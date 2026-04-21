@@ -7,6 +7,7 @@ import { RepoService } from "./services/RepoService.js";
 import { Orchestrator } from "./services/Orchestrator.js";
 import { Broadcaster } from "./ws/broadcast.js";
 import { swarmRouter } from "./routes/swarm.js";
+import { devRouter } from "./routes/dev.js";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -44,6 +45,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.use("/api/swarm", swarmRouter(orchestrator));
+app.use("/api/dev", devRouter(broadcaster));
 
 const shutdown = async (signal: string) => {
   console.log(`\n${signal} received — shutting down swarm`);
