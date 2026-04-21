@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSwarm } from "../state/store";
 import type { TranscriptEntry } from "../types";
+import { summarizeAgentJson } from "./transcriptSummarize";
 
 const AGENT_HUE = [140, 200, 260, 30, 320, 70, 180, 240];
 const COLLAPSE_THRESHOLD = 600;
+const JSON_COLLAPSE_THRESHOLD = 2000;
 
 export function Transcript() {
   const transcript = useSwarm((s) => s.transcript);
@@ -61,18 +63,27 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
     );
   }
   const hue = AGENT_HUE[(entry.agentIndex ?? 1) - 1] ?? 200;
-  return (
-    <CollapsibleBlock
-      className="rounded-md p-3 border text-sm"
-      style={{ borderColor: `hsl(${hue} 30% 30%)`, background: `hsl(${hue} 30% 12%)` }}
-      header={
-        <div className="text-xs mb-1" style={{ color: `hsl(${hue} 60% 70%)` }}>
-          Agent {entry.agentIndex} · {ts}
-        </div>
-      }
-      text={entry.text}
-    />
+  const header = (
+    <div className="text-xs mb-1" style={{ color: `hsl(${hue} 60% 70%)` }}>
+      Agent {entry.agentIndex} · {ts}
+    </div>
   );
+  const style = { borderColor: `hsl(${hue} 30% 30%)`, background: `hsl(${hue} 30% 12%)` };
+  const className = "rounded-md p-3 border text-sm";
+
+  const summary = useMemo(() => summarizeAgentJson(entry.text), [entry.text]);
+  if (summary) {
+    return (
+      <AgentJsonBubble
+        className={className}
+        style={style}
+        header={header}
+        summary={summary.summary}
+        json={summary.json}
+      />
+    );
+  }
+  return <CollapsibleBlock className={className} style={style} header={header} text={entry.text} />;
 }
 
 function StreamingBubble({ agentIndex, text }: { agentIndex: number; text: string }) {
@@ -105,6 +116,50 @@ function Dot({ hue, delay }: { hue: number; delay: number }) {
       className="inline-block w-1 h-1 rounded-full animate-pulse"
       style={{ background: `hsl(${hue} 70% 60%)`, animationDelay: `${delay}ms` }}
     />
+  );
+}
+
+interface AgentJsonBubbleProps {
+  summary: string;
+  json: string;
+  header: React.ReactNode;
+  className?: string;
+  style?: React.CSSProperties;
+}
+function AgentJsonBubble({ summary, json, header, className, style }: AgentJsonBubbleProps) {
+  const [showJson, setShowJson] = useState(false);
+  const [jsonExpanded, setJsonExpanded] = useState(false);
+  const jsonTooLong = json.length > JSON_COLLAPSE_THRESHOLD;
+  const shownJson =
+    !jsonTooLong || jsonExpanded ? json : json.slice(0, JSON_COLLAPSE_THRESHOLD).trimEnd() + "…";
+  return (
+    <div className={className} style={style}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1">{header}</div>
+        <button
+          onClick={() => setShowJson((v) => !v)}
+          className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200 shrink-0"
+        >
+          {showJson ? "Hide JSON" : "View JSON"}
+        </button>
+      </div>
+      <div className="whitespace-pre-wrap">{summary}</div>
+      {showJson ? (
+        <div className="mt-2 rounded border border-ink-700 bg-ink-950 p-2">
+          <pre className="text-[11px] font-mono text-ink-300 whitespace-pre-wrap break-all">
+            {shownJson}
+          </pre>
+          {jsonTooLong ? (
+            <button
+              onClick={() => setJsonExpanded((v) => !v)}
+              className="mt-1 text-xs underline text-ink-400 hover:text-ink-200"
+            >
+              {jsonExpanded ? "Show less" : `Show more (${json.length - JSON_COLLAPSE_THRESHOLD} chars)`}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
