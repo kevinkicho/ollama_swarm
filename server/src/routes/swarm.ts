@@ -27,12 +27,6 @@ export function swarmRouter(orch: Orchestrator): Router {
       res.status(400).json({ error: parsed.error.flatten() });
       return;
     }
-    if (parsed.data.preset === "blackboard") {
-      res
-        .status(501)
-        .json({ error: "Blackboard preset is not implemented yet (phase 0 scaffold)." });
-      return;
-    }
     try {
       await orch.start({
         repoUrl: parsed.data.repoUrl,

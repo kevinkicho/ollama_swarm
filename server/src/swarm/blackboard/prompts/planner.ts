@@ -1,0 +1,159 @@
+import { z } from "zod";
+
+// ---------------------------------------------------------------------------
+// Schema: what we expect back from the planner. Kept tight on purpose — small
+// atomic units (<=2 files, one short description) is the whole point of the
+// blackboard preset. Anything that violates the shape gets dropped.
+// ---------------------------------------------------------------------------
+
+const PlannerTodoSchema = z.object({
+  description: z.string().trim().min(1).max(500),
+  expectedFiles: z.array(z.string().trim().min(1)).min(1).max(2),
+});
+
+const PlannerResponseSchema = z.array(PlannerTodoSchema).max(20);
+
+export interface PlannerTodoInput {
+  description: string;
+  expectedFiles: string[];
+}
+
+export type PlannerParseResult =
+  | { ok: true; todos: PlannerTodoInput[]; dropped: PlannerDropped[] }
+  | { ok: false; reason: string };
+
+export interface PlannerDropped {
+  reason: string;
+  raw: unknown;
+}
+
+// The planner commonly wraps its answer in ```json ... ``` fences, or prefaces
+// it with prose ("Here is the plan: [...]"). Try increasingly-loose extraction
+// only when the raw input fails to parse — otherwise valid top-level objects
+// like `{"description":...,"expectedFiles":[...]}` get chewed up into their
+// inner arrays and silently "succeed".
+function stripFences(raw: string): string | null {
+  const s = raw.trim();
+  const fenceMatch = s.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
+  if (fenceMatch) return fenceMatch[1].trim();
+  const innerFence = s.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
+  if (innerFence) return innerFence[1].trim();
+  // Prose-then-array: `Here is the plan: [...] Let me know!` — slice between
+  // the first '[' and the last ']'. Only meaningful if there's prose before
+  // the opening bracket (firstBracket > 0); otherwise we'd just re-return s.
+  const firstBracket = s.indexOf("[");
+  const lastBracket = s.lastIndexOf("]");
+  if (firstBracket > 0 && lastBracket > firstBracket) {
+    return s.slice(firstBracket, lastBracket + 1);
+  }
+  return null;
+}
+
+export function parsePlannerResponse(raw: string): PlannerParseResult {
+  let parsed: unknown;
+  let lastError = "";
+  try {
+    parsed = JSON.parse(raw.trim());
+  } catch (err) {
+    lastError = err instanceof Error ? err.message : String(err);
+    const cleaned = stripFences(raw);
+    if (cleaned === null) {
+      return { ok: false, reason: `JSON parse failed: ${lastError}` };
+    }
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (err2) {
+      const msg = err2 instanceof Error ? err2.message : String(err2);
+      return { ok: false, reason: `JSON parse failed: ${msg}` };
+    }
+  }
+  if (!Array.isArray(parsed)) {
+    return { ok: false, reason: `expected top-level JSON array, got ${typeof parsed}` };
+  }
+  const todos: PlannerTodoInput[] = [];
+  const dropped: PlannerDropped[] = [];
+  for (const item of parsed) {
+    const v = PlannerTodoSchema.safeParse(item);
+    if (v.success) {
+      todos.push({ description: v.data.description, expectedFiles: v.data.expectedFiles });
+    } else {
+      const reason = v.error.issues
+        .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+        .join("; ");
+      dropped.push({ reason, raw: item });
+    }
+  }
+  // Sanity: reject if the top-level array exceeds the max. The item-level
+  // walk above keeps everything because it iterates parsed itself; instead
+  // just cap valid todos here.
+  const capResult = PlannerResponseSchema.safeParse(todos);
+  if (!capResult.success) {
+    return { ok: false, reason: `too many todos (max 20), got ${todos.length}` };
+  }
+  return { ok: true, todos, dropped };
+}
+
+// ---------------------------------------------------------------------------
+// Prompts. Kept in this module so there's one source of truth for the shape
+// the planner is asked to produce and the shape we parse.
+// ---------------------------------------------------------------------------
+
+export const PLANNER_SYSTEM_PROMPT = [
+  "You are the PLANNER for a swarm of coding agents working on a cloned repository.",
+  "Your only job is to produce a short list of small, atomic TODOs that other agents will each implement independently.",
+  "",
+  "HARD RULES:",
+  "1. Output ONLY a JSON array. No prose. No markdown fences. No commentary before or after.",
+  "2. Each element MUST be an object of shape: {\"description\": string, \"expectedFiles\": string[]}.",
+  "3. `description` is one imperative sentence (e.g., \"Add a readme section explaining the API.\").",
+  "4. `expectedFiles` lists 1 or 2 repo-relative paths the agent will need to touch. NEVER more than 2.",
+  "5. Each TODO must be independently completable without coordinating with another agent.",
+  "6. If the repo is trivial, already complete, or there is nothing meaningful to add, return an empty array [].",
+  "7. Maximum 20 TODOs per response.",
+  "",
+  "Do NOT invent files that do not exist unless the TODO is explicitly about creating a new file.",
+  "Paths must be relative to the repo root. Never use absolute paths or `..`.",
+].join("\n");
+
+export interface PlannerSeed {
+  repoUrl: string;
+  clonePath: string;
+  topLevel: string[];
+  readmeExcerpt: string | null;
+}
+
+export function buildPlannerUserPrompt(seed: PlannerSeed): string {
+  const tree = seed.topLevel.length > 0 ? seed.topLevel.join(", ") : "(empty)";
+  const readme = seed.readmeExcerpt
+    ? seed.readmeExcerpt.slice(0, 4000)
+    : "(no README found at repo root)";
+  return [
+    `Repository: ${seed.repoUrl}`,
+    `Clone path: ${seed.clonePath}`,
+    `Top-level entries: ${tree}`,
+    "",
+    "=== README excerpt (first 4000 chars) ===",
+    readme,
+    "=== end README ===",
+    "",
+    "Using ONLY the information above, output your JSON array of TODOs now.",
+    "Remember: JSON array, no prose, <=2 files per TODO.",
+  ].join("\n");
+}
+
+export function buildRepairPrompt(previousResponse: string, parseError: string): string {
+  return [
+    "Your previous response could not be parsed as the required JSON array.",
+    `Parser error: ${parseError}`,
+    "",
+    "Your previous response was:",
+    "--- BEGIN PREVIOUS RESPONSE ---",
+    previousResponse,
+    "--- END PREVIOUS RESPONSE ---",
+    "",
+    "Respond now with ONLY a JSON array matching the schema:",
+    '[{"description": "one sentence", "expectedFiles": ["path1", "path2"]}, ...]',
+    "",
+    "No prose. No markdown fences. No commentary. Just the JSON array.",
+  ].join("\n");
+}

@@ -3,6 +3,7 @@ import type { RepoService } from "./RepoService.js";
 import type { SwarmEvent, SwarmStatus } from "../types.js";
 import type { PresetId, RunConfig, RunnerOpts, SwarmRunner } from "../swarm/SwarmRunner.js";
 import { RoundRobinRunner } from "../swarm/RoundRobinRunner.js";
+import { BlackboardRunner } from "../swarm/blackboard/BlackboardRunner.js";
 
 export interface OrchestratorOpts extends RunnerOpts {
   manager: AgentManager;
@@ -41,13 +42,37 @@ export class Orchestrator {
 
   async start(cfg: RunConfig): Promise<void> {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
-    this.runner = this.buildRunner(cfg.preset);
-    await this.runner.start(cfg);
+    const runner = this.buildRunner(cfg.preset);
+    // Assign up-front so status()/isRunning() reflect the in-progress run for
+    // new WS clients and the POST /status endpoint while start() is still awaiting.
+    this.runner = runner;
+    try {
+      await runner.start(cfg);
+    } catch (err) {
+      // Runner's start threw partway through (e.g. clone failed, spawn timed out).
+      // Clean up anything it managed to create and drop the reference — otherwise
+      // the dispatcher stays pinned to a stuck runner and the next start call
+      // false-positives as "already running".
+      try {
+        await runner.stop();
+      } catch {
+        // ignore cleanup errors; the original failure is what we want to surface
+      }
+      if (this.runner === runner) this.runner = null;
+      throw err;
+    }
   }
 
   async stop(): Promise<void> {
     if (!this.runner) return;
-    await this.runner.stop();
+    const runner = this.runner;
+    try {
+      await runner.stop();
+    } finally {
+      // Once a run is fully stopped, drop the reference so the next start gets
+      // a fresh slate rather than inheriting the previous runner's terminal phase.
+      this.runner = null;
+    }
   }
 
   private buildRunner(preset: PresetId): SwarmRunner {
@@ -55,7 +80,7 @@ export class Orchestrator {
       case "round-robin":
         return new RoundRobinRunner(this.opts);
       case "blackboard":
-        throw new Error("blackboard preset is not implemented yet (phase 0 scaffold)");
+        return new BlackboardRunner(this.opts);
       default: {
         // Exhaustiveness check — if a new preset is added to PresetId, TS errors here.
         const _exhaustive: never = preset;

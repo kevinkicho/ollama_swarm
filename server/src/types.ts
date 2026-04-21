@@ -65,6 +65,7 @@ export type SwarmPhase =
   | "spawning"
   | "seeding"
   | "discussing"
+  | "planning"
   | "stopping"
   | "stopped"
   | "completed";
