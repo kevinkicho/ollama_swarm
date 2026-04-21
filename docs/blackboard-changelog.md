@@ -355,7 +355,51 @@ Snapshot shape (top-level keys): `error { message, stack? }`, `phase`,
 **Verified (unit):** 115/115 tests green (102 prior + 13 crashSnapshot);
 `tsc --noEmit` clean. Runtime crash-path verification is Step C.
 
-### Step C — E2E verification  **[pending]**
+### Step C — E2E verification  **[working tree]**
+
+Three scenarios run against the live dev server
+(`multi-agent-orchestrator` clone, glm-5.1:cloud), verifying the
+Phase 7 changes behave correctly end-to-end. No code shipped in this
+step — just documentation of what was exercised.
+
+**Scenario 1: Stop mid-claim.** Started a run, polled until executing
+phase with pending claims (5 commits landed, 10 todos outstanding),
+POSTed `/api/swarm/stop`. Verified: phase transitioned
+stopping → stopped → (dispatcher dropped runner → idle); no
+`board-final.json` written at clone root (user stop is not a crash).
+Pre-existing observation — not a Phase 7 regression: spawned opencode
+processes on Windows orphan after `child.kill()` because
+`spawn(..., { shell: true })` kills the shell wrapper but not the
+opencode.exe it wraps. Tracked separately.
+
+**Scenario 2: Cap fires.** Temporarily set `COMMITS_CAP = 3` in
+`caps.ts`, ran against the same repo, reverted after. Observed
+transition: planning → executing → `completed` with final transcript
+entry `"Stopping: commits cap reached (3)"`. Wall-clock from executing
+start to cap-trip ≈ 30 s. Final commit count was 4 (one worker was
+mid-prompt when `checkAndApplyCaps` on a peer worker tripped the
+cap — acceptable under `>=` semantics, the cap is a soft guardrail).
+Verified: phase → `completed` not `stopped` (finally-block's
+`terminationReason` discriminator working); no `board-final.json`
+(cap is not a crash).
+
+**Scenario 3: Crash snapshot lands.** Temporarily injected
+`throw new Error("[Step C CRASH TEST] forced crash after first commit")`
+into `runWorker`'s main loop guarded by `committed >= 1`, reverted
+after. Observed transition: planning → executing → first commit
+(LICENSE) → next worker iteration throws → caught in
+`planAndExecute` → `Run failed: ...` system entry → `writeCrashSnapshot`
+awaited → `Wrote crash snapshot to <clone>/board-final.json` system
+entry → phase → `failed`. Verified `<clone>/board-final.json` top-level
+keys (all 8 present): `error{message,stack}`, `phase="executing"`,
+`runStartedAt`, `crashedAt`, `config` (full RunConfig with
+`preset=blackboard`), `board` (14 planner todos + 0 findings),
+`transcript` (9 entries), `transcriptTruncated=false`. Snapshot wall-
+clock span: 22 s from `runStartedAt` to `crashedAt`.
+
+**Phase 7 complete.** All three sub-steps verified working in a live
+run. Reverts confirmed: working tree clean against HEAD, 115/115 unit
+tests still green, `tsc --noEmit` clean.
 
 ## Phase 8 — UI board view  **[pending]**
 
