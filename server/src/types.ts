@@ -45,6 +45,7 @@ export interface StartSwarmRequest {
   agentCount: number;
   model?: string;
   rounds?: number;
+  preset?: "round-robin" | "blackboard";
 }
 
 export interface SwarmStatus {
