@@ -187,3 +187,53 @@ describe("buildSummary — JSON roundtrip", () => {
     assert.equal(round.wallClockMs, 4_000);
   });
 });
+
+describe("buildSummary — Phase 11c contract + completionDetail", () => {
+  it("includes completionDetail on a clean completed run", () => {
+    const s = buildSummary(
+      baseInput({ completionDetail: "all contract criteria satisfied" }),
+    );
+    assert.equal(s.stopReason, "completed");
+    assert.equal(s.stopDetail, "all contract criteria satisfied");
+  });
+
+  it("ignores completionDetail when a cap tripped", () => {
+    const s = buildSummary(
+      baseInput({
+        stopping: true,
+        terminationReason: "wall-clock cap reached (20 min)",
+        completionDetail: "all contract criteria satisfied",
+      }),
+    );
+    assert.equal(s.stopReason, "cap:wall-clock");
+    assert.equal(s.stopDetail, "wall-clock cap reached (20 min)");
+  });
+
+  it("passes contract through with a defensive copy", () => {
+    const contract = {
+      missionStatement: "Ship it.",
+      criteria: [
+        {
+          id: "c1",
+          description: "README has quick start",
+          expectedFiles: ["README.md"],
+          status: "met" as const,
+          rationale: "Added in commit abc.",
+          addedAt: 100,
+        },
+      ],
+    };
+    const s = buildSummary(baseInput({ contract }));
+    assert.equal(s.contract?.missionStatement, "Ship it.");
+    assert.equal(s.contract?.criteria[0]?.status, "met");
+    assert.equal(s.contract?.criteria[0]?.rationale, "Added in commit abc.");
+    // Defensive copy: mutating the output does not touch the input.
+    s.contract!.criteria[0]!.expectedFiles.push("OTHER.md");
+    assert.deepEqual(contract.criteria[0].expectedFiles, ["README.md"]);
+  });
+
+  it("leaves contract undefined when not supplied", () => {
+    const s = buildSummary(baseInput());
+    assert.equal(s.contract, undefined);
+  });
+});

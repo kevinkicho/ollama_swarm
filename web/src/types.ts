@@ -121,6 +121,7 @@ export interface RunSummary {
   finalGitStatus: string;
   finalGitStatusTruncated: boolean;
   agents: PerAgentStat[];
+  contract?: ExitContract;
 }
 
 export interface BoardCountsDTO {

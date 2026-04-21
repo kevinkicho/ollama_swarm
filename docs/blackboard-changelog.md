@@ -601,7 +601,7 @@ green (142 → 144 from the 2 new `criterionId` passthrough tests).
 
 ---
 
-## Phase 11b — First-pass contract emission + UI panel  **[working tree]**
+## Phase 11b — First-pass contract emission + UI panel  **[`1f679d4`]**
 
 Planner emits an `ExitContract` (mission + criteria) once at the top of
 `planAndExecute`, before it posts todos. The contract is broadcast via
@@ -681,6 +681,124 @@ SetupForm. Those are 11c–11e.
 green (144 → 157 from the 13 new `firstPassContract` parser + prompt
 tests). HMR picked up every edit cleanly on the running dev server;
 both ports returned 200.
+
+---
+
+## Phase 11c — Auditor loop + contract-satisfied termination  **[working tree]**
+
+Runs now terminate when the planner's exit contract is satisfied (every
+criterion is `"met"` or `"wont-do"`) instead of at the first board
+drain. When workers drain with unmet criteria still open, the planner
+agent is re-prompted in an **auditor** role: per-criterion verdicts
+drive the next round of todos, and the drain-audit-repeat loop keeps
+going until the contract is resolved or the auditor cap trips.
+
+Back-compat: runs with no contract (first-pass prompt failed to parse
+after repair) or with a zero-criterion contract fall back to the
+Phase 10 drain-exit behavior — no auditor is invoked.
+
+**New prompt module.** `server/src/swarm/blackboard/prompts/auditor.ts`:
+
+- `AUDITOR_SYSTEM_PROMPT` — asks for a single JSON object shaped
+  `{verdicts: [...], newCriteria?: [...]}` where every verdict carries
+  `id` / `status` (`"met"` / `"wont-do"` / `"unmet"`) / `rationale`, and
+  `"unmet"` verdicts MUST include 1–4 todos. Also permits the auditor to
+  discover brand-new criteria it thinks the initial contract missed.
+- `buildAuditorUserPrompt(seed)` — seed carries mission statement,
+  unmet + resolved criteria, and recent committed/skipped todos and
+  findings (each capped at the last 40 items so prompt size stays bounded
+  on long runs). Also includes current audit invocation number so the
+  model can see the cap approaching.
+- `buildAuditorRepairPrompt(prev, err)` — same one-shot repair loop as
+  the planner and first-pass contract paths.
+- `parseAuditorResponse(raw)` — zod-validated, fence-stripping, with the
+  individual-item drop pattern: a single malformed verdict or new
+  criterion drops without failing the whole envelope. Drops are surfaced
+  in the `dropped` array on success.
+
+19 new tests in `prompts/auditor.test.ts` cover bare object, fenced JSON,
+prose-then-object, mixed verdict statuses, newCriteria passthrough,
+bare-array rejection, missing-verdicts rejection, non-array-newCriteria
+rejection, per-verdict invalid-status drop, unmet-with-empty-rationale
+drop, newCriteria cap drop, unparseable JSON, and system/user/repair
+prompt content sanity (including the 40-item context truncation).
+
+**Runner wiring.** `BlackboardRunner` grows a small handful of pieces:
+
+- `AUDITOR_MAX_INVOCATIONS = 5` constant — backstop against an auditor
+  that can't converge. When hit, the run still terminates as `"completed"`
+  but with a `completionDetail` noting the cap so the UI and summary
+  artifact explain why unresolved criteria remain.
+- `auditInvocations` counter + `completionDetail?: string` fields on
+  the class (both reset in `start()`).
+- `runAuditedExecution(planner, workers)` replaces the single
+  `runWorkers(workers)` call inside `planAndExecute`. It loops:
+  drain with runWorkers → check `allCriteriaResolved()` → if so, set
+  `completionDetail = "all contract criteria satisfied"` and return;
+  else check the invocation cap, else run the auditor and loop again.
+  Also short-circuits when the auditor produces no new work and no
+  criteria transitioned (prevents an empty-spin loop).
+- `runAuditor(planner)` mirrors `runFirstPassContract`'s pattern:
+  promptAgent → parse → one repair attempt → parse again → apply or
+  log and skip. Each invocation increments `auditInvocations`.
+- `buildAuditorSeed()` collects board state into the `AuditorSeed`
+  shape — committed todos (with files, sorted by commit time), skipped
+  todos (with reasons), and findings (all entries, both orderings left
+  for the 40-item truncation inside `buildAuditorUserPrompt`).
+- `applyAuditorResult(result, planner)` walks the verdicts in order:
+  - Unknown criterion IDs are logged and ignored.
+  - Already-resolved criteria are skipped silently.
+  - `"met"` / `"wont-do"` flip status + rationale on the criterion.
+  - `"unmet"` posts each todo via `board.postTodo` with the auditor's
+    `criterionId` linking back to the criterion. The criterion stays
+    `"unmet"` — the next audit round decides its fate.
+  - `"unmet"` with zero todos (schema allows it even though the prompt
+    forbids it) is auto-converted to `"wont-do"` with an auto-rationale
+    so the criterion can't wedge the loop.
+  - `newCriteria[]` entries are appended with `c{N+1}` IDs,
+    `status: "unmet"`, current `addedAt`. Their todos are posted in
+    the next audit round (can't be posted in the same call since their
+    IDs don't exist until after this pass).
+- Every apply call re-emits `contract_updated` via a defensive clone,
+  so the Contract panel updates live as statuses flip and new criteria
+  land.
+
+**Summary artifact.** `server/src/swarm/blackboard/summary.ts` grows
+two fields on both `BuildSummaryInput` and `RunSummary`:
+
+- `completionDetail?: string` — flows into `stopDetail` on the
+  `"completed"` branch. Lets the UI distinguish "all contract criteria
+  satisfied" from "auditor invocation cap reached" from "auditor
+  produced no new work" without overloading `stopReason`. Crucially,
+  `completionDetail` is IGNORED on the cap/user/crash branches so a
+  stale completion note can't mislead.
+- `contract?: ExitContract` — the final contract state (with every
+  verdict applied) gets serialized into `summary.json` and broadcast
+  on the `run_summary` WS event. Written through a defensive
+  clone (`cloneContract`) so post-summary mutation can't leak into the
+  artifact.
+
+4 new tests in `summary.test.ts` exercise the completionDetail +
+contract paths (happy path, cap overrides completionDetail, defensive
+copy, undefined-contract fallthrough).
+
+**Web wiring.** `web/src/types.ts` grows `contract?: ExitContract` on
+`RunSummary` to mirror the server. The existing Contract tab picks up
+live status flips for free via the `contract_updated` dispatch added
+in 11b — no UI code changes needed in 11c.
+
+**Deliberately out of scope for 11c.** No pivot verdict on the
+replanner (Phase 11d) — the auditor can only propose new todos, not
+replace an in-flight stale one. No user-supplied mission goal on the
+SetupForm (Phase 11e) — the mission still comes from the planner's
+reading of the repo. No UI summary badge for `completionDetail` yet;
+the string is in `run_summary` and the artifact, but rendering lives
+in a future polish pass.
+
+**Verified.** `tsc --noEmit` clean both sides; 180/180 server tests
+green (157 → 180 from the 19 new `auditor` parser + prompt tests and
+4 new `summary` contract tests). HMR picked up every edit cleanly on
+the running dev server; both ports returned 200.
 
 ---
 

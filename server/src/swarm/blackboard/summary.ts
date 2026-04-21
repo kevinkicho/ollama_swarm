@@ -8,10 +8,14 @@
 //   1. crashMessage set            → "crash"
 //   2. terminationReason set       → "cap:<type>" (wall-clock | commits | todos)
 //   3. stopping flag set (no cap)  → "user"
-//   4. else                        → "completed"
+//   4. else                        → "completed" (with optional completionDetail
+//                                    e.g. "all contract criteria satisfied" or
+//                                    "auditor cap reached")
 //
 // finalGitStatus is capped at FINAL_GIT_STATUS_MAX chars so a pathological
 // git state (thousands of untracked files) can't blow out the artifact.
+
+import type { ExitContract } from "./types.js";
 
 export const FINAL_GIT_STATUS_MAX = 4_000;
 
@@ -49,6 +53,10 @@ export interface RunSummary {
   finalGitStatus: string;
   finalGitStatusTruncated: boolean;
   agents: PerAgentStat[];
+  /** Phase 11c: the exit contract as it stood at run end, including per-criterion
+   *  verdicts applied by the auditor. Undefined when the first-pass contract
+   *  prompt failed to parse and the run fell back to drain-exit. */
+  contract?: ExitContract;
 }
 
 export interface SummaryConfig {
@@ -75,11 +83,17 @@ export interface BuildSummaryInput {
   /** True if user pressed Stop (or a cap flipped the flag). Distinguished via
    *  terminationReason: user stops leave it unset, cap stops set it. */
   stopping: boolean;
+  /** Phase 11c: short explanation for why a successful "completed" run
+   *  terminated, e.g. "all contract criteria satisfied" or "auditor invocation
+   *  cap reached". Populated into `stopDetail` on the completed branch only. */
+  completionDetail?: string;
   board: SummaryCounts;
   staleEvents: number;
   filesChanged: number;
   finalGitStatus: string;
   agents: PerAgentStat[];
+  /** Phase 11c: exit contract snapshot at run end. Pass through if present. */
+  contract?: ExitContract;
 }
 
 export function buildSummary(input: BuildSummaryInput): RunSummary {
@@ -111,11 +125,25 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     finalGitStatus,
     finalGitStatusTruncated: truncated,
     agents: input.agents.slice(),
+    contract: input.contract ? cloneContract(input.contract) : undefined,
+  };
+}
+
+function cloneContract(c: ExitContract): ExitContract {
+  return {
+    missionStatement: c.missionStatement,
+    criteria: c.criteria.map((crit) => ({
+      ...crit,
+      expectedFiles: [...crit.expectedFiles],
+    })),
   };
 }
 
 function classifyStopReason(
-  input: Pick<BuildSummaryInput, "crashMessage" | "terminationReason" | "stopping">,
+  input: Pick<
+    BuildSummaryInput,
+    "crashMessage" | "terminationReason" | "stopping" | "completionDetail"
+  >,
 ): { stopReason: StopReason; stopDetail?: string } {
   if (input.crashMessage) {
     return { stopReason: "crash", stopDetail: input.crashMessage };
@@ -127,7 +155,7 @@ function classifyStopReason(
   if (input.stopping) {
     return { stopReason: "user" };
   }
-  return { stopReason: "completed" };
+  return { stopReason: "completed", stopDetail: input.completionDetail };
 }
 
 function parseCapType(reason: string): StopReason {

@@ -33,6 +33,17 @@ import {
   type ParsedContract,
 } from "./prompts/firstPassContract.js";
 import {
+  AUDITOR_SYSTEM_PROMPT,
+  buildAuditorRepairPrompt,
+  buildAuditorUserPrompt,
+  parseAuditorResponse,
+  type AuditorResult,
+  type AuditorSeed,
+  type CommittedTodoSummary,
+  type FindingSummary,
+  type SkippedTodoSummary,
+} from "./prompts/auditor.js";
+import {
   buildReplannerRepairPrompt,
   buildReplannerUserPrompt,
   parseReplannerResponse,
@@ -66,6 +77,12 @@ const WORKER_COOLDOWN_MS = 5_000;
 const MAX_REPLAN_ATTEMPTS = 3;
 // Fallback sweep in case the event path missed a stale (e.g. replanOne threw).
 const REPLAN_FALLBACK_TICK_MS = 20_000;
+// Phase 11c: backstop on the drain-audit-repeat loop. Without this, a confused
+// auditor could keep proposing todos that workers produce empty diffs for,
+// cycling forever. After this many invocations we exit with stopReason
+// "completed" and a completionDetail noting the cap — the contract panel
+// shows whatever criteria remain unmet so the user can see what was left.
+const AUDITOR_MAX_INVOCATIONS = 5;
 // No "idle silence" cap. OpenCode's SSE /event stream is observed to stay
 // completely silent across session.prompt's entire duration for our setup, so
 // there is no reliable activity signal to gate on. We rely solely on the
@@ -114,9 +131,15 @@ export class BlackboardRunner implements SwarmRunner {
   private agentRoster: Array<{ id: string; index: number }> = [];
   // Phase 11b: first-pass exit contract. Populated by runFirstPassContract
   // before the planner posts todos. Undefined when the contract prompt failed
-  // to parse after one repair — run still proceeds, just without a contract
-  // (drain-exit remains the termination condition until Phase 11c).
+  // to parse after one repair — in that case the run falls back to the
+  // Phase 10 drain-exit termination (no auditor is invoked).
   private contract?: ExitContract;
+  // Phase 11c: drain-audit-repeat bookkeeping. auditInvocations is the
+  // backstop counter for AUDITOR_MAX_INVOCATIONS. completionDetail, when
+  // set, propagates into the run summary's stopDetail on the "completed"
+  // branch to explain WHY a contract-driven run chose to stop.
+  private auditInvocations = 0;
+  private completionDetail?: string;
 
   constructor(private readonly opts: RunnerOpts) {
     this.boardBroadcaster = createBoardBroadcaster(this.opts.emit);
@@ -167,6 +190,9 @@ export class BlackboardRunner implements SwarmRunner {
     this.staleEventCount = 0;
     this.turnsPerAgent.clear();
     this.agentRoster = [];
+    this.contract = undefined;
+    this.auditInvocations = 0;
+    this.completionDetail = undefined;
     this.active = cfg;
 
     this.setPhase("cloning");
@@ -243,7 +269,7 @@ export class BlackboardRunner implements SwarmRunner {
         this.startClaimExpiry();
         this.planner = planner;
         this.startReplanWatcher();
-        await this.runWorkers(workers);
+        await this.runAuditedExecution(planner, workers);
       }
     } catch (err) {
       errored = true;
@@ -453,6 +479,234 @@ export class BlackboardRunner implements SwarmRunner {
       });
     }
     this.appendSystem(`Posted ${parsed.todos.length} todo(s) to the board.`);
+  }
+
+  // ---------------------------------------------------------------------
+  // Phase 11c: drain-audit-repeat loop
+  //
+  // Each iteration drains the board (runWorkers returns once all todos are
+  // open=0/claimed=0/stale=0 and no replans are in flight), then asks the
+  // auditor whether the contract is satisfied. The auditor's verdicts are
+  // applied in-place: "met"/"wont-do" flip the criterion's status; "unmet"
+  // also posts fresh todos linked by criterionId. If the auditor adds new
+  // criteria, they get a fresh c{N+1} id and show up in the next round.
+  //
+  // Exit conditions (first match wins):
+  //   1. stopping set (user stop / cap / crash)     → caller handles phase
+  //   2. no contract or contract.criteria == 0      → drain-exit (Phase 10)
+  //   3. every criterion has a terminal status      → completionDetail
+  //   4. auditor invocation cap reached             → completionDetail
+  //   5. auditor's parse failed twice and no new
+  //      todos were posted (workers would spin)     → completionDetail
+  // ---------------------------------------------------------------------
+
+  private async runAuditedExecution(planner: Agent, workers: Agent[]): Promise<void> {
+    while (!this.stopping) {
+      await this.runWorkers(workers);
+      if (this.stopping) return;
+
+      // No contract at all → drain-exit behavior (back-compat). An empty
+      // criteria list means the planner had nothing to commit to, so an
+      // audit can't add information — also exit.
+      if (!this.contract || this.contract.criteria.length === 0) return;
+
+      if (this.allCriteriaResolved()) {
+        this.completionDetail = "all contract criteria satisfied";
+        this.appendSystem("All contract criteria resolved. Stopping.");
+        return;
+      }
+
+      if (this.auditInvocations >= AUDITOR_MAX_INVOCATIONS) {
+        this.completionDetail = `auditor invocation cap reached (${AUDITOR_MAX_INVOCATIONS})`;
+        this.appendSystem(
+          `Auditor invocation cap reached (${AUDITOR_MAX_INVOCATIONS}). Stopping with unresolved criteria.`,
+        );
+        return;
+      }
+
+      const openBefore = this.board.counts().open;
+      await this.runAuditor(planner);
+      if (this.stopping) return;
+
+      // Guard against a wedge: auditor produced no new todos AND no new
+      // criteria AND nothing transitioned to terminal — another loop would
+      // just re-audit against the same state. Exit cleanly.
+      const openAfter = this.board.counts().open;
+      if (openAfter === openBefore && !this.allCriteriaResolved() && openAfter === 0) {
+        this.completionDetail = "auditor produced no new work; unresolved criteria remain";
+        this.appendSystem(this.completionDetail + ".");
+        return;
+      }
+    }
+  }
+
+  private allCriteriaResolved(): boolean {
+    if (!this.contract) return true;
+    return this.contract.criteria.every((c) => c.status !== "unmet");
+  }
+
+  private async runAuditor(planner: Agent): Promise<void> {
+    if (!this.contract) return;
+    this.auditInvocations++;
+    this.appendSystem(
+      `Auditor invocation ${this.auditInvocations}/${AUDITOR_MAX_INVOCATIONS}.`,
+    );
+
+    const seed = this.buildAuditorSeed();
+    const firstResponse = await this.promptAgent(
+      planner,
+      `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorUserPrompt(seed)}`,
+    );
+    if (this.stopping) return;
+    this.appendAgent(planner, firstResponse);
+
+    let parsed = parseAuditorResponse(firstResponse);
+    if (!parsed.ok) {
+      this.appendSystem(
+        `Auditor response did not parse (${parsed.reason}). Issuing repair prompt.`,
+      );
+      const repairResponse = await this.promptAgent(
+        planner,
+        `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorRepairPrompt(firstResponse, parsed.reason)}`,
+      );
+      if (this.stopping) return;
+      this.appendAgent(planner, repairResponse);
+      parsed = parseAuditorResponse(repairResponse);
+      if (!parsed.ok) {
+        this.appendSystem(
+          `Auditor still invalid after repair (${parsed.reason}). Skipping this round; unresolved criteria remain.`,
+        );
+        return;
+      }
+    }
+
+    if (parsed.dropped.length > 0) {
+      this.appendSystem(
+        `Auditor dropped ${parsed.dropped.length} invalid item(s): ${parsed.dropped
+          .map((d) => d.reason)
+          .join(" | ")}`,
+      );
+    }
+
+    this.applyAuditorResult(parsed.result, planner);
+  }
+
+  private buildAuditorSeed(): AuditorSeed {
+    const contract = this.contract!;
+    const todos = this.board.listTodos();
+
+    const committed: CommittedTodoSummary[] = todos
+      .filter((t) => t.status === "committed")
+      .sort((a, b) => (a.committedAt ?? 0) - (b.committedAt ?? 0))
+      .map((t) => ({
+        todoId: t.id,
+        description: t.description,
+        expectedFiles: [...t.expectedFiles],
+        committedAt: t.committedAt,
+      }));
+
+    const skipped: SkippedTodoSummary[] = todos
+      .filter((t) => t.status === "skipped")
+      .map((t) => ({
+        todoId: t.id,
+        description: t.description,
+        skippedReason: t.skippedReason,
+      }));
+
+    const findings: FindingSummary[] = this.board.listFindings().map((f) => ({
+      agentId: f.agentId,
+      text: f.text,
+      createdAt: f.createdAt,
+    }));
+
+    return {
+      missionStatement: contract.missionStatement,
+      unmetCriteria: contract.criteria
+        .filter((c) => c.status === "unmet")
+        .map((c) => ({ ...c, expectedFiles: [...c.expectedFiles] })),
+      resolvedCriteria: contract.criteria
+        .filter((c) => c.status !== "unmet")
+        .map((c) => ({ ...c, expectedFiles: [...c.expectedFiles] })),
+      committed,
+      skipped,
+      findings,
+      auditInvocation: this.auditInvocations,
+      maxInvocations: AUDITOR_MAX_INVOCATIONS,
+    };
+  }
+
+  private applyAuditorResult(result: AuditorResult, planner: Agent): void {
+    if (!this.contract) return;
+    const criteriaById = new Map(this.contract.criteria.map((c) => [c.id, c]));
+    const now = Date.now();
+    let statusChanges = 0;
+    let todosPosted = 0;
+
+    for (const v of result.verdicts) {
+      const crit = criteriaById.get(v.id);
+      if (!crit) {
+        this.appendSystem(
+          `Auditor emitted verdict for unknown criterion '${v.id}' — ignored.`,
+        );
+        continue;
+      }
+      if (crit.status !== "unmet") {
+        // Prompt tells auditor not to re-verdict resolved criteria, but if it
+        // does we skip silently (resolved is resolved).
+        continue;
+      }
+
+      if (v.status === "unmet") {
+        if (v.todos.length === 0) {
+          // Schema permits this but the prompt forbids it — auto-convert to
+          // wont-do rather than leaving the criterion wedged unmet with no
+          // new work. The auto-rationale records that we did so.
+          crit.status = "wont-do";
+          crit.rationale = `auto-converted: auditor returned unmet with no todos. Original rationale: ${v.rationale}`;
+          statusChanges++;
+          continue;
+        }
+        for (const t of v.todos) {
+          this.board.postTodo({
+            description: t.description,
+            expectedFiles: [...t.expectedFiles],
+            createdBy: planner.id,
+            createdAt: now,
+            criterionId: crit.id,
+          });
+          todosPosted++;
+        }
+        // Leave crit.status as "unmet" — next audit round will re-check.
+        crit.rationale = v.rationale;
+      } else {
+        crit.status = v.status;
+        crit.rationale = v.rationale;
+        statusChanges++;
+      }
+    }
+
+    // New criteria are appended; their id is the next slot in the criteria
+    // array. Future audit rounds can propose todos for them.
+    let added = 0;
+    if (result.newCriteria.length > 0) {
+      let nextIdx = this.contract.criteria.length;
+      for (const nc of result.newCriteria) {
+        nextIdx++;
+        this.contract.criteria.push({
+          id: `c${nextIdx}`,
+          description: nc.description,
+          expectedFiles: [...nc.expectedFiles],
+          status: "unmet",
+          addedAt: now,
+        });
+        added++;
+      }
+    }
+
+    this.opts.emit({ type: "contract_updated", contract: this.cloneContract(this.contract) });
+    this.appendSystem(
+      `Auditor applied: ${statusChanges} status change(s), ${todosPosted} new todo(s), ${added} new criterion(s).`,
+    );
   }
 
   // ---------------------------------------------------------------------
@@ -963,6 +1217,7 @@ export class BlackboardRunner implements SwarmRunner {
       crashMessage,
       terminationReason: this.terminationReason,
       stopping: this.stopping,
+      completionDetail: this.completionDetail,
       board: {
         committed: counts.committed,
         skipped: counts.skipped,
@@ -972,6 +1227,7 @@ export class BlackboardRunner implements SwarmRunner {
       filesChanged: gitStatus.changedFiles,
       finalGitStatus: gitStatus.porcelain,
       agents: agentStats,
+      contract: this.contract ? this.cloneContract(this.contract) : undefined,
     });
 
     const outPath = path.join(clone, "summary.json");
