@@ -1,0 +1,186 @@
+# Swarm Pattern Catalog
+
+Design notes for the agentic-swarm patterns we plan to support in `ollama_swarm`.
+The long-term goal: expose each pattern as a selectable **preset** on the setup
+page (next to repo URL / agent count) so a user can run the same repo through
+different patterns and compare outcomes side-by-side.
+
+Status legend:
+- `[ ]` not started
+- `[~]` in progress
+- `[x]` shipped as a selectable preset
+- `[=]` currently the only mode (pre-preset era, will be replaced or folded into a preset)
+
+---
+
+## Current implementation (pre-preset)
+
+`[=]` **Round-robin shared-transcript.** N identical agents, one SSE-driven turn
+each per round, full transcript injected into every prompt. Lives in
+`server/src/services/Orchestrator.ts`. Works but suffers from echo-chamber
+behavior — each agent sees the previous replies before speaking, so later
+agents converge on earlier positions.
+
+---
+
+## Pattern catalog
+
+### 1. Role differentiation `[ ]`
+Same weights, different system prompts. Assign each agent a role —
+architect, tester, security-reviewer, performance-critic, docs-reader,
+dependency-auditor, devil's-advocate. Identical models with distinct priors
+produce genuinely different takes. This is MetaGPT's core insight and what
+AutoGen calls "conversable agents."
+
+**Cost:** ~10 lines. The current round-robin loop already has `agent.index`;
+just map it to a role-prompt table.
+**Wins:** cheap diversity, no architectural change.
+**Limits:** still single-threaded; roles are declared not earned.
+
+### 2. Map-reduce over the repo `[ ]`
+Map phase: N agents each take a slice of the tree (`src/`, `tests/`, `docs/`,
+`package.json` + deps, git history, issue tracker) and inspect it in
+isolation with **no shared transcript** — just their slice and a report
+template. Reduce phase: one synthesizer agent reads all N reports and
+produces the unified analysis.
+
+**Wins:** embarrassingly parallel, scales linearly with agent count,
+coverage is much richer than 10 agents all re-reading the README.
+**Limits:** no cross-pollination during exploration; synthesizer becomes
+the bottleneck and the single point of failure.
+
+### 3. Council / parallel drafts + reconcile `[ ]`
+Round 1: every agent answers the question **without** seeing others'
+replies. Round 2: all drafts are revealed, agents revise, vote, or
+reconcile. The independent Round 1 is where the real diversity lives.
+
+**Reference:** Du et al., "Improving Factuality and Reasoning in Language
+Models through Multiagent Debate" (MIT, 2023).
+**Wins:** directly fixes the echo chamber that plagues round-robin.
+**Limits:** 2x the calls vs round-robin, needs a reconcile policy.
+
+### 4. Orchestrator–worker hierarchy `[ ]`
+One "lead" agent plans and dispatches subtasks; workers execute in parallel
+and report back; lead synthesizes. Matches the shape of Anthropic's own
+multi-agent research system (Opus as orchestrator, Sonnet/Haiku as workers).
+
+**Wins:** can mix model strengths — stronger planner, cheaper workers.
+**Limits:** lead is a bottleneck; plan quality caps output quality.
+
+### 5. Debate + judge `[ ]`
+Two agents argue opposite positions ("ship this feature" vs "don't"), a
+third scores who made the stronger case.
+
+**Wins:** better truth signal than consensus, since agreement is often
+just conformity. Good for yes/no or A-vs-B decisions.
+**Limits:** fits only framable decisions; not a general discussion pattern.
+
+### 6. Evaluator / critic loops `[ ]`
+Worker produces → critic scores against a rubric → worker revises. Reflexion-style.
+
+**Wins:** polishes individual outputs to a quality bar.
+**Limits:** scales by adding **iterations**, not agents. Orthogonal to
+the "more agents" axis; probably layers on top of any other pattern.
+
+### 7. Blackboard architecture `[~]` ← **implementation target**
+Instead of a linear transcript, agents post `claim`, `question`, `todo`,
+`finding` items to a shared board. Any idle agent can pick up any unresolved
+item. Async by design, no turn-taking.
+
+**Wins:** scales until the board gets too noisy to manage. No idle agents
+waiting their turn. Natural fit for 10+ agents.
+**Limits:** needs careful coordination rules (see sub-patterns below) —
+without them, concurrent edits stomp each other and stale plans ship.
+
+### 8. Stigmergy / pheromone trails `[ ]`
+Agents leave annotations on files they've explored with a
+confidence/interest score. Other agents prefer unexplored or contentious
+files. Natural for repo exploration — agents self-organize who covers
+what without a central planner.
+
+**Wins:** zero-coordinator scaling, emergent coverage.
+**Limits:** harder to steer toward a specific goal; mostly useful for
+survey/exploration phases, less so for directed work.
+
+---
+
+## Blackboard coordination sub-patterns
+
+When agents pull from a shared board, overlap and stale plans are the core
+problems. These are the layers we can stack onto the blackboard:
+
+- **Pessimistic file claims.** Agent declares intended files at claim time;
+  board rejects overlapping claims. Simple, but head-of-line blocks on shared
+  utility files.
+
+- **Optimistic + CAS + re-plan.** ← **chosen layer**
+  Agents record file hashes at claim time, work freely, and at commit-time
+  the board rejects any commit where a touched file changed underneath them.
+  Rejected todos go back on the board flagged `stale_since=<sha>` and are
+  re-planned before being reclaimable. Mirrors database MVCC and `git rebase`.
+
+- **Dependency-graph scheduling.** A planner pass builds a DAG of todos by
+  file overlap; overlapping todos are serialized, disjoint ones parallelize.
+  Re-runs on every completion. Strong guarantees; needs a smart planner.
+
+- **Git-branch per agent + merge-agent.** Each worker runs in its own branch;
+  a maintainer agent rebases/merges completed branches into main. Reuses
+  git's battle-tested merge logic. Costs a working copy per agent and
+  makes the maintainer a bottleneck at scale.
+
+- **Small atomic units + continuous re-planning.** ← **chosen layer**
+  Todos are tiny ("extract function X from file Y"). After each commit the
+  planner sweeps and regenerates remaining todos from current code state.
+  Staleness barely exists because no plan lives long enough to go stale.
+  Closest thing to stigmergic behavior.
+
+The **chosen stack for v1 of the blackboard preset** is optimistic+CAS
+(lets workers parallelize without blocking) layered over small atomic units
+(keeps the re-plan cost bounded and the conflict surface tiny).
+
+---
+
+## Implementation roadmap
+
+| # | Preset                       | Coordination                        | Why this order |
+| - | ---------------------------- | ----------------------------------- | -------------- |
+| 1 | Blackboard                   | Optimistic+CAS + small atomic units | User's pick; biggest architectural lift, do it while context is fresh |
+| 2 | Role differentiation         | n/a (single-turn loop)              | Cheap; good comparison baseline against blackboard |
+| 3 | Map-reduce                   | n/a (split + synthesize)            | Tests whether isolation beats shared context for coverage |
+| 4 | Council (parallel + reconcile) | n/a (round-based)                 | Isolates diversity gain from role-prompting gain |
+| 5 | Orchestrator–worker          | n/a                                 | Needs role differentiation to be useful; builds on #2 |
+| 6 | Debate + judge               | n/a                                 | Narrow use case; wait until we have a concrete yes/no question |
+| 7 | Critic loops                 | Layer, not preset                   | Orthogonal — add as a toggle on any preset |
+| 8 | Stigmergy                    | Layer on blackboard                 | Extends #1; file-annotation scoring on top of the board |
+
+---
+
+## Preset-picker UX sketch (for later)
+
+The setup page today takes `repoUrl`, `localPath`, `agentCount`, `rounds`,
+`model`. The preset picker adds one field: **Pattern**, a dropdown with
+per-preset help text.
+
+Pattern-specific knobs should only appear for the selected preset:
+- Role differentiation → a list of role slots (editable)
+- Map-reduce → tree-slicing strategy (by folder / by file-type / custom)
+- Council → round count + reconcile policy (vote / merge / judge)
+- Orchestrator-worker → lead model override
+- Blackboard → max concurrent agents, stale-retry limit, atomic-unit size cap
+
+Keep `agentCount` meaningful across all presets; it caps the number of
+concurrent worker slots regardless of pattern.
+
+---
+
+## Open questions to revisit
+
+- **Persistence.** The blackboard wants to survive a server restart (so
+  in-flight claims aren't orphaned). Current transcript is in-memory only
+  — do we need SQLite, or is per-run JSON on disk enough?
+- **Cross-preset transcript format.** The UI currently assumes one linear
+  transcript. Blackboard wants a board view; map-reduce wants a tree view.
+  We'll need a generic "event" stream and per-preset renderers.
+- **Metrics.** To actually compare presets, we need to record wall-clock,
+  token usage, and some output-quality proxy (LOC changed? tests passing?).
+  Worth thinking about before we ship preset #2.
