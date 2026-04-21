@@ -21,7 +21,14 @@ import {
   PLANNER_SYSTEM_PROMPT,
   type PlannerSeed,
 } from "./prompts/planner.js";
-import type { Todo } from "./types.js";
+import {
+  buildReplannerRepairPrompt,
+  buildReplannerUserPrompt,
+  parseReplannerResponse,
+  REPLANNER_SYSTEM_PROMPT,
+  type ReplannerSeed,
+} from "./prompts/replanner.js";
+import type { BoardEvent, Todo } from "./types.js";
 import {
   buildWorkerRepairPrompt,
   buildWorkerUserPrompt,
@@ -43,9 +50,11 @@ const CLAIM_EXPIRY_INTERVAL_MS = 30_000;
 const WORKER_POLL_MS = 2_000;
 const WORKER_POLL_JITTER_MS = 500;
 const WORKER_COOLDOWN_MS = 5_000;
-// Safety valve so a broken board/prompt doesn't spin a worker forever. Real
-// stop conditions (wall-clock, commit cap) land in Phase 7.
-const MAX_WORKER_ITERATIONS = 50;
+// Phase 6: after this many replans, stop trying and mark the todo skipped.
+// Keeps a pathological todo from burning planner turns indefinitely.
+const MAX_REPLAN_ATTEMPTS = 3;
+// Fallback sweep in case the event path missed a stale (e.g. replanOne threw).
+const REPLAN_FALLBACK_TICK_MS = 20_000;
 // No "idle silence" cap. OpenCode's SSE /event stream is observed to stay
 // completely silent across session.prompt's entire duration for our setup, so
 // there is no reliable activity signal to gate on. We rely solely on the
@@ -64,10 +73,21 @@ export class BlackboardRunner implements SwarmRunner {
   // them all at once without needing to know about planner vs worker.
   private activeAborts = new Set<AbortController>();
   private expiryTimer?: NodeJS.Timeout;
+  // Phase 6: replan orchestration. Planner is captured during executing and
+  // reused to replan stale todos — see docs/known-limitations.md.
+  private planner?: Agent;
+  private replanPending = new Set<string>();
+  private replanRunning = false;
+  private replanTickTimer?: NodeJS.Timeout;
 
   constructor(private readonly opts: RunnerOpts) {
     this.boardBroadcaster = createBoardBroadcaster(this.opts.emit);
-    this.board = new Board({ emit: this.boardBroadcaster.emit });
+    this.board = new Board({
+      emit: (ev) => {
+        this.boardBroadcaster.emit(ev);
+        this.onBoardEvent(ev);
+      },
+    });
     this.boardBroadcaster.bindBoard(this.board);
   }
 
@@ -165,6 +185,8 @@ export class BlackboardRunner implements SwarmRunner {
       if (workers.length > 0 && this.board.counts().open > 0) {
         this.setPhase("executing");
         this.startClaimExpiry();
+        this.planner = planner;
+        this.startReplanWatcher();
         await this.runWorkers(workers);
       }
     } catch (err) {
@@ -174,6 +196,7 @@ export class BlackboardRunner implements SwarmRunner {
       this.appendSystem(`Run failed: ${msg}`);
     } finally {
       this.stopClaimExpiry();
+      this.stopReplanWatcher();
     }
     // Ensure the final snapshot lands even if the debounce timer hasn't fired.
     this.boardBroadcaster.flushSnapshot();
@@ -185,6 +208,7 @@ export class BlackboardRunner implements SwarmRunner {
     this.stopping = true;
     this.setPhase("stopping");
     this.stopClaimExpiry();
+    this.stopReplanWatcher();
     for (const ctrl of this.activeAborts) {
       try {
         ctrl.abort(new Error("user stop"));
@@ -284,18 +308,28 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   private async runWorker(agent: Agent): Promise<void> {
-    let iterations = 0;
-    while (!this.stopping && iterations < MAX_WORKER_ITERATIONS) {
-      iterations++;
+    while (!this.stopping) {
       // Jittered poll so N workers don't hit the board in lockstep.
       const jitter = Math.floor(Math.random() * WORKER_POLL_JITTER_MS);
       await this.sleep(WORKER_POLL_MS + jitter);
       if (this.stopping) return;
 
       const counts = this.board.counts();
-      // Nothing left for this worker to do and no one else holding a claim
-      // that could release back to open (Phase 4 stales are terminal).
-      if (counts.open === 0 && counts.claimed === 0) return;
+      // Nothing left to do: no open, nothing claimed, no stales, AND no
+      // in-flight replan work. Stales can resurrect to open via replan, and
+      // a slow replan can finish AFTER the last worker loop — so we must
+      // also wait for replanPending to drain and replanRunning to clear,
+      // otherwise a revised todo would be posted to an already-terminated
+      // swarm and stuck at open forever.
+      if (
+        counts.open === 0 &&
+        counts.claimed === 0 &&
+        counts.stale === 0 &&
+        this.replanPending.size === 0 &&
+        !this.replanRunning
+      ) {
+        return;
+      }
       if (counts.open === 0) continue;
 
       const todo = this.board.findOpenTodo();
@@ -307,9 +341,6 @@ export class BlackboardRunner implements SwarmRunner {
         // helps desync workers that all finished around the same time.
         await this.sleep(WORKER_COOLDOWN_MS + Math.floor(Math.random() * 500));
       }
-    }
-    if (iterations >= MAX_WORKER_ITERATIONS) {
-      this.appendSystem(`[${agent.id}] hit max-iteration safety valve (${MAX_WORKER_ITERATIONS})`);
     }
   }
 
@@ -494,6 +525,191 @@ export class BlackboardRunner implements SwarmRunner {
     const summary = parsed.diffs.map((d) => `${d.file} (${d.newText.length} chars)`).join(", ");
     this.appendSystem(`[${agent.id}] committed: ${summary}`);
     return "committed";
+  }
+
+  // ---------------------------------------------------------------------
+  // Phase 6 — replan orchestration
+  //
+  // Hook into Board events so every todo_stale enqueues the todo for replan.
+  // processReplanQueue serializes through the planner agent (single session),
+  // bumps replanCount via board.replan, or skips via board.skip. A fallback
+  // tick sweeps the board for any stale the event path missed (e.g. if
+  // replanOne itself threw mid-prompt).
+  // ---------------------------------------------------------------------
+
+  private onBoardEvent(ev: BoardEvent): void {
+    if (ev.type !== "todo_stale") return;
+    this.enqueueReplan(ev.todoId);
+  }
+
+  private enqueueReplan(todoId: string): void {
+    if (this.replanPending.has(todoId)) return;
+    this.replanPending.add(todoId);
+    void this.processReplanQueue();
+  }
+
+  private async processReplanQueue(): Promise<void> {
+    // One-at-a-time: the planner is a single agent with one session, so
+    // parallel replans would interleave prompts on the same session.
+    if (this.replanRunning) return;
+    if (!this.planner) return;
+    this.replanRunning = true;
+    try {
+      while (!this.stopping && this.replanPending.size > 0 && this.planner) {
+        const todoId = this.replanPending.values().next().value as string;
+        this.replanPending.delete(todoId);
+        try {
+          await this.replanOne(todoId);
+        } catch (err) {
+          // If replanOne crashes mid-prompt, don't kill the whole queue — but
+          // also don't leave the todo hanging. The fallback tick would re-
+          // enqueue a still-stale todo forever, which then prevents workers
+          // from ever exiting (see shutdown-race fix). Mark it skipped so it
+          // leaves in-flight state cleanly.
+          const msg = err instanceof Error ? err.message : String(err);
+          this.appendSystem(`Replan handler crashed on todo ${todoId}: ${msg}`);
+          try {
+            this.board.skip(todoId, `replanner crashed: ${msg}`);
+          } catch {
+            // skip can throw if the todo moved state meanwhile — ignore.
+          }
+        }
+      }
+    } finally {
+      this.replanRunning = false;
+    }
+  }
+
+  private async replanOne(todoId: string): Promise<void> {
+    const planner = this.planner;
+    if (!planner) return;
+    const todo = this.board.listTodos().find((t) => t.id === todoId);
+    if (!todo) return;
+    // Dedup: the same todo could be enqueued twice. Only act if still stale.
+    if (todo.status !== "stale") return;
+
+    if (todo.replanCount >= MAX_REPLAN_ATTEMPTS) {
+      this.board.skip(
+        todoId,
+        `auto-skipped: replan attempts exhausted (${todo.replanCount})`,
+      );
+      this.appendSystem(
+        `Replan exhausted for todo ${todoId} after ${todo.replanCount} attempt(s). Skipped.`,
+      );
+      return;
+    }
+
+    let contents: Record<string, string | null>;
+    try {
+      contents = await this.readExpectedFiles(todo.expectedFiles);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.board.skip(todoId, `replanner unable to read files: ${msg}`);
+      return;
+    }
+
+    const seed: ReplannerSeed = {
+      todoId: todo.id,
+      originalDescription: todo.description,
+      originalExpectedFiles: todo.expectedFiles,
+      staleReason: todo.staleReason ?? "(unknown)",
+      fileContents: contents,
+      replanCount: todo.replanCount,
+    };
+
+    let response: string;
+    try {
+      response = await this.promptAgent(
+        planner,
+        `${REPLANNER_SYSTEM_PROMPT}\n\n${buildReplannerUserPrompt(seed)}`,
+      );
+    } catch (err) {
+      if (this.stopping) return;
+      const msg = err instanceof Error ? err.message : String(err);
+      this.board.skip(todoId, `replanner prompt failed: ${msg}`);
+      return;
+    }
+    if (this.stopping) return;
+    this.appendAgent(planner, response);
+
+    let parsed = parseReplannerResponse(response);
+    if (!parsed.ok) {
+      this.appendSystem(
+        `Replanner JSON invalid for ${todoId} (${parsed.reason}); issuing repair prompt.`,
+      );
+      let repair: string;
+      try {
+        repair = await this.promptAgent(
+          planner,
+          `${REPLANNER_SYSTEM_PROMPT}\n\n${buildReplannerRepairPrompt(response, parsed.reason)}`,
+        );
+      } catch (err) {
+        if (this.stopping) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        this.board.skip(todoId, `replanner repair prompt failed: ${msg}`);
+        return;
+      }
+      if (this.stopping) return;
+      this.appendAgent(planner, repair);
+      parsed = parseReplannerResponse(repair);
+      if (!parsed.ok) {
+        this.board.skip(
+          todoId,
+          `replanner produced invalid JSON after repair: ${parsed.reason}`,
+        );
+        return;
+      }
+    }
+
+    if (parsed.action === "skip") {
+      this.board.skip(todoId, `replanner decided to skip: ${parsed.reason}`);
+      this.appendSystem(`Replanner skipped todo ${todoId}: ${parsed.reason}`);
+      return;
+    }
+
+    const r = this.board.replan(todoId, {
+      description: parsed.description,
+      expectedFiles: parsed.expectedFiles,
+    });
+    if (!r.ok) {
+      // Board refused (e.g. status changed between our read and the call).
+      // Log it and move on — the fallback tick will pick up any leftover.
+      this.appendSystem(`Replan refused for todo ${todoId}: ${r.reason}`);
+      return;
+    }
+    this.appendSystem(
+      `Replanned todo ${todoId} (attempt ${r.todo.replanCount}): "${truncate(r.todo.description)}"`,
+    );
+  }
+
+  private startReplanWatcher(): void {
+    if (this.replanTickTimer) return;
+    this.replanTickTimer = setInterval(() => {
+      if (this.stopping) return;
+      for (const todo of this.board.listTodos()) {
+        if (todo.status === "stale" && todo.replanCount < MAX_REPLAN_ATTEMPTS) {
+          this.enqueueReplan(todo.id);
+        }
+      }
+      // Also sweep exhausted stales into skipped right away — otherwise
+      // workers would keep looping (counts.stale>0) waiting for them.
+      for (const todo of this.board.listTodos()) {
+        if (todo.status === "stale" && todo.replanCount >= MAX_REPLAN_ATTEMPTS) {
+          this.board.skip(
+            todo.id,
+            `auto-skipped: replan attempts exhausted (${todo.replanCount})`,
+          );
+        }
+      }
+    }, REPLAN_FALLBACK_TICK_MS);
+    this.replanTickTimer.unref?.();
+  }
+
+  private stopReplanWatcher(): void {
+    if (this.replanTickTimer) clearInterval(this.replanTickTimer);
+    this.replanTickTimer = undefined;
+    this.replanPending.clear();
+    this.planner = undefined;
   }
 
   // ---------------------------------------------------------------------

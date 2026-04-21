@@ -146,9 +146,137 @@ No code change; documented here so future readers don't wonder where the runtime
 
 ---
 
-## Phase 6 — Re-planning loop  **[pending]**
+## Phase 6 — Re-planning loop  **[working tree, partially complete]**
 
-*Not started.* See `blackboard-plan.md` §Phase 6.
+When a todo goes stale, the planner agent — not a dedicated replanner — is
+prompted with the stale reason + current file contents and must either
+**revise** the todo (new description + expected files) or **skip** it. See
+[`known-limitations.md`](./known-limitations.md) §"Planner does double duty as
+the replanner" for why one agent covers both roles.
+
+### Step A — Replanner prompt + parser  **[working tree]**
+
+- `server/src/swarm/blackboard/prompts/replanner.ts` — zod-validated union
+  `{revised: {description, expectedFiles}} | {skip: true, reason}`. Same
+  strict-JSON-first-then-fence-strip-then-prose-slice extraction as
+  planner/worker; rejects top-level arrays and mixed-intent shapes.
+- `REPLANNER_SYSTEM_PROMPT` is distinct from the planner's: single-object
+  output, explicit shrink-scope-don't-widen rule, skip-criteria listed
+  explicitly (already-satisfied, no-longer-applies, would-fail-the-same-way).
+- `server/src/swarm/blackboard/prompts/replanner.test.ts` — 15 tests covering
+  happy paths (revised, skip, 2-file revised, fences, prose) and rejections
+  (malformed JSON, top-level array, missing intent, blank reason, `skip: false`
+  literal check, oversize `expectedFiles`).
+
+### Step B — Board replan API  **[no-op; already present]**
+
+`Board.replan(todoId, {description, expectedFiles})` already existed from
+Phase 1 — it flips `stale → open`, bumps `replanCount`, clears `staleReason`,
+emits `todo_replanned`. Extended `Board.test.ts` with four more cases:
+`not_found`, successive-replan count bump (1 → 2), empty-description throw,
+and full `todo_replanned` event payload shape. 92/92 tests green.
+
+### Step C — Runner wiring  **[working tree]**
+
+- `BlackboardRunner` hooks a tee onto `Board`'s emit so every board mutation
+  still flows to the broadcaster but also calls a private `onBoardEvent`.
+  `todo_stale` events enqueue the todo id for replan.
+- `processReplanQueue` serializes through the planner agent (single session,
+  so parallel replans would interleave prompts on the same transcript).
+- `replanOne`:
+  1. Skips if todo is not found or no longer stale (dedup).
+  2. Auto-skips if `replanCount ≥ MAX_REPLAN_ATTEMPTS` (3) — `board.skip`
+     with reason `"replan attempts exhausted"`.
+  3. Re-reads current file contents (the whole reason we replan — the repo
+     moved).
+  4. Prompts the planner with `REPLANNER_SYSTEM_PROMPT` + seed; one repair
+     prompt on parse failure, then `board.skip` on double-failure.
+  5. Dispatches `"revised"` → `board.replan`, `"skip"` → `board.skip`.
+  6. Any prompt error → `board.skip` with the error message (so we don't
+     churn forever on a dead planner).
+- Fallback tick at `REPLAN_FALLBACK_TICK_MS` (20 s): sweeps the board for any
+  stale missed by the event path (e.g. if `replanOne` itself threw) and
+  enqueues it; also force-skips any stale whose `replanCount` reached the cap
+  but that somehow didn't get skipped already (keeps workers from looping
+  forever on `counts.stale > 0`).
+- Worker loop exit condition changed from `open==0 && claimed==0` to
+  `open==0 && claimed==0 && stale==0` — Phase 4 treated stales as terminal,
+  Phase 6 doesn't (a stale may be resurrected by replan).
+- `start()`'s `planAndExecute` captures `this.planner = planner` and calls
+  `startReplanWatcher()` once we enter `executing`. `stop()` and the `finally`
+  block both call `stopReplanWatcher()` which clears the queue, drops the
+  planner reference, and cancels the tick timer.
+
+**Verified (unit):** 92/92 tests green; `tsc --noEmit` clean. End-to-end
+verification is Step D.
+
+### Step D — End-to-end smoke test  **[working tree; surfaced shutdown-race bug — see Step D-fix]**
+
+Ran `poke-blackboard.ps1 -AgentCount 3` against
+`https://github.com/awslabs/multi-agent-orchestrator` (clone path
+`mao-bb-phase6`). Outcome:
+
+- 18 todos posted by planner.
+- **14 committed** via normal worker flow.
+- **3 skipped** via replanner decision (`replanner decided to skip: ...`) —
+  the replanner correctly declined already-satisfied / no-longer-applies
+  todos. Confirms the skip path end-to-end.
+- **2 revised** via replanner (`todo_replanned` event fired, revised
+  description + expected files posted back to board). Confirms the revise
+  path end-to-end.
+- **5 stales** handled in total (3 → skip, 2 → revise). Mix of undici
+  `UND_ERR_HEADERS_TIMEOUT` (environmental flake) and CAS-stale from
+  concurrent workers.
+
+**Bug surfaced: shutdown race on slow replan.** Todo `20c25ebf` went stale
+at t=0 from an undici timeout. Workers polled for `MAX_WORKER_ITERATIONS = 50`
+(≈100 s at 2 s/iter + jitter) and exited at t=99 s; swarm phase transitioned
+to `completed`. Replanner only finished its REVISE decision at t=117 s — 18 s
+after the swarm had already terminated. The revised todo was posted back to
+the board at `open` status, but no worker was alive to claim it, so it sits
+stranded forever. Docs noted the iteration cap as a "safety valve" from
+Phase 4 (predating the replanner), which is exactly the stale assumption the
+race exploits.
+
+### Step D-fix — Shutdown-race fix  **[working tree]**
+
+Goal: workers must not exit while replan work is still in flight, because a
+pending replan can resurrect a stale todo back to `open`.
+
+- Removed the `MAX_WORKER_ITERATIONS = 50` constant and the iteration counter
+  in `runWorker`. The per-prompt `ABSOLUTE_MAX_MS = 20 min` cap (already
+  present) plus the replan-attempts cap (`MAX_REPLAN_ATTEMPTS = 3`) together
+  bound total wall-clock, so the iteration counter was redundant and
+  actively harmful.
+- Extended the worker-exit condition from
+  `counts.open === 0 && counts.claimed === 0 && counts.stale === 0` to also
+  require `this.replanPending.size === 0 && !this.replanRunning`. A stale
+  can still be in the replan queue (waiting for the planner's turn) or
+  actively being prompted at the moment the last worker evaluates its exit
+  — workers now wait those out.
+- `processReplanQueue`'s catch block used to log-and-continue, relying on
+  the fallback tick to re-enqueue. That combined with the new exit condition
+  would pin workers forever on a repeatedly-crashing replan. Catch now also
+  calls `board.skip(todoId, "replanner crashed: ...")` so a terminal failure
+  exits in-flight state cleanly. `board.skip` call is itself wrapped in
+  try/catch because the todo could have moved state meanwhile.
+
+**Verified (unit):** 92/92 tests green; `tsc --noEmit` clean.
+
+**Verified (E2E):** re-ran `poke-blackboard.ps1 -AgentCount 3` against
+`multi-agent-orchestrator` in clone path `mao-bb-phase6-v2`. 17.2 min
+wall-clock. Final counts: **15 posted, 13 committed, 2 skipped, 4 stales
+handled, 2 replans** (both REVISE). The race-bait case specifically closed:
+todo `8eb9c26f` went stale at t≈118 s (CAS mismatch), was revised at
+t≈122 s, and committed at t≈252 s — well past the t≈100 s mark where the
+old `MAX_WORKER_ITERATIONS = 50` cap would have exited workers and stranded
+the revised todo. All other exit paths also exercised: stale → skip
+(already-satisfied); stale → revise → stale → skip-after-2nd-attempt.
+
+**Known limitation, carried forward:** the transcript UI renders
+worker/planner/replanner JSON responses as raw blobs (e.g. `{"diffs":[…]}`).
+Polish task tracked separately — render as one-line summary with a "View
+JSON" toggle.
 
 ## Phase 7 — Stop conditions + safety valves  **[pending]**
 

@@ -359,6 +359,62 @@ describe("Board.replan", () => {
     assert.equal(r.ok, false);
     if (!r.ok) assert.equal(r.reason, "not_stale");
   });
+
+  it("rejects replan of an unknown todo id", () => {
+    const { board } = makeBoard();
+    const r = board.replan("does-not-exist", { description: "y", expectedFiles: ["a"] });
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.equal(r.reason, "not_found");
+  });
+
+  it("bumps replanCount across successive replans", () => {
+    const { board } = makeBoard();
+    const t = board.postTodo({
+      description: "x",
+      expectedFiles: ["a"],
+      createdBy: "p",
+      createdAt: 100,
+    });
+    board.markStale(t.id, "first");
+    const r1 = board.replan(t.id, { description: "y1", expectedFiles: ["a"] });
+    expectOk(r1);
+    assert.equal(r1.todo.replanCount, 1);
+    board.markStale(t.id, "second");
+    const r2 = board.replan(t.id, { description: "y2", expectedFiles: ["b"] });
+    expectOk(r2);
+    assert.equal(r2.todo.replanCount, 2);
+  });
+
+  it("rejects replan with empty description", () => {
+    const { board } = makeBoard();
+    const t = board.postTodo({
+      description: "x",
+      expectedFiles: ["a"],
+      createdBy: "p",
+      createdAt: 100,
+    });
+    board.markStale(t.id, "why");
+    assert.throws(() => board.replan(t.id, { description: "   ", expectedFiles: ["a"] }));
+  });
+
+  it("emits todo_replanned with the new description, expectedFiles, and count", () => {
+    const { board, events } = makeBoard();
+    const t = board.postTodo({
+      description: "x",
+      expectedFiles: ["a"],
+      createdBy: "p",
+      createdAt: 100,
+    });
+    board.markStale(t.id, "why");
+    board.replan(t.id, { description: "new desc", expectedFiles: ["b", "c"] });
+    const ev = events.at(-1);
+    assert.equal(ev?.type, "todo_replanned");
+    if (ev?.type === "todo_replanned") {
+      assert.equal(ev.description, "new desc");
+      assert.deepEqual(ev.expectedFiles, ["b", "c"]);
+      assert.equal(ev.replanCount, 1);
+    }
+  });
 });
 
 describe("Board.skip", () => {
