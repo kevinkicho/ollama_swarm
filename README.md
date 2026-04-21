@@ -83,7 +83,8 @@ Hit Start. You'll see each agent panel go from `spawning` → `ready` → `think
 | `OLLAMA_BASE_URL` | no (defaults to `http://localhost:11434/v1`) | OpenAI-compatible Ollama endpoint, written into each agent's synthesized `opencode.json` |
 | `DEFAULT_MODEL` | no (defaults to `glm-5.1:cloud`) | Model each agent uses when the form's model field is left blank |
 | `OPENCODE_BIN` | no (defaults to `opencode`) | Path/name of the opencode CLI binary |
-| `SERVER_PORT` | no | Pin the backend HTTP+WS port. Blank = random free port picked on each `npm run dev` |
+| `SERVER_PORT` | no (defaults to `52243`) | Override the backend HTTP+WS port |
+| `WEB_PORT` | no (defaults to `52244`) | Override the Vite dev-server port |
 | `GITHUB_TOKEN` | no | GitHub PAT for cloning private repos |
 
 ## Project structure
@@ -92,7 +93,7 @@ Hit Start. You'll see each agent panel go from `spawning` → `ready` → `think
 ollama_swarm/
 ├── package.json              # npm workspaces root (server + web)
 ├── scripts/
-│   └── dev.mjs               # single-process dev runner (picks random ports, spawns tsx + vite)
+│   └── dev.mjs               # single-process dev runner (pins backend:52243, web:52244; override via SERVER_PORT / WEB_PORT)
 ├── .env.example              # copy to .env and fill in OPENCODE_SERVER_PASSWORD
 ├── .gitignore
 ├── README.md
@@ -155,7 +156,7 @@ ollama_swarm/
 
 ### `server/src/config.ts`
 
-- **`resolveServerPort()`** — picks the backend port from `SERVER_PORT` env, then from the `.server-port` file written by `dev.mjs`, then falls back to `5174`.
+- **`resolveServerPort()`** — picks the backend port from `SERVER_PORT` env, then from the `.server-port` file written by `dev.mjs` (pinned to `52243` by default), then falls back to `5174`.
 - **`Schema`** — zod schema that validates and defaults the remaining env vars (enforces `OPENCODE_SERVER_PASSWORD` is present).
 - **`config`** — the merged, typed, validated environment object exported for the rest of the server.
 - **`basicAuthHeader()`** — returns the `Basic <base64>` string used to authenticate against every opencode server.
@@ -296,7 +297,7 @@ ollama_swarm/
 
 - **`OPENCODE_SERVER_PASSWORD is required in .env`** — you haven't copied `.env.example` to `.env` or haven't set the password.
 - **Agents spawn but every turn errors with `fetch failed`** — usually Ollama isn't running, the model isn't pulled, or your pre-existing port-4096 opencode server rejected basic auth. Check `curl http://localhost:11434/api/tags` and that `OPENCODE_SERVER_PASSWORD` matches your 4096 server.
-- **Port conflicts** — leave `SERVER_PORT` blank in `.env`; `scripts/dev.mjs` will pick a fresh random port every run.
+- **Port conflicts** — defaults are `SERVER_PORT=52243` / `WEB_PORT=52244`. If something else is bound, set either env var to a free port and restart.
 - **`turn silent for Ns` errors** — the opencode server stopped emitting events for a session mid-turn (often an Ollama hang). The swarm will continue on the next agent; check the `[agent-N]` lines in the backend terminal for the underlying opencode error.
 
 ## License

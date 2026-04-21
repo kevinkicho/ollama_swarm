@@ -8,6 +8,11 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 const portFile = path.join(root, ".server-port");
 
+// Fixed ports — pinned so bookmarks, scripts, and the Network tab don't need
+// to chase a new port on every restart. Override with env vars if you need to.
+const DEFAULT_SERVER_PORT = 52243;
+const DEFAULT_WEB_PORT = 52244;
+
 function pickFreePort() {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
@@ -24,9 +29,19 @@ function pickFreePort() {
   });
 }
 
-const port = await pickFreePort();
-const webPort = await pickFreePort();
+function parsePort(raw) {
+  if (!raw) return null;
+  const n = Number(String(raw).trim());
+  return Number.isInteger(n) && n > 0 && n < 65536 ? n : null;
+}
+
+const port = parsePort(process.env.SERVER_PORT) ?? DEFAULT_SERVER_PORT;
+const webPort = parsePort(process.env.WEB_PORT) ?? DEFAULT_WEB_PORT;
+// Keep .server-port in sync so vite.config.ts + server/src/config.ts resolve
+// the same port even when someone skips the env var.
 fs.writeFileSync(portFile, String(port), "utf8");
+// Propagate to children so server/src/config.ts sees the same value we picked.
+process.env.SERVER_PORT = String(port);
 console.log(`[dev] backend :${port}  ·  web :${webPort}  (wrote .server-port)`);
 
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
