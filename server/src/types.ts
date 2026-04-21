@@ -4,6 +4,7 @@ import type {
   Finding,
   Todo,
 } from "./swarm/blackboard/types.js";
+import type { RunSummary } from "./swarm/blackboard/summary.js";
 
 export type AgentStatus = "spawning" | "ready" | "thinking" | "failed" | "stopped";
 
@@ -57,7 +58,8 @@ export type SwarmEvent =
       replanCount: number;
     }
   | { type: "board_finding_posted"; finding: Finding }
-  | { type: "board_state"; snapshot: BoardSnapshot; counts: BoardCountsDTO };
+  | { type: "board_state"; snapshot: BoardSnapshot; counts: BoardCountsDTO }
+  | { type: "run_summary"; summary: RunSummary };
 
 export type SwarmPhase =
   | "idle"

@@ -106,6 +106,20 @@ export class RepoService {
     return null;
   }
 
+  // Phase 9: used by the run summary. Returns `git status --porcelain`
+  // output and an entry count. Swallows errors (a malformed clone still
+  // needs a summary) and returns an empty status in that case.
+  async gitStatus(clonePath: string): Promise<{ porcelain: string; changedFiles: number }> {
+    try {
+      const git = simpleGit(clonePath);
+      const out = await git.raw(["status", "--porcelain"]);
+      const lines = out.split(/\r?\n/).filter((l) => l.length > 0);
+      return { porcelain: out, changedFiles: lines.length };
+    } catch {
+      return { porcelain: "", changedFiles: 0 };
+    }
+  }
+
   async listTopLevel(clonePath: string): Promise<string[]> {
     try {
       const entries = await fs.readdir(clonePath, { withFileTypes: true });

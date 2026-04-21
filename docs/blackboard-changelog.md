@@ -433,7 +433,53 @@ Stale, skip reason for Skipped. A `R<n>` badge appears when
 columns with correct counts; no console errors; type-check
 (`tsc -b` in `web/`) clean.
 
-## Phase 9 — Metrics + run artifact  **[pending]**
+## Phase 9 — Metrics + run artifact  **[working tree]**
+
+Every run leaves `<clone>/summary.json` and broadcasts a matching
+`run_summary` WS event so the Board tab shows a summary card without
+re-reading disk.
+
+**Pure builder.** `server/src/swarm/blackboard/summary.ts` classifies
+`stopReason` from `{crashMessage, terminationReason, stopping}` with a
+first-match priority: crash → cap:* → user → completed. Unknown cap
+strings fall back to `cap:wall-clock` (least wrong) so a future cap
+addition doesn't crash the builder. `finalGitStatus` is truncated at
+`FINAL_GIT_STATUS_MAX = 4_000` chars with a `finalGitStatusTruncated`
+flag — a pathological git state can't blow out the artifact.
+
+**Runner wiring.** `BlackboardRunner` grew three counters:
+`runBootedAt` (stamped in `start()`, spans the whole run including
+clone/spawn/plan, distinct from `runStartedAt` which scopes caps),
+`staleEventCount` (incremented on every `todo_stale` in `onBoardEvent`,
+so replans don't hide thrash), and `turnsPerAgent` (incremented at the
+top of `promptAgent`). A frozen `agentRoster` is captured at spawn
+time so the per-agent stats survive `AgentManager.killAll()` clearing
+its own map during user-stop.
+
+**Write + broadcast.** `writeRunSummary(crashMessage?)` runs from the
+`planAndExecute` finally block — covers completed, stopped (user),
+cap-stopped, and crashed paths. Writes via `writeFileAtomic`, then
+emits `{ type: "run_summary", summary }`. Errors during the write are
+swallowed (log only) — losing the summary shouldn't recursively crash
+a run that was otherwise fine. Token counts are `null`: the current
+`extractText` path doesn't surface OpenCode usage metadata.
+
+**RepoService.** New `gitStatus(clonePath)` returns
+`{ porcelain, changedFiles }`. Swallows errors so a malformed clone
+still gets a summary.
+
+**UI.** `SummaryCard` renders at the top of the Board tab when
+`phase ∈ {completed, stopped, failed}` and a summary is present. Shows
+stop-reason badge (green/gray/amber/red), key stats in a grid, and a
+Details toggle that reveals per-agent turns+tokens and the raw git
+status.
+
+**Verified (unit):** `summary.test.ts` — 18 tests covering every
+stopReason branch, wall-clock clamp, board counts passthrough,
+git-status truncation, per-agent defensive copy, and JSON roundtrip.
+115 → 133 server tests, all green; `tsc --noEmit` clean both sides.
+
+## Phase 10 — Polish + documentation  **[pending]**
 
 ## Phase 10 — Polish + documentation  **[pending]**
 

@@ -4,6 +4,7 @@ import type {
   BoardSnapshot,
   Claim,
   Finding,
+  RunSummary,
   SwarmPhase,
   Todo,
   TranscriptEntry,
@@ -17,6 +18,7 @@ interface SwarmStore {
   streaming: Record<string, string>;
   todos: Record<string, Todo>;
   findings: Finding[];
+  summary?: RunSummary;
   error?: string;
 
   setPhase: (phase: SwarmPhase, round: number) => void;
@@ -33,6 +35,7 @@ interface SwarmStore {
   applyReplan: (todoId: string, description: string, expectedFiles: string[], replanCount: number) => void;
   appendFinding: (f: Finding) => void;
   replaceBoard: (snapshot: BoardSnapshot) => void;
+  setSummary: (s: RunSummary) => void;
 
   setError: (msg: string | undefined) => void;
   reset: () => void;
@@ -46,6 +49,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   streaming: {},
   todos: {},
   findings: [],
+  summary: undefined,
   error: undefined,
 
   setPhase: (phase, round) => set({ phase, round }),
@@ -141,6 +145,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       for (const t of snapshot.todos) todos[t.id] = t;
       return { todos, findings: snapshot.findings.slice() };
     }),
+  setSummary: (s) => set({ summary: s }),
 
   setError: (msg) => set({ error: msg }),
   reset: () =>
@@ -152,6 +157,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       streaming: {},
       todos: {},
       findings: [],
+      summary: undefined,
       error: undefined,
     }),
 }));

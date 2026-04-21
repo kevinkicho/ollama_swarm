@@ -54,6 +54,9 @@ function dispatch(ev: SwarmEvent): void {
     case "board_state":
       s.replaceBoard(ev.snapshot);
       break;
+    case "run_summary":
+      s.setSummary(ev.summary);
+      break;
   }
 }
 

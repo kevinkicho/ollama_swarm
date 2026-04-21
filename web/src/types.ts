@@ -70,6 +70,42 @@ export interface BoardSnapshot {
   findings: Finding[];
 }
 
+export type StopReason =
+  | "completed"
+  | "user"
+  | "crash"
+  | "cap:wall-clock"
+  | "cap:commits"
+  | "cap:todos";
+
+export interface PerAgentStat {
+  agentId: string;
+  agentIndex: number;
+  turnsTaken: number;
+  tokensIn: number | null;
+  tokensOut: number | null;
+}
+
+export interface RunSummary {
+  repoUrl: string;
+  localPath: string;
+  preset: string;
+  model: string;
+  startedAt: number;
+  endedAt: number;
+  wallClockMs: number;
+  stopReason: StopReason;
+  stopDetail?: string;
+  commits: number;
+  staleEvents: number;
+  skippedTodos: number;
+  totalTodos: number;
+  filesChanged: number;
+  finalGitStatus: string;
+  finalGitStatusTruncated: boolean;
+  agents: PerAgentStat[];
+}
+
 export interface BoardCountsDTO {
   open: number;
   claimed: number;
@@ -99,4 +135,5 @@ export type SwarmEvent =
       replanCount: number;
     }
   | { type: "board_finding_posted"; finding: Finding }
-  | { type: "board_state"; snapshot: BoardSnapshot; counts: BoardCountsDTO };
+  | { type: "board_state"; snapshot: BoardSnapshot; counts: BoardCountsDTO }
+  | { type: "run_summary"; summary: RunSummary };

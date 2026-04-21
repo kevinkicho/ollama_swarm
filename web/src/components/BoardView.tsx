@@ -1,6 +1,6 @@
 import { memo, useMemo, useState } from "react";
 import { useSwarm } from "../state/store";
-import type { Finding, Todo, TodoStatus } from "../types";
+import type { Finding, RunSummary, Todo, TodoStatus } from "../types";
 
 const COLUMNS: { key: TodoStatus; label: string; accent: string }[] = [
   { key: "open", label: "Open", accent: "border-sky-500/40 text-sky-300" },
@@ -14,6 +14,8 @@ export function BoardView() {
   const todos = useSwarm((s) => s.todos);
   const findings = useSwarm((s) => s.findings);
   const agents = useSwarm((s) => s.agents);
+  const phase = useSwarm((s) => s.phase);
+  const summary = useSwarm((s) => s.summary);
 
   const grouped = useMemo(() => {
     const out: Record<TodoStatus, Todo[]> = {
@@ -37,9 +39,13 @@ export function BoardView() {
   };
 
   const hasTodos = Object.values(todos).length > 0;
+  const showSummary =
+    summary !== undefined &&
+    (phase === "completed" || phase === "stopped" || phase === "failed");
 
   return (
     <div className="h-full overflow-hidden flex flex-col bg-ink-900">
+      {showSummary ? <SummaryCard summary={summary} /> : null}
       <div className="flex-1 min-h-0 overflow-x-auto">
         <div className="grid grid-cols-5 min-w-[900px] h-full">
           {COLUMNS.map((col) => (
@@ -157,6 +163,118 @@ function formatAge(ms: number): string {
 interface FindingsPaneProps {
   findings: Finding[];
   agentLabel: (agentId: string | undefined) => string;
+}
+
+interface SummaryCardProps {
+  summary: RunSummary;
+}
+
+function SummaryCard({ summary }: SummaryCardProps) {
+  const [open, setOpen] = useState(false);
+  const accent = stopReasonAccent(summary.stopReason);
+  return (
+    <div className={`shrink-0 border-b border-ink-700 bg-ink-800 ${accent.border}`}>
+      <div className="flex items-start gap-4 px-3 py-2">
+        <div className={`shrink-0 text-xs uppercase tracking-wide px-2 py-1 rounded ${accent.badge}`}>
+          {summary.stopReason}
+        </div>
+        <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1 text-xs">
+          <Stat label="Commits" value={String(summary.commits)} />
+          <Stat label="Files changed" value={String(summary.filesChanged)} />
+          <Stat label="Stale events" value={String(summary.staleEvents)} />
+          <Stat label="Skipped" value={String(summary.skippedTodos)} />
+          <Stat label="Total todos" value={String(summary.totalTodos)} />
+          <Stat label="Wall clock" value={formatDuration(summary.wallClockMs)} />
+          <Stat label="Model" value={summary.model} />
+          <Stat label="Preset" value={summary.preset} />
+        </div>
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="shrink-0 text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200"
+        >
+          {open ? "Hide details" : "Details"}
+        </button>
+      </div>
+      {open ? (
+        <div className="px-3 pb-3 space-y-2 text-xs">
+          {summary.stopDetail ? (
+            <div className="text-ink-300">
+              <span className="text-ink-500">detail: </span>
+              {summary.stopDetail}
+            </div>
+          ) : null}
+          <div>
+            <div className="text-ink-500 mb-1">Agents</div>
+            <div className="grid grid-cols-[auto_auto_auto] gap-x-4 gap-y-0.5 w-max">
+              {summary.agents.map((a) => (
+                <AgentStatRow key={a.agentId} agent={a} />
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="text-ink-500 mb-1">
+              git status --porcelain
+              {summary.finalGitStatusTruncated ? " (truncated)" : ""}
+            </div>
+            <pre className="rounded border border-ink-700 bg-ink-950 p-2 max-h-48 overflow-auto text-[11px] font-mono text-ink-300 whitespace-pre-wrap">
+              {summary.finalGitStatus.length > 0 ? summary.finalGitStatus : "(clean)"}
+            </pre>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline gap-1.5 min-w-0">
+      <span className="text-ink-500 shrink-0">{label}:</span>
+      <span className="text-ink-100 truncate" title={value}>{value}</span>
+    </div>
+  );
+}
+
+function AgentStatRow({
+  agent,
+}: {
+  agent: RunSummary["agents"][number];
+}) {
+  const tokens =
+    agent.tokensIn === null && agent.tokensOut === null
+      ? "tokens: —"
+      : `tokens: ${agent.tokensIn ?? "?"}/${agent.tokensOut ?? "?"}`;
+  return (
+    <>
+      <span className="text-ink-300">Agent {agent.agentIndex}</span>
+      <span className="text-ink-400 font-mono">{agent.turnsTaken} turn(s)</span>
+      <span className="text-ink-500">{tokens}</span>
+    </>
+  );
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}m${s.toString().padStart(2, "0")}s`;
+}
+
+function stopReasonAccent(reason: RunSummary["stopReason"]): { badge: string; border: string } {
+  switch (reason) {
+    case "completed":
+      return { badge: "bg-emerald-900/60 text-emerald-200", border: "border-l-4 border-l-emerald-500" };
+    case "user":
+      return { badge: "bg-ink-700 text-ink-200", border: "border-l-4 border-l-ink-400" };
+    case "crash":
+      return { badge: "bg-rose-900/60 text-rose-200", border: "border-l-4 border-l-rose-500" };
+    case "cap:wall-clock":
+    case "cap:commits":
+    case "cap:todos":
+      return { badge: "bg-amber-900/60 text-amber-200", border: "border-l-4 border-l-amber-500" };
+  }
 }
 
 function FindingsPane({ findings, agentLabel }: FindingsPaneProps) {

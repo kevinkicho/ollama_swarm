@@ -14,6 +14,7 @@ import { Board } from "./Board.js";
 import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaster.js";
 import { checkCaps } from "./caps.js";
 import { buildCrashSnapshot } from "./crashSnapshot.js";
+import { buildSummary, type PerAgentStat, type RunSummary } from "./summary.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
 import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
@@ -90,6 +91,20 @@ export class BlackboardRunner implements SwarmRunner {
   // note explaining which cap).
   private runStartedAt?: number;
   private terminationReason?: string;
+  // Phase 9: run-summary counters. runBootedAt is the wall-clock origin
+  // (stamped in start(), covers cloning+spawning+seeding+planning+executing)
+  // while runStartedAt scopes hard caps. staleEventCount tracks every stale
+  // transition, including ones that get replanned back — the spec's
+  // "staleEvents" metric is the total thrash count, not the residual.
+  // turnsPerAgent counts promptAgent calls, incremented on each invocation
+  // regardless of whether the prompt succeeded.
+  private runBootedAt?: number;
+  private staleEventCount = 0;
+  private turnsPerAgent = new Map<string, number>();
+  // Stashed at spawn time so writeRunSummary can still produce per-agent
+  // stats even after AgentManager.killAll() has cleared its own roster
+  // (stop() path runs killAll concurrently with the summary write).
+  private agentRoster: Array<{ id: string; index: number }> = [];
 
   constructor(private readonly opts: RunnerOpts) {
     this.boardBroadcaster = createBoardBroadcaster(this.opts.emit);
@@ -136,6 +151,10 @@ export class BlackboardRunner implements SwarmRunner {
     this.round = 0;
     this.runStartedAt = undefined;
     this.terminationReason = undefined;
+    this.runBootedAt = Date.now();
+    this.staleEventCount = 0;
+    this.turnsPerAgent.clear();
+    this.agentRoster = [];
     this.active = cfg;
 
     this.setPhase("cloning");
@@ -172,6 +191,10 @@ export class BlackboardRunner implements SwarmRunner {
       this.appendSystem("No workers spawned (agentCount=1). Planner will post TODOs, nothing will drain them.");
     }
 
+    // Freeze the roster for the summary artifact — killAll() will later
+    // empty AgentManager's own map.
+    this.agentRoster = [planner, ...workers].map((a) => ({ id: a.id, index: a.index }));
+
     this.setPhase("seeding");
     const seed = await this.buildSeed(destPath, cfg);
     this.appendSystem(
@@ -192,6 +215,7 @@ export class BlackboardRunner implements SwarmRunner {
     seed: PlannerSeed,
   ): Promise<void> {
     let errored = false;
+    let crashMessage: string | undefined;
     try {
       await this.runPlanner(planner, seed);
       if (this.stopping) return;
@@ -209,9 +233,9 @@ export class BlackboardRunner implements SwarmRunner {
       }
     } catch (err) {
       errored = true;
-      const msg = err instanceof Error ? err.message : String(err);
-      this.opts.emit({ type: "error", message: `blackboard run failed: ${msg}` });
-      this.appendSystem(`Run failed: ${msg}`);
+      crashMessage = err instanceof Error ? err.message : String(err);
+      this.opts.emit({ type: "error", message: `blackboard run failed: ${crashMessage}` });
+      this.appendSystem(`Run failed: ${crashMessage}`);
       // Best-effort post-mortem. Awaited so the write lands before the
       // finally block flips phase to "failed" — a WS consumer watching for
       // the failed transition should be able to trust the artifact is
@@ -220,6 +244,12 @@ export class BlackboardRunner implements SwarmRunner {
     } finally {
       this.stopClaimExpiry();
       this.stopReplanWatcher();
+      // Phase 9: always try to write a summary, regardless of how we got
+      // here (completed / stopped / failed / cap). Awaited so the file and
+      // the broadcast event land before the terminal phase transition, so
+      // a UI consumer reacting to `completed|stopped|failed` can trust the
+      // summary is already available.
+      await this.writeRunSummary(crashMessage);
     }
     // Ensure the final snapshot lands even if the debounce timer hasn't fired.
     this.boardBroadcaster.flushSnapshot();
@@ -572,6 +602,7 @@ export class BlackboardRunner implements SwarmRunner {
 
   private onBoardEvent(ev: BoardEvent): void {
     if (ev.type !== "todo_stale") return;
+    this.staleEventCount++;
     this.enqueueReplan(ev.todoId);
   }
 
@@ -791,6 +822,73 @@ export class BlackboardRunner implements SwarmRunner {
   // snapshot, we log the failure to the transcript (which still broadcasts
   // over WS) and move on. Losing the snapshot is better than turning a
   // normal run failure into a recursive crash.
+  // Phase 9: run summary artifact. Builds a RunSummary, writes it to
+  // `<clone>/summary.json`, and broadcasts `run_summary` so the UI can
+  // render without re-reading the file. Swallows its own errors like
+  // writeCrashSnapshot — a missing summary is an annoyance, not worth
+  // escalating into a run failure.
+  private async writeRunSummary(crashMessage: string | undefined): Promise<void> {
+    const cfg = this.active;
+    if (!cfg) return;
+    if (this.runBootedAt === undefined) return;
+
+    const clone = cfg.localPath;
+    let gitStatus = { porcelain: "", changedFiles: 0 };
+    try {
+      gitStatus = await this.opts.repos.gitStatus(clone);
+    } catch {
+      // gitStatus already swallows, but belt-and-braces.
+    }
+
+    const agentStats: PerAgentStat[] = this.agentRoster.map((a) => ({
+      agentId: a.id,
+      agentIndex: a.index,
+      turnsTaken: this.turnsPerAgent.get(a.id) ?? 0,
+      // OpenCode SDK's session.prompt response doesn't expose per-turn
+      // token usage via our current extractText path, so we leave these
+      // null. Documented in summary.ts.
+      tokensIn: null,
+      tokensOut: null,
+    }));
+
+    const counts = this.board.counts();
+    const summary = buildSummary({
+      config: {
+        repoUrl: cfg.repoUrl,
+        localPath: cfg.localPath,
+        preset: cfg.preset,
+        model: cfg.model,
+      },
+      startedAt: this.runBootedAt,
+      endedAt: Date.now(),
+      crashMessage,
+      terminationReason: this.terminationReason,
+      stopping: this.stopping,
+      board: {
+        committed: counts.committed,
+        skipped: counts.skipped,
+        total: counts.total,
+      },
+      staleEvents: this.staleEventCount,
+      filesChanged: gitStatus.changedFiles,
+      finalGitStatus: gitStatus.porcelain,
+      agents: agentStats,
+    });
+
+    const outPath = path.join(clone, "summary.json");
+    try {
+      await writeFileAtomic(outPath, JSON.stringify(summary, null, 2));
+      this.appendSystem(
+        `Wrote run summary to ${outPath} (stopReason=${summary.stopReason}, commits=${summary.commits}, files=${summary.filesChanged}).`,
+      );
+    } catch (writeErr) {
+      const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
+      this.appendSystem(`Failed to write run summary (${msg})`);
+    }
+    // Broadcast regardless of write success so the UI still gets the card.
+    this.opts.emit({ type: "run_summary", summary });
+  }
+
   private async writeCrashSnapshot(err: unknown): Promise<void> {
     const clone = this.active?.localPath;
     if (!clone) {
@@ -891,6 +989,7 @@ export class BlackboardRunner implements SwarmRunner {
   // Absolute-cap-only watchdog. No idle-silence detection because OpenCode
   // doesn't forward usable activity events for our ollama provider setup.
   private async promptAgent(agent: Agent, prompt: string): Promise<string> {
+    this.turnsPerAgent.set(agent.id, (this.turnsPerAgent.get(agent.id) ?? 0) + 1);
     this.opts.manager.markStatus(agent.id, "thinking");
     this.emitAgentState({
       id: agent.id,

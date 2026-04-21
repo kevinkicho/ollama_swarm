@@ -8,7 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "test": "node --import tsx --test src/swarm/blackboard/Board.test.ts src/swarm/blackboard/prompts/planner.test.ts src/swarm/blackboard/prompts/worker.test.ts src/swarm/blackboard/prompts/replanner.test.ts src/swarm/blackboard/writeFileAtomic.test.ts src/swarm/blackboard/diffValidation.test.ts src/swarm/blackboard/resolveSafe.test.ts src/swarm/blackboard/caps.test.ts src/swarm/blackboard/crashSnapshot.test.ts"
+    "test": "node --import tsx --test src/swarm/blackboard/Board.test.ts src/swarm/blackboard/prompts/planner.test.ts src/swarm/blackboard/prompts/worker.test.ts src/swarm/blackboard/prompts/replanner.test.ts src/swarm/blackboard/writeFileAtomic.test.ts src/swarm/blackboard/diffValidation.test.ts src/swarm/blackboard/resolveSafe.test.ts src/swarm/blackboard/caps.test.ts src/swarm/blackboard/crashSnapshot.test.ts src/swarm/blackboard/summary.test.ts"
   },
   "dependencies": {
     "@opencode-ai/sdk": "^0.15.0",
