@@ -278,9 +278,53 @@ worker/planner/replanner JSON responses as raw blobs (e.g. `{"diffs":[…]}`).
 Polish task tracked separately — render as one-line summary with a "View
 JSON" toggle.
 
-## Phase 7 — Stop conditions + safety valves  **[pending]**
+## Phase 7 — Stop conditions + safety valves  **[in progress]**
 
-*Not started.* See `blackboard-plan.md` §Phase 7.
+Hard-cap a run so it always terminates, and capture final state on crash. See
+`blackboard-plan.md` §Phase 7 for the step breakdown.
+
+### Step A — Hard caps  **[working tree]**
+
+Pure decision function + minimal runner wiring so a pathological run can't
+run forever. Caps are intentionally generous — normal runs complete well
+under them; the caps are a safety valve, not a production tuning knob. Not
+runtime-configurable (see `known-limitations.md`); deferred to a later cap
+iteration if a real run ever bumps into the defaults.
+
+- `server/src/swarm/blackboard/caps.ts` — `checkCaps({startedAt, now,
+  committed, totalTodos}) → string | null`. Constants: `WALL_CLOCK_CAP_MS =
+  20 min`, `COMMITS_CAP = 20`, `TODOS_CAP = 30`. Priority when multiple trip
+  in the same tick: wall-clock → commits → todos (first-match wins so the
+  caller gets one stable reason string).
+- `server/src/swarm/blackboard/caps.test.ts` — 10 tests: below-cap null,
+  boundary-minus-one passes, each cap fires at its own boundary, priority
+  ordering (wall-clock > commits > todos, commits > todos), clock skew
+  (`now < startedAt` returns null, not fires negative-past-cap), `>=` vs `>`
+  contract (one run that writes exactly COMMITS_CAP terminates immediately
+  afterward).
+- `BlackboardRunner.ts` — two new state fields (`runStartedAt`,
+  `terminationReason`), both reset in `start()`. `runStartedAt` stamped just
+  before `setPhase("executing")` so planning time does NOT count toward the
+  wall-clock cap (planning is one prompt; caps are a worker-loop guard).
+  `checkAndApplyCaps()` helper called at the top of every `runWorker`
+  iteration, before the natural-exit check: if a cap trips it logs
+  `Stopping: <reason>`, sets `stopping=true` to unblock all workers, and
+  aborts every in-flight `activeAborts` controller so a worker mid-prompt
+  doesn't sit for the full ABSOLUTE_MAX_MS watchdog. Idempotent — peer
+  workers checking simultaneously see `stopping` already set and short-
+  circuit.
+- `planAndExecute`'s finally-block phase transition changed from
+  `if (this.stopping) return` to `if (this.stopping && !this.terminationReason) return`
+  so a cap-induced stop still transitions to `completed` (with the reason
+  in the transcript), while a user-initiated stop continues to let `stop()`
+  drive the phase to `stopped`.
+
+**Verified (unit):** 102/102 tests green (92 prior + 10 new caps tests);
+`tsc --noEmit` clean. E2E verification deferred to Step C.
+
+### Step B — Crash snapshot  **[pending]**
+
+### Step C — E2E verification  **[pending]**
 
 ## Phase 8 — UI board view  **[pending]**
 

@@ -11,6 +11,7 @@ import type {
 import type { RunConfig, RunnerOpts, SwarmRunner } from "../SwarmRunner.js";
 import { Board } from "./Board.js";
 import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaster.js";
+import { checkCaps } from "./caps.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
 import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
@@ -79,6 +80,14 @@ export class BlackboardRunner implements SwarmRunner {
   private replanPending = new Set<string>();
   private replanRunning = false;
   private replanTickTimer?: NodeJS.Timeout;
+  // Phase 7: hard-cap state. runStartedAt is stamped when executing begins so
+  // the wall-clock cap is scoped to the worker loop (planning time doesn't
+  // count). terminationReason is set by the cap-enforcement helper so the
+  // finally block can tell "user pressed stop" (phase → stopped) apart from
+  // "cap tripped and asked us to stop" (phase → completed, with a transcript
+  // note explaining which cap).
+  private runStartedAt?: number;
+  private terminationReason?: string;
 
   constructor(private readonly opts: RunnerOpts) {
     this.boardBroadcaster = createBoardBroadcaster(this.opts.emit);
@@ -123,6 +132,8 @@ export class BlackboardRunner implements SwarmRunner {
     this.transcript = [];
     this.stopping = false;
     this.round = 0;
+    this.runStartedAt = undefined;
+    this.terminationReason = undefined;
     this.active = cfg;
 
     this.setPhase("cloning");
@@ -183,6 +194,11 @@ export class BlackboardRunner implements SwarmRunner {
       await this.runPlanner(planner, seed);
       if (this.stopping) return;
       if (workers.length > 0 && this.board.counts().open > 0) {
+        // Stamp the wall-clock origin just before caps start being checked.
+        // Planning time (seeding, initial planner prompt, repair) does NOT
+        // count toward the cap — the cap is a worker-loop guard, not a total
+        // run guard.
+        this.runStartedAt = Date.now();
         this.setPhase("executing");
         this.startClaimExpiry();
         this.planner = planner;
@@ -200,7 +216,11 @@ export class BlackboardRunner implements SwarmRunner {
     }
     // Ensure the final snapshot lands even if the debounce timer hasn't fired.
     this.boardBroadcaster.flushSnapshot();
-    if (this.stopping) return;
+    // User-initiated stop: stop() sets phase to "stopping" → "stopped" itself,
+    // so we bail. Cap-initiated stop also sets this.stopping, but we detect
+    // that via terminationReason and fall through to setPhase("completed")
+    // so the UI reflects the run actually finishing at the cap boundary.
+    if (this.stopping && !this.terminationReason) return;
     this.setPhase(errored ? "failed" : "completed");
   }
 
@@ -313,6 +333,12 @@ export class BlackboardRunner implements SwarmRunner {
       const jitter = Math.floor(Math.random() * WORKER_POLL_JITTER_MS);
       await this.sleep(WORKER_POLL_MS + jitter);
       if (this.stopping) return;
+
+      // Phase 7: cap guard. Check BEFORE considering new work so we don't
+      // burn another prompt right after a cap would have tripped. Sets
+      // stopping=true under the hood, so the next loop iteration (if any)
+      // exits cleanly; we also return early here for promptness.
+      if (this.checkAndApplyCaps()) return;
 
       const counts = this.board.counts();
       // Nothing left to do: no open, nothing claimed, no stales, AND no
@@ -710,6 +736,45 @@ export class BlackboardRunner implements SwarmRunner {
     this.replanTickTimer = undefined;
     this.replanPending.clear();
     this.planner = undefined;
+  }
+
+  // ---------------------------------------------------------------------
+  // Phase 7 — hard caps
+  //
+  // Called from each worker loop iteration. If any cap trips, sets
+  // terminationReason, flips stopping=true so all workers exit their
+  // `while (!this.stopping)` guard, and aborts in-flight prompts so a
+  // worker mid-prompt doesn't sit for the full ABSOLUTE_MAX_MS watchdog.
+  //
+  // Idempotent: if terminationReason is already set (a peer worker beat us
+  // to it) we just return true without double-logging or double-aborting.
+  // Also returns true unconditionally once stopping is set — any non-cap
+  // path that flipped stopping (user stop, shutdown race) wants workers
+  // to exit too, so short-circuit here keeps the call site simple.
+  // ---------------------------------------------------------------------
+
+  private checkAndApplyCaps(): boolean {
+    if (this.stopping) return true;
+    if (this.runStartedAt === undefined) return false;
+    const reason = checkCaps({
+      startedAt: this.runStartedAt,
+      now: Date.now(),
+      committed: this.board.counts().committed,
+      totalTodos: this.board.listTodos().length,
+    });
+    if (!reason) return false;
+    this.terminationReason = reason;
+    this.appendSystem(`Stopping: ${reason}`);
+    this.stopping = true;
+    for (const ctrl of this.activeAborts) {
+      try {
+        ctrl.abort(new Error(`cap: ${reason}`));
+      } catch {
+        // best-effort; AbortController.abort throws on already-aborted in
+        // some runtimes.
+      }
+    }
+    return true;
   }
 
   // ---------------------------------------------------------------------
