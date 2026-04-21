@@ -153,4 +153,5 @@ export type SwarmEvent =
     }
   | { type: "board_finding_posted"; finding: Finding }
   | { type: "board_state"; snapshot: BoardSnapshot; counts: BoardCountsDTO }
+  | { type: "contract_updated"; contract: ExitContract }
   | { type: "run_summary"; summary: RunSummary };

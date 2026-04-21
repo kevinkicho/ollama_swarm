@@ -2,9 +2,10 @@ import { useState } from "react";
 import { useSwarm } from "../state/store";
 import { AgentPanel } from "./AgentPanel";
 import { BoardView } from "./BoardView";
+import { ContractPanel } from "./ContractPanel";
 import { Transcript } from "./Transcript";
 
-type Tab = "transcript" | "board";
+type Tab = "transcript" | "board" | "contract";
 
 export function SwarmView() {
   const agents = useSwarm((s) => s.agents);
@@ -88,9 +89,12 @@ export function SwarmView() {
           <TabButton active={tab === "board"} onClick={() => setTab("board")}>
             Board
           </TabButton>
+          <TabButton active={tab === "contract"} onClick={() => setTab("contract")}>
+            Contract
+          </TabButton>
         </div>
         <div className="flex-1 overflow-hidden">
-          {tab === "transcript" ? <Transcript /> : <BoardView />}
+          {tab === "transcript" ? <Transcript /> : tab === "board" ? <BoardView /> : <ContractPanel />}
         </div>
         <form onSubmit={onSay} className="border-t border-ink-700 p-3 bg-ink-800 flex gap-2">
           <input

@@ -3,6 +3,7 @@ import type {
   AgentState,
   BoardSnapshot,
   Claim,
+  ExitContract,
   Finding,
   RunSummary,
   SwarmPhase,
@@ -18,6 +19,7 @@ interface SwarmStore {
   streaming: Record<string, string>;
   todos: Record<string, Todo>;
   findings: Finding[];
+  contract?: ExitContract;
   summary?: RunSummary;
   error?: string;
 
@@ -35,6 +37,7 @@ interface SwarmStore {
   applyReplan: (todoId: string, description: string, expectedFiles: string[], replanCount: number) => void;
   appendFinding: (f: Finding) => void;
   replaceBoard: (snapshot: BoardSnapshot) => void;
+  setContract: (c: ExitContract) => void;
   setSummary: (s: RunSummary) => void;
 
   setError: (msg: string | undefined) => void;
@@ -49,6 +52,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   streaming: {},
   todos: {},
   findings: [],
+  contract: undefined,
   summary: undefined,
   error: undefined,
 
@@ -145,6 +149,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       for (const t of snapshot.todos) todos[t.id] = t;
       return { todos, findings: snapshot.findings.slice() };
     }),
+  setContract: (c) => set({ contract: c }),
   setSummary: (s) => set({ summary: s }),
 
   setError: (msg) => set({ error: msg }),
@@ -157,6 +162,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       streaming: {},
       todos: {},
       findings: [],
+      contract: undefined,
       summary: undefined,
       error: undefined,
     }),

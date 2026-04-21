@@ -26,13 +26,20 @@ import {
   type PlannerSeed,
 } from "./prompts/planner.js";
 import {
+  buildFirstPassContractRepairPrompt,
+  buildFirstPassContractUserPrompt,
+  FIRST_PASS_CONTRACT_SYSTEM_PROMPT,
+  parseFirstPassContractResponse,
+  type ParsedContract,
+} from "./prompts/firstPassContract.js";
+import {
   buildReplannerRepairPrompt,
   buildReplannerUserPrompt,
   parseReplannerResponse,
   REPLANNER_SYSTEM_PROMPT,
   type ReplannerSeed,
 } from "./prompts/replanner.js";
-import type { BoardEvent, Todo } from "./types.js";
+import type { BoardEvent, ExitContract, Todo } from "./types.js";
 import {
   buildWorkerRepairPrompt,
   buildWorkerUserPrompt,
@@ -105,6 +112,11 @@ export class BlackboardRunner implements SwarmRunner {
   // stats even after AgentManager.killAll() has cleared its own roster
   // (stop() path runs killAll concurrently with the summary write).
   private agentRoster: Array<{ id: string; index: number }> = [];
+  // Phase 11b: first-pass exit contract. Populated by runFirstPassContract
+  // before the planner posts todos. Undefined when the contract prompt failed
+  // to parse after one repair — run still proceeds, just without a contract
+  // (drain-exit remains the termination condition until Phase 11c).
+  private contract?: ExitContract;
 
   constructor(private readonly opts: RunnerOpts) {
     this.boardBroadcaster = createBoardBroadcaster(this.opts.emit);
@@ -217,6 +229,8 @@ export class BlackboardRunner implements SwarmRunner {
     let errored = false;
     let crashMessage: string | undefined;
     try {
+      await this.runFirstPassContract(planner, seed);
+      if (this.stopping) return;
       await this.runPlanner(planner, seed);
       if (this.stopping) return;
       if (workers.length > 0 && this.board.counts().open > 0) {
@@ -287,6 +301,91 @@ export class BlackboardRunner implements SwarmRunner {
       clonePath,
       topLevel,
       readmeExcerpt,
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // Phase 11b: first-pass exit contract
+  // ---------------------------------------------------------------------
+
+  // Ask the planner for a mission statement + criteria list BEFORE it posts
+  // todos. One shot + one repair attempt, matching runPlanner's pattern. If
+  // the contract can't be parsed we log, leave this.contract undefined, and
+  // return — the caller proceeds to runPlanner either way.
+  private async runFirstPassContract(agent: Agent, seed: PlannerSeed): Promise<void> {
+    const firstResponse = await this.promptAgent(
+      agent,
+      `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed)}`,
+    );
+    if (this.stopping) return;
+    this.appendAgent(agent, firstResponse);
+
+    let parsed = parseFirstPassContractResponse(firstResponse);
+    if (!parsed.ok) {
+      this.appendSystem(
+        `Contract response did not parse (${parsed.reason}). Issuing repair prompt.`,
+      );
+      const repairResponse = await this.promptAgent(
+        agent,
+        `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractRepairPrompt(
+          firstResponse,
+          parsed.reason,
+        )}`,
+      );
+      if (this.stopping) return;
+      this.appendAgent(agent, repairResponse);
+      parsed = parseFirstPassContractResponse(repairResponse);
+      if (!parsed.ok) {
+        this.appendSystem(
+          `Contract still invalid after repair (${parsed.reason}). Proceeding without a contract.`,
+        );
+        return;
+      }
+    }
+
+    if (parsed.dropped.length > 0) {
+      this.appendSystem(
+        `Dropped ${parsed.dropped.length} invalid criterion(s): ${parsed.dropped
+          .map((d) => d.reason)
+          .join(" | ")}`,
+      );
+    }
+
+    this.contract = this.buildContract(parsed.contract);
+    this.opts.emit({ type: "contract_updated", contract: this.cloneContract(this.contract) });
+
+    if (this.contract.criteria.length === 0) {
+      this.appendSystem(
+        `Contract: "${this.contract.missionStatement}" (0 criteria — planner found nothing to commit to).`,
+      );
+    } else {
+      this.appendSystem(
+        `Contract: "${this.contract.missionStatement}" (${this.contract.criteria.length} criteria).`,
+      );
+    }
+  }
+
+  private buildContract(parsed: ParsedContract): ExitContract {
+    const addedAt = Date.now();
+    return {
+      missionStatement: parsed.missionStatement,
+      criteria: parsed.criteria.map((c, i) => ({
+        id: `c${i + 1}`,
+        description: c.description,
+        expectedFiles: [...c.expectedFiles],
+        status: "unmet",
+        addedAt,
+      })),
+    };
+  }
+
+  private cloneContract(c: ExitContract): ExitContract {
+    return {
+      missionStatement: c.missionStatement,
+      criteria: c.criteria.map((crit) => ({
+        ...crit,
+        expectedFiles: [...crit.expectedFiles],
+      })),
     };
   }
 

@@ -601,6 +601,89 @@ green (142 → 144 from the 2 new `criterionId` passthrough tests).
 
 ---
 
+## Phase 11b — First-pass contract emission + UI panel  **[working tree]**
+
+Planner emits an `ExitContract` (mission + criteria) once at the top of
+`planAndExecute`, before it posts todos. The contract is broadcast via
+a new `contract_updated` WS event, stored in the web Zustand store,
+and rendered in a new **Contract** tab alongside Transcript and Board.
+
+Behavior is still drain-exit — the contract is informational in 11b.
+Gating run termination on contract satisfaction lands in Phase 11c
+(auditor loop) and won't need another type or transport change.
+
+**New prompt module.** `server/src/swarm/blackboard/prompts/firstPassContract.ts`:
+
+- `FIRST_PASS_CONTRACT_SYSTEM_PROMPT` — asks for a single JSON *object*
+  shaped `{missionStatement, criteria: [{description, expectedFiles}]}`.
+  Emphasizes that criteria are outcomes ("README has a Quick Start
+  section") not implementation steps.
+- `buildFirstPassContractUserPrompt(seed)` — reuses the existing
+  `PlannerSeed` (repo URL, clone path, top-level dirs, README excerpt)
+  so the contract has the same context the planner has.
+- `buildFirstPassContractRepairPrompt(prev, err)` — same one-shot repair
+  loop as `planner.ts`.
+- `parseFirstPassContractResponse(raw)` — zod-validated parser. Envelope
+  is an object (not an array like `planner`), so the fence-stripper
+  targets `{...}`. Drops individual invalid criteria without failing
+  the whole contract (mirrors planner's per-todo drop pattern).
+
+Cap per criterion: `expectedFiles.length ≤ 4` (planner's todo cap is
+≤ 2; contract criteria can span a little wider). Contract cap: ≤ 12
+criteria total.
+
+13 new tests in `prompts/firstPassContract.test.ts` cover bare object,
+fenced JSON, prose-wrapped JSON, empty criteria, array-instead-of-object,
+missing mission, invalid-criteria drop, unparseable JSON, and prompt
+content sanity checks.
+
+**Runner wiring.** `BlackboardRunner.runFirstPassContract(planner, seed)`
+runs immediately before `runPlanner` inside `planAndExecute`'s try block
+(so crashes are caught the same way). It promptAgent → parse → one
+repair on failure → parse again → give up silently if still invalid.
+On success, `buildContract(parsed)` stamps `c1`/`c2`/... IDs, sets all
+statuses to `unmet`, and stamps a single `addedAt`. The contract is
+stored in `this.contract` (for Phase 11c) and broadcast via a defensive
+clone.
+
+If the prompt fails or the repair loop gives up, `this.contract` stays
+undefined and the run proceeds as before — no behavior change from the
+user's perspective. The transcript gets a `"Proceeding without a
+contract."` line so this case is visible in the log.
+
+**Server types.** `server/src/types.ts` imports `ExitContract` from the
+blackboard types module and adds `{ type: "contract_updated"; contract }`
+to `SwarmEvent`.
+
+**Web wiring.** `web/src/types.ts` mirrors the event variant (types were
+already mirrored in 11a). `web/src/state/store.ts` grows:
+- `contract?: ExitContract` field + `setContract(c)` action
+- Cleared in `reset()` along with the rest
+- Dispatched from `useSwarmSocket.ts` on `contract_updated`
+
+**UI panel.** `web/src/components/ContractPanel.tsx` — read-only view:
+- Mission statement at top as a body-weight line
+- Criteria list with per-row status badge (unmet / met / wont-do),
+  monospace `id`, description, expected-file chips, and an optional
+  rationale italicized beneath
+- Summary line at the top of the list: "N met · M unmet · K wont-do"
+- Empty-state message when no contract has arrived yet
+
+`SwarmView.tsx` grew a third tab button (**Contract**) between Board
+and the say-input, following the existing `TabButton` pattern.
+
+**Deliberately out of scope for 11b.** No auditor, no re-emission of
+`contract_updated` mid-run (so status stays `"unmet"` for the whole
+run), no contract-satisfied termination, no seed goal field on
+SetupForm. Those are 11c–11e.
+
+**Verified.** `tsc --noEmit` clean both sides; 157/157 server tests
+green (144 → 157 from the 13 new `firstPassContract` parser + prompt
+tests). HMR picked up every edit cleanly on the running dev server;
+both ports returned 200.
+
+---
+
 ## Cross-phase notes
 
 - **Event log.** A per-boot append-only JSONL log is written at `logs/current.jsonl` via `server/src/ws/eventLogger.ts` (landed alongside Phase 4 work, currently uncommitted). Every `SwarmEvent` the WS broadcasts gets a line, making post-hoc verification of runs possible even after the browser tab is closed.
