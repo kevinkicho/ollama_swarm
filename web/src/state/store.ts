@@ -1,5 +1,13 @@
 import { create } from "zustand";
-import type { AgentState, SwarmPhase, TranscriptEntry } from "../types";
+import type {
+  AgentState,
+  BoardSnapshot,
+  Claim,
+  Finding,
+  SwarmPhase,
+  Todo,
+  TranscriptEntry,
+} from "../types";
 
 interface SwarmStore {
   phase: SwarmPhase;
@@ -7,6 +15,8 @@ interface SwarmStore {
   agents: Record<string, AgentState>;
   transcript: TranscriptEntry[];
   streaming: Record<string, string>;
+  todos: Record<string, Todo>;
+  findings: Finding[];
   error?: string;
 
   setPhase: (phase: SwarmPhase, round: number) => void;
@@ -14,6 +24,16 @@ interface SwarmStore {
   appendEntry: (e: TranscriptEntry) => void;
   setStreaming: (agentId: string, text: string) => void;
   clearStreaming: (agentId: string) => void;
+
+  upsertTodo: (t: Todo) => void;
+  applyClaim: (todoId: string, claim: Claim) => void;
+  markCommitted: (todoId: string) => void;
+  markStale: (todoId: string, reason: string, replanCount: number) => void;
+  markSkipped: (todoId: string, reason: string) => void;
+  applyReplan: (todoId: string, description: string, expectedFiles: string[], replanCount: number) => void;
+  appendFinding: (f: Finding) => void;
+  replaceBoard: (snapshot: BoardSnapshot) => void;
+
   setError: (msg: string | undefined) => void;
   reset: () => void;
 }
@@ -24,6 +44,8 @@ export const useSwarm = create<SwarmStore>((set) => ({
   agents: {},
   transcript: [],
   streaming: {},
+  todos: {},
+  findings: [],
   error: undefined,
 
   setPhase: (phase, round) => set({ phase, round }),
@@ -44,6 +66,92 @@ export const useSwarm = create<SwarmStore>((set) => ({
       delete next[agentId];
       return { streaming: next };
     }),
+
+  upsertTodo: (t) => set((s) => ({ todos: { ...s.todos, [t.id]: t } })),
+  applyClaim: (todoId, claim) =>
+    set((s) => {
+      const existing = s.todos[todoId];
+      if (!existing) return s;
+      return {
+        todos: { ...s.todos, [todoId]: { ...existing, status: "claimed", claim } },
+      };
+    }),
+  markCommitted: (todoId) =>
+    set((s) => {
+      const existing = s.todos[todoId];
+      if (!existing) return s;
+      // committedAt here is a UI-side approximation; a follow-up board_state
+      // snapshot replaces it with the authoritative server timestamp.
+      return {
+        todos: {
+          ...s.todos,
+          [todoId]: { ...existing, status: "committed", committedAt: Date.now() },
+        },
+      };
+    }),
+  markStale: (todoId, reason, replanCount) =>
+    set((s) => {
+      const existing = s.todos[todoId];
+      if (!existing) return s;
+      return {
+        todos: {
+          ...s.todos,
+          [todoId]: { ...existing, status: "stale", staleReason: reason, replanCount },
+        },
+      };
+    }),
+  markSkipped: (todoId, reason) =>
+    set((s) => {
+      const existing = s.todos[todoId];
+      if (!existing) return s;
+      return {
+        todos: {
+          ...s.todos,
+          [todoId]: { ...existing, status: "skipped", skippedReason: reason },
+        },
+      };
+    }),
+  applyReplan: (todoId, description, expectedFiles, replanCount) =>
+    set((s) => {
+      const existing = s.todos[todoId];
+      if (!existing) return s;
+      return {
+        todos: {
+          ...s.todos,
+          [todoId]: {
+            ...existing,
+            description,
+            expectedFiles,
+            replanCount,
+            status: "open",
+            staleReason: undefined,
+            claim: undefined,
+          },
+        },
+      };
+    }),
+  appendFinding: (f) =>
+    set((s) => {
+      if (s.findings.some((existing) => existing.id === f.id)) return s;
+      return { findings: [...s.findings, f] };
+    }),
+  replaceBoard: (snapshot) =>
+    set(() => {
+      const todos: Record<string, Todo> = {};
+      for (const t of snapshot.todos) todos[t.id] = t;
+      return { todos, findings: snapshot.findings.slice() };
+    }),
+
   setError: (msg) => set({ error: msg }),
-  reset: () => set({ phase: "idle", round: 0, agents: {}, transcript: [], streaming: {}, error: undefined }),
+  reset: () =>
+    set({
+      phase: "idle",
+      round: 0,
+      agents: {},
+      transcript: [],
+      streaming: {},
+      todos: {},
+      findings: [],
+      error: undefined,
+    }),
 }));

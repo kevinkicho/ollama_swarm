@@ -401,7 +401,37 @@ clock span: 22 s from `runStartedAt` to `crashedAt`.
 run. Reverts confirmed: working tree clean against HEAD, 115/115 unit
 tests still green, `tsc --noEmit` clean.
 
-## Phase 8 — UI board view  **[pending]**
+## Phase 8 — UI board view  **[working tree]**
+
+The Board tab lives alongside Transcript in `SwarmView`. Five columns
+(Open, Claimed, Committed, Stale, Skipped) are driven by a pure
+grouping over the store's `todos` map; cards sort by `createdAt` within
+each column. A collapsible Findings pane sits below the columns.
+
+**Store.** `web/src/state/store.ts` grew `todos: Record<string, Todo>`
+and `findings: Finding[]`, plus granular reducers for each board event
+(`upsertTodo`, `applyClaim`, `markCommitted`, `markStale`,
+`markSkipped`, `applyReplan`, `appendFinding`) and a bulk
+`replaceBoard` for `board_state` snapshots. The committed reducer
+stamps a UI-side `committedAt = Date.now()` that the next snapshot
+overwrites with the authoritative server time.
+
+**Dispatcher.** `useSwarmSocket.ts` now handles the full board event
+surface — `board_todo_posted`/`claimed`/`committed`/`stale`/`skipped`/
+`replanned`, `board_finding_posted`, and `board_state`.
+
+**Cards.** `TodoCard` is `React.memo`'d and keyed by `todoId + ":" +
+status` so a column move doesn't thrash siblings. Each card shows
+description, expectedFiles, creator, and per-status extras: claimer +
+claim age for Claimed, commit time for Committed, stale reason for
+Stale, skip reason for Skipped. A `R<n>` badge appears when
+`replanCount > 0`.
+
+**Verified (live).** Ran `blackboard` on
+`sindresorhus/is-plain-obj` (3 agents, glm-5.1:cloud). Planner posted
+9 todos; 7 committed, 2 skipped. The Board tab rendered all five
+columns with correct counts; no console errors; type-check
+(`tsc -b` in `web/`) clean.
 
 ## Phase 9 — Metrics + run artifact  **[pending]**
 

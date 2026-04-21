@@ -30,6 +30,30 @@ function dispatch(ev: SwarmEvent): void {
     case "error":
       s.setError(ev.message);
       break;
+    case "board_todo_posted":
+      s.upsertTodo(ev.todo);
+      break;
+    case "board_todo_claimed":
+      s.applyClaim(ev.todoId, ev.claim);
+      break;
+    case "board_todo_committed":
+      s.markCommitted(ev.todoId);
+      break;
+    case "board_todo_stale":
+      s.markStale(ev.todoId, ev.reason, ev.replanCount);
+      break;
+    case "board_todo_skipped":
+      s.markSkipped(ev.todoId, ev.reason);
+      break;
+    case "board_todo_replanned":
+      s.applyReplan(ev.todoId, ev.description, ev.expectedFiles, ev.replanCount);
+      break;
+    case "board_finding_posted":
+      s.appendFinding(ev.finding);
+      break;
+    case "board_state":
+      s.replaceBoard(ev.snapshot);
+      break;
   }
 }
 

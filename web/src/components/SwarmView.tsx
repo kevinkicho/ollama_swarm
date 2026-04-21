@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { useSwarm } from "../state/store";
 import { AgentPanel } from "./AgentPanel";
+import { BoardView } from "./BoardView";
 import { Transcript } from "./Transcript";
+
+type Tab = "transcript" | "board";
 
 export function SwarmView() {
   const agents = useSwarm((s) => s.agents);
@@ -9,6 +12,7 @@ export function SwarmView() {
   const setError = useSwarm((s) => s.setError);
   const [sayText, setSayText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<Tab>("transcript");
 
   const reset = useSwarm((s) => s.reset);
   const agentList = Object.values(agents).sort((a, b) => a.index - b.index);
@@ -77,8 +81,16 @@ export function SwarmView() {
         ) : null}
       </aside>
       <section className="flex flex-col overflow-hidden">
+        <div className="flex border-b border-ink-700 bg-ink-800 text-sm">
+          <TabButton active={tab === "transcript"} onClick={() => setTab("transcript")}>
+            Transcript
+          </TabButton>
+          <TabButton active={tab === "board"} onClick={() => setTab("board")}>
+            Board
+          </TabButton>
+        </div>
         <div className="flex-1 overflow-hidden">
-          <Transcript />
+          {tab === "transcript" ? <Transcript /> : <BoardView />}
         </div>
         <form onSubmit={onSay} className="border-t border-ink-700 p-3 bg-ink-800 flex gap-2">
           <input
@@ -96,5 +108,26 @@ export function SwarmView() {
         </form>
       </section>
     </div>
+  );
+}
+
+interface TabButtonProps {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}
+function TabButton({ active, onClick, children }: TabButtonProps) {
+  return (
+    <button
+      onClick={onClick}
+      className={
+        "px-4 py-2 border-b-2 transition-colors " +
+        (active
+          ? "border-emerald-500 text-emerald-300"
+          : "border-transparent text-ink-400 hover:text-ink-200")
+      }
+    >
+      {children}
+    </button>
   );
 }
