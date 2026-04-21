@@ -56,6 +56,23 @@ export interface Todo {
   replanCount: number;
   claim?: Claim;
   committedAt?: number;
+  criterionId?: string;
+}
+
+export type ExitCriterionStatus = "unmet" | "met" | "wont-do";
+
+export interface ExitCriterion {
+  id: string;
+  description: string;
+  expectedFiles: string[];
+  status: ExitCriterionStatus;
+  rationale?: string;
+  addedAt: number;
+}
+
+export interface ExitContract {
+  missionStatement: string;
+  criteria: ExitCriterion[];
 }
 
 export interface Finding {

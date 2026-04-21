@@ -50,6 +50,38 @@ describe("Board.postTodo", () => {
     assert.equal(list[0]?.description, "b");
     assert.equal(list[1]?.description, "a");
   });
+
+  it("persists criterionId when provided", () => {
+    const { board, events } = makeBoard();
+    const todo = board.postTodo({
+      description: "address c1",
+      expectedFiles: ["README.md"],
+      createdBy: "planner",
+      createdAt: 100,
+      criterionId: "c1",
+    });
+    assert.equal(todo.criterionId, "c1");
+    const fresh = board.listTodos()[0];
+    assert.equal(fresh?.criterionId, "c1");
+    const ev = events.at(-1);
+    assert.equal(ev?.type, "todo_posted");
+    if (ev?.type === "todo_posted") {
+      assert.equal(ev.todo.criterionId, "c1");
+    }
+  });
+
+  it("leaves criterionId undefined when omitted", () => {
+    const { board } = makeBoard();
+    const todo = board.postTodo({
+      description: "plain todo",
+      expectedFiles: [],
+      createdBy: "planner",
+      createdAt: 100,
+    });
+    assert.equal(todo.criterionId, undefined);
+    const fresh = board.listTodos()[0];
+    assert.equal(fresh?.criterionId, undefined);
+  });
 });
 
 describe("Board.claimTodo", () => {

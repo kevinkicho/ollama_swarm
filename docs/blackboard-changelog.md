@@ -550,6 +550,57 @@ green (133 → 142 from the 9 new `deriveCloneDir` tests).
 
 ---
 
+## Phase 11a — ExitContract types + `criterionId` on `Todo` **[pending]**
+
+First cut at the exit-contract design — types only, no behavior change.
+The goal across Phase 11 is to replace drain-exit (stop when the board
+has no open todos) with contract-satisfied termination (stop when a
+declared set of criteria are each marked `met` or `wont-do`). Phase 11a
+just lays the type foundation so 11b–11d can land as pure behavior PRs
+without touching shapes again.
+
+**Types.** `server/src/swarm/blackboard/types.ts` grew two new
+interfaces and extended one:
+
+- `ExitCriterion` — `{ id, description, expectedFiles, status, rationale?, addedAt }`
+  where `status: "unmet" | "met" | "wont-do"`. The three-valued status
+  is deliberate: `wont-do` is what the auditor emits for criteria that
+  are out of scope or already handled by prior work (not a failure,
+  not a pass — a closed verdict that ends the obligation without a
+  commit).
+- `ExitContract` — `{ missionStatement, criteria: ExitCriterion[] }`.
+  Mission statement is the seed goal; criteria accumulate across the
+  run (first-pass planner emits the initial set; auditor can add more
+  as it learns).
+- `Todo.criterionId?: string` — optional link from a todo back to the
+  contract criterion it's intended to satisfy. `undefined` for
+  discussion-only or exploratory todos the planner adds outside the
+  contract.
+
+`Board.postTodo` accepts an optional `criterionId` and stores it on
+the todo. `copyTodo` already uses `...todo` spread, so defensive copies
+preserve it for free. No other Board method is aware of criterion
+links yet — that's Phase 11c's job.
+
+**Mirror.** `web/src/types.ts` mirrors the new shapes so future
+`contract_updated` WS events and a contract panel can land without
+another cross-boundary type migration.
+
+**Tests.** Two new `Board.test.ts` cases:
+- `persists criterionId when provided` — round-trip through
+  `postTodo` → `listTodos` + the `todo_posted` event carries it.
+- `leaves criterionId undefined when omitted` — legacy callers
+  (`BlackboardRunner.ts`, `routes/dev.ts`) keep working without change.
+
+**Deliberately out of scope for 11a.** No prompt changes, no auditor,
+no first-pass contract emission, no UI panel, no `contract_updated`
+event variant. Those are 11b–11e.
+
+**Verified.** `tsc --noEmit` clean on both sides; 144/144 server tests
+green (142 → 144 from the 2 new `criterionId` passthrough tests).
+
+---
+
 ## Cross-phase notes
 
 - **Event log.** A per-boot append-only JSONL log is written at `logs/current.jsonl` via `server/src/ws/eventLogger.ts` (landed alongside Phase 4 work, currently uncommitted). Every `SwarmEvent` the WS broadcasts gets a line, making post-hoc verification of runs possible even after the browser tab is closed.

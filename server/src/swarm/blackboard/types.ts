@@ -12,6 +12,27 @@ export interface Todo {
   replanCount: number;
   claim?: Claim;
   committedAt?: number;
+  // Phase 11a: optional link back to an ExitContract criterion. When set, this
+  // todo is the planner/auditor's concrete plan for satisfying that criterion.
+  // Unused in Phase 11a behavior — only plumbed through postTodo so later phases
+  // can wire the auditor without another type migration.
+  criterionId?: string;
+}
+
+export type ExitCriterionStatus = "unmet" | "met" | "wont-do";
+
+export interface ExitCriterion {
+  id: string;
+  description: string;
+  expectedFiles: string[];
+  status: ExitCriterionStatus;
+  rationale?: string;
+  addedAt: number;
+}
+
+export interface ExitContract {
+  missionStatement: string;
+  criteria: ExitCriterion[];
 }
 
 export interface Claim {

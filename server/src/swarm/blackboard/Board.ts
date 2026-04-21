@@ -19,6 +19,7 @@ type PostTodoInput = {
   expectedFiles: string[];
   createdBy: string;
   createdAt: number;
+  criterionId?: string;
 };
 
 type ClaimInput = {
@@ -90,6 +91,7 @@ export class Board {
       createdAt: input.createdAt,
       status: "open",
       replanCount: 0,
+      criterionId: input.criterionId,
     };
     this.todos.set(todo.id, todo);
     this.emit({ type: "todo_posted", todo: this.copyTodo(todo) });
