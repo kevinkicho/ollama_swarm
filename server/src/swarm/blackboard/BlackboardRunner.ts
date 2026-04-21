@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
+import path from "node:path";
 import type { Agent } from "../../services/AgentManager.js";
 import type {
   AgentState,
@@ -12,6 +13,7 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "../SwarmRunner.js";
 import { Board } from "./Board.js";
 import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaster.js";
 import { checkCaps } from "./caps.js";
+import { buildCrashSnapshot } from "./crashSnapshot.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
 import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
@@ -210,6 +212,11 @@ export class BlackboardRunner implements SwarmRunner {
       const msg = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: `blackboard run failed: ${msg}` });
       this.appendSystem(`Run failed: ${msg}`);
+      // Best-effort post-mortem. Awaited so the write lands before the
+      // finally block flips phase to "failed" — a WS consumer watching for
+      // the failed transition should be able to trust the artifact is
+      // already on disk.
+      await this.writeCrashSnapshot(err);
     } finally {
       this.stopClaimExpiry();
       this.stopReplanWatcher();
@@ -775,6 +782,38 @@ export class BlackboardRunner implements SwarmRunner {
       }
     }
     return true;
+  }
+
+  // Phase 7 Step B: write a post-mortem blob at the clone root so a crashed
+  // run leaves behind enough state to diagnose what happened. Writes via
+  // writeFileAtomic so a crash *during* the snapshot write doesn't leave a
+  // half-written JSON. Swallows its own errors — if we can't write the
+  // snapshot, we log the failure to the transcript (which still broadcasts
+  // over WS) and move on. Losing the snapshot is better than turning a
+  // normal run failure into a recursive crash.
+  private async writeCrashSnapshot(err: unknown): Promise<void> {
+    const clone = this.active?.localPath;
+    if (!clone) {
+      this.appendSystem("Could not write crash snapshot: no clone path set.");
+      return;
+    }
+    const snapshot = buildCrashSnapshot({
+      error: err,
+      phase: this.phase,
+      runStartedAt: this.runStartedAt,
+      crashedAt: Date.now(),
+      config: this.active,
+      board: this.board.snapshot(),
+      transcript: this.transcript,
+    });
+    const outPath = path.join(clone, "board-final.json");
+    try {
+      await writeFileAtomic(outPath, JSON.stringify(snapshot, null, 2));
+      this.appendSystem(`Wrote crash snapshot to ${outPath}`);
+    } catch (writeErr) {
+      const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
+      this.appendSystem(`Failed to write crash snapshot (${msg})`);
+    }
   }
 
   // ---------------------------------------------------------------------

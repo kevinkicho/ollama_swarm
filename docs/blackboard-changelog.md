@@ -322,7 +322,38 @@ iteration if a real run ever bumps into the defaults.
 **Verified (unit):** 102/102 tests green (92 prior + 10 new caps tests);
 `tsc --noEmit` clean. E2E verification deferred to Step C.
 
-### Step B — Crash snapshot  **[pending]**
+### Step B — Crash snapshot  **[working tree]**
+
+On uncaught exception in `planAndExecute`, write
+`<clone>/board-final.json` with enough state to post-mortem the run. The
+`failed` phase transition is unchanged — it was already driven by the
+existing `errored` flag — Step B just guarantees there's an artifact on
+disk when the UI/WS flips to `failed`.
+
+- `server/src/swarm/blackboard/crashSnapshot.ts` — `buildCrashSnapshot(input)`
+  pure shape-assembly function + `CRASH_SNAPSHOT_TRANSCRIPT_MAX = 200` cap
+  so a pathological run can't produce a 50 MB snapshot. Tail-slices the
+  transcript when over the cap and flags `transcriptTruncated: true` so
+  readers know they have the tail, not the whole run.
+- `crashSnapshot.test.ts` — 13 tests: Error vs non-Error message/stack
+  handling, null/undefined error coercion, config passthrough and
+  null-fallback, transcript passthrough below the cap, no-op at exactly
+  the cap, tail truncation over the cap with the flag set, board
+  passthrough, JSON-roundtrip sanity check.
+- `BlackboardRunner.ts` — new `writeCrashSnapshot(err)` method called from
+  the existing catch block, awaited before the finally block flips phase
+  to `failed` so a WS consumer watching for the transition can trust the
+  artifact is already on disk. Uses `writeFileAtomic` so a crash *during*
+  the snapshot write doesn't leave a half-written JSON. Swallows its own
+  write errors — losing the snapshot is better than turning a normal
+  failure into a recursive crash. Logs success/failure to the transcript.
+
+Snapshot shape (top-level keys): `error { message, stack? }`, `phase`,
+`runStartedAt`, `crashedAt`, `config` (full RunConfig or null), `board`
+(`{todos, findings}`), `transcript` (tail-truncated), `transcriptTruncated`.
+
+**Verified (unit):** 115/115 tests green (102 prior + 13 crashSnapshot);
+`tsc --noEmit` clean. Runtime crash-path verification is Step C.
 
 ### Step C — E2E verification  **[pending]**
 
