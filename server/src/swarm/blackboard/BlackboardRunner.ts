@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
-import path from "node:path";
 import type { Agent } from "../../services/AgentManager.js";
 import type {
   AgentState,
@@ -12,6 +11,9 @@ import type {
 import type { RunConfig, RunnerOpts, SwarmRunner } from "../SwarmRunner.js";
 import { Board } from "./Board.js";
 import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaster.js";
+import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
+import { resolveSafe } from "./resolveSafe.js";
+import { writeFileAtomic } from "./writeFileAtomic.js";
 import {
   buildPlannerUserPrompt,
   buildRepairPrompt,
@@ -29,9 +31,9 @@ import {
 } from "./prompts/worker.js";
 
 // Blackboard preset: planner posts TODOs, workers drain them in a
-// claim/execute loop. Workers produce full-file diffs as JSON. Phase 4 is a
-// dry-run — no real file writes happen. Workers hash + prompt + parse diffs
-// and then pass the CAS check trivially since nothing on disk changes.
+// claim/execute loop. Workers produce full-file diffs as JSON; the runner
+// does an optimistic-CAS re-hash at commit time, writes each diff via
+// tmp+rename, then records the commit on the board.
 //
 // Lifecycle: cloning -> spawning -> seeding -> planning -> executing -> completed.
 // Stop at any point aborts in-flight prompts, kills agents, frees ports.
@@ -411,23 +413,86 @@ export class BlackboardRunner implements SwarmRunner {
       return "stale";
     }
 
-    // Phase 4 dry-run: log what would be written and trivially pass CAS.
-    // Hashes haven't moved (no one writes), so commitTodo accepts them.
-    // Phase 5 replaces this block with a real re-hash + write loop.
-    const summary = parsed.diffs.map((d) => `${d.file} (${d.newText.length} chars)`).join(", ");
-    this.appendSystem(`[${agent.id}] would commit: ${summary}`);
+    // Phase 5: re-hash the claimed files; if any drifted since claim time,
+    // mark the todo stale and bail without writing. Otherwise write each diff
+    // via tmp+rename, then record the commit on the board.
+    let currentHashes: Record<string, string>;
+    try {
+      currentHashes = await this.hashExpectedFiles(todo.expectedFiles);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.board.markStale(todo.id, `re-hash failure: ${msg}`);
+      return "stale";
+    }
 
+    const mismatched: string[] = [];
+    for (const [p, claimed] of Object.entries(hashes)) {
+      if ((currentHashes[p] ?? "") !== claimed) mismatched.push(p);
+    }
+    if (mismatched.length > 0) {
+      this.board.markStale(todo.id, `CAS mismatch before write: ${mismatched.join(", ")}`);
+      return "stale";
+    }
+
+    // Block a worker from zeroing out a previously non-empty file. We use the
+    // pre-prompt contents as "old" — CAS above already proved no one touched
+    // these files since, so contents is current.
+    const zeroed = findZeroedFiles(parsed.diffs, contents);
+    if (zeroed.length > 0) {
+      this.board.markStale(
+        todo.id,
+        `worker would zero non-empty file(s): ${zeroed.join(", ")}`,
+      );
+      return "stale";
+    }
+
+    // Reject leading UTF-8 BOMs. Writing one through silently breaks tooling
+    // (git treats the file as unchanged, node parsers throw, linters lie).
+    const bomFiles = findBomPrefixed(parsed.diffs);
+    if (bomFiles.length > 0) {
+      this.board.markStale(
+        todo.id,
+        `worker output has leading UTF-8 BOM in: ${bomFiles.join(", ")}`,
+      );
+      return "stale";
+    }
+
+    // CAS passed locally. Write atomically; on any write error we leave the
+    // claim in place — TTL expiry will convert it to stale and Phase 6 replan
+    // will observe whatever state the partial write left on disk.
+    try {
+      for (const diff of parsed.diffs) {
+        await this.writeDiff(diff.file, diff.newText);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(`[${agent.id}] write failed mid-commit: ${msg}`);
+      this.opts.emit({
+        type: "error",
+        message: `Write failed after CAS pass for todo ${todo.id}: ${msg}`,
+      });
+      this.board.markStale(todo.id, `write failed: ${msg}`);
+      return "stale";
+    }
+
+    // Record on the board. Trivially passes CAS since nothing touched the
+    // files between our re-hash above and these writes (same event-loop tick).
     const commit = this.board.commitTodo({
       todoId: todo.id,
       agentId: agent.id,
-      currentHashes: hashes,
+      currentHashes,
       committedAt: Date.now(),
     });
     if (!commit.ok) {
-      this.appendSystem(`[${agent.id}] unexpected dry-run commit refusal: ${commit.reason}`);
-      this.board.markStale(todo.id, `commit refused: ${commit.reason}`);
+      // Unexpected: we just verified the hashes. Surface as an error and
+      // mark stale so the run can continue.
+      this.appendSystem(`[${agent.id}] unexpected commit refusal: ${commit.reason}`);
+      this.board.markStale(todo.id, `commit refused after write: ${commit.reason}`);
       return "stale";
     }
+
+    const summary = parsed.diffs.map((d) => `${d.file} (${d.newText.length} chars)`).join(", ");
+    this.appendSystem(`[${agent.id}] committed: ${summary}`);
     return "committed";
   }
 
@@ -442,7 +507,7 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   private async hashFile(relPath: string): Promise<string> {
-    const abs = this.resolveSafe(relPath);
+    const abs = await this.resolveSafe(relPath);
     try {
       const buf = await fs.readFile(abs);
       return createHash("sha256").update(buf).digest("hex");
@@ -452,10 +517,14 @@ export class BlackboardRunner implements SwarmRunner {
     }
   }
 
+  private async writeDiff(relPath: string, contents: string): Promise<void> {
+    await writeFileAtomic(await this.resolveSafe(relPath), contents);
+  }
+
   private async readExpectedFiles(files: string[]): Promise<Record<string, string | null>> {
     const out: Record<string, string | null> = {};
     for (const f of files) {
-      const abs = this.resolveSafe(f);
+      const abs = await this.resolveSafe(f);
       try {
         out[f] = await fs.readFile(abs, "utf8");
       } catch (err) {
@@ -469,21 +538,10 @@ export class BlackboardRunner implements SwarmRunner {
     return out;
   }
 
-  // Reject paths that escape the clone or point inside .git. This runs even
-  // in Phase 4 dry-run because bad paths break hashing/reading.
-  private resolveSafe(relPath: string): string {
+  private async resolveSafe(relPath: string): Promise<string> {
     const clone = this.active?.localPath;
     if (!clone) throw new Error("no active clone path");
-    if (path.isAbsolute(relPath)) throw new Error(`absolute path not allowed: ${relPath}`);
-    const abs = path.resolve(clone, relPath);
-    const rel = path.relative(clone, abs);
-    if (rel.startsWith("..") || path.isAbsolute(rel)) {
-      throw new Error(`path escapes clone: ${relPath}`);
-    }
-    // normalize to forward-slash so Windows and POSIX both hit the same check
-    const parts = rel.split(/[\\/]/);
-    if (parts.includes(".git")) throw new Error(`path inside .git: ${relPath}`);
-    return abs;
+    return resolveSafe(clone, relPath);
   }
 
   // ---------------------------------------------------------------------
