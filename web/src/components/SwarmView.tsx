@@ -12,7 +12,7 @@ export function SwarmView() {
 
   const reset = useSwarm((s) => s.reset);
   const agentList = Object.values(agents).sort((a, b) => a.index - b.index);
-  const isTerminal = phase === "completed" || phase === "stopped";
+  const isTerminal = phase === "completed" || phase === "stopped" || phase === "failed";
 
   const onStop = async () => {
     if (!confirm("Stop the swarm? All spawned opencode processes will be terminated.")) return;
@@ -45,7 +45,7 @@ export function SwarmView() {
     }
   };
 
-  const canStop = phase !== "stopping" && phase !== "stopped";
+  const canStop = phase !== "stopping" && phase !== "stopped" && phase !== "failed" && phase !== "completed";
 
   return (
     <div className="h-full grid grid-cols-[260px_1fr]">

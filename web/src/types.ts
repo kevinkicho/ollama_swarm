@@ -28,9 +28,11 @@ export type SwarmPhase =
   | "seeding"
   | "discussing"
   | "planning"
+  | "executing"
   | "stopping"
   | "stopped"
-  | "completed";
+  | "completed"
+  | "failed";
 
 export type TodoStatus = "open" | "claimed" | "committed" | "stale" | "skipped";
 

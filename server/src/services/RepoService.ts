@@ -57,6 +57,38 @@ export class RepoService {
           },
         },
       },
+      // Custom agent we ask every session to run as. Tools + filesystem
+      // permissions are all locked off so glm-5.1:cloud can't sneak real file
+      // edits through opencode's built-in tool loop — the Phase 4 dry-run
+      // broke because the default agent had `edit` enabled and the model used
+      // it instead of returning JSON diffs. We pass `agent: "swarm"` on every
+      // session.prompt call (see BlackboardRunner.promptAgent).
+      agent: {
+        swarm: {
+          mode: "primary" as const,
+          description: "Pure text-in/text-out agent for the ollama_swarm orchestrator. No filesystem or shell access.",
+          tools: {
+            read: false,
+            write: false,
+            edit: false,
+            multiedit: false,
+            patch: false,
+            bash: false,
+            grep: false,
+            glob: false,
+            list: false,
+            webfetch: false,
+            task: false,
+            todoread: false,
+            todowrite: false,
+          },
+          permission: {
+            edit: "deny" as const,
+            bash: "deny" as const,
+            webfetch: "deny" as const,
+          },
+        },
+      },
     };
     await fs.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
   }

@@ -1,4 +1,6 @@
 import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer } from "ws";
 import { config } from "./config.js";
@@ -6,19 +8,28 @@ import { AgentManager } from "./services/AgentManager.js";
 import { RepoService } from "./services/RepoService.js";
 import { Orchestrator } from "./services/Orchestrator.js";
 import { Broadcaster } from "./ws/broadcast.js";
+import { createEventLogger } from "./ws/eventLogger.js";
 import { swarmRouter } from "./routes/swarm.js";
 import { devRouter } from "./routes/dev.js";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+// server/src/index.ts (dev) or server/dist/index.js (built) -> up two to root.
+const repoRoot = path.resolve(here, "..", "..");
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
-const broadcaster = new Broadcaster();
+const eventLogger = createEventLogger({ logDir: path.join(repoRoot, "logs") });
+const broadcaster = new Broadcaster(eventLogger);
 
 const manager = new AgentManager(
   (s) => broadcaster.broadcast({ type: "agent_state", agent: s }),
   (e) => broadcaster.broadcast(e),
+  // Diagnostic-only sink: opencode stdout/stderr + raw SSE envelope records
+  // go straight to the JSONL log without hitting the WS stream.
+  (rec) => eventLogger.log(rec),
 );
 const repos = new RepoService();
 const orchestrator = new Orchestrator({
@@ -54,6 +65,7 @@ const shutdown = async (signal: string) => {
   } catch {
     // ignore
   }
+  eventLogger.close();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5000).unref();
 };
@@ -78,4 +90,5 @@ server.listen(config.SERVER_PORT, () => {
   console.log(`  orchestrator opencode: ${config.OPENCODE_BASE_URL}`);
   console.log(`  ollama: ${config.OLLAMA_BASE_URL}`);
   console.log(`  default model: ${config.DEFAULT_MODEL}`);
+  console.log(`  event log: ${eventLogger.path}`);
 });

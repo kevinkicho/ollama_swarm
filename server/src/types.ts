@@ -66,9 +66,11 @@ export type SwarmPhase =
   | "seeding"
   | "discussing"
   | "planning"
+  | "executing"
   | "stopping"
   | "stopped"
-  | "completed";
+  | "completed"
+  | "failed";
 
 export interface StartSwarmRequest {
   repoUrl: string;

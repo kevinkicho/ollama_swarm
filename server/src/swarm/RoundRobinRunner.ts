@@ -125,11 +125,10 @@ export class RoundRobinRunner implements SwarmRunner {
     this.emitAgentState({ id: agent.id, index: agent.index, port: agent.port, sessionId: agent.sessionId, status: "thinking" });
 
     const prompt = this.buildPrompt(agent, round, totalRounds);
-    // Instead of a wall-clock cap, watch the session's event activity. As long
-    // as we see SSE events for this session (streaming tokens, tool calls,
-    // message updates), we keep waiting. Only bail if the session has been
-    // completely silent for IDLE_CAP_MS — that means it's genuinely stuck.
-    const IDLE_CAP_MS = 120_000;
+    // No "idle silence" cap. OpenCode's SSE /event stream is observed to stay
+    // completely silent across session.prompt's entire duration for our setup, so
+    // there is no reliable activity signal to gate on. We rely solely on the
+    // absolute turn cap below — if a prompt hasn't returned in 20 minutes, abort.
     const ABSOLUTE_MAX_MS = 20 * 60_000;
     const turnStart = Date.now();
     this.opts.manager.touchActivity(agent.sessionId, turnStart);
@@ -137,25 +136,20 @@ export class RoundRobinRunner implements SwarmRunner {
     const controller = new AbortController();
     let abortedReason: string | null = null;
     const watchdog = setInterval(() => {
-      const now = Date.now();
-      const last = this.opts.manager.getLastActivity(agent.sessionId) ?? turnStart;
-      if (now - last > IDLE_CAP_MS) {
-        abortedReason = `silent for ${Math.round((now - last) / 1000)}s`;
-      } else if (now - turnStart > ABSOLUTE_MAX_MS) {
+      if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
         abortedReason = `absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s)`;
-      }
-      if (abortedReason) {
         controller.abort(new Error(abortedReason));
         // Tell opencode to stop working on this session too — otherwise the
         // backend keeps burning compute on a result we're about to discard.
         void agent.client.session.abort({ path: { id: agent.sessionId } }).catch(() => {});
       }
-    }, 5_000);
+    }, 10_000);
 
     try {
       const res = await agent.client.session.prompt({
         path: { id: agent.sessionId },
         body: {
+          agent: "swarm",
           model: { providerID: "ollama", modelID: agent.model },
           parts: [{ type: "text", text: prompt }],
         },

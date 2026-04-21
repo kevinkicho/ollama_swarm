@@ -43,11 +43,16 @@ export class AgentManager {
   private readonly agents = new Map<string, Agent>();
   private readonly lastActivity = new Map<string, number>(); // sessionID -> ts
   private readonly eventAborts = new Map<string, AbortController>(); // agent.id -> abort
+  private readonly rawSseCount = new Map<string, number>(); // agent.id -> count, for debug throttling
   private orchestratorClient?: Client;
 
   constructor(
     private readonly onState: (s: AgentState) => void,
     private readonly onEvent: (e: SwarmEvent) => void = () => {},
+    // Diagnostic-only sink for records we don't want to broadcast over WS but
+    // DO want in logs/current.jsonl (opencode stdout/stderr, raw SSE events).
+    // Separate from onEvent to keep SwarmEvent honestly typed.
+    private readonly logDiag: (record: unknown) => void = () => {},
   ) {}
 
   getLastActivity(sessionId: string): number | undefined {
@@ -118,8 +123,19 @@ export class AgentManager {
         );
       }
 
-      child.stdout?.on("data", (d) => process.stdout.write(`[${id}] ${d}`));
-      child.stderr?.on("data", (d) => process.stderr.write(`[${id}] ${d}`));
+      const teeLine = (stream: "stdout" | "stderr") => (buf: Buffer | string) => {
+        const text = typeof buf === "string" ? buf : buf.toString("utf8");
+        // Also keep writing to the parent stdout/stderr so `npm run dev` users see it live.
+        (stream === "stdout" ? process.stdout : process.stderr).write(`[${id}] ${text}`);
+        // Split on newlines so a 1-line-per-record JSONL stays clean, even when
+        // opencode flushes a multi-line block in a single "data" event.
+        for (const line of text.split(/\r?\n/)) {
+          if (!line) continue;
+          this.logDiag({ type: "_agent_log", agentId: id, stream, line });
+        }
+      };
+      child.stdout?.on("data", teeLine("stdout"));
+      child.stderr?.on("data", teeLine("stderr"));
       child.on("exit", (code) => {
         if (this.agents.has(id)) {
           this.onState({ ...stateBase, status: "stopped", error: `exited with code ${code}` });
@@ -182,21 +198,71 @@ export class AgentManager {
   private startEventStream(agent: Agent): void {
     const abort = new AbortController();
     this.eventAborts.set(agent.id, abort);
+    this.rawSseCount.set(agent.id, 0);
 
     void (async () => {
+      let ended = false;
       try {
+        this.logDiag({ type: "_sse_subscribed", agentId: agent.id, sessionId: agent.sessionId });
         const sub = await agent.client.event.subscribe({ signal: abort.signal });
         const stream = (sub as { stream: AsyncIterable<unknown> }).stream;
         for await (const ev of stream) {
           if (abort.signal.aborted) break;
+          this.logRawSse(agent, ev);
           this.handleSessionEvent(agent, ev);
         }
+        ended = true;
       } catch (err) {
         if (!abort.signal.aborted) {
-          console.error(`[${agent.id}] event stream ended:`, err instanceof Error ? err.message : err);
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[${agent.id}] event stream ended:`, msg);
+          // Surface to the event log so Claude can distinguish "stream died" from
+          // "model was just slow" when diagnosing idle-watchdog trips.
+          this.onEvent({
+            type: "error",
+            message: `SSE stream for ${agent.id} ended unexpectedly: ${msg}`,
+          });
         }
       }
+      // Graceful exit (for-await returned without throwing) while we were still
+      // attached means the server closed the stream on its own — also worth
+      // surfacing because the idle watchdog won't see any more events.
+      if (ended && !abort.signal.aborted) {
+        this.onEvent({
+          type: "error",
+          message: `SSE stream for ${agent.id} closed by server without abort`,
+        });
+      }
     })();
+  }
+
+  // Log raw SSE events pre-filter so we can see if OpenCode is emitting
+  // anything at all. Throttled to avoid drowning the JSONL: first 30 events
+  // verbatim, then only type+sid summaries. Session-lifecycle events always
+  // get through because they're the rarest and most informative.
+  private logRawSse(agent: Agent, ev: unknown): void {
+    const e = ev as { type?: string; properties?: Record<string, unknown> };
+    const type = e?.type;
+    const props = (e?.properties ?? {}) as Record<string, unknown>;
+    const sid =
+      (props.sessionID as string | undefined) ??
+      ((props.info as { id?: string; sessionID?: string } | undefined)?.sessionID) ??
+      ((props.info as { id?: string } | undefined)?.id) ??
+      ((props.part as { sessionID?: string } | undefined)?.sessionID);
+    const count = (this.rawSseCount.get(agent.id) ?? 0) + 1;
+    this.rawSseCount.set(agent.id, count);
+    const isLifecycle = typeof type === "string" && type.startsWith("session.");
+    if (count <= 30 || isLifecycle) {
+      this.logDiag({
+        type: "_raw_sse",
+        agentId: agent.id,
+        ourSessionId: agent.sessionId,
+        eventType: type,
+        eventSessionId: sid,
+        sidMatches: sid === agent.sessionId,
+        count,
+      });
+    }
   }
 
   private handleSessionEvent(agent: Agent, ev: unknown): void {
