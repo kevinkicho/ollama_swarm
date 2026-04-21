@@ -2,12 +2,38 @@ import { memo, useMemo, useState } from "react";
 import { useSwarm } from "../state/store";
 import type { Finding, RunSummary, Todo, TodoStatus } from "../types";
 
-const COLUMNS: { key: TodoStatus; label: string; accent: string }[] = [
-  { key: "open", label: "Open", accent: "border-sky-500/40 text-sky-300" },
-  { key: "claimed", label: "Claimed", accent: "border-amber-500/40 text-amber-300" },
-  { key: "committed", label: "Committed", accent: "border-emerald-500/40 text-emerald-300" },
-  { key: "stale", label: "Stale", accent: "border-rose-500/40 text-rose-300" },
-  { key: "skipped", label: "Skipped", accent: "border-ink-500/60 text-ink-300" },
+const COLUMNS: { key: TodoStatus; label: string; accent: string; help: string }[] = [
+  {
+    key: "open",
+    label: "Open",
+    accent: "border-sky-500/40 text-sky-300",
+    help: "Posted by the planner, not yet claimed. Any idle worker can pick one up.",
+  },
+  {
+    key: "claimed",
+    label: "Claimed",
+    accent: "border-amber-500/40 text-amber-300",
+    help: "A worker is holding this todo. File SHAs are recorded for CAS at commit time.",
+  },
+  {
+    key: "committed",
+    label: "Committed",
+    accent: "border-emerald-500/40 text-emerald-300",
+    help: "Diff passed CAS and was written to disk. A git commit is created at the clone root.",
+  },
+  {
+    key: "stale",
+    label: "Stale",
+    accent: "border-rose-500/40 text-rose-300",
+    help:
+      "CAS rejected this commit — a file changed underneath the worker. The planner will rewrite and reopen it; the R1/R2 badge counts replans.",
+  },
+  {
+    key: "skipped",
+    label: "Skipped",
+    accent: "border-ink-500/60 text-ink-300",
+    help: "Planner declined to replan this todo (too many rewrites, or no longer meaningful).",
+  },
 ];
 
 export function BoardView() {
@@ -53,6 +79,7 @@ export function BoardView() {
               key={col.key}
               label={col.label}
               accent={col.accent}
+              help={col.help}
               count={grouped[col.key].length}
               todos={grouped[col.key]}
               agentLabel={agentLabel}
@@ -73,15 +100,19 @@ export function BoardView() {
 interface ColumnProps {
   label: string;
   accent: string;
+  help: string;
   count: number;
   todos: Todo[];
   agentLabel: (agentId: string | undefined) => string;
 }
 
-function Column({ label, accent, count, todos, agentLabel }: ColumnProps) {
+function Column({ label, accent, help, count, todos, agentLabel }: ColumnProps) {
   return (
     <div className="flex flex-col border-r border-ink-700 last:border-r-0 min-h-0">
-      <div className={`px-3 py-2 border-b ${accent} border-b-ink-700 text-xs uppercase tracking-wide flex items-center justify-between bg-ink-800`}>
+      <div
+        title={help}
+        className={`px-3 py-2 border-b ${accent} border-b-ink-700 text-xs uppercase tracking-wide flex items-center justify-between bg-ink-800 cursor-help`}
+      >
         <span>{label}</span>
         <span className="text-ink-400">{count}</span>
       </div>

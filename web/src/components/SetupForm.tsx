@@ -29,11 +29,11 @@ const PRESETS: readonly SwarmPreset[] = [
   {
     id: "blackboard",
     label: "Blackboard (optimistic + small units)",
-    summary: "Agents pull todos from a shared board; CAS on file hashes catches stale plans.",
+    summary: "Planner posts todos; workers claim and commit in parallel. CAS on file hashes catches stale plans.",
     min: 3,
     max: 8,
     recommended: 6,
-    status: "planned",
+    status: "active",
   },
   {
     id: "role-diff",
@@ -93,9 +93,31 @@ const PRESETS: readonly SwarmPreset[] = [
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
+// Mirror of server's deriveCloneDir for the preview hint under the Parent
+// folder field. Server is the source of truth; this is a best-effort UX
+// preview. Returns "" if the URL isn't parseable yet (so the user gets the
+// plain placeholder hint instead).
+function buildPreviewClonePath(repoUrl: string, parentPath: string): string {
+  if (!repoUrl || !parentPath) return "";
+  let u: URL;
+  try {
+    u = new URL(repoUrl);
+  } catch {
+    return "";
+  }
+  const segments = u.pathname.split("/").filter((s) => s.length > 0);
+  const last = segments[segments.length - 1];
+  if (!last) return "";
+  const name = last.replace(/\.git$/i, "");
+  if (!name) return "";
+  const sep = parentPath.includes("\\") && !parentPath.includes("/") ? "\\" : "/";
+  const trimmed = parentPath.replace(/[\\/]+$/, "");
+  return `${trimmed}${sep}${name}`;
+}
+
 export function SetupForm() {
   const [repoUrl, setRepoUrl] = useState("https://github.com/sindresorhus/is-odd");
-  const [localPath, setLocalPath] = useState("C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\is-odd");
+  const [parentPath, setParentPath] = useState("C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs");
   const [presetId, setPresetId] = useState<string>("round-robin");
   const [agentCount, setAgentCount] = useState(3);
   const [model, setModel] = useState("glm-5.1:cloud");
@@ -106,6 +128,7 @@ export function SetupForm() {
 
   const preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0];
   const isActive = preset.status === "active";
+  const previewClonePath = buildPreviewClonePath(repoUrl, parentPath);
 
   const onPresetChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const next = PRESETS.find((p) => p.id === e.target.value);
@@ -130,7 +153,7 @@ export function SetupForm() {
       const res = await fetch("/api/swarm/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repoUrl, localPath, agentCount, model, rounds, preset: preset.id }),
+        body: JSON.stringify({ repoUrl, parentPath, agentCount, model, rounds, preset: preset.id }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -167,13 +190,20 @@ export function SetupForm() {
           />
         </Field>
 
-        <Field label="Local path" hint="Where to clone. Must be empty or a valid existing clone.">
+        <Field
+          label="Parent folder"
+          hint={
+            previewClonePath
+              ? `The repo will be cloned into ${previewClonePath}`
+              : "Parent folder. The repo is cloned into a subfolder named after the repo (e.g. is-odd)."
+          }
+        >
           <input
             required
-            value={localPath}
-            onChange={(e) => setLocalPath(e.target.value)}
+            value={parentPath}
+            onChange={(e) => setParentPath(e.target.value)}
             className="input font-mono"
-            placeholder="C:\\Users\\you\\projects\\repo"
+            placeholder="C:\\Users\\you\\projects"
           />
         </Field>
 
@@ -194,6 +224,8 @@ export function SetupForm() {
             ))}
           </select>
         </Field>
+
+        {preset.id === "blackboard" ? <BlackboardHelp /> : null}
 
         <div className="grid grid-cols-3 gap-4">
           <Field
@@ -266,5 +298,48 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
       {children}
       {hint ? <div className="text-xs text-ink-400 mt-1">{hint}</div> : null}
     </label>
+  );
+}
+
+function BlackboardHelp() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded border border-ink-700 bg-ink-900/60 text-xs">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-3 py-2 text-ink-300 hover:text-ink-100"
+      >
+        <span>How the blackboard preset coordinates work</span>
+        <span className="text-ink-500">{open ? "▾" : "▸"}</span>
+      </button>
+      {open ? (
+        <div className="px-3 pb-3 space-y-1.5 text-ink-400 leading-snug">
+          <p>
+            <span className="text-ink-200">One planner, N−1 workers.</span> The planner posts atomic
+            todos (≤2 files each) with <code className="font-mono text-ink-300">expectedFiles</code>.
+            Workers claim a todo, record SHA hashes of the files they plan to touch, then return a
+            full-file diff.
+          </p>
+          <p>
+            <span className="text-ink-200">Optimistic CAS at commit.</span> Before the runner writes
+            the diff, it re-hashes every claimed file. If any hash changed under the worker (another
+            worker committed first), the commit is rejected and the todo is marked{" "}
+            <span className="text-rose-300">stale</span>.
+          </p>
+          <p>
+            <span className="text-ink-200">Stale → replan.</span> The planner re-reads the current
+            code and rewrites the stale todo; the <span className="text-amber-300">R1/R2…</span>{" "}
+            badge on a card counts how many times it's been replanned before another worker can
+            reclaim it.
+          </p>
+          <p>
+            <span className="text-ink-200">Hard caps bound every run.</span> 20 min wall-clock, 20
+            commits, or 30 total todos — whichever fires first stops the loop and writes{" "}
+            <code className="font-mono text-ink-300">summary.json</code> at the clone root.
+          </p>
+        </div>
+      ) : null}
+    </div>
   );
 }

@@ -2,9 +2,12 @@
 
 A local web app that spawns a **swarm of [OpenCode](https://opencode.ai) agents** — each backed by an [Ollama](https://ollama.com) model such as `glm-5.1:cloud` — to clone a GitHub repository and collaboratively figure out what the project is, what's working, what's missing, and what to build next.
 
-You fill in a GitHub URL, a local clone path, an agent count, and a number of rounds. The server clones the repo, spawns N headless `opencode serve` processes rooted at that clone, and runs a round-robin "shared transcript" discussion between them. Every agent sees every other agent's reply, so they can build on each other, disagree, `@mention` each other, and eventually converge on a next action.
+You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. Two patterns ship:
 
-A live transcript streams into the browser as it's generated — you see each agent type token-by-token, can inject your own message into the conversation at any time, and stop the whole thing with one click.
+- **Round-robin transcript** — N identical agents take turns on a shared transcript; every agent sees every other agent's reply and responds. Discussion-only, no file edits.
+- **Blackboard (optimistic + small units)** — one planner posts atomic todos to a shared board; N−1 workers claim and commit in parallel, with CAS on file hashes catching stale plans. Agents **actually modify the clone**.
+
+A live transcript streams into the browser as it's generated — you see each agent type token-by-token, can inject your own message into the conversation at any time, and stop the whole thing with one click. The blackboard preset adds a **Board** tab showing todos in five columns (Open / Claimed / Committed / Stale / Skipped), plus a run summary card when the run terminates.
 
 ## Architecture
 
@@ -28,7 +31,7 @@ Port 4096 (pre-existing opencode server) = optional orchestrator voice /
                                            human-in-the-loop surface
 ```
 
-### How the swarm discusses
+### How the round-robin preset works
 
 1. **Seed** — a system message drops the clone path, repo URL, and top-level file listing into the shared transcript, and instructs agents to use their own file-read / grep / find tools to inspect the repo.
 2. **Round-robin turn loop** — for `rounds` iterations, each agent in turn receives a prompt containing the **entire transcript so far** plus role instructions ("you are Agent N, respond in under 250 words, cite file paths"). The agent uses OpenCode tools to read files and produces a reply.
@@ -36,6 +39,18 @@ Port 4096 (pre-existing opencode server) = optional orchestrator voice /
 4. **Live streaming to the UI** — `message.part.updated` events forward partial text to the browser as an `agent_streaming` WebSocket event; you see a pulsing "typing" bubble that fills in as tokens arrive. On turn completion the streaming bubble is replaced by the final transcript entry.
 5. **User injection** — the input at the bottom of the transcript view lets you post a `[HUMAN] ...` line into the shared transcript at any time; every agent sees it on their next turn.
 6. **Stop / New swarm** — Stop aborts all sessions and kills the spawned processes; the UI then shows a "New swarm" button that returns you to the setup form.
+
+### How the blackboard preset works
+
+Phased implementation notes live in [`docs/blackboard-plan.md`](docs/blackboard-plan.md); a per-commit diary is in [`docs/blackboard-changelog.md`](docs/blackboard-changelog.md). The short version:
+
+1. **Planner vs. workers.** Agent 0 is the planner and only posts todos; agents 1..N−1 are workers and only claim + commit. Planner prompts and worker prompts are different loops against the same model. Tool use stays off for workers — they return structured JSON diffs that the Node runner writes to disk, which keeps CAS server-authoritative.
+2. **Atomic todos.** Each todo names ≤2 `expectedFiles` and one logical change. Small units keep the conflict surface tiny and make stale replans cheap.
+3. **Optimistic CAS on file hashes.** At claim time the board records a SHA of every file the worker plans to touch. At commit time the runner re-hashes and rejects the commit if any hash changed underneath the worker (another worker committed first). No locks, no head-of-line blocking.
+4. **Stale → replan.** A rejected commit marks the todo `stale` with a reason. The planner re-reads the current code and rewrites the todo; the card shows an `R1` / `R2` badge counting replans. Workers see the fresh description on the next claim.
+5. **Hard caps.** Every run is bounded by **20 min wall-clock**, **20 commits**, and **30 total todos** (see `server/src/swarm/blackboard/caps.ts`). The loop stops on whichever fires first with a `cap:wall-clock` / `cap:commits` / `cap:todos` stop reason.
+6. **Run artifact.** On any termination (`completed`, user `stop`, `crash`, or a cap), the runner writes `summary.json` at the clone root with `stopReason`, `wallClockMs`, commit/file counts, per-agent turn stats, and the final `git status --porcelain`. A summary card with the same data renders at the top of the Board tab.
+7. **Board tab.** The UI's Board tab shows todos in five columns — **Open** / **Claimed** / **Committed** / **Stale** / **Skipped** — and a collapsible Findings pane. Claim cards show which worker is holding them and how long; stale cards show the rejection reason.
 
 ## Prerequisites
 
@@ -66,12 +81,13 @@ Open the web URL shown (e.g. `http://localhost:56609`), fill in the form, hit **
 ## Usage walkthrough
 
 1. **GitHub URL** — a public repo URL, or a private one if `GITHUB_TOKEN` is set in `.env` (the token is spliced into the clone URL).
-2. **Local path** — an absolute path where the repo should be cloned. Must be empty, not exist, or already be a git repo at that URL.
-3. **Agents** — how many concurrent `opencode serve` workers to spawn (1–8).
-4. **Rounds** — how many full round-robin passes (1–10).
-5. **Model** — any model string registered in Ollama and declared in the synthesized `opencode.json` (defaults to `glm-5.1:cloud`).
+2. **Parent folder** — an absolute path to a _parent_ directory. The server derives the repo name from the URL and clones into `<parentFolder>/<repo-name>` (e.g. parent `C:\...\runs` + URL ending in `/is-odd` → clone at `C:\...\runs\is-odd`). Parent is created if missing; the subfolder must be empty, absent, or already a matching git clone. The form shows a live preview of the resolved clone path under the field.
+3. **Pattern** — `Round-robin transcript` (discussion-only) or `Blackboard (optimistic + small units)` (planner/worker split, CAS, file edits). Selecting blackboard reveals a collapsible help block explaining CAS and stale-replan; other patterns in the dropdown are marked _coming soon_ and disable **Start**.
+4. **Agents** — how many concurrent `opencode serve` workers to spawn (2–8). On blackboard, agent 0 is the planner and the remaining N−1 are workers.
+5. **Rounds** — how many full round-robin passes (1–10). Ignored by the blackboard preset, which terminates on hard caps instead.
+6. **Model** — any model string registered in Ollama and declared in the synthesized `opencode.json` (defaults to `glm-5.1:cloud`).
 
-Hit Start. You'll see each agent panel go from `spawning` → `ready` → `thinking` → `ready`, with live streaming bubbles in the transcript as each agent works. When all rounds complete the phase pill flips to `completed` and a **New swarm** button appears in the sidebar.
+Hit Start. You'll see each agent panel go from `spawning` → `ready` → `thinking` → `ready`, with live streaming bubbles in the transcript as each agent works. On blackboard runs, switch to the **Board** tab to watch todos flow through Open → Claimed → Committed (or Stale → back to Open on CAS rejection). When the run terminates the phase pill flips to `completed` / `stopped` / `failed` and a summary card appears at the top of the Board tab; a **New swarm** button is available in the sidebar.
 
 ## Environment variables
 
@@ -287,11 +303,13 @@ ollama_swarm/
 
 ## Limitations (v1)
 
-- **Discussion only.** Agents read files via OpenCode tools but don't edit the clone. A "work phase" where the swarm executes the agreed next action is deferred.
+- **Round-robin is discussion-only.** Agents read files via OpenCode tools but don't edit the clone in this preset. File edits happen in the blackboard preset.
+- **Blackboard diffs are full-file replacements.** Workers return `{file, newText}` rather than patches — blunt but trivially validatable; patch-based diffs are a v2 concern.
 - **One swarm at a time.** You must Stop the current swarm before starting another.
-- **In-memory transcript.** Restarting the server loses history.
+- **In-memory transcript.** Restarting the server loses history. The blackboard preset also writes `summary.json` and (on crash) `board-final.json` to the clone root, so terminal state survives.
 - **Localhost assumed.** No authentication on the web app itself.
-- **No consensus detection.** The loop always runs all configured rounds.
+- **Round-robin has no consensus detection.** The loop always runs all configured rounds. Blackboard terminates on hard caps, user stop, or an empty board after planning.
+- **Other patterns in the dropdown are `coming soon`.** Role differentiation, map-reduce, council, orchestrator-worker, debate+judge, and stigmergy all disable the Start button for now.
 
 ## Troubleshooting
 

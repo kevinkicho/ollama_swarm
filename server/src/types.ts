@@ -76,7 +76,7 @@ export type SwarmPhase =
 
 export interface StartSwarmRequest {
   repoUrl: string;
-  localPath: string;
+  parentPath: string;
   agentCount: number;
   model?: string;
   rounds?: number;

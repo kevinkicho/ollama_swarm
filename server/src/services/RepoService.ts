@@ -14,6 +14,29 @@ export interface CloneResult {
   alreadyPresent: boolean;
 }
 
+// Given an http(s) git URL and a parent folder, return the absolute path the
+// repo will be cloned to: `parentPath / <last-segment-minus-.git>`. The route
+// handler uses this so the user provides a parent (e.g. C:\...\runs) and the
+// server picks the subfolder name from the URL. Pure: no I/O.
+export function deriveCloneDir(repoUrl: string, parentPath: string): string {
+  let u: URL;
+  try {
+    u = new URL(repoUrl);
+  } catch {
+    throw new Error(`invalid repo URL: ${repoUrl}`);
+  }
+  const segments = u.pathname.split("/").filter((s) => s.length > 0);
+  const last = segments[segments.length - 1];
+  if (!last) {
+    throw new Error(`cannot derive repo name from URL: ${repoUrl}`);
+  }
+  const name = last.replace(/\.git$/i, "");
+  if (!name) {
+    throw new Error(`cannot derive repo name from URL: ${repoUrl}`);
+  }
+  return path.resolve(parentPath, name);
+}
+
 export class RepoService {
   async clone(opts: CloneOptions): Promise<CloneResult> {
     const abs = path.resolve(opts.destPath);

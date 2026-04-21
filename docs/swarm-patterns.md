@@ -82,10 +82,17 @@ Worker produces → critic scores against a rubric → worker revises. Reflexion
 **Limits:** scales by adding **iterations**, not agents. Orthogonal to
 the "more agents" axis; probably layers on top of any other pattern.
 
-### 7. Blackboard architecture `[~]` ← **implementation target**
+### 7. Blackboard architecture `[x]` ← **shipped (v1 preset)**
 Instead of a linear transcript, agents post `claim`, `question`, `todo`,
 `finding` items to a shared board. Any idle agent can pick up any unresolved
 item. Async by design, no turn-taking.
+
+Shipped layers: optimistic CAS on file hashes + small atomic units (≤2
+files per commit) + planner/worker split + stale-replan on CAS rejection
++ hard caps (wall-clock / commits / todos) + `summary.json` run artifact.
+See [`blackboard-plan.md`](./blackboard-plan.md) for phase-by-phase notes
+and [`blackboard-changelog.md`](./blackboard-changelog.md) for what
+landed in each commit.
 
 **Wins:** scales until the board gets too noisy to manage. No idle agents
 waiting their turn. Natural fit for 10+ agents.
@@ -144,7 +151,7 @@ The **chosen stack for v1 of the blackboard preset** is optimistic+CAS
 
 | # | Preset                       | Coordination                        | Why this order |
 | - | ---------------------------- | ----------------------------------- | -------------- |
-| 1 | Blackboard                   | Optimistic+CAS + small atomic units | User's pick; biggest architectural lift, do it while context is fresh |
+| 1 | Blackboard ✓ shipped         | Optimistic+CAS + small atomic units | User's pick; biggest architectural lift, do it while context is fresh |
 | 2 | Role differentiation         | n/a (single-turn loop)              | Cheap; good comparison baseline against blackboard |
 | 3 | Map-reduce                   | n/a (split + synthesize)            | Tests whether isolation beats shared context for coverage |
 | 4 | Council (parallel + reconcile) | n/a (round-based)                 | Isolates diversity gain from role-prompting gain |

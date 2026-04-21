@@ -433,7 +433,7 @@ Stale, skip reason for Skipped. A `R<n>` badge appears when
 columns with correct counts; no console errors; type-check
 (`tsc -b` in `web/`) clean.
 
-## Phase 9 — Metrics + run artifact  **[working tree]**
+## Phase 9 — Metrics + run artifact  **[committed: `c342080`]**
 
 Every run leaves `<clone>/summary.json` and broadcasts a matching
 `run_summary` WS event so the Board tab shows a summary card without
@@ -479,9 +479,74 @@ stopReason branch, wall-clock clamp, board counts passthrough,
 git-status truncation, per-agent defensive copy, and JSON roundtrip.
 115 → 133 server tests, all green; `tsc --noEmit` clean both sides.
 
-## Phase 10 — Polish + documentation  **[pending]**
+## Phase 10 — Polish + documentation  **[working tree]**
 
-## Phase 10 — Polish + documentation  **[pending]**
+Paper cuts that were acceptable during phases 3–9 but shouldn't be there
+once blackboard is a shipped preset.
+
+**Pattern catalog flipped.** `docs/swarm-patterns.md` entry #7
+(blackboard) moved from `[~] implementation target` to
+`[x] shipped (v1 preset)` with a pointer to the plan + changelog. The
+roadmap table's row 1 now reads `Blackboard ✓ shipped` so a reader
+landing on `swarm-patterns.md` cold doesn't have to guess which entries
+are live.
+
+**SetupForm flip.** `web/src/components/SetupForm.tsx` changed the
+`blackboard` preset from `status: "planned"` to `status: "active"` so
+**Start** is enabled when it's selected. The summary text was reworded
+from generic ("Agents pull todos from a shared board") to
+planner-vs-worker specific ("Planner posts todos; workers claim and
+commit in parallel"). Other presets in the dropdown remain `planned`
+and still disable Start.
+
+**BlackboardHelp (inline, collapsible).** New `<BlackboardHelp />`
+renders under the Pattern field only when blackboard is selected. Four
+paragraphs: planner/worker split, optimistic CAS at commit, stale →
+replan with R-badge counter, and the three hard caps (20 min / 20
+commits / 30 todos — numbers pulled from `caps.ts` directly so the
+block is grep-verifiable). Collapsed by default so first-time users
+aren't hit with a wall of text before clicking the row.
+
+**BoardView column tooltips.** Each column header in
+`web/src/components/BoardView.tsx` grew a `title` attribute explaining
+what the column represents. Stale's tooltip specifically names the
+CAS-rejection → planner-rewrite flow and the R1/R2 badge, answering
+the question "why did my todo turn red?" without requiring the user to
+find the docs. Cursor switches to `cursor-help` over the header so
+the tooltip is discoverable.
+
+**README blackboard section.** `README.md` got:
+- A second bullet under the intro ("Blackboard (optimistic + small units)").
+- The prior **How the swarm discusses** heading renamed to
+  **How the round-robin preset works**.
+- A new **How the blackboard preset works** section — seven numbered
+  points covering planner/worker split, atomic todos, optimistic CAS,
+  stale-replan, hard caps, `summary.json` artifact, and the Board tab.
+- Usage walkthrough grew a **Pattern** step (step 3) and noted that
+  `rounds` is ignored by the blackboard preset.
+- Limitations rewritten: round-robin is discussion-only (not the whole
+  app), blackboard diffs are full-file replacements (not patches),
+  `summary.json`/`board-final.json` survive a restart on the blackboard
+  path.
+
+**Parent-folder input.** Previously the **Local path** field had to be
+the exact clone directory (`C:\...\runs\is-odd`); if the user typed the
+parent, the repo got cloned _at_ that path, mixing its files with
+siblings. Now:
+- REST POST body takes `parentPath` instead of `localPath`.
+- `deriveCloneDir(repoUrl, parentPath)` in `server/src/services/RepoService.ts`
+  parses the URL, strips `.git`, and joins with the parent — the route
+  handler hands the full clone path to the orchestrator as
+  `RunConfig.localPath` (internal name unchanged so downstream code is
+  untouched). 9 tests cover URL variants, trailing-slash handling,
+  `.git` stripping, and failure modes.
+- SetupForm field relabeled **Parent folder** with a live preview hint
+  showing the resolved clone path (`…/runs/is-odd`). Default changed
+  from `runs\is-odd` to `runs`.
+- README walkthrough step 2 rewritten to match.
+
+**Verified.** `tsc --noEmit` clean on both sides; 142/142 server tests
+green (133 → 142 from the 9 new `deriveCloneDir` tests).
 
 ---
 
