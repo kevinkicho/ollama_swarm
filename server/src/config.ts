@@ -1,0 +1,49 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import "dotenv/config";
+import { z } from "zod";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+// server/src/config.ts (dev) or server/dist/config.ts (built) → up two to repo root.
+const repoRoot = path.resolve(here, "..", "..");
+const portFile = path.join(repoRoot, ".server-port");
+
+function resolveServerPort(): number {
+  // Explicit env wins over the auto-pick file so a user can still pin a port.
+  const fromEnv = process.env.SERVER_PORT;
+  if (fromEnv && fromEnv.trim() !== "") {
+    const n = Number(fromEnv);
+    if (Number.isInteger(n) && n > 0) return n;
+  }
+  try {
+    const raw = fs.readFileSync(portFile, "utf8").trim();
+    const n = Number(raw);
+    if (Number.isInteger(n) && n > 0) return n;
+  } catch {
+    // fall through
+  }
+  return 5174;
+}
+
+const Schema = z.object({
+  OPENCODE_SERVER_USERNAME: z.string().min(1).default("opencode"),
+  OPENCODE_SERVER_PASSWORD: z.string().min(1, "OPENCODE_SERVER_PASSWORD is required in .env"),
+  OPENCODE_BASE_URL: z.string().url().default("http://127.0.0.1:4096"),
+  OLLAMA_BASE_URL: z.string().url().default("http://localhost:11434/v1"),
+  DEFAULT_MODEL: z.string().default("glm-5.1:cloud"),
+  OPENCODE_BIN: z.string().default("opencode"),
+  GITHUB_TOKEN: z.string().optional(),
+});
+
+const parsed = Schema.parse(process.env);
+
+export const config = {
+  ...parsed,
+  SERVER_PORT: resolveServerPort(),
+};
+
+export function basicAuthHeader(): string {
+  const raw = `${config.OPENCODE_SERVER_USERNAME}:${config.OPENCODE_SERVER_PASSWORD}`;
+  return "Basic " + Buffer.from(raw, "utf8").toString("base64");
+}
