@@ -1705,7 +1705,7 @@ workers followed by a synthesis from agent-1.
 
 ---
 
-## Unit 13 — Debate + judge preset  **[committed: pending]**
+## Unit 13 — Debate + judge preset  **[committed: `000c38e`]**
 
 Fourth preset of this session. Fixed 3 agents, yes/no framing:
 
