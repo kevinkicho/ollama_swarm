@@ -1410,6 +1410,100 @@ being reached at all.
 
 ---
 
+## Unit 10 — Council preset (parallel drafts + reconcile)  **[committed: pending]**
+
+Direct answer to the single-planner weakness observed on the MatSci
+Explorer run: a preset where no one agent defines the goal. Every agent
+produces an independent first draft with zero visibility of peers, then
+all drafts are revealed and agents revise across subsequent rounds.
+
+**Why this preset now, before orchestrator-worker or debate-judge.**
+Council is architecturally the lightest of the three not-yet-shipped
+patterns user named — it's a round-based runner like role-diff, no file
+edits, no heterogeneous models, no fixed yes/no framing. It rides on
+the same transcript/spawn/seed machinery we already have and introduces
+exactly one new mechanic: *within a round, don't let agent A see agent
+B's output yet*. That single mechanic is the whole value — it breaks
+the echo-chamber pattern that round-robin and role-diff both inherit
+from sharing a running transcript.
+
+- `server/src/swarm/CouncilRunner.ts` — new runner implementing
+  `SwarmRunner`. Structurally similar to `RoundRobinRunner` (shared
+  `seed`, `status`, `injectUser`, `stop`, `setPhase`, `emitAgentState`
+  shapes) but with two meaningful differences:
+  1. `loop()` fans out agent turns via `Promise.allSettled` instead
+     of a serial `for` loop. All agents in a round run concurrently.
+  2. Before the round fires, `loop()` captures a `snapshot` of the
+     transcript. Every `runTurn` in the round builds its prompt from
+     that snapshot, not from the live `this.transcript`. Even if
+     agent-1's `session.prompt` returns and appends while agent-3 is
+     still waiting, agent-3's prompt was already committed at
+     snapshot time — it sees nothing new. This is the enforcement
+     point for Round 1 independence.
+  `extractText` and `describeSdkError` are duplicated from
+  `RoundRobinRunner` rather than shared — extracting a tiny shared
+  module for two callers would be premature. Re-evaluate when a
+  third runner wants them.
+- `buildCouncilPrompt(agentIndex, round, totalRounds, snapshot)` —
+  exported pure function. When `round === 1`, filters out every
+  `role === "agent"` entry from the visible transcript, so the
+  per-agent round-1 prompt contains only system + user (the seed and
+  any human-injected messages). When `round > 1`, the full transcript
+  is visible including peer drafts. Header text is round-aware:
+  round-1 says *"your independent first draft … you cannot see the
+  other agents' drafts; that is deliberate."*; round-2+ says *"the
+  other agents' prior drafts are in the transcript … revise your own
+  position."*
+- `server/src/swarm/CouncilRunner.test.ts` — 9 tests across 3 describe
+  blocks. Round-1 independence: peer-agent content absent from prompt
+  body; `[Agent N]` transcript lines don't appear for peers; system
+  + user entries still visible; draft-round wording present; empty
+  transcript handled. Round-2+ reveal: peer drafts present; revision
+  wording; round 3 still reveals. General shape: requesting agent
+  named in header + closing line; discussion goals listed.
+- `server/src/swarm/SwarmRunner.ts` — `PresetId` gains `"council"`.
+- `server/src/services/Orchestrator.ts` — `buildRunner` gains a
+  `case "council": return new CouncilRunner(this.opts)`. Exhaustiveness
+  check preserved.
+- `server/src/routes/swarm.ts` — Zod enum on the start endpoint
+  accepts `"council"`.
+- `server/package.json` — test script registers
+  `src/swarm/CouncilRunner.test.ts`.
+- `web/src/components/SetupForm.tsx` — existing `council` PRESETS entry
+  flipped from `status: "planned"` to `status: "active"`. Summary
+  updated from *"Round 2 reconcile or vote"* (never true) to *"Round
+  2+ reveal and revise"* (what we actually shipped). No reconcile
+  policy in v1.
+- `docs/swarm-patterns.md` — §3 flipped `[ ]` → `[x]`; roadmap row
+  updated; body expanded with the snapshot-based enforcement note.
+
+**What Council does NOT do in v1.**
+- **No explicit reconcile step.** No vote, no synthesizer, no judge.
+  The user reads the final round's drafts and reconciles in their
+  head. An automatic reconcile would be a Unit 11+ add if it earns
+  its keep on observed runs.
+- **No retry wrapper.** Same limitation as
+  `RoundRobinRunner.runTurn` (see `docs/known-limitations.md`).
+  `UND_ERR_HEADERS_TIMEOUT` on any agent in any round kills that
+  agent's draft for that round — the others continue.
+- **No convergence detection.** Runs the full configured `rounds`
+  count always. Would need a diff-based "nobody changed their
+  position" check to early-terminate.
+
+**Why Promise.allSettled, not Promise.all.** One agent's failure must
+not cancel in-flight prompts for its peers. Promise.all rejects on
+first failure, which would abort the whole round; allSettled lets the
+survivors finish and land their drafts.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`; 367/367
+server tests green (358 before + 9 Unit 10 prompt-shape tests). E2E
+validation: pick Council on the setup form, run against any small repo,
+check that Round-1 drafts show meaningfully different takes (no
+copy-paste convergence — that's the echo chamber Council exists to
+prevent).
+
+---
+
 ## Cross-phase notes
 
 - **Event log.** A per-boot append-only JSONL log is written at `logs/current.jsonl` via `server/src/ws/eventLogger.ts` (landed alongside Phase 4 work, currently uncommitted). Every `SwarmEvent` the WS broadcasts gets a line, making post-hoc verification of runs possible even after the browser tab is closed.

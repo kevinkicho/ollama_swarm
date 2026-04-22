@@ -15,7 +15,7 @@ const StartBody = z.object({
   agentCount: z.number().int().min(1).max(8),
   model: z.string().optional(),
   rounds: z.number().int().min(1).max(10).optional(),
-  preset: z.enum(["round-robin", "blackboard", "role-diff"]).default("round-robin"),
+  preset: z.enum(["round-robin", "blackboard", "role-diff", "council"]).default("round-robin"),
 });
 
 const SayBody = z.object({ text: z.string().min(1) });

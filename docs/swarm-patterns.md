@@ -53,15 +53,26 @@ coverage is much richer than 10 agents all re-reading the README.
 **Limits:** no cross-pollination during exploration; synthesizer becomes
 the bottleneck and the single point of failure.
 
-### 3. Council / parallel drafts + reconcile `[ ]`
+### 3. Council / parallel drafts + reconcile `[x]` ← **shipped as `council` preset (Unit 10)**
 Round 1: every agent answers the question **without** seeing others'
-replies. Round 2: all drafts are revealed, agents revise, vote, or
-reconcile. The independent Round 1 is where the real diversity lives.
+replies. Round 2+: all drafts are revealed, agents revise.
+The independent Round 1 is where the real diversity lives.
+
+Shipped via `CouncilRunner` (see `server/src/swarm/CouncilRunner.ts`).
+Implementation: `loop()` snapshots the transcript at round start, fans
+out all agents in parallel via `Promise.allSettled`, and each agent's
+prompt is built from the pre-round snapshot — so even if one agent's
+`session.prompt` returns before another's, no agent in the same round
+can ever see a peer's draft. `buildCouncilPrompt` (exported for tests)
+filters `role === "agent"` entries out of the visible transcript when
+`round === 1`. No reconcile policy in v1 — agents revise freely across
+later rounds with no voting or synthesis step. Discussion-only.
 
 **Reference:** Du et al., "Improving Factuality and Reasoning in Language
 Models through Multiagent Debate" (MIT, 2023).
 **Wins:** directly fixes the echo chamber that plagues round-robin.
-**Limits:** 2x the calls vs round-robin, needs a reconcile policy.
+**Limits:** 2x the calls vs round-robin, no explicit reconcile step
+(so convergence is implicit — the user reads the final round).
 
 ### 4. Orchestrator–worker hierarchy `[ ]`
 One "lead" agent plans and dispatches subtasks; workers execute in parallel
@@ -158,7 +169,7 @@ The **chosen stack for v1 of the blackboard preset** is optimistic+CAS
 | 1 | Blackboard ✓ shipped         | Optimistic+CAS + small atomic units | User's pick; biggest architectural lift, do it while context is fresh |
 | 2 | Role differentiation ✓ shipped | n/a (single-turn loop)            | Cheap; good comparison baseline against blackboard |
 | 3 | Map-reduce                   | n/a (split + synthesize)            | Tests whether isolation beats shared context for coverage |
-| 4 | Council (parallel + reconcile) | n/a (round-based)                 | Isolates diversity gain from role-prompting gain |
+| 4 | Council (parallel + reconcile) ✓ shipped | n/a (round-based)         | Isolates diversity gain from role-prompting gain |
 | 5 | Orchestrator–worker          | n/a                                 | Needs role differentiation to be useful; builds on #2 |
 | 6 | Debate + judge               | n/a                                 | Narrow use case; wait until we have a concrete yes/no question |
 | 7 | Critic loops                 | Layer, not preset                   | Orthogonal — add as a toggle on any preset |

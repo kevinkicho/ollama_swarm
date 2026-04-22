@@ -1,0 +1,342 @@
+import { randomUUID } from "node:crypto";
+import type { Agent } from "../services/AgentManager.js";
+import type {
+  AgentState,
+  SwarmEvent,
+  SwarmPhase,
+  SwarmStatus,
+  TranscriptEntry,
+} from "../types.js";
+import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
+
+// Council / parallel drafts + reconcile.
+// Round 1: every agent drafts independently. Each agent's prompt contains
+// only the seed + any human-injected messages — NO peer drafts. Drafts are
+// fanned out in parallel and only land in the shared transcript after the
+// whole round has settled, so within Round 1 no agent can see what any other
+// agent wrote. That independence is the whole point: same-model agents
+// produce surprisingly different answers when they can't anchor on each
+// other's output first.
+//
+// Round 2..N: everyone sees everyone's drafts (and any prior revisions) and
+// revises. The reconcile step is whatever the agents converge to across
+// later rounds — no vote, no explicit judge. Discussion-only, no file edits.
+export class CouncilRunner implements SwarmRunner {
+  private transcript: TranscriptEntry[] = [];
+  private phase: SwarmPhase = "idle";
+  private round = 0;
+  private stopping = false;
+  private active?: RunConfig;
+
+  constructor(private readonly opts: RunnerOpts) {}
+
+  status(): SwarmStatus {
+    return {
+      phase: this.phase,
+      round: this.round,
+      repoUrl: this.active?.repoUrl,
+      localPath: this.active?.localPath,
+      model: this.active?.model,
+      agents: this.opts.manager.toStates(),
+      transcript: [...this.transcript],
+    };
+  }
+
+  injectUser(text: string): void {
+    const entry: TranscriptEntry = {
+      id: randomUUID(),
+      role: "user",
+      text,
+      ts: Date.now(),
+    };
+    this.transcript.push(entry);
+    this.opts.emit({ type: "transcript_append", entry });
+  }
+
+  isRunning(): boolean {
+    return this.phase !== "idle" && this.phase !== "stopped";
+  }
+
+  async start(cfg: RunConfig): Promise<void> {
+    if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
+    this.transcript = [];
+    this.stopping = false;
+    this.round = 0;
+    this.active = cfg;
+
+    this.setPhase("cloning");
+    const { destPath } = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
+    await this.opts.repos.writeOpencodeConfig(destPath, cfg.model);
+    this.appendSystem(`Cloned ${cfg.repoUrl} -> ${destPath}`);
+
+    this.setPhase("spawning");
+    const spawnTasks: Promise<Agent>[] = [];
+    for (let i = 1; i <= cfg.agentCount; i++) {
+      spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model }));
+    }
+    const results = await Promise.allSettled(spawnTasks);
+    const ready = results
+      .filter((r): r is PromiseFulfilledResult<Agent> => r.status === "fulfilled")
+      .map((r) => r.value);
+    if (ready.length === 0) throw new Error("No agents started successfully");
+    this.appendSystem(
+      `${ready.length}/${cfg.agentCount} agents ready on ports ${ready.map((a) => a.port).join(", ")}`,
+    );
+
+    this.setPhase("seeding");
+    await this.seed(destPath, cfg);
+
+    this.setPhase("discussing");
+    void this.loop(cfg);
+  }
+
+  async stop(): Promise<void> {
+    this.stopping = true;
+    this.setPhase("stopping");
+    await this.opts.manager.killAll();
+    this.setPhase("stopped");
+  }
+
+  private async seed(clonePath: string, cfg: RunConfig): Promise<void> {
+    const tree = (await this.opts.repos.listTopLevel(clonePath)).slice(0, 200);
+    const seed = [
+      `Project clone: ${clonePath}`,
+      `Repo: ${cfg.repoUrl}`,
+      `Top-level entries: ${tree.join(", ") || "(empty)"}`,
+      "",
+      "Use your file-read / grep / find tools to actually inspect this repo — start with README.md if present.",
+    ].join("\n");
+    this.appendSystem(seed);
+  }
+
+  private async loop(cfg: RunConfig): Promise<void> {
+    try {
+      for (let r = 1; r <= cfg.rounds; r++) {
+        if (this.stopping) break;
+        this.round = r;
+        this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
+
+        // Snapshot the transcript at round start. Every agent in this round
+        // builds its prompt from this same snapshot, guaranteeing that within
+        // a round no agent sees another agent's output — even if one agent's
+        // session.prompt returns before another's. For Round 1, the snapshot
+        // contains only system + user entries (no agent output exists yet).
+        const snapshot: readonly TranscriptEntry[] = [...this.transcript];
+        const agents = this.opts.manager.list();
+
+        // Fan out: runTurn appends to this.transcript as each agent returns,
+        // so the UI sees drafts populate in real time while the prompts above
+        // were all built from the pre-round snapshot.
+        await Promise.allSettled(agents.map((agent) => this.runTurn(agent, r, cfg.rounds, snapshot)));
+      }
+      if (!this.stopping) this.appendSystem("Council complete.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.opts.emit({ type: "error", message: msg });
+    } finally {
+      if (!this.stopping) this.setPhase("completed");
+    }
+  }
+
+  private async runTurn(
+    agent: Agent,
+    round: number,
+    totalRounds: number,
+    snapshot: readonly TranscriptEntry[],
+  ): Promise<void> {
+    this.opts.manager.markStatus(agent.id, "thinking");
+    this.emitAgentState({
+      id: agent.id,
+      index: agent.index,
+      port: agent.port,
+      sessionId: agent.sessionId,
+      status: "thinking",
+    });
+
+    const prompt = buildCouncilPrompt(agent.index, round, totalRounds, snapshot);
+    // Same absolute-turn cap rationale as RoundRobinRunner: no reliable idle
+    // signal from OpenCode's SSE, so we rely solely on the 20-minute ceiling.
+    const ABSOLUTE_MAX_MS = 20 * 60_000;
+    const turnStart = Date.now();
+    this.opts.manager.touchActivity(agent.sessionId, turnStart);
+
+    const controller = new AbortController();
+    let abortedReason: string | null = null;
+    const watchdog = setInterval(() => {
+      if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
+        abortedReason = `absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s)`;
+        controller.abort(new Error(abortedReason));
+        void agent.client.session.abort({ path: { id: agent.sessionId } }).catch(() => {});
+      }
+    }, 10_000);
+
+    try {
+      const res = await agent.client.session.prompt({
+        path: { id: agent.sessionId },
+        body: {
+          agent: "swarm",
+          model: { providerID: "ollama", modelID: agent.model },
+          parts: [{ type: "text", text: prompt }],
+        },
+        signal: controller.signal,
+      });
+
+      const text = extractText(res) ?? "(empty response)";
+      const entry: TranscriptEntry = {
+        id: randomUUID(),
+        role: "agent",
+        agentId: agent.id,
+        agentIndex: agent.index,
+        text,
+        ts: Date.now(),
+      };
+      this.transcript.push(entry);
+      this.opts.emit({ type: "transcript_append", entry });
+      this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
+      this.opts.manager.markStatus(agent.id, "ready", { lastMessageAt: entry.ts });
+      this.emitAgentState({
+        id: agent.id,
+        index: agent.index,
+        port: agent.port,
+        sessionId: agent.sessionId,
+        status: "ready",
+        lastMessageAt: entry.ts,
+      });
+    } catch (err) {
+      const msg = abortedReason ?? describeSdkError(err);
+      this.appendSystem(`[${agent.id}] error: ${msg}`);
+      this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
+      this.opts.manager.markStatus(agent.id, "failed", { error: msg });
+      this.emitAgentState({
+        id: agent.id,
+        index: agent.index,
+        port: agent.port,
+        sessionId: agent.sessionId,
+        status: "failed",
+        error: msg,
+      });
+    } finally {
+      clearInterval(watchdog);
+    }
+  }
+
+  private appendSystem(text: string): void {
+    const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now() };
+    this.transcript.push(entry);
+    this.opts.emit({ type: "transcript_append", entry });
+  }
+
+  private setPhase(phase: SwarmPhase): void {
+    this.phase = phase;
+    this.opts.emit({ type: "swarm_state", phase, round: this.round });
+  }
+
+  private emitAgentState(s: AgentState): void {
+    this.opts.emit({ type: "agent_state", agent: s });
+  }
+}
+
+// Exported so CouncilRunner.test.ts can lock down the independence invariant
+// without spinning up real agents.
+export function buildCouncilPrompt(
+  agentIndex: number,
+  round: number,
+  totalRounds: number,
+  snapshot: readonly TranscriptEntry[],
+): string {
+  // Round 1 is the draft round: strip peer-agent entries so an agent writing
+  // its first-pass answer cannot anchor on what anyone else has said. Round
+  // 2..N is the revision round: show everything, including prior drafts.
+  const visible =
+    round === 1 ? snapshot.filter((e) => e.role !== "agent") : snapshot;
+
+  const transcriptText = visible
+    .map((e) => {
+      if (e.role === "system") return `[SYSTEM] ${e.text}`;
+      if (e.role === "user") return `[HUMAN] ${e.text}`;
+      return `[Agent ${e.agentIndex}] ${e.text}`;
+    })
+    .join("\n\n");
+
+  const header = `You are Agent ${agentIndex} in a council of AI engineers reviewing a cloned GitHub project.`;
+  const roundIntent =
+    round === 1
+      ? "This is ROUND 1 — your independent first draft. You cannot see the other agents' drafts; that is deliberate. Answer without anchoring on anyone else."
+      : `This is ROUND ${round} of ${totalRounds} — revision. The other agents' prior drafts are in the transcript below. Revise your own position: keep what still holds, change what a peer's draft convinced you of, explicitly disagree where you think they're wrong. Do not just agree.`;
+
+  const transcriptLabel =
+    round === 1
+      ? "=== SEED + ANY HUMAN INPUT (peer drafts hidden this round) ==="
+      : "=== COUNCIL TRANSCRIPT SO FAR ===";
+
+  return [
+    header,
+    roundIntent,
+    "Your working directory IS the project clone — use file-read, grep, and find-files tools to inspect it.",
+    "Round 1: skim README.md and the top-level tree before opining. Later rounds: re-read files when a peer's claim needs checking.",
+    "Keep responses under ~250 words. Be specific. Cite file paths (e.g. `src/foo.ts:42`) when you reference code.",
+    "",
+    "Goals of this discussion:",
+    "1. Figure out what this project is and who it is for.",
+    "2. Identify what is working and what is missing.",
+    "3. Propose one concrete next action the swarm should take.",
+    "",
+    transcriptLabel,
+    transcriptText || "(empty — you are writing the first entry)",
+    "=== END TRANSCRIPT ===",
+    "",
+    `Now respond as Agent ${agentIndex}.`,
+  ].join("\n");
+}
+
+// Duplicated from RoundRobinRunner to avoid coupling the two classes; both
+// use the same OpenCode SDK response shape and the same undici error chain.
+// If a third runner needs these, extract then — not preemptively.
+function extractText(res: unknown): string | undefined {
+  const any = res as {
+    data?: {
+      parts?: Array<{ type?: string; text?: string }>;
+      info?: { parts?: Array<{ type?: string; text?: string }> };
+      text?: string;
+    };
+  };
+  const parts = any?.data?.parts ?? any?.data?.info?.parts;
+  if (Array.isArray(parts)) {
+    const texts = parts
+      .filter((p) => p?.type === "text" && typeof p.text === "string")
+      .map((p) => p.text as string);
+    if (texts.length) return texts.join("\n");
+  }
+  return any?.data?.text;
+}
+
+function describeSdkError(err: unknown): string {
+  if (err instanceof Error) {
+    const parts: string[] = [err.message];
+    let cause: unknown = (err as { cause?: unknown }).cause;
+    let depth = 0;
+    while (cause && depth < 4) {
+      if (cause instanceof Error) {
+        const code = (cause as { code?: string }).code;
+        parts.push(code ? `${cause.message} [${code}]` : cause.message);
+        cause = (cause as { cause?: unknown }).cause;
+      } else {
+        parts.push(String(cause));
+        cause = undefined;
+      }
+      depth++;
+    }
+    return parts.join(" <- ");
+  }
+  if (err && typeof err === "object") {
+    const o = err as { name?: string; message?: string };
+    const head = o.name ? `${o.name}: ` : "";
+    if (o.message) return head + o.message;
+    try {
+      return head + JSON.stringify(o).slice(0, 500);
+    } catch {
+      return head + String(err);
+    }
+  }
+  return String(err);
+}

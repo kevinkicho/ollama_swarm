@@ -56,11 +56,11 @@ const PRESETS: readonly SwarmPreset[] = [
   {
     id: "council",
     label: "Council (parallel drafts + reconcile)",
-    summary: "Round 1 independent drafts; Round 2 reconcile or vote.",
+    summary: "Round 1 independent drafts (peers hidden); Round 2+ reveal and revise.",
     min: 3,
     max: 8,
     recommended: 4,
-    status: "planned",
+    status: "active",
   },
   {
     id: "orchestrator-worker",

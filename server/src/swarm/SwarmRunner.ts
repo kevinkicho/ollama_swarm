@@ -2,7 +2,7 @@ import type { AgentManager } from "../services/AgentManager.js";
 import type { RepoService } from "../services/RepoService.js";
 import type { SwarmEvent, SwarmStatus } from "../types.js";
 
-export type PresetId = "round-robin" | "blackboard" | "role-diff";
+export type PresetId = "round-robin" | "blackboard" | "role-diff" | "council";
 
 export interface RunConfig {
   repoUrl: string;
