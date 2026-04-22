@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { config, basicAuthHeader } from "../config.js";
 import { PortAllocator } from "./PortAllocator.js";
+import { treeKill } from "./treeKill.js";
 import type { AgentState, SwarmEvent } from "../types.js";
 
 type Client = ReturnType<typeof createOpencodeClient>;
@@ -159,7 +160,7 @@ export class AgentManager {
       this.onState({ ...stateBase, sessionId, status: "ready" });
       return agent;
     } catch (err) {
-      child?.kill();
+      treeKill(child);
       this.ports.release(port);
       const msg = err instanceof Error ? err.message : String(err);
       this.onState({ ...stateBase, status: "failed", error: msg });
@@ -182,7 +183,7 @@ export class AgentManager {
       } catch {
         // ignore
       }
-      a.child?.kill();
+      treeKill(a.child);
       this.ports.release(a.port);
       this.lastActivity.delete(a.sessionId);
       this.onState({ id: a.id, index: a.index, port: a.port, sessionId: a.sessionId, status: "stopped" });

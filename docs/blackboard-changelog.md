@@ -1342,6 +1342,74 @@ the transcript shows seven distinguishable voices.
 
 ---
 
+## Unit 9 — Process-tree kill on Windows shutdown  **[committed: pending]**
+
+Close the opencode-grandchild leak the user hit after Ctrl+C'ing
+`npm run dev`: `kill-port 52072 55090…` actually found live PIDs each
+time, which means shutdown wasn't cleaning up.
+
+**Root cause chain.** On Windows `child.kill("SIGTERM")` is a direct
+`TerminateProcess` — the target dies immediately without its own
+handlers running. So when `dev.mjs`'s SIGINT handler SIGTERMs the
+backend, the backend's `process.on("SIGINT")` handler in
+`server/src/index.ts` never gets a chance to call `orchestrator.stop()`
+→ `AgentManager.killAll()`. The opencode servers spawned by
+`AgentManager.spawnAgent` (with `shell: true` on Windows, i.e. wrapped
+in `cmd.exe /d /s /c`) are orphaned. Compounding this, `child.kill()`
+of a shell-wrapped spawn only terminates the `cmd.exe`; the real
+`opencode.exe` grandchild survives and keeps holding its port.
+
+**Fix.** `taskkill /PID <pid> /T /F` — `/T` walks the process tree,
+`/F` force-terminates. Applied at every shutdown call site:
+
+- `server/src/services/treeKill.ts` — new helper. On win32 spawns
+  `taskkill`; on POSIX falls back to `child.kill("SIGTERM")` because
+  Node's signal forwarding is already reliable there. Guards against
+  `undefined`, missing pid, already-killed, and already-exited children
+  so repeated calls are idempotent.
+- `server/src/services/treeKill.test.ts` — 5 guard-clause tests.
+  Doesn't exercise the `spawn("taskkill", …)` path — mocking child
+  processes cross-platform is fragile and the pid-gating guards are
+  the parts a refactor can actually regress.
+- `server/src/services/AgentManager.ts` — replaces `child?.kill()` in
+  the `spawnAgent` catch (cleanup for a spawn that failed mid-init) and
+  `a.child?.kill()` inside `killAll` with `treeKill(…)`. The
+  `client.session.abort` call in `killAll` stays — it's the graceful
+  close that fires first; `treeKill` is what kills the process that
+  session was running under.
+- `scripts/dev.mjs` — same helper inlined (different module system, no
+  shared build setup). Replaces both `child.kill("SIGTERM")` in
+  `shutdown()` and the 4-second `child.kill("SIGKILL")` escalation.
+  On Windows `taskkill /F` is already the hardest kill, so the "try
+  again after 4s" timeout re-issues `taskkill` in case the first call
+  couldn't find the tree (e.g. a child that spawned grandchildren only
+  after we had already enumerated it).
+- `server/package.json` — `scripts.test` gains
+  `src/services/treeKill.test.ts`.
+
+**Why inline `treeKill` in `dev.mjs` instead of sharing.** `dev.mjs` is
+a standalone ESM script outside the `server/` workspace; it has no
+`tsx`/TypeScript compile step and can't import from `server/src/`. A
+shared package for a 20-line helper would be overkill. The two copies
+are the same 20 lines — if one gets fixed, the other gets the same
+diff by eye.
+
+**POSIX behavior unchanged.** `process.platform === "win32"` is the only
+branch that calls `taskkill`; everywhere else the old `child.kill(signal)`
+path runs as before. The two Linux/macOS users on this repo (counting
+the WSL CI path) shouldn't see any difference.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`; 358/358
+server tests green (353 before + 5 Unit 9 guard tests). End-to-end
+validation is a manual PowerShell smoke test on Windows:
+`npm run dev` → start a swarm in the UI so workers spawn → Ctrl+C →
+`kill-port <port>` on each previously-spawned port. If Unit 9 worked,
+every `kill-port` reports "no process found on port X". If it didn't,
+same symptoms as before and we'd need to dig into whether `taskkill` is
+being reached at all.
+
+---
+
 ## Cross-phase notes
 
 - **Event log.** A per-boot append-only JSONL log is written at `logs/current.jsonl` via `server/src/ws/eventLogger.ts` (landed alongside Phase 4 work, currently uncommitted). Every `SwarmEvent` the WS broadcasts gets a line, making post-hoc verification of runs possible even after the browser tab is closed.

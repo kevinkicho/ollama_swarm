@@ -57,6 +57,31 @@ for (const [label, p] of [["tsx", tsxCli], ["vite", viteCli]]) {
 const children = [];
 let shuttingDown = false;
 
+// On Windows, `child.kill("SIGTERM")` only terminates the direct child —
+// our server process — while grandchildren like opencode.exe workers keep
+// running and holding their ports. `taskkill /T /F` walks the process tree
+// and force-terminates everything. On POSIX we keep the signal path because
+// Node's signal forwarding is reliable there.
+function treeKill(child, signal) {
+  if (!child || child.pid === undefined) return;
+  if (child.killed || child.exitCode !== null) return;
+  if (process.platform === "win32") {
+    try {
+      const k = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      k.on("error", () => {
+        try { child.kill(); } catch {}
+      });
+    } catch {
+      try { child.kill(); } catch {}
+    }
+    return;
+  }
+  try { child.kill(signal ?? "SIGTERM"); } catch {}
+}
+
 function prefix(tag, color) {
   const esc = `\x1b[${color}m[${tag}]\x1b[0m `;
   return (buf) => {
@@ -92,14 +117,14 @@ function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   for (const { child } of children) {
-    if (!child.killed && child.exitCode === null) {
-      child.kill("SIGTERM");
-    }
+    treeKill(child, "SIGTERM");
   }
-  // hard-kill any leftovers after 4s
+  // hard-kill any leftovers after 4s (on Windows `taskkill /F` is already
+  // the strongest kill; the second call re-issues it in case the first
+  // taskkill couldn't find/reach the tree)
   setTimeout(() => {
     for (const { child } of children) {
-      if (!child.killed && child.exitCode === null) child.kill("SIGKILL");
+      treeKill(child, "SIGKILL");
     }
     process.exit(0);
   }, 4000).unref();
