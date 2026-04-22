@@ -8,6 +8,7 @@ import { CouncilRunner } from "../swarm/CouncilRunner.js";
 import { OrchestratorWorkerRunner } from "../swarm/OrchestratorWorkerRunner.js";
 import { DebateJudgeRunner } from "../swarm/DebateJudgeRunner.js";
 import { MapReduceRunner } from "../swarm/MapReduceRunner.js";
+import { StigmergyRunner } from "../swarm/StigmergyRunner.js";
 import { DEFAULT_ROLES } from "../swarm/roles.js";
 
 export interface OrchestratorOpts extends RunnerOpts {
@@ -107,6 +108,11 @@ export class Orchestrator {
         // slice of top-level repo entries and inspect them in isolation;
         // reducer synthesizes all mapper reports per cycle.
         return new MapReduceRunner(this.opts);
+      case "stigmergy":
+        // Self-organizing repo exploration. No planner, no roles — agents
+        // pick their own next file based on a shared annotation table
+        // (pheromone trail) that the runner maintains in memory.
+        return new StigmergyRunner(this.opts);
       default: {
         // Exhaustiveness check — if a new preset is added to PresetId, TS errors here.
         const _exhaustive: never = preset;

@@ -9,7 +9,8 @@ export type PresetId =
   | "council"
   | "orchestrator-worker"
   | "debate-judge"
-  | "map-reduce";
+  | "map-reduce"
+  | "stigmergy";
 
 export interface RunConfig {
   repoUrl: string;

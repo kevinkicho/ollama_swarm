@@ -1898,6 +1898,155 @@ mappers by index.
 
 ---
 
+## Unit 15 — Stigmergy preset (standalone)  **[committed: pending]**
+
+Sixth preset of this session, completing the user's list
+(orchestrator-worker, debate-judge, map-reduce, stigmergy). No
+planner, no role assignment — all agents are equal explorers.
+
+**Design decision up front.** Stigmergy was described in
+`docs/swarm-patterns.md` as *"Layer on blackboard"* — i.e., workers
+on the existing blackboard preset consult a file-annotation table
+when picking the next todo. That's the canonical formulation but it
+requires surgery on `BlackboardRunner.claim`/`replan` internals,
+which is both large and risky for a preset whose primary use is
+exploration (not file editing). So Unit 15 ships stigmergy as a
+**standalone preset for repo exploration**. The blackboard-layer
+variant is deferred and explicitly noted as future work in
+`docs/swarm-patterns.md` §8.
+
+**Mechanic.** The runner keeps an in-memory `Map<filePath,
+AnnotationState>` where `AnnotationState` is `{visits, avgInterest,
+avgConfidence, latestNote}` — the shared "pheromone trail." Per
+round, agents go in index order; each agent:
+
+1. Sees the current annotation table (formatted as a sorted text
+   block: most-visited first, alphabetical ties broken
+   deterministically) plus the top-level candidate paths.
+2. Picks ONE file to inspect — the prompt teaches the heuristic
+   "untouched files are most attractive; among visited, prefer high
+   INTEREST + low CONFIDENCE; avoid well-covered files." The model
+   decides; the runner just exposes the signal.
+3. Reads the file via tools, writes a prose report, and appends a
+   single-line annotation JSON: `{"file": "...", "interest": 0-10,
+   "confidence": 0-10, "note": "..."}`.
+4. Runner parses the annotation, clamps interest/confidence to
+   [0, 10] (so a model that returns `100` or `-5` can't poison the
+   table), and merges via running average weighted equally per
+   visit. If parse fails, a system message notes "no annotation
+   update this turn" but keeps the agent's text in the transcript.
+
+`rounds` = how many exploration passes through agents. Total turns =
+`rounds × agentCount`. Min 2 agents — emergence needs multiple
+participants.
+
+- `server/src/swarm/StigmergyRunner.ts` — new runner. Enforces
+  `agentCount >= 2`. On successful run completion, appends a final
+  system message dumping the full formatted annotation table, so
+  the transcript closes with the pheromone map of what was found
+  where.
+- `parseAnnotation(raw)` — exported pure function. Accepts clean
+  JSON / markdown-fenced JSON / JSON embedded in prose (takes the
+  first `{...}` block). Coerces `file` to trimmed string,
+  `interest`/`confidence` to numbers clamped to [0, 10]; treats
+  missing `note` as empty string (not a rejection). Returns null
+  if the required `file`/`interest`/`confidence` keys are missing
+  or malformed.
+- `buildExplorerPrompt({agentIndex, round, totalRounds,
+  candidatePaths, annotations})` — exported pure function. Renders
+  the annotation table inline (via `formatAnnotations`), teaches
+  the attractiveness rule explicitly, specifies the required JSON
+  output shape. No peer transcript — each agent's prompt is the
+  seed + annotation-table + candidate-paths, nothing more.
+- `formatAnnotations(map)` — exported pure function. Sorts entries
+  by visit count desc, alphabetical ties. Empty map renders as
+  *"(empty — no files annotated yet; everything is untouched)"* so
+  round-1 agents know they have free rein.
+- `server/src/swarm/StigmergyRunner.test.ts` — 17 tests across 4
+  describe blocks. `parseAnnotation` happy path (clean JSON, fenced,
+  prose-embedded) + clamping & rejection (out-of-range clamps,
+  missing/bad types, missing note = empty string, non-JSON input).
+  `formatAnnotations` ordering (empty-state, visit-count then
+  alphabetical). `buildExplorerPrompt` pheromone visibility (table
+  rendered inline, empty-table message present, attractiveness rule
+  present, JSON shape spec present, agent named in header+closing).
+- `server/src/swarm/SwarmRunner.ts` — `PresetId` gains `"stigmergy"`.
+- `server/src/services/Orchestrator.ts` — `buildRunner` case.
+- `server/src/routes/swarm.ts` — Zod enum accepts `"stigmergy"`.
+- `server/package.json` — registers the new test file.
+- `web/src/components/SetupForm.tsx` — flipped `status: "planned"` →
+  `"active"`. Summary text updated. `min` lowered from 3 to 2
+  (emergence requires ≥2 agents).
+- `docs/swarm-patterns.md` — §8 flipped `[ ]` → `[x]`; roadmap row
+  updated to note the standalone vs blackboard-layer distinction.
+
+**What Stigmergy does NOT do in v1.**
+- **No re-visit cap.** An agent can legitimately pick a file that's
+  already been visited — the heuristic says "prefer untouched, but
+  among visited, target high-interest low-confidence." If all files
+  are well-covered, agents will converge on re-reads. Acceptable
+  for an exploration tool.
+- **No annotation persistence.** The table is wiped on each
+  `start()`. If we want cross-run continuity (e.g., "explore this
+  repo across 3 sessions") we'd need to serialize to disk.
+- **No explicit synthesizer.** The run ends with the annotation
+  table dumped as a system message and every agent's prose reports
+  in the transcript. There's no "final synthesis" turn. Users read
+  the table and reports directly.
+- **Coarse granularity.** Candidates are top-level repo entries.
+  An agent *can* drill deeper via its file-read tool but the
+  annotation it returns is against whatever path it picked — so
+  annotations may be directory-level, not file-level, depending on
+  how the agent interprets its pick.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+431/431 server tests green (414 before + 17 Unit 15). E2E validation:
+pick Stigmergy on the setup form with agentCount 3, run against any
+small repo, watch the annotation table fill up in system messages
+between agent turns — each turn's `Annotation update — X:
+interest=N, confidence=M, total visits=K` line IS the pheromone
+trail becoming visible.
+
+---
+
+## Session summary (Units 9–15, this conversation)
+
+Seven units shipped in this session:
+
+- **Unit 9** — Windows tree-kill for clean shutdown. Fixed the
+  port-leak the user hit when Ctrl+C'ing `npm run dev`. Port
+  cleanup now relies on `taskkill /T /F` instead of the SIGTERM
+  path that Windows ignores.
+- **Unit 10** — Council preset. First of the user's three-preset
+  list. Parallel drafts with round-1 peer hiding; round-2+ reveals
+  and agents revise.
+- **Unit 11** — Blackboard honors `rounds` + auditor tightening.
+  The MatSci-run post-mortem fix: blackboard's `rounds` slider
+  finally has teeth, and the auditor no longer surrenders
+  `wont-do` on first sight of missing files. E2E-validated on
+  `kevinkicho/kmatsci040226` — run went from 1 commit / 0 test
+  files to 5 commits / 3 real test files + CI workflow.
+- **Unit 12** — Orchestrator–worker preset. Lead plans subtasks
+  as JSON; workers execute isolated in parallel; lead synthesizes.
+- **Unit 13** — Debate + judge preset. Fixed 3 agents: PRO vs CON
+  exchange, JUDGE scores on final round. Proposition default =
+  "This project is ready for production use", overridable via
+  pre-start inject-message.
+- **Unit 14** — Map-reduce preset. Mechanical round-robin
+  partition of top-level repo entries; mappers isolated; reducer
+  synthesizes. Side-steps LLM-planner laziness by using a
+  deterministic partition.
+- **Unit 15** — Stigmergy preset (standalone exploration). Shared
+  annotation table; agents pick their own next file based on
+  pheromone trail. No planner, no roles.
+
+Roster after this session: **eight shipped presets** (round-robin
+baseline + 7 intentional designs). Every pattern named in the
+original catalog (`docs/swarm-patterns.md`) is now either shipped
+or deferred with a documented rationale.
+
+---
+
 ## Cross-phase notes
 
 - **Event log.** A per-boot append-only JSONL log is written at `logs/current.jsonl` via `server/src/ws/eventLogger.ts` (landed alongside Phase 4 work, currently uncommitted). Every `SwarmEvent` the WS broadcasts gets a line, making post-hoc verification of runs possible even after the browser tab is closed.

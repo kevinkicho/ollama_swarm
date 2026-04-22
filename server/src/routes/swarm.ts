@@ -24,6 +24,7 @@ const StartBody = z.object({
       "orchestrator-worker",
       "debate-judge",
       "map-reduce",
+      "stigmergy",
     ])
     .default("round-robin"),
 });

@@ -161,15 +161,35 @@ waiting their turn. Natural fit for 10+ agents.
 **Limits:** needs careful coordination rules (see sub-patterns below) —
 without them, concurrent edits stomp each other and stale plans ship.
 
-### 8. Stigmergy / pheromone trails `[ ]`
-Agents leave annotations on files they've explored with a
-confidence/interest score. Other agents prefer unexplored or contentious
-files. Natural for repo exploration — agents self-organize who covers
-what without a central planner.
+### 8. Stigmergy / pheromone trails `[x]` ← **shipped as `stigmergy` preset (Unit 15)**
+Self-organizing repo exploration. No planner, no role assignment. Each
+agent per turn reads the shared annotation table (file → `{visits,
+avgInterest, avgConfidence, latestNote}`), picks one file to inspect
+based on it, returns a structured annotation, and the runner updates
+the table before the next agent's turn.
 
-**Wins:** zero-coordinator scaling, emergent coverage.
+Shipped via `StigmergyRunner` (see
+`server/src/swarm/StigmergyRunner.ts`) as a **standalone preset** for
+repo exploration — not as a layer on top of blackboard. The
+blackboard-layer variant (workers consulting the annotation table when
+picking the next todo) is a larger surgery on `BlackboardRunner`'s
+claim logic and was deferred.
+
+The annotation table is in-memory in the runner (wiped on next start).
+Per round, agents go in index order; each sees the latest table, picks
+a file, reads it, returns JSON `{file, interest: 0-10, confidence:
+0-10, note}`. The runner clamps interest/confidence to [0, 10] so a
+confused model can't poison the table with extremes. Running averages
+per file accumulate across visits. `rounds` = exploration passes
+through agents; total turns = rounds × agentCount.
+
+**Wins:** zero-coordinator scaling, emergent coverage, pheromone trail
+visible in the transcript (users can see *why* agents picked what
+they picked).
 **Limits:** harder to steer toward a specific goal; mostly useful for
-survey/exploration phases, less so for directed work.
+survey/exploration phases, less so for directed work. No re-visit cap
+— an agent might re-read the same file if the table suggests it's
+still high-interest.
 
 ---
 
@@ -220,7 +240,7 @@ The **chosen stack for v1 of the blackboard preset** is optimistic+CAS
 | 5 | Orchestrator–worker ✓ shipped | n/a                                | Needs role differentiation to be useful; builds on #2 |
 | 6 | Debate + judge ✓ shipped     | n/a                                 | Narrow use case; wait until we have a concrete yes/no question |
 | 7 | Critic loops                 | Layer, not preset                   | Orthogonal — add as a toggle on any preset |
-| 8 | Stigmergy                    | Layer on blackboard                 | Extends #1; file-annotation scoring on top of the board |
+| 8 | Stigmergy ✓ shipped (standalone) | Shared annotation table         | Shipped as standalone exploration preset; blackboard-layer variant deferred |
 
 ---
 

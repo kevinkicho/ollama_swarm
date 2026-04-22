@@ -83,11 +83,11 @@ const PRESETS: readonly SwarmPreset[] = [
   {
     id: "stigmergy",
     label: "Stigmergy / pheromone trails",
-    summary: "Agents annotate files with interest scores; others avoid covered ground.",
-    min: 3,
+    summary: "Self-organizing repo exploration. Each agent picks a file based on a shared annotation table; untouched files attract, well-covered ones repel.",
+    min: 2,
     max: 8,
     recommended: 5,
-    status: "planned",
+    status: "active",
   },
 ];
 
