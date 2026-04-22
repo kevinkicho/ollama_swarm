@@ -1793,7 +1793,7 @@ agent-3 verdict on the final round.
 
 ---
 
-## Unit 14 — Map-reduce preset  **[committed: pending]**
+## Unit 14 — Map-reduce preset  **[committed: `4ce56d0`]**
 
 Fifth preset of this session. Direct counterpoint to the
 LLM-planner-laziness failure mode that Unit 11 fixed downstream of —
