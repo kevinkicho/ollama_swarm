@@ -1342,7 +1342,7 @@ the transcript shows seven distinguishable voices.
 
 ---
 
-## Unit 9 — Process-tree kill on Windows shutdown  **[committed: pending]**
+## Unit 9 — Process-tree kill on Windows shutdown  **[committed: `880b185`]**
 
 Close the opencode-grandchild leak the user hit after Ctrl+C'ing
 `npm run dev`: `kill-port 52072 55090…` actually found live PIDs each
