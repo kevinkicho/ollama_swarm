@@ -44,6 +44,11 @@ broadcaster.attach(wss, (ws) => {
   broadcaster.send(ws, { type: "swarm_state", phase: status.phase, round: status.round });
   for (const a of status.agents) broadcaster.send(ws, { type: "agent_state", agent: a });
   for (const entry of status.transcript) broadcaster.send(ws, { type: "transcript_append", entry });
+  // Replay contract + summary for reloads of a completed run. Both events only
+  // fire once over the live socket, so without this a page refresh after a
+  // terminal run would show empty Contract and Summary cards.
+  if (status.contract) broadcaster.send(ws, { type: "contract_updated", contract: status.contract });
+  if (status.summary) broadcaster.send(ws, { type: "run_summary", summary: status.summary });
 });
 
 app.get("/api/health", (_req, res) => {

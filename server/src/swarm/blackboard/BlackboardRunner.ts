@@ -140,6 +140,10 @@ export class BlackboardRunner implements SwarmRunner {
   // branch to explain WHY a contract-driven run chose to stop.
   private auditInvocations = 0;
   private completionDetail?: string;
+  // Stashed by writeRunSummary so status() can hand it to the WS catch-up
+  // on reconnect. Without this, reloading the page after a completed run
+  // would lose the Summary card since run_summary only fires once.
+  private lastSummary?: RunSummary;
 
   constructor(private readonly opts: RunnerOpts) {
     this.boardBroadcaster = createBoardBroadcaster(this.opts.emit);
@@ -161,6 +165,8 @@ export class BlackboardRunner implements SwarmRunner {
       model: this.active?.model,
       agents: this.opts.manager.toStates(),
       transcript: [...this.transcript],
+      summary: this.lastSummary,
+      contract: this.contract ? this.cloneContract(this.contract) : undefined,
     };
   }
 
@@ -1240,6 +1246,9 @@ export class BlackboardRunner implements SwarmRunner {
       const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
       this.appendSystem(`Failed to write run summary (${msg})`);
     }
+    // Stash before the broadcast so a client that connects between emit and
+    // the next status() call still gets the summary via the WS catch-up.
+    this.lastSummary = summary;
     // Broadcast regardless of write success so the UI still gets the card.
     this.opts.emit({ type: "run_summary", summary });
   }

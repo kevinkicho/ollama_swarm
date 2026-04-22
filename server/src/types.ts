@@ -93,4 +93,9 @@ export interface SwarmStatus {
   model?: string;
   agents: AgentState[];
   transcript: TranscriptEntry[];
+  // Stashed on runs that have finished writing their summary so a page
+  // reload can replay the card via the WS catch-up handler in index.ts.
+  // Stays undefined until the run actually completes/stops/crashes.
+  summary?: RunSummary;
+  contract?: ExitContract;
 }
