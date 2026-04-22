@@ -1210,6 +1210,71 @@ commit).
 
 ---
 
+## Unit 7 — Bound undici headersTimeout + surface retry state to the UI  **[uncommitted]**
+
+During the v10 E2E run (`runs/phase11c-medium-v10/`), `agent-2` stalled mid-round
+on `fetch failed <- Headers Timeout Error [UND_ERR_HEADERS_TIMEOUT]`. Node's
+built-in fetch uses undici's default `Agent`, which sets `headersTimeout` to
+~5 minutes. Combined with `retry.ts`'s three attempts (initial + two backoffs of
+4s and 16s), a single stuck upstream could park an agent for ~15 minutes before
+the retry chain finally gave up — during which the UI showed "thinking", giving
+no indication the agent was in a degraded state. This unit addresses both
+halves: tighten the network timeout to fail fast, and surface the retry state
+to the panel so the user can see what's happening.
+
+- `server/src/services/httpDispatcher.ts` — new module. Exports
+  `HEADERS_TIMEOUT_MS = 90_000` and a `configureHttpDispatcher()` that calls
+  `setGlobalDispatcher(new Agent({ headersTimeout: 90_000, bodyTimeout: 0 }))`
+  once (guarded by an `installed` flag so repeated calls are no-ops).
+  `bodyTimeout: 0` disables the stream-read timer explicitly — SSE event
+  subscriptions stay open indefinitely, so a non-zero body timeout would tear
+  down long-lived streams mid-run. 90s for headers gives the upstream more than
+  enough time for cold-start variance without letting a jammed socket burn a
+  full retry budget.
+- `server/src/index.ts` — imports `configureHttpDispatcher` and invokes it at
+  the top of the module, *before* the `AgentManager` import. This matters:
+  `AgentManager` constructs SDK clients at spawn time, which eagerly builds
+  fetch state; installing the dispatcher after that would leave those clients
+  pinned to undici's default. The call has to run in the module-loading phase,
+  not inside an async bootstrap.
+- `server/src/types.ts` and `web/src/types.ts` — `AgentStatus` gains a
+  `"retrying"` variant, and `AgentState` gains optional `retryAttempt`,
+  `retryMax`, `retryReason`. The two files mirror each other by hand (no shared
+  package), same pattern as the other parallel-edited DTOs.
+- `server/src/swarm/blackboard/BlackboardRunner.ts` — in `promptAgent`'s catch
+  block, before calling `interruptibleSleep(backoff)`, the agent now transitions
+  into `"retrying"` with `{retryAttempt, retryMax, retryReason: shortMsg}` via
+  both `manager.markStatus` (authoritative in-memory state) and
+  `emitAgentState` (WS broadcast). The retry loop was already doing the sleep;
+  this just makes the window visible.
+- `web/src/components/AgentPanel.tsx` — amber-pulsing dot for `retrying`, and
+  when `status === "retrying"` the status line reads
+  `retrying 2/3 · UND_ERR_HEADERS_TIMEOUT` instead of the generic phase name.
+  Falls back to `agent.status` when retry metadata is absent (covers the brief
+  window between attempts when state has been reset but error has not).
+
+**Why 90s and not 60s or 120s.** Observed v10 behavior: the stuck agent was
+waiting on a first-token response after prompt submission, not mid-stream.
+Ollama `glm-5.1:cloud` healthy first-token latency is typically 5-30s, with
+occasional 60s+ outliers during model warm-up or queue contention on the cloud
+side. 90s sits above the warm-up tail but well below undici's 5-minute default,
+so genuine slowness retries while an actually-stuck socket fails fast and lets
+the retry chain cycle through in ~20s of sleeps + three fast header timeouts
+instead of 15 minutes of blocking.
+
+**Why not tune `retry.ts` too.** The retry count and backoff curve are fine
+once the timeout is bounded — the pathological budget was almost entirely
+`attempts × headersTimeout`, not the backoff itself. Leaving `retry.ts`
+untouched also means existing tests (which mock timings explicitly) don't need
+to re-baseline.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`; 345/345 server
+tests green (no new tests — the behavior is integration-level and exercised by
+the next E2E run). No changes to test fixtures needed since the dispatcher
+install is a no-op outside the server's Node process.
+
+---
+
 ## Cross-phase notes
 
 - **Event log.** A per-boot append-only JSONL log is written at `logs/current.jsonl` via `server/src/ws/eventLogger.ts` (landed alongside Phase 4 work, currently uncommitted). Every `SwarmEvent` the WS broadcasts gets a line, making post-hoc verification of runs possible even after the browser tab is closed.

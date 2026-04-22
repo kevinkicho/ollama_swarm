@@ -1,4 +1,10 @@
-export type AgentStatus = "spawning" | "ready" | "thinking" | "failed" | "stopped";
+export type AgentStatus =
+  | "spawning"
+  | "ready"
+  | "thinking"
+  | "retrying"
+  | "failed"
+  | "stopped";
 
 export interface AgentState {
   id: string;
@@ -8,6 +14,11 @@ export interface AgentState {
   status: AgentStatus;
   lastMessageAt?: number;
   error?: string;
+  // Unit 7: populated while status === "retrying" so the panel can render
+  // "retrying 2/3 · UND_ERR_HEADERS_TIMEOUT" during the backoff window.
+  retryAttempt?: number;
+  retryMax?: number;
+  retryReason?: string;
 }
 
 export type TranscriptRole = "system" | "user" | "agent";

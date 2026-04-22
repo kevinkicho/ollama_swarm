@@ -3,6 +3,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer } from "ws";
+import { configureHttpDispatcher } from "./services/httpDispatcher.js";
+
+// Install the bounded undici dispatcher BEFORE any import that might trigger
+// a fetch (e.g. SDK client construction at AgentManager spawn-time). Has to
+// run in the module-loading phase, not behind async setup.
+configureHttpDispatcher();
+
 import { config } from "./config.js";
 import { AgentManager } from "./services/AgentManager.js";
 import { RepoService } from "./services/RepoService.js";

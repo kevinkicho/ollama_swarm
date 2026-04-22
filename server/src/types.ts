@@ -7,7 +7,13 @@ import type {
 } from "./swarm/blackboard/types.js";
 import type { RunSummary } from "./swarm/blackboard/summary.js";
 
-export type AgentStatus = "spawning" | "ready" | "thinking" | "failed" | "stopped";
+export type AgentStatus =
+  | "spawning"
+  | "ready"
+  | "thinking"
+  | "retrying"
+  | "failed"
+  | "stopped";
 
 export interface AgentState {
   id: string;
@@ -17,6 +23,12 @@ export interface AgentState {
   status: AgentStatus;
   lastMessageAt?: number;
   error?: string;
+  // Unit 7: set only while status === "retrying" so the UI can render
+  // "Agent N · retrying 2/3 · UND_ERR_HEADERS_TIMEOUT" instead of an
+  // opaque "thinking" during the 5-15 min backoff window.
+  retryAttempt?: number;
+  retryMax?: number;
+  retryReason?: string;
 }
 
 export type TranscriptRole = "system" | "user" | "agent";

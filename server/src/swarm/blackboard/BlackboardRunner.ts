@@ -1500,6 +1500,24 @@ export class BlackboardRunner implements SwarmRunner {
           this.appendSystem(
             `[${agent.id}] transport error (${shortMsg}) — retry ${attempt + 1}/${RETRY_MAX_ATTEMPTS} in ${Math.round(delayMs / 1000)}s`,
           );
+          // Unit 7: surface retry state so the UI doesn't show a silent
+          // "thinking" during the backoff + next-attempt window.
+          const retryAttempt = attempt + 1;
+          this.opts.manager.markStatus(agent.id, "retrying", {
+            retryAttempt,
+            retryMax: RETRY_MAX_ATTEMPTS,
+            retryReason: shortMsg,
+          });
+          this.emitAgentState({
+            id: agent.id,
+            index: agent.index,
+            port: agent.port,
+            sessionId: agent.sessionId,
+            status: "retrying",
+            retryAttempt,
+            retryMax: RETRY_MAX_ATTEMPTS,
+            retryReason: shortMsg,
+          });
           const completed = await this.interruptibleSleep(delayMs, controller.signal);
           if (!completed) throw err;
         }

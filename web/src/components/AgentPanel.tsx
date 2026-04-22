@@ -4,11 +4,16 @@ const STATUS_COLOR: Record<AgentState["status"], string> = {
   spawning: "bg-amber-400",
   ready: "bg-emerald-400",
   thinking: "bg-blue-400 animate-pulse",
+  retrying: "bg-amber-400 animate-pulse",
   failed: "bg-red-500",
   stopped: "bg-ink-400",
 };
 
 export function AgentPanel({ agent }: { agent: AgentState }) {
+  const retryLabel =
+    agent.status === "retrying" && agent.retryAttempt && agent.retryMax
+      ? `retrying ${agent.retryAttempt}/${agent.retryMax}${agent.retryReason ? ` · ${agent.retryReason}` : ""}`
+      : null;
   return (
     <div className="border border-ink-700 rounded-md p-3 bg-ink-800">
       <div className="flex items-center justify-between">
@@ -18,7 +23,7 @@ export function AgentPanel({ agent }: { agent: AgentState }) {
         </div>
         <span className="text-xs font-mono text-ink-400">:{agent.port}</span>
       </div>
-      <div className="mt-1 text-xs text-ink-400 font-mono">{agent.status}</div>
+      <div className="mt-1 text-xs text-ink-400 font-mono">{retryLabel ?? agent.status}</div>
       {agent.error ? <div className="mt-2 text-xs text-red-300">{agent.error}</div> : null}
     </div>
   );
