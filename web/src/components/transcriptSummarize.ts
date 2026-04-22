@@ -1,11 +1,12 @@
 // Recognizes blackboard-preset agent response JSON (planner array / worker
-// {diffs} / replanner {revised | skip}) and produces a one-line summary plus
-// pretty-printed JSON for reveal. Returns null when the text isn't a
-// recognized shape — the caller falls back to rendering raw text.
+// {diffs} / replanner {revised | skip} / first-pass contract / auditor) and
+// produces a one-line summary plus pretty-printed JSON for reveal. Returns
+// null when the text isn't a recognized shape — the caller falls back to
+// rendering raw text.
 //
 // The shape constants MUST stay in sync with the server-side zod schemas in
-// server/src/swarm/blackboard/prompts/{planner,worker,replanner}.ts. Keep the
-// reference doc (docs/blackboard-response-schemas.md) in lockstep too.
+// server/src/swarm/blackboard/prompts/{planner,worker,replanner,firstPassContract,auditor}.ts.
+// Keep the reference doc (docs/blackboard-response-schemas.md) in lockstep too.
 
 export interface AgentJsonSummary {
   summary: string;
@@ -58,6 +59,52 @@ export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
     const p = parsed as { reason?: unknown };
     const reason = typeof p.reason === "string" ? p.reason : "(no reason)";
     return { summary: `Skipped: ${truncate(reason, 160)}`, json: pretty };
+  }
+
+  // First-pass contract: { missionStatement: string, criteria: [{description, expectedFiles}] }
+  if (
+    isObject(parsed) &&
+    typeof (parsed as { missionStatement?: unknown }).missionStatement === "string" &&
+    Array.isArray((parsed as { criteria?: unknown }).criteria)
+  ) {
+    const p = parsed as { missionStatement: string; criteria: unknown[] };
+    const n = p.criteria.length;
+    const firstDesc = n > 0 && isObject(p.criteria[0]) && typeof p.criteria[0].description === "string"
+      ? p.criteria[0].description
+      : null;
+    const crit = n === 0
+      ? "0 criteria"
+      : `${n} criteri${n === 1 ? "on" : "a"}${firstDesc ? `: ${truncate(firstDesc, 90)}` : ""}`;
+    return {
+      summary: `Contract: ${truncate(p.missionStatement, 120)} — ${crit}`,
+      json: pretty,
+    };
+  }
+
+  // Auditor: { verdicts: [{id, status, rationale, todos?}], newCriteria?: [...] }
+  if (isObject(parsed) && Array.isArray((parsed as { verdicts?: unknown }).verdicts)) {
+    const p = parsed as { verdicts: unknown[]; newCriteria?: unknown };
+    let met = 0;
+    let wontDo = 0;
+    let unmet = 0;
+    let unknown = 0;
+    for (const v of p.verdicts) {
+      if (!isObject(v)) { unknown++; continue; }
+      const status = (v as { status?: unknown }).status;
+      if (status === "met") met++;
+      else if (status === "wont-do") wontDo++;
+      else if (status === "unmet") unmet++;
+      else unknown++;
+    }
+    const newN = Array.isArray(p.newCriteria) ? p.newCriteria.length : 0;
+    const counts = [
+      met ? `${met} met` : null,
+      wontDo ? `${wontDo} wont-do` : null,
+      unmet ? `${unmet} unmet` : null,
+      unknown ? `${unknown} ?` : null,
+    ].filter(Boolean).join(", ") || "0 verdicts";
+    const newSuffix = newN > 0 ? ` (+${newN} new criteri${newN === 1 ? "on" : "a"})` : "";
+    return { summary: `Audit: ${counts}${newSuffix}`, json: pretty };
   }
 
   // Planner: top-level array of { description, expectedFiles }

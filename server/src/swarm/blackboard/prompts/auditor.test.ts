@@ -200,6 +200,14 @@ describe("AUDITOR prompts", () => {
     assert.match(AUDITOR_SYSTEM_PROMPT, /unmet.*todos.*REQUIRED/i);
   });
 
+  it("system prompt steers shell-execution criteria to wont-do", () => {
+    // Auditor must recognize that criteria requiring shell execution (tsc,
+    // ESLint, tests) can't be satisfied via file diffs and should route to
+    // wont-do rather than emitting unmet verdicts with no file anchor.
+    assert.match(AUDITOR_SYSTEM_PROMPT, /CANNOT run shell commands/);
+    assert.match(AUDITOR_SYSTEM_PROMPT, /issue `wont-do`/);
+  });
+
   it("user prompt lists unmet criteria and resolved criteria separately", () => {
     const p = buildAuditorUserPrompt(
       seed({

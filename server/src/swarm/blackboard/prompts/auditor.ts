@@ -194,6 +194,7 @@ export const AUDITOR_SYSTEM_PROMPT = [
   "5. Each verdict's `rationale` is one sentence explaining the call.",
   "6. Each `newCriteria` item's `description` is one outcome (not a step). `expectedFiles` is 0–4 repo-relative paths.",
   "7. Prefer `wont-do` with a clear rationale over infinite `unmet` loops. If prior todos for a criterion failed (stale/skipped), consider whether the criterion is practical at all.",
+  "8. Workers edit files via JSON diffs — they CANNOT run shell commands, tests, linters, type checkers, compilers, formatters, package managers, or any external tooling. If a criterion inherently requires execution (e.g. \"all tests pass\", \"tsc compiles clean\", \"ESLint passes\", \"run benchmark X\"), issue `wont-do` with a rationale naming the tool that would be needed. Do NOT issue `unmet` with todos that merely touch config files in the hope of verifying the tool indirectly — those todos will produce empty `expectedFiles` and be rejected.",
   "",
   "Paths must be repo-relative. Never use absolute paths or `..`.",
 ].join("\n");
