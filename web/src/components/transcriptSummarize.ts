@@ -1,5 +1,5 @@
 // Recognizes blackboard-preset agent response JSON (planner array / worker
-// {diffs} / replanner {revised | skip} / first-pass contract / auditor) and
+// {hunks} / replanner {revised | skip} / first-pass contract / auditor) and
 // produces a one-line summary plus pretty-printed JSON for reveal. Returns
 // null when the text isn't a recognized shape — the caller falls back to
 // rendering raw text.
@@ -25,7 +25,38 @@ export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
 
   const pretty = safePretty(parsed);
 
-  // Worker: { diffs: [...], skip?: string }
+  // Worker v2: { hunks: [ replace | create | append ], skip?: string }. Must
+  // be checked BEFORE the v1 diffs branch — a malformed response could in
+  // principle have both keys, but worker.ts only emits hunks now.
+  if (isObject(parsed) && Array.isArray((parsed as { hunks?: unknown }).hunks)) {
+    const p = parsed as { hunks: unknown[]; skip?: unknown };
+    if (typeof p.skip === "string" && p.skip.trim().length > 0) {
+      return { summary: `Declined: ${truncate(p.skip, 160)}`, json: pretty };
+    }
+    if (p.hunks.length === 0) {
+      return { summary: "Returned no changes", json: pretty };
+    }
+    const parts = p.hunks.map((h) => {
+      if (!isObject(h) || typeof h.file !== "string") return "[malformed hunk]";
+      const file = h.file;
+      if (h.op === "create" && typeof h.content === "string") {
+        return `create ${file} (${h.content.length.toLocaleString()} chars)`;
+      }
+      if (h.op === "replace" && typeof h.search === "string" && typeof h.replace === "string") {
+        const delta = h.replace.length - h.search.length;
+        const sign = delta > 0 ? "+" : "";
+        return `replace ${file} (${sign}${delta.toLocaleString()} chars)`;
+      }
+      if (h.op === "append" && typeof h.content === "string") {
+        return `append ${file} (+${h.content.length.toLocaleString()} chars)`;
+      }
+      return `[unknown hunk on ${file}]`;
+    });
+    return { summary: `Wrote ${parts.join(", ")}`, json: pretty };
+  }
+
+  // Worker v1 (legacy): { diffs: [...], skip?: string }. Kept so replays of
+  // pre-Unit-1 event logs still render cleanly. Current workers emit hunks.
   if (isObject(parsed) && Array.isArray((parsed as { diffs?: unknown }).diffs)) {
     const p = parsed as { diffs: unknown[]; skip?: unknown };
     if (typeof p.skip === "string" && p.skip.trim().length > 0) {
