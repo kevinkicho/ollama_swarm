@@ -55,6 +55,7 @@ import {
   REPLANNER_SYSTEM_PROMPT,
   type ReplannerSeed,
 } from "./prompts/replanner.js";
+import { classifyExpectedFiles } from "./prompts/pathValidation.js";
 import type { BoardEvent, ExitContract, Todo } from "./types.js";
 import {
   buildWorkerRepairPrompt,
@@ -419,7 +420,32 @@ export class BlackboardRunner implements SwarmRunner {
       );
     }
 
-    this.contract = this.buildContract(parsed.contract);
+    // Unit 6b: strip criterion paths not grounded in the REPO FILE LIST.
+    // v9 showed rule 9 is ignorable as advice (planner invented `src/tests/`
+    // despite colocated tests being right there); enforcement turns it from
+    // "might work" into "only bindable paths can reach the auditor".
+    const groundedCriteria = parsed.contract.criteria.map((c, idx) => {
+      const { accepted, rejected } = classifyExpectedFiles(c.expectedFiles, seed.repoFiles);
+      for (const r of rejected) {
+        this.board.postFinding({
+          agentId: agent.id,
+          text: `Contract c${idx + 1}: stripped suspicious path '${r.path}' (${r.reason}). Unit 5d linked-commit fallback will rebind from later commits.`,
+          createdAt: Date.now(),
+        });
+      }
+      if (rejected.length > 0) {
+        this.appendSystem(
+          `Contract c${idx + 1}: ${rejected.length}/${c.expectedFiles.length} path(s) stripped as unbindable — criterion kept with expectedFiles=${JSON.stringify(accepted)}.`,
+        );
+      }
+      return { description: c.description, expectedFiles: accepted };
+    });
+    const groundedContract: ParsedContract = {
+      missionStatement: parsed.contract.missionStatement,
+      criteria: groundedCriteria,
+    };
+
+    this.contract = this.buildContract(groundedContract);
     this.opts.emit({ type: "contract_updated", contract: this.cloneContract(this.contract) });
 
     if (this.contract.criteria.length === 0) {
@@ -498,13 +524,46 @@ export class BlackboardRunner implements SwarmRunner {
       );
     }
 
-    if (parsed.todos.length === 0) {
-      this.appendSystem("Planner produced 0 valid todos.");
+    // Unit 6b: apply the same grounding filter to each todo. Planner schema
+    // requires expectedFiles.min(1), so a todo that loses every path has to
+    // be dropped entirely — leaving it with [] would later fail board CAS.
+    const groundedTodos: typeof parsed.todos = [];
+    let suspiciousStripped = 0;
+    let todosDropped = 0;
+    for (const t of parsed.todos) {
+      const { accepted, rejected } = classifyExpectedFiles(t.expectedFiles, seed.repoFiles);
+      for (const r of rejected) {
+        suspiciousStripped += 1;
+        this.board.postFinding({
+          agentId: agent.id,
+          text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": stripped suspicious path '${r.path}' (${r.reason}).`,
+          createdAt: Date.now(),
+        });
+      }
+      if (accepted.length === 0) {
+        todosDropped += 1;
+        this.board.postFinding({
+          agentId: agent.id,
+          text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": dropped entirely — all ${t.expectedFiles.length} path(s) rejected by grounding check.`,
+          createdAt: Date.now(),
+        });
+        continue;
+      }
+      groundedTodos.push({ description: t.description, expectedFiles: accepted });
+    }
+    if (suspiciousStripped > 0 || todosDropped > 0) {
+      this.appendSystem(
+        `Grounding check: stripped ${suspiciousStripped} suspicious path(s); dropped ${todosDropped} todo(s) that lost every path.`,
+      );
+    }
+
+    if (groundedTodos.length === 0) {
+      this.appendSystem("Planner produced 0 valid todos after grounding.");
       this.board.postFinding({
         agentId: agent.id,
         text:
-          parsed.dropped.length > 0
-            ? `Planner returned only invalid todos (${parsed.dropped.length} dropped).`
+          parsed.dropped.length > 0 || todosDropped > 0
+            ? `Planner returned only invalid/unbindable todos (${parsed.dropped.length} schema-dropped, ${todosDropped} grounding-dropped).`
             : "Planner returned an empty todo list — nothing actionable in the repo.",
         createdAt: Date.now(),
       });
@@ -512,7 +571,7 @@ export class BlackboardRunner implements SwarmRunner {
     }
 
     const now = Date.now();
-    for (const t of parsed.todos) {
+    for (const t of groundedTodos) {
       this.board.postTodo({
         description: t.description,
         expectedFiles: t.expectedFiles,
@@ -520,7 +579,7 @@ export class BlackboardRunner implements SwarmRunner {
         createdAt: now,
       });
     }
-    this.appendSystem(`Posted ${parsed.todos.length} todo(s) to the board.`);
+    this.appendSystem(`Posted ${groundedTodos.length} todo(s) to the board.`);
   }
 
   // ---------------------------------------------------------------------

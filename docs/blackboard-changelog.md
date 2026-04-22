@@ -1171,6 +1171,45 @@ E2E run yet; that's the Unit 6a→6b boundary check.
 
 ---
 
+## Unit 6b — Enforce path grounding at contract + todo parse time  **[working tree]**
+
+Unit 6a gave the planner and contract-writer a real file list and told them (via
+system-prompt rules 9 and 10) not to invent paths. The v9 E2E run
+(`runs/phase11c-medium-v9/`) showed those rules are *advisory*: the planner
+dutifully emitted `src/tests/token-tracker.test.ts` and three sibling paths
+despite the REPO FILE LIST showing colocated tests (`src/brain/brain.test.ts`
+lives right next to `src/brain/brain.ts`). The contract criteria inherited the
+same invention, and `writeFileAtomic` happily created the missing `src/tests/`
+directory — so the run "succeeded" while installing tests in a directory that
+doesn't match the repo's convention. This unit replaces the advisory rule with
+code-level enforcement at parse time.
+
+- `server/src/swarm/blackboard/prompts/pathValidation.ts` — pure module, no I/O. `classifyPath(path, repoFiles)` returns one of three verdicts:
+  - `existing` — verbatim match in `repoFiles` (edit-an-existing-file).
+  - `plausible-new` — path not in the list, but parent dir *is* in the list (or the path is at repo root). The worker will create it; `writeFileAtomic` handles missing parents.
+  - `suspicious` — path not in the list *and* parent dir has no sibling in the list. This is the v9 failure mode; enforcement strips these before they reach the board.
+  `classifyExpectedFiles(paths, repoFiles)` runs the classifier over a batch and returns `{accepted, rejected}` with a human-readable reason per rejection. Backslash-normalized so `src\tests\foo.ts` is classified the same as `src/tests/foo.ts` (Windows models occasionally emit mixed separators).
+- `server/src/swarm/blackboard/prompts/pathValidation.test.ts` — 15 tests across 7 describe blocks: verbatim-existing (root + nested), plausible-new (root, colocated-test, inside-src), the exact v9 suspicious regression (`src/tests/*` rejected when REPO FILES has colocated tests), empty-repoFiles degradation (roots plausible, nested suspicious), backslash normalization, and the batch-level splitter.
+- `server/src/swarm/blackboard/BlackboardRunner.ts`:
+  - `runFirstPassContract` — after `parseFirstPassContract`, each criterion's `expectedFiles` is run through `classifyExpectedFiles`. Stripped paths post a per-path finding ("Contract c{N}: stripped suspicious path '...' (not in REPO FILE LIST and parent directory '...' not present). Unit 5d linked-commit fallback will rebind from later commits."). When any paths were stripped for a criterion, a system note summarizes the kept-vs-stripped ratio. A new `groundedContract: ParsedContract` is built from the filtered criteria and passed to `buildContract` — crucially, criteria keep their position (no c1/c2/c3 renumbering); if every path is stripped the criterion survives with `expectedFiles: []` and Unit 5d's linked-commit fallback handles the rebind.
+  - `runPlanner` — same treatment on each todo. Since the planner schema requires `expectedFiles.min(1)`, a todo that loses *every* path has to be dropped entirely (leaving it with `[]` would fail Board CAS later). A per-todo finding is posted for the drop, and a single aggregate system note summarizes total stripped paths + dropped todos. If grounding empties the todo list completely, runPlanner short-circuits with the same "only invalid todos" posture it already had for schema-rejected todos.
+- `server/package.json` — `scripts.test` gained `src/swarm/blackboard/prompts/pathValidation.test.ts` in the explicit file list. (The runner uses a hand-maintained list, not a glob; tests added to the tree without being listed here silently don't run.)
+
+**Why enforcement at the runner, not the parser.** The parsers (`planner.ts`,
+`firstPassContract.ts`) are pure schema validators with no repo knowledge;
+injecting `repoFiles` into them would mean every test fixture has to pass a
+file list. The runner already holds `seed.repoFiles` and is the natural
+enforcement point. This also keeps the findings log legible: every strip posts
+through `board.postFinding`, same channel the auditor uses, so the transcript
+tells the honest story of what the planner tried vs. what the runner accepted.
+
+**Verified.** `tsc --noEmit` clean; 345/345 server tests green (330 before
++ 15 Unit 6b pathValidation). No integration tests added for the runner
+wiring — those are the job of the upcoming v10 E2E run (planned right after
+commit).
+
+---
+
 ## Cross-phase notes
 
 - **Event log.** A per-boot append-only JSONL log is written at `logs/current.jsonl` via `server/src/ws/eventLogger.ts` (landed alongside Phase 4 work, currently uncommitted). Every `SwarmEvent` the WS broadcasts gets a line, making post-hoc verification of runs possible even after the browser tab is closed.
