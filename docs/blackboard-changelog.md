@@ -2009,7 +2009,7 @@ trail becoming visible.
 
 ---
 
-## Unit 16 — Cross-runner retry wrapper + headersTimeout 90s → 180s  **[committed: pending]**
+## Unit 16 — Cross-runner retry wrapper + headersTimeout 90s → 180s  **[committed: `0e0abaf`]**
 
 Direct response to the 2026-04-22 battle test on six presets, where 25
 UND_ERR_HEADERS_TIMEOUT events in 60 minutes of runs translated into
