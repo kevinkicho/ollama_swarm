@@ -5,6 +5,7 @@ import type { PresetId, RunConfig, RunnerOpts, SwarmRunner } from "../swarm/Swar
 import { RoundRobinRunner } from "../swarm/RoundRobinRunner.js";
 import { BlackboardRunner } from "../swarm/blackboard/BlackboardRunner.js";
 import { CouncilRunner } from "../swarm/CouncilRunner.js";
+import { OrchestratorWorkerRunner } from "../swarm/OrchestratorWorkerRunner.js";
 import { DEFAULT_ROLES } from "../swarm/roles.js";
 
 export interface OrchestratorOpts extends RunnerOpts {
@@ -91,6 +92,10 @@ export class Orchestrator {
         // Parallel drafts + reconcile. Round 1 hides peer drafts from each
         // agent's prompt; Round 2+ reveals them. Discussion-only.
         return new CouncilRunner(this.opts);
+      case "orchestrator-worker":
+        // Agent 1 = lead (plans + synthesizes), 2..N = workers (parallel,
+        // isolated subtasks). `rounds` = plan→execute→synthesize cycles.
+        return new OrchestratorWorkerRunner(this.opts);
       default: {
         // Exhaustiveness check — if a new preset is added to PresetId, TS errors here.
         const _exhaustive: never = preset;

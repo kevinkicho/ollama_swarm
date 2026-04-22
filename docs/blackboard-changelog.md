@@ -1595,6 +1595,114 @@ test). E2E validation: re-run the MatSci Explorer scenario with
 test-file criteria cycling through `unmet → committed → met` rather
 than flipping to `wont-do` on first sight.
 
+**E2E confirmed 2026-04-22 on `kevinkicho/kmatsci040226`:** run went
+from 1 commit / 0 test files / 4 bogus wont-dos (pre-Unit-11) → 5
+commits / 3 real test files + CI workflow / 1 legit wont-do. Ended on
+`cap:wall-clock` with the auditor still emitting repair todos — the
+cap caught the tail, not a regression. See
+`runs/kmatsci-demo-unit11/kmatsci040226/summary.json`.
+
+---
+
+## Unit 12 — Orchestrator–worker preset  **[committed: pending]**
+
+Third of the four presets the user asked for in this session (after
+Council in Unit 10; debate-judge, map-reduce, stigmergy still to come).
+The name matches Anthropic's own multi-agent research pattern:
+Agent 1 is the LEAD (reads repo, produces a plan, synthesizes results),
+agents 2..N are WORKERS (each executes one subtask in parallel, with
+NO peer visibility).
+
+**Mechanic.** Per cycle:
+
+1. **Plan.** Lead sees the full transcript and emits a JSON object:
+   `{"assignments": [{"agentIndex": 2, "subtask": "…"}, …]}`. One
+   assignment per worker, lead can't self-assign.
+2. **Execute.** Workers fan out via `Promise.allSettled`. Each worker's
+   prompt contains ONLY its assigned subtask + the seed system messages
+   — no transcript, no peer reports, not even the lead's planning
+   output. That isolation is the point: workers produce independent,
+   parallel, directed coverage.
+3. **Synthesize.** Lead sees the full transcript again (now including
+   all worker reports from this cycle) and writes a synthesis: what
+   the project is, what's working, what's missing, one concrete next
+   action, citing workers by index.
+
+`rounds` = number of plan→execute→synthesize cycles. Between cycles
+the lead can refine based on prior syntheses visible in the transcript.
+
+- `server/src/swarm/OrchestratorWorkerRunner.ts` — new runner
+  implementing `SwarmRunner`. Enforces `agentCount >= 2` at start
+  (can't have a lead with no workers). Min on `SetupForm` is 2.
+- `parsePlan(raw, allowedWorkerIndices)` — exported pure function.
+  Accepts clean JSON, markdown-fenced JSON, or JSON embedded in prose
+  (takes the first `{...}` block). Drops assignments whose
+  `agentIndex` isn't in the worker set (prevents self-assignment to
+  the lead and to non-spawned workers), drops duplicates (keeps
+  first), drops empty subtasks. Malformed input returns an empty
+  plan — the runner then skips the execute phase for that cycle with
+  a system-message explaining why, preserving the raw lead output in
+  the transcript for debugging.
+- `buildLeadPlanPrompt` / `buildWorkerPrompt` / `buildLeadSynthesisPrompt`
+  — three exported pure prompt builders, each covered by tests. The
+  worker prompt builder is the independence enforcement point: it's
+  given only `(workerIndex, round, totalRounds, subtask,
+  seedSnapshot)` — it literally cannot leak peer content because it
+  doesn't receive peer content.
+- `server/src/swarm/OrchestratorWorkerRunner.test.ts` — 19 tests
+  across 5 describe blocks. `parsePlan` happy path + guards (fence
+  stripping, prose-embedded JSON, lead self-assignment rejection,
+  duplicate dropping, empty-subtask dropping, unparseable input,
+  non-array assignments). Prompt builders: worker prompt contains
+  only subtask + seed (not peer content); lead plan prompt names
+  all workers + forbids assigning to lead; cycle 1 gets broad-coverage
+  hint vs later cycles get refinement hint; synthesis prompt includes
+  worker reports + asks for next action + gap-for-next-cycle (mid-run)
+  vs final-recommendation (last cycle).
+- `server/src/swarm/SwarmRunner.ts` — `PresetId` gains `"orchestrator-worker"`.
+- `server/src/services/Orchestrator.ts` — `buildRunner` case.
+- `server/src/routes/swarm.ts` — Zod enum accepts `"orchestrator-worker"`.
+- `server/package.json` — registers the new test file.
+- `web/src/components/SetupForm.tsx` — flipped `status: "planned"` →
+  `"active"`. Summary text updated. `min` lowered from 3 to 2 (lead +
+  1 worker is the minimum viable configuration).
+- `docs/swarm-patterns.md` — §4 flipped `[ ]` → `[x]`; roadmap row
+  updated; body expanded with the v1-scope note about model
+  heterogeneity being deferred.
+
+**What Orchestrator–worker does NOT do in v1.**
+- **No model heterogeneity.** Lead and workers all use `cfg.model`.
+  The canonical "stronger planner + cheaper workers" split (Opus →
+  Sonnet/Haiku in Anthropic's research system) would need a
+  `LEAD_MODEL` env var + `workerModel` / `leadModel` separation in
+  `RunConfig`. Orthogonal to the preset shape; defer until we
+  actually run the same repo through this preset on two model sizes
+  and see what that comparison tells us.
+- **No retry wrapper.** Same limitation as Council and
+  `RoundRobinRunner` (see `docs/known-limitations.md`). A timed-out
+  worker loses its cycle's report; the lead's synthesis continues
+  with whatever came back.
+- **No plan validation against repo reality.** The lead can emit
+  "inspect src/tests/" even if `src/tests/` doesn't exist; the
+  worker's attempt will produce a wasted report. The blackboard
+  preset's Unit 6a/6b path-grounding could be ported here if it
+  becomes an issue — not urgent.
+
+**Why reuse the same prompt/turn mechanics instead of something new.**
+The `runAgent` helper is a near-copy of `runTurn` from
+`RoundRobinRunner`/`CouncilRunner`. Abstracting over them is tempting
+but premature: the three runners differ in *when* they call
+`runAgent` (serial per round / parallel within round / split by
+role), and that's where their value is. Extraction waits for a 4th
+caller; today the duplicated ~40 lines of "start watchdog, call
+session.prompt, append transcript, mark status" is the right call.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+387/387 server tests green (368 before + 19 Unit 12). E2E validation:
+pick Orchestrator–worker on the setup form with agentCount 4, watch
+for a plan JSON from agent-1 followed by three parallel `thinking`
+workers followed by a synthesis from agent-1.
+
 ---
 
 ## Cross-phase notes

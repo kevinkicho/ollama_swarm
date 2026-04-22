@@ -74,12 +74,28 @@ Models through Multiagent Debate" (MIT, 2023).
 **Limits:** 2x the calls vs round-robin, no explicit reconcile step
 (so convergence is implicit — the user reads the final round).
 
-### 4. Orchestrator–worker hierarchy `[ ]`
-One "lead" agent plans and dispatches subtasks; workers execute in parallel
-and report back; lead synthesizes. Matches the shape of Anthropic's own
-multi-agent research system (Opus as orchestrator, Sonnet/Haiku as workers).
+### 4. Orchestrator–worker hierarchy `[x]` ← **shipped as `orchestrator-worker` preset (Unit 12)**
+Agent 1 is the LEAD: it produces a plan (`{assignments: [{agentIndex,
+subtask}]}`), workers execute their subtask in parallel with no peer
+visibility, then the lead synthesizes. `rounds` = plan → execute →
+synthesize cycles.
 
-**Wins:** can mix model strengths — stronger planner, cheaper workers.
+Shipped via `OrchestratorWorkerRunner` (see
+`server/src/swarm/OrchestratorWorkerRunner.ts`). Workers see only their
+assigned subtask + the seed system messages — not the lead's planning
+text, not peer worker reports. The lead sees the full transcript on its
+planning and synthesis turns. `parsePlan` strips any assignment whose
+`agentIndex` isn't in the worker set (no self-assignment to the lead; no
+assignment to a worker that didn't spawn) and drops duplicates.
+
+**V1 scope note.** No model heterogeneity yet — the lead and workers all
+use `cfg.model`. The canonical orchestrator-worker win is "stronger
+planner model + cheaper worker model" (Opus→Sonnet/Haiku); that's a
+Unit-13+ optional add when we have a concrete need.
+
+**Wins:** directed division of labor. Coverage is controlled, not
+emergent. Output has a synthesizer by design (no "user reads and
+reconciles in their head" like Council requires).
 **Limits:** lead is a bottleneck; plan quality caps output quality.
 
 ### 5. Debate + judge `[ ]`
@@ -170,7 +186,7 @@ The **chosen stack for v1 of the blackboard preset** is optimistic+CAS
 | 2 | Role differentiation ✓ shipped | n/a (single-turn loop)            | Cheap; good comparison baseline against blackboard |
 | 3 | Map-reduce                   | n/a (split + synthesize)            | Tests whether isolation beats shared context for coverage |
 | 4 | Council (parallel + reconcile) ✓ shipped | n/a (round-based)         | Isolates diversity gain from role-prompting gain |
-| 5 | Orchestrator–worker          | n/a                                 | Needs role differentiation to be useful; builds on #2 |
+| 5 | Orchestrator–worker ✓ shipped | n/a                                | Needs role differentiation to be useful; builds on #2 |
 | 6 | Debate + judge               | n/a                                 | Narrow use case; wait until we have a concrete yes/no question |
 | 7 | Critic loops                 | Layer, not preset                   | Orthogonal — add as a toggle on any preset |
 | 8 | Stigmergy                    | Layer on blackboard                 | Extends #1; file-annotation scoring on top of the board |

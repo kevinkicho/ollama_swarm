@@ -65,11 +65,11 @@ const PRESETS: readonly SwarmPreset[] = [
   {
     id: "orchestrator-worker",
     label: "Orchestrator–worker hierarchy",
-    summary: "Lead plans, workers execute in parallel, lead synthesizes.",
-    min: 3,
+    summary: "Agent 1 plans subtasks, workers execute in parallel (isolated), lead synthesizes.",
+    min: 2,
     max: 8,
     recommended: 4,
-    status: "planned",
+    status: "active",
   },
   {
     id: "debate-judge",
