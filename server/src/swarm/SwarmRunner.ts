@@ -8,7 +8,8 @@ export type PresetId =
   | "role-diff"
   | "council"
   | "orchestrator-worker"
-  | "debate-judge";
+  | "debate-judge"
+  | "map-reduce";
 
 export interface RunConfig {
   repoUrl: string;

@@ -47,11 +47,11 @@ const PRESETS: readonly SwarmPreset[] = [
   {
     id: "map-reduce",
     label: "Map-reduce over repo",
-    summary: "Workers inspect slices in isolation; one reducer synthesizes.",
+    summary: "Mappers inspect a round-robin slice of top-level entries in isolation; reducer synthesizes.",
     min: 3,
     max: 8,
     recommended: 5,
-    status: "planned",
+    status: "active",
   },
   {
     id: "council",

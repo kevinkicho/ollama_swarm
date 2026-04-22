@@ -1793,6 +1793,111 @@ agent-3 verdict on the final round.
 
 ---
 
+## Unit 14 — Map-reduce preset  **[committed: pending]**
+
+Fifth preset of this session. Direct counterpoint to the
+LLM-planner-laziness failure mode that Unit 11 fixed downstream of —
+*here* we side-step it entirely by using a **mechanical** partition
+of the repo, not an LLM-decided one.
+
+**Roles.** Agent 1 = REDUCER (silent during the map phase, then
+synthesizes). Agents 2..N = MAPPERS, each gets a fixed slice of the
+top-level repo entries.
+
+**Mechanic.** At start, the runner calls `RepoService.listTopLevel`
+and runs `sliceRoundRobin(entries, mapperCount)` to partition. Then
+per cycle:
+
+1. **Map.** All mappers fire in parallel via `Promise.allSettled`.
+   Each mapper's prompt names its assigned slice and the seed; it
+   does NOT see the transcript, peer reports, or even the reducer's
+   prior synthesis. The mapper is told explicitly: *"Inspect ONLY
+   the entries in your slice. Do NOT speculate about entries outside
+   your slice."*
+2. **Reduce.** Reducer sees the full transcript (all mapper reports
+   from this cycle, plus prior cycles' syntheses) and writes a
+   synthesis labeled with `[Mapper N]` references for every claim.
+
+`rounds` = number of map-reduce cycles. Cycle 1 = broad coverage;
+cycle 2+ has the reducer ask for a coverage gap or final picture.
+Slices stay constant across cycles in v1 (no re-slicing based on
+gap analysis — that's a future extension if it earns its keep).
+
+- `server/src/swarm/MapReduceRunner.ts` — new runner. Enforces
+  `agentCount >= 3` (reducer + at least 2 mappers; with only 1
+  mapper, map-reduce reduces to "one agent reads, one agent
+  summarizes," which is just a 2-step round-robin and not worth the
+  preset surface). The `SetupForm`'s `min: 3` already enforces
+  this client-side; the runtime check guards against direct API
+  callers.
+- `sliceRoundRobin(entries, k)` — exported pure function.
+  Round-robin partition: every entry goes to exactly one slice,
+  slice lengths differ by at most 1. Skips `.git`, `node_modules`,
+  `.DS_Store` (filtered before slicing — those entries don't
+  contribute to understanding). Tests cover the partition invariant
+  on a real-shaped repo entry list.
+- `buildMapperPrompt(mapperIndex, round, totalRounds, slice,
+  seedSnapshot)` — exported pure function. The isolation enforcement
+  point: the prompt receives only the assigned slice + seed, never
+  peer content. Hard rule: "Do NOT speculate about entries outside
+  your slice." Tests verify peer slice content (e.g. `tests/`,
+  `docs/`) is absent from a mapper assigned `[src/, package.json]`.
+- `buildReducerPrompt(round, totalRounds, transcript)` — exported
+  pure function. Asks for project description / what works / what's
+  missing / (mid-cycle) coverage gap to hit next, OR (final cycle)
+  unified picture + single most important next step. Hard rule
+  forbids inventing evidence beyond mapper reports — the reducer's
+  job is consolidation, not new claims.
+- `server/src/swarm/MapReduceRunner.test.ts` — 15 tests across 3
+  describe blocks. `sliceRoundRobin` partition shape (even, uneven,
+  partition invariant, more slices than entries, k<=0, empty input);
+  mapper prompt isolation (no peer slice leakage, no-speculation
+  rule, mapper named in header+closing, "cannot see peers — by
+  design" wording, empty slice handled); reducer prompt (mapper
+  reports labeled `[Mapper N]`, mid-run gap-asking, last-cycle final
+  picture, no-invented-evidence rule).
+- `server/src/swarm/SwarmRunner.ts` — `PresetId` gains `"map-reduce"`.
+- `server/src/services/Orchestrator.ts` — `buildRunner` case.
+- `server/src/routes/swarm.ts` — Zod enum accepts `"map-reduce"`.
+- `server/package.json` — registers the new test file.
+- `web/src/components/SetupForm.tsx` — flipped `status: "planned"` →
+  `"active"`. Summary text updated to spell out round-robin slicing
+  + isolation. `min=3` unchanged.
+- `docs/swarm-patterns.md` — §2 flipped `[ ]` → `[x]`; roadmap row
+  updated; body expanded with the rationale for mechanical (not
+  LLM-decided) slicing.
+
+**Why ship slicing as round-robin instead of by-folder semantics.**
+Round-robin is dumb-simple, deterministic, and produces no surprises
+when the repo's top-level shape is awkward (one giant `src/` and a
+README). A "smart" by-folder slicer (e.g., split `src/` into
+sub-directories when it's much bigger than other entries) is a
+reasonable v2 — but the v1 question we want answered is "does
+isolation beat shared context for coverage?" and the cleaner
+experiment uses the simpler partition.
+
+**What this does NOT do in v1.**
+- **No re-slicing between cycles.** Cycle 2's mappers get the same
+  slices as cycle 1. The intended use is "deepen the same area" or
+  "verify on a re-read"; "go fix this gap the reducer found" needs
+  a re-slicer.
+- **No retry wrapper.** Same as Council/OrchestratorWorker. A
+  timed-out mapper loses its slice's report for the cycle; the
+  reducer has to work with what survived.
+- **Coarse slice unit.** Top-level entries only. A 50-file
+  `src/` dir all goes to one mapper. If the slice is big, that
+  mapper's prompt is small (slice = list of names) but its
+  inspection time grows.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+414/414 server tests green (399 before + 15 Unit 14). E2E validation:
+pick Map-reduce on the setup form with agentCount 5 (reducer + 4
+mappers), watch for the seed system message announcing the slicing,
+4 parallel `thinking` mappers, then a single reducer turn citing
+mappers by index.
+
+---
+
 ## Cross-phase notes
 
 - **Event log.** A per-boot append-only JSONL log is written at `logs/current.jsonl` via `server/src/ws/eventLogger.ts` (landed alongside Phase 4 work, currently uncommitted). Every `SwarmEvent` the WS broadcasts gets a line, making post-hoc verification of runs possible even after the browser tab is closed.

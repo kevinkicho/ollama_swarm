@@ -7,6 +7,7 @@ import { BlackboardRunner } from "../swarm/blackboard/BlackboardRunner.js";
 import { CouncilRunner } from "../swarm/CouncilRunner.js";
 import { OrchestratorWorkerRunner } from "../swarm/OrchestratorWorkerRunner.js";
 import { DebateJudgeRunner } from "../swarm/DebateJudgeRunner.js";
+import { MapReduceRunner } from "../swarm/MapReduceRunner.js";
 import { DEFAULT_ROLES } from "../swarm/roles.js";
 
 export interface OrchestratorOpts extends RunnerOpts {
@@ -101,6 +102,11 @@ export class Orchestrator {
         // Fixed 3 agents: Agent 1 = PRO, Agent 2 = CON, Agent 3 = JUDGE.
         // Per round Pro+Con exchange; Judge scores on the final round.
         return new DebateJudgeRunner(this.opts);
+      case "map-reduce":
+        // Agent 1 = reducer, 2..N = mappers. Mappers each get a round-robin
+        // slice of top-level repo entries and inspect them in isolation;
+        // reducer synthesizes all mapper reports per cycle.
+        return new MapReduceRunner(this.opts);
       default: {
         // Exhaustiveness check — if a new preset is added to PresetId, TS errors here.
         const _exhaustive: never = preset;

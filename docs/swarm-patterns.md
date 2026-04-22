@@ -41,17 +41,34 @@ role so peer @mentions and re-reads stay legible.
 **Wins:** cheap diversity, no architectural change.
 **Limits:** still single-threaded; roles are declared not earned.
 
-### 2. Map-reduce over the repo `[ ]`
-Map phase: N agents each take a slice of the tree (`src/`, `tests/`, `docs/`,
-`package.json` + deps, git history, issue tracker) and inspect it in
-isolation with **no shared transcript** — just their slice and a report
-template. Reduce phase: one synthesizer agent reads all N reports and
-produces the unified analysis.
+### 2. Map-reduce over the repo `[x]` ← **shipped as `map-reduce` preset (Unit 14)**
+Agent 1 is the REDUCER; agents 2..N are MAPPERS. The runner
+round-robins the top-level repo entries across mappers — each mapper
+gets a fixed slice and inspects ONLY that slice (no shared transcript,
+no peer reports visible during map phase). Reducer then sees all
+mapper reports and synthesizes.
+
+Shipped via `MapReduceRunner` (see
+`server/src/swarm/MapReduceRunner.ts`). Slicing is mechanical
+(`sliceRoundRobin` partition — every entry appears in exactly one
+slice, lengths differ by at most 1), not LLM-decided. That's
+deliberate: the lesson from the MatSci run (see Unit 11) was that
+LLM planners can get lazy and under-dispatch. A mechanical partition
+side-steps that failure mode entirely — the only way a mapper can
+skip coverage is if it refuses its slice outright, which would show
+up as a visibly empty report.
+
+`rounds` = number of map-reduce cycles. Cycle 1 is broad coverage;
+cycle 2+ lets the reducer re-issue mappers on the SAME slices to
+deepen or re-verify. (Re-slicing between cycles is a future extension
+if we ever want "fill this specific gap the last reducer identified.")
 
 **Wins:** embarrassingly parallel, scales linearly with agent count,
-coverage is much richer than 10 agents all re-reading the README.
-**Limits:** no cross-pollination during exploration; synthesizer becomes
-the bottleneck and the single point of failure.
+coverage is guaranteed (no LLM laziness gap), each mapper's prompt is
+small because it only sees its slice.
+**Limits:** no cross-pollination during exploration; reducer becomes
+the bottleneck and the single point of failure; slicing by top-level
+entry is coarse (a large `src/` dir all goes to one mapper).
 
 ### 3. Council / parallel drafts + reconcile `[x]` ← **shipped as `council` preset (Unit 10)**
 Round 1: every agent answers the question **without** seeing others'
@@ -198,7 +215,7 @@ The **chosen stack for v1 of the blackboard preset** is optimistic+CAS
 | - | ---------------------------- | ----------------------------------- | -------------- |
 | 1 | Blackboard ✓ shipped         | Optimistic+CAS + small atomic units | User's pick; biggest architectural lift, do it while context is fresh |
 | 2 | Role differentiation ✓ shipped | n/a (single-turn loop)            | Cheap; good comparison baseline against blackboard |
-| 3 | Map-reduce                   | n/a (split + synthesize)            | Tests whether isolation beats shared context for coverage |
+| 3 | Map-reduce ✓ shipped         | n/a (split + synthesize)            | Tests whether isolation beats shared context for coverage |
 | 4 | Council (parallel + reconcile) ✓ shipped | n/a (round-based)         | Isolates diversity gain from role-prompting gain |
 | 5 | Orchestrator–worker ✓ shipped | n/a                                | Needs role differentiation to be useful; builds on #2 |
 | 6 | Debate + judge ✓ shipped     | n/a                                 | Narrow use case; wait until we have a concrete yes/no question |
