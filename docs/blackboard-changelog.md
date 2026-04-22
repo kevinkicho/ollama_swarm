@@ -1604,7 +1604,7 @@ cap caught the tail, not a regression. See
 
 ---
 
-## Unit 12 — Orchestrator–worker preset  **[committed: pending]**
+## Unit 12 — Orchestrator–worker preset  **[committed: `4fe0a13`]**
 
 Third of the four presets the user asked for in this session (after
 Council in Unit 10; debate-judge, map-reduce, stigmergy still to come).
