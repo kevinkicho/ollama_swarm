@@ -1410,7 +1410,7 @@ being reached at all.
 
 ---
 
-## Unit 10 — Council preset (parallel drafts + reconcile)  **[committed: pending]**
+## Unit 10 — Council preset (parallel drafts + reconcile)  **[committed: `2395ef9`]**
 
 Direct answer to the single-planner weakness observed on the MatSci
 Explorer run: a preset where no one agent defines the goal. Every agent
