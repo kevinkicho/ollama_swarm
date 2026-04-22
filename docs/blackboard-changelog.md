@@ -1275,7 +1275,7 @@ install is a no-op outside the server's Node process.
 
 ---
 
-## Unit 8 — Role differentiation as a selectable preset  **[uncommitted]**
+## Unit 8 — Role differentiation as a selectable preset  **[committed: `9a36e0d`]**
 
 First preset past blackboard. The UI already had a greyed-out "Role
 differentiation" option (`role-diff`); this unit backs it with a live
