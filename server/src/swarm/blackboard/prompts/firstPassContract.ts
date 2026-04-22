@@ -15,9 +15,20 @@ import type { PlannerSeed } from "./planner.js";
 // That gating lands in 11c.
 // ---------------------------------------------------------------------------
 
+// File paths only — see planner.ts for the motivating incident. Contract
+// criteria feed the auditor, which reads/diffs expectedFiles to check "did
+// any commit touch those files?"; a directory entry breaks that coarse check.
+const filePathEntry = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((p) => !p.endsWith("/") && !p.endsWith("\\"), {
+    message: "must be a file path, not a directory (no trailing / or \\)",
+  });
+
 const CriterionSchema = z.object({
   description: z.string().trim().min(1).max(400),
-  expectedFiles: z.array(z.string().trim().min(1)).min(0).max(4),
+  expectedFiles: z.array(filePathEntry).min(0).max(4),
 });
 
 // Contract envelope. missionStatement is the one-line framing; criteria is the
@@ -158,6 +169,7 @@ export const FIRST_PASS_CONTRACT_SYSTEM_PROMPT = [
   "6. Do NOT invent files that do not plausibly exist or plausibly need to be created.",
   "7. Maximum 12 criteria. Prefer 3–7 focused criteria over 12 vague ones.",
   "8. Do NOT include implementation detail — criteria are outcomes, not steps. The planner will turn each criterion into todos separately.",
+  "9. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, `docs/`, or any path ending in `/` or `\\`. If you don't know which specific file the criterion will land in, prefer an empty `expectedFiles: []` over a guessed directory — the planner will bind real paths after its own read pass. Directory entries are rejected by the parser and the criterion is dropped.",
   "",
   "Criteria should be WHAT SUCCESS LOOKS LIKE when this run ends, not a to-do list.",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",

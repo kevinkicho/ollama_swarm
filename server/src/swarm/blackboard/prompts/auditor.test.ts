@@ -187,6 +187,45 @@ describe("parseAuditorResponse — rejections and drops", () => {
     assert.equal(res.ok, false);
     if (!res.ok) assert.match(res.reason, /JSON parse failed/);
   });
+
+  it("drops unmet verdicts whose todo expectedFiles include a directory path", () => {
+    const res = parseAuditorResponse(
+      JSON.stringify({
+        verdicts: [
+          {
+            id: "c1",
+            status: "unmet",
+            rationale: "needs more tests",
+            todos: [{ description: "add tests", expectedFiles: ["__tests__/"] }],
+          },
+        ],
+      }),
+    );
+    assert.equal(res.ok, true);
+    if (res.ok) {
+      assert.equal(res.result.verdicts.length, 0);
+      assert.equal(res.dropped.length, 1);
+      assert.match(res.dropped[0].reason, /file path, not a directory/);
+    }
+  });
+
+  it("drops newCriteria whose expectedFiles include a directory path", () => {
+    const res = parseAuditorResponse(
+      JSON.stringify({
+        verdicts: [{ id: "c1", status: "met", rationale: "ok" }],
+        newCriteria: [
+          { description: "good", expectedFiles: ["README.md"] },
+          { description: "dir", expectedFiles: ["docs/"] },
+        ],
+      }),
+    );
+    assert.equal(res.ok, true);
+    if (res.ok) {
+      assert.equal(res.result.newCriteria.length, 1);
+      assert.equal(res.dropped.length, 1);
+      assert.match(res.dropped[0].reason, /file path, not a directory/);
+    }
+  });
 });
 
 describe("AUDITOR prompts", () => {

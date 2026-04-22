@@ -119,6 +119,26 @@ describe("parseFirstPassContractResponse — rejections and drops", () => {
     assert.equal(res.ok, false);
     if (!res.ok) assert.match(res.reason, /JSON parse failed/);
   });
+
+  it("drops criteria whose expectedFiles include a directory path", () => {
+    const res = parseFirstPassContractResponse(
+      JSON.stringify({
+        missionStatement: "m",
+        criteria: [
+          { description: "good", expectedFiles: ["README.md"] },
+          { description: "fwd slash dir", expectedFiles: ["src/"] },
+          { description: "backslash dir", expectedFiles: ["lib\\"] },
+        ],
+      }),
+    );
+    assert.equal(res.ok, true);
+    if (res.ok) {
+      assert.equal(res.contract.criteria.length, 1);
+      assert.equal(res.dropped.length, 2);
+      assert.match(res.dropped[0].reason, /file path, not a directory/);
+      assert.match(res.dropped[1].reason, /file path, not a directory/);
+    }
+  });
 });
 
 describe("FIRST_PASS_CONTRACT prompts", () => {

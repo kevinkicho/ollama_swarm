@@ -12,9 +12,19 @@ import { z } from "zod";
 // the union match below.
 // ---------------------------------------------------------------------------
 
+// File paths only — see planner.ts for the motivating incident. Replanner
+// output replaces a stale todo's expectedFiles, so the same rule applies.
+const filePathEntry = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((p) => !p.endsWith("/") && !p.endsWith("\\"), {
+    message: "must be a file path, not a directory (no trailing / or \\)",
+  });
+
 const RevisedBody = z.object({
   description: z.string().trim().min(1).max(500),
-  expectedFiles: z.array(z.string().trim().min(1)).min(1).max(2),
+  expectedFiles: z.array(filePathEntry).min(1).max(2),
 });
 
 const RevisedSchema = z.object({ revised: RevisedBody });
@@ -107,6 +117,7 @@ export const REPLANNER_SYSTEM_PROMPT = [
   "5. `description` is one imperative sentence.",
   "6. `expectedFiles` lists 1 or 2 repo-relative paths. NEVER more than 2.",
   "7. Paths must be relative to the repo root. Never use absolute paths or `..`.",
+  "8. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, or any path ending in `/` or `\\` — the parser rejects them and the revision is lost. If the original stale TODO pointed at a directory, revise to the specific files you see in the current contents or skip.",
   "",
   "Pick SKIP when: the current file contents already satisfy the original TODO, the original intent no longer applies to the repo as it stands now, or retrying would fail for the same reason the previous attempt failed.",
   "Pick REVISE when: the work still needs doing but the scope, files, or wording needs to shift to match what you see in the files NOW. Prefer shrinking scope over widening it — if the previous attempt was too large, split it and keep only the smaller half.",

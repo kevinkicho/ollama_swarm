@@ -122,4 +122,12 @@ describe("parseReplannerResponse — rejections", () => {
     );
     assert.equal(r.ok, false);
   });
+
+  it("rejects revised with a directory-path in expectedFiles", () => {
+    const r = parseReplannerResponse(
+      '{"revised":{"description":"a","expectedFiles":["src/"]}}',
+    );
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.match(r.reason, /file path, not a directory/);
+  });
 });

@@ -14,9 +14,19 @@ import type { ExitCriterion } from "../types.js";
 // them up.
 // ---------------------------------------------------------------------------
 
+// File paths only — see planner.ts for the motivating incident. Same rule
+// applies here because auditor todos and new criteria feed the same Board.
+const filePathEntry = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((p) => !p.endsWith("/") && !p.endsWith("\\"), {
+    message: "must be a file path, not a directory (no trailing / or \\)",
+  });
+
 const AuditorTodoSchema = z.object({
   description: z.string().trim().min(1).max(500),
-  expectedFiles: z.array(z.string().trim().min(1)).min(1).max(2),
+  expectedFiles: z.array(filePathEntry).min(1).max(2),
 });
 
 const VerdictStatusSchema = z.enum(["met", "wont-do", "unmet"]);
@@ -30,7 +40,7 @@ const AuditorVerdictSchema = z.object({
 
 const AuditorNewCriterionSchema = z.object({
   description: z.string().trim().min(1).max(400),
-  expectedFiles: z.array(z.string().trim().min(1)).min(0).max(4),
+  expectedFiles: z.array(filePathEntry).min(0).max(4),
 });
 
 const AuditorResponseSchema = z.object({
@@ -195,6 +205,7 @@ export const AUDITOR_SYSTEM_PROMPT = [
   "6. Each `newCriteria` item's `description` is one outcome (not a step). `expectedFiles` is 0–4 repo-relative paths.",
   "7. Prefer `wont-do` with a clear rationale over infinite `unmet` loops. If prior todos for a criterion failed (stale/skipped), consider whether the criterion is practical at all.",
   "8. Workers edit files via JSON diffs — they CANNOT run shell commands, tests, linters, type checkers, compilers, formatters, package managers, or any external tooling. If a criterion inherently requires execution (e.g. \"all tests pass\", \"tsc compiles clean\", \"ESLint passes\", \"run benchmark X\"), issue `wont-do` with a rationale naming the tool that would be needed. Do NOT issue `unmet` with todos that merely touch config files in the hope of verifying the tool indirectly — those todos will produce empty `expectedFiles` and be rejected.",
+  "9. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, `docs/`, or any path ending in `/` or `\\`. If a todo or new criterion covers a whole directory, pick the specific files (e.g., `src/lib/a.ts`, `src/lib/b.ts`). Directory entries are rejected by the parser; the todo or criterion is dropped.",
   "",
   "Paths must be repo-relative. Never use absolute paths or `..`.",
 ].join("\n");

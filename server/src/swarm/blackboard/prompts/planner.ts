@@ -6,9 +6,21 @@ import { z } from "zod";
 // blackboard preset. Anything that violates the shape gets dropped.
 // ---------------------------------------------------------------------------
 
+// File paths only — a directory entry (trailing / or \) trips a worker's hash
+// pass with EISDIR and forces a stale→replan cycle. Reject at parse time so
+// junk never reaches the Board. See docs/known-limitations.md (resolved) for
+// the incident that motivated this.
+const filePathEntry = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((p) => !p.endsWith("/") && !p.endsWith("\\"), {
+    message: "must be a file path, not a directory (no trailing / or \\)",
+  });
+
 const PlannerTodoSchema = z.object({
   description: z.string().trim().min(1).max(500),
-  expectedFiles: z.array(z.string().trim().min(1)).min(1).max(2),
+  expectedFiles: z.array(filePathEntry).min(1).max(2),
 });
 
 const PlannerResponseSchema = z.array(PlannerTodoSchema).max(20);
@@ -110,6 +122,7 @@ export const PLANNER_SYSTEM_PROMPT = [
   "5. Each TODO must be independently completable without coordinating with another agent.",
   "6. If the repo is trivial, already complete, or there is nothing meaningful to add, return an empty array [].",
   "7. Maximum 20 TODOs per response.",
+  "8. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, `docs/`, or any path ending in `/` or `\\`. If the TODO covers a whole directory, pick the specific files it will touch (e.g., `src/lib/a.ts`, `src/lib/b.ts`) or split it into smaller TODOs. Directory entries are rejected by the parser and the TODO is dropped.",
   "",
   "Do NOT invent files that do not exist unless the TODO is explicitly about creating a new file.",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",

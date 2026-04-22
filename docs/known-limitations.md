@@ -55,40 +55,27 @@ Until then, the numbers in `caps.ts` are the one source of truth.
 
 ---
 
-## Planner/auditor can put directory paths in `expectedFiles`
+## ~~Planner/auditor can put directory paths in `expectedFiles`~~ (resolved 2026-04-21)
 
-**Choice:** `expectedFiles` on a todo is typed as `string[]` with no
-validation that each entry resolves to a file (not a directory). When a
-worker hashes the paths at claim time, a directory entry trips
-`EISDIR: illegal operation on a directory, read` and the todo goes stale.
-The replanner then revises or skips it.
+**Status:** fixed. Trailing `/` or `\` on any `expectedFiles` entry is now
+rejected at zod parse time in all four LLM-facing parsers (planner, auditor
+todos, auditor newCriteria, replanner, first-pass contract) with the message
+"must be a file path, not a directory". The offending item is dropped with a
+clear reason rather than reaching the Board and tripping `EISDIR` at hash
+time. System prompts in each of those modules now spell out "FILE paths,
+never directories" with examples (`src/`, `__tests__/`, `docs/`). The
+first-pass contract prompt additionally steers toward `expectedFiles: []`
+over a guessed directory, which also addresses the adjacent path-grounding
+limitation below.
 
-**Why:** this isn't design — it's a gap. Zod validates shape and path
-safety (repo-relative, no `..`) in `server/src/swarm/blackboard/resolveSafe.ts`
-but stops short of statting the path. The system prompts for planner and
-auditor both say "repo-relative file paths" but neither enforces file-vs-dir
-because LLMs interpret "path" loosely (`src/`, `__tests__/`, and
-`src` all showed up in the smoke run for Phase 11c on
-`kevinkicho/kBioIntelBrowser04052026`).
-
-Current behavior is *noisy but safe*: the hash call fails fast, the todo is
-marked stale with a clear reason, the replanner picks it up and either
-narrows to a real file or skips. The run still makes forward progress.
-
-**When this would need revisiting:**
-- If the noise makes the transcript hard to read (Phase 11c run showed 7+
-  stale events purely from directory-path todos).
-- If a future preset uses `expectedFiles` for something other than hashing
-  (e.g., scoping a shell command), where a directory entry would have
-  different failure modes.
-- If replan budget becomes tight — each directory-path stale burns one of
-  the 3 replan attempts on that todo.
-
-Until then, the cheap fix is a system-prompt sharpening in planner.ts and
-auditor.ts saying "file paths only, never directories — if you mean to
-touch everything under `src/lib/`, name the specific files" plus a
-Board-side validation that rejects entries ending in `/`. Both are small
-follow-ups, not plan items.
+**Original symptoms (preserved for context):** When a worker hashed the
+paths at claim time, a directory entry tripped `EISDIR: illegal operation
+on a directory, read` and the todo went stale. The replanner then revised
+or skipped it — noisy but safe. Phase 11c smoke run on
+`kevinkicho/kBioIntelBrowser04052026` showed 7+ stale events purely from
+directory-path todos (`src/`, `__tests__/`, `src`). The fix closes that
+loop at the parse boundary so directory entries never cost a replan
+attempt.
 
 ---
 

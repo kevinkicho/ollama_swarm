@@ -122,4 +122,18 @@ describe("parsePlannerResponse — drops invalid items", () => {
     assert.equal(r.todos.length, 1);
     assert.equal(r.dropped.length, 1);
   });
+
+  it("drops items whose expectedFiles include a directory path (trailing / or \\)", () => {
+    const raw = JSON.stringify([
+      { description: "ok", expectedFiles: ["src/index.ts"] },
+      { description: "fwd slash dir", expectedFiles: ["src/"] },
+      { description: "backslash dir", expectedFiles: ["src\\"] },
+    ]);
+    const r = parsePlannerResponse(raw);
+    expectOk(r);
+    assert.equal(r.todos.length, 1);
+    assert.equal(r.dropped.length, 2);
+    assert.match(r.dropped[0].reason, /file path, not a directory/);
+    assert.match(r.dropped[1].reason, /file path, not a directory/);
+  });
 });
