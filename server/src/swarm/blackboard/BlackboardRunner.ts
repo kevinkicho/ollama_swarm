@@ -14,6 +14,7 @@ import { Board } from "./Board.js";
 import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaster.js";
 import { checkCaps } from "./caps.js";
 import { buildCrashSnapshot } from "./crashSnapshot.js";
+import { shouldRunFinalAudit } from "./finalAudit.js";
 import { buildSummary, type PerAgentStat, type RunSummary } from "./summary.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
 import { resolveSafe } from "./resolveSafe.js";
@@ -290,6 +291,31 @@ export class BlackboardRunner implements SwarmRunner {
     } finally {
       this.stopClaimExpiry();
       this.stopReplanWatcher();
+      // Cap-trip audit: one last pass so the summary's contract reflects
+      // true met/wont-do/unmet distribution instead of leaving every
+      // unresolved criterion at the default "unmet". shouldRunFinalAudit
+      // narrows this to the exact case that benefits — cap trip, no crash,
+      // no user stop, budget remaining, unresolved criteria still present.
+      // Errors here are swallowed: a missing final audit is worse than
+      // "all unmet" but better than trading a useful summary for a crash.
+      if (
+        shouldRunFinalAudit({
+          errored,
+          hasContract: !!this.contract && this.contract.criteria.length > 0,
+          allCriteriaResolved: this.allCriteriaResolved(),
+          terminationReason: this.terminationReason,
+          auditInvocations: this.auditInvocations,
+          maxInvocations: AUDITOR_MAX_INVOCATIONS,
+          userStopped: this.stopping && !this.terminationReason,
+        })
+      ) {
+        try {
+          await this.runAuditor(planner, { allowWhenStopping: true });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.appendSystem(`Final audit failed: ${msg}`);
+        }
+      }
       // Phase 9: always try to write a summary, regardless of how we got
       // here (completed / stopped / failed / cap). Awaited so the file and
       // the broadcast event land before the terminal phase transition, so
@@ -551,11 +577,15 @@ export class BlackboardRunner implements SwarmRunner {
     return this.contract.criteria.every((c) => c.status !== "unmet");
   }
 
-  private async runAuditor(planner: Agent): Promise<void> {
+  private async runAuditor(
+    planner: Agent,
+    opts: { allowWhenStopping?: boolean } = {},
+  ): Promise<void> {
     if (!this.contract) return;
     this.auditInvocations++;
+    const label = opts.allowWhenStopping ? "final audit" : "auditor invocation";
     this.appendSystem(
-      `Auditor invocation ${this.auditInvocations}/${AUDITOR_MAX_INVOCATIONS}.`,
+      `${label} ${this.auditInvocations}/${AUDITOR_MAX_INVOCATIONS}.`,
     );
 
     const seed = this.buildAuditorSeed();
@@ -563,7 +593,10 @@ export class BlackboardRunner implements SwarmRunner {
       planner,
       `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorUserPrompt(seed)}`,
     );
-    if (this.stopping) return;
+    // Cap-trip final audit needs to keep going even though stopping=true —
+    // that IS the whole reason it's running. In-loop audits short-circuit
+    // as before to honor user stops and crash aborts.
+    if (this.stopping && !opts.allowWhenStopping) return;
     this.appendAgent(planner, firstResponse);
 
     let parsed = parseAuditorResponse(firstResponse);
@@ -575,7 +608,7 @@ export class BlackboardRunner implements SwarmRunner {
         planner,
         `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorRepairPrompt(firstResponse, parsed.reason)}`,
       );
-      if (this.stopping) return;
+      if (this.stopping && !opts.allowWhenStopping) return;
       this.appendAgent(planner, repairResponse);
       parsed = parseAuditorResponse(repairResponse);
       if (!parsed.ok) {
