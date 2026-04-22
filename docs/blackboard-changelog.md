@@ -802,6 +802,112 @@ the running dev server; both ports returned 200.
 
 ---
 
+## Phase 11c hardening — patch-based worker diffs + windowed prompts  **[committed: `42b9789`, `18d0fad`, `2519e54`, `41bb7db`]**
+
+Phase 11c shipped the auditor loop but an E2E run on a medium-sized repo
+(`phase11c-medium-v5`) stopped at the 20-min wall-clock cap with only one
+commit. Root cause: the worker prompt dumped the full contents of every
+expected file, then asked the worker to echo the full new file back as
+`{file, newText}`. On a 49KB README that meant ~50KB in and ~50KB out per
+edit. Combined with `glm-5.1:cloud`'s response latency, every README-touching
+todo blew past undici's 5-min header timeout (`UND_ERR_HEADERS_TIMEOUT`).
+c2 ended the run unmet.
+
+This arc replaces full-file diffs with Aider-style search/replace hunks
+and caps the worker's *input* view of large files at head+tail windows.
+
+**Unit 1 — pure `applyHunks` logic.** `server/src/swarm/blackboard/applyHunks.ts`:
+
+- Discriminated `Hunk` union: `{op:"replace", file, search, replace}`,
+  `{op:"create", file, content}`, `{op:"append", file, content}`.
+- `applyHunks(currentContents, hunks)` returns `{ok:true, newTextsByFile}`
+  or `{ok:false, error}`. Hunks are applied *sequentially* per file — each
+  hunk sees the previous one's output, so two replace hunks against the
+  same file compose predictably.
+- `replace` enforces exact-single-match: ambiguous anchors fail closed
+  with a clear reason. `create` rejects if the file already exists.
+  `append` tolerates either a prior-hunk output or the on-disk content.
+- `applyHunks.test.ts` — 20 tests including sequential same-file composition,
+  ambiguous-anchor rejection, create-on-existing rejection, and the
+  append-to-new-file-from-create combo.
+
+**Unit 2 — worker emits hunks; runner applies via `applyHunks`.** One
+checkpoint because the schema change in `prompts/worker.ts` ripples into
+`BlackboardRunner.commit` — a staggered commit would have left a broken
+intermediate state.
+
+- `prompts/worker.ts` — schema rewritten from `{diffs:[{file,newText}]}` to
+  `{hunks:[Hunk], skip?:string}`. Per-field caps (`SEARCH_MAX`/`REPLACE_MAX`
+  = 50K, `CONTENT_MAX` = 200K); `MAX_HUNKS = 8`. `FILE_FIELD` still enforces
+  `expectedFiles` membership. Worker may now issue multiple hunks against
+  the same file (explicitly allowed — that's the point of hunks).
+- `prompts/worker.test.ts` — 22 tests covering each op's happy path,
+  mixed-op batches, sequential same-file hunks, and every rejection path
+  (empty `search`, missing `content`, unknown `op`, blank `file`,
+  file-not-in-`expectedFiles`, etc.).
+- `WORKER_SYSTEM_PROMPT` — teaches the three ops explicitly, stresses
+  exact-single-match on replace, and tells the worker that files above
+  the windowing threshold arrive as head+marker+tail (see Unit 3).
+- `BlackboardRunner.commit` — after parse, runs `applyHunks(contents, parsed.hunks)`,
+  then zero-file and UTF-8 BOM checks now run against *post-apply* text,
+  and the write loop iterates `resultingDiffs` from `applied.newTextsByFile`.
+  Empty-hunks-without-skip is a stale event. Commit summary line reports
+  hunk count + post-apply sizes per file.
+- **Integration test.** `workerPipeline.test.ts` (12 tests) exercises
+  parse → apply → write on a real tmpdir: happy paths for each op and
+  mixed batches, plus atomicity proofs that a parse failure, an ambiguous
+  anchor, an apply-step rollback, and a file-outside-`expectedFiles`
+  request all leave zero bytes on disk.
+
+**Unit 3 — windowed file views.** `server/src/swarm/blackboard/windowFile.ts`:
+
+- `windowFileForWorker(content)` returns `{full:true, content}` when
+  `content.length ≤ 8000`, else `{full:false, content: head(3KB) + marker + tail(3KB)}`.
+  Marker is prose so a human reading the transcript sees the gap, and
+  tells the worker to use `op:"append"` for EOF additions or `op:"replace"`
+  with an anchor visible in the shown head/tail.
+- Pure function; `windowFile.test.ts` (11 tests) covers boundary, head/tail
+  byte preservation, marker content, the 49KB smoking-gun case, determinism,
+  and the never-longer-than-input invariant.
+- `buildWorkerUserPrompt` (in `prompts/worker.ts`) wraps each `fileContents`
+  value through `windowFileForWorker` and labels the header `full` or
+  `WINDOWED`. A 49KB README now lands as ~6.5KB of prompt.
+
+**E2E validation — `phase11c-medium-v6` vs `-v5`.** Same repo, same
+contract template, same model. v5 baseline → v6 after hardening:
+
+| | v5 | v6 |
+|---|---|---|
+| Wall clock | 24.5 min (`cap:wall-clock`) | 14.5 min (`completed`) |
+| Commits | 1 | 13 |
+| Stale events | 4 | 2 |
+| Files changed | 2 | 7 |
+| Contract `unmet` at stop | 1 (`c2`, README timeout) | 0 |
+| `UND_ERR_HEADERS_TIMEOUT` | 1 (killed `c2`) | 0 |
+| 49KB+ README edits | timed out | 6 successful replace hunks |
+
+All three hunk ops exercised live: `replace` on a 49 → 54KB README,
+`append` on a 71 → 74KB KNOWN_LIMITATIONS.md, `create` for three new
+`*.test.ts` files. Worker declines arrive as well-formed
+`{"hunks":[], "skip":"..."}` and the replanner converts them to skipped
+status (no stale noise).
+
+**Known issue surfaced (not a regression, separate unit).** The replanner
+re-spawns the same unmet criterion after every audit cycle without
+consulting current file state, so when multiple agents each commit a
+hunk against the same criterion, their blocks stack instead of compose.
+In v6 this showed up as four consecutive `### Environment Variables`
+tables under a single `## Configuration` heading in the README, and the
+auditor (fairly) ruled `c3` `wont-do`. Tracked as the next hardening unit.
+
+**Verified.** `tsc --noEmit` clean; 274/274 server tests green across
+53 suites. New suites added by this arc: `applyHunks`, `workerPipeline`
+(parse → apply → write integration), `windowFile`; the `worker` suite
+was rewritten around the hunk schema. v6 E2E stop reason `completed`,
+stopDetail `all contract criteria satisfied`.
+
+---
+
 ## Cross-phase notes
 
 - **Event log.** A per-boot append-only JSONL log is written at `logs/current.jsonl` via `server/src/ws/eventLogger.ts` (landed alongside Phase 4 work, currently uncommitted). Every `SwarmEvent` the WS broadcasts gets a line, making post-hoc verification of runs possible even after the browser tab is closed.
