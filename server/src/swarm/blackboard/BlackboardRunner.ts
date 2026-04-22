@@ -15,6 +15,11 @@ import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaste
 import { checkCaps } from "./caps.js";
 import { buildCrashSnapshot } from "./crashSnapshot.js";
 import { shouldRunFinalAudit } from "./finalAudit.js";
+import {
+  isRetryableSdkError,
+  RETRY_BACKOFF_MS,
+  RETRY_MAX_ATTEMPTS,
+} from "./retry.js";
 import { buildSummary, type PerAgentStat, type RunSummary } from "./summary.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
 import { resolveSafe } from "./resolveSafe.js";
@@ -1413,15 +1418,38 @@ export class BlackboardRunner implements SwarmRunner {
     watchdog.unref?.();
 
     try {
-      const res = await agent.client.session.prompt({
-        path: { id: agent.sessionId },
-        body: {
-          agent: "swarm",
-          model: { providerID: "ollama", modelID: agent.model },
-          parts: [{ type: "text", text: prompt }],
-        },
-        signal: controller.signal,
-      });
+      let res: Awaited<ReturnType<typeof agent.client.session.prompt>> | undefined;
+      let lastErr: unknown;
+      for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
+        try {
+          res = await agent.client.session.prompt({
+            path: { id: agent.sessionId },
+            body: {
+              agent: "swarm",
+              model: { providerID: "ollama", modelID: agent.model },
+              parts: [{ type: "text", text: prompt }],
+            },
+            signal: controller.signal,
+          });
+          lastErr = undefined;
+          break;
+        } catch (err) {
+          lastErr = err;
+          // Watchdog, user stop, or cap already cancelled this turn —
+          // do not retry a deliberate abort.
+          if (controller.signal.aborted) throw err;
+          if (!isRetryableSdkError(err)) throw err;
+          if (attempt >= RETRY_MAX_ATTEMPTS) throw err;
+          const delayMs = RETRY_BACKOFF_MS[attempt - 1];
+          const shortMsg = this.describeSdkError(err);
+          this.appendSystem(
+            `[${agent.id}] transport error (${shortMsg}) — retry ${attempt + 1}/${RETRY_MAX_ATTEMPTS} in ${Math.round(delayMs / 1000)}s`,
+          );
+          const completed = await this.interruptibleSleep(delayMs, controller.signal);
+          if (!completed) throw err;
+        }
+      }
+      if (!res) throw lastErr ?? new Error("prompt returned no result");
       const text = this.extractText(res) ?? "";
       this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
       this.opts.manager.markStatus(agent.id, "ready", { lastMessageAt: Date.now() });
@@ -1459,6 +1487,25 @@ export class BlackboardRunner implements SwarmRunner {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((r) => setTimeout(r, ms));
+  }
+
+  // Resolves true if the full delay elapsed, false if `signal` aborted first.
+  // Used by the prompt-retry loop so a user stop / cap trip / watchdog can
+  // short-circuit the backoff instead of making the run wait 20+ seconds to
+  // notice it's cancelled.
+  private interruptibleSleep(ms: number, signal: AbortSignal): Promise<boolean> {
+    if (signal.aborted) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(true);
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        resolve(false);
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
   private appendSystem(text: string): void {
