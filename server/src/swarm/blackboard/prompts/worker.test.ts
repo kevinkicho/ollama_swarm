@@ -1,6 +1,11 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { parseWorkerResponse, type WorkerParseResult } from "./worker.js";
+import {
+  buildWorkerUserPrompt,
+  parseWorkerResponse,
+  WORKER_SYSTEM_PROMPT,
+  type WorkerParseResult,
+} from "./worker.js";
 
 function expectOk(
   r: WorkerParseResult,
@@ -224,5 +229,66 @@ describe("parseWorkerResponse — rejections (v2 hunks)", () => {
     });
     const r = parseWorkerResponse(raw, ["a.ts"]);
     assert.equal(r.ok, false);
+  });
+});
+
+describe("buildWorkerUserPrompt — small files embedded in full", () => {
+  it("marks a small file as full and includes the whole content", () => {
+    const prompt = buildWorkerUserPrompt({
+      todoId: "t1",
+      description: "tweak the readme",
+      expectedFiles: ["README.md"],
+      fileContents: { "README.md": "# Tiny readme\n" },
+    });
+    assert.match(prompt, /TODO: tweak the readme/);
+    assert.match(prompt, /README\.md.*full/);
+    assert.ok(prompt.includes("# Tiny readme\n"));
+  });
+
+  it("flags a missing file as does-not-exist / use op create", () => {
+    const prompt = buildWorkerUserPrompt({
+      todoId: "t1",
+      description: "create the file",
+      expectedFiles: ["new.ts"],
+      fileContents: { "new.ts": null },
+    });
+    assert.match(prompt, /new\.ts \(does not exist/);
+    assert.match(prompt, /"create"/);
+  });
+});
+
+describe("buildWorkerUserPrompt — large files are windowed", () => {
+  it("windows a 49KB file to well under the threshold", () => {
+    // Distinctive head and tail to prove both are preserved in the prompt.
+    const head = "HEAD-UNIQUE-" + "a".repeat(2000);
+    const tail = "b".repeat(2000) + "-TAIL-UNIQUE";
+    const fluff = "x".repeat(49_000);
+    const big = head + fluff + tail;
+    const prompt = buildWorkerUserPrompt({
+      todoId: "t2",
+      description: "expand the readme",
+      expectedFiles: ["README.md"],
+      fileContents: { "README.md": big },
+    });
+
+    // Header calls out WINDOWED explicitly so an inattentive model can't
+    // claim it didn't know the middle was omitted.
+    assert.match(prompt, /README\.md.*WINDOWED/);
+    // Head and tail anchors survive the window; middle fluff does not.
+    assert.ok(prompt.includes("HEAD-UNIQUE-"));
+    assert.ok(prompt.includes("-TAIL-UNIQUE"));
+    // Prompt is dramatically smaller than the source file. 49KB should land
+    // under ~10KB of total user prompt once windowed.
+    assert.ok(
+      prompt.length < big.length / 4,
+      `prompt (${prompt.length}) should be < big/4 (${Math.floor(big.length / 4)})`,
+    );
+  });
+});
+
+describe("WORKER_SYSTEM_PROMPT — teaches the windowed view", () => {
+  it("mentions windowed large files so the model knows what it's looking at", () => {
+    assert.match(WORKER_SYSTEM_PROMPT, /WINDOW/i);
+    assert.match(WORKER_SYSTEM_PROMPT, /append|replace/);
   });
 });

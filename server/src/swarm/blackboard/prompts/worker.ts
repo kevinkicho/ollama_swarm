@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Hunk } from "../applyHunks.js";
+import { windowFileForWorker } from "../windowFile.js";
 
 // ---------------------------------------------------------------------------
 // Worker response schema (v2). Shape: {"hunks": [ ...discriminated on op ]}.
@@ -157,6 +158,8 @@ export const WORKER_SYSTEM_PROMPT = [
   "7. Maximum 8 hunks per response.",
   "",
   "You will be given the TODO description, the expected file paths, and the current contents of each file (or a note that it does not exist).",
+  "",
+  "LARGE FILES: any file above 8000 chars is shown WINDOWED — you will see the first 3000 chars, a marker noting how many chars are omitted, then the last 3000 chars. To edit text in the omitted middle region, either use op \"append\" for end-of-file additions, or use op \"replace\" with a \"search\" anchor that is unique and visible in the shown head or tail. Do not try to reproduce the whole file back — use hunks.",
 ].join("\n");
 
 export interface WorkerSeed {
@@ -178,8 +181,12 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
     if (content === null || content === undefined) {
       parts.push(`=== ${f} (does not exist — use op "create") ===`);
     } else {
-      parts.push(`=== Current contents of ${f} ===`);
-      parts.push(content);
+      const view = windowFileForWorker(content);
+      const header = view.full
+        ? `=== Current contents of ${f} (${content.length} chars, full) ===`
+        : `=== Current contents of ${f} (${content.length} chars, WINDOWED — head + marker + tail) ===`;
+      parts.push(header);
+      parts.push(view.content);
       parts.push(`=== end ${f} ===`);
     }
     parts.push("");
