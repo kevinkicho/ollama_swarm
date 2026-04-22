@@ -1210,7 +1210,7 @@ commit).
 
 ---
 
-## Unit 7 — Bound undici headersTimeout + surface retry state to the UI  **[uncommitted]**
+## Unit 7 — Bound undici headersTimeout + surface retry state to the UI  **[committed: `9a04399`]**
 
 During the v10 E2E run (`runs/phase11c-medium-v10/`), `agent-2` stalled mid-round
 on `fetch failed <- Headers Timeout Error [UND_ERR_HEADERS_TIMEOUT]`. Node's
