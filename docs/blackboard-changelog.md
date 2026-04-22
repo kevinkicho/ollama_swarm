@@ -1171,7 +1171,7 @@ E2E run yet; that's the Unit 6a→6b boundary check.
 
 ---
 
-## Unit 6b — Enforce path grounding at contract + todo parse time  **[working tree]**
+## Unit 6b — Enforce path grounding at contract + todo parse time  **[committed: `478e45b`]**
 
 Unit 6a gave the planner and contract-writer a real file list and told them (via
 system-prompt rules 9 and 10) not to invent paths. The v9 E2E run
