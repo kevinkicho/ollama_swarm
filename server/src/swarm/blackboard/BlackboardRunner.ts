@@ -21,6 +21,7 @@ import {
   RETRY_MAX_ATTEMPTS,
 } from "./retry.js";
 import { buildSummary, type PerAgentStat, type RunSummary } from "./summary.js";
+import { applyHunks } from "./applyHunks.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
 import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
@@ -899,14 +900,15 @@ export class BlackboardRunner implements SwarmRunner {
       return "stale";
     }
 
-    if (parsed.diffs.length === 0) {
-      this.board.markStale(todo.id, "worker returned empty diffs with no skip reason");
+    if (parsed.hunks.length === 0) {
+      this.board.markStale(todo.id, "worker returned empty hunks with no skip reason");
       return "stale";
     }
 
     // Phase 5: re-hash the claimed files; if any drifted since claim time,
-    // mark the todo stale and bail without writing. Otherwise write each diff
-    // via tmp+rename, then record the commit on the board.
+    // mark the todo stale and bail without writing. Otherwise apply hunks to
+    // the pre-prompt contents, validate the resulting texts, and write each
+    // touched file via tmp+rename before recording the commit on the board.
     let currentHashes: Record<string, string>;
     try {
       currentHashes = await this.hashExpectedFiles(todo.expectedFiles);
@@ -925,10 +927,28 @@ export class BlackboardRunner implements SwarmRunner {
       return "stale";
     }
 
-    // Block a worker from zeroing out a previously non-empty file. We use the
-    // pre-prompt contents as "old" — CAS above already proved no one touched
-    // these files since, so contents is current.
-    const zeroed = findZeroedFiles(parsed.diffs, contents);
+    // Apply hunks against pre-prompt contents. CAS above already proved no
+    // one touched these files since, so contents is the correct base. Any
+    // hunk failure (anchor not unique, create on an existing file, etc.) is
+    // surfaced with a hunk-index prefix from applyHunks — replanner can use
+    // that to tell the worker which hunk to fix.
+    const applied = applyHunks(contents, parsed.hunks);
+    if (!applied.ok) {
+      this.board.markStale(todo.id, `hunk apply failed: ${applied.error}`);
+      return "stale";
+    }
+
+    // Convert the per-file post-apply output into the {file, newText} shape
+    // the existing validators expect. Only files that actually had hunks are
+    // present (applyHunks preserves that contract).
+    const resultingDiffs = Object.entries(applied.newTextsByFile).map(
+      ([file, newText]) => ({ file, newText }),
+    );
+
+    // Block a worker from zeroing out a previously non-empty file. We check
+    // on the post-apply text, not on raw hunks — a sequence of replaces that
+    // whittles a file down to "" would slip past a per-hunk check.
+    const zeroed = findZeroedFiles(resultingDiffs, contents);
     if (zeroed.length > 0) {
       this.board.markStale(
         todo.id,
@@ -937,9 +957,10 @@ export class BlackboardRunner implements SwarmRunner {
       return "stale";
     }
 
-    // Reject leading UTF-8 BOMs. Writing one through silently breaks tooling
-    // (git treats the file as unchanged, node parsers throw, linters lie).
-    const bomFiles = findBomPrefixed(parsed.diffs);
+    // Reject leading UTF-8 BOMs in the resulting text. Writing one through
+    // silently breaks tooling (git diffs look empty, node parsers throw,
+    // linters lie).
+    const bomFiles = findBomPrefixed(resultingDiffs);
     if (bomFiles.length > 0) {
       this.board.markStale(
         todo.id,
@@ -952,8 +973,8 @@ export class BlackboardRunner implements SwarmRunner {
     // claim in place — TTL expiry will convert it to stale and Phase 6 replan
     // will observe whatever state the partial write left on disk.
     try {
-      for (const diff of parsed.diffs) {
-        await this.writeDiff(diff.file, diff.newText);
+      for (const { file, newText } of resultingDiffs) {
+        await this.writeDiff(file, newText);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -982,8 +1003,12 @@ export class BlackboardRunner implements SwarmRunner {
       return "stale";
     }
 
-    const summary = parsed.diffs.map((d) => `${d.file} (${d.newText.length} chars)`).join(", ");
-    this.appendSystem(`[${agent.id}] committed: ${summary}`);
+    const summary = resultingDiffs
+      .map((d) => `${d.file} (${d.newText.length} chars)`)
+      .join(", ");
+    this.appendSystem(
+      `[${agent.id}] committed ${parsed.hunks.length} hunk(s): ${summary}`,
+    );
     return "committed";
   }
 

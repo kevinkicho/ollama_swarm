@@ -1,29 +1,74 @@
 import { z } from "zod";
+import type { Hunk } from "../applyHunks.js";
 
 // ---------------------------------------------------------------------------
-// Worker response schema. Shape: {"diffs": [{"file": string, "newText": string}]}
-// Intentionally blunt — full-file replacement. Patch-based diffs are a v2 concern
-// (the plan calls this out explicitly). A 200KB cap per file keeps a runaway
-// model from buying us half a gigabyte of prose.
+// Worker response schema (v2). Shape: {"hunks": [ ...discriminated on op ]}.
+//
+// v1 was full-file replacement ({file, newText}) — simple but quadratic on big
+// files: the worker reads a 49KB README in the prompt and sends it back, every
+// time, even for a two-line edit. Combined with cloud LLM latency that blew
+// past undici's 5-min header timeout (phase11c-medium-v5, c2 unmet).
+//
+// v2 is Aider-style search/replace. Three ops: replace (the common case),
+// create (new file), append (end-of-file with no stable anchor, e.g. CHANGELOG
+// entries). The runner enforces exact-single-match on replace and fails closed
+// with a clear reason on ambiguity.
 // ---------------------------------------------------------------------------
 
-const DiffSchema = z.object({
-  file: z.string().trim().min(1).max(1000),
-  newText: z.string().max(200_000),
+const FILE_FIELD = z.string().trim().min(1).max(1000);
+
+// Per-field caps. Search/replace are kept modest because a giant search block
+// is almost always the worker trying to re-paste a whole file — the point of
+// hunks is NOT to do that. Create/append can legitimately be larger (new
+// scaffolding file, long CHANGELOG entry), but we still cap to prevent a
+// runaway model from buying us half a gigabyte of prose.
+const SEARCH_MAX = 50_000;
+const REPLACE_MAX = 50_000;
+const CONTENT_MAX = 200_000;
+
+const ReplaceHunkSchema = z.object({
+  op: z.literal("replace"),
+  file: FILE_FIELD,
+  // search must be non-empty — an empty anchor matches nothing / everything
+  // depending on interpretation, and applyHunks rejects it anyway.
+  search: z.string().min(1).max(SEARCH_MAX),
+  // replace may be empty — that's a legitimate deletion.
+  replace: z.string().max(REPLACE_MAX),
 });
 
+const CreateHunkSchema = z.object({
+  op: z.literal("create"),
+  file: FILE_FIELD,
+  // content may be empty — creating an empty file is legal (e.g. placeholder).
+  content: z.string().max(CONTENT_MAX),
+});
+
+const AppendHunkSchema = z.object({
+  op: z.literal("append"),
+  file: FILE_FIELD,
+  // append with empty content is a no-op; reject at parse time so the worker
+  // can't accidentally burn a hunk slot on nothing.
+  content: z.string().min(1).max(CONTENT_MAX),
+});
+
+const HunkSchema = z.discriminatedUnion("op", [
+  ReplaceHunkSchema,
+  CreateHunkSchema,
+  AppendHunkSchema,
+]);
+
+// Per-response hunk budget. 8 lets a worker make several focused edits to a
+// large file (e.g. README troubleshooting + routing section + provider note)
+// without needing to bundle them into one giant replace block.
+const MAX_HUNKS = 8;
+
 const WorkerResponseSchema = z.object({
-  diffs: z.array(DiffSchema).max(2),
+  hunks: z.array(HunkSchema).max(MAX_HUNKS),
   skip: z.string().trim().min(1).max(500).optional(),
 });
 
-export interface WorkerDiff {
-  file: string;
-  newText: string;
-}
-
 export type WorkerParseResult =
-  | { ok: true; diffs: WorkerDiff[]; skip?: string }
+  | { ok: true; hunks: Hunk[]; skip?: string }
   | { ok: false; reason: string };
 
 // Same extraction pattern as planner.ts: try strict JSON.parse first so a
@@ -77,20 +122,16 @@ export function parseWorkerResponse(
 
   // Workers must stay inside the TODO's expectedFiles. Anything else is a bug
   // or a prompt-injection attempt, and either way the runner shouldn't have
-  // to decide what to do with it.
+  // to decide what to do with it. Unlike v1, multiple hunks per file are now
+  // expected (that's the whole point) — don't reject on duplicate file.
   const allowed = new Set(expectedFiles);
-  const seen = new Set<string>();
-  for (const d of v.data.diffs) {
-    if (!allowed.has(d.file)) {
-      return { ok: false, reason: `diff file "${d.file}" not in expectedFiles` };
+  for (const h of v.data.hunks) {
+    if (!allowed.has(h.file)) {
+      return { ok: false, reason: `hunk file "${h.file}" not in expectedFiles` };
     }
-    if (seen.has(d.file)) {
-      return { ok: false, reason: `duplicate diff for "${d.file}"` };
-    }
-    seen.add(d.file);
   }
 
-  return { ok: true, diffs: v.data.diffs.map((d) => ({ file: d.file, newText: d.newText })), skip: v.data.skip };
+  return { ok: true, hunks: v.data.hunks as Hunk[], skip: v.data.skip };
 }
 
 // ---------------------------------------------------------------------------
@@ -102,12 +143,18 @@ export const WORKER_SYSTEM_PROMPT = [
   "",
   "HARD RULES:",
   "1. Output ONLY a JSON object. No prose. No markdown fences. No commentary before or after.",
-  "2. Shape: {\"diffs\": [{\"file\": string, \"newText\": string}]}",
-  "3. `file` MUST be one of the paths in the TODO's expectedFiles list. Do not touch any other file.",
-  "4. `newText` is the ENTIRE new contents of the file. You are replacing the whole file — include every line you want to keep.",
-  "5. If a listed file doesn't need changes, omit it from `diffs`. Do not echo unchanged files.",
-  "6. If the TODO is impossible, unsafe, or already done, respond with: {\"diffs\": [], \"skip\": \"brief reason\"}",
-  "7. Maximum 2 diffs per response.",
+  "2. Shape: {\"hunks\": [ ...search/replace hunks ]}",
+  "3. Each hunk has an `op` and a `file`. `file` MUST be one of the paths in the TODO's expectedFiles list — do not touch any other file.",
+  "4. Three ops, pick the right one for each change:",
+  "   - {\"op\": \"replace\", \"file\": \"...\", \"search\": \"<EXACT text to find>\", \"replace\": \"<new text>\"}",
+  "     The `search` text must appear EXACTLY ONCE in the current file. Include enough surrounding context to be unique. If the same phrase appears twice, extend `search` until it's unique — otherwise the hunk is rejected.",
+  "   - {\"op\": \"create\", \"file\": \"...\", \"content\": \"<entire file contents>\"}",
+  "     Only valid when the file does not yet exist. Use this for scaffolding new files.",
+  "   - {\"op\": \"append\", \"file\": \"...\", \"content\": \"<text to append at end of file>\"}",
+  "     Use when you need to add at the very end and there's no stable anchor to replace (e.g. appending a new CHANGELOG entry).",
+  "5. Multiple hunks per file are allowed and applied in order — each hunk sees the output of the previous one.",
+  "6. If the TODO is impossible, unsafe, or already done, respond with: {\"hunks\": [], \"skip\": \"brief reason\"}",
+  "7. Maximum 8 hunks per response.",
   "",
   "You will be given the TODO description, the expected file paths, and the current contents of each file (or a note that it does not exist).",
 ].join("\n");
@@ -129,7 +176,7 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
   for (const f of seed.expectedFiles) {
     const content = seed.fileContents[f];
     if (content === null || content === undefined) {
-      parts.push(`=== ${f} (does not exist — you would be creating it) ===`);
+      parts.push(`=== ${f} (does not exist — use op "create") ===`);
     } else {
       parts.push(`=== Current contents of ${f} ===`);
       parts.push(content);
@@ -137,7 +184,9 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
     }
     parts.push("");
   }
-  parts.push("Output your JSON now. Remember: full-file replacement in `newText`, JSON only.");
+  parts.push(
+    "Output your JSON now. Use search/replace hunks — do NOT paste whole files back. JSON only.",
+  );
   return parts.join("\n");
 }
 
@@ -152,8 +201,9 @@ export function buildWorkerRepairPrompt(previousResponse: string, parseError: st
     "--- END PREVIOUS RESPONSE ---",
     "",
     "Respond now with ONLY a JSON object matching:",
-    '{"diffs": [{"file": "path", "newText": "full contents"}]}',
+    '{"hunks": [{"op": "replace", "file": "path", "search": "exact old text", "replace": "new text"}]}',
     "",
+    "Other valid op shapes: create ({op:\"create\", file, content}), append ({op:\"append\", file, content}).",
     "No prose. No markdown fences. No commentary. Just the JSON object.",
   ].join("\n");
 }
