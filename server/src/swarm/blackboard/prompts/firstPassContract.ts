@@ -170,6 +170,7 @@ export const FIRST_PASS_CONTRACT_SYSTEM_PROMPT = [
   "7. Maximum 12 criteria. Prefer 3–7 focused criteria over 12 vague ones.",
   "8. Do NOT include implementation detail — criteria are outcomes, not steps. The planner will turn each criterion into todos separately.",
   "9. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, `docs/`, or any path ending in `/` or `\\`. If you don't know which specific file the criterion will land in, prefer an empty `expectedFiles: []` over a guessed directory — the planner will bind real paths after its own read pass. Directory entries are rejected by the parser and the criterion is dropped.",
+  "10. When `expectedFiles` is non-empty, ground every entry in the REPO FILE LIST provided in the user message. Each entry MUST either (a) appear verbatim in the list (for edits to existing files), or (b) be a new file whose parent directory appears in the list (for criteria that demand a new file at a known location). When unsure, prefer `expectedFiles: []` — the auditor has a linked-commit fallback that will bind real files from later todo activity.",
   "",
   "Criteria should be WHAT SUCCESS LOOKS LIKE when this run ends, not a to-do list.",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",
@@ -180,17 +181,27 @@ export function buildFirstPassContractUserPrompt(seed: PlannerSeed): string {
   const readme = seed.readmeExcerpt
     ? seed.readmeExcerpt.slice(0, 4000)
     : "(no README found at repo root)";
+  // Grounding Unit 6a: shared with buildPlannerUserPrompt so contract criteria
+  // name real paths the auditor can later check. Empty-state copy matches the
+  // planner prompt verbatim to avoid two slightly-different fallback strings.
+  const fileList = seed.repoFiles.length > 0
+    ? seed.repoFiles.join("\n")
+    : "(no files listed — clone may be unreadable; use top-level entries above as a weaker guide)";
   return [
     `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
     `Top-level entries: ${tree}`,
+    "",
+    "=== REPO FILE LIST (up to 150 paths, BFS order, ignores applied) ===",
+    fileList,
+    "=== end REPO FILE LIST ===",
     "",
     "=== README excerpt (first 4000 chars) ===",
     readme,
     "=== end README ===",
     "",
     "Using ONLY the information above, output the exit contract JSON object now.",
-    'Remember: single JSON object, no prose, shape {"missionStatement": "...", "criteria": [...]}.',
+    'Remember: single JSON object, no prose, shape {"missionStatement": "...", "criteria": [...]}. When expectedFiles is non-empty, prefer paths that appear in the REPO FILE LIST; if a criterion implies a new file, its parent directory should appear there.',
   ].join("\n");
 }
 

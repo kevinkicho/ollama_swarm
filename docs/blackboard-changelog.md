@@ -1139,6 +1139,38 @@ preserved for comparison.
 
 ---
 
+## Unit 6a — Planner/contract grounding via real repo file list  **[working tree]**
+
+Addresses known-limitation #3 (planner grounding). The v7 incident where the
+contract emitted `expectedFiles: []` on criteria it couldn't bind to files had
+a deeper cause than the auditor's handling: the planner was working from the
+top-level directory listing + README excerpt alone, so it literally did not
+know which files to name. This unit gives the planner and the first-pass
+contract writer the real file list.
+
+- `server/src/services/RepoService.ts` — added `listRepoFiles(clonePath, {maxFiles=150})`, a BFS walk that returns up to 150 repo-relative paths (forward slashes, one dir at a time). Also exported:
+  - `LIST_REPO_IGNORED_DIRS` — `.git`, `node_modules`, `dist`, `build`, `out`, `coverage`, `.cache`, `.next`, `.turbo`, `.nuxt`, `.parcel-cache`, `.venv`, `__pycache__`, `.pytest_cache`, `target`, `vendor`, and VCS siblings. One shared set so tests can assert "the high-frequency offenders are ignored" without re-encoding the list.
+  - `isLikelyBinaryPath(filename)` + `BINARY_EXTENSIONS` — skips images/archives/fonts/executables/media/design/db files from the listing so the planner isn't asked to edit `.png`s.
+  - BFS on purpose: shallow files (`README.md`, `package.json`, `src/index.ts`) surface before deep ones, matching what a human glancing at a repo sees first.
+- `server/src/services/RepoService.test.ts` — 10 new tests covering: binary-extension positive/negative, ignored-dirs coverage regression guard, forward-slash normalization, ignored-dirs enforcement, binary-file skipping, BFS shallow-first with cap, sorted-within-dir determinism, missing-path graceful [], same-input determinism.
+- `server/src/swarm/blackboard/prompts/planner.ts` — `PlannerSeed` gained `repoFiles: string[]`. `buildPlannerUserPrompt` renders a `=== REPO FILE LIST ===` section (one path per line so the model can quote verbatim). `PLANNER_SYSTEM_PROMPT` gained rule 9: every `expectedFiles` entry must either appear verbatim in the list OR be a new file whose parent directory appears there. Removed the older weaker "do not invent files" line — rule 9 subsumes it.
+- `server/src/swarm/blackboard/prompts/firstPassContract.ts` — symmetric changes: `buildFirstPassContractUserPrompt` renders the same REPO FILE LIST section; `FIRST_PASS_CONTRACT_SYSTEM_PROMPT` gained rule 10 (same grounding rule, with an explicit "when unsure, prefer `expectedFiles: []`" nudge so the auditor's linked-commit fallback stays the recovery path rather than the default).
+- `server/src/swarm/blackboard/BlackboardRunner.ts` — `buildSeed()` now calls `repos.listRepoFiles(clonePath, {maxFiles: 150})` and populates `repoFiles`. Empty-list case degrades to the old behavior (user prompt shows "no files listed"). No API break — callers didn't see the old seed shape directly.
+- `server/src/swarm/blackboard/prompts/firstPassContract.test.ts`, `planner.test.ts` — seed fixtures gained `repoFiles`; 3 new tests per file: REPO FILE LIST is rendered with one path per line, empty-repoFiles falls back gracefully, system prompt references "REPO FILE LIST".
+
+**Why this matters for the failure mode that motivated it.** v7 c4/c5 came
+back unmet because the contract named files the auditor couldn't find. Unit
+5d gave the auditor a linked-commit fallback, Unit 5e made that fallback
+testable, and Unit 6a attacks the root cause one layer up — the contract
+shouldn't be emitting unbindable paths in the first place when a real file
+list is right there.
+
+**Verified.** `tsc --noEmit` clean; 330/330 server tests green (314 before
++ 10 Unit 6a RepoService + 3 planner prompt + 3 contract prompt). No new
+E2E run yet; that's the Unit 6a→6b boundary check.
+
+---
+
 ## Cross-phase notes
 
 - **Event log.** A per-boot append-only JSONL log is written at `logs/current.jsonl` via `server/src/ws/eventLogger.ts` (landed alongside Phase 4 work, currently uncommitted). Every `SwarmEvent` the WS broadcasts gets a line, making post-hoc verification of runs possible even after the browser tab is closed.

@@ -13,6 +13,7 @@ function seed(overrides: Partial<PlannerSeed> = {}): PlannerSeed {
     repoUrl: "https://github.com/x/y",
     clonePath: "/tmp/y",
     topLevel: ["README.md", "src"],
+    repoFiles: ["README.md", "src/index.ts"],
     readmeExcerpt: "# y\n\nSomething.",
     ...overrides,
   };
@@ -164,5 +165,28 @@ describe("FIRST_PASS_CONTRACT prompts", () => {
     assert.match(p, /bad output/);
     assert.match(p, /JSON parse failed: xyz/);
     assert.match(p, /missionStatement/);
+  });
+
+  // Grounding Unit 6a
+  it("user prompt renders REPO FILE LIST with one path per line", () => {
+    const p = buildFirstPassContractUserPrompt(
+      seed({ repoFiles: ["README.md", "src/a.ts", "src/lib/b.ts"] }),
+    );
+    assert.match(p, /=== REPO FILE LIST/);
+    assert.match(p, /=== end REPO FILE LIST/);
+    // Each path on its own line so the model can quote verbatim
+    assert.match(p, /\nREADME\.md\n/);
+    assert.match(p, /\nsrc\/a\.ts\n/);
+    assert.match(p, /\nsrc\/lib\/b\.ts\n/);
+  });
+
+  it("user prompt falls back gracefully when repoFiles is empty", () => {
+    const p = buildFirstPassContractUserPrompt(seed({ repoFiles: [] }));
+    assert.match(p, /no files listed/);
+    assert.match(p, /=== REPO FILE LIST/);
+  });
+
+  it("system prompt instructs to ground expectedFiles in REPO FILE LIST", () => {
+    assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /REPO FILE LIST/);
   });
 });

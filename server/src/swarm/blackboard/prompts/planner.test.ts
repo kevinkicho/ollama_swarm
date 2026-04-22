@@ -1,6 +1,23 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { parsePlannerResponse, type PlannerParseResult } from "./planner.js";
+import {
+  buildPlannerUserPrompt,
+  parsePlannerResponse,
+  PLANNER_SYSTEM_PROMPT,
+  type PlannerParseResult,
+  type PlannerSeed,
+} from "./planner.js";
+
+function seed(overrides: Partial<PlannerSeed> = {}): PlannerSeed {
+  return {
+    repoUrl: "https://github.com/x/y",
+    clonePath: "/tmp/y",
+    topLevel: ["README.md", "src"],
+    repoFiles: ["README.md", "src/index.ts"],
+    readmeExcerpt: "# y\n",
+    ...overrides,
+  };
+}
 
 function expectOk(
   r: PlannerParseResult,
@@ -135,5 +152,30 @@ describe("parsePlannerResponse — drops invalid items", () => {
     assert.equal(r.dropped.length, 2);
     assert.match(r.dropped[0].reason, /file path, not a directory/);
     assert.match(r.dropped[1].reason, /file path, not a directory/);
+  });
+});
+
+// Grounding Unit 6a: user prompt renders REPO FILE LIST; system prompt
+// instructs the planner to ground expectedFiles in that list.
+describe("planner prompts — repo grounding (Unit 6a)", () => {
+  it("user prompt renders REPO FILE LIST with one path per line", () => {
+    const p = buildPlannerUserPrompt(
+      seed({ repoFiles: ["README.md", "src/a.ts", "src/lib/b.ts"] }),
+    );
+    assert.match(p, /=== REPO FILE LIST/);
+    assert.match(p, /=== end REPO FILE LIST/);
+    assert.match(p, /\nREADME\.md\n/);
+    assert.match(p, /\nsrc\/a\.ts\n/);
+    assert.match(p, /\nsrc\/lib\/b\.ts\n/);
+  });
+
+  it("user prompt falls back gracefully when repoFiles is empty", () => {
+    const p = buildPlannerUserPrompt(seed({ repoFiles: [] }));
+    assert.match(p, /no files listed/);
+    assert.match(p, /=== REPO FILE LIST/);
+  });
+
+  it("system prompt instructs planner to ground expectedFiles in REPO FILE LIST", () => {
+    assert.match(PLANNER_SYSTEM_PROMPT, /REPO FILE LIST/);
   });
 });

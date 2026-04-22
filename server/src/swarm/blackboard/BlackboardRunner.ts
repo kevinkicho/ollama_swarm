@@ -358,10 +358,16 @@ export class BlackboardRunner implements SwarmRunner {
   private async buildSeed(clonePath: string, cfg: RunConfig): Promise<PlannerSeed> {
     const topLevel = (await this.opts.repos.listTopLevel(clonePath)).slice(0, 200);
     const readmeExcerpt = await this.opts.repos.readReadme(clonePath);
+    // Grounding Unit 6a: real file paths from a BFS walk, with common
+    // ignores (node_modules, .git, dist, binaries) stripped. Gives the
+    // planner + first-pass-contract something concrete to reference in
+    // expectedFiles instead of guessing from top-level directories.
+    const repoFiles = await this.opts.repos.listRepoFiles(clonePath, { maxFiles: 150 });
     return {
       repoUrl: cfg.repoUrl,
       clonePath,
       topLevel,
+      repoFiles,
       readmeExcerpt,
     };
   }

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import path from "node:path";
 import simpleGit from "simple-git";
 import { config } from "../config.js";
@@ -35,6 +36,48 @@ export function deriveCloneDir(repoUrl: string, parentPath: string): string {
     throw new Error(`cannot derive repo name from URL: ${repoUrl}`);
   }
   return path.resolve(parentPath, name);
+}
+
+// Grounding Unit 6a: directories that listRepoFiles always skips. These are
+// build artifacts, vendored deps, VCS internals, and caches — things the
+// planner should never propose touching. Kept as a Set for O(1) lookup in
+// the BFS inner loop.
+export const LIST_REPO_IGNORED_DIRS: ReadonlySet<string> = new Set([
+  ".git",
+  ".hg",
+  ".svn",
+  "node_modules",
+  "dist",
+  "build",
+  "out",
+  "coverage",
+  ".cache",
+  ".next",
+  ".turbo",
+  ".nuxt",
+  ".parcel-cache",
+  ".venv",
+  "__pycache__",
+  ".pytest_cache",
+  "target", // rust/java
+  "vendor", // php/go
+]);
+
+const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".svg",
+  ".pdf", ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
+  ".exe", ".dll", ".so", ".dylib", ".a", ".o", ".obj",
+  ".class", ".jar", ".war", ".ear",
+  ".mp3", ".mp4", ".avi", ".mov", ".wav", ".ogg", ".flac", ".webm",
+  ".woff", ".woff2", ".ttf", ".otf", ".eot",
+  ".psd", ".ai", ".sketch", ".fig",
+  ".db", ".sqlite", ".sqlite3",
+  ".bin", ".dat", ".pyc",
+]);
+
+export function isLikelyBinaryPath(filename: string): boolean {
+  const ext = path.extname(filename).toLowerCase();
+  return BINARY_EXTENSIONS.has(ext);
 }
 
 export class RepoService {
@@ -152,6 +195,54 @@ export class RepoService {
     } catch {
       return [];
     }
+  }
+
+  // Grounding Unit 6a: breadth-first walk of the clone returning up to
+  // maxFiles repo-relative FILE paths (not directories), with conventional
+  // ignores applied. Used to seed the planner + first-pass-contract prompts
+  // so their expectedFiles are grounded in real repo structure instead of
+  // guessed from top-level-dirs-plus-README.
+  //
+  // BFS on purpose: shallow files (README.md, package.json, src/index.ts)
+  // surface before deep files (src/a/b/c/helper.ts). That matches what a
+  // human glancing at a repo would see first, which is what the planner
+  // should weight heaviest.
+  //
+  // Paths are normalized to forward slashes for prompt consistency — the
+  // LLM shouldn't care about Windows backslashes.
+  async listRepoFiles(
+    clonePath: string,
+    opts: { maxFiles?: number } = {},
+  ): Promise<string[]> {
+    const maxFiles = opts.maxFiles ?? 150;
+    const out: string[] = [];
+    const queue: string[] = [""];
+
+    while (queue.length > 0 && out.length < maxFiles) {
+      const rel = queue.shift()!;
+      const abs = rel === "" ? clonePath : path.join(clonePath, rel);
+      let entries: Dirent[];
+      try {
+        entries = await fs.readdir(abs, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      for (const entry of entries) {
+        if (out.length >= maxFiles) break;
+        if (LIST_REPO_IGNORED_DIRS.has(entry.name)) continue;
+        const childRel = rel === "" ? entry.name : `${rel}/${entry.name}`;
+        if (entry.isDirectory()) {
+          queue.push(childRel);
+        } else if (entry.isFile()) {
+          if (isLikelyBinaryPath(entry.name)) continue;
+          out.push(childRel);
+        }
+        // symlinks/sockets/etc. deliberately skipped
+      }
+    }
+
+    return out;
   }
 
   private async dirExists(p: string): Promise<boolean> {

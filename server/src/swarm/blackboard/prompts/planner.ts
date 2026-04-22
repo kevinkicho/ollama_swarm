@@ -123,8 +123,8 @@ export const PLANNER_SYSTEM_PROMPT = [
   "6. If the repo is trivial, already complete, or there is nothing meaningful to add, return an empty array [].",
   "7. Maximum 20 TODOs per response.",
   "8. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, `docs/`, or any path ending in `/` or `\\`. If the TODO covers a whole directory, pick the specific files it will touch (e.g., `src/lib/a.ts`, `src/lib/b.ts`) or split it into smaller TODOs. Directory entries are rejected by the parser and the TODO is dropped.",
+  "9. Ground every `expectedFiles` entry in the REPO FILE LIST provided in the user message. Each entry MUST either (a) appear verbatim in the list (for edits to existing files), or (b) be a new file whose parent directory appears in the list (for adding a new file to a known location). Do NOT invent paths whose parent directory is not in the list — the worker's file-hash pass will fail on EISDIR/ENOENT and stall the run.",
   "",
-  "Do NOT invent files that do not exist unless the TODO is explicitly about creating a new file.",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",
 ].join("\n");
 
@@ -132,6 +132,12 @@ export interface PlannerSeed {
   repoUrl: string;
   clonePath: string;
   topLevel: string[];
+  // Grounding Unit 6a: breadth-first listing of up to ~150 repo-relative
+  // file paths (forward slashes), with common ignores stripped. Gives the
+  // planner + first-pass-contract real structure to ground expectedFiles
+  // against instead of guessing from top-level dirs alone. Empty when the
+  // clone is unreadable — callers must tolerate that.
+  repoFiles: string[];
   readmeExcerpt: string | null;
 }
 
@@ -140,17 +146,27 @@ export function buildPlannerUserPrompt(seed: PlannerSeed): string {
   const readme = seed.readmeExcerpt
     ? seed.readmeExcerpt.slice(0, 4000)
     : "(no README found at repo root)";
+  // Grounding Unit 6a: show the real files. One path per line — less token-
+  // efficient than comma-separated, but much easier for the model to scan
+  // and quote verbatim into expectedFiles.
+  const fileList = seed.repoFiles.length > 0
+    ? seed.repoFiles.join("\n")
+    : "(no files listed — clone may be unreadable; use top-level entries above as a weaker guide)";
   return [
     `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
     `Top-level entries: ${tree}`,
+    "",
+    "=== REPO FILE LIST (up to 150 paths, BFS order, ignores applied) ===",
+    fileList,
+    "=== end REPO FILE LIST ===",
     "",
     "=== README excerpt (first 4000 chars) ===",
     readme,
     "=== end README ===",
     "",
     "Using ONLY the information above, output your JSON array of TODOs now.",
-    "Remember: JSON array, no prose, <=2 files per TODO.",
+    "Remember: JSON array, no prose, <=2 files per TODO. Prefer paths that appear in the REPO FILE LIST; if creating a new file, its parent directory should appear there.",
   ].join("\n");
 }
 
