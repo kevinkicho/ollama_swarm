@@ -34,6 +34,14 @@ const Schema = z.object({
   DEFAULT_MODEL: z.string().default("glm-5.1:cloud"),
   OPENCODE_BIN: z.string().default("opencode"),
   GITHUB_TOKEN: z.string().optional(),
+  // Unit 17: send a tiny "reply with: ok" prompt to each agent right
+  // after spawn so its first REAL prompt isn't a cold-start. Default
+  // on; set to "false"/"0"/"no" to disable (e.g. for unit-test rigs
+  // where the SDK is mocked).
+  AGENT_WARMUP_ENABLED: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("true")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
 });
 
 const parsed = Schema.parse(process.env);

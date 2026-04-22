@@ -7,6 +7,12 @@ import type { AgentState, SwarmEvent } from "../types.js";
 
 type Client = ReturnType<typeof createOpencodeClient>;
 
+// Unit 17: minimal-token warmup prompt sent to each new agent right
+// after spawn. Intentionally trivial — we don't care about the response
+// content, only about loading model state on the cloud shard so the
+// runner's first real prompt doesn't pay cold-start latency.
+export const WARMUP_PROMPT_TEXT = "Reply with one word: ok";
+
 export interface Agent {
   id: string;
   index: number;
@@ -157,6 +163,15 @@ export class AgentManager {
       this.agents.set(id, agent);
       this.touchActivity(sessionId);
       this.startEventStream(agent);
+      // Unit 17: warm the cloud shard before the runner sees this agent
+      // as ready. If warmup fails (e.g. headers timeout on a stubborn
+      // cold start), proceed anyway — even a failed warmup attempt has
+      // told the cloud shard to start loading state on its end, so the
+      // first real prompt is less cold than it would have been. Skipped
+      // when AGENT_WARMUP_ENABLED is false (unit-test rigs, etc).
+      if (config.AGENT_WARMUP_ENABLED) {
+        await this.warmupAgent(agent);
+      }
       this.onState({ ...stateBase, sessionId, status: "ready" });
       return agent;
     } catch (err) {
@@ -165,6 +180,37 @@ export class AgentManager {
       const msg = err instanceof Error ? err.message : String(err);
       this.onState({ ...stateBase, status: "failed", error: msg });
       throw err;
+    }
+  }
+
+  // Unit 17: send a trivial prompt to the agent right after spawn so
+  // the cloud shard loads model state BEFORE the runner asks for real
+  // work. Cuts the cold-start tail that bumping headersTimeout 90→180s
+  // (Unit 16) couldn't fully cover. Non-fatal — if warmup itself fails
+  // (headers timeout, network blip) we log it and proceed; the next
+  // real prompt has at minimum told the cloud shard we exist.
+  private async warmupAgent(agent: Agent): Promise<void> {
+    const t0 = Date.now();
+    try {
+      await agent.client.session.prompt({
+        path: { id: agent.sessionId },
+        body: {
+          agent: "swarm",
+          model: { providerID: "ollama", modelID: agent.model },
+          parts: [{ type: "text", text: WARMUP_PROMPT_TEXT }],
+        },
+      });
+      this.logDiag({ type: "_warmup_ok", agentId: agent.id, elapsedMs: Date.now() - t0 });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logDiag({
+        type: "_warmup_failed",
+        agentId: agent.id,
+        elapsedMs: Date.now() - t0,
+        error: msg,
+      });
+      // Intentional swallow — warmup is best-effort. The runner's first
+      // real prompt will retry through the Unit 16 wrapper if needed.
     }
   }
 

@@ -2107,9 +2107,106 @@ reaching natural `completed` more often instead of capping.
 
 ---
 
-## Session summary (Units 9–16, this conversation)
+## Unit 17 — Warmup turn at agent spawn (cold-start fix)  **[committed: pending]**
 
-Seven units shipped in this session:
+Direct response to the 2026-04-22 battle test v2 (post Unit 16): even
+with the retry wrapper firing across all seven runners and
+`HEADERS_TIMEOUT_MS` bumped 90 → 180 s, **22 UND_ERR_HEADERS_TIMEOUT
+events still hit during 60 minutes of runs**. The pattern: cold-start
+TTFB on cloud-glm-5.1 occasionally exceeds 180 s. Retries help when
+they ultimately succeed (Council, OW, stigmergy reached 100% success
+in v2); they hurt when the cold-start condition is sustained because
+each retry-then-fail sequence eats up to 540 s of wall-clock per
+agent (3 × 180 s + 4 + 16 backoff). Role-diff regressed from 27% →
+7% in v2 for exactly this reason — the retry budget got eaten by a
+permanently-stuck agent.
+
+Root cause: the FIRST prompt to a freshly spawned agent's session has
+to wait for the cloud shard to load model state on its end. A trivial
+warmup prompt sent at spawn-time pre-pays that latency before the
+runner ever asks for real work, so the runner's first real prompt
+isn't a cold start.
+
+**Mechanic.**
+
+- `server/src/services/AgentManager.ts` — new private method
+  `warmupAgent(agent)` sends a tiny prompt
+  (`WARMUP_PROMPT_TEXT = "Reply with one word: ok"` exported as a
+  named constant) to the agent's session immediately after
+  `session.create` succeeds and `startEventStream` is wired, but
+  BEFORE the agent is broadcast as `status: "ready"`. The runner
+  never sees a cold session.
+- Warmup uses the regular SDK call path (same dispatcher, same
+  authedFetch, same headers timeout). If the warmup itself fails
+  (e.g. headers timeout, network blip), the failure is logged via
+  `logDiag` as a `_warmup_failed` record and `spawnAgent` proceeds
+  anyway. Even a failed warmup attempt has told the cloud shard we
+  exist — the next real prompt goes against a partially-warm shard
+  rather than a cold one.
+- `server/src/config.ts` — new env var `AGENT_WARMUP_ENABLED`.
+  Defaults to `"true"`. Accepts `true|false|1|0|yes|no`. Rejects
+  anything else (so a typo doesn't silently disable warmup —
+  per the test). Set to `"false"` to skip warmup entirely (useful
+  for unit-test rigs where the SDK is mocked or for runs where the
+  cost of an extra prompt per agent isn't worth it).
+- `server/src/services/warmup.test.ts` — 5 new tests. Asserts
+  `WARMUP_PROMPT_TEXT` is non-empty and short (no token bloat);
+  asserts the env-toggle parser defaults to `true`, accepts the six
+  recognized strings, and rejects unrecognized ones.
+
+**What this complements.**
+
+- **Unit 16 (cross-runner retry wrapper).** Retries handle transient
+  failures *during* a run. Warmup prevents the most common transient
+  failure — first-turn cold-start timeout — from happening at all.
+  The combination is multiplicative: warmup reduces the probability
+  that retry needs to fire; retry handles the cases where warmup
+  itself didn't fully succeed.
+
+**What this does NOT do.**
+
+- **No warmup retry.** Single-shot. If warmup fails, the next real
+  prompt is the next attempt and goes through Unit 16's retry
+  wrapper. Warmup-retry would double the cold-start tail; not worth
+  it for a non-fatal step.
+- **No warmup-status broadcast.** Agent stays `status: "spawning"`
+  during warmup. UI sees a slightly longer spawning period — no
+  schema change.
+- **No batch warmup.** Each `spawnAgent` warms its own agent serially
+  after session creation. Could fan-out N warmups in parallel after
+  all spawns return, but parallelism happens at the caller already
+  and the cloud probably serializes anyway.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+446/446 server tests green (441 before + 5 Unit 17 tests). E2E
+validation: re-run battle test v3 after Unit 17 lands — expected to
+see cold-start `UND_ERR_HEADERS_TIMEOUT` count drop from 22 (v2)
+toward zero, retries fire less often, serial presets recover wall-time
+budget that retries were burning.
+
+**Two future units flagged but NOT shipped this session, to revisit
+if v3 still shows gaps:**
+
+- **Unit 18 candidate — per-runner retry config.** Today every runner
+  uses `RETRY_MAX_ATTEMPTS = 3`. Serial presets (role-diff,
+  debate-judge) might prefer `RETRY_MAX_ATTEMPTS = 1` (fail-fast) so
+  a single permanently-stuck agent doesn't sink the whole run's
+  wall-clock budget. Implemented via a `maxAttempts` option on
+  `promptWithRetry` plus per-runner override at the call site.
+- **Unit 19 candidate — adaptive headersTimeout per attempt.** Today
+  the dispatcher's 180 s timeout applies uniformly. A smarter pattern
+  is long-on-attempt-1 (catches genuine cold starts), short on
+  attempts 2–3 (session is warm by then; if it's still slow, the
+  cause isn't latency tail). Needs either dispatcher-per-call (heavy)
+  or an AbortController-driven timeout that pre-empts undici
+  (~60 lines). Defer until evidence shows uniform 180 s is the
+  binding constraint.
+
+---
+
+## Session summary (Units 9–17, this conversation)
+
+Eight units shipped in this session:
 
 - **Unit 9** — Windows tree-kill for clean shutdown. Fixed the
   port-leak the user hit when Ctrl+C'ing `npm run dev`. Port
@@ -2142,11 +2239,19 @@ Seven units shipped in this session:
   seven runners; bumped headersTimeout 90 s → 180 s to catch
   cold-start TTFB on cloud models. Direct response to the battle
   test that surfaced the no-retry gap on the six newer runners.
+- **Unit 17** — Warmup turn at agent spawn. After Unit 16's
+  v2 battle test still showed 22 cold-start timeouts in 60 min,
+  added a tiny pre-spawn warmup prompt so the cloud shard loads
+  model state before the runner asks for real work. Env-toggleable
+  (`AGENT_WARMUP_ENABLED`, default on). Best-effort — warmup
+  failures are logged, not fatal. Two follow-up units (18/19)
+  flagged in the changelog as candidates if v3 still shows gaps.
 
 Roster after this session: **eight shipped presets** (round-robin
-baseline + 7 intentional designs) **all with retry parity**. Every
-pattern named in the original catalog (`docs/swarm-patterns.md`) is
-now either shipped or deferred with a documented rationale.
+baseline + 7 intentional designs) **all with retry parity AND
+spawn-time warmup**. Every pattern named in the original catalog
+(`docs/swarm-patterns.md`) is now either shipped or deferred with a
+documented rationale.
 
 ---
 
