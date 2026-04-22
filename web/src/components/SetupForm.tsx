@@ -42,7 +42,7 @@ const PRESETS: readonly SwarmPreset[] = [
     min: 3,
     max: 8,
     recommended: 5,
-    status: "planned",
+    status: "active",
   },
   {
     id: "map-reduce",

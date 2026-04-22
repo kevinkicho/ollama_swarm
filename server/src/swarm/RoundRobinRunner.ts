@@ -8,6 +8,14 @@ import type {
   TranscriptEntry,
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
+import { roleForAgent, type SwarmRole } from "./roles.js";
+
+export interface RoundRobinOptions {
+  // Unit 8: when set, every agent gets a per-index role prepended to its
+  // prompt. The Orchestrator's "role-diff" preset instantiates this runner
+  // with DEFAULT_ROLES; the plain "round-robin" preset leaves it undefined.
+  roles?: readonly SwarmRole[];
+}
 
 // The current collaboration pattern: N identical agents take turns in a fixed
 // order, each one seeing the full transcript before speaking. Discussion-only —
@@ -18,8 +26,11 @@ export class RoundRobinRunner implements SwarmRunner {
   private round = 0;
   private stopping = false;
   private active?: RunConfig;
+  private readonly roles?: readonly SwarmRole[];
 
-  constructor(private readonly opts: RunnerOpts) {}
+  constructor(private readonly opts: RunnerOpts, options?: RoundRobinOptions) {
+    this.roles = options?.roles && options.roles.length > 0 ? options.roles : undefined;
+  }
 
   status(): SwarmStatus {
     return {
@@ -186,13 +197,23 @@ export class RoundRobinRunner implements SwarmRunner {
       .map((e) => {
         if (e.role === "system") return `[SYSTEM] ${e.text}`;
         if (e.role === "user") return `[HUMAN] ${e.text}`;
-        return `[Agent ${e.agentIndex}] ${e.text}`;
+        const label = this.roles
+          ? `Agent ${e.agentIndex} (${roleForAgent(e.agentIndex ?? 1, this.roles).name})`
+          : `Agent ${e.agentIndex}`;
+        return `[${label}] ${e.text}`;
       })
       .join("\n\n");
 
+    const role = this.roles ? roleForAgent(agent.index, this.roles) : null;
+    const header = role
+      ? `You are Agent ${agent.index} in a swarm of collaborating AI engineers reviewing a cloned GitHub project. Your role is "${role.name}".`
+      : `You are Agent ${agent.index} in a swarm of collaborating AI engineers reviewing a cloned GitHub project.`;
+    const roleGuidance = role ? [`As the ${role.name}: ${role.guidance}`, ""] : [];
+
     return [
-      `You are Agent ${agent.index} in a swarm of collaborating AI engineers reviewing a cloned GitHub project.`,
+      header,
       `This is discussion round ${round} of ${totalRounds}.`,
+      ...roleGuidance,
       "Your working directory IS the project clone — use file-read, grep, and find-files tools to inspect it.",
       "Round 1: skim README.md and the top-level tree before opining. Later rounds: only re-read files when a peer's claim needs checking.",
       "Keep responses under ~250 words. Be specific. Cite file paths (e.g. `src/foo.ts:42`) when you reference code.",
@@ -207,7 +228,9 @@ export class RoundRobinRunner implements SwarmRunner {
       transcriptText || "(empty — you are first to speak)",
       "=== END TRANSCRIPT ===",
       "",
-      `Now respond as Agent ${agent.index}.`,
+      role
+        ? `Now respond as Agent ${agent.index} (${role.name}), through the lens of your role.`
+        : `Now respond as Agent ${agent.index}.`,
     ].join("\n");
   }
 

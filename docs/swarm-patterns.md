@@ -25,15 +25,19 @@ agents converge on earlier positions.
 
 ## Pattern catalog
 
-### 1. Role differentiation `[ ]`
+### 1. Role differentiation `[x]` ← **shipped as `role-diff` preset (Unit 8)**
 Same weights, different system prompts. Assign each agent a role —
 architect, tester, security-reviewer, performance-critic, docs-reader,
 dependency-auditor, devil's-advocate. Identical models with distinct priors
 produce genuinely different takes. This is MetaGPT's core insight and what
 AutoGen calls "conversable agents."
 
-**Cost:** ~10 lines. The current round-robin loop already has `agent.index`;
-just map it to a role-prompt table.
+Shipped as an option on `RoundRobinRunner` (see `server/src/swarm/roles.ts`
+for the seven-role catalog). The `role-diff` preset instantiates the same
+runner with `DEFAULT_ROLES` injected; plain `round-robin` still exists as
+the no-role baseline for comparison. Transcript labels agents with their
+role so peer @mentions and re-reads stay legible.
+
 **Wins:** cheap diversity, no architectural change.
 **Limits:** still single-threaded; roles are declared not earned.
 
@@ -152,7 +156,7 @@ The **chosen stack for v1 of the blackboard preset** is optimistic+CAS
 | # | Preset                       | Coordination                        | Why this order |
 | - | ---------------------------- | ----------------------------------- | -------------- |
 | 1 | Blackboard ✓ shipped         | Optimistic+CAS + small atomic units | User's pick; biggest architectural lift, do it while context is fresh |
-| 2 | Role differentiation         | n/a (single-turn loop)              | Cheap; good comparison baseline against blackboard |
+| 2 | Role differentiation ✓ shipped | n/a (single-turn loop)            | Cheap; good comparison baseline against blackboard |
 | 3 | Map-reduce                   | n/a (split + synthesize)            | Tests whether isolation beats shared context for coverage |
 | 4 | Council (parallel + reconcile) | n/a (round-based)                 | Isolates diversity gain from role-prompting gain |
 | 5 | Orchestrator–worker          | n/a                                 | Needs role differentiation to be useful; builds on #2 |

@@ -1275,6 +1275,73 @@ install is a no-op outside the server's Node process.
 
 ---
 
+## Unit 8 — Role differentiation as a selectable preset  **[uncommitted]**
+
+First preset past blackboard. The UI already had a greyed-out "Role
+differentiation" option (`role-diff`); this unit backs it with a live
+implementation so users can pick it from the Start-a-swarm form. No new
+architectural piece — it rides on `RoundRobinRunner` via an optional
+`roles` constructor arg.
+
+- `server/src/swarm/roles.ts` — new pure module. Exports
+  `DEFAULT_ROLES` (seven roles from `docs/swarm-patterns.md` §1: Architect,
+  Tester, Security reviewer, Performance critic, Docs reader, Dependency
+  auditor, Devil's advocate) and `roleForAgent(agentIndex, roles)` which does
+  1-based modulo so agent 8 wraps back to role 0. Throws on bad inputs so a
+  miswired preset crashes at `buildPrompt` time rather than silently producing
+  generic output.
+- `server/src/swarm/roles.test.ts` — 8 tests across 2 describe blocks:
+  catalog shape (exactly 7 named roles, non-empty guidance), `roleForAgent`
+  sequential + wrap-around + invalid-input + custom-table.
+- `server/src/swarm/RoundRobinRunner.ts` — constructor takes an optional
+  second argument `{ roles?: readonly SwarmRole[] }`. When present,
+  `buildPrompt` prepends a role line (`Your role is "Tester"`) and a
+  guidance paragraph, and labels transcript lines as
+  `[Agent 2 (Tester)] ...` so peer @mentions and re-reads stay legible.
+  When absent, the prompt and transcript format are bit-for-bit identical
+  to the pre-Unit-8 output — plain `round-robin` keeps its exact behavior.
+- `server/src/services/Orchestrator.ts` — `buildRunner` gains a
+  `"role-diff"` case that instantiates `RoundRobinRunner` with
+  `DEFAULT_ROLES`. The exhaustiveness check on `PresetId` is preserved.
+- `server/src/swarm/SwarmRunner.ts` — `PresetId` gets a third member
+  `"role-diff"`.
+- `server/src/routes/swarm.ts` — the Zod enum on the start endpoint
+  accepts `"role-diff"` alongside the existing two.
+- `server/package.json` — `scripts.test` gains `src/swarm/roles.test.ts`.
+  (The runner's file list is hand-maintained; tests not listed there silently
+  don't run.)
+- `web/src/components/SetupForm.tsx` — the existing `role-diff` PRESETS
+  entry flipped from `status: "planned"` to `status: "active"`, which
+  enables the Start button when selected. No new form fields — role count
+  and role catalog are fixed in v1.
+- `docs/swarm-patterns.md` — flipped §1 status marker from `[ ]` to `[x]`
+  and updated the implementation-roadmap row.
+
+**Why reuse `RoundRobinRunner` instead of a new class.** The role catalog
+changes ~15 lines of prompt text; everything else (seeding, transcript
+management, the 20-minute absolute turn cap, error surfacing) is identical
+to plain round-robin. A subclass or separate runner would duplicate 250+
+lines for negligible gain. Keeping `role-diff` as a configured variant of
+round-robin also means any future round-robin fix (e.g. a new watchdog
+behavior) applies to both presets automatically.
+
+**Why keep plain `round-robin` alive.** It's the no-role baseline for A/B
+comparisons. Without it we can't tell whether a behavior difference in a
+run is from role priors or from general round-robin dynamics.
+
+**Role catalog source.** `docs/swarm-patterns.md` §1 names all seven. The
+guidance strings are new; each leans on the role's actual responsibility
+(e.g. Security reviewer: "Cite the specific line or dependency. If you see
+nothing to flag, say so — don't invent threats.") to push back against the
+generic-agent drift that plain round-robin suffers from.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`; 353/353
+server tests green (345 before + 8 Unit 8 roles). End-to-end validation is
+the job of the next run — pick `role-diff` on the setup form and confirm
+the transcript shows seven distinguishable voices.
+
+---
+
 ## Cross-phase notes
 
 - **Event log.** A per-boot append-only JSONL log is written at `logs/current.jsonl` via `server/src/ws/eventLogger.ts` (landed alongside Phase 4 work, currently uncommitted). Every `SwarmEvent` the WS broadcasts gets a line, making post-hoc verification of runs possible even after the browser tab is closed.

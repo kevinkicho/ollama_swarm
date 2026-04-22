@@ -4,6 +4,7 @@ import type { SwarmEvent, SwarmStatus } from "../types.js";
 import type { PresetId, RunConfig, RunnerOpts, SwarmRunner } from "../swarm/SwarmRunner.js";
 import { RoundRobinRunner } from "../swarm/RoundRobinRunner.js";
 import { BlackboardRunner } from "../swarm/blackboard/BlackboardRunner.js";
+import { DEFAULT_ROLES } from "../swarm/roles.js";
 
 export interface OrchestratorOpts extends RunnerOpts {
   manager: AgentManager;
@@ -79,6 +80,10 @@ export class Orchestrator {
     switch (preset) {
       case "round-robin":
         return new RoundRobinRunner(this.opts);
+      case "role-diff":
+        // Same runner as round-robin, plus the seven-role catalog prepended
+        // to each agent's prompt so identical weights produce distinct priors.
+        return new RoundRobinRunner(this.opts, { roles: DEFAULT_ROLES });
       case "blackboard":
         return new BlackboardRunner(this.opts);
       default: {
