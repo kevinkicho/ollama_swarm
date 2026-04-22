@@ -65,7 +65,7 @@ One agent turns a repo tour into a JSON array of atomic TODOs, posts them to the
 
 ---
 
-## Phase 4 — Worker claim + execute (dry-run)  **[working tree, not yet committed]**
+## Phase 4 — Worker claim + execute (dry-run)  **[committed: `1a66fb0`]**
 
 Workers spawn, claim todos, produce JSON diffs, log "would commit" — **no real file writes**. The prompt-engineering phase.
 
@@ -87,7 +87,7 @@ Workers spawn, claim todos, produce JSON diffs, log "would commit" — **no real
 
 ---
 
-## Phase 5 — Real writes with optimistic CAS  **[working tree, not yet committed]**
+## Phase 5 — Real writes with optimistic CAS  **[committed: `1e7a357`]**
 
 Workers actually modify files. Every commit is re-hashed against claim-time
 hashes and refused if anything drifted. Broken down into five independently
@@ -146,7 +146,7 @@ No code change; documented here so future readers don't wonder where the runtime
 
 ---
 
-## Phase 6 — Re-planning loop  **[working tree, partially complete]**
+## Phase 6 — Re-planning loop  **[committed: `6aa06d1`]**
 
 When a todo goes stale, the planner agent — not a dedicated replanner — is
 prompted with the stale reason + current file contents and must either
@@ -154,7 +154,7 @@ prompted with the stale reason + current file contents and must either
 [`known-limitations.md`](./known-limitations.md) §"Planner does double duty as
 the replanner" for why one agent covers both roles.
 
-### Step A — Replanner prompt + parser  **[working tree]**
+### Step A — Replanner prompt + parser
 
 - `server/src/swarm/blackboard/prompts/replanner.ts` — zod-validated union
   `{revised: {description, expectedFiles}} | {skip: true, reason}`. Same
@@ -176,7 +176,7 @@ emits `todo_replanned`. Extended `Board.test.ts` with four more cases:
 `not_found`, successive-replan count bump (1 → 2), empty-description throw,
 and full `todo_replanned` event payload shape. 92/92 tests green.
 
-### Step C — Runner wiring  **[working tree]**
+### Step C — Runner wiring
 
 - `BlackboardRunner` hooks a tee onto `Board`'s emit so every board mutation
   still flows to the broadcaster but also calls a private `onBoardEvent`.
@@ -210,7 +210,7 @@ and full `todo_replanned` event payload shape. 92/92 tests green.
 **Verified (unit):** 92/92 tests green; `tsc --noEmit` clean. End-to-end
 verification is Step D.
 
-### Step D — End-to-end smoke test  **[working tree; surfaced shutdown-race bug — see Step D-fix]**
+### Step D — End-to-end smoke test  **[surfaced shutdown-race bug — see Step D-fix]**
 
 Ran `poke-blackboard.ps1 -AgentCount 3` against
 `https://github.com/awslabs/multi-agent-orchestrator` (clone path
@@ -238,7 +238,7 @@ stranded forever. Docs noted the iteration cap as a "safety valve" from
 Phase 4 (predating the replanner), which is exactly the stale assumption the
 race exploits.
 
-### Step D-fix — Shutdown-race fix  **[working tree]**
+### Step D-fix — Shutdown-race fix
 
 Goal: workers must not exit while replan work is still in flight, because a
 pending replan can resurrect a stale todo back to `open`.
@@ -278,12 +278,12 @@ worker/planner/replanner JSON responses as raw blobs (e.g. `{"diffs":[…]}`).
 Polish task tracked separately — render as one-line summary with a "View
 JSON" toggle.
 
-## Phase 7 — Stop conditions + safety valves  **[in progress]**
+## Phase 7 — Stop conditions + safety valves  **[committed: `d2dcc85`, `0e9a990`, `c7e6934`]**
 
 Hard-cap a run so it always terminates, and capture final state on crash. See
 `blackboard-plan.md` §Phase 7 for the step breakdown.
 
-### Step A — Hard caps  **[working tree]**
+### Step A — Hard caps
 
 Pure decision function + minimal runner wiring so a pathological run can't
 run forever. Caps are intentionally generous — normal runs complete well
@@ -322,7 +322,7 @@ iteration if a real run ever bumps into the defaults.
 **Verified (unit):** 102/102 tests green (92 prior + 10 new caps tests);
 `tsc --noEmit` clean. E2E verification deferred to Step C.
 
-### Step B — Crash snapshot  **[working tree]**
+### Step B — Crash snapshot
 
 On uncaught exception in `planAndExecute`, write
 `<clone>/board-final.json` with enough state to post-mortem the run. The
@@ -355,7 +355,7 @@ Snapshot shape (top-level keys): `error { message, stack? }`, `phase`,
 **Verified (unit):** 115/115 tests green (102 prior + 13 crashSnapshot);
 `tsc --noEmit` clean. Runtime crash-path verification is Step C.
 
-### Step C — E2E verification  **[working tree]**
+### Step C — E2E verification
 
 Three scenarios run against the live dev server
 (`multi-agent-orchestrator` clone, glm-5.1:cloud), verifying the
@@ -401,7 +401,7 @@ clock span: 22 s from `runStartedAt` to `crashedAt`.
 run. Reverts confirmed: working tree clean against HEAD, 115/115 unit
 tests still green, `tsc --noEmit` clean.
 
-## Phase 8 — UI board view  **[working tree]**
+## Phase 8 — UI board view  **[committed: `76ac564`]**
 
 The Board tab lives alongside Transcript in `SwarmView`. Five columns
 (Open, Claimed, Committed, Stale, Skipped) are driven by a pure
@@ -479,7 +479,7 @@ stopReason branch, wall-clock clamp, board counts passthrough,
 git-status truncation, per-agent defensive copy, and JSON roundtrip.
 115 → 133 server tests, all green; `tsc --noEmit` clean both sides.
 
-## Phase 10 — Polish + documentation  **[working tree]**
+## Phase 10 — Polish + documentation  **[committed: `6f7a281`]**
 
 Paper cuts that were acceptable during phases 3–9 but shouldn't be there
 once blackboard is a shipped preset.
@@ -550,7 +550,7 @@ green (133 → 142 from the 9 new `deriveCloneDir` tests).
 
 ---
 
-## Phase 11a — ExitContract types + `criterionId` on `Todo` **[pending]**
+## Phase 11a — ExitContract types + `criterionId` on `Todo` **[committed: `5381fce`]**
 
 First cut at the exit-contract design — types only, no behavior change.
 The goal across Phase 11 is to replace drain-exit (stop when the board
@@ -601,7 +601,7 @@ green (142 → 144 from the 2 new `criterionId` passthrough tests).
 
 ---
 
-## Phase 11b — First-pass contract emission + UI panel  **[`1f679d4`]**
+## Phase 11b — First-pass contract emission + UI panel  **[committed: `1f679d4`]**
 
 Planner emits an `ExitContract` (mission + criteria) once at the top of
 `planAndExecute`, before it posts todos. The contract is broadcast via
@@ -684,7 +684,7 @@ both ports returned 200.
 
 ---
 
-## Phase 11c — Auditor loop + contract-satisfied termination  **[working tree]**
+## Phase 11c — Auditor loop + contract-satisfied termination  **[committed: `69a99e3`, `18588b9`]**
 
 Runs now terminate when the planner's exit contract is satisfied (every
 criterion is `"met"` or `"wont-do"`) instead of at the first board
@@ -908,7 +908,7 @@ stopDetail `all contract criteria satisfied`.
 
 ---
 
-## Phase 11c hardening — auditor file-state awareness  **[working tree]**
+## Phase 11c hardening — auditor file-state awareness  **[committed: `3570f66`, `85d0a4d`, `1cd1ee0`]**
 
 Phase 11c hardening arc (Units 1–3) fixed the *transport* problem — workers
 could now edit large files without timing out. `phase11c-medium-v6` then
@@ -1017,7 +1017,7 @@ stacking anywhere, auditor rationales cite file contents.
 
 ---
 
-## Phase 11c hardening — auditor `expectedFiles: []` fallback + seed extraction  **[working tree]**
+## Phase 11c hardening — auditor `expectedFiles: []` fallback + seed extraction  **[committed: `5983048`, `da374b8`]**
 
 Closes the blind spot Unit 5c surfaced: an unmet criterion with empty
 `expectedFiles` had no file state to feed the auditor, so honest "can't
