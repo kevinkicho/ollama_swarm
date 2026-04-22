@@ -1,12 +1,16 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  AUDITOR_FALLBACK_FILE_MAX,
+  AUDITOR_FALLBACK_RECENT_COMMITS,
   AUDITOR_SYSTEM_PROMPT,
   buildAuditorFileStates,
   buildAuditorRepairPrompt,
   buildAuditorUserPrompt,
   parseAuditorResponse,
+  resolveCriterionFiles,
   type AuditorSeed,
+  type CommittedTodoSummary,
 } from "./auditor.js";
 import {
   WORKER_FILE_HEAD_BYTES,
@@ -489,5 +493,157 @@ describe("buildAuditorFileStates — pure file-state wrapper", () => {
     assert.equal(out[".keep"].content, "");
     assert.equal(out[".keep"].originalLength, 0);
     assert.equal(out[".keep"].full, true);
+  });
+});
+
+describe("resolveCriterionFiles — Unit 5d", () => {
+  function commit(
+    todoId: string,
+    expectedFiles: string[],
+    committedAt = 0,
+    criterionId?: string,
+  ): CommittedTodoSummary {
+    return {
+      todoId,
+      description: `todo ${todoId}`,
+      expectedFiles,
+      committedAt,
+      criterionId,
+    };
+  }
+
+  it("returns the criterion's own expectedFiles verbatim when non-empty", () => {
+    const c = criterion("c1", "README has Quick Start", "unmet", ["README.md", "docs/intro.md"]);
+    const out = resolveCriterionFiles(c, [
+      commit("t1", ["unrelated.ts"], 100, "c1"),
+    ]);
+    assert.deepEqual(out, ["README.md", "docs/intro.md"]);
+  });
+
+  it("defensively copies the criterion's own files (caller can mutate safely)", () => {
+    const c = criterion("c1", "d", "unmet", ["a.ts"]);
+    const out = resolveCriterionFiles(c, []);
+    out.push("b.ts");
+    assert.deepEqual(c.expectedFiles, ["a.ts"]);
+  });
+
+  it("falls back to committed todos whose criterionId matches", () => {
+    const c = criterion("c4", "Tests exist for config", "unmet", []);
+    const out = resolveCriterionFiles(c, [
+      commit("t1", ["src/a.ts"], 100, "c4"),
+      commit("t2", ["src/b.ts"], 200, "c4"),
+      commit("t3", ["src/other.ts"], 300, "c2"),
+    ]);
+    // Files from c4-linked todos only; newest-first, but both make the cap.
+    assert.deepEqual(out.sort(), ["src/a.ts", "src/b.ts"]);
+    assert.equal(out.includes("src/other.ts"), false);
+  });
+
+  it("dedupes repeated file paths across linked todos", () => {
+    const c = criterion("c4", "d", "unmet", []);
+    const out = resolveCriterionFiles(c, [
+      commit("t1", ["src/a.ts"], 100, "c4"),
+      commit("t2", ["src/a.ts", "src/b.ts"], 200, "c4"),
+    ]);
+    assert.equal(out.length, 2);
+    assert.equal(new Set(out).size, 2);
+    assert.equal(out.includes("src/a.ts"), true);
+    assert.equal(out.includes("src/b.ts"), true);
+  });
+
+  it("caps linked fallback at AUDITOR_FALLBACK_FILE_MAX files", () => {
+    const c = criterion("c1", "d", "unmet", []);
+    // 6 distinct files, all linked to c1 — result must cap at 4.
+    const out = resolveCriterionFiles(c, [
+      commit("t1", ["f1"], 100, "c1"),
+      commit("t2", ["f2"], 200, "c1"),
+      commit("t3", ["f3"], 300, "c1"),
+      commit("t4", ["f4"], 400, "c1"),
+      commit("t5", ["f5"], 500, "c1"),
+      commit("t6", ["f6"], 600, "c1"),
+    ]);
+    assert.equal(out.length, AUDITOR_FALLBACK_FILE_MAX);
+    // Newest-first ordering means we prefer f6, f5, f4, f3 over older files.
+    assert.deepEqual(out, ["f6", "f5", "f4", "f3"]);
+  });
+
+  it("widens to recent unlinked commits when no criterion-linked commits exist", () => {
+    const c = criterion("c1", "d", "unmet", []);
+    const out = resolveCriterionFiles(c, [
+      commit("t1", ["old.ts"], 100), // unlinked
+      commit("t2", ["mid.ts"], 200), // unlinked
+      commit("t3", ["new.ts"], 300), // unlinked
+    ]);
+    // All three survive the cap (cap is 4).
+    assert.deepEqual(out.sort(), ["mid.ts", "new.ts", "old.ts"]);
+  });
+
+  it("skips commits with a DIFFERENT criterionId in the unlinked fallback", () => {
+    const c = criterion("c1", "d", "unmet", []);
+    const out = resolveCriterionFiles(c, [
+      commit("t1", ["owned.ts"], 100, "c2"), // owned by c2 — must be excluded
+      commit("t2", ["free.ts"], 200), // truly unlinked
+    ]);
+    assert.deepEqual(out, ["free.ts"]);
+    assert.equal(out.includes("owned.ts"), false);
+  });
+
+  it("limits the unlinked fallback to AUDITOR_FALLBACK_RECENT_COMMITS todos", () => {
+    const c = criterion("c1", "d", "unmet", []);
+    // 6 unlinked commits, each with one unique file — but we only look at the
+    // 4 most recent, so the 2 oldest files must not appear.
+    const out = resolveCriterionFiles(c, [
+      commit("t1", ["old1"], 100),
+      commit("t2", ["old2"], 200),
+      commit("t3", ["recent1"], 300),
+      commit("t4", ["recent2"], 400),
+      commit("t5", ["recent3"], 500),
+      commit("t6", ["recent4"], 600),
+    ]);
+    // Should be exactly the 4 most recent files, newest-first.
+    assert.deepEqual(out, ["recent4", "recent3", "recent2", "recent1"]);
+    assert.equal(AUDITOR_FALLBACK_RECENT_COMMITS, 4);
+  });
+
+  it("prefers linked commits over unlinked even when unlinked are newer", () => {
+    const c = criterion("c1", "d", "unmet", []);
+    const out = resolveCriterionFiles(c, [
+      commit("t1", ["linked.ts"], 100, "c1"), // older, but linked
+      commit("t2", ["orphan.ts"], 500), // newer, but unlinked
+    ]);
+    // Step 2 finds a linked commit, so step 3 (unlinked fallback) doesn't fire.
+    assert.deepEqual(out, ["linked.ts"]);
+    assert.equal(out.includes("orphan.ts"), false);
+  });
+
+  it("returns [] when no expectedFiles, no linked commits, no unlinked commits", () => {
+    const c = criterion("c1", "d", "unmet", []);
+    assert.deepEqual(resolveCriterionFiles(c, []), []);
+    assert.deepEqual(
+      resolveCriterionFiles(c, [commit("t1", ["x.ts"], 100, "c2")]),
+      [],
+    );
+  });
+
+  it("is deterministic for a given input order", () => {
+    const c = criterion("c1", "d", "unmet", []);
+    const committed = [
+      commit("t1", ["a.ts"], 100, "c1"),
+      commit("t2", ["b.ts"], 200, "c1"),
+    ];
+    const a = resolveCriterionFiles(c, committed);
+    const b = resolveCriterionFiles(c, committed);
+    assert.deepEqual(a, b);
+  });
+
+  it("handles missing committedAt as 0 when sorting by recency", () => {
+    const c = criterion("c1", "d", "unmet", []);
+    const out = resolveCriterionFiles(c, [
+      commit("t1", ["withTs.ts"], 500, "c1"),
+      { todoId: "t2", description: "no ts", expectedFiles: ["noTs.ts"], criterionId: "c1" },
+    ]);
+    // t1 has committedAt=500, t2 has undefined (treated as 0), so t1 wins
+    // recency. Both fit under the cap, order is newest-first.
+    assert.deepEqual(out, ["withTs.ts", "noTs.ts"]);
   });
 });

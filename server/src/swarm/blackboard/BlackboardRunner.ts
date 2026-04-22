@@ -45,6 +45,7 @@ import {
   buildAuditorRepairPrompt,
   buildAuditorUserPrompt,
   parseAuditorResponse,
+  resolveCriterionFiles,
   type AuditorResult,
   type AuditorSeed,
   type CommittedTodoSummary,
@@ -649,6 +650,7 @@ export class BlackboardRunner implements SwarmRunner {
         description: t.description,
         expectedFiles: [...t.expectedFiles],
         committedAt: t.committedAt,
+        criterionId: t.criterionId,
       }));
 
     const skipped: SkippedTodoSummary[] = todos
@@ -665,9 +667,16 @@ export class BlackboardRunner implements SwarmRunner {
       createdAt: f.createdAt,
     }));
 
+    // Unit 5d: for unmet criteria whose planner-written expectedFiles is
+    // empty, infer candidate files from committed todos linked to the same
+    // criterion (or from recent unlinked commits as a weak fallback). Surface
+    // the resolved list on the seed's unmetCriteria entry so the auditor's
+    // prompt shows the files alongside the criterion it's trying to close —
+    // the underlying contract is NOT mutated, only the view handed to the
+    // auditor.
     const unmetCriteria = contract.criteria
       .filter((c) => c.status === "unmet")
-      .map((c) => ({ ...c, expectedFiles: [...c.expectedFiles] }));
+      .map((c) => ({ ...c, expectedFiles: resolveCriterionFiles(c, committed) }));
 
     // Gather the union of expectedFiles across unmet criteria so the auditor
     // can decide from current file state rather than guess from commit history.

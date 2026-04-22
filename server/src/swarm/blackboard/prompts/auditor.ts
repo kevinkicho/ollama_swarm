@@ -225,6 +225,75 @@ export interface CommittedTodoSummary {
   description: string;
   expectedFiles: string[];
   committedAt?: number;
+  // Unit 5d: back-link from committed todo → criterion, so the auditor can
+  // fall back to these files when a criterion has no expectedFiles of its own.
+  // Optional because legacy todos (before Phase 11a) and discussion-only todos
+  // never had one.
+  criterionId?: string;
+}
+
+// Unit 5d: per-criterion cap on files included via fallback (not via
+// criterion.expectedFiles). Keeps a criterion with no expectedFiles from
+// dragging in an unbounded history's worth of paths.
+export const AUDITOR_FALLBACK_FILE_MAX = 4;
+
+// Unit 5d: when a criterion has neither its own expectedFiles nor any
+// criterion-linked committed todos, widen to this many of the most recent
+// unlinked committed todos. "Unlinked" because a todo with a different
+// criterionId is already covered by that other criterion's resolution.
+export const AUDITOR_FALLBACK_RECENT_COMMITS = 4;
+
+/**
+ * Decide which on-disk files the auditor should read for a given criterion.
+ *
+ *   1. Criterion has its own expectedFiles → return them verbatim (happy path).
+ *   2. Otherwise, union the expectedFiles of committed todos whose
+ *      criterionId === criterion.id, newest first, capped at
+ *      AUDITOR_FALLBACK_FILE_MAX.
+ *   3. Otherwise, union the expectedFiles of the most recent
+ *      AUDITOR_FALLBACK_RECENT_COMMITS committed todos with NO criterionId
+ *      — those are the likeliest candidates for an unwired criterion.
+ *      Same cap applies.
+ *
+ * Pure function. Deterministic when `committed` is deterministically ordered.
+ */
+export function resolveCriterionFiles(
+  criterion: ExitCriterion,
+  committed: CommittedTodoSummary[],
+): string[] {
+  if (criterion.expectedFiles.length > 0) {
+    return [...criterion.expectedFiles];
+  }
+
+  const byRecencyDesc = (a: CommittedTodoSummary, b: CommittedTodoSummary) =>
+    (b.committedAt ?? 0) - (a.committedAt ?? 0);
+
+  const linked = committed
+    .filter((t) => t.criterionId === criterion.id)
+    .slice()
+    .sort(byRecencyDesc);
+  if (linked.length > 0) {
+    return dedupeCapped(linked.flatMap((t) => t.expectedFiles), AUDITOR_FALLBACK_FILE_MAX);
+  }
+
+  const recentOrphans = committed
+    .filter((t) => !t.criterionId)
+    .slice()
+    .sort(byRecencyDesc)
+    .slice(0, AUDITOR_FALLBACK_RECENT_COMMITS);
+  return dedupeCapped(recentOrphans.flatMap((t) => t.expectedFiles), AUDITOR_FALLBACK_FILE_MAX);
+}
+
+function dedupeCapped(files: string[], max: number): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const f of files) {
+    if (seen.has(f)) continue;
+    seen.add(f);
+    out.push(f);
+    if (out.length >= max) break;
+  }
+  return out;
 }
 
 export interface SkippedTodoSummary {
