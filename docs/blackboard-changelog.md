@@ -1504,6 +1504,99 @@ prevent).
 
 ---
 
+## Unit 11 — Blackboard honors `rounds` + auditor stops surrendering on first try  **[committed: pending]**
+
+User-reported bug, logged here because it's a real behavior change:
+the setup form's **Rounds** slider was cosmetic for blackboard mode.
+A run with `rounds: 6` produced the same single plan-audit cycle as
+`rounds: 1`. Worse, on the 2026-04-22 MatSci Explorer run the auditor
+short-circuited the loop by stamping four of six criteria as
+`wont-do` ("No test files exist and the repo file list does not
+include…") on invocation 1 — so even if the loop *could* have run
+longer, it exited after 1 cycle because `wont-do` counts as resolved.
+Two bugs stacked: the knob was dead AND the auditor surrendered on
+first sight of missing files.
+
+**Change 1: `rounds` now drives the auditor invocation cap in blackboard.**
+
+- `server/src/swarm/blackboard/BlackboardRunner.ts` — the hardcoded
+  `AUDITOR_MAX_INVOCATIONS = 5` constant is gone. Its four usage sites
+  (cap check, stop detail, progress label, auditor seed's
+  `maxInvocations` field) now read from a private `maxAuditInvocations`
+  getter that returns `this.active?.rounds ?? 5`. The zod schema on the
+  start endpoint already validated `rounds` to `[1, 10]`, so the cap is
+  always sensibly bounded.
+- Stop-detail message, when the cap trips, now suggests raising
+  "Rounds" on the setup form so users know the knob exists and what it
+  controls.
+- `README.md` — item 5 ("Rounds") rewritten. The old sentence
+  *"Ignored by the blackboard preset, which terminates on hard caps
+  instead"* was accurate pre-Unit-11; post-Unit-11 blackboard uses
+  `rounds` as the plan→work→audit cycle cap (hard caps still apply on
+  top).
+
+**Change 2: auditor prompt forbids `wont-do` when no work has been attempted.**
+
+- `server/src/swarm/blackboard/prompts/auditor.ts` — decision-process
+  steps 4 and 5 rewritten and HARD RULE 7 rewritten. The tightening:
+  - Step 4 now explicitly says *"Workers CAN create new files from
+    nothing — 'the file does not exist yet' is NOT a reason to verdict
+    `wont-do`. Emit a todo that creates the file."*
+  - Step 5 redefines `wont-do` as requiring **both** (a) the criterion
+    inherently needs shell execution per Rule 8, AND (b) further file
+    edits are unlikely to help. Missing work is now unambiguously
+    `unmet`, not `wont-do`.
+  - Rule 7 used to say *"Prefer wont-do with a clear rationale over
+    infinite unmet loops."* That was fine in theory but in practice
+    licensed the MatSci failure mode. Rewrite: *"A criterion with
+    ZERO attempted todos (no `committed`, no `skipped`) is NEVER
+    `wont-do` unless Rule 8 applies. First-invocation hesitance is
+    the problem this rule exists to prevent."* Rule 8 (shell-execution
+    → wont-do) is left intact — that's the legitimate use case.
+- `server/src/swarm/blackboard/prompts/auditor.test.ts` — new test
+  locking in the "zero attempted todos → never wont-do" language and
+  the "workers CAN create new files" affordance. If a future refactor
+  weakens either, the test fails.
+
+**Why fix Change 1 and Change 2 together.** Fixing only the cap is
+useless — more allowed cycles don't help if the auditor still exits
+on invocation 1 by calling everything `wont-do`. Fixing only the
+prompt tightens auditor behavior but leaves `rounds` dead. Both
+changes together give the user a knob that actually drives depth:
+raise `rounds` → more cycles available → auditor now willing to ask
+the planner to try → planner emits todos for previously-surrendered
+criteria → workers attempt them → next audit judges the result.
+
+**Expected post-Unit-11 behavior on the MatSci-style repo.** Planner
+writes 6 criteria (including three "unit tests for X" criteria).
+Workers do the 2 easy ones (gitignore, requirements pinning). Auditor
+invocation 1: the three test-file criteria are now `unmet` (not
+`wont-do`) because no todo has ever attempted them — auditor emits a
+todo for each. Cycle 2: workers attempt to write test files. Cycle 3:
+auditor judges the attempts. If test files exist and look plausible,
+`met`; if workers genuinely couldn't produce content (e.g., target
+module is too opaque), `wont-do` becomes legitimate because attempts
+exist. The `rounds` budget caps how many such cycles are permitted.
+
+**What this does NOT change.**
+- Hard caps (20 min wall-clock, 20 commits, 30 todos) are unchanged.
+  A lazy planner on a tight deadline still terminates.
+- Workers' loop, claim/commit mechanics, CAS, stale-replan — all
+  untouched.
+- The legitimate `wont-do` pathway for shell-execution criteria
+  ("tests must pass via pytest") is preserved via Rule 8.
+- Round-robin / role-diff / council: `rounds` still means "passes
+  through the agents," unchanged.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+368/368 server tests green (367 before + 1 Unit 11 prompt-tightening
+test). E2E validation: re-run the MatSci Explorer scenario with
+`rounds: 6` and watch for 3+ auditor invocations instead of 1, with
+test-file criteria cycling through `unmet → committed → met` rather
+than flipping to `wont-do` on first sight.
+
+---
+
 ## Cross-phase notes
 
 - **Event log.** A per-boot append-only JSONL log is written at `logs/current.jsonl` via `server/src/ws/eventLogger.ts` (landed alongside Phase 4 work, currently uncommitted). Every `SwarmEvent` the WS broadcasts gets a line, making post-hoc verification of runs possible even after the browser tab is closed.

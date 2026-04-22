@@ -83,12 +83,12 @@ const WORKER_COOLDOWN_MS = 5_000;
 const MAX_REPLAN_ATTEMPTS = 3;
 // Fallback sweep in case the event path missed a stale (e.g. replanOne threw).
 const REPLAN_FALLBACK_TICK_MS = 20_000;
-// Phase 11c: backstop on the drain-audit-repeat loop. Without this, a confused
-// auditor could keep proposing todos that workers produce empty diffs for,
-// cycling forever. After this many invocations we exit with stopReason
-// "completed" and a completionDetail noting the cap — the contract panel
-// shows whatever criteria remain unmet so the user can see what was left.
-const AUDITOR_MAX_INVOCATIONS = 5;
+// Backstop on the drain-audit-repeat loop. Without this, a confused auditor
+// could keep proposing todos that workers produce empty diffs for, cycling
+// forever. The cap is now `cfg.rounds` (the setup-form "Rounds" value) —
+// Unit 11 flipped this from a hardcoded 5 so users can turn the knob.
+// `cfg.rounds` is validated to [1, 10] by the Zod schema on the start
+// endpoint. See `maxAuditInvocations` getter below.
 // No "idle silence" cap. OpenCode's SSE /event stream is observed to stay
 // completely silent across session.prompt's entire duration for our setup, so
 // there is no reliable activity signal to gate on. We rely solely on the
@@ -141,9 +141,10 @@ export class BlackboardRunner implements SwarmRunner {
   // Phase 10 drain-exit termination (no auditor is invoked).
   private contract?: ExitContract;
   // Phase 11c: drain-audit-repeat bookkeeping. auditInvocations is the
-  // backstop counter for AUDITOR_MAX_INVOCATIONS. completionDetail, when
-  // set, propagates into the run summary's stopDetail on the "completed"
-  // branch to explain WHY a contract-driven run chose to stop.
+  // backstop counter compared against maxAuditInvocations (Unit 11: now
+  // derived from cfg.rounds). completionDetail, when set, propagates into
+  // the run summary's stopDetail on the "completed" branch to explain WHY
+  // a contract-driven run chose to stop.
   private auditInvocations = 0;
   private completionDetail?: string;
   // Stashed by writeRunSummary so status() can hand it to the WS catch-up
@@ -310,7 +311,7 @@ export class BlackboardRunner implements SwarmRunner {
           allCriteriaResolved: this.allCriteriaResolved(),
           terminationReason: this.terminationReason,
           auditInvocations: this.auditInvocations,
-          maxInvocations: AUDITOR_MAX_INVOCATIONS,
+          maxInvocations: this.maxAuditInvocations,
           userStopped: this.stopping && !this.terminationReason,
         })
       ) {
@@ -617,10 +618,11 @@ export class BlackboardRunner implements SwarmRunner {
         return;
       }
 
-      if (this.auditInvocations >= AUDITOR_MAX_INVOCATIONS) {
-        this.completionDetail = `auditor invocation cap reached (${AUDITOR_MAX_INVOCATIONS})`;
+      const cap = this.maxAuditInvocations;
+      if (this.auditInvocations >= cap) {
+        this.completionDetail = `auditor invocation cap reached (${cap})`;
         this.appendSystem(
-          `Auditor invocation cap reached (${AUDITOR_MAX_INVOCATIONS}). Stopping with unresolved criteria.`,
+          `Auditor invocation cap reached (${cap}). Stopping with unresolved criteria. Raise "Rounds" on the setup form if you want more plan-audit cycles.`,
         );
         return;
       }
@@ -646,6 +648,15 @@ export class BlackboardRunner implements SwarmRunner {
     return this.contract.criteria.every((c) => c.status !== "unmet");
   }
 
+  // Unit 11: the drain-audit-repeat loop's backstop. Reads from cfg.rounds so
+  // the user's setup-form "Rounds" slider actually has teeth in blackboard
+  // mode (previously ignored — see README notes). The fallback of 5 matches
+  // the pre-Unit-11 hardcoded value and only triggers if this.active is
+  // missing, which shouldn't happen once start() has run.
+  private get maxAuditInvocations(): number {
+    return this.active?.rounds ?? 5;
+  }
+
   private async runAuditor(
     planner: Agent,
     opts: { allowWhenStopping?: boolean } = {},
@@ -654,7 +665,7 @@ export class BlackboardRunner implements SwarmRunner {
     this.auditInvocations++;
     const label = opts.allowWhenStopping ? "final audit" : "auditor invocation";
     this.appendSystem(
-      `${label} ${this.auditInvocations}/${AUDITOR_MAX_INVOCATIONS}.`,
+      `${label} ${this.auditInvocations}/${this.maxAuditInvocations}.`,
     );
 
     const seed = await this.buildAuditorSeed();
@@ -706,7 +717,7 @@ export class BlackboardRunner implements SwarmRunner {
       findings: this.board.listFindings(),
       readFiles: (paths) => this.readExpectedFiles(paths),
       auditInvocation: this.auditInvocations,
-      maxInvocations: AUDITOR_MAX_INVOCATIONS,
+      maxInvocations: this.maxAuditInvocations,
     });
   }
 

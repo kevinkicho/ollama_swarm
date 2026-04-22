@@ -259,6 +259,19 @@ describe("AUDITOR prompts", () => {
     assert.match(AUDITOR_SYSTEM_PROMPT, /issue `wont-do`/);
   });
 
+  it("system prompt forbids wont-do on first-attempt (Unit 11)", () => {
+    // The MatSci Explorer run (2026-04-22) exposed a short-circuit: the
+    // auditor verdicted 4 of 6 criteria as `wont-do` on invocation 1 with
+    // rationale "No test files exist" — even though workers can create new
+    // files. The tightened prompt requires ZERO-attempted criteria to go
+    // unmet (not wont-do), forcing the planner to try rather than surrender.
+    assert.match(
+      AUDITOR_SYSTEM_PROMPT,
+      /zero attempted todos[\s\S]*never.*wont-do/i,
+    );
+    assert.match(AUDITOR_SYSTEM_PROMPT, /Workers CAN create new files/i);
+  });
+
   it("user prompt lists unmet criteria and resolved criteria separately", () => {
     const p = buildAuditorUserPrompt(
       seed({
