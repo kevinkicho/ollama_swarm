@@ -1504,7 +1504,7 @@ prevent).
 
 ---
 
-## Unit 11 — Blackboard honors `rounds` + auditor stops surrendering on first try  **[committed: pending]**
+## Unit 11 — Blackboard honors `rounds` + auditor stops surrendering on first try  **[committed: `ed06ff0`]**
 
 User-reported bug, logged here because it's a real behavior change:
 the setup form's **Rounds** slider was cosmetic for blackboard mode.
