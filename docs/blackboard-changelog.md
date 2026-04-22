@@ -1898,7 +1898,7 @@ mappers by index.
 
 ---
 
-## Unit 15 — Stigmergy preset (standalone)  **[committed: pending]**
+## Unit 15 — Stigmergy preset (standalone)  **[committed: `da4527b`]**
 
 Sixth preset of this session, completing the user's list
 (orchestrator-worker, debate-judge, map-reduce, stigmergy). No
