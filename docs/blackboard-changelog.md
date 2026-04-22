@@ -908,6 +908,115 @@ stopDetail `all contract criteria satisfied`.
 
 ---
 
+## Phase 11c hardening — auditor file-state awareness  **[working tree]**
+
+Phase 11c hardening arc (Units 1–3) fixed the *transport* problem — workers
+could now edit large files without timing out. `phase11c-medium-v6` then
+surfaced a *reasoning* problem: the auditor kept re-spawning the same unmet
+criterion after every audit cycle because it decided verdicts from commit
+history alone, with no view of the current files on disk. Multiple agents
+each committed a hunk against the "add env-var table" criterion and their
+blocks stacked into four consecutive `### Environment Variables` tables
+under one `## Configuration` heading. The v6 auditor saw four commits of
+"add env-var table" work and (correctly, given the information it had) kept
+asking for another pass.
+
+This arc teaches the auditor to read the current file state before
+deciding, and to recognize consolidation-vs-re-add when it sees duplicate
+blocks.
+
+**Unit 5a — AuditorSeed plumbing.** `server/src/swarm/blackboard/prompts/auditor.ts`:
+
+- New `AuditorFileStateEntry` interface — `{exists, content, full, originalLength}`.
+- New pure `buildAuditorFileStates(fileContents)` — runs each entry through
+  `windowFileForWorker` (same 8KB/head+tail logic as Unit 3). Missing files
+  become `{exists:false, content:"", full:true, originalLength:0}`;
+  present files preserve the windowing output verbatim.
+- `AuditorSeed` gains `currentFileState: Record<string, AuditorFileStateEntry>`.
+- `auditor.test.ts` +7 tests covering empty, null, small-file passthrough,
+  large-file windowing, mixed batches, determinism, and empty-string.
+
+`BlackboardRunner.buildAuditorSeed` became async so it can call the
+existing `readExpectedFiles` helper on the union of `expectedFiles` across
+all `"unmet"` criteria. Callsite at `runAuditor` gained an `await`.
+
+**Unit 5b — Auditor prompt rewrite.** Same file; the system prompt now
+opens with a DECISION PROCESS block:
+
+1. **Read each file's current state first.** The `currentFileState` section
+   shows exactly what is on disk right now.
+2. **Judge each criterion against that state, not against the commit log.**
+3. **If a criterion appears satisfied but stacked/duplicated** (e.g. the
+   same table appears twice), emit `"unmet"` with a CONSOLIDATE or REPAIR
+   todo that removes the duplicate — do NOT re-emit a todo that would
+   add a third copy.
+4. **For files shown as WINDOWED (head + marker + tail)**, treat the
+   middle as unseen; rely on the head/tail for structural decisions and
+   only claim `"met"` if the evidence is in the visible window.
+
+`buildAuditorUserPrompt` grew a new section between unmet criteria and
+resolved criteria:
+
+```
+Current file state:
+- path/to/file.md (does not exist on disk)
+- README.md (49231 chars, WINDOWED — head + marker + tail)
+- package.json (783 chars, full)
+  <file contents>
+```
+
+Labels are sorted deterministically for diff-stability of the prompt text.
+
+`auditor.test.ts` +8 tests (3 system prompt: file-state primacy, duplicate
+recognition, windowing; 5 user prompt: section presence, missing-file
+label, WINDOWED label+body, sorted order, empty-state graceful fallback).
+
+**Unit 5c — E2E validation `phase11c-medium-v7`.** New mission template
+(config validation + supervisor crash recovery + tests), same repo. The
+machine slept partway through, so the wall-clock cap fired on wake —
+treat the `31M ms` value in `summary.json` as sleep-distorted. Productive
+execution was ~13 minutes before sleep, matching what we saw live.
+
+| | v6 | v7 |
+|---|---|---|
+| stopReason | `completed` | `cap:wall-clock` (sleep-distorted) |
+| productive wall | 14.5 min | ~13 min (machine slept after) |
+| commits | 13 | 5 |
+| totalTodos | 15 | 8 |
+| skippedTodos | 2 | 1 (intelligent skip, see below) |
+| criteria met | 2 / 5 | 4 / 6 |
+| criteria wont-do | 3 | 0 |
+| criteria unmet at end | 0 | 2 (test-file criteria, see gap) |
+
+**The Unit 5b signal landed.** v7's auditor rationales cite specific file
+contents — "src/config.ts has validateConfig checking REQUIRED_FIELDS",
+"KNOWN_LIMITATIONS.md §40 documents attachWorkerExitHandler in
+supervisor.ts" — where v6's rationales were generic ("the required
+change is present in the committed todos"). No stacked duplicate blocks
+appeared anywhere in the v7 output. The clearest positive: `c2` (LLM
+error handling) was marked `"met"` with rationale "brain.ts already
+implements exponential-backoff retry on LLM failure, a 5-failure circuit
+breaker, escalating pause delays, and fallback to directOllamaCall — the
+replanner skipped the matching TODO for this reason" — file-state
+awareness recognizing that the functionality already existed.
+
+**Gap surfaced — `expectedFiles: []` blind spot.** Two criteria (`c4`,
+`c5` — test-file existence) had empty `expectedFiles` arrays on the
+contract, so `readExpectedFiles([])` returned `{}` and
+`currentFileState` was empty. The auditor honestly reported "file
+content was not shown; need to verify" and left both `"unmet"` — even
+though both test files (`src/__tests__/config.test.ts` 7.8KB and
+`src/__tests__/supervisor.test.ts` 8.9KB) were committed by the same
+run. Honest behavior, but leaves easy wins on the table. Tracked as
+Unit 5d.
+
+**Verified.** `tsc --noEmit` clean; 289/289 server tests green (274 +
+15 new from Units 5a/5b). v7 live behavior matched the test suite:
+intelligent replanner skip fired once at t+~14m, no duplicate-block
+stacking anywhere, auditor rationales cite file contents.
+
+---
+
 ## Cross-phase notes
 
 - **Event log.** A per-boot append-only JSONL log is written at `logs/current.jsonl` via `server/src/ws/eventLogger.ts` (landed alongside Phase 4 work, currently uncommitted). Every `SwarmEvent` the WS broadcasts gets a line, making post-hoc verification of runs possible even after the browser tab is closed.
