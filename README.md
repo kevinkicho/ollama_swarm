@@ -2,10 +2,11 @@
 
 A local web app that spawns a **swarm of [OpenCode](https://opencode.ai) agents** — each backed by an [Ollama](https://ollama.com) model such as `glm-5.1:cloud` — to clone a GitHub repository and collaboratively figure out what the project is, what's working, what's missing, and what to build next.
 
-You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. Two patterns ship:
+You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. Three patterns ship:
 
 - **Round-robin transcript** — N identical agents take turns on a shared transcript; every agent sees every other agent's reply and responds. Discussion-only, no file edits.
 - **Blackboard (optimistic + small units)** — one planner posts atomic todos to a shared board; N−1 workers claim and commit in parallel, with CAS on file hashes catching stale plans. Agents **actually modify the clone**.
+- **Role differentiation** — same round-robin loop but each agent gets a distinct role (Architect, Tester, Security reviewer, Performance critic, Docs reader, Dependency auditor, Devil's advocate). Same weights, different system prompts; transcript labels each line with the role so @mentions stay legible. Discussion-only.
 
 A live transcript streams into the browser as it's generated — you see each agent type token-by-token, can inject your own message into the conversation at any time, and stop the whole thing with one click. The blackboard preset adds a **Board** tab showing todos in five columns (Open / Claimed / Committed / Stale / Skipped), plus a run summary card when the run terminates.
 
@@ -82,7 +83,7 @@ Open the web URL shown (e.g. `http://localhost:56609`), fill in the form, hit **
 
 1. **GitHub URL** — a public repo URL, or a private one if `GITHUB_TOKEN` is set in `.env` (the token is spliced into the clone URL).
 2. **Parent folder** — an absolute path to a _parent_ directory. The server derives the repo name from the URL and clones into `<parentFolder>/<repo-name>` (e.g. parent `C:\...\runs` + URL ending in `/is-odd` → clone at `C:\...\runs\is-odd`). Parent is created if missing; the subfolder must be empty, absent, or already a matching git clone. The form shows a live preview of the resolved clone path under the field.
-3. **Pattern** — `Round-robin transcript` (discussion-only) or `Blackboard (optimistic + small units)` (planner/worker split, CAS, file edits). Selecting blackboard reveals a collapsible help block explaining CAS and stale-replan; other patterns in the dropdown are marked _coming soon_ and disable **Start**.
+3. **Pattern** — one of `Round-robin transcript` (discussion-only), `Blackboard (optimistic + small units)` (planner/worker split, CAS, file edits), or `Role differentiation` (round-robin with per-agent role prompts). Selecting blackboard reveals a collapsible help block explaining CAS and stale-replan; remaining patterns in the dropdown are marked _coming soon_ and disable **Start**.
 4. **Agents** — how many concurrent `opencode serve` workers to spawn (2–8). On blackboard, agent 0 is the planner and the remaining N−1 are workers.
 5. **Rounds** — how many full round-robin passes (1–10). Ignored by the blackboard preset, which terminates on hard caps instead.
 6. **Model** — any model string registered in Ollama and declared in the synthesized `opencode.json` (defaults to `glm-5.1:cloud`).
@@ -309,7 +310,7 @@ ollama_swarm/
 - **In-memory transcript.** Restarting the server loses history. The blackboard preset also writes `summary.json` and (on crash) `board-final.json` to the clone root, so terminal state survives.
 - **Localhost assumed.** No authentication on the web app itself.
 - **Round-robin has no consensus detection.** The loop always runs all configured rounds. Blackboard terminates on hard caps, user stop, or an empty board after planning.
-- **Other patterns in the dropdown are `coming soon`.** Role differentiation, map-reduce, council, orchestrator-worker, debate+judge, and stigmergy all disable the Start button for now.
+- **Other patterns in the dropdown are `coming soon`.** Map-reduce, council, orchestrator-worker, debate+judge, and stigmergy all disable the Start button for now.
 
 ## Troubleshooting
 
