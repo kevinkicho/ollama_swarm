@@ -41,16 +41,12 @@ import {
 } from "./prompts/firstPassContract.js";
 import {
   AUDITOR_SYSTEM_PROMPT,
-  buildAuditorFileStates,
   buildAuditorRepairPrompt,
+  buildAuditorSeedCore,
   buildAuditorUserPrompt,
   parseAuditorResponse,
-  resolveCriterionFiles,
   type AuditorResult,
   type AuditorSeed,
-  type CommittedTodoSummary,
-  type FindingSummary,
-  type SkippedTodoSummary,
 } from "./prompts/auditor.js";
 import {
   buildReplannerRepairPrompt,
@@ -639,69 +635,14 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   private async buildAuditorSeed(): Promise<AuditorSeed> {
-    const contract = this.contract!;
-    const todos = this.board.listTodos();
-
-    const committed: CommittedTodoSummary[] = todos
-      .filter((t) => t.status === "committed")
-      .sort((a, b) => (a.committedAt ?? 0) - (b.committedAt ?? 0))
-      .map((t) => ({
-        todoId: t.id,
-        description: t.description,
-        expectedFiles: [...t.expectedFiles],
-        committedAt: t.committedAt,
-        criterionId: t.criterionId,
-      }));
-
-    const skipped: SkippedTodoSummary[] = todos
-      .filter((t) => t.status === "skipped")
-      .map((t) => ({
-        todoId: t.id,
-        description: t.description,
-        skippedReason: t.skippedReason,
-      }));
-
-    const findings: FindingSummary[] = this.board.listFindings().map((f) => ({
-      agentId: f.agentId,
-      text: f.text,
-      createdAt: f.createdAt,
-    }));
-
-    // Unit 5d: for unmet criteria whose planner-written expectedFiles is
-    // empty, infer candidate files from committed todos linked to the same
-    // criterion (or from recent unlinked commits as a weak fallback). Surface
-    // the resolved list on the seed's unmetCriteria entry so the auditor's
-    // prompt shows the files alongside the criterion it's trying to close —
-    // the underlying contract is NOT mutated, only the view handed to the
-    // auditor.
-    const unmetCriteria = contract.criteria
-      .filter((c) => c.status === "unmet")
-      .map((c) => ({ ...c, expectedFiles: resolveCriterionFiles(c, committed) }));
-
-    // Gather the union of expectedFiles across unmet criteria so the auditor
-    // can decide from current file state rather than guess from commit history.
-    // Deduped via Set; order doesn't matter (prompt-building will key by path).
-    const filesToRead = Array.from(
-      new Set(unmetCriteria.flatMap((c) => c.expectedFiles)),
-    );
-    const fileContents = filesToRead.length > 0
-      ? await this.readExpectedFiles(filesToRead)
-      : {};
-    const currentFileState = buildAuditorFileStates(fileContents);
-
-    return {
-      missionStatement: contract.missionStatement,
-      unmetCriteria,
-      resolvedCriteria: contract.criteria
-        .filter((c) => c.status !== "unmet")
-        .map((c) => ({ ...c, expectedFiles: [...c.expectedFiles] })),
-      committed,
-      skipped,
-      findings,
-      currentFileState,
+    return buildAuditorSeedCore({
+      contract: this.contract!,
+      todos: this.board.listTodos(),
+      findings: this.board.listFindings(),
+      readFiles: (paths) => this.readExpectedFiles(paths),
       auditInvocation: this.auditInvocations,
       maxInvocations: AUDITOR_MAX_INVOCATIONS,
-    };
+    });
   }
 
   private applyAuditorResult(result: AuditorResult, planner: Agent): void {

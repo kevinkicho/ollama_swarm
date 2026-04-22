@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ExitCriterion } from "../types.js";
+import type { ExitContract, ExitCriterion, Finding, Todo } from "../types.js";
 import { windowFileForWorker } from "../windowFile.js";
 
 // ---------------------------------------------------------------------------
@@ -357,6 +357,82 @@ export interface AuditorSeed {
   currentFileState: Record<string, AuditorFileStateEntry>;
   auditInvocation: number;
   maxInvocations: number;
+}
+
+// ---------------------------------------------------------------------------
+// Unit 5e: pure seed composition. Extracted from BlackboardRunner so the full
+// wiring — contract → committed summaries → resolveCriterionFiles →
+// readFiles → buildAuditorFileStates → seed — is testable without spinning up
+// a runner. The runner method becomes a thin wrapper around this.
+// ---------------------------------------------------------------------------
+
+export interface BuildAuditorSeedInput {
+  contract: ExitContract;
+  todos: Todo[];
+  findings: Finding[];
+  readFiles: (paths: string[]) => Promise<Record<string, string | null>>;
+  auditInvocation: number;
+  maxInvocations: number;
+}
+
+export async function buildAuditorSeedCore(
+  input: BuildAuditorSeedInput,
+): Promise<AuditorSeed> {
+  const { contract, todos, findings, readFiles, auditInvocation, maxInvocations } = input;
+
+  const committed: CommittedTodoSummary[] = todos
+    .filter((t) => t.status === "committed")
+    .sort((a, b) => (a.committedAt ?? 0) - (b.committedAt ?? 0))
+    .map((t) => ({
+      todoId: t.id,
+      description: t.description,
+      expectedFiles: [...t.expectedFiles],
+      committedAt: t.committedAt,
+      criterionId: t.criterionId,
+    }));
+
+  const skipped: SkippedTodoSummary[] = todos
+    .filter((t) => t.status === "skipped")
+    .map((t) => ({
+      todoId: t.id,
+      description: t.description,
+      skippedReason: t.skippedReason,
+    }));
+
+  const findingSummaries: FindingSummary[] = findings.map((f) => ({
+    agentId: f.agentId,
+    text: f.text,
+    createdAt: f.createdAt,
+  }));
+
+  // Unit 5d: for unmet criteria whose planner-written expectedFiles is empty,
+  // infer candidate files from committed todos linked to the same criterion
+  // (or from recent unlinked commits as a weak fallback). The resolved list
+  // replaces expectedFiles ONLY on the seed's unmet view — the underlying
+  // contract is untouched.
+  const unmetCriteria = contract.criteria
+    .filter((c) => c.status === "unmet")
+    .map((c) => ({ ...c, expectedFiles: resolveCriterionFiles(c, committed) }));
+
+  const filesToRead = Array.from(
+    new Set(unmetCriteria.flatMap((c) => c.expectedFiles)),
+  );
+  const fileContents = filesToRead.length > 0 ? await readFiles(filesToRead) : {};
+  const currentFileState = buildAuditorFileStates(fileContents);
+
+  return {
+    missionStatement: contract.missionStatement,
+    unmetCriteria,
+    resolvedCriteria: contract.criteria
+      .filter((c) => c.status !== "unmet")
+      .map((c) => ({ ...c, expectedFiles: [...c.expectedFiles] })),
+    committed,
+    skipped,
+    findings: findingSummaries,
+    currentFileState,
+    auditInvocation,
+    maxInvocations,
+  };
 }
 
 const MAX_CONTEXT_ITEMS = 40;

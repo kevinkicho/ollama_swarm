@@ -6,6 +6,7 @@ import {
   AUDITOR_SYSTEM_PROMPT,
   buildAuditorFileStates,
   buildAuditorRepairPrompt,
+  buildAuditorSeedCore,
   buildAuditorUserPrompt,
   parseAuditorResponse,
   resolveCriterionFiles,
@@ -17,7 +18,7 @@ import {
   WORKER_FILE_TAIL_BYTES,
   WORKER_FILE_WINDOW_THRESHOLD,
 } from "../windowFile.js";
-import type { ExitCriterion } from "../types.js";
+import type { ExitContract, ExitCriterion, Finding, Todo } from "../types.js";
 
 function criterion(
   id: string,
@@ -645,5 +646,321 @@ describe("resolveCriterionFiles — Unit 5d", () => {
     // t1 has committedAt=500, t2 has undefined (treated as 0), so t1 wins
     // recency. Both fit under the cap, order is newest-first.
     assert.deepEqual(out, ["withTs.ts", "noTs.ts"]);
+  });
+});
+
+describe("buildAuditorSeedCore — Unit 5e", () => {
+  // Helpers scoped to this block so the synthetic fixtures look like the real
+  // Todo/Finding shapes without dragging in builder logic from elsewhere.
+  function todo(overrides: Partial<Todo> & Pick<Todo, "id" | "status">): Todo {
+    return {
+      description: `todo ${overrides.id}`,
+      expectedFiles: [],
+      createdBy: "planner",
+      createdAt: 0,
+      replanCount: 0,
+      ...overrides,
+    };
+  }
+  function contract(criteria: ExitCriterion[]): ExitContract {
+    return { missionStatement: "Ship the thing.", criteria };
+  }
+  function finding(agentId: string, text: string, createdAt = 0): Finding {
+    return { id: `f-${agentId}-${createdAt}`, agentId, text, createdAt };
+  }
+
+  it("reads the criterion's own expectedFiles via readFiles and windows them", async () => {
+    // Happy path: criterion has its own files, so resolveCriterionFiles is a
+    // pass-through and readFiles is called exactly with those paths.
+    const readCalls: string[][] = [];
+    const seedOut = await buildAuditorSeedCore({
+      contract: contract([criterion("c1", "README has Quick Start", "unmet", ["README.md"])]),
+      todos: [],
+      findings: [],
+      readFiles: async (paths) => {
+        readCalls.push([...paths]);
+        return { "README.md": "# Quick Start\n\nRun it." };
+      },
+      auditInvocation: 1,
+      maxInvocations: 5,
+    });
+    assert.equal(readCalls.length, 1);
+    assert.deepEqual(readCalls[0], ["README.md"]);
+    assert.equal(seedOut.currentFileState["README.md"]?.exists, true);
+    assert.match(seedOut.currentFileState["README.md"]!.content, /Quick Start/);
+    assert.equal(seedOut.unmetCriteria.length, 1);
+    assert.deepEqual(seedOut.unmetCriteria[0]!.expectedFiles, ["README.md"]);
+  });
+
+  it("applies Unit 5d fallback: empty expectedFiles + linked committed todo → file in currentFileState (v7 c4/c5 scenario)", async () => {
+    // This is the critical regression guard: the v7 run had c4/c5 criteria
+    // with empty expectedFiles. Without Unit 5d, readFiles saw an empty list
+    // and the auditor had zero file state to reason about. With Unit 5d, the
+    // committed todo's files are inferred via criterionId linkage and passed
+    // through readFiles, so the auditor sees the actual test-file contents.
+    const readCalls: string[][] = [];
+    const seedOut = await buildAuditorSeedCore({
+      contract: contract([
+        criterion("c4", "Unit tests exist for brain logic", "unmet", []),
+      ]),
+      todos: [
+        todo({
+          id: "t1",
+          status: "committed",
+          expectedFiles: ["src/brain/brain.test.ts"],
+          committedAt: 1_000,
+          criterionId: "c4",
+        }),
+      ],
+      findings: [],
+      readFiles: async (paths) => {
+        readCalls.push([...paths]);
+        return { "src/brain/brain.test.ts": "import { test } from 'node:test';\n// real test\n" };
+      },
+      auditInvocation: 1,
+      maxInvocations: 5,
+    });
+    assert.equal(readCalls.length, 1);
+    assert.deepEqual(readCalls[0], ["src/brain/brain.test.ts"]);
+    assert.deepEqual(seedOut.unmetCriteria[0]!.expectedFiles, ["src/brain/brain.test.ts"]);
+    assert.equal(seedOut.currentFileState["src/brain/brain.test.ts"]?.exists, true);
+    assert.match(
+      seedOut.currentFileState["src/brain/brain.test.ts"]!.content,
+      /real test/,
+    );
+  });
+
+  it("applies Unit 5d unlinked fallback when no linked committed todos exist", async () => {
+    const seedOut = await buildAuditorSeedCore({
+      contract: contract([criterion("c1", "Some orphan criterion", "unmet", [])]),
+      todos: [
+        todo({
+          id: "t1",
+          status: "committed",
+          expectedFiles: ["CONTRIBUTING.md"],
+          committedAt: 500,
+          // no criterionId → orphan, eligible for unlinked fallback
+        }),
+      ],
+      findings: [],
+      readFiles: async (paths) => {
+        assert.deepEqual(paths, ["CONTRIBUTING.md"]);
+        return { "CONTRIBUTING.md": "# How to contribute\n" };
+      },
+      auditInvocation: 1,
+      maxInvocations: 5,
+    });
+    assert.deepEqual(seedOut.unmetCriteria[0]!.expectedFiles, ["CONTRIBUTING.md"]);
+    assert.equal(seedOut.currentFileState["CONTRIBUTING.md"]?.exists, true);
+  });
+
+  it("never calls readFiles when no unmet criterion has any resolvable files", async () => {
+    // Empty expectedFiles, no committed todos at all → nothing to read.
+    // The seed should still build cleanly with an empty currentFileState.
+    let readFilesCallCount = 0;
+    const seedOut = await buildAuditorSeedCore({
+      contract: contract([criterion("c1", "orphan", "unmet", [])]),
+      todos: [],
+      findings: [],
+      readFiles: async () => {
+        readFilesCallCount += 1;
+        return {};
+      },
+      auditInvocation: 1,
+      maxInvocations: 5,
+    });
+    assert.equal(readFilesCallCount, 0);
+    assert.deepEqual(seedOut.currentFileState, {});
+    assert.deepEqual(seedOut.unmetCriteria[0]!.expectedFiles, []);
+  });
+
+  it("batches readFiles into a single call with a deduped union across unmet criteria", async () => {
+    // Two unmet criteria name the same file. readFiles should see it once so
+    // the runner's batch read doesn't do wasted disk work (the dedupe lives
+    // inside buildAuditorSeedCore, not at the call site).
+    const readCalls: string[][] = [];
+    await buildAuditorSeedCore({
+      contract: contract([
+        criterion("c1", "a", "unmet", ["shared.md", "a.md"]),
+        criterion("c2", "b", "unmet", ["shared.md", "b.md"]),
+      ]),
+      todos: [],
+      findings: [],
+      readFiles: async (paths) => {
+        readCalls.push([...paths]);
+        return Object.fromEntries(paths.map((p) => [p, `content of ${p}`]));
+      },
+      auditInvocation: 1,
+      maxInvocations: 5,
+    });
+    assert.equal(readCalls.length, 1);
+    const seen = readCalls[0]!;
+    assert.equal(seen.length, 3, `expected 3 deduped paths, got ${seen.join(",")}`);
+    assert.equal(new Set(seen).size, 3);
+    assert.ok(seen.includes("shared.md"));
+    assert.ok(seen.includes("a.md"));
+    assert.ok(seen.includes("b.md"));
+  });
+
+  it("only reads files for UNMET criteria (resolved criteria are context-only)", async () => {
+    // A met/wont-do criterion with expectedFiles should NOT trigger a file
+    // read — the auditor isn't re-verdicting it, so its file state is noise.
+    const readCalls: string[][] = [];
+    await buildAuditorSeedCore({
+      contract: contract([
+        criterion("c1", "unmet one", "unmet", ["open.md"]),
+        criterion("c2", "met one", "met", ["closed.md"]),
+        criterion("c3", "wont-do one", "wont-do", ["skipped.md"]),
+      ]),
+      todos: [],
+      findings: [],
+      readFiles: async (paths) => {
+        readCalls.push([...paths]);
+        return Object.fromEntries(paths.map((p) => [p, ""]));
+      },
+      auditInvocation: 1,
+      maxInvocations: 5,
+    });
+    assert.deepEqual(readCalls[0], ["open.md"]);
+    assert.equal(readCalls[0]!.includes("closed.md"), false);
+    assert.equal(readCalls[0]!.includes("skipped.md"), false);
+  });
+
+  it("partitions todos into committed/skipped summaries (committed sorted oldest-first)", async () => {
+    const seedOut = await buildAuditorSeedCore({
+      contract: contract([criterion("c1", "d", "unmet", ["x.md"])]),
+      todos: [
+        todo({ id: "t-newer", status: "committed", committedAt: 300, expectedFiles: ["x.md"] }),
+        todo({ id: "t-open", status: "open" }),
+        todo({ id: "t-older", status: "committed", committedAt: 100, expectedFiles: ["y.md"] }),
+        todo({ id: "t-skip", status: "skipped", skippedReason: "duplicate" }),
+      ],
+      findings: [],
+      readFiles: async () => ({ "x.md": "" }),
+      auditInvocation: 1,
+      maxInvocations: 5,
+    });
+    // committed entries sorted oldest-first so buildAuditorUserPrompt's
+    // slice(-40) preserves the newest 40 — flipping the sort here would
+    // silently truncate the wrong end.
+    assert.deepEqual(
+      seedOut.committed.map((c) => c.todoId),
+      ["t-older", "t-newer"],
+    );
+    assert.deepEqual(seedOut.skipped.map((s) => s.todoId), ["t-skip"]);
+    assert.equal(seedOut.skipped[0]!.skippedReason, "duplicate");
+  });
+
+  it("maps findings through unchanged", async () => {
+    const seedOut = await buildAuditorSeedCore({
+      contract: contract([criterion("c1", "d", "unmet", [])]),
+      todos: [],
+      findings: [finding("agent-1", "hit a snag", 42), finding("agent-2", "all clear", 99)],
+      readFiles: async () => ({}),
+      auditInvocation: 1,
+      maxInvocations: 5,
+    });
+    assert.equal(seedOut.findings.length, 2);
+    assert.deepEqual(seedOut.findings[0], { agentId: "agent-1", text: "hit a snag", createdAt: 42 });
+    assert.deepEqual(seedOut.findings[1], { agentId: "agent-2", text: "all clear", createdAt: 99 });
+  });
+
+  it("surfaces resolved (non-unmet) criteria as context-only, with defensively-copied expectedFiles", async () => {
+    const seedOut = await buildAuditorSeedCore({
+      contract: contract([
+        criterion("c1", "unmet one", "unmet", ["open.md"]),
+        criterion("c2", "met one", "met", ["closed.md"]),
+      ]),
+      todos: [],
+      findings: [],
+      readFiles: async () => ({ "open.md": "" }),
+      auditInvocation: 1,
+      maxInvocations: 5,
+    });
+    assert.equal(seedOut.resolvedCriteria.length, 1);
+    assert.equal(seedOut.resolvedCriteria[0]!.id, "c2");
+    // Mutating the returned array must not leak back into the input contract.
+    seedOut.resolvedCriteria[0]!.expectedFiles.push("mutated.md");
+    assert.equal(seedOut.resolvedCriteria[0]!.expectedFiles.length, 2);
+    // (the original criterion object is separately verified to be intact below)
+  });
+
+  it("passes mission statement and invocation counts through to the seed", async () => {
+    const seedOut = await buildAuditorSeedCore({
+      contract: {
+        missionStatement: "Harden the auditor.",
+        criteria: [criterion("c1", "d", "unmet", [])],
+      },
+      todos: [],
+      findings: [],
+      readFiles: async () => ({}),
+      auditInvocation: 3,
+      maxInvocations: 5,
+    });
+    assert.equal(seedOut.missionStatement, "Harden the auditor.");
+    assert.equal(seedOut.auditInvocation, 3);
+    assert.equal(seedOut.maxInvocations, 5);
+  });
+
+  it("marks a missing file (readFiles returned null) as non-existent in currentFileState", async () => {
+    // Round-trips buildAuditorFileStates semantics end-to-end: null → exists:false.
+    const seedOut = await buildAuditorSeedCore({
+      contract: contract([criterion("c1", "d", "unmet", ["missing.ts"])]),
+      todos: [],
+      findings: [],
+      readFiles: async () => ({ "missing.ts": null }),
+      auditInvocation: 1,
+      maxInvocations: 5,
+    });
+    assert.equal(seedOut.currentFileState["missing.ts"]?.exists, false);
+    assert.equal(seedOut.currentFileState["missing.ts"]?.content, "");
+  });
+
+  it("windows a large file in currentFileState (same view as the worker sees)", async () => {
+    const head = "HEAD-UNIQUE-" + "a".repeat(WORKER_FILE_HEAD_BYTES);
+    const tail = "b".repeat(WORKER_FILE_TAIL_BYTES) + "-TAIL-UNIQUE";
+    const filler = "x".repeat(WORKER_FILE_WINDOW_THRESHOLD);
+    const big = head + filler + tail;
+    const seedOut = await buildAuditorSeedCore({
+      contract: contract([criterion("c1", "d", "unmet", ["CHANGELOG.md"])]),
+      todos: [],
+      findings: [],
+      readFiles: async () => ({ "CHANGELOG.md": big }),
+      auditInvocation: 1,
+      maxInvocations: 5,
+    });
+    const entry = seedOut.currentFileState["CHANGELOG.md"]!;
+    assert.equal(entry.exists, true);
+    assert.equal(entry.full, false);
+    assert.equal(entry.originalLength, big.length);
+    assert.ok(entry.content.includes("HEAD-UNIQUE-"));
+    assert.ok(entry.content.includes("-TAIL-UNIQUE"));
+  });
+
+  it("does not mutate the input contract (unmetCriteria.expectedFiles is a fresh array)", async () => {
+    const original = criterion("c1", "d", "unmet", []);
+    const c = contract([original]);
+    const seedOut = await buildAuditorSeedCore({
+      contract: c,
+      todos: [
+        todo({
+          id: "t1",
+          status: "committed",
+          expectedFiles: ["inferred.md"],
+          committedAt: 100,
+          criterionId: "c1",
+        }),
+      ],
+      findings: [],
+      readFiles: async () => ({ "inferred.md": "" }),
+      auditInvocation: 1,
+      maxInvocations: 5,
+    });
+    // Unit 5d decorates unmetCriteria[0].expectedFiles in the seed, but the
+    // underlying ExitContract must be untouched so the runner's in-memory
+    // contract representation doesn't drift between audit invocations.
+    assert.deepEqual(seedOut.unmetCriteria[0]!.expectedFiles, ["inferred.md"]);
+    assert.deepEqual(original.expectedFiles, []);
+    assert.equal(c.criteria[0]!.expectedFiles.length, 0);
   });
 });

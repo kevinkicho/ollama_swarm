@@ -1017,6 +1017,128 @@ stacking anywhere, auditor rationales cite file contents.
 
 ---
 
+## Phase 11c hardening — auditor `expectedFiles: []` fallback + seed extraction  **[working tree]**
+
+Closes the blind spot Unit 5c surfaced: an unmet criterion with empty
+`expectedFiles` had no file state to feed the auditor, so honest "can't
+see" verdicts piled up instead of `"met"`. Two units:
+
+**Unit 5d — `resolveCriterionFiles` fallback.** In
+`server/src/swarm/blackboard/prompts/auditor.ts`:
+
+- `CommittedTodoSummary` gains `criterionId?: string` — already plumbed
+  on `Todo` since Phase 11a, now carried into the auditor's view so a
+  committed todo can be linked back to the criterion it was addressing.
+- New pure `resolveCriterionFiles(criterion, committed)` with a
+  three-step resolution:
+  1. If the criterion has its own `expectedFiles`, return them verbatim
+     (happy path — no inference needed).
+  2. Otherwise, union the `expectedFiles` of committed todos whose
+     `criterionId` matches, newest-first, capped at
+     `AUDITOR_FALLBACK_FILE_MAX = 4` files.
+  3. Otherwise, fall back to the most recent
+     `AUDITOR_FALLBACK_RECENT_COMMITS = 4` *unlinked* committed todos
+     (those with no `criterionId` at all — todos with a different
+     `criterionId` are excluded, since they belong to another criterion).
+     Same 4-file cap.
+- `BlackboardRunner.buildAuditorSeed` calls the new helper when mapping
+  unmet criteria: `{...c, expectedFiles: resolveCriterionFiles(c, committed)}`.
+  The underlying `ExitContract` is NOT mutated — only the view handed
+  to the auditor is decorated.
+
+`auditor.test.ts` +12 targeted tests covering: passthrough, defensive
+copy, linked fallback, dedup across linked todos, file-count cap,
+unlinked fallback, different-`criterionId` exclusion, recent-commits
+cap, linked-preferred-over-unlinked, empty-result terminal state,
+determinism, missing-`committedAt` fallback.
+
+**Unit 5e — `buildAuditorSeedCore` extraction + E2E validation.**
+The composition contract → committed-summaries →
+`resolveCriterionFiles` → `readFiles` → `buildAuditorFileStates` → seed
+used to live in a 73-line async method on `BlackboardRunner`, which
+made the full pipeline awkward to test without instantiating a runner
++ board + agents. Extracted the composition into a pure
+`buildAuditorSeedCore(input)` with a `readFiles` callback so the I/O
+seam is injectable:
+
+```ts
+export interface BuildAuditorSeedInput {
+  contract: ExitContract;
+  todos: Todo[];
+  findings: Finding[];
+  readFiles: (paths: string[]) => Promise<Record<string, string | null>>;
+  auditInvocation: number;
+  maxInvocations: number;
+}
+```
+
+`BlackboardRunner.buildAuditorSeed` is now a 9-line wrapper that passes
+`(paths) => this.readExpectedFiles(paths)` as the callback and hands
+the rest of the inputs through. Behavior-preserving refactor: no
+semantic change, but the whole audit-pipeline can now be validated
+with synthetic contracts + stub `readFiles` rather than end-to-end.
+
+`auditor.test.ts` +13 tests validating the Unit 5d fallback path
+end-to-end. The linchpin test replicates the v7 `c4`/`c5` scenario
+directly: a contract with a single unmet criterion (`c4`, empty
+`expectedFiles`), one committed todo (`criterionId: "c4"`,
+`expectedFiles: ["src/brain/brain.test.ts"]`), and a stub `readFiles`
+returning test-file content. The assertions verify that
+`buildAuditorSeedCore` infers the file via step 2 of
+`resolveCriterionFiles`, calls `readFiles(["src/brain/brain.test.ts"])`
+exactly once, and produces a `currentFileState` where the inferred
+file exists with its real content — which is precisely what was
+missing in v7. Other tests cover: happy-path passthrough, unlinked
+fallback, the "no files resolvable at all" terminal case (readFiles
+NOT called), batched deduped reads across multiple unmet criteria,
+the UNMET-only read policy (resolved criteria don't trigger reads),
+committed/skipped partitioning, findings passthrough, resolved
+criteria as context-only, mission/invocation passthrough, null →
+non-existent, large-file windowing (shared view with worker), and
+non-mutation of the input contract.
+
+**E2E validation run `phase11c-medium-v8`.** Mission: add unit tests
+for core orchestration logic + enforce strict TypeScript + tighten
+lint/typecheck pipelines + add CONTRIBUTING.md.
+
+| | v7 | v8 |
+|---|---|---|
+| stopReason | `cap:wall-clock` (sleep-distorted) | `completed` |
+| stopDetail | — | `all contract criteria satisfied` |
+| wallClockMs | 31,273,500 (sleep) / ~13 min productive | **138,340 (2 min 18 sec)** |
+| commits | 5 | 6 |
+| totalTodos | 8 | 6 |
+| staleEvents | 0 | 0 |
+| skippedTodos | 1 (intelligent) | 0 |
+| criteria met | 4 / 6 | **5 / 6** |
+| criteria wont-do | 0 | 1 (typecheck — rule 8, as designed) |
+| criteria unmet at end | 2 | **0** |
+
+v8 completed cleanly on the first pass with zero stales and zero
+skips, and every `"met"` verdict's rationale quotes the file
+contents directly — e.g. c3 rationale: `tsconfig.json shows "strict":
+true, "noUncheckedIndexedAccess": true, "noImplicitOverride": true`.
+The one `"wont-do"` (c4: "running `bun run typecheck` exits zero")
+correctly invoked system-prompt rule 8: "Verifying that tsc exits
+zero with no errors requires running the TypeScript compiler, which
+workers cannot do."
+
+**Validation-gap note.** v8's planner emitted explicit `expectedFiles`
+on every criterion it wrote, so the Unit 5d fallback path wasn't
+exercised end-to-end at runtime — the fast/clean result is evidence
+of no-regression, not of the fallback firing. That's why Unit 5e
+added the targeted `buildAuditorSeedCore` tests: they exercise the
+fallback deterministically with synthetic fixtures shaped like the
+v7 scenario, without waiting for a planner to emit an empty
+`expectedFiles` array again.
+
+**Verified.** `tsc --noEmit` clean; 314/314 server tests green
+(289 + 12 Unit 5d + 13 Unit 5e). v8 artifact:
+`runs/phase11c-medium-v8/multi-agent-orchestrator/summary.json` —
+preserved for comparison.
+
+---
+
 ## Cross-phase notes
 
 - **Event log.** A per-boot append-only JSONL log is written at `logs/current.jsonl` via `server/src/ws/eventLogger.ts` (landed alongside Phase 4 work, currently uncommitted). Every `SwarmEvent` the WS broadcasts gets a line, making post-hoc verification of runs possible even after the browser tab is closed.
