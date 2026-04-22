@@ -226,14 +226,13 @@ function SummaryCard({ summary }: SummaryCardProps) {
           {open ? "Hide details" : "Details"}
         </button>
       </div>
+      {summary.stopDetail ? (
+        <div className="px-3 pb-2 -mt-1 text-[11px] italic text-ink-400 leading-snug">
+          {summary.stopDetail}
+        </div>
+      ) : null}
       {open ? (
         <div className="px-3 pb-3 space-y-2 text-xs">
-          {summary.stopDetail ? (
-            <div className="text-ink-300">
-              <span className="text-ink-500">detail: </span>
-              {summary.stopDetail}
-            </div>
-          ) : null}
           <div>
             <div className="text-ink-500 mb-1">Agents</div>
             <div className="grid grid-cols-[auto_auto_auto] gap-x-4 gap-y-0.5 w-max">
