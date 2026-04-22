@@ -16,7 +16,14 @@ const StartBody = z.object({
   model: z.string().optional(),
   rounds: z.number().int().min(1).max(10).optional(),
   preset: z
-    .enum(["round-robin", "blackboard", "role-diff", "council", "orchestrator-worker"])
+    .enum([
+      "round-robin",
+      "blackboard",
+      "role-diff",
+      "council",
+      "orchestrator-worker",
+      "debate-judge",
+    ])
     .default("round-robin"),
 });
 

@@ -74,11 +74,11 @@ const PRESETS: readonly SwarmPreset[] = [
   {
     id: "debate-judge",
     label: "Debate + judge",
-    summary: "Two agents argue opposite positions; a third scores the stronger case.",
+    summary: "PRO vs CON exchange arguments each round; JUDGE scores on the final round. Fixed 3 agents.",
     min: 3,
     max: 3,
     recommended: 3,
-    status: "planned",
+    status: "active",
   },
   {
     id: "stigmergy",

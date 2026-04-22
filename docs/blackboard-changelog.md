@@ -1705,6 +1705,94 @@ workers followed by a synthesis from agent-1.
 
 ---
 
+## Unit 13 — Debate + judge preset  **[committed: pending]**
+
+Fourth preset of this session. Fixed 3 agents, yes/no framing:
+
+- **Agent 1 = PRO** — argues FOR the proposition.
+- **Agent 2 = CON** — argues AGAINST.
+- **Agent 3 = JUDGE** — silent until the final round, then reads the
+  whole debate and delivers a verdict: `PRO WINS` / `CON WINS` / `TIE`
+  plus confidence `LOW` / `MEDIUM` / `HIGH`.
+
+Per round, Pro goes first, then Con. Both see the running transcript
+so they can rebut each other specifically (unlike Council's round-1
+isolation — here the whole point is direct argumentation, so visibility
+is on). The Judge stays quiet until the final round runs, then goes
+last with the full debate in front of it.
+
+**Proposition override.** The proposition defaults to *"This project is
+ready for production use."*. Users override by using the setup form's
+inject-message field *before starting the run* — the most recent
+pre-start user injection is picked up as the proposition for this run.
+Once the run is underway, injectUser posts to the transcript as
+ordinary commentary (does not re-set the proposition mid-debate —
+changing the proposition after arguments started would be nonsense).
+
+- `server/src/swarm/DebateJudgeRunner.ts` — new runner. Enforces
+  exactly 3 agents at start (the Zod schema + SetupForm's `min=max=3`
+  also enforce this, but we check again here so a direct-API caller
+  gets a clear error instead of a downstream "no judge" crash). The
+  runner's loop per round is: `runDebaterTurn(pro)` →
+  `runDebaterTurn(con)` → (if final round) `runJudgeTurn(judge)`.
+  Transcript entries from agent-1 and agent-2 are relabeled as `[PRO]`
+  / `[CON]` for readability when building later prompts.
+- `buildDebaterPrompt({side, round, totalRounds, proposition,
+  isFinalRound, transcript})` — exported pure function. Side-specific
+  role text (`PRO (arguing FOR)` vs `CON (arguing AGAINST)`),
+  round-aware brief (mid-debate rounds say "rebut your opponent
+  specifically"; final round says "make your closing statement"),
+  hard rule forbidding side-flipping or conceding.
+- `buildJudgePrompt({proposition, transcript})` — exported pure
+  function. Asks for (1) one-paragraph summary of each side's
+  strongest arg, (2) weakest points of each side, (3) verdict with
+  which specific argument tipped it, (4) confidence. Instructs judge
+  to score **on the merits of arguments presented**, not on prior
+  opinion of the proposition — so a weaker argument for the "correct"
+  side can lose to a stronger argument for the "wrong" side.
+- `DEFAULT_PROPOSITION` exported constant, covered by a test
+  asserting it's non-empty.
+- `server/src/swarm/DebateJudgeRunner.test.ts` — 12 tests across
+  5 describe blocks. Side-specific framing (PRO names agent-1 +
+  argues FOR, CON names agent-2 + argues AGAINST, hard rule against
+  side-flipping is present). Round-aware framing (mid-debate
+  "rebut specifically", final-round "closing statement"). Transcript
+  visibility (peers labeled PRO/CON not Agent 1/2, empty transcript
+  handled). Judge (identifies agent-3, demands explicit verdict
+  shape, merits-not-prior-beliefs instruction, transcript renders as
+  PRO/CON).
+- `server/src/swarm/SwarmRunner.ts` — `PresetId` gains `"debate-judge"`.
+- `server/src/services/Orchestrator.ts` — `buildRunner` case.
+- `server/src/routes/swarm.ts` — Zod enum accepts `"debate-judge"`.
+- `server/package.json` — registers the new test file.
+- `web/src/components/SetupForm.tsx` — flipped `status: "planned"` →
+  `"active"`. Summary text updated to spell out PRO vs CON vs JUDGE
+  and "Fixed 3 agents". `min=max=3` unchanged.
+- `docs/swarm-patterns.md` — §5 flipped `[ ]` → `[x]`; roadmap row
+  updated.
+
+**What Debate + judge does NOT do in v1.**
+- **No proposition UI field.** The inject-message-before-start
+  mechanic works but is quirky. If the pattern gets real use, a
+  dedicated "Proposition" input would be cleaner. Deferred until we
+  see it actually get picked from the dropdown.
+- **No judge scoring rubric.** The judge's verdict is free-text;
+  we extract `PRO WINS` / `CON WINS` / `TIE` by eye. If we wanted a
+  `summary.json`-style artifact with `{verdict: "PRO", confidence:
+  "HIGH"}` we'd need a JSON-parsed judge output. Not urgent — the
+  prose verdict is the interesting part.
+- **Same retry-wrapper limitation.** A timed-out debater kills its
+  turn for that round; the debate continues with the silent half.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+399/399 server tests green (387 before + 12 Unit 13). E2E validation:
+pick Debate + judge on the setup form (agentCount locks to 3), set
+rounds ≥ 2, optionally inject a custom proposition before hitting
+Start, then watch for agent-1 and agent-2 exchanges followed by an
+agent-3 verdict on the final round.
+
+---
+
 ## Cross-phase notes
 
 - **Event log.** A per-boot append-only JSONL log is written at `logs/current.jsonl` via `server/src/ws/eventLogger.ts` (landed alongside Phase 4 work, currently uncommitted). Every `SwarmEvent` the WS broadcasts gets a line, making post-hoc verification of runs possible even after the browser tab is closed.

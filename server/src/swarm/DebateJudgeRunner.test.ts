@@ -1,0 +1,164 @@
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import {
+  buildDebaterPrompt,
+  buildJudgePrompt,
+  DEFAULT_PROPOSITION,
+} from "./DebateJudgeRunner.js";
+import type { TranscriptEntry } from "../types.js";
+
+const system = (text: string): TranscriptEntry => ({
+  id: crypto.randomUUID(),
+  role: "system",
+  text,
+  ts: 0,
+});
+
+const agent = (index: number, text: string): TranscriptEntry => ({
+  id: crypto.randomUUID(),
+  role: "agent",
+  agentIndex: index,
+  agentId: `agent-${index}`,
+  text,
+  ts: 0,
+});
+
+describe("DEFAULT_PROPOSITION", () => {
+  it("has a non-empty default so runs don't crash when user doesn't set one", () => {
+    assert.ok(DEFAULT_PROPOSITION.length > 0);
+  });
+});
+
+describe("buildDebaterPrompt — side-specific framing", () => {
+  it("PRO prompt identifies agent 1 and commits to arguing FOR", () => {
+    const prompt = buildDebaterPrompt({
+      side: "pro",
+      round: 1,
+      totalRounds: 3,
+      proposition: "Cats are better than dogs",
+      isFinalRound: false,
+      transcript: [],
+    });
+    assert.ok(prompt.includes("Agent 1"));
+    assert.match(prompt, /PRO \(arguing FOR\)/);
+    assert.match(prompt, /argue FOR the proposition/);
+  });
+
+  it("CON prompt identifies agent 2 and commits to arguing AGAINST", () => {
+    const prompt = buildDebaterPrompt({
+      side: "con",
+      round: 1,
+      totalRounds: 3,
+      proposition: "Cats are better than dogs",
+      isFinalRound: false,
+      transcript: [],
+    });
+    assert.ok(prompt.includes("Agent 2"));
+    assert.match(prompt, /CON \(arguing AGAINST\)/);
+    assert.match(prompt, /argue AGAINST the proposition/);
+  });
+
+  it("forbids flipping sides or conceding", () => {
+    const prompt = buildDebaterPrompt({
+      side: "pro",
+      round: 1,
+      totalRounds: 3,
+      proposition: "X",
+      isFinalRound: false,
+      transcript: [],
+    });
+    assert.match(prompt, /Do NOT flip sides/);
+    assert.match(prompt, /Do NOT concede/);
+  });
+});
+
+describe("buildDebaterPrompt — round-aware framing", () => {
+  it("mid-debate round tells debater to rebut peer specifically", () => {
+    const prompt = buildDebaterPrompt({
+      side: "pro",
+      round: 2,
+      totalRounds: 4,
+      proposition: "X",
+      isFinalRound: false,
+      transcript: [],
+    });
+    assert.match(prompt, /round 2 of 4/);
+    assert.match(prompt, /Rebut your opponent/i);
+  });
+
+  it("final round triggers closing-statement framing", () => {
+    const prompt = buildDebaterPrompt({
+      side: "con",
+      round: 3,
+      totalRounds: 3,
+      proposition: "X",
+      isFinalRound: true,
+      transcript: [],
+    });
+    assert.match(prompt, /FINAL round/);
+    assert.match(prompt, /closing statement/i);
+  });
+});
+
+describe("buildDebaterPrompt — transcript visibility", () => {
+  it("labels peer entries as PRO / CON (not Agent 1 / Agent 2) for readability", () => {
+    const transcript: TranscriptEntry[] = [
+      system("seed"),
+      agent(1, "pro round 1 content"),
+      agent(2, "con round 1 content"),
+    ];
+    const prompt = buildDebaterPrompt({
+      side: "pro",
+      round: 2,
+      totalRounds: 3,
+      proposition: "X",
+      isFinalRound: false,
+      transcript,
+    });
+    assert.ok(prompt.includes("[PRO] pro round 1 content"));
+    assert.ok(prompt.includes("[CON] con round 1 content"));
+  });
+
+  it("handles an empty transcript (round 1, PRO opens)", () => {
+    const prompt = buildDebaterPrompt({
+      side: "pro",
+      round: 1,
+      totalRounds: 3,
+      proposition: "X",
+      isFinalRound: false,
+      transcript: [],
+    });
+    assert.ok(prompt.includes("(empty — you open the debate)"));
+  });
+});
+
+describe("buildJudgePrompt", () => {
+  it("identifies agent 3 as the judge", () => {
+    const prompt = buildJudgePrompt({ proposition: "X", transcript: [] });
+    assert.ok(prompt.includes("Agent 3"));
+    assert.match(prompt, /JUDGE/);
+  });
+
+  it("demands PRO WINS / CON WINS / TIE verdict with confidence", () => {
+    const prompt = buildJudgePrompt({ proposition: "X", transcript: [] });
+    assert.match(prompt, /PRO WINS, CON WINS, or TIE/);
+    assert.match(prompt, /Confidence: LOW \/ MEDIUM \/ HIGH/);
+  });
+
+  it("instructs scoring on merits of arguments, not prior beliefs", () => {
+    const prompt = buildJudgePrompt({ proposition: "X", transcript: [] });
+    assert.match(prompt, /on the MERITS of the arguments/i);
+    assert.match(prompt, /not on your prior opinion/i);
+  });
+
+  it("renders debater transcript entries as PRO / CON labels", () => {
+    const transcript: TranscriptEntry[] = [
+      system("seed"),
+      agent(1, "pro case ABC"),
+      agent(2, "con case XYZ"),
+    ];
+    const prompt = buildJudgePrompt({ proposition: "X", transcript });
+    assert.ok(prompt.includes("[PRO] pro case ABC"));
+    assert.ok(prompt.includes("[CON] con case XYZ"));
+  });
+});

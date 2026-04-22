@@ -98,13 +98,27 @@ emergent. Output has a synthesizer by design (no "user reads and
 reconciles in their head" like Council requires).
 **Limits:** lead is a bottleneck; plan quality caps output quality.
 
-### 5. Debate + judge `[ ]`
-Two agents argue opposite positions ("ship this feature" vs "don't"), a
-third scores who made the stronger case.
+### 5. Debate + judge `[x]` ← **shipped as `debate-judge` preset (Unit 13)**
+Fixed 3 agents. Agent 1 = PRO (argues FOR the proposition), Agent 2 =
+CON (argues AGAINST), Agent 3 = JUDGE (silent until the final round,
+then reads the whole debate and scores: PRO WINS / CON WINS / TIE with
+confidence LOW/MEDIUM/HIGH).
+
+Shipped via `DebateJudgeRunner` (see
+`server/src/swarm/DebateJudgeRunner.ts`). Per round Pro speaks first,
+then Con — both seeing the full running transcript so they can rebut
+(the Council-style round-1 isolation would defeat the point of a
+debate). On the final round, Judge goes last. Proposition defaults to
+*"This project is ready for production use."*; users override by using
+the inject-message field *before* starting the run — the most recent
+pre-start user injection is picked up as the proposition override.
+Mid-run injections post to the transcript as normal commentary.
 
 **Wins:** better truth signal than consensus, since agreement is often
 just conformity. Good for yes/no or A-vs-B decisions.
-**Limits:** fits only framable decisions; not a general discussion pattern.
+**Limits:** fits only framable decisions; not a general discussion
+pattern. Fixed at exactly 3 agents (Pro/Con/Judge) — no other
+configuration makes sense.
 
 ### 6. Evaluator / critic loops `[ ]`
 Worker produces → critic scores against a rubric → worker revises. Reflexion-style.
@@ -187,7 +201,7 @@ The **chosen stack for v1 of the blackboard preset** is optimistic+CAS
 | 3 | Map-reduce                   | n/a (split + synthesize)            | Tests whether isolation beats shared context for coverage |
 | 4 | Council (parallel + reconcile) ✓ shipped | n/a (round-based)         | Isolates diversity gain from role-prompting gain |
 | 5 | Orchestrator–worker ✓ shipped | n/a                                | Needs role differentiation to be useful; builds on #2 |
-| 6 | Debate + judge               | n/a                                 | Narrow use case; wait until we have a concrete yes/no question |
+| 6 | Debate + judge ✓ shipped     | n/a                                 | Narrow use case; wait until we have a concrete yes/no question |
 | 7 | Critic loops                 | Layer, not preset                   | Orthogonal — add as a toggle on any preset |
 | 8 | Stigmergy                    | Layer on blackboard                 | Extends #1; file-annotation scoring on top of the board |
 
