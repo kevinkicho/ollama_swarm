@@ -2107,7 +2107,7 @@ reaching natural `completed` more often instead of capping.
 
 ---
 
-## Unit 17 — Warmup turn at agent spawn (cold-start fix)  **[committed: pending]**
+## Unit 17 — Warmup turn at agent spawn (cold-start fix)  **[committed: `482be07`]**
 
 Direct response to the 2026-04-22 battle test v2 (post Unit 16): even
 with the retry wrapper firing across all seven runners and
