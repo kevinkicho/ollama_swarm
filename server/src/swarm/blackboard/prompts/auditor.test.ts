@@ -299,6 +299,118 @@ describe("AUDITOR prompts", () => {
     assert.match(p, /JSON parse failed: xyz/);
     assert.match(p, /verdicts/);
   });
+
+  // ---- Unit 5b: system prompt now teaches "read the file first" ----
+
+  it("system prompt describes current file state as primary evidence", () => {
+    // Auditor must understand that the user prompt contains file contents,
+    // and that those contents drive the decision (not commit history alone).
+    assert.match(AUDITOR_SYSTEM_PROMPT, /CURRENT CONTENTS/);
+    assert.match(AUDITOR_SYSTEM_PROMPT, /primary evidence/i);
+  });
+
+  it("system prompt warns about duplicate/stacked prior attempts", () => {
+    // The v6 failure mode: auditor couldn't see that four env-var tables had
+    // stacked under the same heading. System prompt must train the auditor
+    // to recognize that signature and route to CONSOLIDATE/REPAIR todos
+    // rather than another re-add.
+    assert.match(AUDITOR_SYSTEM_PROMPT, /DUPLICATE|duplicate/);
+    assert.match(AUDITOR_SYSTEM_PROMPT, /CONSOLIDATE|consolidate/i);
+    assert.match(AUDITOR_SYSTEM_PROMPT, /re-add/i);
+  });
+
+  it("system prompt explains windowed large-file views", () => {
+    // If the middle of a file is omitted, the auditor should weight visible
+    // head/tail and prefer a verification todo over a confident "met" call.
+    assert.match(AUDITOR_SYSTEM_PROMPT, /WINDOWED|window|head.*marker.*tail/i);
+  });
+
+  // ---- Unit 5b: user prompt now renders the file-state block ----
+
+  it("user prompt includes a Current file state section", () => {
+    const p = buildAuditorUserPrompt(
+      seed({
+        currentFileState: {
+          "README.md": {
+            exists: true,
+            content: "# Hello\n",
+            full: true,
+            originalLength: 8,
+          },
+        },
+      }),
+    );
+    assert.match(p, /Current file state/i);
+    assert.match(p, /README\.md/);
+    assert.match(p, /# Hello/);
+    assert.match(p, /full/);
+  });
+
+  it("user prompt marks a missing file as (does not exist on disk)", () => {
+    const p = buildAuditorUserPrompt(
+      seed({
+        currentFileState: {
+          "src/new.ts": {
+            exists: false,
+            content: "",
+            full: true,
+            originalLength: 0,
+          },
+        },
+      }),
+    );
+    assert.match(p, /src\/new\.ts \(does not exist on disk\)/);
+  });
+
+  it("user prompt marks a windowed file with the WINDOWED label and original size", () => {
+    const p = buildAuditorUserPrompt(
+      seed({
+        currentFileState: {
+          "CHANGELOG.md": {
+            exists: true,
+            content: "HEAD\n\n... [40000 chars omitted ...] ...\n\nTAIL",
+            full: false,
+            originalLength: 50_000,
+          },
+        },
+      }),
+    );
+    assert.match(p, /CHANGELOG\.md/);
+    assert.match(p, /50000 chars/);
+    assert.match(p, /WINDOWED/);
+    // The body (head and tail) reaches the prompt — the auditor is meant to
+    // reason about it, not just see the header.
+    assert.match(p, /HEAD/);
+    assert.match(p, /TAIL/);
+  });
+
+  it("user prompt file-state entries are deterministic (sorted by path)", () => {
+    // Same seed → same prompt, so a test harness reading the user prompt
+    // transcript can diff cleanly when only the content of a known file
+    // changes. We sort by path to eliminate iteration-order wobble across
+    // Node versions / V8 builds.
+    const p = buildAuditorUserPrompt(
+      seed({
+        currentFileState: {
+          "b.md": { exists: true, content: "B", full: true, originalLength: 1 },
+          "a.md": { exists: true, content: "A", full: true, originalLength: 1 },
+        },
+      }),
+    );
+    const aIdx = p.indexOf("a.md");
+    const bIdx = p.indexOf("b.md");
+    assert.ok(aIdx !== -1 && bIdx !== -1);
+    assert.ok(aIdx < bIdx, `expected a.md to appear before b.md, got aIdx=${aIdx} bIdx=${bIdx}`);
+  });
+
+  it("user prompt handles an empty currentFileState gracefully", () => {
+    // e.g. unmet criteria have no expectedFiles, or there are no unmet
+    // criteria at all. Prompt should note the absence rather than render
+    // a silent empty block that looks like a truncated template.
+    const p = buildAuditorUserPrompt(seed({ currentFileState: {} }));
+    assert.match(p, /Current file state/i);
+    assert.match(p, /no files/i);
+  });
 });
 
 describe("buildAuditorFileStates — pure file-state wrapper", () => {

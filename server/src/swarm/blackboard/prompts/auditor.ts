@@ -190,10 +190,18 @@ export const AUDITOR_SYSTEM_PROMPT = [
   "You are the AUDITOR for a swarm of coding agents.",
   "You are called at a checkpoint: the worker pool has drained (no todos left in flight). Your job is to decide whether the EXIT CONTRACT is satisfied.",
   "",
-  "For each UNMET criterion, issue one of these verdicts:",
-  "  - \"met\":      the committed work satisfies this criterion. Include a rationale pointing to the change.",
-  "  - \"wont-do\":  this criterion is out of scope, already handled, or not worth pursuing. Include a rationale.",
-  "  - \"unmet\":    criterion still needs work. MUST include 1–4 concrete todos under `todos` that, if committed, would satisfy it.",
+  "The user prompt will give you:",
+  "  - the mission statement,",
+  "  - each UNMET criterion with its expectedFiles,",
+  "  - the CURRENT CONTENTS of every file named by an unmet criterion's expectedFiles, shown either in full or — for files above ~8KB — as a head + marker + tail window (the marker tells you how many chars are omitted from the middle),",
+  "  - recent committed/skipped todos and agent findings for context.",
+  "",
+  "DECISION PROCESS for each UNMET criterion:",
+  "  1. Read the CURRENT FILE STATE for that criterion's expectedFiles. This is the primary evidence — commit history is secondary.",
+  "  2. If the file already shows the requirement satisfied, verdict is \"met\". Quote a short phrase from the shown content in your rationale so the call is auditable.",
+  "  3. If the file shows evidence of prior attempts that produced DUPLICATES (e.g. the same heading or table appearing twice), STACKING (new blocks pasted without removing the old), or HALF-DONE edits, the verdict is \"unmet\" and the todos MUST be CONSOLIDATE/REPAIR/DEDUP todos, not \"add X\" todos. A re-add todo in this situation will just produce another duplicate.",
+  "  4. If the requirement is genuinely absent, verdict is \"unmet\" with 1–4 concrete todos describing what to add.",
+  "  5. If the requirement needs shell execution or is out of scope, verdict is \"wont-do\" with a rationale.",
   "",
   "You MAY add new criteria via `newCriteria` when you discover important outcomes the initial contract missed. New criteria start with no todos — future audits can propose todos for them.",
   "",
@@ -202,11 +210,12 @@ export const AUDITOR_SYSTEM_PROMPT = [
   "2. Shape: {\"verdicts\": [{\"id\": string, \"status\": \"met\"|\"wont-do\"|\"unmet\", \"rationale\": string, \"todos\"?: [...]}], \"newCriteria\"?: [{\"description\": string, \"expectedFiles\": string[]}]}.",
   "3. Every verdict's `id` MUST match an existing unmet criterion ID (c1, c2, ...). Do NOT include verdicts for criteria that are already met or wont-do.",
   "4. For `unmet` status, `todos` is REQUIRED and must contain 1–4 items; each todo names ≤2 expectedFiles (repo-relative paths).",
-  "5. Each verdict's `rationale` is one sentence explaining the call.",
+  "5. Each verdict's `rationale` is one sentence explaining the call; when possible, reference what you saw in the current file state.",
   "6. Each `newCriteria` item's `description` is one outcome (not a step). `expectedFiles` is 0–4 repo-relative paths.",
-  "7. Prefer `wont-do` with a clear rationale over infinite `unmet` loops. If prior todos for a criterion failed (stale/skipped), consider whether the criterion is practical at all.",
+  "7. Prefer `wont-do` with a clear rationale over infinite `unmet` loops. If prior todos for a criterion failed (stale/skipped) AND the file still doesn't show the requirement, consider whether the criterion is practical at all.",
   "8. Workers edit files via JSON diffs — they CANNOT run shell commands, tests, linters, type checkers, compilers, formatters, package managers, or any external tooling. If a criterion inherently requires execution (e.g. \"all tests pass\", \"tsc compiles clean\", \"ESLint passes\", \"run benchmark X\"), issue `wont-do` with a rationale naming the tool that would be needed. Do NOT issue `unmet` with todos that merely touch config files in the hope of verifying the tool indirectly — those todos will produce empty `expectedFiles` and be rejected.",
   "9. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, `docs/`, or any path ending in `/` or `\\`. If a todo or new criterion covers a whole directory, pick the specific files (e.g., `src/lib/a.ts`, `src/lib/b.ts`). Directory entries are rejected by the parser; the todo or criterion is dropped.",
+  "10. If the current file state is WINDOWED (head + marker + tail), the middle region may contain evidence you can't see. Weight the visible head and tail heavily and prefer a specific consolidation/verification todo over a confident \"met\" when ambiguous.",
   "",
   "Paths must be repo-relative. Never use absolute paths or `..`.",
 ].join("\n");
@@ -308,12 +317,35 @@ export function buildAuditorUserPrompt(seed: AuditorSeed): string {
     )
     .join("\n");
 
+  // File-state block: one entry per known file. Sorted for determinism so the
+  // same seed always produces the same prompt (easier diffing in test output
+  // and in the transcript log).
+  const fileStateEntries = Object.entries(seed.currentFileState).sort(
+    ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0),
+  );
+  const fileStateBlock = fileStateEntries
+    .map(([path, entry]) => {
+      if (!entry.exists) {
+        return `--- ${path} (does not exist on disk) ---`;
+      }
+      const header = entry.full
+        ? `--- ${path} (${entry.originalLength} chars, full) ---`
+        : `--- ${path} (${entry.originalLength} chars, WINDOWED — head + marker + tail) ---`;
+      return `${header}\n${entry.content}\n--- end ${path} ---`;
+    })
+    .join("\n\n");
+
   return [
     `Mission: ${seed.missionStatement}`,
     `Audit invocation: ${seed.auditInvocation} of ${seed.maxInvocations} (hard cap).`,
     "",
     "=== Criteria that still need a verdict (UNMET) ===",
     unmet.length > 0 ? unmet : "(none — all criteria already resolved)",
+    "",
+    "=== Current file state for UNMET criteria (primary evidence) ===",
+    fileStateEntries.length > 0
+      ? fileStateBlock
+      : "(no files — unmet criteria have no expectedFiles)",
     "",
     "=== Criteria already resolved (for context only; do NOT re-verdict) ===",
     resolved.length > 0 ? resolved : "(none)",
