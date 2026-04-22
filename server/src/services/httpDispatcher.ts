@@ -20,11 +20,15 @@
 
 import { Agent, setGlobalDispatcher } from "undici";
 
-// 90 s is deliberately generous — healthy cloud TTFB is usually <30 s, but
-// the first turn on a cold cloud shard can ramp to ~60 s while the model
-// warms. 90 s keeps healthy runs unaffected while cutting a stalled
-// connection off ~3× faster than undici's default.
-export const HEADERS_TIMEOUT_MS = 90_000;
+// Unit 16 (2026-04-22): bumped 90 s → 180 s after the battle test
+// surfaced 25 UND_ERR_HEADERS_TIMEOUT events in 60 minutes of runs,
+// concentrated on agents' first prompts where cold-start TTFB on
+// cloud-glm-5.1 occasionally crosses 90 s. With the cross-runner retry
+// helper landed in the same unit, 3 attempts × 180 s = 540 s worst
+// case per turn — still well under the 20 min absolute turn watchdog
+// every runner enforces. Healthy runs are unaffected (returns happen
+// in the first 30-60 s normally); only the cold-start tail benefits.
+export const HEADERS_TIMEOUT_MS = 180_000;
 
 // Exported so the retry layer's budget comment stays honest: 3 attempts
 // × HEADERS_TIMEOUT_MS + RETRY_BACKOFF_MS totals = ~5 min worst case.

@@ -8,6 +8,7 @@ import type {
   TranscriptEntry,
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
+import { promptWithRetry } from "./promptWithRetry.js";
 
 // Map-reduce over the repo.
 // Agent 1 = REDUCER (silent during the map phase, then synthesizes).
@@ -205,14 +206,30 @@ export class MapReduceRunner implements SwarmRunner {
     }, 10_000);
 
     try {
-      const res = await agent.client.session.prompt({
-        path: { id: agent.sessionId },
-        body: {
-          agent: "swarm",
-          model: { providerID: "ollama", modelID: agent.model },
-          parts: [{ type: "text", text: prompt }],
-        },
+      // Unit 16: shared retry wrapper.
+      const res = await promptWithRetry(agent, prompt, {
         signal: controller.signal,
+        describeError: describeSdkError,
+        onRetry: ({ attempt, max, reasonShort, delayMs }) => {
+          this.appendSystem(
+            `[${agent.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
+          );
+          this.opts.manager.markStatus(agent.id, "retrying", {
+            retryAttempt: attempt,
+            retryMax: max,
+            retryReason: reasonShort,
+          });
+          this.emitAgentState({
+            id: agent.id,
+            index: agent.index,
+            port: agent.port,
+            sessionId: agent.sessionId,
+            status: "retrying",
+            retryAttempt: attempt,
+            retryMax: max,
+            retryReason: reasonShort,
+          });
+        },
       });
       const text = extractText(res) ?? "(empty response)";
       const entry: TranscriptEntry = {

@@ -158,39 +158,30 @@ the cap measuring actual active work.
 
 ---
 
-## `RoundRobinRunner.runTurn` has no retry wrapper
+## ~~`RoundRobinRunner.runTurn` has no retry wrapper~~ (resolved 2026-04-22, Unit 16)
 
-**Choice:** `server/src/swarm/RoundRobinRunner.ts` wraps each turn in a
-single-shot try/catch around `session.prompt`. Any failure
-(`UND_ERR_HEADERS_TIMEOUT`, fetch failure, SDK error) flips the agent
-to `failed` and the outer loop moves to the next agent without retry.
+**Status:** fixed for ALL non-blackboard runners. The retry loop that
+lived inline in `BlackboardRunner.promptAgent` was extracted to a
+shared `server/src/swarm/promptWithRetry.ts` and every runner
+(round-robin, role-diff, council, orchestrator-worker, debate-judge,
+map-reduce, stigmergy) now calls it. Same retry semantics blackboard
+already had: 3 attempts with 4 s + 16 s backoff on transient
+codes (`UND_ERR_HEADERS_TIMEOUT` / `ECONNRESET` / etc.); never
+retries `AbortError` or non-retryable HTTP 4xx; surfaces a
+`retrying` AgentStatus with retry counter so the UI doesn't show a
+silent "thinking" during backoff. Paired with `HEADERS_TIMEOUT_MS`
+bumped 90 s → 180 s in `httpDispatcher.ts` to catch more legitimate
+cold-start TTFB before it ever needs a retry.
 
-**Why:** round-robin is the simple baseline — clean forward progress,
-one turn per agent per round, failures visible in the transcript. The
-blackboard runner has retry+surfacing logic (`promptAgent` + Unit 7's
-retry-state wiring) because its agents do real work that's expensive
-to lose; discussion turns are cheap to skip.
-
-**What this breaks:** the `role-diff` preset rides on
-`RoundRobinRunner`. The 2026-04-22 role-diff E2E run
-(`runs/role-diff-v1/compliance-report.md`) completed with 4 of 5
-agents marked `failed` — agents 2–5 hit `UND_ERR_HEADERS_TIMEOUT` on
-their first turn and never recovered. Only the Architect (agent 1)
-ever spoke. Under the blackboard runner with identical model latency,
-those same timeouts would have retried 3× before marking the agent
-failed.
-
-**When this would need revisiting:**
-- If role-diff (or any future round-robin-based preset) starts being
-  used for actual evaluation rather than just "does the preset wire
-  up" — a 1-of-5 role-coverage run is worthless for comparing roles.
-- If the bounded headers timeout from Unit 7 stops being the dominant
-  failure mode; today it's the main reason a first turn fails.
-
-**Cheap fix when it becomes a real problem:** port the retry wrapper
-from `BlackboardRunner.promptAgent` into `RoundRobinRunner.runTurn`.
-The retry-state surface (retryAttempt / retryMax / retryReason on
-`AgentState`) already exists — only the retry loop itself is missing.
+**Original symptoms (preserved for context):** the 2026-04-22
+role-diff E2E run completed with 4 of 5 agents marked `failed` —
+agents 2–5 hit `UND_ERR_HEADERS_TIMEOUT` on their first turn and
+never recovered. The 2026-04-22 battle test on six presets surfaced
+the same pattern across role-diff, council, OW, debate-judge,
+map-reduce, and stigmergy — 25 timeouts in 60 minutes of runs,
+~50% of expected agent turns lost. With Unit 16, all seven runners
+have the same retry semantics blackboard's been using since Phase
+11c.
 
 ---
 

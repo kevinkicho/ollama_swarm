@@ -9,6 +9,7 @@ import type {
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { roleForAgent, type SwarmRole } from "./roles.js";
+import { promptWithRetry } from "./promptWithRetry.js";
 
 export interface RoundRobinOptions {
   // Unit 8: when set, every agent gets a per-index role prepended to its
@@ -157,14 +158,32 @@ export class RoundRobinRunner implements SwarmRunner {
     }, 10_000);
 
     try {
-      const res = await agent.client.session.prompt({
-        path: { id: agent.sessionId },
-        body: {
-          agent: "swarm",
-          model: { providerID: "ollama", modelID: agent.model },
-          parts: [{ type: "text", text: prompt }],
-        },
+      // Unit 16: shared retry wrapper. Same retry semantics as
+      // BlackboardRunner — UND_ERR_HEADERS_TIMEOUT and friends get up
+      // to 3 attempts with [4s, 16s] backoff before giving up.
+      const res = await promptWithRetry(agent, prompt, {
         signal: controller.signal,
+        describeError: (e) => this.describeSdkError(e),
+        onRetry: ({ attempt, max, reasonShort, delayMs }) => {
+          this.appendSystem(
+            `[${agent.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
+          );
+          this.opts.manager.markStatus(agent.id, "retrying", {
+            retryAttempt: attempt,
+            retryMax: max,
+            retryReason: reasonShort,
+          });
+          this.emitAgentState({
+            id: agent.id,
+            index: agent.index,
+            port: agent.port,
+            sessionId: agent.sessionId,
+            status: "retrying",
+            retryAttempt: attempt,
+            retryMax: max,
+            retryReason: reasonShort,
+          });
+        },
       });
 
       const text = this.extractText(res) ?? "(empty response)";

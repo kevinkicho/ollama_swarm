@@ -2009,7 +2009,105 @@ trail becoming visible.
 
 ---
 
-## Session summary (Units 9–15, this conversation)
+## Unit 16 — Cross-runner retry wrapper + headersTimeout 90s → 180s  **[committed: pending]**
+
+Direct response to the 2026-04-22 battle test on six presets, where 25
+UND_ERR_HEADERS_TIMEOUT events in 60 minutes of runs translated into
+~50% of expected agent turns being lost. The blackboard runner's
+retry+backoff loop (already shipped with Phase 11c) survived the same
+conditions; the six newer runners did not, because their inner-turn
+methods called `agent.client.session.prompt(...)` directly with no
+retry. Unit 16 lifts blackboard's loop into a shared helper and points
+all seven runners at it.
+
+**Mechanic.**
+
+- `server/src/swarm/promptWithRetry.ts` — new module. Exports
+  `promptWithRetry(agent, promptText, opts)` and the `RetryInfo`
+  interface. Internals use the existing `RETRY_MAX_ATTEMPTS = 3` and
+  `RETRY_BACKOFF_MS = [4_000, 16_000]` from
+  `server/src/swarm/blackboard/retry.ts` (which still owns the
+  retry classifier and constants — extraction moved only the loop).
+  The helper does the SDK call + classify-and-retry; the caller wires
+  side-effects (transcript line + `retrying` AgentStatus) via an
+  optional `onRetry` callback. Sleep is overridable for tests
+  (default uses an interruptible-by-AbortSignal `setTimeout`).
+- `server/src/swarm/promptWithRetry.test.ts` — 10 tests across 4
+  describe blocks. Happy path (first-attempt success, no onRetry
+  fired); retry on transient (recover at attempt 2 with onRetry info
+  reporting attempt=2/max=3/delay=4000ms; recover at attempt 3 with
+  delays [4s, 16s]; throw after 3 failures); non-retryable + abort
+  (HTTP 4xx never retries; AbortError never retries; pre-aborted
+  signal short-circuits; interrupted sleep throws underlying err);
+  custom `describeError` propagates to the `reasonShort` field. Tests
+  use a fake Agent with a programmable `session.prompt` mock and a
+  `fastSleep` stub that resolves immediately so test wall-time stays
+  under a second instead of the 20s a real backoff would burn.
+- `server/src/swarm/blackboard/BlackboardRunner.ts` — `promptAgent`'s
+  inline retry loop deleted; replaced with one `promptWithRetry`
+  call. The `onRetry` callback preserves the prior surface bit-for-bit
+  (the same `[agent-X] transport error (Y) — retry N/3 in Ms`
+  transcript line and the same `markStatus("retrying", ...)`
+  emission). Removed the now-dead `RETRY_MAX_ATTEMPTS` /
+  `RETRY_BACKOFF_MS` / `isRetryableSdkError` imports.
+- `RoundRobinRunner.ts` / `CouncilRunner.ts` /
+  `OrchestratorWorkerRunner.ts` / `DebateJudgeRunner.ts` /
+  `MapReduceRunner.ts` / `StigmergyRunner.ts` — each runner's
+  `runTurn` (or `runAgent`) replaces the direct
+  `agent.client.session.prompt(...)` call with `promptWithRetry`.
+  Same `onRetry` boilerplate in each: append a transcript line,
+  flip the agent's status to `retrying` with attempt counter +
+  reason. `RoundRobinRunner` uses `this.describeSdkError` (instance
+  method); the rest use the module-level `describeSdkError` they
+  already had defined for their failure paths — no new code surface.
+- `server/src/services/httpDispatcher.ts` — `HEADERS_TIMEOUT_MS`
+  bumped 90 s → 180 s. With Unit 16's retry now applied uniformly
+  across all 7 runners, the worst-case budget is 3 attempts × 180 s
+  = 540 s per turn, still well under the 20 min absolute turn
+  watchdog every runner enforces. The bump catches more legitimate
+  cold-start TTFB (>90 s on cloud) without introducing a longer
+  hang on truly-stuck connections.
+- `server/package.json` — registers `src/swarm/promptWithRetry.test.ts`.
+
+**Why retry + timeout bump together rather than one or the other.**
+- Retry alone with the 90 s timeout would still classify many
+  legitimate slow first responses as failures and waste backoff cycles
+  retrying the same prompt that just needed more time.
+- Timeout bump alone (no retry) would catch slower cold starts but
+  every still-real failure becomes terminal — the non-blackboard
+  runners would still lose half their turns.
+- Together: more legitimate responses succeed on the first try (180 s
+  catches the cold-start tail), and any actual transient failures get
+  3 chances. Expected battle-test improvement: role-diff 27% → 70%+,
+  debate-judge 14% → 50%+, map-reduce coverage from 1/4 mappers to
+  3-4/4. Re-running the battle test post-Unit-16 should validate.
+
+**What this does NOT do.**
+- **No warmup turn at spawn time.** The first attempt of the first
+  turn is still a cold-start request; we just give it more time and
+  retry it. Unit 17 (warmup turn) is the orthogonal "prevent cold
+  start entirely" follow-up if Unit 16's numbers leave gaps.
+- **No debate-judge–specific retry count.** All seven runners use the
+  same `RETRY_MAX_ATTEMPTS = 3`. If debate-judge's PRO/CON keep losing
+  turns even at retry-3, Unit 18's "higher retry count for fixed-role
+  presets" becomes the cheap follow-up.
+- **No persistence of retry stats.** The transcript records each
+  retry, and the AgentState carries the current retry counter for
+  the UI, but `summary.json` doesn't aggregate "total retries this
+  run" yet.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+441/441 server tests green (431 before + 10 Unit 16 helper tests).
+Existing blackboard tests (workerPipeline, retry classifier, etc.)
+all still pass — the lifted loop is bit-for-bit equivalent. E2E
+validation: re-run the battle test (six presets × 10 min each); the
+expected delta is dramatically fewer agents stuck at zero turns and
+the three serial presets (role-diff, debate-judge, stigmergy)
+reaching natural `completed` more often instead of capping.
+
+---
+
+## Session summary (Units 9–16, this conversation)
 
 Seven units shipped in this session:
 
@@ -2039,11 +2137,16 @@ Seven units shipped in this session:
 - **Unit 15** — Stigmergy preset (standalone exploration). Shared
   annotation table; agents pick their own next file based on
   pheromone trail. No planner, no roles.
+- **Unit 16** — Cross-runner retry wrapper. Lifted blackboard's
+  retry loop into a shared `promptWithRetry` helper used by all
+  seven runners; bumped headersTimeout 90 s → 180 s to catch
+  cold-start TTFB on cloud models. Direct response to the battle
+  test that surfaced the no-retry gap on the six newer runners.
 
 Roster after this session: **eight shipped presets** (round-robin
-baseline + 7 intentional designs). Every pattern named in the
-original catalog (`docs/swarm-patterns.md`) is now either shipped
-or deferred with a documented rationale.
+baseline + 7 intentional designs) **all with retry parity**. Every
+pattern named in the original catalog (`docs/swarm-patterns.md`) is
+now either shipped or deferred with a documented rationale.
 
 ---
 
