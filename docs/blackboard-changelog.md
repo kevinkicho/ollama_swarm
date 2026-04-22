@@ -1139,7 +1139,7 @@ preserved for comparison.
 
 ---
 
-## Unit 6a — Planner/contract grounding via real repo file list  **[working tree]**
+## Unit 6a — Planner/contract grounding via real repo file list  **[committed: `daec341`]**
 
 Addresses known-limitation #3 (planner grounding). The v7 incident where the
 contract emitted `expectedFiles: []` on criteria it couldn't bind to files had
