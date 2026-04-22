@@ -2,11 +2,17 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   AUDITOR_SYSTEM_PROMPT,
+  buildAuditorFileStates,
   buildAuditorRepairPrompt,
   buildAuditorUserPrompt,
   parseAuditorResponse,
   type AuditorSeed,
 } from "./auditor.js";
+import {
+  WORKER_FILE_HEAD_BYTES,
+  WORKER_FILE_TAIL_BYTES,
+  WORKER_FILE_WINDOW_THRESHOLD,
+} from "../windowFile.js";
 import type { ExitCriterion } from "../types.js";
 
 function criterion(
@@ -26,6 +32,7 @@ function seed(overrides: Partial<AuditorSeed> = {}): AuditorSeed {
     committed: [],
     skipped: [],
     findings: [],
+    currentFileState: {},
     auditInvocation: 1,
     maxInvocations: 5,
     ...overrides,
@@ -291,5 +298,84 @@ describe("AUDITOR prompts", () => {
     assert.match(p, /broken output/);
     assert.match(p, /JSON parse failed: xyz/);
     assert.match(p, /verdicts/);
+  });
+});
+
+describe("buildAuditorFileStates — pure file-state wrapper", () => {
+  it("returns an empty record for an empty input", () => {
+    const out = buildAuditorFileStates({});
+    assert.deepEqual(out, {});
+  });
+
+  it("marks a null content as non-existent with empty view", () => {
+    const out = buildAuditorFileStates({ "src/new.ts": null });
+    assert.deepEqual(out["src/new.ts"], {
+      exists: false,
+      content: "",
+      full: true,
+      originalLength: 0,
+    });
+  });
+
+  it("passes a small file through in full", () => {
+    const body = "# Tiny\n\nhello\n";
+    const out = buildAuditorFileStates({ "README.md": body });
+    assert.equal(out["README.md"].exists, true);
+    assert.equal(out["README.md"].full, true);
+    assert.equal(out["README.md"].content, body);
+    assert.equal(out["README.md"].originalLength, body.length);
+  });
+
+  it("windows a large file via windowFileForWorker (same view as worker sees)", () => {
+    // Past-threshold content triggers the window. Distinctive head/tail so we
+    // can verify the auditor gets the SAME head+marker+tail the worker gets —
+    // that's the whole point of reusing windowFileForWorker.
+    const head = "HEAD-UNIQUE-" + "a".repeat(WORKER_FILE_HEAD_BYTES);
+    const tail = "b".repeat(WORKER_FILE_TAIL_BYTES) + "-TAIL-UNIQUE";
+    const filler = "x".repeat(WORKER_FILE_WINDOW_THRESHOLD);
+    const big = head + filler + tail;
+
+    const out = buildAuditorFileStates({ "README.md": big });
+    assert.equal(out["README.md"].exists, true);
+    assert.equal(out["README.md"].full, false);
+    assert.equal(out["README.md"].originalLength, big.length);
+    assert.ok(out["README.md"].content.includes("HEAD-UNIQUE-"));
+    assert.ok(out["README.md"].content.includes("-TAIL-UNIQUE"));
+    // Windowed view is dramatically smaller than the source.
+    assert.ok(out["README.md"].content.length < big.length / 2);
+  });
+
+  it("handles a mix of present, missing, small, and large files in one call", () => {
+    const big = "z".repeat(WORKER_FILE_WINDOW_THRESHOLD + 1_000);
+    const out = buildAuditorFileStates({
+      "README.md": "# small\n",
+      "src/new.ts": null,
+      "CHANGELOG.md": big,
+    });
+    assert.equal(out["README.md"].exists, true);
+    assert.equal(out["README.md"].full, true);
+    assert.equal(out["src/new.ts"].exists, false);
+    assert.equal(out["src/new.ts"].content, "");
+    assert.equal(out["CHANGELOG.md"].exists, true);
+    assert.equal(out["CHANGELOG.md"].full, false);
+    assert.equal(out["CHANGELOG.md"].originalLength, big.length);
+  });
+
+  it("is deterministic — same input produces identical output", () => {
+    const src = { "a.ts": "const x = 1;\n", "b.ts": null };
+    const a = buildAuditorFileStates(src);
+    const b = buildAuditorFileStates(src);
+    assert.deepEqual(a, b);
+  });
+
+  it("treats an empty-string file as existing (not missing)", () => {
+    // Regression guard: null means "not on disk", "" means "empty file" —
+    // the auditor needs to see an empty placeholder file differently from
+    // a missing one to reason about create-vs-edit.
+    const out = buildAuditorFileStates({ ".keep": "" });
+    assert.equal(out[".keep"].exists, true);
+    assert.equal(out[".keep"].content, "");
+    assert.equal(out[".keep"].originalLength, 0);
+    assert.equal(out[".keep"].full, true);
   });
 });

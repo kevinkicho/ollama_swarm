@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ExitCriterion } from "../types.js";
+import { windowFileForWorker } from "../windowFile.js";
 
 // ---------------------------------------------------------------------------
 // Phase 11c: auditor.
@@ -229,6 +230,42 @@ export interface FindingSummary {
   createdAt: number;
 }
 
+// Current state of a file the auditor cares about (i.e. named in some unmet
+// criterion's expectedFiles). Shape is intentionally flat rather than a
+// discriminated union on `exists` so prompt-building code can read fields
+// without narrowing — the convention is: on !exists, content is "" and
+// originalLength is 0, and `full` is true (there's nothing omitted).
+export interface AuditorFileStateEntry {
+  exists: boolean;
+  content: string;
+  full: boolean;
+  originalLength: number;
+}
+
+// Build per-file state entries from a batch read. Reuses windowFileForWorker
+// so the auditor sees the same head+marker+tail view the worker does — no
+// need to teach two call sites about truncation math. Pure: I/O lives in the
+// caller (typically BlackboardRunner.readExpectedFiles).
+export function buildAuditorFileStates(
+  fileContents: Record<string, string | null>,
+): Record<string, AuditorFileStateEntry> {
+  const out: Record<string, AuditorFileStateEntry> = {};
+  for (const [path, content] of Object.entries(fileContents)) {
+    if (content === null) {
+      out[path] = { exists: false, content: "", full: true, originalLength: 0 };
+      continue;
+    }
+    const view = windowFileForWorker(content);
+    out[path] = {
+      exists: true,
+      content: view.content,
+      full: view.full,
+      originalLength: view.originalLength,
+    };
+  }
+  return out;
+}
+
 export interface AuditorSeed {
   missionStatement: string;
   unmetCriteria: ExitCriterion[];
@@ -236,6 +273,10 @@ export interface AuditorSeed {
   committed: CommittedTodoSummary[];
   skipped: SkippedTodoSummary[];
   findings: FindingSummary[];
+  // Current on-disk state of every file referenced by any unmet criterion's
+  // expectedFiles. Unit 5a populates this but does NOT yet thread it into the
+  // prompt — Unit 5b does that, so this field sits unread for one commit.
+  currentFileState: Record<string, AuditorFileStateEntry>;
   auditInvocation: number;
   maxInvocations: number;
 }

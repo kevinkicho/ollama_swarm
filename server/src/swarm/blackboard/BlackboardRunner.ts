@@ -41,6 +41,7 @@ import {
 } from "./prompts/firstPassContract.js";
 import {
   AUDITOR_SYSTEM_PROMPT,
+  buildAuditorFileStates,
   buildAuditorRepairPrompt,
   buildAuditorUserPrompt,
   parseAuditorResponse,
@@ -594,7 +595,7 @@ export class BlackboardRunner implements SwarmRunner {
       `${label} ${this.auditInvocations}/${AUDITOR_MAX_INVOCATIONS}.`,
     );
 
-    const seed = this.buildAuditorSeed();
+    const seed = await this.buildAuditorSeed();
     const firstResponse = await this.promptAgent(
       planner,
       `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorUserPrompt(seed)}`,
@@ -636,7 +637,7 @@ export class BlackboardRunner implements SwarmRunner {
     this.applyAuditorResult(parsed.result, planner);
   }
 
-  private buildAuditorSeed(): AuditorSeed {
+  private async buildAuditorSeed(): Promise<AuditorSeed> {
     const contract = this.contract!;
     const todos = this.board.listTodos();
 
@@ -664,17 +665,31 @@ export class BlackboardRunner implements SwarmRunner {
       createdAt: f.createdAt,
     }));
 
+    const unmetCriteria = contract.criteria
+      .filter((c) => c.status === "unmet")
+      .map((c) => ({ ...c, expectedFiles: [...c.expectedFiles] }));
+
+    // Gather the union of expectedFiles across unmet criteria so the auditor
+    // can decide from current file state rather than guess from commit history.
+    // Deduped via Set; order doesn't matter (prompt-building will key by path).
+    const filesToRead = Array.from(
+      new Set(unmetCriteria.flatMap((c) => c.expectedFiles)),
+    );
+    const fileContents = filesToRead.length > 0
+      ? await this.readExpectedFiles(filesToRead)
+      : {};
+    const currentFileState = buildAuditorFileStates(fileContents);
+
     return {
       missionStatement: contract.missionStatement,
-      unmetCriteria: contract.criteria
-        .filter((c) => c.status === "unmet")
-        .map((c) => ({ ...c, expectedFiles: [...c.expectedFiles] })),
+      unmetCriteria,
       resolvedCriteria: contract.criteria
         .filter((c) => c.status !== "unmet")
         .map((c) => ({ ...c, expectedFiles: [...c.expectedFiles] })),
       committed,
       skipped,
       findings,
+      currentFileState,
       auditInvocation: this.auditInvocations,
       maxInvocations: AUDITOR_MAX_INVOCATIONS,
     };
