@@ -1696,7 +1696,12 @@ export class BlackboardRunner implements SwarmRunner {
       }
       if (counts.open === 0) continue;
 
-      const todo = this.board.findOpenTodo();
+      // Unit 45: prefer the claimable-finder so we skip todos whose
+      // expectedFiles are already locked by a sibling worker's live
+      // claim. When every open todo is locked we just continue —
+      // another worker will commit/expire soon and free a file. The
+      // jittered sleep at the top of the loop is the implicit backoff.
+      const todo = this.board.findClaimableTodo();
       if (!todo) continue;
 
       const outcome = await this.executeWorkerTodo(agent, todo);

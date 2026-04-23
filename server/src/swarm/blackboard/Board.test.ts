@@ -586,3 +586,162 @@ describe("Board defensive copying", () => {
     assert.equal(fresh?.description, "x");
   });
 });
+
+// Unit 45: per-file claim lock — kills the row-by-row thrash where
+// two workers parallel-claim todos that touch the same big file and
+// only one commit can survive CAS. New behavior: claimTodo refuses
+// when a sibling claim already holds an overlapping file, and a new
+// findClaimableTodo helper pre-filters open todos by lock state so
+// the worker dispatcher doesn't spin on a locked-but-still-open todo.
+describe("Board file-lock (Unit 45)", () => {
+  function postPair(board: Board, files1: string[], files2: string[]) {
+    const t1 = board.postTodo({
+      description: "edit row 1",
+      expectedFiles: files1,
+      createdBy: "planner",
+      createdAt: 100,
+    });
+    const t2 = board.postTodo({
+      description: "edit row 2",
+      expectedFiles: files2,
+      createdBy: "planner",
+      createdAt: 101,
+    });
+    return { t1, t2 };
+  }
+
+  it("rejects claimTodo with file_locked when another claim covers an overlapping file", () => {
+    const { board } = makeBoard();
+    const { t1, t2 } = postPair(board, ["table.md"], ["table.md"]);
+    const c1 = board.claimTodo({
+      todoId: t1.id,
+      agentId: "agent-A",
+      fileHashes: { "table.md": "h1" },
+      claimedAt: 200,
+      expiresAt: 200_000,
+    });
+    expectOk(c1);
+    const c2 = board.claimTodo({
+      todoId: t2.id,
+      agentId: "agent-B",
+      fileHashes: { "table.md": "h1" },
+      claimedAt: 201,
+      expiresAt: 200_001,
+    });
+    assert.equal(c2.ok, false);
+    if (c2.ok) return;
+    assert.equal(c2.reason, "file_locked");
+    if (c2.reason !== "file_locked") return;
+    assert.deepEqual(c2.lockedFiles, ["table.md"]);
+  });
+
+  it("permits parallel claims on disjoint files", () => {
+    const { board } = makeBoard();
+    const { t1, t2 } = postPair(board, ["a.md"], ["b.md"]);
+    const c1 = board.claimTodo({
+      todoId: t1.id, agentId: "A", fileHashes: { "a.md": "h" }, claimedAt: 1, expiresAt: 1000,
+    });
+    const c2 = board.claimTodo({
+      todoId: t2.id, agentId: "B", fileHashes: { "b.md": "h" }, claimedAt: 2, expiresAt: 1001,
+    });
+    expectOk(c1);
+    expectOk(c2);
+  });
+
+  it("releases the lock after commit so a queued sibling todo can claim", () => {
+    const { board } = makeBoard();
+    const { t1, t2 } = postPair(board, ["table.md"], ["table.md"]);
+    board.claimTodo({
+      todoId: t1.id, agentId: "A", fileHashes: { "table.md": "h1" }, claimedAt: 1, expiresAt: 1000,
+    });
+    board.commitTodo({
+      todoId: t1.id, agentId: "A", currentHashes: { "table.md": "h1" }, committedAt: 2,
+    });
+    // First claim is now committed → lock released → second claim succeeds.
+    const c2 = board.claimTodo({
+      todoId: t2.id, agentId: "B", fileHashes: { "table.md": "h2" }, claimedAt: 3, expiresAt: 1001,
+    });
+    expectOk(c2);
+  });
+
+  it("releases the lock on stale (claim cleared) so a fresh worker can claim", () => {
+    const { board } = makeBoard();
+    const { t1, t2 } = postPair(board, ["table.md"], ["table.md"]);
+    board.claimTodo({
+      todoId: t1.id, agentId: "A", fileHashes: { "table.md": "h1" }, claimedAt: 1, expiresAt: 1000,
+    });
+    // Mark t1 stale (e.g. CAS rejected at commit). The Board clears
+    // t1.claim, so t1's file is no longer locked even though t1 itself
+    // is now in status "stale".
+    board.markStale(t1.id, "CAS rejected");
+    const c2 = board.claimTodo({
+      todoId: t2.id, agentId: "B", fileHashes: { "table.md": "h2" }, claimedAt: 3, expiresAt: 1001,
+    });
+    expectOk(c2);
+  });
+
+  it("treats partial overlap as locked (any overlapping file blocks)", () => {
+    const { board } = makeBoard();
+    const { t1, t2 } = postPair(board, ["a.md", "b.md"], ["b.md", "c.md"]);
+    board.claimTodo({
+      todoId: t1.id, agentId: "A", fileHashes: { "a.md": "h", "b.md": "h" }, claimedAt: 1, expiresAt: 1000,
+    });
+    const c2 = board.claimTodo({
+      todoId: t2.id, agentId: "B", fileHashes: { "b.md": "h", "c.md": "h" }, claimedAt: 2, expiresAt: 1001,
+    });
+    assert.equal(c2.ok, false);
+    if (c2.ok) return;
+    assert.equal(c2.reason, "file_locked");
+    if (c2.reason !== "file_locked") return;
+    assert.deepEqual(c2.lockedFiles, ["b.md"]);
+  });
+});
+
+describe("Board.findClaimableTodo (Unit 45)", () => {
+  it("returns the same todo as findOpenTodo when nothing is locked", () => {
+    const { board } = makeBoard();
+    board.postTodo({ description: "x", expectedFiles: ["a"], createdBy: "p", createdAt: 1 });
+    board.postTodo({ description: "y", expectedFiles: ["b"], createdBy: "p", createdAt: 2 });
+    const open = board.findOpenTodo();
+    const claimable = board.findClaimableTodo();
+    assert.equal(open?.id, claimable?.id);
+  });
+
+  it("skips a locked todo and returns the next compatible one", () => {
+    const { board } = makeBoard();
+    const t1 = board.postTodo({ description: "t1", expectedFiles: ["table.md"], createdBy: "p", createdAt: 1 });
+    board.postTodo({ description: "t2", expectedFiles: ["table.md"], createdBy: "p", createdAt: 2 });
+    const t3 = board.postTodo({ description: "t3", expectedFiles: ["other.md"], createdBy: "p", createdAt: 3 });
+    board.claimTodo({
+      todoId: t1.id, agentId: "A", fileHashes: { "table.md": "h" }, claimedAt: 10, expiresAt: 10_000,
+    });
+    // t2 is open but file-locked behind t1; t3 is open and free.
+    // Expect findClaimableTodo to skip t2 and return t3.
+    const next = board.findClaimableTodo();
+    assert.equal(next?.id, t3.id);
+  });
+
+  it("returns undefined when every open todo is file-locked", () => {
+    const { board } = makeBoard();
+    const t1 = board.postTodo({ description: "t1", expectedFiles: ["a"], createdBy: "p", createdAt: 1 });
+    board.postTodo({ description: "t2", expectedFiles: ["a"], createdBy: "p", createdAt: 2 });
+    board.claimTodo({
+      todoId: t1.id, agentId: "A", fileHashes: { "a": "h" }, claimedAt: 10, expiresAt: 10_000,
+    });
+    assert.equal(board.findClaimableTodo(), undefined);
+  });
+
+  it("ignores claims on stale/committed/skipped todos when computing locks", () => {
+    const { board } = makeBoard();
+    const t1 = board.postTodo({ description: "t1", expectedFiles: ["a"], createdBy: "p", createdAt: 1 });
+    const t2 = board.postTodo({ description: "t2", expectedFiles: ["a"], createdBy: "p", createdAt: 2 });
+    board.claimTodo({
+      todoId: t1.id, agentId: "A", fileHashes: { "a": "h" }, claimedAt: 10, expiresAt: 10_000,
+    });
+    board.commitTodo({
+      todoId: t1.id, agentId: "A", currentHashes: { "a": "h" }, committedAt: 11,
+    });
+    // t1 is committed (no live claim) → t2 should be claimable.
+    assert.equal(board.findClaimableTodo()?.id, t2.id);
+  });
+});

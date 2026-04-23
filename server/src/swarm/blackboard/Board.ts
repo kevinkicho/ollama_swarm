@@ -48,7 +48,14 @@ type CommitResult =
 
 type ClaimResult =
   | { ok: true; todo: Todo }
-  | { ok: false; reason: "not_found" | "not_open" };
+  | { ok: false; reason: "not_found" | "not_open" }
+  // Unit 45: another live claim already covers one or more of this
+  // todo's expectedFiles. Optimistic CAS would reject the second
+  // commit anyway and mark the todo stale — better to refuse the
+  // claim up front so the worker can pick a different todo and the
+  // file-row thrash never starts. lockedFiles names the overlap so
+  // the caller can log specifics.
+  | { ok: false; reason: "file_locked"; lockedFiles: string[] };
 
 type StaleResult =
   | { ok: true; todo: Todo }
@@ -117,10 +124,33 @@ export class Board {
     return found ? this.copyTodo(found) : undefined;
   }
 
+  // Unit 45: a more selective open-todo finder that skips any open
+  // todo whose expectedFiles overlap a currently-claimed todo. When
+  // every open todo is locked, returns undefined — the caller should
+  // sleep briefly and try again, since a commit/expiry will eventually
+  // free up files. The order is the same as findOpenTodo (createdAt
+  // ascending), so an unlocked older todo wins over a locked newer one.
+  findClaimableTodo(): Todo | undefined {
+    const locked = this.collectLockedFiles();
+    const found = this.orderedTodos().find(
+      (t) => t.status === "open" && !this.todoOverlapsLockedFiles(t, locked),
+    );
+    return found ? this.copyTodo(found) : undefined;
+  }
+
   claimTodo(input: ClaimInput): ClaimResult {
     const todo = this.todos.get(input.todoId);
     if (!todo) return { ok: false, reason: "not_found" };
     if (todo.status !== "open") return { ok: false, reason: "not_open" };
+    // Unit 45: per-file claim lock. Walk every currently-claimed todo
+    // and reject if any of THIS todo's expectedFiles overlap one of
+    // theirs. Keeps the optimistic CAS from triggering a stale → replan
+    // cycle on a guaranteed-conflict commit.
+    const locked = this.collectLockedFiles();
+    const overlap = todo.expectedFiles.filter((f) => locked.has(f));
+    if (overlap.length > 0) {
+      return { ok: false, reason: "file_locked", lockedFiles: overlap };
+    }
     const claim: Claim = {
       todoId: todo.id,
       agentId: input.agentId,
@@ -132,6 +162,26 @@ export class Board {
     todo.claim = claim;
     this.emit({ type: "todo_claimed", todoId: todo.id, claim: this.copyClaim(claim) });
     return { ok: true, todo: this.copyTodo(todo) };
+  }
+
+  // Unit 45: union of every expectedFile path across todos currently in
+  // status "claimed". Returned as a Set for O(1) overlap checks. New
+  // file paths a worker is creating count as locked too — the same
+  // path being concurrently created twice is a real conflict.
+  private collectLockedFiles(): Set<string> {
+    const out = new Set<string>();
+    for (const t of this.todos.values()) {
+      if (t.status !== "claimed") continue;
+      for (const f of t.expectedFiles) out.add(f);
+    }
+    return out;
+  }
+
+  // Helper kept private; pulled out so findClaimableTodo and the
+  // overlap reporting in claimTodo share the same logic.
+  private todoOverlapsLockedFiles(t: Todo, locked: Set<string>): boolean {
+    for (const f of t.expectedFiles) if (locked.has(f)) return true;
+    return false;
   }
 
   commitTodo(input: CommitInput): CommitResult {
