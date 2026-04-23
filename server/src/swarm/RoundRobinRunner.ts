@@ -246,6 +246,17 @@ export class RoundRobinRunner implements SwarmRunner {
             elapsedMs,
             success,
           });
+          // Unit 40: live-stream latency samples over WS so the UI can
+          // render a sparkline tooltip on the thinking ticker.
+          this.opts.emit({
+            type: "agent_latency_sample",
+            agentId: agent.id,
+            agentIndex: agent.index,
+            attempt,
+            elapsedMs,
+            success,
+            ts: Date.now(),
+          });
         },
         onRetry: ({ attempt, max, reasonShort, delayMs }) => {
           this.stats.onRetry(agent.id);

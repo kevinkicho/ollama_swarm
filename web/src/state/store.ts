@@ -5,11 +5,17 @@ import type {
   Claim,
   ExitContract,
   Finding,
+  LatencySample,
   RunSummary,
   SwarmPhase,
   Todo,
   TranscriptEntry,
 } from "../types";
+
+// Unit 40: cap per-agent rolling window. 20 samples is enough for a
+// sparkline to show "is the current wait unusually long vs. recent
+// attempts?" without unbounded growth over a multi-hour run.
+const LATENCY_WINDOW = 20;
 
 interface SwarmStore {
   phase: SwarmPhase;
@@ -22,6 +28,7 @@ interface SwarmStore {
   contract?: ExitContract;
   summary?: RunSummary;
   error?: string;
+  latency: Record<string, LatencySample[]>;
 
   setPhase: (phase: SwarmPhase, round: number) => void;
   upsertAgent: (a: AgentState) => void;
@@ -39,6 +46,7 @@ interface SwarmStore {
   replaceBoard: (snapshot: BoardSnapshot) => void;
   setContract: (c: ExitContract) => void;
   setSummary: (s: RunSummary) => void;
+  pushLatencySample: (agentId: string, sample: LatencySample) => void;
 
   setError: (msg: string | undefined) => void;
   reset: () => void;
@@ -55,6 +63,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   contract: undefined,
   summary: undefined,
   error: undefined,
+  latency: {},
 
   setPhase: (phase, round) => set({ phase, round }),
   upsertAgent: (a) => set((s) => ({ agents: { ...s.agents, [a.id]: a } })),
@@ -151,6 +160,13 @@ export const useSwarm = create<SwarmStore>((set) => ({
     }),
   setContract: (c) => set({ contract: c }),
   setSummary: (s) => set({ summary: s }),
+  pushLatencySample: (agentId, sample) =>
+    set((s) => {
+      const existing = s.latency[agentId] ?? [];
+      const next = existing.concat(sample);
+      if (next.length > LATENCY_WINDOW) next.splice(0, next.length - LATENCY_WINDOW);
+      return { latency: { ...s.latency, [agentId]: next } };
+    }),
 
   setError: (msg) => set({ error: msg }),
   reset: () =>
@@ -165,5 +181,6 @@ export const useSwarm = create<SwarmStore>((set) => ({
       contract: undefined,
       summary: undefined,
       error: undefined,
+      latency: {},
     }),
 }));

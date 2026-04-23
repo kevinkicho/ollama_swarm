@@ -81,7 +81,23 @@ export type SwarmEvent =
   | { type: "board_finding_posted"; finding: Finding }
   | { type: "board_state"; snapshot: BoardSnapshot; counts: BoardCountsDTO }
   | { type: "contract_updated"; contract: ExitContract }
-  | { type: "run_summary"; summary: RunSummary };
+  | { type: "run_summary"; summary: RunSummary }
+  // Unit 40: per-attempt latency sample emitted by each runner's
+  // onTiming callback (sibling of the existing logDiag /
+  // _prompt_timing record but delivered over the WS stream so the UI
+  // can accumulate recent samples and render a sparkline tooltip).
+  // `elapsedMs` is wall-clock from the start of session.prompt to
+  // either (a) its resolution if success, or (b) the headers-timeout
+  // bail if not.
+  | {
+      type: "agent_latency_sample";
+      agentId: string;
+      agentIndex: number;
+      attempt: number;
+      elapsedMs: number;
+      success: boolean;
+      ts: number;
+    };
 
 export type SwarmPhase =
   | "idle"

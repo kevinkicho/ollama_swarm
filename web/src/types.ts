@@ -170,4 +170,26 @@ export type SwarmEvent =
   | { type: "board_finding_posted"; finding: Finding }
   | { type: "board_state"; snapshot: BoardSnapshot; counts: BoardCountsDTO }
   | { type: "contract_updated"; contract: ExitContract }
-  | { type: "run_summary"; summary: RunSummary };
+  | { type: "run_summary"; summary: RunSummary }
+  // Unit 40: per-attempt latency sample. The zustand store keeps a
+  // bounded rolling window per agent; the AgentPanel renders it as a
+  // sparkline in the "thinking 3m54s" tooltip so users can see whether
+  // the CURRENT wait is typical for this agent or much longer than
+  // recent attempts.
+  | {
+      type: "agent_latency_sample";
+      agentId: string;
+      agentIndex: number;
+      attempt: number;
+      elapsedMs: number;
+      success: boolean;
+      ts: number;
+    };
+
+// Unit 40: one recent-latency sample as stored client-side.
+export interface LatencySample {
+  ts: number;
+  elapsedMs: number;
+  success: boolean;
+  attempt: number;
+}

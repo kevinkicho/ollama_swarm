@@ -60,6 +60,14 @@ function dispatch(ev: SwarmEvent): void {
     case "run_summary":
       s.setSummary(ev.summary);
       break;
+    case "agent_latency_sample":
+      s.pushLatencySample(ev.agentId, {
+        ts: ev.ts,
+        elapsedMs: ev.elapsedMs,
+        success: ev.success,
+        attempt: ev.attempt,
+      });
+      break;
   }
 }
 

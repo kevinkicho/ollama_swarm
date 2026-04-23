@@ -250,6 +250,16 @@ export class CouncilRunner implements SwarmRunner {
             elapsedMs,
             success,
           });
+          // Unit 40: live latency sample over WS for the UI sparkline.
+          this.opts.emit({
+            type: "agent_latency_sample",
+            agentId: agent.id,
+            agentIndex: agent.index,
+            attempt,
+            elapsedMs,
+            success,
+            ts: Date.now(),
+          });
         },
         onRetry: ({ attempt, max, reasonShort, delayMs }) => {
           this.stats.onRetry(agent.id);

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import type { AgentState } from "../types";
+import { useSwarm } from "../state/store";
+import type { AgentState, LatencySample } from "../types";
 
 const STATUS_COLOR: Record<AgentState["status"], string> = {
   spawning: "bg-amber-400",
@@ -39,8 +40,44 @@ function useElapsedTicker(thinkingSince: number | undefined, active: boolean): s
   return formatElapsed(Date.now() - thinkingSince);
 }
 
+// Unit 40: render recent attempt latencies as a bar sparkline. Height
+// encodes elapsed ms relative to the window's max, color encodes success
+// (emerald) vs. failure (red). Oldest on the left, newest on the right
+// so the rightmost bar is the "current-if-mid-flight or most-recent"
+// comparison point.
+function Sparkline({ samples }: { samples: LatencySample[] }) {
+  if (samples.length === 0) return null;
+  const maxMs = Math.max(...samples.map((s) => s.elapsedMs), 1);
+  const barW = 6;
+  const gap = 2;
+  const h = 32;
+  const w = samples.length * (barW + gap) - gap;
+  return (
+    <svg width={w} height={h} className="block">
+      {samples.map((s, i) => {
+        const barH = Math.max(2, Math.round((s.elapsedMs / maxMs) * h));
+        const x = i * (barW + gap);
+        const y = h - barH;
+        const fill = s.success ? "#34d399" : "#f87171";
+        return <rect key={`${s.ts}-${i}`} x={x} y={y} width={barW} height={barH} fill={fill} rx={1} />;
+      })}
+    </svg>
+  );
+}
+
+function formatSampleMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const mins = Math.floor(s / 60);
+  const rem = Math.round(s % 60);
+  return `${mins}m${rem.toString().padStart(2, "0")}s`;
+}
+
 export function AgentPanel({ agent }: { agent: AgentState }) {
   const elapsed = useElapsedTicker(agent.thinkingSince, agent.status === "thinking");
+  const samples = useSwarm((s) => s.latency[agent.id] ?? []);
+  const [hover, setHover] = useState(false);
   const retryLabel =
     agent.status === "retrying" && agent.retryAttempt && agent.retryMax
       ? `retrying ${agent.retryAttempt}/${agent.retryMax}${agent.retryReason ? ` · ${agent.retryReason}` : ""}`
@@ -52,6 +89,10 @@ export function AgentPanel({ agent }: { agent: AgentState }) {
       ? `thinking ${elapsed}`
       : null;
   const primaryLine = retryLabel ?? thinkingLabel ?? agent.status;
+  const isThinking = agent.status === "thinking" && agent.thinkingSince !== undefined;
+  const showPopover = hover && samples.length > 0;
+  const last = samples.length > 0 ? samples[samples.length - 1] : null;
+  const successCount = samples.filter((s) => s.success).length;
   return (
     <div className="border border-ink-700 rounded-md p-3 bg-ink-800">
       <div className="flex items-center justify-between">
@@ -62,14 +103,29 @@ export function AgentPanel({ agent }: { agent: AgentState }) {
         <span className="text-xs font-mono text-ink-400">:{agent.port}</span>
       </div>
       <div
-        className="mt-1 text-xs text-ink-400 font-mono"
+        className={`mt-1 text-xs text-ink-400 font-mono relative ${samples.length > 0 ? "cursor-help" : ""}`}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
         title={
-          agent.status === "thinking" && agent.thinkingSince
-            ? `Agent has been thinking since ${new Date(agent.thinkingSince).toLocaleTimeString()}. This is normal — the cloud cold-start tail can take several minutes. If it passes ~5 min the client will give up and retry.`
+          !showPopover && isThinking
+            ? `Agent has been thinking since ${new Date(agent.thinkingSince!).toLocaleTimeString()}. This is normal — the cloud cold-start tail can take several minutes. If it passes ~5 min the client will give up and retry.`
             : undefined
         }
       >
         {primaryLine}
+        {showPopover ? (
+          <div className="absolute z-10 bottom-full left-0 mb-1 bg-ink-900 border border-ink-600 rounded p-2 shadow-lg whitespace-nowrap">
+            <div className="text-[10px] text-ink-300 mb-1">
+              Recent {samples.length} attempt{samples.length === 1 ? "" : "s"} · {successCount} ok / {samples.length - successCount} fail
+            </div>
+            <Sparkline samples={samples} />
+            {last ? (
+              <div className="text-[10px] text-ink-400 mt-1">
+                last: {formatSampleMs(last.elapsedMs)} {last.success ? "✓" : "✗"}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       {agent.error ? <div className="mt-2 text-xs text-red-300">{agent.error}</div> : null}
     </div>
