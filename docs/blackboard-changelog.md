@@ -2554,7 +2554,7 @@ tests).
 
 ---
 
-## Unit 21 — Observability bundle (toStates fix + summary stats + extraction script)  **[committed: pending]**
+## Unit 21 — Observability bundle (toStates fix + summary stats + extraction script)  **[committed: `355a3f9`]**
 
 Three small fixes that together turn Unit 19's per-call timing data
 into something *visible* (UI), *queryable* (script), and *durable*
