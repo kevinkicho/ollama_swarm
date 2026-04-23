@@ -35,6 +35,11 @@ export interface PromptWithRetryOptions {
   // Override the sleep function — mainly for tests. Returns true if the
   // sleep completed naturally, false if interrupted by the signal.
   sleep?: (ms: number, signal: AbortSignal) => Promise<boolean>;
+  // Unit 19: optional hook fired after every attempt (success or failure)
+  // with the wall-clock elapsed time of that attempt. Lets runners log
+  // per-call latency for post-run extraction. Caller writes to the diag
+  // log channel; the helper itself doesn't touch logging.
+  onTiming?: (info: TimingInfo) => void;
 }
 
 export interface RetryInfo {
@@ -46,6 +51,19 @@ export interface RetryInfo {
   delayMs: number;
 }
 
+// Unit 19: per-attempt wall-clock timing surfaced after EVERY attempt
+// (success or failure). The caller writes this to whatever diagnostic
+// channel it owns; the helper just provides the numbers.
+export interface TimingInfo {
+  // The attempt that just finished (1-based).
+  attempt: number;
+  // Wall-clock ms from the moment we called session.prompt to the
+  // moment it returned (success) or threw (failure).
+  elapsedMs: number;
+  // True if the attempt resolved normally; false if it threw.
+  success: boolean;
+}
+
 export async function promptWithRetry(
   agent: Agent,
   promptText: string,
@@ -55,8 +73,9 @@ export async function promptWithRetry(
   const sleep = opts.sleep ?? defaultInterruptibleSleep;
   let lastErr: unknown;
   for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
+    const t0 = Date.now();
     try {
-      return await agent.client.session.prompt({
+      const res = await agent.client.session.prompt({
         path: { id: agent.sessionId },
         body: {
           agent: "swarm",
@@ -65,7 +84,10 @@ export async function promptWithRetry(
         },
         signal: opts.signal,
       });
+      opts.onTiming?.({ attempt, elapsedMs: Date.now() - t0, success: true });
+      return res;
     } catch (err) {
+      opts.onTiming?.({ attempt, elapsedMs: Date.now() - t0, success: false });
       lastErr = err;
       // Watchdog, user stop, or cap already cancelled this turn — do
       // not retry a deliberate abort.

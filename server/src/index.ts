@@ -43,6 +43,9 @@ const orchestrator = new Orchestrator({
   manager,
   repos,
   emit: (e) => broadcaster.broadcast(e),
+  // Unit 19: per-call timing telemetry from promptWithRetry lands here
+  // (alongside the AgentManager's diag records). Same logs/current.jsonl.
+  logDiag: (rec) => eventLogger.log(rec),
 });
 
 broadcaster.attach(wss, (ws) => {

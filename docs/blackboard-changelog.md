@@ -2372,9 +2372,102 @@ v5 battle test will compare against v4. Predicted deltas:
 
 ---
 
-## Session summary (Units 9–18b, this conversation)
+## Unit 18c — Full revert to v3 shape (back out remaining Unit 18 plumbing)  **[committed: pending]**
 
-Nine units shipped in this session:
+The 2026-04-22 v5 battle test made it clear that further iteration on
+the warmup angle is gambling on cloud variance. v3 → v4 → v5 aggregate
+went 75% → 59% → 50% across consecutive hours of the same evening,
+with debate-judge swinging 100% (v4) → 14% (v5) on **identical code**.
+The signal of any code change is now smaller than the cloud noise.
+
+Restoring the v3 shape: drop the explicit `skipWarmup: true` +
+`warmupSerially()` plumbing from all 7 runners; let
+`AgentManager.spawnAgent` handle warmup the way Unit 17 originally
+designed (auto-warmup baked into spawn). Smaller surface area, cleaner
+mental model.
+
+- All 7 runners (`RoundRobinRunner`, `CouncilRunner`,
+  `OrchestratorWorkerRunner`, `DebateJudgeRunner`, `MapReduceRunner`,
+  `StigmergyRunner`, `BlackboardRunner`): removed `skipWarmup: true`
+  from `spawnAgent` calls; removed `await
+  this.opts.manager.warmupSerially(ready)` lines.
+- `AgentManager.warmupSerially` and `warmupParallel` helpers stay as
+  public methods (no callers, harmless to keep, and a future unit may
+  want them back). `SpawnOpts.skipWarmup` field stays for the same
+  reason.
+
+**What stays in.** Unit 17's auto-warmup-at-spawn (the original
+useful piece). Unit 16's cross-runner retry wrapper. Unit 9's
+tree-kill. The full preset roster.
+
+**What's gone.** Unit 18's serial-warmup-at-runner-level. Unit 18's
+pre-batch parallel warmup (already removed in 18b).
+
+446/446 server tests still green; tsc clean both workspaces.
+
+---
+
+## Unit 19 — Per-call timing telemetry  **[committed: pending]**
+
+The reason we couldn't tell signal from noise across v3/v4/v5 is that
+we only measured outcomes (turn success rate, timeout count) — not
+per-call latency. v5 debate-judge's 100% → 14% swing on identical
+code was attributable to "cloud variance" only as a guess; we had
+no per-call latency data to confirm.
+
+Unit 19 adds that data. Every `agent.client.session.prompt(...)` call
+inside `promptWithRetry` is now timed (wall-clock ms from call to
+return-or-throw) and the result is surfaced via a new `onTiming`
+hook. Each runner wires the hook to its `logDiag` channel, which
+writes one record per attempt to `logs/current.jsonl`:
+
+```
+{"type":"_prompt_timing","preset":"council","agentId":"agent-2","agentIndex":2,"attempt":1,"elapsedMs":47213,"success":true}
+```
+
+Post-run extraction can compute per-preset, per-agent, per-attempt
+latency distributions. Lets future battle-test comparisons cleanly
+say *"v6's median per-call latency was 40s vs v5's 25s — that's
+cloud, not code."*
+
+- `server/src/swarm/promptWithRetry.ts` — `PromptWithRetryOptions`
+  gains optional `onTiming?: (info: TimingInfo) => void`. New
+  `TimingInfo` interface: `{attempt, elapsedMs, success}`. The
+  helper stamps `t0 = Date.now()` before the SDK call and emits the
+  delta after success or failure. Zero behavior change when the
+  callback is omitted.
+- `server/src/swarm/SwarmRunner.ts` — `RunnerOpts` gains optional
+  `logDiag?: (record: unknown) => void`. Defaults to undefined so
+  existing callers (tests, etc.) don't break.
+- `server/src/index.ts` — Orchestrator now constructed with
+  `logDiag: (rec) => eventLogger.log(rec)`, so timing records land
+  in the same `logs/current.jsonl` as WS events.
+- All 7 runners (`RoundRobinRunner`, `CouncilRunner`,
+  `OrchestratorWorkerRunner`, `DebateJudgeRunner`, `MapReduceRunner`,
+  `StigmergyRunner`, `BlackboardRunner`): each `promptWithRetry` call
+  gets an `onTiming` callback that logs `_prompt_timing` records
+  with `{type, preset, agentId, agentIndex, attempt, elapsedMs,
+  success}`.
+
+**Why no test for the timing path.** It's a one-line `Date.now()`
+delta and a callback invocation — testing it requires mocking the
+SDK's `session.prompt` AND a clock, which is more fragile than
+asserting the helper's existing retry semantics. The validation is
+seeing real timing records show up in `logs/current.jsonl` on the
+next run.
+
+**Validation cost: zero on its own.** Unit 19 doesn't change any
+runtime behavior — it just adds log records. A trivial 1-preset
+dev test would prove the records are showing up; no full battle
+test needed for this unit alone.
+
+446/446 server tests still green; tsc clean both workspaces.
+
+---
+
+## Session summary (Units 9–19, this conversation)
+
+Eleven units shipped in this session:
 
 - **Unit 9** — Windows tree-kill for clean shutdown. Fixed the
   port-leak the user hit when Ctrl+C'ing `npm run dev`. Port
@@ -2416,18 +2509,43 @@ Nine units shipped in this session:
 - **Unit 18** — Serial spawn-warmup + pre-batch parallel warmup.
   v3 battle test showed warmup-at-spawn worked for serial presets
   (role-diff 7→100%, stigmergy 10→5 min) but didn't help parallel
-  presets (council, MR, OW had identical-to-v2 outcomes). Diagnosed
-  as cloud load-balancer inability to load N shards in parallel.
-  Fix: serialize spawn-time warmup across agents (one shard at a
-  time), and add pre-batch parallel warmup of small prompts before
-  parallel-fan-out runners' first real-turn batch. v4 battle test
-  pending to validate.
+  presets. Tried serial spawn-warmup + pre-batch parallel warmup;
+  v4 battle test mixed result (debate-judge breakthrough, council
+  regression).
+- **Unit 18b** — Back out pre-batch parallel warmup. v4 showed it
+  doubled timeout count for council (12 vs 6) — the parallel
+  warmup batch hit the same cloud cold-start ceiling as the real
+  batch. Reverted; kept serial spawn-warmup. v5 battle test still
+  showed cloud-variance dominating.
+- **Unit 18c** — Full revert of Unit 18 plumbing (remove
+  `skipWarmup` + `warmupSerially()` calls). Back to v3 shape:
+  `AgentManager.spawnAgent`'s built-in Unit 17 auto-warmup handles
+  everything. `warmupSerially`/`warmupParallel` helpers stay public
+  for future use.
+- **Unit 19** — Per-call timing telemetry. Adds an `onTiming` hook
+  to `promptWithRetry` that all 7 runners wire to their `logDiag`
+  channel. Every `session.prompt` attempt now writes a
+  `_prompt_timing` record (`elapsedMs`, `success`, `attempt`,
+  `preset`, `agentId`) to `logs/current.jsonl`. No runtime change.
+  Future battle-test comparisons can compute per-call latency to
+  separate cloud variance from code effect.
 
 Roster after this session: **eight shipped presets** (round-robin
-baseline + 7 intentional designs) **all with retry parity, serial
-spawn-warmup, and parallel-batch warmup where applicable**. Every
+baseline + 7 intentional designs) **all with retry parity, Unit 17
+auto-warmup at spawn, and Unit 19 per-call timing telemetry**. Every
 pattern named in the original catalog (`docs/swarm-patterns.md`) is
 now either shipped or deferred with a documented rationale.
+
+**Open follow-ups (NOT shipped this session):**
+- **Unit 20 candidate** — agent tools fix. Discussion-only presets
+  (round-robin, role-diff, council, debate-judge, OW workers,
+  map-reduce mappers, stigmergy) currently send `agent: "swarm"` to
+  the SDK, which falls back to a no-tools profile. Agents have no
+  `file-read`/`grep`/`find-files` access despite prompts asking
+  them to use those. Fix: drop the `agent` specifier so OpenCode
+  uses its default `build` profile (which has tools), or configure
+  a `swarm` profile in `opencode.json`. Probably the biggest
+  remaining quality lever. Separate arc from the throughput work.
 
 ---
 

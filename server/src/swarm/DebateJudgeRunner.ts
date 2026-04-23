@@ -87,8 +87,7 @@ export class DebateJudgeRunner implements SwarmRunner {
     this.setPhase("spawning");
     const spawnTasks: Promise<Agent>[] = [];
     for (let i = 1; i <= cfg.agentCount; i++) {
-      // Unit 18: skip per-spawn warmup; we warm serially below.
-      spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model, skipWarmup: true }));
+      spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model }));
     }
     const results = await Promise.allSettled(spawnTasks);
     const ready = results
@@ -105,7 +104,6 @@ export class DebateJudgeRunner implements SwarmRunner {
     this.appendSystem(
       `3 agents ready on ports ${ready.map((a) => a.port).join(", ")}. Agent 1 = PRO, Agent 2 = CON, Agent 3 = JUDGE.`,
     );
-    await this.opts.manager.warmupSerially(ready);
 
     this.setPhase("seeding");
     await this.seed(destPath, cfg);
@@ -225,6 +223,16 @@ export class DebateJudgeRunner implements SwarmRunner {
       const res = await promptWithRetry(agent, prompt, {
         signal: controller.signal,
         describeError: describeSdkError,
+        onTiming: ({ attempt, elapsedMs, success }) =>
+          this.opts.logDiag?.({
+            type: "_prompt_timing",
+            preset: this.active?.preset,
+            agentId: agent.id,
+            agentIndex: agent.index,
+            attempt,
+            elapsedMs,
+            success,
+          }),
         onRetry: ({ attempt, max, reasonShort, delayMs }) => {
           this.appendSystem(
             `[${agent.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,

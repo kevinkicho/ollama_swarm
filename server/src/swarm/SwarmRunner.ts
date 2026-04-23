@@ -25,6 +25,11 @@ export interface RunnerOpts {
   manager: AgentManager;
   repos: RepoService;
   emit: (e: SwarmEvent) => void;
+  // Unit 19: optional diagnostic-log channel for non-WS records (per-call
+  // timing, raw SDK events, warmup outcomes). Defaults to a no-op so
+  // existing tests don't have to construct one. Lands in the same
+  // logs/current.jsonl that the WS event logger writes.
+  logDiag?: (record: unknown) => void;
 }
 
 // Every preset implementation fulfills this contract so the top-level
