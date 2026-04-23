@@ -3492,6 +3492,240 @@ with one entry per completed tier.
 
 ---
 
+## Unit 35 — Critic agent at commit time (anti-busywork gate)  **[committed: `469ef62`]**
+
+Second structural lever from `docs/autonomous-productivity.md`.
+Between "worker returns valid hunks + CAS passes" and "write diffs
++ commit on the board", a peer agent reviews the proposed change
+and verdicts `accept` or `reject`. Reject → `markStale` with the
+critic's rationale, no disk mutation, no commit slot burned; the
+replanner picks up a fresh angle. Catches the specific busywork
+patterns the auditor's string-match verdict is too coarse to
+catch at multi-hour run scale:
+
+1. **DUPLICATE CONTENT** — pyramids of test files with identical
+   bodies; same content across multiple "different" files.
+2. **TESTS WITHOUT BEHAVIOR** — trivially-true assertions, empty
+   test bodies, describe-blocks without `it` calls.
+3. **RENAME / REORG ONLY** — no behavior change, no information
+   added.
+4. **STUB IMPLEMENTATIONS** — functions that return null / throw
+   "not implemented" / are pure TODO comments, labelled as if done.
+5. **GENERIC DOCUMENTATION** — prose that could apply to any
+   project. Lorem-ipsum-tier filler.
+6. **REGRESSIONS** — removing substantive prior code without
+   equivalent-or-better replacement.
+
+Explicitly scoped OUT: code style, test coverage completeness,
+naming bikeshedding, whether a BETTER approach exists. The bar
+is "not obviously busywork", not "perfect".
+
+**Envelope:** `{"verdict": "accept"|"reject", "rationale": "one
+sentence"}`. Zod-validated, stripFences-tolerant, same parser
+pattern as first-pass contract / auditor. Rationale is required
+to name the pattern when rejecting and cite the concrete add
+when accepting — this is the audit trail.
+
+**Peer selection** (BlackboardRunner.runCritic):
+
+- Prefer a worker OTHER than the proposer (peer-review spirit).
+- Fall back to the planner if no other workers exist (agentCount
+  = 2 case).
+- If no peer at all, skip and accept by default (shouldn't
+  happen since blackboard requires workers, but the guard is
+  there).
+
+**Failure-open philosophy.** If the critic prompt itself fails
+(parse error after one repair, SDK error, peer timeout, etc.),
+accept by default with a transcript note. Blocking real worker
+output due to infrastructure issues would be a cure worse than
+the disease.
+
+**Config:**
+
+| Surface | Default | Effect |
+|---|---|---|
+| `CRITIC_ENABLED` env | `false` | When `true`, every blackboard run's commits pass through a critic unless overridden per-run. |
+| `RunConfig.critic` per-run | absent → inherit env | `true` / `false` wins over env for this run. |
+
+**Hook point.** `BlackboardRunner.runWorker`, between
+`findBomPrefixed` pass and the `writeDiff` loop. The pre-existing
+order — parse → re-hash → CAS → applyHunks → findZeroedFiles →
+findBomPrefixed → WRITE → commitTodo — stays intact; the critic
+inserts between findBomPrefixed and WRITE. No auditor / planner /
+worker / CAS / replanner logic changes.
+
+**Seed shape** (see `prompts/critic.ts`):
+
+- `proposingAgentId` — so the critic can frame it as peer review.
+- `todoDescription` + `todoExpectedFiles` — what's being worked on.
+- `criterionId` + `criterionDescription` — the bigger outcome
+  context, when the todo is linked to a criterion.
+- `files` — per-file before / after snippets with an 8 KB cap per
+  file (head-truncated past that).
+- `recentCommits` — up to 12 recent committed todos, so the
+  critic can spot cross-file duplicate patterns ("has this agent
+  already done essentially the same thing to a sibling file?").
+
+**Tests added (27):** on `buildCriticUserPrompt` /
+`parseCriticResponse` / `CRITIC_SYSTEM_PROMPT` — happy paths,
+rejections (missing verdict, missing rationale, empty rationale,
+over-long rationale, unknown verdict string, bare array,
+unparseable JSON), fenced JSON, prose-unwrap, 80-entry
+recent-commits cap, 8 KB per-file snippet cap, created-file
+rendering, modified-file rendering, criterion include/omit,
+parent-criterion rendering with id + description. No
+runner-level tests — `runCritic` is orchestration glue over
+`promptAgent` + the already-tested parser / builder pair;
+end-to-end validation is the next real autonomous run with
+`--critic on`.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+557/557 server tests green (530 before + 27 Unit 35 tests).
+
+**How to try it.**
+
+```bash
+curl -X POST http://<host>:52243/api/swarm/start \
+  -H 'Content-Type: application/json' \
+  -u opencode:<password> \
+  -d '{ ..., "preset": "blackboard", "critic": true }'
+```
+
+Watch the transcript for `[critic] agent-N accepted ...` and
+`[critic] agent-N REJECTED ...` log lines. Rejected todos will
+then go stale and show up in the replanner queue.
+
+---
+
+## Unit 36 — Wire swarm-ui (Unit 26) to auditor for UI-criteria evidence  **[committed: `e22e337`]**
+
+Third structural lever from `docs/autonomous-productivity.md`.
+The auditor has always verdicted based on file-read-from-disk
+evidence — a criterion like "the home page renders the sign-up
+CTA" got scored by whether src/Home.tsx CONTAINS the string
+`Sign up`, not whether the actually-running app shows one. Unit
+26 shipped the `swarm-ui` agent profile + Playwright MCP server
+configuration; Unit 29 shipped a dev-only smoke route. Unit 36
+finally wires it into the run proper.
+
+**What lands on disk:** a new `RunConfig.uiUrl?: string` threaded
+through the route schema. When the user sets it AND
+`MCP_PLAYWRIGHT_ENABLED=true`, the auditor seed-build phase now
+also spawns an isolated `swarm-ui` agent (via a fresh
+AgentManager — same pattern as Unit 29's smoke, so the run's WS
+stream stays clean), has it `browser_navigate` to the URL +
+`browser_snapshot`, pastes the accessibility tree into the seed
+as `uiSnapshot`. The auditor user prompt gets a new block:
+
+```
+=== Live UI snapshot (from http://localhost:3000) — PRIMARY
+    EVIDENCE for user-visible criteria ===
+<accessibility tree, 16 KB head-truncated>
+=== end UI snapshot ===
+```
+
+The system prompt gains **Rule 11**: when the snapshot is
+present, it's PRIMARY evidence for any criterion framed as
+user-visible. If the criterion says "home page shows a sign-up
+CTA" and the snapshot shows no such element, the verdict is
+`unmet` — even if files were committed that ostensibly added
+it. Files verify INTENT; the snapshot verifies DELIVERY. When no
+snapshot is present (cfg.uiUrl unset or MCP disabled), the
+auditor falls back to file-only evaluation — pre-Unit-36
+behavior, byte-identical.
+
+**What Unit 36 does NOT do:**
+
+- **Does not start the app.** The user must have the app running
+  at `uiUrl` before they hit `/api/swarm/start`. Automating the
+  "start the app" step requires workers to execute shell
+  commands (currently forbidden, see auditor Rule 8 /
+  `known-limitations.md`). That's a Unit 37+ concern.
+- **Does not navigate multiple pages per audit.** One
+  `browser_navigate` to `cfg.uiUrl` + one snapshot per audit
+  invocation. Multi-page verification (e.g., separate criteria
+  each naming a specific path) is a follow-up optimization.
+- **Does not persist the swarm-ui agent across audits.** Each
+  audit invocation spawns + tears down one `swarm-ui` subprocess.
+  Costs ~10-30s of setup per audit (model-side warmup excluded
+  via `skipWarmup: true`). A persistent agent is a possible
+  follow-up once audit counts grow.
+
+**Failure modes handled:**
+
+- `MCP_PLAYWRIGHT_ENABLED=false` while `cfg.uiUrl` is set → log
+  a transcript note, fall back to file-only audit. Doesn't crash.
+- swarm-ui spawn fails / prompt fails / response is empty → log
+  note, fall back to file-only audit. Doesn't crash.
+- Browser navigation fails (page unreachable, 500, etc.) → the
+  swarm-ui agent is instructed to return the error verbatim;
+  auditor sees it and can reason about it.
+- Snapshot > 16 KB → head-truncated with a `[N chars
+  truncated]` marker. 16 KB is generous for a typical app page;
+  extremely complex pages lose the tail.
+
+**Implementation:**
+
+- `SwarmRunner.RunConfig` gains `uiUrl?: string` (documented
+  blackboard-only).
+- `routes/swarm.ts` StartBody schema: `uiUrl: z.string().url().optional()`.
+- `prompts/auditor.ts`:
+  - `AuditorSeed` gains optional `uiUrl?: string`, `uiSnapshot?: string`.
+  - `BuildAuditorSeedInput` gains matching passthrough fields.
+  - `buildAuditorSeedCore` forwards them unchanged.
+  - `buildAuditorUserPrompt` renders the snapshot block BEFORE
+    the file-state block when present (so the auditor reads UI
+    evidence first).
+  - `AUDITOR_SYSTEM_PROMPT` Rule 11 added.
+- `BlackboardRunner.ts`:
+  - `buildAuditorSeed` now first checks cfg.uiUrl +
+    MCP_PLAYWRIGHT_ENABLED and calls the new
+    `captureUiSnapshot(url)` helper when both are true.
+  - `captureUiSnapshot` spins up an isolated `AgentManager`
+    (no-op broadcast + diag sinks), spawns one `swarm-ui` agent
+    at index 100 in the clone dir, prompts with
+    `browser_navigate + browser_snapshot + paste verbatim`, and
+    returns the extracted text. `finally`-tears-down regardless
+    of success or failure.
+
+**Tests added (10):** on auditor prompt + seed — Rule-11
+presence in the system prompt, snapshot-block rendering when
+both url+snap present, omission when either is missing, 16 KB
+truncation with marker, ordering (UI block BEFORE file-state
+block), seed passthrough for both provided and absent cases. No
+runner-level tests — `captureUiSnapshot` is orchestration glue
+over the same `AgentManager` + `session.prompt` primitives Unit
+29's smoke route already exercises live; end-to-end validation
+needs a real running app at a URL.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+567/567 server tests green (557 before + 10 Unit 36 tests).
+
+**How to try it.** Start your app at some URL (e.g.
+`http://localhost:3000`). Make sure `MCP_PLAYWRIGHT_ENABLED=true`
+in `.env` AND `npm install -g @playwright/mcp && npx playwright
+install`. Then:
+
+```bash
+curl -X POST http://<host>:52243/api/swarm/start \
+  -H 'Content-Type: application/json' \
+  -u opencode:<password> \
+  -d '{
+    ...,
+    "preset": "blackboard",
+    "uiUrl": "http://localhost:3000",
+    "ambitionTiers": 5
+  }'
+```
+
+Watch the transcript for `[ui-audit] captured UI snapshot for
+<url> (<N> chars)` log lines — one per audit invocation. The
+auditor's verdicts should then incorporate what the app actually
+renders, not just what files got changed.
+
+---
+
 ## Session summary (Units 9–21, this conversation)
 
 Twelve units shipped in this session:
