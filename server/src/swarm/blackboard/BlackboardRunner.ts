@@ -34,8 +34,10 @@ import {
   type PlannerSeed,
 } from "./prompts/planner.js";
 import {
+  buildCouncilContractMergePrompt,
   buildFirstPassContractRepairPrompt,
   buildFirstPassContractUserPrompt,
+  type CouncilContractDraft,
   FIRST_PASS_CONTRACT_SYSTEM_PROMPT,
   parseFirstPassContractResponse,
   type ParsedContract,
@@ -65,6 +67,7 @@ import {
   WORKER_SYSTEM_PROMPT,
   type WorkerSeed,
 } from "./prompts/worker.js";
+import { config } from "../../config.js";
 
 // Blackboard preset: planner posts TODOs, workers drain them in a
 // claim/execute loop. Workers produce full-file diffs as JSON; the runner
@@ -286,7 +289,7 @@ export class BlackboardRunner implements SwarmRunner {
     let errored = false;
     let crashMessage: string | undefined;
     try {
-      await this.runFirstPassContract(planner, seed);
+      await this.runFirstPassContractOrchestrator(planner, workers, seed);
       if (this.stopping) return;
       await this.runPlanner(planner, seed);
       if (this.stopping) return;
@@ -447,15 +450,173 @@ export class BlackboardRunner implements SwarmRunner {
       );
     }
 
+    this.finalizeContract(parsed.contract, seed, agent);
+  }
+
+  // Unit 30: council-mode dispatch. When COUNCIL_CONTRACT_ENABLED is on AND
+  // there's at least one worker to add cognitive diversity, run the
+  // two-phase council flow (N drafts in parallel, then planner-merge). If
+  // the council flow produces nothing usable (all drafts failed to parse
+  // OR the merge itself failed), fall through to the legacy single-agent
+  // path so the run still gets a contract. When the flag is off, skip
+  // straight to single-agent.
+  private async runFirstPassContractOrchestrator(
+    planner: Agent,
+    workers: Agent[],
+    seed: PlannerSeed,
+  ): Promise<void> {
+    if (config.COUNCIL_CONTRACT_ENABLED && workers.length > 0) {
+      const merged = await this.tryCouncilContract(planner, workers, seed);
+      if (merged !== null) {
+        this.finalizeContract(merged, seed, planner);
+        return;
+      }
+      this.appendSystem(
+        "Council contract produced no usable drafts or merge failed; falling back to single-agent contract.",
+      );
+    }
+    await this.runFirstPassContract(planner, seed);
+  }
+
+  // Unit 30: two-phase council contract.
+  //
+  // Phase A (DRAFT): every agent in [planner, ...workers] produces a
+  // first-pass contract INDEPENDENTLY from the same seed. Parallel,
+  // peer-hidden (each agent's prompt is identical to the single-agent
+  // one — no agent sees any other agent's draft).
+  //
+  // Phase B (MERGE): the planner receives all parseable drafts in one
+  // prompt and produces the final authoritative contract. Uses the
+  // usual promptPlannerWithFallback so a planner cold-start failure
+  // cycles through workers as merge candidates.
+  //
+  // Returns the merged ParsedContract on success, OR the sole
+  // surviving draft when only 1 agent's draft parsed (no merge needed),
+  // OR null when nothing usable came back (caller falls back to
+  // single-agent). The caller is responsible for grounding + finalizing.
+  private async tryCouncilContract(
+    planner: Agent,
+    workers: Agent[],
+    seed: PlannerSeed,
+  ): Promise<ParsedContract | null> {
+    const allAgents = [planner, ...workers];
+    const draftPrompt = `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(
+      seed,
+    )}`;
+
+    this.appendSystem(
+      `Council contract: prompting ${allAgents.length} agents for independent first-pass drafts.`,
+    );
+
+    const draftResults = await Promise.allSettled(
+      allAgents.map(async (a) => {
+        const text = await this.promptAgent(a, draftPrompt);
+        return { agent: a, text };
+      }),
+    );
+
+    const drafts: CouncilContractDraft[] = [];
+    for (const r of draftResults) {
+      if (r.status !== "fulfilled") {
+        this.appendSystem(
+          `Council draft prompt rejected: ${
+            r.reason instanceof Error ? r.reason.message : String(r.reason)
+          }`,
+        );
+        continue;
+      }
+      this.appendAgent(r.value.agent, r.value.text);
+      const parsed = parseFirstPassContractResponse(r.value.text);
+      if (!parsed.ok) {
+        this.appendSystem(
+          `Council draft from ${r.value.agent.id} did not parse (${parsed.reason}); skipping.`,
+        );
+        continue;
+      }
+      if (parsed.dropped.length > 0) {
+        this.appendSystem(
+          `Council draft from ${r.value.agent.id}: dropped ${parsed.dropped.length} invalid criterion(s) at parse time.`,
+        );
+      }
+      drafts.push({ agentId: r.value.agent.id, contract: parsed.contract });
+    }
+
+    if (drafts.length === 0) {
+      this.appendSystem("Council contract: 0 drafts survived parsing.");
+      return null;
+    }
+    if (drafts.length === 1) {
+      this.appendSystem(
+        `Council contract: only 1 of ${allAgents.length} drafts parsed — using it directly (no merge).`,
+      );
+      return drafts[0].contract;
+    }
+
+    this.appendSystem(
+      `Council contract: ${drafts.length} drafts parsed; running merge via planner.`,
+    );
+    const mergePrompt = buildCouncilContractMergePrompt(seed, drafts);
+    const { response: mergeResponse, agentUsed: mergeAgent } =
+      await this.promptPlannerWithFallback(planner, mergePrompt);
+    if (this.stopping) return null;
+    this.appendAgent(mergeAgent, mergeResponse);
+
+    let mergeParsed = parseFirstPassContractResponse(mergeResponse);
+    if (!mergeParsed.ok) {
+      this.appendSystem(
+        `Council merge response did not parse (${mergeParsed.reason}). Issuing repair prompt.`,
+      );
+      const { response: repairResponse, agentUsed: repairAgent } =
+        await this.promptPlannerWithFallback(
+          mergeAgent,
+          `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractRepairPrompt(
+            mergeResponse,
+            mergeParsed.reason,
+          )}`,
+        );
+      if (this.stopping) return null;
+      this.appendAgent(repairAgent, repairResponse);
+      mergeParsed = parseFirstPassContractResponse(repairResponse);
+      if (!mergeParsed.ok) {
+        this.appendSystem(
+          `Council merge still invalid after repair (${mergeParsed.reason}). Using best draft (most criteria) as fallback.`,
+        );
+        // Deterministic tie-break: prefer the draft with the most criteria;
+        // ties go to the earliest agent (planner first). Gives us *some*
+        // contract rather than punting back to single-agent after we've
+        // already paid for N drafts.
+        const best = drafts.reduce((a, b) =>
+          b.contract.criteria.length > a.contract.criteria.length ? b : a,
+        );
+        return best.contract;
+      }
+    }
+    if (mergeParsed.dropped.length > 0) {
+      this.appendSystem(
+        `Council merge: dropped ${mergeParsed.dropped.length} invalid criterion(s) at parse time.`,
+      );
+    }
+    return mergeParsed.contract;
+  }
+
+  // Unit 6b grounding + contract publish, extracted (Unit 30) so both the
+  // single-agent and council paths produce identical downstream shape.
+  // `ownerAgent` is only used to label the agent on path-strip findings
+  // — both paths treat the planner as the nominal author.
+  private finalizeContract(
+    parsed: ParsedContract,
+    seed: PlannerSeed,
+    ownerAgent: Agent,
+  ): void {
     // Unit 6b: strip criterion paths not grounded in the REPO FILE LIST.
     // v9 showed rule 9 is ignorable as advice (planner invented `src/tests/`
     // despite colocated tests being right there); enforcement turns it from
     // "might work" into "only bindable paths can reach the auditor".
-    const groundedCriteria = parsed.contract.criteria.map((c, idx) => {
+    const groundedCriteria = parsed.criteria.map((c, idx) => {
       const { accepted, rejected } = classifyExpectedFiles(c.expectedFiles, seed.repoFiles);
       for (const r of rejected) {
         this.board.postFinding({
-          agentId: agent.id,
+          agentId: ownerAgent.id,
           text: `Contract c${idx + 1}: stripped suspicious path '${r.path}' (${r.reason}). Unit 5d linked-commit fallback will rebind from later commits.`,
           createdAt: Date.now(),
         });
@@ -468,7 +629,7 @@ export class BlackboardRunner implements SwarmRunner {
       return { description: c.description, expectedFiles: accepted };
     });
     const groundedContract: ParsedContract = {
-      missionStatement: parsed.contract.missionStatement,
+      missionStatement: parsed.missionStatement,
       criteria: groundedCriteria,
     };
 

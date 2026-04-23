@@ -1,8 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildCouncilContractMergePrompt,
   buildFirstPassContractRepairPrompt,
   buildFirstPassContractUserPrompt,
+  type CouncilContractDraft,
   FIRST_PASS_CONTRACT_SYSTEM_PROMPT,
   parseFirstPassContractResponse,
 } from "./firstPassContract.js";
@@ -228,5 +230,126 @@ describe("FIRST_PASS_CONTRACT prompts", () => {
     assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /USER DIRECTIVE.*AUTHORITATIVE/i);
     // Cap bumped 12 -> 20 to accommodate directive-driven runs.
     assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /Maximum 20 criteria/);
+  });
+});
+
+// Unit 30: council-style initial contract merge prompt.
+describe("buildCouncilContractMergePrompt", () => {
+  function draft(
+    agentId: string,
+    mission: string,
+    criteria: Array<{ description: string; expectedFiles: string[] }>,
+  ): CouncilContractDraft {
+    return { agentId, contract: { missionStatement: mission, criteria } };
+  }
+
+  it("renders every draft's mission statement and criteria list", () => {
+    const drafts: CouncilContractDraft[] = [
+      draft("agent-1", "Document the API.", [
+        { description: "README has Quick Start", expectedFiles: ["README.md"] },
+      ]),
+      draft("agent-2", "Polish the README.", [
+        { description: "Link license in README", expectedFiles: ["README.md", "LICENSE"] },
+      ]),
+    ];
+    const p = buildCouncilContractMergePrompt(seed(), drafts);
+    // Both missions appear
+    assert.match(p, /Document the API\./);
+    assert.match(p, /Polish the README\./);
+    // Both agents attributed
+    assert.match(p, /by agent-1/);
+    assert.match(p, /by agent-2/);
+    // Criteria descriptions visible
+    assert.match(p, /README has Quick Start/);
+    assert.match(p, /Link license in README/);
+    // Grounding block still present so merge can validate paths
+    assert.match(p, /REPO FILE LIST/);
+  });
+
+  it("labels drafts with their 1-based index", () => {
+    const drafts: CouncilContractDraft[] = [
+      draft("agent-1", "m1", []),
+      draft("agent-2", "m2", []),
+      draft("agent-3", "m3", []),
+    ];
+    const p = buildCouncilContractMergePrompt(seed(), drafts);
+    assert.match(p, /Draft 1/);
+    assert.match(p, /Draft 2/);
+    assert.match(p, /Draft 3/);
+  });
+
+  it("mentions the draft count in the framing line", () => {
+    const drafts: CouncilContractDraft[] = [
+      draft("agent-1", "m", []),
+      draft("agent-2", "m", []),
+      draft("agent-3", "m", []),
+      draft("agent-4", "m", []),
+    ];
+    const p = buildCouncilContractMergePrompt(seed(), drafts);
+    // e.g. "4 agents ... each drafted"
+    assert.match(p, /4 agents/);
+  });
+
+  it("renders an empty expectedFiles list as '(none)' for readability", () => {
+    const drafts: CouncilContractDraft[] = [
+      draft("agent-1", "m", [{ description: "outcome without files", expectedFiles: [] }]),
+    ];
+    const p = buildCouncilContractMergePrompt(seed(), drafts);
+    assert.match(p, /expectedFiles: \(none\)/);
+  });
+
+  it("includes merge rules for union/dedupe + grounding + 20-criterion cap", () => {
+    const drafts: CouncilContractDraft[] = [draft("agent-1", "m", [])];
+    const p = buildCouncilContractMergePrompt(seed(), drafts);
+    assert.match(p, /UNION/);
+    assert.match(p, /DEDUPE/);
+    assert.match(p, /Maximum 20 criteria/);
+    assert.match(p, /REPO FILE LIST/);
+  });
+
+  it("INCLUDES USER DIRECTIVE block and directive-specific rule when directive is present", () => {
+    const drafts: CouncilContractDraft[] = [draft("agent-1", "m", [])];
+    const p = buildCouncilContractMergePrompt(
+      seed({ userDirective: "Ship every README feature." }),
+      drafts,
+    );
+    assert.match(p, /USER DIRECTIVE \(AUTHORITATIVE/);
+    assert.match(p, /Ship every README feature\./);
+    // The directive-specific merge rule (authoritative language) shows up
+    assert.match(p, /MUST address every distinct outcome the directive names/);
+  });
+
+  it("OMITS USER DIRECTIVE block when directive is absent and says so in Rule 7", () => {
+    const drafts: CouncilContractDraft[] = [draft("agent-1", "m", [])];
+    const p = buildCouncilContractMergePrompt(seed({ userDirective: undefined }), drafts);
+    assert.ok(!p.includes("USER DIRECTIVE"), "no directive block when absent");
+    // Rule 7's no-directive variant is present instead
+    assert.match(p, /No user directive this run/);
+  });
+
+  it("OMITS USER DIRECTIVE block when directive is whitespace-only", () => {
+    const drafts: CouncilContractDraft[] = [draft("agent-1", "m", [])];
+    const p = buildCouncilContractMergePrompt(seed({ userDirective: "   " }), drafts);
+    assert.ok(!p.includes("USER DIRECTIVE"), "whitespace directive treated as absent");
+  });
+
+  it("falls back gracefully when repoFiles is empty", () => {
+    const drafts: CouncilContractDraft[] = [draft("agent-1", "m", [])];
+    const p = buildCouncilContractMergePrompt(seed({ repoFiles: [] }), drafts);
+    assert.match(p, /REPO FILE LIST/);
+    assert.match(p, /clone may be unreadable/);
+  });
+
+  it("falls back gracefully when readmeExcerpt is null", () => {
+    const drafts: CouncilContractDraft[] = [draft("agent-1", "m", [])];
+    const p = buildCouncilContractMergePrompt(seed({ readmeExcerpt: null }), drafts);
+    assert.match(p, /no README found/);
+  });
+
+  it("instructs to output ONLY a JSON object (no prose, no fences)", () => {
+    const drafts: CouncilContractDraft[] = [draft("agent-1", "m", [])];
+    const p = buildCouncilContractMergePrompt(seed(), drafts);
+    assert.match(p, /No prose/);
+    assert.match(p, /no fences/);
   });
 });

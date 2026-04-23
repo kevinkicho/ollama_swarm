@@ -54,6 +54,22 @@ const Schema = z.object({
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // Unit 30: council-style initial contract for the blackboard preset.
+  // When enabled, turn 0 runs a two-phase contract pass:
+  //   (a) DRAFT — all N agents independently produce a first-pass
+  //       contract from the same seed, in parallel (peer-hidden)
+  //   (b) MERGE — the planner sees every draft and produces a single
+  //       authoritative contract (union distinct outcomes, dedupe
+  //       synonyms, prefer grounded paths)
+  // Buys cognitive diversity on contract framing without changing the
+  // rest of the run (todos + audit still flow through agent-1 as
+  // planner, preserving session continuity). Default OFF so existing
+  // runs are unaffected; turn it on to A/B whether N-draft contracts
+  // catch anything agent-1-alone missed.
+  COUNCIL_CONTRACT_ENABLED: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
 });
 
 const parsed = Schema.parse(process.env);

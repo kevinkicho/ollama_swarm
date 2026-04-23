@@ -223,6 +223,103 @@ export function buildFirstPassContractUserPrompt(seed: PlannerSeed): string {
   ].join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// Unit 30: council-style initial contract.
+//
+// Opt-in via COUNCIL_CONTRACT_ENABLED. When enabled, every agent in the
+// swarm produces a first-pass contract DRAFT independently from the same
+// seed (parallel, peer-hidden, same prompt as the single-agent path).
+// Then the planner sees every draft and produces the final authoritative
+// contract via buildCouncilContractMergePrompt. The merge prompt reuses
+// the seed's grounding material (REPO FILE LIST, README excerpt, user
+// directive) so merge decisions can still be grounded in real repo
+// structure rather than just averaged across drafts.
+//
+// Draft shape matches ParsedContract (the same shape
+// parseFirstPassContractResponse emits). Each draft is tagged with its
+// producing agent's id so the merge prompt can cite who proposed what.
+// ---------------------------------------------------------------------------
+
+export interface CouncilContractDraft {
+  agentId: string;
+  contract: ParsedContract;
+}
+
+export function buildCouncilContractMergePrompt(
+  seed: PlannerSeed,
+  drafts: readonly CouncilContractDraft[],
+): string {
+  const draftBlocks = drafts
+    .map((d, i) => {
+      const criteriaList = d.contract.criteria
+        .map((c, ci) => {
+          const files = c.expectedFiles.length > 0
+            ? c.expectedFiles.join(", ")
+            : "(none)";
+          return `    ${ci + 1}. ${c.description}  [expectedFiles: ${files}]`;
+        })
+        .join("\n");
+      return [
+        `=== Draft ${i + 1} — by ${d.agentId} ===`,
+        `missionStatement: ${d.contract.missionStatement}`,
+        `criteria (${d.contract.criteria.length}):`,
+        criteriaList.length > 0 ? criteriaList : "    (none)",
+        `=== end Draft ${i + 1} ===`,
+      ].join("\n");
+    })
+    .join("\n\n");
+
+  const fileList = seed.repoFiles.length > 0
+    ? seed.repoFiles.join("\n")
+    : "(no files listed — clone may be unreadable)";
+  const readme = seed.readmeExcerpt
+    ? seed.readmeExcerpt.slice(0, 2000)
+    : "(no README found at repo root)";
+
+  const directive = seed.userDirective?.trim();
+  const directiveBlock = directive
+    ? [
+        "=== USER DIRECTIVE (AUTHORITATIVE — see Rule 11) ===",
+        directive,
+        "=== end USER DIRECTIVE ===",
+        "",
+      ]
+    : [];
+
+  return [
+    ...directiveBlock,
+    `Repository: ${seed.repoUrl}`,
+    `Clone path: ${seed.clonePath}`,
+    "",
+    `You are the PLANNER. ${drafts.length} agents (including you) each drafted an EXIT CONTRACT for this run INDEPENDENTLY — none of them saw each other's drafts. Your task NOW is to MERGE their drafts into ONE authoritative contract that this run will be audited against.`,
+    "",
+    "=== DRAFTS ===",
+    draftBlocks,
+    "=== end DRAFTS ===",
+    "",
+    "=== REPO FILE LIST (for grounding expectedFiles) ===",
+    fileList,
+    "=== end REPO FILE LIST ===",
+    "",
+    "=== README excerpt (first 2000 chars) ===",
+    readme,
+    "=== end README ===",
+    "",
+    "MERGE RULES:",
+    "1. Output ONLY a single JSON object of shape {\"missionStatement\": string, \"criteria\": [...]}. No prose, no fences.",
+    "2. `missionStatement`: pick the clearest wording across the drafts, or synthesize a sharper one. One sentence.",
+    "3. `criteria`: UNION the distinct outcomes across drafts. DEDUPE criteria that express the same outcome in different wording — pick the clearest phrasing and keep it once. Prefer SPECIFIC over VAGUE.",
+    "4. For each criterion's `expectedFiles`: when drafts disagree on paths, pick paths grounded in the REPO FILE LIST; when unsure, default to `[]` (the auditor's linked-commit fallback will rebind from later work).",
+    "5. Maximum 20 criteria. If drafts collectively propose more, pick the most important, specific, and repo-grounded ones.",
+    "6. `expectedFiles` entries are FILE paths, never directories. No trailing `/` or `\\`.",
+    directive
+      ? "7. USER DIRECTIVE (above) is AUTHORITATIVE. The merged `missionStatement` and `criteria` MUST address every distinct outcome the directive names, regardless of whether individual drafts missed any."
+      : "7. No user directive this run — merge based on the drafts and repo alone.",
+    "",
+    "Output the merged JSON object now.",
+  ].join("\n");
+}
+
 export function buildFirstPassContractRepairPrompt(
   previousResponse: string,
   parseError: string,
