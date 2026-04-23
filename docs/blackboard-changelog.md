@@ -2308,7 +2308,71 @@ parallel fan-out at 4+ agents on cloud-glm-5.1 is a hard ceiling.
 
 ---
 
-## Session summary (Units 9–18, this conversation)
+## Unit 18b — Back out pre-batch parallel warmup (keep serial spawn-warmup)  **[committed: pending]**
+
+The 2026-04-22 battle test v4 (post Unit 18) showed mixed results:
+
+- **debate-judge: 29% → 100%** (huge win, completed in 2:11)
+- **stigmergy: 100% → 100%** (faster: 5min → 3:16)
+- **map-reduce: 40% → 60%** (small win, 1/4 → 2/4 mappers)
+- **role-diff: 100% → 27%** (big regression — 5-agent serial-warmup
+  overhead ate the budget, plus cloud variance)
+- **council: 50% → 33%** (regression — **12 timeouts vs v3's 6**;
+  pre-batch parallel warmup batch hit the same cloud cold-start
+  ceiling as the real batch)
+- **OW: 80% → 50%** (regression — same shape as council)
+
+Aggregate: 75% → 59% (-10 turns net). See
+`runs/battle-test-v3/comparison-v2-v3.md` and v4 extraction for the
+full picture.
+
+**Diagnosis.** The pre-batch parallel warmup was supposed to spread
+cold-start cost across small prompts before the real (large) parallel
+batch. v4 showed this didn't work — the cloud load balancer's
+parallel-cold-start ceiling applied to the warmup batch too. Doubling
+the parallel cold-start surface (warmup + real) made things worse,
+not better. The serial spawn-warmup alone (Unit 18's other half) is
+the part that actually helped — debate-judge benefited from it
+because it has no pre-batch warmup applied (debate-judge is serial).
+
+**Fix.** Back out the pre-batch parallel warmup from CouncilRunner,
+OrchestratorWorkerRunner, and MapReduceRunner. Keep the serial
+spawn-warmup pattern (Unit 18's other half) in all 7 runners — that
+part demonstrably works for debate-judge and stigmergy and is
+neutral-to-positive for the rest.
+
+- `CouncilRunner.loop()` — `if (r === 1) await warmupParallel(agents)`
+  call deleted; comment notes the v4 evidence that drove the revert.
+- `OrchestratorWorkerRunner.loop()` — same deletion; the
+  `assignedWorkers`-building block also removed.
+- `MapReduceRunner.loop()` — same deletion. Map-reduce was the one
+  preset where pre-batch warmup measurably helped (40% → 60%), but
+  the gain was small and the consistency win of removing it across
+  all three parallel-fan-out runners is worth more than the 1
+  additional mapper.
+- The `warmupParallel` helper on `AgentManager` stays — costs nothing
+  to keep available, and a future Unit 19/20 might want it back.
+
+**What stays from Unit 18.**
+- `SpawnOpts.skipWarmup` — still on, used by all 7 runners.
+- `AgentManager.warmupSerially` — still called from every runner's
+  `start()` after the parallel spawn batch.
+- `AgentManager.warmupParallel` — kept as a public method (no callers
+  for now).
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+446/446 server tests green (no test count change). E2E validation:
+v5 battle test will compare against v4. Predicted deltas:
+- council/OW recover from v4 regression toward v3 levels
+- debate-judge stays at 100% (uses only serial spawn-warmup)
+- stigmergy stays at 100%
+- role-diff still at risk if cloud variance / serial-warmup overhead
+  bites
+- map-reduce loses the small v4 gain (40% expected, not 60%)
+
+---
+
+## Session summary (Units 9–18b, this conversation)
 
 Nine units shipped in this session:
 

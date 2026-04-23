@@ -152,16 +152,10 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
 
         // EXECUTE — workers fire in parallel. Each sees ONLY its assigned
         // subtask + the seed, not the full transcript or peer reports.
-        // Unit 18: pre-batch parallel warmup before the first cycle's
-        // worker fan-out. Spawn-time serial warmup loaded one shard each
-        // but they may have cooled while the lead was planning. Subsequent
-        // cycles skip — by then the workers are demonstrably warm.
-        if (r === 1) {
-          const assignedWorkers = plan.assignments
-            .map((a) => workers.find((w) => w.index === a.agentIndex))
-            .filter((w): w is Agent => !!w);
-          await this.opts.manager.warmupParallel(assignedWorkers);
-        }
+        // Unit 18b (2026-04-22): pre-batch parallel warmup REMOVED. v4
+        // battle test showed it didn't help OW (same 50% success vs
+        // worse) — the parallel cold-start ceiling applied to the warmup
+        // batch too. OW relies on serial spawn-warmup from start() only.
         const seedSnapshot = this.transcript.filter((e) => e.role === "system");
         await Promise.allSettled(
           plan.assignments.map((a) => {

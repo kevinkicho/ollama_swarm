@@ -127,15 +127,12 @@ export class CouncilRunner implements SwarmRunner {
         const snapshot: readonly TranscriptEntry[] = [...this.transcript];
         const agents = this.opts.manager.list();
 
-        // Unit 18: pre-batch parallel warmup before the first parallel real
-        // batch. Spawn-time serial warmup loaded one shard each, but cloud
-        // shards may have cooled by the time round 1 fires. A parallel
-        // warmup of small prompts re-warms N shards faster than the real
-        // batch would (small prompts are easier on the load balancer).
-        // Subsequent rounds skip — by then the agents are demonstrably warm.
-        if (r === 1) {
-          await this.opts.manager.warmupParallel(agents);
-        }
+        // Unit 18b (2026-04-22): pre-batch parallel warmup REMOVED. v4
+        // battle test showed it doubled timeout count (12 vs v3's 6) and
+        // retry count (8 vs 4) — the parallel warmup batch hit the same
+        // cloud cold-start ceiling as the real batch it was meant to
+        // protect. Serial spawn-warmup stays in start(); council relies
+        // on that alone now.
 
         // Fan out: runTurn appends to this.transcript as each agent returns,
         // so the UI sees drafts populate in real time while the prompts above

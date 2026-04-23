@@ -142,14 +142,14 @@ export class MapReduceRunner implements SwarmRunner {
 
         this.appendSystem(`Cycle ${r}/${cfg.rounds}: MAP phase — mappers inspecting slices in parallel.`);
 
-        // Unit 18: pre-batch parallel warmup before the first cycle's
-        // mapper fan-out. v3 battle test showed 3 of 4 mappers timed out
-        // identically with and without spawn-time warmup — parallel cold
-        // starts overwhelm the cloud load balancer. Warming with N small
-        // prompts before the N large prompts spreads the cold-start cost.
-        if (r === 1) {
-          await this.opts.manager.warmupParallel(mappers);
-        }
+        // Unit 18b (2026-04-22): pre-batch parallel warmup REMOVED for
+        // consistency with council/OW after v4 battle test showed it
+        // hurt them. Map-reduce was the only one of the three where v4
+        // pre-batch warmup actually improved coverage (1/4 -> 2/4
+        // mappers), but the gain was small (40% -> 60%) vs the
+        // regressions elsewhere. Keep the simpler shape — serial
+        // spawn-warmup only — and revisit if MR coverage proves a
+        // ceiling separately worth a dedicated fix.
 
         // MAP — mappers fire in parallel. Each sees only its assigned slice
         // + the seed. No transcript, no peer reports.
