@@ -45,7 +45,10 @@ describe("checkCaps", () => {
     const reason = checkCaps(baseState({ now: WALL_CLOCK_CAP_MS }));
     assert.ok(reason, "should fire");
     assert.match(reason!, /wall-clock cap/);
-    assert.match(reason!, /20 min/);
+    // Unit 23: assert against the actual configured cap rather than
+    // hardcoding "20 min" — caps.ts may bump the value over time.
+    const minutes = Math.round(WALL_CLOCK_CAP_MS / 60_000);
+    assert.match(reason!, new RegExp(`${minutes} min`));
   });
 
   it("fires the wall-clock cap well past the boundary", () => {
