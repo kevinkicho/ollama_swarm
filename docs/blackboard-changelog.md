@@ -2308,7 +2308,7 @@ parallel fan-out at 4+ agents on cloud-glm-5.1 is a hard ceiling.
 
 ---
 
-## Unit 18b — Back out pre-batch parallel warmup (keep serial spawn-warmup)  **[committed: pending]**
+## Unit 18b — Back out pre-batch parallel warmup (keep serial spawn-warmup)  **[committed: `0644a9b`]**
 
 The 2026-04-22 battle test v4 (post Unit 18) showed mixed results:
 
