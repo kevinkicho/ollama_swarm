@@ -2465,9 +2465,98 @@ test needed for this unit alone.
 
 ---
 
-## Session summary (Units 9–19, this conversation)
+## Unit 20 — Agent tools fix (read-only profile for discussion presets)  **[committed: pending]**
 
-Eleven units shipped in this session:
+Discovered during the v4 battle test post-mortem: discussion-only
+presets' agents kept saying *"I don't have a file-read skill available
+in this environment"* despite their prompts explicitly telling them
+to use file-read / grep / find-files tools. Initial guess was
+`agent: "swarm"` was an unknown profile; actual root cause was the
+opposite — `swarm` IS configured (in
+`RepoService.writeOpencodeConfig`'s synthesized `opencode.json`), but
+intentionally with **all tools disabled**. Phase 4 dry-run had broken
+when the default agent's `edit` tool let glm-5.1:cloud sneak real
+file edits into JSON-diff-only worker output, so we hard-disabled
+everything as a safety move.
+
+Trade-off this leaves: blackboard workers stay safe, but the 6
+discussion-only presets (round-robin, role-diff, council,
+debate-judge, orchestrator-worker, map-reduce, stigmergy) inherit the
+same no-tools profile and operate on seed text alone — agents have
+been guessing about the repo from filenames and hallucinating file
+citations across every battle test we've run.
+
+**Fix.** Add a second agent profile `swarm-read` with read-only tools
+enabled (`read` / `grep` / `glob` / `list`) and write-side tools hard
+denied (`edit` / `write` / `bash` / `multiedit` / `patch` etc. all
+`false` plus `permission.edit:"deny"` / `permission.bash:"deny"`).
+Discussion presets pass `agent: "swarm-read"`; blackboard worker keeps
+`agent: "swarm"` (unchanged).
+
+**Mechanic.**
+
+- `server/src/services/RepoService.ts` —
+  `writeOpencodeConfig.payload.agent` gains a second profile
+  `swarm-read` alongside the existing `swarm`. Comment block expanded
+  to explain when each is used and the safety property (write-side
+  off in BOTH profiles, even though `swarm-read` has reads on).
+- `server/src/swarm/promptWithRetry.ts` — `PromptWithRetryOptions`
+  gains optional `agentName?: string`. Defaults to `"swarm"` (the
+  no-tools profile blackboard workers depend on; backward-compatible
+  for any caller that doesn't opt in). The hardcoded `agent: "swarm"`
+  in the inner `session.prompt` body becomes `agent: agentName`.
+- The 6 non-blackboard runners (`RoundRobinRunner`, `CouncilRunner`,
+  `OrchestratorWorkerRunner`, `DebateJudgeRunner`, `MapReduceRunner`,
+  `StigmergyRunner`) — each `promptWithRetry` call now passes
+  `agentName: "swarm-read"`. Blackboard's `BlackboardRunner.promptAgent`
+  is unchanged (defaults to `"swarm"`, exactly as it has been since
+  Phase 4).
+- `server/src/services/RepoService.test.ts` — 3 new safety-property
+  tests:
+  - Both `swarm` and `swarm-read` profiles exist after
+    `writeOpencodeConfig`.
+  - `swarm.tools.*` are ALL `false` (locks down blackboard worker
+    safety — if a future edit accidentally enables a tool, this fails).
+  - `swarm-read.tools.{read,grep,glob}` are `true`;
+    `swarm-read.tools.{write,edit,bash}` are `false`; permission deny
+    entries present. Locks down "discussion presets stay
+    discussion-only by enforcement, not by hope."
+
+**What this changes for users.**
+
+Run any discussion-only preset on a repo with substantive code; agent
+turns should now contain real file citations (read via the read tool)
+instead of hallucinated paths. Compared to v3-v5 battle tests where
+agents wrote generic-sounding takes from seed text, post-Unit-20
+output should be visibly more concrete — actual quoted lines, real
+function names, accurate descriptions of what's in `src/foo.ts`.
+
+**What this does NOT change.**
+
+- Blackboard's worker agent is unchanged. Workers still get pre-fetched
+  file contents in the prompt and still must return JSON diffs.
+- No new agent statuses, no UI changes, no telemetry additions.
+- The warmup prompt at spawn (Unit 17) still uses the default `swarm`
+  agent — warmup is "Reply with 'ok'", no tools needed.
+
+**What's not been validated yet.**
+
+Unit 20 ships tsc-clean + 449/449 tests green, but the runtime quality
+improvement is observable only by running the presets with the new
+code. No new battle test kicked off — the user explicitly called
+Unit 20 a "separate arc from throughput work." Next time anyone runs
+a discussion-only preset and sees agents quote real file content,
+we'll know it landed.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+449/449 server tests green (446 before + 3 Unit 20 safety-property
+tests).
+
+---
+
+## Session summary (Units 9–20, this conversation)
+
+Twelve units shipped in this session:
 
 - **Unit 9** — Windows tree-kill for clean shutdown. Fixed the
   port-leak the user hit when Ctrl+C'ing `npm run dev`. Port
@@ -2529,23 +2618,22 @@ Eleven units shipped in this session:
   `preset`, `agentId`) to `logs/current.jsonl`. No runtime change.
   Future battle-test comparisons can compute per-call latency to
   separate cloud variance from code effect.
+- **Unit 20** — Agent tools fix. The 6 discussion-only runners now
+  pass `agent: "swarm-read"` to the SDK; a new `swarm-read` profile
+  in the synthesized `opencode.json` enables read-only inspection
+  tools (read / grep / glob / list) while keeping write / edit /
+  bash hard-denied. Blackboard worker stays on the no-tools `swarm`
+  profile, unchanged. Discussion presets' agents can finally read
+  the files their prompts have been telling them to read all along
+  — should produce visibly more concrete output (real quotes from
+  actual code instead of hallucinated file citations).
 
 Roster after this session: **eight shipped presets** (round-robin
 baseline + 7 intentional designs) **all with retry parity, Unit 17
-auto-warmup at spawn, and Unit 19 per-call timing telemetry**. Every
+auto-warmup at spawn, Unit 19 per-call timing telemetry, AND
+Unit 20 read-only file access for discussion presets**. Every
 pattern named in the original catalog (`docs/swarm-patterns.md`) is
 now either shipped or deferred with a documented rationale.
-
-**Open follow-ups (NOT shipped this session):**
-- **Unit 20 candidate** — agent tools fix. Discussion-only presets
-  (round-robin, role-diff, council, debate-judge, OW workers,
-  map-reduce mappers, stigmergy) currently send `agent: "swarm"` to
-  the SDK, which falls back to a no-tools profile. Agents have no
-  `file-read`/`grep`/`find-files` access despite prompts asking
-  them to use those. Fix: drop the `agent` specifier so OpenCode
-  uses its default `build` profile (which has tools), or configure
-  a `swarm` profile in `opencode.json`. Probably the biggest
-  remaining quality lever. Separate arc from the throughput work.
 
 ---
 

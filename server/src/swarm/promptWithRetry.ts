@@ -40,6 +40,12 @@ export interface PromptWithRetryOptions {
   // per-call latency for post-run extraction. Caller writes to the diag
   // log channel; the helper itself doesn't touch logging.
   onTiming?: (info: TimingInfo) => void;
+  // Unit 20: which OpenCode agent profile to use. Defaults to "swarm"
+  // (the no-tools profile blackboard workers need so they return JSON
+  // diffs instead of editing files via tools). Discussion-only presets
+  // pass "swarm-read" so their agents can actually use the file-read /
+  // grep / glob tools that their prompts ask them to use.
+  agentName?: string;
 }
 
 export interface RetryInfo {
@@ -71,6 +77,7 @@ export async function promptWithRetry(
 ): Promise<unknown> {
   const describe = opts.describeError ?? defaultDescribeError;
   const sleep = opts.sleep ?? defaultInterruptibleSleep;
+  const agentName = opts.agentName ?? "swarm";
   let lastErr: unknown;
   for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
     const t0 = Date.now();
@@ -78,7 +85,7 @@ export async function promptWithRetry(
       const res = await agent.client.session.prompt({
         path: { id: agent.sessionId },
         body: {
-          agent: "swarm",
+          agent: agentName,
           model: { providerID: "ollama", modelID: agent.model },
           parts: [{ type: "text", text: promptText }],
         },

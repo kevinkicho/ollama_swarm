@@ -208,3 +208,66 @@ test("listRepoFiles — is deterministic for a given tree (same tree → same ou
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+// Unit 20: writeOpencodeConfig synthesizes two agent profiles. `swarm`
+// stays no-tools (blackboard worker safety — must return JSON diffs);
+// `swarm-read` enables read-only inspection tools so discussion presets
+// can actually use the file-read / grep / glob calls their prompts ask
+// for. These tests lock down the safety property: NO write/edit/bash
+// for either profile, ever.
+test("writeOpencodeConfig — both swarm and swarm-read agent profiles present", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-cfg-"));
+  try {
+    const repos = new RepoService();
+    await repos.writeOpencodeConfig(root, "test-model");
+    const raw = await fs.readFile(path.join(root, "opencode.json"), "utf8");
+    const cfg = JSON.parse(raw) as { agent?: Record<string, unknown> };
+    assert.ok(cfg.agent, "agent block must exist");
+    assert.ok(cfg.agent["swarm"], "swarm profile must exist");
+    assert.ok(cfg.agent["swarm-read"], "swarm-read profile must exist");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("writeOpencodeConfig — swarm profile has ALL tools disabled (blackboard worker safety)", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-cfg-"));
+  try {
+    const repos = new RepoService();
+    await repos.writeOpencodeConfig(root, "test-model");
+    const cfg = JSON.parse(await fs.readFile(path.join(root, "opencode.json"), "utf8")) as {
+      agent: Record<string, { tools: Record<string, boolean> }>;
+    };
+    const tools = cfg.agent["swarm"].tools;
+    for (const [name, enabled] of Object.entries(tools)) {
+      assert.equal(enabled, false, `swarm.tools.${name} must be false (blackboard workers must not use tools — they return JSON diffs)`);
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("writeOpencodeConfig — swarm-read enables read tools, denies write/edit/bash", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-cfg-"));
+  try {
+    const repos = new RepoService();
+    await repos.writeOpencodeConfig(root, "test-model");
+    const cfg = JSON.parse(await fs.readFile(path.join(root, "opencode.json"), "utf8")) as {
+      agent: Record<string, { tools: Record<string, boolean>; permission?: Record<string, string> }>;
+    };
+    const profile = cfg.agent["swarm-read"];
+    // Read-side: should be ON
+    assert.equal(profile.tools.read, true, "swarm-read.tools.read must be true");
+    assert.equal(profile.tools.grep, true, "swarm-read.tools.grep must be true");
+    assert.equal(profile.tools.glob, true, "swarm-read.tools.glob must be true");
+    // Write-side: must stay OFF (the safety property)
+    assert.equal(profile.tools.write, false, "swarm-read.tools.write must be false (discussion-only)");
+    assert.equal(profile.tools.edit, false, "swarm-read.tools.edit must be false (discussion-only)");
+    assert.equal(profile.tools.bash, false, "swarm-read.tools.bash must be false (discussion-only)");
+    // Belt-and-suspenders permission deny
+    assert.equal(profile.permission?.edit, "deny");
+    assert.equal(profile.permission?.bash, "deny");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

@@ -123,16 +123,31 @@ export class RepoService {
           },
         },
       },
-      // Custom agent we ask every session to run as. Tools + filesystem
-      // permissions are all locked off so glm-5.1:cloud can't sneak real file
-      // edits through opencode's built-in tool loop — the Phase 4 dry-run
-      // broke because the default agent had `edit` enabled and the model used
-      // it instead of returning JSON diffs. We pass `agent: "swarm"` on every
-      // session.prompt call (see BlackboardRunner.promptAgent).
+      // Two agent profiles:
+      //
+      // - `swarm` — used by BlackboardRunner workers. Tools + filesystem
+      //   permissions ALL locked off so glm-5.1:cloud can't sneak real
+      //   file edits through opencode's built-in tool loop (Phase 4
+      //   dry-run broke because the default agent had `edit` enabled
+      //   and the model used it instead of returning JSON diffs).
+      //   Workers must return their changes as structured JSON; the
+      //   runner writes them after CAS check.
+      //
+      // - `swarm-read` — Unit 20: used by discussion-only presets
+      //   (round-robin, role-diff, council, debate-judge,
+      //   orchestrator-worker, map-reduce, stigmergy). These agents'
+      //   prompts already tell them to use file-read / grep / find-files
+      //   to inspect the repo; before Unit 20 those instructions were
+      //   a lie because the prompts ran under `swarm` (no tools).
+      //   `swarm-read` enables READ-only tools (read / grep / glob /
+      //   list) so agents can actually inspect the code, while keeping
+      //   write / edit / bash hard-denied so they can't accidentally
+      //   modify the clone — discussion-only stays discussion-only by
+      //   enforcement, not by hope.
       agent: {
         swarm: {
           mode: "primary" as const,
-          description: "Pure text-in/text-out agent for the ollama_swarm orchestrator. No filesystem or shell access.",
+          description: "Pure text-in/text-out agent for the ollama_swarm blackboard worker. No filesystem or shell access.",
           tools: {
             read: false,
             write: false,
@@ -143,6 +158,30 @@ export class RepoService {
             grep: false,
             glob: false,
             list: false,
+            webfetch: false,
+            task: false,
+            todoread: false,
+            todowrite: false,
+          },
+          permission: {
+            edit: "deny" as const,
+            bash: "deny" as const,
+            webfetch: "deny" as const,
+          },
+        },
+        "swarm-read": {
+          mode: "primary" as const,
+          description: "Read-only inspection agent for the ollama_swarm discussion presets. Read / grep / glob / list enabled; edit / write / bash hard-denied.",
+          tools: {
+            read: true,
+            grep: true,
+            glob: true,
+            list: true,
+            write: false,
+            edit: false,
+            multiedit: false,
+            patch: false,
+            bash: false,
             webfetch: false,
             task: false,
             todoread: false,

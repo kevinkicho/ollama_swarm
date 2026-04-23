@@ -163,6 +163,9 @@ export class RoundRobinRunner implements SwarmRunner {
       // to 3 attempts with [4s, 16s] backoff before giving up.
       const res = await promptWithRetry(agent, prompt, {
         signal: controller.signal,
+        // Unit 20: read-only tools (file-read / grep / glob / list).
+        // Discussion-only presets — never edits.
+        agentName: "swarm-read",
         describeError: (e) => this.describeSdkError(e),
         onTiming: ({ attempt, elapsedMs, success }) =>
           this.opts.logDiag?.({

@@ -218,6 +218,8 @@ export class MapReduceRunner implements SwarmRunner {
       // Unit 16: shared retry wrapper.
       const res = await promptWithRetry(agent, prompt, {
         signal: controller.signal,
+        // Unit 20: read-only tools for discussion presets.
+        agentName: "swarm-read",
         describeError: describeSdkError,
         onTiming: ({ attempt, elapsedMs, success }) =>
           this.opts.logDiag?.({
