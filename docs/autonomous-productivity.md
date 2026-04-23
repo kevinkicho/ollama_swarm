@@ -92,9 +92,12 @@ yet. **→ Unit 36 (planned).**
 | 41   | Stop endpoint awaits verified kill           | shipped (`e71dd84`, 2026-04-23)|
 | 42   | Per-agent model selection (planner vs worker)| shipped (`542a273`, 2026-04-23)|
 | 43   | Per-run wall-clock cap override              | shipped (`32da3b5`, 2026-04-23)|
-| 44+  | Cross-run resume + tier-aware replay        | hypothesized                   |
-| 44+  | Auto-start app (workers execute shell)      | hypothesized                   |
-| 44+  | Persistent swarm-ui across audits           | hypothesized                   |
+| 44b  | Anchor-windowed worker seed (middle-row fix) | shipped (`6185a4a`, 2026-04-23)|
+| 45   | Per-file claim priority / row-range splits  | planned                        |
+| 46   | Per-model timeout + audit-context truncation| planned                        |
+| 47+  | Cross-run resume + tier-aware replay        | hypothesized                   |
+| 47+  | Auto-start app (workers execute shell)      | hypothesized                   |
+| 47+  | Persistent swarm-ui across audits           | hypothesized                   |
 
 ## Unit 34 — Ambition ratchet (spec-lite)
 
