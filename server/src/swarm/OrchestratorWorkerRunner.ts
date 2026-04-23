@@ -76,7 +76,8 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
     this.setPhase("spawning");
     const spawnTasks: Promise<Agent>[] = [];
     for (let i = 1; i <= cfg.agentCount; i++) {
-      spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model }));
+      // Unit 18: skip per-spawn warmup; we warm serially below.
+      spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model, skipWarmup: true }));
     }
     const results = await Promise.allSettled(spawnTasks);
     const ready = results
@@ -87,6 +88,7 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
     this.appendSystem(
       `${ready.length}/${cfg.agentCount} agents ready on ports ${ready.map((a) => a.port).join(", ")}. Agent 1 is the LEAD; agents 2..${cfg.agentCount} are WORKERS.`,
     );
+    await this.opts.manager.warmupSerially(ready);
 
     this.setPhase("seeding");
     await this.seed(destPath, cfg);
@@ -150,6 +152,16 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
 
         // EXECUTE — workers fire in parallel. Each sees ONLY its assigned
         // subtask + the seed, not the full transcript or peer reports.
+        // Unit 18: pre-batch parallel warmup before the first cycle's
+        // worker fan-out. Spawn-time serial warmup loaded one shard each
+        // but they may have cooled while the lead was planning. Subsequent
+        // cycles skip — by then the workers are demonstrably warm.
+        if (r === 1) {
+          const assignedWorkers = plan.assignments
+            .map((a) => workers.find((w) => w.index === a.agentIndex))
+            .filter((w): w is Agent => !!w);
+          await this.opts.manager.warmupParallel(assignedWorkers);
+        }
         const seedSnapshot = this.transcript.filter((e) => e.role === "system");
         await Promise.allSettled(
           plan.assignments.map((a) => {

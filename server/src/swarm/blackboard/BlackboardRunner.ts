@@ -216,10 +216,15 @@ export class BlackboardRunner implements SwarmRunner {
     // Planner is always index 1. Workers take 2..N. If the user picks
     // agentCount=1 there are no workers — planner posts TODOs, nothing drains
     // them, and we transition straight to completed. Documented in README.
+    // Unit 18: skipWarmup on spawn; warm serially across all agents
+    // after the parallel spawn batch returns (spawn-time parallel
+    // warmup overwhelmed the cloud load balancer in v3 — see
+    // runs/battle-test-v3/comparison-v2-v3.md).
     const planner = await this.opts.manager.spawnAgent({
       cwd: destPath,
       index: 1,
       model: cfg.model,
+      skipWarmup: true,
     });
     this.appendSystem(`Planner agent ready on port ${planner.port}`);
 
@@ -229,7 +234,7 @@ export class BlackboardRunner implements SwarmRunner {
       // Parallel spawn: each opencode serve takes a few seconds to boot,
       // sequential would compound that for every extra worker.
       const workerSpawns = Array.from({ length: workerCount }, (_, i) =>
-        this.opts.manager.spawnAgent({ cwd: destPath, index: 2 + i, model: cfg.model }),
+        this.opts.manager.spawnAgent({ cwd: destPath, index: 2 + i, model: cfg.model, skipWarmup: true }),
       );
       const spawned = await Promise.all(workerSpawns);
       workers.push(...spawned);
@@ -237,6 +242,10 @@ export class BlackboardRunner implements SwarmRunner {
     } else {
       this.appendSystem("No workers spawned (agentCount=1). Planner will post TODOs, nothing will drain them.");
     }
+    // Serial warmup across all agents (planner first, then workers).
+    // Workers in blackboard pull from a board rather than fan out in
+    // parallel batches, so no pre-batch warmup needed beyond this.
+    await this.opts.manager.warmupSerially([planner, ...workers]);
 
     // Freeze the roster for the summary artifact — killAll() will later
     // empty AgentManager's own map.

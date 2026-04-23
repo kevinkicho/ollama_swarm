@@ -73,7 +73,8 @@ export class CouncilRunner implements SwarmRunner {
     this.setPhase("spawning");
     const spawnTasks: Promise<Agent>[] = [];
     for (let i = 1; i <= cfg.agentCount; i++) {
-      spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model }));
+      // Unit 18: skip per-spawn warmup; we warm serially below.
+      spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model, skipWarmup: true }));
     }
     const results = await Promise.allSettled(spawnTasks);
     const ready = results
@@ -83,6 +84,7 @@ export class CouncilRunner implements SwarmRunner {
     this.appendSystem(
       `${ready.length}/${cfg.agentCount} agents ready on ports ${ready.map((a) => a.port).join(", ")}`,
     );
+    await this.opts.manager.warmupSerially(ready);
 
     this.setPhase("seeding");
     await this.seed(destPath, cfg);
@@ -124,6 +126,16 @@ export class CouncilRunner implements SwarmRunner {
         // contains only system + user entries (no agent output exists yet).
         const snapshot: readonly TranscriptEntry[] = [...this.transcript];
         const agents = this.opts.manager.list();
+
+        // Unit 18: pre-batch parallel warmup before the first parallel real
+        // batch. Spawn-time serial warmup loaded one shard each, but cloud
+        // shards may have cooled by the time round 1 fires. A parallel
+        // warmup of small prompts re-warms N shards faster than the real
+        // batch would (small prompts are easier on the load balancer).
+        // Subsequent rounds skip — by then the agents are demonstrably warm.
+        if (r === 1) {
+          await this.opts.manager.warmupParallel(agents);
+        }
 
         // Fan out: runTurn appends to this.transcript as each agent returns,
         // so the UI sees drafts populate in real time while the prompts above

@@ -87,7 +87,8 @@ export class DebateJudgeRunner implements SwarmRunner {
     this.setPhase("spawning");
     const spawnTasks: Promise<Agent>[] = [];
     for (let i = 1; i <= cfg.agentCount; i++) {
-      spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model }));
+      // Unit 18: skip per-spawn warmup; we warm serially below.
+      spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model, skipWarmup: true }));
     }
     const results = await Promise.allSettled(spawnTasks);
     const ready = results
@@ -104,6 +105,7 @@ export class DebateJudgeRunner implements SwarmRunner {
     this.appendSystem(
       `3 agents ready on ports ${ready.map((a) => a.port).join(", ")}. Agent 1 = PRO, Agent 2 = CON, Agent 3 = JUDGE.`,
     );
+    await this.opts.manager.warmupSerially(ready);
 
     this.setPhase("seeding");
     await this.seed(destPath, cfg);

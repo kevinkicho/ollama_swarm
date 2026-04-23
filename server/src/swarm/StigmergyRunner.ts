@@ -78,7 +78,8 @@ export class StigmergyRunner implements SwarmRunner {
     this.setPhase("spawning");
     const spawnTasks: Promise<Agent>[] = [];
     for (let i = 1; i <= cfg.agentCount; i++) {
-      spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model }));
+      // Unit 18: skip per-spawn warmup; we warm serially below.
+      spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model, skipWarmup: true }));
     }
     const results = await Promise.allSettled(spawnTasks);
     const ready = results
@@ -92,6 +93,7 @@ export class StigmergyRunner implements SwarmRunner {
     this.appendSystem(
       `${ready.length}/${cfg.agentCount} agents ready on ports ${ready.map((a) => a.port).join(", ")}. All agents are equal explorers — no planner, no roles.`,
     );
+    await this.opts.manager.warmupSerially(ready);
 
     this.setPhase("seeding");
     await this.seed(destPath, cfg);

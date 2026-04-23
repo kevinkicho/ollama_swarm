@@ -76,7 +76,8 @@ export class MapReduceRunner implements SwarmRunner {
     this.setPhase("spawning");
     const spawnTasks: Promise<Agent>[] = [];
     for (let i = 1; i <= cfg.agentCount; i++) {
-      spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model }));
+      // Unit 18: skip per-spawn warmup; we warm serially below.
+      spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model, skipWarmup: true }));
     }
     const results = await Promise.allSettled(spawnTasks);
     const ready = results
@@ -90,6 +91,7 @@ export class MapReduceRunner implements SwarmRunner {
     this.appendSystem(
       `${ready.length}/${cfg.agentCount} agents ready on ports ${ready.map((a) => a.port).join(", ")}. Agent 1 is the REDUCER; agents 2..${cfg.agentCount} are MAPPERS.`,
     );
+    await this.opts.manager.warmupSerially(ready);
 
     this.setPhase("seeding");
     await this.seed(destPath, cfg);
@@ -139,6 +141,15 @@ export class MapReduceRunner implements SwarmRunner {
         this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
 
         this.appendSystem(`Cycle ${r}/${cfg.rounds}: MAP phase — mappers inspecting slices in parallel.`);
+
+        // Unit 18: pre-batch parallel warmup before the first cycle's
+        // mapper fan-out. v3 battle test showed 3 of 4 mappers timed out
+        // identically with and without spawn-time warmup — parallel cold
+        // starts overwhelm the cloud load balancer. Warming with N small
+        // prompts before the N large prompts spreads the cold-start cost.
+        if (r === 1) {
+          await this.opts.manager.warmupParallel(mappers);
+        }
 
         // MAP — mappers fire in parallel. Each sees only its assigned slice
         // + the seed. No transcript, no peer reports.

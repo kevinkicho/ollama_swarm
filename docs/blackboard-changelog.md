@@ -2204,9 +2204,113 @@ if v3 still shows gaps:**
 
 ---
 
-## Session summary (Units 9–17, this conversation)
+## Unit 18 — Serial spawn-warmup + pre-batch parallel warmup  **[committed: pending]**
 
-Eight units shipped in this session:
+The 2026-04-22 battle test v3 (post Unit 17) showed that warmup-at-spawn
+worked exactly as designed for serial presets — role-diff went from 7%
+to 100%, stigmergy completed in half the wall time. But parallel-fan-out
+presets (council, map-reduce, OW) saw essentially no improvement, with
+map-reduce in particular producing **literally identical** outcomes to
+v2 (same 2 turns, same agents, same 9 visible timeouts, same 6 retries).
+See `runs/battle-test-v3/comparison-v2-v3.md` for the full breakdown.
+
+Diagnosis: spawns kick off in parallel via `Promise.allSettled`, and
+each spawn does its own warmup as a side effect — meaning N warmups
+hit the cloud load balancer simultaneously. The cloud appears unable
+to load N shards in parallel for the same client; only 1-2 shards end
+up genuinely warm. When the runner then fires its first parallel real-
+turn batch, it triggers the same parallel cold-start pattern again.
+Warmup happened, but not in a way that helped parallel runners.
+
+**Fix shape (two fixes, applied together).**
+
+1. **Serialize warmup across the spawn batch.** Spawn agents in
+   parallel (no change there), but warm them one at a time after the
+   parallel spawn batch returns. Loads N shards sequentially.
+2. **Pre-batch parallel warmup before each parallel-fan-out runner's
+   first real-turn batch.** Just before
+   `Promise.allSettled(agents.map(runTurn))`, fire a parallel set of
+   tiny warmup prompts. The cloud handles N parallel small prompts
+   (~15 chars) better than N parallel large prompts (full transcript +
+   role guidance), so paying the parallel cold-start cost on small
+   prompts spares the real batch from the same penalty.
+
+**Mechanic.**
+
+- `server/src/services/AgentManager.ts`:
+  - `SpawnOpts` gains `skipWarmup?: boolean`. When true, `spawnAgent`
+    skips its built-in Unit 17 warmup. Backward-compatible default
+    (false) preserves Unit 17 behavior for any caller that doesn't
+    opt in.
+  - `warmupAgent` is now public (was private). Runners call it
+    explicitly via the new helpers below.
+  - New `warmupSerially(agents)` — `for (a of agents) await
+    warmupAgent(a)`. Loads cloud shards one at a time.
+  - New `warmupParallel(agents)` — `Promise.allSettled(agents.map(a =>
+    warmupAgent(a)))`. Used by parallel-fan-out runners just before
+    their first real-turn batch.
+  - Both helpers respect the `AGENT_WARMUP_ENABLED` env toggle (no-op
+    when false).
+- Each runner's `start()` updated:
+  - `RoundRobinRunner` (incl. role-diff via roles option),
+    `CouncilRunner`, `OrchestratorWorkerRunner`, `DebateJudgeRunner`,
+    `MapReduceRunner`, `StigmergyRunner`, `BlackboardRunner` — all 7
+    now pass `skipWarmup: true` to `spawnAgent` and call
+    `warmupSerially(ready)` after the parallel spawn batch returns.
+  - This is the consistency fix — all runners use the same warmup
+    discipline regardless of their internal architecture.
+- Three runners gain pre-batch parallel warmup before their first
+  real-turn fan-out:
+  - `CouncilRunner.loop()` — `if (r === 1) await warmupParallel(agents)`
+    immediately before the per-round `Promise.allSettled`.
+  - `OrchestratorWorkerRunner.loop()` — same pattern, but warming
+    only the workers actually assigned by the lead's plan (skips the
+    lead, since the lead's planning turn already warmed it).
+  - `MapReduceRunner.loop()` — same pattern, warming all mappers
+    before the parallel mapper batch.
+  - Subsequent rounds/cycles skip the pre-batch warmup — by then the
+    agents are demonstrably warm from the prior batch.
+  - Stigmergy and debate-judge skip pre-batch entirely (both serial,
+    each turn is its own warmup). Blackboard skips pre-batch (workers
+    pull from the board asynchronously rather than fanning out in
+    parallel batches).
+
+**Why both fixes together.** Spawn-time serial warmup loads N shards
+in sequence, but those shards may have started cooling by the time
+the runner gets through `seed()` and into `loop()`. The pre-batch
+parallel warmup re-warms them right before the real work fires.
+Together they should close the parallel-cold-start gap that v3 left
+gaping for council/OW/map-reduce.
+
+**What this does NOT do.**
+
+- No change to the warmup prompt text — still
+  `"Reply with one word: ok"` from Unit 17.
+- No change to retry semantics — still 3 attempts on transient errors
+  via Unit 16's `promptWithRetry`.
+- No new `AgentStatus`. Agents stay `spawning` during serial warmup
+  and `thinking` during pre-batch parallel warmup (the warmup uses
+  the same SDK path; we just don't broadcast a separate `warming`
+  status because no UI changes consumed it).
+- No tests for the new helpers — they're 3-line wrappers around
+  `warmupAgent` (which is already covered indirectly by the
+  AGENT_WARMUP_ENABLED config tests). The real validation is the v4
+  battle test.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+446/446 server tests green (no test count change — no new test files;
+existing tests all still pass through the refactor). E2E validation:
+re-run the battle test v4 — expected delta is council, map-reduce,
+and OW approaching 100% the way role-diff and stigmergy already do
+in v3. If v4 still shows parallel gaps, the next escalation is
+Unit 19 (adaptive timeout per attempt) or just accepting that some
+parallel fan-out at 4+ agents on cloud-glm-5.1 is a hard ceiling.
+
+---
+
+## Session summary (Units 9–18, this conversation)
+
+Nine units shipped in this session:
 
 - **Unit 9** — Windows tree-kill for clean shutdown. Fixed the
   port-leak the user hit when Ctrl+C'ing `npm run dev`. Port
@@ -2244,14 +2348,22 @@ Eight units shipped in this session:
   added a tiny pre-spawn warmup prompt so the cloud shard loads
   model state before the runner asks for real work. Env-toggleable
   (`AGENT_WARMUP_ENABLED`, default on). Best-effort — warmup
-  failures are logged, not fatal. Two follow-up units (18/19)
-  flagged in the changelog as candidates if v3 still shows gaps.
+  failures are logged, not fatal.
+- **Unit 18** — Serial spawn-warmup + pre-batch parallel warmup.
+  v3 battle test showed warmup-at-spawn worked for serial presets
+  (role-diff 7→100%, stigmergy 10→5 min) but didn't help parallel
+  presets (council, MR, OW had identical-to-v2 outcomes). Diagnosed
+  as cloud load-balancer inability to load N shards in parallel.
+  Fix: serialize spawn-time warmup across agents (one shard at a
+  time), and add pre-batch parallel warmup of small prompts before
+  parallel-fan-out runners' first real-turn batch. v4 battle test
+  pending to validate.
 
 Roster after this session: **eight shipped presets** (round-robin
-baseline + 7 intentional designs) **all with retry parity AND
-spawn-time warmup**. Every pattern named in the original catalog
-(`docs/swarm-patterns.md`) is now either shipped or deferred with a
-documented rationale.
+baseline + 7 intentional designs) **all with retry parity, serial
+spawn-warmup, and parallel-batch warmup where applicable**. Every
+pattern named in the original catalog (`docs/swarm-patterns.md`) is
+now either shipped or deferred with a documented rationale.
 
 ---
 

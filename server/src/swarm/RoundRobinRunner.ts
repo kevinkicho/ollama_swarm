@@ -75,7 +75,9 @@ export class RoundRobinRunner implements SwarmRunner {
     this.setPhase("spawning");
     const spawnTasks: Promise<Agent>[] = [];
     for (let i = 1; i <= cfg.agentCount; i++) {
-      spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model }));
+      // Unit 18: skip the per-spawn warmup; we warm serially below
+      // so cloud shards load one at a time instead of N in parallel.
+      spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model, skipWarmup: true }));
     }
     const results = await Promise.allSettled(spawnTasks);
     const ready = results
@@ -83,6 +85,7 @@ export class RoundRobinRunner implements SwarmRunner {
       .map((r) => r.value);
     if (ready.length === 0) throw new Error("No agents started successfully");
     this.appendSystem(`${ready.length}/${cfg.agentCount} agents ready on ports ${ready.map((a) => a.port).join(", ")}`);
+    await this.opts.manager.warmupSerially(ready);
 
     this.setPhase("seeding");
     await this.seed(destPath, cfg);

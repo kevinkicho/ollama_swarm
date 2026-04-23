@@ -28,6 +28,13 @@ export interface SpawnOpts {
   index: number;
   model: string;
   readyTimeoutMs?: number;
+  // Unit 18: when true, spawnAgent skips the auto-warmup baked in by
+  // Unit 17. Caller is then responsible for warming the agent (typically
+  // via warmupSerially after all spawns return). Used by runners that
+  // want serial warmup across agents instead of the default parallel
+  // pattern (where each parallel spawn does its own warmup concurrently
+  // — the cloud can't load N shards in parallel for the same client).
+  skipWarmup?: boolean;
 }
 
 const authedFetch: typeof fetch = async (input, init) => {
@@ -167,9 +174,11 @@ export class AgentManager {
       // as ready. If warmup fails (e.g. headers timeout on a stubborn
       // cold start), proceed anyway — even a failed warmup attempt has
       // told the cloud shard to start loading state on its end, so the
-      // first real prompt is less cold than it would have been. Skipped
-      // when AGENT_WARMUP_ENABLED is false (unit-test rigs, etc).
-      if (config.AGENT_WARMUP_ENABLED) {
+      // first real prompt is less cold than it would have been.
+      // Unit 18: skipped when opts.skipWarmup is true (runner will warm
+      // serially after the parallel spawn batch returns) or when
+      // AGENT_WARMUP_ENABLED is false (unit-test rigs, etc).
+      if (config.AGENT_WARMUP_ENABLED && !opts.skipWarmup) {
         await this.warmupAgent(agent);
       }
       this.onState({ ...stateBase, sessionId, status: "ready" });
@@ -183,13 +192,40 @@ export class AgentManager {
     }
   }
 
+  // Unit 18: warm a batch of agents one at a time. Used by runners
+  // that pass skipWarmup:true to spawnAgent and then warm explicitly
+  // after the parallel spawn batch returns. Serial warmup loads cloud
+  // shards one-by-one, working around the cloud load balancer's
+  // apparent inability to load N shards in parallel for the same
+  // client (battle test v3 showed parallel warmups didn't help
+  // map-reduce, council, OW — same outcome as no warmup at all).
+  async warmupSerially(agents: readonly Agent[]): Promise<void> {
+    if (!config.AGENT_WARMUP_ENABLED) return;
+    for (const a of agents) {
+      await this.warmupAgent(a);
+    }
+  }
+
+  // Unit 18: warm a batch of agents in parallel. Used by parallel-fan-out
+  // runners (council/OW/map-reduce) immediately before each runner's
+  // FIRST parallel real-turn batch. The cloud handles N parallel small
+  // prompts (warmup) better than N parallel large prompts (real turns
+  // with full transcript), so paying the parallel cold-start cost on
+  // small prompts spares the real batch from the same penalty.
+  async warmupParallel(agents: readonly Agent[]): Promise<void> {
+    if (!config.AGENT_WARMUP_ENABLED) return;
+    await Promise.allSettled(agents.map((a) => this.warmupAgent(a)));
+  }
+
   // Unit 17: send a trivial prompt to the agent right after spawn so
   // the cloud shard loads model state BEFORE the runner asks for real
   // work. Cuts the cold-start tail that bumping headersTimeout 90→180s
   // (Unit 16) couldn't fully cover. Non-fatal — if warmup itself fails
   // (headers timeout, network blip) we log it and proceed; the next
   // real prompt has at minimum told the cloud shard we exist.
-  private async warmupAgent(agent: Agent): Promise<void> {
+  // Unit 18: made public so runners can call it explicitly via
+  // warmupSerially / warmupParallel after a parallel spawn batch.
+  async warmupAgent(agent: Agent): Promise<void> {
     const t0 = Date.now();
     try {
       await agent.client.session.prompt({
