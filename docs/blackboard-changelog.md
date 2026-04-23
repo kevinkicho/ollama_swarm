@@ -2792,6 +2792,75 @@ resolution note.
 
 ---
 
+## Unit 28 — Auditor unions declared + linked-commit files
+
+Mitigate the 2026-04-21 multi-agent-orchestrator failure mode: a
+criterion whose planner-declared `expectedFiles` passes parse-time
+grounding (Unit 6b — parent directory is in the repo tree, so the
+path isn't "suspicious") but points to a file that never actually
+gets created, while linked committed todos land real work at a
+different anchor. Under pre-Unit-28 logic, `resolveCriterionFiles`
+returned the declared paths verbatim when non-empty, so the auditor
+read only the dangling path, saw "file does not exist", and
+verdicted `unmet` — despite real work existing under a sibling
+anchor. The failure then burned a round on auditor-dispatched
+repath todos, which v7's wall-clock cap (pre-Unit-27) often
+interrupted before a second audit could assess.
+
+The fix is targeted to a single pure function. Unit 28 extends
+`resolveCriterionFiles` in the declared-files-non-empty branch:
+instead of returning `[...criterion.expectedFiles]` alone, it
+unions those with the `expectedFiles` of committed todos whose
+`criterionId === criterion.id`. Declared files stay at the head
+of the list so the auditor's primary evidence remains the
+contract-declared paths; linked files follow as corroboration.
+Per-criterion cap is `declared.length + AUDITOR_FALLBACK_FILE_MAX`
+so the prompt size stays bounded even when many workers commit to
+many different anchors for the same criterion.
+
+Three existing invariants are preserved:
+
+- When declared files are empty, the Unit 5d fallback (linked
+  commits → recent unlinked commits) is unchanged.
+- Commits with a DIFFERENT `criterionId` are still excluded from a
+  criterion's union — Unit 28 only unions the matching ones.
+- Deduping matches Unit 5d behavior: a declared path that matches
+  a linked-commit path appears once, in the declared position.
+
+No change to the auditor system prompt (it reads "CURRENT CONTENTS
+of every file named by an unmet criterion's expectedFiles" —
+factually still accurate; the seed's effective `expectedFiles`
+just got wider). No change to `BlackboardRunner` since
+`buildAuditorSeedCore` already calls `resolveCriterionFiles` on
+every seed build.
+
+**Tests added (4):**
+
+- `unions declared expectedFiles with linked-commit files (Unit 28)`
+  — the motivating case. Declared is a dangling path; linked is a
+  real path; both appear in the resolved list, declared first.
+- `dedupes when a declared path matches a linked-commit path
+  (Unit 28)` — declared + identical linked doesn't double-up.
+- `caps the linked-commit portion at AUDITOR_FALLBACK_FILE_MAX when
+  declared is non-empty (Unit 28)` — 1 declared + 6 linked resolves
+  to declared + 4 most-recent linked = 5 total.
+- `ignores linked commits from a DIFFERENT criterionId even when
+  declared is non-empty (Unit 28)` — cross-criterion isolation
+  preserved.
+
+One existing test renamed and kept: `returns the criterion's own
+expectedFiles verbatim when no linked commits exist (Unit 28
+degenerate case)` — the degenerate-case semantics still hold when
+nothing's linked, so it stays a regression guard.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+474/474 server tests green (470 before + 4 Unit 28 tests).
+
+Docs: `known-limitations.md` entry on first-pass contract grounding
+struck through with a resolution note.
+
+---
+
 ## Session summary (Units 9–21, this conversation)
 
 Twelve units shipped in this session:

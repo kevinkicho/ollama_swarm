@@ -79,41 +79,51 @@ attempt.
 
 ---
 
-## First-pass contract's `expectedFiles` aren't grounded in repo structure
+## ~~First-pass contract's `expectedFiles` aren't grounded in repo structure~~ (resolved 2026-04-23, Unit 28)
 
-**Choice:** the first-pass contract emits `criteria[].expectedFiles` from
+**Status:** fixed. The root cause (planner guesses a plausible path that
+doesn't match where workers eventually commit) is unchanged — LLM
+planners will still sometimes pick a reasonable-looking anchor that
+disagrees with the worker-chosen one. What Unit 28 changes is the
+*consequence*: the auditor no longer starves when a declared path
+dangles. `resolveCriterionFiles` now unions a criterion's declared
+`expectedFiles` with the `expectedFiles` of committed todos linked to
+that same criterion (`criterionId === criterion.id`). On the next
+audit, both the planner-chosen anchor AND the real-work anchor are
+read and shown to the auditor, so a criterion whose declared path
+doesn't exist but whose linked commits landed real work at a
+different path can verdict `met` on invocation 1 without waiting for
+a repath round.
+
+Declared files stay at the head of the resolved list so the
+auditor's primary evidence is still the contract-declared paths;
+linked files are appended as corroborating evidence. Per-criterion
+cap: `declared.length + AUDITOR_FALLBACK_FILE_MAX`. The Unit 5d
+fallback for criteria with NO declared files is unchanged.
+
+**Original symptoms (preserved for context):** on the 2026-04-21
+medium run (`kevinkicho/multi-agent-orchestrator`, commit `18588b9`),
+the contract said `src/brain/team-manager.test.ts` but the actual
+module lives at `src/team-manager.ts`. Workers correctly routed
+tests to `src/tests/team-manager.test.ts`, the auditor observed the
+mismatch on invocation 1, and re-dispatched new todos with
+corrected anchors — but the wall-clock cap tripped before audit #2
+could assess the repath (~8 of 21.8 min spent on reconciliation).
+Three criteria (c1/c2/c3) stayed `unmet` purely because the
+original contract path didn't match the file the work landed in.
+Under Unit 28, audit #1 would have included both paths in the
+readFiles union and could have verdicted `met` without needing a
+second invocation.
+
+Keeping the old text below for future archaeology:
+
+&nbsp;&nbsp;&nbsp;&nbsp;_The first-pass contract emits `criteria[].expectedFiles` from
 the mission wording. The agent sees a ~200-entry tree dump and the
 top-level README during seed, but it doesn't stat the guessed paths or
-verify they correspond to where work will actually land.
-
-**Why:** the first-pass agent's job is to turn a vague mission into a
-concrete exit contract quickly. Grounding every `expectedFiles` entry in
-repo reality would need a deeper read pass. We kept it cheap and trusted
-the downstream planner + auditor to reconcile anchors.
-
-On the 2026-04-21 medium run (`kevinkicho/multi-agent-orchestrator`,
-commit `18588b9`), the contract said `src/brain/team-manager.test.ts` but
-the actual module lives at `src/team-manager.ts`. Workers correctly
-routed tests to `src/tests/team-manager.test.ts`, the auditor observed
-the mismatch on invocation 1, and re-dispatched new todos with corrected
-anchors — but the wall-clock cap tripped before audit #2 could assess
-the repath. Three criteria (c1/c2/c3) stayed `unmet` purely because the
-original contract path didn't match the file the work landed in.
-
-**When this would need revisiting:**
-- If repath-driven wasted rounds push runs into `cap:wall-clock` where
-  they would otherwise complete — phase 11c validation showed ~8 min of
-  21.8 min spent on path reconciliation.
-- If the auditor starts conflating "path mismatch" with "work missing"
-  and the distinction stops being reliable.
-
-Until then, the cheap fix is a system-prompt sharpening: tell the
-first-pass contract agent to prefer empty `expectedFiles` over guessed
-anchors when the mission doesn't name a file, and let the planner bind
-real paths after its own read pass. The auditor could also be given
-permission to rewrite a criterion's `expectedFiles` when the committed
-work clearly satisfies the *intent* at a different path. Small follow-up,
-not a plan item.
+verify they correspond to where work will actually land. We kept it
+cheap and trusted the downstream planner + auditor to reconcile
+anchors — Unit 28 is the "auditor reconciles" half of that bet being
+paid off._
 
 ---
 
