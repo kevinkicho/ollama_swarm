@@ -19,6 +19,10 @@ import {
   type TickAccumulator,
 } from "./caps.js";
 import { buildCrashSnapshot } from "./crashSnapshot.js";
+import {
+  buildStateSnapshot,
+  STATE_SNAPSHOT_DEBOUNCE_MS,
+} from "./stateSnapshot.js";
 import { shouldRunFinalAudit } from "./finalAudit.js";
 import { promptWithRetry } from "../promptWithRetry.js";
 import { buildSummary, computeLatencyStats, type PerAgentStat, type RunSummary } from "./summary.js";
@@ -168,6 +172,15 @@ export class BlackboardRunner implements SwarmRunner {
   // on reconnect. Without this, reloading the page after a completed run
   // would lose the Summary card since run_summary only fires once.
   private lastSummary?: RunSummary;
+  // Unit 31: live state-snapshot debounce machinery. Writes
+  // `<clone>/blackboard-state.json` on every phase change, board event, or
+  // contract update. Trailing-edge debounce (see STATE_SNAPSHOT_DEBOUNCE_MS)
+  // so a burst of events coalesces into one write; `stateWriteAgain` flags
+  // that another write is due once the in-flight one finishes, so we never
+  // lose the latest state.
+  private stateWriteTimer?: NodeJS.Timeout;
+  private stateWriteInFlight = false;
+  private stateWriteAgain = false;
 
   constructor(private readonly opts: RunnerOpts) {
     this.boardBroadcaster = createBoardBroadcaster(this.opts.emit);
@@ -217,6 +230,15 @@ export class BlackboardRunner implements SwarmRunner {
     this.runStartedAt = undefined;
     this.tickAccumulator = undefined;
     this.terminationReason = undefined;
+    // Unit 31: clear any lingering state-write timer from a prior run.
+    // stateWriteInFlight may still be true momentarily if a run was torn
+    // down mid-write; that's fine — the flush path handles re-entrancy
+    // via stateWriteAgain.
+    if (this.stateWriteTimer) {
+      clearTimeout(this.stateWriteTimer);
+      this.stateWriteTimer = undefined;
+    }
+    this.stateWriteAgain = false;
     this.runBootedAt = Date.now();
     this.staleEventCount = 0;
     this.turnsPerAgent.clear();
@@ -357,8 +379,18 @@ export class BlackboardRunner implements SwarmRunner {
     // so we bail. Cap-initiated stop also sets this.stopping, but we detect
     // that via terminationReason and fall through to setPhase("completed")
     // so the UI reflects the run actually finishing at the cap boundary.
-    if (this.stopping && !this.terminationReason) return;
+    if (this.stopping && !this.terminationReason) {
+      await this.flushStateWrite();
+      return;
+    }
     this.setPhase(errored ? "failed" : "completed");
+    // Unit 31: final non-debounced write so the on-disk state reflects the
+    // terminal phase even if the debounced timer hasn't fired yet.
+    if (this.stateWriteTimer) {
+      clearTimeout(this.stateWriteTimer);
+      this.stateWriteTimer = undefined;
+    }
+    await this.flushStateWrite();
   }
 
   async stop(): Promise<void> {
@@ -635,6 +667,9 @@ export class BlackboardRunner implements SwarmRunner {
 
     this.contract = this.buildContract(groundedContract);
     this.opts.emit({ type: "contract_updated", contract: this.cloneContract(this.contract) });
+    // Unit 31: the contract is load-bearing state; make sure the very next
+    // observer read sees it even if no board event follows for a while.
+    this.scheduleStateWrite();
 
     if (this.contract.criteria.length === 0) {
       this.appendSystem(
@@ -1253,6 +1288,10 @@ export class BlackboardRunner implements SwarmRunner {
   // ---------------------------------------------------------------------
 
   private onBoardEvent(ev: BoardEvent): void {
+    // Unit 31: every board event changes persisted state. Schedule ahead
+    // of the stale-specific branch so todo_posted / todo_committed /
+    // todo_claimed / finding_posted etc. also flush.
+    this.scheduleStateWrite();
     if (ev.type !== "todo_stale") return;
     this.staleEventCount++;
     this.enqueueReplan(ev.todoId);
@@ -1521,27 +1560,9 @@ export class BlackboardRunner implements SwarmRunner {
       // gitStatus already swallows, but belt-and-braces.
     }
 
-    const agentStats: PerAgentStat[] = this.agentRoster.map((a) => {
-      const lats = this.latenciesPerAgent.get(a.id) ?? [];
-      const stats = computeLatencyStats(lats);
-      return {
-        agentId: a.id,
-        agentIndex: a.index,
-        turnsTaken: this.turnsPerAgent.get(a.id) ?? 0,
-        // OpenCode SDK's session.prompt response doesn't expose per-turn
-        // token usage via our current extractText path, so we leave these
-        // null. Documented in summary.ts.
-        tokensIn: null,
-        tokensOut: null,
-        // Unit 21: attempt + retry + latency telemetry.
-        totalAttempts: this.attemptsPerAgent.get(a.id) ?? 0,
-        totalRetries: this.retriesPerAgent.get(a.id) ?? 0,
-        successfulAttempts: lats.length,
-        meanLatencyMs: stats.mean,
-        p50LatencyMs: stats.p50,
-        p95LatencyMs: stats.p95,
-      };
-    });
+    // Unit 31: extracted to buildPerAgentStats so the state snapshot and
+    // summary stay in sync on agent-row shape.
+    const agentStats: PerAgentStat[] = this.buildPerAgentStats();
 
     const counts = this.board.counts();
     const summary = buildSummary({
@@ -1608,6 +1629,114 @@ export class BlackboardRunner implements SwarmRunner {
     } catch (writeErr) {
       const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
       this.appendSystem(`Failed to write crash snapshot (${msg})`);
+    }
+  }
+
+  // Unit 31: per-agent stats shaped for summary.json / state snapshot
+  // consumption. Extracted so both writers produce identical agent rows
+  // without drift; the summary writer and the state-snapshot scheduler
+  // both call this.
+  private buildPerAgentStats(): PerAgentStat[] {
+    return this.agentRoster.map((a) => {
+      const lats = this.latenciesPerAgent.get(a.id) ?? [];
+      const stats = computeLatencyStats(lats);
+      return {
+        agentId: a.id,
+        agentIndex: a.index,
+        turnsTaken: this.turnsPerAgent.get(a.id) ?? 0,
+        // Token usage isn't exposed by the SDK path we use; documented
+        // in summary.ts.
+        tokensIn: null,
+        tokensOut: null,
+        totalAttempts: this.attemptsPerAgent.get(a.id) ?? 0,
+        totalRetries: this.retriesPerAgent.get(a.id) ?? 0,
+        successfulAttempts: lats.length,
+        meanLatencyMs: stats.mean,
+        p50LatencyMs: stats.p50,
+        p95LatencyMs: stats.p95,
+      };
+    });
+  }
+
+  // Unit 31: schedule a debounced state-snapshot write to
+  // `<clone>/blackboard-state.json`. Trailing-edge: every call resets the
+  // timer so only the LATEST state gets written. When a write is already
+  // in flight, flip `stateWriteAgain` so the next write fires as soon as
+  // the current one finishes — we never stop at stale data.
+  //
+  // Skips when the phase is `idle` or `cloning`: `idle` means there's no
+  // run to persist, and writing during `cloning` would land a file in the
+  // destination directory BEFORE simpleGit.clone runs, tripping
+  // RepoService's "destination is not empty and is not a git repo"
+  // guard and failing the clone. Cloning is short enough that the
+  // post-mortem hole isn't meaningful.
+  private scheduleStateWrite(): void {
+    if (this.phase === "idle" || this.phase === "cloning") return;
+    if (this.stateWriteInFlight) {
+      this.stateWriteAgain = true;
+      return;
+    }
+    if (this.stateWriteTimer) clearTimeout(this.stateWriteTimer);
+    this.stateWriteTimer = setTimeout(() => {
+      this.stateWriteTimer = undefined;
+      void this.flushStateWrite();
+    }, STATE_SNAPSHOT_DEBOUNCE_MS);
+    // Let Node exit even if this timer is pending (it's best-effort state).
+    this.stateWriteTimer.unref?.();
+  }
+
+  // Immediate write, no debounce. Used at run termination so the final
+  // state lands on disk before we clear the in-memory one. Also used as
+  // the body of the debounced path.
+  private async flushStateWrite(): Promise<void> {
+    const clone = this.active?.localPath;
+    if (!clone) return; // No active run; nothing to persist.
+    // Defensive: also skip at flush time in case the phase moved back to
+    // `cloning` (shouldn't happen, but we never want to race the clone).
+    if (this.phase === "idle" || this.phase === "cloning") return;
+    if (this.stateWriteInFlight) {
+      // Another write raced in; mark that we need a follow-up and bail.
+      this.stateWriteAgain = true;
+      return;
+    }
+    this.stateWriteInFlight = true;
+    this.stateWriteAgain = false;
+    try {
+      const snapshot = buildStateSnapshot({
+        writtenAt: Date.now(),
+        phase: this.phase,
+        round: this.round,
+        runBootedAt: this.runBootedAt,
+        runStartedAt: this.runStartedAt,
+        activeElapsedMs: this.tickAccumulator?.activeElapsedMs,
+        config: this.active,
+        contract: this.contract ? this.cloneContract(this.contract) : undefined,
+        board: this.board.snapshot(),
+        perAgent: this.buildPerAgentStats(),
+        staleEventCount: this.staleEventCount,
+        auditInvocations: this.auditInvocations,
+        agentRoster: this.agentRoster.map((a) => ({
+          agentId: a.id,
+          agentIndex: a.index,
+        })),
+        terminationReason: this.terminationReason,
+        completionDetail: this.completionDetail,
+      });
+      const outPath = path.join(clone, "blackboard-state.json");
+      await writeFileAtomic(outPath, JSON.stringify(snapshot, null, 2));
+    } catch (err) {
+      // Best-effort — a state write failure must never crash the run.
+      // Log to the transcript so operators can see it happened, but
+      // swallow otherwise.
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("blackboard-state write failed:", msg);
+    } finally {
+      this.stateWriteInFlight = false;
+      // If another scheduling request came in during our write, honor it now.
+      if (this.stateWriteAgain) {
+        this.stateWriteAgain = false;
+        this.scheduleStateWrite();
+      }
     }
   }
 
@@ -1898,6 +2027,9 @@ export class BlackboardRunner implements SwarmRunner {
   private setPhase(phase: SwarmPhase): void {
     this.phase = phase;
     this.opts.emit({ type: "swarm_state", phase, round: this.round });
+    // Unit 31: phase is a first-class state change; persist it so an
+    // observer tailing blackboard-state.json sees the transition promptly.
+    this.scheduleStateWrite();
   }
 
   private emitAgentState(s: AgentState): void {
