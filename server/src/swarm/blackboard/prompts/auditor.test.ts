@@ -1038,3 +1038,124 @@ describe("buildAuditorSeedCore — Unit 5e", () => {
     assert.equal(c.criteria[0]!.expectedFiles.length, 0);
   });
 });
+
+// Unit 36: Live UI snapshot evidence in the auditor prompt.
+describe("AUDITOR_SYSTEM_PROMPT — Unit 36 UI evidence rule", () => {
+  it("has Rule 11 about UI snapshots being PRIMARY EVIDENCE", () => {
+    assert.match(AUDITOR_SYSTEM_PROMPT, /11\. Unit 36/);
+    assert.match(AUDITOR_SYSTEM_PROMPT, /Live UI snapshot/);
+    assert.match(AUDITOR_SYSTEM_PROMPT, /PRIMARY EVIDENCE/);
+  });
+
+  it("tells auditor to verdict unmet when snapshot contradicts file changes", () => {
+    assert.match(AUDITOR_SYSTEM_PROMPT, /verdict is `unmet`/);
+  });
+
+  it("documents the fallback to file-only when snapshot is absent", () => {
+    assert.match(AUDITOR_SYSTEM_PROMPT, /fall back to file-only evaluation/);
+  });
+});
+
+describe("buildAuditorUserPrompt — Unit 36 UI snapshot block", () => {
+  function seedWithUi(
+    uiUrl: string | undefined,
+    uiSnapshot: string | undefined,
+  ): AuditorSeed {
+    return {
+      missionStatement: "m",
+      unmetCriteria: [
+        criterion("c1", "home page renders sign-up CTA", "unmet", ["src/home.tsx"]),
+      ],
+      resolvedCriteria: [],
+      committed: [],
+      skipped: [],
+      findings: [],
+      currentFileState: {
+        "src/home.tsx": { exists: true, content: "<Home/>", full: true, originalLength: 7 },
+      },
+      auditInvocation: 1,
+      maxInvocations: 5,
+      uiUrl,
+      uiSnapshot,
+    };
+  }
+
+  it("renders the UI snapshot block when both uiUrl and uiSnapshot are present", () => {
+    const p = buildAuditorUserPrompt(
+      seedWithUi("http://localhost:3000", "heading 'Welcome'\nbutton 'Sign up'\n"),
+    );
+    assert.match(p, /Live UI snapshot \(from http:\/\/localhost:3000\)/);
+    assert.match(p, /PRIMARY EVIDENCE for user-visible criteria/);
+    assert.match(p, /button 'Sign up'/);
+  });
+
+  it("omits the UI snapshot block when uiSnapshot is undefined", () => {
+    const p = buildAuditorUserPrompt(
+      seedWithUi("http://localhost:3000", undefined),
+    );
+    assert.ok(!p.includes("Live UI snapshot"));
+  });
+
+  it("omits the UI snapshot block when uiUrl is undefined (snapshot without url is meaningless)", () => {
+    const p = buildAuditorUserPrompt(seedWithUi(undefined, "content"));
+    assert.ok(!p.includes("Live UI snapshot"));
+  });
+
+  it("truncates a >16K snapshot with a chars-truncated marker", () => {
+    const big = "x".repeat(20_000);
+    const p = buildAuditorUserPrompt(
+      seedWithUi("http://localhost:3000", big),
+    );
+    assert.match(p, /chars truncated/);
+    // Should include the truncated amount
+    assert.ok(p.includes("4000 chars truncated"));
+  });
+
+  it("keeps the primary file-state block AFTER the UI snapshot block", () => {
+    const p = buildAuditorUserPrompt(
+      seedWithUi("http://localhost:3000", "snapshot"),
+    );
+    const uiIdx = p.indexOf("Live UI snapshot");
+    const fileIdx = p.indexOf("Current file state for UNMET");
+    assert.ok(uiIdx >= 0 && fileIdx >= 0, "both blocks present");
+    assert.ok(uiIdx < fileIdx, "UI snapshot comes before file state");
+  });
+});
+
+describe("buildAuditorSeedCore — Unit 36 UI passthrough", () => {
+  it("passes uiUrl + uiSnapshot through to the seed", async () => {
+    const c: ExitContract = {
+      missionStatement: "m",
+      criteria: [criterion("c1", "d", "unmet", ["x.ts"])],
+    };
+    const seed = await buildAuditorSeedCore({
+      contract: c,
+      todos: [],
+      findings: [],
+      readFiles: async () => ({ "x.ts": "x" }),
+      auditInvocation: 1,
+      maxInvocations: 5,
+      uiUrl: "http://localhost:3000",
+      uiSnapshot: "body\n",
+    });
+    assert.equal(seed.uiUrl, "http://localhost:3000");
+    assert.equal(seed.uiSnapshot, "body\n");
+  });
+
+  it("leaves uiUrl/uiSnapshot undefined when not provided", async () => {
+    const c: ExitContract = {
+      missionStatement: "m",
+      criteria: [criterion("c1", "d", "unmet", ["x.ts"])],
+    };
+    const seed = await buildAuditorSeedCore({
+      contract: c,
+      todos: [],
+      findings: [],
+      readFiles: async () => ({ "x.ts": "x" }),
+      auditInvocation: 1,
+      maxInvocations: 5,
+    });
+    assert.equal(seed.uiUrl, undefined);
+    assert.equal(seed.uiSnapshot, undefined);
+  });
+});

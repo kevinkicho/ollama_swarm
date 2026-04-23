@@ -61,6 +61,9 @@ const StartBody = z.object({
   ambitionTiers: z.number().int().min(0).max(20).optional(),
   // Unit 35: per-run critic override. Blackboard-only.
   critic: z.boolean().optional(),
+  // Unit 36: user-supplied running-app URL for auditor UI verification.
+  // Requires MCP_PLAYWRIGHT_ENABLED=true. Blackboard-only.
+  uiUrl: z.string().url().optional(),
 });
 
 const SayBody = z.object({ text: z.string().min(1) });
@@ -113,6 +116,7 @@ export function swarmRouter(orch: Orchestrator): Router {
             : undefined,
         ambitionTiers: parsed.data.ambitionTiers,
         critic: parsed.data.critic,
+        uiUrl: parsed.data.uiUrl,
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {

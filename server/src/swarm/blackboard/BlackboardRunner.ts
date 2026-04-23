@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Agent } from "../../services/AgentManager.js";
+import { AgentManager } from "../../services/AgentManager.js";
 import type {
   AgentState,
   SwarmEvent,
@@ -1363,6 +1364,37 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   private async buildAuditorSeed(): Promise<AuditorSeed> {
+    // Unit 36: capture a Live UI snapshot via the swarm-ui profile when
+    // cfg.uiUrl is set AND the Playwright MCP integration is enabled.
+    // Snapshot is included in the seed as PRIMARY EVIDENCE for user-
+    // visible criteria (see AUDITOR_SYSTEM_PROMPT Rule 11).
+    // Best-effort: a capture failure just omits the snapshot, the
+    // auditor falls back to file-only evaluation (pre-Unit-36 behavior).
+    let uiUrl: string | undefined;
+    let uiSnapshot: string | undefined;
+    if (
+      this.active?.uiUrl &&
+      this.active.uiUrl.trim().length > 0 &&
+      config.MCP_PLAYWRIGHT_ENABLED
+    ) {
+      uiUrl = this.active.uiUrl.trim();
+      const snap = await this.captureUiSnapshot(uiUrl).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.appendSystem(`[ui-audit] snapshot capture threw: ${msg}. Proceeding without UI evidence.`);
+        return null;
+      });
+      if (snap !== null) {
+        uiSnapshot = snap;
+        this.appendSystem(
+          `[ui-audit] captured UI snapshot for ${uiUrl} (${snap.length} chars).`,
+        );
+      }
+    } else if (this.active?.uiUrl && !config.MCP_PLAYWRIGHT_ENABLED) {
+      this.appendSystem(
+        `[ui-audit] cfg.uiUrl is set but MCP_PLAYWRIGHT_ENABLED is false — cannot capture snapshot, falling back to file-only audit.`,
+      );
+    }
+
     return buildAuditorSeedCore({
       contract: this.contract!,
       todos: this.board.listTodos(),
@@ -1370,7 +1402,91 @@ export class BlackboardRunner implements SwarmRunner {
       readFiles: (paths) => this.readExpectedFiles(paths),
       auditInvocation: this.auditInvocations,
       maxInvocations: this.maxAuditInvocations,
+      uiUrl,
+      uiSnapshot,
     });
+  }
+
+  // Unit 36: spawn a one-shot swarm-ui agent in an ISOLATED AgentManager
+  // (so it doesn't pollute the run's agent roster / WS stream), have it
+  // browser_navigate + browser_snapshot, return the text response.
+  //
+  // Same pattern as the dev /api/dev/swarm-ui-poke route (Unit 29) but
+  // in-runner: uses the clone dir's opencode.json (which already has
+  // the swarm-ui profile when MCP_PLAYWRIGHT_ENABLED=true, per Unit 26)
+  // so no temp dir is needed. On any failure returns null — the caller
+  // degrades to file-only evaluation.
+  //
+  // Cost: one opencode spawn + one prompt per audit invocation. A 5-
+  // audit run with uiUrl set adds ~1-2 min of wall-clock overhead.
+  // Persistent swarm-ui across the run is a possible follow-up
+  // optimization if audit count grows.
+  private async captureUiSnapshot(uiUrl: string): Promise<string | null> {
+    const clone = this.active?.localPath;
+    if (!clone) return null;
+
+    // Isolated manager with no-op broadcast sinks — doesn't touch the
+    // run's live WS stream or agent-roster state.
+    const uiManager = new AgentManager(
+      () => {},
+      () => {},
+      () => {},
+    );
+    let uiAgent: Agent | undefined;
+
+    const promptText = [
+      "You have the Playwright MCP browser tools available.",
+      `Step 1: call browser_navigate with url "${uiUrl}".`,
+      "Step 2: once the page has loaded, call browser_snapshot.",
+      "Step 3: paste the browser_snapshot's accessibility tree VERBATIM in your text response. Do not summarize, do not paraphrase.",
+      "If any step fails (page unreachable, browser error), return the error text verbatim so the auditor can reason about it.",
+    ].join("\n");
+
+    try {
+      // Index 100 marks this as a side-spawn, not a real run agent.
+      // `skipWarmup: true` — one-shot, no warmup needed.
+      uiAgent = await uiManager.spawnAgent({
+        cwd: clone,
+        index: 100,
+        model: this.active?.model ?? "glm-5.1:cloud",
+        skipWarmup: true,
+      });
+      const response = await uiAgent.client.session.prompt({
+        path: { id: uiAgent.sessionId },
+        body: {
+          agent: "swarm-ui",
+          model: { providerID: "ollama", modelID: uiAgent.model },
+          parts: [{ type: "text", text: promptText }],
+        },
+      });
+      const any = response as {
+        data?: {
+          parts?: Array<{ type?: string; text?: string }>;
+          info?: { parts?: Array<{ type?: string; text?: string }> };
+          text?: string;
+        };
+      };
+      const parts = any?.data?.parts ?? any?.data?.info?.parts;
+      let text: string | undefined;
+      if (Array.isArray(parts)) {
+        const texts = parts
+          .filter((p) => p?.type === "text" && typeof p.text === "string")
+          .map((p) => p.text as string);
+        if (texts.length) text = texts.join("\n");
+      }
+      if (!text) text = any?.data?.text;
+      return text ?? null;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(`[ui-audit] swarm-ui spawn/prompt failed: ${msg}`);
+      return null;
+    } finally {
+      try {
+        await uiManager.killAll();
+      } catch {
+        // best-effort; isolated manager, so a leaked child is bounded
+      }
+    }
   }
 
   private applyAuditorResult(result: AuditorResult, planner: Agent): void {

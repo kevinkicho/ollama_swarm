@@ -61,6 +61,18 @@ export interface RunConfig {
    * ignored by discussion presets (no diff-commit path to gate).
    */
   critic?: boolean;
+  /**
+   * Unit 36: live URL of the app the swarm is working on, for
+   * auditor-side UI verification via Playwright MCP (Unit 26). When
+   * set AND `MCP_PLAYWRIGHT_ENABLED=true`, at audit time the runner
+   * spawns an isolated `swarm-ui` agent, has it `browser_navigate`
+   * to this URL + `browser_snapshot`, and feeds the snapshot's
+   * accessibility tree into the auditor seed as additional
+   * evidence for UI-flavored criteria ("renders home page",
+   * "button X works"). Blackboard-only; user-supplied URL only —
+   * this unit does NOT start the app on the user's behalf.
+   */
+  uiUrl?: string;
 }
 
 export interface RunnerOpts {

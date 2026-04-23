@@ -216,6 +216,7 @@ export const AUDITOR_SYSTEM_PROMPT = [
   "8. Workers edit files via JSON diffs — they CANNOT run shell commands, tests, linters, type checkers, compilers, formatters, package managers, or any external tooling. If a criterion inherently requires execution (e.g. \"all tests pass\", \"tsc compiles clean\", \"ESLint passes\", \"run benchmark X\"), issue `wont-do` with a rationale naming the tool that would be needed. Do NOT issue `unmet` with todos that merely touch config files in the hope of verifying the tool indirectly — those todos will produce empty `expectedFiles` and be rejected.",
   "9. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, `docs/`, or any path ending in `/` or `\\`. If a todo or new criterion covers a whole directory, pick the specific files (e.g., `src/lib/a.ts`, `src/lib/b.ts`). Directory entries are rejected by the parser; the todo or criterion is dropped.",
   "10. If the current file state is WINDOWED (head + marker + tail), the middle region may contain evidence you can't see. Weight the visible head and tail heavily and prefer a specific consolidation/verification todo over a confident \"met\" when ambiguous.",
+  "11. Unit 36: when the user prompt includes a `Live UI snapshot` block, that is PRIMARY EVIDENCE for any criterion framed as user-visible (\"renders\", \"displays\", \"button works\", \"page shows\", \"form submits\"). The snapshot is the accessibility tree of the actually-running app — if a criterion says \"home page shows a sign-up CTA\" and the snapshot shows no such element, the verdict is `unmet`, even if files were committed that ostensibly added it. Files are the SECONDARY evidence when a UI snapshot is present; they verify intent, the snapshot verifies delivery. When no UI snapshot is present, fall back to file-only evaluation (pre-Unit-36 behavior).",
   "",
   "Paths must be repo-relative. Never use absolute paths or `..`.",
 ].join("\n");
@@ -382,6 +383,14 @@ export interface AuditorSeed {
   currentFileState: Record<string, AuditorFileStateEntry>;
   auditInvocation: number;
   maxInvocations: number;
+  // Unit 36: Playwright MCP snapshot of the running app's UI, when the
+  // user supplied `cfg.uiUrl` AND MCP_PLAYWRIGHT_ENABLED=true. Captured
+  // by a side-spawned `swarm-ui` agent right before the auditor prompt.
+  // `uiUrl` echoes the url the snapshot is of; `uiSnapshot` is the raw
+  // accessibility tree + text the MCP server returned (or an error
+  // string on failure). Both undefined when UI verification is off.
+  uiUrl?: string;
+  uiSnapshot?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -398,6 +407,11 @@ export interface BuildAuditorSeedInput {
   readFiles: (paths: string[]) => Promise<Record<string, string | null>>;
   auditInvocation: number;
   maxInvocations: number;
+  // Unit 36: optional UI snapshot + url passthrough. When provided, the
+  // seed carries them into the user-prompt render so the auditor can
+  // weight the snapshot as additional evidence.
+  uiUrl?: string;
+  uiSnapshot?: string;
 }
 
 export async function buildAuditorSeedCore(
@@ -457,6 +471,8 @@ export async function buildAuditorSeedCore(
     currentFileState,
     auditInvocation,
     maxInvocations,
+    uiUrl: input.uiUrl,
+    uiSnapshot: input.uiSnapshot,
   };
 }
 
@@ -505,6 +521,24 @@ export function buildAuditorUserPrompt(seed: AuditorSeed): string {
     })
     .join("\n\n");
 
+  // Unit 36: UI snapshot block, rendered only when a snapshot was
+  // captured at audit time. Capped at ~16 KB to keep the prompt
+  // bounded — browser_snapshot trees on complex pages can be massive.
+  const UI_SNAPSHOT_MAX = 16_000;
+  let uiSnapshotBlock: string[] = [];
+  if (seed.uiUrl && seed.uiSnapshot) {
+    const snap = seed.uiSnapshot.length > UI_SNAPSHOT_MAX
+      ? seed.uiSnapshot.slice(0, UI_SNAPSHOT_MAX) +
+        `\n\n… [${seed.uiSnapshot.length - UI_SNAPSHOT_MAX} chars truncated]`
+      : seed.uiSnapshot;
+    uiSnapshotBlock = [
+      `=== Live UI snapshot (from ${seed.uiUrl}) — PRIMARY EVIDENCE for user-visible criteria ===`,
+      snap,
+      "=== end UI snapshot ===",
+      "",
+    ];
+  }
+
   return [
     `Mission: ${seed.missionStatement}`,
     `Audit invocation: ${seed.auditInvocation} of ${seed.maxInvocations} (hard cap).`,
@@ -512,6 +546,7 @@ export function buildAuditorUserPrompt(seed: AuditorSeed): string {
     "=== Criteria that still need a verdict (UNMET) ===",
     unmet.length > 0 ? unmet : "(none — all criteria already resolved)",
     "",
+    ...uiSnapshotBlock,
     "=== Current file state for UNMET criteria (primary evidence) ===",
     fileStateEntries.length > 0
       ? fileStateBlock
