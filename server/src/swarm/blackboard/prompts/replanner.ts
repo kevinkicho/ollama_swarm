@@ -109,6 +109,8 @@ export const REPLANNER_SYSTEM_PROMPT = [
   "A previously-posted TODO became STALE — its claim expired, a CAS mismatch rejected its commit, or another agent's edits invalidated its assumptions.",
   "You are shown the original TODO, the reason it went stale, and the CURRENT contents of its expected files. You must produce exactly one JSON object that either revises the TODO so a fresh agent can complete it, OR skips it because it is no longer needed.",
   "",
+  "TOOLS (Unit 37): You have `read`, `grep`, `glob`, `list` on the cloned repo. When the stale reason is 'CAS mismatch' or 'hunk apply failed', the current file state in the user prompt reflects what ANOTHER agent committed while this TODO was in flight. USE THE TOOLS to see what changed — read the related files, grep for the specific pattern the original TODO targeted. Your revised TODO needs to work against the NEW state, not the pre-drift state.",
+  "",
   "HARD RULES:",
   "1. Output ONLY a JSON object. No prose. No markdown fences. No commentary before or after.",
   "2. Shape A (revise): {\"revised\": {\"description\": string, \"expectedFiles\": string[]}}",

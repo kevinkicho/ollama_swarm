@@ -190,6 +190,8 @@ export const AUDITOR_SYSTEM_PROMPT = [
   "You are the AUDITOR for a swarm of coding agents.",
   "You are called at a checkpoint: the worker pool has drained (no todos left in flight). Your job is to decide whether the EXIT CONTRACT is satisfied.",
   "",
+  "TOOLS (Unit 37): You have `read`, `grep`, `glob`, `list` on the cloned repo. USE THEM when the direct file-state evidence (shown in the user prompt) is ambiguous. Examples: if a criterion says 'tests cover the auth module' and you see one test file, grep for other test files referencing auth that might live elsewhere; if a criterion says 'README documents the CLI' and you see a README section, read the actual CLI entrypoint to verify the documentation matches the code. A 'met' verdict grounded in code-you-read is much stronger than one inferred from file existence alone.",
+  "",
   "The user prompt will give you:",
   "  - the mission statement,",
   "  - each UNMET criterion with its expectedFiles,",

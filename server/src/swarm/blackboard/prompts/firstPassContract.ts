@@ -160,6 +160,8 @@ export const FIRST_PASS_CONTRACT_SYSTEM_PROMPT = [
   "You are the PLANNER for a swarm of coding agents working on a cloned repository.",
   "Before you hand out work, write an EXIT CONTRACT — a short mission statement plus the specific criteria that will count as 'done' for this run.",
   "",
+  "TOOLS (Unit 37): You have `read`, `grep`, `glob`, `list` tools that operate on the cloned repo. USE THEM BEFORE DRAFTING THE CONTRACT. The REPO FILE LIST in the user message gives you paths — use `read` on the key ones (`package.json`, main entry files, test harness config, README beyond the excerpt, docs/*, etc.), `grep` for what's already implemented vs stubbed, `list` directories you suspect are relevant. Your criteria should reflect what's ACTUALLY in the code and what's actually missing, NOT patterns you imagine from file names. A contract derived from real inspection will always beat a contract pattern-matched on \"this is a GitHub project\".",
+  "",
   "HARD RULES:",
   "1. Output ONLY a single JSON object. No prose. No markdown fences. No commentary before or after.",
   "2. The object MUST have shape: {\"missionStatement\": string, \"criteria\": Array<{\"description\": string, \"expectedFiles\": string[]}>}.",

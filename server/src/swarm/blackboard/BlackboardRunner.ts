@@ -587,7 +587,10 @@ export class BlackboardRunner implements SwarmRunner {
 
     const draftResults = await Promise.allSettled(
       allAgents.map(async (a) => {
-        const text = await this.promptAgent(a, draftPrompt);
+        // Unit 37: council drafts are PLANNER-role prompts (agents
+        // drafting contracts, not producing diffs) — route through
+        // swarm-read so the agent can inspect the code before drafting.
+        const text = await this.promptAgent(a, draftPrompt, "swarm-read");
         return { agent: a, text };
       }),
     );
@@ -1285,10 +1288,14 @@ export class BlackboardRunner implements SwarmRunner {
     // retries aren't worth the latency overhead (the next audit pass
     // would benefit more from a prompt budget than the critic does).
     const promptOnce = async (text: string): Promise<string> => {
+      // Unit 37: critic is a reviewer role — give it read tools so it
+      // can grep for duplicate patterns, list related files, and verify
+      // the proposed diff's context. Matches the swarm-read profile used
+      // by planner / auditor / replanner.
       const res = await planner.client.session.prompt({
         path: { id: sessionId },
         body: {
-          agent: "swarm",
+          agent: "swarm-read",
           model: { providerID: "ollama", modelID: planner.model },
           parts: [{ type: "text", text }],
         },
@@ -2481,14 +2488,19 @@ export class BlackboardRunner implements SwarmRunner {
   private async promptPlannerWithFallback(
     primaryAgent: Agent,
     promptText: string,
+    agentName: "swarm" | "swarm-read" = "swarm-read",
   ): Promise<{ response: string; agentUsed: Agent }> {
+    // Unit 37: planner / auditor / replanner / tier-up calls default to
+    // `swarm-read` so they can actually inspect the code via read / grep /
+    // glob / list tools. Workers continue calling promptAgent directly
+    // with the default `swarm` (no tools) — see runWorker.
     const fallbacks = this.opts.manager.list().filter((a) => a.id !== primaryAgent.id);
     const tried: Agent[] = [primaryAgent, ...fallbacks];
     let lastErr: unknown;
     for (let i = 0; i < tried.length; i++) {
       const agent = tried[i];
       try {
-        const response = await this.promptAgent(agent, promptText);
+        const response = await this.promptAgent(agent, promptText, agentName);
         if (i > 0) {
           this.appendSystem(
             `Planner call routed to ${agent.id} after ${primaryAgent.id} exhausted retries. ` +
@@ -2512,7 +2524,18 @@ export class BlackboardRunner implements SwarmRunner {
     throw lastErr ?? new Error("all planner fallbacks exhausted");
   }
 
-  private async promptAgent(agent: Agent, prompt: string): Promise<string> {
+  private async promptAgent(
+    agent: Agent,
+    prompt: string,
+    agentName: "swarm" | "swarm-read" = "swarm",
+  ): Promise<string> {
+    // Unit 37: agentName defaults to "swarm" (no tools — preserved worker
+    // behavior). Planner / auditor / replanner / tier-up / council-drafts
+    // should pass "swarm-read" to get read / grep / glob / list tools so
+    // they can actually inspect the repo before producing contracts or
+    // verdicts. The route selects the opencode agent profile per-prompt
+    // via session.prompt body.agent — profiles are declared in the
+    // clone's opencode.json (RepoService.writeOpencodeConfig / Unit 20).
     this.turnsPerAgent.set(agent.id, (this.turnsPerAgent.get(agent.id) ?? 0) + 1);
     this.opts.manager.markStatus(agent.id, "thinking");
     this.emitAgentState({
@@ -2546,6 +2569,7 @@ export class BlackboardRunner implements SwarmRunner {
       // event log read identically to the pre-Unit-16 behavior.
       const res = await promptWithRetry(agent, prompt, {
         signal: controller.signal,
+        agentName,
         describeError: (e) => this.describeSdkError(e),
         sleep: (ms, sig) => this.interruptibleSleep(ms, sig),
         onTiming: ({ attempt, elapsedMs, success }) => {
