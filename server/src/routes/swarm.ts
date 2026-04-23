@@ -64,6 +64,12 @@ const StartBody = z.object({
   // Unit 36: user-supplied running-app URL for auditor UI verification.
   // Requires MCP_PLAYWRIGHT_ENABLED=true. Blackboard-only.
   uiUrl: z.string().url().optional(),
+  // Unit 42: per-agent model overrides (blackboard-only). Each falls
+  // back to `model` when absent. Validated as the same loose string
+  // shape as `model` itself — opencode/Ollama is the authoritative
+  // resolver.
+  plannerModel: z.string().trim().min(1).max(200).optional(),
+  workerModel: z.string().trim().min(1).max(200).optional(),
 });
 
 const SayBody = z.object({ text: z.string().min(1) });
@@ -117,6 +123,8 @@ export function swarmRouter(orch: Orchestrator): Router {
         ambitionTiers: parsed.data.ambitionTiers,
         critic: parsed.data.critic,
         uiUrl: parsed.data.uiUrl,
+        plannerModel: parsed.data.plannerModel,
+        workerModel: parsed.data.workerModel,
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {

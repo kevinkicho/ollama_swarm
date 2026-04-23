@@ -192,6 +192,11 @@ export function SetupForm() {
   const [roles, setRoles] = useState<SwarmRoleWeb[]>(() => DEFAULT_ROLES_WEB.map((r) => ({ ...r })));
   const [councilContractPref, setCouncilContractPref] = useState<CouncilContractPref>("");
   const [proposition, setProposition] = useState("");
+  // Unit 42: per-agent model overrides (blackboard-only). Empty string
+  // means "fall through to the main Model field" — same shape as the
+  // server falls back to cfg.model when these are absent.
+  const [plannerModel, setPlannerModel] = useState("");
+  const [workerModel, setWorkerModel] = useState("");
   const [busy, setBusy] = useState(false);
   const setError = useSwarm((s) => s.setError);
   const reset = useSwarm((s) => s.reset);
@@ -239,6 +244,14 @@ export function SetupForm() {
       }
       if (preset.id === "debate-judge" && proposition.trim().length > 0) {
         presetSpecific.proposition = proposition.trim();
+      }
+      // Unit 42: blackboard-only per-agent model overrides. Trimmed
+      // empty → omit the field so the server falls back to cfg.model.
+      if (preset.id === "blackboard") {
+        const pm = plannerModel.trim();
+        const wm = workerModel.trim();
+        if (pm.length > 0) presetSpecific.plannerModel = pm;
+        if (wm.length > 0) presetSpecific.workerModel = wm;
       }
 
       const res = await fetch("/api/swarm/start", {
@@ -363,6 +376,11 @@ export function SetupForm() {
           setCouncilContractPref={setCouncilContractPref}
           proposition={proposition}
           setProposition={setProposition}
+          plannerModel={plannerModel}
+          setPlannerModel={setPlannerModel}
+          workerModel={workerModel}
+          setWorkerModel={setWorkerModel}
+          fallbackModel={model}
         />
 
         <div className="grid grid-cols-3 gap-4">
@@ -495,6 +513,11 @@ function PresetAdvancedSettings(props: {
   setCouncilContractPref: (p: CouncilContractPref) => void;
   proposition: string;
   setProposition: (p: string) => void;
+  plannerModel: string;
+  setPlannerModel: (m: string) => void;
+  workerModel: string;
+  setWorkerModel: (m: string) => void;
+  fallbackModel: string;
 }) {
   const [open, setOpen] = useState(false);
   const {
@@ -505,6 +528,11 @@ function PresetAdvancedSettings(props: {
     setCouncilContractPref,
     proposition,
     setProposition,
+    plannerModel,
+    setPlannerModel,
+    workerModel,
+    setWorkerModel,
+    fallbackModel,
   } = props;
 
   const hasAdvanced =
@@ -518,7 +546,7 @@ function PresetAdvancedSettings(props: {
       case "role-diff":
         return "Advanced settings — role catalog";
       case "blackboard":
-        return "Advanced settings — council-contract draft";
+        return "Advanced settings — council-contract draft + per-agent models";
       case "debate-judge":
         return "Advanced settings — proposition";
       default:
@@ -542,10 +570,19 @@ function PresetAdvancedSettings(props: {
             <RoleDiffAdvanced roles={roles} setRoles={setRoles} />
           ) : null}
           {presetId === "blackboard" ? (
-            <BlackboardAdvanced
-              pref={councilContractPref}
-              setPref={setCouncilContractPref}
-            />
+            <>
+              <BlackboardAdvanced
+                pref={councilContractPref}
+                setPref={setCouncilContractPref}
+              />
+              <BlackboardModelOverrides
+                plannerModel={plannerModel}
+                setPlannerModel={setPlannerModel}
+                workerModel={workerModel}
+                setWorkerModel={setWorkerModel}
+                fallbackModel={fallbackModel}
+              />
+            </>
           ) : null}
           {presetId === "debate-judge" ? (
             <DebateJudgeAdvanced
@@ -555,6 +592,55 @@ function PresetAdvancedSettings(props: {
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function BlackboardModelOverrides({
+  plannerModel,
+  setPlannerModel,
+  workerModel,
+  setWorkerModel,
+  fallbackModel,
+}: {
+  plannerModel: string;
+  setPlannerModel: (m: string) => void;
+  workerModel: string;
+  setWorkerModel: (m: string) => void;
+  fallbackModel: string;
+}) {
+  return (
+    <div className="space-y-2">
+      <Field
+        label="Planner model override (Unit 42)"
+        hint={
+          plannerModel.trim().length === 0
+            ? `Empty → uses the main Model field (${fallbackModel}). Planner-hosted critic / replanner / auditor sessions inherit this too.`
+            : `Planner + critic + replanner + auditor will run on ${plannerModel.trim()}.`
+        }
+      >
+        <input
+          value={plannerModel}
+          onChange={(e) => setPlannerModel(e.target.value.slice(0, 200))}
+          placeholder={`(default: ${fallbackModel})`}
+          className="input font-mono"
+        />
+      </Field>
+      <Field
+        label="Worker model override (Unit 42)"
+        hint={
+          workerModel.trim().length === 0
+            ? `Empty → uses the main Model field (${fallbackModel}). All worker agents (indices 2..N) share this model.`
+            : `All worker agents will run on ${workerModel.trim()}.`
+        }
+      >
+        <input
+          value={workerModel}
+          onChange={(e) => setWorkerModel(e.target.value.slice(0, 200))}
+          placeholder={`(default: ${fallbackModel})`}
+          className="input font-mono"
+        />
+      </Field>
     </div>
   );
 }

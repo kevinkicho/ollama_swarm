@@ -73,6 +73,22 @@ export interface RunConfig {
    * this unit does NOT start the app on the user's behalf.
    */
   uiUrl?: string;
+  /**
+   * Unit 42: per-agent model overrides. When set, the planner agent
+   * (and the planner-hosted critic / replanner / auditor sessions)
+   * uses `plannerModel`, while worker agents use `workerModel`. Each
+   * falls back to `model` when absent — so existing single-model
+   * runs are unchanged. Both blackboard-only (other presets ignore
+   * these and use `model` for every agent).
+   *
+   * Use case: heavy-lift cloud model for planning + verification
+   * (e.g. `glm-5.1:cloud`), cheaper / faster model for high-volume
+   * worker turns (e.g. `gemma4:31b-cloud`). The opencode.json the
+   * runner writes declares ALL distinct model names so opencode
+   * knows about every one before any session.create fires.
+   */
+  plannerModel?: string;
+  workerModel?: string;
 }
 
 export interface RunnerOpts {

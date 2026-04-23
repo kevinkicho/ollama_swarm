@@ -295,8 +295,15 @@ export class BlackboardRunner implements SwarmRunner {
       url: cfg.repoUrl,
       destPath: cfg.localPath,
     });
-    await this.opts.repos.writeOpencodeConfig(destPath, cfg.model);
+    // Unit 42: per-agent model overrides. Each falls back to cfg.model
+    // when absent, so existing single-model runs are byte-identical.
+    const plannerModel = cfg.plannerModel ?? cfg.model;
+    const workerModel = cfg.workerModel ?? cfg.model;
+    await this.opts.repos.writeOpencodeConfig(destPath, [plannerModel, workerModel]);
     this.appendSystem(`Cloned ${cfg.repoUrl} -> ${destPath}`);
+    if (plannerModel !== workerModel) {
+      this.appendSystem(`Per-agent models: planner=${plannerModel}, workers=${workerModel}`);
+    }
 
     this.setPhase("spawning");
     // Planner is always index 1. Workers take 2..N. If the user picks
@@ -305,7 +312,7 @@ export class BlackboardRunner implements SwarmRunner {
     const planner = await this.opts.manager.spawnAgent({
       cwd: destPath,
       index: 1,
-      model: cfg.model,
+      model: plannerModel,
     });
     this.appendSystem(`Planner agent ready on port ${planner.port}`);
 
@@ -315,7 +322,7 @@ export class BlackboardRunner implements SwarmRunner {
       // Parallel spawn: each opencode serve takes a few seconds to boot,
       // sequential would compound that for every extra worker.
       const workerSpawns = Array.from({ length: workerCount }, (_, i) =>
-        this.opts.manager.spawnAgent({ cwd: destPath, index: 2 + i, model: cfg.model }),
+        this.opts.manager.spawnAgent({ cwd: destPath, index: 2 + i, model: workerModel }),
       );
       const spawned = await Promise.all(workerSpawns);
       workers.push(...spawned);

@@ -109,8 +109,20 @@ export class RepoService {
     return { destPath: abs, alreadyPresent: false };
   }
 
-  async writeOpencodeConfig(clonePath: string, model: string): Promise<void> {
+  async writeOpencodeConfig(clonePath: string, model: string | readonly string[]): Promise<void> {
     const filePath = path.join(clonePath, "opencode.json");
+    // Unit 42: accept multiple models so per-agent overrides
+    // (planner vs worker) can each resolve at session-create time.
+    // Single-string callers stay correct — wrapped + de-duped.
+    const modelList = (typeof model === "string" ? [model] : [...model])
+      .map((m) => m.trim())
+      .filter((m) => m.length > 0);
+    const uniqueModels = Array.from(new Set(modelList));
+    if (uniqueModels.length === 0) {
+      throw new Error("writeOpencodeConfig: at least one model required");
+    }
+    const modelsBlock: Record<string, { name: string }> = {};
+    for (const m of uniqueModels) modelsBlock[m] = { name: m };
     const payload = {
       $schema: "https://opencode.ai/config.json",
       provider: {
@@ -118,9 +130,7 @@ export class RepoService {
           npm: "@ai-sdk/openai-compatible",
           name: "Ollama (local)",
           options: { baseURL: config.OLLAMA_BASE_URL },
-          models: {
-            [model]: { name: model },
-          },
+          models: modelsBlock,
         },
       },
       // Two agent profiles:
