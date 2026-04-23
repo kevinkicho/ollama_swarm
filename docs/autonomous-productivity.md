@@ -85,9 +85,11 @@ yet. **→ Unit 36 (planned).**
 | 35   | Critic agent at commit time                 | shipped (`469ef62`, 2026-04-23)|
 | 35-fix | Critic uses fresh session on planner      | shipped (`e258d2f`, 2026-04-23)|
 | 36   | Wire `swarm-ui` (Unit 26) to auditor        | shipped (`e22e337`, 2026-04-23)|
-| 37   | Planner + auditor use `swarm-read` profile  | **next** — see spec below      |
-| 38   | Agent-lifecycle control + orphan reclamation| **next** — see spec below      |
-| 39+  | Bigger warmup / retry backoff tuning        | planned                        |
+| 37   | Planner + auditor use `swarm-read` profile  | shipped (`5473694`, 2026-04-23)|
+| 38   | Agent-lifecycle control + orphan reclamation| shipped (`b103dc7`, 2026-04-23)|
+| 39   | Timeout + retry + "thinking 3m54s" UX        | shipped (`d7cd59a`, 2026-04-23)|
+| 40+  | Historical latency graph in thinking tooltip | planned (Kevin's ask)          |
+| 40+  | Stop endpoint awaits verified kill           | planned                        |
 | 40+  | Cross-run resume + tier-aware replay        | hypothesized                   |
 | 40+  | Auto-start app (workers execute shell)      | hypothesized                   |
 | 40+  | Persistent swarm-ui across audits           | hypothesized                   |
