@@ -3227,6 +3227,130 @@ default; clicking the header expands it.
 
 ---
 
+## Unit 33 — Cross-preset metrics (`summary.json` for every preset)  **[committed: `746a64a`]**
+
+Before this unit, only blackboard wrote `<clone>/summary.json` at
+run end. Every other preset left nothing on disk to compare runs
+by — the per-call timing data existed mid-run (Unit 19's
+`_prompt_timing` records in `logs/current.jsonl`) but wasn't
+aggregated into a per-run artifact. You couldn't ask "was council
+or orchestrator-worker better on this repo?" because there was no
+comparable object to diff. Unit 33 closes that gap.
+
+Three pieces ship together:
+
+**Shared stats collector** (`agentStatsCollector.ts`, +11 tests).
+Stateful class mirroring the in-class Maps
+`BlackboardRunner` already maintains (`turnsPerAgent`,
+`attemptsPerAgent`, `retriesPerAgent`, `latenciesPerAgent`). Each
+non-blackboard runner now carries one as a field instead of
+duplicating the bookkeeping seven times. API: `reset`,
+`registerAgents`, `countTurn(agentId)`,
+`onTiming(agentId, success, elapsedMs)`, `onRetry(agentId)`,
+`buildPerAgentStats()`. Blackboard keeps its own in-class tracking
+to minimize regression surface — folding it into the collector is
+a larger refactor than this unit warrants; a future unit can
+unify.
+
+**Shared summary shape + writer** (`runSummary.ts`, +9 tests).
+`buildDiscussionSummary(input)` produces the common `RunSummary`
+shape for non-blackboard runs. Blackboard-only fields (`commits`,
+`staleEvents`, `skippedTodos`, `totalTodos`, `contract`) are
+simply omitted from discussion summaries; consumers check `preset`
+to know which fields to expect. `writeRunSummary(clonePath,
+summary)` writes atomically (tmp-file + rename) to
+`<clonePath>/summary.json` — the same location blackboard uses,
+so the comparison script doesn't care which preset produced the
+file. Cross-preset identity fields (`agentCount`, `rounds`) are
+now top-level on every summary; `blackboard/summary.ts` threads
+them through `buildSummary` for parity.
+
+**Runner wiring** (6 files, identical pattern in each):
+
+- `RoundRobinRunner` (used by both round-robin and role-diff
+  presets), `CouncilRunner`, `OrchestratorWorkerRunner`,
+  `DebateJudgeRunner`, `MapReduceRunner`, `StigmergyRunner`:
+    - `private stats = new AgentStatsCollector()`,
+      `private startedAt?: number`,
+      `private summaryWritten = false`.
+    - Reset stats in `start()`; register the spawned roster
+      (`stats.registerAgents(ready)`); stamp `startedAt` at the
+      moment the discussing/executing phase begins.
+    - `stats.countTurn(agent.id)` at the top of each per-turn
+      function.
+    - `onTiming` / `onRetry` callbacks route through the collector
+      AND preserve the existing logDiag telemetry (Unit 19).
+    - New private `writeSummary(cfg, crashMessage?)` called from
+      the loop's finally. Writes regardless of termination cause
+      (completed / user-stop / crash). `summaryWritten` flag
+      guards against double-write.
+- `BlackboardRunner` — no behavioral change, only threads
+  `cfg.agentCount` + `cfg.rounds` into `buildSummary` so
+  blackboard summaries now carry the same top-level identity
+  fields as discussion summaries.
+
+**Comparison script** (`scripts/compare-runs.mjs`). Reads N
+summary.json files (run dirs OR direct file paths) and prints a
+column-aligned text table. Smoke-tested against
+`runs/phase9-smoke/summary.json` and
+`runs/kyahoofinance032926/summary.json` (both blackboard) —
+produces parallel columns with rows: preset, agentCount, rounds,
+model, wallClock (humanized), stopReason, stopDetail,
+filesChanged, blackboard-only cells (commits / todos / staleEvents
+/ criteria met/unmet), aggregate per-agent stats (total attempts
+/ retries / successful / mean+p95 latency averaged across
+agents). Non-applicable cells render as "—" not "0" so
+"this preset can't commit" stays distinguishable from "this
+preset ran and committed zero."
+
+Sample output:
+
+```
+metric                    │  phase9-smoke   │  kyahoofinance032926
+──────────────────────────┼─────────────────┼──────────────────────
+preset                    │  blackboard     │  blackboard
+wallClock                 │  2.1m           │  13.5m
+stopReason                │  completed      │  completed
+filesChanged              │  7              │  41
+commits (bb)              │  7              │  11
+criteria met              │  —              │  2
+```
+
+The `agentCount` / `rounds` gap ("—") on old summaries is expected
+— those were written before Unit 33 added the fields. New runs
+fill them in.
+
+**Deliberately out of scope (future units):**
+
+- WS `run_summary` event emission for non-blackboard runs so the
+  UI shows a summary card for every preset (currently only
+  blackboard emits). The on-disk write happens for every preset;
+  the live broadcast does not.
+- Quality proxies beyond `filesChanged` — e.g., test-file count,
+  LOC changed via `git diff --stat --numstat`, criteria pass rate
+  for non-blackboard presets. Unit 33 gives you the infrastructure
+  to compute these; plugging them in is a follow-up.
+- Unifying blackboard's in-class stats tracking with
+  `AgentStatsCollector`. Left as-is to keep Unit 33's blackboard
+  surface area minimal.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+514/514 server tests green (494 before + 11 agentStatsCollector +
+9 runSummary). Compare script smoke-tested against two real
+historical summaries.
+
+**How to try it:** run any non-blackboard preset end-to-end, then
+`cat <clone>/summary.json` — file should exist with the discussion
+shape. Compare two runs:
+
+```
+node scripts/compare-runs.mjs <run-dir-1> <run-dir-2>
+# or
+node scripts/compare-runs.mjs runs/*/summary.json
+```
+
+---
+
 ## Session summary (Units 9–21, this conversation)
 
 Twelve units shipped in this session:

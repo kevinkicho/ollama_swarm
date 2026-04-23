@@ -294,6 +294,13 @@ concurrent worker slots regardless of pattern.
 - **Cross-preset transcript format.** The UI currently assumes one linear
   transcript. Blackboard wants a board view; map-reduce wants a tree view.
   We'll need a generic "event" stream and per-preset renderers.
-- **Metrics.** To actually compare presets, we need to record wall-clock,
-  token usage, and some output-quality proxy (LOC changed? tests passing?).
-  Worth thinking about before we ship preset #2.
+- **Metrics.** (Partially answered, Unit 33.) Every preset now writes
+  `<clone>/summary.json` at run end with a shared shape — wall-clock,
+  per-agent latency stats, attempts+retries, filesChanged. Blackboard
+  keeps its richer fields (commits, contract, staleEvents); other
+  presets simply omit those. `scripts/compare-runs.mjs` reads N
+  summaries and prints a side-by-side comparison. Still missing: a
+  quality proxy beyond `filesChanged` (test-file count, LOC changed
+  via `git diff --stat --numstat`, criteria-met rate for non-blackboard
+  presets). Token usage isn't exposed by the SDK path we use — same
+  nullness limitation as `summary.ts` documents.
