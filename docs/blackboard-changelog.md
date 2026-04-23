@@ -3839,6 +3839,47 @@ responses get killed.
 
 ---
 
+## 2026-04-23 Units 40 + 41 — UX layer before the next E2E
+
+Two follow-ups bundled as a "finish the UX layer before the long
+E2E" deferment: the user asked for the honest-ticker work from
+Unit 39 to be completed before launching the next battle-test run
+on current main.
+
+- **Unit 40** — Historical latency graph in the thinking tooltip.
+  Per-attempt latency samples are now broadcast as a new
+  `agent_latency_sample` SwarmEvent from every runner's onTiming
+  callback. The frontend's zustand store keeps a bounded
+  rolling window of 20 samples per agent. Hovering the
+  "thinking 3m54s" ticker in an AgentPanel renders an inline
+  SVG bar sparkline: bars are height-scaled to the window's
+  max elapsed, colored emerald for success / red for failure,
+  oldest on the left. Lets the user see whether the current
+  wait is unusually long compared to recent attempts on the
+  same agent. Completes the Unit 39 UX work from Kevin's
+  original ask: "keep a tally of the planner taking how many
+  minutes and seconds and display them as ui graph visible to
+  user as tooltip happening when scroll over that ticking
+  timer."
+
+- **Unit 41** — POST /api/swarm/stop awaits verified kill.
+  `AgentManager.killAll` grew two-stage escalation and a
+  doubled poll window: stage 1 does treeKill via ChildProcess
+  for up to 3 s (10 × 300 ms) with a retry at the 0.9-s mark;
+  stage 2 does `killByPid` (direct `taskkill /F /PID`) for
+  another 3 s with the same cadence. The PID-log `remove` is
+  now awaited instead of fire-and-forget so /stop's response
+  reflects on-disk reality, not the optimistic pre-write
+  state. Any PID that escapes both stages is counted and the
+  user sees an explicit error event in the UI ("N/M agent
+  process(es) did not exit within the verified-kill window");
+  the startup orphan sweep from Unit 38 remains the safety
+  net. Closes the remaining corner of Unit 38 — the old
+  fire-and-forget shape returned `{ok:true}` after ~1.5 s
+  regardless of whether the kill actually completed.
+
+---
+
 ## Session summary (Units 9–21, this conversation)
 
 Twelve units shipped in this session:

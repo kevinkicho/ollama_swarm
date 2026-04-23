@@ -88,11 +88,11 @@ yet. **→ Unit 36 (planned).**
 | 37   | Planner + auditor use `swarm-read` profile  | shipped (`5473694`, 2026-04-23)|
 | 38   | Agent-lifecycle control + orphan reclamation| shipped (`b103dc7`, 2026-04-23)|
 | 39   | Timeout + retry + "thinking 3m54s" UX        | shipped (`d7cd59a`, 2026-04-23)|
-| 40+  | Historical latency graph in thinking tooltip | planned (Kevin's ask)          |
-| 40+  | Stop endpoint awaits verified kill           | planned                        |
-| 40+  | Cross-run resume + tier-aware replay        | hypothesized                   |
-| 40+  | Auto-start app (workers execute shell)      | hypothesized                   |
-| 40+  | Persistent swarm-ui across audits           | hypothesized                   |
+| 40   | Historical latency graph in thinking tooltip | shipped (`3ee9408`, 2026-04-23)|
+| 41   | Stop endpoint awaits verified kill           | shipped (`e71dd84`, 2026-04-23)|
+| 42+  | Cross-run resume + tier-aware replay        | hypothesized                   |
+| 42+  | Auto-start app (workers execute shell)      | hypothesized                   |
+| 42+  | Persistent swarm-ui across audits           | hypothesized                   |
 
 ## Unit 34 — Ambition ratchet (spec-lite)
 
