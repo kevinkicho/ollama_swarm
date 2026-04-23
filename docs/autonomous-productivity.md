@@ -95,9 +95,66 @@ yet. **→ Unit 36 (planned).**
 | 44b  | Anchor-windowed worker seed (middle-row fix) | shipped (`6185a4a`, 2026-04-23)|
 | 45   | Per-file claim lock (anti-thrash)           | shipped (`54f90c5`, 2026-04-23)|
 | 46   | HEADERS_TIMEOUT 600s + auditor prompt caps  | shipped (`c74cb7d`, 2026-04-23)|
-| 47+  | Cross-run resume + tier-aware replay        | hypothesized                   |
-| 47+  | Auto-start app (workers execute shell)      | hypothesized                   |
-| 47+  | Persistent swarm-ui across audits           | hypothesized                   |
+| 47   | Existing-clone work-pattern: detect + UI cue| planned (Kevin's ask 2026-04-23)|
+| 48   | Gitignore runner artifacts in clone         | planned (Kevin's ask 2026-04-23)|
+| 49   | Per-run summary file naming (no overwrite)  | planned (Kevin's ask 2026-04-23)|
+| 50   | Planner reads prior summary on resume       | planned (Kevin's ask 2026-04-23)|
+| 51   | Reload prior contract from blackboard-state | planned (Kevin's ask 2026-04-23)|
+| 52+  | Cross-run resume + tier-aware replay        | hypothesized                   |
+| 52+  | Auto-start app (workers execute shell)      | hypothesized                   |
+| 52+  | Persistent swarm-ui across audits           | hypothesized                   |
+
+## Units 47-51 — Build-on-existing-clone work pattern (spec-lite)
+
+Kevin's 2026-04-23 framing: "trying to recreate exact conditions by
+copying into a new isolated folder is just going to be waste of credit.
+I want us to build upon the project using our app and call that a
+test." The seaj-tsia-study run-3 (post-Unit-46) is the first run that
+intentionally reuses the prior run's clone — and the architecture
+already supports this (RepoService.clone returns alreadyPresent without
+re-cloning when the dir is a git repo). These five units harden the
+ergonomics so the pattern is first-class, not accidental.
+
+**Unit 47 — Existing-clone detect + UI cue.** When the user POSTs
+/start with a `parentPath` that already contains a clone of the same
+repo, surface this in the response (e.g. `{ resumed: true,
+priorCommits: 4, priorChangedFiles: 5 }`) AND in the SetupForm UI
+(blue badge: "Resuming work on existing clone — 4 prior commits, 5
+modified files"). Currently the run silently reuses; users could be
+confused if they expected a fresh start. ~30 min.
+
+**Unit 48 — Gitignore runner artifacts in clone.** The runner writes
+`opencode.json`, `blackboard-state.json`, and `summary.json` into the
+clone root as untracked files. They pollute `git status` and a
+human-curating-the-repo flow. Either (a) add them to a `.gitignore`
+the runner appends to on first run, (b) write them outside the clone
+(e.g. `<parentPath>/.swarm-meta/<run-name>/`), or (c) accept the
+pollution as intentional (visible audit trail). Pick before we ship —
+the cleanest is probably (b). ~45 min.
+
+**Unit 49 — Per-run summary file naming.** Today every run writes
+`summary.json` at the clone root, so a 2nd run silently overwrites the
+1st run's summary — the comparison file we just wrote (run #2 vs v6)
+would have been impossible without my mid-session manual `mv`. Fix:
+write to `summary-<runStartedAt>.json` (or `summary-<isoDate>.json`)
+AND symlink/copy to `summary.json` for the "latest" pointer. ~20 min.
+
+**Unit 50 — Planner reads prior summary on resume.** When the
+`alreadyPresent` flag is true and a `summary*.json` exists, include the
+prior summary's contract + verdicts + skipped reasons in the planner's
+seed (capped, like Unit 46b's auditor caps). The planner can then
+build new criteria that DON'T re-attempt what the prior run already
+classified as wont-do or already-met, and can pick up unmet criteria
+from where the prior run left off. ~60 min.
+
+**Unit 51 — Reload prior contract from blackboard-state.json.** The
+runner currently writes `blackboard-state.json` but never reads it —
+it has full prior contract + tier history. On resume, optionally
+re-hydrate the contract instead of re-deriving from scratch. Avoids
+the planner non-determinism (run #2's contract framing differed from
+run #1 because the planner re-derived). Pair with Unit 50 for full
+"continue where we left off" semantics. ~90 min, more invasive
+because tier-history hydration touches the ratchet machinery.
 
 ## Unit 34 — Ambition ratchet (spec-lite)
 
