@@ -23,6 +23,70 @@ export const WALL_CLOCK_CAP_MS = 480 * 60_000;
 export const COMMITS_CAP = 200;
 export const TODOS_CAP = 300;
 
+// Unit 27: host-sleep compensation. The wall-clock cap originally used
+// `Date.now() - runStartedAt`, which silently counts suspended-host time
+// against the run — documented by the phase11c-medium-v7 post-mortem
+// (~8h 41m of elapsed labeled "20 min cap reached" because the user
+// closed the laptop mid-run). The fix is a tick accumulator that
+// advances only by clamped deltas between consecutive cap checks, so a
+// multi-hour jump from host sleep contributes at most this constant
+// per tick instead of the full suspended duration.
+//
+// 5 minutes is generous: the worker poll cycle is ~2.5 s, and even
+// with a single worker blocked on a retry-laden prompt other workers
+// (or the replan tick) still call checkAndApplyCaps regularly. A
+// legitimate gap of 5 min between cap checks would mean every ticker
+// in the system is simultaneously stuck, which ~never happens in
+// practice. False positive cost: if it does happen, we under-count
+// by up to 5 min per tick — the cap fires slightly late. False
+// negative cost: if a sleep is < 5 min, we over-count by the sleep
+// duration — the cap fires slightly early. Both are acceptable
+// compared to today's "cap fires 8 hours late".
+export const MAX_REASONABLE_TICK_DELTA_MS = 5 * 60_000;
+
+export interface TickAccumulator {
+  /** Clamped ms elapsed since the run entered `executing`. */
+  activeElapsedMs: number;
+  /** `Date.now()` at the previous advance; the delta to "now" is clamped. */
+  lastTickAt: number;
+}
+
+/**
+ * Seed a fresh tick accumulator at `now`. Use this at the moment the
+ * run enters `executing` (alongside stamping `runStartedAt`).
+ */
+export function createTickAccumulator(now: number): TickAccumulator {
+  return { activeElapsedMs: 0, lastTickAt: now };
+}
+
+/**
+ * Advance a tick accumulator by the delta since its last tick, clamped
+ * into `[0, MAX_REASONABLE_TICK_DELTA_MS]`. Returns the new accumulator
+ * state AND the detected-jump magnitude (0 if the raw delta was within
+ * the reasonable range). The caller can use `jumpMs` to log / surface
+ * host-sleep detection without this helper needing a side-effect channel.
+ *
+ * Pure: given the same inputs always returns the same output.
+ */
+export function advanceTickAccumulator(
+  prev: TickAccumulator,
+  now: number,
+): { next: TickAccumulator; jumpMs: number } {
+  const rawDelta = now - prev.lastTickAt;
+  const clampedDelta = Math.max(
+    0,
+    Math.min(rawDelta, MAX_REASONABLE_TICK_DELTA_MS),
+  );
+  const jumpMs = Math.max(0, rawDelta - clampedDelta);
+  return {
+    next: {
+      activeElapsedMs: prev.activeElapsedMs + clampedDelta,
+      lastTickAt: now,
+    },
+    jumpMs,
+  };
+}
+
 export interface CapState {
   /** ms-since-epoch when the run entered `executing`. */
   startedAt: number;

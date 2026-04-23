@@ -12,7 +12,12 @@ import type {
 import type { RunConfig, RunnerOpts, SwarmRunner } from "../SwarmRunner.js";
 import { Board } from "./Board.js";
 import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaster.js";
-import { checkCaps } from "./caps.js";
+import {
+  advanceTickAccumulator,
+  checkCaps,
+  createTickAccumulator,
+  type TickAccumulator,
+} from "./caps.js";
 import { buildCrashSnapshot } from "./crashSnapshot.js";
 import { shouldRunFinalAudit } from "./finalAudit.js";
 import { promptWithRetry } from "../promptWithRetry.js";
@@ -116,6 +121,11 @@ export class BlackboardRunner implements SwarmRunner {
   // "cap tripped and asked us to stop" (phase → completed, with a transcript
   // note explaining which cap).
   private runStartedAt?: number;
+  // Unit 27: host-sleep-proof tick accumulator. Advanced in
+  // checkAndApplyCaps; inter-tick deltas are clamped so an 8-hour host
+  // suspend contributes at most MAX_REASONABLE_TICK_DELTA_MS. Seeded
+  // alongside runStartedAt when the executing phase begins.
+  private tickAccumulator?: TickAccumulator;
   private terminationReason?: string;
   // Phase 9: run-summary counters. runBootedAt is the wall-clock origin
   // (stamped in start(), covers cloning+spawning+seeding+planning+executing)
@@ -202,6 +212,7 @@ export class BlackboardRunner implements SwarmRunner {
     this.stopping = false;
     this.round = 0;
     this.runStartedAt = undefined;
+    this.tickAccumulator = undefined;
     this.terminationReason = undefined;
     this.runBootedAt = Date.now();
     this.staleEventCount = 0;
@@ -285,6 +296,7 @@ export class BlackboardRunner implements SwarmRunner {
         // count toward the cap — the cap is a worker-loop guard, not a total
         // run guard.
         this.runStartedAt = Date.now();
+        this.tickAccumulator = createTickAccumulator(this.runStartedAt);
         this.setPhase("executing");
         this.startClaimExpiry();
         this.planner = planner;
@@ -1279,10 +1291,32 @@ export class BlackboardRunner implements SwarmRunner {
 
   private checkAndApplyCaps(): boolean {
     if (this.stopping) return true;
-    if (this.runStartedAt === undefined) return false;
+    if (this.runStartedAt === undefined || this.tickAccumulator === undefined) {
+      return false;
+    }
+    // Unit 27: advance the tick accumulator with host-sleep clamping,
+    // then hand the active elapsed to checkCaps via `startedAt: 0`
+    // semantics. `Date.now()` is still fine as the "now" SOURCE — it's
+    // only the DELTA between consecutive ticks that we clamp. Wall
+    // time → accumulator advance per tick, bounded by
+    // MAX_REASONABLE_TICK_DELTA_MS so an 8-hour laptop sleep no longer
+    // silently burns the cap.
+    const now = Date.now();
+    const { next, jumpMs } = advanceTickAccumulator(this.tickAccumulator, now);
+    this.tickAccumulator = next;
+    // Only surface jumps >1 min as "host sleep?" to avoid noise from
+    // legitimate multi-minute gaps (e.g. a worker blocked on a cold-
+    // start retry sequence while no other worker has ticked). Anything
+    // smaller gets clamped silently.
+    if (jumpMs > 60_000) {
+      const skippedMin = Math.round(jumpMs / 60_000);
+      this.appendSystem(
+        `Clock jump detected: ~${skippedMin} min skipped from cap math (host sleep?).`,
+      );
+    }
     const reason = checkCaps({
-      startedAt: this.runStartedAt,
-      now: Date.now(),
+      startedAt: 0,
+      now: this.tickAccumulator.activeElapsedMs,
       committed: this.board.counts().committed,
       totalTodos: this.board.listTodos().length,
     });
