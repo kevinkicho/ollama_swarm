@@ -2861,6 +2861,80 @@ struck through with a resolution note.
 
 ---
 
+## Unit 29 — Dev smoke route for Unit 26 (`POST /api/dev/swarm-ui-poke`)
+
+First concrete caller of the Unit-26 `swarm-ui` agent profile +
+Playwright MCP infra. Previously shipped blind: the opencode.json
+shape and env flag existed but nothing exercised them end-to-end,
+so we had zero evidence the `@playwright/mcp` subprocess would
+actually spawn and respond on Kevin's box. Before committing to
+(a) auditor UI-verification or (b) a new `ui-audit` preset, we
+pay down that evidence debt with a minimum-viable probe.
+
+Pattern mirrors the Phase-2 `POST /api/dev/board-poke` route:
+dev-only, no auth, no UI, returns JSON. Hits a user-supplied URL
+via one throwaway `swarm-ui` agent in an ISOLATED AgentManager
+instance and returns the response text plus spawn/prompt timings.
+Runs against its own PortAllocator and no-op broadcast callbacks so
+a smoke poke never appears in the UI or touches an active swarm's
+state.
+
+Request: `POST /api/dev/swarm-ui-poke` with body
+`{"url": "https://example.com", "prompt"?: "..."}`. The optional
+`prompt` overrides the default "navigate + snapshot + paste
+verbatim" instruction — useful for testing more complex flows
+(click, type, evaluate) without redeploying.
+
+Response shape on success:
+```
+{"ok": true, "url": ..., "spawnElapsedMs": ..., "promptElapsedMs": ...,
+ "model": ..., "promptText": ..., "responseText": ...}
+```
+
+Response shape on 400 when the flag is off:
+```
+{"error": "MCP_PLAYWRIGHT_ENABLED is not set to true in .env. ..."}
+```
+
+The 400-on-disabled-flag is intentional: without it, the error
+path is a cryptic "unknown agent profile 'swarm-ui'" from
+opencode, which is hard to distinguish from a real MCP spawn
+failure. Failing fast on the flag check makes the intent obvious.
+
+Implementation notes:
+
+- `server/src/routes/dev.ts` — new `/swarm-ui-poke` handler;
+  `devRouter(broadcaster)` signature bumped to
+  `devRouter({ broadcaster, repos })` so the route can call
+  `repos.writeOpencodeConfig` to produce the same opencode.json
+  shape real runs get. Running against the SAME writer means if
+  Unit 26's MCP config is malformed, the smoke fails the same
+  way a real swarm would.
+- `server/src/index.ts` — updated the devRouter invocation.
+- Isolated AgentManager: local `new AgentManager(() => {}, () => {}, () => {})`
+  with no-op state/event/diag sinks. The manager is torn down
+  (`killAll()`) in the `finally` block; the temp dir is removed
+  too.
+- `skipWarmup: true` on spawn — this is a one-shot, no point
+  paying the Unit-17 warmup cost.
+
+How to use (requires `MCP_PLAYWRIGHT_ENABLED=true` in .env AND
+`npm install -g @playwright/mcp && npx playwright install` on the
+host):
+
+```
+curl -X POST http://127.0.0.1:52243/api/dev/swarm-ui-poke \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com"}'
+```
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+474/474 server tests green (no new tests — this route is a live
+probe, not a unit. The existing `board-poke` route is tested the
+same way).
+
+---
+
 ## Session summary (Units 9–21, this conversation)
 
 Twelve units shipped in this session:
