@@ -2204,7 +2204,7 @@ if v3 still shows gaps:**
 
 ---
 
-## Unit 18 — Serial spawn-warmup + pre-batch parallel warmup  **[committed: pending]**
+## Unit 18 — Serial spawn-warmup + pre-batch parallel warmup  **[committed: `8b16098`]**
 
 The 2026-04-22 battle test v3 (post Unit 17) showed that warmup-at-spawn
 worked exactly as designed for serial presets — role-diff went from 7%
