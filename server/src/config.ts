@@ -42,6 +42,18 @@ const Schema = z.object({
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("true")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // Unit 26: Playwright MCP integration. When enabled, every
+  // synthesized opencode.json gains an `mcp.playwright` entry that
+  // spawns @playwright/mcp as a local subprocess, plus a new
+  // `swarm-ui` agent profile that can call browser_navigate /
+  // browser_snapshot / browser_click / etc. Default OFF so users
+  // who don't use UI inspection don't need @playwright/mcp on
+  // their box; opting in requires `npm install -g @playwright/mcp
+  // && npx playwright install` first.
+  MCP_PLAYWRIGHT_ENABLED: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
 });
 
 const parsed = Schema.parse(process.env);

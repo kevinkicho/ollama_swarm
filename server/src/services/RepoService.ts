@@ -195,6 +195,57 @@ export class RepoService {
         },
       },
     };
+
+    // Unit 26: Playwright MCP integration — adds a `mcp.playwright`
+    // server entry + a `swarm-ui` agent profile that can drive a
+    // headless browser via the official @playwright/mcp package.
+    // OFF by default; users who want UI inspection agents opt in via
+    // `MCP_PLAYWRIGHT_ENABLED=true` in .env AND `npm install -g
+    // @playwright/mcp && npx playwright install` on their box.
+    // When disabled, opencode.json shape is bit-for-bit identical to
+    // pre-Unit-26 output so existing runs are unaffected.
+    if (config.MCP_PLAYWRIGHT_ENABLED) {
+      (payload as Record<string, unknown>).mcp = {
+        playwright: {
+          type: "local",
+          command: ["npx", "@playwright/mcp@latest", "--headless", "--isolated"],
+        },
+      };
+      (payload.agent as Record<string, unknown>)["swarm-ui"] = {
+        mode: "primary" as const,
+        description:
+          "UI-inspection agent with Playwright MCP browser access. Read-only filesystem; can navigate, snapshot, screenshot, and interact with the target app's live UI for verification of user-facing criteria.",
+        tools: {
+          // Filesystem: read-only, same as swarm-read profile
+          read: true,
+          grep: true,
+          glob: true,
+          list: true,
+          write: false,
+          edit: false,
+          multiedit: false,
+          patch: false,
+          bash: false,
+          webfetch: false,
+          task: false,
+          todoread: false,
+          todowrite: false,
+        },
+        mcp: {
+          // Enable all tools exposed by the playwright MCP server
+          // (navigate / snapshot / click / type / take_screenshot /
+          // evaluate / wait_for / press_key etc.). OpenCode exposes
+          // them to the agent with `playwright_*` prefixes.
+          playwright: true,
+        },
+        permission: {
+          edit: "deny" as const,
+          bash: "deny" as const,
+          webfetch: "deny" as const,
+        },
+      };
+    }
+
     await fs.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
   }
 

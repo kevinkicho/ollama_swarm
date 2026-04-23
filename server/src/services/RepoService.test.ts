@@ -271,3 +271,29 @@ test("writeOpencodeConfig — swarm-read enables read tools, denies write/edit/b
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+// Unit 26: Playwright MCP integration. Default OFF — no mcp block,
+// no swarm-ui profile. When MCP_PLAYWRIGHT_ENABLED=true, both appear.
+// The MCP_PLAYWRIGHT_ENABLED flag is read at config-load time, so we
+// can't easily toggle it in a unit test (would require module reload
+// with a different process.env). Instead we test the DEFAULT-OFF
+// shape here, and the shape of the mcp/swarm-ui additions is locked
+// down by eyeballing + the integration test when the user runs with
+// the flag enabled. That's the Unit 20 testing pattern.
+test("writeOpencodeConfig — mcp block absent by default (Unit 26 OFF)", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-cfg-"));
+  try {
+    const repos = new RepoService();
+    await repos.writeOpencodeConfig(root, "test-model");
+    const cfg = JSON.parse(await fs.readFile(path.join(root, "opencode.json"), "utf8")) as Record<string, unknown>;
+    // Default: MCP_PLAYWRIGHT_ENABLED=false → no mcp block, no swarm-ui
+    assert.equal(cfg.mcp, undefined, "mcp block should be absent when flag is off");
+    const agents = cfg.agent as Record<string, unknown>;
+    assert.equal(agents["swarm-ui"], undefined, "swarm-ui profile should be absent when flag is off");
+    // Pre-Unit-26 profiles must still be present
+    assert.ok(agents["swarm"], "swarm profile stays");
+    assert.ok(agents["swarm-read"], "swarm-read profile stays");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
