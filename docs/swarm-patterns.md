@@ -244,18 +244,34 @@ The **chosen stack for v1 of the blackboard preset** is optimistic+CAS
 
 ---
 
-## Preset-picker UX sketch (for later)
+## Preset-picker UX sketch (partially shipped, Unit 32)
 
-The setup page today takes `repoUrl`, `localPath`, `agentCount`, `rounds`,
-`model`. The preset picker adds one field: **Pattern**, a dropdown with
-per-preset help text.
+The setup page takes `repoUrl`, `parentPath` (UX-wise the clone is
+derived), `agentCount`, `rounds`, `model`, `userDirective` (Unit 25),
+and a **Pattern** dropdown with per-preset help text.
 
-Pattern-specific knobs should only appear for the selected preset:
-- Role differentiation → a list of role slots (editable)
-- Map-reduce → tree-slicing strategy (by folder / by file-type / custom)
-- Council → round count + reconcile policy (vote / merge / judge)
-- Orchestrator-worker → lead model override
-- Blackboard → max concurrent agents, stale-retry limit, atomic-unit size cap
+Pattern-specific knobs appear only for the selected preset via a
+collapsible `<PresetAdvancedSettings>` panel. Status:
+
+- **Role differentiation → list of role slots.** SHIPPED (Unit 32).
+  Edit / add / remove / reset to the server's `DEFAULT_ROLES` catalog.
+- **Map-reduce → tree-slicing strategy.** DEFERRED — the runner uses
+  a fixed round-robin partition; strategy alternatives don't exist
+  yet on the backend.
+- **Council → round count + reconcile policy.** PARTIAL — `rounds`
+  is a top-level form field. Reconcile policy (vote / merge /
+  judge) is DEFERRED — the runner has no policy notion; convergence
+  happens through revision.
+- **Orchestrator-worker → lead model override.** DEFERRED — the
+  runner uses one model across all agents via `cfg.model`. Surfacing
+  a per-role model would need the runner to track it.
+- **Blackboard → per-run council-contract (Unit 30) override.**
+  SHIPPED (Unit 32). Tri-state: inherit env flag / force on / force
+  off. `max concurrent agents` and `stale-retry limit` remain
+  DEFERRED; hard caps are deliberately compile-time
+  (`known-limitations.md:35`).
+- **Debate-judge → proposition.** SHIPPED (Unit 32). Start-time
+  field replaces the pre-Unit-32 inject-before-start dance.
 
 Keep `agentCount` meaningful across all presets; it caps the number of
 concurrent worker slots regardless of pattern.

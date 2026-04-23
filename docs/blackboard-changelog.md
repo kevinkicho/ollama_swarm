@@ -3118,6 +3118,115 @@ resume support remains a future unit.
 
 ---
 
+## Unit 32 — Preset-settings UI (per-preset Advanced sections)  **[committed: `4203f03`]**
+
+First concrete wiring of the "pattern-specific knobs should only
+appear for the selected preset" sketch from
+`docs/swarm-patterns.md:253`. Ships three knobs with existing
+backend plumbing, plus the collapsible infrastructure future
+units can slot more knobs into:
+
+- **`role-diff` → custom role catalog.** The 7-role
+  `DEFAULT_ROLES` catalog was baked in at Orchestrator
+  construction; users had no say. The form now pre-populates with
+  a mirror of the server's defaults and lets you edit / add /
+  remove / reset. On submit, the list goes as `roles` — server
+  validates name+guidance bounds (16 roles, 80-char name,
+  2000-char guidance) and falls back to `DEFAULT_ROLES` when
+  absent or empty.
+- **`blackboard` → per-run `councilContract` override.** Unit 30's
+  `COUNCIL_CONTRACT_ENABLED` was env-only: to A/B council vs
+  single-agent you had to restart the server between runs. The
+  form now exposes a tri-state select ("Inherit from env flag",
+  "Enable for this run", "Disable for this run"). Sends
+  `councilContract: bool` only when overriding; absent = inherit
+  = pre-Unit-32 behavior.
+- **`debate-judge` → start-time `proposition`.** The runner
+  previously required `injectUser(text)` before `start()` to set
+  the proposition — awkward, because the SetupForm submits start
+  immediately. `proposition` is now a regular form field and wins
+  over the inject path when present. Empty → fall back to inject
+  (backward compatible) → fall back to `DEFAULT_PROPOSITION`.
+
+Infrastructure. The form got one new sub-component:
+`<PresetAdvancedSettings>` — a collapsible panel rendered below
+the user-directive chip. It renders NOTHING for presets without
+knobs today (round-robin, council, orchestrator-worker,
+map-reduce, stigmergy), so the form stays uncluttered for those
+runs. Future units wanting to ship a knob (e.g., map-reduce's
+tree-slicing strategy, orchestrator-worker's lead-model override)
+add a branch in the component and a field in `RunConfig` — the
+wiring is now patterned.
+
+What this unit is NOT. Several knobs listed in the original UX
+sketch are explicitly DEFERRED because they'd need inventing new
+backend behavior first:
+
+- map-reduce tree-slicing strategy — the runner uses a fixed
+  round-robin partition; alternatives don't exist yet.
+- council reconcile policy (vote / merge / judge) — the runner
+  has no notion of policy; convergence happens through revision.
+- orchestrator-worker lead-model override — the runner uses one
+  model across all agents via `cfg.model`.
+- blackboard max-concurrent-agents / stale-retry-limit — hard
+  caps are deliberately compile-time per
+  `known-limitations.md:35`.
+
+Implementation:
+
+- **Backend (all small thread-throughs):**
+    - `SwarmRunner.RunConfig` — three new optional fields:
+      `roles?: SwarmRole[]`, `councilContract?: boolean`,
+      `proposition?: string`. Documented as preset-scoped.
+    - `routes/swarm.ts` — `SwarmRoleSchema` (name + guidance) and
+      three new fields on `StartBody`. Empty roles array becomes
+      `undefined` in the passed RunConfig so the runner's
+      fallback logic kicks in cleanly.
+    - `Orchestrator.buildRunner(preset, cfg)` — the `role-diff`
+      branch now picks `cfg.roles ?? DEFAULT_ROLES`. Empty-array
+      also falls through to defaults (saves callers a UI bug
+      where clearing all roles would crash `roleForAgent`).
+    - `BlackboardRunner.runFirstPassContractOrchestrator` — reads
+      `this.active?.councilContract ?? config.COUNCIL_CONTRACT_ENABLED`.
+      Per-run overrides env.
+    - `DebateJudgeRunner.start` — when `cfg.proposition` is
+      present, it wins over the inject-before-start capture. The
+      inject path still works when `cfg.proposition` is absent,
+      preserving existing API.
+
+- **Frontend:**
+    - `SetupForm.tsx` — three new state fields (`roles`,
+      `councilContractPref`, `proposition`). State persists
+      across preset-switch round-trips so toggling back doesn't
+      lose user input. Submit body composes `presetSpecific`
+      conditionally based on selected preset.
+    - `<PresetAdvancedSettings>` — collapsible wrapper with
+      per-preset label and per-preset branch for the inner UI.
+    - `<RoleDiffAdvanced>` — list editor with
+      add/delete/reset-to-defaults, row counter, maxLength
+      inputs mirroring server's zod limits. Empty list shows a
+      hint that the server will fall back to defaults.
+    - `<BlackboardAdvanced>` — the tri-state select.
+    - `<DebateJudgeAdvanced>` — the proposition textarea with
+      2000-char cap and the `DEFAULT_PROPOSITION` as placeholder.
+
+Also fixed: `<BlackboardHelp>`'s hard-cap copy drifted after Unit
+23 and was saying the wrong values. Now matches Unit 23 (8 h /
+200 / 300) and notes Unit 27's host-sleep compensation.
+
+No new tests. The backend changes are pure thread-throughs; the
+frontend is new UI surface validated by `tsc --noEmit`. Shape
+drift on any knob would 400 on first form submission. 494/494
+server tests unchanged (same suite as Unit 31).
+
+**Visual validation status: NOT DONE this session (no dev
+server running).** The Advanced panel should appear ONLY for
+role-diff / blackboard / debate-judge; other presets should
+render identically to pre-Unit-32. The panel is collapsed by
+default; clicking the header expands it.
+
+---
+
 ## Session summary (Units 9–21, this conversation)
 
 Twelve units shipped in this session:
