@@ -93,7 +93,7 @@ yet. **→ Unit 36 (planned).**
 | 42   | Per-agent model selection (planner vs worker)| shipped (`542a273`, 2026-04-23)|
 | 43   | Per-run wall-clock cap override              | shipped (`32da3b5`, 2026-04-23)|
 | 44b  | Anchor-windowed worker seed (middle-row fix) | shipped (`6185a4a`, 2026-04-23)|
-| 45   | Per-file claim priority / row-range splits  | planned                        |
+| 45   | Per-file claim lock (anti-thrash)           | shipped (`54f90c5`, 2026-04-23)|
 | 46   | Per-model timeout + audit-context truncation| planned                        |
 | 47+  | Cross-run resume + tier-aware replay        | hypothesized                   |
 | 47+  | Auto-start app (workers execute shell)      | hypothesized                   |
