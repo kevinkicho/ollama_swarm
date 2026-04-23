@@ -2653,6 +2653,67 @@ preset run) is where the new visibility shows up.
 
 ---
 
+## Unit 26 — Playwright MCP integration (env-gated, default OFF)  **[committed: `fdc24b0`]**
+
+Opt-in infrastructure for UI-inspection agents. When the
+`MCP_PLAYWRIGHT_ENABLED` env var is set to a truthy value in
+`.env`, every synthesized `opencode.json` at clone time gains two
+things: a `mcp.playwright` local-server entry (spawns
+`@playwright/mcp` via `npx`), and a brand-new `swarm-ui` agent
+profile that exposes all `browser_*` MCP tools (navigate,
+snapshot, click, type, evaluate, take_screenshot, wait_for,
+press_key, …) alongside read-only filesystem tools.
+
+Why gated. `@playwright/mcp` isn't in this project's dep tree —
+it's meant to be installed globally by users who want UI
+inspection (`npm install -g @playwright/mcp && npx playwright
+install`). Shipping it enabled-by-default would break startup
+for everyone who doesn't have it. OFF by default means zero
+surface-area change for existing users; the resulting
+`opencode.json` is bit-for-bit identical to pre-Unit-26 output
+when the flag is unset.
+
+Implementation (surgical, one file pattern-matches per addition):
+
+- `server/src/config.ts` — adds `MCP_PLAYWRIGHT_ENABLED` to the
+  zod env schema. Same `"true"/"false"/"1"/"0"/"yes"/"no"` enum
+  + transform pattern as `AGENT_WARMUP_ENABLED` (Unit 17).
+  Defaults to `"false"` so unset env = disabled.
+- `server/src/services/RepoService.ts` — inside
+  `writeOpencodeConfig`, a single `if (config.MCP_PLAYWRIGHT_ENABLED)`
+  block after the main payload is assembled. Conditionally
+  appends `payload.mcp.playwright` (type `"local"`, command
+  `["npx", "@playwright/mcp@latest", "--headless", "--isolated"]`)
+  and `payload.agent["swarm-ui"]` (mode `primary`, read-only
+  filesystem tools matching `swarm-read`, `mcp.playwright: true`
+  to expose all Playwright tools, permission denies on edit /
+  bash / webfetch as belt-and-suspenders).
+
+No callsite wires `swarm-ui` yet. Blackboard still uses `swarm`,
+discussion presets still use `swarm-read`. A follow-up unit will
+wire the UI agent into a concrete caller (likely auditor for
+UI-criteria verification, or a new `ui-audit` preset). Shipping
+the infra alone first keeps the diff reviewable and lets users
+opt in + smoke-test the MCP spawn before any runner depends on it.
+
+**Tests added (1):**
+
+- `RepoService.test.ts` — `writeOpencodeConfig — mcp block absent
+  by default (Unit 26 OFF)`. Asserts that with the flag
+  defaulted to `false`, the generated `opencode.json` has no
+  `mcp` key, no `swarm-ui` agent, and both pre-existing `swarm`
+  + `swarm-read` profiles are still present. (The ON path is
+  deliberately not unit-tested: `MCP_PLAYWRIGHT_ENABLED` is read
+  at config-load time, and toggling it in-process would require
+  a full module reload. Visual check + integration-test when
+  the user enables the flag is the validation strategy — same
+  pattern Unit 20 used.)
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+462/462 server tests green (461 before + 1 Unit 26 test).
+
+---
+
 ## Session summary (Units 9–21, this conversation)
 
 Twelve units shipped in this session:
