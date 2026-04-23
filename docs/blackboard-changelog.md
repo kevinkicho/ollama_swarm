@@ -2935,6 +2935,102 @@ same way).
 
 ---
 
+## Unit 30 — Council-style initial contract for blackboard turn 0  **[committed: `edc61bd`]**
+
+Opt-in two-phase contract flow at the start of a blackboard run.
+Today, turn 0 is "agent-1 produces a first-pass contract alone" —
+whatever criteria it names become the mission definition the run
+is audited against. Unit 30 replaces that single-agent draft with
+a parallel N-draft + merge when `COUNCIL_CONTRACT_ENABLED=true`:
+
+- **Turn 0a (DRAFT)** — every agent (planner + workers) receives
+  the same `FIRST_PASS_CONTRACT_SYSTEM_PROMPT + user prompt` and
+  produces a contract INDEPENDENTLY. Parallel, peer-hidden. None
+  of them see each other's drafts; the cognitive-diversity
+  argument from the session-summary discussion is "same-model
+  agents produce surprisingly different answers when they can't
+  anchor on each other's output first."
+- **Turn 0b (MERGE)** — the planner receives every parseable
+  draft in a single prompt (via a new
+  `buildCouncilContractMergePrompt` builder) and produces the
+  final contract. Merge rules: union distinct outcomes, dedupe
+  synonyms, prefer paths grounded in the REPO FILE LIST, cap at
+  20 criteria, honor USER DIRECTIVE authoritatively. The merge
+  runs through `promptPlannerWithFallback` (Unit 24) so a cloud
+  cold-start doesn't sink the turn.
+
+Gated behind `COUNCIL_CONTRACT_ENABLED` env flag, default OFF, so
+existing runs are byte-identical. When the flag is off OR
+`agentCount === 1` (no workers to diversify with), the dispatcher
+drops straight to the legacy `runFirstPassContract` path.
+
+**Degradation design.** The council flow never "hangs" a run:
+
+- 0 drafts survive parsing → fall through to single-agent path.
+  We've paid for one failed parallel batch but the run still gets
+  a contract on the next attempt.
+- 1 draft survives → use it directly, skip the merge prompt. No
+  point paying a merge token cost for a single-source input.
+- ≥2 drafts survive, merge fails twice (first + repair) → pick
+  the draft with the most criteria as fallback (deterministic:
+  ties go to the earliest agent = planner). We've already paid
+  for N drafts; returning something is cheaper than punting.
+
+**Implementation:**
+
+- `server/src/config.ts` — new `COUNCIL_CONTRACT_ENABLED` env
+  flag, same `"true"/"false"/"1"/"0"/"yes"/"no"` enum pattern as
+  `AGENT_WARMUP_ENABLED` (Unit 17) and `MCP_PLAYWRIGHT_ENABLED`
+  (Unit 26). Default `"false"`.
+- `server/src/swarm/blackboard/prompts/firstPassContract.ts` —
+  new exported `CouncilContractDraft` interface (`{agentId,
+  contract: ParsedContract}`) and `buildCouncilContractMergePrompt(
+  seed, drafts)` builder. Reuses seed material (REPO FILE LIST,
+  README excerpt, userDirective) so merge decisions stay
+  grounded rather than just averaged across drafts.
+- `server/src/swarm/blackboard/BlackboardRunner.ts`:
+    - `runFirstPassContractOrchestrator(planner, workers, seed)`
+      — the new dispatch layer. `planAndExecute` now calls this
+      instead of `runFirstPassContract`.
+    - `tryCouncilContract(planner, workers, seed)` — draft
+      collection via `Promise.allSettled`, per-draft parse with
+      skipped-draft logging, merge prompt + repair + fallback.
+      Returns `null` only when nothing usable came back (caller
+      falls back to single-agent).
+    - `finalizeContract(parsed, seed, ownerAgent)` — extracted
+      from `runFirstPassContract` so both paths produce identical
+      downstream shape (Unit 6b path grounding, `buildContract`,
+      `contract_updated` emit, system-log summary line).
+
+**Tests added (11):**
+
+- `buildCouncilContractMergePrompt` draft iteration, index
+  labeling, draft-count framing line, empty `expectedFiles`
+  readable rendering, merge rules presence (UNION/DEDUPE/20-cap),
+  USER DIRECTIVE include/omit/whitespace behavior, empty-repoFiles
+  fallback copy, null-README fallback copy, "no prose / no
+  fences" instruction.
+
+No runner-level tests — `tryCouncilContract` is orchestration
+glue over already-tested building blocks (`promptAgent`,
+`parseFirstPassContractResponse`, `promptPlannerWithFallback`).
+End-to-end validation comes from flipping the flag and running a
+real swarm; A/B against a default run is the natural way to see
+whether the diversity actually catches things.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+485/485 server tests green (474 before + 11 Unit 30 tests).
+
+**To try.** Set `COUNCIL_CONTRACT_ENABLED=true` in `.env`, restart
+the server, run blackboard with ≥2 agents. The transcript will
+show "Council contract: prompting N agents for independent
+first-pass drafts." followed by per-draft accept/skip lines, then
+"Council contract: X drafts parsed; running merge via planner."
+Unit 19's `_prompt_timing` records will show N+1 timings instead
+of the usual 1 for the contract phase.
+
+---
+
 ## Session summary (Units 9–21, this conversation)
 
 Twelve units shipped in this session:
