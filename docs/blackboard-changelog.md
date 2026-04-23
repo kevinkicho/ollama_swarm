@@ -3351,6 +3351,147 @@ node scripts/compare-runs.mjs runs/*/summary.json
 
 ---
 
+## Unit 34 — Ambition ratchet (tier-climb on all-met)  **[committed: `f3314ed`]**
+
+The first structural answer to the autonomous-productivity north
+star (see `docs/autonomous-productivity.md`). Before Unit 34, a
+blackboard run that satisfied its initial contract just
+terminated — the Hello-World smoke at 2026-04-23 hit "all met" in
+~3 minutes with plenty of budget left and nobody telling the
+swarm to keep going. Unit 34 replaces that termination with a
+tier-climb: when the auditor verdicts "all unmet criteria are
+resolved" AND the ratchet is active AND we haven't hit the max
+tier, the planner is asked for a MORE AMBITIOUS tier N+1
+contract. The run keeps climbing until a hard cap trips
+(wall-clock / commits / todos), the max tier is reached, or the
+tier-up prompt fails three times in a row.
+
+Hook point: `runAuditedExecution`'s `allCriteriaResolved` branch.
+Before: set `completionDetail`, return. After: check
+`resolvedMaxTiers()`, call `tryPromoteNextTier()` if eligible, and
+only fall through to termination if the ratchet is off or the
+promotion fails. The auditor / worker / Unit 5d fallback / Unit
+6b grounding / Unit 27 cap math / Unit 28 file-union code paths
+are all unchanged — they keep running as-is on the new tier's
+criteria.
+
+**The tier-up prompt** (`buildTierUpPrompt` in
+`prompts/firstPassContract.ts`) reuses the first-pass contract
+envelope shape so `parseFirstPassContractResponse` handles its
+output with zero new parser surface. It shows:
+
+- The prior tier's mission statement + every criterion with final
+  verdict + rationale (so the planner knows what's already been
+  done and why).
+- The files committed across ALL prior tiers (capped at 80 — a
+  pathological 200-commit tier can't blow the prompt).
+- The REPO FILE LIST (for `expectedFiles` grounding, same as
+  Unit 6a).
+- The README excerpt.
+- The user directive (Unit 25) — explicitly "AUTHORITATIVE at
+  every tier".
+
+The instruction stack specifically includes: _ambition MUST rise_
+(tier 1 polish → tier 2 structure → tier 3 capabilities → tier
+4+ research-driven); _EXTEND prior work, not revise or
+duplicate_; and an _anti-busywork guardrail_ forbidding criteria
+like "add more tests" / "refactor for readability" without a
+concrete OUTCOME.
+
+**Config shape:**
+
+| Surface | Default | Effect |
+|---|---|---|
+| `AMBITION_RATCHET_ENABLED` env | `false` | When `true`, every blackboard run ratchets up to `AMBITION_RATCHET_MAX_TIERS` unless overridden per-run. |
+| `AMBITION_RATCHET_MAX_TIERS` env | `5` | Hard cap when env-enabled. |
+| `RunConfig.ambitionTiers` per-run | absent → inherit env | `0` = disabled this run; `1-20` = enabled with that cap. |
+
+The StartBody zod schema (`routes/swarm.ts`) accepts
+`ambitionTiers: z.number().int().min(0).max(20).optional()` so
+the form / curl callers can flip it per-run. A future UI unit
+will surface this in the Unit-32 Advanced panel.
+
+**Tier-state bookkeeping:**
+
+- `currentTier` — starts 0; flips to 1 when the first contract
+  lands; bumps on every successful promotion.
+- `tiersCompleted` — bumps when a tier's criteria all resolve
+  (regardless of whether a promotion follows).
+- `tierHistory: Array<{tier, missionStatement, criteriaTotal,
+  criteriaMet, criteriaWontDo, criteriaUnmet, wallClockMs,
+  startedAt, endedAt}>` — one row per completed tier, captured
+  via `recordTierCompletion()`.
+- New-tier criteria get IDs continuing from the prior max. Tier 1
+  = c1-c5; tier 2 = c6-cN. Prior-tier criteria stay in
+  `this.contract.criteria` (with their "met"/"wont-do" statuses)
+  so `summary.json` has the complete picture across the run's
+  lifetime.
+
+**Telemetry wiring:**
+
+- `blackboard-state.json` (Unit 31) — snapshot gains optional
+  `currentTier`, `tiersCompleted`, `tierHistory`. Visible
+  mid-run.
+- `summary.json` (Unit 33) — gains optional `maxTierReached`,
+  `tiersCompleted`, `tierHistory`.
+- `scripts/compare-runs.mjs` — two new rows ("max tier reached",
+  "tiers completed"). Pre-Unit-34 summaries render as `—`.
+
+**Degradation design:**
+
+- `tierUpFailures` counter bails after 3 consecutive parse
+  failures to prevent an infinite failed-ratchet loop.
+- A promoted tier with 0 valid criteria counts as a failure
+  (planner saying "I see nothing left" is a legitimate stop
+  signal).
+- `this.stopping` always wins — user stop and cap trips never
+  race the ratchet.
+- The existing "auditor wedge" guard (openAfter === openBefore
+  &&! allCriteriaResolved && open === 0) is UNCHANGED. The
+  ratchet only intercepts the POSITIVE completion path, not the
+  stuck path — a wedged run still terminates as before.
+
+**Tests added (16):** on `buildTierUpPrompt` — tier-number /
+max-tier framing, prior-criteria rendering with rationale,
+committed-files section, REPO FILE LIST grounding,
+ambition-must-rise rule, anti-busywork guardrail, 20-criterion
+cap, directive INCLUDE / OMIT / whitespace-only behavior,
+fallbacks for empty repoFiles / null README / empty
+committedFiles, 80-entry cap on committed-files list,
+parser-shape reminder. No runner-level tests — `tryPromoteNextTier`
+is orchestration glue over already-tested primitives
+(`promptPlannerWithFallback`, `parseFirstPassContractResponse`,
+`classifyExpectedFiles`); end-to-end validation is in the next
+real run with the flag on.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+530/530 server tests green (514 before + 16 Unit 34 tests).
+
+**How to try it.** One path:
+
+```bash
+curl -X POST http://<host>:52243/api/swarm/start \
+  -H 'Content-Type: application/json' \
+  -u opencode:<password> \
+  -d '{
+    "repoUrl": "<https://github.com/...>",
+    "parentPath": "<your parent folder>",
+    "agentCount": 3,
+    "rounds": 10,
+    "model": "glm-5.1:cloud",
+    "preset": "blackboard",
+    "councilContract": true,
+    "ambitionTiers": 5
+  }'
+```
+
+Watch the transcript for `Ambition ratchet: all tier N criteria
+resolved; attempting tier N+1` and `Contract (tier N): ...` log
+lines. `summary.json` at the end will show a `tierHistory` array
+with one entry per completed tier.
+
+---
+
 ## Session summary (Units 9–21, this conversation)
 
 Twelve units shipped in this session:

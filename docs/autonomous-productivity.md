@@ -79,12 +79,12 @@ yet. **→ Unit 36 (planned).**
 
 ## Roadmap
 
-| Unit | Title                                       | Status       |
-|------|---------------------------------------------|--------------|
-| 34   | Ambition ratchet: tier-climb on all-met     | next         |
-| 35   | Critic agent at commit time                 | planned      |
-| 36   | Wire `swarm-ui` (Unit 26) to auditor        | planned      |
-| 37+  | Cross-run resume + tier-aware replay        | hypothesized |
+| Unit | Title                                       | Status                         |
+|------|---------------------------------------------|--------------------------------|
+| 34   | Ambition ratchet: tier-climb on all-met     | shipped (`f3314ed`, 2026-04-23)|
+| 35   | Critic agent at commit time                 | planned                        |
+| 36   | Wire `swarm-ui` (Unit 26) to auditor        | planned                        |
+| 37+  | Cross-run resume + tier-aware replay        | hypothesized                   |
 
 ## Unit 34 — Ambition ratchet (spec-lite)
 
