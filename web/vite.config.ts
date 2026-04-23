@@ -33,6 +33,14 @@ export default defineConfig(({ mode }) => {
       proxy: {
         "/api": { target, changeOrigin: true },
       },
+      // WSL2 + /mnt/c — inotify doesn't see Windows-side file changes, so
+      // chokidar must poll. Cheap on this small tree (a few dozen files);
+      // pays off the first time you save a fix mid-session and want HMR
+      // to actually fire instead of "did it not save?" debugging.
+      watch: {
+        usePolling: true,
+        interval: 250,
+      },
     },
   };
 });

@@ -2,6 +2,13 @@ import { useEffect, useState } from "react";
 import { useSwarm } from "../state/store";
 import type { AgentState, LatencySample } from "../types";
 
+// Stable reference for "no samples yet". Returning a fresh `[]` from the
+// useSwarm selector on every render makes useSyncExternalStore see a
+// changed snapshot every tick and triggers a re-render loop. Using a
+// module-level constant means the selector returns the SAME ref while
+// the agent has no samples, breaking the loop.
+const EMPTY_SAMPLES: readonly LatencySample[] = [];
+
 const STATUS_COLOR: Record<AgentState["status"], string> = {
   spawning: "bg-amber-400",
   ready: "bg-emerald-400",
@@ -76,7 +83,7 @@ function formatSampleMs(ms: number): string {
 
 export function AgentPanel({ agent }: { agent: AgentState }) {
   const elapsed = useElapsedTicker(agent.thinkingSince, agent.status === "thinking");
-  const samples = useSwarm((s) => s.latency[agent.id] ?? []);
+  const samples = useSwarm((s) => s.latency[agent.id] ?? EMPTY_SAMPLES);
   const [hover, setHover] = useState(false);
   const retryLabel =
     agent.status === "retrying" && agent.retryAttempt && agent.retryMax
