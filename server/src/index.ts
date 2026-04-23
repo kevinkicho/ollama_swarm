@@ -71,7 +71,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.use("/api/swarm", swarmRouter(orchestrator));
-app.use("/api/dev", devRouter(broadcaster));
+app.use("/api/dev", devRouter({ broadcaster, repos }));
 
 const shutdown = async (signal: string) => {
   console.log(`\n${signal} received — shutting down swarm`);
