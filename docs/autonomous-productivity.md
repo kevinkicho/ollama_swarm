@@ -94,7 +94,7 @@ yet. **→ Unit 36 (planned).**
 | 43   | Per-run wall-clock cap override              | shipped (`32da3b5`, 2026-04-23)|
 | 44b  | Anchor-windowed worker seed (middle-row fix) | shipped (`6185a4a`, 2026-04-23)|
 | 45   | Per-file claim lock (anti-thrash)           | shipped (`54f90c5`, 2026-04-23)|
-| 46   | Per-model timeout + audit-context truncation| planned                        |
+| 46   | HEADERS_TIMEOUT 600s + auditor prompt caps  | shipped (`c74cb7d`, 2026-04-23)|
 | 47+  | Cross-run resume + tier-aware replay        | hypothesized                   |
 | 47+  | Auto-start app (workers execute shell)      | hypothesized                   |
 | 47+  | Persistent swarm-ui across audits           | hypothesized                   |
