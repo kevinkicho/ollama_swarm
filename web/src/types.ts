@@ -72,6 +72,12 @@ export interface Todo {
   claim?: Claim;
   committedAt?: number;
   criterionId?: string;
+  // Unit 44b: planner-declared anchor strings. Server uses these to
+  // inject ±25 lines of context around each match into the worker
+  // prompt, so workers can edit middle-region rows of large files.
+  // The UI doesn't render them today; mirrored here so the type stays
+  // honest with what crosses the WS.
+  expectedAnchors?: string[];
 }
 
 export type ExitCriterionStatus = "unmet" | "met" | "wont-do";
@@ -166,6 +172,9 @@ export type SwarmEvent =
       description: string;
       expectedFiles: string[];
       replanCount: number;
+      // Unit 44b: optional anchor revision. Server emits it when the
+      // replanner explicitly revised anchors; absent means "keep prior."
+      expectedAnchors?: string[];
     }
   | { type: "board_finding_posted"; finding: Finding }
   | { type: "board_state"; snapshot: BoardSnapshot; counts: BoardCountsDTO }

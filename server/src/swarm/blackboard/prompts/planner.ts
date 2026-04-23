@@ -18,9 +18,19 @@ const filePathEntry = z
     message: "must be a file path, not a directory (no trailing / or \\)",
   });
 
+// Unit 44b: anchor strings the planner expects to find in
+// expectedFiles. Each entry is a verbatim substring (≤ 200 chars) the
+// runner will search for; matched anchors get ±25 lines of context
+// injected into the worker prompt seed. Capped at 4 to bound prompt
+// size — most row-level edits need 1-2 anchors.
+const ANCHOR_MAX_CHARS = 200;
+const ANCHOR_MAX_PER_TODO = 4;
+const anchorEntry = z.string().trim().min(1).max(ANCHOR_MAX_CHARS);
+
 const PlannerTodoSchema = z.object({
   description: z.string().trim().min(1).max(500),
   expectedFiles: z.array(filePathEntry).min(1).max(2),
+  expectedAnchors: z.array(anchorEntry).max(ANCHOR_MAX_PER_TODO).optional(),
 });
 
 const PlannerResponseSchema = z.array(PlannerTodoSchema).max(20);
@@ -28,6 +38,9 @@ const PlannerResponseSchema = z.array(PlannerTodoSchema).max(20);
 export interface PlannerTodoInput {
   description: string;
   expectedFiles: string[];
+  // Unit 44b: optional anchor strings. Forwarded into Board.postTodo
+  // verbatim; resolved at worker-prompt build time.
+  expectedAnchors?: string[];
 }
 
 export type PlannerParseResult =
@@ -87,7 +100,11 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
   for (const item of parsed) {
     const v = PlannerTodoSchema.safeParse(item);
     if (v.success) {
-      todos.push({ description: v.data.description, expectedFiles: v.data.expectedFiles });
+      todos.push({
+        description: v.data.description,
+        expectedFiles: v.data.expectedFiles,
+        expectedAnchors: v.data.expectedAnchors,
+      });
     } else {
       const reason = v.error.issues
         .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
@@ -126,6 +143,7 @@ export const PLANNER_SYSTEM_PROMPT = [
   "7. Maximum 20 TODOs per response.",
   "8. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, `docs/`, or any path ending in `/` or `\\`. If the TODO covers a whole directory, pick the specific files it will touch (e.g., `src/lib/a.ts`, `src/lib/b.ts`) or split it into smaller TODOs. Directory entries are rejected by the parser and the TODO is dropped.",
   "9. Ground every `expectedFiles` entry in the REPO FILE LIST provided in the user message. Each entry MUST either (a) appear verbatim in the list (for edits to existing files), or (b) be a new file whose parent directory appears in the list (for adding a new file to a known location). Do NOT invent paths whose parent directory is not in the list — the worker's file-hash pass will fail on EISDIR/ENOENT and stall the run.",
+  "10. (Unit 44b) For TODOs that touch a SPECIFIC ROW or REGION of a large file (e.g., a single row in a 100-row markdown table, one entry in a 200-entry JSON object), include `expectedAnchors`: an array of 1-4 short verbatim substrings (≤ 200 chars each) that uniquely identify the target region. Workers see only HEAD + TAIL of files above 8 KB; anchors let the runner inject ±25 lines of context around each anchor so the worker can actually edit middle-region rows. Use grep/read first to confirm each anchor exists in the file. Examples: `\"| 7 | **ASE Holdings**\"`, `\"NVIDIA: { revenue:\"`. Omit `expectedAnchors` for whole-file edits, append-only TODOs, or files small enough to show in full.",
   "",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",
 ].join("\n");

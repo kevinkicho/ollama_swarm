@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Hunk } from "../applyHunks.js";
-import { windowFileForWorker } from "../windowFile.js";
+import { windowFileForWorker, windowFileWithAnchors } from "../windowFile.js";
 
 // ---------------------------------------------------------------------------
 // Worker response schema (v2). Shape: {"hunks": [ ...discriminated on op ]}.
@@ -168,18 +168,44 @@ export interface WorkerSeed {
   expectedFiles: string[];
   // null = file does not exist on disk (worker is creating it).
   fileContents: Record<string, string | null>;
+  // Unit 44b: planner-declared anchor strings to surface around their
+  // match locations in the worker prompt. Resolved per-file at prompt
+  // build time. When absent or empty, falls back to the head + tail
+  // window from windowFileForWorker.
+  expectedAnchors?: string[];
 }
 
 export function buildWorkerUserPrompt(seed: WorkerSeed): string {
+  const anchors = seed.expectedAnchors ?? [];
   const parts: string[] = [
     `TODO: ${seed.description}`,
     `Expected files: ${seed.expectedFiles.join(", ")}`,
-    "",
   ];
+  if (anchors.length > 0) {
+    parts.push(`Expected anchors (Unit 44b): ${anchors.map((a) => JSON.stringify(a)).join(", ")}`);
+  }
+  parts.push("");
   for (const f of seed.expectedFiles) {
     const content = seed.fileContents[f];
     if (content === null || content === undefined) {
       parts.push(`=== ${f} (does not exist — use op "create") ===`);
+    } else if (anchors.length > 0) {
+      // Unit 44b: anchored view per file. Includes head + per-anchor
+      // excerpts + tail when the file is large; behaves like the basic
+      // windowed view when it isn't. The per-anchor report is appended
+      // to the header so the model knows which anchors were resolved.
+      const view = windowFileWithAnchors(content, anchors);
+      const headerMode = view.full
+        ? "full"
+        : "ANCHORED — head + per-anchor excerpts + tail";
+      const reportSummary = view.anchorReports
+        .map((r) => `${JSON.stringify(r.anchor)}=${r.found === null ? "MISS" : `line ${r.found}`}`)
+        .join(", ");
+      parts.push(
+        `=== Current contents of ${f} (${content.length} chars, ${headerMode}) [anchors: ${reportSummary}] ===`,
+      );
+      parts.push(view.content);
+      parts.push(`=== end ${f} ===`);
     } else {
       const view = windowFileForWorker(content);
       const header = view.full

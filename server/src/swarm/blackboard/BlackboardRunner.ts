@@ -859,6 +859,10 @@ export class BlackboardRunner implements SwarmRunner {
         expectedFiles: t.expectedFiles,
         createdBy: agent.id,
         createdAt: now,
+        // Unit 44b: forward planner-declared anchors. Undefined / empty
+        // → omitted in postTodo. Each surviving anchor gets resolved at
+        // worker prompt build time.
+        expectedAnchors: t.expectedAnchors,
       });
     }
     this.appendSystem(`Posted ${groundedTodos.length} todo(s) to the board.`);
@@ -1613,6 +1617,10 @@ export class BlackboardRunner implements SwarmRunner {
             createdBy: planner.id,
             createdAt: now,
             criterionId: crit.id,
+            // Unit 44b: auditor-emitted todos may also carry anchors.
+            // Optional chaining keeps the call backward-compatible if the
+            // auditor schema wasn't extended yet.
+            expectedAnchors: (t as { expectedAnchors?: string[] }).expectedAnchors,
           });
           todosPosted++;
         }
@@ -1749,6 +1757,9 @@ export class BlackboardRunner implements SwarmRunner {
       description: todo.description,
       expectedFiles: todo.expectedFiles,
       fileContents: contents,
+      // Unit 44b: pass anchors through. buildWorkerUserPrompt switches
+      // to the anchored window view when this is non-empty.
+      expectedAnchors: todo.expectedAnchors,
     };
 
     let response: string;
@@ -2083,6 +2094,9 @@ export class BlackboardRunner implements SwarmRunner {
     const r = this.board.replan(todoId, {
       description: parsed.description,
       expectedFiles: parsed.expectedFiles,
+      // Unit 44b: anchor revision is optional. undefined → keep prior
+      // anchors; explicit array → replace them.
+      expectedAnchors: parsed.expectedAnchors,
     });
     if (!r.ok) {
       // Board refused (e.g. status changed between our read and the call).

@@ -22,9 +22,17 @@ const filePathEntry = z
     message: "must be a file path, not a directory (no trailing / or \\)",
   });
 
+// Unit 44b: same anchor schema as planner.ts. Replanner can revise the
+// anchor set when the original anchors didn't match the post-drift
+// file. Keep the cap shape identical so prompts stay parallel.
+const REPLAN_ANCHOR_MAX_CHARS = 200;
+const REPLAN_ANCHOR_MAX_PER_TODO = 4;
+const replanAnchorEntry = z.string().trim().min(1).max(REPLAN_ANCHOR_MAX_CHARS);
+
 const RevisedBody = z.object({
   description: z.string().trim().min(1).max(500),
   expectedFiles: z.array(filePathEntry).min(1).max(2),
+  expectedAnchors: z.array(replanAnchorEntry).max(REPLAN_ANCHOR_MAX_PER_TODO).optional(),
 });
 
 const RevisedSchema = z.object({ revised: RevisedBody });
@@ -36,7 +44,16 @@ const SkipSchema = z.object({
 const ReplannerResponseSchema = z.union([RevisedSchema, SkipSchema]);
 
 export type ReplannerParseResult =
-  | { ok: true; action: "revised"; description: string; expectedFiles: string[] }
+  | {
+      ok: true;
+      action: "revised";
+      description: string;
+      expectedFiles: string[];
+      // Unit 44b: optional anchor revision. undefined → keep prior; empty
+      // array (after parsing) → schema rejects, so undefined is the only
+      // way to leave anchors unchanged.
+      expectedAnchors?: string[];
+    }
   | { ok: true; action: "skip"; reason: string }
   | { ok: false; reason: string };
 
@@ -94,6 +111,9 @@ export function parseReplannerResponse(raw: string): ReplannerParseResult {
       action: "revised",
       description: v.data.revised.description,
       expectedFiles: [...v.data.revised.expectedFiles],
+      expectedAnchors: v.data.revised.expectedAnchors
+        ? [...v.data.revised.expectedAnchors]
+        : undefined,
     };
   }
   return { ok: true, action: "skip", reason: v.data.reason };
@@ -120,6 +140,7 @@ export const REPLANNER_SYSTEM_PROMPT = [
   "6. `expectedFiles` lists 1 or 2 repo-relative paths. NEVER more than 2.",
   "7. Paths must be relative to the repo root. Never use absolute paths or `..`.",
   "8. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, or any path ending in `/` or `\\` — the parser rejects them and the revision is lost. If the original stale TODO pointed at a directory, revise to the specific files you see in the current contents or skip.",
+  "9. (Unit 44b) When revising a row-level edit on a large file, you MAY include `expectedAnchors`: an array of 1-4 short verbatim substrings (≤ 200 chars each) the runner will use to inject ±25 lines of context around each match into the next worker's prompt. Use this when the prior attempt failed because the target row was in the file's omitted middle region. Omit `expectedAnchors` to keep whatever the original TODO had.",
   "",
   "Pick SKIP when: the current file contents already satisfy the original TODO, the original intent no longer applies to the repo as it stands now, or retrying would fail for the same reason the previous attempt failed.",
   "Pick REVISE when: the work still needs doing but the scope, files, or wording needs to shift to match what you see in the files NOW. Prefer shrinking scope over widening it — if the previous attempt was too large, split it and keep only the smaller half.",

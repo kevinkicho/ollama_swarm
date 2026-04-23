@@ -20,6 +20,10 @@ type PostTodoInput = {
   createdBy: string;
   createdAt: number;
   criterionId?: string;
+  // Unit 44b: optional anchor strings the planner expects to find in the
+  // expectedFiles. Pre-resolved by the runner at worker-prompt build time
+  // to inject ±25 lines of context around each match.
+  expectedAnchors?: string[];
 };
 
 type ClaimInput = {
@@ -92,6 +96,12 @@ export class Board {
       status: "open",
       replanCount: 0,
       criterionId: input.criterionId,
+      // Unit 44b: forward optional anchors. Empty array → undefined so
+      // downstream "has anchors?" checks stay simple.
+      expectedAnchors:
+        input.expectedAnchors && input.expectedAnchors.length > 0
+          ? [...input.expectedAnchors]
+          : undefined,
     };
     this.todos.set(todo.id, todo);
     this.emit({ type: "todo_posted", todo: this.copyTodo(todo) });
@@ -162,7 +172,7 @@ export class Board {
 
   replan(
     todoId: string,
-    input: { description: string; expectedFiles: string[] },
+    input: { description: string; expectedFiles: string[]; expectedAnchors?: string[] },
   ): ReplanResult {
     const todo = this.todos.get(todoId);
     if (!todo) return { ok: false, reason: "not_found" };
@@ -170,6 +180,12 @@ export class Board {
     if (!input.description.trim()) throw new Error("description cannot be empty");
     todo.description = input.description;
     todo.expectedFiles = [...input.expectedFiles];
+    // Unit 44b: replan may revise anchors. Explicit empty array clears
+    // them; undefined leaves the prior set in place.
+    if (input.expectedAnchors !== undefined) {
+      todo.expectedAnchors =
+        input.expectedAnchors.length > 0 ? [...input.expectedAnchors] : undefined;
+    }
     todo.status = "open";
     todo.replanCount += 1;
     todo.staleReason = undefined;
@@ -179,6 +195,7 @@ export class Board {
       description: todo.description,
       expectedFiles: [...todo.expectedFiles],
       replanCount: todo.replanCount,
+      expectedAnchors: todo.expectedAnchors ? [...todo.expectedAnchors] : undefined,
     });
     return { ok: true, todo: this.copyTodo(todo) };
   }
@@ -255,6 +272,7 @@ export class Board {
     return {
       ...todo,
       expectedFiles: [...todo.expectedFiles],
+      expectedAnchors: todo.expectedAnchors ? [...todo.expectedAnchors] : undefined,
       claim: todo.claim ? this.copyClaim(todo.claim) : undefined,
     };
   }

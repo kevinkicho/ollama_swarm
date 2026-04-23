@@ -17,6 +17,14 @@ export interface Todo {
   // Unused in Phase 11a behavior — only plumbed through postTodo so later phases
   // can wire the auditor without another type migration.
   criterionId?: string;
+  // Unit 44b: optional anchor strings the planner expects to find in
+  // expectedFiles. The runner pre-resolves them before each worker
+  // claim and includes ±25 lines of context around each match in the
+  // worker prompt seed. Solves the "windowed file middle row is
+  // invisible" pattern where workers correctly skip with "rows are in
+  // the omitted middle." Empty / absent → behaves like before
+  // (head + tail only).
+  expectedAnchors?: string[];
 }
 
 export type ExitCriterionStatus = "unmet" | "met" | "wont-do";
@@ -74,5 +82,8 @@ export type BoardEvent =
       description: string;
       expectedFiles: string[];
       replanCount: number;
+      // Unit 44b: replan can revise anchors too. Optional — when absent
+      // the existing anchors are kept.
+      expectedAnchors?: string[];
     }
   | { type: "finding_posted"; finding: Finding };
