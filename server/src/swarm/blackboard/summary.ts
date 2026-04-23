@@ -55,22 +55,34 @@ export interface RunSummary {
   localPath: string;
   preset: string;
   model: string;
+  // Unit 33: agentCount + rounds surfaced at the top level so
+  // cross-preset comparisons don't have to derive them. Optional for
+  // backward compat with any pre-Unit-33 summary consumer that still
+  // expects the old shape (internal only — no external consumers
+  // today, but the defensiveness is cheap).
+  agentCount?: number;
+  rounds?: number;
   startedAt: number;
   endedAt: number;
   wallClockMs: number;
   stopReason: StopReason;
   stopDetail?: string;
-  commits: number;
-  staleEvents: number;
-  skippedTodos: number;
-  totalTodos: number;
+  // Unit 33: blackboard-specific board stats are optional. Non-blackboard
+  // runs omit them rather than emitting zeros (zeros would read as "no
+  // work committed" which is technically true but visually misleading —
+  // those presets can't commit work regardless). Callers checking a
+  // summary's preset to know which fields to expect.
+  commits?: number;
+  staleEvents?: number;
+  skippedTodos?: number;
+  totalTodos?: number;
   filesChanged: number;
   finalGitStatus: string;
   finalGitStatusTruncated: boolean;
   agents: PerAgentStat[];
   /** Phase 11c: the exit contract as it stood at run end, including per-criterion
    *  verdicts applied by the auditor. Undefined when the first-pass contract
-   *  prompt failed to parse and the run fell back to drain-exit. */
+   *  prompt failed to parse and the run fell back to drain-exit. Blackboard-only. */
   contract?: ExitContract;
 }
 
@@ -89,6 +101,10 @@ export interface SummaryCounts {
 
 export interface BuildSummaryInput {
   config: SummaryConfig;
+  /** Unit 33: echoed to the summary top-level so cross-preset
+   *  comparison tooling has parity with non-blackboard presets. */
+  agentCount?: number;
+  rounds?: number;
   startedAt: number;
   endedAt: number;
   /** True if the run threw; takes precedence over every other stop reason. */
@@ -127,6 +143,8 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     localPath: input.config.localPath,
     preset: input.config.preset,
     model: input.config.model,
+    agentCount: input.agentCount,
+    rounds: input.rounds,
     startedAt: input.startedAt,
     endedAt: input.endedAt,
     wallClockMs,

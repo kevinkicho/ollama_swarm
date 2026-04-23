@@ -9,6 +9,8 @@ import type {
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { AgentStatsCollector } from "./agentStatsCollector.js";
+import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
 
 // Stigmergy / pheromone trails — repo exploration mode.
 // No central planner, no role assignment. Agents post annotations on
@@ -29,6 +31,10 @@ export class StigmergyRunner implements SwarmRunner {
   private round = 0;
   private stopping = false;
   private active?: RunConfig;
+  // Unit 33: cross-preset metrics — see RoundRobinRunner for rationale.
+  private stats = new AgentStatsCollector();
+  private startedAt?: number;
+  private summaryWritten = false;
   // The annotation table — the shared "pheromone" state. File path →
   // aggregated annotation. Updated after each agent's turn.
   private annotations = new Map<string, AnnotationState>();
@@ -69,6 +75,9 @@ export class StigmergyRunner implements SwarmRunner {
     this.stopping = false;
     this.round = 0;
     this.active = cfg;
+    this.stats.reset();
+    this.startedAt = undefined;
+    this.summaryWritten = false;
 
     this.setPhase("cloning");
     const { destPath } = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
@@ -92,11 +101,13 @@ export class StigmergyRunner implements SwarmRunner {
     this.appendSystem(
       `${ready.length}/${cfg.agentCount} agents ready on ports ${ready.map((a) => a.port).join(", ")}. All agents are equal explorers — no planner, no roles.`,
     );
+    this.stats.registerAgents(ready);
 
     this.setPhase("seeding");
     await this.seed(destPath, cfg);
 
     this.setPhase("discussing");
+    this.startedAt = Date.now();
     void this.loop(cfg, destPath);
   }
 
@@ -120,6 +131,7 @@ export class StigmergyRunner implements SwarmRunner {
   }
 
   private async loop(cfg: RunConfig, clonePath: string): Promise<void> {
+    let crashMessage: string | undefined;
     try {
       const agents = this.opts.manager.list();
       const initialEntries = await this.opts.repos.listTopLevel(clonePath);
@@ -139,10 +151,50 @@ export class StigmergyRunner implements SwarmRunner {
         this.appendSystem(`Stigmergy run complete. Annotation table:\n${formatAnnotations(this.annotations)}`);
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.opts.emit({ type: "error", message: msg });
+      crashMessage = err instanceof Error ? err.message : String(err);
+      this.opts.emit({ type: "error", message: crashMessage });
     } finally {
+      await this.writeSummary(cfg, crashMessage);
       if (!this.stopping) this.setPhase("completed");
+    }
+  }
+
+  // Unit 33: shared summary writer pattern — see RoundRobinRunner.
+  private async writeSummary(cfg: RunConfig, crashMessage?: string): Promise<void> {
+    if (this.summaryWritten) return;
+    this.summaryWritten = true;
+    if (this.startedAt === undefined) return;
+    let gitStatus = { porcelain: "", changedFiles: 0 };
+    try {
+      gitStatus = await this.opts.repos.gitStatus(cfg.localPath);
+    } catch {
+      // best-effort
+    }
+    const summary = buildDiscussionSummary({
+      config: {
+        repoUrl: cfg.repoUrl,
+        localPath: cfg.localPath,
+        preset: cfg.preset,
+        model: cfg.model,
+      },
+      agentCount: cfg.agentCount,
+      rounds: cfg.rounds,
+      startedAt: this.startedAt,
+      endedAt: Date.now(),
+      crashMessage,
+      stopping: this.stopping,
+      filesChanged: gitStatus.changedFiles,
+      finalGitStatus: gitStatus.porcelain,
+      agents: this.stats.buildPerAgentStats(),
+    });
+    try {
+      await writeRunSummary(cfg.localPath, summary);
+      this.appendSystem(
+        `Wrote run summary (stopReason=${summary.stopReason}, wallClockMs=${summary.wallClockMs}, files=${summary.filesChanged}).`,
+      );
+    } catch (writeErr) {
+      const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
+      this.appendSystem(`Failed to write run summary (${msg})`);
     }
   }
 
@@ -204,6 +256,7 @@ export class StigmergyRunner implements SwarmRunner {
       sessionId: agent.sessionId,
       status: "thinking",
     });
+    this.stats.countTurn(agent.id);
 
     const ABSOLUTE_MAX_MS = 20 * 60_000;
     const turnStart = Date.now();
@@ -226,7 +279,8 @@ export class StigmergyRunner implements SwarmRunner {
         // Unit 20: read-only tools for discussion presets.
         agentName: "swarm-read",
         describeError: describeSdkError,
-        onTiming: ({ attempt, elapsedMs, success }) =>
+        onTiming: ({ attempt, elapsedMs, success }) => {
+          this.stats.onTiming(agent.id, success, elapsedMs);
           this.opts.logDiag?.({
             type: "_prompt_timing",
             preset: this.active?.preset,
@@ -235,8 +289,10 @@ export class StigmergyRunner implements SwarmRunner {
             attempt,
             elapsedMs,
             success,
-          }),
+          });
+        },
         onRetry: ({ attempt, max, reasonShort, delayMs }) => {
+          this.stats.onRetry(agent.id);
           this.appendSystem(
             `[${agent.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
           );

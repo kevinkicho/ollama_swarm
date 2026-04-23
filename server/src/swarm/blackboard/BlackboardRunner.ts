@@ -1578,6 +1578,8 @@ export class BlackboardRunner implements SwarmRunner {
         preset: cfg.preset,
         model: cfg.model,
       },
+      agentCount: cfg.agentCount,
+      rounds: cfg.rounds,
       startedAt: this.runBootedAt,
       endedAt: Date.now(),
       crashMessage,
