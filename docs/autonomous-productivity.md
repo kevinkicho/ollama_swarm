@@ -90,9 +90,10 @@ yet. **→ Unit 36 (planned).**
 | 39   | Timeout + retry + "thinking 3m54s" UX        | shipped (`d7cd59a`, 2026-04-23)|
 | 40   | Historical latency graph in thinking tooltip | shipped (`3ee9408`, 2026-04-23)|
 | 41   | Stop endpoint awaits verified kill           | shipped (`e71dd84`, 2026-04-23)|
-| 42+  | Cross-run resume + tier-aware replay        | hypothesized                   |
-| 42+  | Auto-start app (workers execute shell)      | hypothesized                   |
-| 42+  | Persistent swarm-ui across audits           | hypothesized                   |
+| 42   | Per-agent model selection (planner vs worker)| shipped (`542a273`, 2026-04-23)|
+| 43+  | Cross-run resume + tier-aware replay        | hypothesized                   |
+| 43+  | Auto-start app (workers execute shell)      | hypothesized                   |
+| 43+  | Persistent swarm-ui across audits           | hypothesized                   |
 
 ## Unit 34 — Ambition ratchet (spec-lite)
 
