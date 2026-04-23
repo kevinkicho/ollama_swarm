@@ -93,6 +93,12 @@ const PRESETS: readonly SwarmPreset[] = [
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
+// Quick-fill text for the "Deliver README + research" chip below the
+// user-directive textarea. One-click way to seed the planner with the
+// directive we've been overnight-running on `kyahoofinance032926`.
+const DIRECTIVE_README_AND_RESEARCH =
+  "Make this project actually deliver every feature the README claims to support. Also, creatively enhance its functionalities by adding in more pipelines by conducting research online and then implement them";
+
 // Mirror of server's deriveCloneDir for the preview hint under the Parent
 // folder field. Server is the source of truth; this is a best-effort UX
 // preview. Returns "" if the URL isn't parseable yet (so the user gets the
@@ -116,8 +122,8 @@ function buildPreviewClonePath(repoUrl: string, parentPath: string): string {
 }
 
 export function SetupForm() {
-  const [repoUrl, setRepoUrl] = useState("https://github.com/sindresorhus/is-odd");
-  const [parentPath, setParentPath] = useState("C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs");
+  const [repoUrl, setRepoUrl] = useState("https://github.com/kevinkicho");
+  const [parentPath, setParentPath] = useState("C:\\users\\you\\projects");
   const [presetId, setPresetId] = useState<string>("round-robin");
   const [agentCount, setAgentCount] = useState(3);
   const [model, setModel] = useState("glm-5.1:cloud");
@@ -254,6 +260,14 @@ export function SetupForm() {
             className="input"
             style={{ fontFamily: "inherit", resize: "vertical", minHeight: 60 }}
           />
+          <button
+            type="button"
+            onClick={() => setUserDirective(DIRECTIVE_README_AND_RESEARCH)}
+            title="Click to paste this preset directive into the field above"
+            className="mt-2 inline-block text-xs px-3 py-1 rounded-full bg-ink-700 hover:bg-ink-600 text-ink-300 hover:text-ink-100 border border-ink-600 transition"
+          >
+            + Deliver every README feature + research
+          </button>
         </Field>
 
         <div className="grid grid-cols-3 gap-4">
