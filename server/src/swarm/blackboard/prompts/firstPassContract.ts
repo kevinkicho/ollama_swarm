@@ -167,10 +167,11 @@ export const FIRST_PASS_CONTRACT_SYSTEM_PROMPT = [
   "4. Each criterion's `description` is one imperative sentence naming an observable, checkable outcome (e.g., \"README has a Quick Start section with runnable example.\").",
   "5. Each criterion's `expectedFiles` lists 0–4 repo-relative paths that the criterion's satisfying change is expected to touch. Use [] only when the outcome is non-file (e.g., a test passes).",
   "6. Do NOT invent files that do not plausibly exist or plausibly need to be created.",
-  "7. Maximum 12 criteria. Prefer 3–7 focused criteria over 12 vague ones.",
+  "7. Maximum 20 criteria. Prefer 3–7 focused criteria for small scoped missions, 10–20 when the user's directive is ambitious (Rule 11 below).",
   "8. Do NOT include implementation detail — criteria are outcomes, not steps. The planner will turn each criterion into todos separately.",
   "9. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, `docs/`, or any path ending in `/` or `\\`. If you don't know which specific file the criterion will land in, prefer an empty `expectedFiles: []` over a guessed directory — the planner will bind real paths after its own read pass. Directory entries are rejected by the parser and the criterion is dropped.",
   "10. When `expectedFiles` is non-empty, ground every entry in the REPO FILE LIST provided in the user message. Each entry MUST either (a) appear verbatim in the list (for edits to existing files), or (b) be a new file whose parent directory appears in the list (for criteria that demand a new file at a known location). When unsure, prefer `expectedFiles: []` — the auditor has a linked-commit fallback that will bind real files from later todo activity.",
+  "11. USER DIRECTIVE (Unit 25): if the user message contains a `USER DIRECTIVE` block, that directive is AUTHORITATIVE. Your `missionStatement` MUST be shaped to deliver what the directive asks for; your `criteria` list MUST cover every distinct outcome the directive names (up to the 20-criterion cap). Do NOT substitute your own judgment about what the repo \"needs\" for what the directive explicitly requests. Generate as many criteria as needed to comprehensively address the directive — prefer more (up to 20) over fewer when the directive is broad. When the directive is absent, fall back to your own read of repo gaps as usual.",
   "",
   "Criteria should be WHAT SUCCESS LOOKS LIKE when this run ends, not a to-do list.",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",
@@ -187,7 +188,22 @@ export function buildFirstPassContractUserPrompt(seed: PlannerSeed): string {
   const fileList = seed.repoFiles.length > 0
     ? seed.repoFiles.join("\n")
     : "(no files listed — clone may be unreadable; use top-level entries above as a weaker guide)";
+  // Unit 25: if the user supplied a directive, put it FIRST in the user
+  // prompt so the planner reads it before it reads the repo structure.
+  // The system prompt's Rule 11 tells the planner this block is
+  // authoritative. When the directive is absent, the prompt is
+  // bit-for-bit identical to the pre-Unit-25 shape.
+  const directive = seed.userDirective?.trim();
+  const directiveBlock = directive
+    ? [
+        "=== USER DIRECTIVE (AUTHORITATIVE — see Rule 11) ===",
+        directive,
+        "=== end USER DIRECTIVE ===",
+        "",
+      ]
+    : [];
   return [
+    ...directiveBlock,
     `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
     `Top-level entries: ${tree}`,
@@ -200,7 +216,9 @@ export function buildFirstPassContractUserPrompt(seed: PlannerSeed): string {
     readme,
     "=== end README ===",
     "",
-    "Using ONLY the information above, output the exit contract JSON object now.",
+    directive
+      ? "Output the exit contract JSON object now. Your missionStatement and criteria MUST address the USER DIRECTIVE above (Rule 11). Use the REPO FILE LIST to ground expectedFiles."
+      : "Using ONLY the information above, output the exit contract JSON object now.",
     'Remember: single JSON object, no prose, shape {"missionStatement": "...", "criteria": [...]}. When expectedFiles is non-empty, prefer paths that appear in the REPO FILE LIST; if a criterion implies a new file, its parent directory should appear there.',
   ].join("\n");
 }

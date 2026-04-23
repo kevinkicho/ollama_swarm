@@ -122,6 +122,7 @@ export function SetupForm() {
   const [agentCount, setAgentCount] = useState(3);
   const [model, setModel] = useState("glm-5.1:cloud");
   const [rounds, setRounds] = useState(3);
+  const [userDirective, setUserDirective] = useState("");
   const [busy, setBusy] = useState(false);
   const setError = useSwarm((s) => s.setError);
   const reset = useSwarm((s) => s.reset);
@@ -153,7 +154,17 @@ export function SetupForm() {
       const res = await fetch("/api/swarm/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repoUrl, parentPath, agentCount, model, rounds, preset: preset.id }),
+        body: JSON.stringify({
+          repoUrl,
+          parentPath,
+          agentCount,
+          model,
+          rounds,
+          preset: preset.id,
+          // Unit 25: shape blackboard's first-pass contract via a user
+          // directive. Trimmed/empty goes as undefined (zod strips anyway).
+          userDirective: userDirective.trim() || undefined,
+        }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -226,6 +237,24 @@ export function SetupForm() {
         </Field>
 
         {preset.id === "blackboard" ? <BlackboardHelp /> : null}
+
+        <Field
+          label="User directive (optional)"
+          hint={
+            preset.id === "blackboard"
+              ? "Blackboard only — shapes the auto-generated contract from turn 1. Leave empty for the planner's own read of repo gaps. Max 4000 chars."
+              : "This preset has no auto-contract, so the directive is ignored. It only applies to the Blackboard preset."
+          }
+        >
+          <textarea
+            value={userDirective}
+            onChange={(e) => setUserDirective(e.target.value.slice(0, 4000))}
+            placeholder="e.g., Make this project actually deliver every feature the README claims to support."
+            rows={3}
+            className="input"
+            style={{ fontFamily: "inherit", resize: "vertical", minHeight: 60 }}
+          />
+        </Field>
 
         <div className="grid grid-cols-3 gap-4">
           <Field

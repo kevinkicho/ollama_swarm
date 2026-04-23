@@ -189,4 +189,44 @@ describe("FIRST_PASS_CONTRACT prompts", () => {
   it("system prompt instructs to ground expectedFiles in REPO FILE LIST", () => {
     assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /REPO FILE LIST/);
   });
+
+  // Unit 25: user-directive field should be authoritative in the
+  // contract prompt when present, and transparent when absent.
+  it("user prompt OMITS the USER DIRECTIVE block when directive is absent", () => {
+    const p = buildFirstPassContractUserPrompt(seed({ userDirective: undefined }));
+    assert.ok(!p.includes("USER DIRECTIVE"), "no directive block should appear when none provided");
+  });
+
+  it("user prompt OMITS the USER DIRECTIVE block when directive is empty string", () => {
+    const p = buildFirstPassContractUserPrompt(seed({ userDirective: "   " }));
+    assert.ok(!p.includes("USER DIRECTIVE"), "whitespace-only directive should not produce a block");
+  });
+
+  it("user prompt INCLUDES the USER DIRECTIVE block at the top when directive is provided", () => {
+    const p = buildFirstPassContractUserPrompt(
+      seed({
+        userDirective:
+          "Make this project deliver every feature its README.md advertises.",
+      }),
+    );
+    assert.match(p, /=== USER DIRECTIVE \(AUTHORITATIVE/);
+    assert.match(p, /Make this project deliver every feature/);
+    // Directive block must appear BEFORE the repo URL / tree / README excerpt
+    // so the planner reads intent first.
+    const directiveIdx = p.indexOf("=== USER DIRECTIVE");
+    const repoIdx = p.indexOf("Repository:");
+    assert.ok(directiveIdx >= 0 && repoIdx >= 0 && directiveIdx < repoIdx,
+      "directive block must come before the repo info in the prompt");
+  });
+
+  it("user prompt closing line changes to name the directive when present", () => {
+    const p = buildFirstPassContractUserPrompt(seed({ userDirective: "ship docs" }));
+    assert.match(p, /MUST address the USER DIRECTIVE/);
+  });
+
+  it("system prompt has a Rule 11 referencing USER DIRECTIVE authoritatively", () => {
+    assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /USER DIRECTIVE.*AUTHORITATIVE/i);
+    // Cap bumped 12 -> 20 to accommodate directive-driven runs.
+    assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /Maximum 20 criteria/);
+  });
 });

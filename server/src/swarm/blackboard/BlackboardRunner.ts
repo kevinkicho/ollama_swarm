@@ -378,6 +378,10 @@ export class BlackboardRunner implements SwarmRunner {
       topLevel,
       repoFiles,
       readmeExcerpt,
+      // Unit 25: pass user directive (if any) through to the first-pass
+      // contract prompt. Empty/whitespace was already stripped at the
+      // route boundary; this is just pass-through.
+      userDirective: cfg.userDirective,
     };
   }
 

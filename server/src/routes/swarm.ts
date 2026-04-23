@@ -34,6 +34,12 @@ const StartBody = z.object({
       "stigmergy",
     ])
     .default("round-robin"),
+  // Unit 25: optional free-text directive that shapes the blackboard
+  // planner's first-pass contract. Capped at 4000 chars to match the
+  // README-excerpt window already in the planner seed (same order of
+  // magnitude of prompt real-estate). Empty/whitespace gets treated as
+  // absent — the planner only sees it when there's actual content.
+  userDirective: z.string().trim().max(4000).optional(),
 });
 
 const SayBody = z.object({ text: z.string().min(1) });
@@ -67,6 +73,11 @@ export function swarmRouter(orch: Orchestrator): Router {
         rounds: parsed.data.rounds ?? 3,
         model: parsed.data.model ?? config.DEFAULT_MODEL,
         preset: parsed.data.preset,
+        // Unit 25: pass user directive through. Already trimmed + 4000-cap-
+        // validated by zod. Empty string → undefined already (zod strips).
+        userDirective: parsed.data.userDirective && parsed.data.userDirective.length > 0
+          ? parsed.data.userDirective
+          : undefined,
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {

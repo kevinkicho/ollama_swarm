@@ -19,6 +19,12 @@ export interface RunConfig {
   rounds: number;
   model: string;
   preset: PresetId;
+  // Unit 25: optional user-authored directive that steers the blackboard
+  // planner's first-pass contract. Threaded into PlannerSeed.userDirective
+  // and incorporated into the first-pass contract prompt so criteria are
+  // shaped by user intent from turn 1. Silently ignored by non-blackboard
+  // presets (no auto-contract to shape).
+  userDirective?: string;
 }
 
 export interface RunnerOpts {

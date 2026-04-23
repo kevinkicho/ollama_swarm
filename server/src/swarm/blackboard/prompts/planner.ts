@@ -139,6 +139,11 @@ export interface PlannerSeed {
   // clone is unreadable — callers must tolerate that.
   repoFiles: string[];
   readmeExcerpt: string | null;
+  // Unit 25: optional user-authored directive that shapes the first-pass
+  // contract. When present, the contract MUST incorporate it (see
+  // FIRST_PASS_CONTRACT_SYSTEM_PROMPT rule 11). When absent or empty, the
+  // planner behaves exactly as before Unit 25 (backward-compat).
+  userDirective?: string;
 }
 
 export function buildPlannerUserPrompt(seed: PlannerSeed): string {
