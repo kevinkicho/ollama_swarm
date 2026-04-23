@@ -264,9 +264,17 @@ concurrent worker slots regardless of pattern.
 
 ## Open questions to revisit
 
-- **Persistence.** The blackboard wants to survive a server restart (so
-  in-flight claims aren't orphaned). Current transcript is in-memory only
-  — do we need SQLite, or is per-run JSON on disk enough?
+- **Persistence.** (Partially answered, Unit 31.) The blackboard now
+  writes `<clone>/blackboard-state.json` on every phase change, board
+  event, and contract update (1 s debounce). That gives us mid-run
+  visibility and crash forensics — `cat` the file to see what the swarm
+  is doing right now, and a violently-terminated run leaves the last
+  flushed snapshot for post-mortem. What it doesn't do yet: a true
+  restart-then-resume flow (spawned opencode subprocesses can't
+  reattach across server lifetimes; a resume would need fresh agents
+  reading the snapshot and continuing against the same board). The
+  snapshot shape is versioned (`STATE_SNAPSHOT_VERSION`) and carries
+  everything a future resume flow would need.
 - **Cross-preset transcript format.** The UI currently assumes one linear
   transcript. Blackboard wants a board view; map-reduce wants a tree view.
   We'll need a generic "event" stream and per-preset renderers.

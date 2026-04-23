@@ -3031,6 +3031,93 @@ of the usual 1 for the contract phase.
 
 ---
 
+## Unit 31 — Live blackboard state snapshots  **[committed: `de1c7a7`]**
+
+Writes `<clone>/blackboard-state.json` on every phase change,
+board event, and contract update. Trailing-edge debounced at 1 s
+so a burst of events coalesces into one write. Final
+non-debounced flush at run termination.
+
+The scope is explicitly NOT "resume a run after a server
+restart." Session state for spawned opencode subprocesses can't
+be captured — ports are meaningless across server lifetimes and
+opencode sessions can't reattach. What we DO get:
+
+- **Mid-run visibility.** `cat <clone>/blackboard-state.json` at
+  any moment tells you what the swarm is doing RIGHT NOW —
+  phase, round, todos with claims, findings, per-agent stats —
+  without scraping the WS stream or reading
+  `logs/current.jsonl`.
+- **Crash forensics beyond `board-final.json`.** The crash
+  snapshot is only written when `planAndExecute`'s catch block
+  fires. A violent termination (OS kill, host power loss, Node
+  segfault) bypasses it. The state snapshot is always whatever
+  the last flush wrote, so post-mortem has SOMETHING to read.
+- **Foundation for future resume.** The shape carries the config,
+  contract, board, and per-agent stats needed by a fresh-agent
+  resume flow. Shape is versioned via `STATE_SNAPSHOT_VERSION`
+  so future changes can be gated.
+
+Snapshot shape (`stateSnapshot.ts`):
+
+```
+{
+  version: 1,
+  writtenAt: number,
+  phase: SwarmPhase,
+  round: number,
+  runBootedAt?, runStartedAt?, activeElapsedMs?,
+  config?: RunConfig,
+  contract?: ExitContract,
+  board: BoardSnapshot,  // todos + findings
+  perAgent: PerAgentStat[],  // same shape summary.json uses
+  staleEventCount, auditInvocations,
+  agentRoster: [{agentId, agentIndex}],
+  terminationReason?, completionDetail?
+}
+```
+
+**Clone-phase guard.** Writes are skipped when
+`phase === "cloning"` (or `"idle"`). Writing during cloning
+would drop a file into the target directory before
+`simpleGit.clone` runs, tripping `RepoService.clone`'s
+"destination is not empty and is not a git repo" guard and
+failing the clone. Cloning is short enough that the
+post-mortem hole is not meaningful.
+
+**Re-entrancy.** If a state write is already in flight when
+another event fires, `stateWriteAgain` flips true and the next
+write is scheduled as soon as the current one finishes. No state
+update is lost at the debounce/in-flight boundary.
+
+**Best-effort.** Write errors log to stderr but never crash the
+run or throw up to the event loop — losing a snapshot write is
+strictly less bad than turning a normal run into a recursive
+crash (same posture as `writeCrashSnapshot` and
+`writeRunSummary`).
+
+**Refactor touched by this unit:** `buildPerAgentStats()` was
+extracted from `writeRunSummary` so the state snapshot and the
+summary share an identical agent-row shape. No behavior change
+in `summary.json`; both writers call the same helper now.
+
+**Tests added (9):** on the pure `buildStateSnapshot` and
+`STATE_SNAPSHOT_DEBOUNCE_MS` constants — version stamping,
+passthrough, optional-field absence, deterministic JSON
+output, JSON round-trip, termination-field carry,
+agent-roster ordering, debounce bounds. Runner-level wiring is
+exercised end-to-end the next time blackboard runs (the file
+simply appears at the clone root).
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+494/494 server tests green (485 before + 9 Unit 31 tests).
+
+Docs: `docs/swarm-patterns.md:267`'s "Persistence" open question
+is partially addressed — post-mortem visibility is solved; true
+resume support remains a future unit.
+
+---
+
 ## Session summary (Units 9–21, this conversation)
 
 Twelve units shipped in this session:
