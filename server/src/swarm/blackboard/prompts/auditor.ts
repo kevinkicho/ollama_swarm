@@ -246,9 +246,15 @@ export const AUDITOR_FALLBACK_RECENT_COMMITS = 4;
 /**
  * Decide which on-disk files the auditor should read for a given criterion.
  *
- *   1. Criterion has its own expectedFiles → return them verbatim (happy path).
- *   2. Otherwise, union the expectedFiles of committed todos whose
- *      criterionId === criterion.id, newest first, capped at
+ *   1. Criterion has its own expectedFiles → union them with the expectedFiles
+ *      of committed todos whose criterionId === criterion.id (declared paths
+ *      first, linked paths after; overall capped at
+ *      `declared.length + AUDITOR_FALLBACK_FILE_MAX`). Unit 28 extended this
+ *      from "return declared verbatim" to "union" so a planner guess that
+ *      doesn't match where work actually landed doesn't starve the audit of
+ *      real evidence.
+ *   2. Otherwise (no declared files), union the expectedFiles of committed
+ *      todos whose criterionId === criterion.id, newest first, capped at
  *      AUDITOR_FALLBACK_FILE_MAX.
  *   3. Otherwise, union the expectedFiles of the most recent
  *      AUDITOR_FALLBACK_RECENT_COMMITS committed todos with NO criterionId
@@ -261,10 +267,6 @@ export function resolveCriterionFiles(
   criterion: ExitCriterion,
   committed: CommittedTodoSummary[],
 ): string[] {
-  if (criterion.expectedFiles.length > 0) {
-    return [...criterion.expectedFiles];
-  }
-
   const byRecencyDesc = (a: CommittedTodoSummary, b: CommittedTodoSummary) =>
     (b.committedAt ?? 0) - (a.committedAt ?? 0);
 
@@ -272,8 +274,31 @@ export function resolveCriterionFiles(
     .filter((t) => t.criterionId === criterion.id)
     .slice()
     .sort(byRecencyDesc);
-  if (linked.length > 0) {
-    return dedupeCapped(linked.flatMap((t) => t.expectedFiles), AUDITOR_FALLBACK_FILE_MAX);
+  const linkedFiles = dedupeCapped(
+    linked.flatMap((t) => t.expectedFiles),
+    AUDITOR_FALLBACK_FILE_MAX,
+  );
+
+  // Unit 28: when the criterion has declared expectedFiles, union them with
+  // linked-committed-todo files rather than returning declared files alone.
+  // Motivating case: 2026-04-21 multi-agent-orchestrator run — criterion c1
+  // declared `src/brain/team-manager.test.ts` (parent `src/brain/` was in
+  // the repo so the path passed Unit 6b grounding, but the file itself
+  // never existed), while linked committed todos actually landed work at
+  // `src/tests/team-manager.test.ts`. Under the pre-Unit-28 logic, the
+  // auditor read only the dangling declared path, saw "file doesn't
+  // exist", and called the criterion unmet — despite real work. Declared
+  // files stay at the head of the list so they remain the primary
+  // evidence; linked files come after as corroboration.
+  if (criterion.expectedFiles.length > 0) {
+    return dedupeCapped(
+      [...criterion.expectedFiles, ...linkedFiles],
+      criterion.expectedFiles.length + AUDITOR_FALLBACK_FILE_MAX,
+    );
+  }
+
+  if (linkedFiles.length > 0) {
+    return linkedFiles;
   }
 
   const recentOrphans = committed

@@ -526,12 +526,73 @@ describe("resolveCriterionFiles — Unit 5d", () => {
     };
   }
 
-  it("returns the criterion's own expectedFiles verbatim when non-empty", () => {
+  it("returns the criterion's own expectedFiles verbatim when no linked commits exist (Unit 28 degenerate case)", () => {
     const c = criterion("c1", "README has Quick Start", "unmet", ["README.md", "docs/intro.md"]);
+    // No linked commits — nothing to union in.
     const out = resolveCriterionFiles(c, [
-      commit("t1", ["unrelated.ts"], 100, "c1"),
+      commit("t1", ["some-other-file.ts"], 100, "c2"), // owned by c2, ignored
     ]);
     assert.deepEqual(out, ["README.md", "docs/intro.md"]);
+  });
+
+  // Unit 28: the 2026-04-21 multi-agent-orchestrator failure mode —
+  // planner's declared path passes parse-time grounding (parent dir exists)
+  // but the exact file is dangling, while workers land their commits at a
+  // different anchor linked to the same criterion.
+  it("unions declared expectedFiles with linked-commit files (Unit 28)", () => {
+    const c = criterion(
+      "c1",
+      "Tests exist for team manager",
+      "unmet",
+      ["src/brain/team-manager.test.ts"], // dangling — file never created
+    );
+    const out = resolveCriterionFiles(c, [
+      commit("t1", ["src/tests/team-manager.test.ts"], 100, "c1"), // where work landed
+    ]);
+    // Declared first, linked after — gives the auditor the planner-chosen
+    // anchor AND the real-work anchor in the same prompt.
+    assert.deepEqual(out, [
+      "src/brain/team-manager.test.ts",
+      "src/tests/team-manager.test.ts",
+    ]);
+  });
+
+  it("dedupes when a declared path matches a linked-commit path (Unit 28)", () => {
+    const c = criterion("c1", "README has Quick Start", "unmet", ["README.md"]);
+    const out = resolveCriterionFiles(c, [
+      commit("t1", ["README.md"], 100, "c1"), // same file
+      commit("t2", ["docs/intro.md"], 200, "c1"), // different file
+    ]);
+    // README.md appears once (dedup); docs/intro.md tacked on after.
+    assert.deepEqual(out, ["README.md", "docs/intro.md"]);
+  });
+
+  it("caps the linked-commit portion at AUDITOR_FALLBACK_FILE_MAX when declared is non-empty (Unit 28)", () => {
+    const c = criterion("c1", "d", "unmet", ["declared.ts"]);
+    // 6 distinct linked files — linked union must cap at 4, and the overall
+    // length ceiling is declared.length + AUDITOR_FALLBACK_FILE_MAX = 5.
+    const out = resolveCriterionFiles(c, [
+      commit("t1", ["l1"], 100, "c1"),
+      commit("t2", ["l2"], 200, "c1"),
+      commit("t3", ["l3"], 300, "c1"),
+      commit("t4", ["l4"], 400, "c1"),
+      commit("t5", ["l5"], 500, "c1"),
+      commit("t6", ["l6"], 600, "c1"),
+    ]);
+    assert.equal(out.length, 1 + AUDITOR_FALLBACK_FILE_MAX);
+    assert.equal(out[0], "declared.ts", "declared stays at head");
+    // Linked portion takes the 4 most recent: l6, l5, l4, l3.
+    assert.deepEqual(out.slice(1), ["l6", "l5", "l4", "l3"]);
+  });
+
+  it("ignores linked commits from a DIFFERENT criterionId even when declared is non-empty (Unit 28)", () => {
+    const c = criterion("c1", "d", "unmet", ["declared.ts"]);
+    const out = resolveCriterionFiles(c, [
+      commit("t1", ["c2-owned.ts"], 100, "c2"), // owned by c2 — do NOT union
+      commit("t2", ["true-linked.ts"], 200, "c1"),
+    ]);
+    assert.deepEqual(out, ["declared.ts", "true-linked.ts"]);
+    assert.equal(out.includes("c2-owned.ts"), false);
   });
 
   it("defensively copies the criterion's own files (caller can mutate safely)", () => {
