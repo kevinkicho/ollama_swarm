@@ -1,6 +1,7 @@
 import type { AgentManager } from "../services/AgentManager.js";
 import type { RepoService } from "../services/RepoService.js";
 import type { SwarmEvent, SwarmStatus } from "../types.js";
+import type { SwarmRole } from "./roles.js";
 
 export type PresetId =
   | "round-robin"
@@ -25,6 +26,25 @@ export interface RunConfig {
   // shaped by user intent from turn 1. Silently ignored by non-blackboard
   // presets (no auto-contract to shape).
   userDirective?: string;
+  // Unit 32: per-preset knobs, surfaced by the Start-a-swarm form's
+  // Advanced section. Each is ignored by presets that don't consume it:
+  // only role-diff uses `roles`, only blackboard uses `councilContract`,
+  // only debate-judge uses `proposition`.
+  /** Custom role list for role-diff. Falls back to DEFAULT_ROLES when absent or empty. */
+  roles?: SwarmRole[];
+  /**
+   * Per-run override for blackboard's `COUNCIL_CONTRACT_ENABLED` env flag.
+   * When set, it wins over the env value for this run only. When absent,
+   * the env flag decides. Lets the user A/B without restarting the server.
+   */
+  councilContract?: boolean;
+  /**
+   * Proposition text for debate-judge, captured at start time. Previously
+   * users had to call `injectUser(text)` BEFORE `start()` to set the
+   * proposition — awkward because the SetupForm submits start immediately.
+   * `proposition`, when present, takes precedence over the inject path.
+   */
+  proposition?: string;
 }
 
 export interface RunnerOpts {

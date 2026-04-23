@@ -72,6 +72,14 @@ export class DebateJudgeRunner implements SwarmRunner {
 
   async start(cfg: RunConfig): Promise<void> {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
+    // Unit 32: cfg.proposition (set from the form's Advanced section)
+    // takes precedence over an inject-before-start proposition. Lets
+    // users specify the proposition at start time without the
+    // inject-before-start workaround. The inject path still works when
+    // cfg.proposition is absent — same as pre-Unit-32 behavior.
+    if (cfg.proposition && cfg.proposition.trim().length > 0) {
+      this.proposition = cfg.proposition.trim();
+    }
     const propositionAtStart = this.proposition;
     this.transcript = [];
     this.stopping = false;

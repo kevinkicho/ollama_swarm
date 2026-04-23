@@ -48,7 +48,7 @@ export class Orchestrator {
 
   async start(cfg: RunConfig): Promise<void> {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
-    const runner = this.buildRunner(cfg.preset);
+    const runner = this.buildRunner(cfg.preset, cfg);
     // Assign up-front so status()/isRunning() reflect the in-progress run for
     // new WS clients and the POST /status endpoint while start() is still awaiting.
     this.runner = runner;
@@ -81,14 +81,22 @@ export class Orchestrator {
     }
   }
 
-  private buildRunner(preset: PresetId): SwarmRunner {
+  private buildRunner(preset: PresetId, cfg: RunConfig): SwarmRunner {
     switch (preset) {
       case "round-robin":
         return new RoundRobinRunner(this.opts);
-      case "role-diff":
-        // Same runner as round-robin, plus the seven-role catalog prepended
-        // to each agent's prompt so identical weights produce distinct priors.
-        return new RoundRobinRunner(this.opts, { roles: DEFAULT_ROLES });
+      case "role-diff": {
+        // Unit 32: optional user-supplied roles take precedence over the
+        // default catalog. The route validates shape (name + guidance,
+        // bounded counts) so we just need to pick which list to pass.
+        // An empty `roles` array is treated as "user wants defaults",
+        // same as omitting the field entirely — saves callers a UI bug
+        // where clearing all roles would otherwise crash the runner
+        // (roleForAgent throws on an empty array).
+        const roles =
+          cfg.roles && cfg.roles.length > 0 ? cfg.roles : DEFAULT_ROLES;
+        return new RoundRobinRunner(this.opts, { roles });
+      }
       case "blackboard":
         return new BlackboardRunner(this.opts);
       case "council":

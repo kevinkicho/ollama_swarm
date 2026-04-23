@@ -9,6 +9,15 @@ import { deriveCloneDir } from "../services/RepoService.js";
 // `localPath` (which meant "the full clone path") survives internally as
 // `RunConfig.localPath` — the route handler resolves parent+name and passes
 // the full path downstream.
+
+// Unit 32: preset-specific knob shape for role-diff's custom roles list.
+// Max 16 roles (DEFAULT_ROLES has 7; we give headroom without letting the
+// user stuff an unbounded transcript of guidance into every prompt).
+const SwarmRoleSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  guidance: z.string().trim().min(1).max(2000),
+});
+
 const StartBody = z.object({
   repoUrl: z.string().url(),
   parentPath: z.string().min(1),
@@ -40,6 +49,12 @@ const StartBody = z.object({
   // magnitude of prompt real-estate). Empty/whitespace gets treated as
   // absent — the planner only sees it when there's actual content.
   userDirective: z.string().trim().max(4000).optional(),
+  // Unit 32: per-preset knobs. Validated here so the route layer is the
+  // sole boundary between user input and RunConfig. Runners receive
+  // already-validated values and only need to decide how to apply them.
+  roles: z.array(SwarmRoleSchema).min(1).max(16).optional(),
+  councilContract: z.boolean().optional(),
+  proposition: z.string().trim().max(2000).optional(),
 });
 
 const SayBody = z.object({ text: z.string().min(1) });
@@ -78,6 +93,18 @@ export function swarmRouter(orch: Orchestrator): Router {
         userDirective: parsed.data.userDirective && parsed.data.userDirective.length > 0
           ? parsed.data.userDirective
           : undefined,
+        // Unit 32: per-preset knobs. Empty/absent → undefined so the
+        // runners' fallback logic (DEFAULT_ROLES, env flag,
+        // injected-proposition) kicks in cleanly.
+        roles:
+          parsed.data.roles && parsed.data.roles.length > 0
+            ? parsed.data.roles
+            : undefined,
+        councilContract: parsed.data.councilContract,
+        proposition:
+          parsed.data.proposition && parsed.data.proposition.length > 0
+            ? parsed.data.proposition
+            : undefined,
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {

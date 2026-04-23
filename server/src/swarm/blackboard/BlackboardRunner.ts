@@ -497,7 +497,13 @@ export class BlackboardRunner implements SwarmRunner {
     workers: Agent[],
     seed: PlannerSeed,
   ): Promise<void> {
-    if (config.COUNCIL_CONTRACT_ENABLED && workers.length > 0) {
+    // Unit 32: per-run knob wins over env flag. Absent → env decides,
+    // same as pre-Unit-32 behavior. Lets users A/B with and without
+    // council via the form without restarting the server to flip
+    // COUNCIL_CONTRACT_ENABLED.
+    const councilEnabled =
+      this.active?.councilContract ?? config.COUNCIL_CONTRACT_ENABLED;
+    if (councilEnabled && workers.length > 0) {
       const merged = await this.tryCouncilContract(planner, workers, seed);
       if (merged !== null) {
         this.finalizeContract(merged, seed, planner);
