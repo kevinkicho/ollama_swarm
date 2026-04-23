@@ -2170,6 +2170,10 @@ export class BlackboardRunner implements SwarmRunner {
       now: this.tickAccumulator.activeElapsedMs,
       committed: this.board.counts().committed,
       totalTodos: this.board.listTodos().length,
+      // Unit 43: thread the per-run override through. Undefined when
+      // the user didn't set it — checkCaps falls back to the baked-in
+      // 8-h default in that case.
+      wallClockCapMs: this.active?.wallClockCapMs,
     });
     if (!reason) return false;
     this.terminationReason = reason;

@@ -103,6 +103,39 @@ describe("checkCaps", () => {
     assert.ok(checkCaps(baseState({ committed: COMMITS_CAP })));
     assert.equal(checkCaps(baseState({ committed: COMMITS_CAP - 1 })), null);
   });
+
+  // Unit 43: per-run wall-clock cap override.
+  describe("wallClockCapMs override", () => {
+    it("fires earlier than the baked-in default when a smaller override is set", () => {
+      const thirtyMin = 30 * 60_000;
+      // Below the override → still null.
+      assert.equal(
+        checkCaps(baseState({ now: thirtyMin - 1, wallClockCapMs: thirtyMin })),
+        null,
+      );
+      // At the override boundary → fires, and message reports the override
+      // (in minutes), not the baked-in 480 min default.
+      const reason = checkCaps(baseState({ now: thirtyMin, wallClockCapMs: thirtyMin }));
+      assert.ok(reason);
+      assert.match(reason!, /wall-clock cap reached \(30 min\)/);
+    });
+
+    it("falls back to WALL_CLOCK_CAP_MS when override is undefined", () => {
+      // Same elapsed (way under default 8h) → null. Confirms absence of
+      // override doesn't accidentally tighten the cap.
+      assert.equal(checkCaps(baseState({ now: 60 * 60_000 })), null);
+    });
+
+    it("does not affect commits / todos caps — those stay hard-coded", () => {
+      // Override only governs wall-clock. With a tight override and zero
+      // wall-clock, the commits cap still fires when committed crosses
+      // COMMITS_CAP.
+      const reason = checkCaps(
+        baseState({ committed: COMMITS_CAP, wallClockCapMs: 60_000 }),
+      );
+      assert.match(reason!, /commits cap/);
+    });
+  });
 });
 
 // Unit 27: tick accumulator — the host-sleep-proof clock driver that

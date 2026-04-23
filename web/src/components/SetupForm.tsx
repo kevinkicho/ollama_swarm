@@ -197,6 +197,9 @@ export function SetupForm() {
   // server falls back to cfg.model when these are absent.
   const [plannerModel, setPlannerModel] = useState("");
   const [workerModel, setWorkerModel] = useState("");
+  // Unit 43: per-run wall-clock cap (minutes). Empty = use the 8-h
+  // baked-in default. UI is in MINUTES; we send ms over the wire.
+  const [wallClockCapMin, setWallClockCapMin] = useState("");
   const [busy, setBusy] = useState(false);
   const setError = useSwarm((s) => s.setError);
   const reset = useSwarm((s) => s.reset);
@@ -252,6 +255,12 @@ export function SetupForm() {
         const wm = workerModel.trim();
         if (pm.length > 0) presetSpecific.plannerModel = pm;
         if (wm.length > 0) presetSpecific.workerModel = wm;
+        // Unit 43: convert minutes → ms; clamp client-side so a typo
+        // doesn't 400 at the route. Server enforces 1 min … 8 h too.
+        const capMin = Number(wallClockCapMin.trim());
+        if (Number.isFinite(capMin) && capMin >= 1 && capMin <= 480) {
+          presetSpecific.wallClockCapMs = Math.round(capMin * 60_000);
+        }
       }
 
       const res = await fetch("/api/swarm/start", {
@@ -381,6 +390,8 @@ export function SetupForm() {
           workerModel={workerModel}
           setWorkerModel={setWorkerModel}
           fallbackModel={model}
+          wallClockCapMin={wallClockCapMin}
+          setWallClockCapMin={setWallClockCapMin}
         />
 
         <div className="grid grid-cols-3 gap-4">
@@ -518,6 +529,8 @@ function PresetAdvancedSettings(props: {
   workerModel: string;
   setWorkerModel: (m: string) => void;
   fallbackModel: string;
+  wallClockCapMin: string;
+  setWallClockCapMin: (s: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const {
@@ -533,6 +546,8 @@ function PresetAdvancedSettings(props: {
     workerModel,
     setWorkerModel,
     fallbackModel,
+    wallClockCapMin,
+    setWallClockCapMin,
   } = props;
 
   const hasAdvanced =
@@ -581,6 +596,10 @@ function PresetAdvancedSettings(props: {
                 workerModel={workerModel}
                 setWorkerModel={setWorkerModel}
                 fallbackModel={fallbackModel}
+              />
+              <BlackboardWallClockCap
+                wallClockCapMin={wallClockCapMin}
+                setWallClockCapMin={setWallClockCapMin}
               />
             </>
           ) : null}
@@ -741,6 +760,38 @@ function RoleDiffAdvanced({
         ) : null}
       </div>
     </div>
+  );
+}
+
+function BlackboardWallClockCap({
+  wallClockCapMin,
+  setWallClockCapMin,
+}: {
+  wallClockCapMin: string;
+  setWallClockCapMin: (s: string) => void;
+}) {
+  const trimmed = wallClockCapMin.trim();
+  const parsed = Number(trimmed);
+  const isValid = trimmed.length === 0 || (Number.isFinite(parsed) && parsed >= 1 && parsed <= 480);
+  return (
+    <Field
+      label="Wall-clock cap minutes (Unit 43)"
+      hint={
+        trimmed.length === 0
+          ? "Empty → uses the 8-hour baked-in default. Enter a number 1–480 to cap THIS run only."
+          : isValid
+            ? `Run will stop after ~${parsed} min of active wall-clock time (host-sleep is still clamped per Unit 27).`
+            : "Out of range — enter a number between 1 and 480, or leave empty for the 8 h default."
+      }
+    >
+      <input
+        value={wallClockCapMin}
+        onChange={(e) => setWallClockCapMin(e.target.value)}
+        placeholder="(default: 480)"
+        className={`input font-mono ${!isValid ? "border-rose-500" : ""}`}
+        inputMode="numeric"
+      />
+    </Field>
   );
 }
 

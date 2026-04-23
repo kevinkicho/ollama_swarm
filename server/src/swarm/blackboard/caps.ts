@@ -96,6 +96,13 @@ export interface CapState {
   committed: number;
   /** Total number of todos that have ever been posted (includes stale/skipped/etc.). */
   totalTodos: number;
+  /**
+   * Unit 43: per-run wall-clock cap override (ms). When undefined, the
+   * baked-in `WALL_CLOCK_CAP_MS` (8 h) applies. Commits + todos caps
+   * remain hard-coded — they're runaway-prevention backstops, not
+   * per-run knobs.
+   */
+  wallClockCapMs?: number;
 }
 
 export type CapReason =
@@ -112,10 +119,12 @@ export type CapReason =
  * multiple caps trip in the same tick.
  */
 export function checkCaps(state: CapState): string | null {
-  const { startedAt, now, committed, totalTodos } = state;
+  const { startedAt, now, committed, totalTodos, wallClockCapMs } = state;
   const elapsed = now - startedAt;
-  if (elapsed >= WALL_CLOCK_CAP_MS) {
-    const minutes = Math.round(WALL_CLOCK_CAP_MS / 60_000);
+  // Unit 43: per-run override wins, baked-in default backs it up.
+  const wallCap = wallClockCapMs ?? WALL_CLOCK_CAP_MS;
+  if (elapsed >= wallCap) {
+    const minutes = Math.round(wallCap / 60_000);
     return `wall-clock cap reached (${minutes} min)`;
   }
   if (committed >= COMMITS_CAP) {

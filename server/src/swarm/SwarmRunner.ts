@@ -89,6 +89,16 @@ export interface RunConfig {
    */
   plannerModel?: string;
   workerModel?: string;
+  /**
+   * Unit 43: per-run wall-clock cap override (ms). When set, replaces the
+   * baked-in 8-hour `WALL_CLOCK_CAP_MS` for THIS run only. The other two
+   * caps (commits / todos) keep their hard-coded defaults — this knob
+   * targets the "I want a quick 30-min battle test, not the full 8-h
+   * budget" use case without rebuilding. Blackboard-only; other presets
+   * have their own absolute-turn caps but no equivalent wall-clock loop
+   * gate today.
+   */
+  wallClockCapMs?: number;
 }
 
 export interface RunnerOpts {

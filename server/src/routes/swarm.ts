@@ -70,6 +70,15 @@ const StartBody = z.object({
   // resolver.
   plannerModel: z.string().trim().min(1).max(200).optional(),
   workerModel: z.string().trim().min(1).max(200).optional(),
+  // Unit 43: per-run wall-clock cap override (ms). Bounded
+  // [60_000, 8 * 60 * 60_000] = 1 min … 8 h, matching the baked-in
+  // default's range. Anything outside is a config bug, not a feature.
+  wallClockCapMs: z
+    .number()
+    .int()
+    .min(60_000)
+    .max(8 * 60 * 60_000)
+    .optional(),
 });
 
 const SayBody = z.object({ text: z.string().min(1) });
@@ -125,6 +134,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         uiUrl: parsed.data.uiUrl,
         plannerModel: parsed.data.plannerModel,
         workerModel: parsed.data.workerModel,
+        wallClockCapMs: parsed.data.wallClockCapMs,
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {
