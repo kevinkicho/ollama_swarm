@@ -55,6 +55,12 @@ export interface RunConfig {
    * discussion presets.
    */
   ambitionTiers?: number;
+  /**
+   * Unit 35: per-run override for `CRITIC_ENABLED` env. When set, wins
+   * over the env value for this run only. Blackboard-only; silently
+   * ignored by discussion presets (no diff-commit path to gate).
+   */
+  critic?: boolean;
 }
 
 export interface RunnerOpts {

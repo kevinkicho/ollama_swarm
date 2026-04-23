@@ -59,6 +59,8 @@ const StartBody = z.object({
   // enables with that many tiers max. Absent = inherit from env.
   // Blackboard-only.
   ambitionTiers: z.number().int().min(0).max(20).optional(),
+  // Unit 35: per-run critic override. Blackboard-only.
+  critic: z.boolean().optional(),
 });
 
 const SayBody = z.object({ text: z.string().min(1) });
@@ -110,6 +112,7 @@ export function swarmRouter(orch: Orchestrator): Router {
             ? parsed.data.proposition
             : undefined,
         ambitionTiers: parsed.data.ambitionTiers,
+        critic: parsed.data.critic,
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {

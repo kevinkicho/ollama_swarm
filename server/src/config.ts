@@ -93,6 +93,18 @@ const Schema = z.object({
       const n = Number.parseInt(v, 10);
       return Number.isInteger(n) && n >= 1 && n <= 20 ? n : 5;
     }),
+  // Unit 35: critic agent at commit time. When enabled, a peer agent
+  // reviews every worker diff before it lands — reject verdict marks
+  // the todo stale so the replanner finds a different angle. Catches
+  // the specific busywork patterns the auditor's string-match verdict
+  // is too coarse to catch (duplicate-content test pyramids, rename-
+  // only reorgs, stub implementations labelled "done"). Default OFF
+  // because it adds one prompt per commit; flip on for long autonomous
+  // runs where the cost is worth the quality floor.
+  CRITIC_ENABLED: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
 });
 
 const parsed = Schema.parse(process.env);

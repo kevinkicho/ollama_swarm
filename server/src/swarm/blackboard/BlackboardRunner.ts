@@ -72,6 +72,14 @@ import {
   WORKER_SYSTEM_PROMPT,
   type WorkerSeed,
 } from "./prompts/worker.js";
+import {
+  buildCriticRepairPrompt,
+  buildCriticUserPrompt,
+  CRITIC_SYSTEM_PROMPT,
+  type CriticSeedFileBeforeAfter,
+  type CriticSeedPriorCommit,
+  parseCriticResponse,
+} from "./prompts/critic.js";
 import { config } from "../../config.js";
 
 // Blackboard preset: planner posts TODOs, workers drain them in a
@@ -1158,6 +1166,139 @@ export class BlackboardRunner implements SwarmRunner {
     return max;
   }
 
+  // Unit 35: resolve whether the critic should fire for this run.
+  // Per-run `cfg.critic` wins over env when present (explicit on/off);
+  // otherwise CRITIC_ENABLED env decides.
+  private criticEnabled(): boolean {
+    const perRun = this.active?.critic;
+    if (perRun !== undefined) return perRun;
+    return config.CRITIC_ENABLED;
+  }
+
+  // Unit 35: run the critic on a proposed diff BEFORE it lands.
+  //
+  // Picks a peer agent (NOT the proposing worker): prefers another
+  // worker, falls back to the planner, gives up and returns "accept"
+  // if no peer exists (agentCount=1 shouldn't reach the worker path
+  // anyway — workers require agentCount >= 2). Then prompts the peer
+  // with the critic seed (todo + criterion + per-file before/after +
+  // recent committed todos), parses the verdict, and returns it.
+  //
+  // Failure-open philosophy: if the critic prompt itself fails (parse
+  // error after repair, SDK error, etc.), return "accept" and log —
+  // blocking work due to infrastructure issues is worse than letting
+  // one busywork commit through.
+  private async runCritic(
+    todo: Todo,
+    proposingAgent: Agent,
+    contentsBefore: Record<string, string | null>,
+    resultingDiffs: ReadonlyArray<{ file: string; newText: string }>,
+  ): Promise<"accept" | "reject"> {
+    // Pick a peer. Prefer a worker other than the proposer; fall back
+    // to the planner.
+    const roster = this.opts.manager.list();
+    const peers = roster.filter((a) => a.id !== proposingAgent.id);
+    if (peers.length === 0) {
+      this.appendSystem(
+        `[critic] no peer agent available to review ${proposingAgent.id}'s diff; skipping (accept-by-default).`,
+      );
+      return "accept";
+    }
+    // Prefer a worker (index !== 1); else any peer (= planner).
+    const preferred =
+      peers.find((a) => a.index !== 1) ?? peers[0];
+
+    const linkedCriterion = todo.criterionId
+      ? this.contract?.criteria.find((c) => c.id === todo.criterionId)
+      : undefined;
+
+    const files: CriticSeedFileBeforeAfter[] = resultingDiffs.map((d) => ({
+      file: d.file,
+      before: contentsBefore[d.file] ?? null,
+      after: d.newText,
+    }));
+
+    const recentCommits: CriticSeedPriorCommit[] = this.board
+      .listTodos()
+      .filter((t) => t.status === "committed")
+      .sort((a, b) => (b.committedAt ?? 0) - (a.committedAt ?? 0))
+      .slice(0, 16)
+      .map((t) => ({
+        todoId: t.id,
+        description: t.description,
+        files: [...t.expectedFiles],
+      }));
+
+    const userPrompt = buildCriticUserPrompt({
+      proposingAgentId: proposingAgent.id,
+      todoDescription: todo.description,
+      todoExpectedFiles: [...todo.expectedFiles],
+      criterionId: linkedCriterion?.id,
+      criterionDescription: linkedCriterion?.description,
+      files,
+      recentCommits,
+    });
+    const fullPrompt = `${CRITIC_SYSTEM_PROMPT}\n\n${userPrompt}`;
+
+    let responseText: string;
+    try {
+      responseText = await this.promptAgent(preferred, fullPrompt);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(
+        `[critic] ${preferred.id} prompt failed (${msg}). Accepting by default (failure-open).`,
+      );
+      return "accept";
+    }
+    if (this.stopping) return "accept";
+    this.appendAgent(preferred, responseText);
+
+    let parsed = parseCriticResponse(responseText);
+    if (!parsed.ok) {
+      // One repair attempt, same as the other parsers.
+      this.appendSystem(
+        `[critic] response did not parse (${parsed.reason}). Issuing repair prompt.`,
+      );
+      let repairResponse: string;
+      try {
+        repairResponse = await this.promptAgent(
+          preferred,
+          `${CRITIC_SYSTEM_PROMPT}\n\n${buildCriticRepairPrompt(responseText, parsed.reason)}`,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.appendSystem(
+          `[critic] repair prompt failed (${msg}). Accepting by default (failure-open).`,
+        );
+        return "accept";
+      }
+      if (this.stopping) return "accept";
+      this.appendAgent(preferred, repairResponse);
+      parsed = parseCriticResponse(repairResponse);
+      if (!parsed.ok) {
+        this.appendSystem(
+          `[critic] still invalid after repair (${parsed.reason}). Accepting by default (failure-open).`,
+        );
+        return "accept";
+      }
+    }
+
+    if (parsed.critic.verdict === "reject") {
+      this.board.markStale(
+        todo.id,
+        `critic rejected (${preferred.id}): ${parsed.critic.rationale}`,
+      );
+      this.appendSystem(
+        `[critic] ${preferred.id} REJECTED ${proposingAgent.id}'s diff on "${truncate(todo.description)}": ${parsed.critic.rationale}`,
+      );
+      return "reject";
+    }
+    this.appendSystem(
+      `[critic] ${preferred.id} accepted ${proposingAgent.id}'s diff: ${parsed.critic.rationale}`,
+    );
+    return "accept";
+  }
+
   // Unit 11: the drain-audit-repeat loop's backstop. Reads from cfg.rounds so
   // the user's setup-form "Rounds" slider actually has teeth in blackboard
   // mode (previously ignored — see README notes). The fallback of 5 matches
@@ -1519,6 +1660,27 @@ export class BlackboardRunner implements SwarmRunner {
         `worker output has leading UTF-8 BOM in: ${bomFiles.join(", ")}`,
       );
       return "stale";
+    }
+
+    // Unit 35: critic intercept. Between CAS pass and disk write, a peer
+    // agent reviews the diff for busywork patterns (duplicate content,
+    // stub implementations, rename-only reorgs, tests-without-behavior,
+    // etc.). Reject → markStale, no disk mutation, no commit burned.
+    // Opt-in per run / env; when neither is set the critic is SKIPPED
+    // and the worker-commit flow is byte-identical to pre-Unit-35.
+    if (this.criticEnabled()) {
+      const verdict = await this.runCritic(
+        todo,
+        agent,
+        contents,
+        resultingDiffs,
+      );
+      if (this.stopping) return "stale";
+      if (verdict === "reject") {
+        // The "stale reason" is populated inside runCritic via
+        // markStale-with-rationale; we just return the status bucket.
+        return "stale";
+      }
     }
 
     // CAS passed locally. Write atomically; on any write error we leave the
