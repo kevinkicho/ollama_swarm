@@ -29,6 +29,14 @@ export interface AgentState {
   retryAttempt?: number;
   retryMax?: number;
   retryReason?: string;
+  // Unit 39: timestamp (ms since epoch) of when this agent flipped INTO
+  // the current "thinking" state. The UI renders elapsed time ("thinking
+  // 3m54s") by subtracting this from Date.now() in a 1 s interval while
+  // status === "thinking". Unset for non-thinking states. This is the
+  // honest user-facing display during the HEADERS_TIMEOUT window —
+  // distinguishes "patiently waiting for a real response" from
+  // "something broke" (which is only true after a retry actually fires).
+  thinkingSince?: number;
 }
 
 export type TranscriptRole = "system" | "user" | "agent";

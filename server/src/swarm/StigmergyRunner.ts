@@ -255,6 +255,7 @@ export class StigmergyRunner implements SwarmRunner {
       port: agent.port,
       sessionId: agent.sessionId,
       status: "thinking",
+      thinkingSince: Date.now(),
     });
     this.stats.countTurn(agent.id);
 

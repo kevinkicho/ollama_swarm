@@ -199,7 +199,7 @@ export class RoundRobinRunner implements SwarmRunner {
 
   private async runTurn(agent: Agent, round: number, totalRounds: number): Promise<void> {
     this.opts.manager.markStatus(agent.id, "thinking");
-    this.emitAgentState({ id: agent.id, index: agent.index, port: agent.port, sessionId: agent.sessionId, status: "thinking" });
+    this.emitAgentState({ id: agent.id, index: agent.index, port: agent.port, sessionId: agent.sessionId, status: "thinking", thinkingSince: Date.now() });
     // Unit 33: one turn = one call to runTurn (retries inside
     // promptWithRetry don't bump this; onTiming counts those separately).
     this.stats.countTurn(agent.id);

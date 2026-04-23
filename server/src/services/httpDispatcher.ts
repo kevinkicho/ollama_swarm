@@ -23,12 +23,18 @@ import { Agent, setGlobalDispatcher } from "undici";
 // Unit 16 (2026-04-22): bumped 90 s → 180 s after the battle test
 // surfaced 25 UND_ERR_HEADERS_TIMEOUT events in 60 minutes of runs,
 // concentrated on agents' first prompts where cold-start TTFB on
-// cloud-glm-5.1 occasionally crosses 90 s. With the cross-runner retry
-// helper landed in the same unit, 3 attempts × 180 s = 540 s worst
-// case per turn — still well under the 20 min absolute turn watchdog
-// every runner enforces. Healthy runs are unaffected (returns happen
-// in the first 30-60 s normally); only the cold-start tail benefits.
-export const HEADERS_TIMEOUT_MS = 180_000;
+// cloud-glm-5.1 occasionally crosses 90 s.
+//
+// Unit 39 (2026-04-23): bumped 180 s → 300 s after live kyahoofinance
+// smoke showed agent-1 hitting the 180 s cap TWICE in a row at almost
+// exactly 182 s, then succeeding on attempt 3 at 80 s. The 182 s reads
+// are "undici gave up at the cap, cloud was still producing" — the
+// same request would have succeeded at maybe 190-220 s. The 180 s cap
+// was throwing away work rather than saving time. At 300 s we still
+// kill a truly-stuck connection well under the 20 min absolute turn
+// watchdog, but give legitimately-slow cold-starts room to finish.
+// Healthy runs (25-60 s TTFB) are unaffected.
+export const HEADERS_TIMEOUT_MS = 300_000;
 
 // Exported so the retry layer's budget comment stays honest: 3 attempts
 // × HEADERS_TIMEOUT_MS + RETRY_BACKOFF_MS totals = ~5 min worst case.

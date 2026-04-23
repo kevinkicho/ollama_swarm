@@ -18,9 +18,18 @@
 export const RETRY_MAX_ATTEMPTS = 3;
 
 // Delays BEFORE attempts 2 and 3 (no delay before attempt 1).
-// Budget: 4 + 16 = 20s of backoff on top of up to 3 × ~5min undici
-// timeouts = ~15min worst case — fits inside the 20min per-turn watchdog.
-export const RETRY_BACKOFF_MS: readonly number[] = [4_000, 16_000];
+//
+// Unit 39 (2026-04-23): bumped from [4 s, 16 s] to [30 s, 90 s].
+// Live kyahoofinance smoke showed retries firing back-to-back with
+// only ~4-16 s of cooling between them, each hitting the same slow
+// cloud shard. At [4, 16] the cloud didn't have time to warm; at
+// [30, 90] a truly cold shard has a real chance to come online
+// before we try again. Budget: 30 + 90 = 120 s backoff on top of
+// up to 3 × 300 s (HEADERS_TIMEOUT_MS, Unit 39) timeouts = ~17 min
+// worst case — still fits inside the 20 min per-turn watchdog.
+// Healthy runs are unaffected (succeed on attempt 1; backoff
+// never fires).
+export const RETRY_BACKOFF_MS: readonly number[] = [30_000, 90_000];
 
 // Undici + Node.js network error codes that are worth a second try.
 const RETRYABLE_CODES = new Set<string>([

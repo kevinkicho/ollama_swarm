@@ -89,7 +89,7 @@ describe("promptWithRetry — retry on transient", () => {
     assert.equal(seen.length, 1);
     assert.equal(seen[0].attempt, 2, "onRetry reports the attempt about to start (1-based, so attempt 2)");
     assert.equal(seen[0].max, 3);
-    assert.equal(seen[0].delayMs, 4_000, "first backoff before attempt 2 is 4s per RETRY_BACKOFF_MS");
+    assert.equal(seen[0].delayMs, 30_000, "Unit 39: first backoff before attempt 2 is 30s per RETRY_BACKOFF_MS");
     assert.match(seen[0].reasonShort, /fetch failed|UND_ERR/);
   });
 
@@ -110,8 +110,8 @@ describe("promptWithRetry — retry on transient", () => {
     assert.deepEqual(
       seen.map((s) => ({ attempt: s.attempt, delayMs: s.delayMs })),
       [
-        { attempt: 2, delayMs: 4_000 },
-        { attempt: 3, delayMs: 16_000 },
+        { attempt: 2, delayMs: 30_000 },
+        { attempt: 3, delayMs: 90_000 },
       ],
     );
   });

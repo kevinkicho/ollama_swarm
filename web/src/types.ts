@@ -19,6 +19,10 @@ export interface AgentState {
   retryAttempt?: number;
   retryMax?: number;
   retryReason?: string;
+  // Unit 39: timestamp when status flipped to "thinking". Panel uses
+  // it to render a ticking "thinking 3m54s" so a legitimate slow
+  // prompt doesn't look like an error. Unset for non-thinking states.
+  thinkingSince?: number;
 }
 
 export type TranscriptRole = "system" | "user" | "agent";

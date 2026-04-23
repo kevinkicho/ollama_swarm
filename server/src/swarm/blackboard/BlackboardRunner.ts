@@ -2538,15 +2538,19 @@ export class BlackboardRunner implements SwarmRunner {
     // clone's opencode.json (RepoService.writeOpencodeConfig / Unit 20).
     this.turnsPerAgent.set(agent.id, (this.turnsPerAgent.get(agent.id) ?? 0) + 1);
     this.opts.manager.markStatus(agent.id, "thinking");
+    const turnStart = Date.now();
     this.emitAgentState({
       id: agent.id,
       index: agent.index,
       port: agent.port,
       sessionId: agent.sessionId,
       status: "thinking",
+      // Unit 39: UI uses this to render "thinking 3m54s" while we wait
+      // for the real response, distinguishing a legitimate slow prompt
+      // from an error.
+      thinkingSince: turnStart,
     });
 
-    const turnStart = Date.now();
     this.opts.manager.touchActivity(agent.sessionId, turnStart);
 
     const controller = new AbortController();
