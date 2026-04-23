@@ -2554,7 +2554,106 @@ tests).
 
 ---
 
-## Session summary (Units 9–20, this conversation)
+## Unit 21 — Observability bundle (toStates fix + summary stats + extraction script)  **[committed: pending]**
+
+Three small fixes that together turn Unit 19's per-call timing data
+into something *visible* (UI), *queryable* (script), and *durable*
+(summary.json). Unit 19 produced the data; without Unit 21 nothing
+actually used it.
+
+**Sub-fix A — `scripts/extract-prompt-timings.mjs`.** New stand-alone
+Node script. Reads `_prompt_timing` records from
+`logs/current.jsonl` (or any `--log <path>` you specify) and prints
+three latency tables: aggregate, by preset, by preset+agent, by
+attempt number. CLI args also support `--preset <name>` to filter.
+Output is plain text — sample shape:
+
+```
+=== By preset + agent (latency on successful calls only) ===
+                                   calls     ok  fail%       p50       p95      mean       max
+council / agent-1                      3      3     0%      45.0s     58.2s     49.8s     58.2s
+council / agent-2                      4      2    50%      62.1s     91.0s     76.5s     91.0s
+```
+
+Lets future battle-test post-mortems cleanly say *"v6 median per-call
+latency was 35s, v5 was 120s — the cloud was 3.4× faster today, so
+the v6 success-rate gain is cloud, not code."* Read-only one-shot
+tool; no daemon, no state. Re-runs against the current log on every
+invocation.
+
+**Sub-fix B — `AgentManager.toStates()` fix.** Long-standing
+known-limitations entry: REST `/api/swarm/status` was hardcoding
+every agent's status to `"ready"` regardless of actual state. The
+WebSocket event stream had accurate states (via `markStatus` →
+`onState` callbacks) but anyone polling REST got `"ready"` even
+during a `retrying` or `failed` phase.
+
+Fix: AgentManager now maintains a private `agentStates` map mirroring
+every state change. New private helper `setAgentState(s)` writes to
+both the map AND fires the broadcast `onState` callback in lockstep.
+All 6 prior `this.onState(...)` callsites (spawnAgent / exit handler
+/ markStatus / killAll-loop) now route through `setAgentState`.
+`toStates()` reads from the map (sorted by index) instead of
+synthesizing a fresh "ready" stub from the agent record. `killAll`
+clears the map alongside the agents map.
+
+What you'll see in the browser: agent panels now switch to the
+yellow "retrying" dot and the red "failed" dot in real time during
+a run, not just sit on green "ready" while internally things go
+sideways.
+
+**Sub-fix C — Per-agent retry/latency stats in `summary.json`.**
+Blackboard's `summary.json` previously had `agents: [{agentId,
+agentIndex, turnsTaken, tokensIn, tokensOut}]` per agent. After
+Unit 21 it adds optional `totalAttempts` (incl. retries),
+`totalRetries`, `successfulAttempts`, `meanLatencyMs`,
+`p50LatencyMs`, `p95LatencyMs` — all computed from the same
+`onTiming`/`onRetry` callbacks Unit 19 wired into `promptWithRetry`.
+
+Implementation:
+
+- `summary.ts` — `PerAgentStat` interface gains 6 optional fields.
+  All `?` so older callers / pre-migration summaries don't break.
+  New exported helper `computeLatencyStats(samples)` returns
+  `{mean, p50, p95}` (nearest-rank percentile, non-mutating sort).
+- `BlackboardRunner.ts` — three new `Map<string, ...>` fields
+  alongside `turnsPerAgent`: `attemptsPerAgent`, `retriesPerAgent`,
+  `latenciesPerAgent`. Cleared in `start()`. Updated inside the
+  existing `onTiming` / `onRetry` callbacks on `promptWithRetry`
+  (zero new event surface — same hooks Unit 19 added).
+- `writeRunSummary` — `agentStats.map(...)` now reads from the new
+  maps and calls `computeLatencyStats` to produce percentile fields.
+
+**Tests added:**
+
+- 5 tests on `computeLatencyStats` (empty → all null; single sample;
+  ordering invariance; 10-sample distribution with slow tail;
+  non-mutating sort).
+- 2 tests on `buildSummary` Unit-21 passthrough (new fields pass
+  through when present; missing-field case still works for
+  pre-migration callers).
+
+No new test for `AgentManager.toStates()` — the fix is small,
+spawn/markStatus paths can't be easily exercised without spawning
+real opencode children, and the change is observable end-to-end
+from the next swarm run (UI panels now switch colors). Trade-off
+accepted; smoke test validates.
+
+No new test for the extraction script — one-shot CLI tool with no
+state; running it against a real log is its own validation.
+
+**Validation cost: zero on its own.** Unit 21 doesn't change any
+runtime behavior of the swarm — it adds tracking, mirrors state to
+a map that was previously thrown away, and ships a reading tool.
+The next real run (whether tomorrow's v6 battle test or a one-off
+preset run) is where the new visibility shows up.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+456/456 server tests green (449 before + 7 Unit 21 tests).
+
+---
+
+## Session summary (Units 9–21, this conversation)
 
 Twelve units shipped in this session:
 
@@ -2625,15 +2724,31 @@ Twelve units shipped in this session:
   bash hard-denied. Blackboard worker stays on the no-tools `swarm`
   profile, unchanged. Discussion presets' agents can finally read
   the files their prompts have been telling them to read all along
-  — should produce visibly more concrete output (real quotes from
-  actual code instead of hallucinated file citations).
+  — proven by smoke test where role-diff agents cited `db.py:62`
+  with the actual SQL injection f-string code quoted.
+- **Unit 21** — Observability bundle. Three sub-fixes that turn
+  Unit 19's per-call timing data into something visible (UI),
+  queryable (script), and durable (summary.json):
+  (a) `scripts/extract-prompt-timings.mjs` — reads
+  `_prompt_timing` records and prints latency tables (per preset,
+  per agent, per attempt);
+  (b) `AgentManager.toStates()` fix — REST `/api/swarm/status` now
+  returns real per-agent statuses (retrying / failed / etc.)
+  instead of hardcoded `"ready"`. UI agent panels now switch
+  colors live during retries and failures.
+  (c) `summary.json` per-agent stats — new optional fields
+  `totalAttempts` / `totalRetries` / `successfulAttempts` /
+  `meanLatencyMs` / `p50LatencyMs` / `p95LatencyMs`. Sourced from
+  the existing onTiming / onRetry callbacks via three new maps in
+  BlackboardRunner. New exported `computeLatencyStats` helper.
 
 Roster after this session: **eight shipped presets** (round-robin
 baseline + 7 intentional designs) **all with retry parity, Unit 17
-auto-warmup at spawn, Unit 19 per-call timing telemetry, AND
-Unit 20 read-only file access for discussion presets**. Every
-pattern named in the original catalog (`docs/swarm-patterns.md`) is
-now either shipped or deferred with a documented rationale.
+auto-warmup at spawn, Unit 19 per-call timing telemetry, Unit 20
+read-only file access for discussion presets, AND Unit 21 accurate
+REST status + summary.json latency stats**. Every pattern named in
+the original catalog (`docs/swarm-patterns.md`) is now either
+shipped or deferred with a documented rationale.
 
 ---
 

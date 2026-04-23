@@ -185,36 +185,22 @@ have the same retry semantics blackboard's been using since Phase
 
 ---
 
-## `AgentManager.toStates()` reports every agent as `"ready"`
+## ~~`AgentManager.toStates()` reports every agent as `"ready"`~~ (resolved 2026-04-22, Unit 21)
 
-**Choice:** the REST snapshot at `GET /api/swarm/status` calls
-`AgentManager.toStates()`, which currently hard-codes
-`status: "ready"` for every agent regardless of its actual status.
-Status transitions (`thinking`, `retrying`, `failed`, `stopped`)
-reach the UI via the `agent_state` WebSocket event instead, which the
-in-browser zustand store applies.
+**Status:** fixed. `AgentManager` now maintains a private
+`agentStates` map mirroring every state change. A new
+`setAgentState(s)` helper writes to both the map AND fires the
+broadcast `onState` callback in lockstep. All 6 prior direct
+`this.onState(...)` callsites (spawnAgent / exit handler / markStatus
+/ killAll loop) route through the helper. `toStates()` reads from
+the map (sorted by index) and `killAll` clears it. REST
+`/api/swarm/status` and WS-catchup snapshots now reflect actual
+agent statuses (retrying / failed / etc.); UI agent panels switch
+colors live during retries and failures.
 
-**Why:** (unclear — likely a stub from early scaffolding that was
-never fixed once `markStatus` started broadcasting). The UI works
-because it uses the WebSocket stream; nothing in-app ever consulted
-the REST snapshot for per-agent status.
-
-**What this breaks:** any tool polling `/api/swarm/status` for agent
-health — e.g. the `scripts/monitor-role-diff.mjs` monitor — will
-never see a failed or retrying agent. The role-diff compliance
-report came back with `Irregularities: None` despite 12+
-`UND_ERR_HEADERS_TIMEOUT` events in the run, because the REST
-endpoint served stale `ready` states for the dead agents.
-
-**When this would need revisiting:**
-- If any E2E or monitor script relies on REST polling for compliance
-  checks. Today the fix is "monitor the transcript contents"; the
-  next time someone writes a monitor expecting REST to be
-  authoritative, they'll get bitten.
-- If an external tool (CI, a Slack bot) wants to check swarm health
-  without holding a WebSocket open.
-
-**Cheap fix when it becomes a real problem:** in `toStates()`, read
-the status from the same in-memory agent record that `markStatus`
-writes to, rather than the literal `"ready"`. One line change in
-`server/src/services/AgentManager.ts`.
+**Original symptoms (preserved for context):** the REST snapshot
+hard-coded `status: "ready"` for every agent regardless of actual
+state. The role-diff E2E monitor script
+(`scripts/monitor-role-diff.mjs`) reported `Irregularities: None`
+despite 12+ `UND_ERR_HEADERS_TIMEOUT` events because it polled REST
+for agent statuses and got stale `"ready"` for dead agents.

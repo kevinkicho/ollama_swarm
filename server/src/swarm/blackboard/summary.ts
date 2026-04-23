@@ -33,6 +33,21 @@ export interface PerAgentStat {
   turnsTaken: number;
   tokensIn: number | null;
   tokensOut: number | null;
+  // Unit 21: per-agent attempt + latency stats sourced from
+  // promptWithRetry's onTiming/onRetry hooks. `totalAttempts` includes
+  // retries; `totalRetries` is the count of retry firings (so e.g. an
+  // agent that succeeded on attempt 2 contributes totalAttempts=2,
+  // totalRetries=1). Latency is computed only over SUCCESSFUL attempts
+  // — failed attempts are typically headers-timeout aborts that don't
+  // tell you anything meaningful about model speed. All optional /
+  // null when no data was collected (older summaries, runs that
+  // crashed before any prompt fired).
+  totalAttempts?: number;
+  totalRetries?: number;
+  successfulAttempts?: number;
+  meanLatencyMs?: number | null;
+  p50LatencyMs?: number | null;
+  p95LatencyMs?: number | null;
 }
 
 export interface RunSummary {
@@ -156,6 +171,31 @@ function classifyStopReason(
     return { stopReason: "user" };
   }
   return { stopReason: "completed", stopDetail: input.completionDetail };
+}
+
+// Unit 21: small pure helper for per-agent latency stats. Returns
+// p50/p95/mean over the given samples or null when empty (so the
+// summary doesn't lie about an agent that never produced a successful
+// attempt). Sort is non-mutating.
+export interface LatencyStats {
+  mean: number | null;
+  p50: number | null;
+  p95: number | null;
+}
+export function computeLatencyStats(samplesMs: readonly number[]): LatencyStats {
+  if (samplesMs.length === 0) return { mean: null, p50: null, p95: null };
+  const sorted = [...samplesMs].sort((a, b) => a - b);
+  const sum = sorted.reduce((s, v) => s + v, 0);
+  // Nearest-rank percentile: ceil(p * N / 100) - 1, clamped to [0, N-1].
+  const at = (p: number): number => {
+    const rank = Math.max(1, Math.ceil((p * sorted.length) / 100));
+    return sorted[rank - 1];
+  };
+  return {
+    mean: Math.round(sum / sorted.length),
+    p50: at(50),
+    p95: at(95),
+  };
 }
 
 function parseCapType(reason: string): StopReason {

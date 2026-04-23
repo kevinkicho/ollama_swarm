@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildSummary,
+  computeLatencyStats,
   FINAL_GIT_STATUS_MAX,
   type BuildSummaryInput,
   type PerAgentStat,
@@ -235,5 +236,82 @@ describe("buildSummary — Phase 11c contract + completionDetail", () => {
   it("leaves contract undefined when not supplied", () => {
     const s = buildSummary(baseInput());
     assert.equal(s.contract, undefined);
+  });
+});
+
+// Unit 21: per-agent latency telemetry helper. Pure function — easy to
+// lock down with a few directed inputs.
+describe("computeLatencyStats", () => {
+  it("returns null fields for empty input (so summary doesn't fake stats)", () => {
+    const s = computeLatencyStats([]);
+    assert.equal(s.mean, null);
+    assert.equal(s.p50, null);
+    assert.equal(s.p95, null);
+  });
+
+  it("computes mean / p50 / p95 for a single sample", () => {
+    const s = computeLatencyStats([1500]);
+    assert.equal(s.mean, 1500);
+    assert.equal(s.p50, 1500);
+    assert.equal(s.p95, 1500);
+  });
+
+  it("returns sorted percentiles regardless of input order", () => {
+    const s = computeLatencyStats([300, 100, 200, 500, 400]);
+    assert.equal(s.mean, 300, "mean of 100,200,300,400,500 = 300");
+    assert.equal(s.p50, 300, "median is 300");
+    assert.equal(s.p95, 500, "p95 of 5 samples = max sample");
+  });
+
+  it("handles a realistic latency distribution (1-2s normal, one slow tail)", () => {
+    const samples = [1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 12_000];
+    const s = computeLatencyStats(samples);
+    assert.equal(s.p50, 1400, "median sits in the bulk");
+    assert.equal(s.p95, 12_000, "p95 catches the slow tail");
+    assert.equal(s.mean, 2460, "mean is dragged up by the outlier");
+  });
+
+  it("does not mutate the input array", () => {
+    const samples = [3, 1, 2];
+    computeLatencyStats(samples);
+    assert.deepEqual(samples, [3, 1, 2]);
+  });
+});
+
+describe("buildSummary — per-agent stats (Unit 21 fields passthrough)", () => {
+  it("passes through totalAttempts / totalRetries / latency fields", () => {
+    const agents: PerAgentStat[] = [
+      {
+        agentId: "agent-1",
+        agentIndex: 1,
+        turnsTaken: 4,
+        tokensIn: null,
+        tokensOut: null,
+        totalAttempts: 6,
+        totalRetries: 2,
+        successfulAttempts: 4,
+        meanLatencyMs: 78_000,
+        p50LatencyMs: 45_000,
+        p95LatencyMs: 180_000,
+      },
+    ];
+    const s = buildSummary(baseInput({ agents }));
+    assert.equal(s.agents.length, 1);
+    const a = s.agents[0];
+    assert.equal(a.totalAttempts, 6);
+    assert.equal(a.totalRetries, 2);
+    assert.equal(a.successfulAttempts, 4);
+    assert.equal(a.meanLatencyMs, 78_000);
+    assert.equal(a.p50LatencyMs, 45_000);
+    assert.equal(a.p95LatencyMs, 180_000);
+  });
+
+  it("works when Unit 21 fields are absent (older callers / pre-migration)", () => {
+    const agents: PerAgentStat[] = [
+      { agentId: "agent-1", agentIndex: 1, turnsTaken: 4, tokensIn: null, tokensOut: null },
+    ];
+    const s = buildSummary(baseInput({ agents }));
+    assert.equal(s.agents[0].totalAttempts, undefined);
+    assert.equal(s.agents[0].p50LatencyMs, undefined);
   });
 });

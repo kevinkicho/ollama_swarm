@@ -58,6 +58,12 @@ export class AgentManager {
   private readonly lastActivity = new Map<string, number>(); // sessionID -> ts
   private readonly eventAborts = new Map<string, AbortController>(); // agent.id -> abort
   private readonly rawSseCount = new Map<string, number>(); // agent.id -> count, for debug throttling
+  // Unit 21: per-agent state mirror so toStates() can return current
+  // statuses (retrying / failed / etc.) instead of the hardcoded "ready"
+  // it returned pre-Unit-21. Updated in lockstep with every onState fire.
+  // Keyed by agent.id; survives process exit so the REST snapshot still
+  // shows the terminal status until killAll() clears.
+  private readonly agentStates = new Map<string, AgentState>();
   private orchestratorClient?: Client;
 
   constructor(
@@ -93,20 +99,28 @@ export class AgentManager {
   }
 
   toStates(): AgentState[] {
-    return this.list().map((a) => ({
-      id: a.id,
-      index: a.index,
-      port: a.port,
-      sessionId: a.sessionId,
-      status: "ready",
-    }));
+    // Unit 21: returns actual current state per agent (may be
+    // "thinking" / "retrying" / "failed" / "stopped"), not the
+    // hardcoded "ready" we returned pre-Unit-21. Sorted by index for
+    // deterministic UI ordering.
+    return [...this.agentStates.values()].sort((a, b) => a.index - b.index);
+  }
+
+  // Unit 21: single source-of-truth helper for state changes. Mirrors
+  // the broadcast onState callback AND updates the agentStates map so
+  // toStates() (which feeds REST /api/swarm/status and WS catch-up)
+  // stays consistent with the WS event stream. Every callsite that
+  // used to call `this.onState(s)` directly now calls this.
+  private setAgentState(s: AgentState): void {
+    this.agentStates.set(s.id, s);
+    this.onState(s);
   }
 
   async spawnAgent(opts: SpawnOpts): Promise<Agent> {
     const port = await this.ports.allocate();
     const id = `agent-${opts.index}`;
     const stateBase: AgentState = { id, index: opts.index, port, status: "spawning" };
-    this.onState(stateBase);
+    this.setAgentState(stateBase);
 
     let child: ChildProcess | undefined;
     try {
@@ -152,7 +166,7 @@ export class AgentManager {
       child.stderr?.on("data", teeLine("stderr"));
       child.on("exit", (code) => {
         if (this.agents.has(id)) {
-          this.onState({ ...stateBase, status: "stopped", error: `exited with code ${code}` });
+          this.setAgentState({ ...stateBase, status: "stopped", error: `exited with code ${code}` });
           this.agents.delete(id);
           this.ports.release(port);
         }
@@ -181,13 +195,13 @@ export class AgentManager {
       if (config.AGENT_WARMUP_ENABLED && !opts.skipWarmup) {
         await this.warmupAgent(agent);
       }
-      this.onState({ ...stateBase, sessionId, status: "ready" });
+      this.setAgentState({ ...stateBase, sessionId, status: "ready" });
       return agent;
     } catch (err) {
       treeKill(child);
       this.ports.release(port);
       const msg = err instanceof Error ? err.message : String(err);
-      this.onState({ ...stateBase, status: "failed", error: msg });
+      this.setAgentState({ ...stateBase, status: "failed", error: msg });
       throw err;
     }
   }
@@ -253,7 +267,7 @@ export class AgentManager {
   markStatus(id: string, status: AgentState["status"], extra: Partial<AgentState> = {}): void {
     const a = this.agents.get(id);
     if (!a) return;
-    this.onState({ id, index: a.index, port: a.port, sessionId: a.sessionId, status, ...extra });
+    this.setAgentState({ id, index: a.index, port: a.port, sessionId: a.sessionId, status, ...extra });
   }
 
   async killAll(): Promise<void> {
@@ -268,10 +282,11 @@ export class AgentManager {
       treeKill(a.child);
       this.ports.release(a.port);
       this.lastActivity.delete(a.sessionId);
-      this.onState({ id: a.id, index: a.index, port: a.port, sessionId: a.sessionId, status: "stopped" });
+      this.setAgentState({ id: a.id, index: a.index, port: a.port, sessionId: a.sessionId, status: "stopped" });
     });
     await Promise.allSettled(tasks);
     this.agents.clear();
+    this.agentStates.clear();
   }
 
   // Subscribe to the per-agent opencode SSE event stream. Any event from our

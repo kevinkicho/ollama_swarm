@@ -16,7 +16,7 @@ import { checkCaps } from "./caps.js";
 import { buildCrashSnapshot } from "./crashSnapshot.js";
 import { shouldRunFinalAudit } from "./finalAudit.js";
 import { promptWithRetry } from "../promptWithRetry.js";
-import { buildSummary, type PerAgentStat, type RunSummary } from "./summary.js";
+import { buildSummary, computeLatencyStats, type PerAgentStat, type RunSummary } from "./summary.js";
 import { applyHunks } from "./applyHunks.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
 import { resolveSafe } from "./resolveSafe.js";
@@ -127,6 +127,14 @@ export class BlackboardRunner implements SwarmRunner {
   private runBootedAt?: number;
   private staleEventCount = 0;
   private turnsPerAgent = new Map<string, number>();
+  // Unit 21: per-agent attempt + retry + latency tallies fed by the
+  // existing onTiming / onRetry callbacks on promptWithRetry. Cleared
+  // alongside turnsPerAgent on each start(). Latency samples are only
+  // pushed when the SDK call SUCCEEDED — failed attempts are usually
+  // headers-timeout aborts that don't measure model speed.
+  private attemptsPerAgent = new Map<string, number>();
+  private retriesPerAgent = new Map<string, number>();
+  private latenciesPerAgent = new Map<string, number[]>();
   // Stashed at spawn time so writeRunSummary can still produce per-agent
   // stats even after AgentManager.killAll() has cleared its own roster
   // (stop() path runs killAll concurrently with the summary write).
@@ -198,6 +206,9 @@ export class BlackboardRunner implements SwarmRunner {
     this.runBootedAt = Date.now();
     this.staleEventCount = 0;
     this.turnsPerAgent.clear();
+    this.attemptsPerAgent.clear();
+    this.retriesPerAgent.clear();
+    this.latenciesPerAgent.clear();
     this.agentRoster = [];
     this.contract = undefined;
     this.auditInvocations = 0;
@@ -1299,16 +1310,27 @@ export class BlackboardRunner implements SwarmRunner {
       // gitStatus already swallows, but belt-and-braces.
     }
 
-    const agentStats: PerAgentStat[] = this.agentRoster.map((a) => ({
-      agentId: a.id,
-      agentIndex: a.index,
-      turnsTaken: this.turnsPerAgent.get(a.id) ?? 0,
-      // OpenCode SDK's session.prompt response doesn't expose per-turn
-      // token usage via our current extractText path, so we leave these
-      // null. Documented in summary.ts.
-      tokensIn: null,
-      tokensOut: null,
-    }));
+    const agentStats: PerAgentStat[] = this.agentRoster.map((a) => {
+      const lats = this.latenciesPerAgent.get(a.id) ?? [];
+      const stats = computeLatencyStats(lats);
+      return {
+        agentId: a.id,
+        agentIndex: a.index,
+        turnsTaken: this.turnsPerAgent.get(a.id) ?? 0,
+        // OpenCode SDK's session.prompt response doesn't expose per-turn
+        // token usage via our current extractText path, so we leave these
+        // null. Documented in summary.ts.
+        tokensIn: null,
+        tokensOut: null,
+        // Unit 21: attempt + retry + latency telemetry.
+        totalAttempts: this.attemptsPerAgent.get(a.id) ?? 0,
+        totalRetries: this.retriesPerAgent.get(a.id) ?? 0,
+        successfulAttempts: lats.length,
+        meanLatencyMs: stats.mean,
+        p50LatencyMs: stats.p50,
+        p95LatencyMs: stats.p95,
+      };
+    });
 
     const counts = this.board.counts();
     const summary = buildSummary({
@@ -1488,7 +1510,19 @@ export class BlackboardRunner implements SwarmRunner {
         signal: controller.signal,
         describeError: (e) => this.describeSdkError(e),
         sleep: (ms, sig) => this.interruptibleSleep(ms, sig),
-        onTiming: ({ attempt, elapsedMs, success }) =>
+        onTiming: ({ attempt, elapsedMs, success }) => {
+          // Unit 21: per-agent stats for summary.json. Count every
+          // attempt (incl. retries); only sample latency on success.
+          this.attemptsPerAgent.set(
+            agent.id,
+            (this.attemptsPerAgent.get(agent.id) ?? 0) + 1,
+          );
+          if (success) {
+            const lats = this.latenciesPerAgent.get(agent.id) ?? [];
+            lats.push(elapsedMs);
+            this.latenciesPerAgent.set(agent.id, lats);
+          }
+          // Unit 19: per-call telemetry.
           this.opts.logDiag?.({
             type: "_prompt_timing",
             preset: this.active?.preset,
@@ -1497,8 +1531,14 @@ export class BlackboardRunner implements SwarmRunner {
             attempt,
             elapsedMs,
             success,
-          }),
+          });
+        },
         onRetry: ({ attempt, max, reasonShort, delayMs }) => {
+          // Unit 21: track retry firings per-agent for summary.json.
+          this.retriesPerAgent.set(
+            agent.id,
+            (this.retriesPerAgent.get(agent.id) ?? 0) + 1,
+          );
           this.appendSystem(
             `[${agent.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
           );
