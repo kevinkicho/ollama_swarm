@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { config, basicAuthHeader } from "../config.js";
 import { PortAllocator } from "./PortAllocator.js";
-import { treeKill, isProcessAlive } from "./treeKill.js";
+import { treeKill, killByPid, isProcessAlive } from "./treeKill.js";
 import { AgentPidTracker } from "./agentPids.js";
 import type { AgentState, SwarmEvent } from "../types.js";
 
@@ -22,6 +22,15 @@ export interface Agent {
   client: Client;
   child?: ChildProcess;
   model: string;
+}
+
+// Unit 41: killAll now reports whether every process was confirmed
+// dead before it returned. Callers that want to surface this (e.g.
+// POST /stop response) can read `escaped > 0` and warn; the older
+// fire-and-forget callers can ignore it and behave exactly as before.
+export interface KillAllResult {
+  total: number;
+  escaped: number;
 }
 
 export interface SpawnOpts {
@@ -298,9 +307,10 @@ export class AgentManager {
     this.setAgentState({ id, index: a.index, port: a.port, sessionId: a.sessionId, status, ...extra });
   }
 
-  async killAll(): Promise<void> {
+  async killAll(): Promise<KillAllResult> {
     for (const ctrl of this.eventAborts.values()) ctrl.abort();
     this.eventAborts.clear();
+    let escaped = 0;
     const tasks = [...this.agents.values()].map(async (a) => {
       try {
         await a.client.session.abort({ path: { id: a.sessionId } });
@@ -308,30 +318,66 @@ export class AgentManager {
         // ignore
       }
       treeKill(a.child);
-      // Unit 38: verified kill with escalation. treeKill fires taskkill
-      // but doesn't wait — on Windows, nested child processes can
-      // survive if the tree walk misses them. Poll isProcessAlive for
-      // up to 5 s; if still alive, fire treeKill again. Gives up
-      // silently after the poll deadline — the PID-log-based orphan
-      // sweep on next startup is the safety net.
+      // Unit 41: verified kill with two-stage escalation. We do NOT
+      // return until every PID we spawned is confirmed dead, or we
+      // have exhausted both stages. The /stop route awaits this, so
+      // the HTTP response is an honest "all agents are gone" rather
+      // than the old Unit 38 "fired the kill, hope it worked in 1.5 s".
+      //
+      // Stage 1 (up to 3 s): treeKill via ChildProcess, poll every
+      //   300 ms with one retry at the 0.9 s mark.
+      // Stage 2 (up to 3 s): killByPid (direct taskkill /F /PID or
+      //   SIGTERM→SIGKILL on POSIX), poll every 300 ms. Bypasses the
+      //   ChildProcess handle — catches cases where the Windows shell
+      //   wrapper died but its opencode grandchild is still holding a
+      //   port.
+      // If both stages fail the PID is counted as "escaped" and the
+      // startup orphan sweep remains the safety net.
       const pid = a.child?.pid;
       if (pid !== undefined) {
-        for (let i = 0; i < 5; i++) {
+        let dead = !isProcessAlive(pid);
+        for (let i = 0; i < 10 && !dead; i++) {
           await new Promise((r) => setTimeout(r, 300));
-          if (!isProcessAlive(pid)) break;
-          if (i === 2) treeKill(a.child); // one retry at 0.9 s mark
+          if (!isProcessAlive(pid)) { dead = true; break; }
+          if (i === 2) treeKill(a.child); // retry treeKill at 0.9 s
         }
-        // Clear from persistent PID log regardless — if it's still
-        // alive after the poll, the next startup sweep will catch it.
-        void this.pidTracker?.remove(pid);
+        if (!dead) {
+          killByPid(pid);
+          for (let i = 0; i < 10 && !dead; i++) {
+            await new Promise((r) => setTimeout(r, 300));
+            if (!isProcessAlive(pid)) { dead = true; break; }
+            if (i === 2) killByPid(pid); // retry killByPid at 0.9 s
+          }
+        }
+        if (!dead) escaped += 1;
+        // Unit 41: await the PID-log remove rather than fire-and-forget
+        // so /stop's response reflects on-disk reality. Still wrapped
+        // in try/catch so a transient I/O error doesn't poison the
+        // whole kill chain.
+        try {
+          await this.pidTracker?.remove(pid);
+        } catch {
+          // ignore — remove() already swallows errors internally
+        }
       }
       this.ports.release(a.port);
       this.lastActivity.delete(a.sessionId);
       this.setAgentState({ id: a.id, index: a.index, port: a.port, sessionId: a.sessionId, status: "stopped" });
     });
+    const total = tasks.length;
     await Promise.allSettled(tasks);
     this.agents.clear();
     this.agentStates.clear();
+    if (escaped > 0) {
+      // Unit 41: surface unkillable PIDs to the UI rather than swallowing
+      // silently. The next dev-server startup sweep will still reclaim
+      // them, but the user deserves to know stop wasn't 100 % clean.
+      this.onEvent({
+        type: "error",
+        message: `stop: ${escaped}/${total} agent process(es) did not exit within the verified-kill window. Startup sweep will reclaim on next restart.`,
+      });
+    }
+    return { total, escaped };
   }
 
   // Subscribe to the per-agent opencode SSE event stream. Any event from our
