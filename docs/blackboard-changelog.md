@@ -2465,7 +2465,7 @@ test needed for this unit alone.
 
 ---
 
-## Unit 20 — Agent tools fix (read-only profile for discussion presets)  **[committed: pending]**
+## Unit 20 — Agent tools fix (read-only profile for discussion presets)  **[committed: `a7726f5`]**
 
 Discovered during the v4 battle test post-mortem: discussion-only
 presets' agents kept saying *"I don't have a file-read skill available
