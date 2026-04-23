@@ -2714,6 +2714,84 @@ opt in + smoke-test the MCP spawn before any runner depends on it.
 
 ---
 
+## Unit 27 — Host-sleep-proof wall-clock cap (tick accumulator)  **[committed: `6ac510e`]**
+
+Fix the root cause behind the phase11c-medium-v7 post-mortem where
+an ~8h 41m run was labeled `"wall-clock cap reached (20 min)"`.
+Closing the laptop lid mid-sweep advanced `Date.now()` by the
+suspended duration while the event loop was paused; the next cap
+check read the full gap and tripped the wall-clock guard on a run
+that had only done ~20 min of actual work. Unit 23 bumped the cap
+to 8 h but didn't fix the mechanism — a longer sleep would still
+hit the same failure mode.
+
+The fix replaces `Date.now() - runStartedAt` with a tick
+accumulator. Each `checkAndApplyCaps` call advances an
+`activeElapsedMs` counter by the delta since the previous call,
+clamped into `[0, MAX_REASONABLE_TICK_DELTA_MS]` (5 min). So a
+multi-hour host sleep between two consecutive cap checks
+contributes at most 5 min to the run's elapsed-for-cap-purposes,
+not the full suspended time. `runStartedAt` itself is unchanged —
+it's still wall-clock for `summary.json` and log correlation; only
+the CAP DECISION runs off the accumulator.
+
+5 minutes as the clamp ceiling is generous. Worker poll cycle is
+~2.5 s, and with N workers plus a replan ticker all calling
+`checkAndApplyCaps`, a legitimate 5-min gap between consecutive
+calls would require every ticker in the system to be simultaneously
+stuck — which ~never happens. False-positive cost (if it does
+happen): under-count by up to 5 min per tick, i.e. the cap fires
+slightly late. False-negative cost: if a sleep is < 5 min, it's
+not compensated and counts in full — cap fires slightly early on
+that corner case. Both tolerable compared to today's "cap fires
+8 hours late".
+
+Transparency: when the accumulator detects a clamped jump > 1 min,
+it surfaces a transcript line — `Clock jump detected: ~N min
+skipped from cap math (host sleep?).` That way a post-mortem of an
+unattended overnight run can see exactly how much real time
+elapsed outside the event loop's view, without guessing from
+timestamps.
+
+Implementation:
+
+- `caps.ts` — new `MAX_REASONABLE_TICK_DELTA_MS` export, new
+  `TickAccumulator` interface (`activeElapsedMs` + `lastTickAt`),
+  new pure helpers `createTickAccumulator(now)` and
+  `advanceTickAccumulator(prev, now) → {next, jumpMs}`. The
+  returned `jumpMs` lets the caller surface host-sleep detection
+  without the helper needing a side-effect channel, keeping it
+  unit-testable in isolation.
+- `BlackboardRunner.ts` — new `tickAccumulator?: TickAccumulator`
+  field seeded at the moment the run enters `executing` (same
+  place `runStartedAt` is stamped). Cleared in `start()`'s
+  state-reset block. `checkAndApplyCaps` now advances the
+  accumulator first, logs jumps > 60 s, and passes
+  `{startedAt: 0, now: activeElapsedMs}` to `checkCaps`.
+
+**Tests added (8):**
+
+- Normal-sized tick advances raw delta; `jumpMs` is 0.
+- Multiple consecutive normal ticks accumulate correctly.
+- Host-sleep-sized jump (8 h) clamps to `MAX_REASONABLE_TICK_DELTA_MS`
+  and reports the full overflow as `jumpMs`.
+- Delta exactly at the boundary advances in full with `jumpMs` 0.
+- Delta one ms past the boundary reports `jumpMs` 1 and accumulator
+  stops at the boundary.
+- Backwards clock (negative delta) floors the contribution at 0 but
+  still advances `lastTickAt` so the system doesn't lock up.
+- Pure: same inputs always produce same outputs.
+- Integration with `checkCaps` — an 8 h host sleep passed through
+  the accumulator does NOT trip the wall-clock cap.
+
+**Verified.** `tsc --noEmit` clean in both `server/` and `web/`;
+470/470 server tests green (462 before + 8 Unit 27 tests).
+
+Docs: `known-limitations.md` entry struck through with Unit 27
+resolution note.
+
+---
+
 ## Session summary (Units 9–21, this conversation)
 
 Twelve units shipped in this session:

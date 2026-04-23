@@ -117,44 +117,37 @@ not a plan item.
 
 ---
 
-## Wall-clock cap uses `Date.now()`, not a monotonic timer
+## ~~Wall-clock cap uses `Date.now()`, not a monotonic timer~~ (resolved 2026-04-23, Unit 27)
 
-**Choice:** the 20-minute hard cap compares `Date.now() - startedAt`
-against `MAX_WALL_CLOCK_MS`. It is not backed by `performance.now()` or
-any other monotonic source.
+**Status:** fixed. The wall-clock cap no longer measures
+`Date.now() - runStartedAt`. Instead, `checkAndApplyCaps` advances a
+`TickAccumulator` (see `caps.ts`) per call, with each inter-tick
+delta clamped into `[0, MAX_REASONABLE_TICK_DELTA_MS]` (5 min). A
+multi-hour host sleep now contributes at most 5 min to the cap math
+instead of the full suspended duration, and the cap decision is
+driven by the accumulator's `activeElapsedMs` rather than wall-clock
+subtraction. When a jump > 1 min is detected (i.e., the clamp
+discarded real-time), a transcript line is appended noting how much
+was skipped — useful for post-mortems of unattended overnight runs.
 
-**Why:** `Date.now()` is cheap, obvious, and matches the same clock used
-for `startedAt`/`endedAt` in `summary.json` — convenient when correlating
-wall-clock with log timestamps. Monotonic timers are harder to reason
-about when reporting run duration to a human.
+`runStartedAt` itself is still stamped via `Date.now()` and used for
+summary.json / logging (where a wall-clock origin is what a human
+expects); only the *cap decision* is host-sleep-compensated.
 
-**What this breaks:** if the host sleeps during a run (laptop lid
-closed, OS suspend), `Date.now()` jumps forward on resume while the
-node event loop was paused. On the next turn-tick, the cap check reads
-a wall-clock delta of many hours and the runner immediately stops with
-`stopReason: "cap:wall-clock"` and the static `"wall-clock cap reached
-(20 min)"` detail string — even though actual work took far less than
-20 minutes.
-
-**Evidence:** v7 of phase11c-medium shows `wallClockMs: 31_273_500`
-(~8h 41m) with `stopReason: "cap:wall-clock"` and `stopDetail:
-"wall-clock cap reached (20 min)"`. The clone directory's last-modified
-time matches the ~8h window, and only 5 commits landed — consistent
-with the host being suspended overnight. See
-`runs/phase11c-medium-v7/comparison-v6-v7.md` for the full post-mortem.
-
-**When this would need revisiting:**
-- If unattended overnight runs become the norm (e.g., scheduled E2E
-  runs against a queue of repos), every such run will die on resume
-  with a misleading stop reason.
-- If we start billing token cost against wall-clock elapsed — the
-  summary's `wallClockMs` will overstate real work.
-
-**Cheap fix when it becomes a real problem:** track elapsed via
-`performance.now()` instead of `Date.now()`, OR detect a large
-`Date.now()` jump (>2× the expected turn interval) on each tick and
-reset the baseline to "now" with a one-line system note. Either keeps
-the cap measuring actual active work.
+**Original symptoms (preserved for context):** If the host slept
+during a run (laptop lid closed, OS suspend), `Date.now()` jumped
+forward on resume while the node event loop was paused. On the next
+turn-tick, the cap check read a wall-clock delta of many hours and
+the runner immediately stopped with `stopReason: "cap:wall-clock"`
+and the static `"wall-clock cap reached (20 min)"` detail string —
+even though actual work took far less than the cap. V7 of
+phase11c-medium showed `wallClockMs: 31_273_500` (~8h 41m) with
+`stopReason: "cap:wall-clock"` — see
+`runs/phase11c-medium-v7/comparison-v6-v7.md` for the full
+post-mortem. Unit 23's bump of the cap to 8 h did not fix this; it
+just raised the threshold at which a long sleep would cross the
+line. Unit 27 addresses the root cause so cap math measures active
+work rather than clock passage.
 
 ---
 
