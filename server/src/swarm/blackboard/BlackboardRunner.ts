@@ -1176,38 +1176,56 @@ export class BlackboardRunner implements SwarmRunner {
     return config.CRITIC_ENABLED;
   }
 
-  // Unit 35: run the critic on a proposed diff BEFORE it lands.
+  // Unit 35 (patched post-smoke): run the critic on a proposed diff
+  // BEFORE it lands.
   //
-  // Picks a peer agent (NOT the proposing worker): prefers another
-  // worker, falls back to the planner, gives up and returns "accept"
-  // if no peer exists (agentCount=1 shouldn't reach the worker path
-  // anyway — workers require agentCount >= 2). Then prompts the peer
-  // with the critic seed (todo + criterion + per-file before/after +
-  // recent committed todos), parses the verdict, and returns it.
+  // The first shipped version picked a peer agent (preferring another
+  // worker), prompted on the agent's MAIN session, and called appendAgent
+  // on the response. The 2026-04-23 Hello-World smoke revealed two
+  // related bugs from that shape:
   //
-  // Failure-open philosophy: if the critic prompt itself fails (parse
-  // error after repair, SDK error, etc.), return "accept" and log —
-  // blocking work due to infrastructure issues is worse than letting
-  // one busywork commit through.
+  //   1. Session contamination. When the peer was a worker, that worker's
+  //      own prompt loop was also hitting the same session with worker
+  //      prompts. The session's context bled — a critic prompt's
+  //      "verdict"-shaped response would later come back on the worker's
+  //      next prompt, tripping worker-JSON parse failure ("[agent-N]
+  //      worker JSON invalid") and burning a repair attempt.
+  //   2. UI dup. The streaming events from the critic prompt PLUS the
+  //      explicit appendAgent call produced two "Agent N" entries in
+  //      the transcript with the same text, confusing the display.
+  //
+  // Fix (both at once): run critic on a FRESH session created on the
+  // PLANNER's client each time. The planner (index=1) is never in the
+  // worker polling loop, so no worker-session collision. A fresh
+  // session isolates the critic's context from the planner's own
+  // main session (which carries contract / audit / replan state). And
+  // since fresh-session events don't match the agent's main sessionId
+  // in AgentManager.handleSessionEvent, no `agent_streaming` events
+  // reach the UI — so there's no streaming transcript to dedup against.
+  // We also skip appendAgent entirely: the `[critic] ... accepted/REJECTED
+  // ... : rationale` system message is the user-facing record; the raw
+  // verdict JSON lives in logs/current.jsonl for debugging.
+  //
+  // Failure-open philosophy unchanged: any SDK error / parse error
+  // after repair returns "accept" so infrastructure issues never block
+  // real worker output.
   private async runCritic(
     todo: Todo,
     proposingAgent: Agent,
     contentsBefore: Record<string, string | null>,
     resultingDiffs: ReadonlyArray<{ file: string; newText: string }>,
   ): Promise<"accept" | "reject"> {
-    // Pick a peer. Prefer a worker other than the proposer; fall back
-    // to the planner.
     const roster = this.opts.manager.list();
-    const peers = roster.filter((a) => a.id !== proposingAgent.id);
-    if (peers.length === 0) {
+    const planner = roster.find((a) => a.index === 1);
+    // agentCount = 1 path is the only one without a planner peer; it
+    // shouldn't reach the worker commit path (blackboard requires at
+    // least 1 worker). Accept-by-default is safe here.
+    if (!planner || planner.id === proposingAgent.id) {
       this.appendSystem(
-        `[critic] no peer agent available to review ${proposingAgent.id}'s diff; skipping (accept-by-default).`,
+        `[critic] no planner peer available to review ${proposingAgent.id}'s diff; skipping (accept-by-default).`,
       );
       return "accept";
     }
-    // Prefer a worker (index !== 1); else any peer (= planner).
-    const preferred =
-      peers.find((a) => a.index !== 1) ?? peers[0];
 
     const linkedCriterion = todo.criterionId
       ? this.contract?.criteria.find((c) => c.id === todo.criterionId)
@@ -1241,29 +1259,80 @@ export class BlackboardRunner implements SwarmRunner {
     });
     const fullPrompt = `${CRITIC_SYSTEM_PROMPT}\n\n${userPrompt}`;
 
-    let responseText: string;
+    // Create a fresh session on the planner's client for this critic
+    // call. Isolated from the planner's main session (no context
+    // bleed). The session.create response shape matches what
+    // AgentManager.readSessionId expects.
+    let sessionId: string;
     try {
-      responseText = await this.promptAgent(preferred, fullPrompt);
+      const created = await planner.client.session.create({
+        body: { title: `critic-${todo.id}-${Date.now()}` },
+      });
+      const any = created as { data?: { id?: string; info?: { id?: string } }; id?: string };
+      const sid = any?.data?.id ?? any?.data?.info?.id ?? any?.id;
+      if (!sid) throw new Error("session.create returned no session id");
+      sessionId = sid;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.appendSystem(
-        `[critic] ${preferred.id} prompt failed (${msg}). Accepting by default (failure-open).`,
+        `[critic] failed to open fresh session on ${planner.id} (${msg}). Accepting by default (failure-open).`,
+      );
+      return "accept";
+    }
+
+    // Prompt on the fresh session. No promptWithRetry wrapper — this is
+    // a gate function with accept-by-default on failure, so cold-start
+    // retries aren't worth the latency overhead (the next audit pass
+    // would benefit more from a prompt budget than the critic does).
+    const promptOnce = async (text: string): Promise<string> => {
+      const res = await planner.client.session.prompt({
+        path: { id: sessionId },
+        body: {
+          agent: "swarm",
+          model: { providerID: "ollama", modelID: planner.model },
+          parts: [{ type: "text", text }],
+        },
+      });
+      const any = res as {
+        data?: {
+          parts?: Array<{ type?: string; text?: string }>;
+          info?: { parts?: Array<{ type?: string; text?: string }> };
+          text?: string;
+        };
+      };
+      const parts = any?.data?.parts ?? any?.data?.info?.parts;
+      if (Array.isArray(parts)) {
+        const texts = parts
+          .filter((p) => p?.type === "text" && typeof p.text === "string")
+          .map((p) => p.text as string);
+        if (texts.length) return texts.join("\n");
+      }
+      return any?.data?.text ?? "";
+    };
+
+    let responseText: string;
+    try {
+      responseText = await promptOnce(fullPrompt);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(
+        `[critic] prompt on ${planner.id} (fresh session) failed (${msg}). Accepting by default (failure-open).`,
       );
       return "accept";
     }
     if (this.stopping) return "accept";
-    this.appendAgent(preferred, responseText);
 
     let parsed = parseCriticResponse(responseText);
     if (!parsed.ok) {
-      // One repair attempt, same as the other parsers.
+      // One repair attempt on the SAME fresh session — the session has
+      // the prior message as context, so "fix your previous output"
+      // framing lands.
       this.appendSystem(
-        `[critic] response did not parse (${parsed.reason}). Issuing repair prompt.`,
+        `[critic] response did not parse (${parsed.reason}). Issuing repair prompt on same fresh session.`,
       );
       let repairResponse: string;
       try {
-        repairResponse = await this.promptAgent(
-          preferred,
+        repairResponse = await promptOnce(
           `${CRITIC_SYSTEM_PROMPT}\n\n${buildCriticRepairPrompt(responseText, parsed.reason)}`,
         );
       } catch (err) {
@@ -1274,7 +1343,6 @@ export class BlackboardRunner implements SwarmRunner {
         return "accept";
       }
       if (this.stopping) return "accept";
-      this.appendAgent(preferred, repairResponse);
       parsed = parseCriticResponse(repairResponse);
       if (!parsed.ok) {
         this.appendSystem(
@@ -1284,18 +1352,22 @@ export class BlackboardRunner implements SwarmRunner {
       }
     }
 
+    // The verdict lands as a system message — no appendAgent, so no UI
+    // dup and no transcript pollution with raw critic JSON. The raw
+    // response is still in logs/current.jsonl via the WS diag channel
+    // for debugging.
     if (parsed.critic.verdict === "reject") {
       this.board.markStale(
         todo.id,
-        `critic rejected (${preferred.id}): ${parsed.critic.rationale}`,
+        `critic rejected (${planner.id}): ${parsed.critic.rationale}`,
       );
       this.appendSystem(
-        `[critic] ${preferred.id} REJECTED ${proposingAgent.id}'s diff on "${truncate(todo.description)}": ${parsed.critic.rationale}`,
+        `[critic] ${planner.id} REJECTED ${proposingAgent.id}'s diff on "${truncate(todo.description)}": ${parsed.critic.rationale}`,
       );
       return "reject";
     }
     this.appendSystem(
-      `[critic] ${preferred.id} accepted ${proposingAgent.id}'s diff: ${parsed.critic.rationale}`,
+      `[critic] ${planner.id} accepted ${proposingAgent.id}'s diff: ${parsed.critic.rationale}`,
     );
     return "accept";
   }
