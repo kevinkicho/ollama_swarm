@@ -85,7 +85,7 @@ Open the web URL shown (e.g. `http://localhost:56609`), fill in the form, hit **
 2. **Parent folder** — an absolute path to a _parent_ directory. The server derives the repo name from the URL and clones into `<parentFolder>/<repo-name>` (e.g. parent `C:\...\runs` + URL ending in `/is-odd` → clone at `C:\...\runs\is-odd`). Parent is created if missing; the subfolder must be empty, absent, or already a matching git clone. The form shows a live preview of the resolved clone path under the field.
 3. **Pattern** — one of `Round-robin transcript` (discussion-only), `Blackboard (optimistic + small units)` (planner/worker split, CAS, file edits), or `Role differentiation` (round-robin with per-agent role prompts). Selecting blackboard reveals a collapsible help block explaining CAS and stale-replan; remaining patterns in the dropdown are marked _coming soon_ and disable **Start**.
 4. **Agents** — how many concurrent `opencode serve` workers to spawn (2–8). On blackboard, agent 0 is the planner and the remaining N−1 are workers.
-5. **Rounds** — for round-robin/role-diff/council: how many full passes through the agents (1–10). For blackboard: the maximum number of **auditor invocations** (plan → work → audit cycles) before the run stops even if unresolved criteria remain. Blackboard still stops earlier on the hard caps (20 min wall-clock / 20 commits / 30 todos) or when every criterion is resolved.
+5. **Rounds** — for round-robin/role-diff/council: how many full passes through the agents (1–100). For blackboard: the maximum number of **auditor invocations** (plan → work → audit cycles) before the run stops even if unresolved criteria remain. Blackboard still stops earlier on the hard caps (20 min wall-clock / 20 commits / 30 todos) or when every criterion is resolved. With non-blackboard presets, high values can mean hours of wall-clock and proportional cloud-token spend.
 6. **Model** — any model string registered in Ollama and declared in the synthesized `opencode.json` (defaults to `glm-5.1:cloud`).
 
 Hit Start. You'll see each agent panel go from `spawning` → `ready` → `thinking` → `ready`, with live streaming bubbles in the transcript as each agent works. On blackboard runs, switch to the **Board** tab to watch todos flow through Open → Claimed → Committed (or Stale → back to Open on CAS rejection). When the run terminates the phase pill flips to `completed` / `stopped` / `failed` and a summary card appears at the top of the Board tab; a **New swarm** button is available in the sidebar.
@@ -191,7 +191,7 @@ ollama_swarm/
 
 ### `server/src/routes/swarm.ts`
 
-- **`StartBody`** — zod schema for the start request (validates URL, path, agent count 1–8, rounds 1–10).
+- **`StartBody`** — zod schema for the start request (validates URL, path, agent count 1–8, rounds 1–100).
 - **`SayBody`** — zod schema for the inject-message request.
 - **`swarmRouter(orch)`** — returns an Express router wiring `/status`, `/start`, `/stop`, `/say` against the given `Orchestrator`.
 

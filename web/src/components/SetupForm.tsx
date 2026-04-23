@@ -250,7 +250,7 @@ export function SetupForm() {
             <input
               type="number"
               min={1}
-              max={10}
+              max={100}
               value={rounds}
               onChange={(e) => setRounds(Number(e.target.value))}
               className="input"

@@ -14,7 +14,14 @@ const StartBody = z.object({
   parentPath: z.string().min(1),
   agentCount: z.number().int().min(1).max(8),
   model: z.string().optional(),
-  rounds: z.number().int().min(1).max(10).optional(),
+  // Bumped 2026-04-22 from .max(10) → .max(100). For blackboard, rounds
+  // = max auditor invocations; the 20min wall-clock / 20 commits / 30
+  // todos hard caps still bound runtime so a high `rounds` just removes
+  // a tertiary cap. For non-blackboard presets, rounds maps to actual
+  // work — rounds=100 with 6 agents on a serial preset (round-robin /
+  // role-diff / debate-judge / stigmergy) can mean hours of wall-clock
+  // and proportional cloud-token spend. Use accordingly.
+  rounds: z.number().int().min(1).max(100).optional(),
   preset: z
     .enum([
       "round-robin",
