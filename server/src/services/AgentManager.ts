@@ -2,7 +2,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { config, basicAuthHeader } from "../config.js";
 import { PortAllocator } from "./PortAllocator.js";
-import { treeKill } from "./treeKill.js";
+import { treeKill, isProcessAlive } from "./treeKill.js";
+import { AgentPidTracker } from "./agentPids.js";
 import type { AgentState, SwarmEvent } from "../types.js";
 
 type Client = ReturnType<typeof createOpencodeClient>;
@@ -65,6 +66,12 @@ export class AgentManager {
   // shows the terminal status until killAll() clears.
   private readonly agentStates = new Map<string, AgentState>();
   private orchestratorClient?: Client;
+  // Unit 38: persistent PID tracking for orphan reclamation across
+  // dev-server restarts. When present, AgentManager appends a record
+  // per successful spawn and removes it on clean exit / killAll. When
+  // absent (older callers / tests), PID tracking is a no-op — the
+  // manager still works, orphans just don't get reclaimed.
+  private readonly pidTracker?: AgentPidTracker;
 
   constructor(
     private readonly onState: (s: AgentState) => void,
@@ -73,7 +80,10 @@ export class AgentManager {
     // DO want in logs/current.jsonl (opencode stdout/stderr, raw SSE events).
     // Separate from onEvent to keep SwarmEvent honestly typed.
     private readonly logDiag: (record: unknown) => void = () => {},
-  ) {}
+    pidTracker?: AgentPidTracker,
+  ) {
+    this.pidTracker = pidTracker;
+  }
 
   getLastActivity(sessionId: string): number | undefined {
     return this.lastActivity.get(sessionId);
@@ -165,6 +175,12 @@ export class AgentManager {
       child.stdout?.on("data", teeLine("stdout"));
       child.stderr?.on("data", teeLine("stderr"));
       child.on("exit", (code) => {
+        // Unit 38: child is dead; remove from PID log so startup
+        // orphan-reclamation doesn't try to kill an already-dead pid
+        // on the next restart. Fire-and-forget (best-effort).
+        if (child?.pid !== undefined) {
+          void this.pidTracker?.remove(child.pid);
+        }
         if (this.agents.has(id)) {
           this.setAgentState({ ...stateBase, status: "stopped", error: `exited with code ${code}` });
           this.agents.delete(id);
@@ -183,6 +199,18 @@ export class AgentManager {
       const agent: Agent = { id, index: opts.index, port, sessionId, client, child, model: opts.model };
       this.agents.set(id, agent);
       this.touchActivity(sessionId);
+      // Unit 38: record this PID so the next dev-server startup can
+      // reclaim it if this process or the current server dies without
+      // a clean killAll. Only records AFTER session.create succeeded —
+      // don't track subprocesses that failed to come up fully.
+      if (child?.pid !== undefined) {
+        void this.pidTracker?.add({
+          spawnedAt: Date.now(),
+          pid: child.pid,
+          port,
+          cwd: opts.cwd,
+        });
+      }
       this.startEventStream(agent);
       // Unit 17: warm the cloud shard before the runner sees this agent
       // as ready. If warmup fails (e.g. headers timeout on a stubborn
@@ -280,6 +308,23 @@ export class AgentManager {
         // ignore
       }
       treeKill(a.child);
+      // Unit 38: verified kill with escalation. treeKill fires taskkill
+      // but doesn't wait — on Windows, nested child processes can
+      // survive if the tree walk misses them. Poll isProcessAlive for
+      // up to 5 s; if still alive, fire treeKill again. Gives up
+      // silently after the poll deadline — the PID-log-based orphan
+      // sweep on next startup is the safety net.
+      const pid = a.child?.pid;
+      if (pid !== undefined) {
+        for (let i = 0; i < 5; i++) {
+          await new Promise((r) => setTimeout(r, 300));
+          if (!isProcessAlive(pid)) break;
+          if (i === 2) treeKill(a.child); // one retry at 0.9 s mark
+        }
+        // Clear from persistent PID log regardless — if it's still
+        // alive after the poll, the next startup sweep will catch it.
+        void this.pidTracker?.remove(pid);
+      }
       this.ports.release(a.port);
       this.lastActivity.delete(a.sessionId);
       this.setAgentState({ id: a.id, index: a.index, port: a.port, sessionId: a.sessionId, status: "stopped" });

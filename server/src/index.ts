@@ -12,6 +12,8 @@ configureHttpDispatcher();
 
 import { config } from "./config.js";
 import { AgentManager } from "./services/AgentManager.js";
+import { AgentPidTracker } from "./services/agentPids.js";
+import { reclaimOrphans } from "./services/reclaimOrphans.js";
 import { RepoService } from "./services/RepoService.js";
 import { Orchestrator } from "./services/Orchestrator.js";
 import { Broadcaster } from "./ws/broadcast.js";
@@ -31,12 +33,19 @@ const wss = new WebSocketServer({ server, path: "/ws" });
 const eventLogger = createEventLogger({ logDir: path.join(repoRoot, "logs") });
 const broadcaster = new Broadcaster(eventLogger);
 
+// Unit 38: shared PID tracker for orphan reclamation across dev-server
+// restarts. Writes to `<repoRoot>/logs/agent-pids.log`. AgentManager
+// appends per spawn + removes per clean exit; reclaimOrphans (below)
+// reads it on startup to kill untracked live PIDs from previous runs.
+const pidTracker = new AgentPidTracker(repoRoot);
+
 const manager = new AgentManager(
   (s) => broadcaster.broadcast({ type: "agent_state", agent: s }),
   (e) => broadcaster.broadcast(e),
   // Diagnostic-only sink: opencode stdout/stderr + raw SSE envelope records
   // go straight to the JSONL log without hitting the WS stream.
   (rec) => eventLogger.log(rec),
+  pidTracker,
 );
 const repos = new RepoService();
 const orchestrator = new Orchestrator({
@@ -100,10 +109,30 @@ process.on("uncaughtException", (err) => {
   broadcaster.broadcast({ type: "error", message: `uncaughtException: ${err.message}` });
 });
 
-server.listen(config.SERVER_PORT, () => {
-  console.log(`ollama_swarm server listening on http://127.0.0.1:${config.SERVER_PORT}`);
-  console.log(`  orchestrator opencode: ${config.OPENCODE_BASE_URL}`);
-  console.log(`  ollama: ${config.OLLAMA_BASE_URL}`);
-  console.log(`  default model: ${config.DEFAULT_MODEL}`);
-  console.log(`  event log: ${eventLogger.path}`);
-});
+// Unit 38: reclaim orphaned opencode subprocesses from prior server
+// instances BEFORE we start accepting swarm-start requests. This
+// prevents the PortAllocator from handing out a port that a zombie
+// process still holds, and bounds cumulative resource leak across
+// dev-server restarts. Await so listen doesn't race the kill.
+void reclaimOrphans(repoRoot)
+  .then((result) => {
+    if (result.scanned === 0) {
+      console.log("  orphan reclamation: none in log, clean start");
+    } else {
+      console.log(
+        `  orphan reclamation: ${result.alive}/${result.scanned} PIDs were still alive, killed ${result.killed}`,
+      );
+    }
+  })
+  .catch((err) => {
+    console.error("  orphan reclamation failed (non-fatal):", err);
+  })
+  .finally(() => {
+    server.listen(config.SERVER_PORT, () => {
+      console.log(`ollama_swarm server listening on http://127.0.0.1:${config.SERVER_PORT}`);
+      console.log(`  orchestrator opencode: ${config.OPENCODE_BASE_URL}`);
+      console.log(`  ollama: ${config.OLLAMA_BASE_URL}`);
+      console.log(`  default model: ${config.DEFAULT_MODEL}`);
+      console.log(`  event log: ${eventLogger.path}`);
+    });
+  });
