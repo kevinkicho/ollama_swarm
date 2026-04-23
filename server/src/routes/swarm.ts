@@ -55,6 +55,10 @@ const StartBody = z.object({
   roles: z.array(SwarmRoleSchema).min(1).max(16).optional(),
   councilContract: z.boolean().optional(),
   proposition: z.string().trim().max(2000).optional(),
+  // Unit 34: per-run ambition ratchet cap. 0 = explicitly disabled; 1-20
+  // enables with that many tiers max. Absent = inherit from env.
+  // Blackboard-only.
+  ambitionTiers: z.number().int().min(0).max(20).optional(),
 });
 
 const SayBody = z.object({ text: z.string().min(1) });
@@ -105,6 +109,7 @@ export function swarmRouter(orch: Orchestrator): Router {
           parsed.data.proposition && parsed.data.proposition.length > 0
             ? parsed.data.proposition
             : undefined,
+        ambitionTiers: parsed.data.ambitionTiers,
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {

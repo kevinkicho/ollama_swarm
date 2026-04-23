@@ -320,6 +320,123 @@ export function buildCouncilContractMergePrompt(
   ].join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// Unit 34: ambition-ratchet tier-up prompt.
+//
+// When a blackboard run would naturally terminate on "all contract criteria
+// satisfied", the ratchet instead asks the planner for a TIER N+1 contract:
+// more ambitious than tier N, built on top of the committed state, not a
+// revision or duplicate of prior work. Re-uses the same JSON envelope shape
+// as the first-pass contract so parseFirstPassContractResponse just works.
+//
+// The prior contract is shown with per-criterion verdicts (all "met" by
+// definition at ratchet time) so the planner knows what's ALREADY done. The
+// committed-files list shows where the real work landed. The tier number is
+// explicit so the planner can calibrate ambition.
+// ---------------------------------------------------------------------------
+
+export interface TierUpSeedCriterion {
+  id: string;
+  description: string;
+  status: "met" | "wont-do" | "unmet";
+  rationale?: string;
+  expectedFiles: string[];
+}
+
+export interface TierUpSeedInput {
+  /** 1-based tier number being produced. Tier 1 is the first-pass contract;
+   *  this prompt is called when producing tier 2 or higher. */
+  nextTier: number;
+  /** Hard cap on tiers for this run (env or per-run config). Shown to the
+   *  planner so it knows how many climbs remain. */
+  maxTiers: number;
+  /** Mission statement of the just-completed tier. */
+  priorMissionStatement: string;
+  /** All criteria from the just-completed tier with final verdicts. At
+   *  ratchet time, these are expected to be "met" / "wont-do". */
+  priorCriteria: readonly TierUpSeedCriterion[];
+  /** Files the swarm has committed to across ALL tiers so far. Shown so the
+   *  planner doesn't propose the same file changes again. */
+  committedFiles: readonly string[];
+  /** PlannerSeed's REPO FILE LIST — same grounding material the first-pass
+   *  contract uses for path validation. */
+  repoFiles: readonly string[];
+  /** PlannerSeed's README excerpt. */
+  readmeExcerpt: string | null;
+  /** User directive (Unit 25) — still authoritative at every tier. */
+  userDirective?: string;
+}
+
+export function buildTierUpPrompt(seed: TierUpSeedInput): string {
+  const priorBlock = seed.priorCriteria
+    .map((c) => {
+      const files =
+        c.expectedFiles.length > 0 ? c.expectedFiles.join(", ") : "(none)";
+      const rationale = c.rationale ? ` — ${c.rationale}` : "";
+      return `  - [${c.id}] (${c.status}) ${c.description} [files: ${files}]${rationale}`;
+    })
+    .join("\n");
+
+  const committedList =
+    seed.committedFiles.length > 0
+      ? seed.committedFiles.slice(0, 80).join("\n")
+      : "(no commits yet — should be rare at ratchet time)";
+
+  const fileList =
+    seed.repoFiles.length > 0 ? seed.repoFiles.join("\n") : "(no files listed)";
+  const readme = seed.readmeExcerpt
+    ? seed.readmeExcerpt.slice(0, 2000)
+    : "(no README found at repo root)";
+
+  const directive = seed.userDirective?.trim();
+  const directiveBlock = directive
+    ? [
+        "=== USER DIRECTIVE (AUTHORITATIVE — applies at every tier) ===",
+        directive,
+        "=== end USER DIRECTIVE ===",
+        "",
+      ]
+    : [];
+
+  return [
+    ...directiveBlock,
+    `You are the PLANNER. Tier ${seed.nextTier - 1} of this run is complete — every criterion is now met (or marked wont-do with a valid reason). You are now producing the TIER ${seed.nextTier} contract for this run (of at most ${seed.maxTiers} tiers).`,
+    "",
+    "Your task: produce a JSON contract for the NEXT tier of ambition. Tier N+1 must be MATERIALLY MORE AMBITIOUS than tier N — broader scope, deeper feature work, or capability the prior tier didn't touch.",
+    "",
+    `=== PRIOR TIER (${seed.nextTier - 1}) CONTRACT + VERDICTS ===`,
+    `missionStatement: ${seed.priorMissionStatement}`,
+    "criteria:",
+    priorBlock.length > 0 ? priorBlock : "  (none)",
+    `=== end PRIOR TIER ${seed.nextTier - 1} ===`,
+    "",
+    "=== FILES COMMITTED ACROSS PRIOR TIERS ===",
+    committedList,
+    "=== end committed files ===",
+    "",
+    "=== REPO FILE LIST (for grounding expectedFiles) ===",
+    fileList,
+    "=== end REPO FILE LIST ===",
+    "",
+    "=== README excerpt (first 2000 chars) ===",
+    readme,
+    "=== end README ===",
+    "",
+    "TIER-UP RULES:",
+    "1. Output ONLY a single JSON object of shape {\"missionStatement\": string, \"criteria\": [...]}. No prose. No fences.",
+    "2. Every criterion must EXTEND the prior work, not revise or duplicate it. Do NOT propose changes to files the prior tier already satisfactorily modified unless the change is a substantive extension (not a rename, not a split, not more-tests-of-the-same-thing).",
+    "3. Ambition must rise. Tier 1 might have been polish + docs; tier 2 should add real feature work or structural changes; tier 3 should add capabilities the project's README implies but doesn't deliver; tier 4+ should propose novel additions (research-informed pipelines, integrations, new user-facing flows).",
+    "4. Maximum 20 criteria. Prefer 4–10 specific, outcome-framed criteria per tier.",
+    "5. `expectedFiles` entries are FILE paths, never directories. Prefer paths grounded in the REPO FILE LIST; when unsure, emit `[]`.",
+    "6. Anti-busywork guardrail: do NOT emit criteria like 'add more tests' or 'refactor for readability' without a concrete OUTCOME naming what the tests verify or what the refactor enables.",
+    directive
+      ? "7. The USER DIRECTIVE above is AUTHORITATIVE at every tier — this tier's criteria must continue to address it while raising the ambition bar."
+      : "7. No user directive this run — choose the next tier's scope based on the project's own trajectory.",
+    "",
+    "Output the tier contract JSON object now.",
+  ].join("\n");
+}
+
 export function buildFirstPassContractRepairPrompt(
   previousResponse: string,
   parseError: string,

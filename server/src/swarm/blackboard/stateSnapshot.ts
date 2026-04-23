@@ -37,6 +37,21 @@ export interface StateSnapshotAgentRosterEntry {
   agentIndex: number;
 }
 
+// Unit 34: per-tier stats captured by the ambition ratchet. Included in
+// the state snapshot so mid-run observers + crash-forensics see the
+// tier progression, and echoed into the summary at termination.
+export interface StateSnapshotTierEntry {
+  tier: number;
+  missionStatement: string;
+  criteriaTotal: number;
+  criteriaMet: number;
+  criteriaWontDo: number;
+  criteriaUnmet: number;
+  wallClockMs: number;
+  startedAt: number;
+  endedAt: number;
+}
+
 export interface BlackboardStateSnapshotInput {
   writtenAt: number;
   phase: SwarmPhase;
@@ -57,6 +72,11 @@ export interface BlackboardStateSnapshotInput {
   agentRoster: StateSnapshotAgentRosterEntry[];
   terminationReason?: string;
   completionDetail?: string;
+  // Unit 34: ambition-ratchet state. Absent for pre-Unit-34 snapshots;
+  // present (even if tierHistory is empty) for all Unit-34+ runs.
+  currentTier?: number;
+  tiersCompleted?: number;
+  tierHistory?: StateSnapshotTierEntry[];
 }
 
 export interface BlackboardStateSnapshot extends BlackboardStateSnapshotInput {

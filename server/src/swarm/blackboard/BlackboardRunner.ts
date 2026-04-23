@@ -41,6 +41,7 @@ import {
   buildCouncilContractMergePrompt,
   buildFirstPassContractRepairPrompt,
   buildFirstPassContractUserPrompt,
+  buildTierUpPrompt,
   type CouncilContractDraft,
   FIRST_PASS_CONTRACT_SYSTEM_PROMPT,
   parseFirstPassContractResponse,
@@ -181,6 +182,29 @@ export class BlackboardRunner implements SwarmRunner {
   private stateWriteTimer?: NodeJS.Timeout;
   private stateWriteInFlight = false;
   private stateWriteAgain = false;
+  // Unit 34: ambition ratchet. currentTier starts at 1 once the first
+  // contract is installed; tiersCompleted bumps every time a tier's
+  // criteria all resolve AND the ratchet fires; tierHistory captures a
+  // per-tier summary for cross-run analysis. tierStartedAt is reset on
+  // every successful promotion so each tier has its own wall-clock
+  // delta. tierUpFailures guards against an infinite failed-ratchet
+  // loop — after 3 consecutive parse failures we bail to the normal
+  // termination path.
+  private currentTier = 0;
+  private tiersCompleted = 0;
+  private tierHistory: Array<{
+    tier: number;
+    missionStatement: string;
+    criteriaTotal: number;
+    criteriaMet: number;
+    criteriaWontDo: number;
+    criteriaUnmet: number;
+    wallClockMs: number;
+    startedAt: number;
+    endedAt: number;
+  }> = [];
+  private tierStartedAt?: number;
+  private tierUpFailures = 0;
 
   constructor(private readonly opts: RunnerOpts) {
     this.boardBroadcaster = createBoardBroadcaster(this.opts.emit);
@@ -249,6 +273,12 @@ export class BlackboardRunner implements SwarmRunner {
     this.contract = undefined;
     this.auditInvocations = 0;
     this.completionDetail = undefined;
+    // Unit 34: reset tier state on every start.
+    this.currentTier = 0;
+    this.tiersCompleted = 0;
+    this.tierHistory = [];
+    this.tierStartedAt = undefined;
+    this.tierUpFailures = 0;
     this.active = cfg;
 
     this.setPhase("cloning");
@@ -672,6 +702,9 @@ export class BlackboardRunner implements SwarmRunner {
     };
 
     this.contract = this.buildContract(groundedContract);
+    // Unit 34: first-pass contract installation → tier 1.
+    this.currentTier = 1;
+    this.tierStartedAt = Date.now();
     this.opts.emit({ type: "contract_updated", contract: this.cloneContract(this.contract) });
     // Unit 31: the contract is load-bearing state; make sure the very next
     // observer read sees it even if no board event follows for a while.
@@ -679,11 +712,11 @@ export class BlackboardRunner implements SwarmRunner {
 
     if (this.contract.criteria.length === 0) {
       this.appendSystem(
-        `Contract: "${this.contract.missionStatement}" (0 criteria — planner found nothing to commit to).`,
+        `Contract (tier 1): "${this.contract.missionStatement}" (0 criteria — planner found nothing to commit to).`,
       );
     } else {
       this.appendSystem(
-        `Contract: "${this.contract.missionStatement}" (${this.contract.criteria.length} criteria).`,
+        `Contract (tier 1): "${this.contract.missionStatement}" (${this.contract.criteria.length} criteria).`,
       );
     }
   }
@@ -842,7 +875,41 @@ export class BlackboardRunner implements SwarmRunner {
       if (!this.contract || this.contract.criteria.length === 0) return;
 
       if (this.allCriteriaResolved()) {
-        this.completionDetail = "all contract criteria satisfied";
+        // Unit 34: intercept the natural "all met" termination. If the
+        // ratchet is enabled AND we haven't hit max tiers AND the
+        // tier-up prompt hasn't failed too many times in a row, climb
+        // to tier N+1 instead of terminating. If the ratchet is off or
+        // any guard trips, fall through to the normal termination
+        // path (completionDetail below).
+        const maxTiers = this.resolvedMaxTiers();
+        if (
+          maxTiers > 1 &&
+          this.currentTier < maxTiers &&
+          this.tierUpFailures < 3 &&
+          !this.stopping
+        ) {
+          this.recordTierCompletion();
+          const promoted = await this.tryPromoteNextTier(planner, maxTiers);
+          if (this.stopping) return;
+          if (promoted) {
+            // New tier installed; auditor's criteria are fresh "unmet"
+            // and runWorkers will pick up the new todos on the next
+            // loop iteration. Continue without returning.
+            continue;
+          }
+          // Promotion failed — fall through to normal completion.
+          this.completionDetail =
+            "all tier criteria satisfied; tier-up failed after retries — ending run.";
+          this.appendSystem(this.completionDetail);
+          return;
+        }
+        // Ratchet disabled / max tiers reached / too many failures —
+        // record the final tier's stats, then terminate as before.
+        this.recordTierCompletion();
+        this.completionDetail =
+          this.currentTier > 1
+            ? `all tier ${this.currentTier} criteria satisfied; ratchet cap reached (${maxTiers} tier${maxTiers === 1 ? "" : "s"}).`
+            : "all contract criteria satisfied";
         this.appendSystem("All contract criteria resolved. Stopping.");
         return;
       }
@@ -875,6 +942,220 @@ export class BlackboardRunner implements SwarmRunner {
   private allCriteriaResolved(): boolean {
     if (!this.contract) return true;
     return this.contract.criteria.every((c) => c.status !== "unmet");
+  }
+
+  // Unit 34: resolve the effective tier cap for this run.
+  //
+  //   - `cfg.ambitionTiers === 0` → ratchet explicitly disabled (max = 1,
+  //     meaning "stop at tier 1" = today's behavior).
+  //   - `cfg.ambitionTiers >= 1` → that value, regardless of env flag.
+  //   - Otherwise, check env: AMBITION_RATCHET_ENABLED=true →
+  //     AMBITION_RATCHET_MAX_TIERS; AMBITION_RATCHET_ENABLED=false → 1.
+  //
+  // Capped at 20 by the route schema; also capped by the env's
+  // max-tier value when inheriting.
+  private resolvedMaxTiers(): number {
+    const perRun = this.active?.ambitionTiers;
+    if (perRun !== undefined) {
+      return Math.max(1, perRun);
+    }
+    if (!config.AMBITION_RATCHET_ENABLED) return 1;
+    return config.AMBITION_RATCHET_MAX_TIERS;
+  }
+
+  // Unit 34: capture the just-completed tier's stats. Called when all
+  // criteria for the CURRENT tier are resolved — either right before a
+  // tier promotion or right before final termination. Push stats to
+  // tierHistory; the summary + state snapshot include this array so
+  // cross-run analysis can see the per-tier breakdown.
+  //
+  // The "current tier's criteria" are the tail slice of this.contract.criteria
+  // whose addedAt matches the current tier's startedAt — since buildContract /
+  // appendTierCriteria stamp each batch with the tier's start time, a group-by
+  // on addedAt recovers the per-tier subset.
+  private recordTierCompletion(): void {
+    if (!this.contract || this.currentTier < 1) return;
+    const now = Date.now();
+    const startedAt = this.tierStartedAt ?? now;
+    // The current tier's criteria are the ones whose addedAt is >= this
+    // tier's startedAt (tier N criteria are stamped with tierStartedAt
+    // when promoted; tier 1's are stamped at buildContract time just
+    // after tierStartedAt was set).
+    const tierCriteria = this.contract.criteria.filter(
+      (c) => c.addedAt >= startedAt,
+    );
+    const met = tierCriteria.filter((c) => c.status === "met").length;
+    const wontDo = tierCriteria.filter((c) => c.status === "wont-do").length;
+    const unmet = tierCriteria.filter((c) => c.status === "unmet").length;
+    this.tierHistory.push({
+      tier: this.currentTier,
+      missionStatement: this.contract.missionStatement,
+      criteriaTotal: tierCriteria.length,
+      criteriaMet: met,
+      criteriaWontDo: wontDo,
+      criteriaUnmet: unmet,
+      wallClockMs: Math.max(0, now - startedAt),
+      startedAt,
+      endedAt: now,
+    });
+    this.tiersCompleted += 1;
+  }
+
+  // Unit 34: attempt to promote tier N → tier N+1 via a planner prompt.
+  // Returns true if a new tier contract was installed; false otherwise
+  // (parse failure, zero valid criteria, or user stop mid-prompt).
+  //
+  // Preserves prior-tier criteria in this.contract.criteria (they stay
+  // "met"/"wont-do" for the summary record) and appends the new tier's
+  // criteria with continuing IDs (tier 1 = c1-c5; tier 2 = c6-cN; etc.).
+  // The missionStatement is replaced with the new tier's so the UI and
+  // downstream prompts frame work by the current ambition level.
+  private async tryPromoteNextTier(
+    planner: Agent,
+    maxTiers: number,
+  ): Promise<boolean> {
+    if (!this.contract || !this.active) return false;
+    const nextTier = this.currentTier + 1;
+    this.appendSystem(
+      `Ambition ratchet: all tier ${this.currentTier} criteria resolved; attempting tier ${nextTier} (max ${maxTiers}).`,
+    );
+
+    // Gather committed files across all tiers so the planner doesn't
+    // propose duplicating prior work.
+    const committed = this.board.listTodos().filter((t) => t.status === "committed");
+    const committedFiles = Array.from(
+      new Set(committed.flatMap((t) => t.expectedFiles)),
+    );
+
+    const priorCriteria = this.contract.criteria.map((c) => ({
+      id: c.id,
+      description: c.description,
+      status: c.status,
+      rationale: c.rationale,
+      expectedFiles: [...c.expectedFiles],
+    }));
+
+    // We need the latest PlannerSeed-style inputs (REPO FILE LIST, README,
+    // user directive). Rebuild from the active cfg — cheap and the
+    // directive is carried on the run config.
+    const clone = this.active.localPath;
+    const readmeExcerpt = await this.opts.repos.readReadme(clone).catch(() => null);
+    const repoFiles = await this.opts.repos.listRepoFiles(clone, { maxFiles: 150 }).catch(() => [] as string[]);
+
+    const prompt = buildTierUpPrompt({
+      nextTier,
+      maxTiers,
+      priorMissionStatement: this.contract.missionStatement,
+      priorCriteria,
+      committedFiles,
+      repoFiles,
+      readmeExcerpt,
+      userDirective: this.active.userDirective,
+    });
+
+    const { response, agentUsed } = await this.promptPlannerWithFallback(
+      planner,
+      prompt,
+    );
+    if (this.stopping) return false;
+    this.appendAgent(agentUsed, response);
+
+    let parsed = parseFirstPassContractResponse(response);
+    if (!parsed.ok) {
+      this.appendSystem(
+        `Tier ${nextTier} response did not parse (${parsed.reason}). Issuing repair prompt.`,
+      );
+      const { response: repairResponse, agentUsed: repairAgent } =
+        await this.promptPlannerWithFallback(
+          agentUsed,
+          `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractRepairPrompt(
+            response,
+            parsed.reason,
+          )}`,
+        );
+      if (this.stopping) return false;
+      this.appendAgent(repairAgent, repairResponse);
+      parsed = parseFirstPassContractResponse(repairResponse);
+      if (!parsed.ok) {
+        this.tierUpFailures += 1;
+        this.appendSystem(
+          `Tier ${nextTier} still invalid after repair (${parsed.reason}). Ratchet failure ${this.tierUpFailures}/3.`,
+        );
+        return false;
+      }
+    }
+    if (parsed.contract.criteria.length === 0) {
+      this.tierUpFailures += 1;
+      this.appendSystem(
+        `Tier ${nextTier} produced 0 criteria — planner saw nothing left to do. Ratchet failure ${this.tierUpFailures}/3.`,
+      );
+      return false;
+    }
+
+    // Reset the failure counter on successful parse — we only count
+    // CONSECUTIVE failures.
+    this.tierUpFailures = 0;
+
+    // Ground paths (Unit 6b). Same as the first-pass pass.
+    const priorMaxId = this.largestCriterionIdNumber();
+    const tierStartedAt = Date.now();
+    const appendedCriteria = parsed.contract.criteria.map((c, idx) => {
+      const { accepted, rejected } = classifyExpectedFiles(c.expectedFiles, repoFiles);
+      for (const r of rejected) {
+        this.board.postFinding({
+          agentId: planner.id,
+          text: `Tier ${nextTier} c${priorMaxId + idx + 1}: stripped suspicious path '${r.path}' (${r.reason}).`,
+          createdAt: Date.now(),
+        });
+      }
+      if (rejected.length > 0) {
+        this.appendSystem(
+          `Tier ${nextTier} c${priorMaxId + idx + 1}: ${rejected.length}/${c.expectedFiles.length} path(s) stripped as unbindable.`,
+        );
+      }
+      return {
+        id: `c${priorMaxId + idx + 1}`,
+        description: c.description,
+        expectedFiles: accepted,
+        status: "unmet" as const,
+        addedAt: tierStartedAt,
+      };
+    });
+
+    // Install the new tier on top of prior criteria.
+    this.contract = {
+      missionStatement: parsed.contract.missionStatement,
+      criteria: [...this.contract.criteria, ...appendedCriteria],
+    };
+    this.currentTier = nextTier;
+    this.tierStartedAt = tierStartedAt;
+    this.opts.emit({
+      type: "contract_updated",
+      contract: this.cloneContract(this.contract),
+    });
+    this.scheduleStateWrite();
+    this.appendSystem(
+      `Contract (tier ${nextTier}): "${this.contract.missionStatement}" (+${appendedCriteria.length} new criteria, ${this.contract.criteria.length} total).`,
+    );
+    return true;
+  }
+
+  // Unit 34: highest numeric suffix across current criterion IDs, for ID
+  // continuation on tier promotion. Criteria are IDed c1, c2, c3, ... so
+  // the number is the part after 'c'. Returns 0 if no criteria exist or
+  // none parse (shouldn't happen at ratchet time — we just saw a full
+  // tier complete).
+  private largestCriterionIdNumber(): number {
+    if (!this.contract) return 0;
+    let max = 0;
+    for (const c of this.contract.criteria) {
+      const m = /^c(\d+)$/.exec(c.id);
+      if (m) {
+        const n = Number.parseInt(m[1], 10);
+        if (n > max) max = n;
+      }
+    }
+    return max;
   }
 
   // Unit 11: the drain-audit-repeat loop's backstop. Reads from cfg.rounds so
@@ -1596,6 +1877,12 @@ export class BlackboardRunner implements SwarmRunner {
       finalGitStatus: gitStatus.porcelain,
       agents: agentStats,
       contract: this.contract ? this.cloneContract(this.contract) : undefined,
+      // Unit 34: ambition-ratchet output. Passed through unconditionally
+      // when a tier was ever installed; `undefined` on the pre-contract
+      // drain-exit path (which never even reached tier 1).
+      maxTierReached: this.currentTier > 0 ? this.currentTier : undefined,
+      tiersCompleted: this.currentTier > 0 ? this.tiersCompleted : undefined,
+      tierHistory: this.tierHistory.length > 0 ? this.tierHistory.slice() : undefined,
     });
 
     const outPath = path.join(clone, "summary.json");
@@ -1729,6 +2016,11 @@ export class BlackboardRunner implements SwarmRunner {
         })),
         terminationReason: this.terminationReason,
         completionDetail: this.completionDetail,
+        // Unit 34: tier state. currentTier is 0 before the first contract
+        // lands, 1+ after. tierHistory grows one entry per completed tier.
+        currentTier: this.currentTier > 0 ? this.currentTier : undefined,
+        tiersCompleted: this.tiersCompleted,
+        tierHistory: this.tierHistory.length > 0 ? this.tierHistory.slice() : undefined,
       });
       const outPath = path.join(clone, "blackboard-state.json");
       await writeFileAtomic(outPath, JSON.stringify(snapshot, null, 2));

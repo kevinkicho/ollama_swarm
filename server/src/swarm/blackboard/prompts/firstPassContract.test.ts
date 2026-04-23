@@ -4,9 +4,11 @@ import {
   buildCouncilContractMergePrompt,
   buildFirstPassContractRepairPrompt,
   buildFirstPassContractUserPrompt,
+  buildTierUpPrompt,
   type CouncilContractDraft,
   FIRST_PASS_CONTRACT_SYSTEM_PROMPT,
   parseFirstPassContractResponse,
+  type TierUpSeedInput,
 } from "./firstPassContract.js";
 import type { PlannerSeed } from "./planner.js";
 
@@ -351,5 +353,141 @@ describe("buildCouncilContractMergePrompt", () => {
     const p = buildCouncilContractMergePrompt(seed(), drafts);
     assert.match(p, /No prose/);
     assert.match(p, /no fences/);
+  });
+});
+
+// Unit 34: ambition-ratchet tier-up prompt.
+describe("buildTierUpPrompt", () => {
+  function tierSeed(overrides: Partial<TierUpSeedInput> = {}): TierUpSeedInput {
+    return {
+      nextTier: 2,
+      maxTiers: 5,
+      priorMissionStatement: "Document the public API.",
+      priorCriteria: [
+        {
+          id: "c1",
+          description: "README has Quick Start",
+          status: "met",
+          expectedFiles: ["README.md"],
+          rationale: "README contains usage section.",
+        },
+        {
+          id: "c2",
+          description: "Add LICENSE",
+          status: "met",
+          expectedFiles: ["LICENSE"],
+        },
+      ],
+      committedFiles: ["README.md", "LICENSE"],
+      repoFiles: ["README.md", "LICENSE", "src/index.ts"],
+      readmeExcerpt: "# proj\n\nA library.",
+      ...overrides,
+    };
+  }
+
+  it("frames the next tier with its number and the max tiers", () => {
+    const p = buildTierUpPrompt(tierSeed({ nextTier: 3, maxTiers: 7 }));
+    assert.match(p, /Tier 2 of this run is complete/);
+    assert.match(p, /TIER 3 contract/);
+    assert.match(p, /at most 7 tiers/);
+  });
+
+  it("shows every prior criterion with its status + description", () => {
+    const p = buildTierUpPrompt(tierSeed());
+    assert.match(p, /\[c1\] \(met\) README has Quick Start/);
+    assert.match(p, /\[c2\] \(met\) Add LICENSE/);
+  });
+
+  it("includes prior-tier rationale when present", () => {
+    const p = buildTierUpPrompt(tierSeed());
+    assert.match(p, /README contains usage section\./);
+  });
+
+  it("lists committed files under their own section", () => {
+    const p = buildTierUpPrompt(tierSeed());
+    assert.match(p, /FILES COMMITTED ACROSS PRIOR TIERS/);
+    assert.match(p, /\nREADME\.md\n/);
+    assert.match(p, /\nLICENSE\n/);
+  });
+
+  it("includes REPO FILE LIST for expectedFiles grounding", () => {
+    const p = buildTierUpPrompt(tierSeed());
+    assert.match(p, /REPO FILE LIST/);
+    assert.match(p, /\nsrc\/index\.ts\n/);
+  });
+
+  it("states the ambition-must-rise + anti-busywork rules explicitly", () => {
+    const p = buildTierUpPrompt(tierSeed());
+    assert.match(p, /Ambition must rise/);
+    assert.match(p, /Anti-busywork/);
+    assert.match(p, /EXTEND the prior work, not revise or duplicate it/);
+  });
+
+  it("caps at 20 criteria and prefers 4-10 per tier", () => {
+    const p = buildTierUpPrompt(tierSeed());
+    assert.match(p, /Maximum 20 criteria/);
+    assert.match(p, /Prefer 4.{1,3}10/);
+  });
+
+  it("INCLUDES the USER DIRECTIVE block when a directive is present", () => {
+    const p = buildTierUpPrompt(
+      tierSeed({ userDirective: "Make this README-driven." }),
+    );
+    assert.match(p, /USER DIRECTIVE \(AUTHORITATIVE/);
+    assert.match(p, /applies at every tier/);
+    assert.match(p, /Make this README-driven\./);
+    // The directive-specific rule is visible in the tier-specific form.
+    assert.match(p, /AUTHORITATIVE at every tier/);
+  });
+
+  it("OMITS the USER DIRECTIVE block when directive is absent", () => {
+    const p = buildTierUpPrompt(tierSeed({ userDirective: undefined }));
+    assert.ok(!p.includes("USER DIRECTIVE"));
+    assert.match(p, /No user directive this run/);
+  });
+
+  it("OMITS the USER DIRECTIVE block when directive is whitespace-only", () => {
+    const p = buildTierUpPrompt(tierSeed({ userDirective: "   " }));
+    assert.ok(!p.includes("USER DIRECTIVE"));
+  });
+
+  it("falls back gracefully when repoFiles is empty", () => {
+    const p = buildTierUpPrompt(tierSeed({ repoFiles: [] }));
+    assert.match(p, /REPO FILE LIST/);
+    assert.match(p, /no files listed/);
+  });
+
+  it("falls back gracefully when readmeExcerpt is null", () => {
+    const p = buildTierUpPrompt(tierSeed({ readmeExcerpt: null }));
+    assert.match(p, /no README found at repo root/);
+  });
+
+  it("falls back gracefully when committedFiles is empty", () => {
+    const p = buildTierUpPrompt(tierSeed({ committedFiles: [] }));
+    assert.match(p, /no commits yet/);
+  });
+
+  it("caps committed-file list at 80 entries so a huge run doesn't blow the prompt", () => {
+    const many = Array.from({ length: 120 }, (_, i) => `src/gen/file${i}.ts`);
+    const p = buildTierUpPrompt(tierSeed({ committedFiles: many }));
+    // First 80 included, past 80 excluded.
+    assert.ok(p.includes("src/gen/file0.ts"));
+    assert.ok(p.includes("src/gen/file79.ts"));
+    assert.ok(!p.includes("src/gen/file100.ts"));
+  });
+
+  it("instructs to output ONLY a JSON object with the shared envelope shape", () => {
+    const p = buildTierUpPrompt(tierSeed());
+    assert.match(p, /No prose/);
+    assert.match(p, /No fences/);
+    assert.match(p, /missionStatement.*criteria/);
+  });
+
+  it("is parseable by parseFirstPassContractResponse when the model returns a valid envelope", () => {
+    // Not a structural test — just a reminder that the tier-up prompt
+    // expects the SAME envelope shape as the first-pass contract, so
+    // the same parser works end-to-end.
+    const p = buildTierUpPrompt(tierSeed());
+    assert.match(p, /{"missionStatement": string, "criteria": \[\.\.\.\]}/);
   });
 });

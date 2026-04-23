@@ -45,6 +45,16 @@ export interface RunConfig {
    * `proposition`, when present, takes precedence over the inject path.
    */
   proposition?: string;
+  /**
+   * Unit 34: per-run ambition-ratchet cap. When present and > 0, this run
+   * will climb tiers on "all criteria met" up to this many tiers total
+   * (tier 1 = the initial contract). When 0, explicitly disables the
+   * ratchet for this run. When absent, falls back to
+   * `AMBITION_RATCHET_ENABLED` env (off → disabled, on → capped by
+   * `AMBITION_RATCHET_MAX_TIERS`). Blackboard-only; silently ignored by
+   * discussion presets.
+   */
+  ambitionTiers?: number;
 }
 
 export interface RunnerOpts {

@@ -84,6 +84,22 @@ export interface RunSummary {
    *  verdicts applied by the auditor. Undefined when the first-pass contract
    *  prompt failed to parse and the run fell back to drain-exit. Blackboard-only. */
   contract?: ExitContract;
+  // Unit 34: ambition-ratchet output. Blackboard-only. Absent when the
+  // ratchet is disabled / never fired. `maxTierReached` is the highest
+  // tier number the run touched (1 for runs that never ratcheted).
+  maxTierReached?: number;
+  tiersCompleted?: number;
+  tierHistory?: Array<{
+    tier: number;
+    missionStatement: string;
+    criteriaTotal: number;
+    criteriaMet: number;
+    criteriaWontDo: number;
+    criteriaUnmet: number;
+    wallClockMs: number;
+    startedAt: number;
+    endedAt: number;
+  }>;
 }
 
 export interface SummaryConfig {
@@ -125,6 +141,10 @@ export interface BuildSummaryInput {
   agents: PerAgentStat[];
   /** Phase 11c: exit contract snapshot at run end. Pass through if present. */
   contract?: ExitContract;
+  // Unit 34: ambition-ratchet tier state, threaded through the build.
+  maxTierReached?: number;
+  tiersCompleted?: number;
+  tierHistory?: RunSummary["tierHistory"];
 }
 
 export function buildSummary(input: BuildSummaryInput): RunSummary {
@@ -159,6 +179,10 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     finalGitStatusTruncated: truncated,
     agents: input.agents.slice(),
     contract: input.contract ? cloneContract(input.contract) : undefined,
+    // Unit 34: ambition ratchet passthrough.
+    maxTierReached: input.maxTierReached,
+    tiersCompleted: input.tiersCompleted,
+    tierHistory: input.tierHistory ? input.tierHistory.map((t) => ({ ...t })) : undefined,
   };
 }
 

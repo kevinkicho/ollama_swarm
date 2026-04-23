@@ -107,6 +107,10 @@ const ROWS = [
   ["criteria total", (s) => formatNumberOrDash(totalCriteria(s))],
   ["criteria met", (s) => formatNumberOrDash(countMetCriteria(s))],
   ["criteria unmet", (s) => formatNumberOrDash(countUnmetCriteria(s))],
+  // Unit 34: ambition-ratchet tier stats. Absent for pre-Unit-34 runs
+  // and runs that never installed a contract.
+  ["max tier reached (bb)", (s) => formatNumberOrDash(s.maxTierReached)],
+  ["tiers completed (bb)", (s) => formatNumberOrDash(s.tiersCompleted)],
   ["—", () => ""],
   ["total attempts", (s) => formatNumberOrDash(sumAgentField(s, "totalAttempts"))],
   ["total retries", (s) => formatNumberOrDash(sumAgentField(s, "totalRetries"))],

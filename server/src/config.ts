@@ -70,6 +70,29 @@ const Schema = z.object({
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // Unit 34: ambition ratchet. When enabled, a blackboard run that would
+  // otherwise terminate on "all contract criteria satisfied" instead
+  // promotes a TIER N+1 contract — the planner sees the prior tier's
+  // state + verdicts and produces a more ambitious next-tier contract.
+  // The run climbs tiers until a hard cap trips (wall-clock / commits /
+  // todos), max tiers reached, or tier-up prompts fail repeatedly.
+  // Default OFF so existing runs are byte-identical.
+  AMBITION_RATCHET_ENABLED: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // Unit 34: maximum number of tiers a single run can climb (belt-and-
+  // suspenders guard against an infinite-climb bug). Per-run
+  // `ambitionTiers` cap on RunConfig wins over this when set. 5 is a
+  // pragmatic default — the wall-clock/commits caps are the real stop,
+  // this is just a safety valve.
+  AMBITION_RATCHET_MAX_TIERS: z
+    .string()
+    .default("5")
+    .transform((v) => {
+      const n = Number.parseInt(v, 10);
+      return Number.isInteger(n) && n >= 1 && n <= 20 ? n : 5;
+    }),
 });
 
 const parsed = Schema.parse(process.env);
