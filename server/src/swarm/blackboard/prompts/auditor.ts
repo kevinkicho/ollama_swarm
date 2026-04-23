@@ -480,6 +480,33 @@ export async function buildAuditorSeedCore(
 
 const MAX_CONTEXT_ITEMS = 40;
 
+// Unit 46b: prompt-budget caps. The auditor prompt grows with cumulative
+// state (rationales, files referenced by every unmet criterion); the
+// post-Unit-41 run timed out three times in a row when the prompt got
+// large enough that glm-5.1:cloud couldn't return headers in 5 minutes.
+// These caps trade some auditor context completeness for predictable
+// prompt size — a slightly less-informed verdict beats no verdict.
+//
+// AUDITOR_RATIONALE_MAX_CHARS: 400 — long enough for "criterion is met
+// because file X line Y matches Z," short enough that 20 resolved
+// criteria don't burn 50 KB on prose.
+//
+// AUDITOR_FILE_STATE_MAX_CHARS: 60_000 — sum of all file blocks in the
+// "current file state" section. Above this, oldest entries (sorted
+// alphabetically — chosen for stable test output) are dropped with a
+// truncation marker. 60 KB is roughly 7-8 windowed files; if the
+// auditor needs more, the contract has too many simultaneous open
+// criteria and should be tier-gated anyway.
+const AUDITOR_RATIONALE_MAX_CHARS = 400;
+const AUDITOR_FILE_STATE_MAX_CHARS = 60_000;
+
+function truncateRationale(s: string | undefined): string {
+  if (!s) return "";
+  const trimmed = s.trim();
+  if (trimmed.length <= AUDITOR_RATIONALE_MAX_CHARS) return trimmed;
+  return trimmed.slice(0, AUDITOR_RATIONALE_MAX_CHARS - 3) + "...";
+}
+
 export function buildAuditorUserPrompt(seed: AuditorSeed): string {
   const committed = seed.committed
     .slice(-MAX_CONTEXT_ITEMS)
@@ -494,34 +521,58 @@ export function buildAuditorUserPrompt(seed: AuditorSeed): string {
     .map((f) => `- [${f.agentId}] ${f.text}`)
     .join("\n");
   const resolved = seed.resolvedCriteria
-    .map((c) => `- [${c.id}] (${c.status}) ${c.description}${c.rationale ? ` — ${c.rationale}` : ""}`)
+    .map((c) => {
+      const r = truncateRationale(c.rationale);
+      return `- [${c.id}] (${c.status}) ${c.description}${r ? ` — ${r}` : ""}`;
+    })
     .join("\n");
   const unmet = seed.unmetCriteria
-    .map(
-      (c) =>
-        `- [${c.id}] ${c.description} (expectedFiles: ${
-          c.expectedFiles.length > 0 ? c.expectedFiles.join(", ") : "none"
-        })`,
-    )
+    .map((c) => {
+      const r = truncateRationale(c.rationale);
+      return `- [${c.id}] ${c.description}${r ? ` — prior: ${r}` : ""} (expectedFiles: ${
+        c.expectedFiles.length > 0 ? c.expectedFiles.join(", ") : "none"
+      })`;
+    })
     .join("\n");
 
   // File-state block: one entry per known file. Sorted for determinism so the
   // same seed always produces the same prompt (easier diffing in test output
   // and in the transcript log).
+  // Unit 46b: total budget cap. We render entries in order; once the
+  // running byte total would exceed the budget, drop remaining entries
+  // and emit a truncation marker. Alphabetical order means the dropped
+  // entries are always the last alphabetically — deterministic and
+  // testable.
   const fileStateEntries = Object.entries(seed.currentFileState).sort(
     ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0),
   );
-  const fileStateBlock = fileStateEntries
-    .map(([path, entry]) => {
-      if (!entry.exists) {
-        return `--- ${path} (does not exist on disk) ---`;
-      }
+  const fileStateBlocks: string[] = [];
+  let fileStateUsed = 0;
+  let fileStateDropped = 0;
+  for (const [path, entry] of fileStateEntries) {
+    let block: string;
+    if (!entry.exists) {
+      block = `--- ${path} (does not exist on disk) ---`;
+    } else {
       const header = entry.full
         ? `--- ${path} (${entry.originalLength} chars, full) ---`
         : `--- ${path} (${entry.originalLength} chars, WINDOWED — head + marker + tail) ---`;
-      return `${header}\n${entry.content}\n--- end ${path} ---`;
-    })
-    .join("\n\n");
+      block = `${header}\n${entry.content}\n--- end ${path} ---`;
+    }
+    // +2 for the "\n\n" separator between blocks (matches the .join below).
+    if (fileStateUsed + block.length + 2 > AUDITOR_FILE_STATE_MAX_CHARS && fileStateBlocks.length > 0) {
+      fileStateDropped = fileStateEntries.length - fileStateBlocks.length;
+      break;
+    }
+    fileStateBlocks.push(block);
+    fileStateUsed += block.length + 2;
+  }
+  if (fileStateDropped > 0) {
+    fileStateBlocks.push(
+      `--- [${fileStateDropped} additional file(s) omitted — total file-state would exceed ${AUDITOR_FILE_STATE_MAX_CHARS}-char budget. Verdict on those criteria using the committed/skipped lists below as evidence.] ---`,
+    );
+  }
+  const fileStateBlock = fileStateBlocks.join("\n\n");
 
   // Unit 36: UI snapshot block, rendered only when a snapshot was
   // captured at audit time. Capped at ~16 KB to keep the prompt

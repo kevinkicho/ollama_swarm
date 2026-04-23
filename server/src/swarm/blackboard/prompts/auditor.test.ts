@@ -311,6 +311,57 @@ describe("AUDITOR prompts", () => {
     assert.match(p, /no findings/);
   });
 
+  // Unit 46b: prompt-budget caps on rationales + file-state.
+  it("user prompt truncates a long rationale on a resolved criterion", () => {
+    const longRationale = "x".repeat(2_000);
+    const c = criterion("c1", "done thing", "met");
+    c.rationale = longRationale;
+    const p = buildAuditorUserPrompt(seed({ resolvedCriteria: [c] }));
+    // The truncated rationale appears with a trailing ellipsis;
+    // the full 2000-char string does NOT.
+    assert.ok(!p.includes(longRationale), "raw 2000-char rationale should not appear in prompt");
+    assert.ok(p.includes("..."), "truncation marker present");
+  });
+
+  it("user prompt also truncates a long rationale on an unmet criterion's prior verdict", () => {
+    const longRationale = "y".repeat(2_000);
+    const c = criterion("c1", "still open", "unmet", ["README.md"]);
+    c.rationale = longRationale;
+    const p = buildAuditorUserPrompt(seed({ unmetCriteria: [c] }));
+    assert.ok(!p.includes(longRationale));
+    assert.match(p, /prior:/);
+  });
+
+  it("user prompt drops file-state entries past the byte budget with an explicit marker", () => {
+    // Build 10 files at ~12 KB each. Total 120 KB > 60 KB cap → some get dropped.
+    const fileState: Record<string, import("./auditor.js").AuditorFileStateEntry> = {};
+    for (let i = 0; i < 10; i++) {
+      const name = `file_${i.toString().padStart(2, "0")}.md`;
+      const content = "x".repeat(12_000);
+      fileState[name] = { exists: true, content, full: false, originalLength: 50_000 };
+    }
+    const p = buildAuditorUserPrompt(seed({ currentFileState: fileState }));
+    // Earlier files are kept; later files (alphabetically) get dropped.
+    assert.match(p, /file_00\.md/);
+    assert.ok(!p.includes("file_09.md"), "last alphabetical file should be omitted");
+    assert.match(p, /additional file\(s\) omitted/);
+    assert.match(p, /60000-char budget/);
+  });
+
+  it("user prompt keeps all files when total fits inside the budget", () => {
+    // 3 small files, well under 60 KB → no truncation marker.
+    const fileState: Record<string, import("./auditor.js").AuditorFileStateEntry> = {
+      "a.md": { exists: true, content: "a", full: true, originalLength: 1 },
+      "b.md": { exists: true, content: "b", full: true, originalLength: 1 },
+      "c.md": { exists: true, content: "c", full: true, originalLength: 1 },
+    };
+    const p = buildAuditorUserPrompt(seed({ currentFileState: fileState }));
+    assert.match(p, /a\.md/);
+    assert.match(p, /b\.md/);
+    assert.match(p, /c\.md/);
+    assert.ok(!/additional file\(s\) omitted/.test(p));
+  });
+
   it("repair prompt echoes the parser error and prior response", () => {
     const p = buildAuditorRepairPrompt("broken output", "JSON parse failed: xyz");
     assert.match(p, /broken output/);

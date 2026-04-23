@@ -34,7 +34,18 @@ import { Agent, setGlobalDispatcher } from "undici";
 // kill a truly-stuck connection well under the 20 min absolute turn
 // watchdog, but give legitimately-slow cold-starts room to finish.
 // Healthy runs (25-60 s TTFB) are unaffected.
-export const HEADERS_TIMEOUT_MS = 300_000;
+//
+// Unit 46a (2026-04-23): bumped 300 s → 600 s after the post-Unit-41
+// seaj-tsia-study run showed the planner agent (glm-5.1:cloud) hit the
+// 300 s cap THREE TIMES IN A ROW on a single audit prompt — not a
+// "occasionally slow" pattern, a "this prompt is genuinely too big to
+// finish in 5 minutes" pattern. Unit 46b shrinks the audit prompt
+// (rationale caps, file-state budget) which should mean 600 s is
+// almost never approached; this bump is the safety net for when the
+// shrinking isn't enough. Workers (gemma4:31b-cloud, mean 12 s,
+// p95 47 s) are nowhere near this cap. The 20-min absolute-turn
+// watchdog (BlackboardRunner ABSOLUTE_MAX_MS) is still the outer fence.
+export const HEADERS_TIMEOUT_MS = 600_000;
 
 // Exported so the retry layer's budget comment stays honest: 3 attempts
 // × HEADERS_TIMEOUT_MS + RETRY_BACKOFF_MS totals = ~5 min worst case.

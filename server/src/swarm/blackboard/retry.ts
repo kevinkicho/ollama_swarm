@@ -25,8 +25,12 @@ export const RETRY_MAX_ATTEMPTS = 3;
 // cloud shard. At [4, 16] the cloud didn't have time to warm; at
 // [30, 90] a truly cold shard has a real chance to come online
 // before we try again. Budget: 30 + 90 = 120 s backoff on top of
-// up to 3 × 300 s (HEADERS_TIMEOUT_MS, Unit 39) timeouts = ~17 min
-// worst case — still fits inside the 20 min per-turn watchdog.
+// up to 3 × 600 s (HEADERS_TIMEOUT_MS, Unit 46a) timeouts = ~32 min
+// worst case. NOTE: this exceeds the 20-min per-turn watchdog
+// (ABSOLUTE_MAX_MS in BlackboardRunner) — the watchdog will abort
+// the in-flight attempt before all 3 retries can complete on
+// pathological cases. That's intentional: we'd rather lose a stuck
+// turn at 20 min than a healthy run at 32 min on retry math.
 // Healthy runs are unaffected (succeed on attempt 1; backoff
 // never fires).
 export const RETRY_BACKOFF_MS: readonly number[] = [30_000, 90_000];
