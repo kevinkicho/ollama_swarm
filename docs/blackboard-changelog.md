@@ -2372,7 +2372,7 @@ v5 battle test will compare against v4. Predicted deltas:
 
 ---
 
-## Unit 18c — Full revert to v3 shape (back out remaining Unit 18 plumbing)  **[committed: pending]**
+## Unit 18c — Full revert to v3 shape (back out remaining Unit 18 plumbing)  **[committed: `6a6144a`]**
 
 The 2026-04-22 v5 battle test made it clear that further iteration on
 the warmup angle is gambling on cloud variance. v3 → v4 → v5 aggregate
@@ -2407,7 +2407,7 @@ pre-batch parallel warmup (already removed in 18b).
 
 ---
 
-## Unit 19 — Per-call timing telemetry  **[committed: pending]**
+## Unit 19 — Per-call timing telemetry  **[committed: `6a6144a`]**
 
 The reason we couldn't tell signal from noise across v3/v4/v5 is that
 we only measured outcomes (turn success rate, timeout count) — not
