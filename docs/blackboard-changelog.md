@@ -3726,6 +3726,119 @@ renders, not just what files got changed.
 
 ---
 
+## Fix: Unit 35 critic — fresh session on planner  **[committed: `e258d2f`]**
+
+Smoke-found bug in the shipped Unit 35 critic (469ef62): picking
+a peer worker as the critic AND prompting on that worker's main
+opencode session caused session-context contamination. A
+critic-verdict response would bleed into the worker's NEXT prompt,
+tripping "worker JSON invalid" + repair. Additionally, the flow
+fired both `agent_streaming` (via SDK events) AND `appendAgent`
+(transcript_append), producing visible double-entries in the UI.
+
+Fix: always run critic on a FRESH session created on the PLANNER's
+client per critic call. Planner (index=1) is never in the worker
+polling loop → no session collision. A fresh session is isolated
+from the planner's main session (which carries contract / audit /
+replan state). Fresh-session events don't match the agent's main
+sessionId in `AgentManager.handleSessionEvent` → no
+`agent_streaming` broadcasts → no streaming entries to dedup
+against. Skip `appendAgent` entirely: the `[critic] X
+accepted/REJECTED Y's diff: rationale` system message is the sole
+user-facing record; raw verdict JSON lives in `logs/current.jsonl`
+for debugging.
+
+No new tests (prompt-builder tests unchanged, still pass). The
+change is in the transport layer: which agent + which session.
+
+---
+
+## 2026-04-23 Live smoke post-mortem (Units 34 / 35 / 36)
+
+First real end-to-end smoke of the new ambition loop. Ran two
+scenarios.
+
+**(a) Hello-World (`octocat/Hello-World`)** — 3 agents × 2 rounds,
+council enabled, ambition ratchet=3, critic=true. Completed tier 1
+in ~3.5 min: all 5 criteria met (README expand / LICENSE /
+CONTRIBUTING / .gitignore / hello.py). `summary.json` had
+`tierHistory`, `maxTierReached`, per-agent latency stats. Did NOT
+reach tier 2 — we stopped the run to patch the critic
+session-contamination bug (e258d2f).
+
+What this validated:
+- Unit 30 council drafts + merge → tier 1 contract on disk.
+- Unit 31 `blackboard-state.json` live-tailable during the run.
+- Unit 33 cross-preset summary shape includes `agentCount`,
+  `rounds`, `tierHistory`.
+- Unit 35 critic fired on every commit, wrote accept rationales.
+- Unit 26 / 36 Playwright smoke remained unexercised (no uiUrl).
+
+What the smoke EXPOSED:
+- Critic session-contamination bug (fixed in e258d2f).
+- Hello-World is too trivial to validate ambition — tier-climbing
+  has no substrate to work with on a 14-char-README repo.
+
+**(b) kyahoofinance032926 (real repo, 29 KB README, 25 top-level
+entries)** — same flags, fresh parent folder. Council drafts
+started, then exhibited the cloud-variance tail (Unit 19
+`_prompt_timing` records captured cleanly):
+
+```
+agent-3  attempt=1  25.8 s  ok
+agent-2  attempt=1  62.1 s  ok
+agent-1  attempt=1  182.2s  FAIL (HEADERS_TIMEOUT)
+agent-1  attempt=2  182.9s  FAIL (HEADERS_TIMEOUT)
+agent-1  attempt=3   80.8 s  ok
+```
+
+Agent-1 hit the 180-s undici timeout TWICE at almost exactly the
+cap (suggesting ~185-200 s legitimate completion time, cut off),
+succeeded on the third attempt. Council merge then fired
+successfully. Workers began committing. Run was interrupted
+mid-tier-1 by a (partially failed) user stop.
+
+The smoke SURFACED three structural issues now logged as
+limitations (`docs/known-limitations.md`) with fix-direction Unit
+candidates:
+
+1. **Planner has ALL tools disabled.** `swarm` profile, can't
+   inspect code → produces low-ambition hygiene criteria
+   (".gitignore", README polish) no matter the repo. Unit 37
+   candidate: route planner + auditor through `swarm-read`
+   profile.
+2. **Agent-lifecycle control is unreliable.** `treeKill`
+   best-effort, no verification; dev-server restart orphans
+   previous run's children; user stop doesn't reliably transition
+   `executing` → `stopped`. Live evidence: 15+ `node.exe` orphans
+   after ~5 runs. Unit 38 candidate: PID file per run + startup
+   orphan sweep + verified kill.
+3. **Per-agent opencode subprocess amplifies cloud-variance
+   tails.** Three parallel first-prompts hit concurrent cold
+   starts; one loses the scheduler race and hits 180-s timeout.
+   Architecture is INTENTIONAL (1 subprocess per agent, for
+   isolation) — confirmed preference. Fix is not to collapse but
+   to make the tail survivable: bump `HEADERS_TIMEOUT_MS` 180 →
+   300 and retry backoff [4 s, 16 s] → [30 s, 90 s] (Unit 39
+   candidate).
+
+Theories disproved by the smoke data:
+- ~~Cloud cold-start is universal~~ — user's direct
+  glm-5.1:cloud use returns <30 s consistently. NOT a blanket
+  cold-start problem.
+- ~~Concurrency cap from cloud~~ — Ollama cloud doesn't throttle.
+- ~~Prompt size (30 KB too big)~~ — 30 KB is tiny relative to
+  198 K context; user has run much bigger projects directly.
+- ~~Extra hop through opencode subprocess~~ — that's normal
+  Ollama-opencode architecture; not the issue by itself.
+
+The real culprit on the data: one of N parallel first-prompts
+catches a slower cloud shard (scheduler / shard-load variance),
+and our 180-s timeout cap is tight enough that slow-but-legitimate
+responses get killed.
+
+---
+
 ## Session summary (Units 9–21, this conversation)
 
 Twelve units shipped in this session:

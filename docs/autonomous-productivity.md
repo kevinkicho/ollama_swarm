@@ -83,10 +83,14 @@ yet. **→ Unit 36 (planned).**
 |------|---------------------------------------------|--------------------------------|
 | 34   | Ambition ratchet: tier-climb on all-met     | shipped (`f3314ed`, 2026-04-23)|
 | 35   | Critic agent at commit time                 | shipped (`469ef62`, 2026-04-23)|
+| 35-fix | Critic uses fresh session on planner      | shipped (`e258d2f`, 2026-04-23)|
 | 36   | Wire `swarm-ui` (Unit 26) to auditor        | shipped (`e22e337`, 2026-04-23)|
-| 37+  | Cross-run resume + tier-aware replay        | hypothesized                   |
-| 37+  | Auto-start app (workers execute shell)      | hypothesized                   |
-| 37+  | Persistent swarm-ui across audits           | hypothesized                   |
+| 37   | Planner + auditor use `swarm-read` profile  | **next** — see spec below      |
+| 38   | Agent-lifecycle control + orphan reclamation| **next** — see spec below      |
+| 39+  | Bigger warmup / retry backoff tuning        | planned                        |
+| 40+  | Cross-run resume + tier-aware replay        | hypothesized                   |
+| 40+  | Auto-start app (workers execute shell)      | hypothesized                   |
+| 40+  | Persistent swarm-ui across audits           | hypothesized                   |
 
 ## Unit 34 — Ambition ratchet (spec-lite)
 
@@ -147,3 +151,100 @@ block the ratchet, but surfaces in the summary for post-mortem.
 
 These are worth revisiting after Unit 34's first real battle-test shows
 what actually breaks.
+
+---
+
+## Unit 37 — Planner + auditor use `swarm-read` profile (spec-lite)
+
+**Motivation.** See `docs/known-limitations.md` entry "Planner has ALL
+tools disabled". The 2026-04-23 kyahoofinance032926 smoke made the
+problem concrete — tier-1 criteria like "add `.gitignore`" reveal the
+planner isn't inspecting actual code. Fix is structural: route the
+planner and auditor through the existing `swarm-read` profile (Unit 20
+shipped this profile for discussion presets — read/grep/glob/list on,
+write/edit/bash off) instead of the `swarm` profile that's meant for
+workers.
+
+**Scope:**
+- `BlackboardRunner.promptAgent` already takes an `agentName` parameter
+  passed to `session.prompt.body.agent`. The planner code-paths
+  (`runFirstPassContract`, `tryPromoteNextTier`, `runAuditor`,
+  `replanOne`) currently pass (implicitly) `"swarm"`. Change them to
+  pass `"swarm-read"`.
+- Workers (`runWorker`) STAY on `"swarm"` — they must return JSON
+  diffs via the board CAS path, not touch files via tool loop.
+- Update the planner / first-pass-contract / tier-up prompts to
+  EXPLICITLY instruct tool use:
+  - "Before proposing criteria, use `read`, `grep`, `glob`, `list` to
+    inspect the actual code. Read `package.json`. Grep for existing
+    implementations of what the README claims. List source
+    directories you suspect are relevant."
+  - "Criteria must reflect the code you actually saw, not the code you
+    imagined from the file list."
+- Update the auditor system prompt similarly: "When reviewing file
+  state, use tools to inspect surrounding files that aren't in
+  `expectedFiles` if the verdict is ambiguous from the direct evidence
+  alone."
+
+**Trade-off:** tool loops add round-trips. A planner call that was one
+30-s prompt might become one 90-s prompt with 4 tool calls. Total wall
+clock for tier-1 might grow. Expected benefit: dramatically better
+contract quality, which means fewer wasted worker commits.
+
+**Open question:** should the critic (Unit 35) ALSO use `swarm-read`?
+Critic currently runs with `"swarm"` and sees only the seed. Giving it
+read tools would let it check duplicate patterns across the actual
+codebase, not just the recent-commits list in the seed. Probably yes —
+but scope-gate to Unit 37b if it bloats this unit.
+
+---
+
+## Unit 38 — Agent-lifecycle control + orphan reclamation (spec-lite)
+
+**Motivation.** See `docs/known-limitations.md` entry "Agent-lifecycle
+control is unreliable". Live evidence 2026-04-23: user stop doesn't
+reliably transition `phase: executing` → `stopped`; `tasklist` showed
+15+ `node.exe` orphans on Kevin's box after a session with ~5 runs.
+Every dev-server restart leaves its spawned opencode subprocesses as
+orphans because the new `AgentManager` instance has no knowledge of
+them.
+
+**Scope:**
+
+1. **PID file per run** — on `AgentManager.spawnAgent`, append the
+   subprocess PID (`child.pid`) to `<clonePath>/.agent-pids` (one PID
+   per line). On `killAll`, after the kill batch, delete the file.
+   Atomic via the existing `writeFileAtomic` helper.
+
+2. **Orphan sweep on server startup** — in `server/src/index.ts`,
+   before `server.listen`, scan the `runs/` directory for any
+   `.agent-pids` files. For each PID, check if it's alive (`tasklist
+   /PID <pid>` on Windows, `kill -0 <pid>` on POSIX). If alive AND it
+   looks like an opencode process (check command line), kill it. Then
+   clear the PID file.
+
+3. **Verified kill in `killAll`** — after `treeKill`, poll the PID for
+   liveness with a ~5 s deadline. If still alive, escalate: `taskkill
+   /F /T /PID` with retries, then as a last resort `kill -9` the
+   direct child PID. Log every kill decision to the transcript.
+
+4. **Server-side shutdown signal** — on SIGINT/SIGTERM, ensure
+   `orchestrator.stop()` runs to completion BEFORE process exit. The
+   current pattern (`setTimeout(() => process.exit(1), 5000).unref()`)
+   has a 5-s watchdog that may fire before `killAll` finishes on a
+   slow stop. Extend to 10 s with a stronger guarantee.
+
+5. **Stop signal reliability** — on `POST /api/swarm/stop`, return
+   only AFTER `killAll` has verified every agent is dead. Currently
+   the response fires after `setPhase("stopping")` which races the
+   actual kills. Await the kill verification chain so the client can
+   trust a 200 OK as "really stopped."
+
+**Non-goals:**
+
+- Windows Job Objects integration — would be the BEST fix but needs a
+  native addon or FFI. Defer until the above isn't enough.
+- Killing random `node.exe` by port-range sweep on startup — nuclear,
+  risks killing unrelated dev work. PID-file approach is surgical.
+
+**Dependency:** none. Can ship independently of Unit 37.

@@ -6,6 +6,139 @@ we made it, and what would force us to revisit. Anything that becomes a
 
 ---
 
+## Planner has ALL tools disabled (`swarm` profile, not `swarm-read`)
+
+**Choice:** blackboard's planner and auditor share the `swarm` agent profile
+with the workers. That profile has `read: false, grep: false, glob: false,
+list: false` and `permission: { edit: deny, bash: deny }`. So the planner
+produces its contract with ZERO file inspection — it works only from the
+PlannerSeed (repoUrl + topLevel entries + `listRepoFiles` output of 150 paths
++ README excerpt first 4000 chars). The auditor likewise only sees the
+specific files named by each criterion's `expectedFiles`, never the
+surrounding code.
+
+**Why it happened:** Unit 20 introduced the `swarm-read` profile (read tools
+ON, write tools OFF) for discussion presets (round-robin / council /
+orchestrator-worker / map-reduce / stigmergy / role-diff / debate-judge).
+Blackboard's planner was left on `swarm` by default — workers MUST be on
+`swarm` (they must return JSON diffs, not call edit tools directly), but the
+planner has no such constraint. The distinction was not thought through.
+
+**Evidence from 2026-04-23 kyahoofinance032926 live smoke**: the planner
+produced tier-1 criteria like "add `.gitignore`" and generic README polish —
+pattern-matching on "this is a GitHub project, what do GitHub projects
+usually need?" rather than analyzing the actual code. A typical 30-KB-README
+project never gets its `package.json` inspected, its dependency tree
+audited, its existing test harness grepped for gaps, etc.
+
+**When this would need revisiting:** as soon as we want ambitious contracts.
+Unit 34's ambition ratchet can't climb meaningful tiers if every tier's
+planner is blind to the code.
+
+**Fix direction (Unit 37 candidate, see `docs/autonomous-productivity.md`):**
+route the planner + auditor prompts with `agent: "swarm-read"` instead of
+`agent: "swarm"`, and update their prompts to explicitly instruct tool use
+("inspect package.json, grep for existing patterns, list directories you
+suspect are relevant, then propose criteria"). Workers stay on `swarm`.
+
+---
+
+## Agent-lifecycle control is unreliable (orphan accumulation across restarts)
+
+**Choice:** `AgentManager.killAll()` calls `session.abort` then
+`treeKill(agent.child)` per agent. `treeKill` on Windows shells out to
+`taskkill /F /T /PID <pid>`. This is best-effort with no verification — if
+the kill misses (nested child processes, stale PID reference, Windows
+permissions hiccup), the subprocess survives.
+
+**Why it's structurally fragile:**
+
+1. Every time our dev server restarts (crash, edit-triggered tsx reload,
+   Ctrl-C + manual restart), the new `AgentManager` is a fresh instance with
+   an empty `agents` map. It has no knowledge of the previous server's
+   spawned opencode subprocesses. Those subprocesses become true orphans —
+   nothing ever reclaims them.
+2. A stream already in flight to Ollama cloud continues to drain tokens
+   until it completes naturally, even after the subprocess is killed. HTTP
+   stream cancellation doesn't always propagate to the cloud inference pipe.
+3. On user stop, the stop signal has to traverse: browser → our server →
+   `Orchestrator.stop()` → runner's `stop()` → `this.stopping = true` + abort
+   controllers → `manager.killAll()`. Any link failing silently leaves the
+   run running while the UI shows "stopped".
+
+**Evidence from 2026-04-23 live session**: at one point
+`GET /api/swarm/status` reported `phase: "executing"` with agents in
+`status: "thinking"`, while the UI displayed "failed: user stop" from an
+earlier run. Separately, `tasklist` showed 15+ `node.exe` processes on the
+box after ~5 runs — most were orphans from prior restarts.
+
+**When this would need revisiting:** multi-day unattended operation — Kevin's
+actual goal per `docs/autonomous-productivity.md`. Orphan accumulation in
+that regime is unbounded and will eventually exhaust ports / memory / cloud
+quota.
+
+**Fix direction (Unit 38 candidate):** PID file per run at
+`runs/<slug>/.agent-pids`, written at spawn time and cleared at clean stop.
+On dev-server startup, scan `runs/*/.agent-pids` for live PIDs and kill them
+before binding the port. Plus verified kill (poll `tasklist /PID <pid>`
+after treeKill; escalate if still alive). Native Windows Job Objects would
+be the ideal fix but require a native addon or FFI.
+
+---
+
+## Per-agent opencode subprocess amplifies cloud-variance tails
+
+**Choice:** `AgentManager.spawnAgent` spawns one separate `opencode serve
+--port <random>` subprocess per agent (3 agents = 3 subprocesses on 3
+ports). Each subprocess hosts exactly one session (`session.create` called
+once). This is intentional isolation — confirmed preference 2026-04-23:
+per-agent opencode subprocess is the right shape.
+
+**Why the tail hurts:** the three subprocesses' first prompts all hit the
+cloud at roughly the same time. Each subprocess does independent startup
+(HTTP server init, opencode.json read, @ai-sdk/openai-compatible provider
+load, first-prompt tokenizer prep). Under concurrent cold-start pressure,
+ONE of the N parallel prompts tends to lose the scheduler race and hit the
+180-s `HEADERS_TIMEOUT` (undici). The other N-1 return in 25-60 s.
+
+**Evidence from 2026-04-23 kyahoofinance032926 live smoke** (Unit 19
+`_prompt_timing` records):
+
+```
+agent-3  attempt=1  25.8s   ok
+agent-2  attempt=1  62.1s   ok
+agent-1  attempt=1  182.2s  FAIL (headers timeout at cap)
+agent-1  attempt=2  182.9s  FAIL (headers timeout at cap)
+agent-1  attempt=3   80.8s  ok  ← eventually succeeded
+```
+
+Agent-1's first two attempts hit the cap almost exactly — suggesting the
+request WOULD have completed in ~185-200 s but we kill it at 180. Unit 24's
+planner-fallback didn't trigger because the retries succeeded within the
+3-attempt budget.
+
+Notable: the user's direct use of glm-5.1:cloud via Ollama + opencode
+(outside our swarm) consistently returns in <30 s. So this is NOT a
+fundamental cloud or model issue — it's the N-parallel-cold-start pattern
+we create.
+
+**When this would need revisiting:** ongoing — this is the most visible
+failure mode in every multi-agent run.
+
+**Fix directions:**
+
+1. Bump `HEADERS_TIMEOUT_MS` 180 → 300 (cheap, one line) so a ~200 s
+   legitimate cold-start succeeds instead of burning a retry.
+2. Bump retry backoff [4 s, 16 s] → [30 s, 90 s] so retries actually give
+   the cloud shard time to warm.
+3. More substantive warmup prompt (Unit 17 currently sends "Reply with one
+   word: ok" — tiny, doesn't warm the large-context inference path the real
+   prompt exercises).
+4. Serialize first-prompts across N agents with a small inter-agent delay
+   (e.g., 5-10 s stagger) so the cold-start contention is smoothed.
+
+---
+
 ## Planner does double duty as the replanner
 
 **Choice:** when a todo goes stale (Phase 6), the **planner agent** handles
