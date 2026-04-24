@@ -114,9 +114,11 @@ yet. **→ Unit 36 (planned).**
 | 58   | Dedicated auditor agent (parallel to planner)| planned (Kevin's ask 2026-04-23)|
 | 59   | Specialized-worker blackboard variant       | planned (Kevin's ask 2026-04-23)|
 | 60   | Multi-prompt critic ensemble                | planned (Kevin's ask 2026-04-23)|
-| 61+  | Cross-run resume + tier-aware replay        | hypothesized                   |
-| 61+  | Auto-start app (workers execute shell)      | hypothesized                   |
-| 61+  | Persistent swarm-ui across audits           | hypothesized                   |
+| 61   | Chain-of-thought wrapper for blackboard prompts | planned (self-flagged 2026-04-23)|
+| 62   | Page-refresh persistence (WS catch-up snapshot) | planned (Kevin's ask 2026-04-23)|
+| 63+  | Cross-run resume + tier-aware replay        | hypothesized                   |
+| 63+  | Auto-start app (workers execute shell)      | hypothesized                   |
+| 63+  | Persistent swarm-ui across audits           | hypothesized                   |
 
 ## Units 47-51 — Build-on-existing-clone work pattern (spec-lite)
 
@@ -587,6 +589,86 @@ runtime.
 (Unit 35) vs ensemble. Measure: (a) how many commits the ensemble
 rejects that Unit 35 would have accepted, (b) how many of those
 were actually busywork on manual review.
+
+## Unit 61 — Chain-of-thought wrapper for blackboard prompts (spec-lite)
+
+Kevin's 2026-04-23 hypothesis: the rigid "output ONLY a JSON
+object, no prose" constraint forces glm-5.1:cloud (RLHF'd on
+conversational data) into a less-rehearsed mode and leaves
+reasoning quality on the table.
+
+**The change:** allow a `<thinking>...</thinking>` (or just freeform
+prose) BEFORE the JSON envelope in worker / planner / critic /
+auditor / replanner prompts. Parsers already extract the LAST
+fenced block / final top-level object — so a reasoning preamble
+followed by the JSON envelope works without parser changes.
+
+**Concrete prompt edits:**
+- WORKER_SYSTEM_PROMPT (worker.ts): change rule 1 from "Output ONLY
+  a JSON object" to "You MAY reason briefly first; the FINAL block
+  must be a JSON object on its own."
+- PLANNER_SYSTEM_PROMPT, FIRST_PASS_CONTRACT_SYSTEM_PROMPT,
+  REPLANNER_SYSTEM_PROMPT, AUDITOR_SYSTEM_PROMPT, CRITIC_SYSTEM_PROMPT
+  — same edit.
+- Cap the reasoning preamble at ~1000 chars so prompts don't bloat
+  unbounded (could enforce via a transcript-level truncation).
+
+**A/B opportunity:** ship behind a `RunConfig.reasoningPreamble:
+boolean` flag (default false). Run two seaj-tsia-study resumes —
+one with, one without — and compare commit quality / met-criteria
+rate / wont-do count.
+
+**Risks:** prompts get longer, hits Unit 46a's 600 s headers
+timeout earlier on big audits. Probably fine since reasoning is
+~1 KB and audit prompts are 50+ KB before truncation.
+
+**Cost:** ~45 min implementation; per-call cost +1-2 KB output
+tokens.
+
+## Unit 62 — Page-refresh persistence (WS catch-up snapshot) (spec-lite)
+
+Kevin's 2026-04-23 ask after Ctrl-R cleared the blackboard view.
+Today the zustand store is purely client-side and refresh wipes
+it. /api/swarm/status returns SOME state (phase, agents,
+transcript, summary, contract) but NOT board snapshot, clone state,
+run config (preset/models/path), run id, or latency samples —
+all the things added by Units 40, 47, 52a, 52c, 52d.
+
+**The change:** make refresh non-destructive by hydrating the
+store from a server snapshot on connect.
+
+**Two design options:**
+
+**62a — Extend GET /api/swarm/status.** Add the missing fields
+to the response: `board`, `cloneState`, `runConfig`, `runId`,
+`latency` (recent samples per agent, capped). Client fetches on
+mount and dispatches into store. Simple; one HTTP round-trip on
+every page load. Existing WS streams subsequent live events.
+
+**62b — WS catch-up event.** Server emits a synthetic
+`catch_up` SwarmEvent on every WS open with the full snapshot.
+Client handles it like any other event. No extra HTTP. Cleaner
+single channel; WS handler grows.
+
+**Recommendation:** 62a first — smaller diff (no new event
+variant; uses existing REST). Future Unit 62b can switch if the
+extra HTTP becomes an issue.
+
+**Server work:** extend BlackboardRunner.status() (and the
+non-blackboard runners' status() implementations) to include the
+missing fields. AgentManager already tracks per-agent latency
+samples for Unit 40 — expose them.
+
+**Client work:** useSwarmSocket gets a `useEffect` that fetches
+`/api/swarm/status` once on mount, dispatches each piece into the
+store via existing setters (`upsertTodo`, `setCloneState`,
+`setRunConfig`, etc.). All those setters already exist.
+
+**Edge case:** if no run is active (phase=idle), the catch-up
+returns nothing and the SetupForm renders normally — no
+regression.
+
+~60 min total.
 
 ## Unit 57 — Fix Unit 51 snapshot read race (spec-lite)
 
