@@ -12,7 +12,7 @@ import { roleForAgent, type SwarmRole } from "./roles.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
-import { extractTextWithDiag } from "./extractText.js";
+import { extractTextWithDiag, looksLikeJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 
@@ -324,7 +324,8 @@ export class RoundRobinRunner implements SwarmRunner {
       const extracted = extractTextWithDiag(res, diagCtx);
       let text = extracted.text;
       // Task #54: retry on model silence (see CouncilRunner for detail).
-      if (extracted.isEmpty && !this.stopping) {
+      // Pattern 8: retry on junk-short single-token output too.
+      if ((extracted.isEmpty || looksLikeJunk(text)) && !this.stopping) {
         const retryText = await retryEmptyResponse(agent, prompt, "swarm-read", diagCtx);
         if (retryText !== null) text = retryText;
       }

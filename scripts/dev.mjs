@@ -143,4 +143,4 @@ process.on("SIGINT", () => {
 process.on("SIGTERM", shutdown);
 
 launch("server", path.join(root, "server"), [tsxCli, "watch", "src/index.ts"], "36");
-launch("web", path.join(root, "web"), [viteCli, "--port", String(webPort), "--strictPort"], "35");
+launch("web", path.join(root, "web"), [viteCli, "--port", String(webPort), "--strictPort", "--host"], "35");

@@ -105,6 +105,41 @@ export function extractTextWithDiag(
 // retried after an empty response. Makes the retry intent explicit
 // ("you returned nothing; please answer substantively") so the model
 // has a clear signal to change behavior.
+//
+// Pattern 8 (2026-04-24): widened to also cover junk-short responses
+// (single-token outputs like "4", a hex SHA, or a passwd-like string)
+// — same recovery strategy applies. The suffix mentions both modes so
+// the model knows what behavior to avoid regardless of which one
+// triggered the retry.
 export const EMPTY_RESPONSE_RETRY_SUFFIX =
-  "\n\nNote: your previous response returned no text content (only tool calls or step markers). " +
-  "Please respond now with a substantive plain-text answer — no tool calls, no empty completions.";
+  "\n\nNote: your previous response was degenerate — either it returned no text " +
+  "(only tool calls or step markers) OR it was a single short token (a hash, a " +
+  "single character, a path-like string) that does not answer the question. " +
+  "Please respond now with a substantive multi-sentence plain-text answer — " +
+  "no tool calls, no single-token replies, no empty completions.";
+
+// Pattern 8 detector (2026-04-24): observed model-output failure mode where
+// nemotron-3-super:cloud returns ultra-short non-language output for the
+// council drafter prompt — examples seen on multi-agent-orchestrator runs:
+//   - "4"                                          (single digit, agent-3)
+//   - "7600262d45a782f6ef4b0f2cdc8a2311f0ef5b19"  (hex SHA shape, agent-1)
+//   - ":47000000:47000000:1:::/usr/bin/bash"      (passwd-like, agent-2)
+// Each came back from session.prompt with a real text part — so isEmpty
+// from extractText is false — but the content is useless. Heuristic:
+// short (≤80 chars) AND no internal whitespace = single token, which a
+// real council/discussion response never is (those produce multi-sentence
+// prose by design). Caller should treat true the same as isEmpty: fire
+// retryEmptyResponse with the unified suffix above.
+//
+// False-positive risk: terse legit replies ("yes", "no") would trip this,
+// but discussion presets all instruct ≥250-word responses so a one-token
+// reply is wrong regardless. Reviewed: better to retry once than to keep
+// degenerate output in the transcript.
+export function looksLikeJunk(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return false; // empty handled separately via isEmpty
+  if (trimmed.length > 80) return false;
+  // No internal whitespace = single token; council/orchestrator-worker/etc.
+  // prompts always elicit multi-sentence prose, so single-token = failure.
+  return !/\s/.test(trimmed);
+}

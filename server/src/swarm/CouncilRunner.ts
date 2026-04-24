@@ -11,7 +11,7 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
-import { extractTextWithDiag } from "./extractText.js";
+import { extractTextWithDiag, looksLikeJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
@@ -335,7 +335,10 @@ export class CouncilRunner implements SwarmRunner {
       // text part (model-silence pattern, observed on nemotron under
       // parallel fanout). Best-effort — if the retry also empties or
       // throws, we keep the original "(empty response)" placeholder.
-      if (extracted.isEmpty && !this.stopping) {
+      // Pattern 8 (2026-04-24): also retry on junk-short single-token
+      // outputs ("4", a hex SHA, a passwd-like string) — same nemotron
+      // failure mode, the response is non-empty but useless.
+      if ((extracted.isEmpty || looksLikeJunk(text)) && !this.stopping) {
         const retryText = await retryEmptyResponse(agent, prompt, "swarm-read", diagCtx);
         if (retryText !== null) text = retryText;
       }

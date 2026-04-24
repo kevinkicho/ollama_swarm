@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentManager } from "./AgentManager.js";
 import type { RepoService } from "./RepoService.js";
-import type { SwarmEvent, SwarmStatus } from "../types.js";
+import type { SwarmEvent, SwarmStatus, SwarmStatusRunConfig } from "../types.js";
 import type { PresetId, RunConfig, RunnerOpts, SwarmRunner } from "../swarm/SwarmRunner.js";
 import { RoundRobinRunner } from "../swarm/RoundRobinRunner.js";
 import { BlackboardRunner } from "../swarm/blackboard/BlackboardRunner.js";
@@ -31,6 +31,17 @@ export class Orchestrator {
   // identifier (it's an orchestrator-level handle), so we merge it in
   // here rather than threading it through the runner contract.
   private runId?: string;
+  // Pattern 9 fix (2026-04-24): same trick for runConfig + runStartedAt.
+  // Discussion-preset runners (council/role-diff/etc.) don't include
+  // runConfig in their status() — only blackboard does. Without it, the
+  // web's AgentPanel role helper falls back to the blackboard-ish
+  // "planner / worker" default for every other preset, both during the
+  // run AND after completion when the WS run_started event has long
+  // since fired. Stashing here is the single-call equivalent of teaching
+  // 6 runners to populate runConfig — kept in sync with the run_started
+  // payload below so the REST snapshot and the WS event don't drift.
+  private runConfig?: SwarmStatusRunConfig;
+  private runStartedAt?: number;
 
   constructor(private readonly opts: OrchestratorOpts) {}
 
@@ -40,7 +51,15 @@ export class Orchestrator {
       // Unit 62: stitch the orchestrator-level runId into the snapshot.
       // Leave runnerStatus.runId untouched if the runner already set one
       // (defensive — currently no runner does, but keeps the merge safe).
-      return { ...runnerStatus, runId: runnerStatus.runId ?? this.runId };
+      // Pattern 9: same merge for runConfig + runStartedAt so the AgentPanel
+      // role helper has cfg.preset to pick "drafter" / "mapper" / etc. even
+      // for runs the runner itself doesn't surface runConfig for.
+      return {
+        ...runnerStatus,
+        runId: runnerStatus.runId ?? this.runId,
+        runConfig: runnerStatus.runConfig ?? this.runConfig,
+        runStartedAt: runnerStatus.runStartedAt ?? this.runStartedAt,
+      };
     }
     return {
       phase: "idle",
@@ -107,10 +126,11 @@ export class Orchestrator {
         rolesForRunStarted.push(roleForAgent(i, catalog).name);
       }
     }
-    this.opts.emit({
-      type: "run_started",
-      runId,
-      startedAt: Date.now(),
+    const startedAt = Date.now();
+    // Pattern 9: build the runConfig snapshot once and reuse — same fields
+    // go to the WS run_started event AND the REST status() snapshot.
+    // Single source of truth so the two paths can't drift.
+    const runConfig: SwarmStatusRunConfig = {
       preset: cfg.preset,
       // Per-agent overrides (Unit 42) fall back to cfg.model when absent.
       plannerModel: cfg.plannerModel ?? cfg.model,
@@ -125,6 +145,14 @@ export class Orchestrator {
       clonePath: cfg.localPath,
       agentCount: cfg.agentCount,
       rounds: cfg.rounds,
+    };
+    this.runConfig = runConfig;
+    this.runStartedAt = startedAt;
+    this.opts.emit({
+      type: "run_started",
+      runId,
+      startedAt,
+      ...runConfig,
     });
     try {
       await runner.start(cfg);
@@ -142,6 +170,8 @@ export class Orchestrator {
         this.runner = null;
         // Unit 62: keep runId paired with runner — drop it on failed start.
         this.runId = undefined;
+        this.runConfig = undefined;
+        this.runStartedAt = undefined;
       }
       throw err;
     }
@@ -159,6 +189,8 @@ export class Orchestrator {
       // Unit 62: clear the runId too so a status() after stop reports an
       // idle slate instead of a stale handle from the previous run.
       this.runId = undefined;
+      this.runConfig = undefined;
+      this.runStartedAt = undefined;
     }
   }
 

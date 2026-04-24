@@ -610,9 +610,22 @@ function RunHistoryDropdown() {
                         </span>
                       )}
                       <span>preset {r.preset}</span>
-                      <span>{r.commits !== undefined ? `${r.commits} commits` : ""}</span>
-                      <span>{r.totalTodos !== undefined ? `${r.totalTodos} todos` : ""}</span>
-                      <span>{r.stopReason ? `→ ${r.stopReason}` : ""}</span>
+                      {r.commits !== undefined ? <span>{r.commits} commits</span> : null}
+                      {r.totalTodos !== undefined ? <span>{r.totalTodos} todos</span> : null}
+                      {r.stopReason ? <span>→ {r.stopReason}</span> : null}
+                      {/* clonePath inline (2026-04-24): for non-blackboard
+                          presets the row was nearly empty mid-flight (no
+                          commits / no todos / no stopReason yet), making it
+                          hard to tell which target a row referred to. The
+                          path is the most useful "which run is this" cue;
+                          truncate-from-left so the run-name tail wins
+                          screen real estate over the shared mount prefix. */}
+                      <span
+                        className="font-mono text-[10px] text-ink-500 truncate"
+                        title={r.clonePath}
+                      >
+                        {truncateLeft(r.clonePath, 50)}
+                      </span>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();

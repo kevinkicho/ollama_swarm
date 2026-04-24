@@ -13,6 +13,7 @@ import type { Agent } from "../services/AgentManager.js";
 import {
   EMPTY_RESPONSE_RETRY_SUFFIX,
   extractTextWithDiag,
+  looksLikeJunk,
 } from "./extractText.js";
 
 interface DiagCtx {
@@ -47,7 +48,12 @@ export async function retryEmptyResponse(
       },
     });
     const { text, isEmpty } = extractTextWithDiag(retryRes, diagCtx);
-    return isEmpty ? null : text;
+    // Pattern 8: also reject the retry if it came back as junk-short
+    // single-token output (the failure mode we tried to recover from
+    // in the first place). Returning null keeps the original placeholder
+    // / junk text rather than swapping in a different junk string.
+    if (isEmpty || looksLikeJunk(text)) return null;
+    return text;
   } catch {
     return null;
   }
