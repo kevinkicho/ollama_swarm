@@ -212,6 +212,14 @@ export function SetupForm() {
   // server-side knob (Unit 34) interprets 0 as "stop on first all-met"
   // and 1+ as "climb that many tiers".
   const [ambitionTiers, setAmbitionTiers] = useState("");
+  // Unit 63 follow-on: knobs that exist server-side (Units 36, 58, 59,
+  // 60) but were never wired to the SetupForm. Same shape as the rest
+  // of the blackboard-only state — empty / false = inherit defaults.
+  const [dedicatedAuditor, setDedicatedAuditor] = useState(false);
+  const [auditorModel, setAuditorModel] = useState("");
+  const [specializedWorkers, setSpecializedWorkers] = useState(false);
+  const [criticEnsemble, setCriticEnsemble] = useState(false);
+  const [uiUrl, setUiUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const setError = useSwarm((s) => s.setError);
   const reset = useSwarm((s) => s.reset);
@@ -283,6 +291,22 @@ export function SetupForm() {
             presetSpecific.ambitionTiers = tiers;
           }
         }
+        // Unit 63 follow-on: only POST true. Sending dedicatedAuditor:
+        // false would still be valid but adds noise to the event log,
+        // and the runner reads `cfg.dedicatedAuditor === true` either
+        // way. Same for the worker / critic toggles.
+        if (dedicatedAuditor) presetSpecific.dedicatedAuditor = true;
+        const am = auditorModel.trim();
+        if (dedicatedAuditor && am.length > 0) {
+          presetSpecific.auditorModel = am;
+        }
+        if (specializedWorkers) presetSpecific.specializedWorkers = true;
+        if (criticEnsemble) presetSpecific.criticEnsemble = true;
+        // Unit 36: outside-world UI URL the auditor's swarm-ui agent
+        // navigates to. Server validates as a real URL (z.string().url()),
+        // so trim and only send when non-empty.
+        const ui = uiUrl.trim();
+        if (ui.length > 0) presetSpecific.uiUrl = ui;
       }
 
       const res = await fetch("/api/swarm/start", {
@@ -416,6 +440,16 @@ export function SetupForm() {
           setWallClockCapMin={setWallClockCapMin}
           ambitionTiers={ambitionTiers}
           setAmbitionTiers={setAmbitionTiers}
+          dedicatedAuditor={dedicatedAuditor}
+          setDedicatedAuditor={setDedicatedAuditor}
+          auditorModel={auditorModel}
+          setAuditorModel={setAuditorModel}
+          specializedWorkers={specializedWorkers}
+          setSpecializedWorkers={setSpecializedWorkers}
+          criticEnsemble={criticEnsemble}
+          setCriticEnsemble={setCriticEnsemble}
+          uiUrl={uiUrl}
+          setUiUrl={setUiUrl}
         />
 
         <div className="grid grid-cols-3 gap-4">
@@ -492,6 +526,36 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
+// Boolean checkbox styled to fit the same Field rhythm. Used for the
+// blackboard topology toggles (Units 58 / 59 / 60). The label wraps
+// the input so clicking the title toggles too.
+function ToggleField({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label className="block cursor-pointer">
+      <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          className="h-4 w-4 accent-emerald-500"
+        />
+        <span className="text-xs uppercase tracking-wide text-ink-400">{label}</span>
+      </div>
+      {hint ? <div className="text-xs text-ink-400 mt-1">{hint}</div> : null}
+    </label>
+  );
+}
+
 function BlackboardHelp() {
   const [open, setOpen] = useState(false);
   return (
@@ -557,6 +621,16 @@ function PresetAdvancedSettings(props: {
   setWallClockCapMin: (s: string) => void;
   ambitionTiers: string;
   setAmbitionTiers: (s: string) => void;
+  dedicatedAuditor: boolean;
+  setDedicatedAuditor: (v: boolean) => void;
+  auditorModel: string;
+  setAuditorModel: (s: string) => void;
+  specializedWorkers: boolean;
+  setSpecializedWorkers: (v: boolean) => void;
+  criticEnsemble: boolean;
+  setCriticEnsemble: (v: boolean) => void;
+  uiUrl: string;
+  setUiUrl: (s: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const {
@@ -576,6 +650,16 @@ function PresetAdvancedSettings(props: {
     setWallClockCapMin,
     ambitionTiers,
     setAmbitionTiers,
+    dedicatedAuditor,
+    setDedicatedAuditor,
+    auditorModel,
+    setAuditorModel,
+    specializedWorkers,
+    setSpecializedWorkers,
+    criticEnsemble,
+    setCriticEnsemble,
+    uiUrl,
+    setUiUrl,
   } = props;
 
   const hasAdvanced =
@@ -589,7 +673,7 @@ function PresetAdvancedSettings(props: {
       case "role-diff":
         return "Advanced settings — role catalog";
       case "blackboard":
-        return "Advanced settings — contract draft, per-agent models, runtime caps";
+        return "Advanced settings — contract, models, caps, agent topology, live URL";
       case "debate-judge":
         return "Advanced settings — proposition";
       default:
@@ -638,6 +722,18 @@ function PresetAdvancedSettings(props: {
                 setWallClockCapMin={setWallClockCapMin}
                 setAmbitionTiers={setAmbitionTiers}
               />
+              <BlackboardAgentTopology
+                dedicatedAuditor={dedicatedAuditor}
+                setDedicatedAuditor={setDedicatedAuditor}
+                auditorModel={auditorModel}
+                setAuditorModel={setAuditorModel}
+                specializedWorkers={specializedWorkers}
+                setSpecializedWorkers={setSpecializedWorkers}
+                criticEnsemble={criticEnsemble}
+                setCriticEnsemble={setCriticEnsemble}
+                fallbackModel={fallbackModel}
+              />
+              <BlackboardUiUrl uiUrl={uiUrl} setUiUrl={setUiUrl} />
             </>
           ) : null}
           {presetId === "debate-judge" ? (
@@ -912,6 +1008,118 @@ function MultiHourPresetChip({
     >
       + Multi-hour autonomous ({Math.round(MULTI_HOUR_CAP_MIN / 60)}h, {MULTI_HOUR_TIERS} tiers)
     </button>
+  );
+}
+
+// Unit 63 follow-on: Units 58 (dedicated auditor + auditor model),
+// 59 (specialized workers), and 60 (critic ensemble) all shipped
+// server-side but had no UI exposure. Grouped here as "agent
+// topology" because each one changes how many specialized roles
+// the run spawns or how many lanes a critic verdict takes.
+function BlackboardAgentTopology({
+  dedicatedAuditor,
+  setDedicatedAuditor,
+  auditorModel,
+  setAuditorModel,
+  specializedWorkers,
+  setSpecializedWorkers,
+  criticEnsemble,
+  setCriticEnsemble,
+  fallbackModel,
+}: {
+  dedicatedAuditor: boolean;
+  setDedicatedAuditor: (v: boolean) => void;
+  auditorModel: string;
+  setAuditorModel: (s: string) => void;
+  specializedWorkers: boolean;
+  setSpecializedWorkers: (v: boolean) => void;
+  criticEnsemble: boolean;
+  setCriticEnsemble: (v: boolean) => void;
+  fallbackModel: string;
+}) {
+  return (
+    <div className="space-y-2">
+      <ToggleField
+        label="Dedicated auditor agent (Unit 58)"
+        checked={dedicatedAuditor}
+        onChange={setDedicatedAuditor}
+        hint="Off: planner doubles as auditor (1 less process). On: spawn a separate agent at index N+1 that ONLY runs audit prompts. Frees the planner to focus on todo authorship; useful for multi-hour runs where audit + planning compete for the same session context."
+      />
+      <Field
+        label="Auditor model override (Unit 58)"
+        hint={
+          !dedicatedAuditor
+            ? "Only used when 'Dedicated auditor agent' is enabled above."
+            : auditorModel.trim().length === 0
+              ? `Empty → falls back to the planner model (or main Model: ${fallbackModel}). For a verifier-style audit, try a heavier reasoning model.`
+              : `Auditor agent will run on ${auditorModel.trim()}.`
+        }
+      >
+        <input
+          value={auditorModel}
+          onChange={(e) => setAuditorModel(e.target.value.slice(0, 200))}
+          placeholder={`(default: planner model)`}
+          className="input font-mono"
+          disabled={!dedicatedAuditor}
+        />
+      </Field>
+      <ToggleField
+        label="Specialized workers (Unit 59)"
+        checked={specializedWorkers}
+        onChange={setSpecializedWorkers}
+        hint="Off: all workers share one prompt. On: assign each worker a role (correctness / simplicity / consistency) so identical model weights produce distinct priors when claiming the same todo class. Keeps blackboard topology, no extra processes."
+      />
+      <ToggleField
+        label="Critic ensemble (Unit 60)"
+        checked={criticEnsemble}
+        onChange={setCriticEnsemble}
+        hint="Off: one critic verdict per commit (substance lane only). On: three parallel verdicts (substance / regression / consistency); reject if ANY lane rejects. Catches more busywork at the cost of 3× critic prompts per commit."
+      />
+    </div>
+  );
+}
+
+// Unit 63 follow-on: Unit 36's outside-world UI URL. Server-side
+// MCP_PLAYWRIGHT_ENABLED=true is also required for the swarm-ui
+// agent to actually capture; the hint surfaces this so users don't
+// silently get file-only audits when they expected a snapshot.
+function BlackboardUiUrl({
+  uiUrl,
+  setUiUrl,
+}: {
+  uiUrl: string;
+  setUiUrl: (s: string) => void;
+}) {
+  const trimmed = uiUrl.trim();
+  let isValid = trimmed.length === 0;
+  if (!isValid) {
+    try {
+      // eslint-disable-next-line no-new
+      new URL(trimmed);
+      isValid = true;
+    } catch {
+      isValid = false;
+    }
+  }
+  return (
+    <Field
+      label="Live app URL for outside-world auditor (Unit 36)"
+      hint={
+        trimmed.length === 0
+          ? "Optional. When set, the auditor's swarm-ui agent navigates here and captures the live page accessibility tree as primary evidence for user-visible criteria. Requires MCP_PLAYWRIGHT_ENABLED=true server-side AND `npm install -g @playwright/mcp` on the box. Without those the audit silently falls back to file-only evaluation."
+          : isValid
+            ? `Auditor will browser_navigate to ${trimmed} on each audit invocation.`
+            : "Not a valid URL — must include scheme (e.g. http://localhost:3000)."
+      }
+    >
+      <input
+        value={uiUrl}
+        onChange={(e) => setUiUrl(e.target.value.slice(0, 2000))}
+        placeholder="http://localhost:3000"
+        className={`input font-mono ${!isValid ? "border-rose-500" : ""}`}
+        inputMode="url"
+      />
+    </Field>
   );
 }
 
