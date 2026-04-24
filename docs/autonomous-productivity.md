@@ -97,7 +97,7 @@ yet. **→ Unit 36 (planned).**
 | 46   | HEADERS_TIMEOUT 600s + auditor prompt caps  | shipped (`c74cb7d`, 2026-04-23)|
 | 47   | Existing-clone work-pattern: detect + UI cue| planned (Kevin's ask 2026-04-23)|
 | 48   | Hide runner artifacts via .git/info/exclude | shipped (`fcf29ea`, 2026-04-23)|
-| 49   | Per-run summary file naming (no overwrite)  | planned (Kevin's ask 2026-04-23)|
+| 49   | Per-run summary file naming (no overwrite)  | shipped (`6f9b388`, 2026-04-23)|
 | 50   | Planner reads prior summary on resume       | planned (Kevin's ask 2026-04-23)|
 | 51   | Reload prior contract from blackboard-state | planned (Kevin's ask 2026-04-23)|
 | 52   | Run-identity panel + run history dropdown   | planned (Kevin's ask 2026-04-23)|
