@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
+import { visualizer } from "rollup-plugin-visualizer";
 
 function resolveBackendPort(mode: string): number {
   const env = loadEnv(mode, process.cwd(), "");
@@ -22,8 +23,25 @@ function resolveBackendPort(mode: string): number {
 export default defineConfig(({ mode }) => {
   const backend = resolveBackendPort(mode);
   const target = `http://127.0.0.1:${backend}`;
+  // Perf review 2026-04-24: opt-in bundle analyzer. Emits
+  // `web/dist/stats.html` + `stats.json` alongside the built bundle
+  // when `ANALYZE=1 npm run build` runs. Off by default so normal
+  // builds stay fast and dist/ stays clean.
+  const analyze = process.env.ANALYZE === "1" || process.env.ANALYZE === "true";
+  const plugins = [react()];
+  if (analyze) {
+    plugins.push(
+      visualizer({
+        filename: "dist/stats.html",
+        template: "treemap",
+        gzipSize: true,
+        brotliSize: true,
+        open: false,
+      }),
+    );
+  }
   return {
-    plugins: [react()],
+    plugins,
     define: {
       __BACKEND_PORT__: JSON.stringify(backend),
     },
