@@ -240,6 +240,10 @@ export type SwarmEvent =
       preset: string;
       plannerModel: string;
       workerModel: string;
+      // Auditor-related fields drive AgentPanel role + model display
+      // for the dedicated auditor at index N+1 (Unit 58).
+      auditorModel: string;
+      dedicatedAuditor: boolean;
       repoUrl: string;
       clonePath: string;
       agentCount: number;
@@ -270,6 +274,11 @@ export interface RunConfigSnapshot {
   preset: string;
   plannerModel: string;
   workerModel: string;
+  // Auditor model (used at index N+1 when dedicatedAuditor=true).
+  // Always set in run_started — falls back to plannerModel when the
+  // user didn't override.
+  auditorModel: string;
+  dedicatedAuditor: boolean;
   repoUrl: string;
   clonePath: string;
   agentCount: number;

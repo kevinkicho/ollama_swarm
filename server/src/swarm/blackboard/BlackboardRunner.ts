@@ -292,6 +292,8 @@ export class BlackboardRunner implements SwarmRunner {
           preset: this.active.preset,
           plannerModel: this.active.plannerModel ?? this.active.model,
           workerModel: this.active.workerModel ?? this.active.model,
+          auditorModel: this.active.auditorModel ?? this.active.plannerModel ?? this.active.model,
+          dedicatedAuditor: this.active.dedicatedAuditor === true,
           repoUrl: this.active.repoUrl,
           clonePath: this.active.localPath,
           agentCount: this.active.agentCount,

@@ -153,6 +153,14 @@ export type SwarmEvent =
       preset: string;
       plannerModel: string;
       workerModel: string;
+      // Auditor model used when cfg.dedicatedAuditor is true. Emitted
+      // unconditionally (falls back to plannerModel → main model when
+      // the user didn't override) so the UI can label the agent at
+      // index N+1 with its actual model. Discussion presets ignore.
+      auditorModel: string;
+      // Whether the run spawned a dedicated auditor at index N+1.
+      // The UI uses this to label that agent's role correctly.
+      dedicatedAuditor: boolean;
       repoUrl: string;
       clonePath: string;
       agentCount: number;
@@ -238,6 +246,10 @@ export interface SwarmStatusRunConfig {
   preset: string;
   plannerModel: string;
   workerModel: string;
+  // Mirrors run_started — auditor model + dedicatedAuditor flag for
+  // the AgentPanel role/model display at index N+1.
+  auditorModel: string;
+  dedicatedAuditor: boolean;
   repoUrl: string;
   clonePath: string;
   agentCount: number;

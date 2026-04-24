@@ -97,6 +97,8 @@ function dispatch(ev: SwarmEvent): void {
         preset: ev.preset,
         plannerModel: ev.plannerModel,
         workerModel: ev.workerModel,
+        auditorModel: ev.auditorModel,
+        dedicatedAuditor: ev.dedicatedAuditor,
         repoUrl: ev.repoUrl,
         clonePath: ev.clonePath,
         agentCount: ev.agentCount,

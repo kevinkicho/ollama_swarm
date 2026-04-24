@@ -102,6 +102,11 @@ export class Orchestrator {
       // Per-agent overrides (Unit 42) fall back to cfg.model when absent.
       plannerModel: cfg.plannerModel ?? cfg.model,
       workerModel: cfg.workerModel ?? cfg.model,
+      // Auditor model fallback chain matches BlackboardRunner: explicit
+      // override → planner override → main model. Same surface as the
+      // runner so the UI label is honest about what's actually running.
+      auditorModel: cfg.auditorModel ?? cfg.plannerModel ?? cfg.model,
+      dedicatedAuditor: cfg.dedicatedAuditor === true,
       repoUrl: cfg.repoUrl,
       clonePath: cfg.localPath,
       agentCount: cfg.agentCount,

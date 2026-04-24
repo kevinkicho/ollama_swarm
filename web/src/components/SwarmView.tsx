@@ -54,15 +54,23 @@ export function SwarmView() {
 
   const canStop = phase !== "stopping" && phase !== "stopped" && phase !== "failed" && phase !== "completed";
 
-  // Unit 56: derive per-agent role + model so AgentPanel can render its
-  // own session id + model chips inline (was the IdentifiersRow). Agent
-  // index 1 is the planner; everything else is a worker per the
-  // BlackboardRunner spawn contract.
+  // Unit 56 + UI-test fix 2026-04-24: derive per-agent role + model so
+  // AgentPanel can label its card. Agent index 1 is the planner; the
+  // dedicated auditor (Unit 58, blackboard only) spawns at
+  // index = agentCount + 1 and should be labeled "auditor", not
+  // "worker". Everything in between is a worker.
   const cfg = useSwarm((s) => s.runConfig);
-  const agentRole = (idx: number): "planner" | "worker" =>
-    idx === 1 ? "planner" : "worker";
-  const agentModel = (idx: number): string | undefined =>
-    cfg ? (idx === 1 ? cfg.plannerModel : cfg.workerModel) : undefined;
+  const agentRole = (idx: number): "planner" | "worker" | "auditor" => {
+    if (idx === 1) return "planner";
+    if (cfg?.dedicatedAuditor && idx > cfg.agentCount) return "auditor";
+    return "worker";
+  };
+  const agentModel = (idx: number): string | undefined => {
+    if (!cfg) return undefined;
+    if (idx === 1) return cfg.plannerModel;
+    if (cfg.dedicatedAuditor && idx > cfg.agentCount) return cfg.auditorModel;
+    return cfg.workerModel;
+  };
 
   return (
     <div className="h-full flex flex-col">

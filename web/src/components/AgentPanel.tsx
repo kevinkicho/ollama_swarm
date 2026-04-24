@@ -84,15 +84,18 @@ function formatSampleMs(ms: number): string {
 
 // Unit 56: AgentPanel takes role + model from the parent so the card
 // can render the previously-topbar-only IdentifiersRow chips
-// (per-agent session id + model) inline. Role is "planner" for index 1
-// and "worker" for any other; SwarmView derives both before passing.
+// (per-agent session id + model) inline. Roles today:
+//   - "planner" at index 1
+//   - "auditor" at index agentCount+1 when cfg.dedicatedAuditor (Unit 58)
+//   - "worker" for everything in between
+// SwarmView derives these via agentRole(idx) before passing.
 export function AgentPanel({
   agent,
   role,
   model,
 }: {
   agent: AgentState;
-  role: "planner" | "worker";
+  role: "planner" | "worker" | "auditor";
   model?: string;
 }) {
   const elapsed = useElapsedTicker(agent.thinkingSince, agent.status === "thinking");
@@ -124,9 +127,17 @@ export function AgentPanel({
               "text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 " +
               (role === "planner"
                 ? "border-amber-500/50 text-amber-300"
-                : "border-ink-600 text-ink-400")
+                : role === "auditor"
+                  ? "border-sky-500/50 text-sky-300"
+                  : "border-ink-600 text-ink-400")
             }
-            title={role === "planner" ? "Planner / replanner / auditor / critic" : "Worker (claims + commits todos)"}
+            title={
+              role === "planner"
+                ? "Planner / replanner / critic (runs audit too when no dedicated auditor)"
+                : role === "auditor"
+                  ? "Dedicated auditor (Unit 58) — judges contract criteria only, frees the planner to focus on todo authorship"
+                  : "Worker (claims + commits todos)"
+            }
           >
             {role}
           </span>
