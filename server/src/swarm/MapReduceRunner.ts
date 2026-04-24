@@ -13,6 +13,7 @@ import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
 import { extractTextWithDiag } from "./extractText.js";
 import { formatCloneMessage } from "./cloneMessage.js";
+import { staggerStart } from "./staggerStart.js";
 
 // Map-reduce over the repo.
 // Agent 1 = REDUCER (silent during the map phase, then synthesizes).
@@ -200,13 +201,13 @@ export class MapReduceRunner implements SwarmRunner {
 
         // MAP — mappers fire in parallel. Each sees only its assigned slice
         // + the seed. No transcript, no peer reports.
+        // Task #53: stagger the N parallel mapper prompts to avoid the
+        // Pattern 3 cold-start queue race confirmed in 2026-04-24 logs.
         const seedSnapshot = this.transcript.filter((e) => e.role === "system");
-        await Promise.allSettled(
-          mappers.map((m, i) => {
-            const mySlice = slices[i] ?? [];
-            return this.runMapperTurn(m, r, cfg.rounds, mySlice, seedSnapshot);
-          }),
-        );
+        await staggerStart(mappers, (m, i) => {
+          const mySlice = slices[i] ?? [];
+          return this.runMapperTurn(m, r, cfg.rounds, mySlice, seedSnapshot);
+        });
         if (this.stopping) break;
 
         // REDUCE — reducer sees full transcript (including all mapper

@@ -14,6 +14,7 @@ import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
 import { extractTextWithDiag } from "./extractText.js";
 import { formatCloneMessage } from "./cloneMessage.js";
+import { staggerStart } from "./staggerStart.js";
 
 // Orchestrator–worker hierarchy.
 // Agent 1 is the LEAD: it reads the repo, produces a plan assigning one
@@ -191,13 +192,13 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
         // worse) — the parallel cold-start ceiling applied to the warmup
         // batch too. OW relies on serial spawn-warmup from start() only.
         const seedSnapshot = this.transcript.filter((e) => e.role === "system");
-        await Promise.allSettled(
-          plan.assignments.map((a) => {
-            const w = workers.find((x) => x.index === a.agentIndex);
-            if (!w) return Promise.resolve();
-            return this.runWorkerTurn(w, r, cfg.rounds, a.subtask, seedSnapshot);
-          }),
-        );
+        // Task #53: stagger the N parallel worker prompts to avoid the
+        // Pattern 3 cold-start queue race confirmed in 2026-04-24 logs.
+        await staggerStart(plan.assignments, (a) => {
+          const w = workers.find((x) => x.index === a.agentIndex);
+          if (!w) return Promise.resolve();
+          return this.runWorkerTurn(w, r, cfg.rounds, a.subtask, seedSnapshot);
+        });
         if (this.stopping) break;
 
         // SYNTHESIZE — lead sees the full transcript again (now including

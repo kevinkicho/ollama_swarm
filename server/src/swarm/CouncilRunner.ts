@@ -13,6 +13,7 @@ import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
 import { extractTextWithDiag } from "./extractText.js";
 import { formatCloneMessage } from "./cloneMessage.js";
+import { staggerStart } from "./staggerStart.js";
 
 // Council / parallel drafts + reconcile.
 // Round 1: every agent drafts independently. Each agent's prompt contains
@@ -170,7 +171,13 @@ export class CouncilRunner implements SwarmRunner {
         // Fan out: runTurn appends to this.transcript as each agent returns,
         // so the UI sees drafts populate in real time while the prompts above
         // were all built from the pre-round snapshot.
-        await Promise.allSettled(agents.map((agent) => this.runTurn(agent, r, cfg.rounds, snapshot)));
+        // Task #53: stagger the N parallel session.prompt calls by ~150ms
+        // per agent so they don't all hit the cloud at the same ms.
+        // Log analysis 2026-04-24 confirmed Pattern 3 — agent-2 consistently
+        // loses the queue race when all agents fire simultaneously.
+        await staggerStart(agents, (agent) =>
+          this.runTurn(agent, r, cfg.rounds, snapshot),
+        );
       }
       if (!this.stopping) this.appendSystem("Council complete.");
     } catch (err) {
