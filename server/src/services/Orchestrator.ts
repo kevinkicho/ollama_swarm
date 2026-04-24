@@ -60,6 +60,21 @@ export class Orchestrator {
 
   async start(cfg: RunConfig): Promise<void> {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
+    // Improvement #5 (post task #34): if a previous run is in a terminal
+    // phase, isRunning() returns false but the runner reference is still
+    // pinned (only stop() clears it — natural completion does not). Drop
+    // it here so the new run gets a clean slot and the next status() call
+    // doesn't surface stale state from the old runner. This is the
+    // single-call equivalent of the explicit /stop the sequencer used to
+    // need between every preset.
+    if (this.runner) {
+      try {
+        await this.stop();
+      } catch {
+        // best-effort — if cleanup of the prior runner errors, surface it
+        // via the next status() rather than blocking the new start.
+      }
+    }
     const runner = this.buildRunner(cfg.preset, cfg);
     // Assign up-front so status()/isRunning() reflect the in-progress run for
     // new WS clients and the POST /status endpoint while start() is still awaiting.

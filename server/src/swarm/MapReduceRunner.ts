@@ -64,7 +64,14 @@ export class MapReduceRunner implements SwarmRunner {
   }
 
   isRunning(): boolean {
-    return this.phase !== "idle" && this.phase !== "stopped";
+    // Task #34: see BlackboardRunner.isRunning() — terminal phases
+    // are not running.
+    return (
+      this.phase !== "idle" &&
+      this.phase !== "stopped" &&
+      this.phase !== "completed" &&
+      this.phase !== "failed"
+    );
   }
 
   async start(cfg: RunConfig): Promise<void> {

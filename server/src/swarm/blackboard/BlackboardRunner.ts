@@ -328,7 +328,17 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   isRunning(): boolean {
-    return this.phase !== "idle" && this.phase !== "stopped";
+    // Task #34: terminal phases ("completed", "failed") must NOT be
+    // treated as running — otherwise the orchestrator can't accept a
+    // new start without an explicit /stop in between, even though the
+    // prior run is fully done. Sequential preset tours hit this on
+    // every transition.
+    return (
+      this.phase !== "idle" &&
+      this.phase !== "stopped" &&
+      this.phase !== "completed" &&
+      this.phase !== "failed"
+    );
   }
 
   async start(cfg: RunConfig): Promise<void> {
