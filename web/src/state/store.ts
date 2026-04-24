@@ -262,11 +262,25 @@ export const useSwarm = create<SwarmStore>((set) => ({
   // is supplied (test rigs, future callers that lack the fields).
   resetForNewRun: (info) =>
     set((s) => {
+      // Fix 2026-04-24 (Kevin caught stigmergy run showing a prior
+      // blackboard contract): resetForNewRun must ALSO clear the
+      // blackboard-specific panels' data (contract + todos + findings
+      // + summary). Otherwise they cross-contaminate — a non-blackboard
+      // run inherits the previous blackboard run's contract, making
+      // the Contract tab show misleading stale data. Cross-run history
+      // lives in the run-history dropdown (task #36), not in the
+      // live tabs.
+      const blackboardReset: Partial<SwarmStore> = {
+        contract: undefined,
+        todos: {},
+        findings: [],
+        summary: undefined,
+      };
       // Skip the divider entirely on an empty transcript — nothing to
       // divide yet, and it avoids the "first-paint shows a divider"
       // weirdness at run start.
       if (s.transcript.length === 0) {
-        return { agents: {}, streaming: {}, latency: {} };
+        return { agents: {}, streaming: {}, latency: {}, ...blackboardReset };
       }
       // Task #46 also: dedupe consecutive dividers. If the last entry
       // is already a run-start marker, don't stack a second one —
@@ -278,7 +292,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
         (lastEntry.text === "— new run started —" ||
           lastEntry.text.startsWith("▸▸RUN-START▸▸"));
       if (isLastADivider) {
-        return { agents: {}, streaming: {}, latency: {} };
+        return { agents: {}, streaming: {}, latency: {}, ...blackboardReset };
       }
       // Build the divider text. When metadata is supplied, prefix
       // with the sentinel + encode fields as a pipe-separated line
@@ -299,6 +313,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
         agents: {},
         streaming: {},
         latency: {},
+        ...blackboardReset,
         transcript: [
           ...s.transcript,
           {

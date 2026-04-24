@@ -18,8 +18,21 @@ export function SwarmView() {
   const [tab, setTab] = useState<Tab>("transcript");
 
   const reset = useSwarm((s) => s.reset);
+  const cfg = useSwarm((s) => s.runConfig);
   const agentList = Object.values(agents).sort((a, b) => a.index - b.index);
   const isTerminal = phase === "completed" || phase === "stopped" || phase === "failed";
+  // Board + Contract are blackboard-specific surfaces. Show the tabs
+  // only for blackboard runs (including pre-start when the preset is
+  // selected but no run config exists yet — default to showing them
+  // since the SetupForm is open).
+  const showBlackboardTabs = !cfg || cfg.preset === "blackboard";
+  // If the current tab becomes hidden (user switched presets while on
+  // Contract), fall back to Transcript so the content area isn't empty.
+  useEffect(() => {
+    if (!showBlackboardTabs && (tab === "board" || tab === "contract")) {
+      setTab("transcript");
+    }
+  }, [showBlackboardTabs, tab]);
 
   const onStop = async () => {
     if (!confirm("Stop the swarm? All spawned opencode processes will be terminated.")) return;
@@ -64,7 +77,6 @@ export function SwarmView() {
   //   - stigmergy: all explorers (self-organizing, no lead)
   //   - round-robin: all peers (no specialization)
   // Default when cfg is unknown: planner + worker shape (blackboard-ish).
-  const cfg = useSwarm((s) => s.runConfig);
   const agentRole = (idx: number): string => {
     if (!cfg) return idx === 1 ? "planner" : "worker";
     // Role-diff overlays catalog names with modulo wrap, matching the
@@ -143,15 +155,30 @@ export function SwarmView() {
           <TabButton active={tab === "transcript"} onClick={() => setTab("transcript")}>
             Transcript
           </TabButton>
-          <TabButton active={tab === "board"} onClick={() => setTab("board")}>
-            Board
-          </TabButton>
-          <TabButton active={tab === "contract"} onClick={() => setTab("contract")}>
-            Contract
-          </TabButton>
+          {/* Board + Contract are blackboard-only surfaces. Hiding
+              them on other presets avoids showing misleading empty
+              tabs and (pre-fix) a lingering prior-run contract. */}
+          {showBlackboardTabs ? (
+            <>
+              <TabButton active={tab === "board"} onClick={() => setTab("board")}>
+                Board
+              </TabButton>
+              <TabButton active={tab === "contract"} onClick={() => setTab("contract")}>
+                Contract
+              </TabButton>
+            </>
+          ) : null}
         </div>
         <div className="flex-1 overflow-hidden">
-          {tab === "transcript" ? <Transcript /> : tab === "board" ? <BoardView /> : <ContractPanel />}
+          {tab === "transcript" ? (
+            <Transcript />
+          ) : tab === "board" && showBlackboardTabs ? (
+            <BoardView />
+          ) : tab === "contract" && showBlackboardTabs ? (
+            <ContractPanel />
+          ) : (
+            <Transcript />
+          )}
         </div>
         <form onSubmit={onSay} className="border-t border-ink-700 p-3 bg-ink-800 flex gap-2">
           <input
