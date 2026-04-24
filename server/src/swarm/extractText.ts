@@ -48,9 +48,15 @@ export function extractText(res: unknown): string | undefined {
 //   - hasDataText: whether data.text fallback was empty too
 //   - responseShape: a one-line summary the user can grep on
 //
+// Task #54 (2026-04-24): returns { text, isEmpty } instead of just
+// text. Callers that want to retry on model silence (empty response
+// despite successful SDK resolution) gate on isEmpty. Callers that
+// don't care treat `text` as before — it still contains either the
+// extracted text OR the "(empty response)" placeholder.
+//
 // Routed through the runner's logDiag callback so the diagnostic
 // lands in logs/current.jsonl alongside other per-prompt records,
-// not just dev-server stderr. Caller passes its own this.opts.logDiag.
+// not just dev-server stderr.
 export function extractTextWithDiag(
   res: unknown,
   ctx: {
@@ -59,9 +65,9 @@ export function extractTextWithDiag(
     agentIndex?: number;
     logDiag?: (rec: Record<string, unknown>) => void;
   },
-): string {
+): { text: string; isEmpty: boolean } {
   const text = extractText(res);
-  if (text !== undefined && text.length > 0) return text;
+  if (text !== undefined && text.length > 0) return { text, isEmpty: false };
 
   const any = res as OpenCodeResponse;
   const parts = any?.data?.parts ?? any?.data?.info?.parts;
@@ -92,5 +98,13 @@ export function extractTextWithDiag(
     ts: Date.now(),
   });
 
-  return "(empty response)";
+  return { text: "(empty response)", isEmpty: true };
 }
+
+// Task #54: suffix a clarifying message onto a prompt that's being
+// retried after an empty response. Makes the retry intent explicit
+// ("you returned nothing; please answer substantively") so the model
+// has a clear signal to change behavior.
+export const EMPTY_RESPONSE_RETRY_SUFFIX =
+  "\n\nNote: your previous response returned no text content (only tool calls or step markers). " +
+  "Please respond now with a substantive plain-text answer — no tool calls, no empty completions.";

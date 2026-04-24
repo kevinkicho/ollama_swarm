@@ -47,9 +47,9 @@ describe("extractText", () => {
 });
 
 describe("extractTextWithDiag", () => {
-  it("returns the extracted text when present (no diag fired)", () => {
+  it("returns the extracted text + isEmpty=false when present (no diag fired)", () => {
     let diagCalls = 0;
-    const text = extractTextWithDiag(
+    const result = extractTextWithDiag(
       { data: { parts: [{ type: "text", text: "ok" }] } },
       {
         runner: "test",
@@ -60,13 +60,14 @@ describe("extractTextWithDiag", () => {
         },
       },
     );
-    assert.equal(text, "ok");
+    assert.equal(result.text, "ok");
+    assert.equal(result.isEmpty, false);
     assert.equal(diagCalls, 0);
   });
 
-  it("returns '(empty response)' AND fires diag when parts is empty", () => {
+  it("returns '(empty response)' + isEmpty=true AND fires diag when parts is empty", () => {
     let diagPayload: any = null;
-    const text = extractTextWithDiag(
+    const result = extractTextWithDiag(
       { data: { parts: [] } },
       {
         runner: "test",
@@ -77,7 +78,8 @@ describe("extractTextWithDiag", () => {
         },
       },
     );
-    assert.equal(text, "(empty response)");
+    assert.equal(result.text, "(empty response)");
+    assert.equal(result.isEmpty, true);
     assert.ok(diagPayload, "logDiag should have been called");
     assert.equal(diagPayload.type, "empty_response");
     assert.equal(diagPayload.runner, "test");
@@ -88,7 +90,7 @@ describe("extractTextWithDiag", () => {
 
   it("captures part types for diagnostics when only non-text parts present", () => {
     let diagPayload: any = null;
-    extractTextWithDiag(
+    const result = extractTextWithDiag(
       { data: { parts: [{ type: "tool" }, { type: "tool" }, { type: "metadata" }] } },
       {
         runner: "test",
@@ -98,6 +100,7 @@ describe("extractTextWithDiag", () => {
         },
       },
     );
+    assert.equal(result.isEmpty, true);
     assert.ok(diagPayload);
     assert.equal(diagPayload.partsLength, 3);
     assert.deepEqual(
@@ -107,16 +110,17 @@ describe("extractTextWithDiag", () => {
   });
 
   it("works without a logDiag callback (silent fallback)", () => {
-    const text = extractTextWithDiag(
+    const result = extractTextWithDiag(
       { data: { parts: [] } },
       { runner: "test", agentId: "agent-4" },
     );
-    assert.equal(text, "(empty response)");
+    assert.equal(result.text, "(empty response)");
+    assert.equal(result.isEmpty, true);
   });
 
   it("flags extractedEmptyString=true when text is '' (degenerate case)", () => {
     let diagPayload: any = null;
-    extractTextWithDiag(
+    const result = extractTextWithDiag(
       { data: { text: "" } },
       {
         runner: "test",
@@ -126,6 +130,7 @@ describe("extractTextWithDiag", () => {
         },
       },
     );
+    assert.equal(result.isEmpty, true);
     assert.ok(diagPayload);
     assert.equal(diagPayload.extractedEmptyString, true);
   });

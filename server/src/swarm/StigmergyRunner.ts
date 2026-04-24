@@ -12,6 +12,7 @@ import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
 import { extractTextWithDiag } from "./extractText.js";
+import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 
 // Stigmergy / pheromone trails — repo exploration mode.
@@ -378,12 +379,19 @@ export class StigmergyRunner implements SwarmRunner {
           });
         },
       });
-      const text = extractTextWithDiag(res, {
+      const diagCtx = {
         runner: "stigmergy",
         agentId: agent.id,
         agentIndex: agent.index,
         logDiag: this.opts.logDiag,
-      });
+      };
+      const extracted = extractTextWithDiag(res, diagCtx);
+      let text = extracted.text;
+      // Task #54: retry on model silence (see CouncilRunner for detail).
+      if (extracted.isEmpty && !this.stopping) {
+        const retryText = await retryEmptyResponse(agent, prompt, "swarm-read", diagCtx);
+        if (retryText !== null) text = retryText;
+      }
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",

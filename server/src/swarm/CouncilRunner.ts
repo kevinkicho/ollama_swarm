@@ -12,6 +12,7 @@ import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
 import { extractTextWithDiag } from "./extractText.js";
+import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
 
@@ -322,12 +323,22 @@ export class CouncilRunner implements SwarmRunner {
         },
       });
 
-      const text = extractTextWithDiag(res, {
+      const diagCtx = {
         runner: "council",
         agentId: agent.id,
         agentIndex: agent.index,
         logDiag: this.opts.logDiag,
-      });
+      };
+      const extracted = extractTextWithDiag(res, diagCtx);
+      let text = extracted.text;
+      // Task #54: one-shot retry when the response came back with no
+      // text part (model-silence pattern, observed on nemotron under
+      // parallel fanout). Best-effort — if the retry also empties or
+      // throws, we keep the original "(empty response)" placeholder.
+      if (extracted.isEmpty && !this.stopping) {
+        const retryText = await retryEmptyResponse(agent, prompt, "swarm-read", diagCtx);
+        if (retryText !== null) text = retryText;
+      }
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",

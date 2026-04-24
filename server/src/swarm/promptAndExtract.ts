@@ -1,0 +1,54 @@
+// Task #54 (2026-04-24): one-shot retry when extractTextWithDiag
+// signals isEmpty=true. Skips the full promptWithRetry wrapper on the
+// retry — transport errors were already handled on the first attempt;
+// this is purely about getting TEXT out of a response that came back
+// empty (partsLength > 0 but no type:"text" part, e.g.
+// ['step-start', 'tool'] or ['step-start', 'step-finish']).
+//
+// Best-effort: any error during the retry returns null so the caller
+// keeps its original "(empty response)" placeholder rather than
+// propagating a new failure.
+
+import type { Agent } from "../services/AgentManager.js";
+import {
+  EMPTY_RESPONSE_RETRY_SUFFIX,
+  extractTextWithDiag,
+} from "./extractText.js";
+
+interface DiagCtx {
+  runner: string;
+  agentId: string;
+  agentIndex?: number;
+  logDiag?: (rec: Record<string, unknown>) => void;
+}
+
+export async function retryEmptyResponse(
+  agent: Agent,
+  originalPrompt: string,
+  agentName: "swarm" | "swarm-read",
+  diagCtx: DiagCtx,
+): Promise<string | null> {
+  diagCtx.logDiag?.({
+    type: "_prompt_empty_retry",
+    runner: diagCtx.runner,
+    agentId: diagCtx.agentId,
+    agentIndex: diagCtx.agentIndex,
+    ts: Date.now(),
+  });
+  try {
+    const retryRes = await agent.client.session.prompt({
+      path: { id: agent.sessionId },
+      body: {
+        agent: agentName,
+        model: { providerID: "ollama", modelID: agent.model },
+        parts: [
+          { type: "text", text: originalPrompt + EMPTY_RESPONSE_RETRY_SUFFIX },
+        ],
+      },
+    });
+    const { text, isEmpty } = extractTextWithDiag(retryRes, diagCtx);
+    return isEmpty ? null : text;
+  } catch {
+    return null;
+  }
+}
