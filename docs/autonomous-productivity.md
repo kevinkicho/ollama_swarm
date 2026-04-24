@@ -116,7 +116,7 @@ yet. **→ Unit 36 (planned).**
 | 59   | Specialized-worker blackboard variant (59a) | shipped (`40cb099`, 2026-04-23)|
 | 60   | Multi-prompt critic ensemble                | shipped (`bfb156c`, 2026-04-23)|
 | 62   | Page-refresh persistence (REST catch-up)    | shipped (`c01a04a`, 2026-04-23)|
-| 63   | SetupForm: expose ambitionTiers + multi-hour preset chip | planned (Kevin's ask 2026-04-23)|
+| 63   | SetupForm: ambitionTiers input + multi-hour preset chip | shipped (`5bb8d7d`, 2026-04-23)|
 | 64+  | Cross-run resume + tier-aware replay        | hypothesized                   |
 | 64+  | Auto-start app (workers execute shell)      | hypothesized                   |
 | 64+  | Persistent swarm-ui across audits           | hypothesized                   |
