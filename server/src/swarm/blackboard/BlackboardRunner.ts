@@ -26,6 +26,7 @@ import {
 } from "./stateSnapshot.js";
 import { shouldRunFinalAudit } from "./finalAudit.js";
 import { promptWithRetry } from "../promptWithRetry.js";
+import { formatCloneMessage } from "../cloneMessage.js";
 import { buildSummary, computeLatencyStats, type PerAgentStat, type RunSummary } from "./summary.js";
 import { applyHunks } from "./applyHunks.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
@@ -427,7 +428,7 @@ export class BlackboardRunner implements SwarmRunner {
       ? [plannerModel, workerModel, auditorModel]
       : [plannerModel, workerModel];
     await this.opts.repos.writeOpencodeConfig(destPath, declaredModels);
-    this.appendSystem(`Cloned ${cfg.repoUrl} -> ${destPath}`);
+    this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
     if (plannerModel !== workerModel) {
       this.appendSystem(`Per-agent models: planner=${plannerModel}, workers=${workerModel}`);
     }

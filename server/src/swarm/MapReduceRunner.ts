@@ -12,6 +12,7 @@ import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
 import { extractTextWithDiag } from "./extractText.js";
+import { formatCloneMessage } from "./cloneMessage.js";
 
 // Map-reduce over the repo.
 // Agent 1 = REDUCER (silent during the map phase, then synthesizes).
@@ -102,7 +103,7 @@ export class MapReduceRunner implements SwarmRunner {
     // Unit 48: hide runner artifacts from `git status` (see RoundRobinRunner).
     await this.opts.repos.excludeRunnerArtifacts(destPath);
     await this.opts.repos.writeOpencodeConfig(destPath, cfg.model);
-    this.appendSystem(`Cloned ${cfg.repoUrl} -> ${destPath}`);
+    this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
 
     this.setPhase("spawning");
     const spawnTasks: Promise<Agent>[] = [];

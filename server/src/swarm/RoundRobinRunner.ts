@@ -13,6 +13,7 @@ import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
 import { extractTextWithDiag } from "./extractText.js";
+import { formatCloneMessage } from "./cloneMessage.js";
 
 export interface RoundRobinOptions {
   // Unit 8: when set, every agent gets a per-index role prepended to its
@@ -106,7 +107,7 @@ export class RoundRobinRunner implements SwarmRunner {
     // clone's local .git/info/exclude (NOT the user's .gitignore).
     await this.opts.repos.excludeRunnerArtifacts(destPath);
     await this.opts.repos.writeOpencodeConfig(destPath, cfg.model);
-    this.appendSystem(`Cloned ${cfg.repoUrl} -> ${destPath}`);
+    this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
 
     this.setPhase("spawning");
     const spawnTasks: Promise<Agent>[] = [];
