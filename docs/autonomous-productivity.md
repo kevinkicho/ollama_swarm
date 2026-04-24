@@ -111,9 +111,12 @@ yet. **→ Unit 36 (planned).**
 | 56   | Topbar + sidebar consolidation              | planned (Kevin's ask 2026-04-23)|
 | 56b  | Contract: dedupe counts (drop label row)    | planned (Kevin's ask 2026-04-23)|
 | 57   | Unit 51 fix: cache snapshot before phase    | planned (self-flagged 2026-04-23)|
-| 58+  | Cross-run resume + tier-aware replay        | hypothesized                   |
-| 58+  | Auto-start app (workers execute shell)      | hypothesized                   |
-| 58+  | Persistent swarm-ui across audits           | hypothesized                   |
+| 58   | Dedicated auditor agent (parallel to planner)| planned (Kevin's ask 2026-04-23)|
+| 59   | Specialized-worker blackboard variant       | planned (Kevin's ask 2026-04-23)|
+| 60   | Multi-prompt critic ensemble                | planned (Kevin's ask 2026-04-23)|
+| 61+  | Cross-run resume + tier-aware replay        | hypothesized                   |
+| 61+  | Auto-start app (workers execute shell)      | hypothesized                   |
+| 61+  | Persistent swarm-ui across audits           | hypothesized                   |
 
 ## Units 47-51 — Build-on-existing-clone work pattern (spec-lite)
 
@@ -467,6 +470,123 @@ encode the same information AND provide the filter affordance).
 
 Trivial — a couple lines deleted from `web/src/components/ContractPanel.tsx`.
 ~5 min. Bundle with Unit 56 since both touch UI cleanup.
+
+## Unit 58 — Dedicated auditor agent (spec-lite)
+
+Kevin's "I have budget" brainstorm 2026-04-23: the most leveraged
+single architectural change. Today agent-1 wears 4 hats (planner /
+poster / replanner / auditor / + critic on fresh session). The
+auditor pass is the single biggest bottleneck — Unit 46b had to
+truncate the audit prompt to 60 KB because it grows with every
+committed/skipped todo + every file in unmet criteria's
+expectedFiles. Run-3 of seaj-tsia-study spent ~10 min on its first
+audit; with workers idle for that whole window.
+
+**The change:** introduce a dedicated auditor agent (separate
+opencode session, optionally a different model — auditing is
+diff/criteria reasoning, could even use a smaller faster model).
+Agent-1 stays planner-only. Audit happens IN PARALLEL with workers
+draining the next batch of todos.
+
+**Wins (data-driven):**
+- Workers don't idle during audit (run-3 they were idle for 10
+  min while the first audit ran — that's 30+ todos worth of
+  parallel work foregone).
+- Fresh session for the auditor avoids anchoring bias on the
+  planner's prior decisions (same Unit 35-fix logic as the
+  critic).
+- If the auditor hangs/times out (Unit 46a's 600 s ceiling),
+  workers keep working — only the audit verdict is delayed,
+  not the whole run.
+
+**Risks:**
+- Loses the planner's session memory of "why I posted these
+  todos." Auditor sees the criteria + file state cold. May
+  matter on subtle / context-dependent verdicts.
+- Another opencode subprocess + cloud session to manage
+  (though Unit 38's PID tracker + Unit 41's verified-kill make
+  this cheap).
+
+**Implementation sketch:**
+- New AgentManager.spawnAuditor() called once at run-start.
+- BlackboardRunner's ~7 audit-call sites switch from
+  `promptPlannerWithFallback(planner, ...)` to
+  `promptAgent(this.auditor, ...)`.
+- killAll already covers the new agent.
+- ~2 hours including testing.
+
+**Order matters**: ship Unit 57 (snapshot race fix) BEFORE this
+unit so the auditor's prior-state read is reliable.
+
+## Unit 59 — Specialized-worker blackboard variant (spec-lite)
+
+Most research-backed of the three brainstorm items.
+**Precedent**: MetaGPT (Hong et al. 2023) PM/Architect/Engineer/QA
+roles outperform single-agent on HumanEval + SoftwareDev; ChatDev
+(Qian et al. 2023) CEO/CTO/Programmer/Reviewer/Tester pipeline
+improves task completion vs flat agent; AutoGen (Wu et al. 2023,
+Microsoft Research) conversational specialization framework with
+benchmark wins; AgentVerse (Chen et al. 2023) heterogeneous-agent
+framework.
+
+**The change:** a new preset (or a blackboard sub-mode) where each
+worker has a deliberately-different role prompt. Two design choices:
+
+**59a — Per-worker static role.** Worker-1 = "you bias toward
+correctness and edge cases." Worker-2 = "you bias toward simplicity
+and minimal diff." Worker-3 = "you bias toward stylistic
+consistency with the existing codebase." Worker pool is
+heterogeneous; planner doesn't decide which gets what — todos
+go to whichever worker is free, and the role bias shapes the
+diff.
+
+**59b — Planner-tagged routing.** Planner emits each todo with a
+`requiredRole` field (e.g., `"architecture"`, `"tactical-edit"`,
+`"test-coverage"`). Each worker has a role at spawn time;
+findClaimableTodo (Unit 45) only returns todos whose required
+role matches the worker's. Stronger specialization signal,
+more coordination cost.
+
+**Recommendation:** 59a first. It piggybacks on Unit 32's role
+catalog (already built for the role-diff discussion preset);
+porting that machinery into the blackboard worker prompt is a
+~3-4 hour unit. 59b is a more invasive Unit 59b that requires
+schema changes to Todo + the planner's output shape.
+
+**A/B opportunity:** with the resume-contract path (Unit 51), you
+can run the SAME contract through both vanilla blackboard and the
+specialized variant and compare commit quality / criteria-met rate.
+
+## Unit 60 — Multi-prompt critic ensemble (spec-lite)
+
+Worth-testing addition from the brainstorm. **Precedent**:
+Multi-Agent Debate (Du et al. 2023) and ChatEval (Chan et al. 2023)
+show multiple critics beat a single critic on factuality +
+human-correlation when the critics have **diverse perspectives**
+(not just more votes from the same prompt).
+
+**The change:** Unit 35's single critic at commit time becomes a
+3-critic ensemble. Each critic uses a deliberately different
+prompt:
+
+- **Substance critic** — "is this real work or busywork?"
+  (current Unit 35 prompt, unchanged)
+- **Regression critic** — "could this break anything that was
+  working before? Look at the file's other consumers."
+- **Consistency critic** — "does this match the codebase's
+  established patterns / style / naming?"
+
+Verdict is **majority vote**: 2-of-3 must accept. Tie-breaking:
+substance critic wins (it's the most directly load-bearing).
+
+**Cost**: triples the per-commit critic-prompt count. Throwing
+budget at quality. ~60 min of work; 100% of the cost is per-commit
+runtime.
+
+**A/B opportunity**: compare same contract under single-critic
+(Unit 35) vs ensemble. Measure: (a) how many commits the ensemble
+rejects that Unit 35 would have accepted, (b) how many of those
+were actually busywork on manual review.
 
 ## Unit 57 — Fix Unit 51 snapshot read race (spec-lite)
 
