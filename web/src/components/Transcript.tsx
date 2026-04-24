@@ -102,7 +102,48 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
       />
     );
   }
+  // Task #38: when the agent response is raw JSON that no structured
+  // summarizer recognized (e.g. orchestrator-worker assignments
+  // envelope, council reveal verdict, novel envelope shapes) — pretty-
+  // print it in a code block instead of the bare-text wall the
+  // CollapsibleBlock would otherwise render. Falls through cleanly to
+  // CollapsibleBlock if the text isn't valid JSON.
+  const prettyJson = useMemo(() => tryPrettyJson(entry.text), [entry.text]);
+  if (prettyJson) {
+    return (
+      <JsonPrettyBubble
+        className={className}
+        style={style}
+        header={header}
+        json={prettyJson}
+      />
+    );
+  }
   return <CollapsibleBlock className={className} style={style} header={header} text={entry.text} />;
+}
+
+// Task #38: parse + pretty-print agent text if it's valid JSON.
+// Returns the formatted string on success, null otherwise. Strips a
+// leading ```json ... ``` fence first since several presets wrap
+// envelopes that way. Only returns when the parsed value is an
+// object or array — bare strings/numbers/booleans pass through to
+// CollapsibleBlock since pretty-printing them adds no value.
+function tryPrettyJson(text: string): string | null {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return null;
+  // Strip a fenced ```json or ``` block if present.
+  const fenced = /^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/m.exec(trimmed);
+  const candidate = fenced ? fenced[1] : trimmed;
+  // Cheap pre-check so we don't run JSON.parse on every prose response.
+  const first = candidate.charAt(0);
+  if (first !== "{" && first !== "[") return null;
+  try {
+    const parsed = JSON.parse(candidate) as unknown;
+    if (parsed === null || typeof parsed !== "object") return null;
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return null;
+  }
 }
 
 // Unit 54: render the discriminated server-side summary as a single
@@ -201,6 +242,44 @@ function AgentJsonBubble({ summary, json, header, className, style }: AgentJsonB
             </button>
           ) : null}
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+// Task #38: render an agent response as a pretty-printed JSON block.
+// Used when the response IS valid JSON but no structured summarizer
+// recognized its envelope shape. Same collapse-on-overflow + view-
+// JSON-toggle UX as AgentJsonBubble, minus the summary line (we don't
+// have a one-liner to show — just present the formatted JSON
+// directly in a monospace block that's easy to scan).
+function JsonPrettyBubble({
+  json,
+  header,
+  className,
+  style,
+}: {
+  json: string;
+  header: React.ReactNode;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const tooLong = json.length > JSON_COLLAPSE_THRESHOLD;
+  const shown = !tooLong || expanded ? json : json.slice(0, JSON_COLLAPSE_THRESHOLD).trimEnd() + "…";
+  return (
+    <div className={className} style={style}>
+      {header}
+      <pre className="text-[11px] font-mono text-ink-200 whitespace-pre-wrap break-all rounded border border-ink-700 bg-ink-950 p-2 mt-1">
+        {shown}
+      </pre>
+      {tooLong ? (
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-1 text-xs underline text-ink-400 hover:text-ink-200"
+        >
+          {expanded ? "Show less" : `Show more (${json.length - JSON_COLLAPSE_THRESHOLD} chars)`}
+        </button>
       ) : null}
     </div>
   );
