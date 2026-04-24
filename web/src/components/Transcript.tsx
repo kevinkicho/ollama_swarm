@@ -154,6 +154,19 @@ function formatServerSummary(s: TranscriptEntrySummary): string {
   if (s.kind === "worker_skip") {
     return `Declined: ${s.reason}`;
   }
+  // Task #43: orchestrator-worker assignments → one-line summary plus a
+  // bullet block. Kept as a single string for the AgentJsonBubble path;
+  // line breaks render via whitespace-pre-wrap.
+  if (s.kind === "ow_assignments") {
+    const lead =
+      s.subtaskCount === 1
+        ? `Orchestrator assigned 1 subtask:`
+        : `Orchestrator assigned ${s.subtaskCount} subtasks:`;
+    const lines = s.assignments.map(
+      (a) => `  → agent-${a.agentIndex}: ${a.subtask}`,
+    );
+    return [lead, ...lines].join("\n");
+  }
   // worker_hunks
   const opParts: string[] = [];
   if (s.ops.replace > 0) opParts.push(`${s.ops.replace} replace`);

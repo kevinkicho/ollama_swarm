@@ -77,6 +77,15 @@ export type TranscriptEntrySummary =
   | {
       kind: "worker_skip";
       reason: string;
+    }
+  // Task #43: orchestrator-worker lead's assignments envelope. Parsed
+  // server-side by OrchestratorWorkerRunner after extractText; attached
+  // to the transcript entry so the UI renders a glance line + click-to-
+  // expand bullet list instead of a wall of JSON.
+  | {
+      kind: "ow_assignments";
+      subtaskCount: number;
+      assignments: Array<{ agentIndex: number; subtask: string }>;
     };
 
 export interface BoardCountsDTO {

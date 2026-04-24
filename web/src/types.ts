@@ -56,6 +56,12 @@ export type TranscriptEntrySummary =
   | {
       kind: "worker_skip";
       reason: string;
+    }
+  | {
+      // Task #43: orchestrator-worker lead's assignments envelope.
+      kind: "ow_assignments";
+      subtaskCount: number;
+      assignments: Array<{ agentIndex: number; subtask: string }>;
     };
 
 export type SwarmPhase =

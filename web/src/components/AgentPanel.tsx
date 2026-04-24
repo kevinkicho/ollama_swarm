@@ -19,6 +19,13 @@ const STATUS_COLOR: Record<AgentState["status"], string> = {
   stopped: "bg-ink-400",
 };
 
+// Task #40: when the RUN itself terminated cleanly (phase === "completed"),
+// stopped agents represent a successful exit — NOT a crash / user-stop.
+// Show that distinction with a muted emerald dot + "done" label instead of
+// the grey "stopped" treatment. Applied inside the AgentPanel render
+// below using the store's phase.
+const DONE_COLOR = "bg-emerald-600/60";
+
 // Unit 39: format a wall-clock ms duration as "3m54s" / "45s" / "1h12m".
 // Keep it terse so it fits inside an agent card. Sub-second is clamped
 // to "0s" so the ticker doesn't start at "-12ms".
@@ -100,6 +107,7 @@ export function AgentPanel({
 }) {
   const elapsed = useElapsedTicker(agent.thinkingSince, agent.status === "thinking");
   const samples = useSwarm((s) => s.latency[agent.id] ?? EMPTY_SAMPLES);
+  const phase = useSwarm((s) => s.phase);
   const [hover, setHover] = useState(false);
   const retryLabel =
     agent.status === "retrying" && agent.retryAttempt && agent.retryMax
@@ -111,7 +119,17 @@ export function AgentPanel({
     agent.status === "thinking" && elapsed
       ? `thinking ${elapsed}`
       : null;
-  const primaryLine = retryLabel ?? thinkingLabel ?? agent.status;
+  // Task #40: when the run ended cleanly, rename the terminal state
+  // to "done" so users can tell it apart from a crash / user-stop.
+  const runCompletedCleanly = phase === "completed";
+  const statusLabel =
+    agent.status === "stopped" && runCompletedCleanly ? "done" : agent.status;
+  const primaryLine = retryLabel ?? thinkingLabel ?? statusLabel;
+  // Override the status dot color for the done case too.
+  const dotColor =
+    agent.status === "stopped" && runCompletedCleanly
+      ? DONE_COLOR
+      : STATUS_COLOR[agent.status];
   const isThinking = agent.status === "thinking" && agent.thinkingSince !== undefined;
   const showPopover = hover && samples.length > 0;
   const last = samples.length > 0 ? samples[samples.length - 1] : null;
@@ -120,7 +138,10 @@ export function AgentPanel({
     <div className="border border-ink-700 rounded-md p-3 bg-ink-800">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 min-w-0">
-          <span className={`inline-block h-2 w-2 rounded-full ${STATUS_COLOR[agent.status]} shrink-0`} />
+          <span
+            className={`inline-block h-2 w-2 rounded-full ${dotColor} shrink-0`}
+            title={agent.status === "stopped" && runCompletedCleanly ? "Exited cleanly when the run completed (not a crash)" : undefined}
+          />
           <span className="font-medium">Agent {agent.index}</span>
           <span
             className={

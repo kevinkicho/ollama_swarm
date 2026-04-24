@@ -203,19 +203,38 @@ function IdentityStrip() {
   const runName = cfg ? deriveRunName(cfg.clonePath) : "(unnamed run)";
   const onOpen = async () => {
     if (!cfg) return;
-    try {
-      const res = await fetch("/api/swarm/open", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: cfg.clonePath }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        // Soft failure — log to console rather than spam the user.
-        console.warn("open clone path failed:", body.error ?? res.status);
+    // Task #45: retry on TypeError: Failed to fetch (tsx-watch restart
+    // window makes the backend briefly unreachable — 2-5s typical).
+    // Retry 3 times with 500ms backoff before giving up.
+    const attemptOnce = async (): Promise<{ ok: boolean; err?: unknown }> => {
+      try {
+        const res = await fetch("/api/swarm/open", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: cfg.clonePath }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          return { ok: false, err: body.error ?? `HTTP ${res.status}` };
+        }
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, err };
       }
-    } catch (err) {
-      console.warn("open clone path failed:", err);
+    };
+    for (let i = 0; i < 3; i++) {
+      const result = await attemptOnce();
+      if (result.ok) return;
+      // Only retry on TypeError (network-level). HTTP errors are permanent.
+      if (!(result.err instanceof TypeError)) {
+        console.warn("open clone path failed:", result.err);
+        return;
+      }
+      if (i < 2) {
+        await new Promise((r) => setTimeout(r, 500));
+      } else {
+        console.warn("open clone path failed after 3 retries:", result.err);
+      }
     }
   };
   const sameModel = cfg && cfg.plannerModel === cfg.workerModel;
@@ -327,19 +346,40 @@ function RunHistoryDropdown() {
 
   // Refetch on open so the list reflects any sibling runs that
   // appeared since the previous open. Cheap — directory listing.
+  // Task #47: retry on TypeError: Failed to fetch so tsx-watch restart
+  // windows don't surface as a permanent error in the dropdown.
   useEffect(() => {
     if (!open) return;
     setLoading(true);
     setError(null);
-    // The route is mounted at /api/swarm in server/src/index.ts.
-    fetch("/api/swarm/runs")
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((body) => {
-        const list = Array.isArray(body.runs) ? (body.runs as RunSummaryDigest[]) : [];
-        setRuns(list);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    (async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const r = await fetch("/api/swarm/runs");
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const body = await r.json();
+          if (cancelled) return;
+          const list = Array.isArray(body.runs) ? (body.runs as RunSummaryDigest[]) : [];
+          setRuns(list);
+          setLoading(false);
+          return;
+        } catch (err) {
+          const isNetwork = err instanceof TypeError;
+          if (!isNetwork || attempt === 2) {
+            if (!cancelled) {
+              setError(err instanceof Error ? err.message : String(err));
+              setLoading(false);
+            }
+            return;
+          }
+          await new Promise((r2) => setTimeout(r2, 500));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
 
   const onOpenFolder = async (clonePath: string) => {

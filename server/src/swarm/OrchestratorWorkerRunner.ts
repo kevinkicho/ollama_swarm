@@ -6,6 +6,7 @@ import type {
   SwarmPhase,
   SwarmStatus,
   TranscriptEntry,
+  TranscriptEntrySummary,
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
@@ -377,6 +378,10 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
         agentIndex: agent.index,
         logDiag: this.opts.logDiag,
       });
+      // Task #43: if this agent's response parses as an assignments
+      // envelope (lead's turn 1 shape), attach a structured summary
+      // so the UI renders a glance line + bullet list instead of
+      // raw JSON. Workers' free-text responses get no summary.
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
@@ -384,6 +389,7 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
         agentIndex: agent.index,
         text,
         ts: Date.now(),
+        summary: parseAssignmentsSummary(text),
       };
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });
@@ -618,4 +624,42 @@ function describeSdkError(err: unknown): string {
     }
   }
   return String(err);
+}
+
+// Task #43: parse an orchestrator "assignments" envelope into a
+// structured summary the transcript UI can render inline. Accepts a
+// fenced ```json``` block OR a bare object. Returns undefined when
+// the text isn't an assignments envelope (e.g. worker free-text
+// response, lead synthesis pass). The summary carries enough for
+// the UI to render a one-line summary + bullet-list expansion.
+function parseAssignmentsSummary(text: string): TranscriptEntrySummary | undefined {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return undefined;
+  // Strip a ```json ... ``` fence if present.
+  const fenced = /^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/m.exec(trimmed);
+  const candidate = fenced ? fenced[1] : trimmed;
+  if (candidate.charAt(0) !== "{") return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(candidate);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const obj = parsed as { assignments?: unknown };
+  if (!Array.isArray(obj.assignments)) return undefined;
+  const assignments: Array<{ agentIndex: number; subtask: string }> = [];
+  for (const item of obj.assignments) {
+    if (!item || typeof item !== "object") continue;
+    const it = item as { agentIndex?: unknown; subtask?: unknown };
+    if (typeof it.agentIndex !== "number") continue;
+    if (typeof it.subtask !== "string") continue;
+    assignments.push({ agentIndex: it.agentIndex, subtask: it.subtask });
+  }
+  if (assignments.length === 0) return undefined;
+  return {
+    kind: "ow_assignments",
+    subtaskCount: assignments.length,
+    assignments,
+  };
 }
