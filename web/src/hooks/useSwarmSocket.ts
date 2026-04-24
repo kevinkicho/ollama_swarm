@@ -68,6 +68,15 @@ function dispatch(ev: SwarmEvent): void {
         attempt: ev.attempt,
       });
       break;
+    case "clone_state":
+      s.setCloneState({
+        alreadyPresent: ev.alreadyPresent,
+        clonePath: ev.clonePath,
+        priorCommits: ev.priorCommits,
+        priorChangedFiles: ev.priorChangedFiles,
+        priorUntrackedFiles: ev.priorUntrackedFiles,
+      });
+      break;
   }
 }
 

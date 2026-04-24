@@ -193,6 +193,19 @@ export type SwarmEvent =
       elapsedMs: number;
       success: boolean;
       ts: number;
+    }
+  // Unit 47: emitted once per run, right after the clone completes.
+  // alreadyPresent=true means the runner reused an existing clone
+  // (build-on-existing-clone work pattern) — UI surfaces a banner so
+  // the user knows the run is building on prior progress, not a
+  // fresh start.
+  | {
+      type: "clone_state";
+      alreadyPresent: boolean;
+      clonePath: string;
+      priorCommits: number;
+      priorChangedFiles: number;
+      priorUntrackedFiles: number;
     };
 
 // Unit 40: one recent-latency sample as stored client-side.
@@ -201,4 +214,13 @@ export interface LatencySample {
   elapsedMs: number;
   success: boolean;
   attempt: number;
+}
+
+// Unit 47: client-side mirror of the clone_state event payload.
+export interface CloneState {
+  alreadyPresent: boolean;
+  clonePath: string;
+  priorCommits: number;
+  priorChangedFiles: number;
+  priorUntrackedFiles: number;
 }

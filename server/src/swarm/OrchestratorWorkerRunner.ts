@@ -78,7 +78,17 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
     this.summaryWritten = false;
 
     this.setPhase("cloning");
-    const { destPath } = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
+    const cloneResult = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
+    const { destPath } = cloneResult;
+    // Unit 47: tell the UI whether this is a fresh clone or a resume.
+    this.opts.emit({
+      type: "clone_state",
+      alreadyPresent: cloneResult.alreadyPresent,
+      clonePath: destPath,
+      priorCommits: cloneResult.priorCommits,
+      priorChangedFiles: cloneResult.priorChangedFiles,
+      priorUntrackedFiles: cloneResult.priorUntrackedFiles,
+    });
     // Unit 48: hide runner artifacts from `git status` (see RoundRobinRunner).
     await this.opts.repos.excludeRunnerArtifacts(destPath);
     await this.opts.repos.writeOpencodeConfig(destPath, cfg.model);

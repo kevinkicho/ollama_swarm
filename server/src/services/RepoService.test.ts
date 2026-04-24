@@ -447,3 +447,89 @@ test("excludeRunnerArtifacts — handles existing exclude file without trailing 
     await fs.rm(clone, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Unit 47: cloneStats — used by clone() to populate the extended
+// CloneResult so the runner can emit the clone_state SwarmEvent. We
+// build a real tiny git repo on disk because cloneStats shells out via
+// simple-git; mocking would defeat the purpose.
+// ---------------------------------------------------------------------------
+
+import { execSync } from "node:child_process";
+
+async function makeTmpGitRepo(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-clonestats-"));
+  // git init + config a placeholder identity so the test commits work
+  // on hosts that don't have a global git config (CI in particular).
+  execSync("git init -q -b main", { cwd: root });
+  execSync("git config user.email test@example.com", { cwd: root });
+  execSync("git config user.name Test", { cwd: root });
+  return root;
+}
+
+test("cloneStats — returns commits=1 / clean tree on a fresh single-commit repo", async () => {
+  const root = await makeTmpGitRepo();
+  try {
+    await fs.writeFile(path.join(root, "README.md"), "# Hello\n");
+    execSync("git add README.md && git commit -q -m initial", { cwd: root });
+    const repos = new RepoService();
+    const stats = await repos.cloneStats(root);
+    assert.equal(stats.commits, 1, "single commit");
+    assert.equal(stats.changedFiles, 0, "clean tree");
+    assert.equal(stats.untrackedFiles, 0, "no untracked");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cloneStats — counts modified + untracked files separately", async () => {
+  const root = await makeTmpGitRepo();
+  try {
+    await fs.writeFile(path.join(root, "tracked.md"), "v1\n");
+    execSync("git add tracked.md && git commit -q -m v1", { cwd: root });
+    // Modify the tracked file
+    await fs.writeFile(path.join(root, "tracked.md"), "v2\n");
+    // Add an untracked file
+    await fs.writeFile(path.join(root, "fresh.md"), "new\n");
+    const repos = new RepoService();
+    const stats = await repos.cloneStats(root);
+    assert.equal(stats.commits, 1);
+    assert.equal(stats.changedFiles, 1, "tracked.md is modified");
+    assert.equal(stats.untrackedFiles, 1, "fresh.md is untracked");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cloneStats — counts multiple commits in history", async () => {
+  const root = await makeTmpGitRepo();
+  try {
+    await fs.writeFile(path.join(root, "a.md"), "1\n");
+    execSync("git add a.md && git commit -q -m c1", { cwd: root });
+    await fs.writeFile(path.join(root, "b.md"), "2\n");
+    execSync("git add b.md && git commit -q -m c2", { cwd: root });
+    await fs.writeFile(path.join(root, "c.md"), "3\n");
+    execSync("git add c.md && git commit -q -m c3", { cwd: root });
+    const repos = new RepoService();
+    const stats = await repos.cloneStats(root);
+    assert.equal(stats.commits, 3);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cloneStats — returns zeros for a non-git directory (best-effort)", async () => {
+  const notARepo = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-clonestats-noregit-"));
+  try {
+    const repos = new RepoService();
+    const stats = await repos.cloneStats(notARepo);
+    // No throw, just zeros — the runner emits a clone_state with zero
+    // counts and the UI knows not to show a "you have prior work"
+    // banner because alreadyPresent will be false anyway.
+    assert.equal(stats.commits, 0);
+    assert.equal(stats.changedFiles, 0);
+    assert.equal(stats.untrackedFiles, 0);
+  } finally {
+    await fs.rm(notARepo, { recursive: true, force: true });
+  }
+});

@@ -292,9 +292,23 @@ export class BlackboardRunner implements SwarmRunner {
     this.active = cfg;
 
     this.setPhase("cloning");
-    const { destPath } = await this.opts.repos.clone({
+    const cloneResult = await this.opts.repos.clone({
       url: cfg.repoUrl,
       destPath: cfg.localPath,
+    });
+    const { destPath } = cloneResult;
+    // Unit 47: tell the UI whether this is a fresh clone or a resume,
+    // and how much prior work it's building on. The build-on-existing
+    // pattern (Units 47-51) makes this distinction load-bearing —
+    // user shouldn't be confused when their re-run silently picks up
+    // 4 prior commits + 5 modified files.
+    this.opts.emit({
+      type: "clone_state",
+      alreadyPresent: cloneResult.alreadyPresent,
+      clonePath: destPath,
+      priorCommits: cloneResult.priorCommits,
+      priorChangedFiles: cloneResult.priorChangedFiles,
+      priorUntrackedFiles: cloneResult.priorUntrackedFiles,
     });
     // Unit 42: per-agent model overrides. Each falls back to cfg.model
     // when absent, so existing single-model runs are byte-identical.

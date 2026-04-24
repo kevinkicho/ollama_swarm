@@ -3,6 +3,7 @@ import type {
   AgentState,
   BoardSnapshot,
   Claim,
+  CloneState,
   ExitContract,
   Finding,
   LatencySample,
@@ -29,6 +30,13 @@ interface SwarmStore {
   summary?: RunSummary;
   error?: string;
   latency: Record<string, LatencySample[]>;
+  // Unit 47: latest clone_state event for the current run, or
+  // undefined before the runner emits it. UI uses this to show the
+  // "you're resuming an existing clone" banner.
+  cloneState?: CloneState;
+  // Unit 47: user has dismissed the resume banner for this run; the
+  // banner stays hidden until the next reset (new run start).
+  cloneBannerDismissed: boolean;
 
   setPhase: (phase: SwarmPhase, round: number) => void;
   upsertAgent: (a: AgentState) => void;
@@ -47,6 +55,8 @@ interface SwarmStore {
   setContract: (c: ExitContract) => void;
   setSummary: (s: RunSummary) => void;
   pushLatencySample: (agentId: string, sample: LatencySample) => void;
+  setCloneState: (c: CloneState) => void;
+  dismissCloneBanner: () => void;
 
   setError: (msg: string | undefined) => void;
   reset: () => void;
@@ -64,6 +74,8 @@ export const useSwarm = create<SwarmStore>((set) => ({
   summary: undefined,
   error: undefined,
   latency: {},
+  cloneState: undefined,
+  cloneBannerDismissed: false,
 
   setPhase: (phase, round) => set({ phase, round }),
   upsertAgent: (a) => set((s) => ({ agents: { ...s.agents, [a.id]: a } })),
@@ -167,6 +179,12 @@ export const useSwarm = create<SwarmStore>((set) => ({
       if (next.length > LATENCY_WINDOW) next.splice(0, next.length - LATENCY_WINDOW);
       return { latency: { ...s.latency, [agentId]: next } };
     }),
+  // Unit 47: clone_state arrives once per run. Setting it ALSO clears
+  // the dismissed flag so a fresh run shows its banner even if a
+  // prior banner was dismissed mid-session (each run has its own
+  // dismissal scope).
+  setCloneState: (c) => set({ cloneState: c, cloneBannerDismissed: false }),
+  dismissCloneBanner: () => set({ cloneBannerDismissed: true }),
 
   setError: (msg) => set({ error: msg }),
   reset: () =>
@@ -182,5 +200,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       summary: undefined,
       error: undefined,
       latency: {},
+      cloneState: undefined,
+      cloneBannerDismissed: false,
     }),
 }));

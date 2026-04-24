@@ -97,6 +97,20 @@ export type SwarmEvent =
       elapsedMs: number;
       success: boolean;
       ts: number;
+    }
+  // Unit 47: emitted once per run, right after RepoService.clone
+  // resolves. `alreadyPresent` distinguishes a fresh shallow clone
+  // from a build-on-existing-clone resume. The 3 counts give the UI
+  // enough to render a "you're resuming N prior commits + M modified
+  // + K untracked" banner without a separate fetch. Clone path is
+  // included so a UI banner can show what the resume targets.
+  | {
+      type: "clone_state";
+      alreadyPresent: boolean;
+      clonePath: string;
+      priorCommits: number;
+      priorChangedFiles: number;
+      priorUntrackedFiles: number;
     };
 
 export type SwarmPhase =

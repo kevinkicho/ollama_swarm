@@ -13,6 +13,23 @@ export interface CloneOptions {
 export interface CloneResult {
   destPath: string;
   alreadyPresent: boolean;
+  // Unit 47: prior-state stats so the UI can render a "you're resuming
+  // an existing clone" banner without a separate round-trip. Always
+  // populated; on a fresh clone the values reflect the shallow clone's
+  // initial state (commits=1, changedFiles=0, untrackedFiles=0).
+  // Best-effort — git failures yield zeros, never throw out of clone().
+  priorCommits: number;
+  priorChangedFiles: number;
+  priorUntrackedFiles: number;
+}
+
+// Unit 47: prior-state stats helper. Used by clone() to populate the
+// extended CloneResult. Exported so future tooling (resume detector,
+// per-run gating) can reuse the same shape.
+export interface CloneStats {
+  commits: number;
+  changedFiles: number;
+  untrackedFiles: number;
 }
 
 // Given an http(s) git URL and a parent folder, return the absolute path the
@@ -91,7 +108,16 @@ export class RepoService {
       if (nonEmpty) {
         const isRepo = await this.dirExists(path.join(abs, ".git"));
         if (isRepo && !opts.force) {
-          return { destPath: abs, alreadyPresent: true };
+          // Unit 47: populate prior-state stats so the runner can emit
+          // a "you're resuming an existing clone" signal to the UI.
+          const stats = await this.cloneStats(abs);
+          return {
+            destPath: abs,
+            alreadyPresent: true,
+            priorCommits: stats.commits,
+            priorChangedFiles: stats.changedFiles,
+            priorUntrackedFiles: stats.untrackedFiles,
+          };
         }
         if (!opts.force) {
           throw new Error(
@@ -106,7 +132,47 @@ export class RepoService {
     const authedUrl = this.withAuth(opts.url);
     const git = simpleGit();
     await git.clone(authedUrl, abs, ["--depth", "1"]);
-    return { destPath: abs, alreadyPresent: false };
+    const stats = await this.cloneStats(abs);
+    return {
+      destPath: abs,
+      alreadyPresent: false,
+      priorCommits: stats.commits,
+      priorChangedFiles: stats.changedFiles,
+      priorUntrackedFiles: stats.untrackedFiles,
+    };
+  }
+
+  // Unit 47: count commits + working-tree changes inside an existing
+  // clone. Used by clone() so its CloneResult tells the runner (and
+  // ultimately the UI) whether this is a fresh shallow clone or a
+  // resume on top of accumulated work.
+  //
+  // Best-effort: any git failure yields zeros rather than throwing —
+  // we'd rather start the run with a missing banner than abort
+  // because `git status` was momentarily unhappy.
+  async cloneStats(clonePath: string): Promise<CloneStats> {
+    try {
+      const git = simpleGit(clonePath);
+      // rev-list --count counts reachable commits from HEAD. On a
+      // shallow `--depth 1` clone this returns 1; on a clone with
+      // history it returns N.
+      const commitsRaw = await git.raw(["rev-list", "--count", "HEAD"]);
+      const commits = Number.parseInt(commitsRaw.trim(), 10) || 0;
+      // status returns parsed porcelain. Modified+staged count vs
+      // untracked split — matches what `git status -s` shows.
+      const status = await git.status();
+      // Modified | added | deleted | renamed all count as "changed";
+      // not_added is the porcelain "??" untracked bucket.
+      const changedFiles =
+        status.modified.length +
+        status.created.length +
+        status.deleted.length +
+        status.renamed.length;
+      const untrackedFiles = status.not_added.length;
+      return { commits, changedFiles, untrackedFiles };
+    } catch {
+      return { commits: 0, changedFiles: 0, untrackedFiles: 0 };
+    }
   }
 
   // Unit 48: append runner-written file patterns to the clone's
