@@ -292,7 +292,8 @@ function RunHistoryDropdown() {
     if (!open) return;
     setLoading(true);
     setError(null);
-    fetch("/api/runs")
+    // The route is mounted at /api/swarm in server/src/index.ts.
+    fetch("/api/swarm/runs")
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((body) => {
         const list = Array.isArray(body.runs) ? (body.runs as RunSummaryDigest[]) : [];
