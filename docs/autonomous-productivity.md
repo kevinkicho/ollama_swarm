@@ -108,9 +108,11 @@ yet. **→ Unit 36 (planned).**
 | 53   | Contract panel: status filter (default unmet)| shipped (`1c9edfd`, 2026-04-23)|
 | 54   | Transcript: collapse worker JSON to summary | shipped (`15a7b81`, 2026-04-23)|
 | 55   | Auto-killAll on natural completion          | shipped (`76fe957`, 2026-04-23)|
-| 56+  | Cross-run resume + tier-aware replay        | hypothesized                   |
-| 56+  | Auto-start app (workers execute shell)      | hypothesized                   |
-| 56+  | Persistent swarm-ui across audits           | hypothesized                   |
+| 56   | Topbar + sidebar consolidation              | planned (Kevin's ask 2026-04-23)|
+| 57   | Unit 51 fix: cache snapshot before phase    | planned (self-flagged 2026-04-23)|
+| 58+  | Cross-run resume + tier-aware replay        | hypothesized                   |
+| 58+  | Auto-start app (workers execute shell)      | hypothesized                   |
+| 58+  | Persistent swarm-ui across audits           | hypothesized                   |
 
 ## Units 47-51 — Build-on-existing-clone work pattern (spec-lite)
 
@@ -411,3 +413,64 @@ them.
   risks killing unrelated dev work. PID-file approach is surgical.
 
 **Dependency:** none. Can ship independently of Unit 37.
+
+
+## Unit 56 — Topbar + sidebar consolidation (spec-lite)
+
+Kevin's 2026-04-23 ask after seeing the Phase A+B+C UI shipped:
+"there are multiple topbars... lets put all agent-specific
+information [in the left-sidebar agent cards] for concise
+presentation, and put all the run-specific information into a
+single topbar." Reduces 2 topbars to 1, moves what's naturally
+agent-scoped to the agent panel.
+
+**End state (after this unit):**
+
+1. App header (unchanged) — title + RuntimeTicker + PhasePill.
+2. CloneBanner (unchanged — Kevin: "this is great. lets keep this").
+3. **Single run-identity topbar** with: run uuid (chip,
+   click-to-copy), run name, preset, planner model, worker model,
+   total agents count, project path (truncate-from-LEFT,
+   click-to-open via POST /api/swarm/open).
+4. Left sidebar header: "Agents (N)" — count moves here.
+5. Left sidebar **agent cards (enhanced)**: agent index, role
+   (planner / worker), status, thinking ticker (Unit 39), retry
+   indicator (Unit 39), latency sparkline tooltip (Unit 40),
+   session id chip (click-to-copy), model name (chip).
+
+**What goes away:** the separate IdentifiersRow (Unit 52d). Its
+run-uuid concern moves into the topbar; its per-agent session-id
++ model concerns move into the AgentPanel cards.
+
+**Implementation sketch:**
+- Extract a shared `<CopyChip>` component (currently lives inside
+  SwarmView).
+- AgentPanel takes new props: `role: "planner" | "worker"` and
+  `model: string`, derived in SwarmView from `agent.index === 1`
+  and `runConfig.{plannerModel|workerModel}`.
+- Sidebar `Agents` header → `Agents ({agentList.length})`.
+- IdentityStrip absorbs the run-uuid chip, IdentifiersRow component
+  + its invocation deleted.
+
+Pure web — no server/type changes. ~45 min. Pairs nicely with the
+Unit 39 thinkingSince REST-snapshot bug fix (deferred since this
+session) since both touch AgentPanel.
+
+## Unit 57 — Fix Unit 51 snapshot read race (spec-lite)
+
+Self-flagged 2026-04-23 during the post-Unit-51 validation run.
+Symptom: `tryResumeContract` correctly fell back to first-pass-
+contract because the on-disk `blackboard-state.json` had no
+contract. Cause: the runner's own setPhase("spawning") at the top
+of start fires `scheduleStateWrite()` debounced 1s; spawning takes
+~3-5s with N opencode subprocess starts, so by the time
+planAndExecute calls tryResumeContract the prior run's snapshot
+has been overwritten with a fresh phase=spawning + no-contract
+shape.
+
+**Fix:** read the snapshot at the very TOP of `runner.start()`,
+BEFORE any setPhase fires. Cache as a private field
+`this.priorSnapshot?: BlackboardStateSnapshot | null`.
+`tryResumeContract` consumes the cached value instead of re-reading
+from disk. ~15 min, no schema changes.
+
