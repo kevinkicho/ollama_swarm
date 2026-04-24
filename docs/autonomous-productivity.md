@@ -101,9 +101,11 @@ yet. **→ Unit 36 (planned).**
 | 50   | Planner reads prior summary on resume       | planned (Kevin's ask 2026-04-23)|
 | 51   | Reload prior contract from blackboard-state | planned (Kevin's ask 2026-04-23)|
 | 52   | Run-identity panel + run history dropdown   | planned (Kevin's ask 2026-04-23)|
-| 53+  | Cross-run resume + tier-aware replay        | hypothesized                   |
-| 53+  | Auto-start app (workers execute shell)      | hypothesized                   |
-| 53+  | Persistent swarm-ui across audits           | hypothesized                   |
+| 53   | Contract panel: status filter (default unmet)| planned (Kevin's ask 2026-04-23)|
+| 54   | Transcript: collapse worker JSON to summary | planned (Kevin's ask 2026-04-23)|
+| 55+  | Cross-run resume + tier-aware replay        | hypothesized                   |
+| 55+  | Auto-start app (workers execute shell)      | hypothesized                   |
+| 55+  | Persistent swarm-ui across audits           | hypothesized                   |
 
 ## Units 47-51 — Build-on-existing-clone work pattern (spec-lite)
 
@@ -206,6 +208,47 @@ event log + summary). Lets you compare what changed between run-2
 and run-3 without flipping between log files. Depends on Unit 49
 (per-run summary file naming) so the discovery loop has stable
 paths to read. ~90 min.
+
+## Unit 53 — Contract panel: status filter (spec-lite)
+
+Kevin's 2026-04-23 ask during seaj-tsia-study run-3: by the time the
+auditor has resolved 5+ criteria, the Contract tab is dominated by
+already-`met` rows that the user no longer cares about. Add a
+3-button filter row above the criteria list: **All / Unmet / Met**
+(maybe also `Wont-do` as a 4th). Default selection is **Unmet** so
+the panel always opens onto the criteria still in flight. Filter
+state can live in zustand (transient) or persist to localStorage
+keyed by run name (preferred — survives reloads mid-run).
+~30 min. Pure web/, no server changes.
+
+## Unit 54 — Transcript: collapse worker JSON to summary (spec-lite)
+
+Kevin's 2026-04-23 ask during seaj-tsia-study run-3: workers post
+raw JSON hunk responses (often 2000-3000 chars with whole-file
+content embedded in `search`/`replace`/`content`). Currently the
+transcript renders the first ~300 chars with a "Show more (2912
+chars)" expand link. The header is also a generic "Agent 2 ·
+5:05:54 PM ```json" — no signal about WHAT the worker is proposing.
+
+Replace the default rendering with a one-line summary derived from
+parsing the JSON envelope:
+- Success: `Agent 2 · 17:05:54 → 1 replace hunk in assets/js/companies-timeseries.js (2912 chars)`
+- Skip: `Agent 2 · 17:05:54 → skip: <reason>`
+- Multi-hunk: `Agent 2 · 17:05:54 → 3 hunks (2 replace, 1 append) in 02_KEY_FINANCIALS.md`
+- Unparseable: fall back to current truncated-with-Show-more view
+  so we don't hide a parser bug behind cleaner UI.
+
+Click the row to expand into the full JSON pretty-printed (or the
+file diff if we want to render it as a diff). Skip rows stay
+collapsed-by-default since the reason is already visible.
+
+The parser already exists (server-side `parseWorkerResponse`); for
+the UI we need a client-side equivalent or a server-emitted
+metadata sidecar in the `transcript_append` event (e.g. add an
+optional `summary?: { kind, file, hunks, ...}` field). Server-emit
+is cleaner — keeps the parsing logic in one place. ~60 min total
+(40 server, 20 web). Pairs nicely with Unit 53 since both target
+the same "I have too much info, show me less by default" need.
 
 ## Unit 34 — Ambition ratchet (spec-lite)
 
