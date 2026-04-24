@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSwarm } from "../state/store";
-import type { RunSummaryDigest } from "../types";
+import type { PerAgentStat, RunSummary, RunSummaryDigest } from "../types";
 import { AgentPanel } from "./AgentPanel";
 import { BoardView } from "./BoardView";
 import { ContractPanel } from "./ContractPanel";
@@ -650,47 +650,264 @@ function RunHistoryDropdown() {
   );
 }
 
-// Unit 52e: read-only modal showing a prior run's headline summary.
-// Doesn't replay the event log (deferred to a future unit) — just
-// names what happened in that run.
+// Read-only modal showing a prior run's full summary (2026-04-24
+// redesign): grid layout, fetches the full summary.json on open
+// (was: only the thin digest), shows per-agent latency table,
+// run-level counters, git status preview, contract criteria.
+// Adds an "Open summary JSON" button that pops the raw JSON into
+// a new tab so users can grep through what they need.
+//
+// Transcript replay is still deferred — the runner doesn't persist
+// transcripts past run-end yet (queued as task #65). Until then,
+// "review past run as if live" isn't possible.
 function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose: () => void }) {
+  const [summary, setSummary] = useState<RunSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const params = new URLSearchParams({
+          clonePath: digest.clonePath,
+          ...(digest.runId ? { runId: digest.runId } : {}),
+        });
+        const r = await fetch(`/api/swarm/run-summary?${params.toString()}`);
+        if (!r.ok) {
+          if (!cancelled) setError(`HTTP ${r.status}`);
+          return;
+        }
+        const body = (await r.json()) as RunSummary;
+        if (!cancelled) setSummary(body);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [digest.clonePath, digest.runId]);
+
+  const summaryUrl = `/api/swarm/run-summary?clonePath=${encodeURIComponent(digest.clonePath)}${
+    digest.runId ? `&runId=${encodeURIComponent(digest.runId)}` : ""
+  }`;
+
+  // Fall back to digest fields when the full summary fetch hasn't
+  // landed yet — digest is a strict subset, so the header always
+  // renders something useful.
+  const head = summary ?? {
+    repoUrl: "",
+    localPath: digest.clonePath,
+    preset: digest.preset,
+    model: digest.model,
+    startedAt: digest.startedAt,
+    endedAt: digest.endedAt,
+    wallClockMs: digest.wallClockMs,
+    stopReason: (digest.stopReason ?? "") as RunSummary["stopReason"],
+    commits: digest.commits ?? 0,
+    staleEvents: 0,
+    skippedTodos: 0,
+    totalTodos: digest.totalTodos ?? 0,
+    filesChanged: 0,
+    finalGitStatus: "",
+    finalGitStatusTruncated: false,
+    agents: [] as PerAgentStat[],
+  };
+
   return (
     <div
-      className="fixed inset-0 z-30 bg-black/60 flex items-center justify-center p-4"
+      className="fixed inset-0 z-30 bg-black/70 flex items-center justify-center p-4"
       onClick={onClose}
     >
       <div
-        className="bg-ink-900 border border-ink-600 rounded-lg shadow-2xl max-w-xl w-full p-5 space-y-3"
+        className="bg-ink-900 border border-ink-600 rounded-lg shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-baseline justify-between gap-3">
-          <h3 className="text-lg font-semibold">{digest.name}</h3>
-          <button onClick={onClose} className="text-ink-400 hover:text-ink-100">
+        {/* Header */}
+        <div className="sticky top-0 bg-ink-900 border-b border-ink-700 px-5 py-3 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-lg font-semibold text-ink-100 truncate">{digest.name}</h3>
+            <div className="text-[10px] font-mono text-ink-500 truncate">
+              {digest.runId ? `run ${digest.runId}` : "(no runId)"}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-ink-400 hover:text-ink-100 text-lg leading-none px-2"
+            aria-label="Close"
+          >
             ✕
           </button>
         </div>
-        <div className="text-xs font-mono text-ink-400 space-y-1">
-          <div>Started: {new Date(digest.startedAt).toLocaleString()}</div>
-          {digest.endedAt > 0 ? (
-            <div>Ended: {new Date(digest.endedAt).toLocaleString()}</div>
+
+        {/* Body */}
+        <div className="p-5 space-y-4 text-xs">
+          {/* Identity grid */}
+          <section>
+            <SectionLabel>Identity</SectionLabel>
+            <div className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 font-mono">
+              <DataLabel>Preset</DataLabel>
+              <DataValue>{head.preset}</DataValue>
+              <DataLabel>Model</DataLabel>
+              <DataValue>{head.model}</DataValue>
+              {head.repoUrl ? (
+                <>
+                  <DataLabel>Repo</DataLabel>
+                  <DataValue>
+                    <a
+                      href={head.repoUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sky-300 hover:text-sky-200 underline break-all"
+                    >
+                      {head.repoUrl}
+                    </a>
+                  </DataValue>
+                </>
+              ) : null}
+              <DataLabel>Clone path</DataLabel>
+              <DataValue><span className="break-all text-ink-300">{head.localPath}</span></DataValue>
+              <DataLabel>Started</DataLabel>
+              <DataValue>{new Date(head.startedAt).toLocaleString()}</DataValue>
+              {head.endedAt > 0 ? (
+                <>
+                  <DataLabel>Ended</DataLabel>
+                  <DataValue>{new Date(head.endedAt).toLocaleString()}</DataValue>
+                </>
+              ) : null}
+              {head.wallClockMs > 0 ? (
+                <>
+                  <DataLabel>Wall-clock</DataLabel>
+                  <DataValue>{formatRuntimeMs(head.wallClockMs)}</DataValue>
+                </>
+              ) : null}
+              {head.stopReason ? (
+                <>
+                  <DataLabel>Stop reason</DataLabel>
+                  <DataValue>{head.stopReason}</DataValue>
+                </>
+              ) : null}
+            </div>
+          </section>
+
+          {/* Run-level counters */}
+          {summary ? (
+            <section>
+              <SectionLabel>Counters</SectionLabel>
+              <div className="grid grid-cols-3 gap-3">
+                <Stat label="Commits" value={summary.commits} />
+                <Stat label="Files changed" value={summary.filesChanged} />
+                <Stat label="Total todos" value={summary.totalTodos} />
+                <Stat label="Skipped todos" value={summary.skippedTodos} />
+                <Stat label="Stale events" value={summary.staleEvents} />
+                <Stat label="Agents" value={summary.agents.length} />
+              </div>
+            </section>
           ) : null}
-          {digest.wallClockMs > 0 ? (
-            <div>Wall-clock: {formatRuntimeMs(digest.wallClockMs)}</div>
+
+          {/* Per-agent table */}
+          {summary && summary.agents.length > 0 ? (
+            <section>
+              <SectionLabel>Per-agent ({summary.agents.length})</SectionLabel>
+              <div className="overflow-x-auto rounded border border-ink-700">
+                <table className="w-full text-[11px] font-mono">
+                  <thead className="bg-ink-800/60 text-ink-400 text-left">
+                    <tr>
+                      <th className="px-2 py-1">#</th>
+                      <th className="px-2 py-1">Role</th>
+                      <th className="px-2 py-1 text-right">Turns</th>
+                      <th className="px-2 py-1 text-right">Attempts</th>
+                      <th className="px-2 py-1 text-right">Retries</th>
+                      <th className="px-2 py-1 text-right">Mean</th>
+                      <th className="px-2 py-1 text-right">p50</th>
+                      <th className="px-2 py-1 text-right">p95</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {summary.agents.map((a) => (
+                      <tr key={a.agentId} className="border-t border-ink-700/60">
+                        <td className="px-2 py-1 text-ink-300">{a.agentIndex}</td>
+                        <td className="px-2 py-1 text-ink-200">{roleForRow(summary.preset, a.agentIndex, summary.agents.length)}</td>
+                        <td className="px-2 py-1 text-right text-ink-200">{a.turnsTaken}</td>
+                        <td className="px-2 py-1 text-right text-ink-300">{a.totalAttempts ?? "—"}</td>
+                        <td className="px-2 py-1 text-right text-ink-300">{a.totalRetries ?? "—"}</td>
+                        <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.meanLatencyMs)}</td>
+                        <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.p50LatencyMs)}</td>
+                        <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.p95LatencyMs)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           ) : null}
-          <div>Preset: {digest.preset}</div>
-          <div>Model: {digest.model}</div>
-          {digest.commits !== undefined ? <div>Commits: {digest.commits}</div> : null}
-          {digest.totalTodos !== undefined ? <div>Total todos: {digest.totalTodos}</div> : null}
-          {digest.stopReason ? <div>Stop reason: {digest.stopReason}</div> : null}
-          <div title={digest.clonePath}>
-            Path: <span className="text-ink-300">{truncateLeft(digest.clonePath, 60)}</span>
-          </div>
+
+          {/* Contract criteria (blackboard only) */}
+          {summary?.contract ? (
+            <section>
+              <SectionLabel>Contract — {summary.contract.criteria.length} criteria</SectionLabel>
+              {summary.contract.missionStatement ? (
+                <div className="text-ink-300 italic mb-1">{summary.contract.missionStatement}</div>
+              ) : null}
+              <ul className="space-y-1">
+                {summary.contract.criteria.map((c) => (
+                  <li key={c.id} className="flex gap-2">
+                    <span className={
+                      c.status === "met" ? "text-emerald-400"
+                      : c.status === "wont-do" ? "text-amber-400"
+                      : "text-ink-500"
+                    }>
+                      {c.status === "met" ? "✓" : c.status === "wont-do" ? "✕" : "○"}
+                    </span>
+                    <span className="text-ink-300">{c.description}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
+          {/* Final git status */}
+          {summary?.finalGitStatus ? (
+            <section>
+              <SectionLabel>
+                Final git status
+                {summary.finalGitStatusTruncated ? <span className="text-amber-400"> (truncated)</span> : null}
+              </SectionLabel>
+              <pre className="text-[10px] font-mono text-ink-400 bg-ink-950/60 border border-ink-700 rounded p-2 max-h-40 overflow-auto whitespace-pre-wrap">
+                {summary.finalGitStatus.trim() || "(clean)"}
+              </pre>
+            </section>
+          ) : null}
+
+          {/* Loading / error state */}
+          {loading ? (
+            <div className="text-ink-500 italic">Loading full summary…</div>
+          ) : null}
+          {error && !summary ? (
+            <div className="text-rose-300">Failed to load full summary: {error}</div>
+          ) : null}
+          {!loading && !error && !summary ? (
+            <div className="text-ink-500 italic">
+              No matching summary on disk. Showing digest only.
+            </div>
+          ) : null}
         </div>
-        <div className="text-xs text-ink-500 italic">
-          Read-only. Event-log replay is deferred to a future unit; for now,
-          inspect the clone folder to see what landed.
-        </div>
-        <div className="flex justify-end gap-2 pt-2 border-t border-ink-700">
+
+        {/* Footer */}
+        <div className="sticky bottom-0 bg-ink-900 border-t border-ink-700 px-5 py-3 flex flex-wrap justify-end gap-2">
+          <a
+            href={summaryUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs px-3 py-1.5 rounded bg-ink-700 hover:bg-ink-600 text-ink-100 border border-ink-600"
+          >
+            Open summary JSON ↗
+          </a>
           <button
             onClick={() => {
               void fetch("/api/swarm/open", {
@@ -713,6 +930,68 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
       </div>
     </div>
   );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="text-[10px] uppercase tracking-wider text-ink-500 font-semibold mb-1">
+      {children}
+    </div>
+  );
+}
+
+function DataLabel({ children }: { children: React.ReactNode }) {
+  return <div className="text-ink-500">{children}</div>;
+}
+
+function DataValue({ children }: { children: React.ReactNode }) {
+  return <div className="text-ink-200 min-w-0">{children}</div>;
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5">
+      <div className="text-[9px] uppercase tracking-wider text-ink-500">{label}</div>
+      <div className="text-ink-100 font-mono text-sm">{value.toLocaleString()}</div>
+    </div>
+  );
+}
+
+function fmtMs(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+// Mirror of agentRole() inside SwarmView — modal only knows preset
+// + index, not the live runConfig. Kept in sync so dropdown rows
+// show the same role names users see in AgentPanel during a run.
+function roleForRow(preset: string, idx: number, totalAgents: number): string {
+  switch (preset) {
+    case "blackboard":
+      if (idx === 1) return "planner";
+      if (idx > totalAgents - 1) return "auditor";
+      return "worker";
+    case "orchestrator-worker":
+      return idx === 1 ? "orchestrator" : "worker";
+    case "map-reduce":
+      return idx === 1 ? "reducer" : "mapper";
+    case "council":
+      return "drafter";
+    case "stigmergy":
+      return "explorer";
+    case "round-robin":
+      return "peer";
+    case "role-diff":
+      return "role-diff";
+    case "debate-judge":
+      if (idx === 1) return "pro";
+      if (idx === 2) return "con";
+      if (idx === 3) return "judge";
+      return "peer";
+    default:
+      return idx === 1 ? "planner" : "worker";
+  }
 }
 
 function formatRuntimeMs(ms: number): string {

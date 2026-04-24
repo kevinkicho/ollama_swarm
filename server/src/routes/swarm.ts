@@ -385,6 +385,58 @@ export function swarmRouter(orch: Orchestrator): Router {
     res.json({ runs });
   });
 
+  // Single full-summary fetch for the history modal (2026-04-24).
+  // Lookup by clonePath + runId — the modal already knows both from
+  // its digest, so we don't need to scan everything again.
+  // Returns the entire summary.json contents (RunSummary shape +
+  // contract / agent stats), not a thin digest.
+  //
+  // Defensive on bad inputs: 400 on missing params, 404 if the
+  // matching summary file doesn't exist or doesn't carry the
+  // requested runId, 500 on unexpected I/O.
+  r.get("/run-summary", async (req: Request, res: Response) => {
+    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
+    const runId = typeof req.query.runId === "string" ? req.query.runId : "";
+    if (!clonePath) {
+      res.status(400).json({ error: "clonePath required" });
+      return;
+    }
+    let entries: string[];
+    try {
+      entries = await fs.readdir(clonePath);
+    } catch {
+      res.status(404).json({ error: "clonePath not readable" });
+      return;
+    }
+    // Try per-run files first (canonical), then summary.json fallback.
+    const candidates = [
+      ...entries.filter((e) => /^summary-.+\.json$/.test(e)),
+      "summary.json",
+    ];
+    for (const e of candidates) {
+      let raw: string;
+      try {
+        raw = await fs.readFile(path.join(clonePath, e), "utf8");
+      } catch {
+        continue;
+      }
+      let parsed: Record<string, unknown>;
+      try {
+        const tmp = JSON.parse(raw);
+        if (typeof tmp !== "object" || tmp === null) continue;
+        parsed = tmp as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      // If runId requested, only return the matching summary. If not
+      // requested, return the first parseable (typically the latest).
+      if (runId && parsed.runId !== runId) continue;
+      res.json(parsed);
+      return;
+    }
+    res.status(404).json({ error: "no matching summary found" });
+  });
+
   return r;
 }
 

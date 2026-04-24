@@ -162,6 +162,17 @@ export interface PerAgentStat {
   turnsTaken: number;
   tokensIn: number | null;
   tokensOut: number | null;
+  // Unit 21: per-agent attempt + latency stats. Optional because
+  // older summaries or runs that crashed before any prompt fired
+  // won't have them. See server-side PerAgentStat for semantics:
+  // totalAttempts includes retries; totalRetries is the retry-fire
+  // count; latency is over SUCCESSFUL attempts only.
+  totalAttempts?: number;
+  totalRetries?: number;
+  successfulAttempts?: number;
+  meanLatencyMs?: number | null;
+  p50LatencyMs?: number | null;
+  p95LatencyMs?: number | null;
 }
 
 export interface RunSummary {

@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as nodePath from "node:path";
 import type { AgentManager } from "./AgentManager.js";
 import type { RepoService } from "./RepoService.js";
 import type { SwarmEvent, SwarmStatus, SwarmStatusRunConfig } from "../types.js";
@@ -21,6 +24,26 @@ export interface OrchestratorOpts extends RunnerOpts {
 // Re-exported so callers (routes/swarm.ts, index.ts) don't have to reach into
 // the swarm/ namespace to pass a RunConfig.
 export type { RunConfig };
+
+// Persisted lastParentPath store. /tmp survives dev-server restarts
+// but resets on reboot — fine for this use, since the user runs at
+// least once after reboot and the path gets re-set automatically.
+const LAST_PARENT_FILE = nodePath.join(tmpdir(), "ollama-swarm-last-parent.txt");
+function readPersistedLastParent(): string | undefined {
+  try {
+    const v = readFileSync(LAST_PARENT_FILE, "utf8").trim();
+    return v.length > 0 ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+function writePersistedLastParent(p: string): void {
+  try {
+    writeFileSync(LAST_PARENT_FILE, p, "utf8");
+  } catch {
+    // best-effort; the in-memory cache still works for this session
+  }
+}
 
 // Thin preset dispatcher. Holds one `SwarmRunner` per run and delegates the
 // public surface to it. The state of a run lives on the runner itself.
@@ -49,7 +72,11 @@ export class Orchestrator {
   // this, the runs dropdown was empty between runs (the route had
   // no way to know where to look). Cleared only when a new start()
   // overwrites it — never on stop or terminal phase.
-  private lastParentPath?: string;
+  // Persisted to /tmp/ollama-swarm-last-parent.txt so a dev-server
+  // restart doesn't reset the dropdown to empty. Survives restart;
+  // reset only on full host reboot (acceptable — user runs once
+  // post-reboot and it's set again).
+  private lastParentPath?: string = readPersistedLastParent();
 
   constructor(private readonly opts: OrchestratorOpts) {}
 
@@ -164,13 +191,10 @@ export class Orchestrator {
     this.runConfig = runConfig;
     this.runStartedAt = startedAt;
     // Cache parent dir so /api/swarm/runs can keep showing historical
-    // runs in this folder even after this run terminates. Imported
-    // from path module at top of file (deferred to read time below
-    // to avoid an unnecessary top-level import here).
-    {
-      const path = await import("node:path");
-      this.lastParentPath = path.dirname(path.resolve(cfg.localPath));
-    }
+    // runs in this folder even after this run terminates. Persisted
+    // to /tmp so a dev-server restart doesn't lose it.
+    this.lastParentPath = nodePath.dirname(nodePath.resolve(cfg.localPath));
+    writePersistedLastParent(this.lastParentPath);
     this.opts.emit({
       type: "run_started",
       runId,
