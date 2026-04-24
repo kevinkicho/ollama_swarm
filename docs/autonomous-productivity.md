@@ -109,6 +109,7 @@ yet. **→ Unit 36 (planned).**
 | 54   | Transcript: collapse worker JSON to summary | shipped (`15a7b81`, 2026-04-23)|
 | 55   | Auto-killAll on natural completion          | shipped (`76fe957`, 2026-04-23)|
 | 56   | Topbar + sidebar consolidation              | planned (Kevin's ask 2026-04-23)|
+| 56b  | Contract: dedupe counts (drop label row)    | planned (Kevin's ask 2026-04-23)|
 | 57   | Unit 51 fix: cache snapshot before phase    | planned (self-flagged 2026-04-23)|
 | 58+  | Cross-run resume + tier-aware replay        | hypothesized                   |
 | 58+  | Auto-start app (workers execute shell)      | hypothesized                   |
@@ -455,6 +456,17 @@ run-uuid concern moves into the topbar; its per-agent session-id
 Pure web — no server/type changes. ~45 min. Pairs nicely with the
 Unit 39 thinkingSince REST-snapshot bug fix (deferred since this
 session) since both touch AgentPanel.
+
+## Unit 56b — Contract panel: drop the duplicate counts row (spec-lite)
+
+Kevin's 2026-04-23 ask: the Contract tab shows "0 met / 8 unmet / 0
+wont-do" TWICE — once as a label-only line in the criteria header,
+once as the four-button filter row from Unit 53 (each button shows
+its own count). Drop the label-only version, keep the buttons (they
+encode the same information AND provide the filter affordance).
+
+Trivial — a couple lines deleted from `web/src/components/ContractPanel.tsx`.
+~5 min. Bundle with Unit 56 since both touch UI cleanup.
 
 ## Unit 57 — Fix Unit 51 snapshot read race (spec-lite)
 
