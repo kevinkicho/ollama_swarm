@@ -232,8 +232,10 @@ function IdentityStrip() {
               <span title="Worker model"><span className="text-ink-500">worker</span> {cfg.workerModel}</span>
             </>
           )}
-          <span className="text-ink-600">·</span>
-          <span><span className="text-ink-500">agents</span> {cfg.agentCount}</span>
+          {/* Topbar dedup: dropped the "agents N" segment. cfg.agentCount
+              excludes the dedicated auditor (Unit 58) so the count was
+              wrong for 4-agent runs, and the live agent count is already
+              in the left sidebar header. Dedup over fix-the-count. */}
           <button
             onClick={onOpen}
             title={`Open in OS file manager — ${cfg.clonePath}`}

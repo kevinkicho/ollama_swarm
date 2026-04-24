@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { config } from "../config.js";
@@ -363,23 +363,93 @@ async function readRunDigest(
   return null;
 }
 
+// True iff this Node process is running inside WSL2 — Linux uname,
+// but the kernel string includes "microsoft". We treat WSL2 as a
+// distinct platform from native Linux because xdg-open is rarely
+// installed there but explorer.exe is always reachable.
+function isWsl2(): boolean {
+  if (process.platform !== "linux") return false;
+  if (process.env.WSL_DISTRO_NAME) return true;
+  try {
+    const release = readFileSync("/proc/version", "utf8");
+    return /microsoft/i.test(release);
+  } catch {
+    return false;
+  }
+}
+
 // Cross-platform "show this directory in the user's file manager."
 // Detached + unref so the spawned process doesn't keep the dev
 // server alive as a child. stdio ignored so a slow file-manager
 // startup doesn't block our HTTP response.
+//
+// All branches attach an `error` handler to the spawned child so an
+// ENOENT (handler binary not installed) becomes a logged warning
+// instead of an uncaughtException that takes the dev server down.
+// The HTTP response has already been sent by the time the spawn
+// errors, so there's nothing to surface back to the caller — we just
+// want to fail safe.
 function openInOsFileManager(absPath: string): void {
   const opts = { detached: true, stdio: "ignore" as const };
+
+  // WSL2 → use Windows Explorer via the wslpath-converted path.
+  // Falls back to a no-op if wslpath isn't on PATH (rare; ships
+  // with every WSL2 distro by default).
+  if (isWsl2()) {
+    const winPath = wslPathToWindows(absPath) ?? absPath;
+    const child = spawn("explorer.exe", [winPath], opts);
+    child.on("error", (err) => {
+      console.warn(`[open] explorer.exe spawn failed in WSL2: ${err.message}`);
+    });
+    child.unref();
+    return;
+  }
+
   if (process.platform === "win32") {
     // `start "" <path>` opens the path in Explorer on Windows. The
     // empty title arg is REQUIRED — without it `start` treats the
     // path as the title.
-    spawn("cmd", ["/c", "start", "", absPath], opts).unref();
-  } else if (process.platform === "darwin") {
-    spawn("open", [absPath], opts).unref();
-  } else {
-    // Linux / WSL2 — xdg-open. WSL2 also has wslview as a fallback
-    // but xdg-open is more portable; fall through to the user's
-    // default handler.
-    spawn("xdg-open", [absPath], opts).unref();
+    const child = spawn("cmd", ["/c", "start", "", absPath], opts);
+    child.on("error", (err) => {
+      console.warn(`[open] cmd /c start spawn failed: ${err.message}`);
+    });
+    child.unref();
+    return;
+  }
+
+  if (process.platform === "darwin") {
+    const child = spawn("open", [absPath], opts);
+    child.on("error", (err) => {
+      console.warn(`[open] open(1) spawn failed: ${err.message}`);
+    });
+    child.unref();
+    return;
+  }
+
+  // Native Linux — xdg-open is the standard. If it's not installed
+  // (minimal containers, headless boxes), the error handler swallows
+  // the ENOENT instead of crashing the process.
+  const child = spawn("xdg-open", [absPath], opts);
+  child.on("error", (err) => {
+    console.warn(
+      `[open] xdg-open spawn failed: ${err.message}. Install xdg-utils to enable open-in-file-manager.`,
+    );
+  });
+  child.unref();
+}
+
+// Convert a WSL2 Linux path to its Windows-visible form via the
+// `wslpath` utility. Returns null on any failure (utility missing,
+// non-zero exit, empty stdout) so callers can fall back gracefully.
+// Synchronous because we already do filesystem I/O around it and the
+// utility returns instantly.
+function wslPathToWindows(linuxPath: string): string | null {
+  try {
+    const result = spawnSync("wslpath", ["-w", linuxPath], { encoding: "utf8" });
+    if (result.status !== 0) return null;
+    const out = (result.stdout ?? "").trim();
+    return out.length > 0 ? out : null;
+  } catch {
+    return null;
   }
 }
