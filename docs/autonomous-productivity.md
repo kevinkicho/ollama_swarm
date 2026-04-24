@@ -114,7 +114,7 @@ yet. **→ Unit 36 (planned).**
 | 57b  | Unit 39 thinkingSince REST-snapshot fix     | shipped (`256f025`, 2026-04-23)|
 | 58   | Dedicated auditor agent (parallel to planner)| shipped (`1b8cf39`, 2026-04-23)|
 | 59   | Specialized-worker blackboard variant (59a) | shipped (`40cb099`, 2026-04-23)|
-| 60   | Multi-prompt critic ensemble                | planned (Kevin's ask 2026-04-23)|
+| 60   | Multi-prompt critic ensemble                | shipped (`bfb156c`, 2026-04-23)|
 | 62   | Page-refresh persistence (WS catch-up snapshot) | planned (Kevin's ask 2026-04-23)|
 | 63   | SetupForm: expose ambitionTiers + multi-hour preset chip | planned (Kevin's ask 2026-04-23)|
 | 64+  | Cross-run resume + tier-aware replay        | hypothesized                   |
