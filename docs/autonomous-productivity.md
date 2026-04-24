@@ -109,8 +109,9 @@ yet. **→ Unit 36 (planned).**
 | 54   | Transcript: collapse worker JSON to summary | shipped (`15a7b81`, 2026-04-23)|
 | 55   | Auto-killAll on natural completion          | shipped (`76fe957`, 2026-04-23)|
 | 56   | Topbar + sidebar consolidation              | planned (Kevin's ask 2026-04-23)|
-| 56b  | Contract: dedupe counts (drop label row)    | planned (Kevin's ask 2026-04-23)|
-| 57   | Unit 51 fix: cache snapshot before phase    | planned (self-flagged 2026-04-23)|
+| 56b  | Contract: dedupe counts (drop label row)    | shipped (`d65a2e3`, 2026-04-23)|
+| 57   | Unit 51 fix: cache snapshot before phase    | shipped (`256f025`, 2026-04-23)|
+| 57b  | Unit 39 thinkingSince REST-snapshot fix     | shipped (`256f025`, 2026-04-23)|
 | 58   | Dedicated auditor agent (parallel to planner)| planned (Kevin's ask 2026-04-23)|
 | 59   | Specialized-worker blackboard variant       | planned (Kevin's ask 2026-04-23)|
 | 60   | Multi-prompt critic ensemble                | planned (Kevin's ask 2026-04-23)|
