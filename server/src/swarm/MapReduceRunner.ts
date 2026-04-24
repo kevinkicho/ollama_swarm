@@ -228,6 +228,7 @@ export class MapReduceRunner implements SwarmRunner {
         localPath: cfg.localPath,
         preset: cfg.preset,
         model: cfg.model,
+        runId: cfg.runId,
       },
       agentCount: cfg.agentCount,
       rounds: cfg.rounds,

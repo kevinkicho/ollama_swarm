@@ -152,6 +152,18 @@ export interface RunConfig {
    * (no point ensembling a disabled critic). Default off.
    */
   criticEnsemble?: boolean;
+  /**
+   * Task #36: app-level run id minted by the Orchestrator at run-start
+   * (Unit 52d) and stashed into RunConfig here so runners can forward
+   * it to their summary builders. Lets summary.json carry the same
+   * runId the UI shows, so the history dropdown can render it as a
+   * column and click-to-copy matches the live IdentityStrip chip.
+   *
+   * Not user-settable — the route schema doesn't accept this field;
+   * Orchestrator.start overwrites any caller-provided value. Optional
+   * on the type so tests that build bare RunConfigs stay valid.
+   */
+  runId?: string;
 }
 
 export interface RunnerOpts {

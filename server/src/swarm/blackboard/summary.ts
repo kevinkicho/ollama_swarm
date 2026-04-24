@@ -51,6 +51,14 @@ export interface PerAgentStat {
 }
 
 export interface RunSummary {
+  /**
+   * Task #36: app-level run id (uuid) minted by the Orchestrator at
+   * run-start (Unit 52d). Optional on the type so summaries written
+   * before task #36 stay shape-compatible; new runs always populate it.
+   * Enables the run-history dropdown to cross-reference historical
+   * summaries against the live IdentityStrip runId chip.
+   */
+  runId?: string;
   repoUrl: string;
   localPath: string;
   preset: string;
@@ -107,6 +115,10 @@ export interface SummaryConfig {
   localPath: string;
   preset: string;
   model: string;
+  /** Task #36: runId threaded from cfg.runId so buildSummary can include
+   *  it in the RunSummary output. Optional — builders that don't know
+   *  it (tests, older call paths) just omit it. */
+  runId?: string;
 }
 
 export interface SummaryCounts {
@@ -159,6 +171,7 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
   }
 
   return {
+    runId: input.config.runId,
     repoUrl: input.config.repoUrl,
     localPath: input.config.localPath,
     preset: input.config.preset,

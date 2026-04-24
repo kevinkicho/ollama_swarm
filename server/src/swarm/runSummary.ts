@@ -58,6 +58,7 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
   }
 
   return {
+    runId: input.config.runId,
     repoUrl: input.config.repoUrl,
     localPath: input.config.localPath,
     preset: input.config.preset,

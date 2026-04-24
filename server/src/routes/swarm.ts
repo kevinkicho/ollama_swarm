@@ -310,6 +310,11 @@ interface RunSummaryDigest {
   totalTodos?: number;
   hasContract: boolean;
   isActive: boolean;
+  // Task #36: runId from summary.json (absent on pre-task-36 writes).
+  // Enables click-to-copy in the dropdown that matches the live
+  // IdentityStrip chip so transcript references like "run 7302..."
+  // can be located in the history list.
+  runId?: string;
 }
 
 async function readRunDigest(
@@ -358,6 +363,7 @@ async function readRunDigest(
       totalTodos: typeof obj.totalTodos === "number" ? obj.totalTodos : undefined,
       hasContract: contract !== undefined && Array.isArray(contract.criteria),
       isActive: false,
+      runId: typeof obj.runId === "string" ? obj.runId : undefined,
     };
   }
   return null;

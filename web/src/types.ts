@@ -294,6 +294,9 @@ export interface RunSummaryDigest {
   totalTodos?: number;
   hasContract: boolean;
   isActive: boolean;
+  // Task #36: app-level runId (uuid) from the summary.json. Absent on
+  // pre-task-36 runs so the dropdown renders "—" for legacy rows.
+  runId?: string;
 }
 
 // Unit 62: shape returned by GET /api/swarm/status. Mirror of the

@@ -89,6 +89,11 @@ export class Orchestrator {
     // - resolved config so the UI renders without a REST round-trip.
     const runId = randomUUID();
     this.runId = runId;
+    // Task #36: forward the minted runId into cfg so the runner can
+    // include it in buildSummary → summary.json. Otherwise the runId
+    // only lives in memory + the WS run_started event, never making
+    // it to disk where the history dropdown reads digests from.
+    cfg.runId = runId;
     this.opts.emit({
       type: "run_started",
       runId,

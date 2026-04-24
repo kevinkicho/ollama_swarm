@@ -398,7 +398,33 @@ function RunHistoryDropdown() {
                         {new Date(r.startedAt).toLocaleString()}
                       </span>
                     </div>
-                    <div className="text-[11px] text-ink-400 mt-0.5 flex flex-wrap gap-x-3">
+                    <div className="text-[11px] text-ink-400 mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                      {/* Task #36: runId chip first, matches the live
+                          IdentityStrip chip so users can cross-reference
+                          a transcript mention like "run 73026b78" to a
+                          specific row in this dropdown. Click-to-copy
+                          full uuid; renders "—" for legacy rows without
+                          a recorded runId. */}
+                      {r.runId ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void navigator.clipboard.writeText(r.runId!);
+                          }}
+                          title={`Copy full runId: ${r.runId}`}
+                          className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-ink-800 border border-ink-700 hover:bg-ink-700 hover:text-ink-100"
+                        >
+                          {r.runId.slice(0, 8)}
+                        </button>
+                      ) : (
+                        <span
+                          title="runId not recorded (run predates task #36)"
+                          className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-ink-900/40 border border-ink-800 text-ink-600"
+                        >
+                          —
+                        </span>
+                      )}
                       <span>preset {r.preset}</span>
                       <span>{r.commits !== undefined ? `${r.commits} commits` : ""}</span>
                       <span>{r.totalTodos !== undefined ? `${r.totalTodos} todos` : ""}</span>
