@@ -77,13 +77,9 @@ export function ContractPanel() {
               <span className="text-ink-500"> of {contract.criteria.length}</span>
             ) : null}
           </div>
-          <div className="text-xs text-ink-400 font-mono">
-            <span className="text-emerald-300">{counts.met} met</span>
-            <span className="mx-1.5 text-ink-600">·</span>
-            <span className="text-ink-300">{counts.unmet} unmet</span>
-            <span className="mx-1.5 text-ink-600">·</span>
-            <span className="text-ink-500">{counts["wont-do"]} wont-do</span>
-          </div>
+          {/* Unit 56b: dropped the labels-only "X met · Y unmet · Z wont-do"
+              row that used to live here — the FilterTabs below already shows
+              each count on its button AND provides the filter affordance. */}
         </div>
 
         <FilterTabs filter={filter} setFilter={setFilter} counts={counts} total={contract.criteria.length} />
