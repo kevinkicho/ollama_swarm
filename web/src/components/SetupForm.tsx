@@ -106,6 +106,21 @@ const DIRECTIVE_README_AND_RESEARCH =
 const MULTI_HOUR_CAP_MIN = 480;
 const MULTI_HOUR_TIERS = 5;
 
+// Recommended model mix for the blackboard preset (Kevin's standing
+// preference). Each role's strengths line up with a different model:
+//   - Planner (agent-1) authors contracts + todos; benefits from a
+//     well-rounded reasoning model that holds session context.
+//   - Workers (agents 2..N) emit structured diffs against ≤2 files;
+//     benefits from a fast code-shaped model that doesn't overthink.
+//   - Auditor (agent N+1 with Unit 58) reads the whole contract +
+//     recent commits + optional UI snapshot; benefits from a heavier
+//     verifier-style model.
+// Pre-populated as initial state for the matching SetupForm inputs;
+// users can clear to fall through to the main Model field.
+const BLACKBOARD_DEFAULT_PLANNER_MODEL = "glm-5.1:cloud";
+const BLACKBOARD_DEFAULT_WORKER_MODEL = "gemma4:31b-cloud";
+const BLACKBOARD_DEFAULT_AUDITOR_MODEL = "nemotron-3-super:cloud";
+
 // Unit 32: role-diff's customizable role list. Kept in sync with the
 // server's DEFAULT_ROLES in server/src/swarm/roles.ts — edits there
 // should be mirrored here (and vice versa) so the form's "reset to
@@ -201,9 +216,13 @@ export function SetupForm() {
   const [proposition, setProposition] = useState("");
   // Unit 42: per-agent model overrides (blackboard-only). Empty string
   // means "fall through to the main Model field" — same shape as the
-  // server falls back to cfg.model when these are absent.
-  const [plannerModel, setPlannerModel] = useState("");
-  const [workerModel, setWorkerModel] = useState("");
+  // server falls back to cfg.model when these are absent. The non-
+  // empty initial values are the recommended blackboard model mix
+  // (see BLACKBOARD_DEFAULT_*_MODEL above); silently ignored on
+  // non-blackboard presets since the submit handler only POSTs them
+  // when preset === "blackboard".
+  const [plannerModel, setPlannerModel] = useState(BLACKBOARD_DEFAULT_PLANNER_MODEL);
+  const [workerModel, setWorkerModel] = useState(BLACKBOARD_DEFAULT_WORKER_MODEL);
   // Unit 43: per-run wall-clock cap (minutes). Empty = use the 8-h
   // baked-in default. UI is in MINUTES; we send ms over the wire.
   const [wallClockCapMin, setWallClockCapMin] = useState("");
@@ -216,7 +235,7 @@ export function SetupForm() {
   // 60) but were never wired to the SetupForm. Same shape as the rest
   // of the blackboard-only state — empty / false = inherit defaults.
   const [dedicatedAuditor, setDedicatedAuditor] = useState(false);
-  const [auditorModel, setAuditorModel] = useState("");
+  const [auditorModel, setAuditorModel] = useState(BLACKBOARD_DEFAULT_AUDITOR_MODEL);
   const [specializedWorkers, setSpecializedWorkers] = useState(false);
   const [criticEnsemble, setCriticEnsemble] = useState(false);
   const [uiUrl, setUiUrl] = useState("");
@@ -767,14 +786,14 @@ function BlackboardModelOverrides({
         label="Planner model override (Unit 42)"
         hint={
           plannerModel.trim().length === 0
-            ? `Empty → uses the main Model field (${fallbackModel}). Planner-hosted critic / replanner / auditor sessions inherit this too.`
+            ? `Empty → uses the main Model field (${fallbackModel}). Planner-hosted critic / replanner / auditor sessions inherit this too. Recommended for blackboard: ${BLACKBOARD_DEFAULT_PLANNER_MODEL}.`
             : `Planner + critic + replanner + auditor will run on ${plannerModel.trim()}.`
         }
       >
         <input
           value={plannerModel}
           onChange={(e) => setPlannerModel(e.target.value.slice(0, 200))}
-          placeholder={`(default: ${fallbackModel})`}
+          placeholder={`(blackboard recommended: ${BLACKBOARD_DEFAULT_PLANNER_MODEL})`}
           className="input font-mono"
         />
       </Field>
@@ -782,14 +801,14 @@ function BlackboardModelOverrides({
         label="Worker model override (Unit 42)"
         hint={
           workerModel.trim().length === 0
-            ? `Empty → uses the main Model field (${fallbackModel}). All worker agents (indices 2..N) share this model.`
+            ? `Empty → uses the main Model field (${fallbackModel}). All worker agents (indices 2..N) share this model. Recommended for blackboard: ${BLACKBOARD_DEFAULT_WORKER_MODEL} (fast, code-shaped).`
             : `All worker agents will run on ${workerModel.trim()}.`
         }
       >
         <input
           value={workerModel}
           onChange={(e) => setWorkerModel(e.target.value.slice(0, 200))}
-          placeholder={`(default: ${fallbackModel})`}
+          placeholder={`(blackboard recommended: ${BLACKBOARD_DEFAULT_WORKER_MODEL})`}
           className="input font-mono"
         />
       </Field>
@@ -1049,16 +1068,16 @@ function BlackboardAgentTopology({
         label="Auditor model override (Unit 58)"
         hint={
           !dedicatedAuditor
-            ? "Only used when 'Dedicated auditor agent' is enabled above."
+            ? `Only used when 'Dedicated auditor agent' is enabled above. Recommended for blackboard: ${BLACKBOARD_DEFAULT_AUDITOR_MODEL} (heavier verifier-style model).`
             : auditorModel.trim().length === 0
-              ? `Empty → falls back to the planner model (or main Model: ${fallbackModel}). For a verifier-style audit, try a heavier reasoning model.`
+              ? `Empty → falls back to the planner model (or main Model: ${fallbackModel}). Recommended for blackboard: ${BLACKBOARD_DEFAULT_AUDITOR_MODEL}.`
               : `Auditor agent will run on ${auditorModel.trim()}.`
         }
       >
         <input
           value={auditorModel}
           onChange={(e) => setAuditorModel(e.target.value.slice(0, 200))}
-          placeholder={`(default: planner model)`}
+          placeholder={`(blackboard recommended: ${BLACKBOARD_DEFAULT_AUDITOR_MODEL})`}
           className="input font-mono"
           disabled={!dedicatedAuditor}
         />
