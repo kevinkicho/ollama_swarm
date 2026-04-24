@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AgentManager } from "./AgentManager.js";
 import type { RepoService } from "./RepoService.js";
 import type { SwarmEvent, SwarmStatus } from "../types.js";
@@ -52,13 +53,17 @@ export class Orchestrator {
     // Assign up-front so status()/isRunning() reflect the in-progress run for
     // new WS clients and the POST /status endpoint while start() is still awaiting.
     this.runner = runner;
-    // Unit 52a + 52c: anchor for the UI's runtime ticker AND identity
-    // strip. Single source of truth across all 7 runners. Fires BEFORE
-    // runner.start so a slow clone or spawn counts toward user-visible
-    // runtime. Carries the resolved config so the UI can show preset
-    // + per-agent models + clone path without a REST round-trip.
+    // Unit 52a + 52c + 52d: anchor for the UI's runtime ticker,
+    // identity strip, and identifiers row. Single source of truth
+    // across all 7 runners. Fires BEFORE runner.start so a slow clone
+    // or spawn counts toward user-visible runtime. Carries:
+    // - runId: Unit 52d — app-level handle, distinct from opencode
+    //   session ids. Useful for cross-referencing logs and future
+    //   persistent run history.
+    // - resolved config so the UI renders without a REST round-trip.
     this.opts.emit({
       type: "run_started",
+      runId: randomUUID(),
       startedAt: Date.now(),
       preset: cfg.preset,
       // Per-agent overrides (Unit 42) fall back to cfg.model when absent.

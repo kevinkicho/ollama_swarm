@@ -207,12 +207,13 @@ export type SwarmEvent =
       priorChangedFiles: number;
       priorUntrackedFiles: number;
     }
-  // Unit 52a + 52c: emitted once at the very top of Orchestrator.start.
-  // Anchors the UI's runtime ticker AND populates the run-identity
-  // strip (preset + per-agent models + clone path) without a separate
-  // REST round-trip.
+  // Unit 52a + 52c + 52d: emitted once at the very top of Orchestrator.start.
+  // Anchors the runtime ticker + identity strip + identifiers row.
+  // `runId` (Unit 52d) is an app-level uuid minted at run-start,
+  // distinct from any opencode session id.
   | {
       type: "run_started";
+      runId: string;
       startedAt: number;
       preset: string;
       plannerModel: string;

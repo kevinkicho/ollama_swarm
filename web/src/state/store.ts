@@ -46,6 +46,10 @@ interface SwarmStore {
   // captured from the same run_started event. Drives the
   // run-identity strip.
   runConfig?: RunConfigSnapshot;
+  // Unit 52d: app-level run id (uuid) minted at run-start. Distinct
+  // from opencode session ids. Used in the identifiers row for
+  // click-to-copy + future cross-referencing of per-run artifacts.
+  runId?: string;
 
   setPhase: (phase: SwarmPhase, round: number) => void;
   upsertAgent: (a: AgentState) => void;
@@ -68,6 +72,7 @@ interface SwarmStore {
   dismissCloneBanner: () => void;
   setRunStartedAt: (ts: number) => void;
   setRunConfig: (c: RunConfigSnapshot) => void;
+  setRunId: (id: string) => void;
 
   setError: (msg: string | undefined) => void;
   reset: () => void;
@@ -89,6 +94,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   cloneBannerDismissed: false,
   runStartedAt: undefined,
   runConfig: undefined,
+  runId: undefined,
 
   setPhase: (phase, round) => set({ phase, round }),
   upsertAgent: (a) => set((s) => ({ agents: { ...s.agents, [a.id]: a } })),
@@ -200,6 +206,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   dismissCloneBanner: () => set({ cloneBannerDismissed: true }),
   setRunStartedAt: (ts) => set({ runStartedAt: ts }),
   setRunConfig: (c) => set({ runConfig: c }),
+  setRunId: (id) => set({ runId: id }),
 
   setError: (msg) => set({ error: msg }),
   reset: () =>
@@ -219,5 +226,6 @@ export const useSwarm = create<SwarmStore>((set) => ({
       cloneBannerDismissed: false,
       runStartedAt: undefined,
       runConfig: undefined,
+      runId: undefined,
     }),
 }));

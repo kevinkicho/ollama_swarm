@@ -56,6 +56,7 @@ export function SwarmView() {
     <div className="h-full flex flex-col">
       <CloneBanner />
       <IdentityStrip />
+      <IdentifiersRow />
       <div className="flex-1 grid grid-cols-[260px_1fr] min-h-0">
       <aside className="border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800">
         <div className="flex items-center justify-between mb-2">
@@ -225,6 +226,75 @@ function deriveRunName(clonePath: string): string {
   // non-empty tail. Path module on web is overkill for this.
   const parts = clonePath.split(/[\\/]/).filter((p) => p.length > 0);
   return parts[parts.length - 1] ?? "(unnamed run)";
+}
+
+// Unit 52d: compact identifiers row under the IdentityStrip. Shows
+// the app runId (new uuid), each agent's opencode session id, and
+// the model slugs. Every ID is click-to-copy — specifically the
+// opencode session ids are what you'd grep `logs/current.jsonl`
+// for to debug a single agent's prompts.
+function IdentifiersRow() {
+  const runId = useSwarm((s) => s.runId);
+  const agents = useSwarm((s) => s.agents);
+  const cfg = useSwarm((s) => s.runConfig);
+  if (!runId && !cfg) return null;
+  const agentList = Object.values(agents).sort((a, b) => a.index - b.index);
+  const sameModel = cfg && cfg.plannerModel === cfg.workerModel;
+  return (
+    <div className="bg-ink-900/40 border-b border-ink-700 px-4 py-1 flex items-center gap-3 text-[11px] font-mono text-ink-400 flex-wrap">
+      {runId ? (
+        <CopyChip label="run" value={runId} short={runId.slice(0, 8)} />
+      ) : null}
+      {agentList.map((a) =>
+        a.sessionId ? (
+          <CopyChip
+            key={a.id}
+            label={a.id}
+            value={a.sessionId}
+            short={a.sessionId.slice(0, 12) + "…"}
+          />
+        ) : null,
+      )}
+      {cfg ? (
+        sameModel ? (
+          <CopyChip label="model" value={cfg.plannerModel} short={cfg.plannerModel} />
+        ) : (
+          <>
+            <CopyChip label="planner" value={cfg.plannerModel} short={cfg.plannerModel} />
+            <CopyChip label="worker" value={cfg.workerModel} short={cfg.workerModel} />
+          </>
+        )
+      ) : null}
+    </div>
+  );
+}
+
+// Click-to-copy chip. Shows `<label> <short>` with the full value
+// as the tooltip. Clicking copies the full value to clipboard and
+// briefly flashes a checkmark. Silently no-ops if the clipboard
+// API isn't available (older browsers / insecure contexts).
+function CopyChip({ label, value, short }: { label: string; value: string; short: string }) {
+  const [copied, setCopied] = useState(false);
+  const onClick = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // no-op: clipboard unavailable
+    }
+  };
+  return (
+    <button
+      onClick={onClick}
+      title={`${label}: ${value}  (click to copy)`}
+      className="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"
+    >
+      <span className="text-ink-500">{label}</span>
+      <span>{short}</span>
+      <span className="text-emerald-400 text-[10px] w-2">{copied ? "✓" : ""}</span>
+    </button>
+  );
 }
 
 interface TabButtonProps {

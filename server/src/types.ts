@@ -112,15 +112,14 @@ export type SwarmEvent =
       priorChangedFiles: number;
       priorUntrackedFiles: number;
     }
-  // Unit 52a + 52c: emitted once at the very top of Orchestrator.start
-  // so the UI's runtime ticker has a stable wall-clock anchor AND the
-  // run-identity strip has its config data without a separate REST
-  // round-trip. Fires BEFORE the runner's first phase transition, so
-  // a slow clone + spawn count toward the user-visible runtime. The
-  // summary's startedAt may differ slightly (it tracks "executing"
-  // start for cap math), but the user-visible ticker uses THIS value.
+  // Unit 52a + 52c + 52d: emitted once at the very top of Orchestrator.start.
+  // runId (Unit 52d) is a fresh uuid the orchestrator mints at run-start
+  // so the UI identifiers row has an app-level handle distinct from any
+  // opencode session id. Other fields anchor the runtime ticker and
+  // identity strip without a separate REST round-trip.
   | {
       type: "run_started";
+      runId: string;
       startedAt: number;
       preset: string;
       plannerModel: string;

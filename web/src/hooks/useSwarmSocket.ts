@@ -79,6 +79,7 @@ function dispatch(ev: SwarmEvent): void {
       break;
     case "run_started":
       s.setRunStartedAt(ev.startedAt);
+      s.setRunId(ev.runId);
       s.setRunConfig({
         preset: ev.preset,
         plannerModel: ev.plannerModel,
