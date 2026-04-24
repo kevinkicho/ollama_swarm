@@ -286,7 +286,12 @@ export function SetupForm() {
   // Unit 63 follow-on: knobs that exist server-side (Units 36, 58, 59,
   // 60) but were never wired to the SetupForm. Same shape as the rest
   // of the blackboard-only state — empty / false = inherit defaults.
-  const [dedicatedAuditor, setDedicatedAuditor] = useState(false);
+  // Default-on: vocabmaster v7 4-agent run (2026-04-23) showed
+  // dedicated auditor on nemotron-3-super was 5-12× faster than
+  // planner-as-auditor on glm-5.1, AND freed the planner to focus
+  // on todo authorship (planner mean latency halved 117s→57s).
+  // No downside on cost — one extra subprocess per run.
+  const [dedicatedAuditor, setDedicatedAuditor] = useState(true);
   const [auditorModel, setAuditorModel] = useState(BLACKBOARD_DEFAULT_AUDITOR_MODEL);
   const [specializedWorkers, setSpecializedWorkers] = useState(false);
   const [criticEnsemble, setCriticEnsemble] = useState(false);
