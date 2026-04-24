@@ -150,6 +150,25 @@ export class BlackboardRunner implements SwarmRunner {
   // building each worker prompt. Empty map = default flat-pool
   // behavior.
   private workerRoles = new Map<string, string>();
+  // Unit 62: bounded per-agent rolling latency window for the
+  // page-refresh catch-up snapshot. Same shape + cap (20) as the
+  // client-side store.latency. Populated alongside the
+  // agent_latency_sample WS emit so live and catch-up paths use
+  // identical data.
+  private recentLatencySamples = new Map<
+    string,
+    Array<{ ts: number; elapsedMs: number; success: boolean; attempt: number }>
+  >();
+  // Unit 62: cloneState payload stashed at clone time so the
+  // page-refresh catch-up returns it. The WS clone_state event still
+  // fires for live observers; this stash is purely for catch-up.
+  private cloneStateForStatus?: {
+    alreadyPresent: boolean;
+    clonePath: string;
+    priorCommits: number;
+    priorChangedFiles: number;
+    priorUntrackedFiles: number;
+  };
   private replanPending = new Set<string>();
   private replanRunning = false;
   private replanTickTimer?: NodeJS.Timeout;
@@ -258,6 +277,27 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   status(): SwarmStatus {
+    // Unit 62: include the catch-up payload so a page refresh can
+    // hydrate the zustand store from one HTTP fetch. WS events keep
+    // the live store fresh; this is purely the reload path.
+    const board = this.board.snapshot();
+    const counts = this.board.counts();
+    const latency: Record<string, Array<{ ts: number; elapsedMs: number; success: boolean; attempt: number }>> = {};
+    for (const [agentId, samples] of this.recentLatencySamples.entries()) {
+      // Defensive copy so callers can't mutate our internal buffer.
+      latency[agentId] = samples.map((s) => ({ ...s }));
+    }
+    const runConfig = this.active
+      ? {
+          preset: this.active.preset,
+          plannerModel: this.active.plannerModel ?? this.active.model,
+          workerModel: this.active.workerModel ?? this.active.model,
+          repoUrl: this.active.repoUrl,
+          clonePath: this.active.localPath,
+          agentCount: this.active.agentCount,
+          rounds: this.active.rounds,
+        }
+      : undefined;
     return {
       phase: this.phase,
       round: this.round,
@@ -268,6 +308,11 @@ export class BlackboardRunner implements SwarmRunner {
       transcript: [...this.transcript],
       summary: this.lastSummary,
       contract: this.contract ? this.cloneContract(this.contract) : undefined,
+      cloneState: this.cloneStateForStatus,
+      runConfig,
+      runStartedAt: this.runBootedAt,
+      board: { todos: board.todos, findings: board.findings, counts },
+      latency,
     };
   }
 
@@ -332,13 +377,18 @@ export class BlackboardRunner implements SwarmRunner {
     // pattern (Units 47-51) makes this distinction load-bearing —
     // user shouldn't be confused when their re-run silently picks up
     // 4 prior commits + 5 modified files.
-    this.opts.emit({
-      type: "clone_state",
+    // Unit 62: ALSO stash for the page-refresh catch-up snapshot so a
+    // reload re-renders the banner instead of forgetting we resumed.
+    this.cloneStateForStatus = {
       alreadyPresent: cloneResult.alreadyPresent,
       clonePath: destPath,
       priorCommits: cloneResult.priorCommits,
       priorChangedFiles: cloneResult.priorChangedFiles,
       priorUntrackedFiles: cloneResult.priorUntrackedFiles,
+    };
+    this.opts.emit({
+      type: "clone_state",
+      ...this.cloneStateForStatus,
     });
     // Unit 42: per-agent model overrides. Each falls back to cfg.model
     // when absent, so existing single-model runs are byte-identical.
@@ -3030,6 +3080,7 @@ export class BlackboardRunner implements SwarmRunner {
             success,
           });
           // Unit 40: live latency sample over WS for the UI sparkline.
+          const sampleTs = Date.now();
           this.opts.emit({
             type: "agent_latency_sample",
             agentId: agent.id,
@@ -3037,8 +3088,16 @@ export class BlackboardRunner implements SwarmRunner {
             attempt,
             elapsedMs,
             success,
-            ts: Date.now(),
+            ts: sampleTs,
           });
+          // Unit 62: also push into the bounded rolling window stash
+          // so the page-refresh catch-up snapshot has the same data
+          // a live observer would see. Cap at 20 (matches the
+          // client-side LATENCY_WINDOW in store.ts).
+          const recent = this.recentLatencySamples.get(agent.id) ?? [];
+          recent.push({ ts: sampleTs, elapsedMs, success, attempt });
+          if (recent.length > 20) recent.splice(0, recent.length - 20);
+          this.recentLatencySamples.set(agent.id, recent);
         },
         onRetry: ({ attempt, max, reasonShort, delayMs }) => {
           // Unit 21: track retry firings per-agent for summary.json.

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useSwarm } from "../state/store";
-import type { SwarmEvent } from "../types";
+import type { SwarmEvent, SwarmStatusSnapshot } from "../types";
 
 // Singleton so React StrictMode's double-invoked effect doesn't
 // open/close a socket mid-handshake (the source of the noisy
@@ -8,6 +8,11 @@ import type { SwarmEvent } from "../types";
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let backoffMs = 500;
+// Unit 62: gate the page-refresh catch-up fetch so React StrictMode's
+// double-mount doesn't pull /api/swarm/status twice on initial load.
+// (The fetch is idempotent, so a duplicate isn't harmful — just
+// wasteful and noisy in the network tab.)
+let catchUpFetched = false;
 
 function dispatch(ev: SwarmEvent): void {
   const s = useSwarm.getState();
@@ -124,8 +129,48 @@ function connect(): void {
   };
 }
 
+// Unit 62: page-refresh catch-up. Runs once per page load BEFORE the
+// WS opens its first event, so the store hydrates from the snapshot
+// and live events layer on top. If a run is in flight when the user
+// hits Ctrl-R, this restores the board / clone banner / runtime
+// ticker / latency sparkline without waiting for the next event tick
+// (which on a slow run could be minutes away).
+async function hydrateFromSnapshot(): Promise<void> {
+  if (catchUpFetched) return;
+  catchUpFetched = true;
+  try {
+    const res = await fetch("/api/swarm/status");
+    if (!res.ok) return;
+    const snap = (await res.json()) as SwarmStatusSnapshot;
+    const s = useSwarm.getState();
+    // Phase + round drive the topbar; safe to set even at idle (no-op).
+    s.setPhase(snap.phase, snap.round);
+    for (const a of snap.agents) s.upsertAgent(a);
+    for (const e of snap.transcript) s.appendEntry(e);
+    if (snap.summary) s.setSummary(snap.summary);
+    if (snap.contract) s.setContract(snap.contract);
+    if (snap.cloneState) s.setCloneState(snap.cloneState);
+    if (snap.runConfig) s.setRunConfig(snap.runConfig);
+    if (snap.runId) s.setRunId(snap.runId);
+    if (snap.runStartedAt) s.setRunStartedAt(snap.runStartedAt);
+    if (snap.board) {
+      s.replaceBoard({ todos: snap.board.todos, findings: snap.board.findings });
+    }
+    if (snap.latency) {
+      for (const [agentId, samples] of Object.entries(snap.latency)) {
+        for (const sample of samples) s.pushLatencySample(agentId, sample);
+      }
+    }
+  } catch {
+    // Catch-up is best-effort. WS events still fill in the store as
+    // the run progresses — a failed snapshot just means the
+    // immediately-post-refresh UI is sparser until the next event.
+  }
+}
+
 export function useSwarmSocket(): void {
   useEffect(() => {
+    void hydrateFromSnapshot();
     connect();
     // No cleanup — the socket is a module-level singleton and is
     // reused across component remounts. The browser cleans it up

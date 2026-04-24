@@ -194,4 +194,55 @@ export interface SwarmStatus {
   // Stays undefined until the run actually completes/stops/crashes.
   summary?: RunSummary;
   contract?: ExitContract;
+  // Unit 62: page-refresh catch-up state. Populated by
+  // BlackboardRunner.status() so the web can hydrate its zustand
+  // store from one HTTP fetch instead of waiting for the next batch
+  // of WS events to redraw the screen. All fields optional —
+  // discussion presets leave the blackboard-specific ones absent,
+  // and pre-Unit-X clients silently ignore them.
+  cloneState?: SwarmStatusCloneState;
+  runConfig?: SwarmStatusRunConfig;
+  runId?: string;
+  runStartedAt?: number;
+  board?: SwarmStatusBoard;
+  // Per-agent recent-latency samples (bounded — same window the
+  // client renders in the sparkline tooltip). Empty / absent on
+  // discussion presets.
+  latency?: Record<string, SwarmStatusLatencySample[]>;
+}
+
+// Unit 62: shapes for the SwarmStatus catch-up payload. Mirror of
+// the same fields the WS broadcasts in clone_state / run_started /
+// board_state / agent_latency_sample events — keeping them
+// duplicated in a snapshot type is the simplest way to let the web
+// hydrate from one HTTP call without juggling event-shaped data.
+export interface SwarmStatusCloneState {
+  alreadyPresent: boolean;
+  clonePath: string;
+  priorCommits: number;
+  priorChangedFiles: number;
+  priorUntrackedFiles: number;
+}
+
+export interface SwarmStatusRunConfig {
+  preset: string;
+  plannerModel: string;
+  workerModel: string;
+  repoUrl: string;
+  clonePath: string;
+  agentCount: number;
+  rounds: number;
+}
+
+export interface SwarmStatusBoard {
+  todos: import("./swarm/blackboard/types.js").Todo[];
+  findings: import("./swarm/blackboard/types.js").Finding[];
+  counts: BoardCountsDTO;
+}
+
+export interface SwarmStatusLatencySample {
+  ts: number;
+  elapsedMs: number;
+  success: boolean;
+  attempt: number;
 }

@@ -295,3 +295,27 @@ export interface RunSummaryDigest {
   hasContract: boolean;
   isActive: boolean;
 }
+
+// Unit 62: shape returned by GET /api/swarm/status. Mirror of the
+// server-side SwarmStatus interface — used by useSwarmSocket on
+// mount to hydrate the zustand store after a page refresh. All
+// catch-up fields are optional (discussion presets, idle phase,
+// pre-run state).
+export interface SwarmStatusSnapshot {
+  phase: SwarmPhase;
+  round: number;
+  agents: AgentState[];
+  transcript: TranscriptEntry[];
+  summary?: RunSummary;
+  contract?: ExitContract;
+  cloneState?: CloneState;
+  runConfig?: RunConfigSnapshot;
+  runId?: string;
+  runStartedAt?: number;
+  board?: {
+    todos: Todo[];
+    findings: Finding[];
+    counts: BoardCountsDTO;
+  };
+  latency?: Record<string, LatencySample[]>;
+}

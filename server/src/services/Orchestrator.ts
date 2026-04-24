@@ -26,11 +26,22 @@ export type { RunConfig };
 // public surface to it. The state of a run lives on the runner itself.
 export class Orchestrator {
   private runner: SwarmRunner | null = null;
+  // Unit 62: stash the runId minted at run-start so the page-refresh
+  // catch-up snapshot can include it. The runner doesn't own this
+  // identifier (it's an orchestrator-level handle), so we merge it in
+  // here rather than threading it through the runner contract.
+  private runId?: string;
 
   constructor(private readonly opts: OrchestratorOpts) {}
 
   status(): SwarmStatus {
-    if (this.runner) return this.runner.status();
+    if (this.runner) {
+      const runnerStatus = this.runner.status();
+      // Unit 62: stitch the orchestrator-level runId into the snapshot.
+      // Leave runnerStatus.runId untouched if the runner already set one
+      // (defensive — currently no runner does, but keeps the merge safe).
+      return { ...runnerStatus, runId: runnerStatus.runId ?? this.runId };
+    }
     return {
       phase: "idle",
       round: 0,
@@ -61,9 +72,11 @@ export class Orchestrator {
     //   session ids. Useful for cross-referencing logs and future
     //   persistent run history.
     // - resolved config so the UI renders without a REST round-trip.
+    const runId = randomUUID();
+    this.runId = runId;
     this.opts.emit({
       type: "run_started",
-      runId: randomUUID(),
+      runId,
       startedAt: Date.now(),
       preset: cfg.preset,
       // Per-agent overrides (Unit 42) fall back to cfg.model when absent.
@@ -86,7 +99,11 @@ export class Orchestrator {
       } catch {
         // ignore cleanup errors; the original failure is what we want to surface
       }
-      if (this.runner === runner) this.runner = null;
+      if (this.runner === runner) {
+        this.runner = null;
+        // Unit 62: keep runId paired with runner — drop it on failed start.
+        this.runId = undefined;
+      }
       throw err;
     }
   }
@@ -100,6 +117,9 @@ export class Orchestrator {
       // Once a run is fully stopped, drop the reference so the next start gets
       // a fresh slate rather than inheriting the previous runner's terminal phase.
       this.runner = null;
+      // Unit 62: clear the runId too so a status() after stop reports an
+      // idle slate instead of a stale handle from the previous run.
+      this.runId = undefined;
     }
   }
 
