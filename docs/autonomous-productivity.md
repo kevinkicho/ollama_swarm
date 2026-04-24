@@ -104,7 +104,7 @@ yet. **→ Unit 36 (planned).**
 | 52b  | Composite status badge                       | shipped (`ee4284b`, 2026-04-23)|
 | 52c  | Run identity strip + click-to-open path      | shipped (`9467c43`, 2026-04-23)|
 | 52d  | Identifiers row (click-to-copy chips)        | shipped (`0b15bc3`, 2026-04-23)|
-| 52e  | Run history dropdown                         | planned (Kevin's ask 2026-04-23)|
+| 52e  | Run history dropdown + digest modal          | shipped (`103da5c`, 2026-04-23)|
 | 53   | Contract panel: status filter (default unmet)| shipped (`1c9edfd`, 2026-04-23)|
 | 54   | Transcript: collapse worker JSON to summary | shipped (`15a7b81`, 2026-04-23)|
 | 55   | Auto-killAll on natural completion          | shipped (`76fe957`, 2026-04-23)|
