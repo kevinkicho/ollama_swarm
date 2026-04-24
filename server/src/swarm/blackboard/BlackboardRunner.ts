@@ -132,6 +132,11 @@ export class BlackboardRunner implements SwarmRunner {
   // Phase 6: replan orchestration. Planner is captured during executing and
   // reused to replan stale todos — see docs/known-limitations.md.
   private planner?: Agent;
+  // Unit 58: dedicated auditor agent. Populated when
+  // cfg.dedicatedAuditor === true; runAuditor routes to this agent
+  // instead of reusing the planner. Undefined otherwise (default
+  // behavior — planner wears the auditor hat).
+  private auditor?: Agent;
   private replanPending = new Set<string>();
   private replanRunning = false;
   private replanTickTimer?: NodeJS.Timeout;
@@ -326,15 +331,29 @@ export class BlackboardRunner implements SwarmRunner {
     // when absent, so existing single-model runs are byte-identical.
     const plannerModel = cfg.plannerModel ?? cfg.model;
     const workerModel = cfg.workerModel ?? cfg.model;
+    // Unit 58: auditor model. Falls back to plannerModel (same role
+    // family — reasoning over criteria + file state) then to model.
+    // Only meaningful when cfg.dedicatedAuditor is true; harmless to
+    // compute either way.
+    const auditorModel = cfg.auditorModel ?? plannerModel;
     // Unit 48: hide runner-written artifacts (opencode.json,
     // blackboard-state.json, summary.json, summary-*.json) from
     // `git status` via the clone's local .git/info/exclude — NOT the
     // user's .gitignore. See RepoService.excludeRunnerArtifacts.
     await this.opts.repos.excludeRunnerArtifacts(destPath);
-    await this.opts.repos.writeOpencodeConfig(destPath, [plannerModel, workerModel]);
+    // Unit 58: opencode.json must declare every distinct model so any
+    // spawned agent can resolve at session.create time. dedupe in
+    // writeOpencodeConfig handles the no-op case when models match.
+    const declaredModels = cfg.dedicatedAuditor
+      ? [plannerModel, workerModel, auditorModel]
+      : [plannerModel, workerModel];
+    await this.opts.repos.writeOpencodeConfig(destPath, declaredModels);
     this.appendSystem(`Cloned ${cfg.repoUrl} -> ${destPath}`);
     if (plannerModel !== workerModel) {
       this.appendSystem(`Per-agent models: planner=${plannerModel}, workers=${workerModel}`);
+    }
+    if (cfg.dedicatedAuditor && auditorModel !== plannerModel) {
+      this.appendSystem(`Per-agent models: auditor=${auditorModel}`);
     }
 
     // Unit 57: cache the prior run's blackboard-state.json BEFORE the
@@ -372,9 +391,27 @@ export class BlackboardRunner implements SwarmRunner {
       this.appendSystem("No workers spawned (agentCount=1). Planner will post TODOs, nothing will drain them.");
     }
 
+    // Unit 58: spawn the dedicated auditor agent (opt-in). Index is
+    // agentCount + 1 so it doesn't collide with workers (1=planner,
+    // 2..N=workers, N+1=auditor). Total agents = agentCount + 1.
+    if (cfg.dedicatedAuditor) {
+      const auditorIndex = cfg.agentCount + 1;
+      this.auditor = await this.opts.manager.spawnAgent({
+        cwd: destPath,
+        index: auditorIndex,
+        model: auditorModel,
+      });
+      this.appendSystem(
+        `Auditor agent ${this.auditor.id} ready on port ${this.auditor.port} (model=${auditorModel}). Audit calls will route here in parallel with workers.`,
+      );
+    } else {
+      this.auditor = undefined;
+    }
+
     // Freeze the roster for the summary artifact — killAll() will later
     // empty AgentManager's own map.
-    this.agentRoster = [planner, ...workers].map((a) => ({ id: a.id, index: a.index }));
+    this.agentRoster = [planner, ...workers, ...(this.auditor ? [this.auditor] : [])]
+      .map((a) => ({ id: a.id, index: a.index }));
 
     this.setPhase("seeding");
     const seed = await this.buildSeed(destPath, cfg);
@@ -1564,8 +1601,14 @@ export class BlackboardRunner implements SwarmRunner {
 
     const seed = await this.buildAuditorSeed();
     // Unit 24: planner fallback (see promptPlannerWithFallback comment).
+    // Unit 58: when a dedicated auditor agent was spawned, route the
+    // audit prompt to it instead of reusing the planner. Workers can
+    // continue draining new todos in parallel during the audit (they
+    // were idle on the planner-as-auditor path). promptPlannerWithFallback's
+    // fallback-to-worker safety net still kicks in if the auditor times out.
+    const auditPrimary = this.auditor ?? planner;
     const { response: firstResponse, agentUsed: auditAgent } = await this.promptPlannerWithFallback(
-      planner,
+      auditPrimary,
       `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorUserPrompt(seed)}`,
     );
     // Cap-trip final audit needs to keep going even though stopping=true —
@@ -1579,6 +1622,7 @@ export class BlackboardRunner implements SwarmRunner {
       this.appendSystem(
         `Auditor response did not parse (${parsed.reason}). Issuing repair prompt.`,
       );
+      // Unit 58: repair pass also stays on the auditor (or falls back).
       const { response: repairResponse, agentUsed: repairAgent } = await this.promptPlannerWithFallback(
         auditAgent,
         `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorRepairPrompt(firstResponse, parsed.reason)}`,
@@ -2294,6 +2338,10 @@ export class BlackboardRunner implements SwarmRunner {
     this.replanTickTimer = undefined;
     this.replanPending.clear();
     this.planner = undefined;
+    // Unit 58: forget the auditor handle on stop too. AgentManager's
+    // killAll has already terminated the underlying opencode process;
+    // the field itself just shouldn't keep referencing a dead agent.
+    this.auditor = undefined;
   }
 
   // ---------------------------------------------------------------------

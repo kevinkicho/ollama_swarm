@@ -86,6 +86,11 @@ const StartBody = z.object({
   // blackboard-state.json instead of re-deriving via first-pass-
   // contract. Blackboard-only. Default false = existing behavior.
   resumeContract: z.boolean().optional(),
+  // Unit 58: opt-in to a 4th agent dedicated to the auditor role.
+  // Total agents = agentCount + 1 (auditor is extra; workers
+  // unchanged). Blackboard-only.
+  dedicatedAuditor: z.boolean().optional(),
+  auditorModel: z.string().trim().min(1).max(200).optional(),
 });
 
 const SayBody = z.object({ text: z.string().min(1) });
@@ -150,6 +155,8 @@ export function swarmRouter(orch: Orchestrator): Router {
         workerModel: parsed.data.workerModel,
         wallClockCapMs: parsed.data.wallClockCapMs,
         resumeContract: parsed.data.resumeContract,
+        dedicatedAuditor: parsed.data.dedicatedAuditor,
+        auditorModel: parsed.data.auditorModel,
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {

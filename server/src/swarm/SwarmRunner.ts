@@ -111,6 +111,27 @@ export interface RunConfig {
    * to the normal first-pass-contract path. Blackboard-only.
    */
   resumeContract?: boolean;
+  /**
+   * Unit 58: opt-in to spawn a 4th agent dedicated to the AUDITOR
+   * role. Without this flag, agent-1 wears 4 hats (planner +
+   * replanner + auditor + critic-via-fresh-session) — Unit 46b's
+   * audit-prompt truncation is a band-aid for the bottleneck. With
+   * this flag, audit calls route to a dedicated agent so workers
+   * keep draining new todos in parallel with the audit pass, and
+   * the auditor's fresh session avoids anchoring on the planner's
+   * prior decisions. Total agents = cfg.agentCount + 1 (the +1 is
+   * the auditor; existing worker pool size is preserved).
+   * Blackboard-only.
+   */
+  dedicatedAuditor?: boolean;
+  /**
+   * Unit 58: per-run model override for the auditor agent (when
+   * dedicatedAuditor=true). Falls back to plannerModel, then to
+   * model. Useful when you want a smaller/faster model for audit
+   * (it's diff/criteria reasoning — doesn't need the planner's
+   * design taste). Ignored when dedicatedAuditor is false.
+   */
+  auditorModel?: string;
 }
 
 export interface RunnerOpts {
