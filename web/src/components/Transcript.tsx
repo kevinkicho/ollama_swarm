@@ -173,6 +173,16 @@ function formatServerSummary(s: TranscriptEntrySummary): string {
     );
     return [lead, ...lines].join("\n");
   }
+  // Phase 2b/2c: structural markers (council_draft, debate_turn) carry
+  // metadata for preset-specific panels but don't have a useful
+  // one-line form — fall back to a short descriptor so Bubble's
+  // summary display isn't empty.
+  if (s.kind === "council_draft") {
+    return `Council · round ${s.round} · ${s.phase}`;
+  }
+  if (s.kind === "debate_turn") {
+    return `Debate · round ${s.round} · ${s.role.toUpperCase()}`;
+  }
   // worker_hunks
   const opParts: string[] = [];
   if (s.ops.replace > 0) opParts.push(`${s.ops.replace} replace`);

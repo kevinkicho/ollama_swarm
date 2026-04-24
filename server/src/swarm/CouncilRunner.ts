@@ -328,6 +328,15 @@ export class CouncilRunner implements SwarmRunner {
         agentIndex: agent.index,
         text,
         ts: Date.now(),
+        // Phase 2b: tag with round + phase so the DraftMatrix can
+        // bucket without fragile index math. Round 1 = independent
+        // drafts (peer-hidden in the prompt); Round 2+ = reveal &
+        // revise (peers visible).
+        summary: {
+          kind: "council_draft",
+          round,
+          phase: round === 1 ? "draft" : "reveal",
+        },
       };
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });

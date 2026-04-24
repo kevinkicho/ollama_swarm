@@ -39,6 +39,9 @@ export class MapReduceRunner implements SwarmRunner {
   private stats = new AgentStatsCollector();
   private startedAt?: number;
   private summaryWritten = false;
+  // Phase 2d: mapper slice assignments, keyed by agentId. Empty map
+  // pre-run or if slicing hasn't happened yet.
+  private mapperSlices: Record<string, string[]> = {};
 
   constructor(private readonly opts: RunnerOpts) {}
 
@@ -53,6 +56,8 @@ export class MapReduceRunner implements SwarmRunner {
       transcript: [...this.transcript],
       // Task #39: per-agent partial-stream buffer for catch-up.
       streaming: this.opts.manager.getPartialStreams(),
+      // Phase 2d: mapper slice assignments for CoveragePanel catch-up.
+      mapperSlices: { ...this.mapperSlices },
     };
   }
 
@@ -167,6 +172,15 @@ export class MapReduceRunner implements SwarmRunner {
       this.appendSystem(
         `Repo slicing: round-robin over ${slicingSource.length} top-level entries across ${mappers.length} mappers.`,
       );
+      // Phase 2d: stash + emit slice assignments so CoveragePanel can
+      // render the tree view. Keyed by agentId for consistency with
+      // other per-agent maps (latency etc.).
+      const slicesById: Record<string, string[]> = {};
+      for (let i = 0; i < mappers.length; i++) {
+        slicesById[mappers[i].id] = slices[i] ?? [];
+      }
+      this.mapperSlices = slicesById;
+      this.opts.emit({ type: "mapper_slices", slices: slicesById });
 
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;

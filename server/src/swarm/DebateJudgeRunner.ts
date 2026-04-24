@@ -201,7 +201,7 @@ export class DebateJudgeRunner implements SwarmRunner {
         if (this.stopping) break;
         // JUDGE turn (only on the final round)
         if (isFinalRound) {
-          await this.runJudgeTurn(judge, prop);
+          await this.runJudgeTurn(judge, prop, r);
         }
       }
       if (!this.stopping) this.appendSystem("Debate concluded.");
@@ -274,15 +274,26 @@ export class DebateJudgeRunner implements SwarmRunner {
       isFinalRound,
       transcript: [...this.transcript],
     });
-    await this.runAgent(agent, prompt);
+    // Phase 2c: tag so VerdictPanel can group PRO/CON pairs by round.
+    await this.runAgent(agent, prompt, { role: side, round });
   }
 
-  private async runJudgeTurn(judge: Agent, proposition: string): Promise<void> {
+  private async runJudgeTurn(
+    judge: Agent,
+    proposition: string,
+    round: number,
+  ): Promise<void> {
     const prompt = buildJudgePrompt({ proposition, transcript: [...this.transcript] });
-    await this.runAgent(judge, prompt);
+    await this.runAgent(judge, prompt, { role: "judge", round });
   }
 
-  private async runAgent(agent: Agent, prompt: string): Promise<void> {
+  // Phase 2c: transcript tag so the VerdictPanel can identify each
+  // turn's role + round without guessing by agent-index order.
+  private async runAgent(
+    agent: Agent,
+    prompt: string,
+    debateTag?: { role: "pro" | "con" | "judge"; round: number },
+  ): Promise<void> {
     this.opts.manager.markStatus(agent.id, "thinking");
     this.emitAgentState({
       id: agent.id,
@@ -374,6 +385,10 @@ export class DebateJudgeRunner implements SwarmRunner {
         agentIndex: agent.index,
         text,
         ts: Date.now(),
+        // Phase 2c: VerdictPanel groups entries by round + role.
+        summary: debateTag
+          ? { kind: "debate_turn", round: debateTag.round, role: debateTag.role }
+          : undefined,
       };
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });

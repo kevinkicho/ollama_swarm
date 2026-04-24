@@ -62,6 +62,18 @@ export type TranscriptEntrySummary =
       kind: "ow_assignments";
       subtaskCount: number;
       assignments: Array<{ agentIndex: number; subtask: string }>;
+    }
+  | {
+      // Phase 2b: council draft/reveal metadata.
+      kind: "council_draft";
+      round: number;
+      phase: "draft" | "reveal";
+    }
+  | {
+      // Phase 2c: debate-judge per-turn role.
+      kind: "debate_turn";
+      round: number;
+      role: "pro" | "con" | "judge";
     };
 
 export type SwarmPhase =
@@ -214,6 +226,11 @@ export type SwarmEvent =
       file: string;
       state: PheromoneEntry;
     }
+  // Phase 2d: map-reduce mapper slice assignments.
+  | {
+      type: "mapper_slices";
+      slices: Record<string, string[]>;
+    }
   // Unit 40: per-attempt latency sample. The zustand store keeps a
   // bounded rolling window per agent; the AgentPanel renders it as a
   // sparkline in the "thinking 3m54s" tooltip so users can see whether
@@ -361,4 +378,6 @@ export interface SwarmStatusSnapshot {
   streaming?: Record<string, { text: string; updatedAt: number }>;
   // Phase 2a: stigmergy pheromone table for catch-up hydration.
   pheromones?: Record<string, PheromoneEntry>;
+  // Phase 2d: map-reduce mapper slice assignments for catch-up.
+  mapperSlices?: Record<string, string[]>;
 }

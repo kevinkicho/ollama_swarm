@@ -8,8 +8,21 @@ import { CopyChip } from "./CopyChip";
 import { Transcript } from "./Transcript";
 import { MetricsPanel } from "./MetricsPanel";
 import { PheromonePanel } from "./PheromonePanel";
+import { DraftMatrix } from "./DraftMatrix";
+import { VerdictPanel } from "./VerdictPanel";
+import { CoveragePanel } from "./CoveragePanel";
+import { OwSubtasksPanel } from "./OwSubtasksPanel";
 
-type Tab = "transcript" | "metrics" | "board" | "contract" | "pheromones";
+type Tab =
+  | "transcript"
+  | "metrics"
+  | "board"
+  | "contract"
+  | "pheromones"
+  | "drafts"
+  | "verdict"
+  | "coverage"
+  | "subtasks";
 
 export function SwarmView() {
   const agents = useSwarm((s) => s.agents);
@@ -28,20 +41,35 @@ export function SwarmView() {
   // selected but no run config exists yet — default to showing them
   // since the SetupForm is open).
   const showBlackboardTabs = !cfg || cfg.preset === "blackboard";
-  // Phase 2a: Pheromones tab is stigmergy-only. Like Board + Contract
-  // above, we hide it entirely on other presets to avoid dead UI.
+  // Phase 2 preset-specific primary-signal tabs. Each only appears
+  // for its matching preset; tabs from earlier presets in the same
+  // session disappear when the user switches.
   const showPheromonesTab = cfg?.preset === "stigmergy";
+  const showDraftsTab = cfg?.preset === "council";
+  const showVerdictTab = cfg?.preset === "debate-judge";
+  const showCoverageTab = cfg?.preset === "map-reduce";
+  const showSubtasksTab = cfg?.preset === "orchestrator-worker";
   // If the current tab becomes hidden (user switched presets while on
   // a now-invisible tab), fall back to Transcript so the content area
   // isn't empty.
   useEffect(() => {
-    if (!showBlackboardTabs && (tab === "board" || tab === "contract")) {
-      setTab("transcript");
-    }
-    if (!showPheromonesTab && tab === "pheromones") {
-      setTab("transcript");
-    }
-  }, [showBlackboardTabs, showPheromonesTab, tab]);
+    const hiddenTab =
+      (!showBlackboardTabs && (tab === "board" || tab === "contract")) ||
+      (!showPheromonesTab && tab === "pheromones") ||
+      (!showDraftsTab && tab === "drafts") ||
+      (!showVerdictTab && tab === "verdict") ||
+      (!showCoverageTab && tab === "coverage") ||
+      (!showSubtasksTab && tab === "subtasks");
+    if (hiddenTab) setTab("transcript");
+  }, [
+    showBlackboardTabs,
+    showPheromonesTab,
+    showDraftsTab,
+    showVerdictTab,
+    showCoverageTab,
+    showSubtasksTab,
+    tab,
+  ]);
 
   const onStop = async () => {
     if (!confirm("Stop the swarm? All spawned opencode processes will be terminated.")) return;
@@ -185,6 +213,26 @@ export function SwarmView() {
               Pheromones
             </TabButton>
           ) : null}
+          {showDraftsTab ? (
+            <TabButton active={tab === "drafts"} onClick={() => setTab("drafts")}>
+              Drafts
+            </TabButton>
+          ) : null}
+          {showVerdictTab ? (
+            <TabButton active={tab === "verdict"} onClick={() => setTab("verdict")}>
+              Verdict
+            </TabButton>
+          ) : null}
+          {showCoverageTab ? (
+            <TabButton active={tab === "coverage"} onClick={() => setTab("coverage")}>
+              Coverage
+            </TabButton>
+          ) : null}
+          {showSubtasksTab ? (
+            <TabButton active={tab === "subtasks"} onClick={() => setTab("subtasks")}>
+              Subtasks
+            </TabButton>
+          ) : null}
         </div>
         <div className="flex-1 overflow-hidden">
           {tab === "transcript" ? (
@@ -197,6 +245,14 @@ export function SwarmView() {
             <ContractPanel />
           ) : tab === "pheromones" && showPheromonesTab ? (
             <PheromonePanel />
+          ) : tab === "drafts" && showDraftsTab ? (
+            <DraftMatrix />
+          ) : tab === "verdict" && showVerdictTab ? (
+            <VerdictPanel />
+          ) : tab === "coverage" && showCoverageTab ? (
+            <CoveragePanel />
+          ) : tab === "subtasks" && showSubtasksTab ? (
+            <OwSubtasksPanel />
           ) : (
             <Transcript />
           )}

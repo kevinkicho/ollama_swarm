@@ -54,6 +54,8 @@ interface SwarmStore {
   // Phase 2a: stigmergy pheromone table. Empty for non-stigmergy
   // presets. Keyed by file path.
   pheromones: Record<string, PheromoneEntry>;
+  // Phase 2d: map-reduce mapper slice assignments. Keyed by agentId.
+  mapperSlices: Record<string, string[]>;
 
   setPhase: (phase: SwarmPhase, round: number) => void;
   upsertAgent: (a: AgentState) => void;
@@ -78,6 +80,7 @@ interface SwarmStore {
   setRunConfig: (c: RunConfigSnapshot) => void;
   setRunId: (id: string) => void;
   upsertPheromone: (file: string, state: PheromoneEntry) => void;
+  setMapperSlices: (slices: Record<string, string[]>) => void;
 
   setError: (msg: string | undefined) => void;
   reset: () => void;
@@ -120,6 +123,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   runConfig: undefined,
   runId: undefined,
   pheromones: {},
+  mapperSlices: {},
 
   setPhase: (phase, round) => set({ phase, round }),
   upsertAgent: (a) => set((s) => ({ agents: { ...s.agents, [a.id]: a } })),
@@ -234,6 +238,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   setRunId: (id) => set({ runId: id }),
   upsertPheromone: (file, state) =>
     set((s) => ({ pheromones: { ...s.pheromones, [file]: state } })),
+  setMapperSlices: (slices) => set({ mapperSlices: { ...slices } }),
 
   setError: (msg) => set({ error: msg }),
   reset: () =>
@@ -255,6 +260,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       runConfig: undefined,
       runId: undefined,
       pheromones: {},
+      mapperSlices: {},
     }),
   // Task #37 (partial): clear per-run state when a new run kicks off
   // WITHOUT blowing away transcript/findings/board — those are the
@@ -287,6 +293,9 @@ export const useSwarm = create<SwarmStore>((set) => ({
         // Phase 2a: stigmergy pheromone table is also preset-specific
         // state that shouldn't leak across runs. Cleared here too.
         pheromones: {},
+        // Phase 2d: map-reduce slice assignments — same cross-run
+        // leak category; cleared on new-run boundary.
+        mapperSlices: {},
       };
       // Skip the divider entirely on an empty transcript — nothing to
       // divide yet, and it avoids the "first-paint shows a divider"

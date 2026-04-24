@@ -88,6 +88,11 @@ function dispatch(ev: SwarmEvent): void {
       // catch-up path below.
       s.upsertPheromone(ev.file, ev.state);
       break;
+    case "mapper_slices":
+      // Phase 2d: map-reduce slice assignments. Emitted once at the
+      // top of the run after slicing. Client overwrites the map.
+      s.setMapperSlices(ev.slices);
+      break;
     case "run_started":
       // Task #37 (partial) + #46: a new run is starting. Drop agents/
       // streaming/latency from any prior run in this session — the
@@ -200,6 +205,10 @@ async function hydrateFromSnapshot(): Promise<void> {
       for (const [file, state] of Object.entries(snap.pheromones)) {
         s.upsertPheromone(file, state);
       }
+    }
+    // Phase 2d: hydrate mapper slice assignments.
+    if (snap.mapperSlices && Object.keys(snap.mapperSlices).length > 0) {
+      s.setMapperSlices(snap.mapperSlices);
     }
   } catch {
     // Catch-up is best-effort. WS events still fill in the store as

@@ -86,6 +86,24 @@ export type TranscriptEntrySummary =
       kind: "ow_assignments";
       subtaskCount: number;
       assignments: Array<{ agentIndex: number; subtask: string }>;
+    }
+  // Phase 2b: council draft/reveal metadata. Tagged on every council
+  // transcript entry so the DraftMatrix client component can bucket
+  // entries into a 2D grid (round × agent) without fragile indexing.
+  // Round 1 = "draft" (peer-hidden). Round 2+ = "reveal" (all drafts
+  // visible).
+  | {
+      kind: "council_draft";
+      round: number;
+      phase: "draft" | "reveal";
+    }
+  // Phase 2c: debate-judge per-turn role. Tagged on every debate-
+  // judge transcript entry so the VerdictPanel can group PRO/CON
+  // argument pairs by round and render the JUDGE verdict separately.
+  | {
+      kind: "debate_turn";
+      round: number;
+      role: "pro" | "con" | "judge";
     };
 
 export interface BoardCountsDTO {
@@ -127,6 +145,13 @@ export type SwarmEvent =
       type: "pheromone_updated";
       file: string;
       state: { visits: number; avgInterest: number; avgConfidence: number; latestNote: string };
+    }
+  // Phase 2d (2026-04-24): map-reduce mapper slice assignments. Fired
+  // once at the top of the run, after slicing. Keyed by agentIndex;
+  // agent-1 (reducer) is excluded (it sees everything via transcript).
+  | {
+      type: "mapper_slices";
+      slices: Record<string, string[]>;
     }
   // Unit 40: per-attempt latency sample emitted by each runner's
   // onTiming callback (sibling of the existing logDiag /
@@ -248,6 +273,9 @@ export interface SwarmStatus {
   // Phase 2a: stigmergy pheromone table keyed by file path. Only
   // populated for stigmergy runs; other presets omit it.
   pheromones?: Record<string, SwarmStatusPheromoneEntry>;
+  // Phase 2d: map-reduce mapper assignments (agentIndex → slice of
+  // top-level repo entries). Only populated for map-reduce runs.
+  mapperSlices?: Record<string, string[]>;
 }
 
 export interface SwarmStatusStreamingEntry {
