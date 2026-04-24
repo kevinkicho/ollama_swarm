@@ -79,6 +79,8 @@ export class MapReduceRunner implements SwarmRunner {
 
     this.setPhase("cloning");
     const { destPath } = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
+    // Unit 48: hide runner artifacts from `git status` (see RoundRobinRunner).
+    await this.opts.repos.excludeRunnerArtifacts(destPath);
     await this.opts.repos.writeOpencodeConfig(destPath, cfg.model);
     this.appendSystem(`Cloned ${cfg.repoUrl} -> ${destPath}`);
 

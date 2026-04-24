@@ -297,3 +297,153 @@ test("writeOpencodeConfig — mcp block absent by default (Unit 26 OFF)", async 
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Unit 48: excludeRunnerArtifacts — append runner-written file patterns to
+// the clone's local .git/info/exclude so they don't pollute `git status`.
+// We test against synthetic .git/info/exclude files because spinning up a
+// real git clone in a unit test is heavyweight (and unnecessary — the
+// helper only knows about the file path, not git itself).
+// ---------------------------------------------------------------------------
+
+async function makeTmpClone(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-exclude-"));
+  await fs.mkdir(path.join(root, ".git", "info"), { recursive: true });
+  return root;
+}
+
+const EXPECTED_PATTERNS = [
+  "opencode.json",
+  "blackboard-state.json",
+  "summary.json",
+  "summary-*.json",
+];
+
+test("excludeRunnerArtifacts — appends every standard pattern to a fresh exclude file", async () => {
+  const clone = await makeTmpClone();
+  try {
+    const repos = new RepoService();
+    await repos.excludeRunnerArtifacts(clone);
+    const content = await fs.readFile(path.join(clone, ".git", "info", "exclude"), "utf8");
+    for (const pat of EXPECTED_PATTERNS) {
+      assert.match(content, new RegExp(`^${pat.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+    }
+    // Header comment is present (so a human reading the file knows where
+    // these came from).
+    assert.match(content, /Unit 48/);
+  } finally {
+    await fs.rm(clone, { recursive: true, force: true });
+  }
+});
+
+test("excludeRunnerArtifacts — preserves existing exclude entries", async () => {
+  const clone = await makeTmpClone();
+  try {
+    const excludePath = path.join(clone, ".git", "info", "exclude");
+    await fs.writeFile(excludePath, "# user's prior entries\nmy-secrets.txt\nlocal.config\n", "utf8");
+    const repos = new RepoService();
+    await repos.excludeRunnerArtifacts(clone);
+    const content = await fs.readFile(excludePath, "utf8");
+    // Prior entries kept verbatim
+    assert.match(content, /^my-secrets\.txt$/m);
+    assert.match(content, /^local\.config$/m);
+    // Our patterns appended after
+    assert.match(content, /^opencode\.json$/m);
+    assert.match(content, /^summary-\*\.json$/m);
+  } finally {
+    await fs.rm(clone, { recursive: true, force: true });
+  }
+});
+
+test("excludeRunnerArtifacts — idempotent on repeat calls", async () => {
+  const clone = await makeTmpClone();
+  try {
+    const repos = new RepoService();
+    await repos.excludeRunnerArtifacts(clone);
+    const after1 = await fs.readFile(path.join(clone, ".git", "info", "exclude"), "utf8");
+    await repos.excludeRunnerArtifacts(clone);
+    await repos.excludeRunnerArtifacts(clone);
+    const after3 = await fs.readFile(path.join(clone, ".git", "info", "exclude"), "utf8");
+    assert.equal(after3, after1, "second/third calls must not change the file");
+  } finally {
+    await fs.rm(clone, { recursive: true, force: true });
+  }
+});
+
+test("excludeRunnerArtifacts — appends only the missing pattern when one already exists", async () => {
+  const clone = await makeTmpClone();
+  try {
+    const excludePath = path.join(clone, ".git", "info", "exclude");
+    // Prior content already has summary.json — only the OTHER patterns
+    // should be appended.
+    await fs.writeFile(excludePath, "summary.json\n", "utf8");
+    const repos = new RepoService();
+    await repos.excludeRunnerArtifacts(clone);
+    const content = await fs.readFile(excludePath, "utf8");
+    // summary.json appears exactly once (not duplicated)
+    const summaryHits = content.match(/^summary\.json$/gm) ?? [];
+    assert.equal(summaryHits.length, 1, "summary.json must not be duplicated");
+    // The other patterns are appended
+    assert.match(content, /^opencode\.json$/m);
+    assert.match(content, /^blackboard-state\.json$/m);
+  } finally {
+    await fs.rm(clone, { recursive: true, force: true });
+  }
+});
+
+test("excludeRunnerArtifacts — creates .git/info/ when missing (best-effort)", async () => {
+  // Some shallow clones omit .git/info/ until git itself touches it.
+  // Verify we recreate the dir + file rather than throwing.
+  const clone = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-exclude-bare-"));
+  try {
+    await fs.mkdir(path.join(clone, ".git"), { recursive: true });
+    // Note: NO .git/info/ subdir.
+    const repos = new RepoService();
+    await repos.excludeRunnerArtifacts(clone);
+    const content = await fs.readFile(path.join(clone, ".git", "info", "exclude"), "utf8");
+    assert.match(content, /^opencode\.json$/m);
+  } finally {
+    await fs.rm(clone, { recursive: true, force: true });
+  }
+});
+
+test("excludeRunnerArtifacts — silently no-ops when .git is missing entirely", async () => {
+  // No .git directory at all (clone failed, wrong path). Helper must
+  // not throw — the runner's own clone error path will surface the
+  // real failure.
+  const notARepo = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-exclude-norepo-"));
+  try {
+    const repos = new RepoService();
+    await repos.excludeRunnerArtifacts(notARepo);
+    // No assertion needed beyond "didn't throw" — but verify we
+    // didn't accidentally CREATE .git out of thin air.
+    let gitExists = true;
+    try {
+      await fs.access(path.join(notARepo, ".git"));
+    } catch {
+      gitExists = false;
+    }
+    assert.equal(gitExists, false, "must not create .git/ in a non-repo directory");
+  } finally {
+    await fs.rm(notARepo, { recursive: true, force: true });
+  }
+});
+
+test("excludeRunnerArtifacts — handles existing exclude file without trailing newline", async () => {
+  // A user's prior exclude file may end without a newline. The helper
+  // must insert one before its appended block so the patterns aren't
+  // glued to the previous line.
+  const clone = await makeTmpClone();
+  try {
+    const excludePath = path.join(clone, ".git", "info", "exclude");
+    await fs.writeFile(excludePath, "no-trailing-newline.txt", "utf8");
+    const repos = new RepoService();
+    await repos.excludeRunnerArtifacts(clone);
+    const content = await fs.readFile(excludePath, "utf8");
+    // Original entry stays intact on its own line
+    assert.match(content, /^no-trailing-newline\.txt$/m);
+    assert.match(content, /^opencode\.json$/m);
+  } finally {
+    await fs.rm(clone, { recursive: true, force: true });
+  }
+});

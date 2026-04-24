@@ -82,6 +82,9 @@ export class RoundRobinRunner implements SwarmRunner {
 
     this.setPhase("cloning");
     const { destPath } = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
+    // Unit 48: hide runner-written artifacts from `git status` via the
+    // clone's local .git/info/exclude (NOT the user's .gitignore).
+    await this.opts.repos.excludeRunnerArtifacts(destPath);
     await this.opts.repos.writeOpencodeConfig(destPath, cfg.model);
     this.appendSystem(`Cloned ${cfg.repoUrl} -> ${destPath}`);
 

@@ -299,6 +299,11 @@ export class BlackboardRunner implements SwarmRunner {
     // when absent, so existing single-model runs are byte-identical.
     const plannerModel = cfg.plannerModel ?? cfg.model;
     const workerModel = cfg.workerModel ?? cfg.model;
+    // Unit 48: hide runner-written artifacts (opencode.json,
+    // blackboard-state.json, summary.json, summary-*.json) from
+    // `git status` via the clone's local .git/info/exclude — NOT the
+    // user's .gitignore. See RepoService.excludeRunnerArtifacts.
+    await this.opts.repos.excludeRunnerArtifacts(destPath);
     await this.opts.repos.writeOpencodeConfig(destPath, [plannerModel, workerModel]);
     this.appendSystem(`Cloned ${cfg.repoUrl} -> ${destPath}`);
     if (plannerModel !== workerModel) {

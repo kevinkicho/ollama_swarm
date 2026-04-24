@@ -109,6 +109,70 @@ export class RepoService {
     return { destPath: abs, alreadyPresent: false };
   }
 
+  // Unit 48: append runner-written file patterns to the clone's
+  // local .git/info/exclude so they don't show up in `git status` as
+  // untracked. Specifically NOT touching the user's .gitignore —
+  // .git/info/exclude lives inside .git/ so it's never checked in or
+  // pushed, doesn't surface as "M .gitignore" in the user's working
+  // tree, and survives garbage collection.
+  //
+  // Idempotent: re-runs append nothing if every entry is already
+  // present. Best-effort I/O — a failure here just means git status
+  // still shows our artifacts; not a run-breaking error.
+  //
+  // Patterns excluded:
+  //   opencode.json        — per-clone agent config (Unit 42)
+  //   blackboard-state.json — runtime snapshot (BlackboardRunner only)
+  //   summary.json          — final run summary
+  //   summary-*.json        — Unit 49's per-run summary file naming
+  async excludeRunnerArtifacts(clonePath: string): Promise<void> {
+    const gitDir = path.join(clonePath, ".git");
+    // Guard: only operate inside an existing .git directory. If the
+    // caller passed a non-repo path (clone failed, wrong destPath),
+    // silently no-op rather than fabricating a stray .git/ tree.
+    if (!(await this.dirExists(gitDir))) return;
+    const excludePath = path.join(gitDir, "info", "exclude");
+    const STANDARD_ENTRIES = [
+      "# ollama_swarm runner artifacts (Unit 48)",
+      "opencode.json",
+      "blackboard-state.json",
+      "summary.json",
+      "summary-*.json",
+    ];
+    let existing = "";
+    try {
+      existing = await fs.readFile(excludePath, "utf8");
+    } catch {
+      // .git/info/exclude doesn't exist yet — create the info/ dir
+      // (under the verified-existing .git/) so the appendFile below
+      // has somewhere to land. Some shallow clones omit the file;
+      // git itself recreates it on demand.
+      try {
+        await fs.mkdir(path.dirname(excludePath), { recursive: true });
+      } catch {
+        // info/ dir is unwriteable for some reason; best-effort bail.
+        return;
+      }
+    }
+    // Existing entries normalized for comparison: trim and skip blank
+    // lines. Keeps the helper idempotent across whitespace drift.
+    const existingLines = new Set(
+      existing
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0),
+    );
+    const toAdd = STANDARD_ENTRIES.filter((e) => !existingLines.has(e.trim()));
+    if (toAdd.length === 0) return;
+    const sep = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+    const append = `${sep}${toAdd.join("\n")}\n`;
+    try {
+      await fs.appendFile(excludePath, append, "utf8");
+    } catch {
+      // best-effort
+    }
+  }
+
   async writeOpencodeConfig(clonePath: string, model: string | readonly string[]): Promise<void> {
     const filePath = path.join(clonePath, "opencode.json");
     // Unit 42: accept multiple models so per-agent overrides
