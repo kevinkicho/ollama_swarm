@@ -250,6 +250,8 @@ export type SwarmEvent =
       // for the dedicated auditor at index N+1 (Unit 58).
       auditorModel: string;
       dedicatedAuditor: boolean;
+      // Task #42: role-diff role names indexed by (agentIndex - 1).
+      roles?: string[];
       repoUrl: string;
       clonePath: string;
       agentCount: number;
@@ -285,6 +287,8 @@ export interface RunConfigSnapshot {
   // user didn't override.
   auditorModel: string;
   dedicatedAuditor: boolean;
+  // Task #42: role-diff role names indexed by (agentIndex - 1).
+  roles?: string[];
   repoUrl: string;
   clonePath: string;
   agentCount: number;

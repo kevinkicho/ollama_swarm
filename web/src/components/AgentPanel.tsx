@@ -91,18 +91,21 @@ function formatSampleMs(ms: number): string {
 
 // Unit 56: AgentPanel takes role + model from the parent so the card
 // can render the previously-topbar-only IdentifiersRow chips
-// (per-agent session id + model) inline. Roles today:
+// (per-agent session id + model) inline. Fixed roles:
 //   - "planner" at index 1
 //   - "auditor" at index agentCount+1 when cfg.dedicatedAuditor (Unit 58)
 //   - "worker" for everything in between
-// SwarmView derives these via agentRole(idx) before passing.
+// Task #42: role-diff overlays role-catalog names ("Architect",
+// "Tester", etc.) as arbitrary strings. Renderer branches on the
+// fixed names for colored badges; any other string renders with a
+// distinct violet badge to signal "custom role from catalog".
 export function AgentPanel({
   agent,
   role,
   model,
 }: {
   agent: AgentState;
-  role: "planner" | "worker" | "auditor";
+  role: string;
   model?: string;
 }) {
   const elapsed = useElapsedTicker(agent.thinkingSince, agent.status === "thinking");
@@ -150,14 +153,22 @@ export function AgentPanel({
                 ? "border-amber-500/50 text-amber-300"
                 : role === "auditor"
                   ? "border-sky-500/50 text-sky-300"
-                  : "border-ink-600 text-ink-400")
+                  : role === "worker"
+                    ? "border-ink-600 text-ink-400"
+                    // Task #42: role-diff catalog names (Architect,
+                    // Tester, etc.) get a violet badge distinct from
+                    // the three fixed roles so users see at a glance
+                    // that this card is role-diff-shaped.
+                    : "border-violet-500/50 text-violet-300")
             }
             title={
               role === "planner"
                 ? "Planner / replanner / critic (runs audit too when no dedicated auditor)"
                 : role === "auditor"
                   ? "Dedicated auditor (Unit 58) — judges contract criteria only, frees the planner to focus on todo authorship"
-                  : "Worker (claims + commits todos)"
+                  : role === "worker"
+                    ? "Worker (claims + commits todos)"
+                    : `Role-diff catalog: ${role}. Guidance prepended to the agent's round-robin prompt so identical model weights produce distinct priors.`
             }
           >
             {role}

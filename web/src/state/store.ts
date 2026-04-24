@@ -78,7 +78,23 @@ interface SwarmStore {
   reset: () => void;
   // Task #37 (partial): lighter reset fired on WS run_started — drops
   // agents/streaming/latency only so prior transcript stays readable.
-  resetForNewRun: () => void;
+  // Task #46: accepts run metadata so the transcript divider can
+  // render the runId + preset + models + agent count + repo instead
+  // of a plain "— new run started —" line.
+  resetForNewRun: (info?: RunStartDividerInfo) => void;
+}
+
+// Task #46: metadata threaded into the transcript divider that
+// resetForNewRun appends. All optional — if missing, we fall back
+// to the plain "— new run started —" text for back-compat with any
+// caller (tests, future code paths) that doesn't have the info.
+export interface RunStartDividerInfo {
+  runId?: string;
+  preset?: string;
+  plannerModel?: string;
+  workerModel?: string;
+  agentCount?: number;
+  repoUrl?: string;
 }
 
 export const useSwarm = create<SwarmStore>((set) => ({
@@ -236,25 +252,62 @@ export const useSwarm = create<SwarmStore>((set) => ({
   // history the user may still want to scroll. This addresses the
   // Agent N leftover problem (role-diff's 5 agents lingering after
   // council started with 4) without destroying context from the prior
-  // run. The in-flight-stream-wipe case (hypothesis 1 in #37) is
-  // still open — needs a server-side partial-stream buffer.
-  resetForNewRun: () =>
-    set((s) => ({
-      agents: {},
-      streaming: {},
-      latency: {},
-      // Append a divider so the user sees a visual break between runs.
-      transcript:
-        s.transcript.length > 0
-          ? [
-              ...s.transcript,
-              {
-                id: `divider-${Date.now()}`,
-                role: "system" as const,
-                text: "— new run started —",
-                ts: Date.now(),
-              },
-            ]
-          : s.transcript,
-    })),
+  // run.
+  // Task #46: emits a structured divider marker with run metadata
+  // (runId + preset + models + agentCount + repo) so the Transcript
+  // renderer can show a rich horizontal-rule block instead of a plain
+  // "— new run started —" line. The divider's text uses a sentinel
+  // prefix "▸▸RUN-START▸▸" so Transcript.tsx can detect it and render
+  // a custom component; fall back to the plain text when no metadata
+  // is supplied (test rigs, future callers that lack the fields).
+  resetForNewRun: (info) =>
+    set((s) => {
+      // Skip the divider entirely on an empty transcript — nothing to
+      // divide yet, and it avoids the "first-paint shows a divider"
+      // weirdness at run start.
+      if (s.transcript.length === 0) {
+        return { agents: {}, streaming: {}, latency: {} };
+      }
+      // Task #46 also: dedupe consecutive dividers. If the last entry
+      // is already a run-start marker, don't stack a second one —
+      // fixes the "— new run started — / — new run started —" stack
+      // that Kevin flagged during UI testing.
+      const lastEntry = s.transcript[s.transcript.length - 1];
+      const isLastADivider =
+        lastEntry?.role === "system" &&
+        (lastEntry.text === "— new run started —" ||
+          lastEntry.text.startsWith("▸▸RUN-START▸▸"));
+      if (isLastADivider) {
+        return { agents: {}, streaming: {}, latency: {} };
+      }
+      // Build the divider text. When metadata is supplied, prefix
+      // with the sentinel + encode fields as a pipe-separated line
+      // the renderer can parse. Otherwise fall back to the old
+      // plain-text format.
+      const text = info
+        ? [
+            "▸▸RUN-START▸▸",
+            `runId=${info.runId ?? ""}`,
+            `preset=${info.preset ?? ""}`,
+            `plannerModel=${info.plannerModel ?? ""}`,
+            `workerModel=${info.workerModel ?? ""}`,
+            `agentCount=${info.agentCount ?? ""}`,
+            `repoUrl=${info.repoUrl ?? ""}`,
+          ].join("|")
+        : "— new run started —";
+      return {
+        agents: {},
+        streaming: {},
+        latency: {},
+        transcript: [
+          ...s.transcript,
+          {
+            id: `divider-${Date.now()}`,
+            role: "system" as const,
+            text,
+            ts: Date.now(),
+          },
+        ],
+      };
+    }),
 }));

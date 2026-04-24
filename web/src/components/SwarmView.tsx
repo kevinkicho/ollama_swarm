@@ -59,8 +59,14 @@ export function SwarmView() {
   // dedicated auditor (Unit 58, blackboard only) spawns at
   // index = agentCount + 1 and should be labeled "auditor", not
   // "worker". Everything in between is a worker.
+  // Task #42: role-diff overlays role-catalog names (Architect /
+  // Tester / …) via cfg.roles; when present the label is the role
+  // name (a string) rather than the generic planner/worker/auditor.
   const cfg = useSwarm((s) => s.runConfig);
-  const agentRole = (idx: number): "planner" | "worker" | "auditor" => {
+  const agentRole = (idx: number): string => {
+    if (cfg?.preset === "role-diff" && cfg.roles && cfg.roles.length > 0) {
+      return cfg.roles[(idx - 1) % cfg.roles.length];
+    }
     if (idx === 1) return "planner";
     if (cfg?.dedicatedAuditor && idx > cfg.agentCount) return "auditor";
     return "worker";

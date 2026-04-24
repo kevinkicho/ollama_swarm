@@ -104,10 +104,16 @@ function launch(name, cwd, args, color) {
   child.stdout.on("data", (d) => process.stdout.write(tagOut(d)));
   child.stderr.on("data", (d) => process.stderr.write(tagOut(d)));
   child.on("exit", (code, signal) => {
-    if (!shuttingDown) {
-      console.log(`[dev] ${name} exited (code=${code} signal=${signal}) — shutting down`);
-      shutdown();
-    }
+    if (shuttingDown) return;
+    // Task #44: don't cascade-shutdown the other child when one dies.
+    // Previously, if the server (tsx watch) crashed, we killed vite
+    // too — which caused the browser's @vite/client to spam
+    // ERR_CONNECTION_REFUSED for the whole restart window. Now the
+    // surviving child keeps running so the UI stays responsive while
+    // the user decides whether to restart the dead one manually.
+    console.log(
+      `[dev] ${name} exited (code=${code} signal=${signal}). Other children left running; press Ctrl-C to stop the rest or re-run \`npm run dev\` to restart.`,
+    );
   });
   children.push({ name, child });
   return child;

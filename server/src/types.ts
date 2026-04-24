@@ -170,6 +170,12 @@ export type SwarmEvent =
       // Whether the run spawned a dedicated auditor at index N+1.
       // The UI uses this to label that agent's role correctly.
       dedicatedAuditor: boolean;
+      // Task #42: role-diff only — array of role names indexed by
+      // (agentIndex - 1). Empty/undefined on other presets. Drives
+      // AgentPanel's role label for role-diff (e.g. "Architect"
+      // instead of the generic "worker"). Wraps on (index % roles.length)
+      // like roleForAgent() to match the runner's resolution.
+      roles?: string[];
       repoUrl: string;
       clonePath: string;
       agentCount: number;
@@ -259,6 +265,8 @@ export interface SwarmStatusRunConfig {
   // the AgentPanel role/model display at index N+1.
   auditorModel: string;
   dedicatedAuditor: boolean;
+  // Task #42: role-diff role names indexed by (agentIndex - 1).
+  roles?: string[];
   repoUrl: string;
   clonePath: string;
   agentCount: number;

@@ -201,7 +201,13 @@ export class AgentManager {
 
       const baseUrl = `http://127.0.0.1:${port}`;
       const client = createOpencodeClient({ baseUrl, fetch: authedFetch, throwOnError: true });
-      const created = await client.session.create({ body: { title: id } });
+      // Task #41: N parallel spawn batches occasionally hit a race
+      // where 1-2 sibling agents' session.create calls throw a
+      // non-Error envelope (observed during UI testing 2026-04-24:
+      // agents 3+4 failed within 1ms of each other). Retry once with
+      // a small jittered backoff — cheap enough to not notice on the
+      // happy path, fixes the race cleanly when it does fire.
+      const created = await this.createSessionWithRetry(client, id);
       const sessionId = this.readSessionId(created);
       if (!sessionId) throw new Error("session.create returned no session id");
 
@@ -572,6 +578,37 @@ export class AgentManager {
       out[agentId] = { text: s.text, updatedAt: s.updatedAt };
     }
     return out;
+  }
+
+  // Task #41: retry session.create once on transient failures (the
+  // parallel-spawn race observed during UI testing 2026-04-24).
+  // Logs a diag record on each attempt so if the race still fires
+  // after this change we get concrete data on what's throwing. The
+  // retry waits a jittered 100-250ms — short enough to not slow
+  // successful spawns visibly, long enough to let the sibling agents'
+  // session.create calls clear their queue.
+  private async createSessionWithRetry(client: Client, agentId: string): Promise<unknown> {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        return await client.session.create({ body: { title: agentId } });
+      } catch (err) {
+        lastErr = err;
+        this.logDiag({
+          type: "_session_create_failed",
+          agentId,
+          attempt,
+          error: stringifyError(err),
+        });
+        if (attempt >= 2) break;
+        // Jittered backoff: 100-250ms. Avoids retrying all N siblings
+        // at the same post-failure moment which would just reproduce
+        // the race.
+        const delay = 100 + Math.floor(Math.random() * 150);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+    throw lastErr;
   }
 
   private async waitForReady(port: number, timeoutMs: number): Promise<void> {

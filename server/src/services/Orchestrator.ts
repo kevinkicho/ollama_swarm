@@ -10,7 +10,7 @@ import { OrchestratorWorkerRunner } from "../swarm/OrchestratorWorkerRunner.js";
 import { DebateJudgeRunner } from "../swarm/DebateJudgeRunner.js";
 import { MapReduceRunner } from "../swarm/MapReduceRunner.js";
 import { StigmergyRunner } from "../swarm/StigmergyRunner.js";
-import { DEFAULT_ROLES } from "../swarm/roles.js";
+import { DEFAULT_ROLES, roleForAgent } from "../swarm/roles.js";
 
 export interface OrchestratorOpts extends RunnerOpts {
   manager: AgentManager;
@@ -94,6 +94,19 @@ export class Orchestrator {
     // only lives in memory + the WS run_started event, never making
     // it to disk where the history dropdown reads digests from.
     cfg.runId = runId;
+    // Task #42: resolve per-agent role names for role-diff so the UI
+    // can render role labels in AgentPanel. Other presets leave this
+    // undefined — runs with no role catalog get the generic worker
+    // label. Uses the same catalog + wrap semantics as roleForAgent
+    // in RoundRobinRunner so the UI matches what actually ran.
+    let rolesForRunStarted: string[] | undefined;
+    if (cfg.preset === "role-diff") {
+      const catalog = cfg.roles && cfg.roles.length > 0 ? cfg.roles : DEFAULT_ROLES;
+      rolesForRunStarted = [];
+      for (let i = 1; i <= cfg.agentCount; i++) {
+        rolesForRunStarted.push(roleForAgent(i, catalog).name);
+      }
+    }
     this.opts.emit({
       type: "run_started",
       runId,
@@ -107,6 +120,7 @@ export class Orchestrator {
       // runner so the UI label is honest about what's actually running.
       auditorModel: cfg.auditorModel ?? cfg.plannerModel ?? cfg.model,
       dedicatedAuditor: cfg.dedicatedAuditor === true,
+      roles: rolesForRunStarted,
       repoUrl: cfg.repoUrl,
       clonePath: cfg.localPath,
       agentCount: cfg.agentCount,
