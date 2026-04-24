@@ -900,6 +900,24 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
 
         {/* Footer */}
         <div className="sticky bottom-0 bg-ink-900 border-t border-ink-700 px-5 py-3 flex flex-wrap justify-end gap-2">
+          {/* Task #65: open the run in a fresh tab as if it were live —
+              new tab parses ?review + ?path, hydrates store from the
+              saved summary, and reuses SwarmView's existing panels
+              (transcript / metrics / agent cards). Disabled when the
+              summary has no transcript (legacy runs predate task #65). */}
+          {digest.runId ? (
+            <a
+              href={`/?review=${encodeURIComponent(digest.runId)}&path=${encodeURIComponent(digest.clonePath)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={summary?.transcript
+                ? `Replay this run in a new tab (${summary.transcript.length} transcript entries)`
+                : "Open the run in a new tab — transcript replay only works on runs after task #65 landed"}
+              className="text-xs px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-emerald-100 border border-emerald-600 font-medium"
+            >
+              Open run review ↗
+            </a>
+          ) : null}
           <a
             href={summaryUrl}
             target="_blank"

@@ -228,6 +228,7 @@ export class StigmergyRunner implements SwarmRunner {
       filesChanged: gitStatus.changedFiles,
       finalGitStatus: gitStatus.porcelain,
       agents: this.stats.buildPerAgentStats(),
+      transcript: this.transcript,
     });
     try {
       await writeRunSummary(cfg.localPath, summary);

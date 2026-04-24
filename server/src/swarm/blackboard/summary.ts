@@ -18,6 +18,12 @@
 import type { ExitContract } from "./types.js";
 
 export const FINAL_GIT_STATUS_MAX = 4_000;
+// Task #65: transcript persistence cap. Typical discussion runs land
+// 10-100 entries; blackboard can hit 200-500. 1000 is comfortable
+// headroom; runs beyond it set transcriptTruncated=true and keep the
+// FIRST 1000 (head, not tail — the early system + setup entries are
+// usually the most useful for review).
+export const TRANSCRIPT_MAX_ENTRIES = 1_000;
 
 export type StopReason =
   | "completed"
@@ -88,6 +94,14 @@ export interface RunSummary {
   finalGitStatus: string;
   finalGitStatusTruncated: boolean;
   agents: PerAgentStat[];
+  // Task #65 (2026-04-24): persist the in-memory transcript at run-end
+  // so the history modal / review view can replay what happened.
+  // Optional for back-compat with summaries written before this lands.
+  // Truncated server-side at TRANSCRIPT_MAX_ENTRIES if a runaway run
+  // produces an unreasonable transcript (defensive — typical runs are
+  // 10-100 entries; blackboard can hit 200-500).
+  transcript?: import("../../types.js").TranscriptEntry[];
+  transcriptTruncated?: boolean;
   /** Phase 11c: the exit contract as it stood at run end, including per-criterion
    *  verdicts applied by the auditor. Undefined when the first-pass contract
    *  prompt failed to parse and the run fell back to drain-exit. Blackboard-only. */
@@ -157,6 +171,8 @@ export interface BuildSummaryInput {
   maxTierReached?: number;
   tiersCompleted?: number;
   tierHistory?: RunSummary["tierHistory"];
+  // Task #65: in-memory transcript snapshot at run-end.
+  transcript?: import("../../types.js").TranscriptEntry[];
 }
 
 export function buildSummary(input: BuildSummaryInput): RunSummary {
@@ -192,6 +208,17 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     finalGitStatusTruncated: truncated,
     agents: input.agents.slice(),
     contract: input.contract ? cloneContract(input.contract) : undefined,
+    // Task #65: cap transcript at TRANSCRIPT_MAX_ENTRIES (head) so a
+    // pathological run doesn't blow the summary file. transcriptTruncated
+    // surfaces in the modal for honesty.
+    ...(() => {
+      const t = input.transcript;
+      if (!t || t.length === 0) return {};
+      if (t.length > TRANSCRIPT_MAX_ENTRIES) {
+        return { transcript: t.slice(0, TRANSCRIPT_MAX_ENTRIES), transcriptTruncated: true };
+      }
+      return { transcript: t.slice() };
+    })(),
     // Unit 34: ambition ratchet passthrough.
     maxTierReached: input.maxTierReached,
     tiersCompleted: input.tiersCompleted,

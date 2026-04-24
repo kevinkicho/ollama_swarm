@@ -2777,6 +2777,8 @@ export class BlackboardRunner implements SwarmRunner {
       maxTierReached: this.currentTier > 0 ? this.currentTier : undefined,
       tiersCompleted: this.currentTier > 0 ? this.tiersCompleted : undefined,
       tierHistory: this.tierHistory.length > 0 ? this.tierHistory.slice() : undefined,
+      // Task #65: persist transcript so the modal + review view can replay.
+      transcript: this.transcript,
     });
 
     // Unit 49: dual write — per-run timestamped file (never overwrites

@@ -3,23 +3,49 @@ import { useSwarm } from "./state/store";
 import { useSwarmSocket } from "./hooks/useSwarmSocket";
 import { SetupForm } from "./components/SetupForm";
 import { SwarmView } from "./components/SwarmView";
+import type { RunSummary } from "./types";
+
+// Task #65 (2026-04-24): URL-based review mode. When the user opens a
+// past run from the history modal we set ?review=<runId>&path=<encoded>.
+// In that mode the app skips the live WebSocket and instead hydrates
+// the store from the saved summary (which now persists transcript +
+// agent stats), so existing components — IdentityStrip, AgentPanel,
+// Transcript, MetricsPanel — render the past run as if it were live.
+function parseReviewParams(): { runId: string; clonePath: string } | null {
+  if (typeof window === "undefined") return null;
+  const sp = new URLSearchParams(window.location.search);
+  const runId = sp.get("review");
+  const clonePath = sp.get("path");
+  if (!runId || !clonePath) return null;
+  return { runId, clonePath };
+}
 
 export default function App() {
-  useSwarmSocket();
+  const review = parseReviewParams();
+  // Skip the live WS in review mode; the saved summary is the source.
+  useSwarmSocket(review === null);
+  useReviewHydration(review);
   const phase = useSwarm((s) => s.phase);
   const error = useSwarm((s) => s.error);
 
   // Once a swarm has started, keep the user on SwarmView even after the loop
   // completes or they hit Stop — they need to read the transcript. They return
   // to setup only via the explicit "Start new swarm" button (which resets).
-  const showSetup = phase === "idle";
+  // In review mode we always show SwarmView (never the setup form).
+  const showSetup = review === null && phase === "idle";
 
   return (
     <div className="h-full flex flex-col">
       <header className="px-6 py-3 border-b border-ink-700 flex items-center justify-between">
         <div className="flex items-baseline gap-3">
           <h1 className="text-lg font-semibold tracking-tight">ollama_swarm</h1>
-          <span className="text-xs text-ink-400 font-mono">glm-5.1:cloud · opencode</span>
+          {review ? (
+            <span className="text-xs text-amber-300 font-mono px-2 py-0.5 rounded bg-amber-950/40 border border-amber-700/50">
+              REVIEW MODE · run {review.runId.slice(0, 8)}
+            </span>
+          ) : (
+            <span className="text-xs text-ink-400 font-mono">glm-5.1:cloud · opencode</span>
+          )}
         </div>
         <div className="flex items-center gap-3">
           <RuntimeTicker />
@@ -36,6 +62,73 @@ export default function App() {
       </main>
     </div>
   );
+}
+
+// Hydrates the store from a saved RunSummary so the existing live-view
+// components render a past run. Only runs in review mode; no-op otherwise.
+function useReviewHydration(review: { runId: string; clonePath: string } | null) {
+  const setRunId = useSwarm((s) => s.setRunId);
+  const setRunStartedAt = useSwarm((s) => s.setRunStartedAt);
+  const setRunConfig = useSwarm((s) => s.setRunConfig);
+  const setSummary = useSwarm((s) => s.setSummary);
+  const setContract = useSwarm((s) => s.setContract);
+  const appendEntry = useSwarm((s) => s.appendEntry);
+  const setError = useSwarm((s) => s.setError);
+  const setPhase = useSwarm((s) => s.setPhase);
+
+  useEffect(() => {
+    if (!review) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const params = new URLSearchParams({
+          clonePath: review.clonePath,
+          runId: review.runId,
+        });
+        const r = await fetch(`/api/swarm/run-summary?${params.toString()}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const summary = (await r.json()) as RunSummary;
+        if (cancelled) return;
+        // Hydrate identity + ticker + topbar.
+        setRunId(review.runId);
+        setRunStartedAt(summary.startedAt);
+        setRunConfig({
+          preset: summary.preset,
+          plannerModel: summary.model,
+          workerModel: summary.model,
+          auditorModel: summary.model,
+          dedicatedAuditor: false,
+          repoUrl: summary.repoUrl,
+          clonePath: summary.localPath,
+          agentCount: summary.agents.length,
+          rounds: 0,
+        });
+        setSummary(summary);
+        if (summary.contract) setContract(summary.contract);
+        // Replay transcript through the existing append path so
+        // Transcript / MetricsPanel / etc. don't need to know they're
+        // looking at a snapshot.
+        if (summary.transcript) {
+          for (const e of summary.transcript) appendEntry(e);
+        }
+        // Phase is whatever the run terminated as; map stopReason →
+        // a display phase that makes the PhasePill render sensibly.
+        const phase = summary.stopReason === "completed" ? "completed"
+          : summary.stopReason === "user" || summary.stopReason === "crash" ? "stopped"
+          : "completed";
+        setPhase(phase, 0);
+      } catch (err) {
+        if (!cancelled) {
+          setError(`Review hydration failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Hydrate once per (runId, clonePath); store setters are stable references.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [review?.runId, review?.clonePath]);
 }
 
 // Unit 52b: replaced the bare-phase pill with a composite signal —

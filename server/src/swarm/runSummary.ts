@@ -24,11 +24,13 @@ import path from "node:path";
 
 import {
   FINAL_GIT_STATUS_MAX,
+  TRANSCRIPT_MAX_ENTRIES,
   type PerAgentStat,
   type RunSummary,
   type StopReason,
   type SummaryConfig,
 } from "./blackboard/summary.js";
+import type { TranscriptEntry } from "../types.js";
 
 export interface DiscussionSummaryInput {
   config: SummaryConfig;
@@ -44,6 +46,11 @@ export interface DiscussionSummaryInput {
   filesChanged: number;
   finalGitStatus: string;
   agents: PerAgentStat[];
+  // Task #65: in-memory transcript snapshot at run-end. The runner
+  // owns this.transcript and just hands a copy in here. Optional —
+  // older callers that haven't been updated yet still produce valid
+  // summaries (just without transcript replay).
+  transcript?: TranscriptEntry[];
 }
 
 export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummary {
@@ -55,6 +62,20 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
   if (finalGitStatus.length > FINAL_GIT_STATUS_MAX) {
     finalGitStatus = finalGitStatus.slice(0, FINAL_GIT_STATUS_MAX);
     truncated = true;
+  }
+
+  // Task #65: cap transcript at TRANSCRIPT_MAX_ENTRIES (head, not
+  // tail — the early system + setup entries are usually the most
+  // useful for review). Mark truncation so the modal can surface it.
+  let transcript: TranscriptEntry[] | undefined;
+  let transcriptTruncated: boolean | undefined;
+  if (input.transcript && input.transcript.length > 0) {
+    if (input.transcript.length > TRANSCRIPT_MAX_ENTRIES) {
+      transcript = input.transcript.slice(0, TRANSCRIPT_MAX_ENTRIES);
+      transcriptTruncated = true;
+    } else {
+      transcript = input.transcript.slice();
+    }
   }
 
   return {
@@ -76,6 +97,8 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
     finalGitStatus,
     finalGitStatusTruncated: truncated,
     agents: input.agents.slice(),
+    transcript,
+    transcriptTruncated,
   };
 }
 

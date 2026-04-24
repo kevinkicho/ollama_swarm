@@ -194,6 +194,11 @@ export interface RunSummary {
   finalGitStatusTruncated: boolean;
   agents: PerAgentStat[];
   contract?: ExitContract;
+  // Task #65 (2026-04-24): persisted transcript snapshot at run-end.
+  // Optional — older summaries don't have it. Capped server-side at
+  // TRANSCRIPT_MAX_ENTRIES; transcriptTruncated=true when capped.
+  transcript?: TranscriptEntry[];
+  transcriptTruncated?: boolean;
 }
 
 export interface BoardCountsDTO {

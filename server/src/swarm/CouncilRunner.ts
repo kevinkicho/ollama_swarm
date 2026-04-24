@@ -222,6 +222,8 @@ export class CouncilRunner implements SwarmRunner {
       filesChanged: gitStatus.changedFiles,
       finalGitStatus: gitStatus.porcelain,
       agents: this.stats.buildPerAgentStats(),
+      // Task #65: persist transcript so the history modal can replay.
+      transcript: this.transcript,
     });
     try {
       await writeRunSummary(cfg.localPath, summary);

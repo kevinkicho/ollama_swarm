@@ -217,12 +217,16 @@ async function hydrateFromSnapshot(): Promise<void> {
   }
 }
 
-export function useSwarmSocket(): void {
+// Task #65: `enabled=false` keeps the hook a no-op so review-tabs
+// (?review=...) skip the live WebSocket + status snapshot fetch
+// — the review view hydrates the store from a saved summary instead.
+export function useSwarmSocket(enabled = true): void {
   useEffect(() => {
+    if (!enabled) return;
     void hydrateFromSnapshot();
     connect();
     // No cleanup — the socket is a module-level singleton and is
     // reused across component remounts. The browser cleans it up
     // on page unload.
-  }, []);
+  }, [enabled]);
 }
