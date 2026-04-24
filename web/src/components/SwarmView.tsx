@@ -4,6 +4,7 @@ import type { RunSummaryDigest } from "../types";
 import { AgentPanel } from "./AgentPanel";
 import { BoardView } from "./BoardView";
 import { ContractPanel } from "./ContractPanel";
+import { CopyChip } from "./CopyChip";
 import { Transcript } from "./Transcript";
 
 type Tab = "transcript" | "board" | "contract";
@@ -53,15 +54,26 @@ export function SwarmView() {
 
   const canStop = phase !== "stopping" && phase !== "stopped" && phase !== "failed" && phase !== "completed";
 
+  // Unit 56: derive per-agent role + model so AgentPanel can render its
+  // own session id + model chips inline (was the IdentifiersRow). Agent
+  // index 1 is the planner; everything else is a worker per the
+  // BlackboardRunner spawn contract.
+  const cfg = useSwarm((s) => s.runConfig);
+  const agentRole = (idx: number): "planner" | "worker" =>
+    idx === 1 ? "planner" : "worker";
+  const agentModel = (idx: number): string | undefined =>
+    cfg ? (idx === 1 ? cfg.plannerModel : cfg.workerModel) : undefined;
+
   return (
     <div className="h-full flex flex-col">
       <CloneBanner />
       <IdentityStrip />
-      <IdentifiersRow />
-      <div className="flex-1 grid grid-cols-[260px_1fr] min-h-0">
+      <div className="flex-1 grid grid-cols-[280px_1fr] min-h-0">
       <aside className="border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800">
         <div className="flex items-center justify-between mb-2">
-          <div className="text-xs uppercase tracking-wide text-ink-400">Agents</div>
+          <div className="text-xs uppercase tracking-wide text-ink-400">
+            Agents <span className="text-ink-500 font-mono normal-case">({agentList.length})</span>
+          </div>
           {isTerminal ? (
             <button
               onClick={onNewSwarm}
@@ -80,7 +92,7 @@ export function SwarmView() {
           )}
         </div>
         {agentList.map((a) => (
-          <AgentPanel key={a.id} agent={a} />
+          <AgentPanel key={a.id} agent={a} role={agentRole(a.index)} model={agentModel(a.index)} />
         ))}
         {agentList.length === 0 ? (
           <div className="text-xs text-ink-400">No agents yet.</div>
@@ -164,16 +176,25 @@ function truncateLeft(s: string, maxLen: number): string {
   return "…" + s.slice(s.length - maxLen + 1);
 }
 
-// Unit 52c: persistent strip under the header showing the run's
-// identity — preset + per-agent models + clone path. The path is
-// click-to-open via POST /api/swarm/open (server validates the
-// request matches the active run's clonePath, then shells out to
-// Explorer/Finder/xdg-open).
+// Unit 52c (Unit 56-consolidated): single run-identity topbar showing
+// run uuid + run name + preset + planner/worker models + agent count
+// + clone path. The path is click-to-open via POST /api/swarm/open
+// (server validates the request matches the active run's clonePath,
+// then shells out to Explorer/Finder/xdg-open). Per-agent session ids
+// + models live in the AgentPanel cards (Unit 56) — this strip only
+// carries run-level metadata.
 function IdentityStrip() {
   const cfg = useSwarm((s) => s.runConfig);
-  if (!cfg) return null;
-  const runName = deriveRunName(cfg.clonePath);
+  const runId = useSwarm((s) => s.runId);
+  const history = (
+    <span className="ml-auto pl-3 flex items-center gap-2">
+      <RunHistoryDropdown />
+    </span>
+  );
+  if (!cfg && !runId) return null;
+  const runName = cfg ? deriveRunName(cfg.clonePath) : "(unnamed run)";
   const onOpen = async () => {
+    if (!cfg) return;
     try {
       const res = await fetch("/api/swarm/open", {
         method: "POST",
@@ -189,33 +210,40 @@ function IdentityStrip() {
       console.warn("open clone path failed:", err);
     }
   };
-  const sameModel = cfg.plannerModel === cfg.workerModel;
+  const sameModel = cfg && cfg.plannerModel === cfg.workerModel;
   return (
-    <div className="bg-ink-900/60 border-b border-ink-700 px-4 py-1.5 flex items-center gap-3 text-xs font-mono text-ink-300">
-      <span className="text-ink-100 font-semibold">{runName}</span>
-      <span className="text-ink-600">·</span>
-      <span title="Preset"><span className="text-ink-500">preset</span> {cfg.preset}</span>
-      <span className="text-ink-600">·</span>
-      {sameModel ? (
-        <span title="Planner + worker model"><span className="text-ink-500">model</span> {cfg.plannerModel}</span>
-      ) : (
+    <div className="bg-ink-900/60 border-b border-ink-700 px-4 py-1.5 flex items-center gap-2.5 text-xs font-mono text-ink-300 flex-wrap">
+      {runId ? (
+        <CopyChip label="run" value={runId} short={runId.slice(0, 8)} />
+      ) : null}
+      {cfg ? (
         <>
-          <span title="Planner model"><span className="text-ink-500">planner</span> {cfg.plannerModel}</span>
           <span className="text-ink-600">·</span>
-          <span title="Worker model"><span className="text-ink-500">worker</span> {cfg.workerModel}</span>
+          <span className="text-ink-100 font-semibold">{runName}</span>
+          <span className="text-ink-600">·</span>
+          <span title="Preset"><span className="text-ink-500">preset</span> {cfg.preset}</span>
+          <span className="text-ink-600">·</span>
+          {sameModel ? (
+            <span title="Planner + worker model"><span className="text-ink-500">model</span> {cfg.plannerModel}</span>
+          ) : (
+            <>
+              <span title="Planner model"><span className="text-ink-500">planner</span> {cfg.plannerModel}</span>
+              <span className="text-ink-600">·</span>
+              <span title="Worker model"><span className="text-ink-500">worker</span> {cfg.workerModel}</span>
+            </>
+          )}
+          <span className="text-ink-600">·</span>
+          <span><span className="text-ink-500">agents</span> {cfg.agentCount}</span>
+          <button
+            onClick={onOpen}
+            title={`Open in OS file manager — ${cfg.clonePath}`}
+            className="text-ink-400 hover:text-ink-100 hover:underline truncate max-w-md inline-block align-bottom ml-auto"
+          >
+            {truncateLeft(cfg.clonePath, 60)}
+          </button>
         </>
-      )}
-      <span className="text-ink-600">·</span>
-      <span><span className="text-ink-500">agents</span> {cfg.agentCount}</span>
-      <span className="flex-1 text-right">
-        <button
-          onClick={onOpen}
-          title={`Open in OS file manager — ${cfg.clonePath}`}
-          className="text-ink-400 hover:text-ink-100 hover:underline truncate max-w-md inline-block align-bottom"
-        >
-          {truncateLeft(cfg.clonePath, 60)}
-        </button>
-      </span>
+      ) : null}
+      {history}
     </div>
   );
 }
@@ -229,50 +257,12 @@ function deriveRunName(clonePath: string): string {
   return parts[parts.length - 1] ?? "(unnamed run)";
 }
 
-// Unit 52d: compact identifiers row under the IdentityStrip. Shows
-// the app runId (new uuid), each agent's opencode session id, and
-// the model slugs. Every ID is click-to-copy — specifically the
-// opencode session ids are what you'd grep `logs/current.jsonl`
-// for to debug a single agent's prompts. Includes a Unit 52e
-// "history" button that opens a dropdown of prior runs in the
-// same parent dir.
-function IdentifiersRow() {
-  const runId = useSwarm((s) => s.runId);
-  const agents = useSwarm((s) => s.agents);
-  const cfg = useSwarm((s) => s.runConfig);
-  if (!runId && !cfg) return null;
-  const agentList = Object.values(agents).sort((a, b) => a.index - b.index);
-  const sameModel = cfg && cfg.plannerModel === cfg.workerModel;
-  return (
-    <div className="bg-ink-900/40 border-b border-ink-700 px-4 py-1 flex items-center gap-3 text-[11px] font-mono text-ink-400 flex-wrap">
-      {runId ? (
-        <CopyChip label="run" value={runId} short={runId.slice(0, 8)} />
-      ) : null}
-      {agentList.map((a) =>
-        a.sessionId ? (
-          <CopyChip
-            key={a.id}
-            label={a.id}
-            value={a.sessionId}
-            short={a.sessionId.slice(0, 12) + "…"}
-          />
-        ) : null,
-      )}
-      {cfg ? (
-        sameModel ? (
-          <CopyChip label="model" value={cfg.plannerModel} short={cfg.plannerModel} />
-        ) : (
-          <>
-            <CopyChip label="planner" value={cfg.plannerModel} short={cfg.plannerModel} />
-            <CopyChip label="worker" value={cfg.workerModel} short={cfg.workerModel} />
-          </>
-        )
-      ) : null}
-      <span className="flex-1" />
-      <RunHistoryDropdown />
-    </div>
-  );
-}
+// Unit 56: IdentifiersRow has been deleted as a separate row.
+// - run uuid moved into IdentityStrip's leading chip
+// - per-agent session id + model moved into AgentPanel cards
+// - history dropdown moved into IdentityStrip's right edge
+// Net result: 2 topbars collapsed to 1; agent-scoped info renders
+// where you already look for the agent (the sidebar card).
 
 // Unit 52e: lazy-fetches GET /api/runs when opened, lists prior runs
 // in the active run's parent dir, click row → modal with the prior
@@ -471,33 +461,8 @@ function formatRuntimeMs(ms: number): string {
   return `${s}s`;
 }
 
-// Click-to-copy chip. Shows `<label> <short>` with the full value
-// as the tooltip. Clicking copies the full value to clipboard and
-// briefly flashes a checkmark. Silently no-ops if the clipboard
-// API isn't available (older browsers / insecure contexts).
-function CopyChip({ label, value, short }: { label: string; value: string; short: string }) {
-  const [copied, setCopied] = useState(false);
-  const onClick = async () => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1200);
-    } catch {
-      // no-op: clipboard unavailable
-    }
-  };
-  return (
-    <button
-      onClick={onClick}
-      title={`${label}: ${value}  (click to copy)`}
-      className="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"
-    >
-      <span className="text-ink-500">{label}</span>
-      <span>{short}</span>
-      <span className="text-emerald-400 text-[10px] w-2">{copied ? "✓" : ""}</span>
-    </button>
-  );
-}
+// Unit 56: CopyChip moved to its own file (./CopyChip.tsx) so AgentPanel
+// can import it too.
 
 interface TabButtonProps {
   active: boolean;

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useSwarm } from "../state/store";
 import type { AgentState, LatencySample } from "../types";
+import { CopyChip } from "./CopyChip";
 
 // Stable reference for "no samples yet". Returning a fresh `[]` from the
 // useSwarm selector on every render makes useSyncExternalStore see a
@@ -81,7 +82,19 @@ function formatSampleMs(ms: number): string {
   return `${mins}m${rem.toString().padStart(2, "0")}s`;
 }
 
-export function AgentPanel({ agent }: { agent: AgentState }) {
+// Unit 56: AgentPanel takes role + model from the parent so the card
+// can render the previously-topbar-only IdentifiersRow chips
+// (per-agent session id + model) inline. Role is "planner" for index 1
+// and "worker" for any other; SwarmView derives both before passing.
+export function AgentPanel({
+  agent,
+  role,
+  model,
+}: {
+  agent: AgentState;
+  role: "planner" | "worker";
+  model?: string;
+}) {
   const elapsed = useElapsedTicker(agent.thinkingSince, agent.status === "thinking");
   const samples = useSwarm((s) => s.latency[agent.id] ?? EMPTY_SAMPLES);
   const [hover, setHover] = useState(false);
@@ -103,9 +116,20 @@ export function AgentPanel({ agent }: { agent: AgentState }) {
   return (
     <div className="border border-ink-700 rounded-md p-3 bg-ink-800">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className={`inline-block h-2 w-2 rounded-full ${STATUS_COLOR[agent.status]}`} />
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`inline-block h-2 w-2 rounded-full ${STATUS_COLOR[agent.status]} shrink-0`} />
           <span className="font-medium">Agent {agent.index}</span>
+          <span
+            className={
+              "text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 " +
+              (role === "planner"
+                ? "border-amber-500/50 text-amber-300"
+                : "border-ink-600 text-ink-400")
+            }
+            title={role === "planner" ? "Planner / replanner / auditor / critic" : "Worker (claims + commits todos)"}
+          >
+            {role}
+          </span>
         </div>
         <span className="text-xs font-mono text-ink-400">:{agent.port}</span>
       </div>
@@ -134,6 +158,21 @@ export function AgentPanel({ agent }: { agent: AgentState }) {
           </div>
         ) : null}
       </div>
+      {/* Unit 56: per-agent identifiers moved here from the previously-
+          separate IdentifiersRow. session id (click-to-copy) is the
+          load-bearing one for log forensics; model name is informational. */}
+      {(agent.sessionId || model) ? (
+        <div className="mt-1.5 flex flex-wrap items-baseline gap-1 text-[10px] font-mono text-ink-400">
+          {agent.sessionId ? (
+            <CopyChip
+              label="session"
+              value={agent.sessionId}
+              short={agent.sessionId.slice(0, 12) + "…"}
+            />
+          ) : null}
+          {model ? <CopyChip label="model" value={model} short={model} /> : null}
+        </div>
+      ) : null}
       {agent.error ? <div className="mt-2 text-xs text-red-300">{agent.error}</div> : null}
     </div>
   );
