@@ -101,7 +101,7 @@ yet. **→ Unit 36 (planned).**
 | 50   | Planner reads prior summary on resume       | planned (Kevin's ask 2026-04-23)|
 | 51   | Reload prior contract from blackboard-state | planned (Kevin's ask 2026-04-23)|
 | 52   | Run-identity panel + run history dropdown   | planned (Kevin's ask 2026-04-23)|
-| 53   | Contract panel: status filter (default unmet)| planned (Kevin's ask 2026-04-23)|
+| 53   | Contract panel: status filter (default unmet)| shipped (`1c9edfd`, 2026-04-23)|
 | 54   | Transcript: collapse worker JSON to summary | planned (Kevin's ask 2026-04-23)|
 | 55   | Auto-killAll on natural completion          | shipped (`76fe957`, 2026-04-23)|
 | 56+  | Cross-run resume + tier-aware replay        | hypothesized                   |
