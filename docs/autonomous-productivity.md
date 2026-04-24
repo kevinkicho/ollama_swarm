@@ -100,9 +100,10 @@ yet. **→ Unit 36 (planned).**
 | 49   | Per-run summary file naming (no overwrite)  | planned (Kevin's ask 2026-04-23)|
 | 50   | Planner reads prior summary on resume       | planned (Kevin's ask 2026-04-23)|
 | 51   | Reload prior contract from blackboard-state | planned (Kevin's ask 2026-04-23)|
-| 52+  | Cross-run resume + tier-aware replay        | hypothesized                   |
-| 52+  | Auto-start app (workers execute shell)      | hypothesized                   |
-| 52+  | Persistent swarm-ui across audits           | hypothesized                   |
+| 52   | Run-identity panel + run history dropdown   | planned (Kevin's ask 2026-04-23)|
+| 53+  | Cross-run resume + tier-aware replay        | hypothesized                   |
+| 53+  | Auto-start app (workers execute shell)      | hypothesized                   |
+| 53+  | Persistent swarm-ui across audits           | hypothesized                   |
 
 ## Units 47-51 — Build-on-existing-clone work pattern (spec-lite)
 
@@ -155,6 +156,56 @@ the planner non-determinism (run #2's contract framing differed from
 run #1 because the planner re-derived). Pair with Unit 50 for full
 "continue where we left off" semantics. ~90 min, more invasive
 because tier-history hydration touches the ratchet machinery.
+
+## Unit 52 — Run-identity panel + run history dropdown (spec-lite)
+
+Kevin's 2026-04-23 framing during seaj-tsia-study run-3: the top
+right corner shows just `executing` with no run-level context, so
+mid-run it's hard to tell which run is which when reviewing logs
+or comparing across attempts. This unit is the run-level
+observability surface in the UI. Each sub-bullet is independently
+shippable; bundle them or split into 52a/52b/52c as needed.
+
+**52a — Total runtime ticker.** Wall-clock since `startedAt` (from
+the run config), shown in the status bar near the phase badge.
+Tick at 1s. When the run ends, freeze at final wallClockMs.
+Non-trivial only because `startedAt` isn't currently broadcast as
+a SwarmEvent — needs either a one-shot run-start event with the
+config, or extending swarm_state to carry it. ~30 min.
+
+**52b — Meaningful run status badge.** Today the top-right just
+shows the SwarmPhase enum verbatim (`executing`). Replace with a
+composite signal: `executing — round 3 — 21 commits / 30 todos`
+(or similar). When `phase=stopping`, show what we're waiting on
+(active aborts, killAll progress). When `phase=executing` and
+all agents have been thinking >5 min, show `slow-audit` with a
+tooltip. ~45 min.
+
+**52c — Run identity strip.** Persistent strip showing: run name
+(derived from clone-dir basename or user-provided), preset
+(blackboard / round-robin / etc.), planner model + worker model
+(Unit 42), project directory (truncate-from-LEFT so the
+distinguishing-tail is visible: `…ollama_swarm\runs\post-unit41-baseline\seaj-tsia-study`),
+click → opens OS file manager (Windows Explorer / macOS Finder /
+xdg-open). On the backend side, run-name might be inferred from
+parentPath if not explicitly named. ~60 min.
+
+**52d — Identifiers row.** Compact row with: app run id (a
+new uuid we mint at start, today nothing exists), opencode session
+ids per agent (already in `AgentState.sessionId`), Ollama model
+slugs (`glm-5.1:cloud`, `gemma4:31b-cloud`). Each click-to-copy.
+The opencode session id specifically is what you'd grep
+`logs/current.jsonl` for to debug a single agent's prompts.
+~30 min.
+
+**52e — Run history dropdown.** Reads `runs/*/summary.json`
+via a new `/api/runs` endpoint, sorted by mtime descending.
+Selecting a prior run swaps the UI into a read-only "viewing
+historical run X" mode (events not live; pulled from the persisted
+event log + summary). Lets you compare what changed between run-2
+and run-3 without flipping between log files. Depends on Unit 49
+(per-run summary file naming) so the discovery loop has stable
+paths to read. ~90 min.
 
 ## Unit 34 — Ambition ratchet (spec-lite)
 
