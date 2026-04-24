@@ -117,6 +117,7 @@ yet. **→ Unit 36 (planned).**
 | 60   | Multi-prompt critic ensemble                | shipped (`bfb156c`, 2026-04-23)|
 | 62   | Page-refresh persistence (REST catch-up)    | shipped (`c01a04a`, 2026-04-23)|
 | 63   | SetupForm: ambitionTiers input + multi-hour preset chip | shipped (`5bb8d7d`, 2026-04-23)|
+| 63b  | SetupForm: dedicatedAuditor + auditorModel + specializedWorkers + criticEnsemble + uiUrl | shipped (`e600da0`, 2026-04-23)|
 | 64+  | Cross-run resume + tier-aware replay        | hypothesized                   |
 | 64+  | Auto-start app (workers execute shell)      | hypothesized                   |
 | 64+  | Persistent swarm-ui across audits           | hypothesized                   |
