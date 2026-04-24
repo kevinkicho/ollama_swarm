@@ -99,6 +99,13 @@ const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(ma
 const DIRECTIVE_README_AND_RESEARCH =
   "Make this project actually deliver every feature the README claims to support. Also, creatively enhance its functionalities by adding in more pipelines by conducting research online and then implement them";
 
+// Unit 63: one-click "Multi-hour autonomous" preset. Single source of
+// truth so the chip's button label stays in sync if these defaults
+// shift later. 8 h cap + 5 tiers matches the north-star scenario in
+// docs/autonomous-productivity.md.
+const MULTI_HOUR_CAP_MIN = 480;
+const MULTI_HOUR_TIERS = 5;
+
 // Unit 32: role-diff's customizable role list. Kept in sync with the
 // server's DEFAULT_ROLES in server/src/swarm/roles.ts — edits there
 // should be mirrored here (and vice versa) so the form's "reset to
@@ -200,6 +207,11 @@ export function SetupForm() {
   // Unit 43: per-run wall-clock cap (minutes). Empty = use the 8-h
   // baked-in default. UI is in MINUTES; we send ms over the wire.
   const [wallClockCapMin, setWallClockCapMin] = useState("");
+  // Unit 63: per-run ambition-tier cap. Blackboard-only. Empty = use
+  // env default (today: off). 0–20 matches the route Zod cap. The
+  // server-side knob (Unit 34) interprets 0 as "stop on first all-met"
+  // and 1+ as "climb that many tiers".
+  const [ambitionTiers, setAmbitionTiers] = useState("");
   const [busy, setBusy] = useState(false);
   const setError = useSwarm((s) => s.setError);
   const reset = useSwarm((s) => s.reset);
@@ -260,6 +272,16 @@ export function SetupForm() {
         const capMin = Number(wallClockCapMin.trim());
         if (Number.isFinite(capMin) && capMin >= 1 && capMin <= 480) {
           presetSpecific.wallClockCapMs = Math.round(capMin * 60_000);
+        }
+        // Unit 63: ambition tier cap. Empty → omit (server falls back
+        // to env default). Otherwise send the integer; route Zod
+        // accepts 0–20 and 0 explicitly disables the ratchet.
+        const tiersTrim = ambitionTiers.trim();
+        if (tiersTrim.length > 0) {
+          const tiers = Number(tiersTrim);
+          if (Number.isInteger(tiers) && tiers >= 0 && tiers <= 20) {
+            presetSpecific.ambitionTiers = tiers;
+          }
         }
       }
 
@@ -392,6 +414,8 @@ export function SetupForm() {
           fallbackModel={model}
           wallClockCapMin={wallClockCapMin}
           setWallClockCapMin={setWallClockCapMin}
+          ambitionTiers={ambitionTiers}
+          setAmbitionTiers={setAmbitionTiers}
         />
 
         <div className="grid grid-cols-3 gap-4">
@@ -531,6 +555,8 @@ function PresetAdvancedSettings(props: {
   fallbackModel: string;
   wallClockCapMin: string;
   setWallClockCapMin: (s: string) => void;
+  ambitionTiers: string;
+  setAmbitionTiers: (s: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const {
@@ -548,6 +574,8 @@ function PresetAdvancedSettings(props: {
     fallbackModel,
     wallClockCapMin,
     setWallClockCapMin,
+    ambitionTiers,
+    setAmbitionTiers,
   } = props;
 
   const hasAdvanced =
@@ -561,7 +589,7 @@ function PresetAdvancedSettings(props: {
       case "role-diff":
         return "Advanced settings — role catalog";
       case "blackboard":
-        return "Advanced settings — council-contract draft + per-agent models";
+        return "Advanced settings — contract draft, per-agent models, runtime caps";
       case "debate-judge":
         return "Advanced settings — proposition";
       default:
@@ -600,6 +628,15 @@ function PresetAdvancedSettings(props: {
               <BlackboardWallClockCap
                 wallClockCapMin={wallClockCapMin}
                 setWallClockCapMin={setWallClockCapMin}
+              />
+              <BlackboardAmbitionTiers
+                ambitionTiers={ambitionTiers}
+                setAmbitionTiers={setAmbitionTiers}
+                wallClockCapMin={wallClockCapMin}
+              />
+              <MultiHourPresetChip
+                setWallClockCapMin={setWallClockCapMin}
+                setAmbitionTiers={setAmbitionTiers}
               />
             </>
           ) : null}
@@ -792,6 +829,89 @@ function BlackboardWallClockCap({
         inputMode="numeric"
       />
     </Field>
+  );
+}
+
+// Unit 63a: ambition-tier cap input. Empty = inherit env default
+// (today: off). The soft warning fires when tiers > 0 AND the
+// wall-clock cap is short enough that a second tier almost
+// certainly won't have time to make meaningful progress.
+function BlackboardAmbitionTiers({
+  ambitionTiers,
+  setAmbitionTiers,
+  wallClockCapMin,
+}: {
+  ambitionTiers: string;
+  setAmbitionTiers: (s: string) => void;
+  wallClockCapMin: string;
+}) {
+  const trimmed = ambitionTiers.trim();
+  const parsed = Number(trimmed);
+  const isValid =
+    trimmed.length === 0 ||
+    (Number.isInteger(parsed) && parsed >= 0 && parsed <= 20);
+  const capTrimmed = wallClockCapMin.trim();
+  const capParsed = Number(capTrimmed);
+  const capIsShort =
+    capTrimmed.length > 0 &&
+    Number.isFinite(capParsed) &&
+    capParsed < 60;
+  const showShortCapWarning =
+    isValid && trimmed.length > 0 && parsed > 0 && capIsShort;
+  return (
+    <Field
+      label="Ambition tier cap (Unit 34)"
+      hint={
+        trimmed.length === 0
+          ? "Empty → inherits AMBITION_RATCHET_ENABLED env (today's default off). 0 = stop on first 'all met'. 1–20 = climb that many tiers; each tier asks the planner for a more ambitious next contract once the current one is satisfied."
+          : isValid
+            ? parsed === 0
+              ? "Disabled — runner stops on first 'all met'."
+              : `Will climb up to ${parsed} tier${parsed === 1 ? "" : "s"} (re-asks the planner for a harder next contract on each all-met).`
+            : "Out of range — enter an integer between 0 and 20, or leave empty to inherit the env default."
+      }
+    >
+      <input
+        value={ambitionTiers}
+        onChange={(e) => setAmbitionTiers(e.target.value)}
+        placeholder="(default: env)"
+        className={`input font-mono ${!isValid ? "border-rose-500" : ""}`}
+        inputMode="numeric"
+      />
+      {showShortCapWarning ? (
+        <div className="text-xs text-amber-300 mt-1">
+          Tier-climb usually needs &gt;1 hr to make a meaningful second
+          tier — your wall-clock cap of {capParsed} min may stop the run
+          before the climb fires.
+        </div>
+      ) : null}
+    </Field>
+  );
+}
+
+// Unit 63b: one-click preset chip that fills both the wall-clock cap
+// and ambition-tier inputs with the multi-hour autonomous defaults.
+// Mirrors the "+ Deliver every README feature + research" chip pattern
+// — same styling, same single-click semantics.
+function MultiHourPresetChip({
+  setWallClockCapMin,
+  setAmbitionTiers,
+}: {
+  setWallClockCapMin: (s: string) => void;
+  setAmbitionTiers: (s: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        setWallClockCapMin(String(MULTI_HOUR_CAP_MIN));
+        setAmbitionTiers(String(MULTI_HOUR_TIERS));
+      }}
+      title="Click to fill the wall-clock cap and ambition-tier inputs above with the multi-hour autonomous defaults"
+      className="inline-block text-xs px-3 py-1 rounded-full bg-ink-700 hover:bg-ink-600 text-ink-300 hover:text-ink-100 border border-ink-600 transition"
+    >
+      + Multi-hour autonomous ({Math.round(MULTI_HOUR_CAP_MIN / 60)}h, {MULTI_HOUR_TIERS} tiers)
+    </button>
   );
 }
 
