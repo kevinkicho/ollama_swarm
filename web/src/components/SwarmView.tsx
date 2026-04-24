@@ -6,8 +6,9 @@ import { BoardView } from "./BoardView";
 import { ContractPanel } from "./ContractPanel";
 import { CopyChip } from "./CopyChip";
 import { Transcript } from "./Transcript";
+import { MetricsPanel } from "./MetricsPanel";
 
-type Tab = "transcript" | "board" | "contract";
+type Tab = "transcript" | "metrics" | "board" | "contract";
 
 export function SwarmView() {
   const agents = useSwarm((s) => s.agents);
@@ -155,6 +156,9 @@ export function SwarmView() {
           <TabButton active={tab === "transcript"} onClick={() => setTab("transcript")}>
             Transcript
           </TabButton>
+          <TabButton active={tab === "metrics"} onClick={() => setTab("metrics")}>
+            Metrics
+          </TabButton>
           {/* Board + Contract are blackboard-only surfaces. Hiding
               them on other presets avoids showing misleading empty
               tabs and (pre-fix) a lingering prior-run contract. */}
@@ -172,6 +176,8 @@ export function SwarmView() {
         <div className="flex-1 overflow-hidden">
           {tab === "transcript" ? (
             <Transcript />
+          ) : tab === "metrics" ? (
+            <MetricsPanel />
           ) : tab === "board" && showBlackboardTabs ? (
             <BoardView />
           ) : tab === "contract" && showBlackboardTabs ? (
