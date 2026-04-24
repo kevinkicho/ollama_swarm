@@ -334,6 +334,12 @@ export class AgentManager {
   // through onTiming).
   private firstPromptLogged = new Set<string>();
 
+  // Task #39: per-agent partial-stream buffer. Updated on every
+  // `message.part.updated` event with text content; cleared on
+  // `session.idle` (stream finalized) and on killAll (run end).
+  // getPartialStreams() returns a snapshot for the REST catch-up.
+  private partialStreams = new Map<string, { text: string; updatedAt: number }>();
+
   recordPromptComplete(
     agentId: string,
     info: { attempt: number; elapsedMs: number; success: boolean },
@@ -419,6 +425,9 @@ export class AgentManager {
     // killAll fires at run-end, so clearing here means the next run's
     // first prompts emit fresh "cold_start" diag records.
     this.firstPromptLogged.clear();
+    // Task #39: drop any residual partial-stream buffers — agent IDs
+    // from the killed run no longer exist; the next run spawns fresh.
+    this.partialStreams.clear();
     if (escaped > 0) {
       // Unit 41: surface unkillable PIDs to the UI rather than swallowing
       // silently. The next dev-server startup sweep will still reclaim
@@ -526,6 +535,16 @@ export class AgentManager {
     if (type === "message.part.updated") {
       const part = props.part as { type?: string; text?: string } | undefined;
       if (part?.type === "text" && typeof part.text === "string") {
+        // Task #39: mirror the partial-stream text into a per-agent
+        // buffer so the REST /api/swarm/status catch-up endpoint can
+        // return it on page-refresh. Without this, hitting Ctrl-R
+        // mid-stream lost the partial text entirely — only finalized
+        // transcript entries survived. Cap at one buffer per agent;
+        // successive partials overwrite.
+        this.partialStreams.set(agent.id, {
+          text: part.text,
+          updatedAt: Date.now(),
+        });
         this.onEvent({
           type: "agent_streaming",
           agentId: agent.id,
@@ -536,9 +555,23 @@ export class AgentManager {
       return;
     }
     if (type === "session.idle") {
+      // Task #39: stream finalized, drop the partial buffer.
+      this.partialStreams.delete(agent.id);
       this.onEvent({ type: "agent_streaming_end", agentId: agent.id });
       return;
     }
+  }
+
+  // Task #39: expose the current per-agent partial-stream buffer as a
+  // plain object snapshot so callers (runner status() paths) can
+  // include it in the SwarmStatus returned by REST catch-up. Returns
+  // a defensive copy — callers can't mutate our internal map.
+  getPartialStreams(): Record<string, { text: string; updatedAt: number }> {
+    const out: Record<string, { text: string; updatedAt: number }> = {};
+    for (const [agentId, s] of this.partialStreams.entries()) {
+      out[agentId] = { text: s.text, updatedAt: s.updatedAt };
+    }
+    return out;
   }
 
   private async waitForReady(port: number, timeoutMs: number): Promise<void> {

@@ -169,6 +169,16 @@ async function hydrateFromSnapshot(): Promise<void> {
         for (const sample of samples) s.pushLatencySample(agentId, sample);
       }
     }
+    // Task #39: restore mid-stream agent turns from the server-side
+    // partial-stream buffer. Without this, Ctrl-R mid-stream lost the
+    // partial text entirely — only finalized transcript entries
+    // survived. Each entry becomes a setStreaming call so the
+    // existing StreamingBubble renders correctly.
+    if (snap.streaming) {
+      for (const [agentId, entry] of Object.entries(snap.streaming)) {
+        s.setStreaming(agentId, entry.text);
+      }
+    }
   } catch {
     // Catch-up is best-effort. WS events still fill in the store as
     // the run progresses — a failed snapshot just means the

@@ -209,6 +209,16 @@ export interface SwarmStatus {
   // client renders in the sparkline tooltip). Empty / absent on
   // discussion presets.
   latency?: Record<string, SwarmStatusLatencySample[]>;
+  // Task #39: per-agent partial-stream text captured in memory so a
+  // page-refresh catch-up can restore the mid-stream UI state. Keyed
+  // by agentId; present only for agents whose stream hasn't yet hit
+  // session.idle. Empty / absent when no stream is active.
+  streaming?: Record<string, SwarmStatusStreamingEntry>;
+}
+
+export interface SwarmStatusStreamingEntry {
+  text: string;
+  updatedAt: number;
 }
 
 // Unit 62: shapes for the SwarmStatus catch-up payload. Mirror of

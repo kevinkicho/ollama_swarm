@@ -47,6 +47,8 @@ export class CouncilRunner implements SwarmRunner {
       model: this.active?.model,
       agents: this.opts.manager.toStates(),
       transcript: [...this.transcript],
+      // Task #39: per-agent partial-stream buffer for catch-up.
+      streaming: this.opts.manager.getPartialStreams(),
     };
   }
 

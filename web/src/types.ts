@@ -321,4 +321,7 @@ export interface SwarmStatusSnapshot {
     counts: BoardCountsDTO;
   };
   latency?: Record<string, LatencySample[]>;
+  // Task #39: per-agent partial-stream text captured server-side so
+  // a Ctrl-R mid-stream can restore the in-progress agent turn.
+  streaming?: Record<string, { text: string; updatedAt: number }>;
 }

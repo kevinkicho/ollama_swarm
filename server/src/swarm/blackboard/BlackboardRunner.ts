@@ -313,6 +313,10 @@ export class BlackboardRunner implements SwarmRunner {
       runStartedAt: this.runBootedAt,
       board: { todos: board.todos, findings: board.findings, counts },
       latency,
+      // Task #39: include per-agent partial-stream buffer so a page-
+      // refresh catch-up can restore mid-stream UI. AgentManager
+      // owns the buffer; we just forward its current snapshot.
+      streaming: this.opts.manager.getPartialStreams(),
     };
   }
 
