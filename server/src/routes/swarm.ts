@@ -5,7 +5,7 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { config } from "../config.js";
 import type { Orchestrator } from "../services/Orchestrator.js";
-import { deriveCloneDir } from "../services/RepoService.js";
+import { deriveCloneDir, RepoService } from "../services/RepoService.js";
 
 // `parentPath` is the folder the user points at on the setup form; the repo
 // is cloned into `<parentPath>/<repo-name-from-URL>`. The older name
@@ -111,9 +111,89 @@ const OpenBody = z.object({ path: z.string().min(1).max(4096) });
 
 export function swarmRouter(orch: Orchestrator): Router {
   const r = Router();
+  // Stateless helper — RepoService methods we use here (dirExists,
+  // cloneStats) don't touch orchestrator state, so a fresh instance is
+  // fine and avoids threading orch.opts.repos through.
+  const repos = new RepoService();
 
   r.get("/status", (_req: Request, res: Response) => {
     res.json(orch.status());
+  });
+
+  // Preflight check (2026-04-24): lets the SetupForm preview whether a
+  // Start will CLONE fresh or RESUME an existing clone BEFORE the user
+  // commits. Keeps the decision visible instead of only surfacing
+  // post-start via CloneBanner + the "Resuming existing clone..."
+  // transcript line.
+  //
+  // Contract:
+  //   GET /api/swarm/preflight?repoUrl=...&parentPath=...
+  //   → 200 { destPath, exists, isGitRepo, alreadyPresent,
+  //           priorCommits, priorChangedFiles, priorUntrackedFiles,
+  //           blocker?: "not-git-repo" }
+  //   → 400 on bad inputs (missing fields, unparseable URL)
+  //
+  // Mirrors RepoService.clone's decision logic without actually
+  // cloning: if destPath exists + has .git, alreadyPresent=true + we
+  // also include cloneStats. If destPath exists but is NOT a git repo,
+  // we flag blocker="not-git-repo" — clone() would reject this with
+  // "Destination is not empty and is not a git repo". If destPath
+  // doesn't exist, alreadyPresent=false and a fresh clone would happen.
+  r.get("/preflight", async (req: Request, res: Response) => {
+    const repoUrl = typeof req.query.repoUrl === "string" ? req.query.repoUrl : "";
+    const parentPath = typeof req.query.parentPath === "string" ? req.query.parentPath : "";
+    if (!repoUrl || !parentPath) {
+      res.status(400).json({ error: "repoUrl and parentPath are required" });
+      return;
+    }
+    let destPath: string;
+    try {
+      destPath = deriveCloneDir(repoUrl, parentPath);
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : "could not derive clone directory",
+      });
+      return;
+    }
+    const exists = await repos.dirExists(destPath);
+    if (!exists) {
+      res.json({
+        destPath,
+        exists: false,
+        isGitRepo: false,
+        alreadyPresent: false,
+        priorCommits: 0,
+        priorChangedFiles: 0,
+        priorUntrackedFiles: 0,
+      });
+      return;
+    }
+    const isGitRepo = await repos.dirExists(path.join(destPath, ".git"));
+    if (!isGitRepo) {
+      // Non-empty non-git dir — clone() would reject unless force=true.
+      // Surface as a blocker so the SetupForm can warn before Start.
+      res.json({
+        destPath,
+        exists: true,
+        isGitRepo: false,
+        alreadyPresent: false,
+        priorCommits: 0,
+        priorChangedFiles: 0,
+        priorUntrackedFiles: 0,
+        blocker: "not-git-repo",
+      });
+      return;
+    }
+    const stats = await repos.cloneStats(destPath);
+    res.json({
+      destPath,
+      exists: true,
+      isGitRepo: true,
+      alreadyPresent: true,
+      priorCommits: stats.commits,
+      priorChangedFiles: stats.changedFiles,
+      priorUntrackedFiles: stats.untrackedFiles,
+    });
   });
 
   r.post("/start", async (req: Request, res: Response) => {

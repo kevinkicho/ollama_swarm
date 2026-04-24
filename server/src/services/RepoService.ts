@@ -475,7 +475,7 @@ export class RepoService {
     return out;
   }
 
-  private async dirExists(p: string): Promise<boolean> {
+  async dirExists(p: string): Promise<boolean> {
     try {
       const s = await fs.stat(p);
       return s.isDirectory();

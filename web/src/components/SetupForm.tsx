@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useSwarm } from "../state/store";
+import { PreflightPreview } from "./PreflightPreview";
 
 type PresetStatus = "active" | "planned";
 
@@ -529,6 +530,8 @@ export function SetupForm() {
             placeholder="C:\\Users\\you\\projects"
           />
         </Field>
+
+        <PreflightPreview repoUrl={repoUrl} parentPath={parentPath} />
 
         <Field
           label="Pattern"
