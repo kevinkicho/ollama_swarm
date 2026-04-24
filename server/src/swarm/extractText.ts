@@ -138,8 +138,16 @@ export const EMPTY_RESPONSE_RETRY_SUFFIX =
 export function looksLikeJunk(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.length === 0) return false; // empty handled separately via isEmpty
-  if (trimmed.length > 80) return false;
-  // No internal whitespace = single token; council/orchestrator-worker/etc.
-  // prompts always elicit multi-sentence prose, so single-token = failure.
-  return !/\s/.test(trimmed);
+  // Single-token: very short, no whitespace at all (hex SHA, "4", passwd-like).
+  // Council/orchestrator-worker/etc. prompts always elicit multi-sentence
+  // prose, so single-token = failure regardless of length up to 80 chars.
+  if (trimmed.length <= 80 && !/\s/.test(trimmed)) return true;
+  // Trivially-short multi-word: 2026-04-24 OW run had agent-4 return
+  // "MEXICAN PASSION FRUIT" (21 chars, 3 words) and similar non-sequiturs.
+  // Discussion presets all request ≥250-word responses, so anything under
+  // 30 chars total is definitionally inadequate even if grammatically valid.
+  // False positives ("Yes, agreed.") are also degenerate in this context
+  // — the prompts ask for multi-sentence analysis, not acknowledgements.
+  if (trimmed.length <= 30) return true;
+  return false;
 }
