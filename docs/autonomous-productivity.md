@@ -108,7 +108,7 @@ yet. **→ Unit 36 (planned).**
 | 53   | Contract panel: status filter (default unmet)| shipped (`1c9edfd`, 2026-04-23)|
 | 54   | Transcript: collapse worker JSON to summary | shipped (`15a7b81`, 2026-04-23)|
 | 55   | Auto-killAll on natural completion          | shipped (`76fe957`, 2026-04-23)|
-| 56   | Topbar + sidebar consolidation              | planned (Kevin's ask 2026-04-23)|
+| 56   | Topbar + sidebar consolidation              | shipped (`92e7d3a`, 2026-04-23)|
 | 56b  | Contract: dedupe counts (drop label row)    | shipped (`d65a2e3`, 2026-04-23)|
 | 57   | Unit 51 fix: cache snapshot before phase    | shipped (`256f025`, 2026-04-23)|
 | 57b  | Unit 39 thinkingSince REST-snapshot fix     | shipped (`256f025`, 2026-04-23)|
