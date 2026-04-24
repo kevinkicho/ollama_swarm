@@ -114,11 +114,16 @@ yet. **→ Unit 36 (planned).**
 | 58   | Dedicated auditor agent (parallel to planner)| planned (Kevin's ask 2026-04-23)|
 | 59   | Specialized-worker blackboard variant       | planned (Kevin's ask 2026-04-23)|
 | 60   | Multi-prompt critic ensemble                | planned (Kevin's ask 2026-04-23)|
-| 61   | Chain-of-thought wrapper for blackboard prompts | planned (self-flagged 2026-04-23)|
 | 62   | Page-refresh persistence (WS catch-up snapshot) | planned (Kevin's ask 2026-04-23)|
 | 63+  | Cross-run resume + tier-aware replay        | hypothesized                   |
 | 63+  | Auto-start app (workers execute shell)      | hypothesized                   |
 | 63+  | Persistent swarm-ui across audits           | hypothesized                   |
+
+(Unit 61 was queued during the 2026-04-23 brainstorm based on Kevin's
+"models want conversation" hypothesis. Both Kevin and Claude reviewed
+and dropped it — the CoT-before-JSON change has marginal upside on
+reasoning-heavy auditor prompts but compounds Unit 46a's audit-timeout
+risk we just fixed. Better levers elsewhere.)
 
 ## Units 47-51 — Build-on-existing-clone work pattern (spec-lite)
 
@@ -589,41 +594,6 @@ runtime.
 (Unit 35) vs ensemble. Measure: (a) how many commits the ensemble
 rejects that Unit 35 would have accepted, (b) how many of those
 were actually busywork on manual review.
-
-## Unit 61 — Chain-of-thought wrapper for blackboard prompts (spec-lite)
-
-Kevin's 2026-04-23 hypothesis: the rigid "output ONLY a JSON
-object, no prose" constraint forces glm-5.1:cloud (RLHF'd on
-conversational data) into a less-rehearsed mode and leaves
-reasoning quality on the table.
-
-**The change:** allow a `<thinking>...</thinking>` (or just freeform
-prose) BEFORE the JSON envelope in worker / planner / critic /
-auditor / replanner prompts. Parsers already extract the LAST
-fenced block / final top-level object — so a reasoning preamble
-followed by the JSON envelope works without parser changes.
-
-**Concrete prompt edits:**
-- WORKER_SYSTEM_PROMPT (worker.ts): change rule 1 from "Output ONLY
-  a JSON object" to "You MAY reason briefly first; the FINAL block
-  must be a JSON object on its own."
-- PLANNER_SYSTEM_PROMPT, FIRST_PASS_CONTRACT_SYSTEM_PROMPT,
-  REPLANNER_SYSTEM_PROMPT, AUDITOR_SYSTEM_PROMPT, CRITIC_SYSTEM_PROMPT
-  — same edit.
-- Cap the reasoning preamble at ~1000 chars so prompts don't bloat
-  unbounded (could enforce via a transcript-level truncation).
-
-**A/B opportunity:** ship behind a `RunConfig.reasoningPreamble:
-boolean` flag (default false). Run two seaj-tsia-study resumes —
-one with, one without — and compare commit quality / met-criteria
-rate / wont-do count.
-
-**Risks:** prompts get longer, hits Unit 46a's 600 s headers
-timeout earlier on big audits. Probably fine since reasoning is
-~1 KB and audit prompts are 50+ KB before truncation.
-
-**Cost:** ~45 min implementation; per-call cost +1-2 KB output
-tokens.
 
 ## Unit 62 — Page-refresh persistence (WS catch-up snapshot) (spec-lite)
 
