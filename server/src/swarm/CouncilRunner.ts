@@ -274,6 +274,9 @@ export class CouncilRunner implements SwarmRunner {
             elapsedMs,
             success,
           });
+          // Improvement #4: per-agent first-prompt cold-start logging.
+          // No-op after the first call per agent.
+          this.opts.manager.recordPromptComplete(agent.id, { attempt, elapsedMs, success });
           // Unit 40: live latency sample over WS for the UI sparkline.
           this.opts.emit({
             type: "agent_latency_sample",

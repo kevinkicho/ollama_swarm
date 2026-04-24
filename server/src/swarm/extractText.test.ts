@@ -65,7 +65,7 @@ describe("extractTextWithDiag", () => {
   });
 
   it("returns '(empty response)' AND fires diag when parts is empty", () => {
-    let diagPayload: Record<string, unknown> | null = null;
+    let diagPayload: any = null;
     const text = extractTextWithDiag(
       { data: { parts: [] } },
       {
@@ -79,15 +79,15 @@ describe("extractTextWithDiag", () => {
     );
     assert.equal(text, "(empty response)");
     assert.ok(diagPayload, "logDiag should have been called");
-    assert.equal(diagPayload!.type, "empty_response");
-    assert.equal(diagPayload!.runner, "test");
-    assert.equal(diagPayload!.agentId, "agent-2");
-    assert.equal(diagPayload!.partsLength, 0);
-    assert.deepEqual(diagPayload!.partTypes, []);
+    assert.equal(diagPayload.type, "empty_response");
+    assert.equal(diagPayload.runner, "test");
+    assert.equal(diagPayload.agentId, "agent-2");
+    assert.equal(diagPayload.partsLength, 0);
+    assert.deepEqual(diagPayload.partTypes, []);
   });
 
   it("captures part types for diagnostics when only non-text parts present", () => {
-    let diagPayload: Record<string, unknown> | null = null;
+    let diagPayload: any = null;
     extractTextWithDiag(
       { data: { parts: [{ type: "tool" }, { type: "tool" }, { type: "metadata" }] } },
       {
@@ -99,9 +99,9 @@ describe("extractTextWithDiag", () => {
       },
     );
     assert.ok(diagPayload);
-    assert.equal(diagPayload!.partsLength, 3);
+    assert.equal(diagPayload.partsLength, 3);
     assert.deepEqual(
-      (diagPayload!.partTypes as string[]).sort(),
+      (diagPayload.partTypes as string[]).sort(),
       ["metadata", "tool"],
     );
   });
@@ -115,7 +115,7 @@ describe("extractTextWithDiag", () => {
   });
 
   it("flags extractedEmptyString=true when text is '' (degenerate case)", () => {
-    let diagPayload: Record<string, unknown> | null = null;
+    let diagPayload: any = null;
     extractTextWithDiag(
       { data: { text: "" } },
       {
@@ -127,6 +127,6 @@ describe("extractTextWithDiag", () => {
       },
     );
     assert.ok(diagPayload);
-    assert.equal(diagPayload!.extractedEmptyString, true);
+    assert.equal(diagPayload.extractedEmptyString, true);
   });
 });

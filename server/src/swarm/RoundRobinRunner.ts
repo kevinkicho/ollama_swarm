@@ -273,6 +273,8 @@ export class RoundRobinRunner implements SwarmRunner {
             elapsedMs,
             success,
           });
+          // Improvement #4: per-agent first-prompt cold-start logging.
+          this.opts.manager.recordPromptComplete(agent.id, { attempt, elapsedMs, success });
           // Unit 40: live-stream latency samples over WS so the UI can
           // render a sparkline tooltip on the thinking ticker.
           this.opts.emit({

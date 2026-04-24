@@ -3134,6 +3134,8 @@ export class BlackboardRunner implements SwarmRunner {
             elapsedMs,
             success,
           });
+          // Improvement #4: per-agent first-prompt cold-start logging.
+          this.opts.manager.recordPromptComplete(agent.id, { attempt, elapsedMs, success });
           // Unit 40: live latency sample over WS for the UI sparkline.
           const sampleTs = Date.now();
           this.opts.emit({

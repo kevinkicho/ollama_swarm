@@ -315,6 +315,8 @@ export class StigmergyRunner implements SwarmRunner {
             elapsedMs,
             success,
           });
+          // Improvement #4: per-agent first-prompt cold-start logging.
+          this.opts.manager.recordPromptComplete(agent.id, { attempt, elapsedMs, success });
           // Unit 40: live latency sample over WS for the UI sparkline.
           this.opts.emit({
             type: "agent_latency_sample",

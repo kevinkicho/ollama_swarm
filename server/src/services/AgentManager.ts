@@ -320,6 +320,40 @@ export class AgentManager {
     this.setAgentState(s);
   }
 
+  // Improvement #4 from 2026-04-23 retro: per-agent first-prompt
+  // (cold-start) latency tracking. The "Agent N starvation" pattern
+  // has shifted across runs (agent-2 in v6, agent-2+3 in v7,
+  // agent-3 empty responses on the preset tour). Whichever agent
+  // index lands in the degraded queue slot under cloud fanout has
+  // varied — so we want per-agent first-byte timing on the FIRST
+  // prompt only, where the cold-start cost is concentrated.
+  //
+  // Runners call this after every promptWithRetry timing. The first
+  // call per agent emits a "cold_start" diag record; subsequent
+  // calls are no-ops here (the per-attempt timing already lands
+  // through onTiming).
+  private firstPromptLogged = new Set<string>();
+
+  recordPromptComplete(
+    agentId: string,
+    info: { attempt: number; elapsedMs: number; success: boolean },
+  ): void {
+    if (this.firstPromptLogged.has(agentId)) return;
+    this.firstPromptLogged.add(agentId);
+    const agent = this.agents.get(agentId);
+    this.logDiag({
+      type: "cold_start",
+      agentId,
+      agentIndex: agent?.index,
+      port: agent?.port,
+      model: agent?.model,
+      attempt: info.attempt,
+      elapsedMs: info.elapsedMs,
+      success: info.success,
+      ts: Date.now(),
+    });
+  }
+
   async killAll(): Promise<KillAllResult> {
     for (const ctrl of this.eventAborts.values()) ctrl.abort();
     this.eventAborts.clear();
@@ -381,6 +415,10 @@ export class AgentManager {
     await Promise.allSettled(tasks);
     this.agents.clear();
     this.agentStates.clear();
+    // Improvement #4: each run gets its own cold-start measurement.
+    // killAll fires at run-end, so clearing here means the next run's
+    // first prompts emit fresh "cold_start" diag records.
+    this.firstPromptLogged.clear();
     if (escaped > 0) {
       // Unit 41: surface unkillable PIDs to the UI rather than swallowing
       // silently. The next dev-server startup sweep will still reclaim
