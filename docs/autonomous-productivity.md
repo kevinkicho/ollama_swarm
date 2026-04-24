@@ -99,7 +99,7 @@ yet. **→ Unit 36 (planned).**
 | 48   | Hide runner artifacts via .git/info/exclude | shipped (`fcf29ea`, 2026-04-23)|
 | 49   | Per-run summary file naming (no overwrite)  | shipped (`6f9b388`, 2026-04-23)|
 | 50   | Planner reads prior summary on resume       | shipped (`bffa885`, 2026-04-23)|
-| 51   | Reload prior contract from blackboard-state | planned (Kevin's ask 2026-04-23)|
+| 51   | Reload prior contract from blackboard-state | shipped (`91e83cd`, 2026-04-23)|
 | 52a  | Runtime ticker (header)                      | shipped (`4fb6921`, 2026-04-23)|
 | 52b  | Composite status badge                       | shipped (`ee4284b`, 2026-04-23)|
 | 52c  | Run identity strip + click-to-open path      | shipped (`9467c43`, 2026-04-23)|
