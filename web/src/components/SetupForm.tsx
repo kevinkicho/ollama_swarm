@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useSwarm } from "../state/store";
 import { PreflightPreview } from "./PreflightPreview";
+import { StartConfirmModal } from "./StartConfirmModal";
+import type { PreflightState } from "../types";
 
 type PresetStatus = "active" | "planned";
 
@@ -372,6 +374,10 @@ export function SetupForm() {
   const [busy, setBusy] = useState(false);
   const setError = useSwarm((s) => s.setError);
   const reset = useSwarm((s) => s.reset);
+  // Set by onSubmit when preflight finds an existing clone or a
+  // not-git-repo blocker; cleared by either Resume (after start
+  // fires) or Cancel. Only one modal instance at a time.
+  const [confirmModal, setConfirmModal] = useState<PreflightState | null>(null);
 
   const preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0];
   const isActive = preset.status === "active";
@@ -395,9 +401,10 @@ export function SetupForm() {
     setAgentCount(clamp(raw, preset.min, preset.max));
   };
 
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isActive) return;
+  // Actual POST → /api/swarm/start. Called directly when preflight
+  // is clean, or via StartConfirmModal's Resume callback when an
+  // existing clone was detected and the user confirmed.
+  const performStart = async () => {
     setBusy(true);
     setError(undefined);
     reset();
@@ -490,7 +497,41 @@ export function SetupForm() {
     }
   };
 
+  // Preflight gate: fire GET /api/swarm/preflight before POSTing.
+  // If it detects an existing clone (alreadyPresent) or a not-git-
+  // repo blocker, show the signup-style confirmation modal instead
+  // of silently starting. Network errors on preflight fall through
+  // — /start itself is still the source of truth for blockers.
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isActive) return;
+
+    setBusy(true);
+    try {
+      const params = new URLSearchParams({
+        repoUrl: repoUrl.trim(),
+        parentPath: parentPath.trim(),
+      });
+      const res = await fetch(`/api/swarm/preflight?${params.toString()}`);
+      if (res.ok) {
+        const state = (await res.json()) as PreflightState;
+        if (state.alreadyPresent || state.blocker) {
+          setConfirmModal(state);
+          setBusy(false);
+          return;
+        }
+      }
+    } catch {
+      // Silent — fall through to the POST and let /start surface
+      // any real error.
+    }
+    setBusy(false);
+
+    await performStart();
+  };
+
   return (
+    <>
     <div className="h-full overflow-auto flex items-center justify-center p-8">
       <form
         onSubmit={onSubmit}
@@ -677,6 +718,17 @@ export function SetupForm() {
         `}</style>
       </form>
     </div>
+    {confirmModal ? (
+      <StartConfirmModal
+        state={confirmModal}
+        onResume={() => {
+          setConfirmModal(null);
+          void performStart();
+        }}
+        onCancel={() => setConfirmModal(null)}
+      />
+    ) : null}
+    </>
   );
 }
 

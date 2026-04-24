@@ -281,6 +281,21 @@ export type SwarmEvent =
       rounds: number;
     };
 
+// Shared shape returned by GET /api/swarm/preflight. Drives both the
+// inline PreflightPreview under the Parent folder field AND the
+// pre-Start confirmation modal (StartConfirmModal) that gates Start
+// when an existing clone is detected.
+export interface PreflightState {
+  destPath: string;
+  exists: boolean;
+  isGitRepo: boolean;
+  alreadyPresent: boolean;
+  priorCommits: number;
+  priorChangedFiles: number;
+  priorUntrackedFiles: number;
+  blocker?: "not-git-repo";
+}
+
 // Phase 2a (2026-04-24): stigmergy pheromone table entry — the shared
 // annotation state that drives file-picking. Mirror of
 // SwarmStatusPheromoneEntry server-side.

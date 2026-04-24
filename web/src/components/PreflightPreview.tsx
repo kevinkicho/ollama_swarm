@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { PreflightState } from "../types";
 
 // Preflight (2026-04-24): inline preview below the SetupForm's
 // repoUrl + parentPath fields showing whether a Start click will:
@@ -9,16 +10,6 @@ import { useEffect, useState } from "react";
 // Debounced at 400ms so typing doesn't thrash the backend. Silent
 // on network error — keeps the form usable even if the dev server
 // is momentarily unreachable (task #45/#47 style soft fallback).
-interface PreflightState {
-  destPath: string;
-  exists: boolean;
-  isGitRepo: boolean;
-  alreadyPresent: boolean;
-  priorCommits: number;
-  priorChangedFiles: number;
-  priorUntrackedFiles: number;
-  blocker?: "not-git-repo";
-}
 
 export function PreflightPreview({
   repoUrl,
