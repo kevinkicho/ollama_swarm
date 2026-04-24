@@ -7,6 +7,7 @@ import { FINAL_GIT_STATUS_MAX } from "./blackboard/summary.js";
 import {
   buildDiscussionSummary,
   writeRunSummary,
+  buildPerRunSummaryFileName,
   type DiscussionSummaryInput,
 } from "./runSummary.js";
 
@@ -101,35 +102,80 @@ describe("buildDiscussionSummary — git status truncation", () => {
 });
 
 describe("writeRunSummary — on-disk shape", () => {
-  it("writes JSON to <clonePath>/summary.json atomically", async () => {
+  it("writes JSON to BOTH summary.json and the per-run timestamped file", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "run-summary-"));
     try {
       const s = buildDiscussionSummary(base({ config: { ...base().config, localPath: tmp } }));
-      const outPath = await writeRunSummary(tmp, s);
-      assert.equal(outPath, path.join(tmp, "summary.json"));
-      const roundTripped = JSON.parse(await fs.readFile(outPath, "utf8"));
-      assert.equal(roundTripped.preset, "round-robin");
-      assert.equal(roundTripped.agentCount, 3);
-      assert.equal(roundTripped.rounds, 5);
-      assert.equal(roundTripped.stopReason, "completed");
+      const { perRunPath, latestPath } = await writeRunSummary(tmp, s);
+      // Latest pointer at the canonical path.
+      assert.equal(latestPath, path.join(tmp, "summary.json"));
+      // Per-run sibling whose name encodes startedAt as ISO-with-dashes.
+      assert.equal(perRunPath, path.join(tmp, buildPerRunSummaryFileName(s.startedAt)));
+      assert.match(path.basename(perRunPath), /^summary-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/);
+      // Both files have identical contents.
+      const latest = JSON.parse(await fs.readFile(latestPath, "utf8"));
+      const perRun = JSON.parse(await fs.readFile(perRunPath, "utf8"));
+      assert.deepEqual(latest, perRun);
+      assert.equal(latest.preset, "round-robin");
+      assert.equal(latest.agentCount, 3);
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
   });
 
-  it("overwrites an existing summary.json when called twice (second wins)", async () => {
+  it("overwrites only summary.json on a second call — prior per-run file survives", async () => {
+    // Unit 49 core promise: build-on-existing-clone runs leave a
+    // discoverable trail. summary.json points at the latest; older
+    // per-run files remain on disk.
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "run-summary-"));
     try {
-      const first = buildDiscussionSummary(base({ agentCount: 1 }));
-      const second = buildDiscussionSummary(base({ agentCount: 2 }));
-      await writeRunSummary(tmp, first);
-      await writeRunSummary(tmp, second);
-      const roundTripped = JSON.parse(
-        await fs.readFile(path.join(tmp, "summary.json"), "utf8"),
-      );
-      assert.equal(roundTripped.agentCount, 2);
+      const first = buildDiscussionSummary(base({
+        agentCount: 1,
+        startedAt: 1_700_000_000_000,
+        endedAt: 1_700_000_001_000,
+      }));
+      const second = buildDiscussionSummary(base({
+        agentCount: 2,
+        startedAt: 1_700_000_500_000,
+        endedAt: 1_700_000_501_000,
+      }));
+      const { perRunPath: firstPerRun } = await writeRunSummary(tmp, first);
+      const { perRunPath: secondPerRun, latestPath } = await writeRunSummary(tmp, second);
+      // Per-run files have distinct names, both still on disk.
+      assert.notEqual(firstPerRun, secondPerRun);
+      const firstRoundTrip = JSON.parse(await fs.readFile(firstPerRun, "utf8"));
+      const secondRoundTrip = JSON.parse(await fs.readFile(secondPerRun, "utf8"));
+      assert.equal(firstRoundTrip.agentCount, 1, "prior run's per-run file preserved");
+      assert.equal(secondRoundTrip.agentCount, 2, "current run's per-run file written");
+      // Latest pointer reflects the second run.
+      const latest = JSON.parse(await fs.readFile(latestPath, "utf8"));
+      assert.equal(latest.agentCount, 2);
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe("buildPerRunSummaryFileName", () => {
+  it("produces an ISO-derived name with colons and dots replaced by dashes", () => {
+    // Date.UTC(2026, 3, 23, 18, 22, 5, 380) → 2026-04-23T18:22:05.380Z
+    const iso = new Date(Date.UTC(2026, 3, 23, 18, 22, 5, 380)).getTime();
+    assert.equal(buildPerRunSummaryFileName(iso), "summary-2026-04-23T18-22-05-380Z.json");
+  });
+
+  it("sorts lexicographically in chronological order", () => {
+    const names = [
+      buildPerRunSummaryFileName(Date.UTC(2026, 0, 1, 0, 0, 0, 0)),
+      buildPerRunSummaryFileName(Date.UTC(2026, 0, 1, 0, 0, 1, 0)),
+      buildPerRunSummaryFileName(Date.UTC(2026, 0, 2, 0, 0, 0, 0)),
+      buildPerRunSummaryFileName(Date.UTC(2027, 0, 1, 0, 0, 0, 0)),
+    ];
+    const sorted = [...names].sort();
+    assert.deepEqual(sorted, names, "lex sort must equal chronological");
+  });
+
+  it("only contains characters legal on every common filesystem (no : or *)", () => {
+    const name = buildPerRunSummaryFileName(Date.now());
+    assert.equal(name.match(/[:*?"<>|/\\]/), null);
   });
 });

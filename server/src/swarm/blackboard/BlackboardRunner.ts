@@ -31,6 +31,7 @@ import { applyHunks } from "./applyHunks.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
 import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
+import { buildPerRunSummaryFileName } from "../runSummary.js";
 import {
   buildPlannerUserPrompt,
   buildRepairPrompt,
@@ -2287,11 +2288,18 @@ export class BlackboardRunner implements SwarmRunner {
       tierHistory: this.tierHistory.length > 0 ? this.tierHistory.slice() : undefined,
     });
 
-    const outPath = path.join(clone, "summary.json");
+    // Unit 49: dual write — per-run timestamped file (never overwrites
+    // a prior run's summary) + summary.json "latest" pointer. Mirrors
+    // the runSummary.ts helper used by the discussion presets so the
+    // on-disk shape is identical across all 7 runners.
+    const json = JSON.stringify(summary, null, 2);
+    const perRunPath = path.join(clone, buildPerRunSummaryFileName(summary.startedAt));
+    const latestPath = path.join(clone, "summary.json");
     try {
-      await writeFileAtomic(outPath, JSON.stringify(summary, null, 2));
+      await writeFileAtomic(perRunPath, json);
+      await writeFileAtomic(latestPath, json);
       this.appendSystem(
-        `Wrote run summary to ${outPath} (stopReason=${summary.stopReason}, commits=${summary.commits}, files=${summary.filesChanged}).`,
+        `Wrote run summary to ${perRunPath} + ${latestPath} (stopReason=${summary.stopReason}, commits=${summary.commits}, files=${summary.filesChanged}).`,
       );
     } catch (writeErr) {
       const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
