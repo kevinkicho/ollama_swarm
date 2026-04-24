@@ -10,8 +10,31 @@ interface SwarmPreset {
   min: number;
   max: number;
   recommended: number;
+  // Per-preset recommended model for the main Model field. Two-tier
+  // framework: REASONING for presets where every / the dominant agent
+  // makes judgment calls (planner, drafter, judge, synthesizer);
+  // CODING for presets where every agent produces structured output
+  // against a clear spec (stigmergy file-summarization). When the
+  // preset is multi-role (blackboard, map-reduce, etc.) this is the
+  // model the highest-leverage role wants — per-agent overrides
+  // refine the rest.
+  recommendedModel: string;
   status: PresetStatus;
 }
+
+// Two-tier model framework — see docs/autonomous-productivity.md
+// "Per-preset distribution" for the full rationale.
+//   REASONING — judgment, decomposition, synthesis, multi-step
+//     deliberation. Use for planners, drafters, judges, reducers,
+//     orchestrators, peer-dialogue presets.
+//   CODING — structured-output emission against a clear spec
+//     (diffs, file summaries). Faster + cheaper than reasoning;
+//     correct trade-off for blackboard workers and stigmergy peers.
+//   VERIFIER — heaviest reasoning model, reserved for the auditor
+//     role where rubber-stamping is the dominant failure mode.
+const MODEL_REASONING = "glm-5.1:cloud";
+const MODEL_CODING = "gemma4:31b-cloud";
+const MODEL_VERIFIER = "nemotron-3-super:cloud";
 
 // Keep server-side cap (max=8) in mind when editing `max` values here.
 // Patterns that theoretically scale higher (blackboard, stigmergy) are
@@ -24,6 +47,7 @@ const PRESETS: readonly SwarmPreset[] = [
     min: 2,
     max: 8,
     recommended: 3,
+    recommendedModel: MODEL_REASONING,
     status: "active",
   },
   {
@@ -33,6 +57,9 @@ const PRESETS: readonly SwarmPreset[] = [
     min: 3,
     max: 8,
     recommended: 6,
+    // Main Model = the planner's tier. Per-agent overrides
+    // (BLACKBOARD_DEFAULT_*_MODEL) refine workers + auditor.
+    recommendedModel: MODEL_REASONING,
     status: "active",
   },
   {
@@ -42,6 +69,7 @@ const PRESETS: readonly SwarmPreset[] = [
     min: 3,
     max: 8,
     recommended: 5,
+    recommendedModel: MODEL_REASONING,
     status: "active",
   },
   {
@@ -51,6 +79,10 @@ const PRESETS: readonly SwarmPreset[] = [
     min: 3,
     max: 8,
     recommended: 5,
+    // Single-model preset today — pick reducer's tier so synthesis
+    // doesn't bottleneck. When per-role model selection ships
+    // (Unit 65 candidate), swap mappers to MODEL_CODING.
+    recommendedModel: MODEL_REASONING,
     status: "active",
   },
   {
@@ -60,6 +92,9 @@ const PRESETS: readonly SwarmPreset[] = [
     min: 3,
     max: 8,
     recommended: 4,
+    // All N drafters need actual angles; coding-tier produces
+    // near-identical drafts → no diversity gain.
+    recommendedModel: MODEL_REASONING,
     status: "active",
   },
   {
@@ -69,6 +104,9 @@ const PRESETS: readonly SwarmPreset[] = [
     min: 2,
     max: 8,
     recommended: 4,
+    // Single-model preset today — pick orchestrator's tier. Same
+    // Unit 65 candidate as map-reduce.
+    recommendedModel: MODEL_REASONING,
     status: "active",
   },
   {
@@ -78,6 +116,10 @@ const PRESETS: readonly SwarmPreset[] = [
     min: 3,
     max: 3,
     recommended: 3,
+    // All three roles need higher-reasoning. Heterogeneous-judge
+    // (PRO/CON on one model, JUDGE on another) is a Unit 65
+    // candidate — bias mitigation gain isn't huge.
+    recommendedModel: MODEL_REASONING,
     status: "active",
   },
   {
@@ -87,6 +129,10 @@ const PRESETS: readonly SwarmPreset[] = [
     min: 2,
     max: 8,
     recommended: 5,
+    // Each task is read-and-summarize; coding-tier finishes faster
+    // → more parallel coverage per minute. Coordination is via the
+    // pheromone table, not deliberation, so reasoning doesn't pay.
+    recommendedModel: MODEL_CODING,
     status: "active",
   },
 ];
@@ -106,20 +152,13 @@ const DIRECTIVE_README_AND_RESEARCH =
 const MULTI_HOUR_CAP_MIN = 480;
 const MULTI_HOUR_TIERS = 5;
 
-// Recommended model mix for the blackboard preset (Kevin's standing
-// preference). Each role's strengths line up with a different model:
-//   - Planner (agent-1) authors contracts + todos; benefits from a
-//     well-rounded reasoning model that holds session context.
-//   - Workers (agents 2..N) emit structured diffs against ≤2 files;
-//     benefits from a fast code-shaped model that doesn't overthink.
-//   - Auditor (agent N+1 with Unit 58) reads the whole contract +
-//     recent commits + optional UI snapshot; benefits from a heavier
-//     verifier-style model.
+// Blackboard role defaults. Maps each role to its tier from the
+// MODEL_REASONING / MODEL_CODING / MODEL_VERIFIER framework above.
 // Pre-populated as initial state for the matching SetupForm inputs;
 // users can clear to fall through to the main Model field.
-const BLACKBOARD_DEFAULT_PLANNER_MODEL = "glm-5.1:cloud";
-const BLACKBOARD_DEFAULT_WORKER_MODEL = "gemma4:31b-cloud";
-const BLACKBOARD_DEFAULT_AUDITOR_MODEL = "nemotron-3-super:cloud";
+const BLACKBOARD_DEFAULT_PLANNER_MODEL = MODEL_REASONING;
+const BLACKBOARD_DEFAULT_WORKER_MODEL = MODEL_CODING;
+const BLACKBOARD_DEFAULT_AUDITOR_MODEL = MODEL_VERIFIER;
 
 // Unit 32: role-diff's customizable role list. Kept in sync with the
 // server's DEFAULT_ROLES in server/src/swarm/roles.ts — edits there
@@ -204,7 +243,10 @@ export function SetupForm() {
   const [parentPath, setParentPath] = useState("C:\\users\\you\\projects");
   const [presetId, setPresetId] = useState<string>("round-robin");
   const [agentCount, setAgentCount] = useState(3);
-  const [model, setModel] = useState("glm-5.1:cloud");
+  // Model defaults to the initial preset's recommendation so the
+  // form renders with a sensible Model field on first paint.
+  // onPresetChange refreshes this when the user switches presets.
+  const [model, setModel] = useState(PRESETS[0].recommendedModel);
   const [rounds, setRounds] = useState(3);
   const [userDirective, setUserDirective] = useState("");
   // Unit 32: per-preset knobs. State lives in SetupForm so it persists
@@ -252,6 +294,11 @@ export function SetupForm() {
     if (!next) return;
     setPresetId(next.id);
     setAgentCount(clamp(next.recommended, next.min, next.max));
+    // Match the agentCount auto-update pattern: switching presets
+    // also flips the main Model to the new preset's recommendation
+    // (e.g. round-robin → stigmergy lands you on MODEL_CODING).
+    // User can override after.
+    setModel(next.recommendedModel);
   };
 
   const onAgentCountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
