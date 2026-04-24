@@ -206,7 +206,12 @@ export type SwarmEvent =
       priorCommits: number;
       priorChangedFiles: number;
       priorUntrackedFiles: number;
-    };
+    }
+  // Unit 52a: emitted once at the very top of Orchestrator.start.
+  // Anchors the UI's runtime ticker on a stable wall-clock value
+  // that includes clone + spawn time (which the runtime user
+  // perceives as "the run is taking a while").
+  | { type: "run_started"; startedAt: number };
 
 // Unit 40: one recent-latency sample as stored client-side.
 export interface LatencySample {

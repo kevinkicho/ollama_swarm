@@ -77,6 +77,9 @@ function dispatch(ev: SwarmEvent): void {
         priorUntrackedFiles: ev.priorUntrackedFiles,
       });
       break;
+    case "run_started":
+      s.setRunStartedAt(ev.startedAt);
+      break;
   }
 }
 

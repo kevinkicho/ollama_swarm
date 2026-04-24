@@ -37,6 +37,10 @@ interface SwarmStore {
   // Unit 47: user has dismissed the resume banner for this run; the
   // banner stays hidden until the next reset (new run start).
   cloneBannerDismissed: boolean;
+  // Unit 52a: wall-clock ms-since-epoch at which the orchestrator
+  // started this run. Anchors the runtime ticker. Undefined when no
+  // run has fired this session OR after reset().
+  runStartedAt?: number;
 
   setPhase: (phase: SwarmPhase, round: number) => void;
   upsertAgent: (a: AgentState) => void;
@@ -57,6 +61,7 @@ interface SwarmStore {
   pushLatencySample: (agentId: string, sample: LatencySample) => void;
   setCloneState: (c: CloneState) => void;
   dismissCloneBanner: () => void;
+  setRunStartedAt: (ts: number) => void;
 
   setError: (msg: string | undefined) => void;
   reset: () => void;
@@ -76,6 +81,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   latency: {},
   cloneState: undefined,
   cloneBannerDismissed: false,
+  runStartedAt: undefined,
 
   setPhase: (phase, round) => set({ phase, round }),
   upsertAgent: (a) => set((s) => ({ agents: { ...s.agents, [a.id]: a } })),
@@ -185,6 +191,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   // dismissal scope).
   setCloneState: (c) => set({ cloneState: c, cloneBannerDismissed: false }),
   dismissCloneBanner: () => set({ cloneBannerDismissed: true }),
+  setRunStartedAt: (ts) => set({ runStartedAt: ts }),
 
   setError: (msg) => set({ error: msg }),
   reset: () =>
@@ -202,5 +209,6 @@ export const useSwarm = create<SwarmStore>((set) => ({
       latency: {},
       cloneState: undefined,
       cloneBannerDismissed: false,
+      runStartedAt: undefined,
     }),
 }));

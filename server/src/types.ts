@@ -111,6 +111,16 @@ export type SwarmEvent =
       priorCommits: number;
       priorChangedFiles: number;
       priorUntrackedFiles: number;
+    }
+  // Unit 52a: emitted once at the very top of Orchestrator.start so
+  // the UI's runtime ticker has a stable wall-clock anchor. Fires
+  // BEFORE the runner's first phase transition, so a slow clone +
+  // spawn count toward the user-visible runtime. The summary's
+  // startedAt may differ slightly (it tracks "executing" start for
+  // cap math), but the user-visible ticker uses THIS value.
+  | {
+      type: "run_started";
+      startedAt: number;
     };
 
 export type SwarmPhase =
