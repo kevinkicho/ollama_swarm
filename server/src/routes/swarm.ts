@@ -332,11 +332,18 @@ export function swarmRouter(orch: Orchestrator): Router {
   // parent dir is unreadable — never throws.
   r.get("/runs", async (_req: Request, res: Response) => {
     const status = orch.status();
-    if (!status.localPath) {
+    // 2026-04-24: when idle (no active run, status.localPath
+    // undefined), fall back to the orchestrator's cached
+    // lastParentPath so the dropdown stays useful between runs.
+    // Without this fallback the dropdown was empty whenever the user
+    // wasn't mid-run — which is most of the time.
+    const parent = status.localPath
+      ? path.dirname(path.resolve(status.localPath))
+      : orch.getLastParentPath();
+    if (!parent) {
       res.json({ runs: [] });
       return;
     }
-    const parent = path.dirname(path.resolve(status.localPath));
     let entries: string[];
     try {
       entries = await fs.readdir(parent);
@@ -344,7 +351,10 @@ export function swarmRouter(orch: Orchestrator): Router {
       res.json({ runs: [] });
       return;
     }
-    const activeClone = path.resolve(status.localPath);
+    const activeClone = status.localPath ? path.resolve(status.localPath) : null;
+    const activeRunId = status.runConfig?.preset
+      ? status.runId ?? null
+      : null;
     const runs: RunSummaryDigest[] = [];
     for (const name of entries) {
       const cloneDir = path.join(parent, name);
@@ -355,13 +365,17 @@ export function swarmRouter(orch: Orchestrator): Router {
         continue;
       }
       if (!stat.isDirectory()) continue;
-      // Try the latest pointer first (Unit 49: summary.json); fall
-      // back to scanning for the newest summary-*.json. Fast happy
-      // path; defensive on older clones.
-      const digest = await readRunDigest(cloneDir, name);
-      if (digest) {
-        digest.isActive = cloneDir === activeClone;
-        runs.push(digest);
+      // 2026-04-24: surface EVERY per-run summary (summary-<iso>.json),
+      // not just the latest. A target run 8 times now contributes 8
+      // dropdown rows instead of 1.
+      const digests = await readAllRunDigests(cloneDir, name);
+      for (const d of digests) {
+        // Active = the run whose clonePath matches AND whose runId
+        // matches the orchestrator's current runId. Without the runId
+        // check, every prior run on the active target's clone dir
+        // would falsely flag as "active".
+        d.isActive = activeClone !== null && cloneDir === activeClone && d.runId !== undefined && d.runId === activeRunId;
+        runs.push(d);
       }
     }
     // Newest first by startedAt (descending). Falls back to dir name
@@ -397,56 +411,105 @@ interface RunSummaryDigest {
   runId?: string;
 }
 
-async function readRunDigest(
+function parseSummaryToDigest(
+  raw: string,
   cloneDir: string,
   name: string,
-): Promise<RunSummaryDigest | null> {
-  // Latest pointer first.
-  const candidates = [path.join(cloneDir, "summary.json")];
+): RunSummaryDigest | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const obj = parsed as Record<string, unknown>;
+  if (typeof obj.preset !== "string" || typeof obj.startedAt !== "number") return null;
+  const contract = obj.contract as Record<string, unknown> | undefined;
+  return {
+    name,
+    clonePath: cloneDir,
+    preset: obj.preset,
+    model: typeof obj.model === "string" ? obj.model : "(unknown)",
+    startedAt: obj.startedAt,
+    endedAt: typeof obj.endedAt === "number" ? obj.endedAt : 0,
+    wallClockMs: typeof obj.wallClockMs === "number" ? obj.wallClockMs : 0,
+    stopReason: typeof obj.stopReason === "string" ? obj.stopReason : undefined,
+    commits: typeof obj.commits === "number" ? obj.commits : undefined,
+    totalTodos: typeof obj.totalTodos === "number" ? obj.totalTodos : undefined,
+    hasContract: contract !== undefined && Array.isArray(contract.criteria),
+    isActive: false,
+    runId: typeof obj.runId === "string" ? obj.runId : undefined,
+  };
+}
+
+// 2026-04-24: returns one digest per RUN in this cloneDir, not just
+// per cloneDir. Reads every `summary-<iso>.json` (per-run, never
+// overwritten — Unit 49) and falls back to bare `summary.json`
+// (latest pointer) only when no per-run file exists. Dedups by
+// (runId || startedAt) so a legacy clone whose latest pointer
+// happens to match a per-run file isn't counted twice.
+//
+// Previously the route only returned ONE digest per cloneDir (the
+// latest), so a target run 8 times appeared as a single dropdown
+// row with the most recent stats. Surfacing all per-run summaries
+// gives the user true historical visibility into the framework's
+// behavior across multiple iterations on the same target.
+async function readAllRunDigests(
+  cloneDir: string,
+  name: string,
+): Promise<RunSummaryDigest[]> {
+  const digests: RunSummaryDigest[] = [];
+  const seen = new Set<string>();
+  const dedupKey = (d: RunSummaryDigest) => d.runId ?? `t:${d.startedAt}`;
+
+  // Per-run files first — these are the source of truth, written once
+  // at run-end and never touched again.
+  let perRun: string[] = [];
   try {
     const all = await fs.readdir(cloneDir);
-    const perRun = all
-      .filter((e) => /^summary-.+\.json$/.test(e))
-      .sort()
-      .reverse();
-    for (const e of perRun) candidates.push(path.join(cloneDir, e));
+    perRun = all.filter((e) => /^summary-.+\.json$/.test(e));
   } catch {
-    // ignore — latest pointer alone is fine
+    // unreadable cloneDir — return empty
+    return [];
   }
-  for (const candidate of candidates) {
+  for (const e of perRun) {
     let raw: string;
     try {
-      raw = await fs.readFile(candidate, "utf8");
+      raw = await fs.readFile(path.join(cloneDir, e), "utf8");
     } catch {
       continue;
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      continue;
-    }
-    if (typeof parsed !== "object" || parsed === null) continue;
-    const obj = parsed as Record<string, unknown>;
-    if (typeof obj.preset !== "string" || typeof obj.startedAt !== "number") continue;
-    const contract = obj.contract as Record<string, unknown> | undefined;
-    return {
-      name,
-      clonePath: cloneDir,
-      preset: obj.preset,
-      model: typeof obj.model === "string" ? obj.model : "(unknown)",
-      startedAt: obj.startedAt,
-      endedAt: typeof obj.endedAt === "number" ? obj.endedAt : 0,
-      wallClockMs: typeof obj.wallClockMs === "number" ? obj.wallClockMs : 0,
-      stopReason: typeof obj.stopReason === "string" ? obj.stopReason : undefined,
-      commits: typeof obj.commits === "number" ? obj.commits : undefined,
-      totalTodos: typeof obj.totalTodos === "number" ? obj.totalTodos : undefined,
-      hasContract: contract !== undefined && Array.isArray(contract.criteria),
-      isActive: false,
-      runId: typeof obj.runId === "string" ? obj.runId : undefined,
-    };
+    const d = parseSummaryToDigest(raw, cloneDir, name);
+    if (!d) continue;
+    const k = dedupKey(d);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    digests.push(d);
   }
-  return null;
+
+  // Fallback: bare summary.json (the latest pointer). On modern
+  // clones this duplicates one of the per-run files above and the
+  // dedup catches it. On legacy clones with no per-run files, this
+  // is the only way to see the run at all.
+  let latestRaw: string | null = null;
+  try {
+    latestRaw = await fs.readFile(path.join(cloneDir, "summary.json"), "utf8");
+  } catch {
+    // no latest pointer — fine
+  }
+  if (latestRaw !== null) {
+    const d = parseSummaryToDigest(latestRaw, cloneDir, name);
+    if (d) {
+      const k = dedupKey(d);
+      if (!seen.has(k)) {
+        seen.add(k);
+        digests.push(d);
+      }
+    }
+  }
+
+  return digests;
 }
 
 // True iff this Node process is running inside WSL2 — Linux uname,

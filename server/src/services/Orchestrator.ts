@@ -42,6 +42,14 @@ export class Orchestrator {
   // payload below so the REST snapshot and the WS event don't drift.
   private runConfig?: SwarmStatusRunConfig;
   private runStartedAt?: number;
+  // 2026-04-24: parent dir of the last successfully-started run.
+  // Survives stop() / completion (unlike runConfig + runId) so the
+  // /api/swarm/runs route can keep showing historical runs from the
+  // same parent dir even when no run is currently active. Without
+  // this, the runs dropdown was empty between runs (the route had
+  // no way to know where to look). Cleared only when a new start()
+  // overwrites it — never on stop or terminal phase.
+  private lastParentPath?: string;
 
   constructor(private readonly opts: OrchestratorOpts) {}
 
@@ -71,6 +79,13 @@ export class Orchestrator {
 
   isRunning(): boolean {
     return this.runner?.isRunning() ?? false;
+  }
+
+  // Returns the parent dir of the last successfully-started run.
+  // Used by /api/swarm/runs to keep listing historical summaries
+  // when no run is currently active.
+  getLastParentPath(): string | undefined {
+    return this.lastParentPath;
   }
 
   injectUser(text: string): void {
@@ -148,6 +163,14 @@ export class Orchestrator {
     };
     this.runConfig = runConfig;
     this.runStartedAt = startedAt;
+    // Cache parent dir so /api/swarm/runs can keep showing historical
+    // runs in this folder even after this run terminates. Imported
+    // from path module at top of file (deferred to read time below
+    // to avoid an unnecessary top-level import here).
+    {
+      const path = await import("node:path");
+      this.lastParentPath = path.dirname(path.resolve(cfg.localPath));
+    }
     this.opts.emit({
       type: "run_started",
       runId,
