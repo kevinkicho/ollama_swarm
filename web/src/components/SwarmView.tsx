@@ -54,22 +54,48 @@ export function SwarmView() {
 
   const canStop = phase !== "stopping" && phase !== "stopped" && phase !== "failed" && phase !== "completed";
 
-  // Unit 56 + UI-test fix 2026-04-24: derive per-agent role + model so
-  // AgentPanel can label its card. Agent index 1 is the planner; the
-  // dedicated auditor (Unit 58, blackboard only) spawns at
-  // index = agentCount + 1 and should be labeled "auditor", not
-  // "worker". Everything in between is a worker.
-  // Task #42: role-diff overlays role-catalog names (Architect /
-  // Tester / …) via cfg.roles; when present the label is the role
-  // name (a string) rather than the generic planner/worker/auditor.
+  // Per-preset role labels. Each preset has its own spawn contract:
+  //   - blackboard: agent-1=planner, mid=workers, N+1=auditor (Unit 58)
+  //   - role-diff: catalog names (Architect/Tester/...) from cfg.roles
+  //   - orchestrator-worker: agent-1=orchestrator, mid=workers
+  //   - debate-judge: 3 fixed roles — pro / con / judge
+  //   - map-reduce: agent-1=reducer, mid=mappers
+  //   - council: all drafters (round 1 peer-hidden, round 2+ revisers)
+  //   - stigmergy: all explorers (self-organizing, no lead)
+  //   - round-robin: all peers (no specialization)
+  // Default when cfg is unknown: planner + worker shape (blackboard-ish).
   const cfg = useSwarm((s) => s.runConfig);
   const agentRole = (idx: number): string => {
-    if (cfg?.preset === "role-diff" && cfg.roles && cfg.roles.length > 0) {
+    if (!cfg) return idx === 1 ? "planner" : "worker";
+    // Role-diff overlays catalog names with modulo wrap, matching the
+    // server's roleForAgent resolution.
+    if (cfg.preset === "role-diff" && cfg.roles && cfg.roles.length > 0) {
       return cfg.roles[(idx - 1) % cfg.roles.length];
     }
-    if (idx === 1) return "planner";
-    if (cfg?.dedicatedAuditor && idx > cfg.agentCount) return "auditor";
-    return "worker";
+    switch (cfg.preset) {
+      case "blackboard":
+        if (idx === 1) return "planner";
+        if (cfg.dedicatedAuditor && idx > cfg.agentCount) return "auditor";
+        return "worker";
+      case "orchestrator-worker":
+        return idx === 1 ? "orchestrator" : "worker";
+      case "map-reduce":
+        return idx === 1 ? "reducer" : "mapper";
+      case "debate-judge":
+        if (idx === 1) return "pro";
+        if (idx === 2) return "con";
+        if (idx === 3) return "judge";
+        return "peer";
+      case "council":
+        return "drafter";
+      case "stigmergy":
+        return "explorer";
+      case "round-robin":
+        return "peer";
+      default:
+        // Unknown preset — fall back to the blackboard-ish default.
+        return idx === 1 ? "planner" : "worker";
+    }
   };
   const agentModel = (idx: number): string | undefined => {
     if (!cfg) return undefined;

@@ -149,27 +149,9 @@ export function AgentPanel({
           <span
             className={
               "text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 " +
-              (role === "planner"
-                ? "border-amber-500/50 text-amber-300"
-                : role === "auditor"
-                  ? "border-sky-500/50 text-sky-300"
-                  : role === "worker"
-                    ? "border-ink-600 text-ink-400"
-                    // Task #42: role-diff catalog names (Architect,
-                    // Tester, etc.) get a violet badge distinct from
-                    // the three fixed roles so users see at a glance
-                    // that this card is role-diff-shaped.
-                    : "border-violet-500/50 text-violet-300")
+              roleBadgeClass(role)
             }
-            title={
-              role === "planner"
-                ? "Planner / replanner / critic (runs audit too when no dedicated auditor)"
-                : role === "auditor"
-                  ? "Dedicated auditor (Unit 58) — judges contract criteria only, frees the planner to focus on todo authorship"
-                  : role === "worker"
-                    ? "Worker (claims + commits todos)"
-                    : `Role-diff catalog: ${role}. Guidance prepended to the agent's round-robin prompt so identical model weights produce distinct priors.`
-            }
+            title={roleTooltip(role)}
           >
             {role}
           </span>
@@ -219,4 +201,73 @@ export function AgentPanel({
       {agent.error ? <div className="mt-2 text-xs text-red-300">{agent.error}</div> : null}
     </div>
   );
+}
+
+// Role-badge style + tooltip per preset-specific role. Fixed roles
+// get hard-coded colors; any other string (role-diff catalog names
+// like "Architect") falls through to violet.
+//
+// Color palette rationale:
+//   amber  — leads / synthesizers (planner, orchestrator, reducer)
+//   sky    — verifiers (auditor, judge)
+//   grey   — workers / executors
+//   teal   — parallel scouts (mapper, explorer)
+//   rose   — adversarial / independent (drafter, con)
+//   emerald — positional (pro)
+//   violet — role-diff catalog custom
+function roleBadgeClass(role: string): string {
+  switch (role) {
+    case "planner":
+    case "orchestrator":
+    case "reducer":
+      return "border-amber-500/50 text-amber-300";
+    case "auditor":
+    case "judge":
+      return "border-sky-500/50 text-sky-300";
+    case "worker":
+    case "peer":
+      return "border-ink-600 text-ink-400";
+    case "mapper":
+    case "explorer":
+      return "border-teal-500/50 text-teal-300";
+    case "drafter":
+    case "con":
+      return "border-rose-500/50 text-rose-300";
+    case "pro":
+      return "border-emerald-500/50 text-emerald-300";
+    default:
+      // Role-diff catalog (Architect / Tester / …) or unknown string.
+      return "border-violet-500/50 text-violet-300";
+  }
+}
+
+function roleTooltip(role: string): string {
+  switch (role) {
+    case "planner":
+      return "Planner / replanner / critic (runs audit too when no dedicated auditor)";
+    case "auditor":
+      return "Dedicated auditor (Unit 58) — judges contract criteria only, frees the planner to focus on todo authorship";
+    case "orchestrator":
+      return "Orchestrator — plans subtasks as JSON, assigns to workers, synthesizes their outputs";
+    case "reducer":
+      return "Reducer — receives mapper findings, synthesizes the final report";
+    case "mapper":
+      return "Mapper — inspects a round-robin slice of top-level repo entries in isolation";
+    case "drafter":
+      return "Drafter — round 1 draft (peers hidden); round 2+ revises after seeing other drafts";
+    case "explorer":
+      return "Explorer — picks a file via the shared pheromone table (untouched attracts, covered repels)";
+    case "pro":
+      return "PRO — argues in favor of the proposition each round";
+    case "con":
+      return "CON — argues against the proposition each round";
+    case "judge":
+      return "JUDGE — scores PRO and CON on the final round only";
+    case "worker":
+      return "Worker (claims + commits todos)";
+    case "peer":
+      return "Peer — no specialization; takes turns reading the full transcript";
+    default:
+      return `Role-diff catalog: ${role}. Guidance prepended to the agent's round-robin prompt so identical model weights produce distinct priors.`;
+  }
 }
