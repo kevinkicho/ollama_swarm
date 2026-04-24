@@ -91,6 +91,9 @@ const StartBody = z.object({
   // unchanged). Blackboard-only.
   dedicatedAuditor: z.boolean().optional(),
   auditorModel: z.string().trim().min(1).max(200).optional(),
+  // Unit 59 (59a): per-worker role bias (correctness / simplicity /
+  // consistency cycling). Blackboard-only.
+  specializedWorkers: z.boolean().optional(),
 });
 
 const SayBody = z.object({ text: z.string().min(1) });
@@ -157,6 +160,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         resumeContract: parsed.data.resumeContract,
         dedicatedAuditor: parsed.data.dedicatedAuditor,
         auditorModel: parsed.data.auditorModel,
+        specializedWorkers: parsed.data.specializedWorkers,
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {

@@ -35,6 +35,7 @@ import { buildPerRunSummaryFileName, findAndReadNewestPriorSummary } from "../ru
 import type { PriorRunSummary } from "./prompts/planner.js";
 import { summarizeAgentResponse } from "./transcriptSummary.js";
 import { readBlackboardStateSnapshot, type BlackboardStateSnapshot } from "./stateSnapshot.js";
+import { assignWorkerRole } from "./workerRoles.js";
 import {
   buildPlannerUserPrompt,
   buildRepairPrompt,
@@ -137,6 +138,12 @@ export class BlackboardRunner implements SwarmRunner {
   // instead of reusing the planner. Undefined otherwise (default
   // behavior — planner wears the auditor hat).
   private auditor?: Agent;
+  // Unit 59 (59a): per-worker role guidance (correctness / simplicity
+  // / consistency). Populated at spawn time when
+  // cfg.specializedWorkers === true; looked up by agent id when
+  // building each worker prompt. Empty map = default flat-pool
+  // behavior.
+  private workerRoles = new Map<string, string>();
   private replanPending = new Set<string>();
   private replanRunning = false;
   private replanTickTimer?: NodeJS.Timeout;
@@ -386,7 +393,21 @@ export class BlackboardRunner implements SwarmRunner {
       );
       const spawned = await Promise.all(workerSpawns);
       workers.push(...spawned);
-      for (const w of workers) this.appendSystem(`Worker agent ${w.id} ready on port ${w.port}`);
+      // Unit 59 (59a): assign a static role bias to each worker when
+      // specializedWorkers is on. workerOrdinal is 1-based (worker-2 is
+      // ordinal 1). Roles cycle through workerRoles.ts catalog.
+      this.workerRoles.clear();
+      if (cfg.specializedWorkers) {
+        spawned.forEach((w, i) => {
+          const role = assignWorkerRole(i + 1);
+          this.workerRoles.set(w.id, role.guidance);
+          this.appendSystem(
+            `Worker agent ${w.id} ready on port ${w.port} (role: ${role.name})`,
+          );
+        });
+      } else {
+        for (const w of workers) this.appendSystem(`Worker agent ${w.id} ready on port ${w.port}`);
+      }
     } else {
       this.appendSystem("No workers spawned (agentCount=1). Planner will post TODOs, nothing will drain them.");
     }
@@ -1961,6 +1982,10 @@ export class BlackboardRunner implements SwarmRunner {
       // Unit 44b: pass anchors through. buildWorkerUserPrompt switches
       // to the anchored window view when this is non-empty.
       expectedAnchors: todo.expectedAnchors,
+      // Unit 59 (59a): inject the assigned role bias for this worker.
+      // Empty string when specializedWorkers is off; buildWorkerUserPrompt
+      // skips the preamble when absent → byte-identical pre-Unit-59 prompt.
+      roleGuidance: this.workerRoles.get(agent.id),
     };
 
     let response: string;

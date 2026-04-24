@@ -173,14 +173,27 @@ export interface WorkerSeed {
   // build time. When absent or empty, falls back to the head + tail
   // window from windowFileForWorker.
   expectedAnchors?: string[];
+  // Unit 59 (59a): worker role bias. When set, the runner prepends
+  // this guidance to WORKER_SYSTEM_PROMPT before the rules so the
+  // worker's diff carries the role's bias (correctness / simplicity /
+  // consistency, etc. — see workerRoles.ts catalog). Absent on
+  // default-pool runs; the worker prompt is byte-identical to the
+  // pre-Unit-59 shape when omitted.
+  roleGuidance?: string;
 }
 
 export function buildWorkerUserPrompt(seed: WorkerSeed): string {
   const anchors = seed.expectedAnchors ?? [];
-  const parts: string[] = [
-    `TODO: ${seed.description}`,
-    `Expected files: ${seed.expectedFiles.join(", ")}`,
-  ];
+  const parts: string[] = [];
+  // Unit 59 (59a): role guidance leads the prompt so the worker reads
+  // its bias before the todo. Only present when specializedWorkers
+  // mode is on; absent renders the pre-Unit-59 shape verbatim.
+  if (seed.roleGuidance && seed.roleGuidance.trim().length > 0) {
+    parts.push(seed.roleGuidance.trim());
+    parts.push("");
+  }
+  parts.push(`TODO: ${seed.description}`);
+  parts.push(`Expected files: ${seed.expectedFiles.join(", ")}`);
   if (anchors.length > 0) {
     parts.push(`Expected anchors (Unit 44b): ${anchors.map((a) => JSON.stringify(a)).join(", ")}`);
   }

@@ -132,6 +132,17 @@ export interface RunConfig {
    * design taste). Ignored when dedicatedAuditor is false.
    */
   auditorModel?: string;
+  /**
+   * Unit 59 (59a — static per-worker role): when true, each worker
+   * gets a deliberately-different role bias (correctness /
+   * simplicity / consistency, cycling through workerRoles.ts) that
+   * prepends its system prompt. Same model + same todo, but the
+   * commits across workers carry distinct biases — research-backed
+   * (MetaGPT, ChatDev, AutoGen, AgentVerse) for outperforming a
+   * flat worker pool. Default off; opt in for runs where you want
+   * the diversity. Blackboard-only.
+   */
+  specializedWorkers?: boolean;
 }
 
 export interface RunnerOpts {

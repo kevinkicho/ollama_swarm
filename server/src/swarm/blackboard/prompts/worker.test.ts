@@ -292,3 +292,42 @@ describe("WORKER_SYSTEM_PROMPT — teaches the windowed view", () => {
     assert.match(WORKER_SYSTEM_PROMPT, /append|replace/);
   });
 });
+
+// Unit 59 (59a): worker prompt accepts a roleGuidance preamble that
+// the runner injects when specializedWorkers is on.
+describe("buildWorkerUserPrompt — Unit 59 role guidance preamble", () => {
+  it("prepends roleGuidance before the TODO line when present", () => {
+    const prompt = buildWorkerUserPrompt({
+      todoId: "t1",
+      description: "do the thing",
+      expectedFiles: ["a.md"],
+      fileContents: { "a.md": "hi" },
+      roleGuidance: "ROLE BIAS — CORRECTNESS. Weight edge cases heavily.",
+    });
+    const guidanceIdx = prompt.indexOf("ROLE BIAS");
+    const todoIdx = prompt.indexOf("TODO:");
+    assert.ok(guidanceIdx >= 0, "guidance preamble should be present");
+    assert.ok(todoIdx > guidanceIdx, "guidance must come BEFORE the TODO line");
+  });
+
+  it("omits the preamble when roleGuidance is absent (byte-identical to pre-Unit-59 shape)", () => {
+    const without = buildWorkerUserPrompt({
+      todoId: "t1",
+      description: "do the thing",
+      expectedFiles: ["a.md"],
+      fileContents: { "a.md": "hi" },
+    });
+    assert.ok(!without.includes("ROLE BIAS"), "no role preamble on default-pool runs");
+  });
+
+  it("omits the preamble when roleGuidance is whitespace-only", () => {
+    const prompt = buildWorkerUserPrompt({
+      todoId: "t1",
+      description: "do the thing",
+      expectedFiles: ["a.md"],
+      fileContents: { "a.md": "hi" },
+      roleGuidance: "   \n  ",
+    });
+    assert.ok(!prompt.includes("ROLE BIAS"));
+  });
+});
