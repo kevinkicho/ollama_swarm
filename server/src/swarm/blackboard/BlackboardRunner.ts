@@ -31,7 +31,8 @@ import { applyHunks } from "./applyHunks.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
 import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
-import { buildPerRunSummaryFileName } from "../runSummary.js";
+import { buildPerRunSummaryFileName, findAndReadNewestPriorSummary } from "../runSummary.js";
+import type { PriorRunSummary } from "./prompts/planner.js";
 import {
   buildPlannerUserPrompt,
   buildRepairPrompt,
@@ -495,6 +496,12 @@ export class BlackboardRunner implements SwarmRunner {
     // planner + first-pass-contract something concrete to reference in
     // expectedFiles instead of guessing from top-level directories.
     const repoFiles = await this.opts.repos.listRepoFiles(clonePath, { maxFiles: 150 });
+    // Unit 50: when this run is a resume on an existing clone, look for
+    // the newest prior summary and distill it for the planner. The
+    // first-pass-contract prompt's Rule 12 instructs the planner to
+    // build on it rather than re-attempt resolved criteria. Fresh
+    // clones skip this (no prior summary on disk, returns null).
+    const priorRunSummary = await this.loadPriorRunSummary(clonePath);
     return {
       repoUrl: cfg.repoUrl,
       clonePath,
@@ -505,6 +512,30 @@ export class BlackboardRunner implements SwarmRunner {
       // contract prompt. Empty/whitespace was already stripped at the
       // route boundary; this is just pass-through.
       userDirective: cfg.userDirective,
+      priorRunSummary,
+    };
+  }
+
+  // Unit 50: read + distill the most recent prior summary in this
+  // clone path. Returns undefined when no prior summary exists OR when
+  // it lacks a usable contract (e.g. a discussion-preset run has no
+  // contract at all — those runs can't inform a blackboard resume).
+  private async loadPriorRunSummary(clonePath: string): Promise<PriorRunSummary | undefined> {
+    const summary = await findAndReadNewestPriorSummary(clonePath);
+    if (!summary || !summary.contract || summary.contract.criteria.length === 0) {
+      return undefined;
+    }
+    const startedAtIso = new Date(summary.startedAt).toISOString();
+    return {
+      startedAtIso,
+      missionStatement: summary.contract.missionStatement,
+      criteria: summary.contract.criteria.map((c) => ({
+        id: c.id,
+        description: c.description,
+        status: c.status,
+        rationale: c.rationale,
+        expectedFiles: [...c.expectedFiles],
+      })),
     };
   }
 

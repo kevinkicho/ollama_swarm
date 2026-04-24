@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { PlannerSeed } from "./planner.js";
+import type { PlannerSeed, PriorRunSummary } from "./planner.js";
+import { PRIOR_RATIONALE_MAX_CHARS } from "./planner.js";
 
 // ---------------------------------------------------------------------------
 // Phase 11b: first-pass exit contract.
@@ -174,6 +175,7 @@ export const FIRST_PASS_CONTRACT_SYSTEM_PROMPT = [
   "9. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, `docs/`, or any path ending in `/` or `\\`. If you don't know which specific file the criterion will land in, prefer an empty `expectedFiles: []` over a guessed directory — the planner will bind real paths after its own read pass. Directory entries are rejected by the parser and the criterion is dropped.",
   "10. When `expectedFiles` is non-empty, ground every entry in the REPO FILE LIST provided in the user message. Each entry MUST either (a) appear verbatim in the list (for edits to existing files), or (b) be a new file whose parent directory appears in the list (for criteria that demand a new file at a known location). When unsure, prefer `expectedFiles: []` — the auditor has a linked-commit fallback that will bind real files from later todo activity.",
   "11. USER DIRECTIVE (Unit 25): if the user message contains a `USER DIRECTIVE` block, that directive is AUTHORITATIVE. Your `missionStatement` MUST be shaped to deliver what the directive asks for; your `criteria` list MUST cover every distinct outcome the directive names (up to the 20-criterion cap). Do NOT substitute your own judgment about what the repo \"needs\" for what the directive explicitly requests. Generate as many criteria as needed to comprehensively address the directive — prefer more (up to 20) over fewer when the directive is broad. When the directive is absent, fall back to your own read of repo gaps as usual.",
+  "12. PRIOR RUN (Unit 50): if the user message contains a `PRIOR RUN` block, this is a RESUME on the same clone — the prior run's contract is shown with each criterion's final status (met / unmet / wont-do) and rationale. Your job: produce NEW criteria that BUILD ON the prior work, NOT re-attempt it. For each prior criterion: if `met` → DON'T add a redundant criterion targeting the same outcome (it's already done; verify by reading the file if uncertain). If `wont-do` → DON'T re-attempt unless the prior rationale was an environment limitation (e.g. \"can't run shell\") that no longer applies. If `unmet` → either continue / extend / refine it, OR replace it with a tighter version if the prior phrasing wasn't specific enough. Prefer fewer, sharper criteria that close the remaining gaps over re-listing everything. The user is iterating — your job is to MAKE PROGRESS from where the prior run left off.",
   "",
   "Criteria should be WHAT SUCCESS LOOKS LIKE when this run ends, not a to-do list.",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",
@@ -204,8 +206,15 @@ export function buildFirstPassContractUserPrompt(seed: PlannerSeed): string {
         "",
       ]
     : [];
+  // Unit 50: when this run is a resume on an existing clone AND a prior
+  // summary was found on disk, render its contract distilled. Sits
+  // BETWEEN directive and repo state so the planner reads "what did we
+  // try last time" before "what's in the repo now" — the prior block
+  // is shorter and primes the model on continuation framing.
+  const priorBlock = buildPriorRunBlock(seed.priorRunSummary);
   return [
     ...directiveBlock,
+    ...priorBlock,
     `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
     `Top-level entries: ${tree}`,
@@ -220,9 +229,37 @@ export function buildFirstPassContractUserPrompt(seed: PlannerSeed): string {
     "",
     directive
       ? "Output the exit contract JSON object now. Your missionStatement and criteria MUST address the USER DIRECTIVE above (Rule 11). Use the REPO FILE LIST to ground expectedFiles."
-      : "Using ONLY the information above, output the exit contract JSON object now.",
+      : seed.priorRunSummary
+        ? "Output the exit contract JSON object now. This is a RESUME — your criteria MUST build on the PRIOR RUN above (Rule 12), not re-attempt resolved criteria. Use the REPO FILE LIST to ground expectedFiles."
+        : "Using ONLY the information above, output the exit contract JSON object now.",
     'Remember: single JSON object, no prose, shape {"missionStatement": "...", "criteria": [...]}. When expectedFiles is non-empty, prefer paths that appear in the REPO FILE LIST; if a criterion implies a new file, its parent directory should appear there.',
   ].join("\n");
+}
+
+// Unit 50: render a "PRIOR RUN" block from the distilled summary.
+// Empty array when no prior summary — the user prompt then has the
+// pre-Unit-50 shape.
+function buildPriorRunBlock(prior: PriorRunSummary | undefined): string[] {
+  if (!prior) return [];
+  const truncate = (s: string | undefined): string => {
+    if (!s) return "";
+    const t = s.trim();
+    return t.length <= PRIOR_RATIONALE_MAX_CHARS ? t : t.slice(0, PRIOR_RATIONALE_MAX_CHARS - 3) + "...";
+  };
+  const criteriaLines = prior.criteria.map((c) => {
+    const r = truncate(c.rationale);
+    const filesPart =
+      c.expectedFiles.length > 0 ? ` (files: ${c.expectedFiles.join(", ")})` : "";
+    return `  - [${c.id}] (${c.status}) ${c.description}${r ? ` — ${r}` : ""}${filesPart}`;
+  });
+  return [
+    `=== PRIOR RUN (Unit 50 — RESUME on this same clone, see Rule 12) ===`,
+    `Prior mission (${prior.startedAtIso}): ${prior.missionStatement}`,
+    `Prior criteria (${prior.criteria.length}):`,
+    ...criteriaLines,
+    `=== end PRIOR RUN ===`,
+    "",
+  ];
 }
 
 // ---------------------------------------------------------------------------

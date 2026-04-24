@@ -233,6 +233,107 @@ describe("FIRST_PASS_CONTRACT prompts", () => {
     // Cap bumped 12 -> 20 to accommodate directive-driven runs.
     assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /Maximum 20 criteria/);
   });
+
+  // Unit 50: prior-run block for the resume path.
+  it("system prompt has a Rule 12 teaching the planner how to handle PRIOR RUN", () => {
+    assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /PRIOR RUN.*Unit 50/);
+    assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /re-attempt/i);
+  });
+
+  it("user prompt OMITS the PRIOR RUN block when priorRunSummary is absent", () => {
+    const p = buildFirstPassContractUserPrompt(seed({ priorRunSummary: undefined }));
+    assert.ok(!p.includes("PRIOR RUN"), "no prior block on fresh clones");
+  });
+
+  it("user prompt INCLUDES the PRIOR RUN block with per-criterion status", () => {
+    const p = buildFirstPassContractUserPrompt(
+      seed({
+        priorRunSummary: {
+          startedAtIso: "2026-04-23T18:22:05.380Z",
+          missionStatement: "Fill the balance sheet gaps.",
+          criteria: [
+            {
+              id: "c1",
+              description: "Populate KLA financial fields",
+              status: "met",
+              rationale: "All null fields filled at line 608.",
+              expectedFiles: ["assets/js/companies-data.js"],
+            },
+            {
+              id: "c2",
+              description: "Extend TSMC timeseries to 5 years",
+              status: "unmet",
+              rationale: "Only 2 years present.",
+              expectedFiles: ["assets/js/companies-timeseries.js"],
+            },
+            {
+              id: "c3",
+              description: "Verify chart console errors",
+              status: "wont-do",
+              rationale: "Requires browser devtools — workers can't.",
+              expectedFiles: [],
+            },
+          ],
+        },
+      }),
+    );
+    assert.match(p, /=== PRIOR RUN/);
+    assert.match(p, /2026-04-23T18:22:05\.380Z/);
+    assert.match(p, /Fill the balance sheet gaps/);
+    // Each criterion line encodes id + status + description.
+    assert.match(p, /\[c1\] \(met\) Populate KLA/);
+    assert.match(p, /\[c2\] \(unmet\) Extend TSMC/);
+    assert.match(p, /\[c3\] \(wont-do\) Verify chart/);
+    // expectedFiles rendered for the criteria that have them.
+    assert.match(p, /files: assets\/js\/companies-data\.js/);
+    // Closing line changes to point at Rule 12.
+    assert.match(p, /build on the PRIOR RUN above \(Rule 12\)/);
+  });
+
+  it("user prompt truncates long prior rationales with an ellipsis", () => {
+    const longRationale = "x".repeat(2_000);
+    const p = buildFirstPassContractUserPrompt(
+      seed({
+        priorRunSummary: {
+          startedAtIso: "2026-04-23T00:00:00.000Z",
+          missionStatement: "m",
+          criteria: [
+            {
+              id: "c1",
+              description: "d",
+              status: "met",
+              rationale: longRationale,
+              expectedFiles: [],
+            },
+          ],
+        },
+      }),
+    );
+    // Raw 2000-char rationale must not appear verbatim.
+    assert.ok(!p.includes(longRationale));
+    assert.match(p, /\.\.\./);
+  });
+
+  it("PRIOR RUN block appears AFTER USER DIRECTIVE but BEFORE repo state", () => {
+    const p = buildFirstPassContractUserPrompt(
+      seed({
+        userDirective: "ship docs",
+        priorRunSummary: {
+          startedAtIso: "2026-04-23T00:00:00.000Z",
+          missionStatement: "m",
+          criteria: [{ id: "c1", description: "d", status: "unmet", expectedFiles: [] }],
+        },
+      }),
+    );
+    const directiveIdx = p.indexOf("=== USER DIRECTIVE");
+    const priorIdx = p.indexOf("=== PRIOR RUN");
+    const repoIdx = p.indexOf("Repository:");
+    assert.ok(directiveIdx >= 0 && priorIdx >= 0 && repoIdx >= 0);
+    assert.ok(
+      directiveIdx < priorIdx && priorIdx < repoIdx,
+      "directive → prior run → repo state ordering",
+    );
+  });
 });
 
 // Unit 30: council-style initial contract merge prompt.

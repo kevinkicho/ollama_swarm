@@ -8,6 +8,7 @@ import {
   buildDiscussionSummary,
   writeRunSummary,
   buildPerRunSummaryFileName,
+  findAndReadNewestPriorSummary,
   type DiscussionSummaryInput,
 } from "./runSummary.js";
 
@@ -177,5 +178,82 @@ describe("buildPerRunSummaryFileName", () => {
   it("only contains characters legal on every common filesystem (no : or *)", () => {
     const name = buildPerRunSummaryFileName(Date.now());
     assert.equal(name.match(/[:*?"<>|/\\]/), null);
+  });
+});
+
+// Unit 50: resume detection — finds the newest prior summary in a
+// clone so the planner's first-pass-contract seed can include it.
+describe("findAndReadNewestPriorSummary", () => {
+  it("returns null when no summary*.json exists", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "resume-nopr-"));
+    try {
+      assert.equal(await findAndReadNewestPriorSummary(tmp), null);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("reads summary.json when it's the only one present", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "resume-latest-"));
+    try {
+      const s = buildDiscussionSummary(base({ agentCount: 2 }));
+      await writeRunSummary(tmp, s);
+      // Delete the per-run file so only summary.json remains — simulates
+      // a pre-Unit-49 clone.
+      const perRunName = buildPerRunSummaryFileName(s.startedAt);
+      await fs.unlink(path.join(tmp, perRunName));
+      const got = await findAndReadNewestPriorSummary(tmp);
+      assert.ok(got);
+      assert.equal(got!.agentCount, 2);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("picks the newest per-run file when multiple exist", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "resume-newest-"));
+    try {
+      const older = buildDiscussionSummary(base({
+        agentCount: 1,
+        startedAt: 1_700_000_000_000,
+        endedAt: 1_700_000_001_000,
+      }));
+      const newer = buildDiscussionSummary(base({
+        agentCount: 5,
+        startedAt: 1_700_000_500_000,
+        endedAt: 1_700_000_501_000,
+      }));
+      await writeRunSummary(tmp, older);
+      await writeRunSummary(tmp, newer);
+      const got = await findAndReadNewestPriorSummary(tmp);
+      assert.ok(got);
+      assert.equal(got!.agentCount, 5, "should pick the NEWER summary");
+      assert.equal(got!.startedAt, newer.startedAt);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("skips unparseable JSON and falls through to the next candidate", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "resume-skipbad-"));
+    try {
+      // Write garbage as the newest-named per-run file.
+      await fs.writeFile(path.join(tmp, "summary-zzzz.json"), "not valid json {", "utf8");
+      // And a valid older summary.
+      const s = buildDiscussionSummary(base({ agentCount: 3 }));
+      await writeRunSummary(tmp, s);
+      const got = await findAndReadNewestPriorSummary(tmp);
+      // The garbage file should have been skipped — we recover from
+      // the valid summary.json (or the valid per-run file).
+      assert.ok(got);
+      assert.equal(got!.agentCount, 3);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null when the clone path doesn't exist", async () => {
+    const nonexistent = path.join(os.tmpdir(), "definitely-not-a-real-path-xyz-unit-50");
+    assert.equal(await findAndReadNewestPriorSummary(nonexistent), null);
   });
 });

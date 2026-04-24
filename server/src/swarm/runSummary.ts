@@ -129,6 +129,73 @@ export function buildPerRunSummaryFileName(startedAt: number): string {
   return `summary-${iso}.json`;
 }
 
+/** Unit 50: find and read the newest prior summary in a clone, for the
+ *  build-on-existing-clone resume path. Looks for files matching the
+ *  Unit 49 per-run pattern (`summary-*.json`); the lex-sortable ISO
+ *  filename means the alphabetically-last entry IS the chronologically-
+ *  newest. Falls back to bare `summary.json` (latest pointer) if no
+ *  per-run file exists — covers clones whose first run wrote summaries
+ *  before Unit 49 shipped.
+ *
+ *  Returns null when no summary is on disk OR when the parsed JSON
+ *  doesn't match the RunSummary shape we expect (defensive — a
+ *  hand-edited summary.json shouldn't crash the planner). Best-effort:
+ *  any I/O failure yields null, never throws.
+ */
+export async function findAndReadNewestPriorSummary(
+  clonePath: string,
+): Promise<RunSummary | null> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(clonePath);
+  } catch {
+    return null;
+  }
+  // Per-Unit-49 pattern matches AND the latest-pointer name. Lex sort
+  // descending so summary-2026-04-23T18.json beats summary-2026-04-22.
+  const perRunMatches = entries
+    .filter((e) => /^summary-.+\.json$/.test(e))
+    .sort()
+    .reverse();
+  // Try per-run files newest-first; if all are unparseable, fall back
+  // to the latest pointer.
+  const candidates = [...perRunMatches, "summary.json"];
+  for (const name of candidates) {
+    const abs = path.join(clonePath, name);
+    let raw: string;
+    try {
+      raw = await fs.readFile(abs, "utf8");
+    } catch {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (looksLikeRunSummary(parsed)) {
+      return parsed as RunSummary;
+    }
+  }
+  return null;
+}
+
+// Conservative shape check: just enough to know we're not handing the
+// planner garbage. Doesn't validate every optional field — those are
+// blackboard-only and the regular RunSummary type already permits
+// them missing for discussion presets.
+function looksLikeRunSummary(x: unknown): boolean {
+  if (typeof x !== "object" || x === null) return false;
+  const obj = x as Record<string, unknown>;
+  return (
+    typeof obj.repoUrl === "string" &&
+    typeof obj.startedAt === "number" &&
+    typeof obj.endedAt === "number" &&
+    typeof obj.preset === "string"
+  );
+}
+
 /** Write a run summary to TWO files inside `<clonePath>`:
  *
  *   1. `summary-<isoStartedAt>.json` — per-run, never overwrites a

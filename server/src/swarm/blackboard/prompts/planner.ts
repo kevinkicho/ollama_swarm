@@ -164,7 +164,36 @@ export interface PlannerSeed {
   // FIRST_PASS_CONTRACT_SYSTEM_PROMPT rule 11). When absent or empty, the
   // planner behaves exactly as before Unit 25 (backward-compat).
   userDirective?: string;
+  // Unit 50: distilled prior run on this same clone, when this run is a
+  // resume (build-on-existing-clone work pattern, Units 47-51). The
+  // first-pass-contract prompt's Rule 12 instructs the planner to AVOID
+  // re-attempting met or wont-do criteria from the prior run, and to
+  // build NEW criteria that extend or replace the unmet ones. Omitted
+  // for fresh clones AND for resume runs that have no prior summary on
+  // disk (e.g. a clone created outside this app).
+  priorRunSummary?: PriorRunSummary;
 }
+
+// Unit 50: slim, capped distillation of the previous run's summary.json
+// for the planner's seed. Only carries the contract — not commits/agent
+// stats — because that's what the planner needs to avoid re-attempting
+// resolved work. Rationales are truncated to bound the prompt size
+// (mirrors AUDITOR_RATIONALE_MAX_CHARS from Unit 46b).
+export interface PriorRunSummary {
+  startedAtIso: string;
+  missionStatement: string;
+  criteria: Array<{
+    id: string;
+    description: string;
+    status: "met" | "unmet" | "wont-do";
+    rationale?: string;
+    expectedFiles: string[];
+  }>;
+}
+
+// Unit 50: per-rationale cap. Same magnitude as Unit 46b's auditor cap.
+// 20 criteria × 400 chars = ~8 KB max for the prior block — bounded.
+export const PRIOR_RATIONALE_MAX_CHARS = 400;
 
 export function buildPlannerUserPrompt(seed: PlannerSeed): string {
   const tree = seed.topLevel.length > 0 ? seed.topLevel.join(", ") : "(empty)";
