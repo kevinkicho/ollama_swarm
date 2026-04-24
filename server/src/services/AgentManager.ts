@@ -237,7 +237,7 @@ export class AgentManager {
     } catch (err) {
       treeKill(child);
       this.ports.release(port);
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = stringifyError(err);
       this.setAgentState({ ...stateBase, status: "failed", error: msg });
       throw err;
     }
@@ -289,7 +289,7 @@ export class AgentManager {
       });
       this.logDiag({ type: "_warmup_ok", agentId: agent.id, elapsedMs: Date.now() - t0 });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = stringifyError(err);
       this.logDiag({
         type: "_warmup_failed",
         agentId: agent.id,
@@ -596,4 +596,25 @@ export class AgentManager {
     const any = res as { data?: { id?: string; info?: { id?: string } }; id?: string };
     return any?.data?.id ?? any?.data?.info?.id ?? any?.id;
   }
+}
+
+// Robust error-to-string that handles non-Error throwables (plain
+// objects like { data: {...} } that the OpenCode SDK can throw when
+// throwOnError=true). Falls back through: Error.message → .name +
+// .message → JSON.stringify → String. Without this, concurrent-spawn
+// races surface in the UI as "[object Object]" — useless for
+// debugging.
+function stringifyError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === "object") {
+    const o = err as { name?: string; message?: string; code?: string };
+    const head = o.name ? `${o.name}: ` : "";
+    if (o.message) return head + o.message;
+    try {
+      return head + JSON.stringify(err).slice(0, 500);
+    } catch {
+      return head + String(err);
+    }
+  }
+  return String(err);
 }
