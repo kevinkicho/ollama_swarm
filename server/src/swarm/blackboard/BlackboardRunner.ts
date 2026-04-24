@@ -33,6 +33,7 @@ import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
 import { buildPerRunSummaryFileName, findAndReadNewestPriorSummary } from "../runSummary.js";
 import type { PriorRunSummary } from "./prompts/planner.js";
+import { summarizeAgentResponse } from "./transcriptSummary.js";
 import {
   buildPlannerUserPrompt,
   buildRepairPrompt,
@@ -2798,6 +2799,10 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   private appendAgent(agent: Agent, text: string): void {
+    // Unit 54: attach a structured summary when the response parses
+    // as a known JSON envelope. UI uses this to collapse worker
+    // hunks/skips into a one-line summary by default.
+    const summary = summarizeAgentResponse(text);
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "agent",
@@ -2805,6 +2810,7 @@ export class BlackboardRunner implements SwarmRunner {
       agentIndex: agent.index,
       text: text || "(empty response)",
       ts: Date.now(),
+      summary,
     };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });

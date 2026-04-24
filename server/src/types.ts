@@ -48,7 +48,36 @@ export interface TranscriptEntry {
   agentIndex?: number;
   text: string;
   ts: number;
+  // Unit 54: optional structured summary for agent responses that
+  // parse as a known JSON envelope (worker hunks/skip, planner todo
+  // list, auditor verdict, etc.). The UI uses this to render a
+  // one-line summary by default and only show the raw text on
+  // click-to-expand. Absent on system/user entries and on agent
+  // entries that don't parse as a recognized envelope.
+  summary?: TranscriptEntrySummary;
 }
+
+// Unit 54: structured summary kinds. Each carries the bare-minimum
+// info to render a glance line. Discriminated by `kind` so the UI
+// switch matches the parser exhaustively.
+export type TranscriptEntrySummary =
+  | {
+      kind: "worker_hunks";
+      hunkCount: number;
+      // Per-op breakdown so the UI can show "2 replace, 1 append".
+      ops: { replace: number; create: number; append: number };
+      // First file touched. Workers are bound to ≤2 expectedFiles
+      // and almost always touch one file, so showing the first is
+      // the useful cue. Absent on empty-hunks (which would be a skip).
+      firstFile?: string;
+      // True when the worker spans multiple distinct files.
+      multipleFiles: boolean;
+      totalChars: number;
+    }
+  | {
+      kind: "worker_skip";
+      reason: string;
+    };
 
 export interface BoardCountsDTO {
   open: number;

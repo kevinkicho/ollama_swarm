@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSwarm } from "../state/store";
-import type { TranscriptEntry } from "../types";
+import type { TranscriptEntry, TranscriptEntrySummary } from "../types";
 import { summarizeAgentJson } from "./transcriptSummarize";
 
 const AGENT_HUE = [140, 200, 260, 30, 320, 70, 180, 240];
@@ -71,19 +71,62 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
   const style = { borderColor: `hsl(${hue} 30% 30%)`, background: `hsl(${hue} 30% 12%)` };
   const className = "rounded-md p-3 border text-sm";
 
-  const summary = useMemo(() => summarizeAgentJson(entry.text), [entry.text]);
-  if (summary) {
+  // Unit 54: prefer the server-computed structured summary when
+  // present (workers' parsed envelope). The server has the
+  // authoritative parser AND avoids the streaming-text edge cases
+  // the client summarizer can mis-extract from. Fall through to the
+  // client-side summarizer for envelope kinds the server doesn't
+  // emit yet (planner / replanner / auditor / contract). Final
+  // fallback is the raw text in a collapsible.
+  if (entry.summary) {
+    const oneLine = formatServerSummary(entry.summary);
     return (
       <AgentJsonBubble
         className={className}
         style={style}
         header={header}
-        summary={summary.summary}
-        json={summary.json}
+        summary={oneLine}
+        json={entry.text}
+      />
+    );
+  }
+  const clientSummary = useMemo(() => summarizeAgentJson(entry.text), [entry.text]);
+  if (clientSummary) {
+    return (
+      <AgentJsonBubble
+        className={className}
+        style={style}
+        header={header}
+        summary={clientSummary.summary}
+        json={clientSummary.json}
       />
     );
   }
   return <CollapsibleBlock className={className} style={style} header={header} text={entry.text} />;
+}
+
+// Unit 54: render the discriminated server-side summary as a single
+// human line. Mirrors the prose used by summarizeAgentJson for the
+// equivalent worker shapes so users don't see two different formats
+// depending on which path computed the summary.
+function formatServerSummary(s: TranscriptEntrySummary): string {
+  if (s.kind === "worker_skip") {
+    return `Declined: ${s.reason}`;
+  }
+  // worker_hunks
+  const opParts: string[] = [];
+  if (s.ops.replace > 0) opParts.push(`${s.ops.replace} replace`);
+  if (s.ops.create > 0) opParts.push(`${s.ops.create} create`);
+  if (s.ops.append > 0) opParts.push(`${s.ops.append} append`);
+  const opSummary = opParts.length === 1 ? opParts[0] : opParts.join(", ");
+  const hunkLabel = s.hunkCount === 1 ? "1 hunk" : `${s.hunkCount} hunks`;
+  const where = s.multipleFiles
+    ? `across multiple files`
+    : s.firstFile
+      ? `in ${s.firstFile}`
+      : `(no file)`;
+  const charsSuffix = s.totalChars > 0 ? ` (${s.totalChars.toLocaleString()} chars)` : "";
+  return `Wrote ${hunkLabel} (${opSummary}) ${where}${charsSuffix}`;
 }
 
 function StreamingBubble({ agentIndex, text }: { agentIndex: number; text: string }) {

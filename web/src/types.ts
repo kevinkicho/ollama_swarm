@@ -34,7 +34,29 @@ export interface TranscriptEntry {
   agentIndex?: number;
   text: string;
   ts: number;
+  // Unit 54: server-computed structured summary of the agent's
+  // response when it parsed as a known envelope. Web prefers this
+  // over its own client-side summarizer because the server has the
+  // authoritative parser. Absent on system/user entries and on
+  // agent entries that didn't parse server-side.
+  summary?: TranscriptEntrySummary;
 }
+
+// Unit 54: mirror of the server-side discriminated union in
+// server/src/types.ts. Add new kinds in lockstep.
+export type TranscriptEntrySummary =
+  | {
+      kind: "worker_hunks";
+      hunkCount: number;
+      ops: { replace: number; create: number; append: number };
+      firstFile?: string;
+      multipleFiles: boolean;
+      totalChars: number;
+    }
+  | {
+      kind: "worker_skip";
+      reason: string;
+    };
 
 export type SwarmPhase =
   | "idle"
