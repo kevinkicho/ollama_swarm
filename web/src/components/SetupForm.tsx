@@ -32,7 +32,17 @@ interface SwarmPreset {
 //     correct trade-off for blackboard workers and stigmergy peers.
 //   VERIFIER — heaviest reasoning model, reserved for the auditor
 //     role where rubber-stamping is the dominant failure mode.
-const MODEL_REASONING = "glm-5.1:cloud";
+//
+// 2026-04-23: REASONING flipped from glm-5.1:cloud to
+// nemotron-3-super:cloud after the vocabmaster v7 4-agent run
+// showed nemotron mean=9.5s vs glm mean=57s on the auditor, and
+// the multi-agent-orchestrator preset tour showed glm producing
+// repeated empty responses on parallel-spawn fanout (Agent 3
+// pattern across role-diff + council). Nemotron now serves both
+// REASONING and VERIFIER duty; constants kept separate so a
+// future heavier verifier model (opus 4.7, kimi-2.6) can split
+// them again without touching every preset.
+const MODEL_REASONING = "nemotron-3-super:cloud";
 const MODEL_CODING = "gemma4:31b-cloud";
 const MODEL_VERIFIER = "nemotron-3-super:cloud";
 
