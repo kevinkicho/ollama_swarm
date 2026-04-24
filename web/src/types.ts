@@ -275,3 +275,23 @@ export interface RunConfigSnapshot {
   agentCount: number;
   rounds: number;
 }
+
+// Unit 52e: digest returned by GET /api/runs for the run-history
+// dropdown. Mirror of server-side RunSummaryDigest in
+// server/src/routes/swarm.ts. Optional fields are blackboard-only
+// (commits / totalTodos / hasContract) and absent on discussion-
+// preset summaries.
+export interface RunSummaryDigest {
+  name: string;
+  clonePath: string;
+  preset: string;
+  model: string;
+  startedAt: number;
+  endedAt: number;
+  wallClockMs: number;
+  stopReason?: string;
+  commits?: number;
+  totalTodos?: number;
+  hasContract: boolean;
+  isActive: boolean;
+}

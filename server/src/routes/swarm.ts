@@ -173,11 +173,13 @@ export function swarmRouter(orch: Orchestrator): Router {
     res.json({ ok: true });
   });
 
-  // Unit 52c: open the run's clone path in the OS file manager
+  // Unit 52c + 52e: open a run's clone path in the OS file manager
   // (Windows Explorer / macOS Finder / xdg-open on Linux). Locked
-  // down to the orchestrator's CURRENT clone path so the endpoint
-  // can't be coaxed into opening arbitrary filesystem locations
-  // from the LAN. Best-effort: a spawn failure surfaces as 500.
+  // down to the orchestrator's CURRENT clone path OR a sibling
+  // directory in the same parent (prior runs from the run-history
+  // dropdown — Unit 52e). The parent constraint is the
+  // path-traversal guard: the LAN can't coax this endpoint into
+  // opening arbitrary filesystem locations.
   r.post("/open", async (req: Request, res: Response) => {
     const parsed = OpenBody.safeParse(req.body);
     if (!parsed.success) {
@@ -186,10 +188,18 @@ export function swarmRouter(orch: Orchestrator): Router {
     }
     const requested = path.resolve(parsed.data.path);
     const status = orch.status();
-    const allowed = status.localPath ? path.resolve(status.localPath) : null;
-    if (!allowed || requested !== allowed) {
+    const activeClone = status.localPath ? path.resolve(status.localPath) : null;
+    if (!activeClone) {
+      res.status(403).json({ error: "open: no active run; nothing to compare against" });
+      return;
+    }
+    const activeParent = path.dirname(activeClone);
+    const requestedParent = path.dirname(requested);
+    const isActive = requested === activeClone;
+    const isSibling = requestedParent === activeParent && requested !== activeParent;
+    if (!isActive && !isSibling) {
       res.status(403).json({
-        error: "open: requested path doesn't match the active run's clonePath",
+        error: "open: requested path is not the active clone or a sibling of it",
       });
       return;
     }
@@ -214,7 +224,122 @@ export function swarmRouter(orch: Orchestrator): Router {
     }
   });
 
+  // Unit 52e: list prior runs discoverable in the active run's
+  // parent directory. Each entry carries the headline summary fields
+  // so the UI dropdown + modal can render without further fetches.
+  // Returns 200 with an empty list when no run is active or the
+  // parent dir is unreadable — never throws.
+  r.get("/runs", async (_req: Request, res: Response) => {
+    const status = orch.status();
+    if (!status.localPath) {
+      res.json({ runs: [] });
+      return;
+    }
+    const parent = path.dirname(path.resolve(status.localPath));
+    let entries: string[];
+    try {
+      entries = await fs.readdir(parent);
+    } catch {
+      res.json({ runs: [] });
+      return;
+    }
+    const activeClone = path.resolve(status.localPath);
+    const runs: RunSummaryDigest[] = [];
+    for (const name of entries) {
+      const cloneDir = path.join(parent, name);
+      let stat: import("node:fs").Stats;
+      try {
+        stat = await fs.stat(cloneDir);
+      } catch {
+        continue;
+      }
+      if (!stat.isDirectory()) continue;
+      // Try the latest pointer first (Unit 49: summary.json); fall
+      // back to scanning for the newest summary-*.json. Fast happy
+      // path; defensive on older clones.
+      const digest = await readRunDigest(cloneDir, name);
+      if (digest) {
+        digest.isActive = cloneDir === activeClone;
+        runs.push(digest);
+      }
+    }
+    // Newest first by startedAt (descending). Falls back to dir name
+    // when startedAt is missing (shouldn't happen with a real
+    // summary, but defensive).
+    runs.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
+    res.json({ runs });
+  });
+
   return r;
+}
+
+// Unit 52e: thin digest of a run's summary for the history dropdown.
+// Strict subset of RunSummary's surface — anything bigger goes via a
+// follow-up modal fetch (or we just open the folder).
+interface RunSummaryDigest {
+  name: string;
+  clonePath: string;
+  preset: string;
+  model: string;
+  startedAt: number;
+  endedAt: number;
+  wallClockMs: number;
+  stopReason?: string;
+  commits?: number;
+  totalTodos?: number;
+  hasContract: boolean;
+  isActive: boolean;
+}
+
+async function readRunDigest(
+  cloneDir: string,
+  name: string,
+): Promise<RunSummaryDigest | null> {
+  // Latest pointer first.
+  const candidates = [path.join(cloneDir, "summary.json")];
+  try {
+    const all = await fs.readdir(cloneDir);
+    const perRun = all
+      .filter((e) => /^summary-.+\.json$/.test(e))
+      .sort()
+      .reverse();
+    for (const e of perRun) candidates.push(path.join(cloneDir, e));
+  } catch {
+    // ignore — latest pointer alone is fine
+  }
+  for (const candidate of candidates) {
+    let raw: string;
+    try {
+      raw = await fs.readFile(candidate, "utf8");
+    } catch {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (typeof parsed !== "object" || parsed === null) continue;
+    const obj = parsed as Record<string, unknown>;
+    if (typeof obj.preset !== "string" || typeof obj.startedAt !== "number") continue;
+    const contract = obj.contract as Record<string, unknown> | undefined;
+    return {
+      name,
+      clonePath: cloneDir,
+      preset: obj.preset,
+      model: typeof obj.model === "string" ? obj.model : "(unknown)",
+      startedAt: obj.startedAt,
+      endedAt: typeof obj.endedAt === "number" ? obj.endedAt : 0,
+      wallClockMs: typeof obj.wallClockMs === "number" ? obj.wallClockMs : 0,
+      stopReason: typeof obj.stopReason === "string" ? obj.stopReason : undefined,
+      commits: typeof obj.commits === "number" ? obj.commits : undefined,
+      totalTodos: typeof obj.totalTodos === "number" ? obj.totalTodos : undefined,
+      hasContract: contract !== undefined && Array.isArray(contract.criteria),
+      isActive: false,
+    };
+  }
+  return null;
 }
 
 // Cross-platform "show this directory in the user's file manager."
