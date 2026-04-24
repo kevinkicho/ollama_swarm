@@ -216,12 +216,18 @@ function IdentityStrip() {
       {runId ? (
         <CopyChip label="run" value={runId} short={runId.slice(0, 8)} />
       ) : null}
+      {/* Task #35: preset badge immediately after the runId chip — they're
+          the two most-scanned anchors in the strip, and pairing them lets
+          users instantly see "this is the {preset} run with id {short}".
+          Uppercase pill style is intentional: visually distinct from the
+          monospace runId and the model chips. */}
+      {cfg ? (
+        <PresetBadge preset={cfg.preset} />
+      ) : null}
       {cfg ? (
         <>
           <span className="text-ink-600">·</span>
           <span className="text-ink-100 font-semibold">{runName}</span>
-          <span className="text-ink-600">·</span>
-          <span title="Preset"><span className="text-ink-500">preset</span> {cfg.preset}</span>
           <span className="text-ink-600">·</span>
           {sameModel ? (
             <span title="Planner + worker model"><span className="text-ink-500">model</span> {cfg.plannerModel}</span>
@@ -247,6 +253,39 @@ function IdentityStrip() {
       ) : null}
       {history}
     </div>
+  );
+}
+
+// Task #35: pill-style badge for the active preset, rendered right
+// after the runId chip in IdentityStrip. Per-preset color so a quick
+// glance distinguishes a write-capable blackboard run from a read-
+// only discussion preset. Uppercase + tracking for visual weight
+// against the surrounding monospace chips.
+function PresetBadge({ preset }: { preset: string }) {
+  // Color buckets: write-capable = emerald (signals "this run will
+  // change files"); read-only discussion presets = ink-blue tones.
+  // Debate-judge (PRO/CON dynamic) gets amber. Stigmergy (self-
+  // organizing) gets teal. Council/role-diff/orchestrator-worker/
+  // map-reduce/round-robin share a neutral indigo.
+  const palette = ((): { bg: string; fg: string; border: string } => {
+    switch (preset) {
+      case "blackboard":
+        return { bg: "bg-emerald-900/40", fg: "text-emerald-200", border: "border-emerald-700" };
+      case "debate-judge":
+        return { bg: "bg-amber-900/30", fg: "text-amber-200", border: "border-amber-700" };
+      case "stigmergy":
+        return { bg: "bg-teal-900/30", fg: "text-teal-200", border: "border-teal-700" };
+      default:
+        return { bg: "bg-indigo-900/30", fg: "text-indigo-200", border: "border-indigo-700" };
+    }
+  })();
+  return (
+    <span
+      title={`Preset: ${preset}`}
+      className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] uppercase tracking-wider font-semibold ${palette.bg} ${palette.fg} ${palette.border}`}
+    >
+      {preset}
+    </span>
   );
 }
 
