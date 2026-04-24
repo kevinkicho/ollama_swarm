@@ -1218,14 +1218,59 @@ export class BlackboardRunner implements SwarmRunner {
 
       // Guard against a wedge: auditor produced no new todos AND no new
       // criteria AND nothing transitioned to terminal — another loop would
-      // just re-audit against the same state. Exit cleanly.
+      // just re-audit against the same state.
+      //
+      // Unit 64b: before giving up, give the planner one chance to author
+      // todos for the unmet criteria. The auditor doesn't always post
+      // todos for fresh criteria — most notably right after a tier
+      // promotion (Unit 34), where the just-installed tier-N+1 criteria
+      // have no prior worker output for the auditor to evaluate. The
+      // pre-fix wedge fired immediately on that empty audit and stopped
+      // the run, leaving the entire new tier abandoned. Calling the
+      // planner here lets it ground a fresh batch of todos against the
+      // current repo state + the unmet criteria sitting on the contract.
+      // If even the planner produces nothing, THEN we stop with a more
+      // accurate completion detail.
       const openAfter = this.board.counts().open;
       if (openAfter === openBefore && !this.allCriteriaResolved() && openAfter === 0) {
-        this.completionDetail = "auditor produced no new work; unresolved criteria remain";
+        const fallbackSucceeded = await this.runPlannerFallbackForUnmetCriteria(planner);
+        if (this.stopping) return;
+        if (fallbackSucceeded) {
+          // Planner posted todos; continue to runWorkers on the next
+          // iteration so they can be drained.
+          continue;
+        }
+        this.completionDetail = "auditor + planner produced no new work; unresolved criteria remain";
         this.appendSystem(this.completionDetail + ".");
         return;
       }
     }
+  }
+
+  // Unit 64b: rebuild a fresh PlannerSeed and ask the planner to author
+  // todos. Returns true if at least one todo landed on the board.
+  // Best-effort — a missing clonePath or seed-build failure returns false
+  // so the caller stops cleanly. Caller is responsible for the post-call
+  // continue/stop branch.
+  private async runPlannerFallbackForUnmetCriteria(planner: Agent): Promise<boolean> {
+    if (!this.active) return false;
+    const openBefore = this.board.counts().open;
+    this.appendSystem(
+      "Auditor produced no new work; trying a planner pass against the current contract before stopping.",
+    );
+    let seed: PlannerSeed;
+    try {
+      seed = await this.buildSeed(this.active.localPath, this.active);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(`Planner-fallback seed build failed: ${msg}.`);
+      return false;
+    }
+    if (this.stopping) return false;
+    await this.runPlanner(planner, seed);
+    if (this.stopping) return false;
+    const openAfter = this.board.counts().open;
+    return openAfter > openBefore;
   }
 
   private allCriteriaResolved(): boolean {
