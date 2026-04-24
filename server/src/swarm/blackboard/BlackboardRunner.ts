@@ -34,7 +34,7 @@ import { writeFileAtomic } from "./writeFileAtomic.js";
 import { buildPerRunSummaryFileName, findAndReadNewestPriorSummary } from "../runSummary.js";
 import type { PriorRunSummary } from "./prompts/planner.js";
 import { summarizeAgentResponse } from "./transcriptSummary.js";
-import { readBlackboardStateSnapshot } from "./stateSnapshot.js";
+import { readBlackboardStateSnapshot, type BlackboardStateSnapshot } from "./stateSnapshot.js";
 import {
   buildPlannerUserPrompt,
   buildRepairPrompt,
@@ -175,6 +175,15 @@ export class BlackboardRunner implements SwarmRunner {
   // to parse after one repair — in that case the run falls back to the
   // Phase 10 drain-exit termination (no auditor is invoked).
   private contract?: ExitContract;
+  // Unit 57: snapshot of the prior run's blackboard-state.json, captured
+  // at the very TOP of start() BEFORE any setPhase fires. tryResumeContract
+  // reads from THIS cached value, not the live disk file — by the time
+  // tryResumeContract runs, our own setPhase("spawning") has fired
+  // scheduleStateWrite which after ~1 s overwrites the prior snapshot
+  // with our own fresh phase=spawning + no-contract shape. Race window
+  // is ~3-5 s (spawning takes that long for N opencode subprocesses);
+  // caching at the very top sidesteps it entirely.
+  private priorSnapshot?: BlackboardStateSnapshot | null;
   // Phase 11c: drain-audit-repeat bookkeeping. auditInvocations is the
   // backstop counter compared against maxAuditInvocations (Unit 11: now
   // derived from cfg.rounds). completionDetail, when set, propagates into
@@ -327,6 +336,15 @@ export class BlackboardRunner implements SwarmRunner {
     if (plannerModel !== workerModel) {
       this.appendSystem(`Per-agent models: planner=${plannerModel}, workers=${workerModel}`);
     }
+
+    // Unit 57: cache the prior run's blackboard-state.json BEFORE the
+    // spawning phase fires its scheduled snapshot write. See the field
+    // declaration for the race details. Read here (clone exists, no
+    // snapshot writes have fired yet because cloning phase skips
+    // scheduleStateWrite). Always reads — Unit 51's tryResumeContract
+    // uses the cached value when cfg.resumeContract is true; cheap
+    // I/O when it's not.
+    this.priorSnapshot = await readBlackboardStateSnapshot(destPath);
 
     this.setPhase("spawning");
     // Planner is always index 1. Workers take 2..N. If the user picks
@@ -536,8 +554,14 @@ export class BlackboardRunner implements SwarmRunner {
   // Returns false on missing/invalid snapshot — caller falls back
   // to the normal planner-derives-contract path silently. Logs the
   // resume to the transcript so the user knows we picked it up.
-  private async tryResumeContract(clonePath: string): Promise<boolean> {
-    const snap = await readBlackboardStateSnapshot(clonePath);
+  //
+  // Unit 57: reads from the cached priorSnapshot (captured at the top
+  // of start() BEFORE any spawning-phase scheduleStateWrite fires).
+  // Re-reading from disk here would race with our own snapshot writes
+  // and almost always see our own freshly-written empty-contract
+  // shape — exactly the bug Unit 57 fixes.
+  private async tryResumeContract(_clonePath: string): Promise<boolean> {
+    const snap = this.priorSnapshot;
     if (!snap || !snap.contract) {
       this.appendSystem(
         "Resume requested but no valid blackboard-state.json found — falling back to first-pass-contract.",
@@ -2891,7 +2915,13 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   private emitAgentState(s: AgentState): void {
-    this.opts.emit({ type: "agent_state", agent: s });
+    // thinkingSince REST-snapshot fix: route through the manager so
+    // the agentStates mirror gets updated AND the WS event still
+    // fires (the manager's onState callback IS opts.emit-equivalent
+    // for `agent_state` events). Before this change, fields like
+    // `thinkingSince` (Unit 39) only appeared on the live WS stream
+    // — REST /status served a stale mirror that omitted them.
+    this.opts.manager.recordAgentState(s);
   }
 
   private describeSdkError(err: unknown): string {

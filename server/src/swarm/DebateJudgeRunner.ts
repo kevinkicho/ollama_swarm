@@ -398,7 +398,10 @@ export class DebateJudgeRunner implements SwarmRunner {
   }
 
   private emitAgentState(s: AgentState): void {
-    this.opts.emit({ type: "agent_state", agent: s });
+    // thinkingSince REST-snapshot fix: route through the manager so
+    // the agentStates mirror gets updated in lockstep with the WS
+    // broadcast. See AgentManager.recordAgentState.
+    this.opts.manager.recordAgentState(s);
   }
 }
 

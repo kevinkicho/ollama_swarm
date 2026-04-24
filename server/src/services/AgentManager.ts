@@ -307,6 +307,19 @@ export class AgentManager {
     this.setAgentState({ id, index: a.index, port: a.port, sessionId: a.sessionId, status, ...extra });
   }
 
+  // thinkingSince REST-snapshot fix (bundled with Unit 56b/57 cleanup
+  // batch 2026-04-23): runners that previously bypassed the manager
+  // and emitted agent_state events directly via `opts.emit` left the
+  // manager's `agentStates` mirror stale. The REST /api/swarm/status
+  // snapshot reads from that mirror, so fields like Unit 39's
+  // `thinkingSince` only appeared on the live WS stream — fresh page
+  // loads + WS catch-up never saw them. This passthrough lets runners
+  // route their direct emits through the same single source of truth
+  // setAgentState writes to (mirror + broadcast in lockstep).
+  recordAgentState(s: AgentState): void {
+    this.setAgentState(s);
+  }
+
   async killAll(): Promise<KillAllResult> {
     for (const ctrl of this.eventAborts.values()) ctrl.abort();
     this.eventAborts.clear();
