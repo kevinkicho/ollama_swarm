@@ -155,7 +155,11 @@ export class StigmergyRunner implements SwarmRunner {
       this.opts.emit({ type: "error", message: crashMessage });
     } finally {
       await this.writeSummary(cfg, crashMessage);
-      if (!this.stopping) this.setPhase("completed");
+      // Unit 55: auto-killAll on natural completion (see RoundRobinRunner).
+      if (!this.stopping) {
+        await this.opts.manager.killAll();
+        this.setPhase("completed");
+      }
     }
   }
 

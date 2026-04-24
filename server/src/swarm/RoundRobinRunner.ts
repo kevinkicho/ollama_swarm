@@ -151,7 +151,13 @@ export class RoundRobinRunner implements SwarmRunner {
       // terminal setPhase so a UI observer reacting to "completed" can
       // trust the file is already on disk.
       await this.writeSummary(cfg, crashMessage);
-      if (!this.stopping) this.setPhase("completed");
+      // Unit 55: auto-killAll on natural completion. Without this,
+      // a finished run leaves agents holding ports + cloud sessions.
+      // Skip when this.stopping=true — stop() already did the kill.
+      if (!this.stopping) {
+        await this.opts.manager.killAll();
+        this.setPhase("completed");
+      }
     }
   }
 

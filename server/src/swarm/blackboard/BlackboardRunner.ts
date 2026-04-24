@@ -429,6 +429,16 @@ export class BlackboardRunner implements SwarmRunner {
       await this.flushStateWrite();
       return;
     }
+    // Unit 55: auto-killAll on natural completion (and on errored
+    // termination). Before this unit, only stop() killed agents — a
+    // run that finished naturally ("auditor produced no new work,"
+    // all-met, cap reached) left every opencode subprocess and cloud
+    // session alive, holding ports + paying cloud upkeep until the
+    // user/Claude manually intervened. Mirrors the killAll inside
+    // stop(): same verified-kill semantics from Unit 41 (poll +
+    // taskkill escalation + pidTracker.remove). Idempotent if a
+    // sibling code path already cleared the roster.
+    await this.opts.manager.killAll();
     this.setPhase(errored ? "failed" : "completed");
     // Unit 31: final non-debounced write so the on-disk state reflects the
     // terminal phase even if the debounced timer hasn't fired yet.
