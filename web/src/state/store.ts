@@ -76,6 +76,9 @@ interface SwarmStore {
 
   setError: (msg: string | undefined) => void;
   reset: () => void;
+  // Task #37 (partial): lighter reset fired on WS run_started — drops
+  // agents/streaming/latency only so prior transcript stays readable.
+  resetForNewRun: () => void;
 }
 
 export const useSwarm = create<SwarmStore>((set) => ({
@@ -228,4 +231,30 @@ export const useSwarm = create<SwarmStore>((set) => ({
       runConfig: undefined,
       runId: undefined,
     }),
+  // Task #37 (partial): clear per-run state when a new run kicks off
+  // WITHOUT blowing away transcript/findings/board — those are the
+  // history the user may still want to scroll. This addresses the
+  // Agent N leftover problem (role-diff's 5 agents lingering after
+  // council started with 4) without destroying context from the prior
+  // run. The in-flight-stream-wipe case (hypothesis 1 in #37) is
+  // still open — needs a server-side partial-stream buffer.
+  resetForNewRun: () =>
+    set((s) => ({
+      agents: {},
+      streaming: {},
+      latency: {},
+      // Append a divider so the user sees a visual break between runs.
+      transcript:
+        s.transcript.length > 0
+          ? [
+              ...s.transcript,
+              {
+                id: `divider-${Date.now()}`,
+                role: "system" as const,
+                text: "— new run started —",
+                ts: Date.now(),
+              },
+            ]
+          : s.transcript,
+    })),
 }));

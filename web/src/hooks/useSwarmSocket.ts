@@ -83,6 +83,14 @@ function dispatch(ev: SwarmEvent): void {
       });
       break;
     case "run_started":
+      // Task #37 (partial): a new run is starting. Drop agents/
+      // streaming/latency from any prior run in this session — the
+      // prior runner's roster is stale (different preset may have
+      // more/fewer agents, different ports, different sessions). We
+      // keep transcript + findings + board so the user can still
+      // scroll through what happened, with a "— new run started —"
+      // divider inserted.
+      s.resetForNewRun();
       s.setRunStartedAt(ev.startedAt);
       s.setRunId(ev.runId);
       s.setRunConfig({
