@@ -307,7 +307,8 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
     });
     this.stats.countTurn(agent.id);
 
-    const ABSOLUTE_MAX_MS = 20 * 60_000;
+    // Pattern 11: 20m → 4m. See CouncilRunner for rationale.
+    const ABSOLUTE_MAX_MS = 4 * 60_000;
     const turnStart = Date.now();
     this.opts.manager.touchActivity(agent.sessionId, turnStart);
 

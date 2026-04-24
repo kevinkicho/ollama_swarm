@@ -241,7 +241,8 @@ export class RoundRobinRunner implements SwarmRunner {
     // completely silent across session.prompt's entire duration for our setup, so
     // there is no reliable activity signal to gate on. We rely solely on the
     // absolute turn cap below — if a prompt hasn't returned in 20 minutes, abort.
-    const ABSOLUTE_MAX_MS = 20 * 60_000;
+    // Pattern 11: 20m → 4m. See CouncilRunner for rationale.
+    const ABSOLUTE_MAX_MS = 4 * 60_000;
     const turnStart = Date.now();
     this.opts.manager.touchActivity(agent.sessionId, turnStart);
 

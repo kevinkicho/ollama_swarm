@@ -254,7 +254,11 @@ export class CouncilRunner implements SwarmRunner {
     const prompt = buildCouncilPrompt(agent.index, round, totalRounds, snapshot);
     // Same absolute-turn cap rationale as RoundRobinRunner: no reliable idle
     // signal from OpenCode's SSE, so we rely solely on the 20-minute ceiling.
-    const ABSOLUTE_MAX_MS = 20 * 60_000;
+    // Pattern 11 (2026-04-24): lowered from 20m → 4m. nemotron-3-super:cloud
+    // has a long-tail of 4-7 min slow first-prompts (~12% of attempts);
+    // beyond ~4 min, the agent is almost certainly hung rather than slow.
+    // Aborting here unblocks the round so the rest of the swarm can finish.
+    const ABSOLUTE_MAX_MS = 4 * 60_000;
     const turnStart = Date.now();
     this.opts.manager.touchActivity(agent.sessionId, turnStart);
 
