@@ -34,6 +34,7 @@ import { writeFileAtomic } from "./writeFileAtomic.js";
 import { buildPerRunSummaryFileName, findAndReadNewestPriorSummary } from "../runSummary.js";
 import type { PriorRunSummary } from "./prompts/planner.js";
 import { summarizeAgentResponse } from "./transcriptSummary.js";
+import { readBlackboardStateSnapshot } from "./stateSnapshot.js";
 import {
   buildPlannerUserPrompt,
   buildRepairPrompt,
@@ -379,7 +380,19 @@ export class BlackboardRunner implements SwarmRunner {
     let errored = false;
     let crashMessage: string | undefined;
     try {
-      await this.runFirstPassContractOrchestrator(planner, workers, seed);
+      // Unit 51: opt-in resume from blackboard-state.json. When the
+      // user set cfg.resumeContract AND the snapshot is present +
+      // valid, install the prior contract directly and skip the
+      // first-pass-contract round entirely. Tier counters hydrate
+      // from the snapshot too. Falls through to the normal path on
+      // missing/invalid snapshot — silent fallback so the user gets
+      // SOMETHING even if the resume can't bind.
+      const resumed = this.active?.resumeContract === true
+        ? await this.tryResumeContract(seed.clonePath)
+        : false;
+      if (!resumed) {
+        await this.runFirstPassContractOrchestrator(planner, workers, seed);
+      }
       if (this.stopping) return;
       await this.runPlanner(planner, seed);
       if (this.stopping) return;
@@ -515,6 +528,59 @@ export class BlackboardRunner implements SwarmRunner {
       userDirective: cfg.userDirective,
       priorRunSummary,
     };
+  }
+
+  // Unit 51: opt-in resume path. Reads blackboard-state.json from
+  // the clone, installs the prior run's contract + tier state
+  // directly, and tells the caller to skip first-pass-contract.
+  // Returns false on missing/invalid snapshot — caller falls back
+  // to the normal planner-derives-contract path silently. Logs the
+  // resume to the transcript so the user knows we picked it up.
+  private async tryResumeContract(clonePath: string): Promise<boolean> {
+    const snap = await readBlackboardStateSnapshot(clonePath);
+    if (!snap || !snap.contract) {
+      this.appendSystem(
+        "Resume requested but no valid blackboard-state.json found — falling back to first-pass-contract.",
+      );
+      return false;
+    }
+    // Install contract + tier state from the snapshot. cloneContract
+    // (NOT buildContract) is intentional — buildContract resets every
+    // criterion to status="unmet" and renumbers ids, but on resume we
+    // want to PRESERVE the prior met/unmet/wont-do status, rationales,
+    // and ids. The auditor will re-evaluate them against the current
+    // working tree on its first invocation, so a "met" criterion whose
+    // evidence got reverted will flip back to unmet.
+    this.contract = this.cloneContract(snap.contract);
+    this.currentTier = snap.currentTier ?? 1;
+    this.tiersCompleted = snap.tiersCompleted ?? 0;
+    this.tierStartedAt = Date.now();
+    if (snap.tierHistory && snap.tierHistory.length > 0) {
+      // Restore the prior tier-history entries verbatim. The current
+      // (in-flight) tier isn't in there yet — recordTierCompletion
+      // appends as tiers close. Defensive copy so a downstream
+      // mutation doesn't reach into the snapshot.
+      this.tierHistory = snap.tierHistory.map((t) => ({ ...t }));
+    }
+    this.opts.emit({
+      type: "contract_updated",
+      contract: this.cloneContract(this.contract),
+    });
+    this.scheduleStateWrite();
+    let met = 0;
+    let unmet = 0;
+    let wontDo = 0;
+    for (const c of this.contract.criteria) {
+      if (c.status === "met") met++;
+      else if (c.status === "wont-do") wontDo++;
+      else unmet++;
+    }
+    this.appendSystem(
+      `Resumed contract from blackboard-state.json (tier ${this.currentTier}, ${this.tiersCompleted} tiers completed prior). ` +
+        `${met} met / ${unmet} unmet / ${wontDo} wont-do criteria carried over — ` +
+        `auditor will re-evaluate against the current working tree.`,
+    );
+    return true;
   }
 
   // Unit 50: read + distill the most recent prior summary in this

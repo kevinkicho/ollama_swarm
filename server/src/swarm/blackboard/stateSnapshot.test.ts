@@ -1,12 +1,16 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   buildStateSnapshot,
+  readBlackboardStateSnapshot,
   STATE_SNAPSHOT_DEBOUNCE_MS,
   STATE_SNAPSHOT_VERSION,
   type BlackboardStateSnapshotInput,
 } from "./stateSnapshot.js";
-import type { BoardSnapshot } from "./types.js";
+import type { BoardSnapshot, ExitContract } from "./types.js";
 
 function emptyBoard(): BoardSnapshot {
   return { todos: [], findings: [] };
@@ -165,5 +169,138 @@ describe("STATE_SNAPSHOT_DEBOUNCE_MS", () => {
     // the on-disk view lags the in-memory view by enough to matter.
     assert.ok(STATE_SNAPSHOT_DEBOUNCE_MS >= 100);
     assert.ok(STATE_SNAPSHOT_DEBOUNCE_MS <= 5_000);
+  });
+});
+
+// Unit 51: read path for the resume-contract flow.
+describe("readBlackboardStateSnapshot", () => {
+  function contract(): ExitContract {
+    return {
+      missionStatement: "Test mission.",
+      criteria: [
+        { id: "c1", description: "do x", expectedFiles: ["x.md"], status: "met", addedAt: 1 },
+        { id: "c2", description: "do y", expectedFiles: [], status: "unmet", addedAt: 1 },
+      ],
+    };
+  }
+
+  it("returns null when blackboard-state.json doesn't exist", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "snap-read-none-"));
+    try {
+      assert.equal(await readBlackboardStateSnapshot(tmp), null);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null when the file is unparseable JSON", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "snap-read-bad-"));
+    try {
+      await fs.writeFile(path.join(tmp, "blackboard-state.json"), "{not json", "utf8");
+      assert.equal(await readBlackboardStateSnapshot(tmp), null);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null when the snapshot lacks a contract", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "snap-read-nocon-"));
+    try {
+      const snap = buildStateSnapshot({
+        writtenAt: 100,
+        phase: "executing",
+        round: 0,
+        board: { todos: [], findings: [] },
+        perAgent: [],
+        staleEventCount: 0,
+        auditInvocations: 0,
+        agentRoster: [],
+      });
+      await fs.writeFile(
+        path.join(tmp, "blackboard-state.json"),
+        JSON.stringify(snap),
+        "utf8",
+      );
+      // Pre-contract crashes are not useful for resume; helper rejects.
+      assert.equal(await readBlackboardStateSnapshot(tmp), null);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null when the version field doesn't match STATE_SNAPSHOT_VERSION", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "snap-read-vermismatch-"));
+    try {
+      const stale = {
+        version: STATE_SNAPSHOT_VERSION + 99,
+        writtenAt: 1,
+        phase: "executing",
+        round: 0,
+        board: { todos: [], findings: [] },
+        perAgent: [],
+        staleEventCount: 0,
+        auditInvocations: 0,
+        agentRoster: [],
+        contract: contract(),
+      };
+      await fs.writeFile(
+        path.join(tmp, "blackboard-state.json"),
+        JSON.stringify(stale),
+        "utf8",
+      );
+      // Future schema bumps are gated — better to fall back to
+      // first-pass-contract than to install a contract whose shape
+      // we don't fully understand.
+      assert.equal(await readBlackboardStateSnapshot(tmp), null);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("reads back a snapshot with contract + tier state intact", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "snap-read-good-"));
+    try {
+      const snap = buildStateSnapshot({
+        writtenAt: 1_000,
+        phase: "executing",
+        round: 3,
+        board: { todos: [], findings: [] },
+        perAgent: [],
+        staleEventCount: 0,
+        auditInvocations: 2,
+        agentRoster: [{ agentId: "agent-1", agentIndex: 1 }],
+        contract: contract(),
+        currentTier: 2,
+        tiersCompleted: 1,
+        tierHistory: [
+          {
+            tier: 1,
+            missionStatement: "Test mission.",
+            criteriaTotal: 2,
+            criteriaMet: 2,
+            criteriaWontDo: 0,
+            criteriaUnmet: 0,
+            wallClockMs: 60_000,
+            startedAt: 0,
+            endedAt: 60_000,
+          },
+        ],
+      });
+      await fs.writeFile(
+        path.join(tmp, "blackboard-state.json"),
+        JSON.stringify(snap),
+        "utf8",
+      );
+      const got = await readBlackboardStateSnapshot(tmp);
+      assert.ok(got);
+      assert.equal(got!.version, STATE_SNAPSHOT_VERSION);
+      assert.equal(got!.contract!.missionStatement, "Test mission.");
+      assert.equal(got!.contract!.criteria.length, 2);
+      assert.equal(got!.currentTier, 2);
+      assert.equal(got!.tiersCompleted, 1);
+      assert.equal(got!.tierHistory!.length, 1);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 });

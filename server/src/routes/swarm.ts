@@ -82,6 +82,10 @@ const StartBody = z.object({
     .min(60_000)
     .max(8 * 60 * 60_000)
     .optional(),
+  // Unit 51: reload contract + tier state from prior run's
+  // blackboard-state.json instead of re-deriving via first-pass-
+  // contract. Blackboard-only. Default false = existing behavior.
+  resumeContract: z.boolean().optional(),
 });
 
 const SayBody = z.object({ text: z.string().min(1) });
@@ -145,6 +149,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         plannerModel: parsed.data.plannerModel,
         workerModel: parsed.data.workerModel,
         wallClockCapMs: parsed.data.wallClockCapMs,
+        resumeContract: parsed.data.resumeContract,
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {

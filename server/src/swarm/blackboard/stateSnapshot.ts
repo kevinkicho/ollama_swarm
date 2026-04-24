@@ -99,3 +99,54 @@ export function buildStateSnapshot(
 // Trailing-edge: every schedule() call resets the timer so only the
 // LATEST state gets written.
 export const STATE_SNAPSHOT_DEBOUNCE_MS = 1_000;
+
+// Unit 51: read the on-disk snapshot for the resume-contract flow.
+// Returns null if the file is missing, unparseable, or doesn't carry
+// a valid contract. Best-effort — runner falls back to the normal
+// first-pass-contract path on any failure.
+//
+// Lives in this module so the read path stays next to the write
+// path that produced the file (single source of shape truth).
+import { promises as fs } from "node:fs";
+import path from "node:path";
+
+export async function readBlackboardStateSnapshot(
+  clonePath: string,
+): Promise<BlackboardStateSnapshot | null> {
+  const file = path.join(clonePath, "blackboard-state.json");
+  let raw: string;
+  try {
+    raw = await fs.readFile(file, "utf8");
+  } catch {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!looksLikeStateSnapshot(parsed)) return null;
+  // Future schema bumps: gate here on `version` if we ever ship a
+  // breaking change. v1 is the only shape today.
+  if ((parsed as BlackboardStateSnapshot).version !== STATE_SNAPSHOT_VERSION) {
+    return null;
+  }
+  return parsed as BlackboardStateSnapshot;
+}
+
+// Conservative shape check: just enough to know the snapshot has a
+// usable contract. Doesn't validate every optional field.
+function looksLikeStateSnapshot(x: unknown): boolean {
+  if (typeof x !== "object" || x === null) return false;
+  const obj = x as Record<string, unknown>;
+  if (typeof obj.version !== "number") return false;
+  if (typeof obj.phase !== "string") return false;
+  // The resume path needs an actual contract — snapshots from runs
+  // that died before first-pass-contract are useless to us.
+  const contract = obj.contract as Record<string, unknown> | undefined;
+  if (!contract) return false;
+  if (typeof contract.missionStatement !== "string") return false;
+  if (!Array.isArray(contract.criteria)) return false;
+  return true;
+}

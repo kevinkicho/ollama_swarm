@@ -99,6 +99,18 @@ export interface RunConfig {
    * gate today.
    */
   wallClockCapMs?: number;
+  /**
+   * Unit 51: opt-in to reload the prior run's contract + tier state
+   * directly from `<clone>/blackboard-state.json` instead of having
+   * the planner re-derive a first-pass contract. Pairs with the
+   * build-on-existing-clone work pattern — when the user is iterating
+   * on the same target, this avoids planner non-determinism (run #2's
+   * contract framing differing from run #1) and skips the long
+   * first-pass-contract round entirely. When the snapshot is missing,
+   * unparseable, or has no contract, the runner silently falls back
+   * to the normal first-pass-contract path. Blackboard-only.
+   */
+  resumeContract?: boolean;
 }
 
 export interface RunnerOpts {
