@@ -106,7 +106,7 @@ yet. **→ Unit 36 (planned).**
 | 52d  | Identifiers row (click-to-copy chips)        | shipped (`0b15bc3`, 2026-04-23)|
 | 52e  | Run history dropdown                         | planned (Kevin's ask 2026-04-23)|
 | 53   | Contract panel: status filter (default unmet)| shipped (`1c9edfd`, 2026-04-23)|
-| 54   | Transcript: collapse worker JSON to summary | planned (Kevin's ask 2026-04-23)|
+| 54   | Transcript: collapse worker JSON to summary | shipped (`15a7b81`, 2026-04-23)|
 | 55   | Auto-killAll on natural completion          | shipped (`76fe957`, 2026-04-23)|
 | 56+  | Cross-run resume + tier-aware replay        | hypothesized                   |
 | 56+  | Auto-start app (workers execute shell)      | hypothesized                   |
