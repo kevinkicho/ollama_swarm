@@ -11,6 +11,7 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
+import { extractTextWithDiag } from "./extractText.js";
 
 // Stigmergy / pheromone trails — repo exploration mode.
 // No central planner, no role assignment. Agents post annotations on
@@ -347,7 +348,12 @@ export class StigmergyRunner implements SwarmRunner {
           });
         },
       });
-      const text = extractText(res) ?? "(empty response)";
+      const text = extractTextWithDiag(res, {
+        runner: "stigmergy",
+        agentId: agent.id,
+        agentIndex: agent.index,
+        logDiag: this.opts.logDiag,
+      });
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
@@ -528,24 +534,6 @@ export function formatAnnotations(annotations: ReadonlyMap<string, AnnotationSta
     );
   }
   return rows.join("\n");
-}
-
-function extractText(res: unknown): string | undefined {
-  const any = res as {
-    data?: {
-      parts?: Array<{ type?: string; text?: string }>;
-      info?: { parts?: Array<{ type?: string; text?: string }> };
-      text?: string;
-    };
-  };
-  const parts = any?.data?.parts ?? any?.data?.info?.parts;
-  if (Array.isArray(parts)) {
-    const texts = parts
-      .filter((p) => p?.type === "text" && typeof p.text === "string")
-      .map((p) => p.text as string);
-    if (texts.length) return texts.join("\n");
-  }
-  return any?.data?.text;
 }
 
 function describeSdkError(err: unknown): string {

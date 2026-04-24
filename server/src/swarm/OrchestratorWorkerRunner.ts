@@ -11,6 +11,7 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
+import { extractTextWithDiag } from "./extractText.js";
 
 // Orchestrator–worker hierarchy.
 // Agent 1 is the LEAD: it reads the repo, produces a plan assigning one
@@ -364,7 +365,12 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
           });
         },
       });
-      const text = extractText(res) ?? "(empty response)";
+      const text = extractTextWithDiag(res, {
+        runner: "orchestrator-worker",
+        agentId: agent.id,
+        agentIndex: agent.index,
+        logDiag: this.opts.logDiag,
+      });
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
@@ -575,26 +581,6 @@ export function buildLeadSynthesisPrompt(
     "",
     "Now write your synthesis.",
   ].join("\n");
-}
-
-// Duplicated helpers — see CouncilRunner for rationale. Extraction waits
-// until a 4th caller wants them.
-function extractText(res: unknown): string | undefined {
-  const any = res as {
-    data?: {
-      parts?: Array<{ type?: string; text?: string }>;
-      info?: { parts?: Array<{ type?: string; text?: string }> };
-      text?: string;
-    };
-  };
-  const parts = any?.data?.parts ?? any?.data?.info?.parts;
-  if (Array.isArray(parts)) {
-    const texts = parts
-      .filter((p) => p?.type === "text" && typeof p.text === "string")
-      .map((p) => p.text as string);
-    if (texts.length) return texts.join("\n");
-  }
-  return any?.data?.text;
 }
 
 function describeSdkError(err: unknown): string {

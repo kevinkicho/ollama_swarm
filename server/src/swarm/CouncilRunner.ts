@@ -11,6 +11,7 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
+import { extractTextWithDiag } from "./extractText.js";
 
 // Council / parallel drafts + reconcile.
 // Round 1: every agent drafts independently. Each agent's prompt contains
@@ -307,7 +308,12 @@ export class CouncilRunner implements SwarmRunner {
         },
       });
 
-      const text = extractText(res) ?? "(empty response)";
+      const text = extractTextWithDiag(res, {
+        runner: "council",
+        agentId: agent.id,
+        agentIndex: agent.index,
+        logDiag: this.opts.logDiag,
+      });
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
@@ -416,27 +422,6 @@ export function buildCouncilPrompt(
     "",
     `Now respond as Agent ${agentIndex}.`,
   ].join("\n");
-}
-
-// Duplicated from RoundRobinRunner to avoid coupling the two classes; both
-// use the same OpenCode SDK response shape and the same undici error chain.
-// If a third runner needs these, extract then — not preemptively.
-function extractText(res: unknown): string | undefined {
-  const any = res as {
-    data?: {
-      parts?: Array<{ type?: string; text?: string }>;
-      info?: { parts?: Array<{ type?: string; text?: string }> };
-      text?: string;
-    };
-  };
-  const parts = any?.data?.parts ?? any?.data?.info?.parts;
-  if (Array.isArray(parts)) {
-    const texts = parts
-      .filter((p) => p?.type === "text" && typeof p.text === "string")
-      .map((p) => p.text as string);
-    if (texts.length) return texts.join("\n");
-  }
-  return any?.data?.text;
 }
 
 function describeSdkError(err: unknown): string {

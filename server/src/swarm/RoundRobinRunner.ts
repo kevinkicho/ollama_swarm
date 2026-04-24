@@ -12,6 +12,7 @@ import { roleForAgent, type SwarmRole } from "./roles.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
+import { extractTextWithDiag } from "./extractText.js";
 
 export interface RoundRobinOptions {
   // Unit 8: when set, every agent gets a per-index role prepended to its
@@ -307,7 +308,12 @@ export class RoundRobinRunner implements SwarmRunner {
         },
       });
 
-      const text = this.extractText(res) ?? "(empty response)";
+      const text = extractTextWithDiag(res, {
+        runner: "round-robin",
+        agentId: agent.id,
+        agentIndex: agent.index,
+        logDiag: this.opts.logDiag,
+      });
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
@@ -425,19 +431,4 @@ export class RoundRobinRunner implements SwarmRunner {
     return String(err);
   }
 
-  private extractText(res: unknown): string | undefined {
-    const any = res as {
-      data?: {
-        parts?: Array<{ type?: string; text?: string }>;
-        info?: { parts?: Array<{ type?: string; text?: string }> };
-        text?: string;
-      };
-    };
-    const parts = any?.data?.parts ?? any?.data?.info?.parts;
-    if (Array.isArray(parts)) {
-      const texts = parts.filter((p) => p?.type === "text" && typeof p.text === "string").map((p) => p.text as string);
-      if (texts.length) return texts.join("\n");
-    }
-    return any?.data?.text;
-  }
 }
