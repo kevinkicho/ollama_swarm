@@ -44,6 +44,18 @@ export class StigmergyRunner implements SwarmRunner {
   constructor(private readonly opts: RunnerOpts) {}
 
   status(): SwarmStatus {
+    // Phase 2a: expose the pheromone table for the REST catch-up path
+    // so a page refresh mid-run restores the PheromonePanel's state
+    // without waiting for the next applyAnnotation to fire over WS.
+    const pheromones: Record<string, {
+      visits: number;
+      avgInterest: number;
+      avgConfidence: number;
+      latestNote: string;
+    }> = {};
+    for (const [file, s] of this.annotations.entries()) {
+      pheromones[file] = { ...s };
+    }
     return {
       phase: this.phase,
       round: this.round,
@@ -54,6 +66,7 @@ export class StigmergyRunner implements SwarmRunner {
       transcript: [...this.transcript],
       // Task #39: per-agent partial-stream buffer for catch-up.
       streaming: this.opts.manager.getPartialStreams(),
+      pheromones,
     };
   }
 
@@ -256,22 +269,33 @@ export class StigmergyRunner implements SwarmRunner {
 
   private applyAnnotation(ann: ParsedAnnotation): void {
     const existing = this.annotations.get(ann.file);
+    let next: AnnotationState;
     if (!existing) {
-      this.annotations.set(ann.file, {
+      next = {
         visits: 1,
         avgInterest: ann.interest,
         avgConfidence: ann.confidence,
         latestNote: ann.note,
-      });
-      return;
+      };
+    } else {
+      // Running average — equal weight per visit. Cheap, good enough for v1.
+      const n = existing.visits + 1;
+      next = {
+        visits: n,
+        avgInterest: (existing.avgInterest * existing.visits + ann.interest) / n,
+        avgConfidence: (existing.avgConfidence * existing.visits + ann.confidence) / n,
+        latestNote: ann.note,
+      };
     }
-    // Running average — equal weight per visit. Cheap, good enough for v1.
-    const n = existing.visits + 1;
-    this.annotations.set(ann.file, {
-      visits: n,
-      avgInterest: (existing.avgInterest * existing.visits + ann.interest) / n,
-      avgConfidence: (existing.avgConfidence * existing.visits + ann.confidence) / n,
-      latestNote: ann.note,
+    this.annotations.set(ann.file, next);
+    // Phase 2a: live WS update so the PheromonePanel reflects new
+    // annotations immediately instead of waiting for catch-up. Single-
+    // row updates (not the full table) keep the event small even when
+    // the annotation set grows.
+    this.opts.emit({
+      type: "pheromone_updated",
+      file: ann.file,
+      state: { ...next },
     });
   }
 

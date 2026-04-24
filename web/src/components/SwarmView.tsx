@@ -7,8 +7,9 @@ import { ContractPanel } from "./ContractPanel";
 import { CopyChip } from "./CopyChip";
 import { Transcript } from "./Transcript";
 import { MetricsPanel } from "./MetricsPanel";
+import { PheromonePanel } from "./PheromonePanel";
 
-type Tab = "transcript" | "metrics" | "board" | "contract";
+type Tab = "transcript" | "metrics" | "board" | "contract" | "pheromones";
 
 export function SwarmView() {
   const agents = useSwarm((s) => s.agents);
@@ -27,13 +28,20 @@ export function SwarmView() {
   // selected but no run config exists yet — default to showing them
   // since the SetupForm is open).
   const showBlackboardTabs = !cfg || cfg.preset === "blackboard";
+  // Phase 2a: Pheromones tab is stigmergy-only. Like Board + Contract
+  // above, we hide it entirely on other presets to avoid dead UI.
+  const showPheromonesTab = cfg?.preset === "stigmergy";
   // If the current tab becomes hidden (user switched presets while on
-  // Contract), fall back to Transcript so the content area isn't empty.
+  // a now-invisible tab), fall back to Transcript so the content area
+  // isn't empty.
   useEffect(() => {
     if (!showBlackboardTabs && (tab === "board" || tab === "contract")) {
       setTab("transcript");
     }
-  }, [showBlackboardTabs, tab]);
+    if (!showPheromonesTab && tab === "pheromones") {
+      setTab("transcript");
+    }
+  }, [showBlackboardTabs, showPheromonesTab, tab]);
 
   const onStop = async () => {
     if (!confirm("Stop the swarm? All spawned opencode processes will be terminated.")) return;
@@ -172,6 +180,11 @@ export function SwarmView() {
               </TabButton>
             </>
           ) : null}
+          {showPheromonesTab ? (
+            <TabButton active={tab === "pheromones"} onClick={() => setTab("pheromones")}>
+              Pheromones
+            </TabButton>
+          ) : null}
         </div>
         <div className="flex-1 overflow-hidden">
           {tab === "transcript" ? (
@@ -182,6 +195,8 @@ export function SwarmView() {
             <BoardView />
           ) : tab === "contract" && showBlackboardTabs ? (
             <ContractPanel />
+          ) : tab === "pheromones" && showPheromonesTab ? (
+            <PheromonePanel />
           ) : (
             <Transcript />
           )}

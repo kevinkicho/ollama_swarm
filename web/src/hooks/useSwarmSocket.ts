@@ -82,6 +82,12 @@ function dispatch(ev: SwarmEvent): void {
         priorUntrackedFiles: ev.priorUntrackedFiles,
       });
       break;
+    case "pheromone_updated":
+      // Phase 2a: stigmergy pheromone table update. Live upsert per
+      // annotation commit. Full-table hydration happens via the REST
+      // catch-up path below.
+      s.upsertPheromone(ev.file, ev.state);
+      break;
     case "run_started":
       // Task #37 (partial) + #46: a new run is starting. Drop agents/
       // streaming/latency from any prior run in this session — the
@@ -187,6 +193,12 @@ async function hydrateFromSnapshot(): Promise<void> {
     if (snap.streaming) {
       for (const [agentId, entry] of Object.entries(snap.streaming)) {
         s.setStreaming(agentId, entry.text);
+      }
+    }
+    // Phase 2a: hydrate pheromone table from the REST catch-up.
+    if (snap.pheromones) {
+      for (const [file, state] of Object.entries(snap.pheromones)) {
+        s.upsertPheromone(file, state);
       }
     }
   } catch {

@@ -120,6 +120,14 @@ export type SwarmEvent =
   | { type: "board_state"; snapshot: BoardSnapshot; counts: BoardCountsDTO }
   | { type: "contract_updated"; contract: ExitContract }
   | { type: "run_summary"; summary: RunSummary }
+  // Phase 2a (2026-04-24): stigmergy pheromone update fired per
+  // annotation commit. Carries the single file's new state so the
+  // client can upsert without receiving the full table each time.
+  | {
+      type: "pheromone_updated";
+      file: string;
+      state: { visits: number; avgInterest: number; avgConfidence: number; latestNote: string };
+    }
   // Unit 40: per-attempt latency sample emitted by each runner's
   // onTiming callback (sibling of the existing logDiag /
   // _prompt_timing record but delivered over the WS stream so the UI
@@ -237,11 +245,25 @@ export interface SwarmStatus {
   // by agentId; present only for agents whose stream hasn't yet hit
   // session.idle. Empty / absent when no stream is active.
   streaming?: Record<string, SwarmStatusStreamingEntry>;
+  // Phase 2a: stigmergy pheromone table keyed by file path. Only
+  // populated for stigmergy runs; other presets omit it.
+  pheromones?: Record<string, SwarmStatusPheromoneEntry>;
 }
 
 export interface SwarmStatusStreamingEntry {
   text: string;
   updatedAt: number;
+}
+
+// Phase 2a (2026-04-24): stigmergy-only pheromone table. File path →
+// annotation state. Drives every agent's next-file pick during a
+// stigmergy run; previously this was the ONE piece of state the UI
+// couldn't see at all.
+export interface SwarmStatusPheromoneEntry {
+  visits: number;
+  avgInterest: number;
+  avgConfidence: number;
+  latestNote: string;
 }
 
 // Unit 62: shapes for the SwarmStatus catch-up payload. Mirror of

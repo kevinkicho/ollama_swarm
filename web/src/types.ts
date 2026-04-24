@@ -208,6 +208,12 @@ export type SwarmEvent =
   | { type: "board_state"; snapshot: BoardSnapshot; counts: BoardCountsDTO }
   | { type: "contract_updated"; contract: ExitContract }
   | { type: "run_summary"; summary: RunSummary }
+  // Phase 2a: stigmergy pheromone update.
+  | {
+      type: "pheromone_updated";
+      file: string;
+      state: PheromoneEntry;
+    }
   // Unit 40: per-attempt latency sample. The zustand store keeps a
   // bounded rolling window per agent; the AgentPanel renders it as a
   // sparkline in the "thinking 3m54s" tooltip so users can see whether
@@ -257,6 +263,16 @@ export type SwarmEvent =
       agentCount: number;
       rounds: number;
     };
+
+// Phase 2a (2026-04-24): stigmergy pheromone table entry — the shared
+// annotation state that drives file-picking. Mirror of
+// SwarmStatusPheromoneEntry server-side.
+export interface PheromoneEntry {
+  visits: number;
+  avgInterest: number;
+  avgConfidence: number;
+  latestNote: string;
+}
 
 // Unit 40: one recent-latency sample as stored client-side.
 export interface LatencySample {
@@ -343,4 +359,6 @@ export interface SwarmStatusSnapshot {
   // Task #39: per-agent partial-stream text captured server-side so
   // a Ctrl-R mid-stream can restore the in-progress agent turn.
   streaming?: Record<string, { text: string; updatedAt: number }>;
+  // Phase 2a: stigmergy pheromone table for catch-up hydration.
+  pheromones?: Record<string, PheromoneEntry>;
 }
