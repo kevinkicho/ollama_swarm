@@ -52,11 +52,23 @@ export class Orchestrator {
     // Assign up-front so status()/isRunning() reflect the in-progress run for
     // new WS clients and the POST /status endpoint while start() is still awaiting.
     this.runner = runner;
-    // Unit 52a: anchor for the UI's runtime ticker. Single source of
-    // truth across all 7 runners — emitted here so we don't need 7
-    // copies of the same one-shot event. Fires BEFORE runner.start
-    // so a slow clone or spawn counts toward user-visible runtime.
-    this.opts.emit({ type: "run_started", startedAt: Date.now() });
+    // Unit 52a + 52c: anchor for the UI's runtime ticker AND identity
+    // strip. Single source of truth across all 7 runners. Fires BEFORE
+    // runner.start so a slow clone or spawn counts toward user-visible
+    // runtime. Carries the resolved config so the UI can show preset
+    // + per-agent models + clone path without a REST round-trip.
+    this.opts.emit({
+      type: "run_started",
+      startedAt: Date.now(),
+      preset: cfg.preset,
+      // Per-agent overrides (Unit 42) fall back to cfg.model when absent.
+      plannerModel: cfg.plannerModel ?? cfg.model,
+      workerModel: cfg.workerModel ?? cfg.model,
+      repoUrl: cfg.repoUrl,
+      clonePath: cfg.localPath,
+      agentCount: cfg.agentCount,
+      rounds: cfg.rounds,
+    });
     try {
       await runner.start(cfg);
     } catch (err) {

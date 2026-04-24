@@ -1,3 +1,6 @@
+import { spawn } from "node:child_process";
+import path from "node:path";
+import { promises as fs } from "node:fs";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { config } from "../config.js";
@@ -83,6 +86,13 @@ const StartBody = z.object({
 
 const SayBody = z.object({ text: z.string().min(1) });
 
+// Unit 52c: open-clone request body. Path is the absolute path of the
+// directory the user wants to open in the OS file manager. Validated
+// at handler time against the orchestrator's known clone — we only
+// open paths the runner is currently or was recently working in,
+// never arbitrary filesystem locations.
+const OpenBody = z.object({ path: z.string().min(1).max(4096) });
+
 export function swarmRouter(orch: Orchestrator): Router {
   const r = Router();
 
@@ -163,5 +173,67 @@ export function swarmRouter(orch: Orchestrator): Router {
     res.json({ ok: true });
   });
 
+  // Unit 52c: open the run's clone path in the OS file manager
+  // (Windows Explorer / macOS Finder / xdg-open on Linux). Locked
+  // down to the orchestrator's CURRENT clone path so the endpoint
+  // can't be coaxed into opening arbitrary filesystem locations
+  // from the LAN. Best-effort: a spawn failure surfaces as 500.
+  r.post("/open", async (req: Request, res: Response) => {
+    const parsed = OpenBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.flatten() });
+      return;
+    }
+    const requested = path.resolve(parsed.data.path);
+    const status = orch.status();
+    const allowed = status.localPath ? path.resolve(status.localPath) : null;
+    if (!allowed || requested !== allowed) {
+      res.status(403).json({
+        error: "open: requested path doesn't match the active run's clonePath",
+      });
+      return;
+    }
+    try {
+      // Verify it actually exists before shelling out — saves us a
+      // confusing OS-level error and lets us return a clean 404.
+      const stat = await fs.stat(requested);
+      if (!stat.isDirectory()) {
+        res.status(400).json({ error: "open: path is not a directory" });
+        return;
+      }
+    } catch {
+      res.status(404).json({ error: "open: path does not exist" });
+      return;
+    }
+    try {
+      openInOsFileManager(requested);
+      res.json({ ok: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: `open: spawn failed (${msg})` });
+    }
+  });
+
   return r;
+}
+
+// Cross-platform "show this directory in the user's file manager."
+// Detached + unref so the spawned process doesn't keep the dev
+// server alive as a child. stdio ignored so a slow file-manager
+// startup doesn't block our HTTP response.
+function openInOsFileManager(absPath: string): void {
+  const opts = { detached: true, stdio: "ignore" as const };
+  if (process.platform === "win32") {
+    // `start "" <path>` opens the path in Explorer on Windows. The
+    // empty title arg is REQUIRED — without it `start` treats the
+    // path as the title.
+    spawn("cmd", ["/c", "start", "", absPath], opts).unref();
+  } else if (process.platform === "darwin") {
+    spawn("open", [absPath], opts).unref();
+  } else {
+    // Linux / WSL2 — xdg-open. WSL2 also has wslview as a fallback
+    // but xdg-open is more portable; fall through to the user's
+    // default handler.
+    spawn("xdg-open", [absPath], opts).unref();
+  }
 }

@@ -207,11 +207,21 @@ export type SwarmEvent =
       priorChangedFiles: number;
       priorUntrackedFiles: number;
     }
-  // Unit 52a: emitted once at the very top of Orchestrator.start.
-  // Anchors the UI's runtime ticker on a stable wall-clock value
-  // that includes clone + spawn time (which the runtime user
-  // perceives as "the run is taking a while").
-  | { type: "run_started"; startedAt: number };
+  // Unit 52a + 52c: emitted once at the very top of Orchestrator.start.
+  // Anchors the UI's runtime ticker AND populates the run-identity
+  // strip (preset + per-agent models + clone path) without a separate
+  // REST round-trip.
+  | {
+      type: "run_started";
+      startedAt: number;
+      preset: string;
+      plannerModel: string;
+      workerModel: string;
+      repoUrl: string;
+      clonePath: string;
+      agentCount: number;
+      rounds: number;
+    };
 
 // Unit 40: one recent-latency sample as stored client-side.
 export interface LatencySample {
@@ -228,4 +238,17 @@ export interface CloneState {
   priorCommits: number;
   priorChangedFiles: number;
   priorUntrackedFiles: number;
+}
+
+// Unit 52c: client-side mirror of the run_started event's config
+// fields. Used by the run-identity strip in SwarmView. Excludes
+// startedAt (kept as a separate ticker anchor in store.runStartedAt).
+export interface RunConfigSnapshot {
+  preset: string;
+  plannerModel: string;
+  workerModel: string;
+  repoUrl: string;
+  clonePath: string;
+  agentCount: number;
+  rounds: number;
 }

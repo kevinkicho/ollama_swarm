@@ -79,6 +79,15 @@ function dispatch(ev: SwarmEvent): void {
       break;
     case "run_started":
       s.setRunStartedAt(ev.startedAt);
+      s.setRunConfig({
+        preset: ev.preset,
+        plannerModel: ev.plannerModel,
+        workerModel: ev.workerModel,
+        repoUrl: ev.repoUrl,
+        clonePath: ev.clonePath,
+        agentCount: ev.agentCount,
+        rounds: ev.rounds,
+      });
       break;
   }
 }

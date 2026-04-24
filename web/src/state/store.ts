@@ -7,6 +7,7 @@ import type {
   ExitContract,
   Finding,
   LatencySample,
+  RunConfigSnapshot,
   RunSummary,
   SwarmPhase,
   Todo,
@@ -41,6 +42,10 @@ interface SwarmStore {
   // started this run. Anchors the runtime ticker. Undefined when no
   // run has fired this session OR after reset().
   runStartedAt?: number;
+  // Unit 52c: snapshot of the run's config (preset, models, paths)
+  // captured from the same run_started event. Drives the
+  // run-identity strip.
+  runConfig?: RunConfigSnapshot;
 
   setPhase: (phase: SwarmPhase, round: number) => void;
   upsertAgent: (a: AgentState) => void;
@@ -62,6 +67,7 @@ interface SwarmStore {
   setCloneState: (c: CloneState) => void;
   dismissCloneBanner: () => void;
   setRunStartedAt: (ts: number) => void;
+  setRunConfig: (c: RunConfigSnapshot) => void;
 
   setError: (msg: string | undefined) => void;
   reset: () => void;
@@ -82,6 +88,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   cloneState: undefined,
   cloneBannerDismissed: false,
   runStartedAt: undefined,
+  runConfig: undefined,
 
   setPhase: (phase, round) => set({ phase, round }),
   upsertAgent: (a) => set((s) => ({ agents: { ...s.agents, [a.id]: a } })),
@@ -192,6 +199,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   setCloneState: (c) => set({ cloneState: c, cloneBannerDismissed: false }),
   dismissCloneBanner: () => set({ cloneBannerDismissed: true }),
   setRunStartedAt: (ts) => set({ runStartedAt: ts }),
+  setRunConfig: (c) => set({ runConfig: c }),
 
   setError: (msg) => set({ error: msg }),
   reset: () =>
@@ -210,5 +218,6 @@ export const useSwarm = create<SwarmStore>((set) => ({
       cloneState: undefined,
       cloneBannerDismissed: false,
       runStartedAt: undefined,
+      runConfig: undefined,
     }),
 }));

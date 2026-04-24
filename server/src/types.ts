@@ -112,15 +112,23 @@ export type SwarmEvent =
       priorChangedFiles: number;
       priorUntrackedFiles: number;
     }
-  // Unit 52a: emitted once at the very top of Orchestrator.start so
-  // the UI's runtime ticker has a stable wall-clock anchor. Fires
-  // BEFORE the runner's first phase transition, so a slow clone +
-  // spawn count toward the user-visible runtime. The summary's
-  // startedAt may differ slightly (it tracks "executing" start for
-  // cap math), but the user-visible ticker uses THIS value.
+  // Unit 52a + 52c: emitted once at the very top of Orchestrator.start
+  // so the UI's runtime ticker has a stable wall-clock anchor AND the
+  // run-identity strip has its config data without a separate REST
+  // round-trip. Fires BEFORE the runner's first phase transition, so
+  // a slow clone + spawn count toward the user-visible runtime. The
+  // summary's startedAt may differ slightly (it tracks "executing"
+  // start for cap math), but the user-visible ticker uses THIS value.
   | {
       type: "run_started";
       startedAt: number;
+      preset: string;
+      plannerModel: string;
+      workerModel: string;
+      repoUrl: string;
+      clonePath: string;
+      agentCount: number;
+      rounds: number;
     };
 
 export type SwarmPhase =

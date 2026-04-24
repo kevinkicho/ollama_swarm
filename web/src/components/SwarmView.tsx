@@ -55,6 +55,7 @@ export function SwarmView() {
   return (
     <div className="h-full flex flex-col">
       <CloneBanner />
+      <IdentityStrip />
       <div className="flex-1 grid grid-cols-[260px_1fr] min-h-0">
       <aside className="border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800">
         <div className="flex items-center justify-between mb-2">
@@ -159,6 +160,71 @@ function CloneBanner() {
 function truncateLeft(s: string, maxLen: number): string {
   if (s.length <= maxLen) return s;
   return "…" + s.slice(s.length - maxLen + 1);
+}
+
+// Unit 52c: persistent strip under the header showing the run's
+// identity — preset + per-agent models + clone path. The path is
+// click-to-open via POST /api/swarm/open (server validates the
+// request matches the active run's clonePath, then shells out to
+// Explorer/Finder/xdg-open).
+function IdentityStrip() {
+  const cfg = useSwarm((s) => s.runConfig);
+  if (!cfg) return null;
+  const runName = deriveRunName(cfg.clonePath);
+  const onOpen = async () => {
+    try {
+      const res = await fetch("/api/swarm/open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: cfg.clonePath }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        // Soft failure — log to console rather than spam the user.
+        console.warn("open clone path failed:", body.error ?? res.status);
+      }
+    } catch (err) {
+      console.warn("open clone path failed:", err);
+    }
+  };
+  const sameModel = cfg.plannerModel === cfg.workerModel;
+  return (
+    <div className="bg-ink-900/60 border-b border-ink-700 px-4 py-1.5 flex items-center gap-3 text-xs font-mono text-ink-300">
+      <span className="text-ink-100 font-semibold">{runName}</span>
+      <span className="text-ink-600">·</span>
+      <span title="Preset"><span className="text-ink-500">preset</span> {cfg.preset}</span>
+      <span className="text-ink-600">·</span>
+      {sameModel ? (
+        <span title="Planner + worker model"><span className="text-ink-500">model</span> {cfg.plannerModel}</span>
+      ) : (
+        <>
+          <span title="Planner model"><span className="text-ink-500">planner</span> {cfg.plannerModel}</span>
+          <span className="text-ink-600">·</span>
+          <span title="Worker model"><span className="text-ink-500">worker</span> {cfg.workerModel}</span>
+        </>
+      )}
+      <span className="text-ink-600">·</span>
+      <span><span className="text-ink-500">agents</span> {cfg.agentCount}</span>
+      <span className="flex-1 text-right">
+        <button
+          onClick={onOpen}
+          title={`Open in OS file manager — ${cfg.clonePath}`}
+          className="text-ink-400 hover:text-ink-100 hover:underline truncate max-w-md inline-block align-bottom"
+        >
+          {truncateLeft(cfg.clonePath, 60)}
+        </button>
+      </span>
+    </div>
+  );
+}
+
+// Run name = basename of the clone path. Falls back to a placeholder
+// if the path lacks a meaningful tail (defensive).
+function deriveRunName(clonePath: string): string {
+  // Cross-platform basename: split on either separator and grab the
+  // non-empty tail. Path module on web is overkill for this.
+  const parts = clonePath.split(/[\\/]/).filter((p) => p.length > 0);
+  return parts[parts.length - 1] ?? "(unnamed run)";
 }
 
 interface TabButtonProps {
