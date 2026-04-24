@@ -6,6 +6,11 @@ import {
   CRITIC_FILE_SNIPPET_MAX,
   CRITIC_RECENT_COMMITS_MAX,
   CRITIC_SYSTEM_PROMPT,
+  CONSISTENCY_CRITIC_NAME,
+  CONSISTENCY_CRITIC_SYSTEM_PROMPT,
+  REGRESSION_CRITIC_NAME,
+  REGRESSION_CRITIC_SYSTEM_PROMPT,
+  SUBSTANCE_CRITIC_NAME,
   parseCriticResponse,
   type CriticSeed,
 } from "./critic.js";
@@ -247,5 +252,55 @@ describe("buildCriticRepairPrompt", () => {
     assert.match(p, /JSON parse failed: x/);
     assert.match(p, /not JSON at all/);
     assert.match(p, /accept.*reject/);
+  });
+});
+
+// Unit 60: ensemble critic prompts (regression + consistency).
+describe("Unit 60 — critic ensemble prompts", () => {
+  it("exposes the three lane names as constants", () => {
+    assert.equal(SUBSTANCE_CRITIC_NAME, "substance");
+    assert.equal(REGRESSION_CRITIC_NAME, "regression");
+    assert.equal(CONSISTENCY_CRITIC_NAME, "consistency");
+  });
+
+  it("regression prompt is narrowly scoped to regression risk", () => {
+    assert.match(REGRESSION_CRITIC_SYSTEM_PROMPT, /REGRESSION CRITIC/);
+    // Anchors the lane name as the primary lens.
+    assert.match(REGRESSION_CRITIC_SYSTEM_PROMPT, /BREAK SOMETHING THAT CURRENTLY WORKS/);
+    // Calls out the specific patterns.
+    assert.match(REGRESSION_CRITIC_SYSTEM_PROMPT, /CALLER BREAKAGE/);
+    assert.match(REGRESSION_CRITIC_SYSTEM_PROMPT, /REMOVED INVARIANT/);
+    assert.match(REGRESSION_CRITIC_SYSTEM_PROMPT, /TEST DELETION/);
+    // Should NOT poach the substance critic's busywork patterns.
+    assert.ok(!/BUSYWORK/.test(REGRESSION_CRITIC_SYSTEM_PROMPT));
+  });
+
+  it("consistency prompt is narrowly scoped to codebase fit", () => {
+    assert.match(CONSISTENCY_CRITIC_SYSTEM_PROMPT, /CONSISTENCY CRITIC/);
+    assert.match(CONSISTENCY_CRITIC_SYSTEM_PROMPT, /DOESN'T MATCH the rest of the codebase/);
+    assert.match(CONSISTENCY_CRITIC_SYSTEM_PROMPT, /NAMING DRIFT/);
+    assert.match(CONSISTENCY_CRITIC_SYSTEM_PROMPT, /DUPLICATE UTILITY/);
+    assert.match(CONSISTENCY_CRITIC_SYSTEM_PROMPT, /BYPASSED ABSTRACTION/);
+    assert.ok(!/REGRESSION/.test(CONSISTENCY_CRITIC_SYSTEM_PROMPT));
+  });
+
+  it("all three lanes use the same JSON envelope shape so one parser fits all", () => {
+    for (const prompt of [
+      CRITIC_SYSTEM_PROMPT,
+      REGRESSION_CRITIC_SYSTEM_PROMPT,
+      CONSISTENCY_CRITIC_SYSTEM_PROMPT,
+    ]) {
+      assert.match(prompt, /verdict.*accept.*reject/);
+      assert.match(prompt, /rationale/);
+    }
+  });
+
+  it("each lane has a distinct system prompt (no copy-paste leakage)", () => {
+    const all = new Set([
+      CRITIC_SYSTEM_PROMPT,
+      REGRESSION_CRITIC_SYSTEM_PROMPT,
+      CONSISTENCY_CRITIC_SYSTEM_PROMPT,
+    ]);
+    assert.equal(all.size, 3, "all three prompts must be distinct strings");
   });
 });

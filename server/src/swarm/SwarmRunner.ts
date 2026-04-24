@@ -143,6 +143,15 @@ export interface RunConfig {
    * the diversity. Blackboard-only.
    */
   specializedWorkers?: boolean;
+  /**
+   * Unit 60: when true, the critic at commit time is a 3-critic
+   * ensemble (substance / regression / consistency, each with a
+   * different system prompt) instead of a single critic. Verdict
+   * is majority-vote (2-of-3 accept = accept). Triples critic
+   * cost per commit; only meaningful when cfg.critic !== false
+   * (no point ensembling a disabled critic). Default off.
+   */
+  criticEnsemble?: boolean;
 }
 
 export interface RunnerOpts {

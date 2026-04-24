@@ -94,6 +94,10 @@ const StartBody = z.object({
   // Unit 59 (59a): per-worker role bias (correctness / simplicity /
   // consistency cycling). Blackboard-only.
   specializedWorkers: z.boolean().optional(),
+  // Unit 60: 3-critic ensemble (substance / regression / consistency)
+  // with majority vote. Blackboard-only; only meaningful when critic
+  // is enabled.
+  criticEnsemble: z.boolean().optional(),
 });
 
 const SayBody = z.object({ text: z.string().min(1) });
@@ -161,6 +165,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         dedicatedAuditor: parsed.data.dedicatedAuditor,
         auditorModel: parsed.data.auditorModel,
         specializedWorkers: parsed.data.specializedWorkers,
+        criticEnsemble: parsed.data.criticEnsemble,
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {
