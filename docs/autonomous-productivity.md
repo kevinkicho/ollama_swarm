@@ -103,9 +103,10 @@ yet. **→ Unit 36 (planned).**
 | 52   | Run-identity panel + run history dropdown   | planned (Kevin's ask 2026-04-23)|
 | 53   | Contract panel: status filter (default unmet)| planned (Kevin's ask 2026-04-23)|
 | 54   | Transcript: collapse worker JSON to summary | planned (Kevin's ask 2026-04-23)|
-| 55+  | Cross-run resume + tier-aware replay        | hypothesized                   |
-| 55+  | Auto-start app (workers execute shell)      | hypothesized                   |
-| 55+  | Persistent swarm-ui across audits           | hypothesized                   |
+| 55   | Auto-killAll on natural completion          | shipped (`76fe957`, 2026-04-23)|
+| 56+  | Cross-run resume + tier-aware replay        | hypothesized                   |
+| 56+  | Auto-start app (workers execute shell)      | hypothesized                   |
+| 56+  | Persistent swarm-ui across audits           | hypothesized                   |
 
 ## Units 47-51 — Build-on-existing-clone work pattern (spec-lite)
 
