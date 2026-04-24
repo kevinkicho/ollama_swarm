@@ -115,9 +115,10 @@ yet. **→ Unit 36 (planned).**
 | 59   | Specialized-worker blackboard variant       | planned (Kevin's ask 2026-04-23)|
 | 60   | Multi-prompt critic ensemble                | planned (Kevin's ask 2026-04-23)|
 | 62   | Page-refresh persistence (WS catch-up snapshot) | planned (Kevin's ask 2026-04-23)|
-| 63+  | Cross-run resume + tier-aware replay        | hypothesized                   |
-| 63+  | Auto-start app (workers execute shell)      | hypothesized                   |
-| 63+  | Persistent swarm-ui across audits           | hypothesized                   |
+| 63   | SetupForm: expose ambitionTiers + multi-hour preset chip | planned (Kevin's ask 2026-04-23)|
+| 64+  | Cross-run resume + tier-aware replay        | hypothesized                   |
+| 64+  | Auto-start app (workers execute shell)      | hypothesized                   |
+| 64+  | Persistent swarm-ui across audits           | hypothesized                   |
 
 (Unit 61 was queued during the 2026-04-23 brainstorm based on Kevin's
 "models want conversation" hypothesis. Both Kevin and Claude reviewed
@@ -594,6 +595,43 @@ runtime.
 (Unit 35) vs ensemble. Measure: (a) how many commits the ensemble
 rejects that Unit 35 would have accepted, (b) how many of those
 were actually busywork on manual review.
+
+## Unit 63 — SetupForm: expose ambitionTiers + multi-hour preset chip (spec-lite)
+
+Kevin's 2026-04-23 ask: today's SetupForm has Unit 43's wall-clock
+cap input but NOT Unit 34's `ambitionTiers` input. To run the
+"multi-hour autonomous improvement" north-star scenario you have
+to know to POST it directly. Surface the knob in the UI.
+
+**Two changes:**
+
+**63a — `ambitionTiers` input.** Add to the blackboard
+`PresetAdvancedSettings` next to the wall-clock cap. Number input,
+0-20 (matches route Zod cap). Empty/0 = inherit env (today's
+default off). Helper text: "0 = stop on first 'all met' (default).
+1-20 = climb that many tiers — each tier asks the planner for a
+more ambitious next contract once the current one is satisfied."
+
+**63b — Multi-hour preset chip.** A one-click "Multi-hour
+autonomous (8h, 5 tiers)" button next to the cap inputs that fills
+both fields:
+- `wallClockCapMin` → 480
+- `ambitionTiers` → 5
+
+Mirrors the existing "+ Deliver every README feature + research"
+chip pattern under the user-directive textarea. Lets the user opt
+into the north-star scenario without needing to remember the magic
+numbers.
+
+**Validation/UX nits:**
+- When `ambitionTiers > 0` AND `wallClockCapMin < 60`, show a soft
+  warning ("tier-climb usually needs >1 hr to make a meaningful
+  second tier"). Inline text under the input, not a modal.
+- The chip's button label dynamically updates if defaults change
+  later (single source-of-truth in a constant).
+
+Pure web — no server / Zod changes. The route schema already
+accepts `ambitionTiers` (added in Unit 34). ~30 min total.
 
 ## Unit 62 — Page-refresh persistence (WS catch-up snapshot) (spec-lite)
 
