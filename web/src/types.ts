@@ -81,6 +81,11 @@ export type TranscriptEntrySummary =
       kind: "council_synthesis";
       rounds: number;
     }
+  // Task #80: stigmergy report-out at end of run.
+  | {
+      kind: "stigmergy_report";
+      filesRanked: number;
+    }
   // Task #72 (2026-04-25): structured payload for the end-of-run
   // banner. Web renders as a per-agent table grid instead of plain
   // text. Mirrors server-side `kind: "run_finished"` exactly.

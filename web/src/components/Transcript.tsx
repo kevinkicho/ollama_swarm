@@ -161,20 +161,41 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
       );
       return <CollapsibleBlock className={className} style={style} header={chipHeader} text={entry.text} />;
     }
-    // Task #79: council synthesis — distinctive emerald wrapper so the
-    // consensus answer is visually obvious as the run's takeaway.
+    // Task #79 + #80: synthesis-style entries — distinctive bordered
+    // wrapper so the consolidated takeaway is visually obvious as the
+    // run's "answer", separate from the per-turn drafts above.
     if (entry.summary.kind === "council_synthesis") {
+      const r = entry.summary.rounds;
       const synHeader = (
         <div>
           {header}
           <div className="text-[10px] uppercase tracking-wider font-semibold text-emerald-300 mb-1">
-            ═ Council synthesis · {entry.summary.rounds} round{entry.summary.rounds === 1 ? "" : "s"} ═
+            ═ Council synthesis · {r} round{r === 1 ? "" : "s"} ═
           </div>
         </div>
       );
       return (
         <CollapsibleBlock
           className="rounded-md p-3 border-2 border-emerald-700/60 bg-emerald-950/20 text-sm"
+          style={undefined}
+          header={synHeader}
+          text={entry.text}
+        />
+      );
+    }
+    if (entry.summary.kind === "stigmergy_report") {
+      const n = entry.summary.filesRanked;
+      const synHeader = (
+        <div>
+          {header}
+          <div className="text-[10px] uppercase tracking-wider font-semibold text-sky-300 mb-1">
+            ═ Stigmergy report-out · {n} files ranked ═
+          </div>
+        </div>
+      );
+      return (
+        <CollapsibleBlock
+          className="rounded-md p-3 border-2 border-sky-700/60 bg-sky-950/20 text-sm"
           style={undefined}
           header={synHeader}
           text={entry.text}
@@ -327,6 +348,9 @@ function formatServerSummary(s: TranscriptEntrySummary): string {
   }
   if (s.kind === "council_synthesis") {
     return `Council synthesis (${s.rounds} round${s.rounds === 1 ? "" : "s"})`;
+  }
+  if (s.kind === "stigmergy_report") {
+    return `Stigmergy report-out (${s.filesRanked} files ranked)`;
   }
   // worker_hunks
   const opParts: string[] = [];

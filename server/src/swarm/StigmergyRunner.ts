@@ -187,6 +187,13 @@ export class StigmergyRunner implements SwarmRunner {
       }
       if (!this.stopping) {
         this.appendSystem(`Stigmergy run complete. Annotation table:\n${formatAnnotations(this.annotations)}`);
+        // Task #80 (2026-04-25): report-out synthesis. Without this,
+        // the run ends with the raw annotation table and no human-
+        // readable "what did we find" summary. Lead agent ranks files
+        // by visits × interest and produces a top-N narrative.
+        if (this.annotations.size > 0) {
+          await this.runReportOutPass();
+        }
       }
     } catch (err) {
       crashMessage = err instanceof Error ? err.message : String(err);
@@ -244,6 +251,131 @@ export class StigmergyRunner implements SwarmRunner {
     } catch (writeErr) {
       const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
       this.appendSystem(`Failed to write run summary (${msg})`);
+    }
+  }
+
+  // Task #80: report-out pass at end of run. Routes through agent-1
+  // with the ranked annotation table and asks for a top-N narrative.
+  // Tagged with summary kind "stigmergy_report" so the modal renders
+  // distinctively. Failure is non-fatal — the raw annotation table
+  // already landed in transcript above.
+  private async runReportOutPass(): Promise<void> {
+    const agents = this.opts.manager.list();
+    const lead = agents.find((a) => a.index === 1);
+    if (!lead) return;
+    this.opts.manager.markStatus(lead.id, "thinking");
+    this.emitAgentState({
+      id: lead.id,
+      index: lead.index,
+      port: lead.port,
+      sessionId: lead.sessionId,
+      status: "thinking",
+      thinkingSince: Date.now(),
+    });
+    this.stats.countTurn(lead.id);
+    this.appendSystem(`Synthesizing stigmergy findings (agent-${lead.index})…`);
+
+    // Server-side ranking — annotations sorted by visits × avgInterest.
+    // Top 10 surfaces the highest-signal files; cap prevents prompt
+    // bloat on big repos.
+    const ranked = [...this.annotations.entries()]
+      .map(([file, a]) => ({ file, ...a, score: a.visits * a.avgInterest }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10);
+    const tableText = ranked
+      .map((r, i) => `${i + 1}. ${r.file} — visits=${r.visits}, interest=${r.avgInterest.toFixed(1)}, confidence=${r.avgConfidence.toFixed(1)}, note="${r.latestNote}"`)
+      .join("\n");
+    const prompt = [
+      "You are Agent 1, the stigmergy synthesis lead. The swarm just finished exploring a repo with self-organizing file picks driven by a shared annotation table.",
+      "Your job NOW is to produce a human-readable REPORT-OUT summarizing what the swarm found.",
+      "",
+      "STRUCTURE your response as:",
+      "1. **Top findings** — 3-5 bullets naming the most interesting files and WHY (cite the agents' notes).",
+      "2. **Coverage** — what was explored well, what was missed (any obvious gaps in the pheromone table?).",
+      "3. **Recommended next action** — ONE concrete next step a developer should take based on what the swarm surfaced.",
+      "",
+      "Keep it under ~400 words. Be specific. Reference file paths. Don't just restate the table — interpret it.",
+      "",
+      "=== TOP 10 FILES BY (visits × interest) ===",
+      tableText,
+      "=== END TABLE ===",
+      "",
+      "Produce your report-out now.",
+    ].join("\n");
+
+    const ABSOLUTE_MAX_MS = 4 * 60_000;
+    const turnStart = Date.now();
+    this.opts.manager.touchActivity(lead.sessionId, turnStart);
+    const controller = new AbortController();
+    const watchdog = setInterval(() => {
+      if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
+        controller.abort(new Error(`absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s)`));
+        void lead.client.session.abort({ path: { id: lead.sessionId } }).catch(() => {});
+      }
+    }, 10_000);
+    try {
+      const res = await promptWithRetry(lead, prompt, {
+        signal: controller.signal,
+        agentName: "swarm-read",
+        describeError: describeSdkError,
+        onTiming: ({ attempt, elapsedMs, success }) => {
+          this.stats.onTiming(lead.id, success, elapsedMs);
+          this.opts.manager.recordPromptComplete(lead.id, { attempt, elapsedMs, success });
+          this.opts.emit({
+            type: "agent_latency_sample",
+            agentId: lead.id,
+            agentIndex: lead.index,
+            attempt,
+            elapsedMs,
+            success,
+            ts: Date.now(),
+          });
+        },
+        onRetry: ({ attempt, max, reasonShort, delayMs }) => {
+          this.stats.onRetry(lead.id);
+          this.appendSystem(
+            `[${lead.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
+          );
+        },
+      });
+      const diagCtx = {
+        runner: "stigmergy",
+        agentId: lead.id,
+        agentIndex: lead.index,
+        logDiag: this.opts.logDiag,
+      };
+      const extracted = extractTextWithDiag(res, diagCtx);
+      let text = extracted.text;
+      if ((extracted.isEmpty || looksLikeJunk(text)) && !this.stopping) {
+        const retryText = await retryEmptyResponse(lead, prompt, "swarm-read", diagCtx);
+        if (retryText !== null) text = retryText;
+      }
+      const entry: TranscriptEntry = {
+        id: randomUUID(),
+        role: "agent",
+        agentId: lead.id,
+        agentIndex: lead.index,
+        text,
+        ts: Date.now(),
+        summary: { kind: "stigmergy_report", filesRanked: ranked.length },
+      };
+      this.transcript.push(entry);
+      this.opts.emit({ type: "transcript_append", entry });
+    } catch (err) {
+      this.appendSystem(
+        `[${lead.id}] report-out failed (${err instanceof Error ? err.message : String(err)}); skipping synthesis.`,
+      );
+    } finally {
+      clearInterval(watchdog);
+      this.opts.manager.markStatus(lead.id, "ready");
+      this.emitAgentState({
+        id: lead.id,
+        index: lead.index,
+        port: lead.port,
+        sessionId: lead.sessionId,
+        status: "ready",
+        lastMessageAt: Date.now(),
+      });
     }
   }
 

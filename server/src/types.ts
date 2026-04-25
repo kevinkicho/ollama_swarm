@@ -113,6 +113,13 @@ export type TranscriptEntrySummary =
       kind: "council_synthesis";
       rounds: number;
     }
+  // Task #80 (2026-04-25): stigmergy report-out at end of run.
+  // Agent-1 takes the ranked pheromone table and produces a
+  // top-findings + coverage + next-action narrative.
+  | {
+      kind: "stigmergy_report";
+      filesRanked: number;
+    }
   // Task #72 (2026-04-25): structured payload for the end-of-run
   // banner. The transcript text is still human-readable, but the
   // grid renderer uses these fields directly so it can lay out a
