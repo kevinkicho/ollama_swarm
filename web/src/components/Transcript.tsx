@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSwarm } from "../state/store";
 import type { TranscriptEntry, TranscriptEntrySummary } from "../types";
 import { summarizeAgentJson } from "./transcriptSummarize";
@@ -513,48 +513,54 @@ interface CollapsibleProps {
 }
 function CollapsibleBlock({ text, header, className, style }: CollapsibleProps) {
   const [expanded, setExpanded] = useState(false);
-  // Task #75: pixel-height clip + fade-out over the previous char-
-  // length truncation. The char count was a poor proxy for visual
-  // height — 600 chars of short lines could still eat half the
-  // viewport. Now we cap the body at MAX_BUBBLE_HEIGHT_PX with a
-  // fade-out gradient + Show more button. Char-length fallback kept
-  // for very long messages so we don't render a 50KB DOM node just
-  // to clip it.
+  // Char-length truncation as a defensive cap (don't render 50KB
+  // DOM nodes just to clip them visually).
   const charLong = text.length > COLLAPSE_THRESHOLD;
   const shown = !charLong || expanded ? text : text.slice(0, COLLAPSE_THRESHOLD).trimEnd() + "…";
   const bodyStyle = expanded ? undefined : { maxHeight: MAX_BUBBLE_HEIGHT_PX, overflow: "hidden" as const };
+  // Task #76: only render Show more when the body ACTUALLY overflows.
+  // Previously the button appeared on every collapsed message
+  // (including 1-line ones) — clicking did nothing visible. Measure
+  // scrollHeight vs clientHeight via a ref to detect real overflow.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [overflows, setOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    // 1px tolerance for sub-pixel rendering.
+    const isOverflowing = el.scrollHeight - el.clientHeight > 1;
+    if (isOverflowing !== overflows) setOverflows(isOverflowing);
+  }, [shown, expanded, overflows]);
+  const hasMore = charLong || overflows;
   return (
     <div className={className} style={style}>
       {header}
       <div className="relative">
-        <div className="whitespace-pre-wrap" style={bodyStyle}>{shown}</div>
-        {!expanded ? (
+        <div ref={bodyRef} className="whitespace-pre-wrap" style={bodyStyle}>{shown}</div>
+        {!expanded && hasMore ? (
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-ink-900 to-transparent"
           />
         ) : null}
       </div>
-      {/* Show more / less control. Visible whenever the char-truncate
-          fired OR the body was tall enough to hit the height cap. We
-          can't measure DOM height here without a ref, so always offer
-          the button when not expanded; clicking when nothing's hidden
-          is a no-op. Kept terse so it doesn't itself eat space. */}
-      {!expanded ? (
-        <button
-          onClick={() => setExpanded(true)}
-          className="mt-1 text-xs underline text-ink-400 hover:text-ink-200"
-        >
-          Show more{charLong ? ` (${text.length - COLLAPSE_THRESHOLD} more chars)` : ""}
-        </button>
-      ) : (
-        <button
-          onClick={() => setExpanded(false)}
-          className="mt-1 text-xs underline text-ink-400 hover:text-ink-200"
-        >
-          Show less
-        </button>
-      )}
+      {hasMore ? (
+        !expanded ? (
+          <button
+            onClick={() => setExpanded(true)}
+            className="mt-1 text-xs underline text-ink-400 hover:text-ink-200"
+          >
+            Show more{charLong ? ` (${text.length - COLLAPSE_THRESHOLD} more chars)` : ""}
+          </button>
+        ) : (
+          <button
+            onClick={() => setExpanded(false)}
+            className="mt-1 text-xs underline text-ink-400 hover:text-ink-200"
+          >
+            Show less
+          </button>
+        )
+      ) : null}
     </div>
   );
 }
@@ -637,8 +643,17 @@ function WorkerHunksBubble({
     added += c.added;
     removed += c.removed;
   }
-  // Task #75: cap bubble body height + fade-out + show-more.
+  // Task #75 + #76: cap height + measure actual overflow so the
+  // Show more button only appears when there's hidden content.
   const bodyStyle = expanded ? undefined : { maxHeight: MAX_BUBBLE_HEIGHT_PX, overflow: "hidden" as const };
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [overflows, setOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const isOverflowing = el.scrollHeight - el.clientHeight > 1;
+    if (isOverflowing !== overflows) setOverflows(isOverflowing);
+  }, [hunks, expanded, overflows]);
   return (
     <div className={className} style={style}>
       <div className="flex items-start justify-between gap-2 mb-1">
@@ -656,24 +671,26 @@ function WorkerHunksBubble({
         {removed > 0 ? <div className="text-rose-300 font-mono tabular-nums shrink-0">−{removed}</div> : null}
       </div>
       <div className="relative">
-        <div className="space-y-2" style={bodyStyle}>
+        <div ref={bodyRef} className="space-y-2" style={bodyStyle}>
           {hunks.map((h, i) => (
             <HunkBlock key={i} hunk={h} index={i} />
           ))}
         </div>
-        {!expanded ? (
+        {!expanded && overflows ? (
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-900 to-transparent"
           />
         ) : null}
       </div>
-      <button
-        onClick={() => setExpanded((v) => !v)}
-        className="mt-1 text-xs underline text-ink-400 hover:text-ink-200"
-      >
-        {expanded ? "Show less" : "Show more"}
-      </button>
+      {overflows ? (
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-1 text-xs underline text-ink-400 hover:text-ink-200"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      ) : null}
       {showRaw ? (
         <div className="mt-2 rounded border border-ink-700 bg-ink-950 p-2">
           <pre className="text-[10px] font-mono text-ink-300 whitespace-pre-wrap break-all">

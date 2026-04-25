@@ -27,10 +27,22 @@ const ANCHOR_MAX_CHARS = 200;
 const ANCHOR_MAX_PER_TODO = 4;
 const anchorEntry = z.string().trim().min(1).max(ANCHOR_MAX_CHARS);
 
+// Task #70 (2026-04-25): symbol names the planner expects to find
+// in expectedFiles. The runner verifies each symbol exists with a
+// word-boundary grep BEFORE posting the todo, so todos premised on
+// classes/functions that don't exist (the planner's most common
+// failure mode — see Pattern 12 in run patterns memory) get dropped
+// before any worker prompt fires. Cap at 4 to bound prompt size +
+// validation work.
+const SYMBOL_MAX_CHARS = 200;
+const SYMBOLS_MAX_PER_TODO = 4;
+const symbolEntry = z.string().trim().min(1).max(SYMBOL_MAX_CHARS);
+
 const PlannerTodoSchema = z.object({
   description: z.string().trim().min(1).max(500),
   expectedFiles: z.array(filePathEntry).min(1).max(2),
   expectedAnchors: z.array(anchorEntry).max(ANCHOR_MAX_PER_TODO).optional(),
+  expectedSymbols: z.array(symbolEntry).max(SYMBOLS_MAX_PER_TODO).optional(),
 });
 
 // Task #71 (2026-04-25): lowered cap from 20 → 5. Earlier blackboard
@@ -50,6 +62,9 @@ export interface PlannerTodoInput {
   // Unit 44b: optional anchor strings. Forwarded into Board.postTodo
   // verbatim; resolved at worker-prompt build time.
   expectedAnchors?: string[];
+  // Task #70: optional symbol names the runner verifies exist in
+  // expectedFiles before posting the todo. Drop-on-mismatch.
+  expectedSymbols?: string[];
 }
 
 export type PlannerParseResult =
@@ -113,6 +128,7 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
         description: v.data.description,
         expectedFiles: v.data.expectedFiles,
         expectedAnchors: v.data.expectedAnchors,
+        expectedSymbols: v.data.expectedSymbols,
       });
     } else {
       const reason = v.error.issues
@@ -153,6 +169,7 @@ export const PLANNER_SYSTEM_PROMPT = [
   "8. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, `docs/`, or any path ending in `/` or `\\`. If the TODO covers a whole directory, pick the specific files it will touch (e.g., `src/lib/a.ts`, `src/lib/b.ts`) or split it into smaller TODOs. Directory entries are rejected by the parser and the TODO is dropped.",
   "9. Ground every `expectedFiles` entry in the REPO FILE LIST provided in the user message. Each entry MUST either (a) appear verbatim in the list (for edits to existing files), or (b) be a new file whose parent directory appears in the list (for adding a new file to a known location). Do NOT invent paths whose parent directory is not in the list — the worker's file-hash pass will fail on EISDIR/ENOENT and stall the run.",
   "10. (Unit 44b) For TODOs that touch a SPECIFIC ROW or REGION of a large file (e.g., a single row in a 100-row markdown table, one entry in a 200-entry JSON object), include `expectedAnchors`: an array of 1-4 short verbatim substrings (≤ 200 chars each) that uniquely identify the target region. Workers see only HEAD + TAIL of files above 8 KB; anchors let the runner inject ±25 lines of context around each anchor so the worker can actually edit middle-region rows. Use grep/read first to confirm each anchor exists in the file. Examples: `\"| 7 | **ASE Holdings**\"`, `\"NVIDIA: { revenue:\"`. Omit `expectedAnchors` for whole-file edits, append-only TODOs, or files small enough to show in full.",
+  "11. (Task #70) For TODOs that operate on EXISTING symbols (a function, class, or named export the worker is supposed to modify or document), include `expectedSymbols`: an array of 1-4 symbol names (≤ 200 chars each) the runner will word-boundary-grep in each expectedFile BEFORE posting the todo. If any symbol is missing from every expectedFile, the runner drops the todo with a finding — saves a wasted worker round-trip. Examples: `[\"createOrchestrator\"]`, `[\"AgentManager\", \"spawnAgent\"]`. OMIT for create-new-file TODOs (file doesn't exist yet) and for whole-file rewrites. Include for: \"add JSDoc to X\", \"add null guard to Y\", \"rename Z\", \"replace inline string with constant W\". When in doubt, include — being wrong about a symbol's existence is the planner's #1 failure mode.",
   "",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",
 ].join("\n");
