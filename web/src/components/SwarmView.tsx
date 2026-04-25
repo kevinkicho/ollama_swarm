@@ -183,9 +183,11 @@ export function SwarmView() {
         {agentList.map((a) => (
           <AgentPanel key={a.id} agent={a} role={agentRole(a.index)} model={agentModel(a.index)} />
         ))}
-        {agentList.length === 0 ? (
-          <div className="text-xs text-ink-400">No agents yet.</div>
-        ) : null}
+        {/* 2026-04-25: when the live agents map is empty (run completed
+            and killAll cleared the roster), fall back to a compact
+            list sourced from summary.agents so the sidebar isn't
+            misleadingly empty after a finished run. */}
+        {agentList.length === 0 ? <SidebarSummaryAgents /> : null}
       </aside>
       <section className="flex flex-col overflow-hidden">
         <div className="flex border-b border-ink-700 bg-ink-800 text-sm">
@@ -1053,6 +1055,48 @@ interface TabButtonProps {
   onClick: () => void;
   children: React.ReactNode;
 }
+// Task #84 (2026-04-25): sidebar fallback for completed runs.
+// AgentManager.killAll() clears the live agents map at run-end so
+// the AgentPanel cards disappear. Without this fallback the sidebar
+// shows "No agents yet" even on a healthy completed run, which is
+// jarring next to all the rich main-viewport content. Renders a
+// compact card per summary.agents entry.
+function SidebarSummaryAgents() {
+  const summary = useSwarm((s) => s.summary);
+  const cfg = useSwarm((s) => s.runConfig);
+  if (!summary || summary.agents.length === 0) {
+    return <div className="text-xs text-ink-400">No agents yet.</div>;
+  }
+  return (
+    <>
+      <div className="text-[10px] uppercase tracking-wider text-ink-500 font-semibold mt-2 mb-1">
+        Final agent stats
+      </div>
+      {summary.agents.map((a) => {
+        const role = cfg ? roleForRow(cfg.preset, a.agentIndex, summary.agents.length) : "agent";
+        const lines = (a.linesAdded ?? 0) + (a.linesRemoved ?? 0);
+        return (
+          <div key={a.agentId} className="rounded border border-ink-700 bg-ink-800/50 p-2 text-xs">
+            <div className="flex items-baseline justify-between gap-2 mb-1">
+              <span className="text-ink-100 font-semibold">agent-{a.agentIndex}</span>
+              <span className="text-[10px] text-ink-400 font-mono">{role}</span>
+            </div>
+            <div className="text-[10px] font-mono text-ink-300 grid grid-cols-2 gap-x-2 gap-y-0.5">
+              <span className="text-ink-500">turns</span><span className="text-right">{a.turnsTaken}</span>
+              {a.totalAttempts !== undefined ? <><span className="text-ink-500">attempts</span><span className="text-right">{a.totalAttempts}</span></> : null}
+              {a.totalRetries !== undefined && a.totalRetries > 0 ? <><span className="text-ink-500">retries</span><span className="text-right text-amber-300">{a.totalRetries}</span></> : null}
+              {a.meanLatencyMs ? <><span className="text-ink-500">mean</span><span className="text-right">{fmtMs(a.meanLatencyMs)}</span></> : null}
+              {a.commits !== undefined && a.commits > 0 ? <><span className="text-ink-500">commits</span><span className="text-right text-emerald-300">{a.commits}</span></> : null}
+              {lines > 0 ? <><span className="text-ink-500">lines</span><span className="text-right"><span className="text-emerald-300">+{a.linesAdded ?? 0}</span> <span className="text-rose-300">−{a.linesRemoved ?? 0}</span></span></> : null}
+              {a.rejectedAttempts !== undefined && a.rejectedAttempts > 0 ? <><span className="text-ink-500">rejected</span><span className="text-right text-rose-300">{a.rejectedAttempts}</span></> : null}
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 function TabButton({ active, onClick, children }: TabButtonProps) {
   return (
     <button
