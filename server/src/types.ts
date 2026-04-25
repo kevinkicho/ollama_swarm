@@ -104,6 +104,48 @@ export type TranscriptEntrySummary =
       kind: "debate_turn";
       round: number;
       role: "pro" | "con" | "judge";
+    }
+  // Task #72 (2026-04-25): structured payload for the end-of-run
+  // banner. The transcript text is still human-readable, but the
+  // grid renderer uses these fields directly so it can lay out a
+  // table without parsing back the formatted text. Per-agent stats
+  // mirror PerAgentStat (subset — only what the grid renders).
+  | {
+      kind: "run_finished";
+      stopReason: string;
+      stopDetail?: string;
+      wallClockMs: number;
+      filesChanged: number;
+      commits?: number;
+      totalTodos?: number;
+      skippedTodos?: number;
+      staleEvents?: number;
+      linesAdded: number;
+      linesRemoved: number;
+      agents: Array<{
+        agentIndex: number;
+        role: string;
+        turns: number;
+        attempts: number;
+        retries: number;
+        meanLatencyMs: number | null;
+        commits: number;
+        linesAdded: number;
+        linesRemoved: number;
+        rejected: number;
+        jsonRepairs: number;
+        promptErrors: number;
+      }>;
+    }
+  // Task #72: structured seed-announce. Renders as a definition list
+  // (repo / clone path) plus a collapsible top-level entries grid so
+  // the wall-of-text Top-level entries: ... line is no longer the only
+  // way to see this data.
+  | {
+      kind: "seed_announce";
+      repoUrl: string;
+      clonePath: string;
+      topLevel: string[];
     };
 
 export interface BoardCountsDTO {

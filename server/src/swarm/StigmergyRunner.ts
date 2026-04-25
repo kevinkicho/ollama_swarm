@@ -6,11 +6,12 @@ import type {
   SwarmPhase,
   SwarmStatus,
   TranscriptEntry,
+  TranscriptEntrySummary,
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
-import { buildDiscussionSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
+import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
 import { extractTextWithDiag, looksLikeJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
@@ -164,7 +165,7 @@ export class StigmergyRunner implements SwarmRunner {
       "",
       "Pattern: Stigmergy (pheromone trails). Agents pick which file to read each turn based on a shared annotation table. Untouched files attract; high-interest low-confidence files attract; well-covered files repel. The exploration is self-organizing — no central planner.",
     ].join("\n");
-    this.appendSystem(seed);
+    this.appendSystem(seed, buildSeedSummary(cfg.repoUrl, clonePath, tree));
   }
 
   private async loop(cfg: RunConfig, clonePath: string): Promise<void> {
@@ -235,6 +236,7 @@ export class StigmergyRunner implements SwarmRunner {
       await writeRunSummary(cfg.localPath, summary);
       this.appendSystem(
         formatRunFinishedBanner(summary),
+        buildRunFinishedSummary(summary),
       );
       this.appendSystem(
         `Wrote run summary (stopReason=${summary.stopReason}, wallClockMs=${summary.wallClockMs}, files=${summary.filesChanged}).`,
@@ -439,8 +441,8 @@ export class StigmergyRunner implements SwarmRunner {
     }
   }
 
-  private appendSystem(text: string): void {
-    const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now() };
+  private appendSystem(text: string, summary?: TranscriptEntrySummary): void {
+    const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now(), summary };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
   }

@@ -11,7 +11,7 @@ import type {
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
-import { buildDiscussionSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
+import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
 import { extractTextWithDiag, looksLikeJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
@@ -149,7 +149,7 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
       "Pattern: Orchestrator–worker. Agent 1 is the LEAD; other agents are WORKERS.",
       "Lead will produce a plan (one subtask per worker), workers will execute in parallel with no visibility of peers, then lead will synthesize.",
     ].join("\n");
-    this.appendSystem(seed);
+    this.appendSystem(seed, buildSeedSummary(cfg.repoUrl, clonePath, tree));
   }
 
   private async loop(cfg: RunConfig): Promise<void> {
@@ -264,6 +264,7 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
       await writeRunSummary(cfg.localPath, summary);
       this.appendSystem(
         formatRunFinishedBanner(summary),
+        buildRunFinishedSummary(summary),
       );
       this.appendSystem(
         `Wrote run summary (stopReason=${summary.stopReason}, wallClockMs=${summary.wallClockMs}, files=${summary.filesChanged}).`,
@@ -440,8 +441,8 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
     }
   }
 
-  private appendSystem(text: string): void {
-    const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now() };
+  private appendSystem(text: string, summary?: TranscriptEntrySummary): void {
+    const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now(), summary };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
   }

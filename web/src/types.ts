@@ -74,6 +74,43 @@ export type TranscriptEntrySummary =
       kind: "debate_turn";
       round: number;
       role: "pro" | "con" | "judge";
+    }
+  // Task #72 (2026-04-25): structured payload for the end-of-run
+  // banner. Web renders as a per-agent table grid instead of plain
+  // text. Mirrors server-side `kind: "run_finished"` exactly.
+  | {
+      kind: "run_finished";
+      stopReason: string;
+      stopDetail?: string;
+      wallClockMs: number;
+      filesChanged: number;
+      commits?: number;
+      totalTodos?: number;
+      skippedTodos?: number;
+      staleEvents?: number;
+      linesAdded: number;
+      linesRemoved: number;
+      agents: Array<{
+        agentIndex: number;
+        role: string;
+        turns: number;
+        attempts: number;
+        retries: number;
+        meanLatencyMs: number | null;
+        commits: number;
+        linesAdded: number;
+        linesRemoved: number;
+        rejected: number;
+        jsonRepairs: number;
+        promptErrors: number;
+      }>;
+    }
+  // Task #72: seed-announce structured payload.
+  | {
+      kind: "seed_announce";
+      repoUrl: string;
+      clonePath: string;
+      topLevel: string[];
     };
 
 export type SwarmPhase =

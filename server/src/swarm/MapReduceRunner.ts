@@ -6,11 +6,12 @@ import type {
   SwarmPhase,
   SwarmStatus,
   TranscriptEntry,
+  TranscriptEntrySummary,
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
-import { buildDiscussionSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
+import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
 import { extractTextWithDiag, looksLikeJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
@@ -156,7 +157,7 @@ export class MapReduceRunner implements SwarmRunner {
       "Pattern: Map-reduce. Agent 1 is the REDUCER; others are MAPPERS.",
       "Each mapper inspects only its assigned slice of the repo (in isolation). The reducer consolidates all mapper reports at the end of each cycle.",
     ].join("\n");
-    this.appendSystem(seed);
+    this.appendSystem(seed, buildSeedSummary(cfg.repoUrl, clonePath, tree));
   }
 
   private async loop(cfg: RunConfig, clonePath: string): Promise<void> {
@@ -266,6 +267,7 @@ export class MapReduceRunner implements SwarmRunner {
       await writeRunSummary(cfg.localPath, summary);
       this.appendSystem(
         formatRunFinishedBanner(summary),
+        buildRunFinishedSummary(summary),
       );
       this.appendSystem(
         `Wrote run summary (stopReason=${summary.stopReason}, wallClockMs=${summary.wallClockMs}, files=${summary.filesChanged}).`,
@@ -424,8 +426,8 @@ export class MapReduceRunner implements SwarmRunner {
     }
   }
 
-  private appendSystem(text: string): void {
-    const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now() };
+  private appendSystem(text: string, summary?: TranscriptEntrySummary): void {
+    const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now(), summary };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
   }

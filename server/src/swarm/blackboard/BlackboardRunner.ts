@@ -9,6 +9,7 @@ import type {
   SwarmPhase,
   SwarmStatus,
   TranscriptEntry,
+  TranscriptEntrySummary,
 } from "../../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "../SwarmRunner.js";
 import { Board } from "./Board.js";
@@ -32,7 +33,7 @@ import { applyHunks } from "./applyHunks.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
 import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
-import { buildPerRunSummaryFileName, findAndReadNewestPriorSummary, formatPortReleaseLine, formatRunFinishedBanner } from "../runSummary.js";
+import { buildPerRunSummaryFileName, buildRunFinishedSummary, findAndReadNewestPriorSummary, formatPortReleaseLine, formatRunFinishedBanner } from "../runSummary.js";
 import type { PriorRunSummary } from "./prompts/planner.js";
 import { summarizeAgentResponse } from "./transcriptSummary.js";
 import { readBlackboardStateSnapshot, type BlackboardStateSnapshot } from "./stateSnapshot.js";
@@ -2854,7 +2855,7 @@ export class BlackboardRunner implements SwarmRunner {
       // Task #68: rich end-of-run banner with per-agent rollup,
       // posted before the file-write line so the most informative
       // content lands first.
-      this.appendSystem(formatRunFinishedBanner(summary));
+      this.appendSystem(formatRunFinishedBanner(summary), buildRunFinishedSummary(summary));
       this.appendSystem(
         `Wrote run summary to ${perRunPath} + ${latestPath} (stopReason=${summary.stopReason}, commits=${summary.commits}, files=${summary.filesChanged}).`,
       );
@@ -3324,8 +3325,8 @@ export class BlackboardRunner implements SwarmRunner {
     });
   }
 
-  private appendSystem(text: string): void {
-    const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now() };
+  private appendSystem(text: string, summary?: TranscriptEntrySummary): void {
+    const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now(), summary };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
   }

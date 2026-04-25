@@ -6,11 +6,12 @@ import type {
   SwarmPhase,
   SwarmStatus,
   TranscriptEntry,
+  TranscriptEntrySummary,
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
-import { buildDiscussionSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
+import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
 import { extractTextWithDiag, looksLikeJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
@@ -143,7 +144,10 @@ export class CouncilRunner implements SwarmRunner {
       "",
       "Use your file-read / grep / find tools to actually inspect this repo — start with README.md if present.",
     ].join("\n");
-    this.appendSystem(seed);
+    // Task #72: structured payload so the web renders the seed
+    // announce as a grid (definition list + collapsible top-level
+    // file list) instead of the wall-of-text comma-separated line.
+    this.appendSystem(seed, buildSeedSummary(cfg.repoUrl, clonePath, tree));
   }
 
   private async loop(cfg: RunConfig): Promise<void> {
@@ -232,8 +236,9 @@ export class CouncilRunner implements SwarmRunner {
       await writeRunSummary(cfg.localPath, summary);
       // Task #68: rich end-of-run banner with per-agent rollup. Posted
       // BEFORE the terse file-write line so the most informative
-      // content is the last thing the user reads.
-      this.appendSystem(formatRunFinishedBanner(summary));
+      // content is the last thing the user reads. Task #72: also
+      // attach the structured summary so the web renders a grid.
+      this.appendSystem(formatRunFinishedBanner(summary), buildRunFinishedSummary(summary));
       this.appendSystem(
         `Wrote run summary (stopReason=${summary.stopReason}, wallClockMs=${summary.wallClockMs}, files=${summary.filesChanged}).`,
       );
@@ -402,8 +407,8 @@ export class CouncilRunner implements SwarmRunner {
     }
   }
 
-  private appendSystem(text: string): void {
-    const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now() };
+  private appendSystem(text: string, summary?: TranscriptEntrySummary): void {
+    const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now(), summary };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
   }

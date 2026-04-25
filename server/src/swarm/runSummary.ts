@@ -377,3 +377,62 @@ export function formatPortReleaseLine(killResult: { total: number; escaped: numb
   }
   return `⚠ ${killResult.escaped} of ${killResult.total} agent process(es) escaped the kill — orphan sweep will catch them at next start.`;
 }
+
+// Task #72 (2026-04-25): build the structured TranscriptEntrySummary
+// for the run-finished banner. The web Transcript component renders
+// this as a grid (per-agent table) instead of parsing the plain-text
+// banner. Runner attaches both — text for legacy clients, summary
+// for the grid renderer.
+import type { TranscriptEntrySummary } from "../types.js";
+export function buildRunFinishedSummary(summary: RunSummary): TranscriptEntrySummary {
+  let added = 0;
+  let removed = 0;
+  for (const a of summary.agents) {
+    added += a.linesAdded ?? 0;
+    removed += a.linesRemoved ?? 0;
+  }
+  const N = summary.agents.length;
+  return {
+    kind: "run_finished",
+    stopReason: summary.stopReason,
+    stopDetail: summary.stopDetail,
+    wallClockMs: summary.wallClockMs,
+    filesChanged: summary.filesChanged,
+    commits: summary.commits,
+    totalTodos: summary.totalTodos,
+    skippedTodos: summary.skippedTodos,
+    staleEvents: summary.staleEvents,
+    linesAdded: added,
+    linesRemoved: removed,
+    agents: summary.agents.map((a) => ({
+      agentIndex: a.agentIndex,
+      role: roleForAgent(summary.preset, a.agentIndex, N),
+      turns: a.turnsTaken,
+      attempts: a.totalAttempts ?? a.turnsTaken,
+      retries: a.totalRetries ?? 0,
+      meanLatencyMs: a.meanLatencyMs ?? null,
+      commits: a.commits ?? 0,
+      linesAdded: a.linesAdded ?? 0,
+      linesRemoved: a.linesRemoved ?? 0,
+      rejected: a.rejectedAttempts ?? 0,
+      jsonRepairs: a.jsonRepairs ?? 0,
+      promptErrors: a.promptErrors ?? 0,
+    })),
+  };
+}
+
+// Task #72: structured payload for the seed-announce system message
+// (Project clone / Repo / Top-level entries). Web renders as a
+// definition list + collapsible file grid.
+export function buildSeedSummary(
+  repoUrl: string,
+  clonePath: string,
+  topLevel: readonly string[],
+): TranscriptEntrySummary {
+  return {
+    kind: "seed_announce",
+    repoUrl,
+    clonePath,
+    topLevel: [...topLevel],
+  };
+}

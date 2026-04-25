@@ -51,6 +51,16 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
     if (entry.text.startsWith("▸▸RUN-START▸▸")) {
       return <RunStartDivider text={entry.text} ts={entry.ts} />;
     }
+    // Task #72: dedicated grid renderers for structured system
+    // entries. The plaintext text payload stays in entry.text as a
+    // fallback / for older clients, but if the structured summary
+    // is present we render it as a proper grid.
+    if (entry.summary?.kind === "run_finished") {
+      return <RunFinishedGrid summary={entry.summary} ts={entry.ts} />;
+    }
+    if (entry.summary?.kind === "seed_announce") {
+      return <SeedAnnounceGrid summary={entry.summary} ts={entry.ts} />;
+    }
     return (
       <CollapsibleBlock
         className="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"
@@ -205,6 +215,16 @@ function formatServerSummary(s: TranscriptEntrySummary): string {
   }
   if (s.kind === "debate_turn") {
     return `Debate · round ${s.round} · ${s.role.toUpperCase()}`;
+  }
+  // Task #72: structural kinds rendered by dedicated grid components
+  // — formatServerSummary is unused for these but the discriminated
+  // union demands exhaustiveness. Return a one-line descriptor for
+  // safety (e.g. if future code paths render them as plain text).
+  if (s.kind === "run_finished") {
+    return `Run finished — ${s.stopReason}`;
+  }
+  if (s.kind === "seed_announce") {
+    return `Project seed — ${s.topLevel.length} top-level entries`;
   }
   // worker_hunks
   const opParts: string[] = [];
@@ -445,6 +465,176 @@ function CollapsibleBlock({ text, header, className, style }: CollapsibleProps) 
           {expanded ? "Show less" : `Show more (${text.length - COLLAPSE_THRESHOLD} chars)`}
         </button>
       ) : null}
+    </div>
+  );
+}
+
+// Task #72 (2026-04-25): grid renderer for the end-of-run banner.
+// Replaces the plaintext "═══ Run finished ═══" wall-of-text with a
+// proper table — header strip with the headline stats, then a per-
+// agent table with one row per agent and columns for every metric.
+function RunFinishedGrid({
+  summary: s,
+  ts,
+}: {
+  summary: Extract<TranscriptEntrySummary, { kind: "run_finished" }>;
+  ts: number;
+}) {
+  const wallClock = formatRuntime(s.wallClockMs);
+  const tsStr = new Date(ts).toLocaleTimeString();
+  return (
+    <div className="rounded border border-emerald-700/50 bg-emerald-950/20 p-3 my-2">
+      <div className="flex items-baseline justify-between gap-2 mb-2">
+        <div className="text-emerald-300 font-semibold tracking-wide text-xs uppercase">
+          ═ Run finished — {s.stopReason} in {wallClock} ═
+        </div>
+        <div className="text-[10px] text-ink-500 font-mono">{tsStr}</div>
+      </div>
+      {/* Headline tiles */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+        <Tile label="Files changed" value={s.filesChanged} />
+        <Tile label="Commits" value={s.commits ?? 0} />
+        <Tile label="+ Lines" value={s.linesAdded} accent="text-emerald-300" />
+        <Tile label="− Lines" value={s.linesRemoved} accent="text-rose-300" />
+        {s.totalTodos !== undefined ? <Tile label="Total todos" value={s.totalTodos} /> : null}
+        {s.skippedTodos !== undefined ? <Tile label="Skipped todos" value={s.skippedTodos} /> : null}
+        {s.staleEvents !== undefined ? <Tile label="Stale events" value={s.staleEvents} /> : null}
+      </div>
+      {s.stopDetail ? (
+        <div className="text-[11px] text-ink-400 italic mb-2">Detail: {s.stopDetail}</div>
+      ) : null}
+      {/* Per-agent grid */}
+      <div className="text-[10px] uppercase tracking-wider text-ink-500 font-semibold mb-1">
+        Per-agent ({s.agents.length})
+      </div>
+      <div className="overflow-x-auto rounded border border-ink-700/60">
+        <table className="w-full text-[11px] font-mono">
+          <thead className="bg-ink-800/60 text-ink-400 text-left">
+            <tr>
+              <th className="px-2 py-1">#</th>
+              <th className="px-2 py-1">Role</th>
+              <th className="px-2 py-1 text-right">Turns</th>
+              <th className="px-2 py-1 text-right">Att</th>
+              <th className="px-2 py-1 text-right">Ret</th>
+              <th className="px-2 py-1 text-right">Mean</th>
+              <th className="px-2 py-1 text-right">Commits</th>
+              <th className="px-2 py-1 text-right text-emerald-400/70">+L</th>
+              <th className="px-2 py-1 text-right text-rose-400/70">−L</th>
+              <th className="px-2 py-1 text-right text-rose-400/70">Rejected</th>
+              <th className="px-2 py-1 text-right text-amber-400/70">JSON⚠</th>
+              <th className="px-2 py-1 text-right text-rose-500/70">Errors</th>
+            </tr>
+          </thead>
+          <tbody>
+            {s.agents.map((a) => (
+              <tr key={a.agentIndex} className="border-t border-ink-700/60">
+                <td className="px-2 py-1 text-ink-300">{a.agentIndex}</td>
+                <td className="px-2 py-1 text-ink-200">{a.role}</td>
+                <td className="px-2 py-1 text-right text-ink-200">{a.turns}</td>
+                <td className="px-2 py-1 text-right text-ink-300">{a.attempts}</td>
+                <td className="px-2 py-1 text-right text-ink-300">{a.retries}</td>
+                <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.meanLatencyMs)}</td>
+                <td className="px-2 py-1 text-right text-ink-200">{a.commits}</td>
+                <td className="px-2 py-1 text-right text-emerald-300">{a.linesAdded}</td>
+                <td className="px-2 py-1 text-right text-rose-300">{a.linesRemoved}</td>
+                <td className={`px-2 py-1 text-right ${a.rejected > 0 ? "text-rose-300 font-semibold" : "text-ink-300"}`}>{a.rejected}</td>
+                <td className={`px-2 py-1 text-right ${a.jsonRepairs > 0 ? "text-amber-300" : "text-ink-300"}`}>{a.jsonRepairs}</td>
+                <td className={`px-2 py-1 text-right ${a.promptErrors > 0 ? "text-rose-400 font-semibold" : "text-ink-300"}`}>{a.promptErrors}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Task #72: grid renderer for the seed-announce system entry. The
+// long top-level entries list collapses into a grid of pill chips
+// instead of a comma-separated wall.
+function SeedAnnounceGrid({
+  summary: s,
+  ts,
+}: {
+  summary: Extract<TranscriptEntrySummary, { kind: "seed_announce" }>;
+  ts: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const PREVIEW_COUNT = 12;
+  const tsStr = new Date(ts).toLocaleTimeString();
+  const shown = expanded ? s.topLevel : s.topLevel.slice(0, PREVIEW_COUNT);
+  const hidden = s.topLevel.length - shown.length;
+  return (
+    <div className="rounded border border-sky-700/40 bg-sky-950/20 p-3 my-2">
+      <div className="flex items-baseline justify-between gap-2 mb-2">
+        <div className="text-sky-300 font-semibold tracking-wide text-xs uppercase">
+          ⤓ Project seed
+        </div>
+        <div className="text-[10px] text-ink-500 font-mono">{tsStr}</div>
+      </div>
+      <div className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-xs font-mono mb-2">
+        <div className="text-ink-500">Repo</div>
+        <div className="text-ink-200 break-all">
+          <a href={s.repoUrl} target="_blank" rel="noopener noreferrer" className="text-sky-300 hover:text-sky-200 underline">{s.repoUrl}</a>
+        </div>
+        <div className="text-ink-500">Clone</div>
+        <div className="text-ink-200 break-all">{s.clonePath}</div>
+        <div className="text-ink-500">Top-level</div>
+        <div className="text-ink-200">{s.topLevel.length} entries</div>
+      </div>
+      <div className="flex flex-wrap gap-1 mb-2">
+        {shown.map((name) => (
+          <span
+            key={name}
+            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-ink-800/60 border border-ink-700 text-ink-300"
+          >
+            {name}
+          </span>
+        ))}
+      </div>
+      {hidden > 0 ? (
+        <button
+          onClick={() => setExpanded(true)}
+          className="text-[10px] underline text-ink-400 hover:text-ink-200"
+        >
+          + show {hidden} more
+        </button>
+      ) : expanded && s.topLevel.length > PREVIEW_COUNT ? (
+        <button
+          onClick={() => setExpanded(false)}
+          className="text-[10px] underline text-ink-400 hover:text-ink-200"
+        >
+          show less
+        </button>
+      ) : null}
+      <div className="text-[10px] text-ink-500 italic mt-2">
+        Use file-read / grep / find tools to inspect this repo — start with README.md if present.
+      </div>
+    </div>
+  );
+}
+
+function formatRuntime(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m ${sec}s`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+function fmtMs(ms: number | null): string {
+  if (ms === null) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function Tile({ label, value, accent }: { label: string; value: number; accent?: string }) {
+  return (
+    <div className="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5">
+      <div className="text-[9px] uppercase tracking-wider text-ink-500">{label}</div>
+      <div className={`font-mono text-sm ${accent ?? "text-ink-100"}`}>{value.toLocaleString()}</div>
     </div>
   );
 }
