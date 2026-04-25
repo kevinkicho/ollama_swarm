@@ -830,6 +830,9 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
                       <th className="px-2 py-1 text-right text-emerald-400/70" title="Lines added by this agent (blackboard-only)">+Lines</th>
                       <th className="px-2 py-1 text-right text-rose-400/70" title="Lines removed by this agent (blackboard-only)">−Lines</th>
                       <th className="px-2 py-1 text-right" title="Total lines touched (added + removed)">Total</th>
+                      <th className="px-2 py-1 text-right text-rose-400/70" title="Rejected work — declined todos + JSON-invalid-after-repair + CAS losses + hunk-apply failures + critic rejections (blackboard-only)">Rejected</th>
+                      <th className="px-2 py-1 text-right text-amber-400/70" title="JSON-invalid first attempts that triggered the repair-prompt path (informational; successful repair still counts)">JSON⚠</th>
+                      <th className="px-2 py-1 text-right text-rose-500/70" title="Hard errors during this agent's prompts (network, abort, etc.)">Errors</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -851,6 +854,9 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
                           <td className="px-2 py-1 text-right text-emerald-300">{a.linesAdded ?? "—"}</td>
                           <td className="px-2 py-1 text-right text-rose-300">{a.linesRemoved ?? "—"}</td>
                           <td className="px-2 py-1 text-right text-ink-200">{linesTotal ?? "—"}</td>
+                          <td className={`px-2 py-1 text-right ${a.rejectedAttempts && a.rejectedAttempts > 0 ? "text-rose-300 font-semibold" : "text-ink-300"}`}>{a.rejectedAttempts ?? "—"}</td>
+                          <td className={`px-2 py-1 text-right ${a.jsonRepairs && a.jsonRepairs > 0 ? "text-amber-300" : "text-ink-300"}`}>{a.jsonRepairs ?? "—"}</td>
+                          <td className={`px-2 py-1 text-right ${a.promptErrors && a.promptErrors > 0 ? "text-rose-400 font-semibold" : "text-ink-300"}`}>{a.promptErrors ?? "—"}</td>
                         </tr>
                       );
                     })}

@@ -211,6 +211,10 @@ export class BlackboardRunner implements SwarmRunner {
   private commitsPerAgent = new Map<string, number>();
   private linesAddedPerAgent = new Map<string, number>();
   private linesRemovedPerAgent = new Map<string, number>();
+  // Task #67: per-agent rejected-work + recovery counters.
+  private rejectedAttemptsPerAgent = new Map<string, number>();
+  private jsonRepairsPerAgent = new Map<string, number>();
+  private promptErrorsPerAgent = new Map<string, number>();
   // Stashed at spawn time so writeRunSummary can still produce per-agent
   // stats even after AgentManager.killAll() has cleared its own roster
   // (stop() path runs killAll concurrently with the summary write).
@@ -379,6 +383,9 @@ export class BlackboardRunner implements SwarmRunner {
     this.commitsPerAgent.clear();
     this.linesAddedPerAgent.clear();
     this.linesRemovedPerAgent.clear();
+    this.rejectedAttemptsPerAgent.clear();
+    this.jsonRepairsPerAgent.clear();
+    this.promptErrorsPerAgent.clear();
     this.retriesPerAgent.clear();
     this.latenciesPerAgent.clear();
     this.agentRoster = [];
@@ -1730,6 +1737,8 @@ export class BlackboardRunner implements SwarmRunner {
       this.appendSystem(
         `[critic] ${planner.id} REJECTED ${proposingAgent.id}'s diff on "${truncate(todo.description)}": ${parsed.critic.rationale}`,
       );
+      // Task #67: critic rejection of this proposer's work.
+      bumpAgentCounter(this.rejectedAttemptsPerAgent, proposingAgent.id);
       return "reject";
     }
     this.appendSystem(
@@ -1804,6 +1813,8 @@ export class BlackboardRunner implements SwarmRunner {
         todo.id,
         `critic ensemble rejected (lead: ${rejectingLane.lane.name})`,
       );
+      // Task #67: critic-ensemble rejection of proposer's work.
+      bumpAgentCounter(this.rejectedAttemptsPerAgent, proposingAgent.id);
     }
     return verdict;
   }
@@ -2286,6 +2297,9 @@ export class BlackboardRunner implements SwarmRunner {
       if (this.stopping) return "aborted";
       const msg = err instanceof Error ? err.message : String(err);
       this.board.markStale(todo.id, `worker prompt failed: ${msg}`);
+      // Task #67: hard error during this agent's worker prompt.
+      bumpAgentCounter(this.promptErrorsPerAgent, agent.id);
+      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
       return "stale";
     }
     if (this.stopping) return "aborted";
@@ -2293,6 +2307,10 @@ export class BlackboardRunner implements SwarmRunner {
 
     let parsed = parseWorkerResponse(response, todo.expectedFiles);
     if (!parsed.ok) {
+      // Task #67: JSON-invalid first attempt. Informational counter even
+      // if the repair below succeeds — tells us which workers struggle
+      // with the JSON envelope.
+      bumpAgentCounter(this.jsonRepairsPerAgent, agent.id);
       this.appendSystem(`[${agent.id}] worker JSON invalid (${parsed.reason}); issuing repair prompt.`);
       let repair: string;
       try {
@@ -2304,6 +2322,8 @@ export class BlackboardRunner implements SwarmRunner {
         if (this.stopping) return "aborted";
         const msg = err instanceof Error ? err.message : String(err);
         this.board.markStale(todo.id, `worker repair prompt failed: ${msg}`);
+        bumpAgentCounter(this.promptErrorsPerAgent, agent.id);
+        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
         return "stale";
       }
       if (this.stopping) return "aborted";
@@ -2311,6 +2331,8 @@ export class BlackboardRunner implements SwarmRunner {
       parsed = parseWorkerResponse(repair, todo.expectedFiles);
       if (!parsed.ok) {
         this.board.markStale(todo.id, `worker produced invalid JSON after repair: ${parsed.reason}`);
+        // Repair didn't fix it; this attempt is fully wasted.
+        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
         return "stale";
       }
     }
@@ -2320,11 +2342,13 @@ export class BlackboardRunner implements SwarmRunner {
       // Mark stale (not skipped) so Phase 6 replan can decide whether to
       // re-prompt or formally skip it. Skipped is a human/planner decision.
       this.board.markStale(todo.id, `worker declined: ${parsed.skip}`);
+      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
       return "stale";
     }
 
     if (parsed.hunks.length === 0) {
       this.board.markStale(todo.id, "worker returned empty hunks with no skip reason");
+      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
       return "stale";
     }
 
@@ -2347,6 +2371,8 @@ export class BlackboardRunner implements SwarmRunner {
     }
     if (mismatched.length > 0) {
       this.board.markStale(todo.id, `CAS mismatch before write: ${mismatched.join(", ")}`);
+      // Task #67: lost the optimistic-CAS race; agent's work is wasted.
+      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
       return "stale";
     }
 
@@ -2358,6 +2384,7 @@ export class BlackboardRunner implements SwarmRunner {
     const applied = applyHunks(contents, parsed.hunks);
     if (!applied.ok) {
       this.board.markStale(todo.id, `hunk apply failed: ${applied.error}`);
+      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
       return "stale";
     }
 
@@ -2889,6 +2916,10 @@ export class BlackboardRunner implements SwarmRunner {
         commits: this.commitsPerAgent.get(a.id) ?? 0,
         linesAdded: this.linesAddedPerAgent.get(a.id) ?? 0,
         linesRemoved: this.linesRemovedPerAgent.get(a.id) ?? 0,
+        // Task #67: rejected-work + recovery counters.
+        rejectedAttempts: this.rejectedAttemptsPerAgent.get(a.id) ?? 0,
+        jsonRepairs: this.jsonRepairsPerAgent.get(a.id) ?? 0,
+        promptErrors: this.promptErrorsPerAgent.get(a.id) ?? 0,
       };
     });
   }
@@ -3381,6 +3412,13 @@ export class BlackboardRunner implements SwarmRunner {
 
 function truncate(s: string, max = 80): string {
   return s.length <= max ? s : s.slice(0, max - 1) + "…";
+}
+
+// Task #67: small helper to bump a per-agent counter Map without
+// repeating the `(map.get(id) ?? 0) + 1` pattern at every call site.
+// Mutates in place; no return value.
+function bumpAgentCounter(m: Map<string, number>, agentId: string): void {
+  m.set(agentId, (m.get(agentId) ?? 0) + 1);
 }
 
 // Task #66: count line-equivalents in a hunk's text. Empty string → 0.

@@ -63,6 +63,23 @@ export interface PerAgentStat {
   commits?: number;
   linesAdded?: number;
   linesRemoved?: number;
+  // Task #67 (2026-04-24): per-agent rejected-work + recovery counters.
+  // Blackboard-only. Surface in the modal so users can spot WHY a worker
+  // produced 0 commits despite many turns (was it bad todos? bad model
+  // output? CAS races?). All optional / blackboard-only.
+  //   rejectedAttempts = sum of: declined-todo + invalid-JSON-after-repair
+  //                      + CAS-mismatch + hunk-apply-fail + BOM-detected
+  //                      + critic-reject. One number that measures
+  //                      "wasted work this agent produced".
+  //   jsonRepairs      = count of JSON-invalid first attempts that
+  //                      triggered the repair-prompt path (informational —
+  //                      a successful repair still counts).
+  //   promptErrors     = count of hard errors thrown by this agent's
+  //                      prompts (network errors, abort, etc.) that
+  //                      escaped past promptWithRetry.
+  rejectedAttempts?: number;
+  jsonRepairs?: number;
+  promptErrors?: number;
 }
 
 export interface RunSummary {

@@ -179,6 +179,11 @@ export interface PerAgentStat {
   commits?: number;
   linesAdded?: number;
   linesRemoved?: number;
+  // Task #67 (2026-04-24): per-agent rejected-work + recovery counters.
+  // Blackboard-only; — for discussion presets in the modal.
+  rejectedAttempts?: number;
+  jsonRepairs?: number;
+  promptErrors?: number;
 }
 
 export interface RunSummary {
