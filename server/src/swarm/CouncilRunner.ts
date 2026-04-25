@@ -184,6 +184,14 @@ export class CouncilRunner implements SwarmRunner {
           this.runTurn(agent, r, cfg.rounds, snapshot),
         );
       }
+      // Task #79 (2026-04-25): final consensus pass. After all rounds,
+      // agent-1 takes every drafter's final position and produces a
+      // single consolidated answer. Without this, council ends with N
+      // parallel drafts and no clear "what did we decide" output —
+      // users had to read every draft and synthesize themselves.
+      if (!this.stopping && cfg.rounds > 0) {
+        await this.runSynthesisPass(cfg);
+      }
       if (!this.stopping) this.appendSystem("Council complete.");
     } catch (err) {
       crashMessage = err instanceof Error ? err.message : String(err);
@@ -245,6 +253,108 @@ export class CouncilRunner implements SwarmRunner {
     } catch (writeErr) {
       const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
       this.appendSystem(`Failed to write run summary (${msg})`);
+    }
+  }
+
+  // Task #79: final consensus synthesis. Routes through agent-1 with
+  // all council drafts in context and asks for a unified answer. Uses
+  // the same promptWithRetry + extractText path as runTurn so timing
+  // + retry stats land in the per-agent rollup. Treated as a normal
+  // agent turn for stats purposes — the synthesis IS agent-1's last
+  // contribution. Tagged with summary kind "council_synthesis" so
+  // the modal can render it distinctively.
+  private async runSynthesisPass(cfg: RunConfig): Promise<void> {
+    const agents = this.opts.manager.list();
+    const lead = agents.find((a) => a.index === 1);
+    if (!lead) return;
+    this.opts.manager.markStatus(lead.id, "thinking");
+    this.emitAgentState({
+      id: lead.id,
+      index: lead.index,
+      port: lead.port,
+      sessionId: lead.sessionId,
+      status: "thinking",
+      thinkingSince: Date.now(),
+    });
+    this.stats.countTurn(lead.id);
+    this.appendSystem(`Synthesizing council consensus (agent-${lead.index})…`);
+
+    const prompt = buildCouncilSynthesisPrompt(cfg.rounds, this.transcript);
+    const ABSOLUTE_MAX_MS = 4 * 60_000;
+    const turnStart = Date.now();
+    this.opts.manager.touchActivity(lead.sessionId, turnStart);
+    const controller = new AbortController();
+    const watchdog = setInterval(() => {
+      if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
+        controller.abort(new Error(`absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s)`));
+        void lead.client.session.abort({ path: { id: lead.sessionId } }).catch(() => {});
+      }
+    }, 10_000);
+    try {
+      const res = await promptWithRetry(lead, prompt, {
+        signal: controller.signal,
+        agentName: "swarm-read",
+        describeError: describeSdkError,
+        onTiming: ({ attempt, elapsedMs, success }) => {
+          this.stats.onTiming(lead.id, success, elapsedMs);
+          this.opts.manager.recordPromptComplete(lead.id, { attempt, elapsedMs, success });
+          this.opts.emit({
+            type: "agent_latency_sample",
+            agentId: lead.id,
+            agentIndex: lead.index,
+            attempt,
+            elapsedMs,
+            success,
+            ts: Date.now(),
+          });
+        },
+        onRetry: ({ attempt, max, reasonShort, delayMs }) => {
+          this.stats.onRetry(lead.id);
+          this.appendSystem(
+            `[${lead.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
+          );
+        },
+      });
+      const diagCtx = {
+        runner: "council",
+        agentId: lead.id,
+        agentIndex: lead.index,
+        logDiag: this.opts.logDiag,
+      };
+      const extracted = extractTextWithDiag(res, diagCtx);
+      let text = extracted.text;
+      if ((extracted.isEmpty || looksLikeJunk(text)) && !this.stopping) {
+        const retryText = await retryEmptyResponse(lead, prompt, "swarm-read", diagCtx);
+        if (retryText !== null) text = retryText;
+      }
+      const entry: TranscriptEntry = {
+        id: randomUUID(),
+        role: "agent",
+        agentId: lead.id,
+        agentIndex: lead.index,
+        text,
+        ts: Date.now(),
+        summary: { kind: "council_synthesis", rounds: cfg.rounds },
+      };
+      this.transcript.push(entry);
+      this.opts.emit({ type: "transcript_append", entry });
+    } catch (err) {
+      // Synthesis failure is non-fatal — log and continue. The council
+      // still produced N final drafts that the user can read.
+      this.appendSystem(
+        `[${lead.id}] synthesis failed (${err instanceof Error ? err.message : String(err)}); skipping consolidation.`,
+      );
+    } finally {
+      clearInterval(watchdog);
+      this.opts.manager.markStatus(lead.id, "ready");
+      this.emitAgentState({
+        id: lead.id,
+        index: lead.index,
+        port: lead.port,
+        sessionId: lead.sessionId,
+        status: "ready",
+        lastMessageAt: Date.now(),
+      });
     }
   }
 
@@ -424,6 +534,40 @@ export class CouncilRunner implements SwarmRunner {
     // broadcast. See AgentManager.recordAgentState.
     this.opts.manager.recordAgentState(s);
   }
+}
+
+// Task #79: synthesis prompt. Uses ALL transcript entries (system +
+// agent) so the lead can see the seed + every draft. Frames the
+// output expectation explicitly: one consolidated answer, what
+// converged, what's still contested, one concrete next action.
+export function buildCouncilSynthesisPrompt(
+  totalRounds: number,
+  transcript: readonly TranscriptEntry[],
+): string {
+  const transcriptText = transcript
+    .map((e) => {
+      if (e.role === "system") return `[SYSTEM] ${e.text}`;
+      if (e.role === "user") return `[HUMAN] ${e.text}`;
+      return `[Agent ${e.agentIndex}] ${e.text}`;
+    })
+    .join("\n\n");
+  return [
+    `You are Agent 1, the council's synthesis lead. The council just finished ${totalRounds} round${totalRounds === 1 ? "" : "s"} of independent drafts + reveal/revise.`,
+    "Your job NOW is to produce a SINGLE consolidated answer that integrates every agent's final position.",
+    "",
+    "STRUCTURE your response as:",
+    "1. **Consensus** — what every agent (including you) converged on. State it as a direct claim, not a meta-observation.",
+    "2. **Disagreements** — where agents still hold different positions. Name the agents and their stances.",
+    "3. **Next action** — ONE concrete next step the swarm or user should take, given the council's findings. If no action is needed, say so.",
+    "",
+    "Keep it under ~400 words. Be specific. Cite file paths or peer claims when relevant. Do not just summarize the drafts — synthesize them.",
+    "",
+    "=== FULL COUNCIL TRANSCRIPT ===",
+    transcriptText,
+    "=== END TRANSCRIPT ===",
+    "",
+    "Produce your synthesis now.",
+  ].join("\n");
 }
 
 // Exported so CouncilRunner.test.ts can lock down the independence invariant

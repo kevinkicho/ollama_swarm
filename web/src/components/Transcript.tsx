@@ -161,6 +161,26 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
       );
       return <CollapsibleBlock className={className} style={style} header={chipHeader} text={entry.text} />;
     }
+    // Task #79: council synthesis — distinctive emerald wrapper so the
+    // consensus answer is visually obvious as the run's takeaway.
+    if (entry.summary.kind === "council_synthesis") {
+      const synHeader = (
+        <div>
+          {header}
+          <div className="text-[10px] uppercase tracking-wider font-semibold text-emerald-300 mb-1">
+            ═ Council synthesis · {entry.summary.rounds} round{entry.summary.rounds === 1 ? "" : "s"} ═
+          </div>
+        </div>
+      );
+      return (
+        <CollapsibleBlock
+          className="rounded-md p-3 border-2 border-emerald-700/60 bg-emerald-950/20 text-sm"
+          style={undefined}
+          header={synHeader}
+          text={entry.text}
+        />
+      );
+    }
     // Task #74 (2026-04-25): worker_hunks renders as a real diff view
     // — per hunk, op + file header + search/replace as stacked dim-red /
     // bright-green blocks. The raw JSON envelope was unreadable; this
@@ -304,6 +324,9 @@ function formatServerSummary(s: TranscriptEntrySummary): string {
   }
   if (s.kind === "seed_announce") {
     return `Project seed — ${s.topLevel.length} top-level entries`;
+  }
+  if (s.kind === "council_synthesis") {
+    return `Council synthesis (${s.rounds} round${s.rounds === 1 ? "" : "s"})`;
   }
   // worker_hunks
   const opParts: string[] = [];

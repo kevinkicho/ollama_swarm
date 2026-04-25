@@ -75,6 +75,12 @@ export type TranscriptEntrySummary =
       round: number;
       role: "pro" | "con" | "judge";
     }
+  // Task #79: council final-consensus synthesis at the end of a
+  // council run. Agent-1 consolidates all drafts into one answer.
+  | {
+      kind: "council_synthesis";
+      rounds: number;
+    }
   // Task #72 (2026-04-25): structured payload for the end-of-run
   // banner. Web renders as a per-agent table grid instead of plain
   // text. Mirrors server-side `kind: "run_finished"` exactly.
