@@ -636,13 +636,13 @@ export function RunHistoryDropdown() {
                         )}
                       </td>
                       <td className="px-2 py-1 text-right text-ink-300 tabular-nums">
-                        {r.commits ?? <span className="text-ink-600">—</span>}
+                        {r.commits && r.commits > 0 ? r.commits : ""}
                       </td>
                       <td className="px-2 py-1 text-right text-ink-300 tabular-nums">
-                        {r.totalTodos ?? <span className="text-ink-600">—</span>}
+                        {r.totalTodos && r.totalTodos > 0 ? r.totalTodos : ""}
                       </td>
-                      <td className="px-2 py-1 text-right text-ink-300 tabular-nums">
-                        {r.wallClockMs > 0 ? formatRuntimeMs(r.wallClockMs) : <span className="text-ink-600">—</span>}
+                      <td className="px-2 py-1 text-right text-ink-300 tabular-nums whitespace-nowrap">
+                        {r.wallClockMs > 0 ? formatRuntimeMs(r.wallClockMs) : ""}
                       </td>
                       <td className="px-2 py-1 text-ink-500 truncate max-w-[260px]" title={r.clonePath}>
                         {truncateLeft(r.clonePath, 36)}
@@ -1010,14 +1010,15 @@ function DataValue({ children }: { children: React.ReactNode }) {
 }
 
 function Stat({ label, value }: { label: string; value: number | undefined }) {
-  // 2026-04-25 fix: blackboard-only fields (totalTodos / skippedTodos
-  // / staleEvents) are undefined on discussion-preset summaries.
-  // Calling undefined.toLocaleString() crashed the modal and blanked
-  // the page. Render "—" instead so the modal stays usable.
+  // 2026-04-25 fine-tune: blank-out 0 + undefined (Kevin's preference
+  // — empty cell reads cleaner than "—" or "0"). Defensive against
+  // discussion-preset summaries where blackboard-only fields are
+  // undefined; also avoids the original undefined.toLocaleString crash.
+  const display = !value ? "" : value.toLocaleString();
   return (
     <div className="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5">
       <div className="text-[9px] uppercase tracking-wider text-ink-500">{label}</div>
-      <div className="text-ink-100 font-mono text-sm">{value === undefined ? "—" : value.toLocaleString()}</div>
+      <div className="text-ink-100 font-mono text-sm min-h-[1.25rem]">{display}</div>
     </div>
   );
 }
@@ -1059,14 +1060,17 @@ function roleForRow(preset: string, idx: number, totalAgents: number): string {
   }
 }
 
+// 2026-04-25 fine-tune: spaced units per Kevin — "1 m 4 s" reads as
+// English better than "1m04s". No zero-padding (was: "1m04s") since
+// the spaces already separate the components visually.
 function formatRuntimeMs(ms: number): string {
   const secs = Math.floor(ms / 1000);
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
   const s = secs % 60;
-  if (h > 0) return `${h}h${m.toString().padStart(2, "0")}m${s.toString().padStart(2, "0")}s`;
-  if (m > 0) return `${m}m${s.toString().padStart(2, "0")}s`;
-  return `${s}s`;
+  if (h > 0) return `${h} h ${m} m ${s} s`;
+  if (m > 0) return `${m} m ${s} s`;
+  return `${s} s`;
 }
 
 // Unit 56: CopyChip moved to its own file (./CopyChip.tsx) so AgentPanel
@@ -1125,16 +1129,14 @@ function ResultChip({ reason }: { reason: string }) {
   );
 }
 
+// 2026-04-25 fine-tune: always show date alongside time per Kevin's
+// review. Today's runs cluster at the top of the dropdown so the date
+// is helpful to anchor "this run was yesterday" vs "this morning."
 function fmtTimeShort(ts: number): string {
   const d = new Date(ts);
-  const today = new Date();
-  const sameDay =
-    d.getFullYear() === today.getFullYear() &&
-    d.getMonth() === today.getMonth() &&
-    d.getDate() === today.getDate();
+  const date = `${d.getMonth() + 1}/${d.getDate()}`;
   const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  if (sameDay) return time;
-  return `${d.getMonth() + 1}/${d.getDate()} ${time}`;
+  return `${date} · ${time}`;
 }
 
 // Task #84 (2026-04-25): sidebar fallback for completed runs.
