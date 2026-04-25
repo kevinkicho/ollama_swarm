@@ -10,7 +10,7 @@ import type {
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
-import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
+import { buildDiscussionSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
 import { extractTextWithDiag, looksLikeJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
@@ -194,7 +194,8 @@ export class StigmergyRunner implements SwarmRunner {
       await this.writeSummary(cfg, crashMessage);
       // Unit 55: auto-killAll on natural completion (see RoundRobinRunner).
       if (!this.stopping) {
-        await this.opts.manager.killAll();
+        const killResult = await this.opts.manager.killAll();
+        this.appendSystem(formatPortReleaseLine(killResult));
         this.setPhase("completed");
       }
     }
@@ -232,6 +233,9 @@ export class StigmergyRunner implements SwarmRunner {
     });
     try {
       await writeRunSummary(cfg.localPath, summary);
+      this.appendSystem(
+        formatRunFinishedBanner(summary),
+      );
       this.appendSystem(
         `Wrote run summary (stopReason=${summary.stopReason}, wallClockMs=${summary.wallClockMs}, files=${summary.filesChanged}).`,
       );

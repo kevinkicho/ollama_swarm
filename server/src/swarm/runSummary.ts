@@ -254,3 +254,71 @@ export async function writeRunSummary(
   await writeJsonAtomic(latestPath, json);
   return { perRunPath, latestPath };
 }
+
+// Task #68 (2026-04-24): rich end-of-run banner appended to the
+// transcript so users see a clear "run finished" marker AND a
+// per-agent stats summary at the very end. Mirrors the modal's
+// per-agent table in compact one-line form. Discussion presets that
+// don't commit show "0 commits" honestly. Used by every runner's
+// writeSummary path.
+function fmtRuntime(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h${m}m${sec}s`;
+  if (m > 0) return `${m}m${sec}s`;
+  return `${sec}s`;
+}
+
+export function formatRunFinishedBanner(summary: RunSummary): string {
+  const lines: string[] = [];
+  lines.push(`═══ Run finished — ${summary.stopReason} in ${fmtRuntime(summary.wallClockMs)} ═══`);
+  // Top-level totals — only show counters that are meaningful for
+  // this preset (commits/todos are blackboard-only; show 0 honestly
+  // for blackboard runs that produced none).
+  const totals: string[] = [];
+  if (summary.commits !== undefined) totals.push(`${summary.commits} commit${summary.commits === 1 ? "" : "s"}`);
+  totals.push(`${summary.filesChanged} file${summary.filesChanged === 1 ? "" : "s"} changed`);
+  if (summary.totalTodos !== undefined && summary.totalTodos > 0) {
+    totals.push(`${summary.totalTodos} todos (${summary.skippedTodos ?? 0} skipped, ${summary.staleEvents ?? 0} stale events)`);
+  }
+  // Sum lines added/removed across all agents (per-agent attribution
+  // lives below; a top-line total reads at a glance).
+  let added = 0;
+  let removed = 0;
+  for (const a of summary.agents) {
+    added += a.linesAdded ?? 0;
+    removed += a.linesRemoved ?? 0;
+  }
+  if (added > 0 || removed > 0) totals.push(`+${added} / -${removed} lines`);
+  if (totals.length > 0) lines.push(totals.join(" · "));
+  // Per-agent one-line summary.
+  if (summary.agents.length > 0) {
+    lines.push("Per-agent:");
+    for (const a of summary.agents) {
+      const cells: string[] = [
+        `${a.turnsTaken}t`,
+      ];
+      if (a.commits !== undefined && a.commits > 0) cells.push(`${a.commits}c`);
+      if ((a.linesAdded ?? 0) > 0 || (a.linesRemoved ?? 0) > 0) {
+        cells.push(`+${a.linesAdded ?? 0}/-${a.linesRemoved ?? 0}`);
+      }
+      if ((a.rejectedAttempts ?? 0) > 0) cells.push(`${a.rejectedAttempts}rej`);
+      if ((a.totalRetries ?? 0) > 0) cells.push(`${a.totalRetries}retry`);
+      if ((a.promptErrors ?? 0) > 0) cells.push(`${a.promptErrors}err`);
+      lines.push(`  agent-${a.agentIndex}: ${cells.join(" ")}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+// Task #68: format the kill-verification line. Called by every runner
+// right after manager.killAll() at end-of-run so users see explicit
+// confirmation that all agent ports were released.
+export function formatPortReleaseLine(killResult: { total: number; escaped: number }): string {
+  if (killResult.escaped === 0) {
+    return `✓ All ${killResult.total} agent port${killResult.total === 1 ? "" : "s"} released cleanly.`;
+  }
+  return `⚠ ${killResult.escaped} of ${killResult.total} agent process(es) escaped the kill — orphan sweep will catch them at next start.`;
+}

@@ -10,7 +10,7 @@ import type {
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
-import { buildDiscussionSummary, writeRunSummary } from "./runSummary.js";
+import { buildDiscussionSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
 import { extractTextWithDiag, looksLikeJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
@@ -187,8 +187,11 @@ export class CouncilRunner implements SwarmRunner {
     } finally {
       await this.writeSummary(cfg, crashMessage);
       // Unit 55: auto-killAll on natural completion (see RoundRobinRunner).
+      // Task #68: surface the kill result in the transcript so the user
+      // sees explicit confirmation that all agent ports were released.
       if (!this.stopping) {
-        await this.opts.manager.killAll();
+        const killResult = await this.opts.manager.killAll();
+        this.appendSystem(formatPortReleaseLine(killResult));
         this.setPhase("completed");
       }
     }
@@ -227,6 +230,10 @@ export class CouncilRunner implements SwarmRunner {
     });
     try {
       await writeRunSummary(cfg.localPath, summary);
+      // Task #68: rich end-of-run banner with per-agent rollup. Posted
+      // BEFORE the terse file-write line so the most informative
+      // content is the last thing the user reads.
+      this.appendSystem(formatRunFinishedBanner(summary));
       this.appendSystem(
         `Wrote run summary (stopReason=${summary.stopReason}, wallClockMs=${summary.wallClockMs}, files=${summary.filesChanged}).`,
       );

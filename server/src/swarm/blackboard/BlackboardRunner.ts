@@ -32,7 +32,7 @@ import { applyHunks } from "./applyHunks.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
 import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
-import { buildPerRunSummaryFileName, findAndReadNewestPriorSummary } from "../runSummary.js";
+import { buildPerRunSummaryFileName, findAndReadNewestPriorSummary, formatPortReleaseLine, formatRunFinishedBanner } from "../runSummary.js";
 import type { PriorRunSummary } from "./prompts/planner.js";
 import { summarizeAgentResponse } from "./transcriptSummary.js";
 import { readBlackboardStateSnapshot, type BlackboardStateSnapshot } from "./stateSnapshot.js";
@@ -639,7 +639,9 @@ export class BlackboardRunner implements SwarmRunner {
     // stop(): same verified-kill semantics from Unit 41 (poll +
     // taskkill escalation + pidTracker.remove). Idempotent if a
     // sibling code path already cleared the roster.
-    await this.opts.manager.killAll();
+    // Task #68: surface the kill result in the transcript.
+    const killResult = await this.opts.manager.killAll();
+    this.appendSystem(formatPortReleaseLine(killResult));
     this.setPhase(errored ? "failed" : "completed");
     // Unit 31: final non-debounced write so the on-disk state reflects the
     // terminal phase even if the debounced timer hasn't fired yet.
@@ -2849,6 +2851,10 @@ export class BlackboardRunner implements SwarmRunner {
     try {
       await writeFileAtomic(perRunPath, json);
       await writeFileAtomic(latestPath, json);
+      // Task #68: rich end-of-run banner with per-agent rollup,
+      // posted before the file-write line so the most informative
+      // content lands first.
+      this.appendSystem(formatRunFinishedBanner(summary));
       this.appendSystem(
         `Wrote run summary to ${perRunPath} + ${latestPath} (stopReason=${summary.stopReason}, commits=${summary.commits}, files=${summary.filesChanged}).`,
       );
