@@ -550,9 +550,12 @@ export function RunHistoryDropdown() {
         history {open ? "▴" : "▾"}
       </button>
       {open ? (
-        <div className="absolute z-20 right-0 mt-1 w-[min(560px,calc(100vw-2rem))] rounded border border-ink-600 bg-ink-900 shadow-xl overflow-hidden">
+        <div className="absolute z-20 right-0 mt-1 w-[min(960px,calc(100vw-2rem))] rounded border border-ink-600 bg-ink-900 shadow-xl overflow-hidden">
           <div className="px-3 py-2 border-b border-ink-700 flex items-center justify-between text-[11px] text-ink-400">
-            <span>Prior runs in parent folder</span>
+            <span>
+              Prior runs in parent folder
+              {runs && runs.length > 0 ? <span className="ml-2 text-ink-500">({runs.length})</span> : null}
+            </span>
             <button
               onClick={() => setOpen(false)}
               className="text-ink-500 hover:text-ink-200"
@@ -561,7 +564,7 @@ export function RunHistoryDropdown() {
               ✕
             </button>
           </div>
-          <div className="max-h-[60vh] overflow-y-auto">
+          <div className="max-h-[70vh] overflow-y-auto">
             {loading ? (
               <div className="p-3 text-ink-400">Loading…</div>
             ) : error ? (
@@ -571,80 +574,95 @@ export function RunHistoryDropdown() {
                 No sibling runs found in this parent folder.
               </div>
             ) : runs ? (
-              <ul>
-                {runs.map((r) => (
-                  <li
-                    key={r.clonePath}
-                    className={
-                      "px-3 py-2 border-b border-ink-800 hover:bg-ink-800/60 transition cursor-pointer " +
-                      (r.isActive ? "bg-emerald-900/20" : "")
-                    }
-                    onClick={() => setSelected(r)}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold text-ink-100 truncate">{r.name}</span>
-                      <span className="text-[10px] text-ink-500 font-mono shrink-0">
-                        {r.isActive ? "active · " : ""}
-                        {new Date(r.startedAt).toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="text-[11px] text-ink-400 mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-                      {/* Task #36: runId chip first, matches the live
-                          IdentityStrip chip so users can cross-reference
-                          a transcript mention like "run 73026b78" to a
-                          specific row in this dropdown. Click-to-copy
-                          full uuid; renders "—" for legacy rows without
-                          a recorded runId. */}
-                      {r.runId ? (
+              // Task #86 (2026-04-25): spreadsheet-style table with
+              // aligned columns + color-coded preset/result chips so
+              // users can scan the history at a glance.
+              <table className="w-full text-[11px] font-mono">
+                <thead className="bg-ink-800/60 text-ink-500 text-left text-[10px] uppercase tracking-wider sticky top-0 z-10">
+                  <tr>
+                    <th className="px-2 py-1.5 font-semibold">Time</th>
+                    <th className="px-2 py-1.5 font-semibold">Run</th>
+                    <th className="px-2 py-1.5 font-semibold">Preset</th>
+                    <th className="px-2 py-1.5 font-semibold">Result</th>
+                    <th className="px-2 py-1.5 font-semibold text-right">Commits</th>
+                    <th className="px-2 py-1.5 font-semibold text-right">Todos</th>
+                    <th className="px-2 py-1.5 font-semibold text-right">Wall</th>
+                    <th className="px-2 py-1.5 font-semibold">Path</th>
+                    <th className="px-2 py-1.5 font-semibold"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runs.map((r) => (
+                    <tr
+                      key={`${r.clonePath}-${r.runId ?? r.startedAt}`}
+                      className={
+                        "border-t border-ink-800/60 hover:bg-ink-800/40 transition cursor-pointer " +
+                        (r.isActive ? "bg-emerald-900/20" : "")
+                      }
+                      onClick={() => setSelected(r)}
+                    >
+                      <td className="px-2 py-1 text-ink-400" title={new Date(r.startedAt).toLocaleString()}>
+                        {fmtTimeShort(r.startedAt)}
+                      </td>
+                      <td className="px-2 py-1">
+                        {r.runId ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void navigator.clipboard.writeText(r.runId!);
+                            }}
+                            title={`Copy full runId: ${r.runId}`}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-ink-800 border border-ink-700 hover:bg-ink-700 hover:text-ink-100 text-ink-300"
+                          >
+                            {r.runId.slice(0, 8)}
+                          </button>
+                        ) : (
+                          <span className="text-ink-600 text-[10px]">—</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1">
+                        <PresetChip preset={r.preset} />
+                      </td>
+                      <td className="px-2 py-1">
+                        {r.isActive ? (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-700/30 border border-emerald-600/40 text-emerald-300 font-semibold">
+                            ● ACTIVE
+                          </span>
+                        ) : r.stopReason ? (
+                          <ResultChip reason={r.stopReason} />
+                        ) : (
+                          <span className="text-ink-600 text-[10px]">—</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1 text-right text-ink-300 tabular-nums">
+                        {r.commits ?? <span className="text-ink-600">—</span>}
+                      </td>
+                      <td className="px-2 py-1 text-right text-ink-300 tabular-nums">
+                        {r.totalTodos ?? <span className="text-ink-600">—</span>}
+                      </td>
+                      <td className="px-2 py-1 text-right text-ink-300 tabular-nums">
+                        {r.wallClockMs > 0 ? formatRuntimeMs(r.wallClockMs) : <span className="text-ink-600">—</span>}
+                      </td>
+                      <td className="px-2 py-1 text-ink-500 truncate max-w-[260px]" title={r.clonePath}>
+                        {truncateLeft(r.clonePath, 36)}
+                      </td>
+                      <td className="px-2 py-1 text-right">
                         <button
-                          type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            void navigator.clipboard.writeText(r.runId!);
+                            void onOpenFolder(r.clonePath);
                           }}
-                          title={`Copy full runId: ${r.runId}`}
-                          className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-ink-800 border border-ink-700 hover:bg-ink-700 hover:text-ink-100"
+                          title="Open clone folder in OS file manager"
+                          className="text-[10px] text-ink-400 hover:text-ink-100 underline"
                         >
-                          {r.runId.slice(0, 8)}
+                          open
                         </button>
-                      ) : (
-                        <span
-                          title="runId not recorded (run predates task #36)"
-                          className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-ink-900/40 border border-ink-800 text-ink-600"
-                        >
-                          —
-                        </span>
-                      )}
-                      <span>preset {r.preset}</span>
-                      {r.commits !== undefined ? <span>{r.commits} commits</span> : null}
-                      {r.totalTodos !== undefined ? <span>{r.totalTodos} todos</span> : null}
-                      {r.stopReason ? <span>→ {r.stopReason}</span> : null}
-                      {/* clonePath inline (2026-04-24): for non-blackboard
-                          presets the row was nearly empty mid-flight (no
-                          commits / no todos / no stopReason yet), making it
-                          hard to tell which target a row referred to. The
-                          path is the most useful "which run is this" cue;
-                          truncate-from-left so the run-name tail wins
-                          screen real estate over the shared mount prefix. */}
-                      <span
-                        className="font-mono text-[10px] text-ink-500 truncate"
-                        title={r.clonePath}
-                      >
-                        {truncateLeft(r.clonePath, 50)}
-                      </span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void onOpenFolder(r.clonePath);
-                        }}
-                        className="ml-auto text-ink-400 hover:text-ink-100 underline"
-                      >
-                        open folder
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             ) : null}
           </div>
         </div>
@@ -1059,6 +1077,66 @@ interface TabButtonProps {
   onClick: () => void;
   children: React.ReactNode;
 }
+// Task #86 (2026-04-25): color-coded chip per swarm preset. Same
+// hue per preset across the dropdown + (future) anywhere else
+// preset names appear, so users build muscle memory for "council
+// = sky, blackboard = emerald, debate-judge = amber" etc.
+const PRESET_CHIP_STYLES: Record<string, string> = {
+  blackboard: "bg-emerald-900/40 border-emerald-700/50 text-emerald-200",
+  council: "bg-sky-900/40 border-sky-700/50 text-sky-200",
+  "orchestrator-worker": "bg-amber-900/40 border-amber-700/50 text-amber-200",
+  "map-reduce": "bg-violet-900/40 border-violet-700/50 text-violet-200",
+  "role-diff": "bg-fuchsia-900/40 border-fuchsia-700/50 text-fuchsia-200",
+  "debate-judge": "bg-rose-900/40 border-rose-700/50 text-rose-200",
+  stigmergy: "bg-teal-900/40 border-teal-700/50 text-teal-200",
+  "round-robin": "bg-ink-700 border-ink-600 text-ink-200",
+};
+function PresetChip({ preset }: { preset: string }) {
+  const cls = PRESET_CHIP_STYLES[preset] ?? "bg-ink-700 border-ink-600 text-ink-200";
+  return (
+    <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold uppercase tracking-wide ${cls}`}>
+      {preset}
+    </span>
+  );
+}
+
+// Task #86: stopReason chip with semantic coloring. Distinguishes
+// natural completion from user-stop from cap-trip from crash.
+function ResultChip({ reason }: { reason: string }) {
+  let cls = "bg-ink-700 border-ink-600 text-ink-300";
+  let label = reason;
+  if (reason === "completed") {
+    cls = "bg-emerald-900/40 border-emerald-700/50 text-emerald-300";
+    label = "completed";
+  } else if (reason === "user") {
+    cls = "bg-ink-800 border-ink-700 text-ink-400";
+    label = "stopped";
+  } else if (reason === "crash" || reason === "failed") {
+    cls = "bg-rose-900/40 border-rose-700/50 text-rose-300";
+    label = "crashed";
+  } else if (reason.startsWith("cap:")) {
+    cls = "bg-amber-900/40 border-amber-700/50 text-amber-300";
+    label = reason.replace("cap:", "cap·");
+  }
+  return (
+    <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${cls}`}>
+      {label}
+    </span>
+  );
+}
+
+function fmtTimeShort(ts: number): string {
+  const d = new Date(ts);
+  const today = new Date();
+  const sameDay =
+    d.getFullYear() === today.getFullYear() &&
+    d.getMonth() === today.getMonth() &&
+    d.getDate() === today.getDate();
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (sameDay) return time;
+  return `${d.getMonth() + 1}/${d.getDate()} ${time}`;
+}
+
 // Task #84 (2026-04-25): sidebar fallback for completed runs.
 // AgentManager.killAll() clears the live agents map at run-end so
 // the AgentPanel cards disappear. Without this fallback the sidebar
