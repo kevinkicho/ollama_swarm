@@ -292,15 +292,27 @@ export class DebateJudgeRunner implements SwarmRunner {
     round: number,
   ): Promise<void> {
     const prompt = buildJudgePrompt({ proposition, transcript: [...this.transcript] });
-    await this.runAgent(judge, prompt, { role: "judge", round });
+    // Task #81: try to parse the JUDGE response as a structured
+    // verdict and upgrade the summary tag. Falls back to plain
+    // debate_turn if JSON parse fails — the freeform text still
+    // lands in the transcript.
+    await this.runAgent(judge, prompt, { role: "judge", round }, (text) => {
+      const verdict = parseDebateVerdict(text);
+      if (!verdict) return undefined;
+      return { kind: "debate_verdict", round, ...verdict };
+    });
   }
 
   // Phase 2c: transcript tag so the VerdictPanel can identify each
   // turn's role + round without guessing by agent-index order.
+  // Task #81: enrichSummary lets the caller (e.g. runJudgeTurn)
+  // post-process the text and upgrade the basic debate_turn tag to
+  // a richer kind like debate_verdict.
   private async runAgent(
     agent: Agent,
     prompt: string,
     debateTag?: { role: "pro" | "con" | "judge"; round: number },
+    enrichSummary?: (text: string) => TranscriptEntrySummary | undefined,
   ): Promise<void> {
     this.opts.manager.markStatus(agent.id, "thinking");
     this.emitAgentState({
@@ -395,6 +407,10 @@ export class DebateJudgeRunner implements SwarmRunner {
         const retryText = await retryEmptyResponse(agent, prompt, "swarm-read", diagCtx);
         if (retryText !== null) text = retryText;
       }
+      // Task #81: prefer the enriched summary when the caller provides
+      // one (JUDGE upgrades to debate_verdict). Fall back to the
+      // basic debate_turn tag for PRO/CON.
+      const enriched = enrichSummary?.(text);
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
@@ -402,10 +418,11 @@ export class DebateJudgeRunner implements SwarmRunner {
         agentIndex: agent.index,
         text,
         ts: Date.now(),
-        // Phase 2c: VerdictPanel groups entries by round + role.
-        summary: debateTag
-          ? { kind: "debate_turn", round: debateTag.round, role: debateTag.role }
-          : undefined,
+        summary:
+          enriched ??
+          (debateTag
+            ? { kind: "debate_turn", round: debateTag.round, role: debateTag.role }
+            : undefined),
       };
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });
@@ -522,27 +539,87 @@ export function buildJudgePrompt(args: BuildJudgePromptArgs): string {
     })
     .join("\n\n");
 
+  // Task #81 (2026-04-25): structured verdict. Previously freeform
+  // text; now JSON envelope so the modal renders a scorecard.
+  // Parser is lenient — falls back to freeform-as-rationale if model
+  // doesn't comply with JSON shape.
   return [
     "You are Agent 3, the JUDGE of a structured debate.",
     `Proposition: "${proposition}"`,
     "",
     "Your job: score the debate on the MERITS of the arguments presented, not on your prior opinion of the proposition. Score independently — a weaker argument for the 'correct' side should lose to a stronger argument for the 'wrong' side.",
     "",
-    "Produce a verdict in this shape (prose, not JSON):",
-    "1. One-paragraph summary of each side's strongest argument (PRO, then CON).",
-    "2. Your assessment of where each side was weakest.",
-    "3. Verdict: PRO WINS, CON WINS, or TIE — with a one-sentence rationale citing which specific argument tipped the balance.",
-    "4. Confidence: LOW / MEDIUM / HIGH — how clean the win was.",
+    "Output ONLY a JSON object matching this shape (no prose, no fences, no commentary):",
+    "{",
+    '  "winner": "pro" | "con" | "tie",',
+    '  "confidence": "low" | "medium" | "high",',
+    '  "proStrongest": "1-2 sentences naming PRO\'s best argument",',
+    '  "conStrongest": "1-2 sentences naming CON\'s best argument",',
+    '  "proWeakest": "1-2 sentences naming PRO\'s weakest point",',
+    '  "conWeakest": "1-2 sentences naming CON\'s weakest point",',
+    '  "decisive": "1 sentence — what tipped the balance",',
+    '  "nextAction": "1 sentence — concrete action a developer should take given this verdict, or \\"none needed\\""',
+    "}",
     "",
-    "Do NOT restate the proposition or the ground rules. Go straight into your summary.",
-    "Cite debaters as 'PRO' / 'CON' (not Agent 1 / Agent 2) for readability.",
+    "Cite debaters as 'PRO' / 'CON' (not Agent 1 / Agent 2) inside the strings for readability.",
     "",
     "=== FULL DEBATE TRANSCRIPT ===",
     transcriptText,
     "=== END TRANSCRIPT ===",
     "",
-    "Now deliver your verdict.",
+    "Now produce the JSON verdict.",
   ].join("\n");
+}
+
+// Task #81: lenient parser for the JUDGE's JSON verdict. Same three-
+// strategy approach as transcriptSummary.tryParseJson — strict, fence-
+// strip, slice-between-braces — so a model that wraps in ```json or
+// emits prose around the object still gets the structured tag.
+export interface ParsedDebateVerdict {
+  winner: "pro" | "con" | "tie";
+  confidence: "low" | "medium" | "high";
+  proStrongest: string;
+  conStrongest: string;
+  proWeakest: string;
+  conWeakest: string;
+  decisive: string;
+  nextAction: string;
+}
+export function parseDebateVerdict(raw: string): ParsedDebateVerdict | null {
+  const obj = parseLooseJson(raw);
+  if (!obj || typeof obj !== "object") return null;
+  const o = obj as Record<string, unknown>;
+  const winner = o.winner;
+  const confidence = o.confidence;
+  if (winner !== "pro" && winner !== "con" && winner !== "tie") return null;
+  if (confidence !== "low" && confidence !== "medium" && confidence !== "high") return null;
+  const str = (k: string): string =>
+    typeof o[k] === "string" ? (o[k] as string).trim() : "";
+  return {
+    winner,
+    confidence,
+    proStrongest: str("proStrongest"),
+    conStrongest: str("conStrongest"),
+    proWeakest: str("proWeakest"),
+    conWeakest: str("conWeakest"),
+    decisive: str("decisive"),
+    nextAction: str("nextAction"),
+  };
+}
+function parseLooseJson(raw: string): unknown {
+  const s = raw.trim();
+  if (!s) return null;
+  try { return JSON.parse(s); } catch { /* fall through */ }
+  const fence = /```(?:json)?\s*\n?([\s\S]*?)\n?```/m.exec(s);
+  if (fence) {
+    try { return JSON.parse(fence[1]!.trim()); } catch { /* fall through */ }
+  }
+  const firstBrace = s.indexOf("{");
+  const lastBrace = s.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    try { return JSON.parse(s.slice(firstBrace, lastBrace + 1)); } catch { /* fall through */ }
+  }
+  return null;
 }
 
 

@@ -291,10 +291,18 @@ export class MapReduceRunner implements SwarmRunner {
 
   private async runReducerTurn(agent: Agent, round: number, totalRounds: number): Promise<void> {
     const prompt = buildReducerPrompt(round, totalRounds, [...this.transcript]);
-    await this.runAgent(agent, prompt);
+    // Task #82: tag the FINAL cycle's reducer output as the run's
+    // synthesis so the modal renders distinctively. Earlier cycles
+    // are intermediate reductions; only the last one is the "answer".
+    const isFinal = round === totalRounds;
+    await this.runAgent(agent, prompt, isFinal ? () => ({ kind: "mapreduce_synthesis", cycle: round }) : undefined);
   }
 
-  private async runAgent(agent: Agent, prompt: string): Promise<void> {
+  private async runAgent(
+    agent: Agent,
+    prompt: string,
+    enrichSummary?: (text: string) => TranscriptEntrySummary | undefined,
+  ): Promise<void> {
     this.opts.manager.markStatus(agent.id, "thinking");
     this.emitAgentState({
       id: agent.id,
@@ -395,6 +403,8 @@ export class MapReduceRunner implements SwarmRunner {
         agentIndex: agent.index,
         text,
         ts: Date.now(),
+        // Task #82: optional enriched summary from the caller.
+        summary: enrichSummary?.(text),
       };
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });
@@ -515,13 +525,18 @@ export function buildReducerPrompt(
     `You are the REDUCER (Agent 1) in a map-reduce swarm.`,
     `This is the reduce step of cycle ${round}/${totalRounds}. Mapper agents just reported on their assigned slices of the repo.`,
     "",
-    "Read every mapper report in the transcript below. Produce a synthesis (under ~500 words) that:",
-    "1. Summarizes what the project is and who it seems to be for, citing mapper findings.",
-    "2. Summarizes what's working across the codebase (with mapper attributions).",
-    "3. Summarizes what's missing or problematic (with mapper attributions).",
+    "Your job is NOT to summarize each mapper individually — it is to SYNTHESIZE across them. Look for the things only visible from the reducer's vantage:",
+    "  - SURPRISES: a finding from one mapper that recontextualizes another's slice (e.g. Mapper 2 found a singleton that explains the duplication Mapper 4 reported).",
+    "  - CONTRADICTIONS: places where mappers reached different conclusions about the same area (e.g. Mapper 1 says the API is REST, Mapper 3 says it's gRPC — both can't be right).",
+    "  - GAPS: the thing nobody covered well that the union of slices makes obvious.",
+    "",
+    "Produce a synthesis (under ~500 words) that:",
+    "1. **Project picture** — what this codebase IS, who it's for, citing mapper findings.",
+    "2. **Cross-slice surprises + contradictions** — what jumped out when you read all reports together. Name the mappers and the specific tension.",
+    "3. **What's solid / what's missing** — with mapper + file attributions.",
     closingInstruction,
     "",
-    "Cite mappers by their agent index (e.g. \"Mapper 3 noted…\") and by file paths they cited. Do NOT invent evidence beyond what mappers reported.",
+    "Cite mappers by their agent index (e.g. \"Mapper 3 noted…\") and by file paths they cited. Do NOT invent evidence beyond what mappers reported. Do NOT just restate each mapper in turn — that's the failure mode this prompt exists to prevent.",
     "",
     "=== TRANSCRIPT ===",
     transcriptText,

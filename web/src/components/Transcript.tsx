@@ -202,6 +202,32 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
         />
       );
     }
+    // Task #81: structured debate verdict — render as a scorecard
+    // grid with PRO/CON columns and the decisive call in the header.
+    if (entry.summary.kind === "debate_verdict") {
+      return <DebateVerdictBubble verdict={entry.summary} header={header} ts={entry.ts} />;
+    }
+    // Task #82: map-reduce final-cycle synthesis — distinctive
+    // wrapper like council/stigmergy synthesis.
+    if (entry.summary.kind === "mapreduce_synthesis") {
+      const c = entry.summary.cycle;
+      const synHeader = (
+        <div>
+          {header}
+          <div className="text-[10px] uppercase tracking-wider font-semibold text-violet-300 mb-1">
+            ═ Map-reduce synthesis · cycle {c} ═
+          </div>
+        </div>
+      );
+      return (
+        <CollapsibleBlock
+          className="rounded-md p-3 border-2 border-violet-700/60 bg-violet-950/20 text-sm"
+          style={undefined}
+          header={synHeader}
+          text={entry.text}
+        />
+      );
+    }
     // Task #74 (2026-04-25): worker_hunks renders as a real diff view
     // — per hunk, op + file header + search/replace as stacked dim-red /
     // bright-green blocks. The raw JSON envelope was unreadable; this
@@ -351,6 +377,12 @@ function formatServerSummary(s: TranscriptEntrySummary): string {
   }
   if (s.kind === "stigmergy_report") {
     return `Stigmergy report-out (${s.filesRanked} files ranked)`;
+  }
+  if (s.kind === "debate_verdict") {
+    return `Debate verdict — ${s.winner.toUpperCase()} (${s.confidence})`;
+  }
+  if (s.kind === "mapreduce_synthesis") {
+    return `Map-reduce synthesis (cycle ${s.cycle})`;
   }
   // worker_hunks
   const opParts: string[] = [];
@@ -629,6 +661,77 @@ function CollapsibleBlock({ text, header, className, style }: CollapsibleProps) 
             Show less
           </button>
         )
+      ) : null}
+    </div>
+  );
+}
+
+// Task #81 (2026-04-25): scorecard renderer for the JUDGE's structured
+// verdict. Two-column grid (PRO / CON) with strongest + weakest per
+// side, then a footer strip with the decisive call + next action.
+function DebateVerdictBubble({
+  verdict: v,
+  header,
+  ts,
+}: {
+  verdict: Extract<TranscriptEntrySummary, { kind: "debate_verdict" }>;
+  header: React.ReactNode;
+  ts: number;
+}) {
+  const tsStr = new Date(ts).toLocaleTimeString();
+  const winnerColor =
+    v.winner === "pro" ? "text-emerald-300 border-emerald-700/60 bg-emerald-950/20"
+    : v.winner === "con" ? "text-rose-300 border-rose-700/60 bg-rose-950/20"
+    : "text-amber-300 border-amber-700/60 bg-amber-950/20";
+  const winnerLabel = v.winner === "pro" ? "PRO WINS" : v.winner === "con" ? "CON WINS" : "TIE";
+  return (
+    <div className={`rounded-md p-3 border-2 text-sm ${winnerColor}`}>
+      {header}
+      <div className="flex items-baseline justify-between gap-2 mb-3">
+        <div className="text-xs uppercase tracking-wider font-bold">
+          ⚖ {winnerLabel} · confidence: {v.confidence.toUpperCase()}
+        </div>
+        <div className="text-[10px] text-ink-500 font-mono">round {v.round} · {tsStr}</div>
+      </div>
+      <div className="grid grid-cols-2 gap-2 mb-3">
+        <div className="rounded border border-emerald-700/40 bg-emerald-950/30 p-2">
+          <div className="text-[10px] uppercase tracking-wider text-emerald-300 font-semibold mb-1">PRO</div>
+          {v.proStrongest ? (
+            <div className="text-[11px] text-ink-200 mb-1">
+              <span className="text-emerald-400">strongest:</span> {v.proStrongest}
+            </div>
+          ) : null}
+          {v.proWeakest ? (
+            <div className="text-[11px] text-ink-300">
+              <span className="text-rose-400">weakest:</span> {v.proWeakest}
+            </div>
+          ) : null}
+        </div>
+        <div className="rounded border border-rose-700/40 bg-rose-950/30 p-2">
+          <div className="text-[10px] uppercase tracking-wider text-rose-300 font-semibold mb-1">CON</div>
+          {v.conStrongest ? (
+            <div className="text-[11px] text-ink-200 mb-1">
+              <span className="text-rose-400">strongest:</span> {v.conStrongest}
+            </div>
+          ) : null}
+          {v.conWeakest ? (
+            <div className="text-[11px] text-ink-300">
+              <span className="text-emerald-400">weakest:</span> {v.conWeakest}
+            </div>
+          ) : null}
+        </div>
+      </div>
+      {v.decisive ? (
+        <div className="rounded border border-ink-700 bg-ink-950/40 p-2 mb-2">
+          <div className="text-[10px] uppercase tracking-wider text-ink-500 font-semibold mb-1">Decisive</div>
+          <div className="text-[11px] text-ink-200">{v.decisive}</div>
+        </div>
+      ) : null}
+      {v.nextAction ? (
+        <div className="rounded border border-amber-700/40 bg-amber-950/20 p-2">
+          <div className="text-[10px] uppercase tracking-wider text-amber-300 font-semibold mb-1">Next action</div>
+          <div className="text-[11px] text-ink-200">{v.nextAction}</div>
+        </div>
       ) : null}
     </div>
   );

@@ -120,6 +120,28 @@ export type TranscriptEntrySummary =
       kind: "stigmergy_report";
       filesRanked: number;
     }
+  // Task #81 (2026-04-25): structured debate verdict. JUDGE produces
+  // a JSON envelope; runner parses + tags with this kind so the
+  // modal renders a scorecard instead of freeform text.
+  | {
+      kind: "debate_verdict";
+      round: number;
+      winner: "pro" | "con" | "tie";
+      confidence: "low" | "medium" | "high";
+      proStrongest: string;
+      conStrongest: string;
+      proWeakest: string;
+      conWeakest: string;
+      decisive: string;
+      nextAction: string;
+    }
+  // Task #82 (2026-04-25): final-cycle map-reduce synthesis. Reducer's
+  // last cycle output gets tagged so the modal renders it as the
+  // run's "answer", separate from intermediate reductions above.
+  | {
+      kind: "mapreduce_synthesis";
+      cycle: number;
+    }
   // Task #72 (2026-04-25): structured payload for the end-of-run
   // banner. The transcript text is still human-readable, but the
   // grid renderer uses these fields directly so it can lay out a

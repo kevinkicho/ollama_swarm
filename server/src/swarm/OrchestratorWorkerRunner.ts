@@ -530,17 +530,28 @@ export function buildLeadPlanPrompt(
     `This is planning phase of cycle ${round}/${totalRounds}.`,
     `Your workers are: ${workerList}. Assign ONE subtask to each — workers execute in parallel with no visibility of each other.`,
     "",
+    // Task #83 (2026-04-25): repo-grounding for subtask quality.
+    // Mirror of the planner-grounding rule from #69 (blackboard).
+    // Lead frequently dispatches workers to inspect things that
+    // don't exist in the codebase ("audit src/utils/" when there's
+    // no utils dir). Forcing a tool-call pass before assignments
+    // dramatically reduces wasted worker cycles.
+    "REQUIRED VERIFICATION (Task #83) — BEFORE writing assignments:",
+    "  - Use `list` / `glob` / `read` tools on the cloned repo to confirm the directories and files you intend to dispatch workers to ACTUALLY EXIST.",
+    "  - If you assume a path (e.g. `src/utils/`, `tests/`, `docs/`) that turns out to not exist, the worker will return a 'not found' report and burn the cycle.",
+    "  - Cheapest verification: read README.md + a top-level `list` first. Then assign workers to paths that appeared in those listings.",
+    "",
     "Output ONLY a JSON object with this shape (no prose, no markdown fences):",
     '{"assignments": [{"agentIndex": 2, "subtask": "…"}, {"agentIndex": 3, "subtask": "…"}, …]}',
     "",
     "Rules for good subtasks:",
     "- Each subtask is self-contained (the worker sees only its subtask + the seed; no peer context, no your planning text).",
-    "- Subtasks should DIVIDE LABOR: e.g. \"inspect src/\", \"read README and package.json\", \"inspect tests/ and note coverage\", \"audit dependencies in package.json\". Avoid duplicate assignments.",
+    "- Subtasks should DIVIDE LABOR: e.g. \"inspect src/foo/\", \"read README and package.json\", \"inspect src/__tests__/ and note coverage\", \"audit dependencies in package.json\". Avoid duplicate assignments. Reference REAL paths you verified above.",
     "- Keep subtask text under ~200 chars. Be specific about what to report back.",
     "- One assignment per worker. Do NOT assign more than one subtask to the same agent.",
     round > 1
       ? "- This is a later cycle: you have prior cycle syntheses in the transcript. Use them to refine — dispatch workers to fill gaps the prior synthesis surfaced."
-      : "- This is cycle 1: start with broad coverage of the repo.",
+      : "- This is cycle 1: start with broad coverage of the repo. Verify the top-level structure with `list .` first so your dispatched paths are real.",
     "",
     "=== TRANSCRIPT SO FAR ===",
     transcriptText || "(empty — this is the first planning step)",

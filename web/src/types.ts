@@ -86,6 +86,24 @@ export type TranscriptEntrySummary =
       kind: "stigmergy_report";
       filesRanked: number;
     }
+  // Task #81: structured debate verdict.
+  | {
+      kind: "debate_verdict";
+      round: number;
+      winner: "pro" | "con" | "tie";
+      confidence: "low" | "medium" | "high";
+      proStrongest: string;
+      conStrongest: string;
+      proWeakest: string;
+      conWeakest: string;
+      decisive: string;
+      nextAction: string;
+    }
+  // Task #82: map-reduce final-cycle synthesis.
+  | {
+      kind: "mapreduce_synthesis";
+      cycle: number;
+    }
   // Task #72 (2026-04-25): structured payload for the end-of-run
   // banner. Web renders as a per-agent table grid instead of plain
   // text. Mirrors server-side `kind: "run_finished"` exactly.
