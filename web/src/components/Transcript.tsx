@@ -191,6 +191,23 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
       />
     );
   }
+  // 2026-04-25: client-side worker_hunks detection for legacy entries
+  // whose server-side summary tagging dropped (pre-fix runs OR
+  // entries from envelopes the lenient parser couldn't slice). Mirrors
+  // the WorkerHunksBubble routing so the diff renderer applies even
+  // when summary.kind is missing.
+  const looseHunks = useMemo(() => tryParseWorkerHunks(entry.text), [entry.text]);
+  if (looseHunks) {
+    return (
+      <WorkerHunksBubble
+        className={className}
+        style={style}
+        header={header}
+        summary={`${looseHunks.length} hunk${looseHunks.length === 1 ? "" : "s"}`}
+        rawJson={entry.text}
+      />
+    );
+  }
   const clientSummary = useMemo(() => summarizeAgentJson(entry.text), [entry.text]);
   if (clientSummary) {
     return (
