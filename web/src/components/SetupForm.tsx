@@ -6,6 +6,17 @@ import type { PreflightState } from "../types";
 
 type PresetStatus = "active" | "planned";
 
+// Task #138 (revised): per-preset directive behavior. Surfaces under
+// the User Directive textarea so users know upfront whether the
+// preset will act on what they type.
+//   "honored"          — directive shapes the run (blackboard only today)
+//   "uses-proposition" — directive ignored, but the preset has a
+//                         separate Proposition field that plays the
+//                         same role (debate-judge)
+//   "ignored"          — discussion-only preset; the directive has
+//                         no slot and is dropped on the floor
+type DirectiveBehavior = "honored" | "uses-proposition" | "ignored";
+
 interface SwarmPreset {
   id: string;
   label: string;
@@ -23,6 +34,7 @@ interface SwarmPreset {
   // refine the rest.
   recommendedModel: string;
   status: PresetStatus;
+  directive: DirectiveBehavior;
 }
 
 // Two-tier model framework — see docs/autonomous-productivity.md
@@ -62,6 +74,7 @@ const PRESETS: readonly SwarmPreset[] = [
     recommended: 3,
     recommendedModel: MODEL_REASONING,
     status: "active",
+    directive: "ignored",
   },
   {
     id: "blackboard",
@@ -74,6 +87,7 @@ const PRESETS: readonly SwarmPreset[] = [
     // (BLACKBOARD_DEFAULT_*_MODEL) refine workers + auditor.
     recommendedModel: MODEL_REASONING,
     status: "active",
+    directive: "honored",
   },
   {
     id: "role-diff",
@@ -84,6 +98,7 @@ const PRESETS: readonly SwarmPreset[] = [
     recommended: 5,
     recommendedModel: MODEL_REASONING,
     status: "active",
+    directive: "ignored",
   },
   {
     id: "map-reduce",
@@ -101,6 +116,7 @@ const PRESETS: readonly SwarmPreset[] = [
     // (Unit 65 candidate), swap mappers to MODEL_CODING.
     recommendedModel: MODEL_REASONING,
     status: "active",
+    directive: "ignored",
   },
   {
     id: "council",
@@ -113,6 +129,7 @@ const PRESETS: readonly SwarmPreset[] = [
     // near-identical drafts → no diversity gain.
     recommendedModel: MODEL_REASONING,
     status: "active",
+    directive: "ignored",
   },
   {
     id: "orchestrator-worker",
@@ -125,6 +142,7 @@ const PRESETS: readonly SwarmPreset[] = [
     // Unit 65 candidate as map-reduce.
     recommendedModel: MODEL_REASONING,
     status: "active",
+    directive: "ignored",
   },
   {
     id: "orchestrator-worker-deep",
@@ -138,6 +156,7 @@ const PRESETS: readonly SwarmPreset[] = [
     recommended: 8,
     recommendedModel: MODEL_REASONING,
     status: "active",
+    directive: "ignored",
   },
   {
     id: "debate-judge",
@@ -151,6 +170,7 @@ const PRESETS: readonly SwarmPreset[] = [
     // candidate — bias mitigation gain isn't huge.
     recommendedModel: MODEL_REASONING,
     status: "active",
+    directive: "uses-proposition",
   },
   {
     id: "stigmergy",
@@ -164,6 +184,7 @@ const PRESETS: readonly SwarmPreset[] = [
     // pheromone table, not deliberation, so reasoning doesn't pay.
     recommendedModel: MODEL_CODING,
     status: "active",
+    directive: "ignored",
   },
 ];
 
@@ -619,12 +640,9 @@ export function SetupForm() {
 
         <Field
           label="User directive (optional)"
-          hint={
-            preset.id === "blackboard"
-              ? "Blackboard only — shapes the auto-generated contract from turn 1. Leave empty for the planner's own read of repo gaps. Max 4000 chars."
-              : "This preset has no auto-contract, so the directive is ignored. It only applies to the Blackboard preset."
-          }
+          hint={directiveHintFor(preset)}
         >
+          <DirectiveBadge preset={preset} />
           <textarea
             value={userDirective}
             onChange={(e) => setUserDirective(e.target.value.slice(0, 4000))}
@@ -863,6 +881,43 @@ function ToggleField({
       </div>
       {hint ? <div className="text-xs text-ink-400 mt-1">{hint}</div> : null}
     </label>
+  );
+}
+
+// Task #138 (revised): hint text + visual badge for the User Directive
+// field. Per-preset behavior is fixed in the preset spec; this just
+// renders it in a consistent, scannable shape so the user knows what
+// the swarm will actually do with what they type.
+function directiveHintFor(preset: SwarmPreset): string {
+  switch (preset.directive) {
+    case "honored":
+      return "This preset will use the directive. Blackboard shapes its auto-generated contract from turn 1 around what you write here. Leave empty for the planner's own read of repo gaps. Max 4000 chars.";
+    case "uses-proposition":
+      return "This preset ignores the directive — but it has a separate Proposition field below that plays the same role. Type your debate prompt there.";
+    case "ignored":
+      return "This preset analyzes the repo as-is and ignores the directive. Pick Blackboard if you want the swarm to drive specific changes; or use Debate-judge with a Proposition.";
+  }
+}
+
+function DirectiveBadge({ preset }: { preset: SwarmPreset }) {
+  const cls =
+    preset.directive === "honored"
+      ? "bg-emerald-900/40 border-emerald-700/50 text-emerald-200"
+      : preset.directive === "uses-proposition"
+        ? "bg-sky-900/40 border-sky-700/50 text-sky-200"
+        : "bg-ink-800 border-ink-700 text-ink-400";
+  const label =
+    preset.directive === "honored"
+      ? "✓ honored by this preset"
+      : preset.directive === "uses-proposition"
+        ? "↳ ignored — debate-judge uses Proposition instead"
+        : "✕ ignored — analysis-only preset";
+  return (
+    <div
+      className={`mb-1.5 inline-block text-[11px] uppercase tracking-wider px-2 py-0.5 rounded border ${cls}`}
+    >
+      {label}
+    </div>
   );
 }
 

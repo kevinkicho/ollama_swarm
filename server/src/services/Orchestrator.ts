@@ -146,6 +146,11 @@ export class Orchestrator {
     // preset, so the usage dashboard can break down "blackboard ate
     // 60% of today's tokens" etc. Cleared in stop().
     tokenTracker.setCurrentPreset(cfg.preset);
+    // Task #137: clear any prior run's quota-exhausted flag so this
+    // run gets to probe the wall fresh. If the rate window has
+    // reset / the user upgraded their plan / etc., the new run finds
+    // out by trying. The flag re-trips immediately if not.
+    tokenTracker.clearQuotaState();
     // Unit 52a + 52c + 52d: anchor for the UI's runtime ticker,
     // identity strip, and identifiers row. Single source of truth
     // across all 7 runners. Fires BEFORE runner.start so a slow clone

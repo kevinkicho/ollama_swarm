@@ -92,6 +92,12 @@ app.get("/api/usage", (_req, res) => {
     last7d: tokenTracker.totalsInWindow(7 * 24 * 60 * 60_000, "7d"),
     lifetime: tokenTracker.total(),
     recent: tokenTracker.recent(50),
+    // Task #137: surface the quota-exhausted state so polling clients
+    // (3-min usage check, UI dashboard, the smoke-tour script) can
+    // see the wall as soon as the proxy detects it. Null when no wall
+    // observed since the last clearQuotaState() (i.e. since the
+    // current run started).
+    quota: tokenTracker.getQuotaState(),
   });
 });
 

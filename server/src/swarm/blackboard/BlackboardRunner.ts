@@ -27,7 +27,7 @@ import {
 } from "./stateSnapshot.js";
 import { shouldRunFinalAudit } from "./finalAudit.js";
 import { promptWithRetry } from "../promptWithRetry.js";
-import { snapshotLifetimeTokens, tokenBudgetExceeded } from "../../services/ollamaProxy.js";
+import { isQuotaExhausted, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../../services/ollamaProxy.js";
 import { formatCloneMessage } from "../cloneMessage.js";
 import { buildSummary, computeLatencyStats, type PerAgentStat, type RunSummary } from "./summary.js";
 import { applyHunks } from "./applyHunks.js";
@@ -3383,7 +3383,19 @@ export class BlackboardRunner implements SwarmRunner {
     )
       ? `token-budget reached (${this.active?.tokenBudget?.toLocaleString()} tokens)`
       : null;
-    const finalReason = reason ?? tokenReason;
+    // Task #137: quota-exhausted cap check. Distinct from the token
+    // budget — this fires when UPSTREAM Ollama signals we've hit a
+    // rate / plan limit (proxy detected 429 or quota body), not when
+    // OUR per-run budget tripped. Stops the run cleanly so the rest
+    // of the round doesn't burn on retries the proxy will keep
+    // rejecting.
+    const quotaState = this.tokenBaselineForRun !== undefined && isQuotaExhausted()
+      ? tokenTracker.getQuotaState()
+      : null;
+    const quotaReason = quotaState
+      ? `ollama-quota-exhausted (${quotaState.statusCode}: ${quotaState.reason.slice(0, 120)})`
+      : null;
+    const finalReason = reason ?? tokenReason ?? quotaReason;
     if (!finalReason) return false;
     this.terminationReason = finalReason;
     this.appendSystem(`Stopping: ${finalReason}`);

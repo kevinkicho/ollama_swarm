@@ -57,9 +57,34 @@ export interface UsageWindow {
 
 const CACHE_LIMIT = 100_000;
 
+// Task #137: quota-exhausted state. When the proxy sees an upstream
+// Ollama response that signals the account is at its rate / usage
+// wall (HTTP 429, sometimes 402/403 with a quota-shaped body), it
+// flips this state. Runners poll isQuotaExhausted() between turns
+// and stop the run cleanly with a "cap:quota" reason — no point
+// burning the rest of the round on retries the proxy will keep
+// rejecting. Orchestrator clears the state on run-start so the
+// NEXT run gets to discover the wall fresh (e.g. after a sleep
+// past the rate window).
+export interface QuotaState {
+  since: number;
+  reason: string;
+  statusCode: number;
+}
+
+const QUOTA_BODY_KEYWORDS: readonly RegExp[] = [
+  /\bquota\b/i,
+  /\brate[\s_-]*limit(?:ed)?/i,
+  /\busage[\s_-]*limit/i,
+  /\bweekly[\s_-]*limit/i,
+  /\b(too\s+many\s+requests)\b/i,
+  /\bexceed(?:ed|s)?\s+(?:your\s+)?(?:plan|quota|limit)/i,
+];
+
 class TokenTracker {
   private records: UsageRecord[] = [];
   private currentPreset?: string;
+  private quota: QuotaState | null = null;
 
   add(r: UsageRecord): void {
     // Stamp current preset at insertion time; the orchestrator owns
@@ -76,6 +101,26 @@ class TokenTracker {
   /** Called from Orchestrator on run start / end. */
   setCurrentPreset(preset: string | undefined): void {
     this.currentPreset = preset;
+  }
+
+  /** Task #137: proxy flips this when upstream Ollama returns a quota-
+   *  shaped response. Runners poll between turns; UI surfaces the wall. */
+  markQuotaExhausted(statusCode: number, reason: string): void {
+    if (this.quota) return; // first hit wins; keep the original timestamp
+    this.quota = { since: Date.now(), reason, statusCode };
+  }
+
+  /** Cleared on run-start so the next run can probe the wall fresh. */
+  clearQuotaState(): void {
+    this.quota = null;
+  }
+
+  isQuotaExhausted(): boolean {
+    return this.quota !== null;
+  }
+
+  getQuotaState(): QuotaState | null {
+    return this.quota;
   }
 
   totalsInWindow(windowMs: number, label: string): UsageWindow {
@@ -157,6 +202,58 @@ export function tokenBudgetExceeded(baseline: number, budget: number | undefined
   return tokenTracker.totalSinceLifetimeBaseline(baseline) >= budget;
 }
 
+/** Task #137: convenience export — runners poll between turns. Returns
+ *  true once the proxy has seen a quota-shaped upstream response since
+ *  the last clearQuotaState() call. */
+export function isQuotaExhausted(): boolean {
+  return tokenTracker.isQuotaExhausted();
+}
+
+/** Task #137: pure detector — exported for unit tests. Decides whether
+ *  an upstream Ollama response (status code + body) is signaling that
+ *  the account is at its rate / usage wall. Returns the reason string
+ *  on detection; null otherwise. */
+export function detectQuotaExhausted(status: number, body: string): string | null {
+  // Status 429 is the textbook signal — Ollama Cloud uses it for
+  // rate-limit AND for plan-quota walls. 402/403 with quota body are
+  // rarer but seen in some upstream variants.
+  if (status === 429) {
+    return body.length > 0 ? `429 ${truncateForReason(body)}` : "429 Too Many Requests";
+  }
+  if (status === 402 || status === 403) {
+    if (QUOTA_BODY_KEYWORDS.some((re) => re.test(body))) {
+      return `${status} ${truncateForReason(body)}`;
+    }
+  }
+  // Some upstream variants return 200 with an error body (no usage
+  // counts, just an "error" field naming the quota). Catch those too —
+  // requires a JSON-shaped error field that mentions a quota keyword.
+  if (status === 200 && body.length < 4_000) {
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed && typeof parsed === "object") {
+        const err = (parsed as { error?: unknown }).error;
+        if (typeof err === "string" && QUOTA_BODY_KEYWORDS.some((re) => re.test(err))) {
+          return `200-with-error: ${truncateForReason(err)}`;
+        }
+      }
+    } catch {
+      // body wasn't JSON; fine — fall through (probably a normal SSE chunk).
+    }
+  }
+  return null;
+}
+
+function detectAndMarkQuotaExhausted(status: number, body: string): void {
+  const reason = detectQuotaExhausted(status, body);
+  if (reason) tokenTracker.markQuotaExhausted(status, reason);
+}
+
+function truncateForReason(s: string, max = 160): string {
+  const cleaned = s.trim().replace(/\s+/g, " ");
+  return cleaned.length > max ? `${cleaned.slice(0, max - 1)}…` : cleaned;
+}
+
 export const tokenTracker = new TokenTracker();
 
 interface ProxyOpts {
@@ -188,7 +285,8 @@ export function startOllamaProxy(opts: ProxyOpts): { stop: () => Promise<void> }
       },
       (proxyRes) => {
         // Pass status + headers straight through.
-        res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
+        const status = proxyRes.statusCode ?? 200;
+        res.writeHead(status, proxyRes.headers);
         const chunks: Buffer[] = [];
         proxyRes.on("data", (chunk: Buffer) => {
           chunks.push(chunk);
@@ -200,6 +298,11 @@ export function startOllamaProxy(opts: ProxyOpts): { stop: () => Promise<void> }
           // glitch never breaks the actual proxied response.
           try {
             const body = Buffer.concat(chunks).toString("utf8");
+            // Task #137: scan for quota-exhausted signals BEFORE token
+            // recording so a 429-with-no-tokens correctly flips the
+            // wall flag. Cheap (regex scan on a string we'd parse
+            // anyway).
+            detectAndMarkQuotaExhausted(status, body);
             recordTokensFromBody(body, {
               ts: Date.now(),
               durationMs: Date.now() - t0,

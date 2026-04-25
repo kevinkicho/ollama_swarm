@@ -58,7 +58,7 @@ import {
   writeRunSummary,
 } from "./runSummary.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
-import { snapshotLifetimeTokens, tokenBudgetExceeded } from "../services/ollamaProxy.js";
+import { isQuotaExhausted, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../services/ollamaProxy.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
@@ -302,6 +302,15 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
           this.earlyStopDetail = `token-budget reached (${cfg.tokenBudget?.toLocaleString()} tokens)`;
           this.appendSystem(
             `Token budget of ${cfg.tokenBudget?.toLocaleString()} tokens reached at cycle ${r - 1}/${cfg.rounds} — ending run early.`,
+          );
+          break;
+        }
+        // Task #137: quota-wall cap check.
+        if (isQuotaExhausted()) {
+          const q = tokenTracker.getQuotaState();
+          this.earlyStopDetail = `ollama-quota-exhausted (${q?.statusCode}: ${q?.reason.slice(0, 100)})`;
+          this.appendSystem(
+            `Ollama quota wall hit at cycle ${r - 1}/${cfg.rounds} (${q?.statusCode}) — ending run early.`,
           );
           break;
         }
