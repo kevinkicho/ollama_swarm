@@ -253,3 +253,52 @@ export function buildWorkerRepairPrompt(previousResponse: string, parseError: st
     "No prose. No markdown fences. No commentary. Just the JSON object.",
   ].join("\n");
 }
+
+// Task #78 (2026-04-25): self-repair when applyHunks fails because a
+// `search` text doesn't exactly match the file (whitespace drift, tab
+// vs spaces, CRLF vs LF, the model imagined a slightly-different
+// version of the file). Prior behavior: markStale → replan from
+// scratch with a fresh worker. Now: feed the actual file content +
+// the failed hunks back to the SAME worker once before giving up.
+//
+// Cap at HUNK_REPAIR_FILE_SLICE chars — most worker turns are
+// surgical and the worker doesn't need the whole 50KB file to fix
+// one hunk. If the file is larger we send head+tail.
+const HUNK_REPAIR_FILE_SLICE = 4_000;
+
+export function buildHunkRepairPrompt(
+  failedHunks: unknown[],
+  applyError: string,
+  fileContents: Record<string, string>,
+): string {
+  const fileBlocks: string[] = [];
+  for (const [file, contents] of Object.entries(fileContents)) {
+    let body = contents;
+    let note = "";
+    if (contents.length > HUNK_REPAIR_FILE_SLICE * 2) {
+      const head = contents.slice(0, HUNK_REPAIR_FILE_SLICE).trimEnd();
+      const tail = contents.slice(-HUNK_REPAIR_FILE_SLICE).trimStart();
+      body = `${head}\n\n... <middle ${contents.length - HUNK_REPAIR_FILE_SLICE * 2} chars elided> ...\n\n${tail}`;
+      note = " (showing head + tail; middle elided)";
+    }
+    fileBlocks.push(`--- BEGIN FILE: ${file}${note} ---\n${body}\n--- END FILE: ${file} ---`);
+  }
+  return [
+    "Your previous diff did NOT apply to the file. The most common cause is a whitespace or newline mismatch — your `search` text doesn't exactly match what's actually in the file.",
+    `applyHunks error: ${applyError}`,
+    "",
+    "The ACTUAL current file content is below. Compare your search text to the real bytes — note exact whitespace, tabs vs spaces, blank lines.",
+    "",
+    ...fileBlocks,
+    "",
+    "Your previous hunks were:",
+    "--- BEGIN PREVIOUS HUNKS ---",
+    JSON.stringify(failedHunks, null, 2),
+    "--- END PREVIOUS HUNKS ---",
+    "",
+    "Respond NOW with a corrected JSON envelope. The `search` field must be a verbatim substring of the file content shown above. Match exact whitespace.",
+    "",
+    'Shape: {"hunks": [{"op": "replace", "file": "path", "search": "exact old text", "replace": "new text"}]}',
+    "No prose. No markdown fences. Just the JSON object.",
+  ].join("\n");
+}

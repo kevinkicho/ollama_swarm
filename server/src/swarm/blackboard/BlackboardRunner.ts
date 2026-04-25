@@ -74,6 +74,7 @@ import {
 import { classifyExpectedFiles } from "./prompts/pathValidation.js";
 import type { BoardEvent, ExitContract, Todo } from "./types.js";
 import {
+  buildHunkRepairPrompt,
   buildWorkerRepairPrompt,
   buildWorkerUserPrompt,
   parseWorkerResponse,
@@ -2419,7 +2420,69 @@ export class BlackboardRunner implements SwarmRunner {
     // hunk failure (anchor not unique, create on an existing file, etc.) is
     // surfaced with a hunk-index prefix from applyHunks — replanner can use
     // that to tell the worker which hunk to fix.
-    const applied = applyHunks(contents, parsed.hunks);
+    let applied = applyHunks(contents, parsed.hunks);
+    // Task #78: self-repair when the failure is a "search" mismatch
+    // (whitespace drift, the worker imagined a slightly-different file).
+    // Send the actual file content + failed hunks back to the SAME worker
+    // for one corrective round. Cheaper than markStale → replan from
+    // scratch with a fresh worker, which loses all the worker's context.
+    if (!applied.ok && /text not found/.test(applied.error) && !this.stopping) {
+      this.appendSystem(
+        `[${agent.id}] hunk apply failed (search mismatch); issuing repair prompt with actual file content.`,
+      );
+      let repair: string;
+      // Filter out files we couldn't read (null = not present); they
+      // can't have a search-mismatch failure anyway.
+      const readableContents: Record<string, string> = {};
+      for (const [f, t] of Object.entries(contents)) {
+        if (typeof t === "string") readableContents[f] = t;
+      }
+      try {
+        repair = await this.promptAgent(
+          agent,
+          `${WORKER_SYSTEM_PROMPT}\n\n${buildHunkRepairPrompt(parsed.hunks, applied.error, readableContents)}`,
+        );
+      } catch (err) {
+        if (this.stopping) return "aborted";
+        const msg = err instanceof Error ? err.message : String(err);
+        this.board.markStale(todo.id, `hunk repair prompt failed: ${msg}`);
+        bumpAgentCounter(this.promptErrorsPerAgent, agent.id);
+        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
+        return "stale";
+      }
+      if (this.stopping) return "aborted";
+      this.appendAgent(agent, repair);
+      const repairParsed = parseWorkerResponse(repair, todo.expectedFiles);
+      if (!repairParsed.ok) {
+        // Repair also produced bad JSON — give up and markStale with
+        // the original applyHunks error (more actionable than the
+        // repair-parse error).
+        this.board.markStale(todo.id, `hunk apply failed: ${applied.error}`);
+        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
+        return "stale";
+      }
+      if (repairParsed.skip || repairParsed.hunks.length === 0) {
+        // Worker decided the todo wasn't doable after seeing the file.
+        // Honor it as a decline; the replanner can re-route.
+        const reason = repairParsed.skip || "empty hunks after repair";
+        this.board.markStale(todo.id, `worker declined after hunk repair: ${reason}`);
+        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
+        return "stale";
+      }
+      // Re-apply with the repaired hunks. The pre-prompt contents are
+      // still the right base — CAS still holds (we haven't yielded
+      // since the re-hash above).
+      const reapplied = applyHunks(contents, repairParsed.hunks);
+      if (!reapplied.ok) {
+        this.board.markStale(todo.id, `hunk apply failed after repair: ${reapplied.error}`);
+        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
+        return "stale";
+      }
+      this.appendSystem(`[${agent.id}] hunk repair succeeded.`);
+      // Promote the repaired result into the downstream pipeline.
+      applied = reapplied;
+      parsed = repairParsed;
+    }
     if (!applied.ok) {
       this.board.markStale(todo.id, `hunk apply failed: ${applied.error}`);
       bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
