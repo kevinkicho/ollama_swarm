@@ -37,6 +37,15 @@ interface UsageRecord {
   preset?: string;
 }
 
+// Task #137: proxy-side quota state. Null when no wall observed since
+// the current run started; otherwise the upstream Ollama status code +
+// reason snippet that tripped the detector.
+interface QuotaState {
+  since: number;
+  reason: string;
+  statusCode: number;
+}
+
 interface UsagePayload {
   last1h: UsageWindow;
   last5h: UsageWindow;
@@ -44,6 +53,7 @@ interface UsagePayload {
   last7d: UsageWindow;
   lifetime: { promptTokens: number; responseTokens: number; calls: number };
   recent: UsageRecord[];
+  quota?: QuotaState | null;
 }
 
 const POLL_INTERVAL_MS = 10_000;
@@ -93,6 +103,13 @@ function pctColor(pct: number): string {
   return "bg-rose-500";
 }
 
+// Task #139: independent quota-state poll. Even when the UsageWidget
+// panel is closed we poll /api/usage every QUOTA_POLL_MS so the
+// header chip can flip red the moment the proxy detects a wall.
+// Polling /api/usage is free (in-memory tracker on our own server),
+// so this is cheap.
+const QUOTA_POLL_MS = 30_000;
+
 export function UsageWidget() {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<UsagePayload | null>(null);
@@ -107,7 +124,11 @@ export function UsageWidget() {
   // shows the current 1h total so the user has at-a-glance awareness
   // without opening the panel. Polled once on mount, then while open.
   const [headerSnap, setHeaderSnap] = useState<number>(0);
+  // Task #139: quota-wall state, polled independently of `open` so
+  // the header chip flips red as soon as the proxy detects a wall.
+  const [quota, setQuota] = useState<QuotaState | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const quotaPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchUsage = useCallback(async () => {
     try {
@@ -116,6 +137,7 @@ export function UsageWidget() {
       const body = (await r.json()) as UsagePayload;
       setData(body);
       setHeaderSnap(body.last1h.totalTokens);
+      setQuota(body.quota ?? null);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -127,7 +149,17 @@ export function UsageWidget() {
     void fetchUsage();
   }, [fetchUsage]);
 
-  // Poll while open.
+  // Task #139: background quota poll, always on (~30s). Cheap — hits our
+  // own server's in-memory tracker.
+  useEffect(() => {
+    quotaPollTimerRef.current = setInterval(fetchUsage, QUOTA_POLL_MS);
+    return () => {
+      if (quotaPollTimerRef.current) clearInterval(quotaPollTimerRef.current);
+      quotaPollTimerRef.current = null;
+    };
+  }, [fetchUsage]);
+
+  // Higher-rate poll while open (10s) for the breakdown tables.
   useEffect(() => {
     if (!open) {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
@@ -147,16 +179,22 @@ export function UsageWidget() {
     setCaps((c) => ({ ...c, [key]: value }));
   }, []);
 
+  // Task #139: header chip color reflects quota state. Red when the
+  // proxy has detected a wall; default ink otherwise.
+  const chipBaseCls = "rounded px-2 py-0.5 border transition flex items-center gap-1.5";
+  const chipCls = quota
+    ? `${chipBaseCls} text-rose-100 hover:text-white bg-rose-900/60 hover:bg-rose-900/80 border-rose-700/70 hover:border-rose-600 animate-pulse`
+    : `${chipBaseCls} text-ink-400 hover:text-ink-100 hover:bg-ink-800/70 border-ink-700 hover:border-ink-600`;
   return (
     <span className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        title="Token usage — click to expand"
-        className="text-ink-400 hover:text-ink-100 hover:bg-ink-800/70 rounded px-2 py-0.5 border border-ink-700 hover:border-ink-600 transition flex items-center gap-1.5"
+        title={quota ? `Ollama quota wall hit (${quota.statusCode}) — click for details` : "Token usage — click to expand"}
+        className={chipCls}
       >
-        <span>tokens</span>
-        <span className="font-mono text-[10px] text-ink-500">
-          {fmtTokens(headerSnap)}/1h
+        <span>{quota ? "⚠ QUOTA WALL" : "tokens"}</span>
+        <span className={`font-mono text-[10px] ${quota ? "text-rose-200" : "text-ink-500"}`}>
+          {quota ? `${quota.statusCode}` : `${fmtTokens(headerSnap)}/1h`}
         </span>
         <span>{open ? "▴" : "▾"}</span>
       </button>
@@ -174,6 +212,22 @@ export function UsageWidget() {
             <button onClick={() => setOpen(false)} className="text-ink-500 hover:text-ink-200">✕</button>
           </div>
           <div className="max-h-[70vh] overflow-y-auto p-3 space-y-3">
+            {/* Task #139: quota-wall banner. Stays at the top of the open
+                 panel until the wall clears (i.e. until a new run starts
+                 — Orchestrator clears the state on each start so the
+                 next run gets to probe the wall fresh). */}
+            {quota ? (
+              <div className="rounded border-2 border-rose-700 bg-rose-950/60 px-3 py-2 text-xs space-y-1">
+                <div className="font-semibold text-rose-100">
+                  ⚠ Ollama quota wall hit (HTTP {quota.statusCode})
+                </div>
+                <div className="text-rose-200 font-mono break-words">{quota.reason}</div>
+                <div className="text-rose-300/80">
+                  Detected at {new Date(quota.since).toLocaleTimeString()}.
+                  In-flight runs stopped cleanly via Task #137; the next run start clears this flag so it can re-probe the wall.
+                </div>
+              </div>
+            ) : null}
             {error ? (
               <div className="text-rose-300 text-xs">Failed to load: {error}</div>
             ) : !data ? (
