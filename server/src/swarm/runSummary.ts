@@ -257,57 +257,112 @@ export async function writeRunSummary(
 
 // Task #68 (2026-04-24): rich end-of-run banner appended to the
 // transcript so users see a clear "run finished" marker AND a
-// per-agent stats summary at the very end. Mirrors the modal's
-// per-agent table in compact one-line form. Discussion presets that
-// don't commit show "0 commits" honestly. Used by every runner's
-// writeSummary path.
+// per-agent stats summary at the very end. Used by every runner's
+// writeSummary path. Format favors readability over compactness:
+// full field names, all metrics shown (even zeros), one line per
+// agent with its role.
 function fmtRuntime(ms: number): string {
   const s = Math.floor(ms / 1000);
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   const sec = s % 60;
-  if (h > 0) return `${h}h${m}m${sec}s`;
-  if (m > 0) return `${m}m${sec}s`;
+  if (h > 0) return `${h}h ${m}m ${sec}s`;
+  if (m > 0) return `${m}m ${sec}s`;
   return `${sec}s`;
+}
+
+function fmtMs(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+// Mirror of the web-side roleForRow / agentRole helpers — kept
+// server-side too so the banner shows readable role names instead
+// of bare indices. Preset-specific.
+function roleForAgent(preset: string, idx: number, totalAgents: number): string {
+  switch (preset) {
+    case "blackboard":
+      if (idx === 1) return "planner";
+      if (idx > totalAgents - 1) return "auditor";
+      return "worker";
+    case "orchestrator-worker":
+      return idx === 1 ? "orchestrator" : "worker";
+    case "map-reduce":
+      return idx === 1 ? "reducer" : "mapper";
+    case "council":
+      return "drafter";
+    case "stigmergy":
+      return "explorer";
+    case "round-robin":
+      return "peer";
+    case "role-diff":
+      return "role-diff";
+    case "debate-judge":
+      if (idx === 1) return "pro";
+      if (idx === 2) return "con";
+      if (idx === 3) return "judge";
+      return "peer";
+    default:
+      return idx === 1 ? "planner" : "worker";
+  }
 }
 
 export function formatRunFinishedBanner(summary: RunSummary): string {
   const lines: string[] = [];
   lines.push(`═══ Run finished — ${summary.stopReason} in ${fmtRuntime(summary.wallClockMs)} ═══`);
-  // Top-level totals — only show counters that are meaningful for
-  // this preset (commits/todos are blackboard-only; show 0 honestly
-  // for blackboard runs that produced none).
-  const totals: string[] = [];
-  if (summary.commits !== undefined) totals.push(`${summary.commits} commit${summary.commits === 1 ? "" : "s"}`);
-  totals.push(`${summary.filesChanged} file${summary.filesChanged === 1 ? "" : "s"} changed`);
-  if (summary.totalTodos !== undefined && summary.totalTodos > 0) {
-    totals.push(`${summary.totalTodos} todos (${summary.skippedTodos ?? 0} skipped, ${summary.staleEvents ?? 0} stale events)`);
-  }
-  // Sum lines added/removed across all agents (per-agent attribution
-  // lives below; a top-line total reads at a glance).
+
+  // Top-level totals. Always show the core 3 (files, commits, lines);
+  // todo counters only when applicable (blackboard).
   let added = 0;
   let removed = 0;
   for (const a of summary.agents) {
     added += a.linesAdded ?? 0;
     removed += a.linesRemoved ?? 0;
   }
-  if (added > 0 || removed > 0) totals.push(`+${added} / -${removed} lines`);
-  if (totals.length > 0) lines.push(totals.join(" · "));
-  // Per-agent one-line summary.
+  const commitsTotal = summary.commits ?? 0;
+  lines.push(
+    `Files changed: ${summary.filesChanged} · ` +
+      `Commits: ${commitsTotal} · ` +
+      `Lines: +${added} / -${removed}`,
+  );
+  if (summary.stopDetail) {
+    lines.push(`Stop detail: ${summary.stopDetail}`);
+  }
+  if (summary.totalTodos !== undefined && summary.totalTodos > 0) {
+    lines.push(
+      `Todos: ${summary.totalTodos} total · ${commitsTotal} committed · ` +
+        `${summary.skippedTodos ?? 0} skipped · ${summary.staleEvents ?? 0} stale events`,
+    );
+  }
+
+  // Per-agent rollup. One line per agent, full field names, ALL
+  // counters shown (even zeros) so the format is predictable. For
+  // discussion presets the commits/lines/rejected/etc. all read 0
+  // honestly rather than being silently omitted.
   if (summary.agents.length > 0) {
-    lines.push("Per-agent:");
+    lines.push("");
+    lines.push(`Per-agent breakdown (${summary.agents.length} agents):`);
+    const N = summary.agents.length;
     for (const a of summary.agents) {
-      const cells: string[] = [
-        `${a.turnsTaken}t`,
-      ];
-      if (a.commits !== undefined && a.commits > 0) cells.push(`${a.commits}c`);
-      if ((a.linesAdded ?? 0) > 0 || (a.linesRemoved ?? 0) > 0) {
-        cells.push(`+${a.linesAdded ?? 0}/-${a.linesRemoved ?? 0}`);
-      }
-      if ((a.rejectedAttempts ?? 0) > 0) cells.push(`${a.rejectedAttempts}rej`);
-      if ((a.totalRetries ?? 0) > 0) cells.push(`${a.totalRetries}retry`);
-      if ((a.promptErrors ?? 0) > 0) cells.push(`${a.promptErrors}err`);
-      lines.push(`  agent-${a.agentIndex}: ${cells.join(" ")}`);
+      const role = roleForAgent(summary.preset, a.agentIndex, N);
+      const turns = a.turnsTaken;
+      const attempts = a.totalAttempts ?? turns;
+      const retries = a.totalRetries ?? 0;
+      const mean = fmtMs(a.meanLatencyMs);
+      const commits = a.commits ?? 0;
+      const linesAdded = a.linesAdded ?? 0;
+      const linesRemoved = a.linesRemoved ?? 0;
+      const rejected = a.rejectedAttempts ?? 0;
+      const jsonRepairs = a.jsonRepairs ?? 0;
+      const errors = a.promptErrors ?? 0;
+      lines.push(
+        `  agent-${a.agentIndex} (${role}): ${turns} turns · ${attempts} attempts · ${retries} retries · mean ${mean}`,
+      );
+      lines.push(
+        `              ${commits} commits · +${linesAdded} / -${linesRemoved} lines · ` +
+          `${rejected} rejected · ${jsonRepairs} JSON-repairs · ${errors} errors`,
+      );
     }
   }
   return lines.join("\n");
