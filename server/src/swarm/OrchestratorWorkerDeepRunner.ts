@@ -295,6 +295,12 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
       }
 
       const tokenBaseline = snapshotLifetimeTokens();
+      // Task #144: same consecutive-empty-plans guard as flat OW. The
+      // orchestrator's prompt context grows even faster in deep mode
+      // (mid-lead syntheses + cross-cycle history), so the same break
+      // threshold applies.
+      let consecutiveEmptyPlans = 0;
+      const EMPTY_PLAN_BREAK_THRESHOLD = 2;
 
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
@@ -333,11 +339,20 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
           break;
         }
         if (topPlan.assignments.length === 0) {
+          consecutiveEmptyPlans++;
           this.appendSystem(
-            `Cycle ${r}: orchestrator produced no parseable mid-lead assignments — skipping execute phase this cycle.`,
+            `Cycle ${r}: orchestrator produced no parseable mid-lead assignments — skipping execute phase this cycle. (consecutive=${consecutiveEmptyPlans})`,
           );
+          if (consecutiveEmptyPlans >= EMPTY_PLAN_BREAK_THRESHOLD) {
+            this.earlyStopDetail = `orchestrator-silenced (${consecutiveEmptyPlans} consecutive empty plans)`;
+            this.appendSystem(
+              `Orchestrator has produced empty plans for ${consecutiveEmptyPlans} consecutive cycles — ending OW-deep early to avoid burning wall-clock on dead loops.`,
+            );
+            break;
+          }
           continue;
         }
+        consecutiveEmptyPlans = 0;
 
         // Phase 2 + 3 + 4 — Each mid-lead, in parallel: plan → workers → synth.
         // The seed snapshot all sub-prompts share is the system messages

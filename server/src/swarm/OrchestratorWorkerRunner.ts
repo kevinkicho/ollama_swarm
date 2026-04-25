@@ -168,6 +168,13 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
 
       // Task #124: snapshot lifetime tokens for budget delta.
       const tokenBaseline = snapshotLifetimeTokens();
+      // Task #144: track consecutive empty-plan cycles. Past a small
+      // threshold the lead's prompt context has bloated to the point
+      // the model returns "(empty response)" placeholder for every
+      // plan; further cycles burn wall-clock for no work. Break the
+      // loop instead of grinding through to cfg.rounds.
+      let consecutiveEmptyPlans = 0;
+      const EMPTY_PLAN_BREAK_THRESHOLD = 2;
 
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
@@ -213,11 +220,27 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
           break;
         }
         if (plan.assignments.length === 0) {
+          consecutiveEmptyPlans++;
           this.appendSystem(
-            `Cycle ${r}: lead produced no parseable assignments — skipping execute phase this cycle. Raw lead output preserved in transcript.`,
+            `Cycle ${r}: lead produced no parseable assignments — skipping execute phase this cycle. Raw lead output preserved in transcript. (consecutive=${consecutiveEmptyPlans})`,
           );
+          // Task #144: break out of the loop if the lead has gone silent
+          // N cycles in a row. Diagnosed pattern (run b242f7f1 on 2026-04-25):
+          // by cycle 8 nemotron returns "(empty response)" for every plan
+          // due to context bloat from prior cycles' transcript; retry also
+          // returns empty; loop runs to cfg.rounds wasting wall-clock.
+          if (consecutiveEmptyPlans >= EMPTY_PLAN_BREAK_THRESHOLD) {
+            this.earlyStopDetail = `lead-silenced (${consecutiveEmptyPlans} consecutive empty plans)`;
+            this.appendSystem(
+              `Lead has produced empty plans for ${consecutiveEmptyPlans} consecutive cycles — ending OW early to avoid burning wall-clock on dead loops.`,
+            );
+            break;
+          }
           continue;
         }
+        // Reset counter on a successful plan — prior empties don't count
+        // against future stalls.
+        consecutiveEmptyPlans = 0;
 
         // EXECUTE — workers fire in parallel. Each sees ONLY its assigned
         // subtask + the seed, not the full transcript or peer reports.
