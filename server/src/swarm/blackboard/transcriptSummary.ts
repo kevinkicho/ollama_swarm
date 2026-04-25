@@ -95,10 +95,17 @@ function tryParseJson(raw: string): unknown {
       /* fall through */
     }
   }
-  // Prose-then-object: slice between first `{` and last `}`
+  // Prose-then-object OR object-then-trailing-garbage: slice between
+  // first `{` and last `}`. 2026-04-25 fix: `firstBrace > 0` was an
+  // off-by-one — when JSON starts at position 0 (the common worker
+  // response shape), this branch was never entered. The model
+  // occasionally appends a stray `]` after a valid envelope (e.g.
+  // `{"hunks":[{...}]}]`), and without this fallback the summary
+  // tagger silently dropped to undefined → web rendered raw JSON
+  // instead of the diff view. firstBrace >= 0 covers both.
   const firstBrace = s.indexOf("{");
   const lastBrace = s.lastIndexOf("}");
-  if (firstBrace > 0 && lastBrace > firstBrace) {
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
     try {
       return JSON.parse(s.slice(firstBrace, lastBrace + 1));
     } catch {

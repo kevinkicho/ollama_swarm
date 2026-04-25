@@ -578,32 +578,45 @@ interface ParsedHunk {
   replace?: string;
   content?: string;
 }
-function tryParseWorkerHunks(rawJson: string): ParsedHunk[] | null {
-  try {
-    // Strip a fenced ```json ... ``` wrapper if present.
-    const fenced = /^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/m.exec(rawJson.trim());
-    const candidate = fenced ? fenced[1] : rawJson;
-    const parsed = JSON.parse(candidate) as unknown;
-    if (typeof parsed !== "object" || parsed === null) return null;
-    const hunks = (parsed as { hunks?: unknown }).hunks;
-    if (!Array.isArray(hunks)) return null;
-    const out: ParsedHunk[] = [];
-    for (const h of hunks) {
-      if (typeof h !== "object" || h === null) continue;
-      const ho = h as Record<string, unknown>;
-      const op = ho.op;
-      const file = ho.file;
-      if (typeof op !== "string" || typeof file !== "string") continue;
-      if (op === "replace" && typeof ho.search === "string" && typeof ho.replace === "string") {
-        out.push({ op, file, search: ho.search, replace: ho.replace });
-      } else if ((op === "create" || op === "append") && typeof ho.content === "string") {
-        out.push({ op, file, content: ho.content });
-      }
-    }
-    return out.length > 0 ? out : null;
-  } catch {
-    return null;
+function parseLooseJson(raw: string): unknown {
+  const s = raw.trim();
+  if (!s) return undefined;
+  // 1. Strict parse first.
+  try { return JSON.parse(s); } catch { /* fall through */ }
+  // 2. ```json ... ``` fence stripping.
+  const fence = /```(?:json)?\s*\n?([\s\S]*?)\n?```/m.exec(s);
+  if (fence) {
+    try { return JSON.parse(fence[1]!.trim()); } catch { /* fall through */ }
   }
+  // 3. Slice between first `{` and last `}` — handles trailing
+  //    garbage (model occasionally appends a stray `]`) and prose
+  //    surrounding a JSON envelope.
+  const firstBrace = s.indexOf("{");
+  const lastBrace = s.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    try { return JSON.parse(s.slice(firstBrace, lastBrace + 1)); } catch { /* fall through */ }
+  }
+  return undefined;
+}
+function tryParseWorkerHunks(rawJson: string): ParsedHunk[] | null {
+  const parsed = parseLooseJson(rawJson);
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const hunks = (parsed as { hunks?: unknown }).hunks;
+  if (!Array.isArray(hunks)) return null;
+  const out: ParsedHunk[] = [];
+  for (const h of hunks) {
+    if (typeof h !== "object" || h === null) continue;
+    const ho = h as Record<string, unknown>;
+    const op = ho.op;
+    const file = ho.file;
+    if (typeof op !== "string" || typeof file !== "string") continue;
+    if (op === "replace" && typeof ho.search === "string" && typeof ho.replace === "string") {
+      out.push({ op, file, search: ho.search, replace: ho.replace });
+    } else if ((op === "create" || op === "append") && typeof ho.content === "string") {
+      out.push({ op, file, content: ho.content });
+    }
+  }
+  return out.length > 0 ? out : null;
 }
 function WorkerHunksBubble({
   summary,
