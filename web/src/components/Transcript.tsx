@@ -6,6 +6,12 @@ import { summarizeAgentJson } from "./transcriptSummarize";
 const AGENT_HUE = [140, 200, 260, 30, 320, 70, 180, 240];
 const COLLAPSE_THRESHOLD = 600;
 const JSON_COLLAPSE_THRESHOLD = 2000;
+// Task #75 (2026-04-25): max bubble body height before clip + fade.
+// Tall bubbles dominated the transcript viewport when several agents
+// produced 50+ line responses. 24rem (~24 lines @ default text size)
+// is enough to hold a dense paragraph without the viewport being
+// eaten by one bubble.
+const MAX_BUBBLE_HEIGHT_PX = 384;
 
 export function Transcript() {
   const transcript = useSwarm((s) => s.transcript);
@@ -507,20 +513,48 @@ interface CollapsibleProps {
 }
 function CollapsibleBlock({ text, header, className, style }: CollapsibleProps) {
   const [expanded, setExpanded] = useState(false);
-  const isLong = text.length > COLLAPSE_THRESHOLD;
-  const shown = !isLong || expanded ? text : text.slice(0, COLLAPSE_THRESHOLD).trimEnd() + "…";
+  // Task #75: pixel-height clip + fade-out over the previous char-
+  // length truncation. The char count was a poor proxy for visual
+  // height — 600 chars of short lines could still eat half the
+  // viewport. Now we cap the body at MAX_BUBBLE_HEIGHT_PX with a
+  // fade-out gradient + Show more button. Char-length fallback kept
+  // for very long messages so we don't render a 50KB DOM node just
+  // to clip it.
+  const charLong = text.length > COLLAPSE_THRESHOLD;
+  const shown = !charLong || expanded ? text : text.slice(0, COLLAPSE_THRESHOLD).trimEnd() + "…";
+  const bodyStyle = expanded ? undefined : { maxHeight: MAX_BUBBLE_HEIGHT_PX, overflow: "hidden" as const };
   return (
     <div className={className} style={style}>
       {header}
-      <div className="whitespace-pre-wrap">{shown}</div>
-      {isLong ? (
+      <div className="relative">
+        <div className="whitespace-pre-wrap" style={bodyStyle}>{shown}</div>
+        {!expanded ? (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-ink-900 to-transparent"
+          />
+        ) : null}
+      </div>
+      {/* Show more / less control. Visible whenever the char-truncate
+          fired OR the body was tall enough to hit the height cap. We
+          can't measure DOM height here without a ref, so always offer
+          the button when not expanded; clicking when nothing's hidden
+          is a no-op. Kept terse so it doesn't itself eat space. */}
+      {!expanded ? (
         <button
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => setExpanded(true)}
           className="mt-1 text-xs underline text-ink-400 hover:text-ink-200"
         >
-          {expanded ? "Show less" : `Show more (${text.length - COLLAPSE_THRESHOLD} chars)`}
+          Show more{charLong ? ` (${text.length - COLLAPSE_THRESHOLD} more chars)` : ""}
         </button>
-      ) : null}
+      ) : (
+        <button
+          onClick={() => setExpanded(false)}
+          className="mt-1 text-xs underline text-ink-400 hover:text-ink-200"
+        >
+          Show less
+        </button>
+      )}
     </div>
   );
 }
@@ -579,6 +613,7 @@ function WorkerHunksBubble({
   style?: React.CSSProperties;
 }) {
   const [showRaw, setShowRaw] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const hunks = useMemo(() => tryParseWorkerHunks(rawJson), [rawJson]);
   // Fallback: if we can't parse, defer to AgentJsonBubble.
   if (!hunks) {
@@ -592,6 +627,18 @@ function WorkerHunksBubble({
       />
     );
   }
+  // Per-bubble +/- totals — sum across hunks. Right-aligned next to
+  // the summary line so the bubble's at-a-glance change footprint
+  // matches the per-hunk badges below.
+  let added = 0;
+  let removed = 0;
+  for (const h of hunks) {
+    const c = countHunkLines(h);
+    added += c.added;
+    removed += c.removed;
+  }
+  // Task #75: cap bubble body height + fade-out + show-more.
+  const bodyStyle = expanded ? undefined : { maxHeight: MAX_BUBBLE_HEIGHT_PX, overflow: "hidden" as const };
   return (
     <div className={className} style={style}>
       <div className="flex items-start justify-between gap-2 mb-1">
@@ -603,12 +650,30 @@ function WorkerHunksBubble({
           {showRaw ? "Hide raw" : "Raw JSON"}
         </button>
       </div>
-      <div className="text-[11px] text-ink-400 mb-2">{summary}</div>
-      <div className="space-y-2">
-        {hunks.map((h, i) => (
-          <HunkBlock key={i} hunk={h} index={i} />
-        ))}
+      <div className="flex items-baseline gap-2 mb-2 text-[11px]">
+        <div className="text-ink-400 flex-1 min-w-0 truncate">{summary}</div>
+        {added > 0 ? <div className="text-emerald-300 font-mono tabular-nums shrink-0">+{added}</div> : null}
+        {removed > 0 ? <div className="text-rose-300 font-mono tabular-nums shrink-0">−{removed}</div> : null}
       </div>
+      <div className="relative">
+        <div className="space-y-2" style={bodyStyle}>
+          {hunks.map((h, i) => (
+            <HunkBlock key={i} hunk={h} index={i} />
+          ))}
+        </div>
+        {!expanded ? (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-900 to-transparent"
+          />
+        ) : null}
+      </div>
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="mt-1 text-xs underline text-ink-400 hover:text-ink-200"
+      >
+        {expanded ? "Show less" : "Show more"}
+      </button>
       {showRaw ? (
         <div className="mt-2 rounded border border-ink-700 bg-ink-950 p-2">
           <pre className="text-[10px] font-mono text-ink-300 whitespace-pre-wrap break-all">
@@ -621,12 +686,21 @@ function WorkerHunksBubble({
 }
 function HunkBlock({ hunk: h, index }: { hunk: ParsedHunk; index: number }) {
   const opColor = h.op === "replace" ? "text-amber-300" : h.op === "create" ? "text-emerald-300" : "text-sky-300";
+  const counts = countHunkLines(h);
   return (
     <div className="rounded border border-ink-700 overflow-hidden">
       <div className="bg-ink-800/60 px-2 py-1 flex items-baseline gap-2 text-[11px] font-mono">
         <span className="text-ink-500">#{index + 1}</span>
         <span className={`uppercase font-semibold ${opColor}`}>{h.op}</span>
-        <span className="text-ink-300 break-all">{h.file}</span>
+        <span className="text-ink-300 break-all flex-1 min-w-0 truncate" title={h.file}>{h.file}</span>
+        {/* Line counters — right-aligned, hidden when 0 (per Kevin's
+            review: don't show "+0" or "-0" noise). */}
+        {counts.added > 0 ? (
+          <span className="text-emerald-300 tabular-nums shrink-0">+{counts.added}</span>
+        ) : null}
+        {counts.removed > 0 ? (
+          <span className="text-rose-300 tabular-nums shrink-0">−{counts.removed}</span>
+        ) : null}
       </div>
       {h.op === "replace" ? (
         <>
@@ -642,6 +716,22 @@ function HunkBlock({ hunk: h, index }: { hunk: ParsedHunk; index: number }) {
       )}
     </div>
   );
+}
+
+// Count line-equivalents in a hunk's text. Mirrors the server-side
+// countNewlines() so the UI's +N/-M badges match the per-agent
+// linesAdded/Removed totals server-side. Trailing-newline-tolerant.
+function countLines(s: string): number {
+  if (!s) return 0;
+  const trimmed = s.endsWith("\n") ? s.slice(0, -1) : s;
+  if (trimmed.length === 0) return 0;
+  return trimmed.split("\n").length;
+}
+function countHunkLines(h: ParsedHunk): { added: number; removed: number } {
+  if (h.op === "replace") {
+    return { added: countLines(h.replace ?? ""), removed: countLines(h.search ?? "") };
+  }
+  return { added: countLines(h.content ?? ""), removed: 0 };
 }
 function DiffPane({ label, text, accent }: { label: string; text: string; accent: string }) {
   const [expanded, setExpanded] = useState(false);
