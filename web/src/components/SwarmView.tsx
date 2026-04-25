@@ -985,11 +985,15 @@ function DataValue({ children }: { children: React.ReactNode }) {
   return <div className="text-ink-200 min-w-0">{children}</div>;
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
+function Stat({ label, value }: { label: string; value: number | undefined }) {
+  // 2026-04-25 fix: blackboard-only fields (totalTodos / skippedTodos
+  // / staleEvents) are undefined on discussion-preset summaries.
+  // Calling undefined.toLocaleString() crashed the modal and blanked
+  // the page. Render "—" instead so the modal stays usable.
   return (
     <div className="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5">
       <div className="text-[9px] uppercase tracking-wider text-ink-500">{label}</div>
-      <div className="text-ink-100 font-mono text-sm">{value.toLocaleString()}</div>
+      <div className="text-ink-100 font-mono text-sm">{value === undefined ? "—" : value.toLocaleString()}</div>
     </div>
   );
 }

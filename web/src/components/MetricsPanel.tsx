@@ -1,5 +1,5 @@
 import { useSwarm } from "../state/store";
-import type { AgentState, LatencySample } from "../types";
+import type { AgentState, LatencySample, PerAgentStat } from "../types";
 
 // Phase 1 of the tabs-per-preset brainstorm (2026-04-24): a universal
 // per-agent metrics view that works across all 8 presets without
@@ -23,9 +23,18 @@ export function MetricsPanel() {
   const agents = useSwarm((s) => s.agents);
   const latency = useSwarm((s) => s.latency);
   const cfg = useSwarm((s) => s.runConfig);
+  const summary = useSwarm((s) => s.summary);
   const agentList = Object.values(agents).sort((a, b) => a.index - b.index);
 
+  // 2026-04-25: when the live agents map is empty (run completed and
+  // killAll cleared the roster), fall back to the saved summary's
+  // per-agent stats so the metrics tab stays useful for past-run
+  // review. Live samples take precedence; summary is the post-run
+  // fallback only.
   if (agentList.length === 0) {
+    if (summary && summary.agents.length > 0) {
+      return <MetricsFromSummary summary={summary} />;
+    }
     return (
       <div className="h-full overflow-auto p-6 text-sm text-ink-400">
         No agents yet. Metrics populate once the run starts and agents produce their first prompts.
@@ -75,6 +84,63 @@ export function MetricsPanel() {
         </p>
       </div>
     </div>
+  );
+}
+
+// 2026-04-25: post-run fallback rendering. Same column shape as the
+// live MetricsRow but sourced from summary.agents (PerAgentStat) so
+// users can review a completed run's metrics without re-running it.
+// Latency stats come from the summary's per-agent meanLatencyMs / p50 /
+// p95 (which the runner computed over successful attempts only — same
+// semantics as the live window).
+function MetricsFromSummary({ summary }: { summary: import("../types").RunSummary }) {
+  return (
+    <div className="h-full overflow-auto p-4">
+      <div className="text-xs text-ink-500 mb-2">
+        Final per-agent metrics (run completed · sourced from saved summary).
+        Live sample data is gone but the summary preserves attempts, retries,
+        and full-run latency stats.
+      </div>
+      <table className="w-full text-xs font-mono">
+        <thead>
+          <tr className="text-left text-ink-500 uppercase tracking-wide text-[10px] border-b border-ink-700">
+            <th className="py-1 px-2">Agent</th>
+            <th className="py-1 px-2 text-right">Turns</th>
+            <th className="py-1 px-2 text-right">Attempts</th>
+            <th className="py-1 px-2 text-right">Retries</th>
+            <th className="py-1 px-2 text-right">Mean</th>
+            <th className="py-1 px-2 text-right">p50</th>
+            <th className="py-1 px-2 text-right">p95</th>
+            <th className="py-1 px-2 text-right">Commits</th>
+            <th className="py-1 px-2 text-right">Lines</th>
+            <th className="py-1 px-2 text-right">Rejected</th>
+          </tr>
+        </thead>
+        <tbody>
+          {summary.agents.map((a) => (
+            <SummaryMetricsRow key={a.agentId} a={a} />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SummaryMetricsRow({ a }: { a: PerAgentStat }) {
+  const lines = (a.linesAdded ?? 0) + (a.linesRemoved ?? 0);
+  return (
+    <tr className="border-b border-ink-800/60 hover:bg-ink-800/40">
+      <td className="py-1 px-2 text-ink-200">agent-{a.agentIndex}</td>
+      <td className="py-1 px-2 text-right text-ink-300">{a.turnsTaken}</td>
+      <td className="py-1 px-2 text-right text-ink-300">{a.totalAttempts ?? "—"}</td>
+      <td className="py-1 px-2 text-right text-ink-300">{a.totalRetries ?? "—"}</td>
+      <td className="py-1 px-2 text-right text-ink-300">{fmt(a.meanLatencyMs ?? null)}</td>
+      <td className="py-1 px-2 text-right text-ink-300">{fmt(a.p50LatencyMs ?? null)}</td>
+      <td className="py-1 px-2 text-right text-ink-300">{fmt(a.p95LatencyMs ?? null)}</td>
+      <td className="py-1 px-2 text-right text-ink-200">{a.commits ?? "—"}</td>
+      <td className="py-1 px-2 text-right text-ink-300">{lines || "—"}</td>
+      <td className={`py-1 px-2 text-right ${(a.rejectedAttempts ?? 0) > 0 ? "text-rose-300" : "text-ink-300"}`}>{a.rejectedAttempts ?? "—"}</td>
+    </tr>
   );
 }
 
