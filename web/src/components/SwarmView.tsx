@@ -642,7 +642,7 @@ export function RunHistoryDropdown() {
                         {r.totalTodos && r.totalTodos > 0 ? r.totalTodos : ""}
                       </td>
                       <td className="px-2 py-1 text-right text-ink-300 tabular-nums whitespace-nowrap">
-                        {r.wallClockMs > 0 ? formatRuntimeMs(r.wallClockMs) : ""}
+                        {r.wallClockMs > 0 ? formatDurationCompact(r.wallClockMs) : ""}
                       </td>
                       <td className="px-2 py-1 text-ink-500 truncate max-w-[260px]" title={r.clonePath}>
                         {truncateLeft(r.clonePath, 36)}
@@ -1060,14 +1060,36 @@ function roleForRow(preset: string, idx: number, totalAgents: number): string {
   }
 }
 
-// 2026-04-25 fine-tune: spaced units per Kevin — "1 m 4 s" reads as
-// English better than "1m04s". No zero-padding (was: "1m04s") since
-// the spaces already separate the components visually.
+// 2026-04-25 fine-tune: two duration formatters per Kevin.
+//
+// formatDurationCompact — colon-digital for the history dropdown
+//   table where the column is narrow and rows benefit from
+//   tight scannable runtimes:
+//     1m 4s        → "1:4"
+//     12h 12m 13s  → "12:12:13"
+//     4d 15h 12m 12s → "4:15:12:12"
+//     30s alone    → "0:30" (always show m:s — matches stopwatch)
+//
+// formatRuntimeMs — spaced "3 m 24 s" for the modal's Identity
+//   grid where there's room and English units read better at
+//   review time.
+function formatDurationCompact(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const d = Math.floor(total / 86400);
+  const h = Math.floor((total % 86400) / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (d > 0) return `${d}:${h}:${m}:${s}`;
+  if (h > 0) return `${h}:${m}:${s}`;
+  return `${m}:${s}`;
+}
 function formatRuntimeMs(ms: number): string {
-  const secs = Math.floor(ms / 1000);
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = secs % 60;
+  const total = Math.floor(ms / 1000);
+  const d = Math.floor(total / 86400);
+  const h = Math.floor((total % 86400) / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (d > 0) return `${d} d ${h} h ${m} m ${s} s`;
   if (h > 0) return `${h} h ${m} m ${s} s`;
   if (m > 0) return `${m} m ${s} s`;
   return `${s} s`;
