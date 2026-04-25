@@ -33,7 +33,16 @@ const PlannerTodoSchema = z.object({
   expectedAnchors: z.array(anchorEntry).max(ANCHOR_MAX_PER_TODO).optional(),
 });
 
-const PlannerResponseSchema = z.array(PlannerTodoSchema).max(20);
+// Task #71 (2026-04-25): lowered cap from 20 → 5. Earlier blackboard
+// runs surfaced a "skip cascade" pattern — the planner posted up to 20
+// todos based on assumed code structure ("Agent class constructor",
+// "Brain class") and 16 of 20 got declined by workers because the
+// referenced symbols didn't exist. Smaller batches let the planner
+// see worker feedback (declines, repair-prompt failures) sooner and
+// adjust its mental model of the codebase before the next batch.
+// Trade-off: more planner round-trips but less wasted worker work.
+const MAX_TODOS_PER_BATCH = 5;
+const PlannerResponseSchema = z.array(PlannerTodoSchema).max(MAX_TODOS_PER_BATCH);
 
 export interface PlannerTodoInput {
   description: string;
@@ -117,7 +126,7 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
   // just cap valid todos here.
   const capResult = PlannerResponseSchema.safeParse(todos);
   if (!capResult.success) {
-    return { ok: false, reason: `too many todos (max 20), got ${todos.length}` };
+    return { ok: false, reason: `too many todos (max ${MAX_TODOS_PER_BATCH}), got ${todos.length}` };
   }
   return { ok: true, todos, dropped };
 }
@@ -140,7 +149,7 @@ export const PLANNER_SYSTEM_PROMPT = [
   "4. `expectedFiles` lists 1 or 2 repo-relative paths the agent will need to touch. NEVER more than 2.",
   "5. Each TODO must be independently completable without coordinating with another agent.",
   "6. If the repo is trivial, already complete, or there is nothing meaningful to add, return an empty array [].",
-  "7. Maximum 20 TODOs per response.",
+  "7. Maximum 5 TODOs per response. Smaller is better — the replanner re-prompts you for more after these land, and a smaller initial batch lets you see worker feedback (declined / repaired / committed) before you commit to the next 5.",
   "8. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, `docs/`, or any path ending in `/` or `\\`. If the TODO covers a whole directory, pick the specific files it will touch (e.g., `src/lib/a.ts`, `src/lib/b.ts`) or split it into smaller TODOs. Directory entries are rejected by the parser and the TODO is dropped.",
   "9. Ground every `expectedFiles` entry in the REPO FILE LIST provided in the user message. Each entry MUST either (a) appear verbatim in the list (for edits to existing files), or (b) be a new file whose parent directory appears in the list (for adding a new file to a known location). Do NOT invent paths whose parent directory is not in the list — the worker's file-hash pass will fail on EISDIR/ENOENT and stall the run.",
   "10. (Unit 44b) For TODOs that touch a SPECIFIC ROW or REGION of a large file (e.g., a single row in a 100-row markdown table, one entry in a 200-entry JSON object), include `expectedAnchors`: an array of 1-4 short verbatim substrings (≤ 200 chars each) that uniquely identify the target region. Workers see only HEAD + TAIL of files above 8 KB; anchors let the runner inject ±25 lines of context around each anchor so the worker can actually edit middle-region rows. Use grep/read first to confirm each anchor exists in the file. Examples: `\"| 7 | **ASE Holdings**\"`, `\"NVIDIA: { revenue:\"`. Omit `expectedAnchors` for whole-file edits, append-only TODOs, or files small enough to show in full.",

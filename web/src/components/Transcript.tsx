@@ -482,6 +482,8 @@ function RunFinishedGrid({
 }) {
   const wallClock = formatRuntime(s.wallClockMs);
   const tsStr = new Date(ts).toLocaleTimeString();
+  const startedStr = new Date(s.startedAt).toLocaleString();
+  const endedStr = new Date(s.endedAt).toLocaleString();
   return (
     <div className="rounded border border-emerald-700/50 bg-emerald-950/20 p-3 my-2">
       <div className="flex items-baseline justify-between gap-2 mb-2">
@@ -489,6 +491,37 @@ function RunFinishedGrid({
           ═ Run finished — {s.stopReason} in {wallClock} ═
         </div>
         <div className="text-[10px] text-ink-500 font-mono">{tsStr}</div>
+      </div>
+      {/* Identity strip — runId, preset, model, repo, clone path,
+          start/end times. Two-column definition list keeps it compact. */}
+      <div className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 text-[11px] font-mono mb-3 px-1">
+        {s.runId ? (
+          <>
+            <div className="text-ink-500">Run ID</div>
+            <div className="text-ink-300 break-all">{s.runId}</div>
+          </>
+        ) : null}
+        <div className="text-ink-500">Preset</div>
+        <div className="text-ink-200">{s.preset}</div>
+        <div className="text-ink-500">Model</div>
+        <div className="text-ink-200">{s.model}</div>
+        <div className="text-ink-500">Repo</div>
+        <div className="text-ink-200 break-all">
+          <a href={s.repoUrl} target="_blank" rel="noopener noreferrer" className="text-sky-300 hover:text-sky-200 underline">{s.repoUrl}</a>
+        </div>
+        <div className="text-ink-500">Clone</div>
+        <div className="text-ink-300 break-all">{s.clonePath}</div>
+        <div className="text-ink-500">Started</div>
+        <div className="text-ink-200">{startedStr}</div>
+        <div className="text-ink-500">Ended</div>
+        <div className="text-ink-200">{endedStr}</div>
+        <div className="text-ink-500">Duration</div>
+        <div className="text-ink-200">{wallClock}</div>
+        <div className="text-ink-500">Stop reason</div>
+        <div className={s.stopReason === "completed" ? "text-emerald-300" : s.stopReason === "user" ? "text-ink-200" : "text-amber-300"}>
+          {s.stopReason}
+          {s.stopDetail ? <span className="text-ink-400 italic"> — {s.stopDetail}</span> : null}
+        </div>
       </div>
       {/* Headline tiles */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
@@ -499,10 +532,8 @@ function RunFinishedGrid({
         {s.totalTodos !== undefined ? <Tile label="Total todos" value={s.totalTodos} /> : null}
         {s.skippedTodos !== undefined ? <Tile label="Skipped todos" value={s.skippedTodos} /> : null}
         {s.staleEvents !== undefined ? <Tile label="Stale events" value={s.staleEvents} /> : null}
+        <Tile label="Agents" value={s.agents.length} />
       </div>
-      {s.stopDetail ? (
-        <div className="text-[11px] text-ink-400 italic mb-2">Detail: {s.stopDetail}</div>
-      ) : null}
       {/* Per-agent grid */}
       <div className="text-[10px] uppercase tracking-wider text-ink-500 font-semibold mb-1">
         Per-agent ({s.agents.length})

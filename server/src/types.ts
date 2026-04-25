@@ -112,9 +112,19 @@ export type TranscriptEntrySummary =
   // mirror PerAgentStat (subset — only what the grid renders).
   | {
       kind: "run_finished";
+      // Identity / context
+      runId?: string;
+      preset: string;
+      model: string;
+      repoUrl: string;
+      clonePath: string;
+      // Timing
+      startedAt: number;
+      endedAt: number;
+      wallClockMs: number;
+      // Outcome
       stopReason: string;
       stopDetail?: string;
-      wallClockMs: number;
       filesChanged: number;
       commits?: number;
       totalTodos?: number;

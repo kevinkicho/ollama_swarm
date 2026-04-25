@@ -394,6 +394,13 @@ export function buildRunFinishedSummary(summary: RunSummary): TranscriptEntrySum
   const N = summary.agents.length;
   return {
     kind: "run_finished",
+    runId: summary.runId,
+    preset: summary.preset,
+    model: summary.model,
+    repoUrl: summary.repoUrl,
+    clonePath: summary.localPath,
+    startedAt: summary.startedAt,
+    endedAt: summary.endedAt,
     stopReason: summary.stopReason,
     stopDetail: summary.stopDetail,
     wallClockMs: summary.wallClockMs,
