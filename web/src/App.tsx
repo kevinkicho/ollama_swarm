@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useSwarm } from "./state/store";
 import { useSwarmSocket } from "./hooks/useSwarmSocket";
 import { SetupForm } from "./components/SetupForm";
-import { SwarmView } from "./components/SwarmView";
+import { RunHistoryDropdown, SwarmView } from "./components/SwarmView";
 import type { RunSummary } from "./types";
 
 // Task #65 (2026-04-24): URL-based review mode. When the user opens a
@@ -50,6 +50,12 @@ export default function App() {
         <div className="flex items-center gap-3">
           <RuntimeTicker />
           <PhasePill />
+          {/* Task #85: history dropdown lives in the App header so it's
+              accessible even before any run starts (SetupForm flash
+              page). The /api/swarm/runs route falls back to
+              lastParentPath when no run is active, so the dropdown
+              still loads recent history without a current run. */}
+          <RunHistoryDropdown />
         </div>
       </header>
       {error ? (

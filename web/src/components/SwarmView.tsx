@@ -332,11 +332,11 @@ function truncateLeft(s: string, maxLen: number): string {
 function IdentityStrip() {
   const cfg = useSwarm((s) => s.runConfig);
   const runId = useSwarm((s) => s.runId);
-  const history = (
-    <span className="ml-auto pl-3 flex items-center gap-2">
-      <RunHistoryDropdown />
-    </span>
-  );
+  // Task #85: history dropdown moved to the App-level header so it's
+  // also reachable from the SetupForm. IdentityStrip no longer
+  // renders it — keep `history = null` so existing layout doesn't
+  // shift when this strip appears.
+  const history = null;
   if (!cfg && !runId) return null;
   const runName = cfg ? deriveRunName(cfg.clonePath) : "(unnamed run)";
   const onOpen = async () => {
@@ -475,7 +475,11 @@ function deriveRunName(clonePath: string): string {
 // summary's headline data + Open Folder button (POST /open). Stays
 // closed until the user clicks — no eager fetching that would race
 // page-load.
-function RunHistoryDropdown() {
+// Task #85 (2026-04-25): exported so the App-level top header can
+// render the dropdown even before any run has started — users can
+// review past runs from the SetupForm flash page without first
+// having to start a new run.
+export function RunHistoryDropdown() {
   const [open, setOpen] = useState(false);
   const [runs, setRuns] = useState<RunSummaryDigest[] | null>(null);
   const [loading, setLoading] = useState(false);
