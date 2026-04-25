@@ -542,6 +542,11 @@ function CollapsibleBlock({ text, header, className, style }: CollapsibleProps) 
   const bodyRef = useRef<HTMLDivElement>(null);
   const [overflows, setOverflows] = useState(false);
   useLayoutEffect(() => {
+    // Only measure when collapsed. Once expanded, the body is
+    // unbounded so overflow naturally goes to 0 — re-measuring would
+    // flip overflows=false and hide the "Show less" button, leaving
+    // the user stranded with no way to collapse back.
+    if (expanded) return;
     const el = bodyRef.current;
     if (!el) return;
     // 1px tolerance for sub-pixel rendering.
@@ -679,6 +684,9 @@ function WorkerHunksBubble({
   const bodyRef = useRef<HTMLDivElement>(null);
   const [overflows, setOverflows] = useState(false);
   useLayoutEffect(() => {
+    // See CollapsibleBlock — skip measurement when expanded so the
+    // "Show less" button stays visible.
+    if (expanded) return;
     const el = bodyRef.current;
     if (!el) return;
     const isOverflowing = el.scrollHeight - el.clientHeight > 1;
