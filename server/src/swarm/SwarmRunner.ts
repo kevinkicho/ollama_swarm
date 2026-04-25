@@ -9,6 +9,7 @@ export type PresetId =
   | "role-diff"
   | "council"
   | "orchestrator-worker"
+  | "orchestrator-worker-deep"
   | "debate-judge"
   | "map-reduce"
   | "stigmergy";
@@ -100,6 +101,74 @@ export interface RunConfig {
    */
   wallClockCapMs?: number;
   /**
+   * Task #124: optional per-run hard cap on total tokens consumed
+   * (prompt + response). When set, the runner polls the proxy-backed
+   * tokenTracker every cap-check tick; once cumulative-since-start
+   * exceeds this number, the runner halts the same way wall-clock
+   * does. User-supplied — no default, no implicit cap. Useful for
+   * autonomous mode where wall-clock alone doesn't bound cost (a
+   * stuck retry loop can burn tokens with little wall-clock movement).
+   * Empty / undefined = no token cap (legacy behavior).
+   */
+  tokenBudget?: number;
+  /**
+   * Task #127: when no userDirective is set, run a one-shot
+   * goal-generation pre-pass using the planner agent — it inspects
+   * the repo and proposes 3-5 ambitious-but-feasible improvements,
+   * then the top one becomes the directive for this run. Lifts the
+   * swarm from "do something" to "do something that matters."
+   * Default true. Set false to fall back to the legacy
+   * planner-picks-from-scratch behavior. Blackboard-only; ignored by
+   * other presets (which don't use userDirective).
+   */
+  autoGenerateGoals?: boolean;
+  /**
+   * Task #129: post-completion stretch-goal reflection. After a run
+   * finishes successfully (not crashed, not user-stopped, has at
+   * least one commit OR met-criteria > 0), the planner is asked one
+   * meta-question: "what would the BEST version of this work have
+   * done?". The answer is recorded as a `stretch_goals` transcript
+   * summary so the next run (or the user) can use it as a directive.
+   * Lifts the swarm from "did the contract" → "what could it have
+   * done that was more ambitious?". Default true. Set false to
+   * skip (saves one planner prompt per successful run).
+   * Blackboard-only.
+   */
+  autoStretchReflection?: boolean;
+  /**
+   * Task #128: per-commit independent verifier. When true, between
+   * critic-accept and disk-write a verifier agent reads the todo +
+   * the proposed diff and issues a verdict (verified / partial /
+   * false / unverifiable). FALSE blocks the commit (markStale →
+   * replan). Critical unblocker for autonomous mode where no human
+   * reviews each commit. Adds one prompt per commit; default false
+   * (opt-in). Blackboard-only.
+   */
+  verifier?: boolean;
+  /**
+   * Task #132: continuous mode — run-against-budget instead of
+   * run-against-rounds. When true, the runner treats `rounds` as
+   * effectively unbounded; the run halts on cap (tokenBudget /
+   * wallClockCapMs / blackboard's commits/todos caps) or user
+   * stop. Required: at least one budget cap must be set, otherwise
+   * the route layer rejects the start (else this would be an
+   * infinite loop). Default false. Compatible with all presets;
+   * blackboard is already cap-driven so the flag is a no-op there
+   * but still validated. Pairs with #133 (token tracking) +
+   * #124 (token-budget) which together make the budget gate real.
+   */
+  continuous?: boolean;
+  /**
+   * Task #130: persistent cross-run memory (`<clone>/.swarm-memory.jsonl`).
+   * On run-start, the planner seed surfaces the most recent N
+   * lessons-learned entries from prior runs against this clone.
+   * On successful run-end (after stretch reflection, before summary
+   * write), the planner produces a 2-4 bullet lesson distillation
+   * which gets appended. Default true; set false to skip both the
+   * read AND the write. Blackboard-only.
+   */
+  autoMemory?: boolean;
+  /**
    * Unit 51: opt-in to reload the prior run's contract + tier state
    * directly from `<clone>/blackboard-state.json` instead of having
    * the planner re-derive a first-pass contract. Pairs with the
@@ -152,6 +221,18 @@ export interface RunConfig {
    * (no point ensembling a disabled critic). Default off.
    */
   criticEnsemble?: boolean;
+  /**
+   * Task #102: opt-in post-verdict "build" round for debate-judge.
+   * After the JUDGE returns a verdict with confidence ≥ medium and a
+   * non-tie winner, the same 3 agents pivot to: PRO=implementer
+   * (file-edits to action the verdict's nextAction), CON=reviewer
+   * (verifies + flags issues), JUDGE=signoff. Switches the per-turn
+   * agentName from "swarm-read" to "swarm" so file-edit tools become
+   * available. Default off — preserves the discussion-only character
+   * of debate-judge for users who don't want the swarm to write.
+   * Debate-judge-only; ignored by other presets.
+   */
+  executeNextAction?: boolean;
   /**
    * Task #36: app-level run id minted by the Orchestrator at run-start
    * (Unit 52d) and stashed into RunConfig here so runners can forward

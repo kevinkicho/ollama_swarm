@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { config, basicAuthHeader } from "../config.js";
 import { PortAllocator } from "./PortAllocator.js";
-import { treeKill, killByPid, isProcessAlive } from "./treeKill.js";
+import { treeKill, killByPid, killByPort, isProcessAlive } from "./treeKill.js";
 import { AgentPidTracker } from "./agentPids.js";
 import type { AgentState, SwarmEvent } from "../types.js";
 
@@ -197,6 +197,32 @@ export class AgentManager {
         }
       });
 
+      // Task #121: track the PID IMMEDIATELY after spawn, NOT after
+      // session.create. Pre-#121, add() ran on line ~222 only AFTER
+      // waitForReady + createSessionWithRetry — a 20+ second window
+      // where the subprocess was alive but untracked. If the dev
+      // server died (kill -KILL during a code-reload, OOM, crash)
+      // mid-spawn, those subprocesses became orphans the next
+      // reclaimOrphans sweep couldn't see (no entry in the PID file).
+      //
+      // Observed today: a single dev session accumulated 70+ orphans
+      // (~24 GB RAM) across multiple restart cycles where spawn
+      // batches were in flight at restart time.
+      //
+      // Trade-off: subprocesses that fail to come up fully now get a
+      // PID-log entry too. The child.on("exit") handler above removes
+      // them when they exit, so the file self-heals on failure paths.
+      // Net: tiny risk of a stale entry between failed-spawn and the
+      // exit-event delivery (vs huge risk of unkillable orphans).
+      if (child.pid !== undefined) {
+        void this.pidTracker?.add({
+          spawnedAt: Date.now(),
+          pid: child.pid,
+          port,
+          cwd: opts.cwd,
+        });
+      }
+
       await this.waitForReady(port, opts.readyTimeoutMs ?? 20_000);
 
       const baseUrl = `http://127.0.0.1:${port}`;
@@ -214,18 +240,9 @@ export class AgentManager {
       const agent: Agent = { id, index: opts.index, port, sessionId, client, child, model: opts.model };
       this.agents.set(id, agent);
       this.touchActivity(sessionId);
-      // Unit 38: record this PID so the next dev-server startup can
-      // reclaim it if this process or the current server dies without
-      // a clean killAll. Only records AFTER session.create succeeded —
-      // don't track subprocesses that failed to come up fully.
-      if (child?.pid !== undefined) {
-        void this.pidTracker?.add({
-          spawnedAt: Date.now(),
-          pid: child.pid,
-          port,
-          cwd: opts.cwd,
-        });
-      }
+      // Task #121: pidTracker.add moved to immediately-after-spawn (above).
+      // This used to be the only add site, but the late timing left a
+      // 20+ second window where subprocesses were alive but untracked.
       this.startEventStream(agent);
       // Unit 17: warm the cloud shard before the runner sees this agent
       // as ready. If warmup fails (e.g. headers timeout on a stubborn
@@ -377,11 +394,9 @@ export class AgentManager {
         // ignore
       }
       treeKill(a.child);
-      // Unit 41: verified kill with two-stage escalation. We do NOT
-      // return until every PID we spawned is confirmed dead, or we
-      // have exhausted both stages. The /stop route awaits this, so
-      // the HTTP response is an honest "all agents are gone" rather
-      // than the old Unit 38 "fired the kill, hope it worked in 1.5 s".
+      // Unit 41 + Task #122: verified kill with three-stage escalation.
+      // We do NOT return until every PID we spawned is confirmed dead,
+      // OR we have exhausted all stages. The /stop route awaits this.
       //
       // Stage 1 (up to 3 s): treeKill via ChildProcess, poll every
       //   300 ms with one retry at the 0.9 s mark.
@@ -390,7 +405,13 @@ export class AgentManager {
       //   ChildProcess handle — catches cases where the Windows shell
       //   wrapper died but its opencode grandchild is still holding a
       //   port.
-      // If both stages fail the PID is counted as "escaped" and the
+      // Stage 3 (Task #122, up to 3 s): killByPort. The opencode
+      //   binary actually exec()s through a launcher that exits
+      //   within seconds — the captured child.pid is dead, but a
+      //   different node PID owns the port. Look up the actual
+      //   listener PID and kill it. This is what was leaking the
+      //   most orphans before.
+      // If all stages fail the PID is counted as "escaped" and the
       // startup orphan sweep remains the safety net.
       const pid = a.child?.pid;
       if (pid !== undefined) {
@@ -408,7 +429,26 @@ export class AgentManager {
             if (i === 2) killByPid(pid); // retry killByPid at 0.9 s
           }
         }
-        if (!dead) escaped += 1;
+        // Task #122: stage 3 — port-based escalation. Always run when
+        // the port is still listening, even if `dead` claims true (the
+        // tracked PID is dead but a different process can still hold
+        // the port — common with opencode launchers).
+        const portKilled = killByPort(a.port);
+        if (portKilled.length > 0) {
+          // Wait for port-targeted PIDs to die.
+          let allPortDead = false;
+          for (let i = 0; i < 10 && !allPortDead; i++) {
+            await new Promise((r) => setTimeout(r, 300));
+            allPortDead = portKilled.every((p) => !isProcessAlive(p));
+            if (i === 2 && !allPortDead) {
+              for (const p of portKilled) killByPid(p);
+            }
+          }
+          if (!allPortDead) escaped += 1;
+          else dead = true; // count as cleaned up
+        } else if (!dead) {
+          escaped += 1;
+        }
         // Unit 41: await the PID-log remove rather than fire-and-forget
         // so /stop's response reflects on-disk reality. Still wrapped
         // in try/catch so a transient I/O error doesn't poison the

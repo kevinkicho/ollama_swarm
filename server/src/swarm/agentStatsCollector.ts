@@ -21,6 +21,11 @@ export class AgentStatsCollector {
   private attempts = new Map<string, number>();
   private retries = new Map<string, number>();
   private latencies = new Map<string, number[]>();
+  // Task #115: track consecutive post-retry junk responses per agent.
+  // Resets to 0 on any non-junk turn. Crosses the JUNK_QUARANTINE_THRESHOLD
+  // = the model is genuinely stuck (Pattern 8 / 89f3faa3 :thumbs_up:
+  // case) — surfacing the count so runners + UI can react.
+  private consecutiveJunk = new Map<string, number>();
   // Stashed at register-time so buildPerAgentStats still produces rows
   // even after AgentManager.killAll() cleared its own roster. Mirrors
   // BlackboardRunner.agentRoster (Unit 21).
@@ -32,6 +37,7 @@ export class AgentStatsCollector {
     this.attempts.clear();
     this.retries.clear();
     this.latencies.clear();
+    this.consecutiveJunk.clear();
     this.roster = [];
   }
 
@@ -66,6 +72,27 @@ export class AgentStatsCollector {
    * attempts=2, retries=1. */
   onRetry(agentId: string): void {
     this.retries.set(agentId, (this.retries.get(agentId) ?? 0) + 1);
+  }
+
+  /**
+   * Task #115: record whether this agent's post-retry text was still
+   * junk. Returns the new consecutive-junk count for this agent
+   * (0 = recovered, ≥1 = still junk). Caller can compare against
+   * JUNK_QUARANTINE_THRESHOLD to decide whether to escalate.
+   */
+  recordJunkPostRetry(agentId: string, isStillJunk: boolean): number {
+    if (isStillJunk) {
+      const next = (this.consecutiveJunk.get(agentId) ?? 0) + 1;
+      this.consecutiveJunk.set(agentId, next);
+      return next;
+    }
+    this.consecutiveJunk.delete(agentId);
+    return 0;
+  }
+
+  /** Read-only — current consecutive-junk count for an agent. */
+  consecutiveJunkCount(agentId: string): number {
+    return this.consecutiveJunk.get(agentId) ?? 0;
   }
 
   /** Produce the PerAgentStat rows for a summary. One row per registered

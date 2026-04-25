@@ -86,6 +86,18 @@ export type TranscriptEntrySummary =
       kind: "stigmergy_report";
       filesRanked: number;
     }
+  // Task #100 (2026-04-25): role-diff synthesis. Mirrors server
+  // types — see server/src/types.ts.
+  | {
+      kind: "role_diff_synthesis";
+      rounds: number;
+      roles: number;
+    }
+  // Task #102 (2026-04-25): post-verdict build phase. Mirrors server.
+  | {
+      kind: "next_action_phase";
+      role: "announcement" | "implementer" | "reviewer" | "signoff";
+    }
   // Task #81: structured debate verdict.
   | {
       kind: "debate_verdict";
@@ -150,6 +162,13 @@ export type TranscriptEntrySummary =
       repoUrl: string;
       clonePath: string;
       topLevel: string[];
+    }
+  // Task #129: stretch-goal reflection (post-completion).
+  | {
+      kind: "stretch_goals";
+      goals: string[];
+      tier: number;
+      committed: number;
     };
 
 export type SwarmPhase =
@@ -230,7 +249,9 @@ export type StopReason =
   | "crash"
   | "cap:wall-clock"
   | "cap:commits"
-  | "cap:todos";
+  | "cap:todos"
+  | "cap:tokens"
+  | "early-stop";
 
 export interface PerAgentStat {
   agentId: string;

@@ -27,6 +27,7 @@ import {
 } from "./stateSnapshot.js";
 import { shouldRunFinalAudit } from "./finalAudit.js";
 import { promptWithRetry } from "../promptWithRetry.js";
+import { snapshotLifetimeTokens, tokenBudgetExceeded } from "../../services/ollamaProxy.js";
 import { formatCloneMessage } from "../cloneMessage.js";
 import { buildSummary, computeLatencyStats, type PerAgentStat, type RunSummary } from "./summary.js";
 import { applyHunks } from "./applyHunks.js";
@@ -95,6 +96,19 @@ import {
   type CriticSeedPriorCommit,
   parseCriticResponse,
 } from "./prompts/critic.js";
+import {
+  VERIFIER_SYSTEM_PROMPT,
+  buildVerifierUserPrompt,
+  parseVerifierResponse,
+  type VerifierVerdict,
+} from "./prompts/verifier.js";
+import {
+  appendMemoryEntry,
+  parseMemoryLessons,
+  readRecentMemory,
+  renderMemoryForSeed,
+  type MemoryEntry,
+} from "./memoryStore.js";
 import { config } from "../../config.js";
 
 // Blackboard preset: planner posts TODOs, workers drain them in a
@@ -182,6 +196,10 @@ export class BlackboardRunner implements SwarmRunner {
   // "cap tripped and asked us to stop" (phase → completed, with a transcript
   // note explaining which cap).
   private runStartedAt?: number;
+  // Task #124: lifetime token total at run-start, snapshotted alongside
+  // runStartedAt. Used by checkAndApplyCaps to compute "tokens consumed
+  // by THIS run" = current lifetime - this baseline.
+  private tokenBaselineForRun?: number;
   // Unit 27: host-sleep-proof tick accumulator. Advanced in
   // checkAndApplyCaps; inter-tick deltas are clamped so an 8-hour host
   // suspend contributes at most MAX_REASONABLE_TICK_DELTA_MS. Seeded
@@ -367,6 +385,7 @@ export class BlackboardRunner implements SwarmRunner {
     this.stopping = false;
     this.round = 0;
     this.runStartedAt = undefined;
+    this.tokenBaselineForRun = undefined;
     this.tickAccumulator = undefined;
     this.terminationReason = undefined;
     // Unit 31: clear any lingering state-write timer from a prior run.
@@ -534,6 +553,28 @@ export class BlackboardRunner implements SwarmRunner {
       }.`,
     );
 
+    // Task #127: goal-generation pre-pass. When no userDirective is
+    // set AND autoGenerateGoals isn't explicitly disabled, ask the
+    // planner to propose 3-5 ambitious-but-feasible improvements;
+    // the top one becomes the directive for this run. Lifts the
+    // swarm from "do something" to "do something that matters."
+    const shouldGenerateGoals =
+      (!seed.userDirective || seed.userDirective.length === 0) &&
+      cfg.autoGenerateGoals !== false;
+    if (shouldGenerateGoals) {
+      const generated = await this.runGoalGenerationPrePass(planner, seed);
+      if (generated && generated.length > 0) {
+        seed.userDirective = generated;
+        this.appendSystem(
+          `Goal-generation pre-pass: directive set to "${generated.length > 200 ? generated.slice(0, 200) + "…" : generated}"`,
+        );
+      } else {
+        this.appendSystem(
+          `Goal-generation pre-pass: no usable directive returned — falling back to planner-from-scratch.`,
+        );
+      }
+    }
+
     this.setPhase("planning");
     // Background so the HTTP POST that triggered start() returns immediately.
     // The UI watches progress over /ws.
@@ -570,6 +611,9 @@ export class BlackboardRunner implements SwarmRunner {
         // count toward the cap — the cap is a worker-loop guard, not a total
         // run guard.
         this.runStartedAt = Date.now();
+        // Task #124: same baseline timing for token-budget — planner
+        // tokens before this point don't count toward the budget.
+        this.tokenBaselineForRun = snapshotLifetimeTokens();
         this.tickAccumulator = createTickAccumulator(this.runStartedAt);
         this.setPhase("executing");
         this.startClaimExpiry();
@@ -613,6 +657,53 @@ export class BlackboardRunner implements SwarmRunner {
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           this.appendSystem(`Final audit failed: ${msg}`);
+        }
+      }
+      // Task #129: stretch-goal reflection pass. Asks the planner one
+      // meta-question — "what would the BEST version of this work have
+      // done?" — so the next run (or the user) has a launchpad for a
+      // more ambitious follow-up. Gated on:
+      //   - run did NOT error (a crashed run can't reflect honestly)
+      //   - was NOT stopped manually by the user (they explicitly opted
+      //     out of finishing — pestering them with reflection is rude)
+      //   - has substantive output (committed > 0 OR a contract exists)
+      //   - autoStretchReflection !== false (default ON)
+      // Errors are swallowed for the same reason as the final audit:
+      // a missing reflection is annoying, not run-fatal.
+      const userStopped = this.stopping && !this.terminationReason;
+      const hasOutput =
+        this.board.counts().committed > 0 ||
+        (this.contract?.criteria.length ?? 0) > 0;
+      if (
+        !errored &&
+        !userStopped &&
+        hasOutput &&
+        this.active?.autoStretchReflection !== false
+      ) {
+        try {
+          await this.runStretchGoalReflectionPass(planner);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.appendSystem(`Stretch-goal reflection failed: ${msg}`);
+        }
+      }
+      // Task #130: persistent memory write. Runs AFTER the stretch
+      // reflection so the planner has the most context (commits +
+      // contract resolution + stretch goals all in transcript) when
+      // distilling lessons. Same gating as stretch reflection plus
+      // autoMemory !== false. Errors swallowed; missing memory write
+      // is annoying, not run-fatal.
+      if (
+        !errored &&
+        !userStopped &&
+        hasOutput &&
+        this.active?.autoMemory !== false
+      ) {
+        try {
+          await this.runMemoryDistillationPass(planner, this.active?.localPath);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.appendSystem(`Memory distillation failed: ${msg}`);
         }
       }
       // Phase 9: always try to write a summary, regardless of how we got
@@ -686,6 +777,28 @@ export class BlackboardRunner implements SwarmRunner {
     // build on it rather than re-attempt resolved criteria. Fresh
     // clones skip this (no prior summary on disk, returns null).
     const priorRunSummary = await this.loadPriorRunSummary(clonePath);
+    // Task #130: persistent cross-run memory (.swarm-memory.jsonl).
+    // Independent of priorRunSummary above — that's the immediately-
+    // preceding run's contract; this is the planner-authored "lessons
+    // learned" log across many runs. Read failure here is not fatal:
+    // a missing file returns []; bad JSON lines are skipped silently.
+    // Disabled by cfg.autoMemory === false (default true).
+    let priorMemoryRendered: string | undefined;
+    if (cfg.autoMemory !== false) {
+      try {
+        const recent = await readRecentMemory(clonePath);
+        const rendered = renderMemoryForSeed(recent);
+        priorMemoryRendered = rendered.length > 0 ? rendered : undefined;
+        if (recent.length > 0) {
+          this.appendSystem(
+            `Memory: surfaced ${recent.length} prior-run lesson entry(ies) from .swarm-memory.jsonl into the planner seed.`,
+          );
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.appendSystem(`Memory read failed (${msg}); continuing without prior-run context.`);
+      }
+    }
     return {
       repoUrl: cfg.repoUrl,
       clonePath,
@@ -697,6 +810,7 @@ export class BlackboardRunner implements SwarmRunner {
       // route boundary; this is just pass-through.
       userDirective: cfg.userDirective,
       priorRunSummary,
+      priorMemoryRendered,
     };
   }
 
@@ -838,6 +952,242 @@ export class BlackboardRunner implements SwarmRunner {
   // Unit 30: council-mode dispatch. When COUNCIL_CONTRACT_ENABLED is on AND
   // there's at least one worker to add cognitive diversity, run the
   // two-phase council flow (N drafts in parallel, then planner-merge). If
+  // Task #127: goal-generation pre-pass. Asks the planner agent to
+  // propose 3-5 ambitious-but-feasible improvements to the repo,
+  // then picks the top one (highest impact:effort) as the directive.
+  // Returns the chosen directive string, or undefined when the
+  // model's response can't be salvaged (silent fallback to
+  // planner-from-scratch). Costs one planner prompt; cheap.
+  private async runGoalGenerationPrePass(
+    planner: Agent,
+    seed: PlannerSeed,
+  ): Promise<string | undefined> {
+    this.appendSystem("Goal-generation pre-pass: asking planner to propose ambitious goals…");
+    const topLevelText = seed.topLevel.slice(0, 60).join(", ");
+    const readmeText = seed.readmeExcerpt
+      ? `=== README excerpt ===\n${seed.readmeExcerpt.slice(0, 4000)}\n=== END ===`
+      : "(no README)";
+    const prompt = [
+      "You are a senior engineer doing a one-shot triage of an unfamiliar repo.",
+      `Repo: ${seed.repoUrl}`,
+      `Top-level entries: ${topLevelText}`,
+      "",
+      readmeText,
+      "",
+      "Propose 3-5 AMBITIOUS-BUT-FEASIBLE improvements ranked by impact:effort. Each:",
+      "- 1 sentence describing the improvement.",
+      "- Cites 1-3 file paths from the repo where the work would land.",
+      "- Notes WHY it's ambitious (what gets unlocked) and WHY feasible (concrete attack path, no research wave required).",
+      "",
+      "Avoid trivia (typo fixes, dependency bumps, doc-only edits). Favor structural improvements that would matter to the next person reading the code.",
+      "",
+      "Output format:",
+      "1. [TITLE] - one-sentence description (files: a/b.ts, c.ts) — Ambitious because X. Feasible because Y.",
+      "2. ...",
+      "",
+      "After the list, on a NEW LINE, write `TOP: <number>` (e.g. `TOP: 1`) — the single goal that has the best impact:effort ratio. The user will run a swarm against this top goal.",
+    ].join("\n");
+
+    try {
+      const res = await planner.client.session.prompt({
+        path: { id: planner.sessionId },
+        body: {
+          agent: "swarm-read",
+          model: { providerID: "ollama", modelID: planner.model },
+          parts: [{ type: "text", text: prompt }],
+        },
+      });
+      const text = (await import("../extractText.js")).extractText(res);
+      if (!text) return undefined;
+      // Parse TOP: N then extract item N.
+      const topMatch = /^\s*TOP\s*:\s*(\d+)\s*$/im.exec(text);
+      const items = parseGoalList(text);
+      if (items.length === 0) return undefined;
+      const topIdx = topMatch ? Math.max(1, Math.min(items.length, Number(topMatch[1]!))) - 1 : 0;
+      return items[topIdx];
+    } catch (err) {
+      this.appendSystem(
+        `Goal-generation pre-pass failed (${err instanceof Error ? err.message : String(err)}); falling back to planner-from-scratch.`,
+      );
+      return undefined;
+    }
+  }
+
+  // Task #129: post-completion stretch-goal reflection. Asks the
+  // planner one meta-question after a successful run: "what would
+  // the BEST version of this work have done?". The list of 3-5
+  // ranked goals is appended as a `stretch_goals` transcript entry
+  // and surfaced in the run summary. Idempotent — safe to call
+  // exactly once per run; callers gate on autoStretchReflection.
+  //
+  // Why a separate pass and not just the auditor: the auditor is
+  // anchored on the existing contract criteria. Asking it "what
+  // SHOULD we have done that we didn't?" puts it in conflict with
+  // its own prior verdicts. A fresh prompt — without the contract
+  // framing baked in — produces honestly-ambitious answers.
+  private async runStretchGoalReflectionPass(planner: Agent): Promise<void> {
+    this.appendSystem("Stretch-goal reflection: asking planner what a more ambitious version would have done…");
+    const tier = this.currentTier;
+    const counts = this.board.counts();
+    const committed = counts.committed;
+    const contractCriteria = this.contract?.criteria ?? [];
+    const prompt = [
+      "You are a senior engineer doing a post-mortem on a swarm run that just COMPLETED on this repo.",
+      `Tier reached: ${tier}`,
+      `Commits made: ${committed}`,
+      "",
+      contractCriteria.length > 0
+        ? `=== Contract criteria the swarm worked on ===\n${contractCriteria
+            .map((c, i) => `${i + 1}. [${c.status}] ${c.description}`)
+            .join("\n")}\n=== END ===`
+        : "(no contract on file)",
+      "",
+      "The swarm finished its scoped work. Your job is to look UP — not at what was done, but at what a more ambitious version of this work would have tackled INSTEAD or ADDITIONALLY.",
+      "",
+      "Propose 3-5 STRETCH goals ranked by impact. Each:",
+      "- 1 sentence describing the goal.",
+      "- Cites 1-3 file paths in the repo where the work would land.",
+      "- Says explicitly what the COMPLETED contract MISSED, RAN OUT OF TIME ON, or DELIBERATELY CHOSE NOT to attempt.",
+      "",
+      "Avoid: praising what was done; trivia (typo fixes, doc-only edits); restating the existing criteria. Favor: structural changes, new capabilities, harder correctness invariants, and changes that the run was 'one tier away' from being able to commit to.",
+      "",
+      "Output format:",
+      "1. [TITLE] - one-sentence description (files: a/b.ts, c.ts) — Stretch because X.",
+      "2. ...",
+    ].join("\n");
+
+    try {
+      const res = await planner.client.session.prompt({
+        path: { id: planner.sessionId },
+        body: {
+          agent: "swarm-read",
+          model: { providerID: "ollama", modelID: planner.model },
+          parts: [{ type: "text", text: prompt }],
+        },
+      });
+      const text = (await import("../extractText.js")).extractText(res);
+      if (!text) {
+        this.appendSystem("Stretch-goal reflection: planner returned empty.");
+        return;
+      }
+      const goals = parseGoalList(text);
+      if (goals.length === 0) {
+        this.appendSystem("Stretch-goal reflection: planner response did not contain a parseable goal list.");
+        return;
+      }
+      const entry: TranscriptEntry = {
+        id: randomUUID(),
+        role: "agent",
+        agentId: planner.id,
+        agentIndex: planner.index,
+        text,
+        ts: Date.now(),
+        summary: { kind: "stretch_goals", goals: goals.slice(0, 5), tier, committed },
+      };
+      this.transcript.push(entry);
+      this.opts.emit({ type: "transcript_append", entry });
+      this.appendSystem(
+        `Stretch-goal reflection: ${goals.length} goal(s) recorded for next-run consideration.`,
+      );
+    } catch (err) {
+      this.appendSystem(
+        `Stretch-goal reflection failed (${err instanceof Error ? err.message : String(err)}).`,
+      );
+    }
+  }
+
+  // Task #130: persistent memory distillation. Asks the planner for
+  // 2-4 lessons-learned bullets reflecting on this run. Writes one
+  // MemoryEntry to <clone>/.swarm-memory.jsonl. Idempotent — safe to
+  // call exactly once per run; callers gate on autoMemory.
+  //
+  // Why a distinct prompt from stretch reflection: stretch goals look
+  // FORWARD ("what to attempt next"); memory looks BACKWARD ("what
+  // future runs should AVOID rediscovering or BUILD on"). The
+  // categories overlap but are not identical — stretch goals can be
+  // ambitious-and-untried; memory should pin durable lessons.
+  private async runMemoryDistillationPass(
+    planner: Agent,
+    clonePath: string | undefined,
+  ): Promise<void> {
+    if (!clonePath) {
+      this.appendSystem("Memory distillation skipped: clone path missing.");
+      return;
+    }
+    const tier = this.currentTier;
+    const counts = this.board.counts();
+    const committed = counts.committed;
+    const contractCriteria = this.contract?.criteria ?? [];
+    const runId = this.active?.runId ?? "unknown";
+    this.appendSystem("Memory distillation: asking planner for lessons-learned bullets to log into .swarm-memory.jsonl…");
+    const prompt = [
+      "You are doing a brief post-run reflection that will be SAVED for future runs against this same clone to read.",
+      `Tier reached: ${tier}`,
+      `Commits made: ${committed}`,
+      "",
+      contractCriteria.length > 0
+        ? `=== Contract criteria (final state) ===\n${contractCriteria
+            .map((c, i) => `${i + 1}. [${c.status}] ${c.description}`)
+            .join("\n")}\n=== END ===`
+        : "(no contract on file)",
+      "",
+      "Output 2-4 LESSONS LEARNED — durable bullets that a future run on this same clone should be aware of. Each:",
+      "- One sentence.",
+      "- Concrete and actionable. \"X file pattern is fragile, prefer Y\" beats \"be careful\".",
+      "- Either AVOIDANCE (\"don't try X — wasted N commits because Y\") or BUILDING (\"the Z scaffold landed in this run is ready for follow-up W\").",
+      "",
+      "Output format — ONE JSON object only, no fences, no prose:",
+      `{"lessons": ["lesson 1", "lesson 2", "lesson 3"]}`,
+      "",
+      "If there's genuinely nothing worth remembering (e.g. the run accomplished nothing new), output {\"lessons\": []} and a future run will skip the memory entry.",
+    ].join("\n");
+
+    let responseText: string;
+    try {
+      const res = await planner.client.session.prompt({
+        path: { id: planner.sessionId },
+        body: {
+          agent: "swarm-read",
+          model: { providerID: "ollama", modelID: planner.model },
+          parts: [{ type: "text", text: prompt }],
+        },
+      });
+      const text = (await import("../extractText.js")).extractText(res);
+      responseText = text ?? "";
+    } catch (err) {
+      this.appendSystem(
+        `Memory distillation prompt failed (${err instanceof Error ? err.message : String(err)}).`,
+      );
+      return;
+    }
+    if (!responseText) {
+      this.appendSystem("Memory distillation: planner returned empty.");
+      return;
+    }
+    const lessons = parseMemoryLessons(responseText);
+    if (lessons.length === 0) {
+      this.appendSystem("Memory distillation: no usable lessons parsed (planner may have said nothing memorable).");
+      return;
+    }
+    const entry: MemoryEntry = {
+      ts: Date.now(),
+      runId,
+      tier,
+      commits: committed,
+      lessons,
+    };
+    try {
+      const total = await appendMemoryEntry(clonePath, entry);
+      this.appendSystem(
+        `Memory distillation: appended ${lessons.length} lesson(s) to .swarm-memory.jsonl (${total} entries on file).`,
+      );
+    } catch (err) {
+      this.appendSystem(
+        `Memory write failed (${err instanceof Error ? err.message : String(err)}); lessons not persisted.`,
+      );
+    }
+  }
+
   // the council flow produces nothing usable (all drafts failed to parse
   // OR the merge itself failed), fall through to the legacy single-agent
   // path so the run still gets a contract. When the flag is off, skip
@@ -1228,6 +1578,12 @@ export class BlackboardRunner implements SwarmRunner {
 
   private async runAuditedExecution(planner: Agent, workers: Agent[]): Promise<void> {
     while (!this.stopping) {
+      // Task #116: cap-check before each audit cycle. Worker loop
+      // checks per-iteration too, but if workers are stuck in long
+      // retry sequences (Pattern 8 / glm-5.1 slow turns) the loop can
+      // overshoot the wall-clock cap by minutes. This adds a second
+      // gate at the audit boundary so the cap fires reliably.
+      if (this.checkAndApplyCaps()) return;
       await this.runWorkers(workers);
       if (this.stopping) return;
 
@@ -1782,6 +2138,142 @@ export class BlackboardRunner implements SwarmRunner {
     }
     this.appendSystem(
       `[critic] ${planner.id} accepted ${proposingAgent.id}'s diff: ${parsed.critic.rationale}`,
+    );
+    return "accept";
+  }
+
+  // Task #128: per-commit verifier. Independent claim-checking gate
+  // sitting between critic-accept and disk-write. The critic asks
+  // "is this BUSYWORK?"; the auditor asks "are contract criteria
+  // met across all commits?"; the verifier asks the narrower per-
+  // commit question: "does THIS diff actually do what THIS todo
+  // asked for?". Catches the failure mode where a worker satisfies
+  // the critic with a plausible-looking diff that doesn't action
+  // its specific todo — wasting a commit slot the auditor only
+  // notices much later.
+  //
+  // Verdict semantics (matches verifier.ts header):
+  //   - "verified" / "partial" → accept
+  //   - "unverifiable"         → accept + log warning
+  //   - "false"                → reject (markStale → replan)
+  //
+  // Failure-open everywhere (no planner peer, prompt fails, response
+  // doesn't parse) — same model as the critic. Verifier is here to
+  // catch a real failure mode, not to grind the run on its own
+  // hiccups.
+  private verifierEnabled(): boolean {
+    return this.active?.verifier === true;
+  }
+
+  private async runVerifier(
+    todo: Todo,
+    proposingAgent: Agent,
+    contentsBefore: Record<string, string | null>,
+    resultingDiffs: ReadonlyArray<{ file: string; newText: string }>,
+  ): Promise<"accept" | "reject"> {
+    const roster = this.opts.manager.list();
+    const planner = roster.find((a) => a.index === 1);
+    if (!planner || planner.id === proposingAgent.id) {
+      this.appendSystem(
+        `[verifier] no planner peer to check ${proposingAgent.id}'s diff; skipping (accept-by-default).`,
+      );
+      return "accept";
+    }
+    const files = resultingDiffs.map((d) => ({
+      file: d.file,
+      before: contentsBefore[d.file] ?? null,
+      after: d.newText,
+    }));
+    const userPrompt = buildVerifierUserPrompt({
+      proposingAgentId: proposingAgent.id,
+      todoDescription: todo.description,
+      todoExpectedFiles: [...todo.expectedFiles],
+      files,
+    });
+    const fullPrompt = `${VERIFIER_SYSTEM_PROMPT}\n\n${userPrompt}`;
+
+    let sessionId: string;
+    try {
+      const created = await planner.client.session.create({
+        body: { title: `verifier-${todo.id}-${Date.now()}` },
+      });
+      const any = created as { data?: { id?: string; info?: { id?: string } }; id?: string };
+      const sid = any?.data?.id ?? any?.data?.info?.id ?? any?.id;
+      if (!sid) throw new Error("session.create returned no session id");
+      sessionId = sid;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(
+        `[verifier] failed to open fresh session on ${planner.id} (${msg}). Accepting by default (failure-open).`,
+      );
+      return "accept";
+    }
+
+    let responseText: string;
+    try {
+      const res = await planner.client.session.prompt({
+        path: { id: sessionId },
+        body: {
+          agent: "swarm-read",
+          model: { providerID: "ollama", modelID: planner.model },
+          parts: [{ type: "text", text: fullPrompt }],
+        },
+      });
+      const any = res as {
+        data?: {
+          parts?: Array<{ type?: string; text?: string }>;
+          info?: { parts?: Array<{ type?: string; text?: string }> };
+          text?: string;
+        };
+      };
+      const parts = any?.data?.parts ?? any?.data?.info?.parts;
+      if (Array.isArray(parts)) {
+        const texts = parts
+          .filter((p) => p?.type === "text" && typeof p.text === "string")
+          .map((p) => p.text as string);
+        responseText = texts.length ? texts.join("\n") : (any?.data?.text ?? "");
+      } else {
+        responseText = any?.data?.text ?? "";
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(
+        `[verifier] prompt failed on ${planner.id} (${msg}). Accepting by default (failure-open).`,
+      );
+      return "accept";
+    }
+    if (this.stopping) return "accept";
+
+    const parsed = parseVerifierResponse(responseText);
+    if (!parsed.ok) {
+      this.appendSystem(
+        `[verifier] response did not parse (${parsed.reason}). Accepting by default (failure-open).`,
+      );
+      return "accept";
+    }
+    const verdict: VerifierVerdict = parsed.verifier.verdict;
+    const cite = parsed.verifier.evidenceCitation;
+    const rat = parsed.verifier.rationale ? ` — ${parsed.verifier.rationale}` : "";
+    if (verdict === "false") {
+      this.board.markStale(
+        todo.id,
+        `verifier rejected (${planner.id}): ${cite}${rat}`,
+      );
+      this.appendSystem(
+        `[verifier] ${planner.id} FALSE on ${proposingAgent.id}'s diff for "${truncate(todo.description)}": ${cite}${rat}`,
+      );
+      bumpAgentCounter(this.rejectedAttemptsPerAgent, proposingAgent.id);
+      return "reject";
+    }
+    if (verdict === "unverifiable") {
+      this.appendSystem(
+        `[verifier] ${planner.id} UNVERIFIABLE on ${proposingAgent.id}'s diff for "${truncate(todo.description)}": ${cite}${rat} — accepting (failure-open).`,
+      );
+      return "accept";
+    }
+    // verified or partial → accept
+    this.appendSystem(
+      `[verifier] ${planner.id} ${verdict.toUpperCase()} ${proposingAgent.id}'s diff: ${cite}${rat}`,
     );
     return "accept";
   }
@@ -2541,6 +3033,26 @@ export class BlackboardRunner implements SwarmRunner {
       }
     }
 
+    // Task #128: verifier intercept. After critic accept (or critic
+    // disabled), an independent claim-checker reads the todo + diff
+    // and asks "does this diff actually action this specific todo?".
+    // FALSE blocks the commit (markStale → replanner picks a fresh
+    // angle). PARTIAL / VERIFIED proceed; UNVERIFIABLE proceeds with
+    // a logged warning. Opt-in via cfg.verifier — when off the worker
+    // pipeline is byte-identical to pre-#128.
+    if (this.verifierEnabled()) {
+      const verdict = await this.runVerifier(
+        todo,
+        agent,
+        contents,
+        resultingDiffs,
+      );
+      if (this.stopping) return "stale";
+      if (verdict === "reject") {
+        return "stale";
+      }
+    }
+
     // CAS passed locally. Write atomically; on any write error we leave the
     // claim in place — TTL expiry will convert it to stale and Phase 6 replan
     // will observe whatever state the partial write left on disk.
@@ -2639,6 +3151,9 @@ export class BlackboardRunner implements SwarmRunner {
     this.replanRunning = true;
     try {
       while (!this.stopping && this.replanPending.size > 0 && this.planner) {
+        // Task #116: cap-check at each replan iteration so a long
+        // queue of replans can't drag the run past wall-clock.
+        if (this.checkAndApplyCaps()) return;
         const todoId = this.replanPending.values().next().value as string;
         this.replanPending.delete(todoId);
         try {
@@ -2859,13 +3374,23 @@ export class BlackboardRunner implements SwarmRunner {
       // 8-h default in that case.
       wallClockCapMs: this.active?.wallClockCapMs,
     });
-    if (!reason) return false;
-    this.terminationReason = reason;
-    this.appendSystem(`Stopping: ${reason}`);
+    // Task #124: token-budget cap check. Independent of the wall-
+    // clock/commits/todos caps. Returns its own reason string so the
+    // run-summary distinguishes "budget hit" from other cap-trips.
+    const tokenReason = (
+      this.tokenBaselineForRun !== undefined &&
+      tokenBudgetExceeded(this.tokenBaselineForRun, this.active?.tokenBudget)
+    )
+      ? `token-budget reached (${this.active?.tokenBudget?.toLocaleString()} tokens)`
+      : null;
+    const finalReason = reason ?? tokenReason;
+    if (!finalReason) return false;
+    this.terminationReason = finalReason;
+    this.appendSystem(`Stopping: ${finalReason}`);
     this.stopping = true;
     for (const ctrl of this.activeAborts) {
       try {
-        ctrl.abort(new Error(`cap: ${reason}`));
+        ctrl.abort(new Error(`cap: ${finalReason}`));
       } catch {
         // best-effort; AbortController.abort throws on already-aborted in
         // some runtimes.
@@ -3591,4 +4116,31 @@ function countNewlines(s: string): number {
   const trimmed = s.endsWith("\n") ? s.slice(0, -1) : s;
   if (trimmed.length === 0) return 0;
   return trimmed.split("\n").length;
+}
+
+// Task #127: parse a numbered goal list of the shape:
+//   1. [TITLE] - description ...
+//   2. [TITLE] - description ...
+// Returns each item's text WITHOUT the leading "N." marker. Tolerant
+// of "1)" and bare "1" prefixes too. Stops at lines that don't start
+// with a number (e.g. the "TOP: N" trailer or empty trailing prose).
+// Exported for testability.
+export function parseGoalList(text: string): string[] {
+  const items: string[] = [];
+  let current: string[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    const numStart = /^\s*(\d{1,2})[.)]\s+(.*)$/.exec(line);
+    if (numStart) {
+      if (current.length > 0) items.push(current.join(" ").trim());
+      current = [numStart[2] ?? ""];
+    } else if (current.length > 0 && line.trim().length > 0 && !/^TOP\s*:/i.test(line)) {
+      current.push(line.trim());
+    } else if (current.length > 0 && (line.trim().length === 0 || /^TOP\s*:/i.test(line))) {
+      items.push(current.join(" ").trim());
+      current = [];
+    }
+  }
+  if (current.length > 0) items.push(current.join(" ").trim());
+  return items.filter((s) => s.length > 0);
 }

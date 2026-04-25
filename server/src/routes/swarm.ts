@@ -4,6 +4,7 @@ import { promises as fs, readFileSync } from "node:fs";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { config } from "../config.js";
+import { validateContinuousMode } from "./continuousMode.js";
 import type { Orchestrator } from "../services/Orchestrator.js";
 import { deriveCloneDir, RepoService } from "../services/RepoService.js";
 
@@ -41,6 +42,7 @@ const StartBody = z.object({
       "role-diff",
       "council",
       "orchestrator-worker",
+      "orchestrator-worker-deep",
       "debate-judge",
       "map-reduce",
       "stigmergy",
@@ -98,6 +100,31 @@ const StartBody = z.object({
   // with majority vote. Blackboard-only; only meaningful when critic
   // is enabled.
   criticEnsemble: z.boolean().optional(),
+  // Task #102 (2026-04-25): opt-in post-verdict "build" round for
+  // debate-judge — PRO becomes implementer, CON reviewer, JUDGE
+  // signoff. Default off; debate-judge-only.
+  executeNextAction: z.boolean().optional(),
+  // Task #124: optional per-run hard cap on total tokens (prompt +
+  // response) consumed. User-supplied number, no defaults.
+  tokenBudget: z.number().int().positive().optional(),
+  // Task #127: when no userDirective is set, auto-generate one via a
+  // pre-pass. Default true (caller can pass false to disable).
+  autoGenerateGoals: z.boolean().optional(),
+  // Task #129: post-completion stretch-goal reflection pass — one
+  // planner prompt asks "what would the BEST version of this work
+  // have done?" and tags the answer for next-run / user review.
+  // Default true; pass false to skip.
+  autoStretchReflection: z.boolean().optional(),
+  // Task #128: per-commit verifier (claim-vs-diff). Default off; opt-in.
+  verifier: z.boolean().optional(),
+  // Task #132: continuous mode — run-against-budget instead of
+  // run-against-rounds. Requires at least one budget cap (tokenBudget
+  // or wallClockCapMs); the start handler rejects otherwise.
+  continuous: z.boolean().optional(),
+  // Task #130: persistent cross-run memory (.swarm-memory.jsonl).
+  // Read at planner-seed time + written at run-end (post-stretch).
+  // Default true.
+  autoMemory: z.boolean().optional(),
 });
 
 const SayBody = z.object({ text: z.string().min(1) });
@@ -202,6 +229,42 @@ export function swarmRouter(orch: Orchestrator): Router {
       res.status(400).json({ error: parsed.error.flatten() });
       return;
     }
+    // Task #109: map-reduce floor agentCount=4 (1 reducer + 3 mappers).
+    // Smaller setups (agentCount=3 = 2 mappers) leave one mapper with a
+    // trivially-small slice that the model collapses on; full RCA in
+    // run 2bcf662f. The 2-mapper minimum is enforced inside the runner
+    // anyway, but rejecting at the schema layer gives a clearer error.
+    if (parsed.data.preset === "map-reduce" && parsed.data.agentCount < 4) {
+      res.status(400).json({
+        error: `Map-reduce requires at least 4 agents (1 reducer + 3 mappers). With fewer mappers, slice quality degrades sharply and one mapper typically gets stuck on a tiny slice. Got agentCount=${parsed.data.agentCount}.`,
+      });
+      return;
+    }
+    // Task #131: orchestrator-worker-deep needs at least 1 orchestrator
+    // + 1 mid-lead + 2 workers = 4 agents to add coverage over flat OW.
+    // Below that, the topology degenerates (mid-lead gets 0-1 workers
+    // and the deep tier is just extra latency). Match map-reduce's
+    // policy: reject at the route layer with a clear message.
+    if (parsed.data.preset === "orchestrator-worker-deep" && parsed.data.agentCount < 4) {
+      res.status(400).json({
+        error: `orchestrator-worker-deep requires at least 4 agents (1 orchestrator + 1 mid-lead + 2 workers). With fewer, the deep tier degenerates into flat OW with extra latency. Got agentCount=${parsed.data.agentCount}.`,
+      });
+      return;
+    }
+    // Task #132: continuous mode safety. Without a budget cap, the
+    // runner has no stop signal except user/error — that's an
+    // infinite loop the user almost certainly didn't intend. Reject
+    // here with a clear message rather than burning tokens.
+    const continuousErr = validateContinuousMode({
+      continuous: parsed.data.continuous,
+      preset: parsed.data.preset,
+      tokenBudget: parsed.data.tokenBudget,
+      wallClockCapMs: parsed.data.wallClockCapMs,
+    });
+    if (continuousErr) {
+      res.status(400).json({ error: continuousErr });
+      return;
+    }
     let localPath: string;
     try {
       localPath = deriveCloneDir(parsed.data.repoUrl, parsed.data.parentPath);
@@ -211,11 +274,18 @@ export function swarmRouter(orch: Orchestrator): Router {
       return;
     }
     try {
+      // Task #132: continuous mode replaces rounds with an effectively-
+      // unbounded value (1M). The runners see this same cfg.rounds in
+      // their for-loop, but a budget cap is guaranteed to stop the run
+      // long before round 1M. Avoids touching every runner's loop.
+      const effectiveRounds = parsed.data.continuous
+        ? 1_000_000
+        : (parsed.data.rounds ?? 3);
       await orch.start({
         repoUrl: parsed.data.repoUrl,
         localPath,
         agentCount: parsed.data.agentCount,
-        rounds: parsed.data.rounds ?? 3,
+        rounds: effectiveRounds,
         model: parsed.data.model ?? config.DEFAULT_MODEL,
         preset: parsed.data.preset,
         // Unit 25: pass user directive through. Already trimmed + 4000-cap-
@@ -246,6 +316,13 @@ export function swarmRouter(orch: Orchestrator): Router {
         auditorModel: parsed.data.auditorModel,
         specializedWorkers: parsed.data.specializedWorkers,
         criticEnsemble: parsed.data.criticEnsemble,
+        executeNextAction: parsed.data.executeNextAction,
+        tokenBudget: parsed.data.tokenBudget,
+        autoGenerateGoals: parsed.data.autoGenerateGoals,
+        autoStretchReflection: parsed.data.autoStretchReflection,
+        verifier: parsed.data.verifier,
+        continuous: parsed.data.continuous,
+        autoMemory: parsed.data.autoMemory,
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {

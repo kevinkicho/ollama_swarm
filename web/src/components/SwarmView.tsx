@@ -128,6 +128,17 @@ export function SwarmView() {
         return "worker";
       case "orchestrator-worker":
         return idx === 1 ? "orchestrator" : "worker";
+      case "orchestrator-worker-deep": {
+        // Same K calculation as the server (runSummary.roleForAgent +
+        // OrchestratorWorkerDeepRunner.computeDeepTopology). Kept in
+        // sync so the UI labels match what the runner actually does.
+        if (idx === 1) return "orchestrator";
+        const remaining = Math.max(0, cfg.agentCount - 1);
+        const targetK = Math.max(1, Math.ceil(remaining / 6));
+        const maxK = Math.max(1, Math.floor(remaining / 3));
+        const k = Math.min(targetK, maxK);
+        return idx <= 1 + k ? "mid-lead" : "worker";
+      }
       case "map-reduce":
         return idx === 1 ? "reducer" : "mapper";
       case "debate-judge":
@@ -479,21 +490,74 @@ function deriveRunName(clonePath: string): string {
 // render the dropdown even before any run has started — users can
 // review past runs from the SetupForm flash page without first
 // having to start a new run.
+
+// Task #111 (2026-04-25): localStorage cache for the history dropdown
+// + run-summary fetches. When the dev server is down (which happens
+// often during dev work), the dropdown was empty and prior runs
+// weren't browsable. Cache successful responses; fall back on network
+// error; surface a "[cached]" badge so users know they're viewing
+// stale data.
+const CACHE_RUNS_LIST_KEY = "ollama-swarm:runs-list";
+const CACHE_RUN_SUMMARY_PREFIX = "ollama-swarm:run-summary:";
+const CACHE_RUNS_LIST_MAX = 100;
+const CACHE_SUMMARY_MAX_BYTES = 1_000_000; // 1MB per summary
+
+function tryReadCache<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+function tryWriteCache(key: string, value: unknown): void {
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized.length > CACHE_SUMMARY_MAX_BYTES) return;
+    localStorage.setItem(key, serialized);
+  } catch {
+    // Quota exceeded or storage disabled — silent fallback. The cache
+    // is a nice-to-have, not load-bearing.
+  }
+}
+function cacheRunsList(runs: RunSummaryDigest[]): void {
+  tryWriteCache(CACHE_RUNS_LIST_KEY, runs.slice(0, CACHE_RUNS_LIST_MAX));
+}
+function cachedRunsList(): RunSummaryDigest[] | null {
+  return tryReadCache<RunSummaryDigest[]>(CACHE_RUNS_LIST_KEY);
+}
+function cacheRunSummary(clonePath: string, runId: string | undefined, summary: RunSummary): void {
+  const id = runId ?? clonePath;
+  tryWriteCache(`${CACHE_RUN_SUMMARY_PREFIX}${id}`, summary);
+}
+function cachedRunSummary(clonePath: string, runId: string | undefined): RunSummary | null {
+  const id = runId ?? clonePath;
+  return tryReadCache<RunSummary>(`${CACHE_RUN_SUMMARY_PREFIX}${id}`);
+}
+
 export function RunHistoryDropdown() {
   const [open, setOpen] = useState(false);
   const [runs, setRuns] = useState<RunSummaryDigest[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Task #111: track whether the current `runs` came from the cache
+  // (server unreachable) so the dropdown can render a "[cached]" badge.
+  const [fromCache, setFromCache] = useState(false);
   const [selected, setSelected] = useState<RunSummaryDigest | null>(null);
 
   // Refetch on open so the list reflects any sibling runs that
   // appeared since the previous open. Cheap — directory listing.
   // Task #47: retry on TypeError: Failed to fetch so tsx-watch restart
   // windows don't surface as a permanent error in the dropdown.
+  // Task #111: on network failure after retries, fall back to the
+  // localStorage cache so users can still browse prior runs even
+  // when the dev server is offline.
   useEffect(() => {
     if (!open) return;
     setLoading(true);
     setError(null);
+    setFromCache(false);
     let cancelled = false;
     (async () => {
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -504,13 +568,22 @@ export function RunHistoryDropdown() {
           if (cancelled) return;
           const list = Array.isArray(body.runs) ? (body.runs as RunSummaryDigest[]) : [];
           setRuns(list);
+          cacheRunsList(list);
           setLoading(false);
           return;
         } catch (err) {
           const isNetwork = err instanceof TypeError;
           if (!isNetwork || attempt === 2) {
             if (!cancelled) {
-              setError(err instanceof Error ? err.message : String(err));
+              // Task #111: offline fallback.
+              const cached = cachedRunsList();
+              if (cached && cached.length > 0) {
+                setRuns(cached);
+                setFromCache(true);
+                setError(null);
+              } else {
+                setError(err instanceof Error ? err.message : String(err));
+              }
               setLoading(false);
             }
             return;
@@ -555,6 +628,15 @@ export function RunHistoryDropdown() {
             <span>
               Prior runs in parent folder
               {runs && runs.length > 0 ? <span className="ml-2 text-ink-500">({runs.length})</span> : null}
+              {/* Task #111: badge when viewing cached data (server unreachable). */}
+              {fromCache ? (
+                <span
+                  className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 border border-amber-700/50 text-amber-300"
+                  title="Server unreachable — showing localStorage cache. Reopen the dropdown to retry."
+                >
+                  cached · server offline
+                </span>
+              ) : null}
             </span>
             <button
               onClick={() => setOpen(false)}
@@ -635,14 +717,29 @@ export function RunHistoryDropdown() {
                           <span className="text-ink-600 text-[10px]">—</span>
                         )}
                       </td>
-                      <td className="px-2 py-1 text-right text-ink-300 tabular-nums">
-                        {r.commits && r.commits > 0 ? r.commits : ""}
+                      {/* 2026-04-25 fine-tune (Kevin): empty / zero values show
+                          "—" at 0.5 opacity so the columns stay visually anchored
+                          but the eye knows it's "no data" not a real zero. */}
+                      <td className="px-2 py-1 text-right tabular-nums">
+                        {r.commits && r.commits > 0 ? (
+                          <span className="text-ink-300">{r.commits}</span>
+                        ) : (
+                          <span className="text-ink-400 opacity-50">—</span>
+                        )}
                       </td>
-                      <td className="px-2 py-1 text-right text-ink-300 tabular-nums">
-                        {r.totalTodos && r.totalTodos > 0 ? r.totalTodos : ""}
+                      <td className="px-2 py-1 text-right tabular-nums">
+                        {r.totalTodos && r.totalTodos > 0 ? (
+                          <span className="text-ink-300">{r.totalTodos}</span>
+                        ) : (
+                          <span className="text-ink-400 opacity-50">—</span>
+                        )}
                       </td>
-                      <td className="px-2 py-1 text-right text-ink-300 tabular-nums whitespace-nowrap">
-                        {r.wallClockMs > 0 ? formatDurationCompact(r.wallClockMs) : ""}
+                      <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">
+                        {r.wallClockMs > 0 ? (
+                          <span className="text-ink-300">{formatDurationCompact(r.wallClockMs)}</span>
+                        ) : (
+                          <span className="text-ink-400 opacity-50">—</span>
+                        )}
                       </td>
                       <td className="px-2 py-1 text-ink-500 truncate max-w-[260px]" title={r.clonePath}>
                         {truncateLeft(r.clonePath, 36)}
@@ -688,12 +785,16 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
   const [summary, setSummary] = useState<RunSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Task #111: track whether the loaded summary came from localStorage
+  // (server unreachable) so the modal can show a "[cached]" badge.
+  const [fromCache, setFromCache] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
       setError(null);
+      setFromCache(false);
       try {
         const params = new URLSearchParams({
           clonePath: digest.clonePath,
@@ -701,13 +802,35 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
         });
         const r = await fetch(`/api/swarm/run-summary?${params.toString()}`);
         if (!r.ok) {
-          if (!cancelled) setError(`HTTP ${r.status}`);
+          // Task #111: HTTP-error fallback to cache (e.g. server up but
+          // file missing — rarer case, but cache may still have it).
+          if (!cancelled) {
+            const cached = cachedRunSummary(digest.clonePath, digest.runId);
+            if (cached) {
+              setSummary(cached);
+              setFromCache(true);
+            } else {
+              setError(`HTTP ${r.status}`);
+            }
+          }
           return;
         }
         const body = (await r.json()) as RunSummary;
-        if (!cancelled) setSummary(body);
+        if (!cancelled) {
+          setSummary(body);
+          cacheRunSummary(digest.clonePath, digest.runId, body);
+        }
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        // Task #111: network-error fallback to cache.
+        if (!cancelled) {
+          const cached = cachedRunSummary(digest.clonePath, digest.runId);
+          if (cached) {
+            setSummary(cached);
+            setFromCache(true);
+          } else {
+            setError(err instanceof Error ? err.message : String(err));
+          }
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -749,15 +872,24 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
       onClick={onClose}
     >
       <div
-        className="bg-ink-900 border border-ink-600 rounded-lg shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto"
+        className="bg-ink-900 border border-ink-600 rounded-lg shadow-2xl w-[min(1400px,95vw)] max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="sticky top-0 bg-ink-900 border-b border-ink-700 px-5 py-3 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <h3 className="text-lg font-semibold text-ink-100 truncate">{digest.name}</h3>
-            <div className="text-[10px] font-mono text-ink-500 truncate">
-              {digest.runId ? `run ${digest.runId}` : "(no runId)"}
+            <div className="text-[10px] font-mono text-ink-500 truncate flex items-center gap-2">
+              <span>{digest.runId ? `run ${digest.runId}` : "(no runId)"}</span>
+              {/* Task #111: cache badge when modal loaded from localStorage. */}
+              {fromCache ? (
+                <span
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 border border-amber-700/50 text-amber-300"
+                  title="Server unreachable — showing cached summary from localStorage."
+                >
+                  cached
+                </span>
+              ) : null}
             </div>
           </div>
           <button
@@ -868,19 +1000,23 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
                         <tr key={a.agentId} className="border-t border-ink-700/60">
                           <td className="px-2 py-1 text-ink-300">{a.agentIndex}</td>
                           <td className="px-2 py-1 text-ink-200">{roleForRow(summary.preset, a.agentIndex, summary.agents.length)}</td>
+                          {/* turns is intentionally numeric (0 = "agent never ran" is meaningful). */}
                           <td className="px-2 py-1 text-right text-ink-200">{a.turnsTaken}</td>
-                          <td className="px-2 py-1 text-right text-ink-300">{a.totalAttempts ?? "—"}</td>
-                          <td className="px-2 py-1 text-right text-ink-300">{a.totalRetries ?? "—"}</td>
+                          {/* 2026-04-25 fine-tune (Kevin): empty/zero numeric
+                              cells render "—" with opacity-50 (same as dropdown
+                              + headline tiles). */}
+                          <NumOrDashCell value={a.totalAttempts} className="px-2 py-1 text-right text-ink-300" />
+                          <NumOrDashCell value={a.totalRetries} className="px-2 py-1 text-right text-ink-300" />
                           <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.meanLatencyMs)}</td>
                           <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.p50LatencyMs)}</td>
                           <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.p95LatencyMs)}</td>
-                          <td className="px-2 py-1 text-right text-ink-200">{a.commits ?? "—"}</td>
-                          <td className="px-2 py-1 text-right text-emerald-300">{a.linesAdded ?? "—"}</td>
-                          <td className="px-2 py-1 text-right text-rose-300">{a.linesRemoved ?? "—"}</td>
-                          <td className="px-2 py-1 text-right text-ink-200">{linesTotal ?? "—"}</td>
-                          <td className={`px-2 py-1 text-right ${a.rejectedAttempts && a.rejectedAttempts > 0 ? "text-rose-300 font-semibold" : "text-ink-300"}`}>{a.rejectedAttempts ?? "—"}</td>
-                          <td className={`px-2 py-1 text-right ${a.jsonRepairs && a.jsonRepairs > 0 ? "text-amber-300" : "text-ink-300"}`}>{a.jsonRepairs ?? "—"}</td>
-                          <td className={`px-2 py-1 text-right ${a.promptErrors && a.promptErrors > 0 ? "text-rose-400 font-semibold" : "text-ink-300"}`}>{a.promptErrors ?? "—"}</td>
+                          <NumOrDashCell value={a.commits} className="px-2 py-1 text-right text-ink-200" />
+                          <NumOrDashCell value={a.linesAdded} className="px-2 py-1 text-right text-emerald-300" />
+                          <NumOrDashCell value={a.linesRemoved} className="px-2 py-1 text-right text-rose-300" />
+                          <NumOrDashCell value={linesTotal} className="px-2 py-1 text-right text-ink-200" />
+                          <NumOrDashCell value={a.rejectedAttempts} className={`px-2 py-1 text-right ${a.rejectedAttempts && a.rejectedAttempts > 0 ? "text-rose-300 font-semibold" : "text-ink-300"}`} />
+                          <NumOrDashCell value={a.jsonRepairs} className={`px-2 py-1 text-right ${a.jsonRepairs && a.jsonRepairs > 0 ? "text-amber-300" : "text-ink-300"}`} />
+                          <NumOrDashCell value={a.promptErrors} className={`px-2 py-1 text-right ${a.promptErrors && a.promptErrors > 0 ? "text-rose-400 font-semibold" : "text-ink-300"}`} />
                         </tr>
                       );
                     })}
@@ -1009,16 +1145,31 @@ function DataValue({ children }: { children: React.ReactNode }) {
   return <div className="text-ink-200 min-w-0">{children}</div>;
 }
 
+// 2026-04-25 fine-tune (Kevin): per-agent table cells render zero/null
+// values as "—" at opacity-50 (matches dropdown + headline-tile
+// convention). Reuses the caller's className for padding/alignment,
+// adds opacity-50 when empty.
+function NumOrDashCell({ value, className }: { value: number | null | undefined; className: string }) {
+  const isEmpty = !value;
+  if (isEmpty) {
+    return <td className={`${className} opacity-50`}>—</td>;
+  }
+  return <td className={className}>{value.toLocaleString()}</td>;
+}
+
 function Stat({ label, value }: { label: string; value: number | undefined }) {
-  // 2026-04-25 fine-tune: blank-out 0 + undefined (Kevin's preference
-  // — empty cell reads cleaner than "—" or "0"). Defensive against
-  // discussion-preset summaries where blackboard-only fields are
-  // undefined; also avoids the original undefined.toLocaleString crash.
-  const display = !value ? "" : value.toLocaleString();
+  // 2026-04-25: Kevin updated preference — modal Stat tiles show "—"
+  // for blank/zero so the empty state is unambiguous (was blank in
+  // earlier #86 fine-tune). 2026-04-25 v2: opacity-50 on the dash
+  // matches the dropdown table convention.
+  const display = !value ? "—" : value.toLocaleString();
+  const isEmpty = !value;
   return (
     <div className="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5">
       <div className="text-[9px] uppercase tracking-wider text-ink-500">{label}</div>
-      <div className="text-ink-100 font-mono text-sm min-h-[1.25rem]">{display}</div>
+      <div className={`font-mono text-sm min-h-[1.25rem] ${isEmpty ? "text-ink-400 opacity-50" : "text-ink-100"}`}>
+        {display}
+      </div>
     </div>
   );
 }
@@ -1040,6 +1191,14 @@ function roleForRow(preset: string, idx: number, totalAgents: number): string {
       return "worker";
     case "orchestrator-worker":
       return idx === 1 ? "orchestrator" : "worker";
+    case "orchestrator-worker-deep": {
+      if (idx === 1) return "orchestrator";
+      const remaining = Math.max(0, totalAgents - 1);
+      const targetK = Math.max(1, Math.ceil(remaining / 6));
+      const maxK = Math.max(1, Math.floor(remaining / 3));
+      const k = Math.min(targetK, maxK);
+      return idx <= 1 + k ? "mid-lead" : "worker";
+    }
     case "map-reduce":
       return idx === 1 ? "reducer" : "mapper";
     case "council":
@@ -1079,9 +1238,18 @@ function formatDurationCompact(ms: number): string {
   const h = Math.floor((total % 86400) / 3600);
   const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
-  if (d > 0) return `${d}:${h}:${m}:${s}`;
-  if (h > 0) return `${h}:${m}:${s}`;
-  return `${m}:${s}`;
+  // 2026-04-25 fine-tune (Kevin):
+  // - 2-digit pad each non-leading segment so colons align vertically.
+  // - When the leading minute is 0, drop the "0:" prefix and just show
+  //   the seconds bare (e.g. "12" instead of "0:12").
+  // - When everything is 0, return "—" (caller's column is "no-data"
+  //   styled so the dash signals "no time recorded").
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (d > 0) return `${d}:${pad(h)}:${pad(m)}:${pad(s)}`;
+  if (h > 0) return `${h}:${pad(m)}:${pad(s)}`;
+  if (m > 0) return `${m}:${pad(s)}`;
+  if (s > 0) return `${s}`;
+  return "—";
 }
 function formatRuntimeMs(ms: number): string {
   const total = Math.floor(ms / 1000);
@@ -1111,6 +1279,9 @@ const PRESET_CHIP_STYLES: Record<string, string> = {
   blackboard: "bg-emerald-900/40 border-emerald-700/50 text-emerald-200",
   council: "bg-sky-900/40 border-sky-700/50 text-sky-200",
   "orchestrator-worker": "bg-amber-900/40 border-amber-700/50 text-amber-200",
+  // Task #131: deep variant gets a slightly deeper amber so the chip
+  // distinguishes from flat OW at a glance.
+  "orchestrator-worker-deep": "bg-amber-950/60 border-amber-600/60 text-amber-100",
   "map-reduce": "bg-violet-900/40 border-violet-700/50 text-violet-200",
   "role-diff": "bg-fuchsia-900/40 border-fuchsia-700/50 text-fuchsia-200",
   "debate-judge": "bg-rose-900/40 border-rose-700/50 text-rose-200",
@@ -1143,6 +1314,9 @@ function ResultChip({ reason }: { reason: string }) {
   } else if (reason.startsWith("cap:")) {
     cls = "bg-amber-900/40 border-amber-700/50 text-amber-300";
     label = reason.replace("cap:", "cap·");
+  } else if (reason === "early-stop") {
+    cls = "bg-sky-900/40 border-sky-700/50 text-sky-300";
+    label = "early-stop";
   }
   return (
     <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${cls}`}>
@@ -1154,10 +1328,28 @@ function ResultChip({ reason }: { reason: string }) {
 // 2026-04-25 fine-tune: always show date alongside time per Kevin's
 // review. Today's runs cluster at the top of the dropdown so the date
 // is helpful to anchor "this run was yesterday" vs "this morning."
+//
+// 2026-04-25 align-tweak (Kevin): hide the leading-zero "0" digits
+// while keeping vertical alignment of "/", ":", and AM/PM across
+// rows. Use figure-space (U+2007) — a Unicode "digit-blank" that's
+// defined to occupy the same width as a digit in tabular-nums /
+// monospace fonts. Result: "04/25 07:08" displays as " 4/25  7: 8"
+// where each leading zero is replaced by an invisible digit-width
+// slot, so a single-digit row still right-pads to the same column
+// positions as a two-digit row. Hand-built (vs locale string) so we
+// can control every component independently.
 function fmtTimeShort(ts: number): string {
   const d = new Date(ts);
-  const date = `${d.getMonth() + 1}/${d.getDate()}`;
-  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const FS = " "; // figure-space — digit-width blank
+  const padInvis = (n: number): string => (n < 10 ? `${FS}${n}` : `${n}`);
+  const date = `${padInvis(d.getMonth() + 1)}/${padInvis(d.getDate())}`;
+  // 12-hour clock with AM/PM, single-digit hours and minutes show as
+  // figure-space + digit so the colon stays in the same column.
+  let hour = d.getHours();
+  const isAM = hour < 12;
+  if (hour === 0) hour = 12;
+  else if (hour > 12) hour -= 12;
+  const time = `${padInvis(hour)}:${padInvis(d.getMinutes())} ${isAM ? "AM" : "PM"}`;
   return `${date} · ${time}`;
 }
 

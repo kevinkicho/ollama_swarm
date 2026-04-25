@@ -6,10 +6,12 @@ import type { AgentManager } from "./AgentManager.js";
 import type { RepoService } from "./RepoService.js";
 import type { SwarmEvent, SwarmStatus, SwarmStatusRunConfig } from "../types.js";
 import type { PresetId, RunConfig, RunnerOpts, SwarmRunner } from "../swarm/SwarmRunner.js";
+import { tokenTracker } from "./ollamaProxy.js";
 import { RoundRobinRunner } from "../swarm/RoundRobinRunner.js";
 import { BlackboardRunner } from "../swarm/blackboard/BlackboardRunner.js";
 import { CouncilRunner } from "../swarm/CouncilRunner.js";
 import { OrchestratorWorkerRunner } from "../swarm/OrchestratorWorkerRunner.js";
+import { OrchestratorWorkerDeepRunner } from "../swarm/OrchestratorWorkerDeepRunner.js";
 import { DebateJudgeRunner } from "../swarm/DebateJudgeRunner.js";
 import { MapReduceRunner } from "../swarm/MapReduceRunner.js";
 import { StigmergyRunner } from "../swarm/StigmergyRunner.js";
@@ -140,6 +142,10 @@ export class Orchestrator {
     // Assign up-front so status()/isRunning() reflect the in-progress run for
     // new WS clients and the POST /status endpoint while start() is still awaiting.
     this.runner = runner;
+    // Task #125: tag every Ollama call made during this run with its
+    // preset, so the usage dashboard can break down "blackboard ate
+    // 60% of today's tokens" etc. Cleared in stop().
+    tokenTracker.setCurrentPreset(cfg.preset);
     // Unit 52a + 52c + 52d: anchor for the UI's runtime ticker,
     // identity strip, and identifiers row. Single source of truth
     // across all 7 runners. Fires BEFORE runner.start so a slow clone
@@ -230,6 +236,9 @@ export class Orchestrator {
     try {
       await runner.stop();
     } finally {
+      // Task #125: clear preset tag — calls between runs (e.g. an
+      // exploratory direct curl to the proxy) bucket as "(idle)".
+      tokenTracker.setCurrentPreset(undefined);
       // Once a run is fully stopped, drop the reference so the next start gets
       // a fresh slate rather than inheriting the previous runner's terminal phase.
       this.runner = null;
@@ -267,6 +276,13 @@ export class Orchestrator {
         // Agent 1 = lead (plans + synthesizes), 2..N = workers (parallel,
         // isolated subtasks). `rounds` = plan→execute→synthesize cycles.
         return new OrchestratorWorkerRunner(this.opts);
+      case "orchestrator-worker-deep":
+        // Task #131: 3-tier OW. Agent 1 = orchestrator, agents 2..K+1 =
+        // mid-leads (K = max(1, ceil((N-1)/6))), agents K+2..N = workers
+        // partitioned across mid-leads. Per cycle: top-plan → mid-plan →
+        // workers → mid-synth → top-synth. Scales coverage past ~8
+        // workers without inflating any single tier's prompt context.
+        return new OrchestratorWorkerDeepRunner(this.opts);
       case "debate-judge":
         // Fixed 3 agents: Agent 1 = PRO, Agent 2 = CON, Agent 3 = JUDGE.
         // Per round Pro+Con exchange; Judge scores on the final round.

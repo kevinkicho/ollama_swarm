@@ -12,7 +12,8 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
-import { extractTextWithDiag, looksLikeJunk } from "./extractText.js";
+import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
+import { snapshotLifetimeTokens, tokenBudgetExceeded } from "../services/ollamaProxy.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 
@@ -42,6 +43,12 @@ export class StigmergyRunner implements SwarmRunner {
   // The annotation table — the shared "pheromone" state. File path →
   // aggregated annotation. Updated after each agent's turn.
   private annotations = new Map<string, AnnotationState>();
+  // Phase B (Task #98): rolling window of the last N rounds' top-10
+  // file-name signatures. Detects "the swarm is no longer learning
+  // anything new" — once the visit-graph stabilizes, more rounds just
+  // burn tokens reading the same files.
+  private rankingHistory: string[] = [];
+  private earlyStopDetail?: string;
 
   constructor(private readonly opts: RunnerOpts) {}
 
@@ -104,6 +111,8 @@ export class StigmergyRunner implements SwarmRunner {
     this.stats.reset();
     this.startedAt = undefined;
     this.summaryWritten = false;
+    this.rankingHistory = [];
+    this.earlyStopDetail = undefined;
 
     this.setPhase("cloning");
     const cloneResult = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
@@ -175,14 +184,54 @@ export class StigmergyRunner implements SwarmRunner {
       const initialEntries = await this.opts.repos.listTopLevel(clonePath);
       const candidatePaths = initialEntries.filter((e) => !SKIP_ENTRIES.has(e));
 
+      // Phase B (Task #98): stability window. Need at least
+      // STABILITY_WINDOW rounds of identical top-10 to call it
+      // converged. Skip the check until the swarm has had time to
+      // explore (MIN_ROUND_FOR_CHECK) — early rounds always look
+      // unstable.
+      const STABILITY_WINDOW = 3;
+      const MIN_ROUND_FOR_CHECK = STABILITY_WINDOW + 2;
+
+      // Task #124: snapshot lifetime tokens for budget delta.
+      const tokenBaseline = snapshotLifetimeTokens();
+
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
+        // Task #124: token-budget cap check.
+        if (tokenBudgetExceeded(tokenBaseline, cfg.tokenBudget)) {
+          this.earlyStopDetail = `token-budget reached (${cfg.tokenBudget?.toLocaleString()} tokens)`;
+          this.appendSystem(`Token budget of ${cfg.tokenBudget?.toLocaleString()} tokens reached at round ${r - 1}/${cfg.rounds} — ending run early.`);
+          break;
+        }
         this.round = r;
         this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
 
         for (const agent of agents) {
           if (this.stopping) break;
           await this.runExplorerTurn(agent, r, cfg.rounds, candidatePaths);
+        }
+
+        // Phase B (Task #98): record this round's ranking, check for
+        // stability. Run only when annotations exist (else the empty
+        // signature trivially matches itself).
+        if (!this.stopping && this.annotations.size > 0 && r < cfg.rounds) {
+          const sig = computeRankingSignature(this.annotations);
+          this.rankingHistory.push(sig);
+          if (this.rankingHistory.length > STABILITY_WINDOW) {
+            this.rankingHistory.shift();
+          }
+          if (
+            r >= MIN_ROUND_FOR_CHECK &&
+            this.rankingHistory.length === STABILITY_WINDOW &&
+            this.rankingHistory.every((s) => s === this.rankingHistory[0])
+          ) {
+            this.earlyStopDetail =
+              `visit-graph stable for ${STABILITY_WINDOW} rounds (top-10 unchanged)`;
+            this.appendSystem(
+              `Top-10 unchanged for ${STABILITY_WINDOW} consecutive rounds — ending stigmergy early at round ${r}/${cfg.rounds}.`,
+            );
+            break;
+          }
         }
       }
       if (!this.stopping) {
@@ -234,6 +283,7 @@ export class StigmergyRunner implements SwarmRunner {
       endedAt: Date.now(),
       crashMessage,
       stopping: this.stopping,
+      earlyStopDetail: this.earlyStopDetail,
       filesChanged: gitStatus.changedFiles,
       finalGitStatus: gitStatus.porcelain,
       agents: this.stats.buildPerAgentStats(),
@@ -350,6 +400,14 @@ export class StigmergyRunner implements SwarmRunner {
         const retryText = await retryEmptyResponse(lead, prompt, "swarm-read", diagCtx);
         if (retryText !== null) text = retryText;
       }
+      // Task #115: track Pattern 8 stuck-loop, warn on threshold.
+      trackPostRetryJunk(text, {
+        agentId: lead.id,
+        recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
+        appendSystem: (msg) => this.appendSystem(msg),
+      });
+      // Task #108: defensive guard — see CouncilRunner.runSynthesisPass.
+      const isJunkSynthesis = looksLikeJunk(text) || extracted.isEmpty;
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
@@ -357,10 +415,17 @@ export class StigmergyRunner implements SwarmRunner {
         agentIndex: lead.index,
         text,
         ts: Date.now(),
-        summary: { kind: "stigmergy_report", filesRanked: ranked.length },
+        summary: isJunkSynthesis
+          ? undefined
+          : { kind: "stigmergy_report", filesRanked: ranked.length },
       };
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });
+      if (isJunkSynthesis) {
+        this.appendSystem(
+          `[${lead.id}] stigmergy report-out text is degenerate (${text.length} chars) — kept in transcript but NOT tagged as canonical report.`,
+        );
+      }
     } catch (err) {
       this.appendSystem(
         `[${lead.id}] report-out failed (${err instanceof Error ? err.message : String(err)}); skipping synthesis.`,
@@ -533,6 +598,12 @@ export class StigmergyRunner implements SwarmRunner {
         const retryText = await retryEmptyResponse(agent, prompt, "swarm-read", diagCtx);
         if (retryText !== null) text = retryText;
       }
+      // Task #115: track Pattern 8 stuck-loop, warn on threshold.
+      trackPostRetryJunk(text, {
+        agentId: agent.id,
+        recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
+        appendSystem: (msg) => this.appendSystem(msg),
+      });
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
@@ -697,6 +768,24 @@ export function buildExplorerPrompt(args: BuildExplorerPromptArgs): string {
     "",
     `Now respond as Agent ${agentIndex}. Remember: prose report THEN annotation JSON on the last line.`,
   ].join("\n");
+}
+
+// Phase B (Task #98): produce a stable signature of the current top-10
+// ranking by (visits × avgInterest). Uses file names only — small score
+// jitter shouldn't reset the stability window. A delimiter that can't
+// appear in a path keeps the signature unambiguous.
+export function computeRankingSignature(
+  annotations: ReadonlyMap<string, AnnotationState>,
+): string {
+  const ranked = [...annotations.entries()]
+    .map(([file, a]) => ({ file, score: a.visits * a.avgInterest }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.file.localeCompare(b.file);
+    })
+    .slice(0, 10)
+    .map((r) => r.file);
+  return ranked.join("␟");
 }
 
 export function formatAnnotations(annotations: ReadonlyMap<string, AnnotationState>): string {

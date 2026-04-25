@@ -202,6 +202,38 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
         />
       );
     }
+    // Task #129: stretch-goal reflection card. Distinct violet styling
+    // because it's a forward-looking artifact (next-run launchpad), not
+    // a recap of work done.
+    if (entry.summary.kind === "stretch_goals") {
+      const sg = entry.summary;
+      const stretchHeader = (
+        <div>
+          {header}
+          <div className="text-[10px] uppercase tracking-wider font-semibold text-violet-300 mb-1">
+            ✦ Stretch goals · {sg.goals.length} ranked · tier {sg.tier} · {sg.committed} commits ✦
+          </div>
+        </div>
+      );
+      const list = (
+        <ol className="text-sm text-ink-200 list-decimal list-inside space-y-1 mt-1">
+          {sg.goals.map((g, i) => (
+            <li key={i} className="text-violet-100">{g}</li>
+          ))}
+        </ol>
+      );
+      return (
+        <div className="rounded-md p-3 border-2 border-violet-700/60 bg-violet-950/20 text-sm">
+          {stretchHeader}
+          {list}
+          <CollapsibleBlock
+            className="text-xs text-ink-400 mt-2"
+            header={<div className="text-[10px] uppercase tracking-wider text-ink-500 mb-0.5">raw planner response</div>}
+            text={entry.text}
+          />
+        </div>
+      );
+    }
     // Task #81: structured debate verdict — render as a scorecard
     // grid with PRO/CON columns and the decisive call in the header.
     if (entry.summary.kind === "debate_verdict") {
@@ -222,6 +254,71 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
       return (
         <CollapsibleBlock
           className="rounded-md p-3 border-2 border-violet-700/60 bg-violet-950/20 text-sm"
+          style={undefined}
+          header={synHeader}
+          text={entry.text}
+        />
+      );
+    }
+    // Task #102: post-verdict build phase entries. Each role gets a
+    // distinct chip color but they all share an indigo border so the
+    // post-verdict block reads as a coherent group below the verdict
+    // scorecard.
+    if (entry.summary.kind === "next_action_phase") {
+      const roleLabel =
+        entry.summary.role === "announcement" ? "🔨 Build phase begins"
+        : entry.summary.role === "implementer" ? "🛠 Implementer (PRO)"
+        : entry.summary.role === "reviewer" ? "🔍 Reviewer (CON)"
+        : "✓ Signoff (JUDGE)";
+      const chipColor =
+        entry.summary.role === "implementer" ? "text-emerald-300"
+        : entry.summary.role === "reviewer" ? "text-rose-300"
+        : entry.summary.role === "signoff" ? "text-amber-300"
+        : "text-indigo-300";
+      const phaseHeader = (
+        <div>
+          {header}
+          <div className={`text-[10px] uppercase tracking-wider font-semibold ${chipColor} mb-1`}>
+            ═ {roleLabel} ═
+          </div>
+        </div>
+      );
+      // Announcement is a system entry — render compact.
+      if (entry.summary.role === "announcement") {
+        return (
+          <div className="rounded-md p-2 border border-indigo-700/60 bg-indigo-950/20 text-xs text-indigo-200">
+            {phaseHeader}
+            <div className="text-ink-200">{entry.text}</div>
+          </div>
+        );
+      }
+      return (
+        <CollapsibleBlock
+          className="rounded-md p-3 border-2 border-indigo-700/60 bg-indigo-950/20 text-sm"
+          style={undefined}
+          header={phaseHeader}
+          text={entry.text}
+        />
+      );
+    }
+    // Task #100: role-diff synthesis — closes the missing-synthesis
+    // gap. Same distinctive-wrapper treatment; amber chip to
+    // visually distinguish from emerald (council) / sky (stigmergy)
+    // / violet (map-reduce).
+    if (entry.summary.kind === "role_diff_synthesis") {
+      const r = entry.summary.rounds;
+      const n = entry.summary.roles;
+      const synHeader = (
+        <div>
+          {header}
+          <div className="text-[10px] uppercase tracking-wider font-semibold text-amber-300 mb-1">
+            ═ Role-diff synthesis · {r} round{r === 1 ? "" : "s"} · {n} role{n === 1 ? "" : "s"} ═
+          </div>
+        </div>
+      );
+      return (
+        <CollapsibleBlock
+          className="rounded-md p-3 border-2 border-amber-700/60 bg-amber-950/20 text-sm"
           style={undefined}
           header={synHeader}
           text={entry.text}
@@ -378,11 +475,20 @@ function formatServerSummary(s: TranscriptEntrySummary): string {
   if (s.kind === "stigmergy_report") {
     return `Stigmergy report-out (${s.filesRanked} files ranked)`;
   }
+  if (s.kind === "stretch_goals") {
+    return `Stretch goals (${s.goals.length} ranked, tier ${s.tier})`;
+  }
   if (s.kind === "debate_verdict") {
     return `Debate verdict — ${s.winner.toUpperCase()} (${s.confidence})`;
   }
   if (s.kind === "mapreduce_synthesis") {
     return `Map-reduce synthesis (cycle ${s.cycle})`;
+  }
+  if (s.kind === "role_diff_synthesis") {
+    return `Role-diff synthesis (${s.rounds} round${s.rounds === 1 ? "" : "s"}, ${s.roles} roles)`;
+  }
+  if (s.kind === "next_action_phase") {
+    return `Build phase — ${s.role}`;
   }
   // worker_hunks
   const opParts: string[] = [];
@@ -1052,16 +1158,20 @@ function RunFinishedGrid({
               <tr key={a.agentIndex} className="border-t border-ink-700/60">
                 <td className="px-2 py-1 text-ink-300">{a.agentIndex}</td>
                 <td className="px-2 py-1 text-ink-200">{a.role}</td>
+                {/* turns is meaningful when 0 too (means agent never ran) — keep numeric. */}
                 <td className="px-2 py-1 text-right text-ink-200">{a.turns}</td>
-                <td className="px-2 py-1 text-right text-ink-300">{a.attempts}</td>
-                <td className="px-2 py-1 text-right text-ink-300">{a.retries}</td>
+                {/* 2026-04-25 fine-tune (Kevin): empty/zero numeric cells
+                    show "—" with opacity-50 so the column reads as
+                    "no data" instead of a real zero. */}
+                <NumOrDash value={a.attempts} className="px-2 py-1 text-right text-ink-300" />
+                <NumOrDash value={a.retries} className="px-2 py-1 text-right text-ink-300" />
                 <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.meanLatencyMs)}</td>
-                <td className="px-2 py-1 text-right text-ink-200">{a.commits}</td>
-                <td className="px-2 py-1 text-right text-emerald-300">{a.linesAdded}</td>
-                <td className="px-2 py-1 text-right text-rose-300">{a.linesRemoved}</td>
-                <td className={`px-2 py-1 text-right ${a.rejected > 0 ? "text-rose-300 font-semibold" : "text-ink-300"}`}>{a.rejected}</td>
-                <td className={`px-2 py-1 text-right ${a.jsonRepairs > 0 ? "text-amber-300" : "text-ink-300"}`}>{a.jsonRepairs}</td>
-                <td className={`px-2 py-1 text-right ${a.promptErrors > 0 ? "text-rose-400 font-semibold" : "text-ink-300"}`}>{a.promptErrors}</td>
+                <NumOrDash value={a.commits} className="px-2 py-1 text-right text-ink-200" />
+                <NumOrDash value={a.linesAdded} className="px-2 py-1 text-right text-emerald-300" />
+                <NumOrDash value={a.linesRemoved} className="px-2 py-1 text-right text-rose-300" />
+                <NumOrDash value={a.rejected} className={`px-2 py-1 text-right ${a.rejected > 0 ? "text-rose-300 font-semibold" : "text-ink-300"}`} />
+                <NumOrDash value={a.jsonRepairs} className={`px-2 py-1 text-right ${a.jsonRepairs > 0 ? "text-amber-300" : "text-ink-300"}`} />
+                <NumOrDash value={a.promptErrors} className={`px-2 py-1 text-right ${a.promptErrors > 0 ? "text-rose-400 font-semibold" : "text-ink-300"}`} />
               </tr>
             ))}
           </tbody>
@@ -1153,10 +1263,26 @@ function fmtMs(ms: number | null): string {
 }
 
 function Tile({ label, value, accent }: { label: string; value: number; accent?: string }) {
+  // 2026-04-25 fine-tune (Kevin): show "—" with opacity 0.5 when
+  // value is 0/null/undefined so empty tiles don't read as a real "0".
+  const isEmpty = !value;
+  const display = isEmpty ? "—" : value.toLocaleString();
+  const colorClass = isEmpty ? "text-ink-400 opacity-50" : (accent ?? "text-ink-100");
   return (
     <div className="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5">
       <div className="text-[9px] uppercase tracking-wider text-ink-500">{label}</div>
-      <div className={`font-mono text-sm ${accent ?? "text-ink-100"}`}>{value.toLocaleString()}</div>
+      <div className={`font-mono text-sm ${colorClass}`}>{display}</div>
     </div>
   );
+}
+
+// 2026-04-25 fine-tune (Kevin): per-agent table cells render zero/null
+// values as "—" at opacity-50. Reuses the caller's className for
+// padding/alignment, swaps to muted color when empty.
+function NumOrDash({ value, className }: { value: number | null | undefined; className: string }) {
+  const isEmpty = !value;
+  if (isEmpty) {
+    return <td className={`${className} opacity-50`}>—</td>;
+  }
+  return <td className={className}>{value.toLocaleString()}</td>;
 }

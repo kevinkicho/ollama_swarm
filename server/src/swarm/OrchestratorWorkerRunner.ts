@@ -12,7 +12,8 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
-import { extractTextWithDiag, looksLikeJunk } from "./extractText.js";
+import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
+import { snapshotLifetimeTokens, tokenBudgetExceeded } from "../services/ollamaProxy.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
@@ -42,6 +43,9 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
   private stats = new AgentStatsCollector();
   private startedAt?: number;
   private summaryWritten = false;
+  // Phase B (Task #101): set when lead emits `done: true` in its plan
+  // for a cycle. Promoted to stopReason="early-stop" by writeSummary.
+  private earlyStopDetail?: string;
 
   constructor(private readonly opts: RunnerOpts) {}
 
@@ -90,6 +94,7 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
     this.stats.reset();
     this.startedAt = undefined;
     this.summaryWritten = false;
+    this.earlyStopDetail = undefined;
 
     this.setPhase("cloning");
     const cloneResult = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
@@ -161,8 +166,17 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
       if (!lead) throw new Error("lead agent (index 1) did not spawn");
       if (workers.length === 0) throw new Error("no workers spawned");
 
+      // Task #124: snapshot lifetime tokens for budget delta.
+      const tokenBaseline = snapshotLifetimeTokens();
+
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
+        // Task #124: token-budget cap check.
+        if (tokenBudgetExceeded(tokenBaseline, cfg.tokenBudget)) {
+          this.earlyStopDetail = `token-budget reached (${cfg.tokenBudget?.toLocaleString()} tokens)`;
+          this.appendSystem(`Token budget of ${cfg.tokenBudget?.toLocaleString()} tokens reached at cycle ${r - 1}/${cfg.rounds} — ending run early.`);
+          break;
+        }
         this.round = r;
         this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
 
@@ -179,6 +193,18 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
         if (this.stopping) break;
 
         const plan = parsePlan(planText, workers.map((w) => w.index));
+        // Phase B (Task #101): lead short-circuit. Honor done:true
+        // even if the model also emitted assignments alongside —
+        // the explicit done flag is a stronger signal than any
+        // backup work it might have queued. Skip on cycle 1 (the
+        // prompt forbids it; this is defense-in-depth).
+        if (plan.done === true && r > 1) {
+          this.earlyStopDetail = `lead-reports-done after cycle ${r}/${cfg.rounds}`;
+          this.appendSystem(
+            `Lead reports done — ending OW early at cycle ${r}/${cfg.rounds}.`,
+          );
+          break;
+        }
         if (plan.assignments.length === 0) {
           this.appendSystem(
             `Cycle ${r}: lead produced no parseable assignments — skipping execute phase this cycle. Raw lead output preserved in transcript.`,
@@ -255,6 +281,7 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
       endedAt: Date.now(),
       crashMessage,
       stopping: this.stopping,
+      earlyStopDetail: this.earlyStopDetail,
       filesChanged: gitStatus.changedFiles,
       finalGitStatus: gitStatus.porcelain,
       agents: this.stats.buildPerAgentStats(),
@@ -396,6 +423,12 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
         const retryText = await retryEmptyResponse(agent, prompt, "swarm-read", diagCtx);
         if (retryText !== null) text = retryText;
       }
+      // Task #115: track Pattern 8 stuck-loop, warn on threshold.
+      trackPostRetryJunk(text, {
+        agentId: agent.id,
+        recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
+        appendSystem: (msg) => this.appendSystem(msg),
+      });
       // Task #43: if this agent's response parses as an assignments
       // envelope (lead's turn 1 shape), attach a structured summary
       // so the UI renders a glance line + bullet list instead of
@@ -467,6 +500,12 @@ export interface Assignment {
 
 export interface Plan {
   assignments: Assignment[];
+  // Phase B (Task #101): lead can short-circuit the loop by setting
+  // done:true. Means "no useful work remains; stop now". Independent
+  // of `assignments` — done:true with assignments=[] is the canonical
+  // shape, but if the model still emits assignments alongside, we
+  // honor done:true and skip them.
+  done?: boolean;
 }
 
 // Exported for testability. Accepts either a clean JSON object with
@@ -492,8 +531,10 @@ export function parsePlan(raw: string, allowedWorkerIndices: readonly number[]):
     }
   }
   if (!parsed || typeof parsed !== "object") return { assignments: [] };
+  const doneRaw = (parsed as { done?: unknown }).done;
+  const done = doneRaw === true ? true : undefined;
   const assignmentsRaw = (parsed as { assignments?: unknown }).assignments;
-  if (!Array.isArray(assignmentsRaw)) return { assignments: [] };
+  if (!Array.isArray(assignmentsRaw)) return { assignments: [], done };
   const assignments: Assignment[] = [];
   const seenAgents = new Set<number>();
   for (const a of assignmentsRaw) {
@@ -506,7 +547,7 @@ export function parsePlan(raw: string, allowedWorkerIndices: readonly number[]):
     seenAgents.add(idx);
     assignments.push({ agentIndex: idx, subtask: subtask.trim() });
   }
-  return { assignments };
+  return { assignments, done };
 }
 
 export function buildLeadPlanPrompt(
@@ -542,7 +583,18 @@ export function buildLeadPlanPrompt(
     "  - Cheapest verification: read README.md + a top-level `list` first. Then assign workers to paths that appeared in those listings.",
     "",
     "Output ONLY a JSON object with this shape (no prose, no markdown fences):",
-    '{"assignments": [{"agentIndex": 2, "subtask": "…"}, {"agentIndex": 3, "subtask": "…"}, …]}',
+    '{"done": false, "assignments": [{"agentIndex": 2, "subtask": "…"}, {"agentIndex": 3, "subtask": "…"}, …]}',
+    "",
+    // Phase B (Task #101): early-stop signal. The lead can short-
+    // circuit the loop when there is genuinely nothing useful left
+    // to dispatch — e.g. every prior worker reported "no further
+    // changes needed" or the prior synthesis already covered the
+    // remaining gaps. Be honest: if any meaningful gap remains,
+    // dispatch to investigate it.
+    'Set `done: true` (with assignments: []) ONLY when one of these holds:',
+    "  • All workers in the prior cycle returned NO_CHANGE / nothing-new / no-issues-found.",
+    "  • The prior synthesis explicitly stated a complete, satisfactory picture and there is no remaining gap to investigate.",
+    "Otherwise set `done: false` and dispatch real subtasks. On cycle 1, `done` MUST be false — there's nothing yet to be done about.",
     "",
     "Rules for good subtasks:",
     "- Each subtask is self-contained (the worker sees only its subtask + the seed; no peer context, no your planning text).",

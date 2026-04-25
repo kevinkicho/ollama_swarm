@@ -228,3 +228,42 @@ describe("advanceTickAccumulator", () => {
     assert.equal(reason, null, "8-h host sleep does not trip the wall-clock cap");
   });
 });
+
+// Task #136: regression guard for #116. The wall-clock cap is enforced
+// from THREE loop boundaries in BlackboardRunner — worker, audited
+// execution, and replan-queue. If a future refactor adds a new long-
+// running loop without a checkAndApplyCaps() guard at the top, this
+// test fails so the omission shows up in CI before a real run hits
+// the gap. Doesn't validate runtime behavior (that needs an end-to-
+// end run with a short wallClockCapMs override) but it does pin the
+// structural commitment the post-#116 fix made.
+describe("BlackboardRunner cap-check call sites (Task #136)", () => {
+  it("has a checkAndApplyCaps() call at every documented loop boundary", async () => {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const here = path.dirname(new URL(import.meta.url).pathname);
+    const src = await fs.readFile(path.join(here, "BlackboardRunner.ts"), "utf8");
+    // Each named loop method is required to call checkAndApplyCaps.
+    // We grep for the function header followed (within reasonable
+    // distance) by a checkAndApplyCaps invocation. This catches the
+    // common regression: someone adds a new loop and forgets the cap
+    // gate.
+    const guardedLoops = ["runAuditedExecution", "runWorkers", "processReplanQueue"];
+    for (const name of guardedLoops) {
+      // Match the method DEFINITION (visibility modifier + async +
+      // name + paren list + return type + opening brace), not a call
+      // site. `private async runX(args): Promise<void> {`
+      const defRe = new RegExp(
+        `private\\s+async\\s+${name}\\s*\\([^)]*\\)\\s*:\\s*Promise<[^>]*>\\s*\\{`,
+      );
+      const defMatch = defRe.exec(src);
+      assert.ok(defMatch, `expected to find DEFINITION of loop method ${name}`);
+      const tailWindow = src.slice(defMatch!.index, defMatch!.index + 4_000);
+      assert.match(
+        tailWindow,
+        /checkAndApplyCaps\(\)/,
+        `loop method ${name} is missing a checkAndApplyCaps() guard within 4000 chars of its definition`,
+      );
+    }
+  });
+});

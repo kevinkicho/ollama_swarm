@@ -12,7 +12,8 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
-import { extractTextWithDiag, looksLikeJunk } from "./extractText.js";
+import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
+import { snapshotLifetimeTokens, tokenBudgetExceeded } from "../services/ollamaProxy.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 
@@ -44,6 +45,10 @@ export class DebateJudgeRunner implements SwarmRunner {
   // Only the most recent pre-start injection counts as the proposition;
   // mid-run injections are treated as regular transcript commentary.
   private proposition?: string;
+  // Phase B (Task #94): natural-stop detail when the judge reaches
+  // confidence:high mid-loop. Promoted to stopReason="early-stop" by
+  // writeSummary. Stays undefined on natural rounds-exhaustion ends.
+  private earlyStopDetail?: string;
 
   constructor(private readonly opts: RunnerOpts) {}
 
@@ -107,6 +112,7 @@ export class DebateJudgeRunner implements SwarmRunner {
     this.stats.reset();
     this.startedAt = undefined;
     this.summaryWritten = false;
+    this.earlyStopDetail = undefined;
     this.proposition = propositionAtStart; // re-set after transcript reset
 
     this.setPhase("cloning");
@@ -189,8 +195,28 @@ export class DebateJudgeRunner implements SwarmRunner {
       if (!pro || !con || !judge) throw new Error("Pro/Con/Judge must all spawn (agents 1, 2, 3)");
       const prop = this.proposition ?? DEFAULT_PROPOSITION;
 
+      // Phase B (Task #94): one preliminary judge pass at the loop
+      // midpoint. If the judge says confidence:high we end early —
+      // continuing past a confident verdict just burns tokens. Pick a
+      // single fire-point (not every round) so the judge cost is at
+      // most one extra call beyond the canonical final-round verdict.
+      const earlyCheckRound = cfg.rounds >= 4 ? Math.ceil(cfg.rounds / 2) : 0;
+
+      // Task #102: capture the parsed verdict so the post-loop build
+      // round can act on it.
+      let finalVerdict: ParsedDebateVerdict | null = null;
+
+      // Task #124: snapshot lifetime tokens for budget delta.
+      const tokenBaseline = snapshotLifetimeTokens();
+
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
+        // Task #124: token-budget cap check.
+        if (tokenBudgetExceeded(tokenBaseline, cfg.tokenBudget)) {
+          this.earlyStopDetail = `token-budget reached (${cfg.tokenBudget?.toLocaleString()} tokens)`;
+          this.appendSystem(`Token budget of ${cfg.tokenBudget?.toLocaleString()} tokens reached at round ${r - 1}/${cfg.rounds} — ending run early.`);
+          break;
+        }
         this.round = r;
         this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
 
@@ -201,12 +227,40 @@ export class DebateJudgeRunner implements SwarmRunner {
         // CON turn
         await this.runDebaterTurn(con, "con", r, cfg.rounds, prop, isFinalRound);
         if (this.stopping) break;
-        // JUDGE turn (only on the final round)
+        // JUDGE turn (only on the final round, OR mid-loop when we
+        // hit the early-check checkpoint).
         if (isFinalRound) {
-          await this.runJudgeTurn(judge, prop, r);
+          finalVerdict = await this.runJudgeTurn(judge, prop, r);
+        } else if (r === earlyCheckRound) {
+          finalVerdict = await this.runJudgeTurn(judge, prop, r);
+          if (finalVerdict?.confidence === "high") {
+            this.earlyStopDetail =
+              `judge-confidence-high after round ${r}/${cfg.rounds}`;
+            this.appendSystem(
+              `Judge reached confidence:high at round ${r}/${cfg.rounds} — ending debate early.`,
+            );
+            break;
+          }
         }
       }
       if (!this.stopping) this.appendSystem("Debate concluded.");
+
+      // Phase B (Task #102): post-verdict "build" round. Opt-in via
+      // cfg.executeNextAction. Skip on tie or low-confidence verdicts
+      // (don't act on uncertain conclusions). PRO becomes implementer
+      // and gets file-edit tools (agentName "swarm" instead of
+      // "swarm-read") to actually action the verdict's nextAction;
+      // CON reviews; JUDGE signs off.
+      if (
+        !this.stopping &&
+        cfg.executeNextAction &&
+        finalVerdict &&
+        finalVerdict.winner !== "tie" &&
+        finalVerdict.confidence !== "low" &&
+        finalVerdict.nextAction.trim().length > 0
+      ) {
+        await this.runNextActionPhase(pro, con, judge, prop, finalVerdict);
+      }
     } catch (err) {
       crashMessage = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: crashMessage });
@@ -246,6 +300,7 @@ export class DebateJudgeRunner implements SwarmRunner {
       endedAt: Date.now(),
       crashMessage,
       stopping: this.stopping,
+      earlyStopDetail: this.earlyStopDetail,
       filesChanged: gitStatus.changedFiles,
       finalGitStatus: gitStatus.porcelain,
       agents: this.stats.buildPerAgentStats(),
@@ -286,21 +341,99 @@ export class DebateJudgeRunner implements SwarmRunner {
     await this.runAgent(agent, prompt, { role: side, round });
   }
 
+  // Task #102: post-verdict "build" round. Three turns total (one
+  // per agent), only fires when the user opted in via
+  // cfg.executeNextAction AND the verdict is high/medium confidence
+  // with a non-tie winner. PRO uses write-capable tools to action
+  // the verdict's nextAction; CON inspects the changes and flags
+  // issues; JUDGE signs off (or rejects).
+  private async runNextActionPhase(
+    pro: Agent,
+    con: Agent,
+    judge: Agent,
+    proposition: string,
+    verdict: ParsedDebateVerdict,
+  ): Promise<void> {
+    this.appendSystem(
+      `Build phase: PRO will implement the next-action recommendation; CON reviews; JUDGE signs off.`,
+      { kind: "next_action_phase", role: "announcement" },
+    );
+
+    // Implementer (PRO with write tools)
+    if (this.stopping) return;
+    const implPrompt = buildImplementerPrompt(proposition, verdict);
+    await this.runAgent(
+      pro,
+      implPrompt,
+      undefined,
+      () => ({ kind: "next_action_phase", role: "implementer" }),
+      "swarm",
+    );
+
+    // Task #135: scan the implementer's last entry for evidence of
+    // actual edits (CHANGED: lines or src-path:line citations). When
+    // missing, log a structured diagnostic so the next signoff-rejection
+    // failure has data to RCA from. Doesn't retry — the reviewer +
+    // signoff still see the text and can call it out, this is purely
+    // observability for now.
+    const lastImpl = this.transcript[this.transcript.length - 1];
+    if (lastImpl?.role === "agent") {
+      const noopHints = scanImplementerForNoOp(lastImpl.text);
+      if (noopHints.likelyNoOp) {
+        this.opts.logDiag?.({
+          type: "debate_implementer_noop_suspected",
+          agentId: lastImpl.agentId,
+          reasons: noopHints.reasons,
+          textLen: lastImpl.text.length,
+          ts: Date.now(),
+        });
+        this.appendSystem(
+          `Implementer warning: response shows no evidence of edits (${noopHints.reasons.join(", ")}). Reviewer/signoff may reject.`,
+          { kind: "next_action_phase", role: "announcement" },
+        );
+      }
+    }
+
+    // Reviewer (CON, read-only)
+    if (this.stopping) return;
+    const reviewerPrompt = buildReviewerPrompt(proposition, verdict, [...this.transcript]);
+    await this.runAgent(
+      con,
+      reviewerPrompt,
+      undefined,
+      () => ({ kind: "next_action_phase", role: "reviewer" }),
+    );
+
+    // Signoff (JUDGE, read-only)
+    if (this.stopping) return;
+    const signoffPrompt = buildSignoffPrompt(proposition, verdict, [...this.transcript]);
+    await this.runAgent(
+      judge,
+      signoffPrompt,
+      undefined,
+      () => ({ kind: "next_action_phase", role: "signoff" }),
+    );
+  }
+
   private async runJudgeTurn(
     judge: Agent,
     proposition: string,
     round: number,
-  ): Promise<void> {
+  ): Promise<ParsedDebateVerdict | null> {
     const prompt = buildJudgePrompt({ proposition, transcript: [...this.transcript] });
     // Task #81: try to parse the JUDGE response as a structured
     // verdict and upgrade the summary tag. Falls back to plain
     // debate_turn if JSON parse fails — the freeform text still
     // lands in the transcript.
+    // Task #94: capture the parsed verdict so the loop can use
+    // confidence:high as an early-stop signal.
+    let parsed: ParsedDebateVerdict | null = null;
     await this.runAgent(judge, prompt, { role: "judge", round }, (text) => {
-      const verdict = parseDebateVerdict(text);
-      if (!verdict) return undefined;
-      return { kind: "debate_verdict", round, ...verdict };
+      parsed = parseDebateVerdict(text);
+      if (!parsed) return undefined;
+      return { kind: "debate_verdict", round, ...parsed };
     });
+    return parsed;
   }
 
   // Phase 2c: transcript tag so the VerdictPanel can identify each
@@ -308,11 +441,16 @@ export class DebateJudgeRunner implements SwarmRunner {
   // Task #81: enrichSummary lets the caller (e.g. runJudgeTurn)
   // post-process the text and upgrade the basic debate_turn tag to
   // a richer kind like debate_verdict.
+  // Task #102: agentName param defaults to "swarm-read" (preserves
+  // existing discussion-only behavior) — debate/judge turns pass it
+  // through; the post-verdict implementer turn passes "swarm" to get
+  // file-edit tools.
   private async runAgent(
     agent: Agent,
     prompt: string,
     debateTag?: { role: "pro" | "con" | "judge"; round: number },
     enrichSummary?: (text: string) => TranscriptEntrySummary | undefined,
+    agentName: "swarm" | "swarm-read" = "swarm-read",
   ): Promise<void> {
     this.opts.manager.markStatus(agent.id, "thinking");
     this.emitAgentState({
@@ -345,7 +483,8 @@ export class DebateJudgeRunner implements SwarmRunner {
       const res = await promptWithRetry(agent, prompt, {
         signal: controller.signal,
         // Unit 20: read-only tools for discussion presets.
-        agentName: "swarm-read",
+        // Task #102: implementer turn opts into "swarm" (write tools).
+        agentName,
         describeError: describeSdkError,
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(agent.id, success, elapsedMs);
@@ -404,9 +543,15 @@ export class DebateJudgeRunner implements SwarmRunner {
       // Task #54: retry on model silence (see CouncilRunner for detail).
       // Pattern 8: retry on junk-short single-token output too.
       if ((extracted.isEmpty || looksLikeJunk(text)) && !this.stopping) {
-        const retryText = await retryEmptyResponse(agent, prompt, "swarm-read", diagCtx);
+        const retryText = await retryEmptyResponse(agent, prompt, agentName, diagCtx);
         if (retryText !== null) text = retryText;
       }
+      // Task #115: track Pattern 8 stuck-loop, warn on threshold.
+      trackPostRetryJunk(text, {
+        agentId: agent.id,
+        recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
+        appendSystem: (msg) => this.appendSystem(msg),
+      });
       // Task #81: prefer the enriched summary when the caller provides
       // one (JUDGE upgrades to debate_verdict). Fall back to the
       // basic debate_turn tag for PRO/CON.
@@ -568,6 +713,151 @@ export function buildJudgePrompt(args: BuildJudgePromptArgs): string {
     "=== END TRANSCRIPT ===",
     "",
     "Now produce the JSON verdict.",
+  ].join("\n");
+}
+
+// Task #135: heuristic "did the implementer actually do anything?"
+// scanner. Looks for two positive signals:
+//   1. an explicit `CHANGED:` line (the format the prompt requires)
+//   2. at least one src-style path with a line number (e.g. src/foo.ts:42)
+// Absent BOTH, the response is almost certainly narration-only and the
+// signoff will reject it. Pure observability — emits a log + system
+// note so the next failure has the diagnostic upstream of the verdict.
+export function scanImplementerForNoOp(text: string): {
+  likelyNoOp: boolean;
+  reasons: string[];
+} {
+  const reasons: string[] = [];
+  const hasChangedTag = /^\s*CHANGED:\s*/im.test(text);
+  // Match common path:line patterns — e.g. src/foo.ts:42, ./bar/baz.tsx:1
+  // Excludes URL-like matches (http://...) by requiring a slash-separated
+  // path prefix without a colon-after-scheme.
+  const pathLineRegex = /(?:^|\s|`|"|\()(?:\.{1,2}\/)?[a-zA-Z_][\w./-]*\.[a-zA-Z]{1,5}:\d+/m;
+  const hasPathCitation = pathLineRegex.test(text);
+  if (!hasChangedTag) reasons.push("no CHANGED: tag");
+  if (!hasPathCitation) reasons.push("no path:line citation");
+  // Mention of explicit no-op acknowledgement is fine — the prompt
+  // allows `CHANGED: (none — reason: …)` so the reviewer can decide.
+  // Don't flag those as suspicious.
+  const isAcknowledgedNoOp = /CHANGED:\s*\(none\b/i.test(text);
+  if (isAcknowledgedNoOp) {
+    return { likelyNoOp: false, reasons: [] };
+  }
+  return { likelyNoOp: !hasChangedTag && !hasPathCitation, reasons };
+}
+
+// Task #102: post-verdict build phase prompts. Each turn (PRO=
+// implementer, CON=reviewer, JUDGE=signoff) gets a focused prompt
+// that frames its job in terms of the verdict's nextAction. The
+// implementer is the only turn with file-edit tools.
+export function buildImplementerPrompt(
+  proposition: string,
+  verdict: ParsedDebateVerdict,
+): string {
+  return [
+    `You are now the IMPLEMENTER (formerly PRO debater). The debate concluded with the JUDGE recommending a concrete next action — your job is to action it on the codebase.`,
+    `Original proposition: "${proposition}"`,
+    `Verdict winner: ${verdict.winner.toUpperCase()} · confidence: ${verdict.confidence}`,
+    "",
+    `=== NEXT ACTION TO IMPLEMENT ===`,
+    verdict.nextAction,
+    `=== END ===`,
+    "",
+    "You have file-edit tools available (write/edit/create). Use them.",
+    "1. Read the relevant files first — understand the current state before changing.",
+    "2. Make the smallest concrete change that meaningfully advances the next-action recommendation. Do NOT try to do everything; one focused edit is better than a sprawling one.",
+    "3. After editing, write a short report (under ~250 words) describing: which files you changed, what you changed and why, and what you deliberately did NOT change so the reviewer knows your scope.",
+    "",
+    "Cite paths (e.g. `src/foo.ts:42`). Be specific. If the next-action is genuinely impossible to action with file edits (e.g. \"talk to legal\"), say so explicitly and explain why — do NOT pretend to act.",
+    "",
+    // Task #135: signoff has been observed REJECTING implementer turns
+    // that contain only narration ("I will read foo.ts and add bar")
+    // with no actual edits + no concrete file:line citations. Make the
+    // expected report shape explicit so the model has nowhere to hide.
+    "Required report format (omitting any of these will be rejected by the reviewer):",
+    "  CHANGED: <file path>:<line range> — <what you changed>",
+    "  CHANGED: <file path>:<line range> — <what you changed>   (one line per file touched)",
+    "  RATIONALE: <one paragraph why these specific edits action the next-action>",
+    "  OUT OF SCOPE: <what you intentionally did NOT change>",
+    "",
+    "If you did not actually invoke a file-edit tool this turn, say `CHANGED: (none — reason: <one sentence>)` so the reviewer knows. Narration without edits is a rejection.",
+  ].join("\n");
+}
+
+export function buildReviewerPrompt(
+  proposition: string,
+  verdict: ParsedDebateVerdict,
+  transcript: readonly TranscriptEntry[],
+): string {
+  // Only show the implementer's report (the most recent agent entry)
+  // — reviewer doesn't need the full debate history again, just the
+  // implementer's claims to verify.
+  const lastImpl = [...transcript]
+    .reverse()
+    .find(
+      (e) =>
+        e.role === "agent" &&
+        e.summary &&
+        (e.summary as { kind?: string }).kind === "next_action_phase" &&
+        (e.summary as { role?: string }).role === "implementer",
+    );
+  const implReport = lastImpl?.text ?? "(no implementer report found)";
+  return [
+    `You are now the REVIEWER (formerly CON debater). The IMPLEMENTER just made changes to the codebase to action the JUDGE's next-action recommendation.`,
+    `Original proposition: "${proposition}"`,
+    `Verdict next-action: ${verdict.nextAction}`,
+    "",
+    "=== IMPLEMENTER'S REPORT ===",
+    implReport,
+    "=== END REPORT ===",
+    "",
+    "Your job: VERIFY the implementer's claims by independently inspecting the changed files. You have read-only tools (file-read / grep / find).",
+    "1. Read the files the implementer claims to have changed. Confirm the changes are actually there.",
+    "2. Look for issues: did the implementer break anything? Did they overreach (changes outside scope)? Did they leave gaps (changes that don't fully action the next-action)?",
+    "3. Write a short review (under ~250 words). Use the format:",
+    "   - VERIFIED: <what you confirmed is correctly done>",
+    "   - CONCERNS: <issues you found, if any>",
+    "   - GAPS: <what's still missing relative to the next-action>",
+    "",
+    "Be honest — your role is adversarial. If the implementation is bad or off-target, say so concretely.",
+  ].join("\n");
+}
+
+export function buildSignoffPrompt(
+  proposition: string,
+  verdict: ParsedDebateVerdict,
+  transcript: readonly TranscriptEntry[],
+): string {
+  // Show implementer + reviewer entries; judge needs both to sign off.
+  const phaseEntries = transcript.filter(
+    (e) =>
+      e.role === "agent" &&
+      e.summary &&
+      (e.summary as { kind?: string }).kind === "next_action_phase",
+  );
+  const phaseText = phaseEntries
+    .map((e) => {
+      const role = (e.summary as { role?: string }).role ?? "?";
+      return `[${role.toUpperCase()}] ${e.text}`;
+    })
+    .join("\n\n");
+  return [
+    `You are still the JUDGE. The IMPLEMENTER actioned your next-action recommendation; the REVIEWER inspected the changes. Now you sign off.`,
+    `Original proposition: "${proposition}"`,
+    `Verdict next-action: ${verdict.nextAction}`,
+    "",
+    "=== BUILD-PHASE TRANSCRIPT ===",
+    phaseText,
+    "=== END ===",
+    "",
+    "You may use read-only tools to spot-check anything the reviewer flagged.",
+    "Decide ONE outcome:",
+    "  ACCEPTED — the implementation correctly actions the next-action; the run is done.",
+    "  PARTIAL  — meaningful progress made, but real gaps remain that a future iteration should close.",
+    "  REJECTED — implementation is wrong / harmful / off-target; revert.",
+    "",
+    "Write your decision on the FIRST line as one of: ACCEPTED, PARTIAL, REJECTED.",
+    "Then a short paragraph (under ~150 words) justifying the call, citing the implementer's actual changes and the reviewer's concerns.",
   ].join("\n");
 }
 

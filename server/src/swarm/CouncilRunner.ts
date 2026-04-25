@@ -12,7 +12,8 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
-import { extractTextWithDiag, looksLikeJunk } from "./extractText.js";
+import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
+import { snapshotLifetimeTokens, tokenBudgetExceeded } from "../services/ollamaProxy.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
@@ -39,6 +40,9 @@ export class CouncilRunner implements SwarmRunner {
   private stats = new AgentStatsCollector();
   private startedAt?: number;
   private summaryWritten = false;
+  // Phase B (Task #99): set when the midpoint convergence check
+  // returns "high"; promoted to stopReason="early-stop" by writeSummary.
+  private earlyStopDetail?: string;
 
   constructor(private readonly opts: RunnerOpts) {}
 
@@ -87,6 +91,7 @@ export class CouncilRunner implements SwarmRunner {
     this.stats.reset();
     this.startedAt = undefined;
     this.summaryWritten = false;
+    this.earlyStopDetail = undefined;
 
     this.setPhase("cloning");
     const cloneResult = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
@@ -153,8 +158,26 @@ export class CouncilRunner implements SwarmRunner {
   private async loop(cfg: RunConfig): Promise<void> {
     let crashMessage: string | undefined;
     try {
+      // Phase B (Task #99): single midpoint convergence check.
+      // Mirrors #94's debate-judge midpoint pattern — one extra
+      // synthesis call max, not per-round. Skip for tiny runs where
+      // a midpoint check IS the loop end.
+      const earlyCheckRound = cfg.rounds >= 4 ? Math.ceil(cfg.rounds / 2) : 0;
+
+      // Task #124: snapshot lifetime tokens at run start; budget
+      // checks compare delta vs cfg.tokenBudget.
+      const tokenBaseline = snapshotLifetimeTokens();
+
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
+        // Task #124: token-budget check before each round. Halts the
+        // run with stopReason="early-stop" + a clear cap message
+        // when consumption exceeds the user-supplied budget.
+        if (tokenBudgetExceeded(tokenBaseline, cfg.tokenBudget)) {
+          this.earlyStopDetail = `token-budget reached (${cfg.tokenBudget?.toLocaleString()} tokens)`;
+          this.appendSystem(`Token budget of ${cfg.tokenBudget?.toLocaleString()} tokens reached at round ${r - 1}/${cfg.rounds} — ending run early.`);
+          break;
+        }
         this.round = r;
         this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
 
@@ -183,13 +206,37 @@ export class CouncilRunner implements SwarmRunner {
         await staggerStart(agents, (agent) =>
           this.runTurn(agent, r, cfg.rounds, snapshot),
         );
+
+        // Phase B (Task #99): midpoint synthesis check. If the
+        // synthesizer reports CONVERGENCE: high, the council has
+        // settled — running more rounds just restates the same
+        // consensus. The midpoint synthesis is the canonical
+        // synthesis (we don't run it again at end), so skip the
+        // post-loop pass.
+        if (
+          !this.stopping &&
+          r === earlyCheckRound &&
+          r < cfg.rounds
+        ) {
+          const convergence = await this.runSynthesisPass(cfg);
+          if (convergence === "high") {
+            this.earlyStopDetail =
+              `council-converged-high after round ${r}/${cfg.rounds}`;
+            this.appendSystem(
+              `Council reached convergence:high at round ${r}/${cfg.rounds} — ending early.`,
+            );
+            break;
+          }
+        }
       }
       // Task #79 (2026-04-25): final consensus pass. After all rounds,
       // agent-1 takes every drafter's final position and produces a
       // single consolidated answer. Without this, council ends with N
       // parallel drafts and no clear "what did we decide" output —
       // users had to read every draft and synthesize themselves.
-      if (!this.stopping && cfg.rounds > 0) {
+      // Task #99: skip if the midpoint check already broke us out
+      // (in which case we already ran the synthesis above).
+      if (!this.stopping && cfg.rounds > 0 && !this.earlyStopDetail) {
         await this.runSynthesisPass(cfg);
       }
       if (!this.stopping) this.appendSystem("Council complete.");
@@ -234,6 +281,7 @@ export class CouncilRunner implements SwarmRunner {
       endedAt: Date.now(),
       crashMessage,
       stopping: this.stopping,
+      earlyStopDetail: this.earlyStopDetail,
       filesChanged: gitStatus.changedFiles,
       finalGitStatus: gitStatus.porcelain,
       agents: this.stats.buildPerAgentStats(),
@@ -263,10 +311,10 @@ export class CouncilRunner implements SwarmRunner {
   // agent turn for stats purposes — the synthesis IS agent-1's last
   // contribution. Tagged with summary kind "council_synthesis" so
   // the modal can render it distinctively.
-  private async runSynthesisPass(cfg: RunConfig): Promise<void> {
+  private async runSynthesisPass(cfg: RunConfig): Promise<"high" | "medium" | "low" | null> {
     const agents = this.opts.manager.list();
     const lead = agents.find((a) => a.index === 1);
-    if (!lead) return;
+    if (!lead) return null;
     this.opts.manager.markStatus(lead.id, "thinking");
     this.emitAgentState({
       id: lead.id,
@@ -327,6 +375,18 @@ export class CouncilRunner implements SwarmRunner {
         const retryText = await retryEmptyResponse(lead, prompt, "swarm-read", diagCtx);
         if (retryText !== null) text = retryText;
       }
+      // Task #115: track Pattern 8 stuck-loop, warn on threshold.
+      trackPostRetryJunk(text, {
+        agentId: lead.id,
+        recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
+        appendSystem: (msg) => this.appendSystem(msg),
+      });
+      // Task #108: defensive guard — if the post-retry text still
+      // looks like junk, do NOT tag it as the canonical synthesis.
+      // The transcript still keeps the entry (so the run history
+      // shows what happened) but without the synthesis kind, the
+      // UI won't render a single character as the "consensus".
+      const isJunkSynthesis = looksLikeJunk(text) || extracted.isEmpty;
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
@@ -334,16 +394,28 @@ export class CouncilRunner implements SwarmRunner {
         agentIndex: lead.index,
         text,
         ts: Date.now(),
-        summary: { kind: "council_synthesis", rounds: cfg.rounds },
+        summary: isJunkSynthesis
+          ? undefined
+          : { kind: "council_synthesis", rounds: cfg.rounds },
       };
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });
+      if (isJunkSynthesis) {
+        this.appendSystem(
+          `[${lead.id}] synthesis text is degenerate (${text.length} chars) — kept in transcript but NOT tagged as canonical synthesis.`,
+        );
+        return null;
+      }
+      // Phase B (Task #99): parse the convergence signal so the loop
+      // can act on it.
+      return parseCouncilConvergence(text);
     } catch (err) {
       // Synthesis failure is non-fatal — log and continue. The council
       // still produced N final drafts that the user can read.
       this.appendSystem(
         `[${lead.id}] synthesis failed (${err instanceof Error ? err.message : String(err)}); skipping consolidation.`,
       );
+      return null;
     } finally {
       clearInterval(watchdog);
       this.opts.manager.markStatus(lead.id, "ready");
@@ -470,6 +542,12 @@ export class CouncilRunner implements SwarmRunner {
         const retryText = await retryEmptyResponse(agent, prompt, "swarm-read", diagCtx);
         if (retryText !== null) text = retryText;
       }
+      // Task #115: track Pattern 8 stuck-loop, warn on threshold.
+      trackPostRetryJunk(text, {
+        agentId: agent.id,
+        recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
+        appendSystem: (msg) => this.appendSystem(msg),
+      });
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
@@ -540,6 +618,26 @@ export class CouncilRunner implements SwarmRunner {
 // agent) so the lead can see the seed + every draft. Frames the
 // output expectation explicitly: one consolidated answer, what
 // converged, what's still contested, one concrete next action.
+// Phase B (Task #99): scan a synthesis response for the
+// "CONVERGENCE: high|medium|low" line. Looks at the LAST 3 non-blank
+// lines to be tolerant of trailing fences/whitespace, but doesn't
+// scan the whole response — a passing mention of "convergence" mid-
+// prose shouldn't count.
+export function parseCouncilConvergence(
+  text: string,
+): "high" | "medium" | "low" | null {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const tail = lines.slice(-3);
+  for (const line of tail) {
+    const m = /^convergence\s*:\s*(high|medium|low)\b/i.exec(line);
+    if (m) return m[1].toLowerCase() as "high" | "medium" | "low";
+  }
+  return null;
+}
+
 export function buildCouncilSynthesisPrompt(
   totalRounds: number,
   transcript: readonly TranscriptEntry[],
@@ -561,6 +659,16 @@ export function buildCouncilSynthesisPrompt(
     "3. **Next action** — ONE concrete next step the swarm or user should take, given the council's findings. If no action is needed, say so.",
     "",
     "Keep it under ~400 words. Be specific. Cite file paths or peer claims when relevant. Do not just summarize the drafts — synthesize them.",
+    "",
+    // Phase B (Task #99): convergence signal on the FINAL line. Lets
+    // the runner end mid-loop when the council has clearly settled.
+    // Be conservative — only mark "high" when consensus genuinely
+    // dominates and any remaining disagreements are minor. Marking
+    // converged=high prematurely cuts off useful debate.
+    "On the FINAL line of your response (no markdown, nothing after it), output exactly one of:",
+    "  CONVERGENCE: high   — agents largely agree; further rounds would only restate the consensus.",
+    "  CONVERGENCE: medium — partial consensus with real open questions still in play.",
+    "  CONVERGENCE: low    — significant unresolved disagreement; more rounds would help.",
     "",
     "=== FULL COUNCIL TRANSCRIPT ===",
     transcriptText,

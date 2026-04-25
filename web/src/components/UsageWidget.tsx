@@ -1,0 +1,389 @@
+// Task #125: token-usage widget. Polls /api/usage every 10s while
+// open, renders rolling-window totals with per-model + per-preset
+// breakdowns. User can supply their own subscription cap (Ollama
+// doesn't expose quota via API — feature request #15663 still open),
+// stored in localStorage so it survives reloads.
+//
+// Why no defaults for caps: published Ollama Max quota numbers from
+// Reddit/forum posts are unofficial guesstimates, not from Ollama
+// docs. Empty caps = no progress bar; users opt in.
+
+import { useCallback, useEffect, useRef, useState } from "react";
+
+interface UsageBreakdownEntry {
+  promptTokens: number;
+  responseTokens: number;
+  calls: number;
+}
+
+interface UsageWindow {
+  promptTokens: number;
+  responseTokens: number;
+  totalTokens: number;
+  calls: number;
+  windowMs: number;
+  windowLabel: string;
+  byModel: Record<string, UsageBreakdownEntry>;
+  byPreset: Record<string, UsageBreakdownEntry>;
+}
+
+interface UsageRecord {
+  ts: number;
+  promptTokens: number;
+  responseTokens: number;
+  durationMs: number;
+  model?: string;
+  path?: string;
+  preset?: string;
+}
+
+interface UsagePayload {
+  last1h: UsageWindow;
+  last5h: UsageWindow;
+  last24h: UsageWindow;
+  last7d: UsageWindow;
+  lifetime: { promptTokens: number; responseTokens: number; calls: number };
+  recent: UsageRecord[];
+}
+
+const POLL_INTERVAL_MS = 10_000;
+
+// localStorage keys for user-supplied caps. Numbers stored as strings.
+const CAP_KEYS = {
+  "1h": "ollama-swarm:cap:1h",
+  "5h": "ollama-swarm:cap:5h",
+  "24h": "ollama-swarm:cap:24h",
+  "7d": "ollama-swarm:cap:7d",
+} as const;
+
+type WindowKey = keyof typeof CAP_KEYS;
+
+function readCap(key: WindowKey): number | null {
+  try {
+    const raw = localStorage.getItem(CAP_KEYS[key]);
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+function writeCap(key: WindowKey, value: number | null): void {
+  try {
+    if (value === null || value <= 0) {
+      localStorage.removeItem(CAP_KEYS[key]);
+    } else {
+      localStorage.setItem(CAP_KEYS[key], String(value));
+    }
+  } catch {
+    // storage disabled — silent.
+  }
+}
+
+function fmtTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  return `${(n / 1_000_000_000).toFixed(2)}B`;
+}
+
+function pctColor(pct: number): string {
+  if (pct < 50) return "bg-emerald-500";
+  if (pct < 80) return "bg-amber-500";
+  return "bg-rose-500";
+}
+
+export function UsageWidget() {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState<UsagePayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [caps, setCaps] = useState<Record<WindowKey, number | null>>(() => ({
+    "1h": readCap("1h"),
+    "5h": readCap("5h"),
+    "24h": readCap("24h"),
+    "7d": readCap("7d"),
+  }));
+  // Used as a "live snapshot" badge in the header even when closed —
+  // shows the current 1h total so the user has at-a-glance awareness
+  // without opening the panel. Polled once on mount, then while open.
+  const [headerSnap, setHeaderSnap] = useState<number>(0);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchUsage = useCallback(async () => {
+    try {
+      const r = await fetch("/api/usage");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const body = (await r.json()) as UsagePayload;
+      setData(body);
+      setHeaderSnap(body.last1h.totalTokens);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  // One-shot fetch on mount for the header snapshot.
+  useEffect(() => {
+    void fetchUsage();
+  }, [fetchUsage]);
+
+  // Poll while open.
+  useEffect(() => {
+    if (!open) {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+      return;
+    }
+    void fetchUsage();
+    pollTimerRef.current = setInterval(fetchUsage, POLL_INTERVAL_MS);
+    return () => {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    };
+  }, [open, fetchUsage]);
+
+  const setCap = useCallback((key: WindowKey, value: number | null) => {
+    writeCap(key, value);
+    setCaps((c) => ({ ...c, [key]: value }));
+  }, []);
+
+  return (
+    <span className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title="Token usage — click to expand"
+        className="text-ink-400 hover:text-ink-100 hover:bg-ink-800/70 rounded px-2 py-0.5 border border-ink-700 hover:border-ink-600 transition flex items-center gap-1.5"
+      >
+        <span>tokens</span>
+        <span className="font-mono text-[10px] text-ink-500">
+          {fmtTokens(headerSnap)}/1h
+        </span>
+        <span>{open ? "▴" : "▾"}</span>
+      </button>
+      {open ? (
+        <div className="absolute z-20 right-0 mt-1 w-[min(720px,calc(100vw-2rem))] rounded border border-ink-600 bg-ink-900 shadow-xl overflow-hidden">
+          <div className="px-3 py-2 border-b border-ink-700 flex items-center justify-between text-[11px] text-ink-400">
+            <span>
+              Token usage
+              {data ? (
+                <span className="ml-2 text-ink-500">
+                  · {fmtTokens(data.lifetime.promptTokens + data.lifetime.responseTokens)} lifetime
+                </span>
+              ) : null}
+            </span>
+            <button onClick={() => setOpen(false)} className="text-ink-500 hover:text-ink-200">✕</button>
+          </div>
+          <div className="max-h-[70vh] overflow-y-auto p-3 space-y-3">
+            {error ? (
+              <div className="text-rose-300 text-xs">Failed to load: {error}</div>
+            ) : !data ? (
+              <div className="text-ink-400 text-xs">Loading…</div>
+            ) : (
+              <>
+                {/* Rolling-window cards */}
+                <div className="grid grid-cols-2 gap-2">
+                  {(["1h", "5h", "24h", "7d"] as WindowKey[]).map((wk) => (
+                    <WindowCard
+                      key={wk}
+                      label={wk}
+                      window={data[`last${wk}` as "last1h" | "last5h" | "last24h" | "last7d"]}
+                      cap={caps[wk]}
+                      onCapChange={(v) => setCap(wk, v)}
+                    />
+                  ))}
+                </div>
+                {/* Per-model breakdown (last 24h) */}
+                <BreakdownTable
+                  title="By model · last 24h"
+                  rows={data.last24h.byModel}
+                  empty="(no calls in last 24h)"
+                />
+                {/* Per-preset breakdown (last 24h) */}
+                <BreakdownTable
+                  title="By preset · last 24h"
+                  rows={data.last24h.byPreset}
+                  empty="(no calls in last 24h)"
+                />
+                {/* Recent calls */}
+                <RecentTable rows={data.recent.slice(-15).reverse()} />
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </span>
+  );
+}
+
+function WindowCard({
+  label,
+  window: w,
+  cap,
+  onCapChange,
+}: {
+  label: string;
+  window: UsageWindow;
+  cap: number | null;
+  onCapChange: (v: number | null) => void;
+}) {
+  const pct = cap && cap > 0 ? Math.min(100, (w.totalTokens / cap) * 100) : null;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(cap ? String(cap) : "");
+  const commit = () => {
+    const n = Number(draft);
+    onCapChange(Number.isFinite(n) && n > 0 ? Math.floor(n) : null);
+    setEditing(false);
+  };
+  return (
+    <div className="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5">
+      <div className="flex items-baseline justify-between mb-0.5">
+        <div className="text-[10px] uppercase tracking-wider text-ink-500">last {label}</div>
+        <div className="text-[10px] text-ink-500">{w.calls} calls</div>
+      </div>
+      <div className="font-mono text-sm text-ink-100">{fmtTokens(w.totalTokens)}</div>
+      <div className="text-[9px] text-ink-500 font-mono">
+        {fmtTokens(w.promptTokens)} in · {fmtTokens(w.responseTokens)} out
+      </div>
+      {pct !== null ? (
+        <>
+          <div className="mt-1 h-1.5 rounded bg-ink-800 overflow-hidden">
+            <div className={`h-full ${pctColor(pct)} transition-all`} style={{ width: `${pct}%` }} />
+          </div>
+          <div className="mt-0.5 flex items-center justify-between text-[9px] font-mono text-ink-500">
+            <span>{pct.toFixed(1)}% of cap</span>
+            <button
+              onClick={() => { setDraft(cap ? String(cap) : ""); setEditing(true); }}
+              className="hover:text-ink-200 underline"
+            >
+              cap: {fmtTokens(cap!)}
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="mt-1 text-[9px] font-mono text-ink-600">
+          {editing ? (
+            <span className="flex items-center gap-1">
+              <input
+                type="number"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder="tokens"
+                className="bg-ink-800 border border-ink-700 rounded px-1 py-0.5 w-24 text-ink-200"
+                autoFocus
+                onKeyDown={(e) => { if (e.key === "Enter") commit(); if (e.key === "Escape") setEditing(false); }}
+                onBlur={commit}
+              />
+            </span>
+          ) : (
+            <button onClick={() => setEditing(true)} className="hover:text-ink-300 underline">
+              + set cap
+            </button>
+          )}
+        </div>
+      )}
+      {pct !== null && editing ? (
+        <div className="mt-1 flex items-center gap-1">
+          <input
+            type="number"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="tokens"
+            className="bg-ink-800 border border-ink-700 rounded px-1 py-0.5 w-24 text-ink-200 text-[10px] font-mono"
+            autoFocus
+            onKeyDown={(e) => { if (e.key === "Enter") commit(); if (e.key === "Escape") setEditing(false); }}
+            onBlur={commit}
+          />
+          <button onClick={() => onCapChange(null)} className="text-[9px] text-rose-300 underline">clear</button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function BreakdownTable({
+  title,
+  rows,
+  empty,
+}: {
+  title: string;
+  rows: Record<string, UsageBreakdownEntry>;
+  empty: string;
+}) {
+  const entries = Object.entries(rows).sort((a, b) => (b[1].promptTokens + b[1].responseTokens) - (a[1].promptTokens + a[1].responseTokens));
+  const total = entries.reduce((sum, [, e]) => sum + e.promptTokens + e.responseTokens, 0);
+  return (
+    <div className="rounded border border-ink-700 bg-ink-950/30">
+      <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-ink-500 border-b border-ink-700/60">{title}</div>
+      {entries.length === 0 ? (
+        <div className="px-2 py-2 text-[10px] text-ink-500 italic">{empty}</div>
+      ) : (
+        <table className="w-full text-[11px] font-mono">
+          <thead className="text-[9px] uppercase tracking-wider text-ink-500">
+            <tr>
+              <th className="px-2 py-1 text-left">Name</th>
+              <th className="px-2 py-1 text-right">Calls</th>
+              <th className="px-2 py-1 text-right">Tokens</th>
+              <th className="px-2 py-1 text-right">%</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map(([name, e]) => {
+              const t = e.promptTokens + e.responseTokens;
+              const pct = total > 0 ? (t / total) * 100 : 0;
+              return (
+                <tr key={name} className="border-t border-ink-800/60">
+                  <td className="px-2 py-1 text-ink-200 truncate max-w-[260px]" title={name}>{name}</td>
+                  <td className="px-2 py-1 text-right text-ink-300">{e.calls}</td>
+                  <td className="px-2 py-1 text-right text-ink-300">{fmtTokens(t)}</td>
+                  <td className="px-2 py-1 text-right text-ink-400">{pct.toFixed(0)}%</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function RecentTable({ rows }: { rows: UsageRecord[] }) {
+  return (
+    <div className="rounded border border-ink-700 bg-ink-950/30">
+      <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-ink-500 border-b border-ink-700/60">
+        Recent calls (latest 15)
+      </div>
+      {rows.length === 0 ? (
+        <div className="px-2 py-2 text-[10px] text-ink-500 italic">(no calls yet)</div>
+      ) : (
+        <table className="w-full text-[10px] font-mono">
+          <thead className="text-[9px] uppercase tracking-wider text-ink-500">
+            <tr>
+              <th className="px-2 py-1 text-left">When</th>
+              <th className="px-2 py-1 text-left">Model</th>
+              <th className="px-2 py-1 text-left">Preset</th>
+              <th className="px-2 py-1 text-right">In</th>
+              <th className="px-2 py-1 text-right">Out</th>
+              <th className="px-2 py-1 text-right">Dur</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => {
+              const ageS = Math.floor((Date.now() - r.ts) / 1000);
+              const ageStr = ageS < 60 ? `${ageS}s` : ageS < 3600 ? `${Math.floor(ageS / 60)}m` : `${Math.floor(ageS / 3600)}h`;
+              return (
+                <tr key={`${r.ts}-${i}`} className="border-t border-ink-800/60">
+                  <td className="px-2 py-1 text-ink-400">{ageStr} ago</td>
+                  <td className="px-2 py-1 text-ink-300 truncate max-w-[140px]" title={r.model ?? ""}>{r.model ?? "?"}</td>
+                  <td className="px-2 py-1 text-ink-300 truncate max-w-[100px]" title={r.preset ?? ""}>{r.preset ?? "—"}</td>
+                  <td className="px-2 py-1 text-right text-ink-300">{fmtTokens(r.promptTokens)}</td>
+                  <td className="px-2 py-1 text-right text-ink-300">{fmtTokens(r.responseTokens)}</td>
+                  <td className="px-2 py-1 text-right text-ink-400">{r.durationMs}ms</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}

@@ -120,6 +120,24 @@ export type TranscriptEntrySummary =
       kind: "stigmergy_report";
       filesRanked: number;
     }
+  // Task #100 (2026-04-25): role-diff synthesis (closes the missing-
+  // synthesis gap noted in the 5-preset tour). Agent-1 takes every
+  // role's findings and produces a cross-role consolidation. Doubles
+  // as the convergence detector for early-stop.
+  | {
+      kind: "role_diff_synthesis";
+      rounds: number;
+      roles: number;
+    }
+  // Task #102 (2026-04-25): post-verdict build phase for debate-judge.
+  // After a high/medium-confidence non-tie verdict, PRO becomes
+  // implementer (file-edits), CON reviewer, JUDGE signoff. The
+  // announcement entry uses role="announcement" (system); the agent
+  // turns use implementer | reviewer | signoff.
+  | {
+      kind: "next_action_phase";
+      role: "announcement" | "implementer" | "reviewer" | "signoff";
+    }
   // Task #81 (2026-04-25): structured debate verdict. JUDGE produces
   // a JSON envelope; runner parses + tags with this kind so the
   // modal renders a scorecard instead of freeform text.
@@ -193,6 +211,18 @@ export type TranscriptEntrySummary =
       repoUrl: string;
       clonePath: string;
       topLevel: string[];
+    }
+  // Task #129: stretch-goal reflection (post-completion). Planner is
+  // asked one meta-question after a successful run: "what would the
+  // BEST version of this work have done?". The parsed list of
+  // goals (1-5 entries) ships with the entry so the UI can render
+  // them as a discrete card and the next run can pick one as a
+  // userDirective. Blackboard-only.
+  | {
+      kind: "stretch_goals";
+      goals: string[];
+      tier: number;
+      committed: number;
     };
 
 export interface BoardCountsDTO {

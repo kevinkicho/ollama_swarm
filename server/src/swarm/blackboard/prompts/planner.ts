@@ -205,6 +205,15 @@ export interface PlannerSeed {
   // for fresh clones AND for resume runs that have no prior summary on
   // disk (e.g. a clone created outside this app).
   priorRunSummary?: PriorRunSummary;
+  // Task #130: pre-rendered "Prior runs" block from .swarm-memory.jsonl.
+  // Differs from priorRunSummary above: this is a persistent log of
+  // lessons-learned across many runs (not just the immediately
+  // preceding one), and it carries human-readable bullets the planner
+  // produced post-completion — not the raw contract distillation.
+  // Rendered already by memoryStore.renderMemoryForSeed so the planner
+  // prompt builder doesn't have to know about MemoryEntry shape. Empty
+  // string when there are no prior memories; renderer is no-op then.
+  priorMemoryRendered?: string;
 }
 
 // Unit 50: slim, capped distillation of the previous run's summary.json
@@ -239,8 +248,12 @@ export function buildPlannerUserPrompt(seed: PlannerSeed): string {
   const fileList = seed.repoFiles.length > 0
     ? seed.repoFiles.join("\n")
     : "(no files listed — clone may be unreadable; use top-level entries above as a weaker guide)";
+  // Task #130: prepend persistent cross-run memory if present. Renderer
+  // returns "" when there are no prior memories so this is a no-op on
+  // fresh clones / first runs.
+  const memoryBlock = seed.priorMemoryRendered ? `${seed.priorMemoryRendered}\n\n` : "";
   return [
-    `Repository: ${seed.repoUrl}`,
+    memoryBlock + `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
     `Top-level entries: ${tree}`,
     "",

@@ -4,6 +4,7 @@ import {
   buildDebaterPrompt,
   buildJudgePrompt,
   DEFAULT_PROPOSITION,
+  scanImplementerForNoOp,
 } from "./DebateJudgeRunner.js";
 import type { TranscriptEntry } from "../types.js";
 
@@ -139,10 +140,10 @@ describe("buildJudgePrompt", () => {
     assert.match(prompt, /JUDGE/);
   });
 
-  it("demands PRO WINS / CON WINS / TIE verdict with confidence", () => {
+  it("demands JSON verdict with winner + confidence (Task #81 envelope)", () => {
     const prompt = buildJudgePrompt({ proposition: "X", transcript: [] });
-    assert.match(prompt, /PRO WINS, CON WINS, or TIE/);
-    assert.match(prompt, /Confidence: LOW \/ MEDIUM \/ HIGH/);
+    assert.match(prompt, /"winner": "pro" \| "con" \| "tie"/);
+    assert.match(prompt, /"confidence": "low" \| "medium" \| "high"/);
   });
 
   it("instructs scoring on merits of arguments, not prior beliefs", () => {
@@ -160,5 +161,48 @@ describe("buildJudgePrompt", () => {
     const prompt = buildJudgePrompt({ proposition: "X", transcript });
     assert.ok(prompt.includes("[PRO] pro case ABC"));
     assert.ok(prompt.includes("[CON] con case XYZ"));
+  });
+});
+
+// Task #135: implementer no-op detector. Catches the validation-tour
+// failure mode where the implementer talked about edits without making
+// any, and the signoff REJECTED.
+describe("scanImplementerForNoOp (Task #135)", () => {
+  it("flags pure narration with no path citations or CHANGED tags", () => {
+    const text =
+      "I will read the file and add a new function. After that I should test it. " +
+      "I think this is a good approach to take.";
+    const r = scanImplementerForNoOp(text);
+    assert.equal(r.likelyNoOp, true);
+    assert.ok(r.reasons.includes("no CHANGED: tag"));
+    assert.ok(r.reasons.includes("no path:line citation"));
+  });
+
+  it("passes when CHANGED: tag is present even without path:line", () => {
+    const text = "CHANGED: server/src/index.ts:1 — added route\nRATIONALE: ...";
+    const r = scanImplementerForNoOp(text);
+    assert.equal(r.likelyNoOp, false);
+  });
+
+  it("passes when path:line citation is present even without CHANGED tag", () => {
+    const text = "I edited src/foo.ts:42 to add the new branch.";
+    const r = scanImplementerForNoOp(text);
+    assert.equal(r.likelyNoOp, false);
+  });
+
+  it("passes for explicit acknowledged no-op", () => {
+    const text = "CHANGED: (none — reason: next-action requires a meeting, not code)";
+    const r = scanImplementerForNoOp(text);
+    assert.equal(r.likelyNoOp, false);
+  });
+
+  it("does not count URLs as code-path citations", () => {
+    // URL text alone should NOT count as evidence of edits — the regex
+    // requires the path to be in a position adjacent to whitespace /
+    // backtick / quote / paren AND lacks the `://` scheme. So this
+    // text correctly trips the no-op flag.
+    const text = "See https://example.com/docs/foo.html:1 for details. Nothing else.";
+    const r = scanImplementerForNoOp(text);
+    assert.equal(r.likelyNoOp, true);
   });
 });

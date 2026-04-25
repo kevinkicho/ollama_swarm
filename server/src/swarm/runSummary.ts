@@ -43,6 +43,11 @@ export interface DiscussionSummaryInput {
   crashMessage?: string;
   /** True if user pressed Stop. Ignored when `crashMessage` is set. */
   stopping: boolean;
+  /** When the runner detected a natural-stop signal mid-loop (e.g.
+   *  judge confidence:high), pass the human-readable detail here. Sets
+   *  stopReason="early-stop" + stopDetail=<this string>. Ignored if
+   *  crashMessage or stopping take precedence. */
+  earlyStopDetail?: string;
   filesChanged: number;
   finalGitStatus: string;
   agents: PerAgentStat[];
@@ -103,13 +108,16 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
 }
 
 function classifyDiscussionStopReason(
-  input: Pick<DiscussionSummaryInput, "crashMessage" | "stopping">,
+  input: Pick<DiscussionSummaryInput, "crashMessage" | "stopping" | "earlyStopDetail">,
 ): { stopReason: StopReason; stopDetail?: string } {
   if (input.crashMessage) {
     return { stopReason: "crash", stopDetail: input.crashMessage };
   }
   if (input.stopping) {
     return { stopReason: "user" };
+  }
+  if (input.earlyStopDetail) {
+    return { stopReason: "early-stop", stopDetail: input.earlyStopDetail };
   }
   return { stopReason: "completed" };
 }
@@ -288,6 +296,17 @@ function roleForAgent(preset: string, idx: number, totalAgents: number): string 
       return "worker";
     case "orchestrator-worker":
       return idx === 1 ? "orchestrator" : "worker";
+    case "orchestrator-worker-deep": {
+      // Task #131: 3 tiers — orchestrator (idx 1), then K mid-leads,
+      // then workers. K = max(1, ceil((totalAgents-1)/6)) — kept in
+      // sync with computeDeepTopology in OrchestratorWorkerDeepRunner.
+      if (idx === 1) return "orchestrator";
+      const remaining = Math.max(0, totalAgents - 1);
+      const targetK = Math.max(1, Math.ceil(remaining / 6));
+      const maxK = Math.max(1, Math.floor(remaining / 3));
+      const k = Math.min(targetK, maxK);
+      return idx <= 1 + k ? "mid-lead" : "worker";
+    }
     case "map-reduce":
       return idx === 1 ? "reducer" : "mapper";
     case "council":

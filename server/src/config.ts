@@ -31,6 +31,13 @@ const Schema = z.object({
   OPENCODE_SERVER_PASSWORD: z.string().min(1, "OPENCODE_SERVER_PASSWORD is required in .env"),
   OPENCODE_BASE_URL: z.string().url().default("http://127.0.0.1:4096"),
   OLLAMA_BASE_URL: z.string().url().default("http://localhost:11434/v1"),
+  // Task #133: local Ollama proxy port. Server starts a thin HTTP
+  // proxy on this port and rewrites the in-memory OLLAMA_BASE_URL to
+  // point at it; the proxy forwards every request to the real Ollama
+  // and snoops responses for prompt_eval_count + eval_count. Set to 0
+  // to disable the proxy entirely (legacy direct-to-Ollama mode —
+  // token tracking will be empty).
+  OLLAMA_PROXY_PORT: z.coerce.number().int().min(0).max(65_535).default(11533),
   DEFAULT_MODEL: z.string().default("glm-5.1:cloud"),
   OPENCODE_BIN: z.string().default("opencode"),
   GITHUB_TOKEN: z.string().optional(),
@@ -76,10 +83,15 @@ const Schema = z.object({
   // state + verdicts and produces a more ambitious next-tier contract.
   // The run climbs tiers until a hard cap trips (wall-clock / commits /
   // todos), max tiers reached, or tier-up prompts fail repeatedly.
-  // Default OFF so existing runs are byte-identical.
+  // Task #126 (2026-04-25): default flipped from "false" to "true".
+  // The ratchet is what makes blackboard climb to harder problems
+  // after solving the initial contract — without it, blackboard runs
+  // top out at the first contract and don't push toward more
+  // ambitious goals. AMBITION_RATCHET_MAX_TIERS=5 keeps it bounded.
+  // Per-run `ambitionTiers` knob on RunConfig still wins.
   AMBITION_RATCHET_ENABLED: z
     .enum(["true", "false", "1", "0", "yes", "no"])
-    .default("false")
+    .default("true")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
   // Unit 34: maximum number of tiers a single run can climb (belt-and-
   // suspenders guard against an infinite-climb bug). Per-run

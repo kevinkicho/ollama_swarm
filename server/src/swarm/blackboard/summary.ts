@@ -31,7 +31,9 @@ export type StopReason =
   | "crash"
   | "cap:wall-clock"
   | "cap:commits"
-  | "cap:todos";
+  | "cap:todos"
+  | "cap:tokens"
+  | "early-stop";
 
 export interface PerAgentStat {
   agentId: string;
@@ -312,5 +314,6 @@ function parseCapType(reason: string): StopReason {
   if (reason.startsWith("wall-clock cap")) return "cap:wall-clock";
   if (reason.startsWith("commits cap")) return "cap:commits";
   if (reason.startsWith("todos cap")) return "cap:todos";
+  if (reason.startsWith("token-budget")) return "cap:tokens";
   return "cap:wall-clock";
 }

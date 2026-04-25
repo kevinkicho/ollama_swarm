@@ -12,7 +12,8 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
-import { extractTextWithDiag, looksLikeJunk } from "./extractText.js";
+import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
+import { snapshotLifetimeTokens, tokenBudgetExceeded } from "../services/ollamaProxy.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
@@ -45,6 +46,11 @@ export class MapReduceRunner implements SwarmRunner {
   // Phase 2d: mapper slice assignments, keyed by agentId. Empty map
   // pre-run or if slicing hasn't happened yet.
   private mapperSlices: Record<string, string[]> = {};
+  // Phase B (Task #97): set of mapper agent IDs that have flagged
+  // their slice complete. When this matches the live mapper set, the
+  // run can stop early — no point reducing the same content again.
+  private mappersComplete = new Set<string>();
+  private earlyStopDetail?: string;
 
   constructor(private readonly opts: RunnerOpts) {}
 
@@ -95,6 +101,8 @@ export class MapReduceRunner implements SwarmRunner {
     this.stats.reset();
     this.startedAt = undefined;
     this.summaryWritten = false;
+    this.mappersComplete = new Set();
+    this.earlyStopDetail = undefined;
 
     this.setPhase("cloning");
     const cloneResult = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
@@ -185,8 +193,17 @@ export class MapReduceRunner implements SwarmRunner {
       this.mapperSlices = slicesById;
       this.opts.emit({ type: "mapper_slices", slices: slicesById });
 
+      // Task #124: snapshot lifetime tokens for budget delta.
+      const tokenBaseline = snapshotLifetimeTokens();
+
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
+        // Task #124: token-budget cap check.
+        if (tokenBudgetExceeded(tokenBaseline, cfg.tokenBudget)) {
+          this.earlyStopDetail = `token-budget reached (${cfg.tokenBudget?.toLocaleString()} tokens)`;
+          this.appendSystem(`Token budget of ${cfg.tokenBudget?.toLocaleString()} tokens reached at cycle ${r - 1}/${cfg.rounds} — ending run early.`);
+          break;
+        }
         this.round = r;
         this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
 
@@ -212,10 +229,29 @@ export class MapReduceRunner implements SwarmRunner {
         });
         if (this.stopping) break;
 
+        // Phase B (Task #97): if every mapper signalled COMPLETE in
+        // this cycle's MAP phase, there's nothing new to reduce next
+        // cycle. Force the upcoming reducer pass to be tagged as the
+        // synthesis (since it's now the final reducer output) and
+        // break after.
+        const allComplete =
+          mappers.length > 0 &&
+          mappers.every((m) => this.mappersComplete.has(m.id));
+        const isEarlyStop = allComplete && r < cfg.rounds;
+
         // REDUCE — reducer sees full transcript (including all mapper
         // reports from this cycle) and produces a synthesis.
         this.appendSystem(`Cycle ${r}/${cfg.rounds}: REDUCE phase — reducer synthesizing.`);
-        await this.runReducerTurn(reducer, r, cfg.rounds);
+        await this.runReducerTurn(reducer, r, cfg.rounds, isEarlyStop || undefined);
+
+        if (isEarlyStop) {
+          this.earlyStopDetail =
+            `all-mappers-complete after cycle ${r}/${cfg.rounds}`;
+          this.appendSystem(
+            `All ${mappers.length} mappers reported COMPLETE — ending map-reduce early at cycle ${r}/${cfg.rounds}.`,
+          );
+          break;
+        }
       }
       if (!this.stopping) this.appendSystem("Map-reduce run complete.");
     } catch (err) {
@@ -258,6 +294,7 @@ export class MapReduceRunner implements SwarmRunner {
       endedAt: Date.now(),
       crashMessage,
       stopping: this.stopping,
+      earlyStopDetail: this.earlyStopDetail,
       filesChanged: gitStatus.changedFiles,
       finalGitStatus: gitStatus.porcelain,
       agents: this.stats.buildPerAgentStats(),
@@ -286,16 +323,49 @@ export class MapReduceRunner implements SwarmRunner {
     seedSnapshot: readonly TranscriptEntry[],
   ): Promise<void> {
     const prompt = buildMapperPrompt(agent.index, round, totalRounds, slice, seedSnapshot);
-    await this.runAgent(agent, prompt);
+    // Phase B (Task #97): scan the mapper's last few lines for a
+    // COMPLETE: true|false declaration. Tracking is sticky — once a
+    // mapper says complete, it stays complete; later cycles can't
+    // un-set it (they wouldn't be running if the loop broke).
+    await this.runAgent(agent, prompt, (text) => {
+      if (parseMapperComplete(text)) {
+        this.mappersComplete.add(agent.id);
+      }
+      return undefined;
+    });
   }
 
-  private async runReducerTurn(agent: Agent, round: number, totalRounds: number): Promise<void> {
+  private async runReducerTurn(
+    agent: Agent,
+    round: number,
+    totalRounds: number,
+    isFinalOverride?: boolean,
+  ): Promise<void> {
     const prompt = buildReducerPrompt(round, totalRounds, [...this.transcript]);
     // Task #82: tag the FINAL cycle's reducer output as the run's
     // synthesis so the modal renders distinctively. Earlier cycles
     // are intermediate reductions; only the last one is the "answer".
-    const isFinal = round === totalRounds;
-    await this.runAgent(agent, prompt, isFinal ? () => ({ kind: "mapreduce_synthesis", cycle: round }) : undefined);
+    // Task #97: allow explicit override so the early-stop reducer
+    // pass also gets the synthesis tag (its output IS the answer).
+    const isFinal = isFinalOverride ?? round === totalRounds;
+    // Task #108: defensive guard — if the reducer's text looks like
+    // junk, do NOT apply the synthesis tag (the run history modal
+    // would otherwise render `:` or similar as the canonical answer).
+    await this.runAgent(
+      agent,
+      prompt,
+      isFinal
+        ? (text) => {
+            if (looksLikeJunk(text)) {
+              this.appendSystem(
+                `[${agent.id}] map-reduce synthesis text is degenerate (${text.length} chars) — kept in transcript but NOT tagged as canonical synthesis.`,
+              );
+              return undefined;
+            }
+            return { kind: "mapreduce_synthesis", cycle: round };
+          }
+        : undefined,
+    );
   }
 
   private async runAgent(
@@ -396,6 +466,12 @@ export class MapReduceRunner implements SwarmRunner {
         const retryText = await retryEmptyResponse(agent, prompt, "swarm-read", diagCtx);
         if (retryText !== null) text = retryText;
       }
+      // Task #115: track Pattern 8 stuck-loop, warn on threshold.
+      trackPostRetryJunk(text, {
+        agentId: agent.id,
+        recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
+        appendSystem: (msg) => this.appendSystem(msg),
+      });
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
@@ -458,7 +534,45 @@ export class MapReduceRunner implements SwarmRunner {
 // Skip repo entries that don't contribute to understanding: VCS metadata,
 // node_modules, build output. The mapper listing already truncated by
 // RepoService.listTopLevel; this is a further filter on the labeled slice.
-const SKIP_ENTRIES = new Set([".git/", ".git", "node_modules/", "node_modules", ".DS_Store"]);
+//
+// Task #106 (2026-04-25): expanded with trivial config files that
+// caused "tiny single-file slice" collapse in run 2bcf662f — when a
+// mapper's slice was just `.editorconfig`, the model latched onto its
+// numeric values and emitted just "0.5", "11.4", etc. These configs
+// rarely contain anything a swarm needs to reason about; skipping them
+// keeps slices semantically meaningful even at small mapper counts.
+const SKIP_ENTRIES = new Set([
+  ".git/", ".git", "node_modules/", "node_modules", ".DS_Store",
+  // Task #106 (2026-04-25):
+  ".editorconfig",
+  ".gitignore",
+  ".gitattributes",
+  ".npmrc",
+  ".nvmrc",
+  ".prettierrc", ".prettierrc.json", ".prettierrc.js",
+  ".eslintrc", ".eslintrc.json", ".eslintrc.js",
+  ".env.example",
+  "LICENSE", "LICENSE.md", "LICENSE.txt",
+]);
+
+// Phase B (Task #97): scan a mapper's response for the
+// "COMPLETE: true|false" declaration. Looks at the LAST 3 non-blank
+// lines, then within each line searches for the COMPLETE: pattern
+// anywhere (not just line-start) — observed in v1 validation that
+// the model sometimes prefixes with "Final line:" (literal echo of
+// the instruction), so an anchored regex would miss it.
+export function parseMapperComplete(text: string): boolean {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const tail = lines.slice(-3);
+  for (const line of tail) {
+    const m = /\bcomplete\s*:\s*(true|false)\b/i.exec(line);
+    if (m) return m[1].toLowerCase() === "true";
+  }
+  return false;
+}
 
 // Round-robin partition of `entries` into `k` slices. Exported so tests
 // can lock down the distribution (every entry appears in exactly one
@@ -494,6 +608,15 @@ export function buildMapperPrompt(
     "- Cite file paths (e.g. `src/foo.ts:42`) for any claim you make.",
     "",
     "Do NOT speculate about entries outside your slice.",
+    "",
+    // Phase B (Task #97): convergence signal. Mapper declares when
+    // its slice is fully understood and further cycles would only
+    // re-read the same files. When EVERY mapper reports COMPLETE,
+    // the run can end early. Be honest — declaring complete on a
+    // partially-understood slice wastes the reducer's time.
+    "On the FINAL line of your response (no markdown, nothing after it), output exactly one of:",
+    "  COMPLETE: true   — your slice is fully understood; you have nothing meaningful left to add even with more cycles.",
+    "  COMPLETE: false  — there is more to investigate (gaps, ambiguity, unread files in your slice, etc).",
     "",
     "=== SEED ===",
     seedText || "(empty seed)",

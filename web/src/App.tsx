@@ -3,6 +3,7 @@ import { useSwarm } from "./state/store";
 import { useSwarmSocket } from "./hooks/useSwarmSocket";
 import { SetupForm } from "./components/SetupForm";
 import { RunHistoryDropdown, SwarmView } from "./components/SwarmView";
+import { UsageWidget } from "./components/UsageWidget";
 import type { RunSummary } from "./types";
 
 // Task #65 (2026-04-24): URL-based review mode. When the user opens a
@@ -50,6 +51,11 @@ export default function App() {
         <div className="flex items-center gap-3">
           <RuntimeTicker />
           <PhasePill />
+          {/* Task #125: token-usage widget. Shows rolling 1h/5h/24h/7d
+              consumption pulled from the Ollama proxy (#133). User
+              supplies their own caps — Ollama doesn't expose
+              subscription quotas via API. */}
+          <UsageWidget />
           {/* Task #85: history dropdown lives in the App header so it's
               accessible even before any run starts (SetupForm flash
               page). The /api/swarm/runs route falls back to

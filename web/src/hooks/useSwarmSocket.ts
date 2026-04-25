@@ -14,7 +14,31 @@ let backoffMs = 500;
 // wasteful and noisy in the network tab.)
 let catchUpFetched = false;
 
+// Task #120: hard-refresh transcript hydration race. Before this fix,
+// `hydrateFromSnapshot()` was kicked off (async fetch) immediately
+// followed by `connect()` (sync WS open). The WS could begin emitting
+// `transcript_append` events for entries N+1, N+2 BEFORE the fetch
+// resolved with entries 1..N. Those new events went into the empty
+// transcript first, then the snapshot loop appended 1..N behind them
+// (dedup'd correctly but in WRONG ORDER). Result: user saw newer
+// entries above older ones, sometimes appearing as "missing
+// transcript history."
+//
+// Fix: buffer WS events while hydration is in progress, drain in
+// arrival order once hydration completes. Setting `isHydrating=false`
+// is the gate; `pendingEvents` is the queue.
+let isHydrating = true;
+const pendingEvents: SwarmEvent[] = [];
+
 function dispatch(ev: SwarmEvent): void {
+  if (isHydrating) {
+    pendingEvents.push(ev);
+    return;
+  }
+  applyEvent(ev);
+}
+
+function applyEvent(ev: SwarmEvent): void {
   const s = useSwarm.getState();
   switch (ev.type) {
     case "transcript_append":
@@ -214,6 +238,18 @@ async function hydrateFromSnapshot(): Promise<void> {
     // Catch-up is best-effort. WS events still fill in the store as
     // the run progresses — a failed snapshot just means the
     // immediately-post-refresh UI is sparser until the next event.
+  } finally {
+    // Task #120: open the gate AFTER snapshot is loaded, then drain
+    // any WS events that arrived during the fetch. They're applied
+    // in their original arrival order — appendEntry's id-based dedup
+    // ensures snapshot entries that overlap with buffered events
+    // don't double-insert. Run in finally so a snapshot fetch error
+    // still releases the queue (sparser UI is better than wedged UI).
+    isHydrating = false;
+    while (pendingEvents.length > 0) {
+      const next = pendingEvents.shift();
+      if (next) applyEvent(next);
+    }
   }
 }
 

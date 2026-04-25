@@ -16,6 +16,7 @@ import { AgentPidTracker } from "./services/agentPids.js";
 import { reclaimOrphans } from "./services/reclaimOrphans.js";
 import { RepoService } from "./services/RepoService.js";
 import { Orchestrator } from "./services/Orchestrator.js";
+import { startOllamaProxy, tokenTracker } from "./services/ollamaProxy.js";
 import { Broadcaster } from "./ws/broadcast.js";
 import { createEventLogger } from "./ws/eventLogger.js";
 import { swarmRouter } from "./routes/swarm.js";
@@ -79,6 +80,21 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
+// Task #133: token-usage endpoint backed by the Ollama proxy. Returns
+// per-window aggregates derived from prompt_eval_count + eval_count
+// captured on every Ollama response. Empty when proxy is disabled
+// (OLLAMA_PROXY_PORT=0).
+app.get("/api/usage", (_req, res) => {
+  res.json({
+    last1h: tokenTracker.totalsInWindow(60 * 60_000, "1h"),
+    last5h: tokenTracker.totalsInWindow(5 * 60 * 60_000, "5h"),
+    last24h: tokenTracker.totalsInWindow(24 * 60 * 60_000, "24h"),
+    last7d: tokenTracker.totalsInWindow(7 * 24 * 60 * 60_000, "7d"),
+    lifetime: tokenTracker.total(),
+    recent: tokenTracker.recent(50),
+  });
+});
+
 app.use("/api/swarm", swarmRouter(orchestrator));
 app.use("/api/dev", devRouter({ broadcaster, repos }));
 
@@ -108,6 +124,32 @@ process.on("uncaughtException", (err) => {
   console.error("[server] uncaughtException:", err.stack ?? err.message);
   broadcaster.broadcast({ type: "error", message: `uncaughtException: ${err.message}` });
 });
+
+// Task #133: start the Ollama proxy BEFORE listen so the rewritten
+// OLLAMA_BASE_URL is in place before any agent spawns. The proxy
+// listens on OLLAMA_PROXY_PORT and forwards to the original Ollama
+// URL. We then mutate config.OLLAMA_BASE_URL in-memory so every
+// downstream consumer (RepoService.writeOpencodeConfig, /api/health
+// readout) sees the proxied URL. Set OLLAMA_PROXY_PORT=0 to disable.
+if (config.OLLAMA_PROXY_PORT > 0) {
+  const upstreamUrl = config.OLLAMA_BASE_URL;
+  // Strip /v1 suffix if present — proxy needs the host:port root so it
+  // can forward both /api/* and /v1/* paths verbatim.
+  const upstreamRoot = upstreamUrl.replace(/\/v1\/?$/, "");
+  const proxyHost = `http://127.0.0.1:${config.OLLAMA_PROXY_PORT}`;
+  const proxyUrlWithSuffix = upstreamUrl.endsWith("/v1") || upstreamUrl.endsWith("/v1/")
+    ? `${proxyHost}/v1`
+    : proxyHost;
+  startOllamaProxy({
+    listenPort: config.OLLAMA_PROXY_PORT,
+    upstreamUrl: upstreamRoot,
+  });
+  // Rewrite in-memory config so downstream consumers see the proxy URL.
+  // Keeping the same /v1 suffix policy as the original config so clients
+  // built against it (OpenAI-compat) still hit the right path.
+  (config as { OLLAMA_BASE_URL: string }).OLLAMA_BASE_URL = proxyUrlWithSuffix;
+  console.log(`  ollama proxy: ${proxyHost} → ${upstreamRoot} (token capture enabled)`);
+}
 
 // Unit 38: reclaim orphaned opencode subprocesses from prior server
 // instances BEFORE we start accepting swarm-start requests. This

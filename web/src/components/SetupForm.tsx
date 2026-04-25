@@ -89,7 +89,11 @@ const PRESETS: readonly SwarmPreset[] = [
     id: "map-reduce",
     label: "Map-reduce over repo",
     summary: "Mappers inspect a round-robin slice of top-level entries in isolation; reducer synthesizes.",
-    min: 3,
+    // Task #109: floored at 4 (1 reducer + 3 mappers). Smaller setups
+    // leave one mapper with a trivially-small slice and the model
+    // collapses on it (run 2bcf662f). The route-layer Zod schema also
+    // enforces this, so the form's min keeps both UIs aligned.
+    min: 4,
     max: 8,
     recommended: 5,
     // Single-model preset today — pick reducer's tier so synthesis
@@ -119,6 +123,19 @@ const PRESETS: readonly SwarmPreset[] = [
     recommended: 4,
     // Single-model preset today — pick orchestrator's tier. Same
     // Unit 65 candidate as map-reduce.
+    recommendedModel: MODEL_REASONING,
+    status: "active",
+  },
+  {
+    id: "orchestrator-worker-deep",
+    label: "Orchestrator–worker hierarchy (3-tier)",
+    summary: "3-tier OW for high agent counts. Agent 1 = orchestrator; ~K mid-leads; remaining are workers (~5 per mid-lead). Per cycle: top-plan → mid-plan → workers → mid-synth → top-synth.",
+    // Floor at 4 (1 orchestrator + 1 mid-lead + 2 workers). Cap at 30
+    // because past that the orchestrator's mid-lead pool exceeds 8 again
+    // and the design rationale (no tier sees > ~8 reports) breaks.
+    min: 4,
+    max: 30,
+    recommended: 8,
     recommendedModel: MODEL_REASONING,
     status: "active",
   },
@@ -228,6 +245,12 @@ function estimateWallClockSeconds(
     case "map-reduce":
       // Lead runs twice per round (plan + synth); workers in parallel.
       return Math.round(2 * t * r * SAFETY);
+    case "orchestrator-worker-deep":
+      // Per cycle: top-plan + mid-plan (parallel) + workers (parallel) +
+      // mid-synth (parallel) + top-synth = 5 sequential turns of leads
+      // across the critical path (workers happen inside the mid-lead's
+      // turn so don't add extra walls). 5*t*r is the rough bound.
+      return Math.round(5 * t * r * SAFETY);
     case "stigmergy":
       return Math.round(t * r * SAFETY);
     default:

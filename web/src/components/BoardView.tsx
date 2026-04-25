@@ -303,7 +303,10 @@ function stopReasonAccent(reason: RunSummary["stopReason"]): { badge: string; bo
     case "cap:wall-clock":
     case "cap:commits":
     case "cap:todos":
+    case "cap:tokens":
       return { badge: "bg-amber-900/60 text-amber-200", border: "border-l-4 border-l-amber-500" };
+    case "early-stop":
+      return { badge: "bg-sky-900/60 text-sky-200", border: "border-l-4 border-l-sky-500" };
   }
 }
 

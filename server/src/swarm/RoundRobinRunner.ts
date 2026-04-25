@@ -13,7 +13,8 @@ import { roleForAgent, type SwarmRole } from "./roles.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
-import { extractTextWithDiag, looksLikeJunk } from "./extractText.js";
+import { extractResponseBreakdown, extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
+import { snapshotLifetimeTokens, tokenBudgetExceeded } from "../services/ollamaProxy.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 
@@ -42,6 +43,10 @@ export class RoundRobinRunner implements SwarmRunner {
   private stats = new AgentStatsCollector();
   private startedAt?: number;
   private summaryWritten = false;
+  // Phase B (Task #100): set when the role-diff midpoint synthesis
+  // returns CONVERGENCE: high. Promoted to stopReason="early-stop"
+  // by writeSummary. Plain round-robin (no roles) never sets this.
+  private earlyStopDetail?: string;
 
   constructor(private readonly opts: RunnerOpts, options?: RoundRobinOptions) {
     this.roles = options?.roles && options.roles.length > 0 ? options.roles : undefined;
@@ -91,6 +96,7 @@ export class RoundRobinRunner implements SwarmRunner {
     this.active = cfg;
     this.stats.reset();
     this.startedAt = undefined;
+    this.earlyStopDetail = undefined;
     this.summaryWritten = false;
 
     this.setPhase("cloning");
@@ -156,8 +162,24 @@ export class RoundRobinRunner implements SwarmRunner {
   private async loop(cfg: RunConfig): Promise<void> {
     let crashMessage: string | undefined;
     try {
+      // Phase B (Task #100): role-diff midpoint convergence check.
+      // Only fires when the runner is in role-diff mode (this.roles
+      // defined). Same midpoint pattern as council #99 — one extra
+      // agent-1 call max, not per-round.
+      const earlyCheckRound =
+        this.roles && cfg.rounds >= 4 ? Math.ceil(cfg.rounds / 2) : 0;
+
+      // Task #124: snapshot lifetime tokens at run start for budget delta.
+      const tokenBaseline = snapshotLifetimeTokens();
+
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
+        // Task #124: token-budget cap check before each round.
+        if (tokenBudgetExceeded(tokenBaseline, cfg.tokenBudget)) {
+          this.earlyStopDetail = `token-budget reached (${cfg.tokenBudget?.toLocaleString()} tokens)`;
+          this.appendSystem(`Token budget of ${cfg.tokenBudget?.toLocaleString()} tokens reached at round ${r - 1}/${cfg.rounds} — ending run early.`);
+          break;
+        }
         this.round = r;
         this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
 
@@ -166,7 +188,36 @@ export class RoundRobinRunner implements SwarmRunner {
           if (this.stopping) break;
           await this.runTurn(agent, r, cfg.rounds);
         }
+
+        // Phase B (Task #100): midpoint synthesis check for role-diff.
+        // If convergence:high, the synthesis IS the canonical output
+        // (we skip the post-loop pass, same as #99 council).
+        if (
+          this.roles &&
+          !this.stopping &&
+          r === earlyCheckRound &&
+          r < cfg.rounds
+        ) {
+          const convergence = await this.runRoleDiffSynthesisPass(cfg);
+          if (convergence === "high") {
+            this.earlyStopDetail =
+              `role-diff-converged-high after round ${r}/${cfg.rounds}`;
+            this.appendSystem(
+              `Role-diff reached convergence:high at round ${r}/${cfg.rounds} — ending early.`,
+            );
+            break;
+          }
+        }
       }
+
+      // Phase B (Task #100): final synthesis pass (role-diff only).
+      // Closes the gap noted in the tour summary — role-diff was the
+      // only read-only preset without a synthesis tag. Skip if the
+      // midpoint already broke us out (we already wrote one).
+      if (this.roles && !this.stopping && cfg.rounds > 0 && !this.earlyStopDetail) {
+        await this.runRoleDiffSynthesisPass(cfg);
+      }
+
       if (!this.stopping) this.appendSystem("Discussion complete.");
     } catch (err) {
       crashMessage = err instanceof Error ? err.message : String(err);
@@ -216,6 +267,7 @@ export class RoundRobinRunner implements SwarmRunner {
       endedAt: Date.now(),
       crashMessage,
       stopping: this.stopping,
+      earlyStopDetail: this.earlyStopDetail,
       filesChanged: gitStatus.changedFiles,
       finalGitStatus: gitStatus.porcelain,
       agents: this.stats.buildPerAgentStats(),
@@ -285,6 +337,9 @@ export class RoundRobinRunner implements SwarmRunner {
             attempt,
             elapsedMs,
             success,
+            // Task #104: prompt-size to correlate with elapsedMs.
+            promptChars: prompt.length,
+            round,
           });
           // Improvement #4: per-agent first-prompt cold-start logging.
           this.opts.manager.recordPromptComplete(agent.id, { attempt, elapsedMs, success });
@@ -331,12 +386,31 @@ export class RoundRobinRunner implements SwarmRunner {
       };
       const extracted = extractTextWithDiag(res, diagCtx);
       let text = extracted.text;
+      // Task #117: response-side breakdown for latency RCA. Logged
+      // per-turn so analysis can correlate (agentIndex, round) with
+      // the same-key _prompt_timing record. Captures FIRST attempt's
+      // breakdown — retries are visible separately via the timing log.
+      const breakdown = extractResponseBreakdown(res);
+      this.opts.logDiag?.({
+        type: "_response_breakdown",
+        preset: this.active?.preset,
+        agentId: agent.id,
+        agentIndex: agent.index,
+        round,
+        ...breakdown,
+      });
       // Task #54: retry on model silence (see CouncilRunner for detail).
       // Pattern 8: retry on junk-short single-token output too.
       if ((extracted.isEmpty || looksLikeJunk(text)) && !this.stopping) {
         const retryText = await retryEmptyResponse(agent, prompt, "swarm-read", diagCtx);
         if (retryText !== null) text = retryText;
       }
+      // Task #115: track Pattern 8 stuck-loop, warn on threshold.
+      trackPostRetryJunk(text, {
+        agentId: agent.id,
+        recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
+        appendSystem: (msg) => this.appendSystem(msg),
+      });
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
@@ -358,6 +432,126 @@ export class RoundRobinRunner implements SwarmRunner {
       this.emitAgentState({ id: agent.id, index: agent.index, port: agent.port, sessionId: agent.sessionId, status: "failed", error: msg });
     } finally {
       clearInterval(watchdog);
+    }
+  }
+
+  // Phase B (Task #100): role-diff synthesis pass. Mirrors the
+  // council #79 pattern — agent-1 takes every role's findings and
+  // produces a cross-role consolidation. Same prompt also asks for
+  // a CONVERGENCE: high|medium|low signal (parsed for the early-stop
+  // detector). Tagged "role_diff_synthesis" so the modal can render
+  // it distinctively.
+  private async runRoleDiffSynthesisPass(
+    cfg: RunConfig,
+  ): Promise<"high" | "medium" | "low" | null> {
+    if (!this.roles) return null;
+    const agents = this.opts.manager.list();
+    const lead = agents.find((a) => a.index === 1);
+    if (!lead) return null;
+    this.opts.manager.markStatus(lead.id, "thinking");
+    this.emitAgentState({
+      id: lead.id,
+      index: lead.index,
+      port: lead.port,
+      sessionId: lead.sessionId,
+      status: "thinking",
+      thinkingSince: Date.now(),
+    });
+    this.stats.countTurn(lead.id);
+    this.appendSystem(`Synthesizing role-diff findings (agent-${lead.index})…`);
+
+    const prompt = buildRoleDiffSynthesisPrompt(this.roles, this.transcript);
+    const ABSOLUTE_MAX_MS = 4 * 60_000;
+    const turnStart = Date.now();
+    this.opts.manager.touchActivity(lead.sessionId, turnStart);
+    const controller = new AbortController();
+    const watchdog = setInterval(() => {
+      if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
+        controller.abort(new Error(`absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s)`));
+        void lead.client.session.abort({ path: { id: lead.sessionId } }).catch(() => {});
+      }
+    }, 10_000);
+    try {
+      const res = await promptWithRetry(lead, prompt, {
+        signal: controller.signal,
+        agentName: "swarm-read",
+        describeError: (e) => this.describeSdkError(e),
+        onTiming: ({ attempt, elapsedMs, success }) => {
+          this.stats.onTiming(lead.id, success, elapsedMs);
+          this.opts.manager.recordPromptComplete(lead.id, { attempt, elapsedMs, success });
+          this.opts.emit({
+            type: "agent_latency_sample",
+            agentId: lead.id,
+            agentIndex: lead.index,
+            attempt,
+            elapsedMs,
+            success,
+            ts: Date.now(),
+          });
+        },
+        onRetry: ({ attempt, max, reasonShort, delayMs }) => {
+          this.stats.onRetry(lead.id);
+          this.appendSystem(
+            `[${lead.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
+          );
+        },
+      });
+      const diagCtx = {
+        runner: "role-diff",
+        agentId: lead.id,
+        agentIndex: lead.index,
+        logDiag: this.opts.logDiag,
+      };
+      const extracted = extractTextWithDiag(res, diagCtx);
+      let text = extracted.text;
+      if ((extracted.isEmpty || looksLikeJunk(text)) && !this.stopping) {
+        const retryText = await retryEmptyResponse(lead, prompt, "swarm-read", diagCtx);
+        if (retryText !== null) text = retryText;
+      }
+      // Task #115: track Pattern 8 stuck-loop, warn on threshold.
+      trackPostRetryJunk(text, {
+        agentId: lead.id,
+        recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
+        appendSystem: (msg) => this.appendSystem(msg),
+      });
+      // Task #108: defensive guard — see CouncilRunner.runSynthesisPass.
+      const isJunkSynthesis = looksLikeJunk(text) || extracted.isEmpty;
+      const entry: TranscriptEntry = {
+        id: randomUUID(),
+        role: "agent",
+        agentId: lead.id,
+        agentIndex: lead.index,
+        text,
+        ts: Date.now(),
+        summary: isJunkSynthesis
+          ? undefined
+          : { kind: "role_diff_synthesis", rounds: cfg.rounds, roles: this.roles.length },
+      };
+      this.transcript.push(entry);
+      this.opts.emit({ type: "transcript_append", entry });
+      if (isJunkSynthesis) {
+        this.appendSystem(
+          `[${lead.id}] role-diff synthesis text is degenerate (${text.length} chars) — kept in transcript but NOT tagged as canonical synthesis.`,
+        );
+        return null;
+      }
+      return parseRoleDiffConvergence(text);
+    } catch (err) {
+      this.appendSystem(
+        `[${lead.id}] role-diff synthesis failed (${err instanceof Error ? err.message : String(err)}); skipping consolidation.`,
+      );
+      return null;
+    } finally {
+      clearInterval(watchdog);
+      this.opts.manager.markStatus(lead.id, "ready");
+      this.emitAgentState({
+        id: lead.id,
+        index: lead.index,
+        port: lead.port,
+        sessionId: lead.sessionId,
+        status: "ready",
+        lastMessageAt: Date.now(),
+      });
     }
   }
 
@@ -384,7 +578,19 @@ export class RoundRobinRunner implements SwarmRunner {
       `This is discussion round ${round} of ${totalRounds}.`,
       ...roleGuidance,
       "Your working directory IS the project clone — use file-read, grep, and find-files tools to inspect it.",
-      "Round 1: skim README.md and the top-level tree before opining. Later rounds: only re-read files when a peer's claim needs checking.",
+      // Task #118: hard tool-use requirement. Run daf5c92e showed
+      // role-diff agents NEVER invoked file-read tools (0 tool calls
+      // across 8 turns) — they were guessing from filenames in the
+      // seed snapshot. Without file grounding, role-diff degenerates
+      // to filename-trivia. The "REQUIRED" framing mirrors the OW
+      // lead-grounding rule (#83) that fixed the same problem there.
+      "REQUIRED — BEFORE writing your prose response:",
+      "  1. Use the `read` tool on AT LEAST ONE file from the repo. Pick a file relevant to your role (e.g. Architect → README.md or main entry point; Tester → a test file; Security → auth/config; Performance → hot-path code).",
+      "  2. If a peer in the transcript cited a specific file path you haven't seen, read THAT file before agreeing or pushing back.",
+      "  3. If your prior turn made a claim about file contents, re-verify with a tool call before defending or revising the claim.",
+      "Failing to make at least one tool call means your turn is uninformed and will be flagged as such by reviewers.",
+      "",
+      "Round 1: skim README.md and the top-level tree before opining. Later rounds: read the specific files needed to verify peer claims.",
       "Keep responses under ~250 words. Be specific. Cite file paths (e.g. `src/foo.ts:42`) when you reference code.",
       "You may @mention another agent (e.g. @Agent2) to address them directly.",
       "",
@@ -398,8 +604,8 @@ export class RoundRobinRunner implements SwarmRunner {
       "=== END TRANSCRIPT ===",
       "",
       role
-        ? `Now respond as Agent ${agent.index} (${role.name}), through the lens of your role.`
-        : `Now respond as Agent ${agent.index}.`,
+        ? `Now respond as Agent ${agent.index} (${role.name}), through the lens of your role. Tool-call first, then prose.`
+        : `Now respond as Agent ${agent.index}. Tool-call first, then prose.`,
     ].join("\n");
   }
 
@@ -454,4 +660,71 @@ export class RoundRobinRunner implements SwarmRunner {
     return String(err);
   }
 
+}
+
+// Phase B (Task #100): role-diff synthesis prompt. Same shape as
+// the council synthesis (#79) — labeled cross-role table, not a
+// re-summary of each agent's draft. The CONVERGENCE: line at the
+// end is the early-stop signal (same parser pattern as council #99).
+export function buildRoleDiffSynthesisPrompt(
+  roles: readonly SwarmRole[],
+  transcript: readonly TranscriptEntry[],
+): string {
+  const transcriptText = transcript
+    .map((e) => {
+      if (e.role === "system") return `[SYSTEM] ${e.text}`;
+      if (e.role === "user") return `[HUMAN] ${e.text}`;
+      const role =
+        e.agentIndex !== undefined ? roleForAgent(e.agentIndex, roles) : null;
+      const label = role
+        ? `Agent ${e.agentIndex} (${role.name})`
+        : `Agent ${e.agentIndex}`;
+      return `[${label}] ${e.text}`;
+    })
+    .join("\n\n");
+  const roleNames = roles.map((r) => r.name).join(", ");
+
+  return [
+    `You are Agent 1, the role-diff synthesis lead. The swarm just finished N rounds of discussion with agents wearing different roles: ${roleNames}.`,
+    "Your job NOW is to produce a SINGLE consolidated cross-role view that integrates every role's findings.",
+    "",
+    "STRUCTURE your response as:",
+    "1. **Cross-role agreement** — what every role independently flagged. State as direct claims, cite which role surfaced each (e.g. \"Architect + Tester both noted the absence of integration tests in src/api/\").",
+    "2. **Role-specific findings** — one short bullet per role naming its single most important standalone observation that the others didn't make.",
+    "3. **Disagreements / tensions** — places where role perspectives pull in different directions (e.g. Performance wants caching; Security flags it as a stale-data risk).",
+    "4. **Next action** — ONE concrete next step grounded in the cross-role view.",
+    "",
+    "Keep it under ~400 words. Cite file paths from the discussion. Do NOT just restate each role's draft — synthesize across them.",
+    "",
+    // Phase B (Task #100): convergence signal — same line shape as
+    // CouncilRunner so any UI/parser pattern transfers.
+    "On the FINAL line of your response (no markdown, nothing after it), output exactly one of:",
+    "  CONVERGENCE: high   — roles largely agree; further rounds would only restate the cross-role view.",
+    "  CONVERGENCE: medium — partial cross-role agreement with real open tensions still in play.",
+    "  CONVERGENCE: low    — roles still pulling in different directions; more rounds would help.",
+    "",
+    "=== FULL ROLE-DIFF TRANSCRIPT ===",
+    transcriptText,
+    "=== END TRANSCRIPT ===",
+    "",
+    "Produce your synthesis now.",
+  ].join("\n");
+}
+
+// Phase B (Task #100): scan a synthesis response for the
+// "CONVERGENCE: high|medium|low" line. Mirrors parseCouncilConvergence
+// in CouncilRunner.ts.
+export function parseRoleDiffConvergence(
+  text: string,
+): "high" | "medium" | "low" | null {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const tail = lines.slice(-3);
+  for (const line of tail) {
+    const m = /^convergence\s*:\s*(high|medium|low)\b/i.exec(line);
+    if (m) return m[1].toLowerCase() as "high" | "medium" | "low";
+  }
+  return null;
 }
