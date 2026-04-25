@@ -826,21 +826,34 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
                       <th className="px-2 py-1 text-right">Mean</th>
                       <th className="px-2 py-1 text-right">p50</th>
                       <th className="px-2 py-1 text-right">p95</th>
+                      <th className="px-2 py-1 text-right" title="Commits this agent landed (blackboard-only)">Commits</th>
+                      <th className="px-2 py-1 text-right text-emerald-400/70" title="Lines added by this agent (blackboard-only)">+Lines</th>
+                      <th className="px-2 py-1 text-right text-rose-400/70" title="Lines removed by this agent (blackboard-only)">−Lines</th>
+                      <th className="px-2 py-1 text-right" title="Total lines touched (added + removed)">Total</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {summary.agents.map((a) => (
-                      <tr key={a.agentId} className="border-t border-ink-700/60">
-                        <td className="px-2 py-1 text-ink-300">{a.agentIndex}</td>
-                        <td className="px-2 py-1 text-ink-200">{roleForRow(summary.preset, a.agentIndex, summary.agents.length)}</td>
-                        <td className="px-2 py-1 text-right text-ink-200">{a.turnsTaken}</td>
-                        <td className="px-2 py-1 text-right text-ink-300">{a.totalAttempts ?? "—"}</td>
-                        <td className="px-2 py-1 text-right text-ink-300">{a.totalRetries ?? "—"}</td>
-                        <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.meanLatencyMs)}</td>
-                        <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.p50LatencyMs)}</td>
-                        <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.p95LatencyMs)}</td>
-                      </tr>
-                    ))}
+                    {summary.agents.map((a) => {
+                      const linesTotal = a.linesAdded !== undefined && a.linesRemoved !== undefined
+                        ? a.linesAdded + a.linesRemoved
+                        : undefined;
+                      return (
+                        <tr key={a.agentId} className="border-t border-ink-700/60">
+                          <td className="px-2 py-1 text-ink-300">{a.agentIndex}</td>
+                          <td className="px-2 py-1 text-ink-200">{roleForRow(summary.preset, a.agentIndex, summary.agents.length)}</td>
+                          <td className="px-2 py-1 text-right text-ink-200">{a.turnsTaken}</td>
+                          <td className="px-2 py-1 text-right text-ink-300">{a.totalAttempts ?? "—"}</td>
+                          <td className="px-2 py-1 text-right text-ink-300">{a.totalRetries ?? "—"}</td>
+                          <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.meanLatencyMs)}</td>
+                          <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.p50LatencyMs)}</td>
+                          <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.p95LatencyMs)}</td>
+                          <td className="px-2 py-1 text-right text-ink-200">{a.commits ?? "—"}</td>
+                          <td className="px-2 py-1 text-right text-emerald-300">{a.linesAdded ?? "—"}</td>
+                          <td className="px-2 py-1 text-right text-rose-300">{a.linesRemoved ?? "—"}</td>
+                          <td className="px-2 py-1 text-right text-ink-200">{linesTotal ?? "—"}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

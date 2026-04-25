@@ -54,6 +54,15 @@ export interface PerAgentStat {
   meanLatencyMs?: number | null;
   p50LatencyMs?: number | null;
   p95LatencyMs?: number | null;
+  // Task #66 (2026-04-24): per-agent commit + line counts. Blackboard-only
+  // — discussion presets don't write code so these stay 0/undefined.
+  // commits = how many todos this agent committed; linesAdded / linesRemoved
+  // = sum across the agent's committed hunks (replace counts both, create
+  // and append count added only). Optional for back-compat with summaries
+  // written before this lands.
+  commits?: number;
+  linesAdded?: number;
+  linesRemoved?: number;
 }
 
 export interface RunSummary {

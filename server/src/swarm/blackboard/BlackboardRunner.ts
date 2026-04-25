@@ -204,6 +204,13 @@ export class BlackboardRunner implements SwarmRunner {
   private attemptsPerAgent = new Map<string, number>();
   private retriesPerAgent = new Map<string, number>();
   private latenciesPerAgent = new Map<string, number[]>();
+  // Task #66: per-agent commit + line attribution. Incremented at
+  // commit-success below applyHunks; the modal renders these as
+  // columns in the per-agent table so users can see who actually
+  // produced code vs who just spent turns thinking.
+  private commitsPerAgent = new Map<string, number>();
+  private linesAddedPerAgent = new Map<string, number>();
+  private linesRemovedPerAgent = new Map<string, number>();
   // Stashed at spawn time so writeRunSummary can still produce per-agent
   // stats even after AgentManager.killAll() has cleared its own roster
   // (stop() path runs killAll concurrently with the summary write).
@@ -369,6 +376,9 @@ export class BlackboardRunner implements SwarmRunner {
     this.staleEventCount = 0;
     this.turnsPerAgent.clear();
     this.attemptsPerAgent.clear();
+    this.commitsPerAgent.clear();
+    this.linesAddedPerAgent.clear();
+    this.linesRemovedPerAgent.clear();
     this.retriesPerAgent.clear();
     this.latenciesPerAgent.clear();
     this.agentRoster = [];
@@ -2443,6 +2453,27 @@ export class BlackboardRunner implements SwarmRunner {
     this.appendSystem(
       `[${agent.id}] committed ${parsed.hunks.length} hunk(s): ${summary}`,
     );
+    // Task #66: attribute this commit + line counts to the agent so the
+    // history modal's per-agent table can show who produced code.
+    this.commitsPerAgent.set(agent.id, (this.commitsPerAgent.get(agent.id) ?? 0) + 1);
+    let added = 0;
+    let removed = 0;
+    for (const h of parsed.hunks) {
+      if (h.op === "replace") {
+        added += countNewlines(h.replace);
+        removed += countNewlines(h.search);
+      } else if (h.op === "create" || h.op === "append") {
+        added += countNewlines(h.content);
+      }
+    }
+    this.linesAddedPerAgent.set(
+      agent.id,
+      (this.linesAddedPerAgent.get(agent.id) ?? 0) + added,
+    );
+    this.linesRemovedPerAgent.set(
+      agent.id,
+      (this.linesRemovedPerAgent.get(agent.id) ?? 0) + removed,
+    );
     return "committed";
   }
 
@@ -2852,6 +2883,12 @@ export class BlackboardRunner implements SwarmRunner {
         meanLatencyMs: stats.mean,
         p50LatencyMs: stats.p50,
         p95LatencyMs: stats.p95,
+        // Task #66: blackboard-only signals; default 0 since the runner
+        // attributes commits to the agent that landed each diff. Stays
+        // 0 for the planner / auditor when they don't produce diffs.
+        commits: this.commitsPerAgent.get(a.id) ?? 0,
+        linesAdded: this.linesAddedPerAgent.get(a.id) ?? 0,
+        linesRemoved: this.linesRemovedPerAgent.get(a.id) ?? 0,
       };
     });
   }
@@ -3344,4 +3381,15 @@ export class BlackboardRunner implements SwarmRunner {
 
 function truncate(s: string, max = 80): string {
   return s.length <= max ? s : s.slice(0, max - 1) + "…";
+}
+
+// Task #66: count line-equivalents in a hunk's text. Empty string → 0.
+// Trailing-newline-tolerant: "a\nb" and "a\nb\n" both count as 2 lines.
+// Used for per-agent linesAdded / linesRemoved attribution.
+function countNewlines(s: string): number {
+  if (!s) return 0;
+  // Strip a single trailing \n so "a\n" doesn't count as 2 lines.
+  const trimmed = s.endsWith("\n") ? s.slice(0, -1) : s;
+  if (trimmed.length === 0) return 0;
+  return trimmed.split("\n").length;
 }

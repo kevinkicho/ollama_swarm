@@ -173,6 +173,12 @@ export interface PerAgentStat {
   meanLatencyMs?: number | null;
   p50LatencyMs?: number | null;
   p95LatencyMs?: number | null;
+  // Task #66 (2026-04-24): per-agent commit + line counts. Blackboard-only;
+  // discussion presets stay 0/undefined since they don't write code.
+  // Modal renders these as columns; "—" when undefined.
+  commits?: number;
+  linesAdded?: number;
+  linesRemoved?: number;
 }
 
 export interface RunSummary {
