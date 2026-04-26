@@ -3356,14 +3356,22 @@ export class BlackboardRunner implements SwarmRunner {
     // with the default `swarm` (no tools) — see runWorker.
     const fallbacks = this.opts.manager.list().filter((a) => a.id !== primaryAgent.id);
     const tried: Agent[] = [primaryAgent, ...fallbacks];
+    // Task #195: when routing to a fallback agent, override its model with
+    // the primary planner's model. The session is just transport; the model
+    // produces the answer. Without this, gemma4 (worker model) gets handed
+    // the planner's JSON contract prompt and hallucinates markdown for
+    // ~14 minutes (debate-tcg run e3738692, 2026-04-26).
+    const plannerModel = primaryAgent.model;
     let lastErr: unknown;
     for (let i = 0; i < tried.length; i++) {
       const agent = tried[i];
+      const modelOverride = i === 0 ? undefined : plannerModel;
       try {
-        const response = await this.promptAgent(agent, promptText, agentName);
+        const response = await this.promptAgent(agent, promptText, agentName, modelOverride);
         if (i > 0) {
           this.appendSystem(
-            `Planner call routed to ${agent.id} after ${primaryAgent.id} exhausted retries. ` +
+            `Planner call routed to ${agent.id} (using planner model ${plannerModel}) ` +
+              `after ${primaryAgent.id} exhausted retries. ` +
               `Run continues; ${primaryAgent.id} keeps planner identity for future calls.`,
           );
         }
@@ -3388,6 +3396,7 @@ export class BlackboardRunner implements SwarmRunner {
     agent: Agent,
     prompt: string,
     agentName: "swarm" | "swarm-read" = "swarm",
+    modelOverride?: string,
   ): Promise<string> {
     // Unit 37: agentName defaults to "swarm" (no tools — preserved worker
     // behavior). Planner / auditor / replanner / tier-up / council-drafts
@@ -3461,6 +3470,11 @@ export class BlackboardRunner implements SwarmRunner {
         // replaces the blocking 5-min headersTimeout that was wedging
         // on heavy planner / audit prompts.
         manager: this.opts.manager,
+        // Task #195: planner-fallback uses fallback agent's session as
+        // transport but should run the planner's model — without this
+        // the worker's model gets a planner JSON prompt and produces
+        // wrong-format hallucinated markdown for the entire turn cap.
+        modelOverride,
         onTokens: ({ promptTokens, responseTokens }) => {
           if (promptTokens > 0) this.promptTokensPerAgent.set(agent.id, (this.promptTokensPerAgent.get(agent.id) ?? 0) + promptTokens);
           if (responseTokens > 0) this.responseTokensPerAgent.set(agent.id, (this.responseTokensPerAgent.get(agent.id) ?? 0) + responseTokens);
