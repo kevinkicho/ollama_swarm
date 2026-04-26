@@ -3397,6 +3397,12 @@ export class BlackboardRunner implements SwarmRunner {
     prompt: string,
     agentName: "swarm" | "swarm-read" = "swarm",
     modelOverride?: string,
+    // Task #196: default to "json" since virtually every blackboard
+    // prompt (planner contract, worker hunks, auditor verdict, replanner)
+    // expects JSON output. Pass "free" if a future prompt legitimately
+    // produces prose. Sniff only fires after 2048 chars accumulated, so
+    // short answers pass through naturally.
+    formatExpect: "json" | "free" = "json",
   ): Promise<string> {
     // Unit 37: agentName defaults to "swarm" (no tools — preserved worker
     // behavior). Planner / auditor / replanner / tier-up / council-drafts
@@ -3437,13 +3443,28 @@ export class BlackboardRunner implements SwarmRunner {
 
     const watchdog = setInterval(() => {
       if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
+        // Task #191: consult the SSE per-chunk timer before guillotining.
+        // The 90s STREAM_PER_CHUNK_TIMEOUT_MS is the SSE-aware liveness
+        // signal — if it hasn't fired, chunks are arriving and the model
+        // is actively producing tokens. The 1200s wall-clock cap predates
+        // reliable SSE (#170); now that streaming works, the inner timer
+        // is the better signal. Only fire the cap when SSE has ALSO been
+        // silent for ≥60s — the call is genuinely stuck.
+        const lastChunkAt = this.opts.manager.getLastChunkAt(agent.id);
+        if (abortFiredAt === 0 && lastChunkAt && Date.now() - lastChunkAt < 60_000) {
+          // Healthy SSE; let it keep running. Watchdog re-checks in 10s.
+          return;
+        }
         if (abortFiredAt === 0) {
           abortFiredAt = Date.now();
-          abortedReason = `absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s)`;
+          const sseQuiet = lastChunkAt
+            ? `SSE silent ${Math.round((Date.now() - lastChunkAt) / 1000)}s`
+            : "no SSE chunks received";
+          abortedReason = `absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s, ${sseQuiet})`;
           controller.abort(new Error(abortedReason));
           void agent.client.session.abort({ path: { id: agent.sessionId } }).catch(() => {});
           this.appendSystem(
-            `[${agent.id}] absolute turn cap (${ABSOLUTE_MAX_MS / 1000}s) hit — abort signaled. SDK may take longer to actually return.`,
+            `[${agent.id}] absolute turn cap (${ABSOLUTE_MAX_MS / 1000}s) hit — ${sseQuiet}. Abort signaled.`,
           );
         } else if (Date.now() - lastVisibilityWarn > 60_000) {
           // Periodic reminder while the SDK refuses to return — gives
@@ -3475,6 +3496,10 @@ export class BlackboardRunner implements SwarmRunner {
         // the worker's model gets a planner JSON prompt and produces
         // wrong-format hallucinated markdown for the entire turn cap.
         modelOverride,
+        // Task #196: defense-in-depth even with #195 — early-format
+        // sniff aborts wrong-format responses in ~10s instead of waiting
+        // for the absolute turn cap to fire at 1200s.
+        formatExpect,
         onTokens: ({ promptTokens, responseTokens }) => {
           if (promptTokens > 0) this.promptTokensPerAgent.set(agent.id, (this.promptTokensPerAgent.get(agent.id) ?? 0) + promptTokens);
           if (responseTokens > 0) this.responseTokensPerAgent.set(agent.id, (this.responseTokensPerAgent.get(agent.id) ?? 0) + responseTokens);

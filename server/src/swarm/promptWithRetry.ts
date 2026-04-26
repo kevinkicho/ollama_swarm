@@ -80,6 +80,12 @@ export interface PromptWithRetryOptions {
   // Without this, gemma4 (worker model) gets handed a planner JSON
   // prompt and hallucinates markdown for ~14 minutes.
   modelOverride?: string;
+  // Task #196: format expectation. When "json", AgentManager runs an
+  // early-format sniff after EARLY_FORMAT_SNIFF_BYTES of streamed text.
+  // If the head contains no JSON markers, abort early. Catches the
+  // wrong-format hallucination class within ~10s instead of running to
+  // the absolute turn cap (1200s).
+  formatExpect?: "json" | "free";
 }
 
 export interface RetryInfo {
@@ -138,6 +144,7 @@ export async function promptWithRetry(
           promptText,
           signal: opts.signal,
           perChunkTimeoutMs: STREAM_PER_CHUNK_TIMEOUT_MS,
+          formatExpect: opts.formatExpect,
         });
         res = { data: { parts: [{ type: "text", text }] } };
       } else {

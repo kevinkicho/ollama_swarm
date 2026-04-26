@@ -57,6 +57,11 @@ interface MessageStreamState {
    *  catch handler that SSE is dead and the "lastChunkAt < 10s heuristic"
    *  is unreliable — propagate the HTTP error instead of swallowing. */
   sseStreamDied?: boolean;
+  /** Task #196: format expectation forwarded from streamPrompt opts so
+   *  the SSE-text handler can run an early format-sniff. */
+  formatExpect?: "json" | "free";
+  /** Task #196: idempotency flag — sniff fires at-most-once per call. */
+  formatChecked?: boolean;
 }
 
 export interface StreamPromptOpts {
@@ -67,7 +72,18 @@ export interface StreamPromptOpts {
   /** Reject the stream if no text chunks arrive for this many ms.
    *  Per-chunk liveness signal — replaces undici's headersTimeout. */
   perChunkTimeoutMs: number;
+  /** Task #196: when set to "json", abort early if the first
+   *  EARLY_FORMAT_SNIFF_BYTES of streamed text contain neither `{`
+   *  nor `[` nor a fenced ```json marker. Catches model-mismatch
+   *  hallucinations (e.g. worker model handed a planner JSON prompt
+   *  rambling markdown for ~14 minutes) within ~10s of streaming. */
+  formatExpect?: "json" | "free";
 }
+
+// Task #196: stream-text threshold for the format sniff. Wide enough
+// to skip past common preambles like "Here is the JSON:" yet narrow
+// enough to abort wrong-format responses fast.
+const EARLY_FORMAT_SNIFF_BYTES = 2048;
 
 export interface SpawnOpts {
   cwd: string;
@@ -188,13 +204,29 @@ export class AgentManager {
         resolve,
         reject,
         perChunkTimeoutMs: opts.perChunkTimeoutMs,
+        formatExpect: opts.formatExpect,
       };
       const armChunkTimeout = () => {
         if (state.timeoutHandle) clearTimeout(state.timeoutHandle);
         state.timeoutHandle = setTimeout(() => {
-          this.streamingByAgent.delete(agent.id);
-          state.signalCleanup?.();
-          reject(new Error(`per-chunk timeout: no SSE chunks for ${opts.perChunkTimeoutMs}ms`));
+          // Task #192: silence ≠ death. Before rejecting, probe the
+          // session via REST. If the latest assistant message has
+          // grown since our last SSE chunk, the SSE channel is broken
+          // but the model is still producing — reset the timer and
+          // backfill any missed text. Only reject if the probe also
+          // shows no growth (genuinely stuck).
+          this.probeAndDecide(agent, state, armChunkTimeout, reject).catch((probeErr) => {
+            // Probe itself failed — fall back to the original behavior
+            // (reject as if no SSE chunks). Logged for diagnosis.
+            const cur = this.streamingByAgent.get(agent.id);
+            if (cur !== state) return; // already settled
+            this.streamingByAgent.delete(agent.id);
+            state.signalCleanup?.();
+            reject(new Error(
+              `per-chunk timeout: no SSE chunks for ${opts.perChunkTimeoutMs}ms ` +
+              `(probe also failed: ${probeErr instanceof Error ? probeErr.message : String(probeErr)})`,
+            ));
+          });
         }, opts.perChunkTimeoutMs);
       };
       const onAbort = () => {
@@ -283,6 +315,93 @@ export class AgentManager {
       // armChunkTimeout above kicks in immediately — gives us a "request
       // never produced any chunk" signal even before any SSE event.
     });
+  }
+
+  // Task #192: when the per-chunk SSE timer fires, probe the session
+  // via REST before declaring death. If the latest assistant message
+  // has grown beyond what we've seen via SSE, the SSE delivery channel
+  // is broken — backfill the missed text, reset the per-chunk timer,
+  // and keep waiting. Only reject if the model is genuinely silent.
+  //
+  // This decouples "SSE channel health" from "model health" — they're
+  // two independent failure modes that previously both presented as
+  // "no chunks in 90s = abort".
+  private async probeAndDecide(
+    agent: Agent,
+    state: MessageStreamState,
+    armChunkTimeout: () => void,
+    reject: (err: Error) => void,
+  ): Promise<void> {
+    // Re-check we're still the in-flight stream — caller may have
+    // settled us between timer fire and this microtask.
+    if (this.streamingByAgent.get(agent.id) !== state) return;
+
+    let probeText: string | null = null;
+    try {
+      const res = await agent.client.session.messages({ path: { id: agent.sessionId } });
+      probeText = extractLatestAssistantText(res);
+    } catch (err) {
+      // REST probe failed — fall back to "treat as dead". Caller's
+      // .catch handles the reject path.
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+
+    // Re-check after the await — anything could have changed.
+    if (this.streamingByAgent.get(agent.id) !== state) return;
+
+    if (probeText !== null && probeText.length > state.text.length) {
+      // Model is alive; SSE channel is broken. Backfill the chars we
+      // missed, reset the per-chunk timer, and keep waiting. Surface
+      // to the diag log so we know SSE is unhealthy on this agent.
+      const gained = probeText.length - state.text.length;
+      state.text = probeText;
+      state.lastChunkAt = Date.now();
+      this.logDiag({
+        type: "_sse_probe_recovery",
+        agentId: agent.id,
+        ourSessionId: agent.sessionId,
+        backfilledChars: gained,
+        totalChars: probeText.length,
+      });
+      armChunkTimeout();
+      return;
+    }
+
+    // Probe agrees with SSE: model is silent. Reject as before.
+    this.streamingByAgent.delete(agent.id);
+    state.signalCleanup?.();
+    reject(new Error(`per-chunk timeout: no SSE chunks for ${state.perChunkTimeoutMs}ms (probe confirmed silence)`));
+  }
+
+  // Task #191: lastChunkAt accessor so BlackboardRunner's ABSOLUTE_MAX_MS
+  // watchdog can consult SSE liveness before firing. The existing per-
+  // chunk timeout (90s) is the inner liveness check; the outer 1200s
+  // wall-clock cap should yield to it when SSE is healthy.
+  getLastChunkAt(agentId: string): number | undefined {
+    return this.streamingByAgent.get(agentId)?.lastChunkAt;
+  }
+
+  // Task #194: after the SSE stream auto-reconnects, fetch the current
+  // session state via REST and backfill any text we missed during the
+  // gap. Without this, late chunks that arrived between disconnect and
+  // reconnect are lost forever (SSE has no replay).
+  private async reconcileAfterReconnect(agent: Agent): Promise<void> {
+    const stream = this.streamingByAgent.get(agent.id);
+    if (!stream) return; // no in-flight prompt to reconcile
+    const res = await agent.client.session.messages({ path: { id: agent.sessionId } });
+    const probeText = extractLatestAssistantText(res);
+    if (probeText !== null && probeText.length > stream.text.length) {
+      const gained = probeText.length - stream.text.length;
+      stream.text = probeText;
+      stream.lastChunkAt = Date.now();
+      this.logDiag({
+        type: "_sse_reconnect_backfill",
+        agentId: agent.id,
+        ourSessionId: agent.sessionId,
+        backfilledChars: gained,
+        totalChars: probeText.length,
+      });
+    }
   }
 
   toStates(): AgentState[] {
@@ -758,57 +877,82 @@ export class AgentManager {
     this.eventAborts.set(agent.id, abort);
     this.rawSseCount.set(agent.id, 0);
 
+    // Task #194: SSE auto-reconnect with state reconciliation. The
+    // original "subscribe once" pattern made any network blip permanent
+    // — agent went SSE-blind for the rest of the run. Now we wrap the
+    // subscribe in a backoff loop and on reconnect call session.messages
+    // to backfill any chars we missed during the gap. Stops when abort
+    // signal fires (run end / agent kill).
     void (async () => {
-      let ended = false;
-      try {
-        this.logDiag({ type: "_sse_subscribed", agentId: agent.id, sessionId: agent.sessionId });
-        // Task #170 (Path B): the SDK's SSE client (createSseClient in
-        // gen/core/serverSentEvents.gen.js) uses GLOBAL fetch — it
-        // bypasses the authedFetch interceptor we set up at client
-        // creation. Without auth, /event returns 401 → SDK retries
-        // silently forever → ZERO events delivered. Verified by 0
-        // _raw_sse log entries across all logs prior to this fix.
-        // Pass the Authorization header explicitly here so the
-        // bare-fetch path inside the SDK has it.
-        const sub = await agent.client.event.subscribe({
-          signal: abort.signal,
-          headers: { Authorization: basicAuthHeader() },
-        });
-        const stream = (sub as { stream: AsyncIterable<unknown> }).stream;
-        for await (const ev of stream) {
-          if (abort.signal.aborted) break;
-          this.logRawSse(agent, ev);
-          this.handleSessionEvent(agent, ev);
-        }
-        ended = true;
-      } catch (err) {
-        if (!abort.signal.aborted) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.error(`[${agent.id}] event stream ended:`, msg);
-          // Surface to the event log so Claude can distinguish "stream died" from
-          // "model was just slow" when diagnosing idle-watchdog trips.
-          this.onEvent({
-            type: "error",
-            message: `SSE stream for ${agent.id} ended unexpectedly: ${msg}`,
+      const RECONNECT_BACKOFFS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
+      let attempt = 0;
+      while (!abort.signal.aborted) {
+        const isReconnect = attempt > 0;
+        let ended = false;
+        try {
+          this.logDiag({
+            type: isReconnect ? "_sse_reconnecting" : "_sse_subscribed",
+            agentId: agent.id,
+            sessionId: agent.sessionId,
+            attempt,
           });
+          // Task #170 (Path B): the SDK's SSE client (createSseClient in
+          // gen/core/serverSentEvents.gen.js) uses GLOBAL fetch — it
+          // bypasses the authedFetch interceptor we set up at client
+          // creation. Without auth, /event returns 401 → SDK retries
+          // silently forever → ZERO events delivered. Verified by 0
+          // _raw_sse log entries across all logs prior to this fix.
+          // Pass the Authorization header explicitly here so the
+          // bare-fetch path inside the SDK has it.
+          const sub = await agent.client.event.subscribe({
+            signal: abort.signal,
+            headers: { Authorization: basicAuthHeader() },
+          });
+          // Task #194: on reconnect, backfill any text we missed while
+          // the SSE channel was down. Same probe path as #192, run once
+          // before resuming the for-await so the streamingByAgent state
+          // is current before live events resume.
+          if (isReconnect) {
+            await this.reconcileAfterReconnect(agent).catch((err) => {
+              this.logDiag({
+                type: "_sse_reconcile_failed",
+                agentId: agent.id,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
+          }
+          const stream = (sub as { stream: AsyncIterable<unknown> }).stream;
+          for await (const ev of stream) {
+            if (abort.signal.aborted) break;
+            this.logRawSse(agent, ev);
+            this.handleSessionEvent(agent, ev);
+          }
+          ended = true;
+          // Reset attempt counter on a clean for-await exit (server
+          // closed gracefully — different cause than an error throw).
+          attempt = 0;
+        } catch (err) {
+          if (abort.signal.aborted) break;
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[${agent.id}] event stream ended (attempt ${attempt}):`, msg);
         }
+        if (abort.signal.aborted) break;
+        // Pick backoff for the next attempt — capped at 30s.
+        const backoffIdx = Math.min(attempt, RECONNECT_BACKOFFS_MS.length - 1);
+        const backoff = RECONNECT_BACKOFFS_MS[backoffIdx];
+        this.onEvent({
+          type: "error",
+          message: `SSE stream for ${agent.id} ${ended ? "closed gracefully" : "errored"} — reconnecting in ${Math.round(backoff / 1000)}s`,
+        });
+        await new Promise<void>((r) => setTimeout(r, backoff));
+        attempt += 1;
       }
-      // Task #200: when the SSE stream ends (graceful or error) WITHOUT
-      // session.idle having settled the in-flight stream state, mark the
-      // streaming state as dead so the HTTP catch handler stops swallowing
-      // errors based on the "chunks within 10s" heuristic.
+      // Task #200: final cleanup when the loop exits (abort fired). If
+      // any in-flight stream state still exists, mark sseStreamDied so
+      // the HTTP catch handler propagates instead of trusting silence.
       if (!abort.signal.aborted) {
         const inflight = this.streamingByAgent.get(agent.id);
         if (inflight) inflight.sseStreamDied = true;
-      }
-      // Graceful exit (for-await returned without throwing) while we were still
-      // attached means the server closed the stream on its own — also worth
-      // surfacing because the idle watchdog won't see any more events.
-      if (ended && !abort.signal.aborted) {
-        this.onEvent({
-          type: "error",
-          message: `SSE stream for ${agent.id} closed by server without abort`,
-        });
       }
     })();
   }
@@ -947,7 +1091,41 @@ export class AgentManager {
         // text (concatenated across parts) so streamed responses
         // include every text part, not just the last one to update.
         const stream = this.streamingByAgent.get(agent.id);
-        if (stream) stream.text = fullText;
+        if (stream) {
+          stream.text = fullText;
+          // Task #196: early format-violation check. Once accumulated
+          // text crosses the sniff threshold, verify it looks like the
+          // expected format. If JSON expected and the first chunk
+          // contains no JSON markers (no `{`, no `[`, no fenced
+          // ```json), the model is producing wrong-format output.
+          // Abort early instead of letting the call run to completion.
+          // Catches the e3738692 pattern: worker model handed planner
+          // JSON prompt produces markdown headers for the entire turn.
+          if (
+            stream.formatExpect === "json" &&
+            !stream.formatChecked &&
+            fullText.length >= EARLY_FORMAT_SNIFF_BYTES
+          ) {
+            stream.formatChecked = true;
+            const head = fullText.slice(0, EARLY_FORMAT_SNIFF_BYTES);
+            const looksJson = head.includes("{") || head.includes("[") || head.includes("```json");
+            if (!looksJson) {
+              this.logDiag({
+                type: "_format_sniff_reject",
+                agentId: agent.id,
+                ourSessionId: agent.sessionId,
+                bytesScanned: head.length,
+                preview: head.slice(0, 200),
+              });
+              this.streamingByAgent.delete(agent.id);
+              stream.signalCleanup?.();
+              if (stream.timeoutHandle) clearTimeout(stream.timeoutHandle);
+              stream.reject(new Error(
+                `format violation: expected JSON, first ${head.length} chars contain no JSON marker`,
+              ));
+            }
+          }
+        }
       }
       return;
     }
@@ -1160,4 +1338,28 @@ function stringifyError(err: unknown): string {
     }
   }
   return String(err);
+}
+
+// Task #192: pull the latest ASSISTANT message's concatenated text-part
+// content from a session.messages response. Used by probeAndDecide to
+// check whether the model is still producing tokens when SSE goes quiet.
+// Returns null if no assistant message exists yet (early in the call).
+function extractLatestAssistantText(res: unknown): string | null {
+  // Shape: { data: Array<{ info: Message, parts: Part[] }> } per SDK gen
+  // — but the SDK wrapper sometimes returns the array directly. Handle both.
+  const wrapper = res as { data?: unknown };
+  const list = (wrapper?.data ?? res) as Array<{ info?: { role?: string }; parts?: Array<{ type?: string; text?: string }> }>;
+  if (!Array.isArray(list)) return null;
+  // Find LAST assistant message (most recent).
+  for (let i = list.length - 1; i >= 0; i--) {
+    const msg = list[i];
+    if (msg?.info?.role !== "assistant") continue;
+    const parts = msg.parts ?? [];
+    let combined = "";
+    for (const p of parts) {
+      if (p?.type === "text" && typeof p.text === "string") combined += p.text;
+    }
+    return combined;
+  }
+  return null;
 }
