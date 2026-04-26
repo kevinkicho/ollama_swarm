@@ -108,6 +108,7 @@ import {
 import { runGoalGenerationPrePass as runGoalGenerationPrePassExtracted } from "./goalGenerationPrePass.js";
 // Task #164 (refactor): auditor seed builder + UI snapshot capture split out.
 import { buildAuditorSeed as buildAuditorSeedExtracted } from "./auditorSeedBuilder.js";
+import { truncate } from "./truncate.js";
 import { config } from "../../config.js";
 
 // Blackboard preset: planner posts TODOs, workers drain them in a
@@ -3281,9 +3282,6 @@ export class BlackboardRunner implements SwarmRunner {
   }
 }
 
-function truncate(s: string, max = 80): string {
-  return s.length <= max ? s : s.slice(0, max - 1) + "…";
-}
 
 // Task #67: small helper to bump a per-agent counter Map without
 // repeating the `(map.get(id) ?? 0) + 1` pattern at every call site.

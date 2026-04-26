@@ -28,11 +28,7 @@ import {
 } from "./prompts/verifier.js";
 import type { Board } from "./Board.js";
 import type { Todo } from "./types.js";
-
-// Truncate to 80 chars for log lines (matches BB.ts inline truncate).
-function truncate(s: string, max: number = 80): string {
-  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
-}
+import { truncate } from "./truncate.js";
 
 export interface VerifierContext {
   manager: AgentManager;

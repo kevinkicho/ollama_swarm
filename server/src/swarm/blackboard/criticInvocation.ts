@@ -33,10 +33,7 @@ import {
 } from "./prompts/critic.js";
 import type { Board } from "./Board.js";
 import type { ExitContract, Todo } from "./types.js";
-
-function truncate(s: string, max: number = 80): string {
-  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
-}
+import { truncate } from "./truncate.js";
 
 export interface CriticContext {
   manager: AgentManager;
