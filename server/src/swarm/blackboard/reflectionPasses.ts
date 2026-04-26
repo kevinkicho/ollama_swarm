@@ -37,6 +37,49 @@ import {
 } from "./designMemoryStore.js";
 import { parseGoalList } from "./goalListParser.js";
 
+// Task #183: helper to send a reflection-pass prompt on a FRESH
+// session (mirrors the critic/verifier pattern). The planner's main
+// session has accumulated huge context by reflection-pass time
+// (every prompt + response from the run); reusing it caused glm-5.1
+// to return empty for stretch / memory / design passes — observed
+// across multiple runs. A fresh session per pass keeps each prompt's
+// context bounded to just the pass's prompt itself.
+//
+// Returns the extracted text (or undefined if the prompt failed in a
+// way that should be logged + skipped). Failure-open: any error
+// resolves to undefined, callers handle the empty case.
+async function promptOnFreshSession(
+  planner: Agent,
+  prompt: string,
+  label: string,
+): Promise<string | undefined> {
+  let sessionId: string;
+  try {
+    const created = await planner.client.session.create({
+      body: { title: `${label}-${Date.now()}` },
+    });
+    const any = created as { data?: { id?: string; info?: { id?: string } }; id?: string };
+    const sid = any?.data?.id ?? any?.data?.info?.id ?? any?.id;
+    if (!sid) return undefined;
+    sessionId = sid;
+  } catch {
+    return undefined;
+  }
+  try {
+    const res = await planner.client.session.prompt({
+      path: { id: sessionId },
+      body: {
+        agent: "swarm-read",
+        model: { providerID: "ollama", modelID: planner.model },
+        parts: [{ type: "text", text: prompt }],
+      },
+    });
+    return extractText(res);
+  } catch {
+    return undefined;
+  }
+}
+
 // Bundle of runner state the passes need. Deliberately narrow — only
 // the fields these passes actually touch — so future refactors of the
 // runner can rearrange internals without reaching back into here.
@@ -93,15 +136,9 @@ export async function runStretchGoalReflectionPass(
   ].join("\n");
 
   try {
-    const res = await planner.client.session.prompt({
-      path: { id: planner.sessionId },
-      body: {
-        agent: "swarm-read",
-        model: { providerID: "ollama", modelID: planner.model },
-        parts: [{ type: "text", text: prompt }],
-      },
-    });
-    const text = extractText(res);
+    // Task #183: fresh session — planner's main session has too much
+    // context by reflection-pass time, was returning empty.
+    const text = await promptOnFreshSession(planner, prompt, "stretch");
     if (!text) {
       ctx.appendSystem("Stretch-goal reflection: planner returned empty.");
       return;
@@ -170,24 +207,8 @@ export async function runMemoryDistillationPass(
     'If there\'s genuinely nothing worth remembering (e.g. the run accomplished nothing new), output {"lessons": []} and a future run will skip the memory entry.',
   ].join("\n");
 
-  let responseText: string;
-  try {
-    const res = await planner.client.session.prompt({
-      path: { id: planner.sessionId },
-      body: {
-        agent: "swarm-read",
-        model: { providerID: "ollama", modelID: planner.model },
-        parts: [{ type: "text", text: prompt }],
-      },
-    });
-    const text = extractText(res);
-    responseText = text ?? "";
-  } catch (err) {
-    ctx.appendSystem(
-      `Memory distillation prompt failed (${err instanceof Error ? err.message : String(err)}).`,
-    );
-    return;
-  }
+  // Task #183: fresh session.
+  const responseText = await promptOnFreshSession(planner, prompt, "memory-distill");
   if (!responseText) {
     ctx.appendSystem("Memory distillation: planner returned empty.");
     return;
@@ -287,23 +308,8 @@ export async function runDesignMemoryUpdatePass(
     'If a field has no meaningful update, OMIT it (don\'t echo the prior value).',
   ].join("\n");
 
-  let responseText: string;
-  try {
-    const res = await planner.client.session.prompt({
-      path: { id: planner.sessionId },
-      body: {
-        agent: "swarm-read",
-        model: { providerID: "ollama", modelID: planner.model },
-        parts: [{ type: "text", text: prompt }],
-      },
-    });
-    responseText = extractText(res) ?? "";
-  } catch (err) {
-    ctx.appendSystem(
-      `Design memory update prompt failed (${err instanceof Error ? err.message : String(err)}).`,
-    );
-    return;
-  }
+  // Task #183: fresh session.
+  const responseText = await promptOnFreshSession(planner, prompt, "design-memory");
   if (!responseText) {
     ctx.appendSystem("Design memory update: planner returned empty.");
     return;

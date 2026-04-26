@@ -860,6 +860,16 @@ export class AgentManager {
     // message.updated for both user and assistant messages with
     // info.role + info.id. We use this to classify parts that
     // arrive via message.part.updated.
+    //
+    // Task #182: don't wipe partsByAgent on new assistant message
+    // ids. Earlier #179 reset them, but OpenCode emits a NEW
+    // assistant message.updated mid-stream at step boundaries (e.g.
+    // tool-call → resumed text), which wiped accumulated text from
+    // earlier in the same response. Verified via _stream_complete
+    // diagnostic: resp 9 of run 2299e75a had latestEmittedChars=6433
+    // but partsByAgent=0 — the wipe was the cause. session.idle
+    // remains the canonical "prompt boundary" that clears parts;
+    // mid-stream id changes are now safe — new parts just append.
     if (type === "message.updated") {
       const info = props.info as { id?: string; role?: string } | undefined;
       if ((info?.role === "user" || info?.role === "assistant") && typeof info.id === "string") {
@@ -868,15 +878,7 @@ export class AgentManager {
           roles = new Map();
           this.messageRoles.set(agent.id, roles);
         }
-        const prior = roles.get(info.id);
-        if (prior !== info.role) {
-          roles.set(info.id, info.role);
-          if (info.role === "assistant") {
-            // New assistant message — reset the per-part accumulator
-            // so this response starts clean.
-            this.partsByAgent.delete(agent.id);
-          }
-        }
+        roles.set(info.id, info.role);
       }
       return;
     }
