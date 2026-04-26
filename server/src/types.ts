@@ -384,6 +384,11 @@ export type SwarmPhase =
   // burn while paused; total pause capped at 2h before escalating to
   // permanent cap:quota halt.
   | "paused"
+  // Task #167: soft-stop. User pressed "Drain & Stop" — workers finish
+  // their current claim (so no in-flight commits get lost), no new
+  // claims permitted, then escalate to hard stop. Backstopped at 3 min;
+  // user can press hard "Stop" to escalate immediately.
+  | "draining"
   | "stopping"
   | "stopped"
   | "completed"

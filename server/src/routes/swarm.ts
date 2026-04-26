@@ -378,6 +378,21 @@ export function swarmRouter(orch: Orchestrator): Router {
     }
   });
 
+  // Task #167: soft-stop. Workers finish currently-claimed todos
+  // (no in-flight commits get lost), no new claims, then escalate
+  // to hard stop. Backstopped at 3 min — user can press hard /stop
+  // to escalate immediately. For non-blackboard presets, falls
+  // through to hard /stop (orchestrator handles the dispatch).
+  r.post("/drain", async (_req: Request, res: Response) => {
+    try {
+      await orch.drain();
+      res.json({ ok: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
   r.post("/say", (req: Request, res: Response) => {
     const parsed = SayBody.safeParse(req.body);
     if (!parsed.success) {

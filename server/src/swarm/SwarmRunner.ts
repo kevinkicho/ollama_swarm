@@ -263,6 +263,13 @@ export interface RunnerOpts {
 export interface SwarmRunner {
   start(cfg: RunConfig): Promise<void>;
   stop(): Promise<void>;
+  // Task #167: soft-stop. Optional — when undefined, the orchestrator
+  // falls back to stop(). Blackboard implements it: workers finish
+  // their currently-claimed todo, no new claims permitted, then
+  // escalate to hard stop. Discussion presets have nothing analogous
+  // (their parallel-round structure can't be cleanly drained
+  // mid-round) so they leave it undefined and get hard-stop.
+  drain?(): Promise<void>;
   status(): SwarmStatus;
   injectUser(text: string): void;
   isRunning(): boolean;

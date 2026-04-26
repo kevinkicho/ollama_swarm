@@ -149,6 +149,12 @@ const ABSOLUTE_MAX_MS = 20 * 60_000;
 // pausing forever.
 const PAUSE_PROBE_INTERVAL_MS = 5 * 60_000;
 const MAX_PAUSE_TOTAL_MS = 2 * 60 * 60_000;
+// Task #167: soft-stop deadline. After drain() fires we wait up to
+// this long for in-flight worker claims to commit cleanly; if they
+// don't, escalate to hard stop. 3 minutes covers a normal worker
+// turn (usually <60s on glm/gemma) plus headroom for retries.
+const DRAIN_DEADLINE_MS = 3 * 60_000;
+const DRAIN_WATCHER_INTERVAL_MS = 2_000;
 
 export class BlackboardRunner implements SwarmRunner {
   private transcript: TranscriptEntry[] = [];
@@ -223,6 +229,13 @@ export class BlackboardRunner implements SwarmRunner {
   private pauseStartedAt?: number;
   private totalPausedMs = 0;
   private pauseProbeTimer?: NodeJS.Timeout;
+  // Task #167: soft-stop state. Set by drain(); workers see this in
+  // their poll loop and exit after their current claim commits (no
+  // new claims). drainWatcherTimer polls every 2s for "all in-flight
+  // settled" and escalates to hard stop once true (or on the deadline).
+  private draining = false;
+  private drainStartedAt?: number;
+  private drainWatcherTimer?: NodeJS.Timeout;
   private terminationReason?: string;
   // Phase 9: run-summary counters. runBootedAt is the wall-clock origin
   // (stamped in start(), covers cloning+spawning+seeding+planning+executing)
@@ -417,6 +430,13 @@ export class BlackboardRunner implements SwarmRunner {
     if (this.pauseProbeTimer) {
       clearTimeout(this.pauseProbeTimer);
       this.pauseProbeTimer = undefined;
+    }
+    // Task #167: clear drain state from any prior run.
+    this.draining = false;
+    this.drainStartedAt = undefined;
+    if (this.drainWatcherTimer) {
+      clearInterval(this.drainWatcherTimer);
+      this.drainWatcherTimer = undefined;
     }
     this.terminationReason = undefined;
     // Unit 31: clear any lingering state-write timer from a prior run.
@@ -789,6 +809,69 @@ export class BlackboardRunner implements SwarmRunner {
     await this.flushStateWrite();
   }
 
+  // Task #167: soft-stop. Sets draining=true; workers that are
+  // mid-claim finish + commit cleanly, and no new claims are taken.
+  // A 2s-tick watcher polls for "all in-flight settled" (no claimed
+  // todos AND no active prompts) and escalates to hard stop()
+  // when quiet — or hits the DRAIN_DEADLINE_MS backstop and force-
+  // escalates so a stuck claim can't deadlock the drain.
+  //
+  // No-op if already stopping/draining (idempotent — clicking
+  // Drain twice doesn't compound; clicking Stop after Drain
+  // immediately escalates via the separate stop() path).
+  async drain(): Promise<void> {
+    if (this.stopping || this.draining) return;
+    this.draining = true;
+    this.drainStartedAt = Date.now();
+    this.setPhase("draining");
+    this.appendSystem(
+      `Drain & Stop requested. Workers will finish their current claim (${this.board.counts().claimed} in-flight); no new claims. ` +
+        `Backstop ${DRAIN_DEADLINE_MS / 60_000} min before forced hard stop. ` +
+        `Press Stop to escalate immediately.`,
+    );
+    // Cancel pause probe (no point continuing to poll upstream
+    // during drain — we're committed to stopping).
+    if (this.pauseProbeTimer) {
+      clearTimeout(this.pauseProbeTimer);
+      this.pauseProbeTimer = undefined;
+    }
+    this.paused = false;
+    this.drainWatcherTimer = setInterval(() => void this.checkDrainComplete(), DRAIN_WATCHER_INTERVAL_MS);
+  }
+
+  private async checkDrainComplete(): Promise<void> {
+    if (this.stopping || !this.draining) {
+      if (this.drainWatcherTimer) {
+        clearInterval(this.drainWatcherTimer);
+        this.drainWatcherTimer = undefined;
+      }
+      return;
+    }
+    const claimed = this.board.counts().claimed;
+    const activePrompts = this.activeAborts.size;
+    const elapsed = Date.now() - (this.drainStartedAt ?? Date.now());
+    const overDeadline = elapsed >= DRAIN_DEADLINE_MS;
+    if (claimed === 0 && activePrompts === 0) {
+      this.appendSystem(`Drain complete (${Math.round(elapsed / 1000)}s); escalating to hard stop.`);
+      if (this.drainWatcherTimer) {
+        clearInterval(this.drainWatcherTimer);
+        this.drainWatcherTimer = undefined;
+      }
+      await this.stop();
+      return;
+    }
+    if (overDeadline) {
+      this.appendSystem(
+        `Drain deadline reached (${DRAIN_DEADLINE_MS / 60_000} min) with ${claimed} claim(s) + ${activePrompts} prompt(s) still in-flight. Forcing hard stop.`,
+      );
+      if (this.drainWatcherTimer) {
+        clearInterval(this.drainWatcherTimer);
+        this.drainWatcherTimer = undefined;
+      }
+      await this.stop();
+    }
+  }
+
   async stop(): Promise<void> {
     this.stopping = true;
     this.setPhase("stopping");
@@ -801,6 +884,14 @@ export class BlackboardRunner implements SwarmRunner {
       this.pauseProbeTimer = undefined;
     }
     this.paused = false;
+    // Task #167: cancel drain watcher if soft-stop is being escalated
+    // to hard stop (either by completion or by user clicking Stop
+    // during drain).
+    if (this.drainWatcherTimer) {
+      clearInterval(this.drainWatcherTimer);
+      this.drainWatcherTimer = undefined;
+    }
+    this.draining = false;
     for (const ctrl of this.activeAborts) {
       try {
         ctrl.abort(new Error("user stop"));
@@ -1945,6 +2036,12 @@ export class BlackboardRunner implements SwarmRunner {
       // resume. checkAndApplyCaps short-circuits during pause so the
       // wall-clock cap doesn't burn either.
       if (this.paused) continue;
+      // Task #167: soft-stop. If draining was requested, this worker's
+      // current iteration's executeWorkerTodo (if any) already ran to
+      // completion above the loop boundary. Now: don't claim anything
+      // new — exit cleanly so the drain watcher can escalate to hard
+      // stop once all workers have exited and no claims remain.
+      if (this.draining) return;
 
       const counts = this.board.counts();
       // Nothing left to do: no open, nothing claimed, no stales, AND no

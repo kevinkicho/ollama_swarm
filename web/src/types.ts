@@ -208,6 +208,8 @@ export type SwarmPhase =
   // Task #165: blackboard pauses on persistent Ollama-quota wall and
   // probes every 5 min until upstream clears. 2h max before halting.
   | "paused"
+  // Task #167: soft-stop. Workers finish current claim, then exit.
+  | "draining"
   | "stopping"
   | "stopped"
   | "completed"

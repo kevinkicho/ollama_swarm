@@ -235,6 +235,18 @@ export class Orchestrator {
     }
   }
 
+  // Task #167: soft-stop entry point. If the active runner supports
+  // drain() (blackboard does), use it; otherwise fall through to hard
+  // stop. The runner manages its own escalation deadline + watcher.
+  async drain(): Promise<void> {
+    if (!this.runner) return;
+    if (typeof this.runner.drain === "function") {
+      await this.runner.drain();
+      return;
+    }
+    await this.stop();
+  }
+
   async stop(): Promise<void> {
     if (!this.runner) return;
     const runner = this.runner;

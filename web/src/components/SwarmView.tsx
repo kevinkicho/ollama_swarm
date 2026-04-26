@@ -81,10 +81,25 @@ export function SwarmView() {
   ]);
 
   const onStop = async () => {
-    if (!confirm("Stop the swarm? All spawned opencode processes will be terminated.")) return;
+    if (!confirm("Stop the swarm IMMEDIATELY? All spawned opencode processes will be terminated and any worker mid-commit will lose its work.")) return;
     setBusy(true);
     try {
       await fetch("/api/swarm/stop", { method: "POST" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Task #167: soft-stop. Workers finish their current claim (so
+  // no in-flight commits get lost), no new claims, then escalates
+  // to hard stop. Backstopped at 3 min on the server side.
+  const onDrain = async () => {
+    if (!confirm("Drain & Stop: workers will finish their current claim (no new claims), then the swarm exits. Up to 3 minutes. OK to proceed?")) return;
+    setBusy(true);
+    try {
+      await fetch("/api/swarm/drain", { method: "POST" });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -187,17 +202,33 @@ export function SwarmView() {
             <button
               onClick={onNewSwarm}
               className="text-xs px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500"
+              title="Reset the UI to the setup form. Doesn't affect the just-finished run's saved summary."
             >
               New swarm
             </button>
           ) : (
-            <button
-              onClick={onStop}
-              disabled={busy || !canStop}
-              className="text-xs px-2 py-1 rounded bg-red-700 hover:bg-red-600 disabled:bg-ink-600 disabled:cursor-not-allowed"
-            >
-              Stop
-            </button>
+            <div className="flex gap-1">
+              {/* Task #167: soft-stop. Blackboard preserves in-flight
+                  worker commits; other presets fall through to hard
+                  stop on the server side (their parallel-round
+                  structure has nothing analogous to drain). */}
+              <button
+                onClick={onDrain}
+                disabled={busy || !canStop}
+                className="text-xs px-2 py-1 rounded bg-amber-700 hover:bg-amber-600 disabled:bg-ink-600 disabled:cursor-not-allowed"
+                title="Soft stop: workers finish their current claim, then swarm exits. Up to 3 min. Preserves in-flight commits. (Discussion presets: same as Stop — no in-flight work to preserve.)"
+              >
+                Drain & Stop
+              </button>
+              <button
+                onClick={onStop}
+                disabled={busy || !canStop}
+                className="text-xs px-2 py-1 rounded bg-red-700 hover:bg-red-600 disabled:bg-ink-600 disabled:cursor-not-allowed"
+                title="Hard stop: aborts every in-flight prompt immediately and kills all opencode processes. Worker mid-commit loses its work. Use to escalate during a stuck Drain."
+              >
+                Stop
+              </button>
+            </div>
           )}
         </div>
         {agentList.map((a) => (
