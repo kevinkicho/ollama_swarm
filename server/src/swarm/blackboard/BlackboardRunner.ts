@@ -458,6 +458,23 @@ export class BlackboardRunner implements SwarmRunner {
     }
     this.stateWriteAgain = false;
     this.runBootedAt = Date.now();
+    // Task #171: persist a "Run started" entry as the FIRST transcript
+    // line so it survives a page-refresh catch-up. The WS run_started
+    // event already fires for live observers; this gives refreshing
+    // observers (and review-mode readers) the same anchor at the top
+    // of the transcript. Includes runId8 + preset + model summary so
+    // it's self-explanatory without needing the surrounding UI chrome.
+    {
+      const runId8 = (cfg.runId ?? "?").slice(0, 8);
+      const startedHHMM = new Date(this.runBootedAt).toLocaleTimeString();
+      const modelLine =
+        cfg.preset === "blackboard"
+          ? `planner=${cfg.plannerModel ?? cfg.model}, workers=${cfg.workerModel ?? cfg.model}${cfg.dedicatedAuditor ? `, auditor=${cfg.auditorModel ?? cfg.plannerModel ?? cfg.model}` : ""}`
+          : cfg.model;
+      this.appendSystem(
+        `▶ Run started ${startedHHMM} · run ${runId8} · ${cfg.preset} · ${cfg.agentCount} agents · ${modelLine}`,
+      );
+    }
     this.staleEventCount = 0;
     this.turnsPerAgent.clear();
     this.attemptsPerAgent.clear();
