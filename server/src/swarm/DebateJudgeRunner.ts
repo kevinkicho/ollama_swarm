@@ -529,6 +529,7 @@ export class DebateJudgeRunner implements SwarmRunner {
     try {
       // Unit 16: shared retry wrapper.
       const res = await promptWithRetry(agent, prompt, {
+        onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
         signal: controller.signal,
         // Unit 20: read-only tools for discussion presets.
         // Task #102: implementer turn opts into "swarm" (write tools).

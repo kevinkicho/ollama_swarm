@@ -141,6 +141,9 @@ export type TranscriptEntrySummary =
       staleEvents?: number;
       linesAdded: number;
       linesRemoved: number;
+      // Task #163: run-level token totals (accurate).
+      totalPromptTokens?: number;
+      totalResponseTokens?: number;
       agents: Array<{
         agentIndex: number;
         role: string;
@@ -154,6 +157,9 @@ export type TranscriptEntrySummary =
         rejected: number;
         jsonRepairs: number;
         promptErrors: number;
+        // Task #163: per-agent token totals (approximate for parallel runners).
+        tokensIn?: number | null;
+        tokensOut?: number | null;
       }>;
     }
   // Task #72: seed-announce structured payload.

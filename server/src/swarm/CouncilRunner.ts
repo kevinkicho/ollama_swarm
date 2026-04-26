@@ -391,7 +391,9 @@ export class CouncilRunner implements SwarmRunner {
       }
     }, 10_000);
     try {
+      const onTokens = ({ promptTokens, responseTokens }: { promptTokens: number; responseTokens: number }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens);
       const res = await promptWithRetry(lead, prompt, {
+        onTokens,
         signal: controller.signal,
         agentName: "swarm-read",
         describeError: describeSdkError,
@@ -527,6 +529,7 @@ export class CouncilRunner implements SwarmRunner {
         // Unit 20: read-only tools for discussion presets.
         agentName: "swarm-read",
         describeError: describeSdkError,
+        onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(agent.id, success, elapsedMs);
           this.opts.logDiag?.({

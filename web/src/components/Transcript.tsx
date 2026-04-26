@@ -1166,6 +1166,15 @@ function RunFinishedGrid({
         {s.skippedTodos !== undefined ? <Tile label="Skipped todos" value={s.skippedTodos} /> : null}
         {s.staleEvents !== undefined ? <Tile label="Stale events" value={s.staleEvents} /> : null}
         <Tile label="Agents" value={s.agents.length} />
+        {/* Task #163: run-level token totals. Computed accurately from
+            tokenTracker.recent filtered by run window (independent of
+            per-agent approximations). */}
+        {s.totalPromptTokens !== undefined ? (
+          <Tile label="Tokens in" value={fmtTokensCompact(s.totalPromptTokens)} accent="text-sky-300" />
+        ) : null}
+        {s.totalResponseTokens !== undefined ? (
+          <Tile label="Tokens out" value={fmtTokensCompact(s.totalResponseTokens)} accent="text-violet-300" />
+        ) : null}
       </div>
       {/* Per-agent grid */}
       <div className="text-[10px] uppercase tracking-wider text-ink-500 font-semibold mb-1">
@@ -1187,6 +1196,13 @@ function RunFinishedGrid({
               <th className="px-2 py-1 text-right text-rose-400/70">Rejected</th>
               <th className="px-2 py-1 text-right text-amber-400/70">JSON⚠</th>
               <th className="px-2 py-1 text-right text-rose-500/70">Errors</th>
+              {/* Task #163: per-agent token columns. Approximate for
+                  parallel runners (council/OW/MR fire concurrent calls
+                  so each agent's snapshot delta sees others' tokens too).
+                  Sequential runners (round-robin/stigmergy/debate-judge,
+                  blackboard planner-only paths) are exact. */}
+              <th className="px-2 py-1 text-right text-sky-400/70" title="Approximate for parallel runners — see #163">Tok in</th>
+              <th className="px-2 py-1 text-right text-violet-400/70" title="Approximate for parallel runners — see #163">Tok out</th>
             </tr>
           </thead>
           <tbody>
@@ -1208,6 +1224,12 @@ function RunFinishedGrid({
                 <NumOrDash value={a.rejected} className={`px-2 py-1 text-right ${a.rejected > 0 ? "text-rose-300 font-semibold" : "text-ink-300"}`} />
                 <NumOrDash value={a.jsonRepairs} className={`px-2 py-1 text-right ${a.jsonRepairs > 0 ? "text-amber-300" : "text-ink-300"}`} />
                 <NumOrDash value={a.promptErrors} className={`px-2 py-1 text-right ${a.promptErrors > 0 ? "text-rose-400 font-semibold" : "text-ink-300"}`} />
+                <td className={`px-2 py-1 text-right font-mono ${a.tokensIn != null && a.tokensIn > 0 ? "text-sky-300" : "text-ink-500 opacity-50"}`}>
+                  {a.tokensIn != null ? fmtTokensCompact(a.tokensIn) : "—"}
+                </td>
+                <td className={`px-2 py-1 text-right font-mono ${a.tokensOut != null && a.tokensOut > 0 ? "text-violet-300" : "text-ink-500 opacity-50"}`}>
+                  {a.tokensOut != null ? fmtTokensCompact(a.tokensOut) : "—"}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -1298,11 +1320,20 @@ function fmtMs(ms: number | null): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-function Tile({ label, value, accent }: { label: string; value: number; accent?: string }) {
+// Task #163: compact token formatter — same shape as UsageWidget's
+// fmtTokens but local to this file to avoid a cross-component import.
+function fmtTokensCompact(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  return `${(n / 1_000_000_000).toFixed(2)}B`;
+}
+
+function Tile({ label, value, accent }: { label: string; value: number | string; accent?: string }) {
   // 2026-04-25 fine-tune (Kevin): show "—" with opacity 0.5 when
   // value is 0/null/undefined so empty tiles don't read as a real "0".
-  const isEmpty = !value;
-  const display = isEmpty ? "—" : value.toLocaleString();
+  const isEmpty = typeof value === "number" ? !value : !value || value === "0";
+  const display = isEmpty ? "—" : (typeof value === "number" ? value.toLocaleString() : value);
   const colorClass = isEmpty ? "text-ink-400 opacity-50" : (accent ?? "text-ink-100");
   return (
     <div className="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5">

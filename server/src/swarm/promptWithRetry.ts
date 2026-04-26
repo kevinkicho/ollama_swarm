@@ -4,6 +4,7 @@ import {
   RETRY_BACKOFF_MS,
   isRetryableSdkError,
 } from "./blackboard/retry.js";
+import { tokenTracker } from "../services/ollamaProxy.js";
 
 // Shared SDK-prompt-with-retry helper.
 //
@@ -46,6 +47,16 @@ export interface PromptWithRetryOptions {
   // pass "swarm-read" so their agents can actually use the file-read /
   // grep / glob tools that their prompts ask them to use.
   agentName?: string;
+  // Task #163 (2026-04-26): per-call token accounting. Fired in the
+  // finally block AFTER the call resolves (or throws), with the delta
+  // tokenTracker recorded during the call's wall-clock window.
+  // CAVEAT: tokenTracker is global; for parallel runners (council, OW
+  // workers, MR mappers), the delta includes tokens from concurrent
+  // calls — per-agent attribution is approximate. For sequential
+  // runners it's exact. Run-level totals (computed at summary time
+  // from tokenTracker.recent filtered by run window) stay accurate
+  // either way.
+  onTokens?: (info: { promptTokens: number; responseTokens: number }) => void;
 }
 
 export interface RetryInfo {
@@ -78,7 +89,11 @@ export async function promptWithRetry(
   const describe = opts.describeError ?? defaultDescribeError;
   const sleep = opts.sleep ?? defaultInterruptibleSleep;
   const agentName = opts.agentName ?? "swarm";
+  // Task #163: capture pre-call lifetime token total so we can emit
+  // a delta to opts.onTokens after the call settles.
+  const tokensBefore = opts.onTokens ? tokenTracker.total() : null;
   let lastErr: unknown;
+  try {
   for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
     const t0 = Date.now();
     try {
@@ -117,6 +132,15 @@ export async function promptWithRetry(
   // re-loops up to RETRY_MAX_ATTEMPTS times. Keep the final throw so
   // TypeScript doesn't infer `Promise<unknown | undefined>`.
   throw lastErr ?? new Error("prompt returned no result");
+  } finally {
+    if (tokensBefore && opts.onTokens) {
+      const tokensAfter = tokenTracker.total();
+      opts.onTokens({
+        promptTokens: Math.max(0, tokensAfter.promptTokens - tokensBefore.promptTokens),
+        responseTokens: Math.max(0, tokensAfter.responseTokens - tokensBefore.responseTokens),
+      });
+    }
+  }
 }
 
 function defaultDescribeError(err: unknown): string {

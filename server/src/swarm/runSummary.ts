@@ -25,6 +25,7 @@ import path from "node:path";
 import {
   FINAL_GIT_STATUS_MAX,
   TRANSCRIPT_MAX_ENTRIES,
+  computeRunTokenTotals,
   type PerAgentStat,
   type RunSummary,
   type StopReason,
@@ -96,6 +97,11 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
   // that mode — accurate per-run tracking would require a git-HEAD
   // diff against run-start, deferred as a separate task.)
   const filesChangedByThisRun = 0;
+  // Task #163: run-level token totals via the same helper blackboard uses.
+  const { totalPromptTokens, totalResponseTokens } = computeRunTokenTotals(
+    input.startedAt,
+    input.endedAt,
+  );
   return {
     runId: input.config.runId,
     repoUrl: input.config.repoUrl,
@@ -114,6 +120,8 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
     filesChanged: filesChangedByThisRun,
     finalGitStatus,
     finalGitStatusTruncated: truncated,
+    totalPromptTokens,
+    totalResponseTokens,
     agents: input.agents.slice(),
     transcript,
     transcriptTruncated,
@@ -443,6 +451,9 @@ export function buildRunFinishedSummary(summary: RunSummary): TranscriptEntrySum
     staleEvents: summary.staleEvents,
     linesAdded: added,
     linesRemoved: removed,
+    // Task #163: forward run-level token totals from the summary.
+    totalPromptTokens: summary.totalPromptTokens,
+    totalResponseTokens: summary.totalResponseTokens,
     agents: summary.agents.map((a) => ({
       agentIndex: a.agentIndex,
       role: roleForAgent(summary.preset, a.agentIndex, N),
@@ -456,6 +467,9 @@ export function buildRunFinishedSummary(summary: RunSummary): TranscriptEntrySum
       rejected: a.rejectedAttempts ?? 0,
       jsonRepairs: a.jsonRepairs ?? 0,
       promptErrors: a.promptErrors ?? 0,
+      // Task #163: per-agent token totals.
+      tokensIn: a.tokensIn,
+      tokensOut: a.tokensOut,
     })),
   };
 }

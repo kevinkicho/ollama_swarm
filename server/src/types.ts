@@ -187,6 +187,10 @@ export type TranscriptEntrySummary =
       staleEvents?: number;
       linesAdded: number;
       linesRemoved: number;
+      // Task #163: run-level token totals (accurate, computed from
+      // tokenTracker.recent filtered by run window).
+      totalPromptTokens?: number;
+      totalResponseTokens?: number;
       agents: Array<{
         agentIndex: number;
         role: string;
@@ -200,6 +204,13 @@ export type TranscriptEntrySummary =
         rejected: number;
         jsonRepairs: number;
         promptErrors: number;
+        // Task #163: per-agent token totals. Approximate for parallel
+        // runners (council/OW/MR all fire concurrent calls); accurate
+        // for sequential runners (round-robin/stigmergy/debate-judge/
+        // blackboard-planner-only paths). Null when no tokens recorded
+        // for this agent.
+        tokensIn?: number | null;
+        tokensOut?: number | null;
       }>;
     }
   // Task #72: structured seed-announce. Renders as a definition list

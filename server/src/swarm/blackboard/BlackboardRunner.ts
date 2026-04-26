@@ -235,6 +235,11 @@ export class BlackboardRunner implements SwarmRunner {
   private rejectedAttemptsPerAgent = new Map<string, number>();
   private jsonRepairsPerAgent = new Map<string, number>();
   private promptErrorsPerAgent = new Map<string, number>();
+  // Task #163: per-agent token accumulators populated via promptWithRetry's
+  // onTokens hook. Approximate for parallel paths (worker pool, audit
+  // ensemble) since the underlying tracker is global.
+  private promptTokensPerAgent = new Map<string, number>();
+  private responseTokensPerAgent = new Map<string, number>();
   // Stashed at spawn time so writeRunSummary can still produce per-agent
   // stats even after AgentManager.killAll() has cleared its own roster
   // (stop() path runs killAll concurrently with the summary write).
@@ -407,6 +412,8 @@ export class BlackboardRunner implements SwarmRunner {
     this.rejectedAttemptsPerAgent.clear();
     this.jsonRepairsPerAgent.clear();
     this.promptErrorsPerAgent.clear();
+    this.promptTokensPerAgent.clear();
+    this.responseTokensPerAgent.clear();
     this.retriesPerAgent.clear();
     this.latenciesPerAgent.clear();
     this.agentRoster = [];
@@ -3556,10 +3563,12 @@ export class BlackboardRunner implements SwarmRunner {
         agentId: a.id,
         agentIndex: a.index,
         turnsTaken: this.turnsPerAgent.get(a.id) ?? 0,
-        // Token usage isn't exposed by the SDK path we use; documented
-        // in summary.ts.
-        tokensIn: null,
-        tokensOut: null,
+        // Task #163: per-agent token deltas captured via promptWithRetry's
+        // onTokens hook. Approximate for parallel paths (worker pool +
+        // audit ensemble may overlap with planner/auditor). Null when
+        // no tokens recorded for this agent.
+        tokensIn: this.promptTokensPerAgent.has(a.id) ? this.promptTokensPerAgent.get(a.id)! : null,
+        tokensOut: this.responseTokensPerAgent.has(a.id) ? this.responseTokensPerAgent.get(a.id)! : null,
         totalAttempts: this.attemptsPerAgent.get(a.id) ?? 0,
         totalRetries: this.retriesPerAgent.get(a.id) ?? 0,
         successfulAttempts: lats.length,
@@ -3867,6 +3876,10 @@ export class BlackboardRunner implements SwarmRunner {
       // event log read identically to the pre-Unit-16 behavior.
       const res = await promptWithRetry(agent, prompt, {
         signal: controller.signal,
+        onTokens: ({ promptTokens, responseTokens }) => {
+          if (promptTokens > 0) this.promptTokensPerAgent.set(agent.id, (this.promptTokensPerAgent.get(agent.id) ?? 0) + promptTokens);
+          if (responseTokens > 0) this.responseTokensPerAgent.set(agent.id, (this.responseTokensPerAgent.get(agent.id) ?? 0) + responseTokens);
+        },
         agentName,
         describeError: (e) => this.describeSdkError(e),
         sleep: (ms, sig) => this.interruptibleSleep(ms, sig),

@@ -26,6 +26,14 @@ export class AgentStatsCollector {
   // = the model is genuinely stuck (Pattern 8 / 89f3faa3 :thumbs_up:
   // case) — surfacing the count so runners + UI can react.
   private consecutiveJunk = new Map<string, number>();
+  // Task #163: per-agent token accumulators populated via promptWithRetry's
+  // onTokens hook. Sequential runners get exact attribution; parallel
+  // runners (council, OW workers, MR mappers) inflate slightly because
+  // the underlying tracker delta-snapshot includes concurrent calls'
+  // tokens (documented limitation; run-level totals stay accurate via
+  // tokenTracker.recent filtered by run window).
+  private promptTokens = new Map<string, number>();
+  private responseTokens = new Map<string, number>();
   // Stashed at register-time so buildPerAgentStats still produces rows
   // even after AgentManager.killAll() cleared its own roster. Mirrors
   // BlackboardRunner.agentRoster (Unit 21).
@@ -38,6 +46,8 @@ export class AgentStatsCollector {
     this.retries.clear();
     this.latencies.clear();
     this.consecutiveJunk.clear();
+    this.promptTokens.clear();
+    this.responseTokens.clear();
     this.roster = [];
   }
 
@@ -95,6 +105,19 @@ export class AgentStatsCollector {
     return this.consecutiveJunk.get(agentId) ?? 0;
   }
 
+  /** Task #163: wire into promptWithRetry's `onTokens` callback. Adds
+   *  prompt+response tokens for THIS call to the agent's running totals.
+   *  Sequential runners produce exact attribution; parallel runners
+   *  approximate (see field-level comment above). */
+  recordTokens(agentId: string, promptTokens: number, responseTokens: number): void {
+    if (promptTokens > 0) {
+      this.promptTokens.set(agentId, (this.promptTokens.get(agentId) ?? 0) + promptTokens);
+    }
+    if (responseTokens > 0) {
+      this.responseTokens.set(agentId, (this.responseTokens.get(agentId) ?? 0) + responseTokens);
+    }
+  }
+
   /** Produce the PerAgentStat rows for a summary. One row per registered
    * agent (sorted by index). Missing maps default to zero/null. */
   buildPerAgentStats(): PerAgentStat[] {
@@ -107,11 +130,14 @@ export class AgentStatsCollector {
           agentId: a.id,
           agentIndex: a.index,
           turnsTaken: this.turns.get(a.id) ?? 0,
-          // OpenCode SDK response shape doesn't expose per-turn token
-          // usage via the extractText path the runners use. Same nullness
-          // as blackboard. Documented in summary.ts.
-          tokensIn: null,
-          tokensOut: null,
+          // Task #163: populated via promptWithRetry's onTokens hook.
+          // Captures the tokenTracker delta during each call's window.
+          // Sequential runners → exact; parallel runners → approximate
+          // (each parallel call's delta sees concurrent activity too).
+          // Null when no tokens recorded for this agent (e.g. agent
+          // never prompted, or token tracker disabled).
+          tokensIn: this.promptTokens.has(a.id) ? this.promptTokens.get(a.id)! : null,
+          tokensOut: this.responseTokens.has(a.id) ? this.responseTokens.get(a.id)! : null,
           totalAttempts: this.attempts.get(a.id) ?? 0,
           totalRetries: this.retries.get(a.id) ?? 0,
           successfulAttempts: lats.length,

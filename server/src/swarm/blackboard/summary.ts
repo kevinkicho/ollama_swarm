@@ -16,6 +16,7 @@
 // git state (thousands of untracked files) can't blow out the artifact.
 
 import type { ExitContract } from "./types.js";
+import { tokenTracker as tokenTrackerSingleton } from "../../services/ollamaProxy.js";
 
 export const FINAL_GIT_STATUS_MAX = 4_000;
 // Task #65: transcript persistence cap. Typical discussion runs land
@@ -122,6 +123,13 @@ export interface RunSummary {
   filesChanged: number;
   finalGitStatus: string;
   finalGitStatusTruncated: boolean;
+  // Task #163 (2026-04-26): run-level token totals. Computed accurately
+  // at summary time from tokenTracker.recent[] filtered by ts in the run
+  // window (startedAt → endedAt). Independent of per-agent tokensIn/Out
+  // (which are approximate for parallel paths). Optional for back-compat
+  // with summaries written before this lands.
+  totalPromptTokens?: number;
+  totalResponseTokens?: number;
   agents: PerAgentStat[];
   // Task #65 (2026-04-24): persist the in-memory transcript at run-end
   // so the history modal / review view can replay what happened.
@@ -215,6 +223,14 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     truncated = true;
   }
 
+  // Task #163: accurate run-level token totals via tokenTracker.recent
+  // filtered by ts in the run window. Independent of per-agent fields
+  // (which are approximate for parallel paths).
+  const { totalPromptTokens, totalResponseTokens } = computeRunTokenTotals(
+    input.startedAt,
+    input.endedAt,
+  );
+
   return {
     runId: input.config.runId,
     repoUrl: input.config.repoUrl,
@@ -235,6 +251,8 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     filesChanged: input.filesChanged,
     finalGitStatus,
     finalGitStatusTruncated: truncated,
+    totalPromptTokens,
+    totalResponseTokens,
     agents: input.agents.slice(),
     contract: input.contract ? cloneContract(input.contract) : undefined,
     // Task #65: cap transcript at TRANSCRIPT_MAX_ENTRIES (head) so a
@@ -307,6 +325,33 @@ export function computeLatencyStats(samplesMs: readonly number[]): LatencyStats 
     p50: at(50),
     p95: at(95),
   };
+}
+
+// Task #163: scan tokenTracker.recent[] for records timestamped within
+// the run window (startedAt → endedAt + 5s grace for proxy-side capture
+// latency). Returns 0/0 when the proxy isn't running or no records
+// land in the window. Optional `tracker` arg for tests; defaults to
+// the module-level singleton.
+export function computeRunTokenTotals(
+  startedAt: number,
+  endedAt: number,
+  tracker?: { recent: (n: number) => ReadonlyArray<{ ts: number; promptTokens: number; responseTokens: number }> },
+): { totalPromptTokens: number; totalResponseTokens: number } {
+  const t = tracker ?? tokenTrackerSingleton;
+  const grace = 5_000;
+  const lo = startedAt;
+  const hi = endedAt + grace;
+  // Pull a generous slice — up to 10k records — and filter by window.
+  // The tracker caps at 100k; for any reasonable single-run duration
+  // this slice is plenty.
+  const recent = t.recent(10_000);
+  let p = 0, r = 0;
+  for (const rec of recent) {
+    if (rec.ts < lo || rec.ts > hi) continue;
+    p += rec.promptTokens;
+    r += rec.responseTokens;
+  }
+  return { totalPromptTokens: p, totalResponseTokens: r };
 }
 
 function parseCapType(reason: string): StopReason {
