@@ -55,6 +55,9 @@ interface UsagePayload {
   last24h: UsageWindow;
   last7d: UsageWindow;
   lifetime: { promptTokens: number; responseTokens: number; calls: number };
+  // Task #169: lifetime as a UsageWindow (with byModel + byPreset)
+  // so the All-time toggle can render the same breakdown tables.
+  lifetimeWindow?: UsageWindow;
   recent: UsageRecord[];
   quota?: QuotaState | null;
 }
@@ -127,6 +130,11 @@ export function UsageWidget() {
   // shows the current 1h total so the user has at-a-glance awareness
   // without opening the panel. Polled once on mount, then while open.
   const [headerSnap, setHeaderSnap] = useState<number>(0);
+  // Task #169: scope toggle for the breakdown tables. "24h" = the
+  // existing rolling-window view (default); "all" = lifetime (every
+  // call seen since process start, capped at the 100k in-memory
+  // record buffer). Persists across panel open/close within session.
+  const [scope, setScope] = useState<"24h" | "all">("24h");
   // Task #139: quota-wall state, polled independently of `open` so
   // the header chip flips red as soon as the proxy detects a wall.
   const [quota, setQuota] = useState<QuotaState | null>(null);
@@ -268,18 +276,54 @@ export function UsageWidget() {
                     />
                   ))}
                 </div>
-                {/* Per-model breakdown (last 24h) */}
-                <BreakdownTable
-                  title="By model · last 24h"
-                  rows={data.last24h.byModel}
-                  empty="(no calls in last 24h)"
-                />
-                {/* Per-preset breakdown (last 24h) */}
-                <BreakdownTable
-                  title="By preset · last 24h"
-                  rows={data.last24h.byPreset}
-                  empty="(no calls in last 24h)"
-                />
+                {/* Task #169: scope toggle for the byModel/byPreset
+                    tables. "24h" = today's behavior, recent rolling
+                    window. "all" = every call since the process
+                    started (lifetime, in-memory cap = 100k records). */}
+                <div className="flex items-center gap-2 text-[11px] text-ink-400">
+                  <span>Breakdown scope:</span>
+                  <div className="inline-flex rounded border border-ink-700 overflow-hidden">
+                    <button
+                      onClick={() => setScope("24h")}
+                      className={`px-2 py-0.5 ${scope === "24h" ? "bg-ink-700 text-ink-100" : "hover:bg-ink-800 text-ink-400"}`}
+                      title="Calls within the last 24 hours (rolling window). Excludes older runs."
+                    >
+                      Last 24h
+                    </button>
+                    <button
+                      onClick={() => setScope("all")}
+                      className={`px-2 py-0.5 ${scope === "all" ? "bg-ink-700 text-ink-100" : "hover:bg-ink-800 text-ink-400"}`}
+                      title="All calls since the dev server started (capped at ~100k in-memory records)."
+                    >
+                      All time
+                    </button>
+                  </div>
+                </div>
+                {/* Per-model + per-preset breakdowns — source switches
+                    based on toggle. Falls back to last24h if the
+                    server doesn't ship lifetimeWindow yet (graceful
+                    degradation for stale-server cases). */}
+                {(() => {
+                  const win = scope === "all"
+                    ? (data.lifetimeWindow ?? data.last24h)
+                    : data.last24h;
+                  const scopeLabel = scope === "all" ? "all time" : "last 24h";
+                  const empty = `(no calls in ${scopeLabel})`;
+                  return (
+                    <>
+                      <BreakdownTable
+                        title={`By model · ${scopeLabel}`}
+                        rows={win.byModel}
+                        empty={empty}
+                      />
+                      <BreakdownTable
+                        title={`By preset · ${scopeLabel}`}
+                        rows={win.byPreset}
+                        empty={empty}
+                      />
+                    </>
+                  );
+                })()}
                 {/* Recent calls */}
                 <RecentTable rows={data.recent.slice(-15).reverse()} />
               </>

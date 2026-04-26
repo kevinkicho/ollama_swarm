@@ -106,6 +106,10 @@ app.get("/api/usage", (_req, res) => {
     last24h: tokenTracker.totalsInWindow(24 * 60 * 60_000, "24h"),
     last7d: tokenTracker.totalsInWindow(7 * 24 * 60 * 60_000, "7d"),
     lifetime: tokenTracker.total(),
+    // Task #169: lifetime breakdown (byModel + byPreset) for the
+    // UsageWidget's All-time toggle. Same shape as the windowed
+    // entries; client picks whichever the user toggled to.
+    lifetimeWindow: tokenTracker.totalsAllTime("lifetime"),
     recent: tokenTracker.recent(50),
     // Task #137: surface the quota-exhausted state so polling clients
     // (3-min usage check, UI dashboard, the smoke-tour script) can

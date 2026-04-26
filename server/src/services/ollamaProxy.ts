@@ -227,6 +227,46 @@ class TokenTracker {
     return { promptTokens: p, responseTokens: r, calls: this.records.length };
   }
 
+  /** Task #169: lifetime totals including the same byModel + byPreset
+   *  breakdowns that totalsInWindow() produces, so the UI's usage
+   *  widget can offer an "All time" toggle next to the existing
+   *  "Last 24h" view. Iterates all in-memory records (capped at
+   *  CACHE_LIMIT = 100k — for our scale, equivalent to lifetime). */
+  totalsAllTime(label: string = "lifetime"): UsageWindow {
+    let p = 0;
+    let r = 0;
+    let c = 0;
+    const byModel: Record<string, { promptTokens: number; responseTokens: number; calls: number }> = {};
+    const byPreset: Record<string, { promptTokens: number; responseTokens: number; calls: number }> = {};
+    for (const rec of this.records) {
+      p += rec.promptTokens;
+      r += rec.responseTokens;
+      c += 1;
+      const mKey = rec.model ?? "(unknown)";
+      const m = byModel[mKey] ?? { promptTokens: 0, responseTokens: 0, calls: 0 };
+      m.promptTokens += rec.promptTokens;
+      m.responseTokens += rec.responseTokens;
+      m.calls += 1;
+      byModel[mKey] = m;
+      const pKey = rec.preset ?? "(idle)";
+      const pp = byPreset[pKey] ?? { promptTokens: 0, responseTokens: 0, calls: 0 };
+      pp.promptTokens += rec.promptTokens;
+      pp.responseTokens += rec.responseTokens;
+      pp.calls += 1;
+      byPreset[pKey] = pp;
+    }
+    return {
+      promptTokens: p,
+      responseTokens: r,
+      totalTokens: p + r,
+      calls: c,
+      windowMs: Number.POSITIVE_INFINITY,
+      windowLabel: label,
+      byModel,
+      byPreset,
+    };
+  }
+
   /** Task #124: total tokens (prompt + response) since the given
    *  lifetime baseline. Runners snapshot baseline at run-start and
    *  poll this every cap-check to know how many tokens THIS run has
