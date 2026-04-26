@@ -27,7 +27,7 @@ import {
 } from "./stateSnapshot.js";
 import { shouldRunFinalAudit } from "./finalAudit.js";
 import { promptWithRetry } from "../promptWithRetry.js";
-import { isQuotaExhausted, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../../services/ollamaProxy.js";
+import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../../services/ollamaProxy.js";
 import { formatCloneMessage } from "../cloneMessage.js";
 import { buildSummary, computeLatencyStats, type PerAgentStat, type RunSummary } from "./summary.js";
 import { applyHunks } from "./applyHunks.js";
@@ -3389,7 +3389,7 @@ export class BlackboardRunner implements SwarmRunner {
     // OUR per-run budget tripped. Stops the run cleanly so the rest
     // of the round doesn't burn on retries the proxy will keep
     // rejecting.
-    const quotaState = this.tokenBaselineForRun !== undefined && isQuotaExhausted()
+    const quotaState = this.tokenBaselineForRun !== undefined && shouldHaltOnQuota()
       ? tokenTracker.getQuotaState()
       : null;
     const quotaReason = quotaState

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { detectQuotaExhausted } from "./ollamaProxy.js";
+import { detectQuotaExhausted, shouldHaltOnQuota, tokenTracker } from "./ollamaProxy.js";
 
 describe("detectQuotaExhausted (Task #137)", () => {
   it("returns null on a normal 200 OK with usage body", () => {
@@ -70,5 +70,51 @@ describe("detectQuotaExhausted (Task #137)", () => {
     const r = detectQuotaExhausted(429, long);
     assert.ok(r);
     assert.ok(r!.length < 200, `reason should be capped, got ${r!.length} chars`);
+  });
+});
+
+// Task #149: classification — transient concurrency vs persistent quota
+describe("tokenTracker quota kind classification (Task #149)", () => {
+  it("classifies 'too many concurrent requests' as transient (does not halt)", () => {
+    tokenTracker.clearQuotaState();
+    tokenTracker.markQuotaExhausted(429, '429 {"error":"too many concurrent requests"}', "transient");
+    assert.equal(tokenTracker.isQuotaExhausted(), true, "flag should still be set");
+    assert.equal(shouldHaltOnQuota(), false, "transient should NOT halt");
+    tokenTracker.clearQuotaState();
+  });
+
+  it("classifies 'plan limit exceeded' as persistent (halts)", () => {
+    tokenTracker.clearQuotaState();
+    tokenTracker.markQuotaExhausted(429, '429 {"error":"weekly plan limit exceeded"}', "persistent");
+    assert.equal(tokenTracker.isQuotaExhausted(), true);
+    assert.equal(shouldHaltOnQuota(), true, "persistent should halt");
+    tokenTracker.clearQuotaState();
+  });
+
+  it("upgrades transient → persistent when a stronger signal arrives later", () => {
+    tokenTracker.clearQuotaState();
+    tokenTracker.markQuotaExhausted(429, "concurrent", "transient");
+    assert.equal(shouldHaltOnQuota(), false);
+    // Same run, different upstream response — now we're hitting the real wall.
+    tokenTracker.markQuotaExhausted(429, "weekly quota exceeded", "persistent");
+    assert.equal(shouldHaltOnQuota(), true, "should upgrade to halting once persistent fires");
+    tokenTracker.clearQuotaState();
+  });
+
+  it("does NOT downgrade persistent → transient when a transient signal arrives later", () => {
+    tokenTracker.clearQuotaState();
+    tokenTracker.markQuotaExhausted(429, "weekly quota exceeded", "persistent");
+    tokenTracker.markQuotaExhausted(429, "concurrent burst", "transient");
+    assert.equal(shouldHaltOnQuota(), true, "persistent should be sticky");
+    tokenTracker.clearQuotaState();
+  });
+
+  it("clearQuotaState resets the flag so the next run can probe fresh", () => {
+    tokenTracker.clearQuotaState();
+    tokenTracker.markQuotaExhausted(429, "any", "persistent");
+    assert.equal(shouldHaltOnQuota(), true);
+    tokenTracker.clearQuotaState();
+    assert.equal(shouldHaltOnQuota(), false);
+    assert.equal(tokenTracker.isQuotaExhausted(), false);
   });
 });

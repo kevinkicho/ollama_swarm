@@ -13,7 +13,7 @@ import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
-import { isQuotaExhausted, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../services/ollamaProxy.js";
+import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../services/ollamaProxy.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
@@ -184,7 +184,7 @@ export class CouncilRunner implements SwarmRunner {
         // Task #137: quota-wall cap check. Independent of #124's token-
         // budget — this fires when UPSTREAM Ollama returns a quota /
         // 429 response, regardless of where our local budget stands.
-        if (isQuotaExhausted()) {
+        if (shouldHaltOnQuota()) {
           const q = tokenTracker.getQuotaState();
           this.earlyStopDetail = `ollama-quota-exhausted (${q?.statusCode}: ${q?.reason.slice(0, 100)})`;
           this.appendSystem(`Ollama quota wall hit at round ${r - 1}/${cfg.rounds} (${q?.statusCode}) — ending run early.`);

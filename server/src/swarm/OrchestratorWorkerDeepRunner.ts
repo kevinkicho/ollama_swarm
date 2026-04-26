@@ -58,7 +58,7 @@ import {
   writeRunSummary,
 } from "./runSummary.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
-import { isQuotaExhausted, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../services/ollamaProxy.js";
+import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../services/ollamaProxy.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
@@ -312,7 +312,7 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
           break;
         }
         // Task #137: quota-wall cap check.
-        if (isQuotaExhausted()) {
+        if (shouldHaltOnQuota()) {
           const q = tokenTracker.getQuotaState();
           this.earlyStopDetail = `ollama-quota-exhausted (${q?.statusCode}: ${q?.reason.slice(0, 100)})`;
           this.appendSystem(

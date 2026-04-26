@@ -70,15 +70,48 @@ export interface QuotaState {
   since: number;
   reason: string;
   statusCode: number;
+  // Task #149: distinguishes transient (concurrency burst that clears in
+  // seconds) from persistent (plan/usage/rate-window wall that needs
+  // intervention). Runners should halt only on "persistent"; "transient"
+  // is informational only — the SDK's per-call retry handles the back-off.
+  kind: "transient" | "persistent";
 }
 
-const QUOTA_BODY_KEYWORDS: readonly RegExp[] = [
+// Persistent wall — plan / usage / weekly / monthly quota. These need
+// human or rate-window intervention; the run should halt cleanly.
+const QUOTA_PERSISTENT_KEYWORDS: readonly RegExp[] = [
   /\bquota\b/i,
-  /\brate[\s_-]*limit(?:ed)?/i,
   /\busage[\s_-]*limit/i,
   /\bweekly[\s_-]*limit/i,
-  /\b(too\s+many\s+requests)\b/i,
+  /\bmonthly[\s_-]*limit/i,
+  /\bplan[\s_-]*limit/i,
   /\bexceed(?:ed|s)?\s+(?:your\s+)?(?:plan|quota|limit)/i,
+];
+// Transient wall — concurrency / rate-burst. These clear in seconds;
+// the SDK's retry-with-backoff handles them. We still record the event
+// so the UI can show "throttled briefly" but the run keeps going.
+const QUOTA_TRANSIENT_KEYWORDS: readonly RegExp[] = [
+  /\bconcurrent\b/i,
+  /\b(too\s+many\s+requests)\b/i,
+  /\brate[\s_-]*limit(?:ed)?/i,
+];
+
+function classifyQuotaKind(body: string): "transient" | "persistent" {
+  // Persistent takes precedence — a body that mentions both ("rate limit
+  // on your plan") is a real quota wall, not a burst.
+  if (QUOTA_PERSISTENT_KEYWORDS.some((re) => re.test(body))) return "persistent";
+  if (QUOTA_TRANSIENT_KEYWORDS.some((re) => re.test(body))) return "transient";
+  // Empty/unclassifiable body on a 429 — assume persistent (safer to
+  // halt than to spin if we can't tell).
+  return "persistent";
+}
+
+// Backward-compat alias — anywhere we used QUOTA_BODY_KEYWORDS we now
+// match either category. Used by detectQuotaExhausted for 402/403 and
+// 200-with-error paths where any quota-shaped signal is enough to flag.
+const QUOTA_BODY_KEYWORDS: readonly RegExp[] = [
+  ...QUOTA_PERSISTENT_KEYWORDS,
+  ...QUOTA_TRANSIENT_KEYWORDS,
 ];
 
 class TokenTracker {
@@ -104,10 +137,20 @@ class TokenTracker {
   }
 
   /** Task #137: proxy flips this when upstream Ollama returns a quota-
-   *  shaped response. Runners poll between turns; UI surfaces the wall. */
-  markQuotaExhausted(statusCode: number, reason: string): void {
-    if (this.quota) return; // first hit wins; keep the original timestamp
-    this.quota = { since: Date.now(), reason, statusCode };
+   *  shaped response. Runners poll between turns; UI surfaces the wall.
+   *  Task #149: now also tracks kind ("transient" concurrency vs
+   *  "persistent" plan-quota). Persistent walls win if both have been
+   *  observed in the same run — once a real quota is hit, downgrading
+   *  back to "transient" would be misleading. */
+  markQuotaExhausted(statusCode: number, reason: string, kind: "transient" | "persistent" = "persistent"): void {
+    if (this.quota) {
+      // Upgrade transient → persistent if we see a worse signal later.
+      if (this.quota.kind === "transient" && kind === "persistent") {
+        this.quota = { ...this.quota, statusCode, reason, kind };
+      }
+      return;
+    }
+    this.quota = { since: Date.now(), reason, statusCode, kind };
   }
 
   /** Cleared on run-start so the next run can probe the wall fresh. */
@@ -117,6 +160,12 @@ class TokenTracker {
 
   isQuotaExhausted(): boolean {
     return this.quota !== null;
+  }
+
+  /** Task #149: only returns true for persistent walls. Runners use this
+   *  for halt decisions; transient bursts shouldn't abort the run. */
+  shouldHaltOnQuota(): boolean {
+    return this.quota !== null && this.quota.kind === "persistent";
   }
 
   getQuotaState(): QuotaState | null {
@@ -204,9 +253,20 @@ export function tokenBudgetExceeded(baseline: number, budget: number | undefined
 
 /** Task #137: convenience export — runners poll between turns. Returns
  *  true once the proxy has seen a quota-shaped upstream response since
- *  the last clearQuotaState() call. */
+ *  the last clearQuotaState() call. NOTE: this returns true for BOTH
+ *  transient and persistent walls. For halt decisions, runners should
+ *  prefer shouldHaltOnQuota() (Task #149). isQuotaExhausted is kept
+ *  for back-compat but flagged so callers think about the distinction. */
 export function isQuotaExhausted(): boolean {
   return tokenTracker.isQuotaExhausted();
+}
+
+/** Task #149: runners should call this in cap-checks, not isQuotaExhausted.
+ *  Only returns true for persistent walls (plan / usage / weekly limit).
+ *  Transient concurrency-429s clear in seconds via SDK retry; halting
+ *  on them aborts otherwise-healthy runs. */
+export function shouldHaltOnQuota(): boolean {
+  return tokenTracker.shouldHaltOnQuota();
 }
 
 /** Task #137: pure detector — exported for unit tests. Decides whether
@@ -246,7 +306,10 @@ export function detectQuotaExhausted(status: number, body: string): string | nul
 
 function detectAndMarkQuotaExhausted(status: number, body: string): void {
   const reason = detectQuotaExhausted(status, body);
-  if (reason) tokenTracker.markQuotaExhausted(status, reason);
+  if (reason) {
+    const kind = classifyQuotaKind(body);
+    tokenTracker.markQuotaExhausted(status, reason, kind);
+  }
 }
 
 function truncateForReason(s: string, max = 160): string {
