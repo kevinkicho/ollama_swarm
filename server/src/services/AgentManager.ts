@@ -252,7 +252,20 @@ export class AgentManager {
       // Unit 18: skipped when opts.skipWarmup is true (runner will warm
       // serially after the parallel spawn batch returns) or when
       // AGENT_WARMUP_ENABLED is false (unit-test rigs, etc).
+      // Task #153 (2026-04-25): when N agents spawn in parallel via
+      // Promise.allSettled in the runners, all N warmupAgent calls fire
+      // ~simultaneously and hit Ollama's 429 "too many concurrent requests"
+      // wall (observed in smoke tour 2026-04-25 17:09 with map-reduce's
+      // 5-mapper spawn). Stagger the warmup by `(opts.index - 1) * 200ms`
+      // so agent 1 warms immediately, agent 2 at +200ms, agent 3 at +400ms,
+      // etc. — same shape as #53's staggerStart for in-loop prompts.
+      // Adds at most (N-1)*200ms = ~1.4s for N=8 to total spawn time;
+      // negligible vs. the warmup itself.
       if (config.AGENT_WARMUP_ENABLED && !opts.skipWarmup) {
+        const staggerMs = Math.max(0, opts.index - 1) * 200;
+        if (staggerMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, staggerMs));
+        }
         await this.warmupAgent(agent);
       }
       this.setAgentState({ ...stateBase, sessionId, status: "ready" });
