@@ -52,6 +52,11 @@ interface MessageStreamState {
   perChunkTimeoutMs: number;
   /** AbortSignal listener cleanup. */
   signalCleanup?: () => void;
+  /** Task #200: set by attachEventStream when its for-await loop exits
+   *  WITHOUT session.idle having fired for this agent. Tells the HTTP
+   *  catch handler that SSE is dead and the "lastChunkAt < 10s heuristic"
+   *  is unreliable — propagate the HTTP error instead of swallowing. */
+  sseStreamDied?: boolean;
 }
 
 export interface StreamPromptOpts {
@@ -255,6 +260,17 @@ export class AgentManager {
         // silent — that's a true failure (e.g. auth, network).
         const cur = this.streamingByAgent.get(agent.id);
         if (cur !== state) return; // already settled
+        // Task #200: if SSE channel died (for-await loop exited without
+        // session.idle), the lastChunkAt heuristic is unreliable — last
+        // chunks may have arrived very recently right before the channel
+        // dropped. Propagate the HTTP error instead of waiting for the
+        // per-chunk timer that will never fire because no events are
+        // arriving anymore.
+        if (state.sseStreamDied) {
+          this.streamingByAgent.delete(agent.id);
+          wrappedReject(err instanceof Error ? err : new Error(String(err)));
+          return;
+        }
         const sinceLastChunk = Date.now() - state.lastChunkAt;
         if (sinceLastChunk < 10_000) {
           // SSE is live; trust the per-chunk timer + session.idle
@@ -776,6 +792,14 @@ export class AgentManager {
             message: `SSE stream for ${agent.id} ended unexpectedly: ${msg}`,
           });
         }
+      }
+      // Task #200: when the SSE stream ends (graceful or error) WITHOUT
+      // session.idle having settled the in-flight stream state, mark the
+      // streaming state as dead so the HTTP catch handler stops swallowing
+      // errors based on the "chunks within 10s" heuristic.
+      if (!abort.signal.aborted) {
+        const inflight = this.streamingByAgent.get(agent.id);
+        if (inflight) inflight.sseStreamDied = true;
       }
       // Graceful exit (for-await returned without throwing) while we were still
       // attached means the server closed the stream on its own — also worth

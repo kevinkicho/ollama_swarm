@@ -663,7 +663,16 @@ export class BlackboardRunner implements SwarmRunner {
     this.setPhase("planning");
     // Background so the HTTP POST that triggered start() returns immediately.
     // The UI watches progress over /ws.
-    void this.planAndExecute(planner, workers, seed);
+    // Task #198: planAndExecute has internal try/catch (line ~676), but its
+    // finally block runs async ops (writeRunSummary, runAuditor) that can
+    // throw on their own. Defense in depth: surface any leak as an error
+    // event so the UI doesn't hang in "planning" forever.
+    this.planAndExecute(planner, workers, seed).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.opts.emit({ type: "error", message: `Run aborted (unhandled): ${msg}` });
+      this.appendSystem(`Run aborted (unhandled): ${msg}`);
+      void this.stop().catch(() => {});
+    });
   }
 
   private async planAndExecute(
@@ -910,7 +919,14 @@ export class BlackboardRunner implements SwarmRunner {
       this.pauseProbeTimer = undefined;
     }
     this.paused = false;
-    this.drainWatcherTimer = setInterval(() => void this.checkDrainComplete(), DRAIN_WATCHER_INTERVAL_MS);
+    // Task #199: surface unhandled rejections so a single bad tick doesn't
+    // become a silent stream of unhandled errors firing every 2s.
+    this.drainWatcherTimer = setInterval(() => {
+      this.checkDrainComplete().catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.appendSystem(`Drain watcher tick failed: ${msg}`);
+      });
+    }, DRAIN_WATCHER_INTERVAL_MS);
   }
 
   private async checkDrainComplete(): Promise<void> {
@@ -2726,20 +2742,28 @@ export class BlackboardRunner implements SwarmRunner {
     if (this.replanTickTimer) return;
     this.replanTickTimer = setInterval(() => {
       if (this.stopping) return;
-      for (const todo of this.board.listTodos()) {
-        if (todo.status === "stale" && todo.replanCount < MAX_REPLAN_ATTEMPTS) {
-          this.enqueueReplan(todo.id);
+      // Task #199: board.skip / enqueueReplan can throw on a corrupted
+      // board state. Without try/catch the rejection silently kills the
+      // replan loop AND fires every 20s as an unhandled rejection.
+      try {
+        for (const todo of this.board.listTodos()) {
+          if (todo.status === "stale" && todo.replanCount < MAX_REPLAN_ATTEMPTS) {
+            this.enqueueReplan(todo.id);
+          }
         }
-      }
-      // Also sweep exhausted stales into skipped right away — otherwise
-      // workers would keep looping (counts.stale>0) waiting for them.
-      for (const todo of this.board.listTodos()) {
-        if (todo.status === "stale" && todo.replanCount >= MAX_REPLAN_ATTEMPTS) {
-          this.board.skip(
-            todo.id,
-            `auto-skipped: replan attempts exhausted (${todo.replanCount})`,
-          );
+        // Also sweep exhausted stales into skipped right away — otherwise
+        // workers would keep looping (counts.stale>0) waiting for them.
+        for (const todo of this.board.listTodos()) {
+          if (todo.status === "stale" && todo.replanCount >= MAX_REPLAN_ATTEMPTS) {
+            this.board.skip(
+              todo.id,
+              `auto-skipped: replan attempts exhausted (${todo.replanCount})`,
+            );
+          }
         }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.appendSystem(`Replan tick failed: ${msg}`);
       }
     }, REPLAN_FALLBACK_TICK_MS);
     this.replanTickTimer.unref?.();
@@ -2882,7 +2906,14 @@ export class BlackboardRunner implements SwarmRunner {
     if (this.pauseProbeTimer) return;
     this.pauseProbeTimer = setTimeout(() => {
       this.pauseProbeTimer = undefined;
-      void this.runPauseProbe();
+      // Task #199: if runPauseProbe throws (e.g., planner agent gone),
+      // pause becomes permanent because nothing reschedules. Reschedule
+      // on failure so the user's run can recover when the wall clears.
+      this.runPauseProbe().catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.appendSystem(`Pause probe failed: ${msg}. Will retry.`);
+        if (this.paused && !this.stopping) this.schedulePauseProbe();
+      });
     }, PAUSE_PROBE_INTERVAL_MS);
   }
 
