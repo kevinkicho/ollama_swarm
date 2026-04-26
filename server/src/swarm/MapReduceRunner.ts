@@ -195,6 +195,9 @@ export class MapReduceRunner implements SwarmRunner {
 
       // Task #124: snapshot lifetime tokens for budget delta.
       const tokenBaseline = snapshotLifetimeTokens();
+      // Task #146: dead-loop guard (mirrors #144).
+      let consecutiveEmptyRounds = 0;
+      const EMPTY_ROUND_BREAK_THRESHOLD = 2;
 
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
@@ -230,11 +233,31 @@ export class MapReduceRunner implements SwarmRunner {
         // Task #53: stagger the N parallel mapper prompts to avoid the
         // Pattern 3 cold-start queue race confirmed in 2026-04-24 logs.
         const seedSnapshot = this.transcript.filter((e) => e.role === "system");
+        const transcriptLenBefore = this.transcript.length;
         await staggerStart(mappers, (m, i) => {
           const mySlice = slices[i] ?? [];
           return this.runMapperTurn(m, r, cfg.rounds, mySlice, seedSnapshot);
         });
         if (this.stopping) break;
+        // Task #146: dead-loop guard. If every mapper produced empty/junk
+        // output this cycle, count toward break threshold.
+        const newEntries = this.transcript
+          .slice(transcriptLenBefore)
+          .filter((e) => e.role === "agent");
+        const allEmpty = newEntries.length > 0 &&
+          newEntries.every((e) => (e.text || "") === "(empty response)" || looksLikeJunk(e.text || ""));
+        if (allEmpty) {
+          consecutiveEmptyRounds++;
+          if (consecutiveEmptyRounds >= EMPTY_ROUND_BREAK_THRESHOLD) {
+            this.earlyStopDetail = `mappers-silenced (${consecutiveEmptyRounds} consecutive empty cycles)`;
+            this.appendSystem(
+              `All mappers produced empty/junk output for ${consecutiveEmptyRounds} consecutive cycles — ending map-reduce early.`,
+            );
+            break;
+          }
+        } else {
+          consecutiveEmptyRounds = 0;
+        }
 
         // Phase B (Task #97): if every mapper signalled COMPLETE in
         // this cycle's MAP phase, there's nothing new to reduce next

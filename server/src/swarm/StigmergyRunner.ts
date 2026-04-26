@@ -194,6 +194,9 @@ export class StigmergyRunner implements SwarmRunner {
 
       // Task #124: snapshot lifetime tokens for budget delta.
       const tokenBaseline = snapshotLifetimeTokens();
+      // Task #146: dead-loop guard (mirrors #144).
+      let consecutiveEmptyRounds = 0;
+      const EMPTY_ROUND_BREAK_THRESHOLD = 2;
 
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
@@ -213,9 +216,31 @@ export class StigmergyRunner implements SwarmRunner {
         this.round = r;
         this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
 
+        const transcriptLenBefore = this.transcript.length;
         for (const agent of agents) {
           if (this.stopping) break;
           await this.runExplorerTurn(agent, r, cfg.rounds, candidatePaths);
+        }
+        // Task #146: dead-loop guard. If every explorer this round produced
+        // empty/junk output, count toward break threshold.
+        if (!this.stopping) {
+          const newEntries = this.transcript
+            .slice(transcriptLenBefore)
+            .filter((e) => e.role === "agent");
+          const allEmpty = newEntries.length > 0 &&
+            newEntries.every((e) => (e.text || "") === "(empty response)" || looksLikeJunk(e.text || ""));
+          if (allEmpty) {
+            consecutiveEmptyRounds++;
+            if (consecutiveEmptyRounds >= EMPTY_ROUND_BREAK_THRESHOLD) {
+              this.earlyStopDetail = `explorers-silenced (${consecutiveEmptyRounds} consecutive empty rounds)`;
+              this.appendSystem(
+                `All explorers produced empty/junk output for ${consecutiveEmptyRounds} consecutive rounds — ending stigmergy early.`,
+              );
+              break;
+            }
+          } else {
+            consecutiveEmptyRounds = 0;
+          }
         }
 
         // Phase B (Task #98): record this round's ranking, check for

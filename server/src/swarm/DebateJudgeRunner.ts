@@ -208,6 +208,13 @@ export class DebateJudgeRunner implements SwarmRunner {
 
       // Task #124: snapshot lifetime tokens for budget delta.
       const tokenBaseline = snapshotLifetimeTokens();
+      // Task #146: same dead-loop guard as #144 in OW. By round ~15 of a
+      // long debate, the transcript passed to PRO/CON has bloated and the
+      // model can return "(empty response)" placeholder for every turn.
+      // Track consecutive rounds where all new agent entries are empty/junk;
+      // break when threshold hit.
+      let consecutiveEmptyRounds = 0;
+      const EMPTY_ROUND_BREAK_THRESHOLD = 2;
 
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
@@ -228,12 +235,32 @@ export class DebateJudgeRunner implements SwarmRunner {
         this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
 
         const isFinalRound = r === cfg.rounds;
+        const transcriptLenBefore = this.transcript.length;
         // PRO turn
         await this.runDebaterTurn(pro, "pro", r, cfg.rounds, prop, isFinalRound);
         if (this.stopping) break;
         // CON turn
         await this.runDebaterTurn(con, "con", r, cfg.rounds, prop, isFinalRound);
         if (this.stopping) break;
+        // Task #146: dead-loop guard. If both PRO and CON produced empty/junk
+        // output this round, count it. After N consecutive empty rounds, break.
+        const newEntries = this.transcript
+          .slice(transcriptLenBefore)
+          .filter((e) => e.role === "agent");
+        const allEmpty = newEntries.length > 0 &&
+          newEntries.every((e) => (e.text || "") === "(empty response)" || looksLikeJunk(e.text || ""));
+        if (allEmpty) {
+          consecutiveEmptyRounds++;
+          if (consecutiveEmptyRounds >= EMPTY_ROUND_BREAK_THRESHOLD) {
+            this.earlyStopDetail = `agents-silenced (${consecutiveEmptyRounds} consecutive empty rounds)`;
+            this.appendSystem(
+              `Both debaters produced empty/junk output for ${consecutiveEmptyRounds} consecutive rounds — ending debate early.`,
+            );
+            break;
+          }
+        } else {
+          consecutiveEmptyRounds = 0;
+        }
         // JUDGE turn (only on the final round, OR mid-loop when we
         // hit the early-check checkpoint).
         if (isFinalRound) {

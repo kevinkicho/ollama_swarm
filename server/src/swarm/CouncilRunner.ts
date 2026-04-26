@@ -163,6 +163,9 @@ export class CouncilRunner implements SwarmRunner {
       // synthesis call max, not per-round. Skip for tiny runs where
       // a midpoint check IS the loop end.
       const earlyCheckRound = cfg.rounds >= 4 ? Math.ceil(cfg.rounds / 2) : 0;
+      // Task #146: dead-loop guard (mirrors #144).
+      let consecutiveEmptyRounds = 0;
+      const EMPTY_ROUND_BREAK_THRESHOLD = 2;
 
       // Task #124: snapshot lifetime tokens at run start; budget
       // checks compare delta vs cfg.tokenBudget.
@@ -212,9 +215,30 @@ export class CouncilRunner implements SwarmRunner {
         // per agent so they don't all hit the cloud at the same ms.
         // Log analysis 2026-04-24 confirmed Pattern 3 — agent-2 consistently
         // loses the queue race when all agents fire simultaneously.
+        const transcriptLenBefore = this.transcript.length;
         await staggerStart(agents, (agent) =>
           this.runTurn(agent, r, cfg.rounds, snapshot),
         );
+        // Task #146: dead-loop guard. After each council round, if EVERY
+        // drafter's new entry is empty/junk, count consecutive bad rounds
+        // and break at threshold. Same context-bloat root cause as #144.
+        const newEntries = this.transcript
+          .slice(transcriptLenBefore)
+          .filter((e) => e.role === "agent");
+        const allEmpty = newEntries.length > 0 &&
+          newEntries.every((e) => (e.text || "") === "(empty response)" || looksLikeJunk(e.text || ""));
+        if (allEmpty) {
+          consecutiveEmptyRounds++;
+          if (consecutiveEmptyRounds >= EMPTY_ROUND_BREAK_THRESHOLD) {
+            this.earlyStopDetail = `drafters-silenced (${consecutiveEmptyRounds} consecutive empty rounds)`;
+            this.appendSystem(
+              `All council drafters produced empty/junk output for ${consecutiveEmptyRounds} consecutive rounds — ending council early.`,
+            );
+            break;
+          }
+        } else {
+          consecutiveEmptyRounds = 0;
+        }
 
         // Phase B (Task #99): midpoint synthesis check. If the
         // synthesizer reports CONVERGENCE: high, the council has

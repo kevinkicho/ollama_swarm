@@ -125,6 +125,14 @@ const StartBody = z.object({
   // Read at planner-seed time + written at run-end (post-stretch).
   // Default true.
   autoMemory: z.boolean().optional(),
+  // Task #147: when true, the route auto-stops any existing runner
+  // before starting the new one, instead of returning 409 "A swarm
+  // is already running". Lets clients recover from a stuck-orchestrator
+  // state (e.g. previous start hung in spawning phase, client gave up
+  // on its HTTP request, but the server-side runner is still around).
+  // Default false — explicit opt-in so the UI's normal Start button
+  // can't accidentally clobber a healthy run.
+  force: z.boolean().optional(),
 });
 
 const SayBody = z.object({ text: z.string().min(1) });
@@ -228,6 +236,21 @@ export function swarmRouter(orch: Orchestrator): Router {
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.flatten() });
       return;
+    }
+    // Task #147: force-restart path. When the caller sets force=true, we
+    // pre-emptively stop any existing runner so the new start always gets
+    // a clean slot. Recovers from the "stuck-orchestrator" state observed
+    // in smoke tour 2026-04-25 (map-reduce's spawn took >60s, the script's
+    // curl gave up, but the server-side runner kept holding the slot,
+    // cascading "A swarm is already running" to every subsequent preset).
+    // Best-effort: stop errors are swallowed since the new start will
+    // surface its own error if the orchestrator is truly broken.
+    if (parsed.data.force === true) {
+      try {
+        await orch.stop();
+      } catch {
+        // ignore — proceed to start; if it fails it'll fail with a real reason
+      }
     }
     // Task #109: map-reduce floor agentCount=4 (1 reducer + 3 mappers).
     // Smaller setups (agentCount=3 = 2 mappers) leave one mapper with a
