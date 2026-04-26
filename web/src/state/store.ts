@@ -358,6 +358,11 @@ export const useSwarm = create<SwarmStore>((set) => ({
         // Phase 2d: map-reduce slice assignments — same cross-run
         // leak category; cleared on new-run boundary.
         mapperSlices: {},
+        // Task #189: clear stale topbar error when a new run starts.
+        // A failed prior run's "blackboard run failed: …" banner
+        // shouldn't ride along into the new run's session — if the
+        // new run hits its own error, the server will set a fresh one.
+        error: undefined,
       };
       // Skip the divider entirely on an empty transcript — nothing to
       // divide yet, and it avoids the "first-paint shows a divider"

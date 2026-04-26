@@ -62,7 +62,14 @@ interface UsagePayload {
   quota?: QuotaState | null;
 }
 
-const POLL_INTERVAL_MS = 10_000;
+// Task #185: single coalesced poll. When the panel is open, we want
+// the breakdown tables to refresh every POLL_OPEN_MS (10s). When the
+// panel is closed, we still need a slower background tick so the
+// header chip + quota state stay current — POLL_CLOSED_MS (30s) is
+// plenty since it only drives the header. Two separate intervals were
+// creating a thundering-herd at every 30s boundary while open.
+const POLL_OPEN_MS = 10_000;
+const POLL_CLOSED_MS = 30_000;
 
 // localStorage keys for user-supplied caps. Numbers stored as strings.
 const CAP_KEYS = {
@@ -109,13 +116,6 @@ function pctColor(pct: number): string {
   return "bg-rose-500";
 }
 
-// Task #139: independent quota-state poll. Even when the UsageWidget
-// panel is closed we poll /api/usage every QUOTA_POLL_MS so the
-// header chip can flip red the moment the proxy detects a wall.
-// Polling /api/usage is free (in-memory tracker on our own server),
-// so this is cheap.
-const QUOTA_POLL_MS = 30_000;
-
 export function UsageWidget() {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<UsagePayload | null>(null);
@@ -139,7 +139,6 @@ export function UsageWidget() {
   // the header chip flips red as soon as the proxy detects a wall.
   const [quota, setQuota] = useState<QuotaState | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const quotaPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchUsage = useCallback(async () => {
     try {
@@ -155,30 +154,15 @@ export function UsageWidget() {
     }
   }, []);
 
-  // One-shot fetch on mount for the header snapshot.
+  // Task #185: single coalesced poll. Switches cadence based on `open`:
+  // 10s while open (drives breakdown tables), 30s while closed (drives
+  // header chip + quota detection). Refetches immediately when the
+  // panel toggles so the user never sees a stale snapshot. Replaces
+  // two overlapping intervals that double-hit /api/usage at 30s marks.
   useEffect(() => {
     void fetchUsage();
-  }, [fetchUsage]);
-
-  // Task #139: background quota poll, always on (~30s). Cheap — hits our
-  // own server's in-memory tracker.
-  useEffect(() => {
-    quotaPollTimerRef.current = setInterval(fetchUsage, QUOTA_POLL_MS);
-    return () => {
-      if (quotaPollTimerRef.current) clearInterval(quotaPollTimerRef.current);
-      quotaPollTimerRef.current = null;
-    };
-  }, [fetchUsage]);
-
-  // Higher-rate poll while open (10s) for the breakdown tables.
-  useEffect(() => {
-    if (!open) {
-      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-      pollTimerRef.current = null;
-      return;
-    }
-    void fetchUsage();
-    pollTimerRef.current = setInterval(fetchUsage, POLL_INTERVAL_MS);
+    const interval = open ? POLL_OPEN_MS : POLL_CLOSED_MS;
+    pollTimerRef.current = setInterval(fetchUsage, interval);
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;

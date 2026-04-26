@@ -2,8 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSwarm } from "../state/store";
 import type { TranscriptEntry, TranscriptEntrySummary } from "../types";
 import { summarizeAgentJson } from "./transcriptSummarize";
-
-const AGENT_HUE = [140, 200, 260, 30, 320, 70, 180, 240];
+import { agentBubblePalette, hueForAgent } from "./agentPalette";
+import { useSegmentSplitter } from "./useSegmentSplitter";
 const COLLAPSE_THRESHOLD = 600;
 const JSON_COLLAPSE_THRESHOLD = 2000;
 // Task #75 (2026-04-25): max bubble body height before clip + fade.
@@ -168,13 +168,14 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
       />
     );
   }
-  const hue = AGENT_HUE[(entry.agentIndex ?? 1) - 1] ?? 200;
+  const hue = hueForAgent(entry.agentIndex);
+  const palette = agentBubblePalette(hue, false);
   const header = (
-    <div className="text-xs mb-1" style={{ color: `hsl(${hue} 60% 70%)` }}>
+    <div className="text-xs mb-1" style={{ color: palette.header }}>
       Agent {entry.agentIndex} · {ts}
     </div>
   );
-  const style = { borderColor: `hsl(${hue} 30% 30%)`, background: `hsl(${hue} 30% 12%)` };
+  const style = { borderColor: palette.border, background: palette.background };
   const className = "rounded-md p-3 border text-sm";
 
   // Unit 54: prefer the server-computed structured summary when
@@ -620,12 +621,6 @@ function StreamingDock({
   );
 }
 
-// Task #178: gap threshold (ms) above which a new burst of text is
-// treated as a NEW segment — earlier text gets checkpointed into a
-// collapsible. 5s catches "deep reasoning" pauses without splitting
-// on the normal sub-second SSE-chunk cadence.
-const SEGMENT_PAUSE_MS = 5000;
-
 function PersistentStreamBubble({
   agentIndex,
   text,
@@ -635,54 +630,14 @@ function PersistentStreamBubble({
   text: string;
   meta: { startedAt: number; lastTextAt: number; status: "live" | "done"; endedAt?: number } | undefined;
 }) {
-  const hue = AGENT_HUE[(agentIndex || 1) - 1] ?? 200;
+  const hue = hueForAgent(agentIndex);
   const isDone = meta?.status === "done";
+  const palette = agentBubblePalette(hue, isDone);
   const now = Date.now();
   const sinceLastText = meta ? Math.max(0, now - meta.lastTextAt) : 0;
   const sinceStart = meta ? Math.max(0, now - meta.startedAt) : 0;
 
-  // Task #178: track segment split points. Whenever text grows after
-  // a SEGMENT_PAUSE_MS or longer pause, we record the prior text
-  // length as a split — the segment that just ended becomes a
-  // collapsible block, and new chars start a fresh "active" segment.
-  // splitPoints is monotonically growing, indexes into the cumulative
-  // text. Reset on new prompt cycle (text shrinks back to "").
-  const [splitPoints, setSplitPoints] = useState<number[]>([]);
-  const prevTextRef = useRef<{ text: string; lastTextChangeAt: number }>({
-    text: "",
-    lastTextChangeAt: Date.now(),
-  });
-  useEffect(() => {
-    const prev = prevTextRef.current;
-    if (text === prev.text) return; // no change
-    if (text.length < prev.text.length || !text.startsWith(prev.text)) {
-      // Text shrank or restarted — reset segments (new prompt cycle).
-      prevTextRef.current = { text, lastTextChangeAt: Date.now() };
-      setSplitPoints([]);
-      return;
-    }
-    // Text grew. If the gap since last change crosses the pause
-    // threshold, the prev.text.length boundary becomes a split point.
-    const gap = Date.now() - prev.lastTextChangeAt;
-    if (gap >= SEGMENT_PAUSE_MS && prev.text.length > 0) {
-      setSplitPoints((sp) =>
-        sp.length > 0 && sp[sp.length - 1] === prev.text.length ? sp : [...sp, prev.text.length],
-      );
-    }
-    prevTextRef.current = { text, lastTextChangeAt: Date.now() };
-  }, [text]);
-
-  // Slice text into segments by split points. Last segment is the
-  // current/active one (open by default while live); earlier
-  // segments are collapsible.
-  const segments: string[] = [];
-  let cursor = 0;
-  for (const sp of splitPoints) {
-    if (sp <= cursor || sp > text.length) continue;
-    segments.push(text.slice(cursor, sp));
-    cursor = sp;
-  }
-  segments.push(text.slice(cursor));
+  const segments = useSegmentSplitter(text);
 
   // Subtitle changes based on activity recency:
   //   <2s since last text → "writing…"
@@ -704,22 +659,16 @@ function PersistentStreamBubble({
     subtitle = `deep reasoning ${Math.round(sinceLastText / 1000)}s…${segSuffix}`;
   }
 
-  // Border color shifts subtly based on state — accent while live,
-  // neutral when done — so the visual transition is gradual.
-  const borderColor = isDone ? `hsl(${hue} 20% 22%)` : `hsl(${hue} 30% 30%)`;
-  const bgColor = isDone ? `hsl(${hue} 15% 10%)` : `hsl(${hue} 30% 12%)`;
-  const headerColor = `hsl(${hue} ${isDone ? 30 : 60}% 70%)`;
-
   return (
     <div
       className="rounded-md p-3 border text-sm relative transition-all duration-300"
-      style={{ borderColor, background: bgColor }}
+      style={{ borderColor: palette.border, background: palette.background }}
     >
-      <div className="flex items-center gap-2 text-xs mb-1" style={{ color: headerColor }}>
+      <div className="flex items-center gap-2 text-xs mb-1" style={{ color: palette.header }}>
         <span className="font-semibold">Agent {agentIndex}</span>
         <span className="text-ink-500">{subtitle}</span>
         {isDone ? (
-          <span style={{ color: `hsl(${hue} 60% 65%)` }}>✓</span>
+          <span style={{ color: palette.accent }}>✓</span>
         ) : (
           <span className="inline-flex gap-0.5 items-end">
             <Dot hue={hue} delay={0} />
@@ -760,19 +709,20 @@ function CollapsedSegment({
   const [open, setOpen] = useState(false);
   const charCount = text.length.toLocaleString();
   const preview = text.replace(/\s+/g, " ").slice(0, 80);
+  const palette = agentBubblePalette(hue, true);
   return (
     <div
       className="rounded border text-xs"
       style={{
-        borderColor: `hsl(${hue} 25% 22%)`,
-        background: `hsl(${hue} 25% 9%)`,
+        borderColor: palette.segmentBorder,
+        background: palette.segmentBackground,
       }}
     >
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="w-full text-left px-2 py-1 flex items-center gap-1.5 hover:bg-black/20 transition"
-        style={{ color: `hsl(${hue} 40% 60%)` }}
+        style={{ color: palette.header }}
       >
         <span className="font-mono text-[10px]">{open ? "▾" : "▸"}</span>
         <span className="font-semibold">Segment {index + 1}</span>
@@ -796,10 +746,11 @@ function CollapsedSegment({
 }
 
 function Dot({ hue, delay }: { hue: number; delay: number }) {
+  const palette = agentBubblePalette(hue, false);
   return (
     <span
       className="inline-block w-1 h-1 rounded-full animate-pulse"
-      style={{ background: `hsl(${hue} 70% 60%)`, animationDelay: `${delay}ms` }}
+      style={{ background: palette.accent, animationDelay: `${delay}ms` }}
     />
   );
 }
