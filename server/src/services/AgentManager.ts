@@ -236,13 +236,33 @@ export class AgentManager {
         },
         signal: opts.signal,
       }).catch((err) => {
-        // Only reject if we haven't already settled (e.g. via session.idle
-        // or per-chunk timeout — race is fine, first wins).
+        // Task #170 fix: when streaming via SSE, HTTP-level errors
+        // (UND_ERR_HEADERS_TIMEOUT in particular) are NOISE if SSE has
+        // been actively delivering events. The OpenCode HTTP path
+        // doesn't send response headers until generation completes —
+        // on a heavy 10+ min prompt, undici's headersTimeout will
+        // fire even though SSE chunks are flowing fine. SSE is the
+        // source of truth in streaming mode; the HTTP error is just
+        // a side-channel signal.
+        //
+        // Heuristic: if we received any SSE chunk within the last
+        // 10 seconds (lastChunkAt was just bumped by the SSE handler),
+        // ignore the HTTP error. Per-chunk timeout (default 90s) is
+        // the real liveness signal — if SSE then goes silent, that
+        // path will reject. Otherwise session.idle resolves us.
+        //
+        // Only reject from the HTTP catch when SSE has ALSO been
+        // silent — that's a true failure (e.g. auth, network).
         const cur = this.streamingByAgent.get(agent.id);
-        if (cur === state) {
-          this.streamingByAgent.delete(agent.id);
-          wrappedReject(err instanceof Error ? err : new Error(String(err)));
+        if (cur !== state) return; // already settled
+        const sinceLastChunk = Date.now() - state.lastChunkAt;
+        if (sinceLastChunk < 10_000) {
+          // SSE is live; trust the per-chunk timer + session.idle
+          // to drive completion. Don't reject from HTTP side.
+          return;
         }
+        this.streamingByAgent.delete(agent.id);
+        wrappedReject(err instanceof Error ? err : new Error(String(err)));
       });
       // armChunkTimeout above kicks in immediately — gives us a "request
       // never produced any chunk" signal even before any SSE event.
