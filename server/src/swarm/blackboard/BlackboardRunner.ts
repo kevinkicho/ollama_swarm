@@ -97,18 +97,23 @@ import {
   parseCriticResponse,
 } from "./prompts/critic.js";
 import {
-  VERIFIER_SYSTEM_PROMPT,
-  buildVerifierUserPrompt,
-  parseVerifierResponse,
-  type VerifierVerdict,
-} from "./prompts/verifier.js";
-import {
-  appendMemoryEntry,
-  parseMemoryLessons,
   readRecentMemory,
   renderMemoryForSeed,
-  type MemoryEntry,
 } from "./memoryStore.js";
+// Task #164 (refactor): post-completion reflection passes split out.
+import {
+  runStretchGoalReflectionPass,
+  runMemoryDistillationPass,
+  type ReflectionContext,
+} from "./reflectionPasses.js";
+// Task #164 (refactor): goal-list parser split out (used by both
+// goal-generation pre-pass and stretch reflection).
+import { parseGoalList } from "./goalListParser.js";
+// Task #164 (refactor): per-commit verifier invocation split out.
+import {
+  runVerifier as runVerifierExtracted,
+  type VerifierContext,
+} from "./verifierInvocation.js";
 import { config } from "../../config.js";
 
 // Blackboard preset: planner posts TODOs, workers drain them in a
@@ -681,6 +686,17 @@ export class BlackboardRunner implements SwarmRunner {
       const hasOutput =
         this.board.counts().committed > 0 ||
         (this.contract?.criteria.length ?? 0) > 0;
+      // Task #164 (refactor): build the reflection context once and
+      // pass to both extracted helpers.
+      const reflectionCtx: ReflectionContext = {
+        transcript: this.transcript,
+        appendSystem: (text, summary) => this.appendSystem(text, summary),
+        emit: (e) => this.opts.emit(e),
+        currentTier: this.currentTier,
+        committedCount: this.board.counts().committed,
+        contractCriteria: this.contract?.criteria ?? [],
+        runId: this.active?.runId ?? "unknown",
+      };
       if (
         !errored &&
         !userStopped &&
@@ -688,7 +704,7 @@ export class BlackboardRunner implements SwarmRunner {
         this.active?.autoStretchReflection !== false
       ) {
         try {
-          await this.runStretchGoalReflectionPass(planner);
+          await runStretchGoalReflectionPass(planner, reflectionCtx);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           this.appendSystem(`Stretch-goal reflection failed: ${msg}`);
@@ -707,7 +723,7 @@ export class BlackboardRunner implements SwarmRunner {
         this.active?.autoMemory !== false
       ) {
         try {
-          await this.runMemoryDistillationPass(planner, this.active?.localPath);
+          await runMemoryDistillationPass(planner, this.active?.localPath, reflectionCtx);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           this.appendSystem(`Memory distillation failed: ${msg}`);
@@ -1020,180 +1036,11 @@ export class BlackboardRunner implements SwarmRunner {
     }
   }
 
-  // Task #129: post-completion stretch-goal reflection. Asks the
-  // planner one meta-question after a successful run: "what would
-  // the BEST version of this work have done?". The list of 3-5
-  // ranked goals is appended as a `stretch_goals` transcript entry
-  // and surfaced in the run summary. Idempotent — safe to call
-  // exactly once per run; callers gate on autoStretchReflection.
-  //
-  // Why a separate pass and not just the auditor: the auditor is
-  // anchored on the existing contract criteria. Asking it "what
-  // SHOULD we have done that we didn't?" puts it in conflict with
-  // its own prior verdicts. A fresh prompt — without the contract
-  // framing baked in — produces honestly-ambitious answers.
-  private async runStretchGoalReflectionPass(planner: Agent): Promise<void> {
-    this.appendSystem("Stretch-goal reflection: asking planner what a more ambitious version would have done…");
-    const tier = this.currentTier;
-    const counts = this.board.counts();
-    const committed = counts.committed;
-    const contractCriteria = this.contract?.criteria ?? [];
-    const prompt = [
-      "You are a senior engineer doing a post-mortem on a swarm run that just COMPLETED on this repo.",
-      `Tier reached: ${tier}`,
-      `Commits made: ${committed}`,
-      "",
-      contractCriteria.length > 0
-        ? `=== Contract criteria the swarm worked on ===\n${contractCriteria
-            .map((c, i) => `${i + 1}. [${c.status}] ${c.description}`)
-            .join("\n")}\n=== END ===`
-        : "(no contract on file)",
-      "",
-      "The swarm finished its scoped work. Your job is to look UP — not at what was done, but at what a more ambitious version of this work would have tackled INSTEAD or ADDITIONALLY.",
-      "",
-      "Propose 3-5 STRETCH goals ranked by impact. Each:",
-      "- 1 sentence describing the goal.",
-      "- Cites 1-3 file paths in the repo where the work would land.",
-      "- Says explicitly what the COMPLETED contract MISSED, RAN OUT OF TIME ON, or DELIBERATELY CHOSE NOT to attempt.",
-      "",
-      "Avoid: praising what was done; trivia (typo fixes, doc-only edits); restating the existing criteria. Favor: structural changes, new capabilities, harder correctness invariants, and changes that the run was 'one tier away' from being able to commit to.",
-      "",
-      "Output format:",
-      "1. [TITLE] - one-sentence description (files: a/b.ts, c.ts) — Stretch because X.",
-      "2. ...",
-    ].join("\n");
-
-    try {
-      const res = await planner.client.session.prompt({
-        path: { id: planner.sessionId },
-        body: {
-          agent: "swarm-read",
-          model: { providerID: "ollama", modelID: planner.model },
-          parts: [{ type: "text", text: prompt }],
-        },
-      });
-      const text = (await import("../extractText.js")).extractText(res);
-      if (!text) {
-        this.appendSystem("Stretch-goal reflection: planner returned empty.");
-        return;
-      }
-      const goals = parseGoalList(text);
-      if (goals.length === 0) {
-        this.appendSystem("Stretch-goal reflection: planner response did not contain a parseable goal list.");
-        return;
-      }
-      const entry: TranscriptEntry = {
-        id: randomUUID(),
-        role: "agent",
-        agentId: planner.id,
-        agentIndex: planner.index,
-        text,
-        ts: Date.now(),
-        summary: { kind: "stretch_goals", goals: goals.slice(0, 5), tier, committed },
-      };
-      this.transcript.push(entry);
-      this.opts.emit({ type: "transcript_append", entry });
-      this.appendSystem(
-        `Stretch-goal reflection: ${goals.length} goal(s) recorded for next-run consideration.`,
-      );
-    } catch (err) {
-      this.appendSystem(
-        `Stretch-goal reflection failed (${err instanceof Error ? err.message : String(err)}).`,
-      );
-    }
-  }
-
-  // Task #130: persistent memory distillation. Asks the planner for
-  // 2-4 lessons-learned bullets reflecting on this run. Writes one
-  // MemoryEntry to <clone>/.swarm-memory.jsonl. Idempotent — safe to
-  // call exactly once per run; callers gate on autoMemory.
-  //
-  // Why a distinct prompt from stretch reflection: stretch goals look
-  // FORWARD ("what to attempt next"); memory looks BACKWARD ("what
-  // future runs should AVOID rediscovering or BUILD on"). The
-  // categories overlap but are not identical — stretch goals can be
-  // ambitious-and-untried; memory should pin durable lessons.
-  private async runMemoryDistillationPass(
-    planner: Agent,
-    clonePath: string | undefined,
-  ): Promise<void> {
-    if (!clonePath) {
-      this.appendSystem("Memory distillation skipped: clone path missing.");
-      return;
-    }
-    const tier = this.currentTier;
-    const counts = this.board.counts();
-    const committed = counts.committed;
-    const contractCriteria = this.contract?.criteria ?? [];
-    const runId = this.active?.runId ?? "unknown";
-    this.appendSystem("Memory distillation: asking planner for lessons-learned bullets to log into .swarm-memory.jsonl…");
-    const prompt = [
-      "You are doing a brief post-run reflection that will be SAVED for future runs against this same clone to read.",
-      `Tier reached: ${tier}`,
-      `Commits made: ${committed}`,
-      "",
-      contractCriteria.length > 0
-        ? `=== Contract criteria (final state) ===\n${contractCriteria
-            .map((c, i) => `${i + 1}. [${c.status}] ${c.description}`)
-            .join("\n")}\n=== END ===`
-        : "(no contract on file)",
-      "",
-      "Output 2-4 LESSONS LEARNED — durable bullets that a future run on this same clone should be aware of. Each:",
-      "- One sentence.",
-      "- Concrete and actionable. \"X file pattern is fragile, prefer Y\" beats \"be careful\".",
-      "- Either AVOIDANCE (\"don't try X — wasted N commits because Y\") or BUILDING (\"the Z scaffold landed in this run is ready for follow-up W\").",
-      "",
-      "Output format — ONE JSON object only, no fences, no prose:",
-      `{"lessons": ["lesson 1", "lesson 2", "lesson 3"]}`,
-      "",
-      "If there's genuinely nothing worth remembering (e.g. the run accomplished nothing new), output {\"lessons\": []} and a future run will skip the memory entry.",
-    ].join("\n");
-
-    let responseText: string;
-    try {
-      const res = await planner.client.session.prompt({
-        path: { id: planner.sessionId },
-        body: {
-          agent: "swarm-read",
-          model: { providerID: "ollama", modelID: planner.model },
-          parts: [{ type: "text", text: prompt }],
-        },
-      });
-      const text = (await import("../extractText.js")).extractText(res);
-      responseText = text ?? "";
-    } catch (err) {
-      this.appendSystem(
-        `Memory distillation prompt failed (${err instanceof Error ? err.message : String(err)}).`,
-      );
-      return;
-    }
-    if (!responseText) {
-      this.appendSystem("Memory distillation: planner returned empty.");
-      return;
-    }
-    const lessons = parseMemoryLessons(responseText);
-    if (lessons.length === 0) {
-      this.appendSystem("Memory distillation: no usable lessons parsed (planner may have said nothing memorable).");
-      return;
-    }
-    const entry: MemoryEntry = {
-      ts: Date.now(),
-      runId,
-      tier,
-      commits: committed,
-      lessons,
-    };
-    try {
-      const total = await appendMemoryEntry(clonePath, entry);
-      this.appendSystem(
-        `Memory distillation: appended ${lessons.length} lesson(s) to .swarm-memory.jsonl (${total} entries on file).`,
-      );
-    } catch (err) {
-      this.appendSystem(
-        `Memory write failed (${err instanceof Error ? err.message : String(err)}); lessons not persisted.`,
-      );
-    }
-  }
+  // Task #164 (refactor): the inline stretch-goal (#129) +
+  // memory-distillation (#130) method bodies that lived here are now
+  // in ./reflectionPasses.ts. Call sites in the run-end finally block
+  // construct a ReflectionContext and invoke the exported
+  // runStretchGoalReflectionPass + runMemoryDistillationPass.
 
   // the council flow produces nothing usable (all drafts failed to parse
   // OR the merge itself failed), fall through to the legacy single-agent
@@ -2149,154 +1996,10 @@ export class BlackboardRunner implements SwarmRunner {
     return "accept";
   }
 
-  // Task #128: per-commit verifier. Independent claim-checking gate
-  // sitting between critic-accept and disk-write. The critic asks
-  // "is this BUSYWORK?"; the auditor asks "are contract criteria
-  // met across all commits?"; the verifier asks the narrower per-
-  // commit question: "does THIS diff actually do what THIS todo
-  // asked for?". Catches the failure mode where a worker satisfies
-  // the critic with a plausible-looking diff that doesn't action
-  // its specific todo — wasting a commit slot the auditor only
-  // notices much later.
-  //
-  // Verdict semantics (matches verifier.ts header):
-  //   - "verified" / "partial" → accept
-  //   - "unverifiable"         → accept + log warning
-  //   - "false"                → reject (markStale → replan)
-  //
-  // Failure-open everywhere (no planner peer, prompt fails, response
-  // doesn't parse) — same model as the critic. Verifier is here to
-  // catch a real failure mode, not to grind the run on its own
-  // hiccups.
+  // Task #128 / #164: per-commit verifier — opt-in via cfg.verifier.
+  // Implementation in ./verifierInvocation.ts; this method just gates.
   private verifierEnabled(): boolean {
     return this.active?.verifier === true;
-  }
-
-  private async runVerifier(
-    todo: Todo,
-    proposingAgent: Agent,
-    contentsBefore: Record<string, string | null>,
-    resultingDiffs: ReadonlyArray<{ file: string; newText: string }>,
-  ): Promise<"accept" | "reject"> {
-    const roster = this.opts.manager.list();
-    const planner = roster.find((a) => a.index === 1);
-    if (!planner || planner.id === proposingAgent.id) {
-      this.appendSystem(
-        `[verifier] no planner peer to check ${proposingAgent.id}'s diff; skipping (accept-by-default).`,
-      );
-      return "accept";
-    }
-    const files = resultingDiffs.map((d) => ({
-      file: d.file,
-      before: contentsBefore[d.file] ?? null,
-      after: d.newText,
-    }));
-    const userPrompt = buildVerifierUserPrompt({
-      proposingAgentId: proposingAgent.id,
-      todoDescription: todo.description,
-      todoExpectedFiles: [...todo.expectedFiles],
-      files,
-    });
-    const fullPrompt = `${VERIFIER_SYSTEM_PROMPT}\n\n${userPrompt}`;
-
-    let sessionId: string;
-    try {
-      const created = await planner.client.session.create({
-        body: { title: `verifier-${todo.id}-${Date.now()}` },
-      });
-      const any = created as { data?: { id?: string; info?: { id?: string } }; id?: string };
-      const sid = any?.data?.id ?? any?.data?.info?.id ?? any?.id;
-      if (!sid) throw new Error("session.create returned no session id");
-      sessionId = sid;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(
-        `[verifier] failed to open fresh session on ${planner.id} (${msg}). Accepting by default (failure-open).`,
-      );
-      return "accept";
-    }
-
-    let responseText: string;
-    try {
-      const res = await planner.client.session.prompt({
-        path: { id: sessionId },
-        body: {
-          agent: "swarm-read",
-          model: { providerID: "ollama", modelID: planner.model },
-          parts: [{ type: "text", text: fullPrompt }],
-        },
-      });
-      const any = res as {
-        data?: {
-          parts?: Array<{ type?: string; text?: string }>;
-          info?: { parts?: Array<{ type?: string; text?: string }> };
-          text?: string;
-        };
-      };
-      const parts = any?.data?.parts ?? any?.data?.info?.parts;
-      if (Array.isArray(parts)) {
-        const texts = parts
-          .filter((p) => p?.type === "text" && typeof p.text === "string")
-          .map((p) => p.text as string);
-        responseText = texts.length ? texts.join("\n") : (any?.data?.text ?? "");
-      } else {
-        responseText = any?.data?.text ?? "";
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(
-        `[verifier] prompt failed on ${planner.id} (${msg}). Accepting by default (failure-open).`,
-      );
-      return "accept";
-    }
-    if (this.stopping) return "accept";
-
-    const parsed = parseVerifierResponse(responseText);
-    if (!parsed.ok) {
-      this.appendSystem(
-        `[verifier] response did not parse (${parsed.reason}). Accepting by default (failure-open).`,
-      );
-      return "accept";
-    }
-    const verdict: VerifierVerdict = parsed.verifier.verdict;
-    const cite = parsed.verifier.evidenceCitation;
-    const rat = parsed.verifier.rationale ? ` — ${parsed.verifier.rationale}` : "";
-    // Task #151: structured tag so the UI ribbon renders cleanly. Same
-    // text payload as before for back-compat with any plain-text
-    // consumer; the summary kind drives the visual rendering.
-    const summary = {
-      kind: "verifier_verdict" as const,
-      verdict,
-      proposingAgentId: proposingAgent.id,
-      todoDescription: todo.description,
-      evidenceCitation: cite,
-      rationale: parsed.verifier.rationale,
-    };
-    if (verdict === "false") {
-      this.board.markStale(
-        todo.id,
-        `verifier rejected (${planner.id}): ${cite}${rat}`,
-      );
-      this.appendSystem(
-        `[verifier] ${planner.id} FALSE on ${proposingAgent.id}'s diff for "${truncate(todo.description)}": ${cite}${rat}`,
-        summary,
-      );
-      bumpAgentCounter(this.rejectedAttemptsPerAgent, proposingAgent.id);
-      return "reject";
-    }
-    if (verdict === "unverifiable") {
-      this.appendSystem(
-        `[verifier] ${planner.id} UNVERIFIABLE on ${proposingAgent.id}'s diff for "${truncate(todo.description)}": ${cite}${rat} — accepting (failure-open).`,
-        summary,
-      );
-      return "accept";
-    }
-    // verified or partial → accept
-    this.appendSystem(
-      `[verifier] ${planner.id} ${verdict.toUpperCase()} ${proposingAgent.id}'s diff: ${cite}${rat}`,
-      summary,
-    );
-    return "accept";
   }
 
   // Unit 60: multi-prompt critic ensemble. Three critics fire in
@@ -3062,11 +2765,20 @@ export class BlackboardRunner implements SwarmRunner {
     // a logged warning. Opt-in via cfg.verifier — when off the worker
     // pipeline is byte-identical to pre-#128.
     if (this.verifierEnabled()) {
-      const verdict = await this.runVerifier(
+      const verifierCtx: VerifierContext = {
+        manager: this.opts.manager,
+        board: this.board,
+        appendSystem: (text, summary) => this.appendSystem(text, summary),
+        isStopping: () => this.stopping,
+        bumpRejected: (agentId) =>
+          bumpAgentCounter(this.rejectedAttemptsPerAgent, agentId),
+      };
+      const verdict = await runVerifierExtracted(
         todo,
         agent,
         contents,
         resultingDiffs,
+        verifierCtx,
       );
       if (this.stopping) return "stale";
       if (verdict === "reject") {
@@ -4181,29 +3893,7 @@ function countNewlines(s: string): number {
   return trimmed.split("\n").length;
 }
 
-// Task #127: parse a numbered goal list of the shape:
-//   1. [TITLE] - description ...
-//   2. [TITLE] - description ...
-// Returns each item's text WITHOUT the leading "N." marker. Tolerant
-// of "1)" and bare "1" prefixes too. Stops at lines that don't start
-// with a number (e.g. the "TOP: N" trailer or empty trailing prose).
-// Exported for testability.
-export function parseGoalList(text: string): string[] {
-  const items: string[] = [];
-  let current: string[] = [];
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trimEnd();
-    const numStart = /^\s*(\d{1,2})[.)]\s+(.*)$/.exec(line);
-    if (numStart) {
-      if (current.length > 0) items.push(current.join(" ").trim());
-      current = [numStart[2] ?? ""];
-    } else if (current.length > 0 && line.trim().length > 0 && !/^TOP\s*:/i.test(line)) {
-      current.push(line.trim());
-    } else if (current.length > 0 && (line.trim().length === 0 || /^TOP\s*:/i.test(line))) {
-      items.push(current.join(" ").trim());
-      current = [];
-    }
-  }
-  if (current.length > 0) items.push(current.join(" ").trim());
-  return items.filter((s) => s.length > 0);
-}
+// Task #164 (refactor): parseGoalList moved to ./goalListParser.ts.
+// Re-exported here for back-compat with any external consumer that
+// previously imported it from BlackboardRunner.
+export { parseGoalList } from "./goalListParser.js";
