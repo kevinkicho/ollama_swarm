@@ -547,6 +547,15 @@ export class AgentManager {
   // before agent_streaming_end fires.
   private streamingFlushTimers = new Map<string, NodeJS.Timeout>();
   private latestStreamingText = new Map<string, string>();
+  // Task #174: per-(agent,part) text accumulator. OpenCode emits
+  // MULTIPLE text parts per message (e.g. an initial 29-char echo
+  // part, then the actual N-thousand-char response part). Each part
+  // has its own cumulative `text` field that starts at 0 — naively
+  // setting agent.text = part.text wipes prior parts when a new
+  // part arrives. Tracking per-partId fixes the "streaming text
+  // suddenly goes empty mid-response" bug.
+  // Map: agentId → Map<partId, text>. Insertion order = display order.
+  private partsByAgent = new Map<string, Map<string, string>>();
 
   recordPromptComplete(
     agentId: string,
@@ -672,6 +681,8 @@ export class AgentManager {
     for (const timer of this.streamingFlushTimers.values()) clearTimeout(timer);
     this.streamingFlushTimers.clear();
     this.latestStreamingText.clear();
+    // Task #174: drop per-part accumulators for killed agents.
+    this.partsByAgent.clear();
     if (escaped > 0) {
       // Unit 41: surface unkillable PIDs to the UI rather than swallowing
       // silently. The next dev-server startup sweep will still reclaim
@@ -808,33 +819,42 @@ export class AgentManager {
     }
 
     if (type === "message.part.updated") {
-      const part = props.part as { type?: string; text?: string } | undefined;
+      const part = props.part as { type?: string; text?: string; id?: string } | undefined;
       if (part?.type === "text" && typeof part.text === "string") {
-        // Task #39: mirror the partial-stream text into a per-agent
-        // buffer so the REST /api/swarm/status catch-up endpoint can
-        // return it on page-refresh. Without this, hitting Ctrl-R
-        // mid-stream lost the partial text entirely — only finalized
-        // transcript entries survived. Cap at one buffer per agent;
-        // successive partials overwrite.
+        // Task #174: track this text snapshot per-part so a new text
+        // part starting at len=0 doesn't wipe earlier parts. Display
+        // text = concatenation of all parts in arrival order.
+        const partId = part.id ?? "_default";
+        let agentParts = this.partsByAgent.get(agent.id);
+        if (!agentParts) {
+          agentParts = new Map();
+          this.partsByAgent.set(agent.id, agentParts);
+        }
+        agentParts.set(partId, part.text);
+        const fullText = [...agentParts.values()].join("\n");
+        // Task #39: mirror the FULL stream text (concatenated across
+        // parts) into the per-agent buffer for REST catch-up.
         this.partialStreams.set(agent.id, {
-          text: part.text,
+          text: fullText,
           updatedAt: Date.now(),
         });
         // Task #172: trailing-edge throttle agent_streaming to ~10/sec
         // so the UI doesn't full-re-render on every 50ms SSE chunk.
-        this.scheduleStreamingFlush(agent, part.text);
-        // Task #166: feed the streamPrompt accumulator's text snapshot
-        // (timer reset already handled above for ALL message.* events).
-        // Text snapshots are CUMULATIVE — each event has the full
-        // text so far, not a delta — just overwrite.
+        this.scheduleStreamingFlush(agent, fullText);
+        // Task #166: feed the streamPrompt accumulator with the FULL
+        // text (concatenated across parts) so streamed responses
+        // include every text part, not just the last one to update.
         const stream = this.streamingByAgent.get(agent.id);
-        if (stream) stream.text = part.text;
+        if (stream) stream.text = fullText;
       }
       return;
     }
     if (type === "session.idle") {
       // Task #39: stream finalized, drop the partial buffer.
       this.partialStreams.delete(agent.id);
+      // Task #174: drop the per-part accumulator so the next prompt
+      // on this agent starts with a fresh slate.
+      this.partsByAgent.delete(agent.id);
       // Task #172: flush any pending throttled streaming text so the
       // UI lands on the FINAL state before we tell it the stream
       // ended. Without this, the trailing-edge throttle could leave
