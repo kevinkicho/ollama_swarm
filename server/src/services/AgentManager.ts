@@ -773,17 +773,18 @@ export class AgentManager {
     // proves the session is working and the TCP connection is alive.
     this.touchActivity(agent.sessionId);
 
-    // Task #166 (FIX): reset the streamPrompt per-chunk timer on ANY
-    // matching SSE event for this agent's session — not just text
-    // snapshots. text-typed message.part.updated events are RARE
-    // (often >60s apart on heavy prompts), but message.part.delta /
-    // message.part.updated[reasoning] / etc. flow continuously.
-    // Earlier "reset only on text" version failed because the 90s
-    // timer fired before the next text snapshot, even though the
-    // model was actively generating tokens. ANY part.* event proves
-    // the model is alive — that's the right liveness signal.
+    // Task #170 (FIX): reset the streamPrompt per-chunk timer on
+    // ANY matching SSE event for this agent's session. Earlier
+    // "reset on message.* only" version still failed because the
+    // long planner-thinking phase emits mostly session.status /
+    // session.updated events for tens of seconds before any
+    // message.part.delta arrives. Those session.* events DO mean
+    // the OpenCode server is alive and processing — exactly the
+    // liveness signal we want. The session-id filter above already
+    // restricts to our session, so any event reaching this point
+    // is proof of life.
     const liveStream = this.streamingByAgent.get(agent.id);
-    if (liveStream && typeof type === "string" && type.startsWith("message.")) {
+    if (liveStream) {
       liveStream.lastChunkAt = Date.now();
       if (liveStream.timeoutHandle) clearTimeout(liveStream.timeoutHandle);
       liveStream.timeoutHandle = setTimeout(() => {
