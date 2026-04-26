@@ -125,6 +125,9 @@ const StartBody = z.object({
   // Read at planner-seed time + written at run-end (post-stretch).
   // Default true.
   autoMemory: z.boolean().optional(),
+  // Task #177: long-horizon DESIGN memory at <clone>/.swarm-design/
+  // (north-star + decisions + roadmap). Default true.
+  autoDesignMemory: z.boolean().optional(),
   // Task #147: when true, the route auto-stops any existing runner
   // before starting the new one, instead of returning 409 "A swarm
   // is already running". Lets clients recover from a stuck-orchestrator
@@ -369,6 +372,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         verifier: parsed.data.verifier,
         continuous: parsed.data.continuous,
         autoMemory: parsed.data.autoMemory,
+        autoDesignMemory: parsed.data.autoDesignMemory,
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {

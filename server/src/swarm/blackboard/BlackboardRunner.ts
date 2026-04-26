@@ -85,10 +85,16 @@ import {
   readRecentMemory,
   renderMemoryForSeed,
 } from "./memoryStore.js";
+// Task #177: design memory (north-star + decisions + roadmap).
+import {
+  readDesignMemory,
+  renderDesignMemoryForSeed,
+} from "./designMemoryStore.js";
 // Task #164 (refactor): post-completion reflection passes split out.
 import {
   runStretchGoalReflectionPass,
   runMemoryDistillationPass,
+  runDesignMemoryUpdatePass,
   type ReflectionContext,
 } from "./reflectionPasses.js";
 // Task #164 (refactor): goal-list parser split out (used by both
@@ -816,6 +822,23 @@ export class BlackboardRunner implements SwarmRunner {
           this.appendSystem(`Memory distillation failed: ${msg}`);
         }
       }
+      // Task #177: design memory update pass. Runs AFTER memory
+      // distillation so the planner has the freshest engineering
+      // lessons to inform its creative/product update. Same gates
+      // as the other reflection passes plus autoDesignMemory !== false.
+      if (
+        !errored &&
+        !userStoppedHard &&
+        hasOutput &&
+        this.active?.autoDesignMemory !== false
+      ) {
+        try {
+          await runDesignMemoryUpdatePass(planner, this.active?.localPath, reflectionCtx);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.appendSystem(`Design memory update failed: ${msg}`);
+        }
+      }
       // Phase 9: always try to write a summary, regardless of how we got
       // here (completed / stopped / failed / cap). Awaited so the file and
       // the broadcast event land before the terminal phase transition, so
@@ -992,6 +1015,28 @@ export class BlackboardRunner implements SwarmRunner {
         this.appendSystem(`Memory read failed (${msg}); continuing without prior-run context.`);
       }
     }
+    // Task #177: design memory (north-star + decisions + roadmap).
+    // Read at seed time so the planner honors the long-horizon vision
+    // when proposing the first-pass contract + tier-up missions.
+    let priorDesignMemoryRendered: string | undefined;
+    if (cfg.autoDesignMemory !== false) {
+      try {
+        const dm = await readDesignMemory(clonePath);
+        priorDesignMemoryRendered = renderDesignMemoryForSeed(dm);
+        if (priorDesignMemoryRendered) {
+          const parts: string[] = [];
+          if (dm.northStar) parts.push("north-star");
+          if (dm.roadmap.length > 0) parts.push(`roadmap (${dm.roadmap.length})`);
+          if (dm.decisions.length > 0) parts.push(`${dm.decisions.length} decision(s)`);
+          this.appendSystem(
+            `Design memory: surfaced ${parts.join(" + ")} from .swarm-design/ into the planner seed.`,
+          );
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.appendSystem(`Design memory read failed (${msg}); continuing without long-horizon vision context.`);
+      }
+    }
     return {
       repoUrl: cfg.repoUrl,
       clonePath,
@@ -1004,6 +1049,7 @@ export class BlackboardRunner implements SwarmRunner {
       userDirective: cfg.userDirective,
       priorRunSummary,
       priorMemoryRendered,
+      priorDesignMemoryRendered,
     };
   }
 

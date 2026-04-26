@@ -169,6 +169,15 @@ export interface RunConfig {
    */
   autoMemory?: boolean;
   /**
+   * Task #177: long-horizon DESIGN memory at <clone>/.swarm-design/.
+   * Three markdown files: north-star.md (the long-term vision),
+   * decisions.md (append-only design choices log), roadmap.md
+   * (ranked next features). Read at planner-seed time + updated by
+   * a post-run reflection pass that runs after memory distillation.
+   * Default true; set false to skip both read AND write. Blackboard-only.
+   */
+  autoDesignMemory?: boolean;
+  /**
    * Unit 51: opt-in to reload the prior run's contract + tier state
    * directly from `<clone>/blackboard-state.json` instead of having
    * the planner re-derive a first-pass contract. Pairs with the

@@ -214,6 +214,10 @@ export interface PlannerSeed {
   // prompt builder doesn't have to know about MemoryEntry shape. Empty
   // string when there are no prior memories; renderer is no-op then.
   priorMemoryRendered?: string;
+  // Task #177: design memory rendered (north-star + roadmap +
+  // recent decisions). Read at planner-seed time + updated by a
+  // post-run reflection pass. Empty when no design memory yet.
+  priorDesignMemoryRendered?: string;
 }
 
 // Unit 50: slim, capped distillation of the previous run's summary.json
@@ -252,8 +256,15 @@ export function buildPlannerUserPrompt(seed: PlannerSeed): string {
   // returns "" when there are no prior memories so this is a no-op on
   // fresh clones / first runs.
   const memoryBlock = seed.priorMemoryRendered ? `${seed.priorMemoryRendered}\n\n` : "";
+  // Task #177: prepend design memory (north-star + roadmap + recent
+  // decisions). Comes BEFORE the engineering memory because it sets
+  // the long-horizon framing the planner should evaluate todos against.
+  const designBlock = seed.priorDesignMemoryRendered
+    ? `${seed.priorDesignMemoryRendered}\n\n` +
+      "GUIDANCE: honor the north star + recent decisions when proposing TODOs. Prefer work that advances the roadmap. If a TODO would contradict a prior decision, propose updating the decision first instead.\n\n"
+    : "";
   return [
-    memoryBlock + `Repository: ${seed.repoUrl}`,
+    designBlock + memoryBlock + `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
     `Top-level entries: ${tree}`,
     "",

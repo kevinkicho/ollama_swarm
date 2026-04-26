@@ -28,6 +28,13 @@ import {
   parseMemoryLessons,
   type MemoryEntry,
 } from "./memoryStore.js";
+import {
+  appendDecisions,
+  parseDesignUpdateResponse,
+  readDesignMemory,
+  writeNorthStar,
+  writeRoadmap,
+} from "./designMemoryStore.js";
 import { parseGoalList } from "./goalListParser.js";
 
 // Bundle of runner state the passes need. Deliberately narrow — only
@@ -207,6 +214,129 @@ export async function runMemoryDistillationPass(
   } catch (err) {
     ctx.appendSystem(
       `Memory write failed (${err instanceof Error ? err.message : String(err)}); lessons not persisted.`,
+    );
+  }
+}
+
+// Task #177: design-memory update pass. Asks the planner to refresh
+// the long-horizon CREATIVE / PRODUCT memory at <clone>/.swarm-design/
+// — north-star vision, design decisions, and roadmap. Runs AFTER
+// memory distillation (so the planner has the freshest context). Same
+// gating as the other reflection passes plus autoDesignMemory !== false.
+export async function runDesignMemoryUpdatePass(
+  planner: Agent,
+  clonePath: string | undefined,
+  ctx: ReflectionContext,
+): Promise<void> {
+  if (!clonePath) {
+    ctx.appendSystem("Design memory update skipped: clone path missing.");
+    return;
+  }
+  const tier = ctx.currentTier;
+  const committed = ctx.committedCount;
+  // Read existing memory so the planner sees the current vision/decisions/
+  // roadmap. Helps it produce DELTA updates rather than re-inventing.
+  const prior = await readDesignMemory(clonePath).catch(() =>
+    ({ decisions: [], roadmap: [] } as Awaited<ReturnType<typeof readDesignMemory>>),
+  );
+  ctx.appendSystem(
+    "Design memory update: asking planner to refresh north-star / decisions / roadmap…",
+  );
+  const priorBlock = [
+    prior.northStar
+      ? `=== Current north star ===\n${prior.northStar}\n=== END ===`
+      : "(no north star yet — propose the FIRST one based on this run's outcome)",
+    prior.roadmap.length > 0
+      ? `=== Current roadmap (top ${Math.min(prior.roadmap.length, 5)}) ===\n` +
+        prior.roadmap.slice(0, 5).map((r, i) => `${i + 1}. ${r}`).join("\n") +
+        `\n=== END ===`
+      : "(no roadmap yet — propose 3-5 ranked features)",
+    prior.decisions.length > 0
+      ? `=== Last 3 design decisions ===\n` +
+        prior.decisions
+          .slice(-3)
+          .map((d) => `## ${d.date} · ${d.title}\n${d.body}`)
+          .join("\n\n") +
+        `\n=== END ===`
+      : "(no decisions logged yet)",
+  ].join("\n\n");
+  const prompt = [
+    "You are doing a CREATIVE / PRODUCT post-run reflection. Update the long-horizon design memory for this clone.",
+    "",
+    `This run reached tier ${tier} with ${committed} commits.`,
+    "",
+    priorBlock,
+    "",
+    ctx.contractCriteria.length > 0
+      ? `=== This run's final contract ===\n${ctx.contractCriteria
+          .map((c, i) => `${i + 1}. [${c.status}] ${c.description}`)
+          .join("\n")}\n=== END ===`
+      : "(no contract on file)",
+    "",
+    "Update the design memory across three dimensions:",
+    "",
+    '1. NORTH STAR (1-2 paragraphs): the long-term VISION for what this codebase is becoming. Refine if the work this run REVEALED something about direction. Keep stable if not. Speak about WHAT the product should be, who it serves, what makes it distinctive.',
+    "",
+    '2. NEW DECISIONS (0-3 entries): meaningful design CHOICES made this run that future runs should respect. Each: {title, body}. Title is short; body is 1-3 sentences explaining the choice + rationale. Skip trivial/mechanical commits.',
+    "",
+    "3. ROADMAP (3-7 items, ranked): the top features to build next. Be ambitious — these are creative product decisions, not next-sprint tickets. Compare against EXISTING products in the genre (you know them). What would make this product distinctive vs them?",
+    "",
+    "Output format — ONE JSON object only, no fences, no prose:",
+    `{"northStar": "...", "newDecisions": [{"title":"...", "body":"..."}], "roadmap": ["item1", "item2", ...]}`,
+    "",
+    'If a field has no meaningful update, OMIT it (don\'t echo the prior value).',
+  ].join("\n");
+
+  let responseText: string;
+  try {
+    const res = await planner.client.session.prompt({
+      path: { id: planner.sessionId },
+      body: {
+        agent: "swarm-read",
+        model: { providerID: "ollama", modelID: planner.model },
+        parts: [{ type: "text", text: prompt }],
+      },
+    });
+    responseText = extractText(res) ?? "";
+  } catch (err) {
+    ctx.appendSystem(
+      `Design memory update prompt failed (${err instanceof Error ? err.message : String(err)}).`,
+    );
+    return;
+  }
+  if (!responseText) {
+    ctx.appendSystem("Design memory update: planner returned empty.");
+    return;
+  }
+  const update = parseDesignUpdateResponse(responseText);
+  let wrote = 0;
+  try {
+    if (update.northStar) {
+      await writeNorthStar(clonePath, update.northStar);
+      wrote++;
+    }
+    if (update.newDecisions.length > 0) {
+      await appendDecisions(clonePath, update.newDecisions);
+      wrote += update.newDecisions.length;
+    }
+    if (update.roadmap.length > 0) {
+      await writeRoadmap(clonePath, update.roadmap);
+      wrote++;
+    }
+    if (wrote === 0) {
+      ctx.appendSystem(
+        "Design memory update: planner produced nothing parseable (no changes written).",
+      );
+    } else {
+      const parts: string[] = [];
+      if (update.northStar) parts.push("north-star refreshed");
+      if (update.newDecisions.length > 0) parts.push(`${update.newDecisions.length} decision(s) appended`);
+      if (update.roadmap.length > 0) parts.push(`roadmap of ${update.roadmap.length} items written`);
+      ctx.appendSystem(`Design memory update: ${parts.join(", ")} → .swarm-design/`);
+    }
+  } catch (err) {
+    ctx.appendSystem(
+      `Design memory write failed (${err instanceof Error ? err.message : String(err)}); skipped.`,
     );
   }
 }
