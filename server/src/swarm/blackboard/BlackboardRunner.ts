@@ -140,6 +140,15 @@ const REPLAN_FALLBACK_TICK_MS = 20_000;
 // there is no reliable activity signal to gate on. We rely solely on the
 // absolute turn cap below — if a prompt hasn't returned in 20 minutes, abort.
 const ABSOLUTE_MAX_MS = 20 * 60_000;
+// Task #165: pause-on-quota constants. When the proxy detects a
+// persistent Ollama-quota wall, the run pauses (workers idle, no
+// new prompts) and probes upstream every PAUSE_PROBE_INTERVAL_MS.
+// Resume on first successful probe. Total pause time is capped so
+// a never-clearing wall (plan exhausted till next billing cycle)
+// eventually escalates to a real cap:quota halt rather than
+// pausing forever.
+const PAUSE_PROBE_INTERVAL_MS = 5 * 60_000;
+const MAX_PAUSE_TOTAL_MS = 2 * 60 * 60_000;
 
 export class BlackboardRunner implements SwarmRunner {
   private transcript: TranscriptEntry[] = [];
@@ -205,6 +214,15 @@ export class BlackboardRunner implements SwarmRunner {
   // suspend contributes at most MAX_REASONABLE_TICK_DELTA_MS. Seeded
   // alongside runStartedAt when the executing phase begins.
   private tickAccumulator?: TickAccumulator;
+  // Task #165: pause-on-quota state. When a persistent quota wall
+  // trips, paused=true; pauseStartedAt stamps when the current
+  // pause began (cleared on resume); totalPausedMs accumulates
+  // across all pause periods in this run; pauseProbeTimer drives
+  // the 5-min upstream probe.
+  private paused = false;
+  private pauseStartedAt?: number;
+  private totalPausedMs = 0;
+  private pauseProbeTimer?: NodeJS.Timeout;
   private terminationReason?: string;
   // Phase 9: run-summary counters. runBootedAt is the wall-clock origin
   // (stamped in start(), covers cloning+spawning+seeding+planning+executing)
@@ -392,6 +410,14 @@ export class BlackboardRunner implements SwarmRunner {
     this.runStartedAt = undefined;
     this.tokenBaselineForRun = undefined;
     this.tickAccumulator = undefined;
+    // Task #165: clear pause state from any prior run.
+    this.paused = false;
+    this.pauseStartedAt = undefined;
+    this.totalPausedMs = 0;
+    if (this.pauseProbeTimer) {
+      clearTimeout(this.pauseProbeTimer);
+      this.pauseProbeTimer = undefined;
+    }
     this.terminationReason = undefined;
     // Unit 31: clear any lingering state-write timer from a prior run.
     // stateWriteInFlight may still be true momentarily if a run was torn
@@ -768,6 +794,13 @@ export class BlackboardRunner implements SwarmRunner {
     this.setPhase("stopping");
     this.stopClaimExpiry();
     this.stopReplanWatcher();
+    // Task #165: cancel any in-flight quota-pause probe so it doesn't
+    // try to resume a run that's being torn down.
+    if (this.pauseProbeTimer) {
+      clearTimeout(this.pauseProbeTimer);
+      this.pauseProbeTimer = undefined;
+    }
+    this.paused = false;
     for (const ctrl of this.activeAborts) {
       try {
         ctrl.abort(new Error("user stop"));
@@ -1907,6 +1940,11 @@ export class BlackboardRunner implements SwarmRunner {
       // stopping=true under the hood, so the next loop iteration (if any)
       // exits cleanly; we also return early here for promptness.
       if (this.checkAndApplyCaps()) return;
+      // Task #165: while paused on quota wall, idle silently — don't
+      // claim work, don't burn cooldown, just wait for the probe to
+      // resume. checkAndApplyCaps short-circuits during pause so the
+      // wall-clock cap doesn't burn either.
+      if (this.paused) continue;
 
       const counts = this.board.counts();
       // Nothing left to do: no open, nothing claimed, no stales, AND no
@@ -2544,6 +2582,12 @@ export class BlackboardRunner implements SwarmRunner {
     if (this.runStartedAt === undefined || this.tickAccumulator === undefined) {
       return false;
     }
+    // Task #165: pause-on-quota. If we're already paused, skip the
+    // tick accumulator advance entirely so wall-clock budget doesn't
+    // burn during pause. The pause-cap (2h max paused total) is
+    // checked inside runPauseProbe; here we just no-op cleanly so
+    // worker / planner / replan loops keep ticking without acting.
+    if (this.paused) return false;
     // Unit 27: advance the tick accumulator with host-sleep clamping,
     // then hand the active elapsed to checkCaps via `startedAt: 0`
     // semantics. `Date.now()` is still fine as the "now" SOURCE — it's
@@ -2583,19 +2627,18 @@ export class BlackboardRunner implements SwarmRunner {
     )
       ? `token-budget reached (${this.active?.tokenBudget?.toLocaleString()} tokens)`
       : null;
-    // Task #137: quota-exhausted cap check. Distinct from the token
-    // budget — this fires when UPSTREAM Ollama signals we've hit a
-    // rate / plan limit (proxy detected 429 or quota body), not when
-    // OUR per-run budget tripped. Stops the run cleanly so the rest
-    // of the round doesn't burn on retries the proxy will keep
-    // rejecting.
-    const quotaState = this.tokenBaselineForRun !== undefined && shouldHaltOnQuota()
-      ? tokenTracker.getQuotaState()
-      : null;
-    const quotaReason = quotaState
-      ? `ollama-quota-exhausted (${quotaState.statusCode}: ${quotaState.reason.slice(0, 120)})`
-      : null;
-    const finalReason = reason ?? tokenReason ?? quotaReason;
+    // Task #165 (was #137-halt): quota-exhausted check. Was an
+    // immediate halt; now triggers enterPause() which suspends new
+    // prompts + probes upstream every 5 min. Persistent walls that
+    // never clear escalate to a permanent halt after MAX_PAUSE_TOTAL_MS
+    // (handled inside runPauseProbe); transient walls don't reach
+    // here at all (shouldHaltOnQuota returns false for them).
+    if (this.tokenBaselineForRun !== undefined && shouldHaltOnQuota()) {
+      const quotaState = tokenTracker.getQuotaState();
+      this.enterPause(quotaState);
+      return false;
+    }
+    const finalReason = reason ?? tokenReason;
     if (!finalReason) return false;
     this.terminationReason = finalReason;
     this.appendSystem(`Stopping: ${finalReason}`);
@@ -2609,6 +2652,140 @@ export class BlackboardRunner implements SwarmRunner {
       }
     }
     return true;
+  }
+
+  // Task #165: enter a paused state on persistent Ollama-quota wall.
+  // Suspends new prompt traffic (workers idle, planner idles between
+  // turns) and aborts in-flight prompts so they don't keep hammering
+  // a wall the proxy will keep rejecting. The 5-min probe timer is
+  // armed here and self-reschedules until upstream clears or the 2h
+  // pause cap escalates to a permanent halt.
+  private enterPause(quotaState: { statusCode: number; reason: string } | null): void {
+    if (this.paused) return;
+    this.paused = true;
+    this.pauseStartedAt = Date.now();
+    this.setPhase("paused");
+    const detail = quotaState
+      ? `${quotaState.statusCode}: ${quotaState.reason.slice(0, 120)}`
+      : "(no quota detail)";
+    this.appendSystem(
+      `Ollama quota wall hit (${detail}). Pausing run; will probe upstream every ${PAUSE_PROBE_INTERVAL_MS / 60_000} min and resume when it clears. Total pause cap: ${MAX_PAUSE_TOTAL_MS / 60_000} min.`,
+      { kind: "quota_paused", statusCode: quotaState?.statusCode, reason: quotaState?.reason },
+    );
+    // Abort in-flight prompts so they fail fast — they'd hit the wall
+    // and burn time anyway. Workers will see this.paused and idle.
+    for (const ctrl of this.activeAborts) {
+      try {
+        ctrl.abort(new Error("paused: quota wall"));
+      } catch {
+        // best-effort
+      }
+    }
+    this.schedulePauseProbe();
+  }
+
+  private schedulePauseProbe(): void {
+    if (this.pauseProbeTimer) return;
+    this.pauseProbeTimer = setTimeout(() => {
+      this.pauseProbeTimer = undefined;
+      void this.runPauseProbe();
+    }, PAUSE_PROBE_INTERVAL_MS);
+  }
+
+  // Task #165: pings the planner with a tiny prompt to test whether
+  // the upstream wall has cleared. Cheap (~10 tokens). On success
+  // (no thrown error AND quota state didn't re-flip), clears the
+  // proxy quota state and resumes the run. On failure, reschedules
+  // the next probe — UNLESS the total accumulated pause has crossed
+  // MAX_PAUSE_TOTAL_MS, at which point we escalate to a permanent
+  // halt with stopReason cap:quota.
+  private async runPauseProbe(): Promise<void> {
+    if (!this.paused || this.stopping) return;
+    const totalSoFar = this.totalPausedMs + (this.pauseStartedAt ? Date.now() - this.pauseStartedAt : 0);
+    if (totalSoFar >= MAX_PAUSE_TOTAL_MS) {
+      // Escalate to permanent halt. Roll up totalPausedMs first so
+      // the run summary reflects the full pause time.
+      this.totalPausedMs = totalSoFar;
+      this.pauseStartedAt = undefined;
+      this.paused = false;
+      const q = tokenTracker.getQuotaState();
+      const detail = q ? `${q.statusCode}: ${q.reason.slice(0, 120)}` : "(no detail)";
+      const reason = `ollama-quota-exhausted (${detail}) — pause cap exceeded after ${Math.round(totalSoFar / 60_000)} min`;
+      this.terminationReason = reason;
+      this.appendSystem(
+        `Pause cap of ${MAX_PAUSE_TOTAL_MS / 60_000} min exceeded; upstream wall never cleared. Stopping permanently.`,
+      );
+      this.stopping = true;
+      for (const ctrl of this.activeAborts) {
+        try { ctrl.abort(new Error("paused: cap exceeded")); } catch { /* */ }
+      }
+      return;
+    }
+    const planner = this.opts.manager.list().find((a) => a.index === 1);
+    if (!planner) {
+      // No planner — odd state. Reschedule and try again.
+      this.schedulePauseProbe();
+      return;
+    }
+    let probeOk = false;
+    try {
+      const created = await planner.client.session.create({
+        body: { title: `quota-probe-${Date.now()}` },
+      });
+      const any = created as { data?: { id?: string; info?: { id?: string } }; id?: string };
+      const sid = any?.data?.id ?? any?.data?.info?.id ?? any?.id;
+      if (!sid) throw new Error("session.create returned no session id");
+      await planner.client.session.prompt({
+        path: { id: sid },
+        body: {
+          agent: "swarm-read",
+          model: { providerID: "ollama", modelID: planner.model },
+          parts: [{ type: "text", text: "ping" }],
+        },
+      });
+      probeOk = true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(`[quota-probe] still walled (${msg.slice(0, 120)}). Next probe in ${PAUSE_PROBE_INTERVAL_MS / 60_000} min.`);
+    }
+    if (!this.paused || this.stopping) return;
+    if (probeOk && !shouldHaltOnQuota()) {
+      // Real recovery: clear proxy state + resume.
+      tokenTracker.clearQuotaState();
+      this.exitPause();
+      return;
+    }
+    if (probeOk && shouldHaltOnQuota()) {
+      // Probe succeeded but proxy still flagged — rare race; another
+      // request hit a fresh 429 between our probe + this check.
+      // Treat as still-walled.
+      this.appendSystem("[quota-probe] probe succeeded but proxy re-flagged quota mid-flight; staying paused.");
+    }
+    this.schedulePauseProbe();
+  }
+
+  private exitPause(): void {
+    if (!this.paused) return;
+    const pauseDur = this.pauseStartedAt ? Date.now() - this.pauseStartedAt : 0;
+    this.totalPausedMs += pauseDur;
+    this.pauseStartedAt = undefined;
+    this.paused = false;
+    if (this.pauseProbeTimer) {
+      clearTimeout(this.pauseProbeTimer);
+      this.pauseProbeTimer = undefined;
+    }
+    // Reset the tick accumulator's lastTickAt so the next advance
+    // doesn't accidentally count the pause window — the clamp would
+    // catch most of it but a pause < MAX_REASONABLE_TICK_DELTA_MS
+    // would still leak through.
+    if (this.tickAccumulator) {
+      this.tickAccumulator = { ...this.tickAccumulator, lastTickAt: Date.now() };
+    }
+    this.setPhase("executing");
+    this.appendSystem(
+      `Quota wall cleared after ${Math.round(pauseDur / 60_000)} min. Resuming run (total paused this run: ${Math.round(this.totalPausedMs / 60_000)} min).`,
+      { kind: "quota_resumed", pausedMs: pauseDur, totalPausedMs: this.totalPausedMs },
+    );
   }
 
   // Phase 7 Step B: write a post-mortem blob at the clone root so a crashed

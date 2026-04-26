@@ -526,7 +526,16 @@ function formatServerSummary(s: TranscriptEntrySummary): string {
   if (s.kind === "next_action_phase") {
     return `Build phase — ${s.role}`;
   }
-  // worker_hunks
+  // Task #165: pause/resume on Ollama-quota wall
+  if (s.kind === "quota_paused") {
+    const sc = s.statusCode ? `${s.statusCode}` : "quota";
+    return `Paused — Ollama wall (${sc}); probing every 5min until clear`;
+  }
+  if (s.kind === "quota_resumed") {
+    const min = Math.round(s.pausedMs / 60_000);
+    return `Resumed — wall cleared after ~${min} min`;
+  }
+  // worker_hunks (only kind remaining after all the if-returns above)
   const opParts: string[] = [];
   if (s.ops.replace > 0) opParts.push(`${s.ops.replace} replace`);
   if (s.ops.create > 0) opParts.push(`${s.ops.create} create`);

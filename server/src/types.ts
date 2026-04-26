@@ -247,6 +247,19 @@ export type TranscriptEntrySummary =
       todoDescription: string;
       evidenceCitation: string;
       rationale?: string;
+    }
+  // Task #165: blackboard pause/resume on Ollama-quota wall.
+  // Emitted at pause-entry + resume so the UI can render a "paused,
+  // probing every 5min" ribbon and history of pause/resume events.
+  | {
+      kind: "quota_paused";
+      statusCode?: number;
+      reason?: string;
+    }
+  | {
+      kind: "quota_resumed";
+      pausedMs: number;
+      totalPausedMs: number;
     };
 
 export interface BoardCountsDTO {
@@ -366,6 +379,11 @@ export type SwarmPhase =
   | "discussing"
   | "planning"
   | "executing"
+  // Task #165: blackboard pauses on persistent Ollama-quota wall and
+  // probes every 5 min until upstream clears. Wall-clock cap doesn't
+  // burn while paused; total pause capped at 2h before escalating to
+  // permanent cap:quota halt.
+  | "paused"
   | "stopping"
   | "stopped"
   | "completed"

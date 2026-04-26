@@ -184,6 +184,17 @@ export type TranscriptEntrySummary =
       todoDescription: string;
       evidenceCitation: string;
       rationale?: string;
+    }
+  // Task #165: pause/resume on Ollama-quota wall (mirrors server type).
+  | {
+      kind: "quota_paused";
+      statusCode?: number;
+      reason?: string;
+    }
+  | {
+      kind: "quota_resumed";
+      pausedMs: number;
+      totalPausedMs: number;
     };
 
 export type SwarmPhase =
@@ -194,6 +205,9 @@ export type SwarmPhase =
   | "discussing"
   | "planning"
   | "executing"
+  // Task #165: blackboard pauses on persistent Ollama-quota wall and
+  // probes every 5 min until upstream clears. 2h max before halting.
+  | "paused"
   | "stopping"
   | "stopped"
   | "completed"
