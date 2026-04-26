@@ -114,11 +114,17 @@ export async function promptWithRetry(
     const t0 = Date.now();
     try {
       let res: unknown;
-      if (opts.manager) {
-        // Task #166: streamed path. SSE per-chunk timeout replaces the
-        // blocking 5-min headersTimeout. Returns the assembled text;
-        // wrap in a SDK-shaped envelope so existing extractText callers
-        // see the same structure they'd get from session.prompt.
+      // Task #166 streaming path is DISABLED. Ran into a fundamental
+      // problem: the SDK's `agent.client.event.subscribe()` returns
+      // an AsyncIterable that delivers ZERO events for our setup
+      // (verified: 0 `_raw_sse` log entries in any log we have).
+      // The raw-fetch probe on /event worked, but the SDK path is
+      // dead. Streaming code is left in place for when we route
+      // events via raw fetch (Task #170 candidate) — until then,
+      // every promptWithRetry uses the blocking session.prompt.
+      // Force the fallback regardless of whether opts.manager is set.
+      const STREAMING_ENABLED = false;
+      if (STREAMING_ENABLED && opts.manager) {
         const text = await opts.manager.streamPrompt(agent, {
           agentName,
           modelID: agent.model,
