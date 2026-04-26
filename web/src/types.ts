@@ -251,6 +251,7 @@ export type StopReason =
   | "cap:commits"
   | "cap:todos"
   | "cap:tokens"
+  | "cap:quota"
   | "early-stop";
 
 export interface PerAgentStat {

@@ -305,6 +305,10 @@ function stopReasonAccent(reason: RunSummary["stopReason"]): { badge: string; bo
     case "cap:todos":
     case "cap:tokens":
       return { badge: "bg-amber-900/60 text-amber-200", border: "border-l-4 border-l-amber-500" };
+    case "cap:quota":
+      // Task #158: distinct rose styling for the upstream-Ollama-walled
+      // case; visually separates "we hit our own cap" from "Ollama walled us".
+      return { badge: "bg-rose-900/60 text-rose-200", border: "border-l-4 border-l-rose-500" };
     case "early-stop":
       return { badge: "bg-sky-900/60 text-sky-200", border: "border-l-4 border-l-sky-500" };
   }

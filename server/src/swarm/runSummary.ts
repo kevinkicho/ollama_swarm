@@ -83,6 +83,19 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
     }
   }
 
+  // Task #154: discussion presets (council, role-diff, OW, OW-deep,
+  // debate-judge default, map-reduce, stigmergy) do not write files.
+  // input.filesChanged comes from `git status` on the clone, which
+  // reflects ANY dirty state — including uncommitted changes from
+  // prior blackboard runs on the same clone. Reporting that as
+  // "files changed by this run" is misleading. Set to 0 for discussion
+  // presets unconditionally. (The one exception is debate-judge with
+  // executeNextAction=true, which CAN run an implementer turn that
+  // writes files. We don't separately track per-run commits in the
+  // discussion summary path today, so this is also reported as 0 in
+  // that mode — accurate per-run tracking would require a git-HEAD
+  // diff against run-start, deferred as a separate task.)
+  const filesChangedByThisRun = 0;
   return {
     runId: input.config.runId,
     repoUrl: input.config.repoUrl,
@@ -98,7 +111,7 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
     stopDetail,
     // Blackboard-only fields intentionally omitted. Comparison tooling
     // checks `preset` to know what's applicable.
-    filesChanged: input.filesChanged,
+    filesChanged: filesChangedByThisRun,
     finalGitStatus,
     finalGitStatusTruncated: truncated,
     agents: input.agents.slice(),

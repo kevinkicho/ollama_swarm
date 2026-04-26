@@ -33,6 +33,7 @@ export type StopReason =
   | "cap:commits"
   | "cap:todos"
   | "cap:tokens"
+  | "cap:quota"
   | "early-stop";
 
 export interface PerAgentStat {
@@ -315,5 +316,9 @@ function parseCapType(reason: string): StopReason {
   if (reason.startsWith("commits cap")) return "cap:commits";
   if (reason.startsWith("todos cap")) return "cap:todos";
   if (reason.startsWith("token-budget")) return "cap:tokens";
+  // Task #158: #137's quota-wall reason ("ollama-quota-exhausted (NNN: ...)")
+  // was previously falling through to cap:wall-clock — misleading. Surface
+  // it as its own bucket so summaries / UI can color it distinctly.
+  if (reason.startsWith("ollama-quota-exhausted")) return "cap:quota";
   return "cap:wall-clock";
 }
