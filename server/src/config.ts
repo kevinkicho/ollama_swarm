@@ -45,6 +45,15 @@ const Schema = z.object({
   // Applied at the route layer when cfg.workerModel is absent AND
   // preset === 'blackboard'. Other presets fan agents through `model`.
   DEFAULT_WORKER_MODEL: z.string().default("gemma4:31b-cloud"),
+  // Blackboard-only: default `dedicatedAuditor` to ON. Empirically
+  // delegating audit to a separate agent (planner = pure planning,
+  // auditor = pure auditing) improves overall teamwork — context
+  // doesn't cross-contaminate. Per-run cfg.dedicatedAuditor=false
+  // explicitly disables. Applied at the route layer.
+  DEFAULT_DEDICATED_AUDITOR: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("true")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
   OPENCODE_BIN: z.string().default("opencode"),
   GITHUB_TOKEN: z.string().optional(),
   // Unit 17: send a tiny "reply with: ok" prompt to each agent right

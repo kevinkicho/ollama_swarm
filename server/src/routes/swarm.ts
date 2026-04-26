@@ -342,7 +342,14 @@ export function swarmRouter(orch: Orchestrator): Router {
             : undefined),
         wallClockCapMs: parsed.data.wallClockCapMs,
         resumeContract: parsed.data.resumeContract,
-        dedicatedAuditor: parsed.data.dedicatedAuditor,
+        // Blackboard defaults dedicatedAuditor to ON (env-overridable
+        // via DEFAULT_DEDICATED_AUDITOR). Explicit per-run value
+        // always wins — including explicit `false` to disable.
+        dedicatedAuditor:
+          parsed.data.dedicatedAuditor ??
+          (parsed.data.preset === "blackboard"
+            ? config.DEFAULT_DEDICATED_AUDITOR
+            : undefined),
         auditorModel: parsed.data.auditorModel,
         specializedWorkers: parsed.data.specializedWorkers,
         criticEnsemble: parsed.data.criticEnsemble,
