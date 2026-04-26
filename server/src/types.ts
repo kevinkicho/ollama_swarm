@@ -223,6 +223,19 @@ export type TranscriptEntrySummary =
       goals: string[];
       tier: number;
       committed: number;
+    }
+  // Task #151: verifier verdict (#128). When the per-commit verifier
+  // gate fires, we emit a system message with this structured tag so
+  // the UI can render a colored ribbon (green/amber/red/gray)
+  // alongside the citation, instead of letting the verdict get buried
+  // in plain system noise. Blackboard-only.
+  | {
+      kind: "verifier_verdict";
+      verdict: "verified" | "partial" | "false" | "unverifiable";
+      proposingAgentId: string;
+      todoDescription: string;
+      evidenceCitation: string;
+      rationale?: string;
     };
 
 export interface BoardCountsDTO {

@@ -12,6 +12,7 @@ import { DraftMatrix } from "./DraftMatrix";
 import { VerdictPanel } from "./VerdictPanel";
 import { CoveragePanel } from "./CoveragePanel";
 import { OwSubtasksPanel } from "./OwSubtasksPanel";
+import { MemoryLogPanel } from "./MemoryLogPanel";
 
 type Tab =
   | "transcript"
@@ -22,7 +23,8 @@ type Tab =
   | "drafts"
   | "verdict"
   | "coverage"
-  | "subtasks";
+  | "subtasks"
+  | "memory";
 
 export function SwarmView() {
   const agents = useSwarm((s) => s.agents);
@@ -41,6 +43,10 @@ export function SwarmView() {
   // selected but no run config exists yet — default to showing them
   // since the SetupForm is open).
   const showBlackboardTabs = !cfg || cfg.preset === "blackboard";
+  // Task #152: memory-log tab. .swarm-memory.jsonl is blackboard-only
+  // today (only blackboard runs write entries via #130); show the tab
+  // for blackboard runs and pre-start (when SetupForm is open).
+  const showMemoryTab = !cfg || cfg.preset === "blackboard";
   // Phase 2 preset-specific primary-signal tabs. Each only appears
   // for its matching preset; tabs from earlier presets in the same
   // session disappear when the user switches.
@@ -59,7 +65,8 @@ export function SwarmView() {
       (!showDraftsTab && tab === "drafts") ||
       (!showVerdictTab && tab === "verdict") ||
       (!showCoverageTab && tab === "coverage") ||
-      (!showSubtasksTab && tab === "subtasks");
+      (!showSubtasksTab && tab === "subtasks") ||
+      (!showMemoryTab && tab === "memory");
     if (hiddenTab) setTab("transcript");
   }, [
     showBlackboardTabs,
@@ -68,6 +75,7 @@ export function SwarmView() {
     showVerdictTab,
     showCoverageTab,
     showSubtasksTab,
+    showMemoryTab,
     tab,
   ]);
 
@@ -246,6 +254,11 @@ export function SwarmView() {
               Subtasks
             </TabButton>
           ) : null}
+          {showMemoryTab ? (
+            <TabButton active={tab === "memory"} onClick={() => setTab("memory")}>
+              Memory
+            </TabButton>
+          ) : null}
         </div>
         <div className="flex-1 overflow-hidden">
           {tab === "transcript" ? (
@@ -266,6 +279,8 @@ export function SwarmView() {
             <CoveragePanel />
           ) : tab === "subtasks" && showSubtasksTab ? (
             <OwSubtasksPanel />
+          ) : tab === "memory" && showMemoryTab ? (
+            <div className="h-full overflow-y-auto"><MemoryLogPanel clonePath={cfg?.clonePath} /></div>
           ) : (
             <Transcript />
           )}

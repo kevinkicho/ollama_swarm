@@ -2254,6 +2254,17 @@ export class BlackboardRunner implements SwarmRunner {
     const verdict: VerifierVerdict = parsed.verifier.verdict;
     const cite = parsed.verifier.evidenceCitation;
     const rat = parsed.verifier.rationale ? ` — ${parsed.verifier.rationale}` : "";
+    // Task #151: structured tag so the UI ribbon renders cleanly. Same
+    // text payload as before for back-compat with any plain-text
+    // consumer; the summary kind drives the visual rendering.
+    const summary = {
+      kind: "verifier_verdict" as const,
+      verdict,
+      proposingAgentId: proposingAgent.id,
+      todoDescription: todo.description,
+      evidenceCitation: cite,
+      rationale: parsed.verifier.rationale,
+    };
     if (verdict === "false") {
       this.board.markStale(
         todo.id,
@@ -2261,6 +2272,7 @@ export class BlackboardRunner implements SwarmRunner {
       );
       this.appendSystem(
         `[verifier] ${planner.id} FALSE on ${proposingAgent.id}'s diff for "${truncate(todo.description)}": ${cite}${rat}`,
+        summary,
       );
       bumpAgentCounter(this.rejectedAttemptsPerAgent, proposingAgent.id);
       return "reject";
@@ -2268,12 +2280,14 @@ export class BlackboardRunner implements SwarmRunner {
     if (verdict === "unverifiable") {
       this.appendSystem(
         `[verifier] ${planner.id} UNVERIFIABLE on ${proposingAgent.id}'s diff for "${truncate(todo.description)}": ${cite}${rat} — accepting (failure-open).`,
+        summary,
       );
       return "accept";
     }
     // verified or partial → accept
     this.appendSystem(
       `[verifier] ${planner.id} ${verdict.toUpperCase()} ${proposingAgent.id}'s diff: ${cite}${rat}`,
+      summary,
     );
     return "accept";
   }

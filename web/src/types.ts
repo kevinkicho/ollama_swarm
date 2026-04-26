@@ -169,6 +169,15 @@ export type TranscriptEntrySummary =
       goals: string[];
       tier: number;
       committed: number;
+    }
+  // Task #151: verifier verdict (mirrors server type).
+  | {
+      kind: "verifier_verdict";
+      verdict: "verified" | "partial" | "false" | "unverifiable";
+      proposingAgentId: string;
+      todoDescription: string;
+      evidenceCitation: string;
+      rationale?: string;
     };
 
 export type SwarmPhase =

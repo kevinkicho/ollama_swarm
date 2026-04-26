@@ -537,6 +537,43 @@ export function swarmRouter(orch: Orchestrator): Router {
     res.status(404).json({ error: "no matching summary found" });
   });
 
+  // Task #152: read .swarm-memory.jsonl for a clone. Returns the parsed
+  // entries (newest first by ts), or [] if missing. Cheap — file is
+  // capped at 1 MB by memoryStore's prune logic. Used by the UI memory-
+  // log sidebar to surface lessons learned across prior runs.
+  r.get("/memory", async (req: Request, res: Response) => {
+    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
+    if (!clonePath) {
+      res.status(400).json({ error: "clonePath required" });
+      return;
+    }
+    const memPath = path.join(clonePath, ".swarm-memory.jsonl");
+    let raw: string;
+    try {
+      raw = await fs.readFile(memPath, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        res.json({ entries: [] });
+        return;
+      }
+      res.status(500).json({ error: (err as Error).message });
+      return;
+    }
+    const entries: Array<Record<string, unknown>> = [];
+    for (const line of raw.split("\n")) {
+      const t = line.trim();
+      if (!t) continue;
+      try {
+        const obj = JSON.parse(t);
+        if (obj && typeof obj === "object") entries.push(obj);
+      } catch {
+        // skip malformed lines silently — same policy as memoryStore.readMemory
+      }
+    }
+    entries.sort((a, b) => Number(b.ts ?? 0) - Number(a.ts ?? 0));
+    res.json({ entries });
+  });
+
   return r;
 }
 

@@ -106,6 +106,39 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
     if (entry.summary?.kind === "seed_announce") {
       return <SeedAnnounceGrid summary={entry.summary} ts={entry.ts} />;
     }
+    // Task #151: verifier verdict ribbon. Per-commit gate from #128 — its
+    // verdicts get a colored ribbon so they're visible at a glance instead
+    // of buried among other system messages. Color per verdict semantics.
+    if (entry.summary?.kind === "verifier_verdict") {
+      const v = entry.summary;
+      const palette = {
+        verified: { ring: "border-emerald-700/70 bg-emerald-950/30", chip: "bg-emerald-900/60 text-emerald-200", icon: "✓" },
+        partial: { ring: "border-amber-700/70 bg-amber-950/30", chip: "bg-amber-900/60 text-amber-200", icon: "~" },
+        false: { ring: "border-rose-700/70 bg-rose-950/30", chip: "bg-rose-900/60 text-rose-200", icon: "✕" },
+        unverifiable: { ring: "border-ink-600 bg-ink-800/40", chip: "bg-ink-700 text-ink-300", icon: "?" },
+      }[v.verdict];
+      return (
+        <div className={`rounded-md border-2 ${palette.ring} px-3 py-2 text-xs space-y-1`}>
+          <div className="flex items-center gap-2">
+            <span className={`inline-block ${palette.chip} font-mono uppercase tracking-wider px-1.5 py-0.5 rounded`}>
+              {palette.icon} verifier · {v.verdict}
+            </span>
+            <span className="text-ink-400">on {v.proposingAgentId}'s diff · {ts}</span>
+          </div>
+          <div className="text-ink-300">
+            <span className="text-ink-500">todo:</span> {v.todoDescription.slice(0, 140)}{v.todoDescription.length > 140 ? "…" : ""}
+          </div>
+          <div className="text-ink-200 font-mono break-words">
+            <span className="text-ink-500">cite:</span> {v.evidenceCitation}
+          </div>
+          {v.rationale ? (
+            <div className="text-ink-400">
+              <span className="text-ink-500">why:</span> {v.rationale}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
     return (
       <CollapsibleBlock
         className="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"
@@ -477,6 +510,9 @@ function formatServerSummary(s: TranscriptEntrySummary): string {
   }
   if (s.kind === "stretch_goals") {
     return `Stretch goals (${s.goals.length} ranked, tier ${s.tier})`;
+  }
+  if (s.kind === "verifier_verdict") {
+    return `Verifier ${s.verdict} on ${s.proposingAgentId}`;
   }
   if (s.kind === "debate_verdict") {
     return `Debate verdict — ${s.winner.toUpperCase()} (${s.confidence})`;
