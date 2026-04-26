@@ -3826,12 +3826,36 @@ export class BlackboardRunner implements SwarmRunner {
     const controller = new AbortController();
     this.activeAborts.add(controller);
     let abortedReason: string | null = null;
+    // Task #142: when the absolute turn cap fires, the @opencode-ai SDK
+    // doesn't always honor AbortSignal — the underlying fetch can keep
+    // running until natural completion. The agent's UI status stays
+    // "thinking" past the documented 4-min cap, surprising users (smoke
+    // tour 2026-04-25 17:30: agent-4 thinking for 7 min). Surface a
+    // visible warning when the watchdog first fires AND the call hasn't
+    // returned yet, then a periodic reminder every 60s thereafter.
+    let abortFiredAt = 0;
+    let lastVisibilityWarn = 0;
 
     const watchdog = setInterval(() => {
       if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
-        abortedReason = `absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s)`;
-        controller.abort(new Error(abortedReason));
-        void agent.client.session.abort({ path: { id: agent.sessionId } }).catch(() => {});
+        if (abortFiredAt === 0) {
+          abortFiredAt = Date.now();
+          abortedReason = `absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s)`;
+          controller.abort(new Error(abortedReason));
+          void agent.client.session.abort({ path: { id: agent.sessionId } }).catch(() => {});
+          this.appendSystem(
+            `[${agent.id}] absolute turn cap (${ABSOLUTE_MAX_MS / 1000}s) hit — abort signaled. SDK may take longer to actually return.`,
+          );
+        } else if (Date.now() - lastVisibilityWarn > 60_000) {
+          // Periodic reminder while the SDK refuses to return — gives
+          // the user a signal that the agent is genuinely uncancellable
+          // rather than the marker being stale.
+          lastVisibilityWarn = Date.now();
+          const stuckS = Math.round((Date.now() - turnStart) / 1000);
+          this.appendSystem(
+            `[${agent.id}] still in flight ${stuckS}s after start despite abort — SDK has not returned (Task #142).`,
+          );
+        }
       }
     }, 10_000);
     watchdog.unref?.();
