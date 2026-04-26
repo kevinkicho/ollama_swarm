@@ -556,6 +556,15 @@ export class AgentManager {
   // suddenly goes empty mid-response" bug.
   // Map: agentId → Map<partId, text>. Insertion order = display order.
   private partsByAgent = new Map<string, Map<string, string>>();
+  // Task #175: which message ID is the CURRENT assistant response per
+  // agent. OpenCode emits message.part.updated events for BOTH the
+  // user's prompt (the system+user prompt text echoed back as a text
+  // part) AND the assistant's response. Without this filter our text
+  // accumulator was concatenating "You are the PLANNER..." (the prompt)
+  // with the actual response, producing 27K-char garbled "responses"
+  // that never parsed as JSON. Updated when message.updated fires
+  // with info.role === "assistant"; cleared on session.idle.
+  private currentAssistantMsgId = new Map<string, string>();
 
   recordPromptComplete(
     agentId: string,
@@ -683,6 +692,8 @@ export class AgentManager {
     this.latestStreamingText.clear();
     // Task #174: drop per-part accumulators for killed agents.
     this.partsByAgent.clear();
+    // Task #175: drop assistant-message tracking for killed agents.
+    this.currentAssistantMsgId.clear();
     if (escaped > 0) {
       // Unit 41: surface unkillable PIDs to the UI rather than swallowing
       // silently. The next dev-server startup sweep will still reclaim
@@ -818,9 +829,34 @@ export class AgentManager {
       }, liveStream.perChunkTimeoutMs);
     }
 
+    // Task #175: track the current assistant message ID per agent.
+    // OpenCode emits message.updated for BOTH user and assistant
+    // messages; we only want to accumulate parts from the assistant
+    // message. info.role distinguishes them.
+    if (type === "message.updated") {
+      const info = props.info as { id?: string; role?: string } | undefined;
+      if (info?.role === "assistant" && typeof info.id === "string") {
+        const prior = this.currentAssistantMsgId.get(agent.id);
+        if (prior !== info.id) {
+          // New assistant message — reset the per-part accumulator
+          // so this response starts clean.
+          this.partsByAgent.delete(agent.id);
+          this.currentAssistantMsgId.set(agent.id, info.id);
+        }
+      }
+      return;
+    }
     if (type === "message.part.updated") {
-      const part = props.part as { type?: string; text?: string; id?: string } | undefined;
+      const part = props.part as { type?: string; text?: string; id?: string; messageID?: string } | undefined;
       if (part?.type === "text" && typeof part.text === "string") {
+        // Task #175: filter out user-message parts. Only accumulate
+        // parts whose messageID matches our currently-tracked
+        // assistant message. Prevents concatenating the system+user
+        // prompt text into the "response".
+        const assistantMsgId = this.currentAssistantMsgId.get(agent.id);
+        if (part.messageID && assistantMsgId && part.messageID !== assistantMsgId) {
+          return;
+        }
         // Task #174: track this text snapshot per-part so a new text
         // part starting at len=0 doesn't wipe earlier parts. Display
         // text = concatenation of all parts in arrival order.
@@ -855,6 +891,9 @@ export class AgentManager {
       // Task #174: drop the per-part accumulator so the next prompt
       // on this agent starts with a fresh slate.
       this.partsByAgent.delete(agent.id);
+      // Task #175: clear the assistant-msg tracking so the NEXT
+      // prompt's first message.updated starts a fresh response.
+      this.currentAssistantMsgId.delete(agent.id);
       // Task #172: flush any pending throttled streaming text so the
       // UI lands on the FINAL state before we tell it the stream
       // ended. Without this, the trailing-edge throttle could leave
