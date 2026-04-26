@@ -29,6 +29,13 @@ export default function App() {
   const phase = useSwarm((s) => s.phase);
   const error = useSwarm((s) => s.error);
 
+  // Task #163: when in review mode, poll /api/swarm/status to detect
+  // whether the run being reviewed is ALSO the currently-live run. If
+  // yes, surface "View Live" + "Stop" buttons next to the REVIEW MODE
+  // badge so the user can switch to the live view or abort without
+  // hunting for the controls.
+  const reviewedRunIsLive = useReviewedRunIsLive(review);
+
   // Once a swarm has started, keep the user on SwarmView even after the loop
   // completes or they hit Stop — they need to read the transcript. They return
   // to setup only via the explicit "Start new swarm" button (which resets).
@@ -41,9 +48,14 @@ export default function App() {
         <div className="flex items-baseline gap-3">
           <h1 className="text-lg font-semibold tracking-tight">ollama_swarm</h1>
           {review ? (
-            <span className="text-xs text-amber-300 font-mono px-2 py-0.5 rounded bg-amber-950/40 border border-amber-700/50">
-              REVIEW MODE · run {review.runId.slice(0, 8)}
-            </span>
+            <>
+              <span className="text-xs text-amber-300 font-mono px-2 py-0.5 rounded bg-amber-950/40 border border-amber-700/50">
+                REVIEW MODE · run {review.runId.slice(0, 8)}
+              </span>
+              {reviewedRunIsLive ? (
+                <ReviewActiveControls />
+              ) : null}
+            </>
           ) : (
             <span className="text-xs text-ink-400 font-mono">glm-5.1:cloud · opencode</span>
           )}
@@ -73,6 +85,86 @@ export default function App() {
         {showSetup ? <SetupForm /> : <SwarmView />}
       </main>
     </div>
+  );
+}
+
+// Task #163: poll /api/swarm/status while in review mode to detect
+// whether the reviewed run is the currently-active live run. Returns
+// true once status.runId matches review.runId (and stays true until
+// the live run ends or the user navigates away).
+function useReviewedRunIsLive(review: { runId: string; clonePath: string } | null): boolean {
+  const [isLive, setIsLive] = useState(false);
+  useEffect(() => {
+    if (!review) {
+      setIsLive(false);
+      return;
+    }
+    let cancelled = false;
+    async function check() {
+      try {
+        const r = await fetch("/api/swarm/status");
+        if (!r.ok) return;
+        const body = (await r.json()) as { runId?: string };
+        if (!cancelled) setIsLive(body.runId === review!.runId);
+      } catch {
+        // ignore — next tick will retry
+      }
+    }
+    void check();
+    const t = setInterval(check, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [review]);
+  return isLive;
+}
+
+// Task #163: control row shown in REVIEW MODE when the reviewed run is
+// the live one. Two buttons: "View Live" exits review mode (clears the
+// ?review URL params); "Stop" sends POST /api/swarm/stop.
+function ReviewActiveControls() {
+  const [stopping, setStopping] = useState(false);
+  const onViewLive = () => {
+    // Clear the review params and reload — re-mount drops review mode
+    // and re-attaches the live WebSocket.
+    const url = new URL(window.location.href);
+    url.searchParams.delete("review");
+    url.searchParams.delete("path");
+    window.location.href = url.toString();
+  };
+  const onStop = async () => {
+    if (!confirm("Stop the active swarm run? All spawned opencode processes will be terminated.")) return;
+    setStopping(true);
+    try {
+      await fetch("/api/swarm/stop", { method: "POST" });
+    } catch {
+      // surface via no-op; the next status poll will reflect the stopped state
+    } finally {
+      setStopping(false);
+    }
+  };
+  return (
+    <span className="flex items-center gap-2">
+      <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-700/30 border border-emerald-600/40 text-emerald-300 font-semibold">
+        ● live
+      </span>
+      <button
+        onClick={onViewLive}
+        title="Switch out of REVIEW MODE and connect to the live WebSocket for this run"
+        className="text-xs px-2 py-0.5 rounded border border-emerald-700/60 text-emerald-200 hover:bg-emerald-900/40 hover:border-emerald-600 transition"
+      >
+        View Live ↗
+      </button>
+      <button
+        onClick={onStop}
+        disabled={stopping}
+        title="Send /api/swarm/stop to terminate the active run"
+        className="text-xs px-2 py-0.5 rounded border border-rose-700/60 text-rose-200 hover:bg-rose-900/40 hover:border-rose-600 transition disabled:opacity-50"
+      >
+        {stopping ? "Stopping…" : "Stop"}
+      </button>
+    </span>
   );
 }
 
