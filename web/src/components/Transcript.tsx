@@ -620,6 +620,12 @@ function StreamingDock({
   );
 }
 
+// Task #178: gap threshold (ms) above which a new burst of text is
+// treated as a NEW segment — earlier text gets checkpointed into a
+// collapsible. 5s catches "deep reasoning" pauses without splitting
+// on the normal sub-second SSE-chunk cadence.
+const SEGMENT_PAUSE_MS = 5000;
+
 function PersistentStreamBubble({
   agentIndex,
   text,
@@ -635,22 +641,67 @@ function PersistentStreamBubble({
   const sinceLastText = meta ? Math.max(0, now - meta.lastTextAt) : 0;
   const sinceStart = meta ? Math.max(0, now - meta.startedAt) : 0;
 
+  // Task #178: track segment split points. Whenever text grows after
+  // a SEGMENT_PAUSE_MS or longer pause, we record the prior text
+  // length as a split — the segment that just ended becomes a
+  // collapsible block, and new chars start a fresh "active" segment.
+  // splitPoints is monotonically growing, indexes into the cumulative
+  // text. Reset on new prompt cycle (text shrinks back to "").
+  const [splitPoints, setSplitPoints] = useState<number[]>([]);
+  const prevTextRef = useRef<{ text: string; lastTextChangeAt: number }>({
+    text: "",
+    lastTextChangeAt: Date.now(),
+  });
+  useEffect(() => {
+    const prev = prevTextRef.current;
+    if (text === prev.text) return; // no change
+    if (text.length < prev.text.length || !text.startsWith(prev.text)) {
+      // Text shrank or restarted — reset segments (new prompt cycle).
+      prevTextRef.current = { text, lastTextChangeAt: Date.now() };
+      setSplitPoints([]);
+      return;
+    }
+    // Text grew. If the gap since last change crosses the pause
+    // threshold, the prev.text.length boundary becomes a split point.
+    const gap = Date.now() - prev.lastTextChangeAt;
+    if (gap >= SEGMENT_PAUSE_MS && prev.text.length > 0) {
+      setSplitPoints((sp) =>
+        sp.length > 0 && sp[sp.length - 1] === prev.text.length ? sp : [...sp, prev.text.length],
+      );
+    }
+    prevTextRef.current = { text, lastTextChangeAt: Date.now() };
+  }, [text]);
+
+  // Slice text into segments by split points. Last segment is the
+  // current/active one (open by default while live); earlier
+  // segments are collapsible.
+  const segments: string[] = [];
+  let cursor = 0;
+  for (const sp of splitPoints) {
+    if (sp <= cursor || sp > text.length) continue;
+    segments.push(text.slice(cursor, sp));
+    cursor = sp;
+  }
+  segments.push(text.slice(cursor));
+
   // Subtitle changes based on activity recency:
   //   <2s since last text → "writing…"
   //   2-10s since last text → "thinking 4s…"
   //   >10s since last text → "deep reasoning 22s…" (longer pauses
   //     are usually mid-tool-call or chain-of-thought; not stuck)
-  //   done → "done · X chars · Ys total"
+  //   done → "done · X chars · Ys total · N segment(s)"
+  const segCount = segments.filter((s) => s.length > 0).length;
+  const segSuffix = segCount > 1 ? ` · ${segCount} segments` : "";
   let subtitle: string;
   if (isDone) {
     const totalSec = Math.round(sinceStart / 1000);
-    subtitle = `done · ${text.length.toLocaleString()} chars · ${totalSec}s total`;
+    subtitle = `done · ${text.length.toLocaleString()} chars · ${totalSec}s total${segSuffix}`;
   } else if (sinceLastText < 2000) {
-    subtitle = "writing…";
+    subtitle = `writing…${segSuffix}`;
   } else if (sinceLastText < 10_000) {
-    subtitle = `thinking ${Math.round(sinceLastText / 1000)}s…`;
+    subtitle = `thinking ${Math.round(sinceLastText / 1000)}s…${segSuffix}`;
   } else {
-    subtitle = `deep reasoning ${Math.round(sinceLastText / 1000)}s…`;
+    subtitle = `deep reasoning ${Math.round(sinceLastText / 1000)}s…${segSuffix}`;
   }
 
   // Border color shifts subtly based on state — accent while live,
@@ -677,12 +728,69 @@ function PersistentStreamBubble({
           </span>
         )}
       </div>
-      <div
-        className="whitespace-pre-wrap opacity-90 overflow-y-auto"
-        style={{ maxHeight: `${MAX_BUBBLE_HEIGHT_PX}px` }}
-      >
-        {text || " "}
+      <div className="space-y-1.5">
+        {segments.slice(0, -1).map((seg, i) => (
+          <CollapsedSegment key={i} index={i} text={seg} hue={hue} />
+        ))}
+        {segments.length > 0 ? (
+          <div
+            className="whitespace-pre-wrap opacity-90 overflow-y-auto"
+            style={{ maxHeight: `${MAX_BUBBLE_HEIGHT_PX}px` }}
+          >
+            {segments[segments.length - 1] || " "}
+          </div>
+        ) : null}
       </div>
+    </div>
+  );
+}
+
+// Task #178: collapsible past-segment. Default collapsed showing
+// "▸ N: first ~80 chars… (M chars)"; click to expand into a
+// scrollable preformatted block.
+function CollapsedSegment({
+  index,
+  text,
+  hue,
+}: {
+  index: number;
+  text: string;
+  hue: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const charCount = text.length.toLocaleString();
+  const preview = text.replace(/\s+/g, " ").slice(0, 80);
+  return (
+    <div
+      className="rounded border text-xs"
+      style={{
+        borderColor: `hsl(${hue} 25% 22%)`,
+        background: `hsl(${hue} 25% 9%)`,
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full text-left px-2 py-1 flex items-center gap-1.5 hover:bg-black/20 transition"
+        style={{ color: `hsl(${hue} 40% 60%)` }}
+      >
+        <span className="font-mono text-[10px]">{open ? "▾" : "▸"}</span>
+        <span className="font-semibold">Segment {index + 1}</span>
+        <span className="text-ink-500">·</span>
+        <span className="text-ink-500 flex-1 truncate" title={preview}>
+          {preview}
+          {text.length > 80 ? "…" : ""}
+        </span>
+        <span className="text-ink-500 shrink-0">{charCount} chars</span>
+      </button>
+      {open ? (
+        <div
+          className="whitespace-pre-wrap opacity-80 overflow-y-auto px-2 pb-2 text-sm"
+          style={{ maxHeight: `${MAX_BUBBLE_HEIGHT_PX}px` }}
+        >
+          {text}
+        </div>
+      ) : null}
     </div>
   );
 }
