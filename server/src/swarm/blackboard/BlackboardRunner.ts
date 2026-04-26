@@ -236,6 +236,12 @@ export class BlackboardRunner implements SwarmRunner {
   private draining = false;
   private drainStartedAt?: number;
   private drainWatcherTimer?: NodeJS.Timeout;
+  // Task #168: sticks across drain → stop transition so post-run
+  // gates (memory distillation, stretch reflection) treat a drained
+  // run as a clean exit (the user opted into "finish current work
+  // and stop") rather than as a hard user-stop (which suppresses
+  // both passes). Reset to false on next start().
+  private wasDrained = false;
   private terminationReason?: string;
   // Phase 9: run-summary counters. runBootedAt is the wall-clock origin
   // (stamped in start(), covers cloning+spawning+seeding+planning+executing)
@@ -438,6 +444,9 @@ export class BlackboardRunner implements SwarmRunner {
       clearInterval(this.drainWatcherTimer);
       this.drainWatcherTimer = undefined;
     }
+    // Task #168: clear the drain-marker so this fresh run defaults
+    // to "stop = hard user-stop" classification unless drain() fires.
+    this.wasDrained = false;
     this.terminationReason = undefined;
     // Unit 31: clear any lingering state-write timer from a prior run.
     // stateWriteInFlight may still be true momentarily if a run was torn
@@ -675,15 +684,27 @@ export class BlackboardRunner implements SwarmRunner {
         await this.runAuditedExecution(planner, workers);
       }
     } catch (err) {
-      errored = true;
-      crashMessage = err instanceof Error ? err.message : String(err);
-      this.opts.emit({ type: "error", message: `blackboard run failed: ${crashMessage}` });
-      this.appendSystem(`Run failed: ${crashMessage}`);
-      // Best-effort post-mortem. Awaited so the write lands before the
-      // finally block flips phase to "failed" — a WS consumer watching for
-      // the failed transition should be able to trust the artifact is
-      // already on disk.
-      await this.writeCrashSnapshot(err);
+      const msg = err instanceof Error ? err.message : String(err);
+      // Task #168: when stop() or drain() aborted in-flight prompts,
+      // the abort propagates here as an exception. That's exactly
+      // what the user asked for — don't classify it as a crash.
+      // Leaves errored=false + crashMessage=undefined so summary
+      // classification routes to "user" / drain-completion paths
+      // instead of "crash" (which previously caused user-stop runs
+      // to mis-show stopReason="crash" + write a crash snapshot).
+      if (this.stopping) {
+        this.appendSystem(`Run halted: ${msg}`);
+      } else {
+        errored = true;
+        crashMessage = msg;
+        this.opts.emit({ type: "error", message: `blackboard run failed: ${crashMessage}` });
+        this.appendSystem(`Run failed: ${crashMessage}`);
+        // Best-effort post-mortem. Awaited so the write lands before the
+        // finally block flips phase to "failed" — a WS consumer watching for
+        // the failed transition should be able to trust the artifact is
+        // already on disk.
+        await this.writeCrashSnapshot(err);
+      }
     } finally {
       this.stopClaimExpiry();
       this.stopReplanWatcher();
@@ -702,7 +723,10 @@ export class BlackboardRunner implements SwarmRunner {
           terminationReason: this.terminationReason,
           auditInvocations: this.auditInvocations,
           maxInvocations: this.maxAuditInvocations,
-          userStopped: this.stopping && !this.terminationReason,
+          // Task #168: drained runs should run the final audit (the
+          // user opted into a clean exit + wants final criterion
+          // status). Hard user-stop still suppresses.
+          userStopped: this.stopping && !this.terminationReason && !this.wasDrained,
         })
       ) {
         try {
@@ -723,7 +747,12 @@ export class BlackboardRunner implements SwarmRunner {
       //   - autoStretchReflection !== false (default ON)
       // Errors are swallowed for the same reason as the final audit:
       // a missing reflection is annoying, not run-fatal.
-      const userStopped = this.stopping && !this.terminationReason;
+      // Task #168: differentiate hard-user-stop from drain-stop. Drained
+      // runs ARE "the user opted into a clean exit" — let memory +
+      // stretch reflection fire so the work isn't lost. Only hard
+      // user-stop (Stop button, no drain) suppresses both passes.
+      const userStoppedHard =
+        this.stopping && !this.terminationReason && !this.wasDrained;
       const hasOutput =
         this.board.counts().committed > 0 ||
         (this.contract?.criteria.length ?? 0) > 0;
@@ -740,7 +769,7 @@ export class BlackboardRunner implements SwarmRunner {
       };
       if (
         !errored &&
-        !userStopped &&
+        !userStoppedHard &&
         hasOutput &&
         this.active?.autoStretchReflection !== false
       ) {
@@ -759,7 +788,7 @@ export class BlackboardRunner implements SwarmRunner {
       // is annoying, not run-fatal.
       if (
         !errored &&
-        !userStopped &&
+        !userStoppedHard &&
         hasOutput &&
         this.active?.autoMemory !== false
       ) {
@@ -823,6 +852,11 @@ export class BlackboardRunner implements SwarmRunner {
     if (this.stopping || this.draining) return;
     this.draining = true;
     this.drainStartedAt = Date.now();
+    // Task #168: marker for the post-run gate — drained runs ARE
+    // allowed to fire memory distillation + stretch reflection (the
+    // user opted in to "finish work then stop", which is closer to
+    // a natural completion than to a hard abort).
+    this.wasDrained = true;
     this.setPhase("draining");
     this.appendSystem(
       `Drain & Stop requested. Workers will finish their current claim (${this.board.counts().claimed} in-flight); no new claims. ` +

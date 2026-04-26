@@ -54,6 +54,13 @@ const Schema = z.object({
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("true")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // Blackboard-only: default auditor model = NEMOTRON. Auditor fires
+  // rarely (every K commits + tier-up + final), so its higher latency
+  // is amortized — but it does cross-criterion synthesis where the
+  // strongest reasoning matters most. Per the opencode-swarm pattern.
+  // Per-run cfg.auditorModel still overrides. Applied at the route
+  // layer when preset === 'blackboard' AND dedicatedAuditor is on.
+  DEFAULT_AUDITOR_MODEL: z.string().default("nemotron-3-super:cloud"),
   OPENCODE_BIN: z.string().default("opencode"),
   GITHUB_TOKEN: z.string().optional(),
   // Unit 17: send a tiny "reply with: ok" prompt to each agent right

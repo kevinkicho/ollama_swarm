@@ -350,7 +350,16 @@ export function swarmRouter(orch: Orchestrator): Router {
           (parsed.data.preset === "blackboard"
             ? config.DEFAULT_DEDICATED_AUDITOR
             : undefined),
-        auditorModel: parsed.data.auditorModel,
+        // Blackboard auditor defaults to DEFAULT_AUDITOR_MODEL (nemotron)
+        // when dedicatedAuditor is on AND no per-run override. Auditor
+        // fires rarely so its latency is amortized; cross-criterion
+        // synthesis benefits most from the strongest reasoning tier.
+        auditorModel:
+          parsed.data.auditorModel ??
+          (parsed.data.preset === "blackboard" &&
+          (parsed.data.dedicatedAuditor ?? config.DEFAULT_DEDICATED_AUDITOR)
+            ? config.DEFAULT_AUDITOR_MODEL
+            : undefined),
         specializedWorkers: parsed.data.specializedWorkers,
         criticEnsemble: parsed.data.criticEnsemble,
         executeNextAction: parsed.data.executeNextAction,
