@@ -905,6 +905,44 @@ export class AgentManager {
       return;
     }
     if (type === "session.idle") {
+      // Task #180: diagnostic log of what we accumulated for display.
+      // Lets us verify that ALL assistant text parts received via SSE
+      // make it to the UI — comparing this to the eventual transcript
+      // entry's text length surfaces any drops (race conditions,
+      // throttle gaps, role-filter false-negatives, segment-splitter
+      // bugs). Logged BEFORE we drop the per-agent state so we
+      // can introspect the final accumulator contents.
+      const finalParts = this.partsByAgent.get(agent.id);
+      const finalText = this.latestStreamingText.get(agent.id) ?? "";
+      const partSummary = finalParts
+        ? Array.from(finalParts.entries()).map(([pid, t]) => ({
+            partId: pid.slice(0, 12),
+            chars: t.length,
+          }))
+        : [];
+      const totalCharsAccumulated = partSummary.reduce((s, p) => s + p.chars, 0);
+      const roles = this.messageRoles.get(agent.id);
+      const assistantMsgIds = roles
+        ? Array.from(roles.entries()).filter(([, r]) => r === "assistant").map(([id]) => id.slice(0, 12))
+        : [];
+      const userMsgIds = roles
+        ? Array.from(roles.entries()).filter(([, r]) => r === "user").map(([id]) => id.slice(0, 12))
+        : [];
+      this.logDiag({
+        type: "_stream_complete",
+        agentId: agent.id,
+        partsCount: partSummary.length,
+        partsBreakdown: partSummary,
+        totalCharsAccumulated,
+        // The flushed text is what the UI saw last. The +concatenation
+        // of parts is what we emit. They should match (modulo a join
+        // separator of "\n" between parts).
+        latestEmittedChars: finalText.length,
+        assistantMsgIds,
+        userMsgIds,
+        partialStreamChars: this.partialStreams.get(agent.id)?.text.length ?? 0,
+        ts: Date.now(),
+      });
       // Task #39: stream finalized, drop the partial buffer.
       this.partialStreams.delete(agent.id);
       // Task #174: drop the per-part accumulator so the next prompt
