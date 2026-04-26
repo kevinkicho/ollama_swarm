@@ -39,6 +39,12 @@ const Schema = z.object({
   // token tracking will be empty).
   OLLAMA_PROXY_PORT: z.coerce.number().int().min(0).max(65_535).default(11533),
   DEFAULT_MODEL: z.string().default("glm-5.1:cloud"),
+  // Blackboard-only worker default. Workers do diff-generation and
+  // benefit less from the planner's heavier reasoning model — gemma4
+  // gives ~3-4× the tokens-per-second at acceptable code-edit quality.
+  // Applied at the route layer when cfg.workerModel is absent AND
+  // preset === 'blackboard'. Other presets fan agents through `model`.
+  DEFAULT_WORKER_MODEL: z.string().default("gemma4:31b-cloud"),
   OPENCODE_BIN: z.string().default("opencode"),
   GITHUB_TOKEN: z.string().optional(),
   // Unit 17: send a tiny "reply with: ok" prompt to each agent right

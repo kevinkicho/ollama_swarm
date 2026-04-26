@@ -332,7 +332,14 @@ export function swarmRouter(orch: Orchestrator): Router {
         critic: parsed.data.critic,
         uiUrl: parsed.data.uiUrl,
         plannerModel: parsed.data.plannerModel,
-        workerModel: parsed.data.workerModel,
+        // Blackboard workers default to DEFAULT_WORKER_MODEL (gemma4) so
+        // the planner's heavier reasoning model isn't burned on every
+        // worker turn. Other presets share `model` across all agents.
+        workerModel:
+          parsed.data.workerModel ??
+          (parsed.data.preset === "blackboard"
+            ? config.DEFAULT_WORKER_MODEL
+            : undefined),
         wallClockCapMs: parsed.data.wallClockCapMs,
         resumeContract: parsed.data.resumeContract,
         dedicatedAuditor: parsed.data.dedicatedAuditor,
