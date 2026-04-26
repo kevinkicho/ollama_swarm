@@ -26,58 +26,20 @@ export function Transcript() {
   const [stickyBottom, setStickyBottom] = useState(true);
 
   const streamingCount = Object.keys(streaming).length;
+  const streamingMeta = useSwarm((s) => s.streamingMeta);
 
-  // Task #173: track which agent most recently updated its streaming
-  // text so the dock can render that one expanded + others collapsed.
-  // Updated via effect when streaming changes — last-changed wins.
-  const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
-  const prevTextRef = useRef<Record<string, string>>({});
+  // Task #176 Phase A: 30s safety sweeper — if a streaming entry
+  // is "done" but no transcript_append has cleared it, force-clear
+  // so the bubble doesn't persist forever on a runner that crashed
+  // mid-finalize. clearStreaming is the canonical removal path.
+  const clearStreaming = useSwarm((s) => s.clearStreaming);
   useEffect(() => {
-    const prev = prevTextRef.current;
-    let mostRecent: string | null = activeAgentId;
-    for (const [id, text] of Object.entries(streaming)) {
-      if (prev[id] !== text) mostRecent = id;
-    }
-    prevTextRef.current = { ...streaming };
-    if (mostRecent && mostRecent !== activeAgentId) setActiveAgentId(mostRecent);
-  }, [streaming, activeAgentId]);
-
-  // Task #173: track per-agent "just ended" so the dock can hold
-  // the slot briefly with a ✓ before fading out — no DOM flash.
-  const [recentlyEnded, setRecentlyEnded] = useState<Record<string, { text: string; endedAt: number; agentIndex: number }>>({});
-  const prevStreamingKeysRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    const currentKeys = new Set(Object.keys(streaming));
-    const additions: Record<string, { text: string; endedAt: number; agentIndex: number }> = {};
-    for (const id of prevStreamingKeysRef.current) {
-      if (!currentKeys.has(id)) {
-        const lastText = prevTextRef.current[id] ?? "";
-        const idx = agents[id]?.index ?? 0;
-        additions[id] = { text: lastText, endedAt: Date.now(), agentIndex: idx };
-      }
-    }
-    prevStreamingKeysRef.current = currentKeys;
-    if (Object.keys(additions).length > 0) {
-      setRecentlyEnded((r) => ({ ...r, ...additions }));
-    }
-  }, [streaming, agents]);
-  // Sweeper: drop entries past their fade-out window (1.2s).
-  useEffect(() => {
-    if (Object.keys(recentlyEnded).length === 0) return;
-    const t = setTimeout(() => {
-      const cutoff = Date.now() - 1200;
-      setRecentlyEnded((r) => {
-        const next: typeof r = {};
-        let dropped = false;
-        for (const [id, v] of Object.entries(r)) {
-          if (v.endedAt > cutoff) next[id] = v;
-          else dropped = true;
-        }
-        return dropped ? next : r;
-      });
-    }, 400);
-    return () => clearTimeout(t);
-  }, [recentlyEnded]);
+    const stuck = Object.entries(streamingMeta).filter(
+      ([, m]) => m.status === "done" && m.endedAt && Date.now() - m.endedAt > 30_000,
+    );
+    if (stuck.length === 0) return;
+    for (const [id] of stuck) clearStreaming(id);
+  }, [streamingMeta, clearStreaming]);
 
   // Auto-scroll only when the user hasn't intentionally scrolled up.
   useEffect(() => {
@@ -118,9 +80,8 @@ export function Transcript() {
             "render N inline bubbles, snap-disappear on end" pattern. */}
         <StreamingDock
           streaming={streaming}
+          streamingMeta={streamingMeta}
           agents={agents}
-          activeAgentId={activeAgentId}
-          recentlyEnded={recentlyEnded}
         />
         <div ref={endRef} />
       </div>
@@ -602,91 +563,119 @@ function formatServerSummary(s: TranscriptEntrySummary): string {
   return `Wrote ${hunkLabel} (${opSummary}) ${where}${charsSuffix}`;
 }
 
-// Task #173: per-agent streaming dock. Shows ALL agents that are
-// either currently streaming OR recently ended (1.2s grace). The
-// most-recently-updated agent renders expanded with the full text;
-// other simultaneously-streaming agents collapse to one-line badges.
-// Recently-ended slots show ✓ + their last text and fade out — no
-// "vanish then reappear as transcript entry" flash.
+// Task #173 + #176 Phase A+B: per-agent streaming dock. Each agent
+// gets a STABLE bubble that persists from first chunk through
+// completion — no DOM swap on session.idle. Phase A: bubble stays
+// visible after agent_streaming_end (visual transitions to ✓ +
+// neutral border) until transcript_append for the same agent
+// removes it via store-level dedup. Phase B: "thinking N.Ns…"
+// subtitle uses lastTextAt to show the model is alive even during
+// long pauses with no text emit.
 function StreamingDock({
   streaming,
+  streamingMeta,
   agents,
-  activeAgentId,
-  recentlyEnded,
 }: {
   streaming: Record<string, string>;
+  streamingMeta: Record<string, { startedAt: number; lastTextAt: number; status: "live" | "done"; endedAt?: number }>;
   agents: Record<string, { id: string; index: number }>;
-  activeAgentId: string | null;
-  recentlyEnded: Record<string, { text: string; endedAt: number; agentIndex: number }>;
 }) {
-  // Build the ordered list of slots: active first (the expanded one),
-  // then other-active (collapsed badges), then recently-ended (fading).
-  const activeIds = Object.keys(streaming);
-  const endedIds = Object.keys(recentlyEnded).filter((id) => !(id in streaming));
-  if (activeIds.length === 0 && endedIds.length === 0) return null;
+  // Tick once per second so "thinking N.Ns" updates even when no
+  // SSE event arrives. Cheap — only renders if dock has content.
+  const [, setTickN] = useState(0);
+  const ids = Object.keys(streaming);
+  useEffect(() => {
+    if (ids.length === 0) return;
+    const t = setInterval(() => setTickN((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [ids.length]);
 
-  const expandedId = activeAgentId && activeAgentId in streaming ? activeAgentId : activeIds[0] ?? null;
-  const collapsedActiveIds = activeIds.filter((id) => id !== expandedId);
+  if (ids.length === 0) return null;
+
+  // Sort by lastTextAt descending (most recent activity first). The
+  // top entry gets natural visual focus; multiple parallel agents
+  // stack below it. No collapse-by-default — Phase A keeps every
+  // active stream visible so the user never loses sight of any
+  // agent's content.
+  const ordered = ids
+    .map((id) => ({
+      id,
+      agentIndex: agents[id]?.index ?? 0,
+      text: streaming[id] ?? "",
+      meta: streamingMeta[id],
+    }))
+    .sort((a, b) => (b.meta?.lastTextAt ?? 0) - (a.meta?.lastTextAt ?? 0));
 
   return (
     <div className="space-y-2">
-      {expandedId !== null ? (
-        <ExpandedStreamSlot
-          agentId={expandedId}
-          agentIndex={agents[expandedId]?.index ?? 0}
-          text={streaming[expandedId] ?? ""}
+      {ordered.map((slot) => (
+        <PersistentStreamBubble
+          key={`stream-${slot.id}`}
+          agentIndex={slot.agentIndex}
+          text={slot.text}
+          meta={slot.meta}
         />
-      ) : null}
-      {collapsedActiveIds.length > 0 || endedIds.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5 text-[11px]">
-          {collapsedActiveIds.map((id) => (
-            <CollapsedStreamBadge
-              key={`active-${id}`}
-              agentIndex={agents[id]?.index ?? 0}
-              status="streaming"
-              charCount={(streaming[id] ?? "").length}
-            />
-          ))}
-          {endedIds.map((id) => (
-            <CollapsedStreamBadge
-              key={`ended-${id}`}
-              agentIndex={recentlyEnded[id].agentIndex}
-              status="done"
-              charCount={recentlyEnded[id].text.length}
-            />
-          ))}
-        </div>
-      ) : null}
+      ))}
     </div>
   );
 }
 
-function ExpandedStreamSlot({
+function PersistentStreamBubble({
   agentIndex,
   text,
+  meta,
 }: {
-  agentId: string;
   agentIndex: number;
   text: string;
+  meta: { startedAt: number; lastTextAt: number; status: "live" | "done"; endedAt?: number } | undefined;
 }) {
   const hue = AGENT_HUE[(agentIndex || 1) - 1] ?? 200;
+  const isDone = meta?.status === "done";
+  const now = Date.now();
+  const sinceLastText = meta ? Math.max(0, now - meta.lastTextAt) : 0;
+  const sinceStart = meta ? Math.max(0, now - meta.startedAt) : 0;
+
+  // Subtitle changes based on activity recency:
+  //   <2s since last text → "writing…"
+  //   2-10s since last text → "thinking 4s…"
+  //   >10s since last text → "deep reasoning 22s…" (longer pauses
+  //     are usually mid-tool-call or chain-of-thought; not stuck)
+  //   done → "done · X chars · Ys total"
+  let subtitle: string;
+  if (isDone) {
+    const totalSec = Math.round(sinceStart / 1000);
+    subtitle = `done · ${text.length.toLocaleString()} chars · ${totalSec}s total`;
+  } else if (sinceLastText < 2000) {
+    subtitle = "writing…";
+  } else if (sinceLastText < 10_000) {
+    subtitle = `thinking ${Math.round(sinceLastText / 1000)}s…`;
+  } else {
+    subtitle = `deep reasoning ${Math.round(sinceLastText / 1000)}s…`;
+  }
+
+  // Border color shifts subtly based on state — accent while live,
+  // neutral when done — so the visual transition is gradual.
+  const borderColor = isDone ? `hsl(${hue} 20% 22%)` : `hsl(${hue} 30% 30%)`;
+  const bgColor = isDone ? `hsl(${hue} 15% 10%)` : `hsl(${hue} 30% 12%)`;
+  const headerColor = `hsl(${hue} ${isDone ? 30 : 60}% 70%)`;
+
   return (
     <div
-      className="rounded-md p-3 border text-sm relative transition-opacity duration-200"
-      style={{
-        borderColor: `hsl(${hue} 30% 30%)`,
-        background: `hsl(${hue} 30% 12%)`,
-        boxShadow: `0 0 0 1px hsl(${hue} 50% 30% / 0.4)`,
-      }}
+      className="rounded-md p-3 border text-sm relative transition-all duration-300"
+      style={{ borderColor, background: bgColor }}
     >
-      <div className="flex items-center gap-2 text-xs mb-1" style={{ color: `hsl(${hue} 60% 70%)` }}>
+      <div className="flex items-center gap-2 text-xs mb-1" style={{ color: headerColor }}>
         <span className="font-semibold">Agent {agentIndex}</span>
-        <span className="text-ink-500">streaming</span>
-        <span className="inline-flex gap-0.5 items-end">
-          <Dot hue={hue} delay={0} />
-          <Dot hue={hue} delay={150} />
-          <Dot hue={hue} delay={300} />
-        </span>
+        <span className="text-ink-500">{subtitle}</span>
+        {isDone ? (
+          <span style={{ color: `hsl(${hue} 60% 65%)` }}>✓</span>
+        ) : (
+          <span className="inline-flex gap-0.5 items-end">
+            <Dot hue={hue} delay={0} />
+            <Dot hue={hue} delay={150} />
+            <Dot hue={hue} delay={300} />
+          </span>
+        )}
       </div>
       <div
         className="whitespace-pre-wrap opacity-90 overflow-y-auto"
@@ -695,43 +684,6 @@ function ExpandedStreamSlot({
         {text || " "}
       </div>
     </div>
-  );
-}
-
-function CollapsedStreamBadge({
-  agentIndex,
-  status,
-  charCount,
-}: {
-  agentIndex: number;
-  status: "streaming" | "done";
-  charCount: number;
-}) {
-  const hue = AGENT_HUE[(agentIndex || 1) - 1] ?? 200;
-  const fading = status === "done";
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 transition-opacity ${
-        fading ? "opacity-50 duration-700" : "opacity-100 duration-200"
-      }`}
-      style={{
-        borderColor: `hsl(${hue} 40% 35%)`,
-        background: `hsl(${hue} 40% 10%)`,
-        color: `hsl(${hue} 50% 70%)`,
-      }}
-    >
-      <span className="font-semibold">A{agentIndex}</span>
-      {status === "streaming" ? (
-        <span className="inline-flex gap-0.5 items-end">
-          <Dot hue={hue} delay={0} />
-          <Dot hue={hue} delay={150} />
-          <Dot hue={hue} delay={300} />
-        </span>
-      ) : (
-        <span style={{ color: `hsl(${hue} 60% 65%)` }}>✓</span>
-      )}
-      <span className="text-ink-500">{charCount.toLocaleString()} chars</span>
-    </span>
   );
 }
 

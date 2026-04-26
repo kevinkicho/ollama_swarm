@@ -54,7 +54,10 @@ function applyEvent(ev: SwarmEvent): void {
       s.setStreaming(ev.agentId, ev.text);
       break;
     case "agent_streaming_end":
-      s.clearStreaming(ev.agentId);
+      // Task #176 Phase A: don't remove the bubble; mark it "done"
+      // so it stays visible (with ✓) until the matching transcript_append
+      // arrives and replaces it (or the 30s safety sweeper kicks in).
+      s.markStreamingEnded(ev.agentId);
       break;
     case "error":
       s.setError(ev.message);

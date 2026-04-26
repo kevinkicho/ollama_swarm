@@ -26,6 +26,15 @@ interface SwarmStore {
   agents: Record<string, AgentState>;
   transcript: TranscriptEntry[];
   streaming: Record<string, string>;
+  // Task #176 Phase A+B: per-agent streaming metadata. Drives the
+  // "thinking N.Ns…" subtitle (lastTextAt → wall-clock since last
+  // chunk) and the post-completion persistent bubble (status="done"
+  // keeps the bubble visible with ✓ until transcript_append takes
+  // over the same DOM position).
+  streamingMeta: Record<
+    string,
+    { startedAt: number; lastTextAt: number; status: "live" | "done"; endedAt?: number }
+  >;
   todos: Record<string, Todo>;
   findings: Finding[];
   contract?: ExitContract;
@@ -64,6 +73,11 @@ interface SwarmStore {
   appendEntry: (e: TranscriptEntry) => void;
   setStreaming: (agentId: string, text: string) => void;
   clearStreaming: (agentId: string) => void;
+  // Task #176 Phase A: agent_streaming_end now marks the entry as
+  // "done" (visual ✓ + fade) but doesn't remove it. The eventual
+  // transcript_append takes over that DOM position naturally via
+  // appendEntry's existing delete-from-streaming side effect.
+  markStreamingEnded: (agentId: string) => void;
 
   upsertTodo: (t: Todo) => void;
   applyClaim: (todoId: string, claim: Claim) => void;
@@ -115,6 +129,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   agents: {},
   transcript: [],
   streaming: {},
+  streamingMeta: {},
   todos: {},
   findings: [],
   contract: undefined,
@@ -135,17 +150,54 @@ export const useSwarm = create<SwarmStore>((set) => ({
     set((s) => {
       if (s.transcript.some((t) => t.id === e.id)) return s;
       const nextStreaming = { ...s.streaming };
-      if (e.agentId) delete nextStreaming[e.agentId];
-      return { transcript: [...s.transcript, e], streaming: nextStreaming };
+      const nextMeta = { ...s.streamingMeta };
+      if (e.agentId) {
+        delete nextStreaming[e.agentId];
+        delete nextMeta[e.agentId];
+      }
+      return { transcript: [...s.transcript, e], streaming: nextStreaming, streamingMeta: nextMeta };
     }),
   setStreaming: (agentId, text) =>
-    set((s) => ({ streaming: { ...s.streaming, [agentId]: text } })),
+    set((s) => {
+      const now = Date.now();
+      const prior = s.streamingMeta[agentId];
+      const nextMeta = {
+        ...s.streamingMeta,
+        [agentId]: {
+          startedAt: prior?.startedAt ?? now,
+          lastTextAt: now,
+          status: "live" as const,
+          endedAt: undefined,
+        },
+      };
+      return { streaming: { ...s.streaming, [agentId]: text }, streamingMeta: nextMeta };
+    }),
   clearStreaming: (agentId) =>
     set((s) => {
-      if (!(agentId in s.streaming)) return s;
+      const haveText = agentId in s.streaming;
+      const haveMeta = agentId in s.streamingMeta;
+      if (!haveText && !haveMeta) return s;
       const next = { ...s.streaming };
+      const nextMeta = { ...s.streamingMeta };
       delete next[agentId];
-      return { streaming: next };
+      delete nextMeta[agentId];
+      return { streaming: next, streamingMeta: nextMeta };
+    }),
+  // Task #176 Phase A: ended → "done" but keep the bubble visible.
+  // The transcript_append's existing delete-from-streaming side
+  // effect will clear it once the matching transcript entry lands.
+  // Safety: a 30s sweeper in StreamingDock removes stragglers if
+  // the transcript_append never arrives.
+  markStreamingEnded: (agentId) =>
+    set((s) => {
+      if (!(agentId in s.streamingMeta)) return s;
+      const prior = s.streamingMeta[agentId];
+      return {
+        streamingMeta: {
+          ...s.streamingMeta,
+          [agentId]: { ...prior, status: "done", endedAt: Date.now() },
+        },
+      };
     }),
 
   upsertTodo: (t) => set((s) => ({ todos: { ...s.todos, [t.id]: t } })),
@@ -257,7 +309,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       round: 0,
       agents: {},
       transcript: [],
-      streaming: {},
+      streaming: {}, streamingMeta: {},
       todos: {},
       findings: [],
       contract: undefined,
@@ -311,7 +363,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       // divide yet, and it avoids the "first-paint shows a divider"
       // weirdness at run start.
       if (s.transcript.length === 0) {
-        return { agents: {}, streaming: {}, latency: {}, ...blackboardReset };
+        return { agents: {}, streaming: {}, streamingMeta: {}, latency: {}, ...blackboardReset };
       }
       // Task #46 also: dedupe consecutive dividers. If the last entry
       // is already a run-start marker, don't stack a second one —
@@ -323,7 +375,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
         (lastEntry.text === "— new run started —" ||
           lastEntry.text.startsWith("▸▸RUN-START▸▸"));
       if (isLastADivider) {
-        return { agents: {}, streaming: {}, latency: {}, ...blackboardReset };
+        return { agents: {}, streaming: {}, streamingMeta: {}, latency: {}, ...blackboardReset };
       }
       // Build the divider text. When metadata is supplied, prefix
       // with the sentinel + encode fields as a pipe-separated line
@@ -342,7 +394,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
         : "— new run started —";
       return {
         agents: {},
-        streaming: {},
+        streaming: {}, streamingMeta: {},
         latency: {},
         ...blackboardReset,
         transcript: [
