@@ -83,20 +83,6 @@ import {
   type WorkerSeed,
 } from "./prompts/worker.js";
 import {
-  buildCriticRepairPrompt,
-  buildCriticUserPrompt,
-  CRITIC_SYSTEM_PROMPT,
-  // Unit 60 ensemble lanes:
-  REGRESSION_CRITIC_SYSTEM_PROMPT,
-  CONSISTENCY_CRITIC_SYSTEM_PROMPT,
-  SUBSTANCE_CRITIC_NAME,
-  REGRESSION_CRITIC_NAME,
-  CONSISTENCY_CRITIC_NAME,
-  type CriticSeedFileBeforeAfter,
-  type CriticSeedPriorCommit,
-  parseCriticResponse,
-} from "./prompts/critic.js";
-import {
   readRecentMemory,
   renderMemoryForSeed,
 } from "./memoryStore.js";
@@ -114,6 +100,11 @@ import {
   runVerifier as runVerifierExtracted,
   type VerifierContext,
 } from "./verifierInvocation.js";
+// Task #164 (refactor): per-commit critic + ensemble split out.
+import {
+  runCritic as runCriticExtracted,
+  type CriticContext,
+} from "./criticInvocation.js";
 import { config } from "../../config.js";
 
 // Blackboard preset: planner posts TODOs, workers drain them in a
@@ -1778,383 +1769,18 @@ export class BlackboardRunner implements SwarmRunner {
   // Unit 35: resolve whether the critic should fire for this run.
   // Per-run `cfg.critic` wins over env when present (explicit on/off);
   // otherwise CRITIC_ENABLED env decides.
+  // Task #164 (refactor): single + ensemble critic implementations
+  // moved to ./criticInvocation.ts; this method is just the gate.
   private criticEnabled(): boolean {
     const perRun = this.active?.critic;
     if (perRun !== undefined) return perRun;
     return config.CRITIC_ENABLED;
   }
 
-  // Unit 35 (patched post-smoke): run the critic on a proposed diff
-  // BEFORE it lands.
-  //
-  // The first shipped version picked a peer agent (preferring another
-  // worker), prompted on the agent's MAIN session, and called appendAgent
-  // on the response. The 2026-04-23 Hello-World smoke revealed two
-  // related bugs from that shape:
-  //
-  //   1. Session contamination. When the peer was a worker, that worker's
-  //      own prompt loop was also hitting the same session with worker
-  //      prompts. The session's context bled — a critic prompt's
-  //      "verdict"-shaped response would later come back on the worker's
-  //      next prompt, tripping worker-JSON parse failure ("[agent-N]
-  //      worker JSON invalid") and burning a repair attempt.
-  //   2. UI dup. The streaming events from the critic prompt PLUS the
-  //      explicit appendAgent call produced two "Agent N" entries in
-  //      the transcript with the same text, confusing the display.
-  //
-  // Fix (both at once): run critic on a FRESH session created on the
-  // PLANNER's client each time. The planner (index=1) is never in the
-  // worker polling loop, so no worker-session collision. A fresh
-  // session isolates the critic's context from the planner's own
-  // main session (which carries contract / audit / replan state). And
-  // since fresh-session events don't match the agent's main sessionId
-  // in AgentManager.handleSessionEvent, no `agent_streaming` events
-  // reach the UI — so there's no streaming transcript to dedup against.
-  // We also skip appendAgent entirely: the `[critic] ... accepted/REJECTED
-  // ... : rationale` system message is the user-facing record; the raw
-  // verdict JSON lives in logs/current.jsonl for debugging.
-  //
-  // Failure-open philosophy unchanged: any SDK error / parse error
-  // after repair returns "accept" so infrastructure issues never block
-  // real worker output.
-  private async runCritic(
-    todo: Todo,
-    proposingAgent: Agent,
-    contentsBefore: Record<string, string | null>,
-    resultingDiffs: ReadonlyArray<{ file: string; newText: string }>,
-  ): Promise<"accept" | "reject"> {
-    const roster = this.opts.manager.list();
-    const planner = roster.find((a) => a.index === 1);
-    // agentCount = 1 path is the only one without a planner peer; it
-    // shouldn't reach the worker commit path (blackboard requires at
-    // least 1 worker). Accept-by-default is safe here.
-    if (!planner || planner.id === proposingAgent.id) {
-      this.appendSystem(
-        `[critic] no planner peer available to review ${proposingAgent.id}'s diff; skipping (accept-by-default).`,
-      );
-      return "accept";
-    }
-
-    const linkedCriterion = todo.criterionId
-      ? this.contract?.criteria.find((c) => c.id === todo.criterionId)
-      : undefined;
-
-    const files: CriticSeedFileBeforeAfter[] = resultingDiffs.map((d) => ({
-      file: d.file,
-      before: contentsBefore[d.file] ?? null,
-      after: d.newText,
-    }));
-
-    const recentCommits: CriticSeedPriorCommit[] = this.board
-      .listTodos()
-      .filter((t) => t.status === "committed")
-      .sort((a, b) => (b.committedAt ?? 0) - (a.committedAt ?? 0))
-      .slice(0, 16)
-      .map((t) => ({
-        todoId: t.id,
-        description: t.description,
-        files: [...t.expectedFiles],
-      }));
-
-    const userPrompt = buildCriticUserPrompt({
-      proposingAgentId: proposingAgent.id,
-      todoDescription: todo.description,
-      todoExpectedFiles: [...todo.expectedFiles],
-      criterionId: linkedCriterion?.id,
-      criterionDescription: linkedCriterion?.description,
-      files,
-      recentCommits,
-    });
-
-    // Unit 60: critic ensemble dispatch. When cfg.criticEnsemble is
-    // true, fan out 3 critics in parallel (substance / regression /
-    // consistency) on independent fresh sessions. Verdict is majority
-    // vote across successful responses; ties (1-1 with the third
-    // failing) tie-break to substance per the spec ("most directly
-    // load-bearing"). Default is the original single substance critic.
-    if (this.active?.criticEnsemble === true) {
-      return this.runCriticEnsemble(planner, proposingAgent, todo, userPrompt);
-    }
-    const fullPrompt = `${CRITIC_SYSTEM_PROMPT}\n\n${userPrompt}`;
-
-    // Create a fresh session on the planner's client for this critic
-    // call. Isolated from the planner's main session (no context
-    // bleed). The session.create response shape matches what
-    // AgentManager.readSessionId expects.
-    let sessionId: string;
-    try {
-      const created = await planner.client.session.create({
-        body: { title: `critic-${todo.id}-${Date.now()}` },
-      });
-      const any = created as { data?: { id?: string; info?: { id?: string } }; id?: string };
-      const sid = any?.data?.id ?? any?.data?.info?.id ?? any?.id;
-      if (!sid) throw new Error("session.create returned no session id");
-      sessionId = sid;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(
-        `[critic] failed to open fresh session on ${planner.id} (${msg}). Accepting by default (failure-open).`,
-      );
-      return "accept";
-    }
-
-    // Prompt on the fresh session. No promptWithRetry wrapper — this is
-    // a gate function with accept-by-default on failure, so cold-start
-    // retries aren't worth the latency overhead (the next audit pass
-    // would benefit more from a prompt budget than the critic does).
-    const promptOnce = async (text: string): Promise<string> => {
-      // Unit 37: critic is a reviewer role — give it read tools so it
-      // can grep for duplicate patterns, list related files, and verify
-      // the proposed diff's context. Matches the swarm-read profile used
-      // by planner / auditor / replanner.
-      const res = await planner.client.session.prompt({
-        path: { id: sessionId },
-        body: {
-          agent: "swarm-read",
-          model: { providerID: "ollama", modelID: planner.model },
-          parts: [{ type: "text", text }],
-        },
-      });
-      const any = res as {
-        data?: {
-          parts?: Array<{ type?: string; text?: string }>;
-          info?: { parts?: Array<{ type?: string; text?: string }> };
-          text?: string;
-        };
-      };
-      const parts = any?.data?.parts ?? any?.data?.info?.parts;
-      if (Array.isArray(parts)) {
-        const texts = parts
-          .filter((p) => p?.type === "text" && typeof p.text === "string")
-          .map((p) => p.text as string);
-        if (texts.length) return texts.join("\n");
-      }
-      return any?.data?.text ?? "";
-    };
-
-    let responseText: string;
-    try {
-      responseText = await promptOnce(fullPrompt);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(
-        `[critic] prompt on ${planner.id} (fresh session) failed (${msg}). Accepting by default (failure-open).`,
-      );
-      return "accept";
-    }
-    if (this.stopping) return "accept";
-
-    let parsed = parseCriticResponse(responseText);
-    if (!parsed.ok) {
-      // One repair attempt on the SAME fresh session — the session has
-      // the prior message as context, so "fix your previous output"
-      // framing lands.
-      this.appendSystem(
-        `[critic] response did not parse (${parsed.reason}). Issuing repair prompt on same fresh session.`,
-      );
-      let repairResponse: string;
-      try {
-        repairResponse = await promptOnce(
-          `${CRITIC_SYSTEM_PROMPT}\n\n${buildCriticRepairPrompt(responseText, parsed.reason)}`,
-        );
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.appendSystem(
-          `[critic] repair prompt failed (${msg}). Accepting by default (failure-open).`,
-        );
-        return "accept";
-      }
-      if (this.stopping) return "accept";
-      parsed = parseCriticResponse(repairResponse);
-      if (!parsed.ok) {
-        this.appendSystem(
-          `[critic] still invalid after repair (${parsed.reason}). Accepting by default (failure-open).`,
-        );
-        return "accept";
-      }
-    }
-
-    // The verdict lands as a system message — no appendAgent, so no UI
-    // dup and no transcript pollution with raw critic JSON. The raw
-    // response is still in logs/current.jsonl via the WS diag channel
-    // for debugging.
-    if (parsed.critic.verdict === "reject") {
-      this.board.markStale(
-        todo.id,
-        `critic rejected (${planner.id}): ${parsed.critic.rationale}`,
-      );
-      this.appendSystem(
-        `[critic] ${planner.id} REJECTED ${proposingAgent.id}'s diff on "${truncate(todo.description)}": ${parsed.critic.rationale}`,
-      );
-      // Task #67: critic rejection of this proposer's work.
-      bumpAgentCounter(this.rejectedAttemptsPerAgent, proposingAgent.id);
-      return "reject";
-    }
-    this.appendSystem(
-      `[critic] ${planner.id} accepted ${proposingAgent.id}'s diff: ${parsed.critic.rationale}`,
-    );
-    return "accept";
-  }
-
   // Task #128 / #164: per-commit verifier — opt-in via cfg.verifier.
   // Implementation in ./verifierInvocation.ts; this method just gates.
   private verifierEnabled(): boolean {
     return this.active?.verifier === true;
-  }
-
-  // Unit 60: multi-prompt critic ensemble. Three critics fire in
-  // parallel on the planner's client (each with its own fresh
-  // session) — substance / regression / consistency. Verdict is
-  // majority-vote across SUCCESSFUL responses. Failure-open within
-  // each lane (a failing critic = abstain, not block); failure-open
-  // across the whole ensemble (all three failing → accept).
-  //
-  // Tie-break: at exactly 1-1 (one critic abstained), substance wins
-  // because it carries the broadest set of failure modes and has the
-  // most validation history.
-  //
-  // Wall-clock cost: ~1× a single critic's latency (parallel), not 3×.
-  // Cloud cost: 3× tokens per commit. Worth it on runs where commit
-  // quality > cost.
-  private async runCriticEnsemble(
-    planner: Agent,
-    proposingAgent: Agent,
-    todo: Todo,
-    userPrompt: string,
-  ): Promise<"accept" | "reject"> {
-    const lanes: Array<{ name: string; system: string }> = [
-      { name: SUBSTANCE_CRITIC_NAME, system: CRITIC_SYSTEM_PROMPT },
-      { name: REGRESSION_CRITIC_NAME, system: REGRESSION_CRITIC_SYSTEM_PROMPT },
-      { name: CONSISTENCY_CRITIC_NAME, system: CONSISTENCY_CRITIC_SYSTEM_PROMPT },
-    ];
-    const verdicts = await Promise.all(
-      lanes.map((lane) =>
-        this.runCriticLane(planner, todo, lane.name, lane.system, userPrompt),
-      ),
-    );
-    // Per-lane verdicts logged inside runCriticLane. Compute majority.
-    type Lane = (typeof lanes)[number];
-    const successful = verdicts
-      .map((v, i) => ({ verdict: v, lane: lanes[i] as Lane }))
-      .filter((x): x is { verdict: "accept" | "reject"; lane: Lane } => x.verdict !== "abstain");
-    if (successful.length === 0) {
-      // All three lanes failed — same accept-by-default as the
-      // single-critic path's failure-open rule.
-      this.appendSystem(
-        `[critic-ensemble] all 3 critics failed to produce a verdict on ${proposingAgent.id}'s diff; accepting by default (failure-open).`,
-      );
-      return "accept";
-    }
-    const accepts = successful.filter((x) => x.verdict === "accept").length;
-    const rejects = successful.length - accepts;
-    let verdict: "accept" | "reject";
-    if (accepts > rejects) verdict = "accept";
-    else if (rejects > accepts) verdict = "reject";
-    else {
-      // Tie (only possible at 1-1 after one abstain). Substance wins.
-      const substance = successful.find((x) => x.lane.name === SUBSTANCE_CRITIC_NAME);
-      verdict = substance ? substance.verdict : "accept";
-    }
-    this.appendSystem(
-      `[critic-ensemble] verdict on ${proposingAgent.id}'s diff: ${verdict.toUpperCase()} (${accepts} accept / ${rejects} reject / ${3 - successful.length} abstain).`,
-    );
-    if (verdict === "reject") {
-      // Pick the strongest reject rationale to surface in the stale
-      // reason (substance preferred when it rejected).
-      const rejectingLane =
-        successful.find((x) => x.lane.name === SUBSTANCE_CRITIC_NAME && x.verdict === "reject") ??
-        successful.find((x) => x.verdict === "reject")!;
-      this.board.markStale(
-        todo.id,
-        `critic ensemble rejected (lead: ${rejectingLane.lane.name})`,
-      );
-      // Task #67: critic-ensemble rejection of proposer's work.
-      bumpAgentCounter(this.rejectedAttemptsPerAgent, proposingAgent.id);
-    }
-    return verdict;
-  }
-
-  // Unit 60: one critic lane (substance / regression / consistency).
-  // Mirrors runCritic's per-call shape — fresh session, prompt + repair,
-  // failure-open returns "abstain" so the ensemble layer can vote on
-  // whatever verdicts came back.
-  private async runCriticLane(
-    planner: Agent,
-    todo: Todo,
-    laneName: string,
-    systemPrompt: string,
-    userPrompt: string,
-  ): Promise<"accept" | "reject" | "abstain"> {
-    let sessionId: string;
-    try {
-      const created = await planner.client.session.create({
-        body: { title: `critic-${laneName}-${todo.id}-${Date.now()}` },
-      });
-      const any = created as { data?: { id?: string; info?: { id?: string } }; id?: string };
-      const sid = any?.data?.id ?? any?.data?.info?.id ?? any?.id;
-      if (!sid) throw new Error("session.create returned no session id");
-      sessionId = sid;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(`[critic-${laneName}] session.create failed (${msg}); abstaining.`);
-      return "abstain";
-    }
-    const promptOnce = async (text: string): Promise<string> => {
-      const res = await planner.client.session.prompt({
-        path: { id: sessionId },
-        body: {
-          agent: "swarm-read",
-          model: { providerID: "ollama", modelID: planner.model },
-          parts: [{ type: "text", text }],
-        },
-      });
-      const any = res as {
-        data?: {
-          parts?: Array<{ type?: string; text?: string }>;
-          info?: { parts?: Array<{ type?: string; text?: string }> };
-          text?: string;
-        };
-      };
-      const parts = any?.data?.parts ?? any?.data?.info?.parts;
-      if (Array.isArray(parts)) {
-        const texts = parts
-          .filter((p) => p?.type === "text" && typeof p.text === "string")
-          .map((p) => p.text as string);
-        if (texts.length) return texts.join("\n");
-      }
-      return any?.data?.text ?? "";
-    };
-    let response: string;
-    try {
-      response = await promptOnce(`${systemPrompt}\n\n${userPrompt}`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(`[critic-${laneName}] prompt failed (${msg}); abstaining.`);
-      return "abstain";
-    }
-    if (this.stopping) return "abstain";
-    let parsed = parseCriticResponse(response);
-    if (!parsed.ok) {
-      try {
-        response = await promptOnce(
-          `${systemPrompt}\n\n${buildCriticRepairPrompt(response, parsed.reason)}`,
-        );
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.appendSystem(`[critic-${laneName}] repair failed (${msg}); abstaining.`);
-        return "abstain";
-      }
-      if (this.stopping) return "abstain";
-      parsed = parseCriticResponse(response);
-      if (!parsed.ok) {
-        this.appendSystem(`[critic-${laneName}] still invalid after repair; abstaining.`);
-        return "abstain";
-      }
-    }
-    this.appendSystem(
-      `[critic-${laneName}] ${parsed.critic.verdict.toUpperCase()}: ${parsed.critic.rationale}`,
-    );
-    return parsed.critic.verdict;
   }
 
   // Unit 11: the drain-audit-repeat loop's backstop. Reads from cfg.rounds so
@@ -2743,11 +2369,22 @@ export class BlackboardRunner implements SwarmRunner {
     // Opt-in per run / env; when neither is set the critic is SKIPPED
     // and the worker-commit flow is byte-identical to pre-Unit-35.
     if (this.criticEnabled()) {
-      const verdict = await this.runCritic(
+      const criticCtx: CriticContext = {
+        manager: this.opts.manager,
+        board: this.board,
+        contractCriteria: this.contract?.criteria ?? [],
+        appendSystem: (text, summary) => this.appendSystem(text, summary),
+        isStopping: () => this.stopping,
+        bumpRejected: (agentId) =>
+          bumpAgentCounter(this.rejectedAttemptsPerAgent, agentId),
+        ensembleEnabled: this.active?.criticEnsemble === true,
+      };
+      const verdict = await runCriticExtracted(
         todo,
         agent,
         contents,
         resultingDiffs,
+        criticCtx,
       );
       if (this.stopping) return "stale";
       if (verdict === "reject") {
