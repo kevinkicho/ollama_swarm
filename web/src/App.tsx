@@ -121,10 +121,12 @@ function useReviewedRunIsLive(review: { runId: string; clonePath: string } | nul
 }
 
 // Task #163: control row shown in REVIEW MODE when the reviewed run is
-// the live one. Two buttons: "View Live" exits review mode (clears the
-// ?review URL params); "Stop" sends POST /api/swarm/stop.
+// the live one. Single "View Live" button exits review mode (clears the
+// ?review URL params and reloads). The Stop button lives in live mode
+// (SwarmView header), not here — review mode is for inspection, not
+// control. Once the user hits "View Live", they get the existing Stop
+// button in SwarmView.
 function ReviewActiveControls() {
-  const [stopping, setStopping] = useState(false);
   const onViewLive = () => {
     // Clear the review params and reload — re-mount drops review mode
     // and re-attaches the live WebSocket.
@@ -133,17 +135,6 @@ function ReviewActiveControls() {
     url.searchParams.delete("path");
     window.location.href = url.toString();
   };
-  const onStop = async () => {
-    if (!confirm("Stop the active swarm run? All spawned opencode processes will be terminated.")) return;
-    setStopping(true);
-    try {
-      await fetch("/api/swarm/stop", { method: "POST" });
-    } catch {
-      // surface via no-op; the next status poll will reflect the stopped state
-    } finally {
-      setStopping(false);
-    }
-  };
   return (
     <span className="flex items-center gap-2">
       <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-700/30 border border-emerald-600/40 text-emerald-300 font-semibold">
@@ -151,18 +142,10 @@ function ReviewActiveControls() {
       </span>
       <button
         onClick={onViewLive}
-        title="Switch out of REVIEW MODE and connect to the live WebSocket for this run"
+        title="Switch out of REVIEW MODE and connect to the live WebSocket for this run (the Stop button is in the live view)"
         className="text-xs px-2 py-0.5 rounded border border-emerald-700/60 text-emerald-200 hover:bg-emerald-900/40 hover:border-emerald-600 transition"
       >
         View Live ↗
-      </button>
-      <button
-        onClick={onStop}
-        disabled={stopping}
-        title="Send /api/swarm/stop to terminate the active run"
-        className="text-xs px-2 py-0.5 rounded border border-rose-700/60 text-rose-200 hover:bg-rose-900/40 hover:border-rose-600 transition disabled:opacity-50"
-      >
-        {stopping ? "Stopping…" : "Stop"}
       </button>
     </span>
   );
