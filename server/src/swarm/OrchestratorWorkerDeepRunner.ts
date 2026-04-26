@@ -67,6 +67,7 @@ import {
   buildWorkerPrompt,
   type Assignment,
 } from "./OrchestratorWorkerRunner.js";
+import { runEndReflection } from "./runEndReflection.js";
 
 // Target workers per mid-lead. Picked empirically from #131's industry-
 // consensus note ("past ~8 workers, you need a tree"). At 6, the
@@ -380,6 +381,17 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
       crashMessage = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: crashMessage });
     } finally {
+      // Task #150: end-of-run reflection (orchestrator does it).
+      if (!crashMessage && !this.stopping && cfg.runId) {
+        const orch = this.opts.manager.list().find((a) => a.index === 1);
+        if (orch && this.topology) {
+          const ctxSummary = `Orchestrator-worker-deep · 1 orchestrator + ${this.topology.midLeadIndices.length} mid-leads + ${this.topology.workerIndices.length} workers · ran ${this.round}/${cfg.rounds} cycles${this.earlyStopDetail ? ` · early-stop: ${this.earlyStopDetail}` : ""}`;
+          await runEndReflection({
+            agent: orch, preset: cfg.preset, runId: cfg.runId, clonePath: cfg.localPath,
+            contextSummary: ctxSummary, log: (msg) => this.appendSystem(msg),
+          }).catch(() => {});
+        }
+      }
       await this.writeSummary(cfg, crashMessage);
       if (!this.stopping) {
         const killResult = await this.opts.manager.killAll();

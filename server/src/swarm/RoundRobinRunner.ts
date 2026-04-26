@@ -15,6 +15,7 @@ import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
 import { extractResponseBreakdown, extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../services/ollamaProxy.js";
+import { runEndReflection } from "./runEndReflection.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 
@@ -230,6 +231,17 @@ export class RoundRobinRunner implements SwarmRunner {
       crashMessage = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: crashMessage });
     } finally {
+      // Task #150: end-of-run reflection (cross-preset memory write).
+      if (!crashMessage && !this.stopping && cfg.runId) {
+        const lead = this.opts.manager.list().find((a) => a.index === 1);
+        if (lead) {
+          const ctxSummary = `${cfg.preset} preset · ${cfg.agentCount} agents · ran ${this.round}/${cfg.rounds} rounds${this.earlyStopDetail ? ` · early-stop: ${this.earlyStopDetail}` : ""}`;
+          await runEndReflection({
+            agent: lead, preset: cfg.preset, runId: cfg.runId, clonePath: cfg.localPath,
+            contextSummary: ctxSummary, log: (msg) => this.appendSystem(msg),
+          }).catch(() => {});
+        }
+      }
       // Unit 33: write summary.json at termination so any preset run
       // can be compared via scripts/compare-runs.mjs. Write BEFORE the
       // terminal setPhase so a UI observer reacting to "completed" can

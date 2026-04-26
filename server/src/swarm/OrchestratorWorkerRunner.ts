@@ -17,6 +17,7 @@ import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTr
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
+import { runEndReflection } from "./runEndReflection.js";
 
 // Orchestrator–worker hierarchy.
 // Agent 1 is the LEAD: it reads the repo, produces a plan assigning one
@@ -275,6 +276,17 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
       crashMessage = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: crashMessage });
     } finally {
+      // Task #150: end-of-run reflection (lead does it).
+      if (!crashMessage && !this.stopping && cfg.runId) {
+        const lead = this.opts.manager.list().find((a) => a.index === 1);
+        if (lead) {
+          const ctxSummary = `Orchestrator-worker preset · ${cfg.agentCount} agents (1 lead + workers) · ran ${this.round}/${cfg.rounds} cycles${this.earlyStopDetail ? ` · early-stop: ${this.earlyStopDetail}` : ""}`;
+          await runEndReflection({
+            agent: lead, preset: cfg.preset, runId: cfg.runId, clonePath: cfg.localPath,
+            contextSummary: ctxSummary, log: (msg) => this.appendSystem(msg),
+          }).catch(() => {});
+        }
+      }
       await this.writeSummary(cfg, crashMessage);
       // Unit 55: auto-killAll on natural completion. Task #68: surface
       // the kill result in the transcript.

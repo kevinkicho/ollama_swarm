@@ -16,6 +16,7 @@ import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extrac
 import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../services/ollamaProxy.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
+import { runEndReflection } from "./runEndReflection.js";
 import { staggerStart } from "./staggerStart.js";
 
 // Map-reduce over the repo.
@@ -288,6 +289,17 @@ export class MapReduceRunner implements SwarmRunner {
       crashMessage = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: crashMessage });
     } finally {
+      // Task #150: end-of-run reflection (reducer does it).
+      if (!crashMessage && !this.stopping && cfg.runId) {
+        const reducer = this.opts.manager.list().find((a) => a.index === 1);
+        if (reducer) {
+          const ctxSummary = `Map-reduce preset · 1 reducer + ${cfg.agentCount - 1} mappers · ran ${this.round}/${cfg.rounds} cycles${this.earlyStopDetail ? ` · early-stop: ${this.earlyStopDetail}` : ""}`;
+          await runEndReflection({
+            agent: reducer, preset: cfg.preset, runId: cfg.runId, clonePath: cfg.localPath,
+            contextSummary: ctxSummary, log: (msg) => this.appendSystem(msg),
+          }).catch(() => {});
+        }
+      }
       await this.writeSummary(cfg, crashMessage);
       // Unit 55: auto-killAll on natural completion. Task #68: surface
       // the kill result in the transcript.

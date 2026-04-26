@@ -17,6 +17,7 @@ import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTr
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
+import { runEndReflection } from "./runEndReflection.js";
 
 // Council / parallel drafts + reconcile.
 // Round 1: every agent drafts independently. Each agent's prompt contains
@@ -277,6 +278,24 @@ export class CouncilRunner implements SwarmRunner {
       crashMessage = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: crashMessage });
     } finally {
+      // Task #150: end-of-run reflection. Fires before writeSummary so
+      // the lesson set is appended to .swarm-memory.jsonl before the
+      // run finalizes. Gated on natural completion (no crash, no user
+      // stop) so a half-broken run doesn't write misleading lessons.
+      if (!crashMessage && !this.stopping && cfg.runId) {
+        const lead = this.opts.manager.list().find((a) => a.index === 1);
+        if (lead) {
+          const ctxSummary = `Council preset · ${cfg.agentCount} drafters · ran ${this.round}/${cfg.rounds} rounds${this.earlyStopDetail ? ` · early-stop: ${this.earlyStopDetail}` : ""}`;
+          await runEndReflection({
+            agent: lead,
+            preset: cfg.preset,
+            runId: cfg.runId,
+            clonePath: cfg.localPath,
+            contextSummary: ctxSummary,
+            log: (msg) => this.appendSystem(msg),
+          }).catch(() => {});
+        }
+      }
       await this.writeSummary(cfg, crashMessage);
       // Unit 55: auto-killAll on natural completion (see RoundRobinRunner).
       // Task #68: surface the kill result in the transcript so the user

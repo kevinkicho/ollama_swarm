@@ -16,6 +16,7 @@ import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extrac
 import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../services/ollamaProxy.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
+import { runEndReflection } from "./runEndReflection.js";
 
 // Stigmergy / pheromone trails — repo exploration mode.
 // No central planner, no role assignment. Agents post annotations on
@@ -280,6 +281,17 @@ export class StigmergyRunner implements SwarmRunner {
       crashMessage = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: crashMessage });
     } finally {
+      // Task #150: end-of-run reflection (lead explorer does it).
+      if (!crashMessage && !this.stopping && cfg.runId) {
+        const lead = this.opts.manager.list().find((a) => a.index === 1);
+        if (lead) {
+          const ctxSummary = `Stigmergy preset · ${cfg.agentCount} explorers · ran ${this.round}/${cfg.rounds} rounds${this.earlyStopDetail ? ` · early-stop: ${this.earlyStopDetail}` : ""}`;
+          await runEndReflection({
+            agent: lead, preset: cfg.preset, runId: cfg.runId, clonePath: cfg.localPath,
+            contextSummary: ctxSummary, log: (msg) => this.appendSystem(msg),
+          }).catch(() => {});
+        }
+      }
       await this.writeSummary(cfg, crashMessage);
       // Unit 55: auto-killAll on natural completion (see RoundRobinRunner).
       if (!this.stopping) {
