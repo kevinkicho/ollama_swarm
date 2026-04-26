@@ -466,6 +466,11 @@ export class AgentManager {
   // warmupSerially / warmupParallel after a parallel spawn batch.
   async warmupAgent(agent: Agent): Promise<void> {
     const t0 = Date.now();
+    // Task #181: hide warmup bubbles from UI. The "ok" response
+    // appearing as a streaming chat bubble is noise; the existing
+    // "Worker agent X ready on port Y" system message already
+    // communicates readiness more cleanly.
+    this.suppressStreamingFor.add(agent.id);
     try {
       await agent.client.session.prompt({
         path: { id: agent.sessionId },
@@ -486,6 +491,10 @@ export class AgentManager {
       });
       // Intentional swallow — warmup is best-effort. The runner's first
       // real prompt will retry through the Unit 16 wrapper if needed.
+    } finally {
+      // Task #181: clear suppression so subsequent real prompts on
+      // this agent flow through to the UI normally.
+      this.suppressStreamingFor.delete(agent.id);
     }
   }
 
@@ -575,6 +584,14 @@ export class AgentManager {
   // message.updated events; cleared on session.idle along with the
   // per-part accumulator.
   private messageRoles = new Map<string, Map<string, "user" | "assistant">>();
+  // Task #181: when an agent.id is in this set, all UI-facing streaming
+  // events (agent_streaming, agent_streaming_end) are suppressed, the
+  // partialStreams REST catch-up buffer is not populated, and the
+  // _stream_complete diagnostic is skipped. Used for warmup pings —
+  // their "ok" responses are noise next to the existing "Worker agent
+  // X ready on port Y" system message that already signals readiness.
+  // Set by warmupAgent for the duration of the warmup prompt only.
+  private suppressStreamingFor = new Set<string>();
 
   recordPromptComplete(
     agentId: string,
@@ -876,6 +893,10 @@ export class AgentManager {
         const roles = this.messageRoles.get(agent.id);
         const role = roles?.get(part.messageID);
         if (role !== "assistant") return;
+        // Task #181: hide warmup pings from UI. The accumulator and
+        // role-tracker still update (so session.idle's cleanup runs
+        // normally), but UI-facing emits are skipped.
+        if (this.suppressStreamingFor.has(agent.id)) return;
         // Task #174: track this text snapshot per-part so a new text
         // part starting at len=0 doesn't wipe earlier parts. Display
         // text = concatenation of all parts in arrival order.
@@ -905,6 +926,22 @@ export class AgentManager {
       return;
     }
     if (type === "session.idle") {
+      // Task #181: skip both the diagnostic and the agent_streaming_end
+      // emit when this agent is in warmup-suppression mode. The
+      // _stream_complete log isn't useful for warmup pings, and we
+      // never emitted any agent_streaming so there's nothing to "end"
+      // on the UI side.
+      if (this.suppressStreamingFor.has(agent.id)) {
+        this.partialStreams.delete(agent.id);
+        this.partsByAgent.delete(agent.id);
+        this.messageRoles.delete(agent.id);
+        const stream = this.streamingByAgent.get(agent.id);
+        if (stream) {
+          this.streamingByAgent.delete(agent.id);
+          stream.resolve(stream.text);
+        }
+        return;
+      }
       // Task #180: diagnostic log of what we accumulated for display.
       // Lets us verify that ALL assistant text parts received via SSE
       // make it to the UI — comparing this to the eventual transcript
