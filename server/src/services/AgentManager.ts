@@ -538,6 +538,15 @@ export class AgentManager {
   // Only one in-flight stream per agent at a time — matches our
   // serial usage (each agent's session is single-message-in-flight).
   private streamingByAgent = new Map<string, MessageStreamState>();
+  // Task #172: trailing-edge throttle for agent_streaming WS events.
+  // SSE text snapshots arrive every ~50ms during model output; emitting
+  // each one to the UI causes "vibrating text" (full re-render) and
+  // wasted WS bandwidth. Coalesce to ~10/sec by buffering the latest
+  // text and flushing once per STREAMING_THROTTLE_MS window.
+  // Flushed immediately on session.idle so the final state lands
+  // before agent_streaming_end fires.
+  private streamingFlushTimers = new Map<string, NodeJS.Timeout>();
+  private latestStreamingText = new Map<string, string>();
 
   recordPromptComplete(
     agentId: string,
@@ -658,6 +667,11 @@ export class AgentManager {
       stream.reject(new Error("agent killed"));
     }
     this.streamingByAgent.clear();
+    // Task #172: cancel pending throttle flushes — no point emitting
+    // streaming text for an agent that's been killed.
+    for (const timer of this.streamingFlushTimers.values()) clearTimeout(timer);
+    this.streamingFlushTimers.clear();
+    this.latestStreamingText.clear();
     if (escaped > 0) {
       // Unit 41: surface unkillable PIDs to the UI rather than swallowing
       // silently. The next dev-server startup sweep will still reclaim
@@ -806,12 +820,9 @@ export class AgentManager {
           text: part.text,
           updatedAt: Date.now(),
         });
-        this.onEvent({
-          type: "agent_streaming",
-          agentId: agent.id,
-          agentIndex: agent.index,
-          text: part.text,
-        });
+        // Task #172: trailing-edge throttle agent_streaming to ~10/sec
+        // so the UI doesn't full-re-render on every 50ms SSE chunk.
+        this.scheduleStreamingFlush(agent, part.text);
         // Task #166: feed the streamPrompt accumulator's text snapshot
         // (timer reset already handled above for ALL message.* events).
         // Text snapshots are CUMULATIVE — each event has the full
@@ -824,6 +835,12 @@ export class AgentManager {
     if (type === "session.idle") {
       // Task #39: stream finalized, drop the partial buffer.
       this.partialStreams.delete(agent.id);
+      // Task #172: flush any pending throttled streaming text so the
+      // UI lands on the FINAL state before we tell it the stream
+      // ended. Without this, the trailing-edge throttle could leave
+      // the last 100ms of text un-emitted, causing a tiny flash
+      // back to a slightly-older snapshot at end-of-stream.
+      this.flushStreamingNow(agent);
       this.onEvent({ type: "agent_streaming_end", agentId: agent.id });
       // Task #166: settle the streamPrompt awaiter for this agent.
       const stream = this.streamingByAgent.get(agent.id);
@@ -833,6 +850,49 @@ export class AgentManager {
       }
       return;
     }
+  }
+
+  // Task #172: throttled streaming-text dispatch. Agent text snapshots
+  // arrive every ~50ms during model output; we coalesce to one emit
+  // per STREAMING_THROTTLE_MS (100ms = 10 Hz). Trailing-edge timer:
+  // first chunk schedules a flush, subsequent chunks just update the
+  // latest text, the timer fires once and emits the latest snapshot.
+  private static readonly STREAMING_THROTTLE_MS = 100;
+
+  private scheduleStreamingFlush(agent: Agent, text: string): void {
+    this.latestStreamingText.set(agent.id, text);
+    if (this.streamingFlushTimers.has(agent.id)) return;
+    this.streamingFlushTimers.set(
+      agent.id,
+      setTimeout(() => {
+        this.streamingFlushTimers.delete(agent.id);
+        const latest = this.latestStreamingText.get(agent.id);
+        if (latest === undefined) return;
+        this.onEvent({
+          type: "agent_streaming",
+          agentId: agent.id,
+          agentIndex: agent.index,
+          text: latest,
+        });
+      }, AgentManager.STREAMING_THROTTLE_MS),
+    );
+  }
+
+  private flushStreamingNow(agent: Agent): void {
+    const timer = this.streamingFlushTimers.get(agent.id);
+    if (timer) {
+      clearTimeout(timer);
+      this.streamingFlushTimers.delete(agent.id);
+    }
+    const latest = this.latestStreamingText.get(agent.id);
+    this.latestStreamingText.delete(agent.id);
+    if (latest === undefined) return;
+    this.onEvent({
+      type: "agent_streaming",
+      agentId: agent.id,
+      agentIndex: agent.index,
+      text: latest,
+    });
   }
 
   // Task #39: expose the current per-agent partial-stream buffer as a
