@@ -248,6 +248,34 @@ export function UsageWidget() {
               <div className="text-ink-400 text-xs">Loading…</div>
             ) : (
               <>
+                {/* Task #213: when all 4 rolling windows show identical
+                    numbers, it looks like a display bug but is actually
+                    "you have no calls older than 1h". Surface the oldest
+                    record's age so the user can tell. The dev server
+                    restart wipes the in-memory tokenTracker.records
+                    buffer, so after a restart "all-time" is bounded by
+                    process uptime. */}
+                {(() => {
+                  const oldest = data.recent.length > 0 ? data.recent[0].ts : null;
+                  const allMatch =
+                    data.last1h.totalTokens === data.last5h.totalTokens &&
+                    data.last1h.totalTokens === data.last24h.totalTokens &&
+                    data.last1h.totalTokens === data.last7d.totalTokens &&
+                    data.last1h.calls > 0;
+                  if (!allMatch) return null;
+                  const oldestAge = oldest ? Date.now() - oldest : 0;
+                  const oldestStr =
+                    oldestAge < 60_000 ? `${Math.round(oldestAge / 1000)}s`
+                    : oldestAge < 3_600_000 ? `${Math.round(oldestAge / 60_000)}m`
+                    : `${(oldestAge / 3_600_000).toFixed(1)}h`;
+                  return (
+                    <div className="text-[10px] text-ink-500 px-2 py-1 rounded bg-ink-950/40 border border-ink-700/50">
+                      All windows show identical numbers because the oldest call
+                      is only <span className="text-ink-300 font-mono">{oldestStr}</span> old.
+                      Dev-server restarts wipe the tracker buffer; data accumulates over time.
+                    </div>
+                  );
+                })()}
                 {/* Rolling-window cards */}
                 <div className="grid grid-cols-2 gap-2">
                   {(["1h", "5h", "24h", "7d"] as WindowKey[]).map((wk) => (

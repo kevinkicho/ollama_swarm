@@ -3374,6 +3374,20 @@ export class BlackboardRunner implements SwarmRunner {
               `after ${primaryAgent.id} exhausted retries. ` +
               `Run continues; ${primaryAgent.id} keeps planner identity for future calls.`,
           );
+          // Task #190: clear primary planner's "failed" chip after the
+          // fallback succeeded — the failure was for ONE call, the agent
+          // is still in the pool and will be tried again on the next
+          // planner call. Without this the UI shows a scary red "failed"
+          // panel for an entirely-recovered situation.
+          this.opts.manager.markStatus(primaryAgent.id, "ready", { lastMessageAt: Date.now() });
+          this.emitAgentState({
+            id: primaryAgent.id,
+            index: primaryAgent.index,
+            port: primaryAgent.port,
+            sessionId: primaryAgent.sessionId,
+            status: "ready",
+            lastMessageAt: Date.now(),
+          });
         }
         return { response, agentUsed: agent };
       } catch (err) {

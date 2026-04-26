@@ -38,21 +38,8 @@ export type CriticParseResult =
   | { ok: true; critic: ParsedCriticResponse }
   | { ok: false; reason: string };
 
-// Same stripFences helper as firstPassContract — kept inline to avoid an
-// import cycle and because the shape is small.
-function stripFences(raw: string): string | null {
-  const s = raw.trim();
-  const fenceMatch = s.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
-  if (fenceMatch) return fenceMatch[1].trim();
-  const innerFence = s.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
-  if (innerFence) return innerFence[1].trim();
-  const firstBrace = s.indexOf("{");
-  const lastBrace = s.lastIndexOf("}");
-  if (firstBrace > 0 && lastBrace > firstBrace) {
-    return s.slice(firstBrace, lastBrace + 1);
-  }
-  return null;
-}
+// Task #204: stripFences now uses the shared extractJsonFromText helper.
+import { extractJsonFromText as stripFences } from "../../extractJson.js";
 
 export function parseCriticResponse(raw: string): CriticParseResult {
   let parsed: unknown;

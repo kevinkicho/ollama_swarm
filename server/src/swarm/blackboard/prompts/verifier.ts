@@ -72,21 +72,8 @@ export type VerifierParseResult =
   | { ok: true; verifier: ParsedVerifierResponse }
   | { ok: false; reason: string };
 
-// Same fence-strip + first-brace fallback as critic / planner. Kept
-// inline to avoid a small-shared-helper module.
-function stripFences(raw: string): string | null {
-  const s = raw.trim();
-  const fenceMatch = s.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
-  if (fenceMatch) return fenceMatch[1].trim();
-  const innerFence = s.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
-  if (innerFence) return innerFence[1].trim();
-  const firstBrace = s.indexOf("{");
-  const lastBrace = s.lastIndexOf("}");
-  if (firstBrace > 0 && lastBrace > firstBrace) {
-    return s.slice(firstBrace, lastBrace + 1);
-  }
-  return null;
-}
+// Task #204: shared stripFences helper across 6 prompt parsers.
+import { extractJsonFromText as stripFences } from "../../extractJson.js";
 
 export function parseVerifierResponse(raw: string): VerifierParseResult {
   let parsed: unknown;

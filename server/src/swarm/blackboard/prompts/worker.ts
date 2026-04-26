@@ -75,21 +75,8 @@ export type WorkerParseResult =
 // Same extraction pattern as planner.ts: try strict JSON.parse first so a
 // perfectly-shaped top-level object isn't chewed into something else by the
 // fallback heuristics. Only if that fails do we try fence-stripping.
-function stripFences(raw: string): string | null {
-  const s = raw.trim();
-  const fenceMatch = s.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
-  if (fenceMatch) return fenceMatch[1].trim();
-  const innerFence = s.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
-  if (innerFence) return innerFence[1].trim();
-  // Prose-then-object: slice between first '{' and last '}'. Only meaningful
-  // if there's prose before the opening brace; otherwise it'd just re-return s.
-  const firstBrace = s.indexOf("{");
-  const lastBrace = s.lastIndexOf("}");
-  if (firstBrace > 0 && lastBrace > firstBrace) {
-    return s.slice(firstBrace, lastBrace + 1);
-  }
-  return null;
-}
+// Task #204: shared stripFences helper across 6 prompt parsers.
+import { extractJsonFromText as stripFences } from "../../extractJson.js";
 
 export function parseWorkerResponse(
   raw: string,

@@ -57,22 +57,9 @@ export type ReplannerParseResult =
   | { ok: true; action: "skip"; reason: string }
   | { ok: false; reason: string };
 
-// Same extraction pattern as planner.ts / worker.ts: strict JSON.parse first,
-// then fence stripping, then prose-surround slice. Order matters — otherwise a
-// perfectly-shaped top-level object gets chewed by the fallback heuristics.
-function stripFences(raw: string): string | null {
-  const s = raw.trim();
-  const fenceMatch = s.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
-  if (fenceMatch) return fenceMatch[1].trim();
-  const innerFence = s.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
-  if (innerFence) return innerFence[1].trim();
-  const firstBrace = s.indexOf("{");
-  const lastBrace = s.lastIndexOf("}");
-  if (firstBrace > 0 && lastBrace > firstBrace) {
-    return s.slice(firstBrace, lastBrace + 1);
-  }
-  return null;
-}
+// Task #204: shared stripFences helper across 6 prompt parsers.
+// Same extraction pattern: fenced first, then prose-surround slice.
+import { extractJsonFromText as stripFences } from "../../extractJson.js";
 
 export function parseReplannerResponse(raw: string): ReplannerParseResult {
   let parsed: unknown;

@@ -60,23 +60,9 @@ export type ContractParseResult =
 
 // Planners tend to wrap JSON in ```json fences or prose ("Here is the
 // contract: {...}"). Try progressively looser extraction only if the raw
-// text fails straight-up JSON.parse. Extracts object, not array — the
-// contract is a top-level object.
-function stripFences(raw: string): string | null {
-  const s = raw.trim();
-  const fenceMatch = s.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
-  if (fenceMatch) return fenceMatch[1].trim();
-  const innerFence = s.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
-  if (innerFence) return innerFence[1].trim();
-  // Prose-then-object: slice between first `{` and last `}`. Only meaningful
-  // when prose prefixes the brace (firstBrace > 0).
-  const firstBrace = s.indexOf("{");
-  const lastBrace = s.lastIndexOf("}");
-  if (firstBrace > 0 && lastBrace > firstBrace) {
-    return s.slice(firstBrace, lastBrace + 1);
-  }
-  return null;
-}
+// text fails straight-up JSON.parse. Task #204 extracted this helper —
+// shared across 6 prompt parsers.
+import { extractJsonFromText as stripFences } from "../../extractJson.js";
 
 export function parseFirstPassContractResponse(raw: string): ContractParseResult {
   let parsed: unknown;
