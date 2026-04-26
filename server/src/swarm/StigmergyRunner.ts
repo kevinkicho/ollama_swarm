@@ -410,6 +410,7 @@ export class StigmergyRunner implements SwarmRunner {
     try {
       const res = await promptWithRetry(lead, prompt, {
         signal: controller.signal,
+        manager: this.opts.manager,
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens),
         agentName: "swarm-read",
         describeError: describeSdkError,
@@ -580,6 +581,7 @@ export class StigmergyRunner implements SwarmRunner {
       // Unit 16: shared retry wrapper.
       const res = await promptWithRetry(agent, prompt, {
         signal: controller.signal,
+        manager: this.opts.manager,
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
         // Unit 20: read-only tools for discussion presets.
         agentName: "swarm-read",

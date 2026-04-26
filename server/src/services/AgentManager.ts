@@ -33,6 +33,37 @@ export interface KillAllResult {
   escaped: number;
 }
 
+// Task #166: in-flight stream-prompt accumulator state. Keyed by
+// agent.id in AgentManager.streamingByAgent. Lifecycle:
+//   - registered by streamPrompt() before firing the prompt
+//   - text accumulated from message.part.updated SSE events
+//   - per-chunk timeout reset on every text event
+//   - resolved on session.idle for the agent's session
+//   - rejected on per-chunk timeout, abort, or stream error
+interface MessageStreamState {
+  /** Latest cumulative text snapshot from message.part.updated. */
+  text: string;
+  lastChunkAt: number;
+  /** Settler for the awaiter — resolves with assembled text. */
+  resolve: (text: string) => void;
+  reject: (err: Error) => void;
+  /** Per-chunk timeout — fires reject if no chunks for perChunkTimeoutMs. */
+  timeoutHandle?: NodeJS.Timeout;
+  perChunkTimeoutMs: number;
+  /** AbortSignal listener cleanup. */
+  signalCleanup?: () => void;
+}
+
+export interface StreamPromptOpts {
+  agentName: string;
+  modelID: string;
+  promptText: string;
+  signal: AbortSignal;
+  /** Reject the stream if no text chunks arrive for this many ms.
+   *  Per-chunk liveness signal — replaces undici's headersTimeout. */
+  perChunkTimeoutMs: number;
+}
+
 export interface SpawnOpts {
   cwd: string;
   index: number;
@@ -115,6 +146,103 @@ export class AgentManager {
 
   list(): Agent[] {
     return [...this.agents.values()].sort((a, b) => a.index - b.index);
+  }
+
+  // Task #166: stream-aware replacement for `await agent.client.session.prompt(...)`.
+  // Fires the prompt with `noReply: true` (server doesn't block on the response),
+  // then accumulates text from the existing SSE event stream until session.idle
+  // for the agent's session. Per-chunk timeout fires reject if no text arrives
+  // for opts.perChunkTimeoutMs — that's the real liveness signal, replacing
+  // undici's 5-min headersTimeout that was wedging on heavy prompts.
+  //
+  // Returns the assembled text directly (not the SDK response shape — callers
+  // that previously used extractText(res) on the prompt-response can just use
+  // this string directly).
+  //
+  // Why this works:
+  //   - SSE stream is already subscribed in attachEventStream() per agent
+  //   - handleSessionEvent already fans message.part.updated text events to
+  //     UI via agent_streaming; we add a parallel fan-out to the
+  //     streamingByAgent accumulator
+  //   - session.idle reliably terminates because each agent's session has
+  //     at most one in-flight prompt at a time (our serial usage pattern)
+  async streamPrompt(agent: Agent, opts: StreamPromptOpts): Promise<string> {
+    // One in-flight stream per agent. If a prior call somehow leaked,
+    // reject it so its awaiter unblocks rather than wedging forever.
+    const prior = this.streamingByAgent.get(agent.id);
+    if (prior) {
+      prior.reject(new Error("superseded by new streamPrompt call"));
+      if (prior.timeoutHandle) clearTimeout(prior.timeoutHandle);
+      prior.signalCleanup?.();
+    }
+
+    return new Promise<string>((resolve, reject) => {
+      const state: MessageStreamState = {
+        text: "",
+        lastChunkAt: Date.now(),
+        resolve,
+        reject,
+        perChunkTimeoutMs: opts.perChunkTimeoutMs,
+      };
+      const armChunkTimeout = () => {
+        if (state.timeoutHandle) clearTimeout(state.timeoutHandle);
+        state.timeoutHandle = setTimeout(() => {
+          this.streamingByAgent.delete(agent.id);
+          state.signalCleanup?.();
+          reject(new Error(`per-chunk timeout: no SSE chunks for ${opts.perChunkTimeoutMs}ms`));
+        }, opts.perChunkTimeoutMs);
+      };
+      const onAbort = () => {
+        const cur = this.streamingByAgent.get(agent.id);
+        if (cur === state) this.streamingByAgent.delete(agent.id);
+        if (state.timeoutHandle) clearTimeout(state.timeoutHandle);
+        reject(new Error("aborted"));
+      };
+      opts.signal.addEventListener("abort", onAbort, { once: true });
+      state.signalCleanup = () => opts.signal.removeEventListener("abort", onAbort);
+      armChunkTimeout();
+      this.streamingByAgent.set(agent.id, state);
+      // Override resolve/reject to also clean up signal listener.
+      const wrappedResolve = (text: string) => {
+        state.signalCleanup?.();
+        if (state.timeoutHandle) clearTimeout(state.timeoutHandle);
+        resolve(text);
+      };
+      const wrappedReject = (err: Error) => {
+        state.signalCleanup?.();
+        if (state.timeoutHandle) clearTimeout(state.timeoutHandle);
+        reject(err);
+      };
+      state.resolve = wrappedResolve;
+      state.reject = wrappedReject;
+
+      // Fire the prompt asynchronously. noReply=true means the server
+      // doesn't make us wait for the full response on the HTTP path —
+      // the response flows back via the SSE stream we're already
+      // subscribed to. We still await the SDK call to surface
+      // request-rejection errors (auth/network/validation), but the
+      // HTTP body comes back fast (just the queued-message ack).
+      void agent.client.session.prompt({
+        path: { id: agent.sessionId },
+        body: {
+          agent: opts.agentName,
+          model: { providerID: "ollama", modelID: opts.modelID },
+          parts: [{ type: "text", text: opts.promptText }],
+          noReply: true,
+        },
+        signal: opts.signal,
+      }).catch((err) => {
+        // Only reject if we haven't already settled (e.g. via session.idle
+        // or per-chunk timeout — race is fine, first wins).
+        const cur = this.streamingByAgent.get(agent.id);
+        if (cur === state) {
+          this.streamingByAgent.delete(agent.id);
+          wrappedReject(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+      // armChunkTimeout above kicks in immediately — gives us a "request
+      // never produced any chunk" signal even before any SSE event.
+    });
   }
 
   toStates(): AgentState[] {
@@ -376,6 +504,17 @@ export class AgentManager {
   // getPartialStreams() returns a snapshot for the REST catch-up.
   private partialStreams = new Map<string, { text: string; updatedAt: number }>();
 
+  // Task #166: per-agent in-flight stream-prompt accumulator. When
+  // promptWithRetry uses streamPrompt() instead of the blocking
+  // session.prompt(), we register state here keyed by agent.id —
+  // the SSE handler accumulates text from message.part.updated
+  // events and resolves the promise on session.idle. Per-chunk
+  // timeout fires if no chunks arrive for perChunkTimeoutMs (cheap
+  // liveness signal that replaces undici's 5-min headersTimeout).
+  // Only one in-flight stream per agent at a time — matches our
+  // serial usage (each agent's session is single-message-in-flight).
+  private streamingByAgent = new Map<string, MessageStreamState>();
+
   recordPromptComplete(
     agentId: string,
     info: { attempt: number; elapsedMs: number; success: boolean },
@@ -487,6 +626,14 @@ export class AgentManager {
     // Task #39: drop any residual partial-stream buffers — agent IDs
     // from the killed run no longer exist; the next run spawns fresh.
     this.partialStreams.clear();
+    // Task #166: reject + drop any in-flight streamPrompt awaiters so
+    // they don't wedge a caller that's blocked waiting for chunks
+    // that will never arrive on a killed agent.
+    for (const stream of this.streamingByAgent.values()) {
+      if (stream.timeoutHandle) clearTimeout(stream.timeoutHandle);
+      stream.reject(new Error("agent killed"));
+    }
+    this.streamingByAgent.clear();
     if (escaped > 0) {
       // Unit 41: surface unkillable PIDs to the UI rather than swallowing
       // silently. The next dev-server startup sweep will still reclaim
@@ -610,6 +757,19 @@ export class AgentManager {
           agentIndex: agent.index,
           text: part.text,
         });
+        // Task #166: also feed the streamPrompt accumulator if active.
+        // Text snapshots are CUMULATIVE — each event has the full text
+        // so far, not a delta. Just overwrite. Reset per-chunk timeout.
+        const stream = this.streamingByAgent.get(agent.id);
+        if (stream) {
+          stream.text = part.text;
+          stream.lastChunkAt = Date.now();
+          if (stream.timeoutHandle) clearTimeout(stream.timeoutHandle);
+          stream.timeoutHandle = setTimeout(() => {
+            this.streamingByAgent.delete(agent.id);
+            stream.reject(new Error(`per-chunk timeout: no SSE chunks for ${stream.perChunkTimeoutMs}ms`));
+          }, stream.perChunkTimeoutMs);
+        }
       }
       return;
     }
@@ -617,6 +777,12 @@ export class AgentManager {
       // Task #39: stream finalized, drop the partial buffer.
       this.partialStreams.delete(agent.id);
       this.onEvent({ type: "agent_streaming_end", agentId: agent.id });
+      // Task #166: settle the streamPrompt awaiter for this agent.
+      const stream = this.streamingByAgent.get(agent.id);
+      if (stream) {
+        this.streamingByAgent.delete(agent.id);
+        stream.resolve(stream.text);
+      }
       return;
     }
   }

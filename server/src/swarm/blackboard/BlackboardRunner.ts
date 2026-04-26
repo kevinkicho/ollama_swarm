@@ -3232,6 +3232,10 @@ export class BlackboardRunner implements SwarmRunner {
       // event log read identically to the pre-Unit-16 behavior.
       const res = await promptWithRetry(agent, prompt, {
         signal: controller.signal,
+        // Task #166: streamed-prompt path. Per-chunk SSE timeout
+        // replaces the blocking 5-min headersTimeout that was wedging
+        // on heavy planner / audit prompts.
+        manager: this.opts.manager,
         onTokens: ({ promptTokens, responseTokens }) => {
           if (promptTokens > 0) this.promptTokensPerAgent.set(agent.id, (this.promptTokensPerAgent.get(agent.id) ?? 0) + promptTokens);
           if (responseTokens > 0) this.responseTokensPerAgent.set(agent.id, (this.responseTokensPerAgent.get(agent.id) ?? 0) + responseTokens);

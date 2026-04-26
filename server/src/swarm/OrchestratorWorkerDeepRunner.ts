@@ -539,6 +539,7 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
       const res = await promptWithRetry(agent, prompt, {
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
         signal: controller.signal,
+        manager: this.opts.manager,
         agentName: "swarm-read",
         describeError: describeSdkError,
         onTiming: ({ attempt, elapsedMs, success }) => {

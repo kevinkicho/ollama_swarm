@@ -395,6 +395,7 @@ export class CouncilRunner implements SwarmRunner {
       const res = await promptWithRetry(lead, prompt, {
         onTokens,
         signal: controller.signal,
+        manager: this.opts.manager,
         agentName: "swarm-read",
         describeError: describeSdkError,
         onTiming: ({ attempt, elapsedMs, success }) => {
@@ -526,6 +527,7 @@ export class CouncilRunner implements SwarmRunner {
       // Unit 16: shared retry wrapper.
       const res = await promptWithRetry(agent, prompt, {
         signal: controller.signal,
+        manager: this.opts.manager,
         // Unit 20: read-only tools for discussion presets.
         agentName: "swarm-read",
         describeError: describeSdkError,

@@ -403,6 +403,7 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
       const res = await promptWithRetry(agent, prompt, {
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
         signal: controller.signal,
+        manager: this.opts.manager,
         // Unit 20: read-only tools for discussion presets.
         agentName: "swarm-read",
         describeError: describeSdkError,

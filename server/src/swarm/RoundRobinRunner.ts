@@ -342,6 +342,7 @@ export class RoundRobinRunner implements SwarmRunner {
       // to 3 attempts with [4s, 16s] backoff before giving up.
       const res = await promptWithRetry(agent, prompt, {
         signal: controller.signal,
+        manager: this.opts.manager,
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
         // Unit 20: read-only tools (file-read / grep / glob / list).
         // Discussion-only presets — never edits.
@@ -494,6 +495,7 @@ export class RoundRobinRunner implements SwarmRunner {
     try {
       const res = await promptWithRetry(lead, prompt, {
         signal: controller.signal,
+        manager: this.opts.manager,
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens),
         agentName: "swarm-read",
         describeError: (e) => this.describeSdkError(e),

@@ -1,10 +1,19 @@
-import type { Agent } from "../services/AgentManager.js";
+import type { Agent, AgentManager } from "../services/AgentManager.js";
 import {
   RETRY_MAX_ATTEMPTS,
   RETRY_BACKOFF_MS,
   isRetryableSdkError,
 } from "./blackboard/retry.js";
 import { tokenTracker } from "../services/ollamaProxy.js";
+
+// Task #166: per-chunk timeout for streamed prompts. If no SSE text
+// chunks arrive for this many ms, the model is presumed dead and the
+// attempt fails. Replaces undici's blocking 5-min headersTimeout —
+// for streamed prompts, "no chunk in 90s" is a much sharper liveness
+// signal than "no headers in 5min". Chosen at 90s because heavy
+// reasoning models can pause that long mid-generation without being
+// stuck (observed on glm-5.1 thinking through 4-criterion audits).
+const STREAM_PER_CHUNK_TIMEOUT_MS = 90_000;
 
 // Shared SDK-prompt-with-retry helper.
 //
@@ -57,6 +66,13 @@ export interface PromptWithRetryOptions {
   // from tokenTracker.recent filtered by run window) stay accurate
   // either way.
   onTokens?: (info: { promptTokens: number; responseTokens: number }) => void;
+  // Task #166: when present, fire prompts via the SSE-streaming path
+  // (manager.streamPrompt) instead of the blocking session.prompt.
+  // Eliminates the UND_ERR_HEADERS_TIMEOUT failure mode by making
+  // per-chunk arrival the liveness signal instead of total-response
+  // arrival. Backwards-compatible: callers that don't pass a manager
+  // keep the old blocking behavior.
+  manager?: AgentManager;
 }
 
 export interface RetryInfo {
@@ -97,15 +113,31 @@ export async function promptWithRetry(
   for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
     const t0 = Date.now();
     try {
-      const res = await agent.client.session.prompt({
-        path: { id: agent.sessionId },
-        body: {
-          agent: agentName,
-          model: { providerID: "ollama", modelID: agent.model },
-          parts: [{ type: "text", text: promptText }],
-        },
-        signal: opts.signal,
-      });
+      let res: unknown;
+      if (opts.manager) {
+        // Task #166: streamed path. SSE per-chunk timeout replaces the
+        // blocking 5-min headersTimeout. Returns the assembled text;
+        // wrap in a SDK-shaped envelope so existing extractText callers
+        // see the same structure they'd get from session.prompt.
+        const text = await opts.manager.streamPrompt(agent, {
+          agentName,
+          modelID: agent.model,
+          promptText,
+          signal: opts.signal,
+          perChunkTimeoutMs: STREAM_PER_CHUNK_TIMEOUT_MS,
+        });
+        res = { data: { parts: [{ type: "text", text }] } };
+      } else {
+        res = await agent.client.session.prompt({
+          path: { id: agent.sessionId },
+          body: {
+            agent: agentName,
+            model: { providerID: "ollama", modelID: agent.model },
+            parts: [{ type: "text", text: promptText }],
+          },
+          signal: opts.signal,
+        });
+      }
       opts.onTiming?.({ attempt, elapsedMs: Date.now() - t0, success: true });
       return res;
     } catch (err) {
