@@ -217,18 +217,22 @@ export class AgentManager {
       state.reject = wrappedReject;
 
       // Fire the prompt asynchronously. noReply=true means the server
-      // doesn't make us wait for the full response on the HTTP path —
-      // the response flows back via the SSE stream we're already
-      // subscribed to. We still await the SDK call to surface
-      // request-rejection errors (auth/network/validation), but the
-      // HTTP body comes back fast (just the queued-message ack).
+      // We `void` (don't await) the SDK call so its HTTP duration
+      // doesn't matter to us — SSE events drive completion via
+      // session.idle. The underlying HTTP request may still take 5+
+      // min on heavy prompts, but we'll have resolved long before.
+      //
+      // Note: we tried `noReply: true` initially (intended to make the
+      // server release the HTTP early) but observed that with noReply
+      // OpenCode skips emitting message.part.updated events for our
+      // setup — every prompt 90s-timed-out with zero chunks. So we
+      // fire the regular prompt; the HTTP body just goes unread.
       void agent.client.session.prompt({
         path: { id: agent.sessionId },
         body: {
           agent: opts.agentName,
           model: { providerID: "ollama", modelID: opts.modelID },
           parts: [{ type: "text", text: opts.promptText }],
-          noReply: true,
         },
         signal: opts.signal,
       }).catch((err) => {
@@ -738,6 +742,25 @@ export class AgentManager {
     // proves the session is working and the TCP connection is alive.
     this.touchActivity(agent.sessionId);
 
+    // Task #166 (FIX): reset the streamPrompt per-chunk timer on ANY
+    // matching SSE event for this agent's session — not just text
+    // snapshots. text-typed message.part.updated events are RARE
+    // (often >60s apart on heavy prompts), but message.part.delta /
+    // message.part.updated[reasoning] / etc. flow continuously.
+    // Earlier "reset only on text" version failed because the 90s
+    // timer fired before the next text snapshot, even though the
+    // model was actively generating tokens. ANY part.* event proves
+    // the model is alive — that's the right liveness signal.
+    const liveStream = this.streamingByAgent.get(agent.id);
+    if (liveStream && typeof type === "string" && type.startsWith("message.")) {
+      liveStream.lastChunkAt = Date.now();
+      if (liveStream.timeoutHandle) clearTimeout(liveStream.timeoutHandle);
+      liveStream.timeoutHandle = setTimeout(() => {
+        this.streamingByAgent.delete(agent.id);
+        liveStream.reject(new Error(`per-chunk timeout: no SSE chunks for ${liveStream.perChunkTimeoutMs}ms`));
+      }, liveStream.perChunkTimeoutMs);
+    }
+
     if (type === "message.part.updated") {
       const part = props.part as { type?: string; text?: string } | undefined;
       if (part?.type === "text" && typeof part.text === "string") {
@@ -757,19 +780,12 @@ export class AgentManager {
           agentIndex: agent.index,
           text: part.text,
         });
-        // Task #166: also feed the streamPrompt accumulator if active.
-        // Text snapshots are CUMULATIVE — each event has the full text
-        // so far, not a delta. Just overwrite. Reset per-chunk timeout.
+        // Task #166: feed the streamPrompt accumulator's text snapshot
+        // (timer reset already handled above for ALL message.* events).
+        // Text snapshots are CUMULATIVE — each event has the full
+        // text so far, not a delta — just overwrite.
         const stream = this.streamingByAgent.get(agent.id);
-        if (stream) {
-          stream.text = part.text;
-          stream.lastChunkAt = Date.now();
-          if (stream.timeoutHandle) clearTimeout(stream.timeoutHandle);
-          stream.timeoutHandle = setTimeout(() => {
-            this.streamingByAgent.delete(agent.id);
-            stream.reject(new Error(`per-chunk timeout: no SSE chunks for ${stream.perChunkTimeoutMs}ms`));
-          }, stream.perChunkTimeoutMs);
-        }
+        if (stream) stream.text = part.text;
       }
       return;
     }
