@@ -556,15 +556,25 @@ export class AgentManager {
   // suddenly goes empty mid-response" bug.
   // Map: agentId → Map<partId, text>. Insertion order = display order.
   private partsByAgent = new Map<string, Map<string, string>>();
-  // Task #175: which message ID is the CURRENT assistant response per
-  // agent. OpenCode emits message.part.updated events for BOTH the
-  // user's prompt (the system+user prompt text echoed back as a text
-  // part) AND the assistant's response. Without this filter our text
-  // accumulator was concatenating "You are the PLANNER..." (the prompt)
-  // with the actual response, producing 27K-char garbled "responses"
-  // that never parsed as JSON. Updated when message.updated fires
-  // with info.role === "assistant"; cleared on session.idle.
-  private currentAssistantMsgId = new Map<string, string>();
+  // Task #179 (was #175): per-agent map of messageID → role. OpenCode
+  // emits message.part.updated for BOTH the user's prompt-message parts
+  // AND the assistant's response-message parts; without explicit
+  // role filtering, the per-part text accumulator concatenates the
+  // system+user prompt INTO the response (we saw 27K-char "responses"
+  // starting with "You are the PLANNER..." that never parsed as JSON).
+  //
+  // The original #175 fix tracked only `currentAssistantMsgId` and
+  // accepted any part whose messageID matched. Bug: when user-message
+  // parts fire BEFORE the assistant message.updated event sets
+  // assistantMsgId (race), the early user parts leaked through
+  // because the filter short-circuited on undefined assistantMsgId.
+  //
+  // #179 fix: track ALL known message roles. Parts are only accepted
+  // when their messageID is EXPLICITLY known to be "assistant" — user
+  // and unknown-role parts both reject. Roles populate from
+  // message.updated events; cleared on session.idle along with the
+  // per-part accumulator.
+  private messageRoles = new Map<string, Map<string, "user" | "assistant">>();
 
   recordPromptComplete(
     agentId: string,
@@ -692,8 +702,8 @@ export class AgentManager {
     this.latestStreamingText.clear();
     // Task #174: drop per-part accumulators for killed agents.
     this.partsByAgent.clear();
-    // Task #175: drop assistant-message tracking for killed agents.
-    this.currentAssistantMsgId.clear();
+    // Task #179: drop message-role classification for killed agents.
+    this.messageRoles.clear();
     if (escaped > 0) {
       // Unit 41: surface unkillable PIDs to the UI rather than swallowing
       // silently. The next dev-server startup sweep will still reclaim
@@ -829,19 +839,26 @@ export class AgentManager {
       }, liveStream.perChunkTimeoutMs);
     }
 
-    // Task #175: track the current assistant message ID per agent.
-    // OpenCode emits message.updated for BOTH user and assistant
-    // messages; we only want to accumulate parts from the assistant
-    // message. info.role distinguishes them.
+    // Task #179: track ALL message roles per agent. OpenCode emits
+    // message.updated for both user and assistant messages with
+    // info.role + info.id. We use this to classify parts that
+    // arrive via message.part.updated.
     if (type === "message.updated") {
       const info = props.info as { id?: string; role?: string } | undefined;
-      if (info?.role === "assistant" && typeof info.id === "string") {
-        const prior = this.currentAssistantMsgId.get(agent.id);
-        if (prior !== info.id) {
-          // New assistant message — reset the per-part accumulator
-          // so this response starts clean.
-          this.partsByAgent.delete(agent.id);
-          this.currentAssistantMsgId.set(agent.id, info.id);
+      if ((info?.role === "user" || info?.role === "assistant") && typeof info.id === "string") {
+        let roles = this.messageRoles.get(agent.id);
+        if (!roles) {
+          roles = new Map();
+          this.messageRoles.set(agent.id, roles);
+        }
+        const prior = roles.get(info.id);
+        if (prior !== info.role) {
+          roles.set(info.id, info.role);
+          if (info.role === "assistant") {
+            // New assistant message — reset the per-part accumulator
+            // so this response starts clean.
+            this.partsByAgent.delete(agent.id);
+          }
         }
       }
       return;
@@ -849,14 +866,16 @@ export class AgentManager {
     if (type === "message.part.updated") {
       const part = props.part as { type?: string; text?: string; id?: string; messageID?: string } | undefined;
       if (part?.type === "text" && typeof part.text === "string") {
-        // Task #175: filter out user-message parts. Only accumulate
-        // parts whose messageID matches our currently-tracked
-        // assistant message. Prevents concatenating the system+user
-        // prompt text into the "response".
-        const assistantMsgId = this.currentAssistantMsgId.get(agent.id);
-        if (part.messageID && assistantMsgId && part.messageID !== assistantMsgId) {
-          return;
-        }
+        // Task #179: only accept parts EXPLICITLY classified as
+        // assistant. User-role parts AND unknown-role parts both
+        // reject. Closes the race where user message.part.updated
+        // events arrive before message.updated[role=assistant]
+        // sets the messageID — under #175 those leaked through
+        // because the filter short-circuited on missing assistantMsgId.
+        if (!part.messageID) return;
+        const roles = this.messageRoles.get(agent.id);
+        const role = roles?.get(part.messageID);
+        if (role !== "assistant") return;
         // Task #174: track this text snapshot per-part so a new text
         // part starting at len=0 doesn't wipe earlier parts. Display
         // text = concatenation of all parts in arrival order.
@@ -891,9 +910,9 @@ export class AgentManager {
       // Task #174: drop the per-part accumulator so the next prompt
       // on this agent starts with a fresh slate.
       this.partsByAgent.delete(agent.id);
-      // Task #175: clear the assistant-msg tracking so the NEXT
-      // prompt's first message.updated starts a fresh response.
-      this.currentAssistantMsgId.delete(agent.id);
+      // Task #179: clear message-role tracking for this agent. Next
+      // prompt's first message.updated starts fresh classification.
+      this.messageRoles.delete(agent.id);
       // Task #172: flush any pending throttled streaming text so the
       // UI lands on the FINAL state before we tell it the stream
       // ended. Without this, the trailing-edge throttle could leave
