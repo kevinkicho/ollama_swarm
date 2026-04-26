@@ -663,7 +663,18 @@ export class AgentManager {
       let ended = false;
       try {
         this.logDiag({ type: "_sse_subscribed", agentId: agent.id, sessionId: agent.sessionId });
-        const sub = await agent.client.event.subscribe({ signal: abort.signal });
+        // Task #170 (Path B): the SDK's SSE client (createSseClient in
+        // gen/core/serverSentEvents.gen.js) uses GLOBAL fetch — it
+        // bypasses the authedFetch interceptor we set up at client
+        // creation. Without auth, /event returns 401 → SDK retries
+        // silently forever → ZERO events delivered. Verified by 0
+        // _raw_sse log entries across all logs prior to this fix.
+        // Pass the Authorization header explicitly here so the
+        // bare-fetch path inside the SDK has it.
+        const sub = await agent.client.event.subscribe({
+          signal: abort.signal,
+          headers: { Authorization: basicAuthHeader() },
+        });
         const stream = (sub as { stream: AsyncIterable<unknown> }).stream;
         for await (const ev of stream) {
           if (abort.signal.aborted) break;

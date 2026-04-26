@@ -114,16 +114,15 @@ export async function promptWithRetry(
     const t0 = Date.now();
     try {
       let res: unknown;
-      // Task #166 streaming path is DISABLED. Ran into a fundamental
-      // problem: the SDK's `agent.client.event.subscribe()` returns
-      // an AsyncIterable that delivers ZERO events for our setup
-      // (verified: 0 `_raw_sse` log entries in any log we have).
-      // The raw-fetch probe on /event worked, but the SDK path is
-      // dead. Streaming code is left in place for when we route
-      // events via raw fetch (Task #170 candidate) — until then,
-      // every promptWithRetry uses the blocking session.prompt.
-      // Force the fallback regardless of whether opts.manager is set.
-      const STREAMING_ENABLED = false;
+      // Task #166 streaming path. RE-ENABLED 2026-04-26 after Task
+      // #170 (Path B) found the root cause of the prior failure:
+      // SDK's createSseClient bypasses our authedFetch wrapper and
+      // uses globalThis.fetch directly → /event returned 401 →
+      // SDK retried silently → 0 events delivered. Fix at
+      // AgentManager.attachEventStream now passes Authorization
+      // header explicitly to event.subscribe(); SSE events flow
+      // again, streaming is viable.
+      const STREAMING_ENABLED = true;
       if (STREAMING_ENABLED && opts.manager) {
         const text = await opts.manager.streamPrompt(agent, {
           agentName,
