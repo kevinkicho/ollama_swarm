@@ -40,10 +40,13 @@ interface UsageRecord {
 // Task #137: proxy-side quota state. Null when no wall observed since
 // the current run started; otherwise the upstream Ollama status code +
 // reason snippet that tripped the detector.
+// Task #149: kind distinguishes transient (concurrency burst, clears
+// in seconds) from persistent (real plan/usage limit).
 interface QuotaState {
   since: number;
   reason: string;
   statusCode: number;
+  kind?: "transient" | "persistent";
 }
 
 interface UsagePayload {
@@ -179,22 +182,49 @@ export function UsageWidget() {
     setCaps((c) => ({ ...c, [key]: value }));
   }, []);
 
-  // Task #139: header chip color reflects quota state. Red when the
-  // proxy has detected a wall; default ink otherwise.
+  // Task #139 + #149 + #159: header chip styling reflects quota KIND.
+  //   no quota              → default ink chip
+  //   transient (concurrency)→ amber chip, no pulse — informational
+  //   persistent (plan limit)→ red pulsing chip — alarming
   const chipBaseCls = "rounded px-2 py-0.5 border transition flex items-center gap-1.5";
-  const chipCls = quota
+  const isPersistent = quota?.kind === "persistent";
+  const isTransient = quota?.kind === "transient" || (!!quota && !quota.kind);
+  const chipCls = isPersistent
     ? `${chipBaseCls} text-rose-100 hover:text-white bg-rose-900/60 hover:bg-rose-900/80 border-rose-700/70 hover:border-rose-600 animate-pulse`
-    : `${chipBaseCls} text-ink-400 hover:text-ink-100 hover:bg-ink-800/70 border-ink-700 hover:border-ink-600`;
+    : isTransient
+      ? `${chipBaseCls} text-amber-100 hover:text-white bg-amber-900/40 hover:bg-amber-900/60 border-amber-700/60 hover:border-amber-600`
+      : `${chipBaseCls} text-ink-400 hover:text-ink-100 hover:bg-ink-800/70 border-ink-700 hover:border-ink-600`;
+  const chipLabel = isPersistent ? "⚠ QUOTA WALL" : isTransient ? "throttled" : "tokens";
+  const chipSubtle = isPersistent
+    ? `${quota!.statusCode}`
+    : isTransient
+      ? `429 burst`
+      : `${fmtTokens(headerSnap)}/1h`;
+  const chipTitle = isPersistent
+    ? `Persistent Ollama quota wall (${quota!.statusCode}) — click for details`
+    : isTransient
+      ? "Transient concurrency throttle — clears automatically. Click for details."
+      : "Token usage — click to expand";
+
+  const dismissQuota = useCallback(async () => {
+    try {
+      await fetch("/api/usage/clear-quota", { method: "POST" });
+      setQuota(null);
+    } catch {
+      // silent — next poll will refresh state anyway
+    }
+  }, []);
+
   return (
     <span className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        title={quota ? `Ollama quota wall hit (${quota.statusCode}) — click for details` : "Token usage — click to expand"}
+        title={chipTitle}
         className={chipCls}
       >
-        <span>{quota ? "⚠ QUOTA WALL" : "tokens"}</span>
-        <span className={`font-mono text-[10px] ${quota ? "text-rose-200" : "text-ink-500"}`}>
-          {quota ? `${quota.statusCode}` : `${fmtTokens(headerSnap)}/1h`}
+        <span>{chipLabel}</span>
+        <span className={`font-mono text-[10px] ${isPersistent ? "text-rose-200" : isTransient ? "text-amber-200" : "text-ink-500"}`}>
+          {chipSubtle}
         </span>
         <span>{open ? "▴" : "▾"}</span>
       </button>
@@ -212,21 +242,13 @@ export function UsageWidget() {
             <button onClick={() => setOpen(false)} className="text-ink-500 hover:text-ink-200">✕</button>
           </div>
           <div className="max-h-[70vh] overflow-y-auto p-3 space-y-3">
-            {/* Task #139: quota-wall banner. Stays at the top of the open
-                 panel until the wall clears (i.e. until a new run starts
-                 — Orchestrator clears the state on each start so the
-                 next run gets to probe the wall fresh). */}
+            {/* Task #139 + #149 + #159: quota-wall banner with kind-aware
+                styling. Persistent walls (real plan limit) show as a red
+                alarm; transient bursts (concurrency throttle) show as an
+                amber informational notice. Both have a Dismiss button so
+                stale flags can be cleared without starting a new run. */}
             {quota ? (
-              <div className="rounded border-2 border-rose-700 bg-rose-950/60 px-3 py-2 text-xs space-y-1">
-                <div className="font-semibold text-rose-100">
-                  ⚠ Ollama quota wall hit (HTTP {quota.statusCode})
-                </div>
-                <div className="text-rose-200 font-mono break-words">{quota.reason}</div>
-                <div className="text-rose-300/80">
-                  Detected at {new Date(quota.since).toLocaleTimeString()}.
-                  In-flight runs stopped cleanly via Task #137; the next run start clears this flag so it can re-probe the wall.
-                </div>
-              </div>
+              <QuotaBanner quota={quota} onDismiss={dismissQuota} />
             ) : null}
             {error ? (
               <div className="text-rose-300 text-xs">Failed to load: {error}</div>
@@ -266,6 +288,52 @@ export function UsageWidget() {
         </div>
       ) : null}
     </span>
+  );
+}
+
+// Task #159: kind-aware quota banner. Persistent = red sticky alarm;
+// transient = amber informational notice with auto-clear note.
+function QuotaBanner({ quota, onDismiss }: { quota: QuotaState; onDismiss: () => void }) {
+  const isPersistent = quota.kind === "persistent";
+  const palette = isPersistent
+    ? {
+        outer: "border-rose-700 bg-rose-950/60",
+        title: "text-rose-100",
+        body: "text-rose-200",
+        meta: "text-rose-300/80",
+        button: "border-rose-600 text-rose-100 hover:bg-rose-800/50",
+      }
+    : {
+        outer: "border-amber-700/70 bg-amber-950/40",
+        title: "text-amber-100",
+        body: "text-amber-200",
+        meta: "text-amber-300/80",
+        button: "border-amber-600 text-amber-100 hover:bg-amber-800/50",
+      };
+  return (
+    <div className={`rounded border-2 ${palette.outer} px-3 py-2 text-xs space-y-1`}>
+      <div className="flex items-center justify-between gap-2">
+        <div className={`font-semibold ${palette.title}`}>
+          {isPersistent
+            ? `⚠ Persistent quota wall (HTTP ${quota.statusCode})`
+            : `⚠ Transient throttle (HTTP ${quota.statusCode})`}
+        </div>
+        <button
+          onClick={onDismiss}
+          title="Dismiss this notice (clears the quota flag without starting a new run)"
+          className={`rounded border px-2 py-0.5 text-[10px] uppercase tracking-wider ${palette.button}`}
+        >
+          Dismiss
+        </button>
+      </div>
+      <div className={`${palette.body} font-mono break-words`}>{quota.reason}</div>
+      <div className={palette.meta}>
+        Detected at {new Date(quota.since).toLocaleTimeString()}.
+        {isPersistent
+          ? " In-flight runs stopped cleanly via Task #137. The next run start clears this flag so it can re-probe the wall."
+          : " Concurrency burst — Ollama un-throttled within seconds. Auto-clears after 5 min idle. Runs continue normally; this is informational."}
+      </div>
+    </div>
   );
 }
 

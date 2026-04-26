@@ -84,7 +84,22 @@ app.get("/api/health", (_req, res) => {
 // per-window aggregates derived from prompt_eval_count + eval_count
 // captured on every Ollama response. Empty when proxy is disabled
 // (OLLAMA_PROXY_PORT=0).
+// Task #159: auto-clear transient quota flags after STALE_TRANSIENT_MS
+// of no new wall observation. Concurrency-429s clear in seconds upstream;
+// keeping the flag set indefinitely misleads users into thinking they're
+// near a usage limit. Persistent walls (real plan/quota limit) stay set
+// until explicit clear (Orchestrator.start clears on each new run).
+const STALE_TRANSIENT_MS = 5 * 60_000;
+function maybeClearStaleTransient(): void {
+  const q = tokenTracker.getQuotaState();
+  if (q && q.kind === "transient" && Date.now() - q.since > STALE_TRANSIENT_MS) {
+    tokenTracker.clearQuotaState();
+  }
+}
+
 app.get("/api/usage", (_req, res) => {
+  // Task #159: opportunistic auto-clear on every poll (cheap).
+  maybeClearStaleTransient();
   res.json({
     last1h: tokenTracker.totalsInWindow(60 * 60_000, "1h"),
     last5h: tokenTracker.totalsInWindow(5 * 60 * 60_000, "5h"),
@@ -99,6 +114,14 @@ app.get("/api/usage", (_req, res) => {
     // current run started).
     quota: tokenTracker.getQuotaState(),
   });
+});
+
+// Task #159: explicit dismiss endpoint. Lets the UI's "Dismiss" button
+// clear a stale flag without requiring a new run. Idempotent — clearing
+// when nothing's set is a no-op.
+app.post("/api/usage/clear-quota", (_req, res) => {
+  tokenTracker.clearQuotaState();
+  res.json({ ok: true });
 });
 
 app.use("/api/swarm", swarmRouter(orchestrator));
