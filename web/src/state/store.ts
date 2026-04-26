@@ -30,7 +30,9 @@ interface SwarmStore {
   findings: Finding[];
   contract?: ExitContract;
   summary?: RunSummary;
-  error?: string;
+  // Topbar error banner. Carries runId at error-time so a stale error
+  // from a long-dead run is obvious to the user (and can be dismissed).
+  error?: { message: string; runId?: string; ts: number };
   latency: Record<string, LatencySample[]>;
   // Unit 47: latest clone_state event for the current run, or
   // undefined before the runner emits it. UI uses this to show the
@@ -83,6 +85,8 @@ interface SwarmStore {
   setMapperSlices: (slices: Record<string, string[]>) => void;
 
   setError: (msg: string | undefined) => void;
+  // Dismiss the topbar error banner (sets error → undefined).
+  dismissError: () => void;
   reset: () => void;
   // Task #37 (partial): lighter reset fired on WS run_started — drops
   // agents/streaming/latency only so prior transcript stays readable.
@@ -240,7 +244,13 @@ export const useSwarm = create<SwarmStore>((set) => ({
     set((s) => ({ pheromones: { ...s.pheromones, [file]: state } })),
   setMapperSlices: (slices) => set({ mapperSlices: { ...slices } }),
 
-  setError: (msg) => set({ error: msg }),
+  setError: (msg) =>
+    set((s) =>
+      msg === undefined
+        ? { error: undefined }
+        : { error: { message: msg, runId: s.runId, ts: Date.now() } },
+    ),
+  dismissError: () => set({ error: undefined }),
   reset: () =>
     set({
       phase: "idle",

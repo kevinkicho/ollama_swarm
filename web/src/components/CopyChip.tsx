@@ -1,10 +1,12 @@
 import { useState } from "react";
+import { copyText } from "../utils/copyText";
 
 // Unit 56: extracted from SwarmView so AgentPanel and the topbar can
 // share one click-to-copy chip implementation. Shows `<label> <short>`
 // with the full value as the tooltip; clicking copies the full value
-// to clipboard and briefly flashes a checkmark. Silently no-ops if
-// the clipboard API isn't available (insecure context / older browsers).
+// to clipboard and briefly flashes a checkmark (✓ on success, ✗ on
+// failure). Uses the copyText shim which falls back to execCommand for
+// non-secure contexts (Kevin's WSL-IP URLs).
 export function CopyChip({
   label,
   value,
@@ -14,15 +16,11 @@ export function CopyChip({
   value: string;
   short: string;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   const onClick = async () => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1200);
-    } catch {
-      // no-op: clipboard unavailable
-    }
+    const ok = await copyText(value);
+    setState(ok ? "copied" : "failed");
+    window.setTimeout(() => setState("idle"), 1200);
   };
   return (
     <button
@@ -32,7 +30,13 @@ export function CopyChip({
     >
       <span className="text-ink-500">{label}</span>
       <span>{short}</span>
-      <span className="text-emerald-400 text-[10px] w-2">{copied ? "✓" : ""}</span>
+      <span
+        className={`text-[10px] w-2 ${
+          state === "copied" ? "text-emerald-400" : state === "failed" ? "text-red-400" : ""
+        }`}
+      >
+        {state === "copied" ? "✓" : state === "failed" ? "✗" : ""}
+      </span>
     </button>
   );
 }

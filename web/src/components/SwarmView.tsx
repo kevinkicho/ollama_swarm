@@ -5,6 +5,7 @@ import { AgentPanel } from "./AgentPanel";
 import { BoardView } from "./BoardView";
 import { ContractPanel } from "./ContractPanel";
 import { CopyChip } from "./CopyChip";
+import { copyText } from "../utils/copyText";
 import { Transcript } from "./Transcript";
 import { MetricsPanel } from "./MetricsPanel";
 import { PheromonePanel } from "./PheromonePanel";
@@ -707,7 +708,7 @@ export function RunHistoryDropdown() {
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              void navigator.clipboard.writeText(r.runId!);
+                              void copyText(r.runId!);
                             }}
                             title={`Copy full runId: ${r.runId}`}
                             className="text-[10px] px-1.5 py-0.5 rounded bg-ink-800 border border-ink-700 hover:bg-ink-700 hover:text-ink-100 text-ink-300"
