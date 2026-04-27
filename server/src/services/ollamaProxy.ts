@@ -87,13 +87,20 @@ const QUOTA_PERSISTENT_KEYWORDS: readonly RegExp[] = [
   /\bplan[\s_-]*limit/i,
   /\bexceed(?:ed|s)?\s+(?:your\s+)?(?:plan|quota|limit)/i,
 ];
-// Transient wall — concurrency / rate-burst. These clear in seconds;
-// the SDK's retry-with-backoff handles them. We still record the event
-// so the UI can show "throttled briefly" but the run keeps going.
+// Transient wall — concurrency / rate-burst / capacity. These clear
+// in seconds-to-minutes; the SDK's retry-with-backoff handles them.
+// We still record the event so the UI can show "throttled briefly"
+// but the run keeps going.
+// 2026-04-27: added "overloaded" + "server overloaded" + "503" after
+// run 59c66144 crashed on
+//   "Ollama HTTP 503: Server overloaded, please retry shortly"
+// Crashing on a transient capacity hiccup wastes the whole run.
 const QUOTA_TRANSIENT_KEYWORDS: readonly RegExp[] = [
   /\bconcurrent\b/i,
   /\b(too\s+many\s+requests)\b/i,
   /\brate[\s_-]*limit(?:ed)?/i,
+  /\boverloaded\b/i,
+  /\bserver\s+busy\b/i,
 ];
 
 function classifyQuotaKind(body: string): "transient" | "persistent" {
@@ -323,6 +330,15 @@ export function detectQuotaExhausted(status: number, body: string): string | nul
   if (status === 402 || status === 403) {
     if (QUOTA_BODY_KEYWORDS.some((re) => re.test(body))) {
       return `${status} ${truncateForReason(body)}`;
+    }
+  }
+  // 2026-04-27: HTTP 503 with quota-shaped body (typically "Server
+  // overloaded" from Ollama Cloud during capacity spikes). Transient —
+  // the run should pause + probe instead of crashing. See
+  // run 59c66144 crash post-mortem.
+  if (status === 503) {
+    if (QUOTA_BODY_KEYWORDS.some((re) => re.test(body))) {
+      return `503 ${truncateForReason(body)}`;
     }
   }
   // Some upstream variants return 200 with an error body (no usage

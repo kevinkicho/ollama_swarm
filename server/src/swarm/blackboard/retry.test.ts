@@ -84,6 +84,34 @@ describe("isRetryableSdkError", () => {
     // Should return false (no retryable code found) and NOT hang.
     assert.equal(isRetryableSdkError(a), false);
   });
+
+  // 2026-04-27: 503-overloaded retryability. Run 59c66144 crashed on
+  // a single transient capacity hiccup; treat as retryable.
+  it("retries on Ollama HTTP 503 with overloaded body", () => {
+    assert.equal(
+      isRetryableSdkError(new Error('Ollama HTTP 503: {"error":"Server overloaded, please retry shortly (ref: abc)"}')),
+      true,
+    );
+  });
+
+  it("retries on bare 'Server overloaded' text in any HTTP status", () => {
+    assert.equal(isRetryableSdkError(new Error("Server overloaded — try again later")), true);
+  });
+
+  it("retries on 'overloaded' as a standalone keyword", () => {
+    assert.equal(isRetryableSdkError(new Error("upstream gateway: overloaded")), true);
+  });
+
+  it("retries on 'server busy' framing", () => {
+    assert.equal(isRetryableSdkError(new Error("server busy: capacity at limit")), true);
+  });
+
+  it("does NOT retry on a generic 503 with no overloaded/busy keyword", () => {
+    // 503 alone (without the message keyword) shouldn't auto-retry —
+    // could be a real outage that retry won't help. Match must be on
+    // the "Ollama HTTP 503" framing OR the keywords.
+    assert.equal(isRetryableSdkError(new Error("HTTP 503 Service Unavailable")), false);
+  });
 });
 
 describe("retry config", () => {

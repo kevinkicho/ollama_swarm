@@ -60,9 +60,19 @@ const RETRYABLE_NAMES = new Set<string>([
 // silently — same condition the V1 SSE path treats as "transient,
 // worth a retry" (UND_ERR_BODY_TIMEOUT). Match the message we throw
 // from OllamaClient.chat so isRetryableSdkError flags it.
+//
+// 2026-04-27: added "Ollama HTTP 503" + "overloaded" + "server busy"
+// after run 59c66144 crashed on
+//   "Ollama HTTP 503: Server overloaded, please retry shortly"
+// 503 is a transient capacity hiccup; backoff + retry usually clears
+// it within a single 30-90s window. Crashing wastes the whole run.
 const RETRYABLE_MESSAGE_PATTERNS: readonly RegExp[] = [
   /Ollama idle timeout/i,
   /health-check timeout/i,
+  /Ollama HTTP 503\b/i,
+  /Server overloaded/i,
+  /\boverloaded\b/i,
+  /\bserver\s+busy\b/i,
 ];
 
 export function isRetryableSdkError(err: unknown): boolean {
