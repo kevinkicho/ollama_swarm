@@ -52,20 +52,17 @@ cd web && npx vite build
 
 ### Start dev server
 
+**Kevin runs `npm run dev` from Windows PowerShell.** The setup is WSL ↔ Windows: `node_modules` is shared but esbuild binaries are platform-specific. **Don't run `npm install` or naked `npm run dev` from WSL** — see `feedback_wsl_windows_esbuild` memory.
+
+If you need the dev server up from a WSL session, spawn it as a Windows process via `cmd.exe`:
+
 ```bash
-PW=$(cmd.exe /c "echo %OPENCODE_SERVER_PASSWORD%" 2>/dev/null | tr -d '\r\n')
-OPENCODE_SERVER_PASSWORD="$PW" \
-USE_OLLAMA_DIRECT=1 \
-USE_WORKER_PIPELINE_V2=1 \
-npm run dev
+cmd.exe /c "cd /d C:\\Users\\kevin\\Desktop\\ollama_swarm && set USE_OLLAMA_DIRECT=1&& set USE_WORKER_PIPELINE_V2=1&& npm run dev"
 ```
 
-The `cmd.exe` line pulls Kevin's password from his Windows env (this is
-a WSL setup). Drop the `USE_*` flags to run V1 paths. See
-`reference_dev_server_from_wsl` memory for the longer recipe.
+Or use the longer post-reboot recipe with explicit env-var inlining (`reference_dev_server_from_wsl` memory). Drop the `USE_*` env vars to run V1 paths.
 
-Health: `curl -s http://localhost:52243/api/health` should return
-`{"ok":true,...}`. V2 flag inspection: `curl -s http://localhost:52243/api/v2/status`.
+Health: `curl -s http://localhost:52243/api/health` should return `{"ok":true,...}`. V2 flag inspection: `curl -s http://localhost:52243/api/v2/status`.
 
 ### Fire a swarm via REST
 

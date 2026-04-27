@@ -2,7 +2,7 @@
 
 > **For agents picking up this codebase**: read [`docs/STATUS.md`](docs/STATUS.md) first — it's the single "what's true right now" pointer + map. This README is the user-facing intro and skews toward stable claims; STATUS.md tracks recent fixes + V2 substrate progress.
 
-A local web app that spawns a **swarm of [OpenCode](https://opencode.ai) agents** — each backed by an [Ollama](https://ollama.com) model such as `glm-5.1:cloud` — to clone a GitHub repository and collaboratively figure out what the project is, what's working, what's missing, and what to build next.
+A local web app that spawns a **swarm of [OpenCode](https://opencode.ai) agents** — each backed by an [Ollama](https://ollama.com) model such as `nemotron-3-super:cloud` — to clone a GitHub repository and collaboratively figure out what the project is, what's working, what's missing, and what to build next.
 
 You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. Eight patterns ship today:
 
@@ -18,8 +18,6 @@ You fill in a GitHub URL, a local clone path, an agent count, and pick a **patte
 A live transcript streams into the browser as it's generated — you see each agent type token-by-token, can inject your own message into the conversation at any time, and stop the whole thing with one click. The blackboard preset adds a **Board** tab showing todos in five columns (Open / Claimed / Committed / Stale / Skipped), plus a run summary card when the run terminates.
 
 **See [`docs/ARCHITECTURE-V2.md`](docs/ARCHITECTURE-V2.md) for current architecture status** — the V2 substrate has shipped (state machine, TodoQueueV2, WorkerPipelineV2, OllamaClient, EventLogReaderV2) and is parallel-track instrumented; flip `USE_OLLAMA_DIRECT=1` and `USE_WORKER_PIPELINE_V2=1` to opt the blackboard preset onto the V2 paths.
-
-A live transcript streams into the browser as it's generated — you see each agent type token-by-token, can inject your own message into the conversation at any time, and stop the whole thing with one click. The blackboard preset adds a **Board** tab showing todos in five columns (Open / Claimed / Committed / Stale / Skipped), plus a run summary card when the run terminates.
 
 ## Architecture
 
@@ -38,16 +36,15 @@ Node server (Express + ws + @opencode-ai/sdk)
       └── agent-1 opencode serve :random   → Ollama http://localhost:11434/v1
           agent-2 opencode serve :random   → Ollama http://localhost:11434/v1
           agent-N opencode serve :random   → Ollama http://localhost:11434/v1
-
-Port 4096 (pre-existing opencode server) = optional orchestrator voice /
-                                           human-in-the-loop surface
 ```
+
+Each agent gets its own `opencode serve` subprocess on a random free port (per [ADR 001](docs/decisions/001-per-agent-subprocess.md) — intentional isolation). There is no fixed "orchestrator opencode" requirement; the historical port-4096 plumbing in code is vestigial.
 
 ### How the round-robin preset works
 
 1. **Seed** — a system message drops the clone path, repo URL, and top-level file listing into the shared transcript, and instructs agents to use their own file-read / grep / find tools to inspect the repo.
 2. **Round-robin turn loop** — for `rounds` iterations, each agent in turn receives a prompt containing the **entire transcript so far** plus role instructions ("you are Agent N, respond in under 250 words, cite file paths"). The agent uses OpenCode tools to read files and produces a reply.
-3. **Event-driven idle watchdog** — we don't use a fixed wall-clock timeout. Each agent's opencode server pushes SSE events (`message.part.updated`, `session.idle`, `session.error`, etc.); as long as events keep flowing for the active session, we keep waiting. We only abort a turn if the session has been completely silent for 2 minutes, with a hard 20-minute ceiling as a safety net.
+3. **SSE-aware idle watchdog** (commit `189ca05`) — we don't use a fixed wall-clock turn timeout. Each agent's opencode server pushes SSE events (`message.part.updated`, `session.idle`, `session.error`, etc.); the runner consults `AgentManager.getLastActivity()` and aborts a turn only if no SSE chunk has arrived for 90 seconds, with a 30-minute hard ceiling as a safety net. Long-tail latency that's still producing tokens isn't killed.
 4. **Live streaming to the UI** — `message.part.updated` events forward partial text to the browser as an `agent_streaming` WebSocket event; you see a pulsing "typing" bubble that fills in as tokens arrive. On turn completion the streaming bubble is replaced by the final transcript entry.
 5. **User injection** — the input at the bottom of the transcript view lets you post a `[HUMAN] ...` line into the shared transcript at any time; every agent sees it on their next turn.
 6. **Stop / New swarm** — Stop aborts all sessions and kills the spawned processes; the UI then shows a "New swarm" button that returns you to the setup form.
@@ -67,9 +64,9 @@ Phased implementation notes (now shipped) live in [`docs/blackboard-plan.md`](do
 ## Prerequisites
 
 - **Node 20+**
-- **`opencode` CLI** on `PATH` (the dev server spawns one `opencode serve --port N` subprocess per agent; the binary is required, but you do **not** need to keep a long-running opencode at port 4096 — that requirement was vestigial and got documented away).
-- **`OPENCODE_SERVER_PASSWORD`** in `.env` — any string, used as the shared HTTP-basic-auth secret with the spawned subprocesses.
-- **Ollama** running at `http://localhost:11434` with your desired model pulled (e.g. `ollama pull glm-5.1:cloud`).
+- **`opencode` CLI** on `PATH`. The dev server spawns one `opencode serve --port N` subprocess per agent; you do **not** keep a long-running opencode running yourself.
+- **`OPENCODE_SERVER_PASSWORD`** in `.env` — any string. Used as the shared HTTP-basic-auth secret with the per-agent subprocesses we spawn.
+- **Ollama** running at `http://localhost:11434` with your desired model pulled (e.g. `ollama pull nemotron-3-super:cloud`).
 - **git** on `PATH`.
 
 ## Setup
@@ -78,27 +75,22 @@ Phased implementation notes (now shipped) live in [`docs/blackboard-plan.md`](do
 git clone https://github.com/kevinkicho/ollama_swarm.git
 cd ollama_swarm
 cp .env.example .env
-# Fill in OPENCODE_SERVER_PASSWORD to match whatever your port-4096 server uses
+# Fill in OPENCODE_SERVER_PASSWORD with any string — it's the basic-auth secret
+# the dev server uses with the opencode subprocesses it spawns.
 npm install
 npm run dev
 ```
 
-`npm run dev` starts both the backend and the frontend in one process, each on a **randomly picked free port** (written to `.server-port` so the Vite dev server can target the backend via proxy). Your terminal will print something like:
-
-```
-[dev] backend :56608  ·  web :56609  (wrote .server-port)
-```
-
-Open the web URL shown (e.g. `http://localhost:56609`), fill in the form, hit **Start swarm**.
+`npm run dev` starts both the backend and the frontend in one process. By default the backend binds `127.0.0.1:52243` and the web dev server binds `[::1]:52244` (override via `SERVER_PORT` / `WEB_PORT` env vars). Open `http://localhost:52244`, fill in the form, hit **Start swarm**.
 
 ## Usage walkthrough
 
 1. **GitHub URL** — a public repo URL, or a private one if `GITHUB_TOKEN` is set in `.env` (the token is spliced into the clone URL).
 2. **Parent folder** — an absolute path to a _parent_ directory. The server derives the repo name from the URL and clones into `<parentFolder>/<repo-name>` (e.g. parent `C:\...\runs` + URL ending in `/is-odd` → clone at `C:\...\runs\is-odd`). Parent is created if missing; the subfolder must be empty, absent, or already a matching git clone. The form shows a live preview of the resolved clone path under the field.
-3. **Pattern** — one of `Round-robin transcript` (discussion-only), `Blackboard (optimistic + small units)` (planner/worker split, CAS, file edits), or `Role differentiation` (round-robin with per-agent role prompts). Selecting blackboard reveals a collapsible help block explaining CAS and stale-replan; remaining patterns in the dropdown are marked _coming soon_ and disable **Start**.
-4. **Agents** — how many concurrent `opencode serve` workers to spawn (2–8). On blackboard, agent 0 is the planner and the remaining N−1 are workers.
-5. **Rounds** — for round-robin/role-diff/council: how many full passes through the agents (1–100). For blackboard: the maximum number of **auditor invocations** (plan → work → audit cycles) before the run stops even if unresolved criteria remain. Blackboard still stops earlier on the hard caps (20 min wall-clock / 20 commits / 30 todos) or when every criterion is resolved. With non-blackboard presets, high values can mean hours of wall-clock and proportional cloud-token spend.
-6. **Model** — any model string registered in Ollama and declared in the synthesized `opencode.json` (defaults to `glm-5.1:cloud`).
+3. **Pattern** — one of the eight listed at the top of this README. Selecting blackboard reveals collapsible help explaining CAS and stale-replan; each pattern's `<PresetAdvancedSettings>` panel shows pattern-specific knobs.
+4. **Agents** — how many concurrent agents to spawn (2–8 for most presets). On blackboard, agent 1 is the planner and the remaining N−1 are workers. `debate-judge` requires exactly 3; `map-reduce` and `orchestrator-worker-deep` require ≥4.
+5. **Rounds** — for discussion presets: how many full passes through the agents. For blackboard: the maximum number of **auditor invocations** (plan → work → audit cycles) before the run stops even if unresolved criteria remain. Blackboard still stops earlier on the hard caps (per-run `wallClockCapMs` / 200 commits / 300 todos) or when every criterion is resolved. With non-blackboard presets, high values can mean hours of wall-clock and proportional cloud-token spend.
+6. **Model** — any model string registered in Ollama and declared in the synthesized `opencode.json` (defaults to `nemotron-3-super:cloud`).
 
 Hit Start. You'll see each agent panel go from `spawning` → `ready` → `thinking` → `ready`, with live streaming bubbles in the transcript as each agent works. On blackboard runs, switch to the **Board** tab to watch todos flow through Open → Claimed → Committed (or Stale → back to Open on CAS rejection). When the run terminates the phase pill flips to `completed` / `stopped` / `failed` and a summary card appears at the top of the Board tab; a **New swarm** button is available in the sidebar.
 
@@ -106,68 +98,27 @@ Hit Start. You'll see each agent panel go from `spawning` → `ready` → `think
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `OPENCODE_SERVER_USERNAME` | no (defaults to `opencode`) | HTTP basic auth username used by every opencode server |
-| `OPENCODE_SERVER_PASSWORD` | **yes** | HTTP basic auth password — must match your port-4096 server |
-| `OPENCODE_BASE_URL` | no (defaults to `http://127.0.0.1:4096`) | Location of your pre-existing "orchestrator voice" opencode server |
-| `OLLAMA_BASE_URL` | no (defaults to `http://localhost:11434/v1`) | OpenAI-compatible Ollama endpoint, written into each agent's synthesized `opencode.json` |
-| `DEFAULT_MODEL` | no (defaults to `glm-5.1:cloud`) | Model each agent uses when the form's model field is left blank |
+| `OPENCODE_SERVER_USERNAME` | no (defaults to `opencode`) | HTTP basic auth username used by every spawned opencode subprocess |
+| `OPENCODE_SERVER_PASSWORD` | **yes** | HTTP basic auth password — any string; shared with spawned subprocesses |
+| `OPENCODE_BASE_URL` | no (defaults to `http://127.0.0.1:4096`) | Vestigial — `getOrchestratorClient` is defined but unused. Kept for backwards compat with the synthesized `opencode.json` writer; safe to ignore. |
+| `OLLAMA_BASE_URL` | no (defaults to `http://localhost:11434/v1`) | OpenAI-compatible Ollama endpoint, written into each agent's synthesized `opencode.json`. **Must end in `/v1`** — the proxy defensively appends it if missing (commit `bb0c509`). |
+| `DEFAULT_MODEL` | no (defaults to `nemotron-3-super:cloud`) | Model each agent uses when the form's model field is left blank |
 | `OPENCODE_BIN` | no (defaults to `opencode`) | Path/name of the opencode CLI binary |
 | `SERVER_PORT` | no (defaults to `52243`) | Override the backend HTTP+WS port |
 | `WEB_PORT` | no (defaults to `52244`) | Override the Vite dev-server port |
+| `USE_OLLAMA_DIRECT` | no (defaults off) | Bypass opencode SDK; talk to Ollama directly. Currently only honored by `BlackboardRunner` (V2 path). |
+| `USE_WORKER_PIPELINE_V2` | no (defaults off) | Route blackboard worker writes through the V2 `WorkerPipelineV2` substrate. |
 | `GITHUB_TOKEN` | no | GitHub PAT for cloning private repos |
 
 ## Project structure
 
-```
-ollama_swarm/
-├── package.json              # npm workspaces root (server + web)
-├── scripts/
-│   └── dev.mjs               # single-process dev runner (pins backend:52243, web:52244; override via SERVER_PORT / WEB_PORT)
-├── .env.example              # copy to .env and fill in OPENCODE_SERVER_PASSWORD
-├── .gitignore
-├── README.md
-├── server/
-│   ├── package.json          # express, ws, @opencode-ai/sdk, simple-git, zod, dotenv
-│   ├── tsconfig.json
-│   └── src/
-│       ├── index.ts          # HTTP + WS bootstrap, crash guards, graceful shutdown
-│       ├── config.ts         # zod-validated env loading, basic-auth header helper
-│       ├── types.ts          # shared DTOs (AgentState, TranscriptEntry, SwarmEvent, SwarmPhase)
-│       ├── routes/
-│       │   └── swarm.ts      # POST /api/swarm/start /stop /say, GET /status
-│       ├── services/
-│       │   ├── PortAllocator.ts   # net.createServer(0) free-port probe with reservation set
-│       │   ├── RepoService.ts     # simple-git clone, synthesize opencode.json, README read helper
-│       │   ├── AgentManager.ts    # spawn opencode serve, SDK client, SSE event subscription
-│       │   └── Orchestrator.ts    # turn loop, transcript, idle watchdog, prompt builder
-│       └── ws/
-│           └── broadcast.ts  # tiny WebSocketServer wrapper with per-client send
-└── web/
-    ├── package.json          # react, zustand, vite, tailwind
-    ├── vite.config.ts        # picks backend port from .server-port, proxies /api
-    ├── tailwind.config.js    # custom "ink" palette
-    ├── postcss.config.js
-    ├── index.html            # favicon + root mount
-    ├── public/
-    │   └── favicon.svg       # three colored dots representing the swarm
-    └── src/
-        ├── main.tsx          # React root, StrictMode
-        ├── App.tsx           # top-level router: SetupForm vs SwarmView + phase pill
-        ├── index.css         # Tailwind directives + base styles
-        ├── env.d.ts          # __BACKEND_PORT__ global declaration
-        ├── types.ts          # mirror of server types (AgentState, SwarmEvent, SwarmPhase, …)
-        ├── state/
-        │   └── store.ts      # zustand store: phase, agents, transcript, streaming, error
-        ├── hooks/
-        │   └── useSwarmSocket.ts  # module-level WebSocket singleton + auto-reconnect
-        └── components/
-            ├── SetupForm.tsx      # the initial form (repo URL, path, agent count, rounds, model)
-            ├── SwarmView.tsx      # sidebar of agent panels + transcript + inject-message input
-            ├── AgentPanel.tsx     # per-agent status dot + port + error
-            └── Transcript.tsx     # message bubbles, streaming "typing" bubble, collapse for long text
-```
+Three npm workspaces:
 
-> The tree above is the stable shape. For the current per-file map of recently-added modules (V2 substrate, shared/, route additions, etc.) see the "Where things live" section in [`docs/STATUS.md`](docs/STATUS.md). For per-function detail, the code is the source of truth — open the file.
+- **`server/`** — Express + ws + `@opencode-ai/sdk` + `simple-git` + zod. Hosts the runners, the AgentManager, the proxy, and the REST + WS routes.
+- **`web/`** — Vite + React + Zustand + Tailwind. Setup form, transcript, board, run-history modal.
+- **`shared/`** — pure types + parsers consumed by both sides (state machine reducer, JSON extractors, summary formatter).
+
+For the current per-file map (with V2 substrate files, route mounts, and per-component layout) see the **Where things live** section in [`docs/STATUS.md`](docs/STATUS.md). For per-function detail, the code is the source of truth — open the file.
 
 ## Limitations
 
@@ -184,10 +135,11 @@ See [`docs/known-limitations.md`](docs/known-limitations.md) for the full list w
 ## Troubleshooting
 
 - **`OPENCODE_SERVER_PASSWORD is required in .env`** — you haven't copied `.env.example` to `.env` or haven't set the password.
-- **Agents spawn but every turn errors with `fetch failed`** — usually Ollama isn't running, the model isn't pulled, or your pre-existing port-4096 opencode server rejected basic auth. Check `curl http://localhost:11434/api/tags` and that `OPENCODE_SERVER_PASSWORD` matches your 4096 server.
+- **Agents spawn but every turn errors with `fetch failed` / 404 on `/chat/completions`** — usually Ollama isn't running, the model isn't pulled, or `OLLAMA_BASE_URL` is missing the `/v1` suffix. The proxy now defensively appends `/v1` (commit `bb0c509`), but check `curl http://localhost:11434/api/tags` first.
+- **Empty agent responses across multiple presets** — most often the `/v1` issue above. If that's clean, check `streamPrompt` isn't getting stale `session.idle` from a prior prompt's tail (commit `18a7749` filters this).
 - **Port conflicts** — defaults are `SERVER_PORT=52243` / `WEB_PORT=52244`. If something else is bound, set either env var to a free port and restart.
-- **`turn silent for Ns` errors** — the opencode server stopped emitting events for a session mid-turn (often an Ollama hang). The swarm will continue on the next agent; check the `[agent-N]` lines in the backend terminal for the underlying opencode error.
+- **`turn silent for Ns` errors** — the SSE-aware watchdog (commit `189ca05`) aborts on 90s SSE silence OR a 30-min hard ceiling. Long-tail latency that's still producing tokens isn't killed. The swarm will continue on the next agent; check the `[agent-N]` lines in the backend terminal for the underlying opencode error.
 
 ## License
 
-MIT (or as you prefer — add a `LICENSE` file if publishing).
+MIT — see [`LICENSE`](LICENSE).
