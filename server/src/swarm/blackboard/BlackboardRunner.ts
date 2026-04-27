@@ -2374,8 +2374,17 @@ export class BlackboardRunner implements SwarmRunner {
             counts: { ...counts },
             replanPending: Array.from(this.replanPending),
             replanRunning: this.replanRunning,
+            // V2 Step 3b.2: include the V2 reducer's view at wedge-
+            // detection time. If V2 says "completed" or "auditing"
+            // while V1 is sustained-executing, that's the wedge
+            // bug class (#215, #219, #222) confirmed in real time.
+            v2Phase: this.v2Observer.getState().phase,
+            v2QueueCounts: this.v2TodoQueue.counts(),
             ts: now,
           });
+          // Also fire checkPhase explicitly so the divergence list
+          // captures the wedge as a discrete entry in the run summary.
+          this.v2Observer.checkPhase(this.phase, now, "_worker_wait_wedge");
           // Surface to transcript ONCE per worker, the first time we
           // cross the persistent threshold. Subsequent re-logs (every
           // 30s while still wedged) only update the diag log, not the

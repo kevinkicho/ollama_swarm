@@ -72,10 +72,11 @@ describe("v2Router /status", () => {
     const stack = (router as unknown as { stack: Array<{
       route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: unknown }> };
     }> }).stack;
-    let handler: ((req: import("express").Request, res: import("express").Response) => unknown) | null = null;
+    type Handler = (req: import("express").Request, res: import("express").Response) => unknown;
+    let handler: Handler | null = null;
     for (const layer of stack) {
       if (layer.route?.path === "/status" && layer.route.methods.get) {
-        handler = layer.route.stack[0].handle as typeof handler;
+        handler = layer.route.stack[0].handle as Handler;
         break;
       }
     }
