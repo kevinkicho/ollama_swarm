@@ -85,6 +85,11 @@ export interface PromptWithRetryOptions {
   // explicitly to avoid module-load-time config import (keeps this
   // module unit-testable). When unset/false, the SDK path is used.
   ollamaDirect?: { baseUrl: string };
+  // V2 Step 1: optional diag logger threaded into OllamaClient so the
+  // V2 path's call-start events land in the same logs/current.jsonl as
+  // existing AgentManager diag entries. Lets us count V2 path uses
+  // regardless of whether the call eventually produced tokens.
+  logDiag?: (record: unknown) => void;
 }
 
 export interface RetryInfo {
@@ -147,6 +152,8 @@ export async function promptWithRetry(
           model: agent.model,
           messages: [{ role: "user", content: promptText }],
           signal: opts.signal,
+          agentId: agent.id,
+          logDiag: opts.logDiag,
           // Default 60s idle timeout matches the V2 spec — if the body
           // goes silent for this long, the model is dead. No probes.
           onChunk: (cumulativeText) => {

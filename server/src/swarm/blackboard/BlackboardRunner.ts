@@ -3605,6 +3605,9 @@ export class BlackboardRunner implements SwarmRunner {
         ollamaDirect: process.env.USE_OLLAMA_DIRECT === "1"
           ? { baseUrl: this.opts.ollamaBaseUrl ?? "http://127.0.0.1:11533" }
           : undefined,
+        // V2 Step 1: thread the diag logger so OllamaClient's
+        // _ollama_direct_call entries land in logs/current.jsonl.
+        logDiag: this.opts.logDiag,
         onTokens: ({ promptTokens, responseTokens }) => {
           if (promptTokens > 0) this.promptTokensPerAgent.set(agent.id, (this.promptTokensPerAgent.get(agent.id) ?? 0) + promptTokens);
           if (responseTokens > 0) this.responseTokensPerAgent.set(agent.id, (this.responseTokensPerAgent.get(agent.id) ?? 0) + responseTokens);

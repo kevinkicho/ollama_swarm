@@ -28,6 +28,13 @@ export interface ChatOpts {
    *  Caller is responsible for stripping any /v1 suffix; we always
    *  POST to `${baseUrl}/api/chat`. */
   baseUrl: string;
+  /** Optional diagnostic logger — fires on call start + finish so the
+   *  caller can count V2 path uses regardless of whether tokens
+   *  arrived (idle-timeout aborts produce no done:true → onTokens
+   *  never fires). */
+  logDiag?: (record: unknown) => void;
+  /** Optional agent identifier for diag log correlation. */
+  agentId?: string;
   /** The Ollama model id, e.g. "glm-5.1:cloud" or "gemma4:31b-cloud". */
   model: string;
   /** Conversation history. Last entry is typically the new user prompt. */
@@ -66,6 +73,14 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   // compat path doesn't support our streaming protocol.
   const baseUrl = opts.baseUrl.replace(/\/v1\/?$/, "");
   const url = `${baseUrl}/api/chat`;
+  opts.logDiag?.({
+    type: "_ollama_direct_call",
+    agentId: opts.agentId,
+    model: opts.model,
+    promptChars: opts.messages.reduce((n, m) => n + m.content.length, 0),
+    idleTimeoutMs,
+    ts: t0,
+  });
   const body = JSON.stringify({
     model: opts.model,
     messages: opts.messages,

@@ -56,6 +56,15 @@ const RETRYABLE_NAMES = new Set<string>([
   "SocketError",
 ]);
 
+// V2 Step 1: Ollama-direct idle timeout means the cloud backend hung
+// silently — same condition the V1 SSE path treats as "transient,
+// worth a retry" (UND_ERR_BODY_TIMEOUT). Match the message we throw
+// from OllamaClient.chat so isRetryableSdkError flags it.
+const RETRYABLE_MESSAGE_PATTERNS: readonly RegExp[] = [
+  /Ollama idle timeout/i,
+  /health-check timeout/i,
+];
+
 export function isRetryableSdkError(err: unknown): boolean {
   // Intentional cancellations — don't retry.
   if (err instanceof Error && err.name === "AbortError") return false;
@@ -67,6 +76,11 @@ export function isRetryableSdkError(err: unknown): boolean {
       const code = (cur as { code?: unknown }).code;
       if (typeof code === "string" && RETRYABLE_CODES.has(code)) return true;
       if (RETRYABLE_NAMES.has(cur.name)) return true;
+      // V2 Step 1: also match the Ollama-direct idle-timeout message.
+      const msg = cur.message;
+      if (msg && RETRYABLE_MESSAGE_PATTERNS.some((p) => p.test(msg))) {
+        return true;
+      }
       cur = (cur as { cause?: unknown }).cause;
     } else {
       return false;
