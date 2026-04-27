@@ -4,6 +4,13 @@ Deliberate trade-offs in the current build. Each entry names the choice, why
 we made it, and what would force us to revisit. Anything that becomes a
 *real* problem in practice should graduate out of here into a plan item.
 
+> **2026-04-27 update:** the V2 substrate (state machine, TodoQueueV2,
+> WorkerPipelineV2, OllamaClient, EventLogReaderV2) has shipped + tested
+> + parallel-track instrumentation; see `docs/ARCHITECTURE-V2.md` Status
+> table for what's done vs pending. Several limitations below are
+> on-track for V2 to architecturally remove (rather than fix one bug at
+> a time). Look for the **"V2 makes this irrelevant"** marker.
+
 ---
 
 ## Planner has ALL tools disabled (`swarm` profile, not `swarm-read`)
@@ -137,6 +144,16 @@ failure mode in every multi-agent run.
 4. Serialize first-prompts across N agents with a small inter-agent delay
    (e.g., 5-10 s stagger) so the cold-start contention is smoothed.
 
+**Update 2026-04-27**: substantially mitigated by `189ca05` (SSE-aware
+turn watchdog). The runner-level wall-clock 4-min absolute cap that used
+to kill in-flight prompts mid-generation is gone — replaced with 90s
+SSE-silence cap + 30 min hard ceiling. Long-tail latency that's still
+producing tokens (visible via `AgentManager.getLastActivity` heartbeat)
+is no longer aborted. Cold-start prompts that take 60-180s now succeed
+naturally as long as SSE chunks keep landing. **V2 makes this irrelevant**:
+`USE_OLLAMA_DIRECT=1` skips the opencode subprocess entirely, removing
+the whole class of N-parallel-cold-start contention.
+
 ---
 
 ## Planner does double duty as the replanner
@@ -184,7 +201,40 @@ without solving a problem we have.
 - If different presets (blackboard vs. future presets) need different caps
   and `caps.ts` no longer wants to be global.
 
-Until then, the numbers in `caps.ts` are the one source of truth.
+**Update (Unit 43)**: `wallClockCapMs` IS now a per-run override on the
+`/api/swarm/start` route (range: 60s - 8h). `tokenBudget` is also
+per-run (`StartBody.tokenBudget`). Only `MAX_COMMITS` and `MAX_TODOS`
+remain compile-time constants in `caps.ts`.
+
+---
+
+## OpenCode subprocess remains a runtime dependency (V2 hasn't dropped it yet)
+
+**Choice:** even after the V2 substrate work shipped, every fresh clone
+still requires:
+- `opencode` CLI on `PATH` as `OPENCODE_BIN` (`.cmd` wrapper on Windows)
+- `OPENCODE_SERVER_PASSWORD` set in `.env` (any string — shared secret
+  with the spawned subprocesses)
+- `npm install` pulls `@opencode-ai/sdk` as a runtime dep
+
+**Why:** V2 dropped opencode for the LLM-call path only (gated behind
+`USE_OLLAMA_DIRECT=1`, currently used only by `BlackboardRunner`). The
+agent management layer — `AgentManager.spawnAgent` shelling to
+`opencode serve --port N` per agent + per-agent `opencode.json` config
++ `session.create`/`session.prompt`/SSE event subscription — still drives
+every preset.
+
+**The "orchestrator opencode at port 4096" claim in README/older docs is
+vestigial.** `AgentManager.getOrchestratorClient()` is defined but never
+called anywhere. The startup log "orchestrator opencode: http://127.0.0.1:4096"
+is misleading — that endpoint isn't actually used. Could be deleted in
+a small cleanup PR. Per-agent subprocesses (40125, 45819, etc.) ARE used.
+
+**When this would need revisiting:** when shipping a single-binary install
+("user just needs Ollama") becomes a goal. Per `ARCHITECTURE-V2.md`:
+~1 week of focused refactor — wire `ollamaDirect` through non-blackboard
+runners (1d), replace `AgentManager.spawnAgent` with our own session-state
+class (3d), delete `opencode.json` writing (2d).
 
 ---
 

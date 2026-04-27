@@ -1,12 +1,23 @@
 # ollama_swarm
 
+> **For agents picking up this codebase**: read [`docs/STATUS.md`](docs/STATUS.md) first — it's the single "what's true right now" pointer + map. This README is the user-facing intro and skews toward stable claims; STATUS.md tracks recent fixes + V2 substrate progress.
+
 A local web app that spawns a **swarm of [OpenCode](https://opencode.ai) agents** — each backed by an [Ollama](https://ollama.com) model such as `glm-5.1:cloud` — to clone a GitHub repository and collaboratively figure out what the project is, what's working, what's missing, and what to build next.
 
-You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. Three patterns ship:
+You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. Eight patterns ship today:
 
-- **Round-robin transcript** — N identical agents take turns on a shared transcript; every agent sees every other agent's reply and responds. Discussion-only, no file edits.
-- **Blackboard (optimistic + small units)** — one planner posts atomic todos to a shared board; N−1 workers claim and commit in parallel, with CAS on file hashes catching stale plans. Agents **actually modify the clone**.
-- **Role differentiation** — same round-robin loop but each agent gets a distinct role (Architect, Tester, Security reviewer, Performance critic, Docs reader, Dependency auditor, Devil's advocate). Same weights, different system prompts; transcript labels each line with the role so @mentions stay legible. Discussion-only.
+- **Round-robin transcript** — N identical agents take turns on a shared transcript; every agent sees every other agent's reply and responds. Discussion-only.
+- **Blackboard (optimistic + small units)** — planner posts atomic todos to a shared board; workers claim and commit in parallel, with CAS on file hashes catching stale plans. **The only write-capable preset** — workers actually modify the clone.
+- **Role differentiation** — round-robin loop with each agent given a distinct role (Architect, Tester, Security reviewer, etc.). Discussion-only.
+- **Council** — N drafters write in private round 1, then read peers' drafts in subsequent rounds and converge. Has early-stop convergence detection. Discussion-only.
+- **Orchestrator-worker** (flat + deep) — agent-1 is the lead and dispatches subtasks; agents 2..N execute in parallel. Deep variant adds a mid-tier lead. Discussion-only.
+- **Debate-judge** — Pro / Con / Judge (exactly 3 agents). Multi-round structured debate ending in a JSON verdict. Optional post-verdict "build phase" turns Pro into implementer. Discussion-by-default; `executeNextAction: true` enables file edits.
+- **Map-reduce** — agent-1 is reducer, agents 2..N are mappers slicing the repo and summarizing in parallel. Convergence detector stops on consecutive empty cycles. Discussion-only.
+- **Stigmergy** — pheromone-table + report-out pattern. Discussion-only.
+
+A live transcript streams into the browser as it's generated — you see each agent type token-by-token, can inject your own message into the conversation at any time, and stop the whole thing with one click. The blackboard preset adds a **Board** tab showing todos in five columns (Open / Claimed / Committed / Stale / Skipped), plus a run summary card when the run terminates.
+
+**See [`docs/ARCHITECTURE-V2.md`](docs/ARCHITECTURE-V2.md) for current architecture status** — the V2 substrate has shipped (state machine, TodoQueueV2, WorkerPipelineV2, OllamaClient, EventLogReaderV2) and is parallel-track instrumented; flip `USE_OLLAMA_DIRECT=1` and `USE_WORKER_PIPELINE_V2=1` to opt the blackboard preset onto the V2 paths.
 
 A live transcript streams into the browser as it's generated — you see each agent type token-by-token, can inject your own message into the conversation at any time, and stop the whole thing with one click. The blackboard preset adds a **Board** tab showing todos in five columns (Open / Claimed / Committed / Stale / Skipped), plus a run summary card when the run terminates.
 
@@ -56,7 +67,8 @@ Phased implementation notes live in [`docs/blackboard-plan.md`](docs/blackboard-
 ## Prerequisites
 
 - **Node 20+**
-- **`opencode` CLI** on `PATH` with a pre-existing server already listening at `http://127.0.0.1:4096` protected by HTTP basic auth (shared across every `opencode serve` on this machine via `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD`).
+- **`opencode` CLI** on `PATH` (the dev server spawns one `opencode serve --port N` subprocess per agent; the binary is required, but you do **not** need to keep a long-running opencode at port 4096 — that requirement was vestigial and got documented away).
+- **`OPENCODE_SERVER_PASSWORD`** in `.env` — any string, used as the shared HTTP-basic-auth secret with the spawned subprocesses.
 - **Ollama** running at `http://localhost:11434` with your desired model pulled (e.g. `ollama pull glm-5.1:cloud`).
 - **git** on `PATH`.
 
@@ -302,15 +314,17 @@ ollama_swarm/
 
 - Tailwind configured with a custom "ink" dark palette plus mono font stack; PostCSS runs Tailwind + autoprefixer; `index.css` injects base/components/utilities and makes `html/body/#root` full-height.
 
-## Limitations (v1)
+## Limitations
 
-- **Round-robin is discussion-only.** Agents read files via OpenCode tools but don't edit the clone in this preset. File edits happen in the blackboard preset.
-- **Blackboard diffs are full-file replacements.** Workers return `{file, newText}` rather than patches — blunt but trivially validatable; patch-based diffs are a v2 concern.
-- **One swarm at a time.** You must Stop the current swarm before starting another.
-- **In-memory transcript.** Restarting the server loses history. The blackboard preset also writes `summary.json` and (on crash) `board-final.json` to the clone root, so terminal state survives.
-- **Localhost assumed.** No authentication on the web app itself.
-- **Round-robin has no consensus detection.** The loop always runs all configured rounds. Blackboard terminates on hard caps, user stop, or an empty board after planning.
-- **Other patterns in the dropdown are `coming soon`.** Map-reduce, council, orchestrator-worker, debate+judge, and stigmergy all disable the Start button for now.
+See [`docs/known-limitations.md`](docs/known-limitations.md) for the full list with rationale + resolution status. Headline items today:
+
+- **Blackboard is the only write-capable preset.** All others are discussion-only (run through `swarm-read` agent profile with read-only tools).
+- **Worker hunks are search/replace, not patches.** Aider-style `{op: "replace", file, search, replace}` envelope. Falls back closed when the search anchor isn't unique.
+- **One swarm at a time.** Stop the current swarm before starting another (or pass `force: true` on `/api/swarm/start`).
+- **In-memory transcript** — restarting the server loses live history. Per-run `summary.json` + per-event `logs/current.jsonl` are durable; the run-history dropdown reads the former.
+- **Localhost assumed.** No auth on the web app itself.
+- **OpenCode subprocess remains a runtime dep.** V2 substrate (state machine, TodoQueueV2, WorkerPipelineV2, OllamaClient) has shipped but is opt-in via env flags. Dropping the subprocess entirely is ~1 week of focused refactor; see `docs/ARCHITECTURE-V2.md` Status section.
+- **`/mnt/c` (WSL) flakiness.** tsx watch occasionally SIGTERMs the dev server when files in `/mnt/c` change rapidly; restart the dev server when this happens. Does not affect production.
 
 ## Troubleshooting
 

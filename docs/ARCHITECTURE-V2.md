@@ -1,8 +1,30 @@
-# ollama_swarm — Architecture V2 (proposal)
+# ollama_swarm — Architecture V2
 
 > Written 2026-04-26 after a session of cascading fixes that exposed
 > systemic overfitting. This is a re-think from first principles by an
 > engineer who would rather rewrite than keep patching.
+
+## Status (last updated 2026-04-27)
+
+| Shift | Status | Notes |
+|---|---|---|
+| 1. Drop OpenCode subprocesses → talk to Ollama directly | **partial** | `OllamaClient` substrate shipped (`server/src/services/OllamaClient.ts`); `BlackboardRunner` uses it when `USE_OLLAMA_DIRECT=1`. Non-blackboard runners still go through opencode SDK. Subprocess management not yet removed — see "Drop opencode dependency" path in repo state. |
+| 2. Single state machine for runs | **substrate done** | Pure reducer in `shared/src/runStateMachine.ts` with 33 tests. `RunStateObserver` wires it into `BlackboardRunner` as parallel-track instrumentation; full event wiring + `checkPhase` at every `setPhase` ships in commit `39965ea`. `v2State` lands in run summary + UI surface. |
+| 3. One bubble. One parser. | **done** | `shared/` workspace ships: `extractJson`, `TranscriptEntrySummary`, `summarizeAgentJson`, `formatServerSummary`. `Bubble` extracted into `MessageBubble.tsx` (Transcript.tsx 612→91 LOC). DRY'd 5 synthesis branches into one helper. |
+| 4. Streaming = chunked HTTP, no SSE | **partial** | `OllamaClient` does direct chunked-HTTP read with idle-timeout. Used when `USE_OLLAMA_DIRECT=1`. SSE path still in place for non-V2 routes; not yet deleted. Several SSE-stability fixes landed alongside (stale-session.idle filter `18a7749`, SSE-aware turn watchdog `189ca05`). |
+| 5. TODO queue, not "Board" | **substrate done** | `TodoQueueV2` (FIFO) + `WorkerPipelineV2` (apply + git commit, adapter pattern) + `v2Adapters` (real fs+git) all shipped with tests. `BlackboardRunner` runs `TodoQueueV2` as parallel-track mirror via `onBoardEvent` (commit `41fa509`). When `USE_WORKER_PIPELINE_V2=1`, `executeWorkerTodoV2` routes worker writes through `applyAndCommitV2` (commit `7040a96`, validated 4 commits + 0 divergences). Board.ts not yet deleted. |
+| 6. Event-log UI | **substrate done** | `EventLogReaderV2` parses `logs/current.jsonl` + derives state. `/api/v2/event-log/runs` endpoint + `EventLogPanel` header dropdown ship the read path. UI doesn't yet derive *live* state from events — still WS-snapshot-mirror primary. |
+
+**Summary**: every section has substrate shipped + tested + parallel-track instrumentation; Sections 1, 4, 5, 6 still have an integration step before V1 code can be removed. The substrate work makes those integration steps reversible — flip the env flag off and V1 paths take over. Tests: 972/972 passing.
+
+**Validation passed (2026-04-27)**: 7/7 SDK-path presets (round-robin, council, role-diff, OW, OW-deep, debate-judge, map-reduce, stigmergy) ran clean — 0 empty responses, 0 stale-idle skips, 0 SSE-aborts, 0 V2 reducer divergences. Earlier blackboard validation produced 4 V2 commits with proper author attribution + 0 queue/state divergences.
+
+**Recently shipped fixes that are foundational (not in original 6 shifts but enabled them):**
+- `bb0c509` — `OLLAMA_BASE_URL` always terminated with `/v1` so opencode's openai-compatible adapter doesn't 404. Pre-fix, an env var without `/v1` silently broke every opencode prompt.
+- `18a7749` — `streamPrompt` filters stale `session.idle` from prior `session.prompt`'s tail (warmup or earlier streamPrompt). Pre-fix, the next prompt's stream resolved with empty text.
+- `189ca05` — Wall-clock 4-min "absolute turn cap" replaced with SSE-aware liveness watchdog (`sseAwareTurnWatchdog.ts`). Aborts on 90s SSE silence OR 30-min hard ceiling. Pre-fix the wall-clock cap killed prompts the model was still actively producing.
+
+
 
 ## Why this exists
 
