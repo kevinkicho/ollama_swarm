@@ -3438,30 +3438,58 @@ export class BlackboardRunner implements SwarmRunner {
     agentName: "swarm" | "swarm-read" = "swarm-read",
   ): Promise<{ response: string; agentUsed: Agent }> {
     let agent = primaryAgent;
-    // Quick health check. ~1s budget; cost negligible vs. a planner prompt.
-    const healthy = await this.opts.manager.pingAgentHealth(agent);
-    if (!healthy) {
-      this.appendSystem(`[${agent.id}] subprocess unresponsive — respawning…`);
-      try {
-        agent = await this.opts.manager.respawnAgent(agent);
-        this.appendSystem(
-          `[${agent.id}] respawned on port ${agent.port} (model=${agent.model}). Resuming planner call.`,
-        );
-        // Update the runner's planner reference if this WAS the planner.
-        if (this.planner && this.planner.id === agent.id) {
-          this.planner = agent;
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.appendSystem(`[${agent.id}] respawn failed: ${msg}. Run cannot continue.`);
-        throw new Error(`Planner subprocess respawn failed: ${msg}`);
-      }
+    // Pre-call health check. ~1s budget; cost negligible vs a planner prompt.
+    // Catches "subprocess died before this call started".
+    if (!(await this.opts.manager.pingAgentHealth(agent))) {
+      agent = await this.respawnAndUpdatePlanner(agent);
     }
-    // Promptly run with retries (promptWithRetry handles transient transport
-    // errors; we don't catch+retry here because we don't want fallback to
-    // another agent — that was the bug we're removing).
-    const response = await this.promptAgent(agent, promptText, agentName);
-    return { response, agentUsed: agent };
+    // Try the prompt. If it fails with a transport-style error AND the
+    // subprocess is now dead, this means the subprocess died MID-CALL —
+    // respawn and retry once. If it fails for any other reason (model
+    // returned bad JSON, format violation, etc.), propagate the error.
+    try {
+      const response = await this.promptAgent(agent, promptText, agentName);
+      return { response, agentUsed: agent };
+    } catch (err) {
+      if (this.stopping) throw err;
+      const stillHealthy = await this.opts.manager.pingAgentHealth(agent);
+      if (stillHealthy) {
+        // Real failure (model bad output, etc.) — propagate.
+        throw err;
+      }
+      // Subprocess died mid-call. Respawn and retry.
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(
+        `[${agent.id}] subprocess died mid-call (${msg.slice(0, 80)}); respawning + retrying…`,
+      );
+      agent = await this.respawnAndUpdatePlanner(agent);
+      // Retry once with the fresh subprocess.
+      const response = await this.promptAgent(agent, promptText, agentName);
+      return { response, agentUsed: agent };
+    }
+  }
+
+  // Task #220: respawn an agent's subprocess and update the runner's
+  // planner reference if applicable. Returns the fresh Agent. Throws
+  // with a clear message if respawn fails — the run can't continue
+  // without a working planner subprocess.
+  private async respawnAndUpdatePlanner(agent: Agent): Promise<Agent> {
+    this.appendSystem(`[${agent.id}] subprocess unresponsive — respawning…`);
+    let fresh: Agent;
+    try {
+      fresh = await this.opts.manager.respawnAgent(agent);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(`[${agent.id}] respawn failed: ${msg}. Run cannot continue.`);
+      throw new Error(`Planner subprocess respawn failed: ${msg}`);
+    }
+    this.appendSystem(
+      `[${fresh.id}] respawned on port ${fresh.port} (model=${fresh.model}). Resuming planner work.`,
+    );
+    if (this.planner && this.planner.id === fresh.id) {
+      this.planner = fresh;
+    }
+    return fresh;
   }
 
   private async promptAgent(
