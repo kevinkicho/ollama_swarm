@@ -76,12 +76,6 @@ not promote any of these to "needs-fixing" without re-checking the artifact.
   entries Playwright-friendly" — add `data-entry-id={entry.id}` +
   `data-summary-kind={summary?.kind}` to MessageBubble's wrapping div.
 
-- **Default model drift** — `config.ts` default model is `glm-5.1:cloud`
-  but memory + post-2026-04-23 preference is `nemotron-3-super:cloud`. The
-  f78342b7 run used glm-5.1 because the form/API defaulted to it.
-  **Trigger**: explicit "switch default model to nemotron" — small commit,
-  but verify no test snapshot expects glm-5.1.
-
 - **`npm test` script is bash-only** — current `OPENCODE_SERVER_PASSWORD=test-only npm test`
   prefix syntax fails when run from Windows `cmd.exe`. Tests work via
   `cmd.exe /c "set OPENCODE_SERVER_PASSWORD=test-only && ..."` but that's
@@ -93,6 +87,7 @@ not promote any of these to "needs-fixing" without re-checking the artifact.
 
 ### 2026-04-27 — late session: bug-fix round
 
+- ✅ Default model swap: `glm-5.1:cloud` → `deepseek-v4-pro:cloud` (Kevin pulled + verified). Replaced in: `config.ts`, `.env.example`, `App.tsx` header, `BlackboardRunner.ts:2155` fallback, `scripts/poke-blackboard.ps1`, `SetupForm.tsx` MODEL_REASONING constant, `WallClockEstimate.tsx` (provisional 35s/turn). `nemotron-3-super:cloud` and `glm-5.1:cloud` remain available — type explicitly into the form's Model field.
 - ✅ `b794703` — issue #2 + #3 visibility + port defaults + monitor tooling
   - blackboard: stopReason="no-progress" for 0-work runs (was masquerading as "completed")
   - planner-empty system message now loud about the failure mode

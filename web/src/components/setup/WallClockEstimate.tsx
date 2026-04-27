@@ -8,6 +8,11 @@
 // turn time (success path). Falls back to 60s for unknown models.
 // Update as new runs widen the dataset.
 const MODEL_TURN_SECONDS: Record<string, number> = {
+  // 2026-04-27: deepseek-v4-pro is the new REASONING default. No
+  // dataset yet — provisional 35s based on its reasoning-tier sibling
+  // nemotron's 30s plus modest headroom. Update once we have ≥5 runs
+  // worth of _prompt_timing data.
+  "deepseek-v4-pro:cloud": 35,
   "nemotron-3-super:cloud": 30,
   "glm-5.1:cloud": 70,
   "gemma4:31b-cloud": 30,

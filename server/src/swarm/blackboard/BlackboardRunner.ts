@@ -2152,7 +2152,7 @@ export class BlackboardRunner implements SwarmRunner {
       auditInvocation: this.auditInvocations,
       maxInvocations: this.maxAuditInvocations,
       uiUrl: this.active?.uiUrl,
-      model: this.active?.model ?? "glm-5.1:cloud",
+      model: this.active?.model ?? "deepseek-v4-pro:cloud",
       clonePath: this.active?.localPath ?? "",
       appendSystem: (text) => this.appendSystem(text),
     });

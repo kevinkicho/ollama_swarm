@@ -36,11 +36,17 @@ import {
 // showed nemotron mean=9.5s vs glm mean=57s on the auditor, and
 // the multi-agent-orchestrator preset tour showed glm producing
 // repeated empty responses on parallel-spawn fanout (Agent 3
-// pattern across role-diff + council). Nemotron now serves both
-// REASONING and VERIFIER duty; constants kept separate so a
-// future heavier verifier model (opus 4.7, kimi-2.6) can split
-// them again without touching every preset.
-const MODEL_REASONING = "nemotron-3-super:cloud";
+// pattern across role-diff + council).
+//
+// 2026-04-27: REASONING flipped again, nemotron-3-super:cloud →
+// deepseek-v4-pro:cloud, per Kevin's directive after he pulled +
+// verified deepseek-v4-pro is loaded. nemotron-3-super:cloud and
+// glm-5.1:cloud both remain available — the form's Model field is
+// a free-text input so the user can type any model name to override
+// this default explicitly. Keep these constants separate so a
+// future per-role split (Unit 65 candidate) can target REASONING vs
+// CODING vs a future VERIFIER without touching every preset.
+const MODEL_REASONING = "deepseek-v4-pro:cloud";
 const MODEL_CODING = "gemma4:31b-cloud";
 
 // Keep server-side cap (max=8) in mind when editing `max` values here.

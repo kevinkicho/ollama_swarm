@@ -2,7 +2,7 @@
 
 > **For agents picking up this codebase**: read [`docs/STATUS.md`](docs/STATUS.md) first — it's the single "what's true right now" pointer + map. This README is the user-facing intro and skews toward stable claims; STATUS.md tracks recent fixes + V2 substrate progress.
 
-A local web app that spawns a **swarm of [OpenCode](https://opencode.ai) agents** — each backed by an [Ollama](https://ollama.com) model such as `nemotron-3-super:cloud` — to clone a GitHub repository and collaboratively figure out what the project is, what's working, what's missing, and what to build next.
+A local web app that spawns a **swarm of [OpenCode](https://opencode.ai) agents** — each backed by an [Ollama](https://ollama.com) model such as `deepseek-v4-pro:cloud` — to clone a GitHub repository and collaboratively figure out what the project is, what's working, what's missing, and what to build next.
 
 You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. Eight patterns ship today:
 
@@ -66,7 +66,7 @@ Phased implementation notes (now shipped) live in [`docs/blackboard-plan.md`](do
 - **Node 20+**
 - **`opencode` CLI** on `PATH`. The dev server spawns one `opencode serve --port N` subprocess per agent; you do **not** keep a long-running opencode running yourself.
 - **`OPENCODE_SERVER_PASSWORD`** in `.env` — any string. Used as the shared HTTP-basic-auth secret with the per-agent subprocesses we spawn.
-- **Ollama** running at `http://localhost:11434` with your desired model pulled (e.g. `ollama pull nemotron-3-super:cloud`).
+- **Ollama** running at `http://localhost:11434` with your desired model pulled (e.g. `ollama pull deepseek-v4-pro:cloud`).
 - **git** on `PATH`.
 
 ## Setup
@@ -92,7 +92,7 @@ npm run dev
 3. **Pattern** — one of the eight listed at the top of this README. Selecting blackboard reveals collapsible help explaining CAS and stale-replan; each pattern's `<PresetAdvancedSettings>` panel shows pattern-specific knobs.
 4. **Agents** — how many concurrent agents to spawn (2–8 for most presets). On blackboard, agent 1 is the planner and the remaining N−1 are workers. `debate-judge` requires exactly 3; `map-reduce` and `orchestrator-worker-deep` require ≥4.
 5. **Rounds** — for discussion presets: how many full passes through the agents. For blackboard: the maximum number of **auditor invocations** (plan → work → audit cycles) before the run stops even if unresolved criteria remain. Blackboard still stops earlier on the hard caps (per-run `wallClockCapMs` / 200 commits / 300 todos) or when every criterion is resolved. With non-blackboard presets, high values can mean hours of wall-clock and proportional cloud-token spend.
-6. **Model** — any model string registered in Ollama and declared in the synthesized `opencode.json` (defaults to `nemotron-3-super:cloud`).
+6. **Model** — any model string registered in Ollama and declared in the synthesized `opencode.json` (defaults to `deepseek-v4-pro:cloud`).
 
 Hit Start. You'll see each agent panel go from `spawning` → `ready` → `thinking` → `ready`, with live streaming bubbles in the transcript as each agent works. On blackboard runs, switch to the **Board** tab to watch todos flow through Open → Claimed → Committed (or Stale → back to Open on CAS rejection). When the run terminates the phase pill flips to `completed` / `stopped` / `failed` and a summary card appears at the top of the Board tab; a **New swarm** button is available in the sidebar.
 
@@ -104,7 +104,7 @@ Hit Start. You'll see each agent panel go from `spawning` → `ready` → `think
 | `OPENCODE_SERVER_PASSWORD` | **yes** | HTTP basic auth password — any string; shared with spawned subprocesses |
 | `OPENCODE_BASE_URL` | no (defaults to `http://127.0.0.1:4096`) | Vestigial — `getOrchestratorClient` is defined but unused. Kept for backwards compat with the synthesized `opencode.json` writer; safe to ignore. |
 | `OLLAMA_BASE_URL` | no (defaults to `http://localhost:11434/v1`) | OpenAI-compatible Ollama endpoint, written into each agent's synthesized `opencode.json`. **Must end in `/v1`** — the proxy defensively appends it if missing (commit `bb0c509`). |
-| `DEFAULT_MODEL` | no (defaults to `nemotron-3-super:cloud`) | Model each agent uses when the form's model field is left blank |
+| `DEFAULT_MODEL` | no (defaults to `deepseek-v4-pro:cloud`) | Model each agent uses when the form's model field is left blank. `nemotron-3-super:cloud` and `glm-5.1:cloud` remain available — type explicitly in the form. |
 | `OPENCODE_BIN` | no (defaults to `opencode`) | Path/name of the opencode CLI binary |
 | `SERVER_PORT` | no (defaults to `8243`) | Override the backend HTTP+WS port |
 | `WEB_PORT` | no (defaults to `8244`) | Override the Vite dev-server port |

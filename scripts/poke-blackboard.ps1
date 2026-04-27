@@ -12,7 +12,7 @@ param(
     [string]$RepoUrl = "https://github.com/kevinkicho/multi-agent-orchestrator",
     [string]$LocalPath = "C:\Users\kevin\Workspace\mao-bb",
     [int]$AgentCount = 1,
-    [string]$Model = "glm-5.1:cloud",
+    [string]$Model = "deepseek-v4-pro:cloud",
     [string]$Preset = "blackboard",
     [int]$WaitSeconds = 600,
     [int]$PollSeconds = 2,

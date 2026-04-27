@@ -60,7 +60,7 @@ export default function App() {
               ) : null}
             </>
           ) : (
-            <span className="text-xs text-ink-400 font-mono">glm-5.1:cloud · opencode</span>
+            <span className="text-xs text-ink-400 font-mono">deepseek-v4-pro:cloud · opencode</span>
           )}
         </div>
         <div className="flex items-center gap-3">
