@@ -7,3 +7,5 @@ export {
   extractFirstBalanced,
   extractFirstBalancedJson,
 } from "./extractJson.js";
+
+export type { TranscriptEntrySummary } from "./transcriptEntrySummary.js";

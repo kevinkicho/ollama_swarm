@@ -15,5 +15,5 @@
     "allowImportingTsExtensions": false,
     "isolatedModules": true
   },
-  "include": ["src"]
+  "include": ["src", "../shared/src"]
 }
