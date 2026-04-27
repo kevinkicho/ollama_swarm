@@ -40,24 +40,80 @@ export interface AgentJsonBubbleProps {
   className?: string;
   style?: React.CSSProperties;
 }
+
+// Split a model response into prose preamble + JSON payload. Many models
+// (especially planner-tier ones in thinking mode) emit chain-of-thought
+// reasoning before the structured envelope. Without this, that reasoning
+// is hidden behind "View JSON" and rendered as monospace junk.
+//
+// Heuristic: find the first JSON marker (`{`, `[`, or fenced ```json) —
+// everything before it is prose, everything from it on is JSON. Trims
+// each side. If no marker is found, returns the whole text as prose.
+function splitProseAndJson(text: string): { prose: string; json: string } {
+  const trimmed = text.trim();
+  // Prefer a fenced block — it's the most explicit boundary.
+  const fenceIdx = trimmed.indexOf("```json");
+  const candidates = [
+    trimmed.indexOf("{"),
+    trimmed.indexOf("["),
+    fenceIdx >= 0 ? fenceIdx : -1,
+  ].filter((i) => i >= 0);
+  if (candidates.length === 0) {
+    return { prose: trimmed, json: "" };
+  }
+  const cut = Math.min(...candidates);
+  return {
+    prose: trimmed.slice(0, cut).trim(),
+    json: trimmed.slice(cut).trim(),
+  };
+}
+
 export function AgentJsonBubble({ summary, json, header, className, style }: AgentJsonBubbleProps) {
   const [showJson, setShowJson] = useState(false);
+  const [showReasoning, setShowReasoning] = useState(false);
   const [jsonExpanded, setJsonExpanded] = useState(false);
-  const jsonTooLong = json.length > JSON_COLLAPSE_THRESHOLD;
+  const { prose, json: jsonPart } = splitProseAndJson(json);
+  const hasReasoning = prose.length > 0;
+  // Pretty-print JSON when it's parseable; otherwise show raw.
+  const prettyJson = tryPrettyJson(jsonPart) ?? jsonPart;
+  const jsonTooLong = prettyJson.length > JSON_COLLAPSE_THRESHOLD;
   const shownJson =
-    !jsonTooLong || jsonExpanded ? json : json.slice(0, JSON_COLLAPSE_THRESHOLD).trimEnd() + "…";
+    !jsonTooLong || jsonExpanded ? prettyJson : prettyJson.slice(0, JSON_COLLAPSE_THRESHOLD).trimEnd() + "…";
   return (
     <div className={className} style={style}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1">{header}</div>
-        <button
-          onClick={() => setShowJson((v) => !v)}
-          className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200 shrink-0"
-        >
-          {showJson ? "Hide JSON" : "View JSON"}
-        </button>
+        <div className="flex gap-2 shrink-0">
+          {hasReasoning ? (
+            <button
+              onClick={() => setShowReasoning((v) => !v)}
+              className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200"
+              title="Show the chain-of-thought reasoning the model emitted before the JSON"
+            >
+              {showReasoning ? "Hide reasoning" : `Reasoning (${prose.length.toLocaleString()})`}
+            </button>
+          ) : null}
+          <button
+            onClick={() => setShowJson((v) => !v)}
+            className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200"
+          >
+            {showJson ? "Hide JSON" : "View JSON"}
+          </button>
+        </div>
       </div>
       <div className="whitespace-pre-wrap">{summary}</div>
+      {showReasoning && hasReasoning ? (
+        <div className="mt-2 rounded border border-indigo-900/60 bg-indigo-950/20 p-2">
+          <div className="text-[10px] uppercase tracking-wide text-indigo-300/80 mb-1">
+            Reasoning preamble · {prose.length.toLocaleString()} chars
+          </div>
+          <CollapsibleBlock
+            className=""
+            header={null}
+            text={prose}
+          />
+        </div>
+      ) : null}
       {showJson ? (
         <div className="mt-2 rounded border border-ink-700 bg-ink-950 p-2">
           <pre className="text-[11px] font-mono text-ink-300 whitespace-pre-wrap break-all">
@@ -68,7 +124,7 @@ export function AgentJsonBubble({ summary, json, header, className, style }: Age
               onClick={() => setJsonExpanded((v) => !v)}
               className="mt-1 text-xs underline text-ink-400 hover:text-ink-200"
             >
-              {jsonExpanded ? "Show less" : `Show more (${json.length - JSON_COLLAPSE_THRESHOLD} chars)`}
+              {jsonExpanded ? "Show less" : `Show more (${prettyJson.length - JSON_COLLAPSE_THRESHOLD} chars)`}
             </button>
           ) : null}
         </div>
