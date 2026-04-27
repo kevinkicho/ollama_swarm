@@ -49,7 +49,26 @@
 
 ---
 
-## Data-grounded findings from 2026-04-27 blackboard run f78342b7
+## Data-grounded findings from 2026-04-27 blackboard run 0254ca7c
+
+15-min run with deepseek-v4-pro planner; artifacts in `runs/_monitor/0254ca7c/`
+plus the actual run output at `C:\mnt\c\Users\kevin\Desktop\ollama_swarm\runs\debate-tcg\` (wrong path — see #PATH below).
+
+- **CRITICAL — path mangling at the REST boundary.** A WSL-style `parentPath: "/mnt/c/Users/..."` was interpreted by the Windows-side dev server as `C:\mnt\c\Users\...`, creating a parallel directory tree. Run output landed at `C:\mnt\c\...` instead of the WSL-visible `runs/`. Knock-on: auditor read the wrong path → verdicted criteria unmet despite worker actually committing. **Fix direction**: normalize `parentPath` at the route layer in `routes/swarm.ts` — strip `/mnt/<drive>/` prefix and convert to `<DRIVE>:\`, or reject WSL-style paths with a clear error. **Trigger**: anytime; high-impact UX bug.
+
+- **wallClockCapMs not enforced.** 15-min cap (`wallClockCapMs: 900000`) sent; actual `wallClockMs: 1140810` = 19 min. Either cap-check happens at infrequent boundaries (audit cycles, not turn boundaries) or cap math is broken. **Trigger**: anytime; investigate `checkAndApplyCaps` call sites + the `tickAccumulator` that was added in Unit 27.
+
+- **Issue #1 (OllamaClient 60s idle) reproduced with deepseek-v4-pro.** Planner's replan at +9.5min hit `Ollama idle timeout: no body data for 60000ms` and successfully retried after 30s. Earlier theory that this was glm-5.1-specific is wrong — it's any model whose cold-start-to-first-byte exceeds 60s. **Trigger**: queued for design ("first-chunk timeout vs steady-state timeout" or "active probe via Ollama /api/ps").
+
+- **Monitor script reads wrong summary.json.** It hardcodes `runs/<repo>/summary.json` (WSL path). When the path mangling above fires, it reads stale data. **Fix direction**: monitor should look up summary by `runId` match, or probe both `/mnt/c/...` and `C:\mnt\c\...` paths. **Trigger**: anytime; small fix.
+
+- **Playwright capture still gets 0 bubbles** — no `data-entry-id` on MessageBubble's wrapping div. Already in queue as the issue #4 follow-up. **Trigger**: explicit "make transcript entries Playwright-friendly."
+
+- **deepseek-v4-pro mean latency = 65s/turn (planner role, 4 turns)** in this run. The provisional 35s I added to `WallClockEstimate.tsx` is too low. Needs ≥5 runs of data before re-estimating, but heads-up: estimate is currently underselling deepseek's wall-clock budget. **Trigger**: re-estimate after a few more runs land.
+
+---
+
+## Data-grounded findings from earlier 2026-04-27 blackboard run f78342b7
 
 Each item below is anchored to an artifact in `runs/_monitor/f78342b7/`. Do
 not promote any of these to "needs-fixing" without re-checking the artifact.
