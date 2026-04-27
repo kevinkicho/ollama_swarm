@@ -176,16 +176,20 @@ if (config.OLLAMA_PROXY_PORT > 0) {
   // can forward both /api/* and /v1/* paths verbatim.
   const upstreamRoot = upstreamUrl.replace(/\/v1\/?$/, "");
   const proxyHost = `http://127.0.0.1:${config.OLLAMA_PROXY_PORT}`;
-  const proxyUrlWithSuffix = upstreamUrl.endsWith("/v1") || upstreamUrl.endsWith("/v1/")
-    ? `${proxyHost}/v1`
-    : proxyHost;
+  // 2026-04-27: ALWAYS terminate the rewritten URL with /v1. opencode's
+  // openai-compatible adapter (RepoService writes this to opencode.json's
+  // provider.options.baseURL) appends `/chat/completions` directly, so
+  // a baseURL without /v1 → opencode hits `/chat/completions` → 404.
+  // V2 OllamaClient strips /v1 and uses /api/chat, so it's unaffected.
+  // Pre-fix: this mirrored whatever the user provided, so an env var of
+  // OLLAMA_BASE_URL=http://localhost:11434 (no /v1) silently broke
+  // every opencode-routed prompt with empty responses.
+  const proxyUrlWithSuffix = `${proxyHost}/v1`;
   startOllamaProxy({
     listenPort: config.OLLAMA_PROXY_PORT,
     upstreamUrl: upstreamRoot,
   });
   // Rewrite in-memory config so downstream consumers see the proxy URL.
-  // Keeping the same /v1 suffix policy as the original config so clients
-  // built against it (OpenAI-compat) still hit the right path.
   (config as { OLLAMA_BASE_URL: string }).OLLAMA_BASE_URL = proxyUrlWithSuffix;
   console.log(`  ollama proxy: ${proxyHost} → ${upstreamRoot} (token capture enabled)`);
 }
