@@ -601,17 +601,17 @@ export class AgentManager {
 
   // Task #220: cheap liveness check used by callers (BlackboardRunner)
   // before firing a high-cost prompt to detect a dead subprocess and
-  // trigger respawn. Hits the OpenCode subprocess's `/api/health`
-  // endpoint with a short timeout — if connection refused / timeout /
-  // 5xx, the subprocess is unreachable. ~1s budget; falls through to
-  // false on any unexpected error so callers default to safe (respawn).
+  // trigger respawn. Hits the OpenCode subprocess's `/doc` endpoint —
+  // the same endpoint waitForReady uses for spawn-time readiness, which
+  // proves it exists on every opencode subprocess. (Initial b6d91d13
+  // implementation tried `/api/health` which is OUR dev-server endpoint,
+  // NOT opencode's — every ping returned 404, every planner call
+  // triggered needless respawn.) Short 1.5s timeout via authedFetch;
+  // falls through to false on any error so callers default to respawn.
   async pingAgentHealth(agent: Agent): Promise<boolean> {
     try {
       const res = await Promise.race([
-        fetch(`http://127.0.0.1:${agent.port}/api/health`, {
-          method: "GET",
-          headers: { Authorization: basicAuthHeader() },
-        }),
+        authedFetch(`http://127.0.0.1:${agent.port}/doc`),
         new Promise<Response>((_, rej) =>
           setTimeout(() => rej(new Error("health-check timeout")), 1500),
         ),
