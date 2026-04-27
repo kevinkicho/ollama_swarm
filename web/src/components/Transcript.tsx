@@ -153,6 +153,31 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
         </div>
       );
     }
+    // 2026-04-26 fix: distinct visual style for transient parser/repair
+    // recovery messages. These are normal recovery (system caught a bad
+    // response and is retrying via repair prompt) — they're not real
+    // errors but they LOOK like them in the default neutral system bubble.
+    // Amber chip signals "transient, in recovery" so users don't read
+    // them as fatal. Same pattern as the QuotaBanner kind=transient styling.
+    const isRecoveryNotice =
+      entry.text.includes("did not parse") ||
+      entry.text.includes("Issuing repair prompt") ||
+      entry.text.includes("transport error") ||
+      entry.text.includes("retry ") ||
+      entry.text.includes("worker idle but exit-condition");
+    if (isRecoveryNotice) {
+      return (
+        <div className="border-l-2 border-amber-700/60 pl-3 py-1 text-xs text-amber-300/80 font-mono">
+          <div className="text-amber-400/70 mb-0.5">
+            <span className="inline-block px-1 py-0 text-[9px] uppercase tracking-wider rounded bg-amber-900/40 mr-1.5">
+              recovery
+            </span>
+            {ts}
+          </div>
+          <div className="whitespace-pre-wrap">{entry.text}</div>
+        </div>
+      );
+    }
     return (
       <CollapsibleBlock
         className="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"

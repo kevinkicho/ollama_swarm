@@ -471,15 +471,24 @@ export class BlackboardRunner implements SwarmRunner {
     // of the transcript. Includes runId8 + preset + model summary so
     // it's self-explanatory without needing the surrounding UI chrome.
     {
-      const runId8 = (cfg.runId ?? "?").slice(0, 8);
-      const startedHHMM = new Date(this.runBootedAt).toLocaleTimeString();
-      const modelLine =
-        cfg.preset === "blackboard"
-          ? `planner=${cfg.plannerModel ?? cfg.model}, workers=${cfg.workerModel ?? cfg.model}${cfg.dedicatedAuditor ? `, auditor=${cfg.auditorModel ?? cfg.plannerModel ?? cfg.model}` : ""}`
-          : cfg.model;
-      this.appendSystem(
-        `▶ Run started ${startedHHMM} · run ${runId8} · ${cfg.preset} · ${cfg.agentCount} agents · ${modelLine}`,
-      );
+      // Task #171 + 2026-04-26 fix: emit the "▸▸RUN-START▸▸" sentinel
+      // format so the web RunStartDivider component renders the rich
+      // horizontal-rule block (matching the divider shown when starting
+      // a new run mid-session). Previously we emitted a plain "▶ Run
+      // started" prose string which rendered as a generic system bubble
+      // — visually inconsistent with the in-session run-start divider.
+      const plannerModel = cfg.plannerModel ?? cfg.model;
+      const workerModel = cfg.workerModel ?? cfg.model;
+      const dividerText = [
+        "▸▸RUN-START▸▸",
+        `runId=${cfg.runId ?? ""}`,
+        `preset=${cfg.preset ?? ""}`,
+        `plannerModel=${plannerModel}`,
+        `workerModel=${workerModel}`,
+        `agentCount=${cfg.agentCount ?? ""}`,
+        `repoUrl=${cfg.repoUrl ?? ""}`,
+      ].join("|");
+      this.appendSystem(dividerText);
     }
     this.staleEventCount = 0;
     this.turnsPerAgent.clear();

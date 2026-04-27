@@ -100,14 +100,23 @@ export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
   ) {
     const p = parsed as { missionStatement: string; criteria: unknown[] };
     const n = p.criteria.length;
-    const firstDesc = n > 0 && isObject(p.criteria[0]) && typeof p.criteria[0].description === "string"
-      ? p.criteria[0].description
-      : null;
-    const crit = n === 0
+    // 2026-04-26 fix: show first 3 criteria descriptions instead of just
+    // first 1. Per-criterion truncated to 90 chars; suffix "+N more" if
+    // longer. Still bounded at ~400 chars total but conveys structure
+    // instead of "Contract: blah — 7 criteria: blah" hiding 6 unseen.
+    const previewCount = Math.min(3, n);
+    const previewLines: string[] = [];
+    for (let i = 0; i < previewCount; i++) {
+      const c = p.criteria[i];
+      if (!isObject(c) || typeof c.description !== "string") continue;
+      previewLines.push(`  ${i + 1}. ${truncate(c.description, 90)}`);
+    }
+    const moreSuffix = n > previewCount ? `\n  …+${n - previewCount} more` : "";
+    const critBlock = n === 0
       ? "0 criteria"
-      : `${n} criteri${n === 1 ? "on" : "a"}${firstDesc ? `: ${truncate(firstDesc, 90)}` : ""}`;
+      : `${n} criteri${n === 1 ? "on" : "a"}:\n${previewLines.join("\n")}${moreSuffix}`;
     return {
-      summary: `Contract: ${truncate(p.missionStatement, 120)} — ${crit}`,
+      summary: `Contract: ${truncate(p.missionStatement, 120)}\n${critBlock}`,
       json: pretty,
     };
   }
