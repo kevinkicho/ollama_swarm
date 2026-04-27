@@ -35,6 +35,9 @@ export function EventLogPanel() {
   const [data, setData] = useState<EventLogResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bump to force a refetch — useful when a run is in progress and
+  // the user wants the latest derived state without closing the dropdown.
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -49,7 +52,7 @@ export function EventLogPanel() {
       .then((j) => setData(j))
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
-  }, [open]);
+  }, [open, refreshNonce]);
 
   // Click-outside to close
   useEffect(() => {
@@ -72,8 +75,18 @@ export function EventLogPanel() {
       </button>
       {open ? (
         <div className="absolute right-0 top-full mt-1 z-20 w-[480px] max-h-[60vh] overflow-y-auto rounded border border-ink-600 bg-ink-900 shadow-xl shadow-black/50 p-3">
-          <div className="text-[11px] text-ink-500 mb-2 font-mono break-all">
-            {data?.source ?? "loading…"}
+          <div className="flex items-baseline gap-2 mb-2">
+            <div className="text-[11px] text-ink-500 font-mono break-all flex-1">
+              {data?.source ?? "loading…"}
+            </div>
+            <button
+              onClick={() => setRefreshNonce((n) => n + 1)}
+              disabled={loading}
+              className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-ink-800 hover:bg-ink-700 text-ink-400 hover:text-ink-200 disabled:opacity-50"
+              title="Re-fetch /api/v2/event-log/runs"
+            >
+              {loading ? "…" : "refresh"}
+            </button>
           </div>
           {loading ? (
             <div className="text-ink-400 text-sm italic">Loading…</div>
