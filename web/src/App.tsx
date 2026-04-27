@@ -4,6 +4,7 @@ import { useSwarmSocket } from "./hooks/useSwarmSocket";
 import { SetupForm } from "./components/SetupForm";
 import { SwarmView } from "./components/SwarmView";
 import { RunHistoryDropdown } from "./components/RunHistory";
+import { EventLogPanel } from "./components/EventLogPanel";
 import { UsageWidget } from "./components/UsageWidget";
 import { ErrorBanner } from "./components/ErrorBanner";
 import type { RunSummary } from "./types";
@@ -76,6 +77,9 @@ export default function App() {
               lastParentPath when no run is active, so the dropdown
               still loads recent history without a current run. */}
           <RunHistoryDropdown />
+          {/* V2 Step 6b: read-only event-log viewer (logs/current.jsonl
+              parsed via EventLogReaderV2 + summarized server-side). */}
+          <EventLogPanel />
         </div>
       </header>
       {error ? <ErrorBanner error={error} /> : null}

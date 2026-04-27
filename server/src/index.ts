@@ -21,6 +21,7 @@ import { Broadcaster } from "./ws/broadcast.js";
 import { createEventLogger } from "./ws/eventLogger.js";
 import { swarmRouter } from "./routes/swarm.js";
 import { devRouter } from "./routes/dev.js";
+import { v2Router } from "./routes/v2.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // server/src/index.ts (dev) or server/dist/index.js (built) -> up two to root.
@@ -133,6 +134,8 @@ app.post("/api/usage/clear-quota", (_req, res) => {
 
 app.use("/api/swarm", swarmRouter(orchestrator));
 app.use("/api/dev", devRouter({ broadcaster, repos }));
+// V2 Step 6b: read-only event-log endpoint for the eventual UI cutover.
+app.use("/api/v2", v2Router({ eventLogPath: eventLogger.path }));
 
 const shutdown = async (signal: string) => {
   console.log(`\n${signal} received — shutting down swarm`);
