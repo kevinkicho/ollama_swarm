@@ -457,6 +457,8 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
         header={header}
         summary={`${looseHunks.length} hunk${looseHunks.length === 1 ? "" : "s"}`}
         rawJson={entry.text}
+        segmentSplitPoints={entry.segmentSplitPoints}
+        segmentHue={hue}
       />
     );
   }

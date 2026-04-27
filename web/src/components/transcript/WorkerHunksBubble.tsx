@@ -62,12 +62,16 @@ export function WorkerHunksBubble({
   header,
   className,
   style,
+  segmentSplitPoints,
+  segmentHue,
 }: {
   summary: string;
   rawJson: string;
   header: React.ReactNode;
   className?: string;
   style?: React.CSSProperties;
+  segmentSplitPoints?: number[];
+  segmentHue?: number;
 }) {
   const [showRaw, setShowRaw] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -81,6 +85,8 @@ export function WorkerHunksBubble({
         header={header}
         summary={summary}
         json={rawJson}
+        segmentSplitPoints={segmentSplitPoints}
+        segmentHue={segmentHue}
       />
     );
   }

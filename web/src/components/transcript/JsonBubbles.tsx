@@ -80,6 +80,7 @@ function splitProseAndJson(text: string): { prose: string; json: string } {
 export function AgentJsonBubble({ summary, json, header, className, style, segmentSplitPoints, segmentHue }: AgentJsonBubbleProps) {
   const [showJson, setShowJson] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
+  const [showChunks, setShowChunks] = useState(false);
   const [jsonExpanded, setJsonExpanded] = useState(false);
   const { prose, json: jsonPart } = splitProseAndJson(json);
   const hasReasoning = prose.length > 0;
@@ -99,6 +100,27 @@ export function AgentJsonBubble({ summary, json, header, className, style, segme
     out.push(prose.slice(cursor));
     return out;
   })();
+  // 2026-04-26: full-response streaming-chunks split. Shows the entire
+  // response (prose + JSON together) split by all segment points the
+  // streaming bubble captured. Works for any envelope — auditor JSON,
+  // worker hunks, planner contracts. Without this, JSON-only responses
+  // (auditor verdicts, worker hunks) never get a segment view because
+  // the prose region is empty.
+  const allChunks = (() => {
+    if (!segmentSplitPoints || segmentSplitPoints.length === 0) return null;
+    const validSplits = segmentSplitPoints.filter((p) => p > 0 && p < json.length);
+    if (validSplits.length === 0) return null;
+    const out: string[] = [];
+    let cursor = 0;
+    for (const sp of validSplits) {
+      if (sp <= cursor) continue;
+      out.push(json.slice(cursor, sp));
+      cursor = sp;
+    }
+    out.push(json.slice(cursor));
+    return out;
+  })();
+  const hasChunks = allChunks !== null && allChunks.length > 1;
   // Pretty-print JSON when it's parseable; otherwise show raw.
   const prettyJson = tryPrettyJson(jsonPart) ?? jsonPart;
   const jsonTooLong = prettyJson.length > JSON_COLLAPSE_THRESHOLD;
@@ -109,6 +131,15 @@ export function AgentJsonBubble({ summary, json, header, className, style, segme
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1">{header}</div>
         <div className="flex gap-2 shrink-0">
+          {hasChunks ? (
+            <button
+              onClick={() => setShowChunks((v) => !v)}
+              className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200"
+              title="Show the full response split by streaming pauses — the same segment structure the streaming bubble showed live"
+            >
+              {showChunks ? "Hide chunks" : `Chunks (${allChunks!.length})`}
+            </button>
+          ) : null}
           {hasReasoning ? (
             <button
               onClick={() => setShowReasoning((v) => !v)}
@@ -127,6 +158,14 @@ export function AgentJsonBubble({ summary, json, header, className, style, segme
         </div>
       </div>
       <div className="whitespace-pre-wrap">{summary}</div>
+      {showChunks && hasChunks ? (
+        <div className="mt-2 rounded border border-emerald-900/60 bg-emerald-950/20 p-2">
+          <div className="text-[10px] uppercase tracking-wide text-emerald-300/80 mb-1">
+            Streaming chunks · {allChunks!.length} segments · {json.length.toLocaleString()} chars total
+          </div>
+          <ProseSegments segments={allChunks!} hue={segmentHue ?? 200} />
+        </div>
+      ) : null}
       {showReasoning && hasReasoning ? (
         <div className="mt-2 rounded border border-indigo-900/60 bg-indigo-950/20 p-2">
           <div className="text-[10px] uppercase tracking-wide text-indigo-300/80 mb-1">
