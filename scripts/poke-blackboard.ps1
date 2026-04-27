@@ -6,9 +6,9 @@
 # Usage (from the project root, after `npm run dev` is running):
 #   .\scripts\poke-blackboard.ps1
 #   .\scripts\poke-blackboard.ps1 -AgentCount 3
-#   .\scripts\poke-blackboard.ps1 -Port 52243 -NoWait
+#   .\scripts\poke-blackboard.ps1 -Port 8243 -NoWait
 param(
-    [int]$Port = 52243,
+    [int]$Port = 8243,
     [string]$RepoUrl = "https://github.com/kevinkicho/multi-agent-orchestrator",
     [string]$LocalPath = "C:\Users\kevin\Workspace\mao-bb",
     [int]$AgentCount = 1,

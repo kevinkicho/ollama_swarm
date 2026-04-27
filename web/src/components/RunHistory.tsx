@@ -938,6 +938,9 @@ function ResultChip({ reason }: { reason: string }) {
   } else if (reason === "early-stop") {
     cls = "bg-sky-900/40 border-sky-700/50 text-sky-300";
     label = "early-stop";
+  } else if (reason === "no-progress") {
+    cls = "bg-amber-900/40 border-amber-700/50 text-amber-300";
+    label = "no-progress";
   }
   return (
     <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${cls}`}>

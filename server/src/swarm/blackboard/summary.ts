@@ -8,7 +8,12 @@
 //   1. crashMessage set            → "crash"
 //   2. terminationReason set       → "cap:<type>" (wall-clock | commits | todos)
 //   3. stopping flag set (no cap)  → "user"
-//   4. else                        → "completed" (with optional completionDetail
+//   4. zero-progress detector      → "no-progress" (board has 0 commits + 0 todos
+//                                    AND contract has at least one criterion still
+//                                    unmet — i.e. planner failed to produce
+//                                    actionable work; the run did nothing useful
+//                                    even though it didn't crash or get stopped)
+//   5. else                        → "completed" (with optional completionDetail
 //                                    e.g. "all contract criteria satisfied" or
 //                                    "auditor cap reached")
 //
@@ -35,7 +40,8 @@ export type StopReason =
   | "cap:todos"
   | "cap:tokens"
   | "cap:quota"
-  | "early-stop";
+  | "early-stop"
+  | "no-progress";
 
 export interface PerAgentStat {
   agentId: string;
@@ -333,7 +339,7 @@ function cloneContract(c: ExitContract): ExitContract {
 function classifyStopReason(
   input: Pick<
     BuildSummaryInput,
-    "crashMessage" | "terminationReason" | "stopping" | "completionDetail"
+    "crashMessage" | "terminationReason" | "stopping" | "completionDetail" | "board" | "contract"
   >,
 ): { stopReason: StopReason; stopDetail?: string } {
   if (input.crashMessage) {
@@ -345,6 +351,23 @@ function classifyStopReason(
   }
   if (input.stopping) {
     return { stopReason: "user" };
+  }
+  // Zero-progress detector — see top-of-file priority list. Catches the
+  // "planner returned 0 valid todos and the run gracefully wound down"
+  // pattern that previously masqueraded as a successful completion.
+  // Conditions: contract had real criteria; none flipped to met; board
+  // saw zero todos AND zero commits.
+  const criteria = input.contract?.criteria ?? [];
+  const hadCriteria = criteria.length > 0;
+  const allUnmet = hadCriteria && criteria.every((c) => c.status === "unmet");
+  const noBoardActivity = input.board.total === 0 && input.board.committed === 0;
+  if (allUnmet && noBoardActivity) {
+    return {
+      stopReason: "no-progress",
+      stopDetail:
+        input.completionDetail ??
+        "planner produced no actionable todos; no commits and all criteria still unmet",
+    };
   }
   return { stopReason: "completed", stopDetail: input.completionDetail };
 }

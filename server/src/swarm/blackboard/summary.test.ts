@@ -89,6 +89,69 @@ describe("buildSummary — stopReason classification", () => {
     assert.equal(s.stopReason, "cap:wall-clock");
     assert.equal(s.stopDetail, "some new cap we added later");
   });
+
+  // Issue #2 (2026-04-27): zero-progress detector. A run that didn't
+  // crash, didn't get user-stopped, didn't trip a cap, and produced
+  // 0 commits + 0 todos with all criteria still unmet should NOT be
+  // classified as a successful "completed" — that hides planner failure
+  // behind a green pill in the UI.
+  it("reports 'no-progress' when 0 todos, 0 commits, and all criteria unmet", () => {
+    const s = buildSummary(
+      baseInput({
+        board: { committed: 0, skipped: 0, total: 0 },
+        contract: {
+          missionStatement: "Add CONTRIBUTING.md",
+          criteria: [
+            { id: "c1", description: "x", expectedFiles: ["CONTRIBUTING.md"], status: "unmet", addedAt: 0 },
+            { id: "c2", description: "y", expectedFiles: ["package.json"], status: "unmet", addedAt: 0 },
+          ],
+        },
+      }),
+    );
+    assert.equal(s.stopReason, "no-progress");
+    assert.match(s.stopDetail ?? "", /no actionable todos|all criteria still unmet/i);
+  });
+
+  it("stays 'completed' when 0 commits but at least one criterion was met", () => {
+    const s = buildSummary(
+      baseInput({
+        board: { committed: 0, skipped: 0, total: 0 },
+        contract: {
+          missionStatement: "Some mission",
+          criteria: [
+            { id: "c1", description: "x", expectedFiles: ["a.ts"], status: "met", addedAt: 0 },
+            { id: "c2", description: "y", expectedFiles: ["b.ts"], status: "unmet", addedAt: 0 },
+          ],
+        },
+      }),
+    );
+    assert.equal(s.stopReason, "completed");
+  });
+
+  it("stays 'completed' when commits>0 even if all criteria still unmet (work was done)", () => {
+    const s = buildSummary(
+      baseInput({
+        board: { committed: 3, skipped: 0, total: 3 },
+        contract: {
+          missionStatement: "Some mission",
+          criteria: [
+            { id: "c1", description: "x", expectedFiles: ["a.ts"], status: "unmet", addedAt: 0 },
+          ],
+        },
+      }),
+    );
+    assert.equal(s.stopReason, "completed");
+  });
+
+  it("stays 'completed' when no contract is present (back-compat with discussion-style runs)", () => {
+    const s = buildSummary(
+      baseInput({
+        board: { committed: 0, skipped: 0, total: 0 },
+        contract: undefined,
+      }),
+    );
+    assert.equal(s.stopReason, "completed");
+  });
 });
 
 describe("buildSummary — metrics passthrough", () => {

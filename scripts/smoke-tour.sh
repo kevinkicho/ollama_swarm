@@ -30,7 +30,7 @@ DIRECTIVE="${2:?directive required}"
 LABEL="${3:?label required}"
 PROPOSITION="${4:-This project is well-suited to its target users and ready for the next investment.}"
 
-SERVER="http://127.0.0.1:52243"
+SERVER="http://127.0.0.1:8243"
 PARENT_PATH="/mnt/c/Users/kevin/Desktop/ollama_swarm/runs"
 CHECKPOINT="/tmp/smoke-tour-${LABEL}-progress.json"
 LOG="/tmp/smoke-tour-${LABEL}.log"

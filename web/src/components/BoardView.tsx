@@ -316,6 +316,12 @@ function stopReasonAccent(reason: RunSummary["stopReason"]): { badge: string; bo
       return { badge: "bg-rose-900/60 text-rose-200", border: "border-l-4 border-l-rose-500" };
     case "early-stop":
       return { badge: "bg-sky-900/60 text-sky-200", border: "border-l-4 border-l-sky-500" };
+    case "no-progress":
+      // Distinct from "completed": the run finished without crashing or
+      // hitting a cap, but the planner failed to produce actionable
+      // todos. Amber matches the cap-trips so the user sees "this run
+      // didn't actually do anything useful" at a glance.
+      return { badge: "bg-amber-900/60 text-amber-200", border: "border-l-4 border-l-amber-500" };
   }
 }
 

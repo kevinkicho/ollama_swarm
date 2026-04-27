@@ -140,7 +140,8 @@ export type StopReason =
   | "cap:todos"
   | "cap:tokens"
   | "cap:quota"
-  | "early-stop";
+  | "early-stop"
+  | "no-progress";
 
 export interface PerAgentStat {
   agentId: string;

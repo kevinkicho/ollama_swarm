@@ -10,8 +10,14 @@ const portFile = path.join(root, ".server-port");
 
 // Fixed ports — pinned so bookmarks, scripts, and the Network tab don't need
 // to chase a new port on every restart. Override with env vars if you need to.
-const DEFAULT_SERVER_PORT = 52243;
-const DEFAULT_WEB_PORT = 52244;
+//
+// 2026-04-27: defaults moved 52243/52244 → 8243/8244. Windows reserves the
+// 52199–52398 range for Hyper-V, so the previous defaults could fail with
+// EACCES on most Windows hosts. 8243/8244 sit well outside any commonly
+// reserved range. Verify your host's reserved ranges with
+// `netsh int ipv4 show excludedportrange protocol=tcp` if EACCES recurs.
+const DEFAULT_SERVER_PORT = 8243;
+const DEFAULT_WEB_PORT = 8244;
 
 function pickFreePort() {
   return new Promise((resolve, reject) => {

@@ -16,10 +16,15 @@ export function RunFinishedGrid({
   const tsStr = new Date(ts).toLocaleTimeString();
   const startedStr = new Date(s.startedAt).toLocaleString();
   const endedStr = new Date(s.endedAt).toLocaleString();
+  // Issue #2 fix (2026-04-27): the bubble was always emerald, so even
+  // a 0-work "no-progress" run looked like a green successful completion.
+  // Color now follows stopReason — emerald only for true completed; amber
+  // for no-progress / cap-trips; ink for user-stop; rose for crashes.
+  const palette = paletteForStopReason(s.stopReason);
   return (
-    <div className="rounded border border-emerald-700/50 bg-emerald-950/20 p-3 my-2">
+    <div className={`rounded border ${palette.border} ${palette.bg} p-3 my-2`}>
       <div className="flex items-baseline justify-between gap-2 mb-2">
-        <div className="text-emerald-300 font-semibold tracking-wide text-xs uppercase">
+        <div className={`${palette.title} font-semibold tracking-wide text-xs uppercase`}>
           ═ Run finished — {s.stopReason} in {wallClock} ═
         </div>
         <div className="text-[10px] text-ink-500 font-mono">{tsStr}</div>
@@ -136,6 +141,56 @@ export function RunFinishedGrid({
       </div>
     </div>
   );
+}
+
+// Issue #2 (2026-04-27): per-stopReason palette so a 0-work
+// no-progress run isn't rendered with the same emerald celebration as
+// a true completed run. Default returns emerald (back-compat for old
+// summaries that may carry an unknown stopReason value).
+function paletteForStopReason(reason: string): { border: string; bg: string; title: string } {
+  switch (reason) {
+    case "completed":
+      return {
+        border: "border-emerald-700/50",
+        bg: "bg-emerald-950/20",
+        title: "text-emerald-300",
+      };
+    case "no-progress":
+    case "cap:wall-clock":
+    case "cap:commits":
+    case "cap:todos":
+    case "cap:tokens":
+      return {
+        border: "border-amber-700/50",
+        bg: "bg-amber-950/20",
+        title: "text-amber-300",
+      };
+    case "user":
+      return {
+        border: "border-ink-600/50",
+        bg: "bg-ink-900/40",
+        title: "text-ink-200",
+      };
+    case "crash":
+    case "cap:quota":
+      return {
+        border: "border-rose-700/50",
+        bg: "bg-rose-950/20",
+        title: "text-rose-300",
+      };
+    case "early-stop":
+      return {
+        border: "border-sky-700/50",
+        bg: "bg-sky-950/20",
+        title: "text-sky-300",
+      };
+    default:
+      return {
+        border: "border-emerald-700/50",
+        bg: "bg-emerald-950/20",
+        title: "text-emerald-300",
+      };
+  }
 }
 
 // Task #72: grid renderer for the seed-announce system entry. The

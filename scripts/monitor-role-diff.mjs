@@ -6,7 +6,7 @@
 //   node scripts/monitor-role-diff.mjs --runDir=runs/role-diff-v1 --expectedRoles=5
 //
 // Args:
-//   --port           server port (default 52243)
+//   --port           server port (default 8243)
 //   --runDir         where to write monitor-log.jsonl + compliance-report.md
 //   --expectedRoles  how many of the 7-role catalog to require (default 5, matches UI's "recommended")
 //   --pollMs         poll interval (default 5000)
@@ -24,7 +24,7 @@ const args = Object.fromEntries(
     return m ? [m[1], m[2]] : [a.replace(/^--/, ""), true];
   }),
 );
-const PORT = Number(args.port ?? 52243);
+const PORT = Number(args.port ?? 8243);
 const RUN_DIR = args.runDir ?? "runs/role-diff-v1";
 const EXPECTED_ROLES = Number(args.expectedRoles ?? 5);
 const POLL_MS = Number(args.pollMs ?? 5000);

@@ -1668,13 +1668,22 @@ export class BlackboardRunner implements SwarmRunner {
     groundedTodos.push(...symbolGroundedTodos);
 
     if (groundedTodos.length === 0) {
-      this.appendSystem("Planner produced 0 valid todos after grounding.");
+      // Issue #3 (2026-04-27): make this loud. The previous wording
+      // ("Planner produced 0 valid todos after grounding.") read as a
+      // benign system note; a user looking at the transcript wouldn't
+      // realize the run is now headed for a no-op terminal state.
+      // Stretch-goal reflection + memory distillation still run, but
+      // the headline below names the failure mode.
+      const dropDetail =
+        parsed.dropped.length > 0 || todosDropped > 0
+          ? `Planner returned only invalid/unbindable todos (${parsed.dropped.length} schema-dropped, ${todosDropped} grounding-dropped).`
+          : "Planner returned an empty todo list — nothing actionable in the repo.";
+      this.appendSystem(
+        `⚠ Planner failed to produce actionable todos. ${dropDetail} The run will exit with stopReason="no-progress" after fallback reflection — no commits will land.`,
+      );
       this.board.postFinding({
         agentId: agent.id,
-        text:
-          parsed.dropped.length > 0 || todosDropped > 0
-            ? `Planner returned only invalid/unbindable todos (${parsed.dropped.length} schema-dropped, ${todosDropped} grounding-dropped).`
-            : "Planner returned an empty todo list — nothing actionable in the repo.",
+        text: dropDetail,
         createdAt: Date.now(),
       });
       return;

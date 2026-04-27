@@ -81,7 +81,9 @@ npm install
 npm run dev
 ```
 
-`npm run dev` starts both the backend and the frontend in one process. By default the backend binds `127.0.0.1:52243` and the web dev server binds `[::1]:52244` (override via `SERVER_PORT` / `WEB_PORT` env vars). Open `http://localhost:52244`, fill in the form, hit **Start swarm**.
+`npm run dev` starts both the backend and the frontend in one process. By default the backend binds `127.0.0.1:8243` and the web dev server binds `[::1]:8244` (override via `SERVER_PORT` / `WEB_PORT` env vars). Open `http://localhost:8244`, fill in the form, hit **Start swarm**.
+
+> Pre-2026-04-27 defaults were `52243` / `52244`. They were moved to dodge Windows' Hyper-V reserved range (52199–52398), which would `EACCES` on most Windows hosts.
 
 ## Usage walkthrough
 
@@ -104,8 +106,8 @@ Hit Start. You'll see each agent panel go from `spawning` → `ready` → `think
 | `OLLAMA_BASE_URL` | no (defaults to `http://localhost:11434/v1`) | OpenAI-compatible Ollama endpoint, written into each agent's synthesized `opencode.json`. **Must end in `/v1`** — the proxy defensively appends it if missing (commit `bb0c509`). |
 | `DEFAULT_MODEL` | no (defaults to `nemotron-3-super:cloud`) | Model each agent uses when the form's model field is left blank |
 | `OPENCODE_BIN` | no (defaults to `opencode`) | Path/name of the opencode CLI binary |
-| `SERVER_PORT` | no (defaults to `52243`) | Override the backend HTTP+WS port |
-| `WEB_PORT` | no (defaults to `52244`) | Override the Vite dev-server port |
+| `SERVER_PORT` | no (defaults to `8243`) | Override the backend HTTP+WS port |
+| `WEB_PORT` | no (defaults to `8244`) | Override the Vite dev-server port |
 | `USE_OLLAMA_DIRECT` | no (defaults off) | Bypass opencode SDK; talk to Ollama directly. Currently only honored by `BlackboardRunner` (V2 path). |
 | `USE_WORKER_PIPELINE_V2` | no (defaults off) | Route blackboard worker writes through the V2 `WorkerPipelineV2` substrate. |
 | `GITHUB_TOKEN` | no | GitHub PAT for cloning private repos |
@@ -137,7 +139,7 @@ See [`docs/known-limitations.md`](docs/known-limitations.md) for the full list w
 - **`OPENCODE_SERVER_PASSWORD is required in .env`** — you haven't copied `.env.example` to `.env` or haven't set the password.
 - **Agents spawn but every turn errors with `fetch failed` / 404 on `/chat/completions`** — usually Ollama isn't running, the model isn't pulled, or `OLLAMA_BASE_URL` is missing the `/v1` suffix. The proxy now defensively appends `/v1` (commit `bb0c509`), but check `curl http://localhost:11434/api/tags` first.
 - **Empty agent responses across multiple presets** — most often the `/v1` issue above. If that's clean, check `streamPrompt` isn't getting stale `session.idle` from a prior prompt's tail (commit `18a7749` filters this).
-- **Port conflicts** — defaults are `SERVER_PORT=52243` / `WEB_PORT=52244`. If something else is bound, set either env var to a free port and restart.
+- **Port conflicts** — defaults are `SERVER_PORT=8243` / `WEB_PORT=8244`. If something else is bound, set either env var to a free port and restart. On Windows, check `netsh int ipv4 show excludedportrange protocol=tcp` if you get `EACCES` — Windows reserves chunks of ports for Hyper-V.
 - **`turn silent for Ns` errors** — the SSE-aware watchdog (commit `189ca05`) aborts on 90s SSE silence OR a 30-min hard ceiling. Long-tail latency that's still producing tokens isn't killed. The swarm will continue on the next agent; check the `[agent-N]` lines in the backend terminal for the underlying opencode error.
 
 ## License

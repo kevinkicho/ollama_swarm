@@ -11,5 +11,8 @@
     "dev": "node scripts/dev.mjs",
     "build": "npm -w server run build && npm -w web run build",
     "start": "npm -w server run start"
+  },
+  "devDependencies": {
+    "playwright": "^1.59.1"
   }
 }

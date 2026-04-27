@@ -62,12 +62,12 @@ cmd.exe /c "cd /d C:\\Users\\kevin\\Desktop\\ollama_swarm && set USE_OLLAMA_DIRE
 
 Or use the longer post-reboot recipe with explicit env-var inlining (`reference_dev_server_from_wsl` memory). Drop the `USE_*` env vars to run V1 paths.
 
-Health: `curl -s http://localhost:52243/api/health` should return `{"ok":true,...}`. V2 flag inspection: `curl -s http://localhost:52243/api/v2/status`.
+Health: `curl -s http://localhost:8243/api/health` should return `{"ok":true,...}`. V2 flag inspection: `curl -s http://localhost:8243/api/v2/status`.
 
 ### Fire a swarm via REST
 
 ```bash
-curl -s -X POST http://localhost:52243/api/swarm/start \
+curl -s -X POST http://localhost:8243/api/swarm/start \
   -H "Content-Type: application/json" \
   -d '{
     "repoUrl": "https://github.com/kevinkicho/debate-tcg",
