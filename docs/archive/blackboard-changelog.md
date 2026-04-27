@@ -1,7 +1,16 @@
-# Blackboard Swarm — Phase Changelog
+# Blackboard Swarm — Phase Changelog (ARCHIVED 2026-04-27)
+
+> **This file is archived.** It's a phase-by-phase journal kept while
+> the blackboard preset was under active build. The work has long since
+> shipped; `git log` is now the authoritative change history. Preserved
+> here for narrative archaeology — sometimes a comment or RCA discussion
+> only exists in this journal, not in commit messages. For "what's true
+> right now," start from [`../STATUS.md`](../STATUS.md).
+
+---
 
 Running log of what landed in each phase of the blackboard-preset build and
-how it was verified. Companion to [`blackboard-plan.md`](./blackboard-plan.md)
+how it was verified. Companion to [`../blackboard-plan.md`](../blackboard-plan.md)
 (the *what we plan to do*); this file is the *what we actually did*.
 
 Phases are kept here even after they ship, so later debugging can trace which

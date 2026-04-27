@@ -153,8 +153,8 @@ Shipped layers: optimistic CAS on file hashes + small atomic units (≤2
 files per commit) + planner/worker split + stale-replan on CAS rejection
 + hard caps (wall-clock / commits / todos) + `summary.json` run artifact.
 See [`blackboard-plan.md`](./blackboard-plan.md) for phase-by-phase notes
-and [`blackboard-changelog.md`](./blackboard-changelog.md) for what
-landed in each commit.
+and [`archive/blackboard-changelog.md`](./archive/blackboard-changelog.md)
+for what landed in each commit (archived; `git log` is the live source).
 
 **Wins:** scales until the board gets too noisy to manage. No idle agents
 waiting their turn. Natural fit for 10+ agents.

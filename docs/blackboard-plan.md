@@ -1,4 +1,14 @@
-# Blackboard Preset — Phased Implementation Plan
+# Blackboard Preset — Phased Implementation Plan (HISTORICAL — shipped)
+
+> **Status:** the blackboard preset has shipped, all phases described
+> here are in production. This doc remains for the design rationale +
+> phase ordering it captures (useful when working on related areas).
+> For current architecture, see [`STATUS.md`](./STATUS.md) and
+> [`../server/src/swarm/blackboard/ARCHITECTURE.md`](../server/src/swarm/blackboard/ARCHITECTURE.md).
+> For the V2 roadmap superseding this plan's "what's next" sections,
+> see [`ARCHITECTURE-V2.md`](./ARCHITECTURE-V2.md).
+
+---
 
 Companion doc to [`swarm-patterns.md`](./swarm-patterns.md). This plan breaks
 the first preset build (blackboard, optimistic-CAS, small atomic units) into

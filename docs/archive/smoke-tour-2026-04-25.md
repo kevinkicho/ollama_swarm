@@ -1,4 +1,12 @@
-# Smoke tour digest — 2026-04-25
+# Smoke tour digest — 2026-04-25 (ARCHIVED 2026-04-27)
+
+> **This file is archived.** It's a one-off log from the 2026-04-25 smoke
+> tour. Findings from this tour rolled into `swarm-patterns.md`,
+> `known-limitations.md`, and the 2026-04-27 fix wave (commits bb0c509,
+> 18a7749, 189ca05). For current preset behavior + tour results, see
+> [`../STATUS.md`](../STATUS.md).
+
+---
 
 **Goal**: validate all 8 swarm presets sequentially against 2 repos (debate-tcg, vocabmaster-android) using fresh code from the autonomous-mode roadmap (#124-#139).
 

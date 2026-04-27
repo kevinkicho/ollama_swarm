@@ -231,4 +231,4 @@ When a response fails to parse (surfaces as `worker response invalid:` /
    schema to accept bad output is almost never the right move.
 
 For historical context on every schema change, see
-`docs/blackboard-changelog.md` (phases 3, 4, and 6 touch these files).
+`docs/archive/blackboard-changelog.md` (phases 3, 4, and 6 touch these files).

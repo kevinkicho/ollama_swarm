@@ -128,5 +128,5 @@ web/src/
 - **Per-preset design notes:** `docs/swarm-patterns.md`
 - **What's a deliberate trade-off vs. a bug:** `docs/known-limitations.md`
 - **Long-horizon north star:** `docs/autonomous-productivity.md`
-- **Detailed change history:** `git log` (the 206KB `docs/blackboard-changelog.md` is journal-style — useful for archaeology but git log is authoritative)
+- **Detailed change history:** `git log` (the 206KB phase-journal is at `docs/archive/blackboard-changelog.md` — useful for narrative archaeology but git log is authoritative)
 - **Per-agent feedback / preferences:** `~/.claude/projects/-mnt-c-Users-kevin-Desktop-ollama-swarm/memory/MEMORY.md` (read first; it's loaded into every session's context)
