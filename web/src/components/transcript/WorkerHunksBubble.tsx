@@ -1,5 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AgentJsonBubble, MAX_BUBBLE_HEIGHT_PX } from "./JsonBubbles";
+import { extractFirstBalancedJson } from "../extractJson";
 
 // Task #74 (2026-04-25): readable diff renderer for worker_hunks
 // envelopes. Parses the JSON, renders one block per hunk: op + file
@@ -24,13 +25,14 @@ function parseLooseJson(raw: string): unknown {
   if (fence) {
     try { return JSON.parse(fence[1]!.trim()); } catch { /* fall through */ }
   }
-  // 3. Slice between first `{` and last `}` — handles trailing
-  //    garbage (model occasionally appends a stray `]`) and prose
-  //    surrounding a JSON envelope.
-  const firstBrace = s.indexOf("{");
-  const lastBrace = s.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    try { return JSON.parse(s.slice(firstBrace, lastBrace + 1)); } catch { /* fall through */ }
+  // 3. First-balanced extract — handles models that hallucinate
+  //    chat-template continuation after the real response (gemma4
+  //    observed in run b6d91d13 producing 17KB of fake "next prompt"
+  //    cycles after a valid hunks JSON). The depth-counting extractor
+  //    correctly stops at the first complete object.
+  const firstBalanced = extractFirstBalancedJson(s);
+  if (firstBalanced) {
+    try { return JSON.parse(firstBalanced); } catch { /* fall through */ }
   }
   return undefined;
 }

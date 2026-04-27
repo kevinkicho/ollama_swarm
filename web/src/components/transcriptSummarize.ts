@@ -1,3 +1,5 @@
+import { extractFirstBalancedJson } from "./extractJson";
+
 // Recognizes blackboard-preset agent response JSON (planner array / worker
 // {hunks} / replanner {revised | skip} / first-pass contract / auditor) and
 // produces a one-line summary plus pretty-printed JSON for reveal. Returns
@@ -170,24 +172,16 @@ function extractJson(raw: string): string | null {
   if (!s) return null;
   // Fenced block first — ```json ... ``` or bare ``` ... ```.
   const fence = s.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
-  if (fence) return fence[1].trim();
-  // Top-level JSON starts at character 0.
-  if (s.startsWith("{") || s.startsWith("[")) return s;
-  // Prose-then-JSON: slice from the first '{' or '[' to the last matching
-  // delimiter. Lenient — if it doesn't parse, caller falls back anyway.
-  const firstBrace = s.indexOf("{");
-  const firstBracket = s.indexOf("[");
-  const first =
-    firstBrace < 0
-      ? firstBracket
-      : firstBracket < 0
-        ? firstBrace
-        : Math.min(firstBrace, firstBracket);
-  if (first <= 0) return null;
-  const closer = s[first] === "{" ? "}" : "]";
-  const last = s.lastIndexOf(closer);
-  if (last <= first) return null;
-  return s.slice(first, last + 1);
+  if (fence) {
+    const inner = fence[1].trim();
+    return extractFirstBalancedJson(inner) ?? inner;
+  }
+  // Top-level JSON: prefer the first balanced object/array even when
+  // it starts at character 0 — handles models that hallucinate
+  // chat-template continuation after the real response (gemma4 in run
+  // b6d91d13 produced 17KB of fake "next prompt" cycles after a valid
+  // response). The balanced extractor stops at the matching close.
+  return extractFirstBalancedJson(s);
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
