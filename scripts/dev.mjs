@@ -148,5 +148,14 @@ process.on("SIGINT", () => {
 });
 process.on("SIGTERM", shutdown);
 
-launch("server", path.join(root, "server"), [tsxCli, "watch", "src/index.ts"], "36");
+// 2026-04-27: --no-watch / NO_WATCH=1 disables tsx watch on the server.
+// Use during long validation runs to dodge the WSL inotify SIGTERM-after-
+// summary-write flake (see reference_wsl_sigterm_after_summary memory).
+// Trade-off: code edits require manual restart of the dev server.
+const noWatch = process.argv.includes("--no-watch") || process.env.NO_WATCH === "1";
+const serverArgs = noWatch
+  ? [tsxCli, "src/index.ts"]
+  : [tsxCli, "watch", "src/index.ts"];
+if (noWatch) console.log("[dev] server running WITHOUT tsx watch (--no-watch). Code edits won't auto-restart.");
+launch("server", path.join(root, "server"), serverArgs, "36");
 launch("web", path.join(root, "web"), [viteCli, "--port", String(webPort), "--strictPort", "--host"], "35");

@@ -62,6 +62,14 @@ cmd.exe /c "cd /d C:\\Users\\kevin\\Desktop\\ollama_swarm && set USE_OLLAMA_DIRE
 
 Or use the longer post-reboot recipe with explicit env-var inlining (`reference_dev_server_from_wsl` memory). Drop the `USE_*` env vars to run V1 paths.
 
+For long validation runs where you want to avoid `/mnt/c` inotify SIGTERM flakes (the tsx watch occasionally killing the dev server after summary writes), append `--no-watch`:
+
+```bash
+cmd.exe /c "...npm run dev -- --no-watch"
+```
+
+Trade-off: code edits won't auto-restart the server. Best for "fire a swarm, wait, capture results" workflows.
+
 Health: `curl -s http://localhost:8243/api/health` should return `{"ok":true,...}`. V2 flag inspection: `curl -s http://localhost:8243/api/v2/status`.
 
 ### Fire a swarm via REST

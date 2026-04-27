@@ -32,7 +32,6 @@
 ### Smaller cleanups
 
 
-- **Replace tsx watch with `node --watch` for long-running validation sessions.** tsx watch SIGTERMs the dev server when `/mnt/c` inotify polling sees noise (`reference_wsl_sigterm_after_summary` memory). Lower-impact alternative: just run `tsx src/index.ts` (no watch) when validating, accept manual restart for code edits. **Trigger**: anytime user complains about SIGTERM-mid-validation again.
 
 
 ---
@@ -54,7 +53,9 @@ plus the actual run output at `C:\mnt\c\Users\kevin\Desktop\ollama_swarm\runs\de
 
 - ✅ **wallClockCapMs not enforced** — fixed. Root cause: post-audit reflection passes (stretch goals, memory distillation, design memory update) ran unconditionally even after the audit loop ended past the cap. Each is a 1-3 min planner prompt; on run 0254ca7c that pushed 14-min audit work to 19 min total. Fix gates each pass on `isOverWallClockCap()` (a non-mutating cap probe); when over, transcript surfaces a clear "cap exceeded; skipping bonus passes" message. Test suite (987/987) clean.
 
-- **Issue #1 (OllamaClient 60s idle) reproduced with deepseek-v4-pro.** Planner's replan at +9.5min hit `Ollama idle timeout: no body data for 60000ms` and successfully retried after 30s. Earlier theory that this was glm-5.1-specific is wrong — it's any model whose cold-start-to-first-byte exceeds 60s. **Trigger**: queued for design ("first-chunk timeout vs steady-state timeout" or "active probe via Ollama /api/ps").
+- ✅ **Issue #1 (OllamaClient 60s idle)** — fixed. Now uses two-phase timeout: `firstChunkTimeoutMs` (default 180s) until first body chunk arrives, then `idleTimeoutMs` (default 60s) steady-state. Heavy reasoning models (deepseek-v4-pro, etc.) get the cold-start tolerance they need without weakening steady-state liveness. Mirrors the same pattern applied to streamPrompt for the SSE path.
+
+- **Issue #3 (planner empty → repair → 0-todos) — STILL OPEN.** Visibility fix shipped (`b794703`); structural model-fallback still queued. Needs Kevin's design call: (a) hardcoded sibling-model fallback (deepseek↔nemotron) or per-run-configurable fallback list? (b) swap model on the same opencode session (supported) vs spawn fresh planner agent? (c) prompt-variation fallback as a cheaper alternative? **Trigger**: explicit design choice from Kevin.
 
 - **Monitor script reads wrong summary.json.** It hardcodes `runs/<repo>/summary.json` (WSL path). When the path mangling above fires, it reads stale data. **Fix direction**: monitor should look up summary by `runId` match, or probe both `/mnt/c/...` and `C:\mnt\c\...` paths. **Trigger**: anytime; small fix.
 

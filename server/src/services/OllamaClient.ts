@@ -41,11 +41,18 @@ export interface ChatOpts {
   messages: ChatMessage[];
   /** Cancel the in-flight call. The fetch is aborted; the iterator stops. */
   signal: AbortSignal;
-  /** Maximum ms with no body data before we abort the read.
-   *  Default 60_000 (60s). The Ollama-direct path doesn't need the
-   *  90s + probe + reconnect dance — if the read goes idle for this
-   *  long, the model is dead and we abort. */
+  /** Steady-state ms with no body data before we abort the read,
+   *  measured AFTER the first chunk arrives. Default 60_000 (60s).
+   *  After first chunk we know the model is alive, so a long pause
+   *  with no further bytes is real death. */
   idleTimeoutMs?: number;
+  /** Cold-start ms with no body data before abort, measured from t0
+   *  to the FIRST body chunk. Default 180_000 (180s) — heavy cloud
+   *  models (deepseek-v4-pro etc.) routinely take 60-180s to produce
+   *  their first byte even when healthy. Pre-2026-04-27 we used the
+   *  steady-state idleTimeoutMs (60s) for first-chunk too, which
+   *  killed healthy cold-starts on every run. */
+  firstChunkTimeoutMs?: number;
   /** Optional callback fired on every chunk with the cumulative
    *  text so far. Lets callers stream into UI without buffering. */
   onChunk?: (cumulativeText: string) => void;
@@ -69,6 +76,7 @@ export interface ChatResult {
 export async function chat(opts: ChatOpts): Promise<ChatResult> {
   const t0 = Date.now();
   const idleTimeoutMs = opts.idleTimeoutMs ?? 60_000;
+  const firstChunkTimeoutMs = opts.firstChunkTimeoutMs ?? 180_000;
   // Strip any /v1 suffix the caller may have included — the OpenAI-
   // compat path doesn't support our streaming protocol.
   const baseUrl = opts.baseUrl.replace(/\/v1\/?$/, "");
@@ -79,6 +87,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
     model: opts.model,
     promptChars: opts.messages.reduce((n, m) => n + m.content.length, 0),
     idleTimeoutMs,
+    firstChunkTimeoutMs,
     ts: t0,
   });
   const body = JSON.stringify({
@@ -88,12 +97,20 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   });
 
   // Compose the caller's signal with our idle-timeout signal so the
-  // fetch aborts on whichever fires first.
+  // fetch aborts on whichever fires first. Two-phase timeout: until
+  // the first chunk arrives, allow firstChunkTimeoutMs (default 180s
+  // for cold-start tolerance — heavy cloud models need it). Once we've
+  // seen any body, switch to idleTimeoutMs (default 60s steady-state).
   const idleAbort = new AbortController();
   let lastByteAt = Date.now();
+  let firstChunkSeen = false;
   const idleTimer = setInterval(() => {
-    if (Date.now() - lastByteAt > idleTimeoutMs) {
-      idleAbort.abort(new Error(`Ollama idle timeout: no body data for ${idleTimeoutMs}ms`));
+    const cap = firstChunkSeen ? idleTimeoutMs : firstChunkTimeoutMs;
+    if (Date.now() - lastByteAt > cap) {
+      const phase = firstChunkSeen ? "steady-state" : "cold-start";
+      idleAbort.abort(
+        new Error(`Ollama idle timeout: no body data for ${cap}ms (${phase})`),
+      );
     }
   }, 1_000);
 
@@ -144,6 +161,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
       }
       if (chunk.done) break;
       lastByteAt = Date.now();
+      firstChunkSeen = true;
       buf += decoder.decode(chunk.value, { stream: true });
       // Process complete lines; keep partial line in buf.
       let nl: number;
