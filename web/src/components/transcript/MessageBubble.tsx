@@ -34,19 +34,31 @@ import { formatServerSummary } from "./formatServerSummary";
 
 export function MessageBubble({ entry }: { entry: TranscriptEntry }) {
   const ts = new Date(entry.ts).toLocaleTimeString();
-  if (entry.role === "system") {
-    return <SystemBubble entry={entry} ts={ts} />;
-  }
-  if (entry.role === "user") {
-    return (
-      <CollapsibleBlock
-        className="rounded-md border border-ink-600 bg-ink-800 p-3 text-sm"
-        header={<div className="text-xs text-ink-400 mb-1">you · {ts}</div>}
-        text={entry.text}
-      />
-    );
-  }
-  return <AgentBubble entry={entry} ts={ts} />;
+  // Wrap every entry in a stable div so Playwright + other DOM
+  // inspectors can address each transcript entry without relying on
+  // class names that change with restyles. data-summary-kind is
+  // omitted when no summary is attached (server didn't tag the entry)
+  // so absence is itself a signal.
+  return (
+    <div
+      data-entry-id={entry.id}
+      data-entry-role={entry.role}
+      {...(entry.summary?.kind ? { "data-summary-kind": entry.summary.kind } : {})}
+      {...(typeof entry.agentIndex === "number" ? { "data-agent-index": entry.agentIndex } : {})}
+    >
+      {entry.role === "system" ? (
+        <SystemBubble entry={entry} ts={ts} />
+      ) : entry.role === "user" ? (
+        <CollapsibleBlock
+          className="rounded-md border border-ink-600 bg-ink-800 p-3 text-sm"
+          header={<div className="text-xs text-ink-400 mb-1">you · {ts}</div>}
+          text={entry.text}
+        />
+      ) : (
+        <AgentBubble entry={entry} ts={ts} />
+      )}
+    </div>
+  );
 }
 
 function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {

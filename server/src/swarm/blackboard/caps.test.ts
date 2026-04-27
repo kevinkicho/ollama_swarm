@@ -241,7 +241,11 @@ describe("BlackboardRunner cap-check call sites (Task #136)", () => {
   it("has a checkAndApplyCaps() call at every documented loop boundary", async () => {
     const fs = await import("node:fs/promises");
     const path = await import("node:path");
-    const here = path.dirname(new URL(import.meta.url).pathname);
+    const { fileURLToPath } = await import("node:url");
+    // fileURLToPath handles the Windows /C:/... vs C:\... drive
+    // re-spelling that `.pathname` does naively (and ends up as
+    // C:\C:\... when joined with another path).
+    const here = path.dirname(fileURLToPath(import.meta.url));
     const src = await fs.readFile(path.join(here, "BlackboardRunner.ts"), "utf8");
     // Each named loop method is required to call checkAndApplyCaps.
     // We grep for the function header followed (within reasonable

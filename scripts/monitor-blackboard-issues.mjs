@@ -18,10 +18,22 @@
 //   --pollMs         poll interval (default 3000)
 //   --maxWaitMin     exit if no terminal within this window (default 30)
 
-import { writeFile, mkdir, appendFile, copyFile, readFile } from "node:fs/promises";
+import { writeFile, mkdir, appendFile, copyFile, readFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+
+// Small helper: list files in a directory matching a regex. Returns
+// absolute-ish paths (the dir prefix re-applied). Resolves to []
+// if the directory doesn't exist.
+async function listFiles(dir, pattern) {
+  try {
+    const entries = await readdir(dir);
+    return entries.filter((n) => pattern.test(n)).map((n) => path.join(dir, n));
+  } catch {
+    return [];
+  }
+}
 
 const args = Object.fromEntries(
   process.argv.slice(2).map((a) => {
@@ -153,16 +165,47 @@ async function poll() {
 }
 
 async function copyEvidenceArtifacts() {
-  // Pull the run's summary.json out of runs/<repo>/ — find by runId.
+  // Find the summary by runId match instead of trusting the file path.
+  // Path mangling from a buggy parentPath (run 0254ca7c era) used to
+  // land summaries at C:\mnt\c\... while we looked under runs/. The
+  // pathNormalize fix prevents that for new runs, but defending here
+  // means we still find the right summary if the bug ever recurs OR
+  // if summary.json was overwritten by a newer run between writes.
   const repoSlug = evidence.finalSummary?.repoUrl?.split("/").pop() ?? "unknown";
-  const summarySrc = `runs/${repoSlug}/summary.json`;
-  if (existsSync(summarySrc)) {
+  const candidates = [
+    `runs/${repoSlug}/summary.json`,
+    // Glob per-run summaries too — these are timestamp-suffixed and
+    // never overwritten, so they're the most reliable lookup.
+    ...(await listFiles(`runs/${repoSlug}`, /^summary-.*\.json$/)),
+    // Defensive: probe the historical mangled-path location.
+    `C:\\mnt\\c\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\${repoSlug}\\summary.json`,
+  ];
+  let foundSrc = null;
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
     try {
-      await copyFile(summarySrc, SUMMARY_COPY_PATH);
-      await log("artifact_copied", { from: summarySrc, to: SUMMARY_COPY_PATH });
-    } catch (e) {
-      await log("artifact_copy_error", { src: summarySrc, error: String(e) });
+      const raw = await readFile(candidate, "utf8");
+      const parsed = JSON.parse(raw);
+      if (parsed?.runId === RUN_ID) {
+        foundSrc = candidate;
+        break;
+      }
+    } catch {
+      // unparseable / unreadable — try the next candidate
     }
+  }
+  if (foundSrc) {
+    try {
+      await copyFile(foundSrc, SUMMARY_COPY_PATH);
+      await log("artifact_copied", { from: foundSrc, to: SUMMARY_COPY_PATH, matchedBy: "runId" });
+    } catch (e) {
+      await log("artifact_copy_error", { src: foundSrc, error: String(e) });
+    }
+  } else {
+    await log("artifact_no_match", {
+      runId: RUN_ID,
+      candidatesProbed: candidates.length,
+    });
   }
   // Slice logs/current.jsonl to just our run's entries.
   const eventLogSrc = "logs/current.jsonl";
