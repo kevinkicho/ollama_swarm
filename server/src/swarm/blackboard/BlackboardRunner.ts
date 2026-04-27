@@ -22,6 +22,7 @@ import {
   advanceTickAccumulator,
   checkCaps,
   createTickAccumulator,
+  WALL_CLOCK_CAP_MS,
   type TickAccumulator,
 } from "./caps.js";
 import { buildCrashSnapshot } from "./crashSnapshot.js";
@@ -868,6 +869,10 @@ export class BlackboardRunner implements SwarmRunner {
       //     out of finishing — pestering them with reflection is rude)
       //   - has substantive output (committed > 0 OR a contract exists)
       //   - autoStretchReflection !== false (default ON)
+      //   - wall-clock cap not exceeded (each pass is a 1-3 min planner
+      //     prompt; running them past the user's cap defeats the cap
+      //     entirely — see run 0254ca7c which overshot 15-min by 4 min
+      //     because reflection happened post-audit unconditionally).
       // Errors are swallowed for the same reason as the final audit:
       // a missing reflection is annoying, not run-fatal.
       // Task #168: differentiate hard-user-stop from drain-stop. Drained
@@ -879,6 +884,15 @@ export class BlackboardRunner implements SwarmRunner {
       const hasOutput =
         this.board.counts().committed > 0 ||
         (this.contract?.criteria.length ?? 0) > 0;
+      const overWallClockCap = this.isOverWallClockCap();
+      if (overWallClockCap) {
+        const capMin = Math.round(
+          (this.active?.wallClockCapMs ?? WALL_CLOCK_CAP_MS) / 60_000,
+        );
+        this.appendSystem(
+          `Wall-clock cap (${capMin} min) already exceeded by the time the audit loop ended; skipping post-audit reflection passes (stretch goals, memory distillation, design memory) to honor the cap. Set wallClockCapMs higher to allow them.`,
+        );
+      }
       // Task #164 (refactor): build the reflection context once and
       // pass to both extracted helpers.
       const reflectionCtx: ReflectionContext = {
@@ -894,6 +908,7 @@ export class BlackboardRunner implements SwarmRunner {
         !errored &&
         !userStoppedHard &&
         hasOutput &&
+        !overWallClockCap &&
         this.active?.autoStretchReflection !== false
       ) {
         try {
@@ -913,6 +928,7 @@ export class BlackboardRunner implements SwarmRunner {
         !errored &&
         !userStoppedHard &&
         hasOutput &&
+        !overWallClockCap &&
         this.active?.autoMemory !== false
       ) {
         try {
@@ -930,6 +946,7 @@ export class BlackboardRunner implements SwarmRunner {
         !errored &&
         !userStoppedHard &&
         hasOutput &&
+        !overWallClockCap &&
         this.active?.autoDesignMemory !== false
       ) {
         try {
@@ -3329,6 +3346,20 @@ export class BlackboardRunner implements SwarmRunner {
   // path that flipped stopping (user stop, shutdown race) wants workers
   // to exit too, so short-circuit here keeps the call site simple.
   // ---------------------------------------------------------------------
+
+  // Cap probe that does NOT flip `stopping` / `terminationReason` (which
+  // checkAndApplyCaps does as a side effect). Used by the post-audit
+  // reflection-pass gate so we honor the cap by skipping bonus passes
+  // instead of trying to halt an already-finished audit loop.
+  // Advances the tick accumulator so a long gap since the last
+  // checkAndApplyCaps doesn't undercount the cap.
+  private isOverWallClockCap(): boolean {
+    if (this.tickAccumulator === undefined) return false;
+    const cap = this.active?.wallClockCapMs ?? WALL_CLOCK_CAP_MS;
+    const { next } = advanceTickAccumulator(this.tickAccumulator, Date.now());
+    this.tickAccumulator = next;
+    return next.activeElapsedMs >= cap;
+  }
 
   private checkAndApplyCaps(): boolean {
     if (this.stopping) return true;

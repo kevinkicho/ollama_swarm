@@ -211,11 +211,20 @@ export class AgentManager {
     // prompt to agent-3 — first 3 succeeded normally).
     const promptN = (this.streamPromptCount.get(agent.id) ?? 0) + 1;
     this.streamPromptCount.set(agent.id, promptN);
+    // 2026-04-27: cold-start tolerance. The first prompt to an agent
+    // can hit a multi-minute first-byte tail on heavy reasoning models
+    // (deepseek-v4-pro: observed ≥60s, see run 0254ca7c). Default 90s
+    // per-chunk fires too eagerly on those. Double it for promptN === 1
+    // so cold-start completes; steady-state (promptN ≥ 2) keeps the
+    // sharper 90s signal. Caller can still override via opts.perChunkTimeoutMs.
+    const effectivePerChunkTimeoutMs =
+      promptN === 1 ? Math.max(opts.perChunkTimeoutMs, 180_000) : opts.perChunkTimeoutMs;
     this.logDiag({
       type: "_stream_prompt_start",
       agentId: agent.id,
       promptN,
-      perChunkTimeoutMs: opts.perChunkTimeoutMs,
+      perChunkTimeoutMs: effectivePerChunkTimeoutMs,
+      coldStartBoosted: promptN === 1 && effectivePerChunkTimeoutMs > opts.perChunkTimeoutMs,
       ts: Date.now(),
     });
     // One in-flight stream per agent. If a prior call somehow leaked,
@@ -238,7 +247,7 @@ export class AgentManager {
         lastChunkAt: Date.now(),
         resolve,
         reject,
-        perChunkTimeoutMs: opts.perChunkTimeoutMs,
+        perChunkTimeoutMs: effectivePerChunkTimeoutMs,
         formatExpect: opts.formatExpect,
         initialRolesSize,
         sawNewMessage: false,
@@ -272,11 +281,11 @@ export class AgentManager {
             this.streamingByAgent.delete(agent.id);
             state.signalCleanup?.();
             reject(new Error(
-              `per-chunk timeout: no SSE chunks for ${opts.perChunkTimeoutMs}ms ` +
+              `per-chunk timeout: no SSE chunks for ${effectivePerChunkTimeoutMs}ms ` +
               `(probe also failed: ${probeErr instanceof Error ? probeErr.message : String(probeErr)})`,
             ));
           });
-        }, opts.perChunkTimeoutMs);
+        }, effectivePerChunkTimeoutMs);
       };
       const onAbort = () => {
         const cur = this.streamingByAgent.get(agent.id);

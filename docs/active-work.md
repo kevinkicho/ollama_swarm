@@ -34,7 +34,6 @@
 
 - **Replace tsx watch with `node --watch` for long-running validation sessions.** tsx watch SIGTERMs the dev server when `/mnt/c` inotify polling sees noise (`reference_wsl_sigterm_after_summary` memory). Lower-impact alternative: just run `tsx src/index.ts` (no watch) when validating, accept manual restart for code edits. **Trigger**: anytime user complains about SIGTERM-mid-validation again.
 
-- **Bump first-turn `perChunkTimeoutMs` for cold-start scenarios.** Current 90s is fine post-warmup but cold first-turn can exceed it on heavy models. Could make it 180s for promptN=1 only, drop to 90s for promptN>=2. **Trigger**: if cold-start empties show up again; SSE-aware watchdog already mitigates much of this.
 
 ---
 
@@ -53,7 +52,7 @@ plus the actual run output at `C:\mnt\c\Users\kevin\Desktop\ollama_swarm\runs\de
 
 - ✅ **CRITICAL — path mangling at the REST boundary.** Fixed in `1ec038d` — `normalizeWslPath()` utility at the route layer in `routes/swarm.ts` (both `/preflight` and `/start`). `/mnt/<drive>/<rest>` → `<DRIVE>:\<rest>` on Windows; no-op everywhere else. 13 unit tests. End-to-end verified via preflight: `/mnt/c/Users/.../runs` → `C:\Users\...\runs\debate-tcg`.
 
-- **wallClockCapMs not enforced.** 15-min cap (`wallClockCapMs: 900000`) sent; actual `wallClockMs: 1140810` = 19 min. Either cap-check happens at infrequent boundaries (audit cycles, not turn boundaries) or cap math is broken. **Trigger**: anytime; investigate `checkAndApplyCaps` call sites + the `tickAccumulator` that was added in Unit 27.
+- ✅ **wallClockCapMs not enforced** — fixed. Root cause: post-audit reflection passes (stretch goals, memory distillation, design memory update) ran unconditionally even after the audit loop ended past the cap. Each is a 1-3 min planner prompt; on run 0254ca7c that pushed 14-min audit work to 19 min total. Fix gates each pass on `isOverWallClockCap()` (a non-mutating cap probe); when over, transcript surfaces a clear "cap exceeded; skipping bonus passes" message. Test suite (987/987) clean.
 
 - **Issue #1 (OllamaClient 60s idle) reproduced with deepseek-v4-pro.** Planner's replan at +9.5min hit `Ollama idle timeout: no body data for 60000ms` and successfully retried after 30s. Earlier theory that this was glm-5.1-specific is wrong — it's any model whose cold-start-to-first-byte exceeds 60s. **Trigger**: queued for design ("first-chunk timeout vs steady-state timeout" or "active probe via Ollama /api/ps").
 
