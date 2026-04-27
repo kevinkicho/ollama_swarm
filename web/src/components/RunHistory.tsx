@@ -630,6 +630,55 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
             </section>
           ) : null}
 
+          {/* V2 Step 5c.1: TodoQueue mirror state. Same shape as v2State
+              section above — chip with counts + divergence count badge,
+              expandable table when divergences are non-zero. */}
+          {summary?.v2QueueState ? (
+            <section>
+              <SectionLabel>V2 TodoQueue mirror</SectionLabel>
+              <div className="flex items-baseline gap-2 mb-1 text-[11px]">
+                <span className={`px-2 py-0.5 rounded font-mono text-[10px] uppercase tracking-wider ${
+                  summary.v2QueueState.divergenceCount === 0
+                    ? "bg-emerald-900/60 text-emerald-200"
+                    : "bg-amber-900/60 text-amber-200"
+                }`}>
+                  v2 queue: {summary.v2QueueState.counts.completed}/{summary.v2QueueState.counts.total}
+                </span>
+                <span className="text-ink-400">
+                  {summary.v2QueueState.divergenceCount === 0
+                    ? "✓ V1 board ↔ V2 queue agreement throughout the run"
+                    : `${summary.v2QueueState.divergenceCount} divergence${summary.v2QueueState.divergenceCount === 1 ? "" : "s"}`}
+                </span>
+              </div>
+              {summary.v2QueueState.divergences.length > 0 ? (
+                <table className="w-full text-[10px] font-mono">
+                  <thead>
+                    <tr className="text-ink-500">
+                      <th className="text-left px-1 py-0.5">when</th>
+                      <th className="text-left px-1 py-0.5">trigger</th>
+                      <th className="text-left px-1 py-0.5">v1 (open/claimed/committed/stale/skipped)</th>
+                      <th className="text-left px-1 py-0.5">v2 (pending/inProgress/completed/failed/skipped)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {summary.v2QueueState.divergences.map((d, i) => (
+                      <tr key={i} className="border-t border-ink-800">
+                        <td className="px-1 py-0.5 text-ink-400">{new Date(d.ts).toLocaleTimeString()}</td>
+                        <td className="px-1 py-0.5 text-ink-300">{d.trigger}</td>
+                        <td className="px-1 py-0.5 text-amber-300">
+                          {d.v1.open}/{d.v1.claimed}/{d.v1.committed}/{d.v1.stale}/{d.v1.skipped}
+                        </td>
+                        <td className="px-1 py-0.5 text-rose-300">
+                          {d.v2.pending}/{d.v2.inProgress}/{d.v2.completed}/{d.v2.failed}/{d.v2.skipped}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : null}
+            </section>
+          ) : null}
+
           {/* Final git status */}
           {summary?.finalGitStatus ? (
             <section>

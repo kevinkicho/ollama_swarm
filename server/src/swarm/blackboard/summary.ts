@@ -178,6 +178,26 @@ export interface RunSummary {
       trigger: string;
     }>;
   };
+  // V2 Step 5c.1: end-of-run snapshot of the parallel V2 TodoQueue
+  // mirror + per-event divergences vs V1 board.counts(). Zero
+  // divergences = the V2 queue tracked V1 perfectly; promotion-ready.
+  v2QueueState?: {
+    counts: {
+      pending: number;
+      inProgress: number;
+      completed: number;
+      failed: number;
+      skipped: number;
+      total: number;
+    };
+    divergenceCount: number;
+    divergences: Array<{
+      ts: number;
+      trigger: string;
+      v1: { open: number; claimed: number; committed: number; stale: number; skipped: number };
+      v2: { pending: number; inProgress: number; completed: number; failed: number; skipped: number };
+    }>;
+  };
 }
 
 export interface SummaryConfig {
@@ -231,6 +251,8 @@ export interface BuildSummaryInput {
   transcript?: import("../../types.js").TranscriptEntry[];
   // V2 Step 3b.2: parallel-track V2 reducer state at run end.
   v2State?: RunSummary["v2State"];
+  // V2 Step 5c.1: parallel-track V2 TodoQueue state at run end.
+  v2QueueState?: RunSummary["v2QueueState"];
 }
 
 export function buildSummary(input: BuildSummaryInput): RunSummary {
@@ -293,6 +315,8 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     tierHistory: input.tierHistory ? input.tierHistory.map((t) => ({ ...t })) : undefined,
     // V2 Step 3b.2: parallel-track reducer state passthrough.
     v2State: input.v2State,
+    // V2 Step 5c.1: parallel-track TodoQueue state passthrough.
+    v2QueueState: input.v2QueueState,
   };
 }
 

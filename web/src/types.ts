@@ -213,6 +213,26 @@ export interface RunSummary {
       trigger: string;
     }>;
   };
+  // V2 Step 5c.1: parallel-track V2 TodoQueue mirror. Blackboard-only.
+  // Counts at run end + per-event divergences vs V1 board.counts().
+  // Zero divergences = the V2 queue tracked V1 perfectly across the run.
+  v2QueueState?: {
+    counts: {
+      pending: number;
+      inProgress: number;
+      completed: number;
+      failed: number;
+      skipped: number;
+      total: number;
+    };
+    divergenceCount: number;
+    divergences: Array<{
+      ts: number;
+      trigger: string;
+      v1: { open: number; claimed: number; committed: number; stale: number; skipped: number };
+      v2: { pending: number; inProgress: number; completed: number; failed: number; skipped: number };
+    }>;
+  };
 }
 
 export interface BoardCountsDTO {

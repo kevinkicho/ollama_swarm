@@ -84,7 +84,10 @@ export async function applyAndCommitV2(input: WorkerPipelineInput): Promise<Work
   // 2. Apply hunks in memory. applyHunks returns a structured error
   //    on first failure (search anchor not found, create-on-existing,
   //    etc.) with the hunk index baked in.
-  const applied = applyHunks(contents, input.hunks);
+  // applyHunks expects a mutable Hunk[] but our input is readonly for
+  // caller safety. Slice a defensive copy — applyHunks doesn't mutate
+  // the array, but the type signature insists.
+  const applied = applyHunks(contents, input.hunks.slice());
   if (!applied.ok) {
     // Try to extract the hunk index from the error message for the
     // failedHunkIndex field. applyHunks errors look like "hunk 2:

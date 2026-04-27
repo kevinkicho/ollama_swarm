@@ -224,6 +224,65 @@ describe("TodoQueueV2 — counts + list + clear", () => {
   });
 });
 
+describe("TodoQueueV2 — mirror mode (syncStatus + postWithId)", () => {
+  it("postWithId uses the supplied id verbatim", () => {
+    const q = new TodoQueueV2();
+    q.postWithId("v1-uuid-abc", { description: "x", expectedFiles: [], createdBy: "p" });
+    assert.equal(q.get("v1-uuid-abc")?.id, "v1-uuid-abc");
+    assert.equal(q.counts().pending, 1);
+  });
+
+  it("postWithId throws on id collision", () => {
+    const q = new TodoQueueV2();
+    q.postWithId("dup", { description: "x", expectedFiles: [], createdBy: "p" });
+    assert.throws(
+      () => q.postWithId("dup", { description: "y", expectedFiles: [], createdBy: "p" }),
+      /collision/,
+    );
+  });
+
+  it("syncStatus bypasses status guards (pending → completed direct)", () => {
+    const q = new TodoQueueV2();
+    q.postWithId("x", { description: "t", expectedFiles: [], createdBy: "p" });
+    // Normal complete() would throw because status is pending. syncStatus skips the check.
+    q.syncStatus("x", "completed", { ts: 999 });
+    assert.equal(q.get("x")?.status, "completed");
+    assert.equal(q.get("x")?.endedAt, 999);
+  });
+
+  it("syncStatus to in-progress stamps workerId + startedAt", () => {
+    const q = new TodoQueueV2();
+    q.postWithId("x", { description: "t", expectedFiles: [], createdBy: "p" });
+    q.syncStatus("x", "in-progress", { workerId: "w-2", ts: 100 });
+    assert.equal(q.get("x")?.status, "in-progress");
+    assert.equal(q.get("x")?.workerId, "w-2");
+    assert.equal(q.get("x")?.startedAt, 100);
+  });
+
+  it("syncStatus to failed bumps retries", () => {
+    const q = new TodoQueueV2();
+    q.postWithId("x", { description: "t", expectedFiles: [], createdBy: "p" });
+    q.syncStatus("x", "failed", { reason: "x" });
+    assert.equal(q.getRetries("x"), 1);
+    q.syncStatus("x", "pending", {});
+    q.syncStatus("x", "failed", { reason: "y" });
+    assert.equal(q.getRetries("x"), 2);
+  });
+
+  it("syncStatus to pending clears worker/timing/reason fields", () => {
+    const q = new TodoQueueV2();
+    q.postWithId("x", { description: "t", expectedFiles: [], createdBy: "p" });
+    q.syncStatus("x", "in-progress", { workerId: "w", ts: 100 });
+    q.syncStatus("x", "failed", { reason: "boom", ts: 200 });
+    q.syncStatus("x", "pending", {});
+    const t = q.get("x");
+    assert.equal(t?.workerId, undefined);
+    assert.equal(t?.startedAt, undefined);
+    assert.equal(t?.endedAt, undefined);
+    assert.equal(t?.reason, undefined);
+  });
+});
+
 describe("TodoQueueV2 — multi-worker concurrency model", () => {
   it("two workers dequeue different todos in FIFO order", () => {
     // The queue is the V2 model — workers don't claim files, they

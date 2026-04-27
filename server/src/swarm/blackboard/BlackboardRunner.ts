@@ -14,6 +14,7 @@ import type {
 import type { RunConfig, RunnerOpts, SwarmRunner } from "../SwarmRunner.js";
 import { Board } from "./Board.js";
 import { RunStateObserver } from "./RunStateObserver.js";
+import { TodoQueueV2 } from "./TodoQueueV2.js";
 import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaster.js";
 import {
   advanceTickAccumulator,
@@ -354,6 +355,26 @@ export class BlackboardRunner implements SwarmRunner {
   // current state still ships in the run summary as `v2State` for
   // telemetry — Kevin can compare V2's user-action-only view to V1's
   // setPhase trail.
+  // V2 Step 5c.1: parallel-track TodoQueueV2 mirror. Observability-
+  // only — V1 Board is still the source of truth for worker
+  // operations. Posts/commits/skips/stale events fan out to BOTH
+  // here. Validates that the V2 queue's count semantics match V1's
+  // board.counts() across a real run. Cleared on every start().
+  private v2TodoQueue = new TodoQueueV2();
+  // V1 Board id → V2 queue id translation. Board generates UUIDs;
+  // TodoQueueV2 generates t1/t2/... so we need a bridge for the
+  // mirror to update the right V2 todo on commit/skip events.
+  private v1ToV2TodoId = new Map<string, string>();
+  // Accumulator for divergences between V1 board.counts() and
+  // V2 queue.counts(). Snapshot at runSummary time. Zero divergences
+  // = the V2 queue tracked V1 perfectly through the run.
+  private v2QueueDivergences: Array<{
+    ts: number;
+    v1: { open: number; claimed: number; committed: number; stale: number; skipped: number };
+    v2: { pending: number; inProgress: number; completed: number; failed: number; skipped: number };
+    trigger: string;
+  }> = [];
+
   private v2Observer = new RunStateObserver({
     getCtx: () => {
       const c = this.board.counts();
@@ -553,6 +574,11 @@ export class BlackboardRunner implements SwarmRunner {
     // V2 Step 3b: reset the parallel V2 reducer + fire start.
     this.v2Observer.reset();
     this.v2Observer.apply({ type: "start", ts: this.runBootedAt });
+    // V2 Step 5c.1: reset the parallel V2 todo-queue mirror + its
+    // divergence accumulator so the run starts with a clean slate.
+    this.v2TodoQueue.clear();
+    this.v1ToV2TodoId.clear();
+    this.v2QueueDivergences = [];
 
     this.setPhase("cloning");
     const cloneResult = await this.opts.repos.clone({
@@ -2793,9 +2819,110 @@ export class BlackboardRunner implements SwarmRunner {
         remainingTodos: this.board.counts().open,
       });
     }
+    // V2 Step 5c.1: mirror board lifecycle events into TodoQueueV2.
+    // Observability-only — V1 Board is still the source of truth for
+    // worker operations. The mirror lets us prove the V2 queue's
+    // count semantics match V1's across a real run before the cutover.
+    this.mirrorToV2Queue(ev);
     if (ev.type !== "todo_stale") return;
     this.staleEventCount++;
     this.enqueueReplan(ev.todoId);
+  }
+
+  // V2 Step 5c.1: per-event mirror logic. Board ids are UUIDs;
+  // TodoQueueV2 uses caller-supplied ids via postWithId so the mirror
+  // ids match Board ids 1:1, no translation map needed. syncStatus
+  // bypasses V2's normal status guards (designed for the V2 worker
+  // pipeline where every transition is explicit dequeue→complete);
+  // the mirror needs to skip the dequeue dance because V1's claim
+  // events don't always have a clean V2 equivalent.
+  private mirrorToV2Queue(ev: BoardEvent): void {
+    try {
+      switch (ev.type) {
+        case "todo_posted": {
+          this.v2TodoQueue.postWithId(ev.todo.id, {
+            description: ev.todo.description,
+            expectedFiles: ev.todo.expectedFiles,
+            createdBy: ev.todo.createdBy,
+            createdAt: ev.todo.createdAt,
+            criterionId: ev.todo.criterionId,
+          });
+          break;
+        }
+        case "todo_claimed": {
+          this.v2TodoQueue.syncStatus(ev.todoId, "in-progress", {
+            workerId: ev.claim.agentId,
+            ts: ev.claim.claimedAt,
+          });
+          break;
+        }
+        case "todo_committed": {
+          this.v2TodoQueue.syncStatus(ev.todoId, "completed", { ts: Date.now() });
+          break;
+        }
+        case "todo_skipped": {
+          this.v2TodoQueue.syncStatus(ev.todoId, "skipped", {
+            ts: Date.now(),
+            reason: ev.reason,
+          });
+          break;
+        }
+        case "todo_stale": {
+          // V1 stale = V2 failed (recoverable; planner may replan and
+          // re-claim). Reset on todo_replanned below.
+          this.v2TodoQueue.syncStatus(ev.todoId, "failed", {
+            ts: Date.now(),
+            reason: ev.reason,
+          });
+          break;
+        }
+        case "todo_replanned": {
+          // V1 replan brings the todo back to open. Mirror as pending.
+          this.v2TodoQueue.syncStatus(ev.todoId, "pending", {});
+          break;
+        }
+        // todo_finding etc — no V2 queue analogue; skip silently.
+      }
+    } catch (err) {
+      // Mirror is best-effort; don't crash the runner over a sync
+      // hiccup. Surface to diag so we can see if the mirror drifts.
+      const msg = err instanceof Error ? err.message : String(err);
+      this.opts.logDiag?.({
+        type: "_v2_queue_mirror_error",
+        boardEventType: ev.type,
+        message: msg,
+        ts: Date.now(),
+      });
+    }
+    // After mirror, snapshot divergences between V1 board.counts() and
+    // V2 queue.counts(). The two should agree on the post-event state.
+    const b = this.board.counts();
+    const v2 = this.v2TodoQueue.counts();
+    // V1 "open" + "claimed" maps to V2 "pending" + "inProgress" (work
+    // still in flight). V1 "committed" → V2 "completed". V1 "stale"
+    // is V2 "failed" (recoverable mid-flight). V1 "skipped" → V2 "skipped".
+    const inFlightV1 = b.open + b.claimed;
+    const inFlightV2 = v2.pending + v2.inProgress;
+    const diverges =
+      inFlightV1 !== inFlightV2 ||
+      b.committed !== v2.completed ||
+      b.skipped !== v2.skipped ||
+      b.stale !== v2.failed;
+    if (diverges) {
+      this.v2QueueDivergences.push({
+        ts: Date.now(),
+        v1: { ...b },
+        v2: { ...v2 },
+        trigger: ev.type,
+      });
+      this.opts.logDiag?.({
+        type: "_v2_queue_divergence",
+        boardEventType: ev.type,
+        v1: { ...b },
+        v2: { ...v2 },
+        ts: Date.now(),
+      });
+    }
   }
 
   private enqueueReplan(todoId: string): void {
@@ -3316,6 +3443,14 @@ export class BlackboardRunner implements SwarmRunner {
           ts: d.ts,
           trigger: d.trigger,
         })),
+      },
+      // V2 Step 5c.1: parallel-track TodoQueue snapshot. Counts at
+      // run end + per-event divergences vs V1 board.counts(). Zero
+      // divergences = the V2 queue mirror tracked V1 perfectly.
+      v2QueueState: {
+        counts: this.v2TodoQueue.counts(),
+        divergenceCount: this.v2QueueDivergences.length,
+        divergences: this.v2QueueDivergences.slice(),
       },
     });
 

@@ -198,6 +198,53 @@ export class TodoQueueV2 {
     this.nextIdCounter = 1;
   }
 
+  /** MIRROR-MODE ONLY: force-sync a todo's status without going
+   *  through the dequeue/complete state machine. Use this when
+   *  shadowing an external queue (e.g., V1 Board) where status
+   *  changes don't follow the V2 lifecycle. Sets endedAt + reason
+   *  on terminal transitions; clears them on returns to pending.
+   *  Throws if id is unknown. */
+  syncStatus(id: string, status: TodoQueueStatusV2, opts: { reason?: string; ts?: number; workerId?: string } = {}): void {
+    const t = this.findOrThrow(id);
+    t.status = status;
+    const ts = opts.ts ?? Date.now();
+    if (status === "in-progress") {
+      t.workerId = opts.workerId;
+      t.startedAt = ts;
+      t.endedAt = undefined;
+      t.reason = undefined;
+    } else if (status === "pending") {
+      t.workerId = undefined;
+      t.startedAt = undefined;
+      t.endedAt = undefined;
+      t.reason = undefined;
+    } else {
+      // terminal: completed, failed, skipped
+      t.endedAt = ts;
+      t.reason = opts.reason;
+      if (status === "failed") t.retries += 1;
+    }
+  }
+
+  /** MIRROR-MODE ONLY: post a todo with a caller-provided id rather
+   *  than auto-generating one. Used to keep mirror ids aligned with
+   *  the external queue's ids. Throws if the id collides. */
+  postWithId(id: string, input: PostTodoV2Input): void {
+    if (this.todos.some((t) => t.id === id)) {
+      throw new Error(`Todo id collision: ${id}`);
+    }
+    this.todos.push({
+      id,
+      description: input.description,
+      expectedFiles: input.expectedFiles.slice(),
+      createdBy: input.createdBy,
+      createdAt: input.createdAt ?? Date.now(),
+      status: "pending",
+      criterionId: input.criterionId,
+      retries: 0,
+    });
+  }
+
   private findOrThrow(id: string): QueuedTodoV2 {
     const t = this.todos.find((x) => x.id === id);
     if (!t) throw new Error(`Unknown todo id: ${id}`);
