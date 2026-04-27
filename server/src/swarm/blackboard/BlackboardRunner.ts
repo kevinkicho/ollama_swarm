@@ -2216,15 +2216,19 @@ export class BlackboardRunner implements SwarmRunner {
         status: "ready",
         lastMessageAt: Date.now(),
       });
-      // Task #215: log wedge state every ~30s when the worker is
-      // sleeping in the wait branch. Captures which condition(s) are
-      // non-zero. Smoke run b2a4d987 (2026-04-26) hit exactly this
-      // state for 12+ min with no diagnostic signal which flag was
-      // wedged. The wedge is private state not exposed elsewhere.
+      // Task #215 + #219: log wedge state when the worker has been
+      // wait-spinning for a while. Validation run c05898ab (2026-04-26)
+      // showed the original "fire on first tick" was too eager — every
+      // normal "one worker mid-flight while siblings finished" transient
+      // tripped the alarm. Real wedges (b2a4d987 — 12+ min with claimed=1
+      // stuck) need MULTIPLE consecutive wait ticks. Worker poll = 2-2.5s
+      // per tick; require ~12 ticks (30s+ wait) before surfacing anything.
       if (counts.open === 0) {
         waitTickN += 1;
         const now = Date.now();
-        if (now - lastWaitDiagAt > 30_000) {
+        const PERSISTENT_WEDGE_MIN_TICKS = 12; // ≈30s at WORKER_POLL_MS=2000+jitter
+        const sustainedWedge = waitTickN >= PERSISTENT_WEDGE_MIN_TICKS;
+        if (sustainedWedge && now - lastWaitDiagAt > 30_000) {
           lastWaitDiagAt = now;
           this.opts.logDiag?.({
             type: "_worker_wait_wedge",
@@ -2235,17 +2239,24 @@ export class BlackboardRunner implements SwarmRunner {
             replanRunning: this.replanRunning,
             ts: now,
           });
-          // Also surface to transcript on first occurrence per worker
-          // so the user sees something is off without grepping logs.
-          if (waitTickN === 1) {
+          // Surface to transcript ONCE per worker, the first time we
+          // cross the persistent threshold. Subsequent re-logs (every
+          // 30s while still wedged) only update the diag log, not the
+          // transcript — avoid spam.
+          if (waitTickN === PERSISTENT_WEDGE_MIN_TICKS) {
             this.appendSystem(
-              `[${agent.id}] worker idle but exit-condition not met: ` +
+              `[${agent.id}] worker idle ${Math.round(waitTickN * (WORKER_POLL_MS + WORKER_POLL_JITTER_MS / 2) / 1000)}s but exit-condition not met: ` +
                 `claimed=${counts.claimed} stale=${counts.stale} ` +
                 `replanPending=${this.replanPending.size} replanRunning=${this.replanRunning}`,
             );
           }
         }
         continue;
+      } else {
+        // Reset on any tick where there's open work — the wedge counter
+        // tracks CONSECUTIVE waits, not cumulative. A single open todo
+        // appearing means the prior wait is over.
+        waitTickN = 0;
       }
 
       // Unit 45: prefer the claimable-finder so we skip todos whose
