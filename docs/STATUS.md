@@ -123,6 +123,9 @@ web/src/
 
 ## Where to look next
 
+- **Day-1 essentials for an agent picking up this repo:** `docs/AGENT-GUIDE.md`
+- **Persistent TODO list across sessions:** `docs/active-work.md` (queued / in-flight / recently shipped)
+- **Architecture decisions ("why this and not that"):** `docs/decisions/` (5 ADRs covering per-agent subprocess, hunk format, write-capable preset boundary, V2 parallel-track rollout, keeping opencode)
 - **Code-near architecture for blackboard:** `server/src/swarm/blackboard/ARCHITECTURE.md`
 - **V2 rewrite roadmap + status:** `docs/ARCHITECTURE-V2.md`
 - **Per-preset design notes:** `docs/swarm-patterns.md`

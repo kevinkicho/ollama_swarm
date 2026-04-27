@@ -1,0 +1,82 @@
+# Active work — queued + in-flight (across sessions)
+
+> Persistent TODO list that survives between agent sessions. Per-session
+> `TaskCreate` items die when the session ends; this file is the durable
+> equivalent. **Update it when you finish or queue work.**
+>
+> Last refreshed: 2026-04-27
+
+---
+
+## Queued (waiting on user nod or specific trigger)
+
+### Cloud-quota-burning validation
+
+- **Multi-repo blackboard validation with V2 paths.** Only debate-tcg validated end-to-end so far (4 V2 commits, 0 divergences). Want at least 2-3 different repo types (small Python, larger TypeScript, doc-heavy) to surface scenarios the V2 worker pipeline hasn't hit yet (large hunks, conflicts, multi-file commits). **Trigger**: explicit user "go run multi-repo validation."
+
+- **Long-horizon blackboard run with tier ratchet.** 2-4 hours of continuous mode against a target with a real directive. Validates pause/resume, audit cap behavior, tier promotion, stretch-goal reflection at scale. **Trigger**: explicit "go long-run."
+
+### Risky cutovers (need stable validation first)
+
+- **V2 Step 5c.3 — delete Board.ts.** Requires: USE_WORKER_PIPELINE_V2=1 default-on for 2+ stable runs (currently opt-in). When deleting: drop `Board.ts` (~330 LOC), `executeWorkerTodo` V1 path (~140 LOC), per-file lock cache (#205), v1ToV2TodoId Map. TodoQueueV2 becomes the queue (not a mirror). **Trigger**: 2+ blackboard runs with USE_WORKER_PIPELINE_V2=1 producing real commits + 0 V2 queue divergences.
+
+- **V2 Step 6c — UI cuts over to event-log-derived state.** Currently EventLogReaderV2 is read-only (replay/debug); the live UI still derives state from WebSocket snapshots. Cutting over means the UI subscribes to the JSONL stream and rebuilds state via `deriveRunState`. **Trigger**: more user appetite for the V2 vision; could parallel-track first.
+
+- **Drop opencode subprocess dependency entirely.** ~1 week of refactor:
+  1. Wire `ollamaDirect` through the 6 non-blackboard runners (1d) — then USE_OLLAMA_DIRECT bypasses opencode for *all* presets
+  2. Replace `AgentManager.spawnAgent` with our own session-state class (3d) — drops the opencode subprocess
+  3. Delete `opencode.json` writing in `RepoService.ts`. Replace agent profile + tool-grant logic with our own simple config (2d)
+  
+  Result: single-binary install where users just need Ollama. **Trigger**: explicit "drop opencode."
+
+### Smaller cleanups
+
+- **Delete vestigial `getOrchestratorClient` + `OPENCODE_BASE_URL` (port 4096) plumbing.** `AgentManager.getOrchestratorClient()` is defined but never called anywhere. The startup log "orchestrator opencode: http://127.0.0.1:4096" is misleading. Could be deleted in a small PR. ~30 min. **Trigger**: anytime; safe.
+
+- **Make `USE_WORKER_PIPELINE_V2` per-run instead of env-only.** Currently set at dev-server start; means all runs share the flag. Adding a per-run `cfg.useWorkerPipelineV2` (defaulting to env value) lets users A/B without restart. ~1h including UI surface. **Trigger**: anytime; useful for incremental rollout.
+
+- **Replace tsx watch with `node --watch` for long-running validation sessions.** tsx watch SIGTERMs the dev server when `/mnt/c` inotify polling sees noise (`reference_wsl_sigterm_after_summary` memory). Lower-impact alternative: just run `tsx src/index.ts` (no watch) when validating, accept manual restart for code edits. **Trigger**: anytime user complains about SIGTERM-mid-validation again.
+
+- **Bump first-turn `perChunkTimeoutMs` for cold-start scenarios.** Current 90s is fine post-warmup but cold first-turn can exceed it on heavy models. Could make it 180s for promptN=1 only, drop to 90s for promptN>=2. **Trigger**: if cold-start empties show up again; SSE-aware watchdog already mitigates much of this.
+
+---
+
+## In-flight (active this/recent session)
+
+*(Move items here from "Queued" when started; move to "Done recently" when shipped)*
+
+— none right now —
+
+---
+
+## Done recently (last 30 days; older lands in archive/blackboard-changelog.md)
+
+### 2026-04-27 (this session)
+
+- ✅ V2 substrate complete through Steps 1–6a (commits `fa7ff71` through `94413bd`)
+- ✅ Step 5c.1 parallel-track TodoQueueV2 mirror (`41fa509`)
+- ✅ Step 5c.2 opt-in V2 worker pipeline gated by `USE_WORKER_PIPELINE_V2=1` (`7040a96`)
+- ✅ Step 6b `/api/v2/event-log` endpoint + `EventLogPanel` UI (`70e7c2b`)
+- ✅ `bb0c509` — proxy always terminates rewritten OLLAMA_BASE_URL with /v1 (defensive)
+- ✅ `18a7749` — streamPrompt filters stale session.idle from prior session.prompt's tail
+- ✅ `189ca05` — replaced wall-clock 4-min absolute turn cap with SSE-aware liveness watchdog
+- ✅ `cfee38d` — agents_ready structured summary + expandable per-agent grid
+- ✅ `3ad6869` — fixed npm test by adding OPENCODE_SERVER_PASSWORD=test-only prefix (unblocked 47 tests)
+- ✅ `3f54bb5` + `d6a4864` — docs refresh: STATUS.md, archive, journal cleanup, function-ref drop
+- ✅ Validated 7/7 SDK-path presets clean against debate-tcg with all 4 fixes in place
+
+### 2026-04-26
+
+- V2 Step 1 — OllamaClient direct chunked-HTTP path (commits `8de4eb1`, `4f85b00`, `bc9464b`)
+- V2 Step 2a/b/c — extractJson + TranscriptEntrySummary + summarizeAgentJson moved to shared/ (`ce99504`, `fc5c06f`, `6f5c97f`)
+- See git log for older shipped work + `docs/archive/blackboard-changelog.md` for the deeper journal
+
+---
+
+## Conventions for this file
+
+- **Add an entry when you queue work.** Don't trust your in-session task list to survive.
+- **Move to "In-flight" when you start.** Helps the next agent see what's mid-progress.
+- **Move to "Done recently" with a commit hash when shipped.** Items older than ~30 days can fall off (commit hash + git log is the durable record).
+- **Trigger field is required for "Queued."** Forces clarity about what unblocks the work.
+- **Don't list work that doesn't exist yet** ("we should add X" without a concrete reason). This is a TODO, not a wish list.
