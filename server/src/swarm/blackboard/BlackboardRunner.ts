@@ -15,6 +15,8 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "../SwarmRunner.js";
 import { Board } from "./Board.js";
 import { RunStateObserver } from "./RunStateObserver.js";
 import { TodoQueueV2 } from "./TodoQueueV2.js";
+import { applyAndCommitV2 } from "./WorkerPipelineV2.js";
+import { realFilesystemAdapter, realGitAdapter } from "./v2Adapters.js";
 import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaster.js";
 import {
   advanceTickAccumulator,
@@ -2402,7 +2404,16 @@ export class BlackboardRunner implements SwarmRunner {
       const todo = this.board.findClaimableTodo();
       if (!todo) continue;
 
-      const outcome = await this.executeWorkerTodo(agent, todo);
+      // V2 Step 5c.2: opt-in to V2 worker pipeline via env flag.
+      // Default OFF — V1 path is unchanged. When enabled, the V2 path
+      // skips CAS/lock-files/per-file-hashes (V2 model: applyHunks
+      // search-anchor catches conflicts at apply time, see ARCHITECTURE-
+      // V2.md section 5). Both paths still call board.commit/markStale
+      // so V1 board state stays consistent for the parallel-track mirror.
+      const useV2Worker = process.env.USE_WORKER_PIPELINE_V2 === "1";
+      const outcome = useV2Worker
+        ? await this.executeWorkerTodoV2(agent, todo)
+        : await this.executeWorkerTodo(agent, todo);
       if (outcome === "committed") {
         // Cooldown so one worker doesn't monopolize the board. Random jitter
         // helps desync workers that all finished around the same time.
@@ -2781,6 +2792,160 @@ export class BlackboardRunner implements SwarmRunner {
     this.linesRemovedPerAgent.set(
       agent.id,
       (this.linesRemovedPerAgent.get(agent.id) ?? 0) + removed,
+    );
+    return "committed";
+  }
+
+  // V2 Step 5c.2: opt-in worker pipeline. Same prompt → parse → repair
+  // flow as V1's executeWorkerTodo, but writes via WorkerPipelineV2's
+  // applyAndCommitV2 instead of CAS+lock+writeFileAtomic+board.commit.
+  // V1 board still tracks claim/commit so the parallel-track mirror
+  // (Step 5c.1) stays consistent. Gated by USE_WORKER_PIPELINE_V2 env.
+  //
+  // Skipped vs V1:
+  // - No file-hash CAS (V2 conflict detection is applyHunks anchor failure)
+  // - No per-file lock cache (#205) — git is the conflict resolver
+  // - No re-hash before write (same reason)
+  //
+  // Kept vs V1:
+  // - Claim through V1 board (so two workers don't race on same todo)
+  // - Worker prompt + JSON repair on parse failure
+  // - All board state mutations (claim/commit/markStale) for mirror parity
+  private async executeWorkerTodoV2(
+    agent: Agent,
+    todo: Todo,
+  ): Promise<"committed" | "stale" | "lost-race" | "aborted"> {
+    // V2: empty hash map for the claim — we don't use CAS. The claim
+    // still serves to prevent two workers picking the same todo.
+    const now = Date.now();
+    const claim = this.board.claimTodo({
+      todoId: todo.id,
+      agentId: agent.id,
+      fileHashes: {},
+      claimedAt: now,
+      expiresAt: now + CLAIM_TTL_MS,
+    });
+    if (!claim.ok) return "lost-race";
+
+    let contents: Record<string, string | null>;
+    try {
+      contents = await this.readExpectedFiles(todo.expectedFiles);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.board.markStale(todo.id, `[v2] read failure: ${msg}`);
+      return "stale";
+    }
+
+    const seed: WorkerSeed = {
+      todoId: todo.id,
+      description: todo.description,
+      expectedFiles: todo.expectedFiles,
+      fileContents: contents,
+      expectedAnchors: todo.expectedAnchors,
+      roleGuidance: this.workerRoles.get(agent.id),
+    };
+
+    let response: string;
+    try {
+      response = await this.promptAgent(agent, `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`);
+    } catch (err) {
+      if (this.stopping) return "aborted";
+      const msg = err instanceof Error ? err.message : String(err);
+      this.board.markStale(todo.id, `[v2] worker prompt failed: ${msg}`);
+      bumpAgentCounter(this.promptErrorsPerAgent, agent.id);
+      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
+      return "stale";
+    }
+    if (this.stopping) return "aborted";
+    this.appendAgent(agent, response);
+
+    let parsed = parseWorkerResponse(response, todo.expectedFiles);
+    if (!parsed.ok) {
+      bumpAgentCounter(this.jsonRepairsPerAgent, agent.id);
+      this.appendSystem(`[${agent.id}] [v2] worker JSON invalid (${parsed.reason}); issuing repair prompt.`);
+      let repair: string;
+      try {
+        repair = await this.promptAgent(
+          agent,
+          `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerRepairPrompt(response, parsed.reason)}`,
+        );
+      } catch (err) {
+        if (this.stopping) return "aborted";
+        const msg = err instanceof Error ? err.message : String(err);
+        this.board.markStale(todo.id, `[v2] worker repair prompt failed: ${msg}`);
+        bumpAgentCounter(this.promptErrorsPerAgent, agent.id);
+        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
+        return "stale";
+      }
+      if (this.stopping) return "aborted";
+      this.appendAgent(agent, repair);
+      parsed = parseWorkerResponse(repair, todo.expectedFiles);
+      if (!parsed.ok) {
+        this.board.markStale(todo.id, `[v2] worker produced invalid JSON after repair: ${parsed.reason}`);
+        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
+        return "stale";
+      }
+    }
+
+    if (parsed.skip) {
+      this.appendSystem(`[${agent.id}] [v2] worker declined todo: ${parsed.skip}`);
+      this.board.markStale(todo.id, `[v2] worker declined: ${parsed.skip}`);
+      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
+      return "stale";
+    }
+
+    if (parsed.hunks.length === 0) {
+      this.board.markStale(todo.id, "[v2] worker returned empty hunks with no skip reason");
+      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
+      return "stale";
+    }
+
+    // V2 path: apply + git commit via the substrate. No CAS hash check —
+    // applyHunks anchor failure catches sibling-worker conflicts.
+    const fsAdapter = realFilesystemAdapter(this.active!.localPath);
+    const gitAdapter = realGitAdapter(this.active!.localPath);
+    const applyResult = await applyAndCommitV2({
+      todoId: todo.id,
+      workerId: agent.id,
+      expectedFiles: todo.expectedFiles,
+      hunks: parsed.hunks,
+      fs: fsAdapter,
+      git: gitAdapter,
+    });
+    if (!applyResult.ok) {
+      this.board.markStale(todo.id, `[v2] applyAndCommitV2 failed: ${applyResult.reason}`);
+      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
+      return "stale";
+    }
+
+    // Commit succeeded — update V1 board state. The mirror picks this
+    // up via onBoardEvent so V2 queue counts stay aligned. Per-agent
+    // line stats use the values applyAndCommitV2 returned.
+    //
+    // V1 board.commitTodo expects currentHashes that match the claim
+    // hashes for CAS verification. V2 path uses empty hashes on both
+    // sides (the claim was made with {} too) so the no-op CAS check
+    // always succeeds.
+    const commitResult = this.board.commitTodo({
+      todoId: todo.id,
+      agentId: agent.id,
+      currentHashes: {},
+      committedAt: Date.now(),
+    });
+    if (!commitResult.ok) {
+      // Should not happen — claim succeeded above with matching {} hashes.
+      // Defensive: surface the reason so any drift shows up in the log.
+      this.appendSystem(`[${agent.id}] [v2] board.commitTodo unexpectedly failed: ${commitResult.reason}`);
+      return "stale";
+    }
+    bumpAgentCounter(this.commitsPerAgent, agent.id);
+    this.linesAddedPerAgent.set(
+      agent.id,
+      (this.linesAddedPerAgent.get(agent.id) ?? 0) + applyResult.linesAdded,
+    );
+    this.linesRemovedPerAgent.set(
+      agent.id,
+      (this.linesRemovedPerAgent.get(agent.id) ?? 0) + applyResult.linesRemoved,
     );
     return "committed";
   }
