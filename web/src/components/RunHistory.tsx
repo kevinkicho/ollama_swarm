@@ -579,6 +579,57 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
             </section>
           ) : null}
 
+          {/* V2 Step 3b.2: parallel-track reducer state. Blackboard-only.
+              Renders as a chip with phase + a count of divergences. Zero
+              divergences (the common case) shows a green badge; any
+              divergences expand into a small table for diagnosis. */}
+          {summary?.v2State ? (
+            <section>
+              <SectionLabel>V2 reducer state</SectionLabel>
+              <div className="flex items-baseline gap-2 mb-1 text-[11px]">
+                <span className={`px-2 py-0.5 rounded font-mono text-[10px] uppercase tracking-wider ${
+                  summary.v2State.divergenceCount === 0
+                    ? "bg-emerald-900/60 text-emerald-200"
+                    : "bg-amber-900/60 text-amber-200"
+                }`}>
+                  v2 phase: {summary.v2State.phase}
+                </span>
+                <span className="text-ink-400">
+                  {summary.v2State.divergenceCount === 0
+                    ? "✓ V1↔V2 agreement throughout the run"
+                    : `${summary.v2State.divergenceCount} divergence${summary.v2State.divergenceCount === 1 ? "" : "s"}`}
+                </span>
+                {summary.v2State.pausedReason ? (
+                  <span className="text-amber-300 text-[10px]">paused: {summary.v2State.pausedReason}</span>
+                ) : null}
+              </div>
+              {summary.v2State.divergences.length > 0 ? (
+                <table className="w-full text-[10px] font-mono">
+                  <thead>
+                    <tr className="text-ink-500">
+                      <th className="text-left px-1 py-0.5">when</th>
+                      <th className="text-left px-1 py-0.5">trigger</th>
+                      <th className="text-left px-1 py-0.5">v1</th>
+                      <th className="text-left px-1 py-0.5">v2</th>
+                      <th className="text-left px-1 py-0.5">expected</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {summary.v2State.divergences.map((d, i) => (
+                      <tr key={i} className="border-t border-ink-800">
+                        <td className="px-1 py-0.5 text-ink-400">{new Date(d.ts).toLocaleTimeString()}</td>
+                        <td className="px-1 py-0.5 text-ink-300">{d.trigger}</td>
+                        <td className="px-1 py-0.5 text-amber-300">{d.v1Phase}</td>
+                        <td className="px-1 py-0.5 text-rose-300">{d.v2Phase}</td>
+                        <td className="px-1 py-0.5 text-ink-400">{d.expectedV2Phases}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : null}
+            </section>
+          ) : null}
+
           {/* Final git status */}
           {summary?.finalGitStatus ? (
             <section>
