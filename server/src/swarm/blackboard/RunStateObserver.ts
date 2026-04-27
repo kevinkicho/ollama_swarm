@@ -43,7 +43,11 @@ const PHASE_MAPPING: Record<SwarmPhase, string[]> = {
   // when someone reuses this module from a non-blackboard runner.
   discussing: ["planning"],
   planning: ["planning"],
-  executing: ["executing"],
+  // V1 stays in "executing" throughout the worker → audit → tier-up
+  // cycle. V2 has finer phases here. Accept any of them as agreement.
+  // The wedge case is when V1 sits in executing while V2 has resolved
+  // to "completed" — that's a real divergence and not in this list.
+  executing: ["executing", "auditing", "tier-up", "planning"],
   // Pause is orthogonal in V2 — the underlying phase persists. Any
   // active phase is acceptable when V1 says paused.
   paused: ["planning", "executing", "auditing", "tier-up", "spawning"],

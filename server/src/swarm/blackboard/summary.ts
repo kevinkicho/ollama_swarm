@@ -159,6 +159,25 @@ export interface RunSummary {
     startedAt: number;
     endedAt: number;
   }>;
+  // V2 Step 3b.2: end-of-run snapshot of the parallel V2 reducer state
+  // + accumulated divergences across the run. Blackboard-only. Allows
+  // post-run inspection of whether the V2 model agreed with V1 phase
+  // transitions (zero divergences = promotion-ready). Optional for
+  // back-compat with summaries written before this field landed.
+  v2State?: {
+    phase: string;
+    enteredAt: number;
+    detail?: string;
+    pausedReason?: string;
+    divergenceCount: number;
+    divergences: Array<{
+      v1Phase: string;
+      v2Phase: string;
+      expectedV2Phases: string;
+      ts: number;
+      trigger: string;
+    }>;
+  };
 }
 
 export interface SummaryConfig {
@@ -210,6 +229,8 @@ export interface BuildSummaryInput {
   tierHistory?: RunSummary["tierHistory"];
   // Task #65: in-memory transcript snapshot at run-end.
   transcript?: import("../../types.js").TranscriptEntry[];
+  // V2 Step 3b.2: parallel-track V2 reducer state at run end.
+  v2State?: RunSummary["v2State"];
 }
 
 export function buildSummary(input: BuildSummaryInput): RunSummary {
@@ -270,6 +291,8 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     maxTierReached: input.maxTierReached,
     tiersCompleted: input.tiersCompleted,
     tierHistory: input.tierHistory ? input.tierHistory.map((t) => ({ ...t })) : undefined,
+    // V2 Step 3b.2: parallel-track reducer state passthrough.
+    v2State: input.v2State,
   };
 }
 

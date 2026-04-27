@@ -196,6 +196,23 @@ export interface RunSummary {
   // TRANSCRIPT_MAX_ENTRIES; transcriptTruncated=true when capped.
   transcript?: TranscriptEntry[];
   transcriptTruncated?: boolean;
+  // V2 Step 3b.2: end-of-run snapshot of the parallel V2 reducer state
+  // and accumulated divergences. Blackboard-only. Optional — older
+  // summaries don't have it. Zero divergences = V1↔V2 agreement.
+  v2State?: {
+    phase: string;
+    enteredAt: number;
+    detail?: string;
+    pausedReason?: string;
+    divergenceCount: number;
+    divergences: Array<{
+      v1Phase: string;
+      v2Phase: string;
+      expectedV2Phases: string;
+      ts: number;
+      trigger: string;
+    }>;
+  };
 }
 
 export interface BoardCountsDTO {

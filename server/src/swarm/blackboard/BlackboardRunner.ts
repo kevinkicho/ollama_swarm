@@ -708,6 +708,13 @@ export class BlackboardRunner implements SwarmRunner {
       }
     }
 
+    // V2 Step 3b.2: agents are ready — fire spawned event so the V2
+    // reducer can advance from "spawning" to "planning".
+    this.v2Observer.apply({
+      type: "spawned",
+      ts: Date.now(),
+      agentCount: this.agentRoster.length,
+    });
     this.setPhase("planning");
     // Background so the HTTP POST that triggered start() returns immediately.
     // The UI watches progress over /ws.
@@ -1467,6 +1474,14 @@ export class BlackboardRunner implements SwarmRunner {
     this.currentTier = 1;
     this.tierStartedAt = Date.now();
     this.opts.emit({ type: "contract_updated", contract: this.cloneContract(this.contract) });
+    // V2 Step 3b.2: contract installed — fire contract-built event.
+    // Empty-contract path (criteria.length === 0) transitions V2 directly
+    // to "completed"; otherwise V2 stays in "planning" awaiting todos.
+    this.v2Observer.apply({
+      type: "contract-built",
+      ts: Date.now(),
+      criteriaCount: this.contract.criteria.length,
+    });
     // Unit 31: the contract is load-bearing state; make sure the very next
     // observer read sees it even if no board event follows for a while.
     this.scheduleStateWrite();
@@ -1643,6 +1658,15 @@ export class BlackboardRunner implements SwarmRunner {
       });
     }
     this.appendSystem(`Posted ${groundedTodos.length} todo(s) to the board.`);
+    // V2 Step 3b.2: planner finished — fire todos-posted event so V2
+    // can transition from "planning" to "executing" (count>0) or
+    // "auditing" (count=0). The reducer's branch on count drives the
+    // next phase without needing a separate setPhase call.
+    this.v2Observer.apply({
+      type: "todos-posted",
+      ts: now,
+      count: groundedTodos.length,
+    });
   }
 
   // ---------------------------------------------------------------------
@@ -1697,6 +1721,15 @@ export class BlackboardRunner implements SwarmRunner {
           this.recordTierCompletion();
           const promoted = await this.tryPromoteNextTier(planner, maxTiers);
           if (this.stopping) return;
+          // V2 Step 3b.2: tier-up decision made — fire event so the V2
+          // reducer transitions tier-up → planning (promoted) or
+          // tier-up → completed (failed). Also need to bump V2 into
+          // tier-up first via auditor-returned with allCriteriaResolved.
+          this.v2Observer.apply({
+            type: "tier-up-decision",
+            ts: Date.now(),
+            promoted,
+          });
           if (promoted) {
             // New tier installed; auditor's criteria are fresh "unmet"
             // and runWorkers will pick up the new todos on the next
@@ -2061,6 +2094,11 @@ export class BlackboardRunner implements SwarmRunner {
     this.appendSystem(
       `${label} ${this.auditInvocations}/${this.maxAuditInvocations}.`,
     );
+    // V2 Step 3b.2: auditor invocation counter just incremented; fire
+    // auditor-fired so the V2 reducer can advance executing → auditing
+    // (it already entered auditing on the last todo-committed event,
+    // but keep the explicit fire for symmetry with auditor-returned).
+    this.v2Observer.apply({ type: "auditor-fired", ts: Date.now() });
 
     const seed = await buildAuditorSeedExtracted({
       contract: this.contract!,
@@ -2119,7 +2157,22 @@ export class BlackboardRunner implements SwarmRunner {
       );
     }
 
+    // V2 Step 3b.2: count new todos the auditor added BEFORE applying
+    // (applyAuditorResult mutates the board, so post-apply counts would
+    // include any prior open todos too). The reducer uses
+    // newTodosCount + allCriteriaResolved together to decide whether
+    // to keep auditing, transition to executing, or terminate.
+    const newTodosCount = parsed.result.verdicts.reduce(
+      (n, v) => n + (v.status === "unmet" ? v.todos.length : 0),
+      0,
+    );
     this.applyAuditorResult(parsed.result, planner);
+    this.v2Observer.apply({
+      type: "auditor-returned",
+      ts: Date.now(),
+      allCriteriaResolved: this.allCriteriaResolvedSnapshot(),
+      newTodosCount,
+    });
   }
 
   private applyAuditorResult(result: AuditorResult, planner: Agent): void {
@@ -2721,6 +2774,25 @@ export class BlackboardRunner implements SwarmRunner {
     // of the stale-specific branch so todo_posted / todo_committed /
     // todo_claimed / finding_posted etc. also flush.
     this.scheduleStateWrite();
+    // V2 Step 3b.2: feed todo lifecycle events into the parallel reducer
+    // BEFORE the stale-replan early return below. todo_committed +
+    // todo_skipped both reduce the open-todo count; the V2 reducer's
+    // executing→auditing transition fires when remainingTodos AND ctx
+    // counts hit zero. ctx is read live via the closure passed to the
+    // observer's getCtx, so it always reflects the post-event state.
+    if (ev.type === "todo_committed") {
+      this.v2Observer.apply({
+        type: "todo-committed",
+        ts: Date.now(),
+        remainingTodos: this.board.counts().open,
+      });
+    } else if (ev.type === "todo_skipped") {
+      this.v2Observer.apply({
+        type: "todo-skipped",
+        ts: Date.now(),
+        remainingTodos: this.board.counts().open,
+      });
+    }
     if (ev.type !== "todo_stale") return;
     this.staleEventCount++;
     this.enqueueReplan(ev.todoId);
@@ -3228,6 +3300,23 @@ export class BlackboardRunner implements SwarmRunner {
       tierHistory: this.tierHistory.length > 0 ? this.tierHistory.slice() : undefined,
       // Task #65: persist transcript so the modal + review view can replay.
       transcript: this.transcript,
+      // V2 Step 3b.2: parallel-track reducer snapshot. Includes the
+      // current V2 phase + accumulated divergence list. Zero divergences
+      // = V1↔V2 agreement across the full run (promotion-ready).
+      v2State: {
+        phase: this.v2Observer.getState().phase,
+        enteredAt: this.v2Observer.getState().enteredAt,
+        detail: this.v2Observer.getState().detail,
+        pausedReason: this.v2Observer.getState().pausedReason,
+        divergenceCount: this.v2Observer.getDivergences().length,
+        divergences: this.v2Observer.getDivergences().map((d) => ({
+          v1Phase: d.v1Phase,
+          v2Phase: d.v2Phase,
+          expectedV2Phases: d.expectedV2Phases,
+          ts: d.ts,
+          trigger: d.trigger,
+        })),
+      },
     });
 
     // Unit 49: dual write — per-run timestamped file (never overwrites
@@ -3834,6 +3923,26 @@ export class BlackboardRunner implements SwarmRunner {
     // Unit 31: phase is a first-class state change; persist it so an
     // observer tailing blackboard-state.json sees the transition promptly.
     this.scheduleStateWrite();
+    // V2 Step 3b.2: compare V1 phase to V2 reducer state. Default
+    // observer divergence callback is a no-op; we surface to diag log
+    // here so telemetry consumers can spot V1↔V2 drift in real time.
+    // The PHASE_MAPPING accepts coarse V1 → fine V2 transitions
+    // (V1 executing → V2 {executing, auditing, tier-up}); only true
+    // wedges fire here.
+    const ok = this.v2Observer.checkPhase(phase, Date.now(), "setPhase");
+    if (!ok) {
+      const last = this.v2Observer.getDivergences().slice(-1)[0];
+      if (last) {
+        this.opts.logDiag?.({
+          type: "_v2_state_divergence",
+          v1Phase: last.v1Phase,
+          v2Phase: last.v2Phase,
+          expected: last.expectedV2Phases,
+          ts: last.ts,
+          trigger: last.trigger,
+        });
+      }
+    }
   }
 
   private emitAgentState(s: AgentState): void {
