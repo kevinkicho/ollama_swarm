@@ -164,7 +164,18 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
       entry.text.includes("Issuing repair prompt") ||
       entry.text.includes("transport error") ||
       entry.text.includes("retry ") ||
-      entry.text.includes("worker idle but exit-condition");
+      entry.text.includes("worker idle but exit-condition") ||
+      // Unit 24 fallback chain firing — agent-N failed, routing to next.
+      // This is recovery, NOT a fatal error: the run continues.
+      entry.text.includes("planner call exhausted retries") ||
+      entry.text.includes("Trying next fallback agent") ||
+      entry.text.includes("Planner call routed to") ||
+      entry.text.includes("Replanner JSON invalid") ||
+      entry.text.includes("Run halted: aborted") ||
+      // Pause/resume on quota wall + drain-related messages
+      entry.text.includes("absolute turn cap") ||
+      entry.text.includes("Pause probe") ||
+      entry.text.includes("Drain watcher");
     if (isRecoveryNotice) {
       return (
         <div className="border-l-2 border-amber-700/60 pl-3 py-1 text-xs text-amber-300/80 font-mono">
