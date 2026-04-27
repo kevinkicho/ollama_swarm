@@ -13,6 +13,8 @@ export type { TranscriptEntrySummary } from "./transcriptEntrySummary.js";
 export { summarizeAgentJson } from "./summarizeAgentJson.js";
 export type { AgentJsonSummary } from "./summarizeAgentJson.js";
 
+export { formatServerSummary } from "./formatServerSummary.js";
+
 export {
   INITIAL_STATE,
   reduce,
