@@ -49,9 +49,58 @@
 
 ---
 
+## Data-grounded findings from 2026-04-27 blackboard run f78342b7
+
+Each item below is anchored to an artifact in `runs/_monitor/f78342b7/`. Do
+not promote any of these to "needs-fixing" without re-checking the artifact.
+
+- **Issue #3 — planner empty → repair → 0-todos** is structural. f78342b7
+  reproduced it with no model fallback attempted. Visibility fix in commit
+  `b794703` makes the failure loud; the **structural fix (model fallback
+  when planner returns empty/garbage)** is queued. **Trigger**: explicit
+  "design model-fallback for planner-empty."
+
+- **Issue #1 — OllamaClient 60s idle timer** was NOT exercised in f78342b7
+  (no `Ollama idle timeout` strings). The empty response in this run came
+  from a different cause (Ollama returned an empty response body within the
+  timer, before the 60s elapsed). Need a separate reproducer that forces
+  cold-start >60s. **Trigger**: explicit "reproduce cold-start idle
+  timeout" — likely needs a fresh Ollama process or deliberately-slow model.
+
+- **Issue #4 — WebUI bubble routing** partially verified. `run_finished`
+  bubble works (now amber for no-progress, emerald for completed — see
+  commit `b794703`). Earlier planner-output bubbles weren't captured
+  because Playwright's selector net (`[data-entry-id]`, `.transcript-entry`,
+  etc.) doesn't match anything in the current React tree — there are no
+  stable per-entry attributes. **Trigger**: explicit "make transcript
+  entries Playwright-friendly" — add `data-entry-id={entry.id}` +
+  `data-summary-kind={summary?.kind}` to MessageBubble's wrapping div.
+
+- **Default model drift** — `config.ts` default model is `glm-5.1:cloud`
+  but memory + post-2026-04-23 preference is `nemotron-3-super:cloud`. The
+  f78342b7 run used glm-5.1 because the form/API defaulted to it.
+  **Trigger**: explicit "switch default model to nemotron" — small commit,
+  but verify no test snapshot expects glm-5.1.
+
+- **`npm test` script is bash-only** — current `OPENCODE_SERVER_PASSWORD=test-only npm test`
+  prefix syntax fails when run from Windows `cmd.exe`. Tests work via
+  `cmd.exe /c "set OPENCODE_SERVER_PASSWORD=test-only && ..."` but that's
+  manual. **Trigger**: anytime; cross-env or a small shim wrapper.
+
+---
+
 ## Done recently (last 30 days; older lands in archive/blackboard-changelog.md)
 
-### 2026-04-27 (this session)
+### 2026-04-27 — late session: bug-fix round
+
+- ✅ `b794703` — issue #2 + #3 visibility + port defaults + monitor tooling
+  - blackboard: stopReason="no-progress" for 0-work runs (was masquerading as "completed")
+  - planner-empty system message now loud about the failure mode
+  - default ports 52243/52244 → 8243/8244 (Windows Hyper-V reserved range)
+  - new `scripts/monitor-blackboard-issues.mjs` + `scripts/capture-ui-snapshots.mjs`
+  - Playwright added as devDependency for ongoing UI verification
+
+### 2026-04-27 (earlier session)
 
 - ✅ V2 substrate complete through Steps 1–6a (commits `fa7ff71` through `94413bd`)
 - ✅ Step 5c.1 parallel-track TodoQueueV2 mirror (`41fa509`)
