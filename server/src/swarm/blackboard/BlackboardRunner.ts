@@ -2133,6 +2133,12 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   private async runWorker(agent: Agent): Promise<void> {
+    // Task #215: instrument the wait-loop to surface "all conditions to
+    // exit are NOT met" wedges. Periodically log which condition is
+    // keeping the worker in the wait branch so we can identify state
+    // wedges in real-time instead of post-mortem.
+    let waitTickN = 0;
+    let lastWaitDiagAt = 0;
     while (!this.stopping) {
       // Jittered poll so N workers don't hit the board in lockstep.
       const jitter = Math.floor(Math.random() * WORKER_POLL_JITTER_MS);
@@ -2172,7 +2178,50 @@ export class BlackboardRunner implements SwarmRunner {
       ) {
         return;
       }
-      if (counts.open === 0) continue;
+      // Task #216: emit "ready" status during the wait/poll branch so
+      // the UI doesn't show stale "thinking" from the start of the
+      // previous prompt. Without this, a worker that finished a prompt
+      // and is now polling shows as actively-thinking for minutes.
+      this.opts.manager.markStatus(agent.id, "ready", { lastMessageAt: Date.now() });
+      this.emitAgentState({
+        id: agent.id,
+        index: agent.index,
+        port: agent.port,
+        sessionId: agent.sessionId,
+        status: "ready",
+        lastMessageAt: Date.now(),
+      });
+      // Task #215: log wedge state every ~30s when the worker is
+      // sleeping in the wait branch. Captures which condition(s) are
+      // non-zero. Smoke run b2a4d987 (2026-04-26) hit exactly this
+      // state for 12+ min with no diagnostic signal which flag was
+      // wedged. The wedge is private state not exposed elsewhere.
+      if (counts.open === 0) {
+        waitTickN += 1;
+        const now = Date.now();
+        if (now - lastWaitDiagAt > 30_000) {
+          lastWaitDiagAt = now;
+          this.opts.logDiag?.({
+            type: "_worker_wait_wedge",
+            agentId: agent.id,
+            tickN: waitTickN,
+            counts: { ...counts },
+            replanPending: Array.from(this.replanPending),
+            replanRunning: this.replanRunning,
+            ts: now,
+          });
+          // Also surface to transcript on first occurrence per worker
+          // so the user sees something is off without grepping logs.
+          if (waitTickN === 1) {
+            this.appendSystem(
+              `[${agent.id}] worker idle but exit-condition not met: ` +
+                `claimed=${counts.claimed} stale=${counts.stale} ` +
+                `replanPending=${this.replanPending.size} replanRunning=${this.replanRunning}`,
+            );
+          }
+        }
+        continue;
+      }
 
       // Unit 45: prefer the claimable-finder so we skip todos whose
       // expectedFiles are already locked by a sibling worker's live

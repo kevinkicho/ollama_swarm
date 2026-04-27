@@ -144,7 +144,22 @@ export const useSwarm = create<SwarmStore>((set) => ({
   pheromones: {},
   mapperSlices: {},
 
-  setPhase: (phase, round) => set({ phase, round }),
+  setPhase: (phase, round) =>
+    set((s) => {
+      // Task #214: when transitioning to a terminal phase, hard-clear
+      // any leftover streaming state. Late `agent_streaming` events
+      // arriving AFTER the run-finished transcript_append would
+      // re-populate the StreamingDock and render bubbles AFTER the
+      // "Run finished" card — confusing post-run order. Forcing the
+      // streaming maps empty at terminal-phase guarantees the dock
+      // renders nothing and any late events get re-set into an empty
+      // map (still cleaned up by the 30s sweeper in Transcript.tsx).
+      const isTerminal = phase === "completed" || phase === "stopped" || phase === "failed";
+      if (isTerminal && (Object.keys(s.streaming).length > 0 || Object.keys(s.streamingMeta).length > 0)) {
+        return { phase, round, streaming: {}, streamingMeta: {} };
+      }
+      return { phase, round };
+    }),
   upsertAgent: (a) => set((s) => ({ agents: { ...s.agents, [a.id]: a } })),
   appendEntry: (e) =>
     set((s) => {
