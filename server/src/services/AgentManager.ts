@@ -80,10 +80,14 @@ export interface StreamPromptOpts {
   formatExpect?: "json" | "free";
 }
 
-// Task #196: stream-text threshold for the format sniff. Wide enough
-// to skip past common preambles like "Here is the JSON:" yet narrow
-// enough to abort wrong-format responses fast.
-const EARLY_FORMAT_SNIFF_BYTES = 2048;
+// Task #196: stream-text threshold for the format sniff. Set generously
+// — many planner models emit a thinking-mode preamble (chain-of-thought
+// reasoning) before the JSON. 2KB was too tight (false-positive on
+// glm-5.1's planner reasoning, smoke run f26d7d0f, 2026-04-26). 8KB is
+// large enough to accommodate the worst observed planner preamble while
+// still aborting wrong-format hallucinations (e3738692 produced 29KB
+// of markdown with zero JSON markers).
+const EARLY_FORMAT_SNIFF_BYTES = 8192;
 
 export interface SpawnOpts {
   cwd: string;
@@ -1093,35 +1097,43 @@ export class AgentManager {
         const stream = this.streamingByAgent.get(agent.id);
         if (stream) {
           stream.text = fullText;
-          // Task #196: early format-violation check. Once accumulated
-          // text crosses the sniff threshold, verify it looks like the
-          // expected format. If JSON expected and the first chunk
-          // contains no JSON markers (no `{`, no `[`, no fenced
-          // ```json), the model is producing wrong-format output.
-          // Abort early instead of letting the call run to completion.
-          // Catches the e3738692 pattern: worker model handed planner
-          // JSON prompt produces markdown headers for the entire turn.
+          // Task #196: continuous format-violation check. If JSON is
+          // expected, look for ANY JSON marker (`{`, `[`, "```json")
+          // anywhere in the cumulative text. As soon as one appears
+          // we mark the call format-OK and stop checking. If none has
+          // appeared by EARLY_FORMAT_SNIFF_BYTES, we conclude the model
+          // is producing wrong-format output and abort.
+          //
+          // Why "anywhere" not "head slice": planner models often emit
+          // thinking-mode preamble (chain-of-thought reasoning) before
+          // the JSON. Forcing the marker to be in the first 2KB caused
+          // false-positives (smoke run f26d7d0f, 2026-04-26 — glm-5.1
+          // produced multi-KB reasoning before the JSON, got aborted).
           if (
             stream.formatExpect === "json" &&
-            !stream.formatChecked &&
-            fullText.length >= EARLY_FORMAT_SNIFF_BYTES
+            !stream.formatChecked
           ) {
-            stream.formatChecked = true;
-            const head = fullText.slice(0, EARLY_FORMAT_SNIFF_BYTES);
-            const looksJson = head.includes("{") || head.includes("[") || head.includes("```json");
-            if (!looksJson) {
+            const looksJson =
+              fullText.includes("{") ||
+              fullText.includes("[") ||
+              fullText.includes("```json");
+            if (looksJson) {
+              // Marker found — stop checking on subsequent chunks.
+              stream.formatChecked = true;
+            } else if (fullText.length >= EARLY_FORMAT_SNIFF_BYTES) {
+              // Threshold crossed AND still no marker — wrong format.
               this.logDiag({
                 type: "_format_sniff_reject",
                 agentId: agent.id,
                 ourSessionId: agent.sessionId,
-                bytesScanned: head.length,
-                preview: head.slice(0, 200),
+                bytesScanned: fullText.length,
+                preview: fullText.slice(0, 200),
               });
               this.streamingByAgent.delete(agent.id);
               stream.signalCleanup?.();
               if (stream.timeoutHandle) clearTimeout(stream.timeoutHandle);
               stream.reject(new Error(
-                `format violation: expected JSON, first ${head.length} chars contain no JSON marker`,
+                `format violation: expected JSON, first ${fullText.length} chars contain no JSON marker`,
               ));
             }
           }
