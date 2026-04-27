@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Agent } from "../services/AgentManager.js";
 import { buildAgentsReadySummary } from "./agentsReadySummary.js";
+import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
 import type {
   AgentState,
   SwarmEvent,
@@ -327,26 +328,19 @@ export class RoundRobinRunner implements SwarmRunner {
     this.stats.countTurn(agent.id);
 
     const prompt = this.buildPrompt(agent, round, totalRounds);
-    // No "idle silence" cap. OpenCode's SSE /event stream is observed to stay
-    // completely silent across session.prompt's entire duration for our setup, so
-    // there is no reliable activity signal to gate on. We rely solely on the
-    // absolute turn cap below — if a prompt hasn't returned in 20 minutes, abort.
-    // Pattern 11: 20m → 4m. See CouncilRunner for rationale.
-    const ABSOLUTE_MAX_MS = 4 * 60_000;
-    const turnStart = Date.now();
-    this.opts.manager.touchActivity(agent.sessionId, turnStart);
-
+    // 2026-04-27: SSE-aware watchdog. Replaces the wall-clock 4-min cap
+    // that killed prompts the model was actively producing. The old
+    // comment claimed "OpenCode's SSE stays completely silent" — that
+    // was true before the #170 SSE auth fix; SSE chunks now flow
+    // reliably and AgentManager.getLastActivity tracks them. See
+    // sseAwareTurnWatchdog.
     const controller = new AbortController();
-    let abortedReason: string | null = null;
-    const watchdog = setInterval(() => {
-      if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
-        abortedReason = `absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s)`;
-        controller.abort(new Error(abortedReason));
-        // Tell opencode to stop working on this session too — otherwise the
-        // backend keeps burning compute on a result we're about to discard.
-        void agent.client.session.abort({ path: { id: agent.sessionId } }).catch(() => {});
-      }
-    }, 10_000);
+    const watchdog = startSseAwareTurnWatchdog({
+      manager: this.opts.manager,
+      sessionId: agent.sessionId,
+      controller,
+      abortSession: () => agent.client.session.abort({ path: { id: agent.sessionId } }).then(() => {}),
+    });
 
     try {
       // Unit 16: shared retry wrapper. Same retry semantics as
@@ -458,13 +452,13 @@ export class RoundRobinRunner implements SwarmRunner {
       this.opts.manager.markStatus(agent.id, "ready", { lastMessageAt: entry.ts });
       this.emitAgentState({ id: agent.id, index: agent.index, port: agent.port, sessionId: agent.sessionId, status: "ready", lastMessageAt: entry.ts });
     } catch (err) {
-      const msg = abortedReason ?? this.describeSdkError(err);
+      const msg = watchdog.getAbortReason() ?? this.describeSdkError(err);
       this.appendSystem(`[${agent.id}] error: ${msg}`);
       this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
       this.opts.manager.markStatus(agent.id, "failed", { error: msg });
       this.emitAgentState({ id: agent.id, index: agent.index, port: agent.port, sessionId: agent.sessionId, status: "failed", error: msg });
     } finally {
-      clearInterval(watchdog);
+      watchdog.cancel();
     }
   }
 
@@ -494,16 +488,14 @@ export class RoundRobinRunner implements SwarmRunner {
     this.appendSystem(`Synthesizing role-diff findings (agent-${lead.index})…`);
 
     const prompt = buildRoleDiffSynthesisPrompt(this.roles, this.transcript);
-    const ABSOLUTE_MAX_MS = 4 * 60_000;
-    const turnStart = Date.now();
-    this.opts.manager.touchActivity(lead.sessionId, turnStart);
+    // 2026-04-27: SSE-aware watchdog (see startSseAwareTurnWatchdog).
     const controller = new AbortController();
-    const watchdog = setInterval(() => {
-      if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
-        controller.abort(new Error(`absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s)`));
-        void lead.client.session.abort({ path: { id: lead.sessionId } }).catch(() => {});
-      }
-    }, 10_000);
+    const watchdog = startSseAwareTurnWatchdog({
+      manager: this.opts.manager,
+      sessionId: lead.sessionId,
+      controller,
+      abortSession: () => lead.client.session.abort({ path: { id: lead.sessionId } }).then(() => {}),
+    });
     try {
       const res = await promptWithRetry(lead, prompt, {
         signal: controller.signal,
@@ -577,7 +569,7 @@ export class RoundRobinRunner implements SwarmRunner {
       );
       return null;
     } finally {
-      clearInterval(watchdog);
+      watchdog.cancel();
       this.opts.manager.markStatus(lead.id, "ready");
       this.emitAgentState({
         id: lead.id,

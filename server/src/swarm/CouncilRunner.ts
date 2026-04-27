@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Agent } from "../services/AgentManager.js";
 import { buildAgentsReadySummary } from "./agentsReadySummary.js";
+import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
 import type {
   AgentState,
   SwarmEvent,
@@ -390,16 +391,14 @@ export class CouncilRunner implements SwarmRunner {
     this.appendSystem(`Synthesizing council consensus (agent-${lead.index})…`);
 
     const prompt = buildCouncilSynthesisPrompt(cfg.rounds, this.transcript);
-    const ABSOLUTE_MAX_MS = 4 * 60_000;
-    const turnStart = Date.now();
-    this.opts.manager.touchActivity(lead.sessionId, turnStart);
+    // 2026-04-27: SSE-aware watchdog (see startSseAwareTurnWatchdog).
     const controller = new AbortController();
-    const watchdog = setInterval(() => {
-      if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
-        controller.abort(new Error(`absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s)`));
-        void lead.client.session.abort({ path: { id: lead.sessionId } }).catch(() => {});
-      }
-    }, 10_000);
+    const watchdog = startSseAwareTurnWatchdog({
+      manager: this.opts.manager,
+      sessionId: lead.sessionId,
+      controller,
+      abortSession: () => lead.client.session.abort({ path: { id: lead.sessionId } }).then(() => {}),
+    });
     try {
       const onTokens = ({ promptTokens, responseTokens }: { promptTokens: number; responseTokens: number }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens);
       const res = await promptWithRetry(lead, prompt, {
@@ -482,7 +481,7 @@ export class CouncilRunner implements SwarmRunner {
       );
       return null;
     } finally {
-      clearInterval(watchdog);
+      watchdog.cancel();
       this.opts.manager.markStatus(lead.id, "ready");
       this.emitAgentState({
         id: lead.id,
@@ -513,25 +512,19 @@ export class CouncilRunner implements SwarmRunner {
     this.stats.countTurn(agent.id);
 
     const prompt = buildCouncilPrompt(agent.index, round, totalRounds, snapshot);
-    // Same absolute-turn cap rationale as RoundRobinRunner: no reliable idle
-    // signal from OpenCode's SSE, so we rely solely on the 20-minute ceiling.
-    // Pattern 11 (2026-04-24): lowered from 20m → 4m. nemotron-3-super:cloud
-    // has a long-tail of 4-7 min slow first-prompts (~12% of attempts);
-    // beyond ~4 min, the agent is almost certainly hung rather than slow.
-    // Aborting here unblocks the round so the rest of the swarm can finish.
-    const ABSOLUTE_MAX_MS = 4 * 60_000;
-    const turnStart = Date.now();
-    this.opts.manager.touchActivity(agent.sessionId, turnStart);
-
+    // 2026-04-27: replaced wall-clock 4-min cap with SSE-aware watchdog.
+    // Pre-fix the cap killed prompts the model was actively producing
+    // (cloud streaming has long-tail latency for big prompts but SSE
+    // chunks keep arriving — wall clock saw "4 min" and killed regardless).
+    // New behavior: only abort when SSE has been silent >90s OR total
+    // wall-clock exceeds 30 min. See sseAwareTurnWatchdog for details.
     const controller = new AbortController();
-    let abortedReason: string | null = null;
-    const watchdog = setInterval(() => {
-      if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
-        abortedReason = `absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s)`;
-        controller.abort(new Error(abortedReason));
-        void agent.client.session.abort({ path: { id: agent.sessionId } }).catch(() => {});
-      }
-    }, 10_000);
+    const watchdog = startSseAwareTurnWatchdog({
+      manager: this.opts.manager,
+      sessionId: agent.sessionId,
+      controller,
+      abortSession: () => agent.client.session.abort({ path: { id: agent.sessionId } }).then(() => {}),
+    });
 
     try {
       // Unit 16: shared retry wrapper.
@@ -645,7 +638,7 @@ export class CouncilRunner implements SwarmRunner {
         lastMessageAt: entry.ts,
       });
     } catch (err) {
-      const msg = abortedReason ?? describeSdkError(err);
+      const msg = watchdog.getAbortReason() ?? describeSdkError(err);
       this.appendSystem(`[${agent.id}] error: ${msg}`);
       this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
       this.opts.manager.markStatus(agent.id, "failed", { error: msg });
@@ -658,7 +651,7 @@ export class CouncilRunner implements SwarmRunner {
         error: msg,
       });
     } finally {
-      clearInterval(watchdog);
+      watchdog.cancel();
     }
   }
 

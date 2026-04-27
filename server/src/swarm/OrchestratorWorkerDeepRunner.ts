@@ -48,6 +48,7 @@ import type {
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import {
   buildDiscussionSummary,
@@ -523,18 +524,14 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
       thinkingSince: Date.now(),
     });
     this.stats.countTurn(agent.id);
-    const ABSOLUTE_MAX_MS = 4 * 60_000;
-    const turnStart = Date.now();
-    this.opts.manager.touchActivity(agent.sessionId, turnStart);
+    // 2026-04-27: SSE-aware watchdog (see startSseAwareTurnWatchdog).
     const controller = new AbortController();
-    let abortedReason: string | null = null;
-    const watchdog = setInterval(() => {
-      if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
-        abortedReason = `absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s)`;
-        controller.abort(new Error(abortedReason));
-        void agent.client.session.abort({ path: { id: agent.sessionId } }).catch(() => {});
-      }
-    }, 10_000);
+    const watchdog = startSseAwareTurnWatchdog({
+      manager: this.opts.manager,
+      sessionId: agent.sessionId,
+      controller,
+      abortSession: () => agent.client.session.abort({ path: { id: agent.sessionId } }).then(() => {}),
+    });
     try {
       const res = await promptWithRetry(agent, prompt, {
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
@@ -625,7 +622,7 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
       });
       return text;
     } catch (err) {
-      const msg = abortedReason ?? describeSdkError(err);
+      const msg = watchdog.getAbortReason() ?? describeSdkError(err);
       this.appendSystem(`[${agent.id}] error: ${msg}`);
       this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
       this.opts.manager.markStatus(agent.id, "failed", { error: msg });
@@ -639,7 +636,7 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
       });
       return "";
     } finally {
-      clearInterval(watchdog);
+      watchdog.cancel();
     }
   }
 

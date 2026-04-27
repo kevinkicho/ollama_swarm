@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Agent } from "../services/AgentManager.js";
 import { buildAgentsReadySummary } from "./agentsReadySummary.js";
+import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
 import type {
   AgentState,
   SwarmEvent,
@@ -436,20 +437,14 @@ export class MapReduceRunner implements SwarmRunner {
     });
     this.stats.countTurn(agent.id);
 
-    // Pattern 11: 20m → 4m. See CouncilRunner for rationale.
-    const ABSOLUTE_MAX_MS = 4 * 60_000;
-    const turnStart = Date.now();
-    this.opts.manager.touchActivity(agent.sessionId, turnStart);
-
+    // 2026-04-27: SSE-aware watchdog (see startSseAwareTurnWatchdog).
     const controller = new AbortController();
-    let abortedReason: string | null = null;
-    const watchdog = setInterval(() => {
-      if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
-        abortedReason = `absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s)`;
-        controller.abort(new Error(abortedReason));
-        void agent.client.session.abort({ path: { id: agent.sessionId } }).catch(() => {});
-      }
-    }, 10_000);
+    const watchdog = startSseAwareTurnWatchdog({
+      manager: this.opts.manager,
+      sessionId: agent.sessionId,
+      controller,
+      abortSession: () => agent.client.session.abort({ path: { id: agent.sessionId } }).then(() => {}),
+    });
 
     try {
       // Unit 16: shared retry wrapper.
@@ -549,7 +544,7 @@ export class MapReduceRunner implements SwarmRunner {
         lastMessageAt: entry.ts,
       });
     } catch (err) {
-      const msg = abortedReason ?? describeSdkError(err);
+      const msg = watchdog.getAbortReason() ?? describeSdkError(err);
       this.appendSystem(`[${agent.id}] error: ${msg}`);
       this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
       this.opts.manager.markStatus(agent.id, "failed", { error: msg });
@@ -562,7 +557,7 @@ export class MapReduceRunner implements SwarmRunner {
         error: msg,
       });
     } finally {
-      clearInterval(watchdog);
+      watchdog.cancel();
     }
   }
 
