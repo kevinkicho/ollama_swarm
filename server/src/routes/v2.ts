@@ -24,6 +24,28 @@ export interface V2RouterDeps {
 export function v2Router(deps: V2RouterDeps): Router {
   const r = Router();
 
+  // GET /api/v2/status → { flags: {...}, env: {...} }
+  // Reports which V2 flags are active so Kevin can verify the dev
+  // server picked up the env vars correctly. Cheap diagnostic — no
+  // expensive operations.
+  r.get("/status", (_req: Request, res: Response) => {
+    res.json({
+      flags: {
+        USE_OLLAMA_DIRECT: process.env.USE_OLLAMA_DIRECT === "1",
+        USE_WORKER_PIPELINE_V2: process.env.USE_WORKER_PIPELINE_V2 === "1",
+      },
+      eventLogPath: deps.eventLogPath,
+      v2Substrates: {
+        runStateMachine: "shared/src/runStateMachine.ts (Step 3a)",
+        runStateObserver: "server/src/swarm/blackboard/RunStateObserver.ts (Step 3b)",
+        todoQueueV2: "server/src/swarm/blackboard/TodoQueueV2.ts (Step 5a)",
+        workerPipelineV2: "server/src/swarm/blackboard/WorkerPipelineV2.ts (Step 5b)",
+        v2Adapters: "server/src/swarm/blackboard/v2Adapters.ts (Step 5c.2)",
+        eventLogReaderV2: "server/src/swarm/blackboard/EventLogReaderV2.ts (Step 6a)",
+      },
+    });
+  });
+
   // GET /api/v2/event-log/runs → { runs: [{ derived, recordCount }] }
   // Reads the event log, parses + slices into runs, and returns
   // derived state per slice. Suitable for a sidebar list — for

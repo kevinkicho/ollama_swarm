@@ -65,6 +65,31 @@ function getRunsHandler(router: import("express").Router): (
   throw new Error("could not find handler for GET /event-log/runs");
 }
 
+describe("v2Router /status", () => {
+  it("reports flag state from process.env", async () => {
+    const router = v2Router({ eventLogPath: "/tmp/test.jsonl" });
+    // Find /status handler
+    const stack = (router as unknown as { stack: Array<{
+      route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: unknown }> };
+    }> }).stack;
+    let handler: ((req: import("express").Request, res: import("express").Response) => unknown) | null = null;
+    for (const layer of stack) {
+      if (layer.route?.path === "/status" && layer.route.methods.get) {
+        handler = layer.route.stack[0].handle as typeof handler;
+        break;
+      }
+    }
+    if (!handler) throw new Error("could not find /status handler");
+    const { res, mock } = makeRes();
+    handler({} as import("express").Request, res);
+    const body = mock.body as { flags: Record<string, boolean>; v2Substrates: Record<string, string> };
+    assert.equal(typeof body.flags.USE_OLLAMA_DIRECT, "boolean");
+    assert.equal(typeof body.flags.USE_WORKER_PIPELINE_V2, "boolean");
+    assert.ok(body.v2Substrates.todoQueueV2);
+    assert.ok(body.v2Substrates.workerPipelineV2);
+  });
+});
+
 describe("v2Router /event-log/runs", () => {
   it("returns empty runs when log doesn't exist (ENOENT)", async () => {
     const router = v2Router({ eventLogPath: "/nonexistent/path/log.jsonl" });
