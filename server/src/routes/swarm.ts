@@ -7,6 +7,7 @@ import { config } from "../config.js";
 import { validateContinuousMode } from "./continuousMode.js";
 import type { Orchestrator } from "../services/Orchestrator.js";
 import { deriveCloneDir, RepoService } from "../services/RepoService.js";
+import { normalizeWslPath } from "../services/pathNormalize.js";
 
 // `parentPath` is the folder the user points at on the setup form; the repo
 // is cloned into `<parentPath>/<repo-name-from-URL>`. The older name
@@ -179,11 +180,15 @@ export function swarmRouter(orch: Orchestrator): Router {
   // doesn't exist, alreadyPresent=false and a fresh clone would happen.
   r.get("/preflight", async (req: Request, res: Response) => {
     const repoUrl = typeof req.query.repoUrl === "string" ? req.query.repoUrl : "";
-    const parentPath = typeof req.query.parentPath === "string" ? req.query.parentPath : "";
-    if (!repoUrl || !parentPath) {
+    const rawParentPath = typeof req.query.parentPath === "string" ? req.query.parentPath : "";
+    if (!repoUrl || !rawParentPath) {
       res.status(400).json({ error: "repoUrl and parentPath are required" });
       return;
     }
+    // WSL ↔ Windows boundary: clients under /mnt/c send WSL-style
+    // paths; on Windows we must re-spell them as <DRIVE>:\... or
+    // path.resolve will create a parallel C:\mnt\c\... tree.
+    const parentPath = normalizeWslPath(rawParentPath);
     let destPath: string;
     try {
       destPath = deriveCloneDir(repoUrl, parentPath);
@@ -293,7 +298,10 @@ export function swarmRouter(orch: Orchestrator): Router {
     }
     let localPath: string;
     try {
-      localPath = deriveCloneDir(parsed.data.repoUrl, parsed.data.parentPath);
+      // WSL ↔ Windows boundary normalization (see route preflight
+      // handler comment for context).
+      const parentPath = normalizeWslPath(parsed.data.parentPath);
+      localPath = deriveCloneDir(parsed.data.repoUrl, parentPath);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(400).json({ error: msg });
