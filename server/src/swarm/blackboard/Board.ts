@@ -85,6 +85,13 @@ export class Board {
   private readonly findings = new Map<string, Finding>();
   private readonly emit: (ev: BoardEvent) => void;
   private readonly genId: () => string;
+  // Task #205: cache the union of expectedFiles across claimed todos.
+  // Recomputing every worker tick is O(todos × workers) — under todo-
+  // thrash this becomes the dominant CPU cost. Invalidated by any
+  // mutation that could change which todos are in "claimed" status:
+  // claimTodo (adds), commitTodo / markStale / markSkipped / replan
+  // (removes). postTodo can't change locks (new todos start "open").
+  private lockedFilesCache: Set<string> | null = null;
 
   constructor(opts: BoardOpts = {}) {
     this.emit = opts.emit ?? (() => {});
@@ -160,6 +167,7 @@ export class Board {
     };
     todo.status = "claimed";
     todo.claim = claim;
+    this.lockedFilesCache = null; // Task #205: invalidate (claim adds locks)
     this.emit({ type: "todo_claimed", todoId: todo.id, claim: this.copyClaim(claim) });
     return { ok: true, todo: this.copyTodo(todo) };
   }
@@ -169,11 +177,13 @@ export class Board {
   // file paths a worker is creating count as locked too — the same
   // path being concurrently created twice is a real conflict.
   private collectLockedFiles(): Set<string> {
+    if (this.lockedFilesCache !== null) return this.lockedFilesCache;
     const out = new Set<string>();
     for (const t of this.todos.values()) {
       if (t.status !== "claimed") continue;
       for (const f of t.expectedFiles) out.add(f);
     }
+    this.lockedFilesCache = out;
     return out;
   }
 
@@ -203,6 +213,7 @@ export class Board {
 
     todo.status = "committed";
     todo.committedAt = input.committedAt;
+    this.lockedFilesCache = null; // Task #205: invalidate (commit removes locks)
     this.emit({ type: "todo_committed", todoId: todo.id });
     return { ok: true, todo: this.copyTodo(todo) };
   }
@@ -216,6 +227,7 @@ export class Board {
     todo.status = "stale";
     todo.staleReason = reason;
     todo.claim = undefined;
+    this.lockedFilesCache = null; // Task #205: invalidate (stale removes lock if was claimed)
     this.emit({ type: "todo_stale", todoId, reason, replanCount: todo.replanCount });
     return { ok: true, todo: this.copyTodo(todo) };
   }
@@ -239,6 +251,11 @@ export class Board {
     todo.status = "open";
     todo.replanCount += 1;
     todo.staleReason = undefined;
+    // Task #205: replan transitions stale → open. Stale wasn't holding
+    // a lock, open doesn't either, so cache invalidation isn't strictly
+    // needed — but expectedFiles may have been revised, so future locks
+    // could be different. Invalidate to stay correct.
+    this.lockedFilesCache = null;
     this.emit({
       type: "todo_replanned",
       todoId,
@@ -256,6 +273,7 @@ export class Board {
     todo.status = "skipped";
     todo.skippedReason = reason;
     todo.claim = undefined;
+    this.lockedFilesCache = null; // Task #205: invalidate (skip removes lock if was claimed)
     this.emit({ type: "todo_skipped", todoId, reason });
     return { ok: true, todo: this.copyTodo(todo) };
   }

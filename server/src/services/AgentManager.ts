@@ -474,12 +474,28 @@ export class AgentManager {
       };
       child.stdout?.on("data", teeLine("stdout"));
       child.stderr?.on("data", teeLine("stderr"));
+      // Task #206: track the per-PID `add` promise so the exit handler
+      // can await it before calling `remove`. Without this, a fast
+      // crash-before-ready can land remove() to disk BEFORE add() does,
+      // leaving the PID log with a stale entry the next orphan sweep
+      // tries to kill (potentially unrelated PID by then).
+      let addPromise: Promise<void> | null = null;
+
       child.on("exit", (code) => {
-        // Unit 38: child is dead; remove from PID log so startup
-        // orphan-reclamation doesn't try to kill an already-dead pid
-        // on the next restart. Fire-and-forget (best-effort).
-        if (child?.pid !== undefined) {
-          void this.pidTracker?.remove(child.pid);
+        // Unit 38 + Task #206: child is dead; remove from PID log so
+        // startup orphan-reclamation doesn't try to kill an already-
+        // dead pid on the next restart. Await the matching add() if
+        // one is still in flight — otherwise add+remove can race to
+        // disk in either order.
+        if (child?.pid !== undefined && this.pidTracker) {
+          const pid = child.pid;
+          const tracker = this.pidTracker;
+          void (async () => {
+            if (addPromise) {
+              await addPromise.catch(() => {}); // tolerate add failure
+            }
+            await tracker.remove(pid).catch(() => {});
+          })();
         }
         if (this.agents.has(id)) {
           this.setAgentState({ ...stateBase, status: "stopped", error: `exited with code ${code}` });
@@ -489,28 +505,36 @@ export class AgentManager {
       });
 
       // Task #121: track the PID IMMEDIATELY after spawn, NOT after
-      // session.create. Pre-#121, add() ran on line ~222 only AFTER
-      // waitForReady + createSessionWithRetry — a 20+ second window
-      // where the subprocess was alive but untracked. If the dev
-      // server died (kill -KILL during a code-reload, OOM, crash)
+      // session.create. Pre-#121, add() ran only AFTER waitForReady +
+      // createSessionWithRetry — a 20+ second window where the
+      // subprocess was alive but untracked. If the dev server died
       // mid-spawn, those subprocesses became orphans the next
       // reclaimOrphans sweep couldn't see (no entry in the PID file).
       //
-      // Observed today: a single dev session accumulated 70+ orphans
-      // (~24 GB RAM) across multiple restart cycles where spawn
-      // batches were in flight at restart time.
+      // Observed: a single dev session accumulated 70+ orphans (~24 GB
+      // RAM) across multiple restart cycles where spawn batches were
+      // in flight at restart time.
       //
       // Trade-off: subprocesses that fail to come up fully now get a
       // PID-log entry too. The child.on("exit") handler above removes
-      // them when they exit, so the file self-heals on failure paths.
-      // Net: tiny risk of a stale entry between failed-spawn and the
-      // exit-event delivery (vs huge risk of unkillable orphans).
-      if (child.pid !== undefined) {
-        void this.pidTracker?.add({
+      // them when they exit AND awaits this add() first (Task #206) so
+      // add+remove always settle in correct order on disk.
+      if (child.pid !== undefined && this.pidTracker) {
+        const trackedPid = child.pid;
+        addPromise = this.pidTracker.add({
           spawnedAt: Date.now(),
-          pid: child.pid,
+          pid: trackedPid,
           port,
           cwd: opts.cwd,
+        });
+        // Surface add() failures to diag log; do NOT block spawn on it.
+        addPromise.catch((err) => {
+          this.logDiag({
+            type: "_pid_track_add_failed",
+            agentId: id,
+            pid: trackedPid,
+            error: err instanceof Error ? err.message : String(err),
+          });
         });
       }
 
