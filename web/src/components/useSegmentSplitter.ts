@@ -5,6 +5,12 @@ import { useEffect, useRef, useState } from "react";
 // collapsible. 5s catches "deep reasoning" pauses without splitting
 // on the normal sub-second SSE-chunk cadence.
 export const SEGMENT_PAUSE_MS = 5000;
+// 2026-04-26 fix: minimum chars a segment must contain to be
+// checkpointed. Without this, models that emit single-char delimiters
+// (newline, whitespace) between reasoning phases create useless 1-char
+// segments. glm-5.1 in deep-reasoning mode reproduces this exactly:
+// real chunk → 5s pause → "\n" → 5s pause → real chunk → repeat.
+const MIN_SEGMENT_CHARS = 20;
 
 // Task #188: extracted from PersistentStreamBubble. Tracks the cumulative
 // text and splits it into segments wherever a >= pauseMs gap appeared
@@ -31,12 +37,22 @@ export function useSegmentSplitter(text: string, pauseMs: number = SEGMENT_PAUSE
       return;
     }
     // Text grew. If the gap since last change crosses the pause
-    // threshold, the prev.text.length boundary becomes a split point.
+    // threshold AND the segment that would end at this boundary has
+    // meaningful content (>=MIN_SEGMENT_CHARS since the last split),
+    // the prev.text.length boundary becomes a split point.
     const gap = Date.now() - prev.lastTextChangeAt;
     if (gap >= pauseMs && prev.text.length > 0) {
-      setSplitPoints((sp) =>
-        sp.length > 0 && sp[sp.length - 1] === prev.text.length ? sp : [...sp, prev.text.length],
-      );
+      setSplitPoints((sp) => {
+        const lastSplit = sp.length > 0 ? sp[sp.length - 1] : 0;
+        const candidateSplit = prev.text.length;
+        // Skip if exactly the same boundary as last (idempotency).
+        if (sp.length > 0 && sp[sp.length - 1] === candidateSplit) return sp;
+        // Skip if the segment from lastSplit to candidateSplit would be
+        // tiny — the model just emitted a delimiter, not a real thought.
+        // Let the next real chunk extend the prior segment instead.
+        if (candidateSplit - lastSplit < MIN_SEGMENT_CHARS) return sp;
+        return [...sp, candidateSplit];
+      });
     }
     prevTextRef.current = { text, lastTextChangeAt: Date.now() };
   }, [text, pauseMs]);
