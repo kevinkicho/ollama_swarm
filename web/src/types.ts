@@ -40,6 +40,12 @@ export interface TranscriptEntry {
   // authoritative parser. Absent on system/user entries and on
   // agent entries that didn't parse server-side.
   summary?: TranscriptEntrySummary;
+  // 2026-04-26: client-only field. When the streaming bubble
+  // computed segment split points (5s+ pause boundaries), they get
+  // copied here on transcript_append finalization so the post-stream
+  // bubble can render with the same segment structure the user saw
+  // live. Indices into `text`. Never set by server (typed optional).
+  segmentSplitPoints?: number[];
 }
 
 // Unit 54: mirror of the server-side discriminated union in

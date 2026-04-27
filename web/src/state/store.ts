@@ -35,6 +35,12 @@ interface SwarmStore {
     string,
     { startedAt: number; lastTextAt: number; status: "live" | "done"; endedAt?: number }
   >;
+  // 2026-04-26: per-agent segment split points captured by the
+  // streaming bubble's useSegmentSplitter. Copied onto the transcript
+  // entry on transcript_append so the finalized bubble can render with
+  // the same segment structure the user saw live (run b6d91d13 showed
+  // the structure disappearing on response finalization).
+  streamingSegmentPoints: Record<string, number[]>;
   todos: Record<string, Todo>;
   findings: Finding[];
   contract?: ExitContract;
@@ -78,6 +84,11 @@ interface SwarmStore {
   // transcript_append takes over that DOM position naturally via
   // appendEntry's existing delete-from-streaming side effect.
   markStreamingEnded: (agentId: string) => void;
+  // 2026-04-26: streaming bubble pushes its computed split points
+  // here on every change. appendEntry copies the latest set onto the
+  // finalized transcript entry as `segmentSplitPoints` so the
+  // post-stream bubble can render with the same segment structure.
+  setSegmentPoints: (agentId: string, points: number[]) => void;
 
   upsertTodo: (t: Todo) => void;
   applyClaim: (todoId: string, claim: Claim) => void;
@@ -130,6 +141,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   transcript: [],
   streaming: {},
   streamingMeta: {},
+  streamingSegmentPoints: {},
   todos: {},
   findings: [],
   contract: undefined,
@@ -156,7 +168,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       // map (still cleaned up by the 30s sweeper in Transcript.tsx).
       const isTerminal = phase === "completed" || phase === "stopped" || phase === "failed";
       if (isTerminal && (Object.keys(s.streaming).length > 0 || Object.keys(s.streamingMeta).length > 0)) {
-        return { phase, round, streaming: {}, streamingMeta: {} };
+        return { phase, round, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {} };
       }
       return { phase, round };
     }),
@@ -166,11 +178,27 @@ export const useSwarm = create<SwarmStore>((set) => ({
       if (s.transcript.some((t) => t.id === e.id)) return s;
       const nextStreaming = { ...s.streaming };
       const nextMeta = { ...s.streamingMeta };
+      const nextSegPts = { ...s.streamingSegmentPoints };
+      // 2026-04-26: copy the streaming bubble's split points onto the
+      // transcript entry so the finalized bubble can render segments.
+      // Only when the entry doesn't already carry them (server might
+      // set them in the future too).
+      let entryToAdd = e;
       if (e.agentId) {
+        const captured = s.streamingSegmentPoints[e.agentId];
+        if (captured && captured.length > 0 && !e.segmentSplitPoints) {
+          entryToAdd = { ...e, segmentSplitPoints: captured };
+        }
         delete nextStreaming[e.agentId];
         delete nextMeta[e.agentId];
+        delete nextSegPts[e.agentId];
       }
-      return { transcript: [...s.transcript, e], streaming: nextStreaming, streamingMeta: nextMeta };
+      return {
+        transcript: [...s.transcript, entryToAdd],
+        streaming: nextStreaming,
+        streamingMeta: nextMeta,
+        streamingSegmentPoints: nextSegPts,
+      };
     }),
   setStreaming: (agentId, text) =>
     set((s) => {
@@ -211,6 +239,25 @@ export const useSwarm = create<SwarmStore>((set) => ({
         streamingMeta: {
           ...s.streamingMeta,
           [agentId]: { ...prior, status: "done", endedAt: Date.now() },
+        },
+      };
+    }),
+  // 2026-04-26: streaming-bubble pushes the latest split-points snapshot
+  // here. appendEntry copies them to the finalized transcript entry.
+  setSegmentPoints: (agentId, points) =>
+    set((s) => {
+      const prior = s.streamingSegmentPoints[agentId] ?? [];
+      // Only update if changed — avoids needless renders.
+      if (
+        prior.length === points.length &&
+        prior.every((p, i) => p === points[i])
+      ) {
+        return s;
+      }
+      return {
+        streamingSegmentPoints: {
+          ...s.streamingSegmentPoints,
+          [agentId]: [...points],
         },
       };
     }),
@@ -324,7 +371,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       round: 0,
       agents: {},
       transcript: [],
-      streaming: {}, streamingMeta: {},
+      streaming: {}, streamingMeta: {}, streamingSegmentPoints: {},
       todos: {},
       findings: [],
       contract: undefined,
@@ -383,7 +430,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       // divide yet, and it avoids the "first-paint shows a divider"
       // weirdness at run start.
       if (s.transcript.length === 0) {
-        return { agents: {}, streaming: {}, streamingMeta: {}, latency: {}, ...blackboardReset };
+        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, ...blackboardReset };
       }
       // Task #46 also: dedupe consecutive dividers. If the last entry
       // is already a run-start marker, don't stack a second one —
@@ -395,7 +442,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
         (lastEntry.text === "— new run started —" ||
           lastEntry.text.startsWith("▸▸RUN-START▸▸"));
       if (isLastADivider) {
-        return { agents: {}, streaming: {}, streamingMeta: {}, latency: {}, ...blackboardReset };
+        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, ...blackboardReset };
       }
       // Build the divider text. When metadata is supplied, prefix
       // with the sentinel + encode fields as a pipe-separated line
@@ -414,7 +461,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
         : "— new run started —";
       return {
         agents: {},
-        streaming: {}, streamingMeta: {},
+        streaming: {}, streamingMeta: {}, streamingSegmentPoints: {},
         latency: {},
         ...blackboardReset,
         transcript: [

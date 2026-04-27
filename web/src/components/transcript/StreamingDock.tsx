@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { agentBubblePalette, hueForAgent } from "../agentPalette";
-import { useSegmentSplitter } from "../useSegmentSplitter";
+import { useSegmentSplitterWithPoints } from "../useSegmentSplitter";
+import { useSwarm } from "../../state/store";
 import { MAX_BUBBLE_HEIGHT_PX } from "./JsonBubbles";
 
 // Task #173 + #176 Phase A+B: per-agent streaming dock. Each agent
@@ -51,6 +52,7 @@ export function StreamingDock({
       {ordered.map((slot) => (
         <PersistentStreamBubble
           key={`stream-${slot.id}`}
+          agentId={slot.id}
           agentIndex={slot.agentIndex}
           text={slot.text}
           meta={slot.meta}
@@ -61,10 +63,12 @@ export function StreamingDock({
 }
 
 function PersistentStreamBubble({
+  agentId,
   agentIndex,
   text,
   meta,
 }: {
+  agentId: string;
   agentIndex: number;
   text: string;
   meta: { startedAt: number; lastTextAt: number; status: "live" | "done"; endedAt?: number } | undefined;
@@ -76,7 +80,16 @@ function PersistentStreamBubble({
   const sinceLastText = meta ? Math.max(0, now - meta.lastTextAt) : 0;
   const sinceStart = meta ? Math.max(0, now - meta.startedAt) : 0;
 
-  const segments = useSegmentSplitter(text);
+  const { segments, splitPoints } = useSegmentSplitterWithPoints(text);
+  // 2026-04-26: persist split points to the store so the finalized
+  // bubble can render the same segment structure after the response
+  // completes. Without this, the structure user saw live disappears.
+  const setSegmentPoints = useSwarm((s) => s.setSegmentPoints);
+  useEffect(() => {
+    setSegmentPoints(agentId, splitPoints);
+    // Use length+last as a cheap identity check — splitPoints is
+    // monotonically growing, so this catches every change.
+  }, [agentId, splitPoints.length, splitPoints[splitPoints.length - 1], setSegmentPoints]);
 
   // Subtitle changes based on activity recency:
   //   <2s since last text → "writing…"
@@ -135,8 +148,9 @@ function PersistentStreamBubble({
 
 // Task #178: collapsible past-segment. Default collapsed showing
 // "▸ N: first ~80 chars… (M chars)"; click to expand into a
-// scrollable preformatted block.
-function CollapsedSegment({
+// scrollable preformatted block. Exported 2026-04-26 so the finalized
+// bubble can reuse it for the segment-preserved post-stream view.
+export function CollapsedSegment({
   index,
   text,
   hue,

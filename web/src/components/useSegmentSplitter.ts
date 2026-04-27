@@ -20,7 +20,15 @@ const MIN_SEGMENT_CHARS = 20;
 // Resets segment state when the input text shrinks or restarts (i.e. a
 // new prompt cycle reuses the same bubble). Caller owns the lifecycle of
 // the underlying agent — this hook is a pure transformer of `text`.
-export function useSegmentSplitter(text: string, pauseMs: number = SEGMENT_PAUSE_MS): string[] {
+//
+// 2026-04-26: also returns splitPoints (the raw indices) so callers can
+// persist them across the streaming-bubble → finalized-bubble transition.
+// Without this, the segment structure the user sees live disappears once
+// the response finalizes — visible in run b6d91d13.
+export function useSegmentSplitterWithPoints(
+  text: string,
+  pauseMs: number = SEGMENT_PAUSE_MS,
+): { segments: string[]; splitPoints: number[] } {
   const [splitPoints, setSplitPoints] = useState<number[]>([]);
   const prevTextRef = useRef<{ text: string; lastTextChangeAt: number }>({
     text: "",
@@ -65,5 +73,26 @@ export function useSegmentSplitter(text: string, pauseMs: number = SEGMENT_PAUSE
     cursor = sp;
   }
   segments.push(text.slice(cursor));
-  return segments;
+  return { segments, splitPoints };
+}
+
+// Backwards-compatible alias — returns just the segments array. Callers
+// that don't need to persist splitPoints can keep using this.
+export function useSegmentSplitter(text: string, pauseMs: number = SEGMENT_PAUSE_MS): string[] {
+  return useSegmentSplitterWithPoints(text, pauseMs).segments;
+}
+
+// Pure helper: rebuild segments from text + persisted splitPoints. Used
+// by the finalized-bubble path to render with the same segment structure
+// the streaming bubble showed live.
+export function segmentsFromSplitPoints(text: string, splitPoints: number[]): string[] {
+  const out: string[] = [];
+  let cursor = 0;
+  for (const sp of splitPoints) {
+    if (sp <= cursor || sp > text.length) continue;
+    out.push(text.slice(cursor, sp));
+    cursor = sp;
+  }
+  out.push(text.slice(cursor));
+  return out;
 }

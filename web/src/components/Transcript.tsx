@@ -3,11 +3,13 @@ import { useSwarm } from "../state/store";
 import type { TranscriptEntry, TranscriptEntrySummary } from "../types";
 import { summarizeAgentJson } from "./transcriptSummarize";
 import { agentBubblePalette, hueForAgent } from "./agentPalette";
-import { StreamingDock } from "./transcript/StreamingDock";
+import { StreamingDock, CollapsedSegment } from "./transcript/StreamingDock";
+import { segmentsFromSplitPoints } from "./useSegmentSplitter";
 import {
   AgentJsonBubble,
   CollapsibleBlock,
   JsonPrettyBubble,
+  MAX_BUBBLE_HEIGHT_PX,
   tryPrettyJson,
 } from "./transcript/JsonBubbles";
 import { WorkerHunksBubble, tryParseWorkerHunks } from "./transcript/WorkerHunksBubble";
@@ -483,6 +485,31 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
         header={header}
         json={prettyJson}
       />
+    );
+  }
+  // 2026-04-26: prose response with preserved segment split points from
+  // streaming. Renders the same segment view the user saw live: previous
+  // segments collapsed, last segment shown expanded. Without this, the
+  // organized "thinking phases" view disappears on response finalization.
+  if (entry.segmentSplitPoints && entry.segmentSplitPoints.length > 0) {
+    const segments = segmentsFromSplitPoints(entry.text, entry.segmentSplitPoints);
+    return (
+      <div className={className} style={style}>
+        {header}
+        <div className="space-y-1.5 mt-1">
+          {segments.slice(0, -1).map((seg, i) => (
+            <CollapsedSegment key={i} index={i} text={seg} hue={hue} />
+          ))}
+          {segments.length > 0 ? (
+            <div
+              className="whitespace-pre-wrap opacity-90 overflow-y-auto"
+              style={{ maxHeight: `${MAX_BUBBLE_HEIGHT_PX}px` }}
+            >
+              {segments[segments.length - 1] || " "}
+            </div>
+          ) : null}
+        </div>
+      </div>
     );
   }
   return <CollapsibleBlock className={className} style={style} header={header} text={entry.text} />;
