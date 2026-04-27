@@ -1172,7 +1172,7 @@ export class BlackboardRunner implements SwarmRunner {
     // Unit 24: planner fallback. If primary planner exhausts retries,
     // fall through to each worker in turn so the run survives a
     // single-shard cloud cold-start failure.
-    const { response: firstResponse, agentUsed: contractAgent } = await this.promptPlannerWithFallback(
+    const { response: firstResponse, agentUsed: contractAgent } = await this.promptPlannerSafely(
       agent,
       `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed)}`,
     );
@@ -1184,7 +1184,7 @@ export class BlackboardRunner implements SwarmRunner {
       this.appendSystem(
         `Contract response did not parse (${parsed.reason}). Issuing repair prompt.`,
       );
-      const { response: repairResponse, agentUsed: repairAgent } = await this.promptPlannerWithFallback(
+      const { response: repairResponse, agentUsed: repairAgent } = await this.promptPlannerSafely(
         contractAgent,
         `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractRepairPrompt(
           firstResponse,
@@ -1262,7 +1262,7 @@ export class BlackboardRunner implements SwarmRunner {
   //
   // Phase B (MERGE): the planner receives all parseable drafts in one
   // prompt and produces the final authoritative contract. Uses the
-  // usual promptPlannerWithFallback so a planner cold-start failure
+  // usual promptPlannerSafely so a planner cold-start failure
   // cycles through workers as merge candidates.
   //
   // Returns the merged ParsedContract on success, OR the sole
@@ -1335,7 +1335,7 @@ export class BlackboardRunner implements SwarmRunner {
     );
     const mergePrompt = buildCouncilContractMergePrompt(seed, drafts);
     const { response: mergeResponse, agentUsed: mergeAgent } =
-      await this.promptPlannerWithFallback(planner, mergePrompt);
+      await this.promptPlannerSafely(planner, mergePrompt);
     if (this.stopping) return null;
     this.appendAgent(mergeAgent, mergeResponse);
 
@@ -1345,7 +1345,7 @@ export class BlackboardRunner implements SwarmRunner {
         `Council merge response did not parse (${mergeParsed.reason}). Issuing repair prompt.`,
       );
       const { response: repairResponse, agentUsed: repairAgent } =
-        await this.promptPlannerWithFallback(
+        await this.promptPlannerSafely(
           mergeAgent,
           `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractRepairPrompt(
             mergeResponse,
@@ -1460,8 +1460,8 @@ export class BlackboardRunner implements SwarmRunner {
   // ---------------------------------------------------------------------
 
   private async runPlanner(agent: Agent, seed: PlannerSeed): Promise<void> {
-    // Unit 24: planner fallback (see promptPlannerWithFallback comment).
-    const { response: firstResponse, agentUsed: planAgent } = await this.promptPlannerWithFallback(
+    // Unit 24: planner fallback (see promptPlannerSafely comment).
+    const { response: firstResponse, agentUsed: planAgent } = await this.promptPlannerSafely(
       agent,
       `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed)}`,
     );
@@ -1471,7 +1471,7 @@ export class BlackboardRunner implements SwarmRunner {
     let parsed = parsePlannerResponse(firstResponse);
     if (!parsed.ok) {
       this.appendSystem(`Planner response did not parse (${parsed.reason}). Issuing repair prompt.`);
-      const { response: repairResponse, agentUsed: repairAgent } = await this.promptPlannerWithFallback(
+      const { response: repairResponse, agentUsed: repairAgent } = await this.promptPlannerSafely(
         planAgent,
         `${PLANNER_SYSTEM_PROMPT}\n\n${buildRepairPrompt(firstResponse, parsed.reason)}`,
       );
@@ -1869,7 +1869,7 @@ export class BlackboardRunner implements SwarmRunner {
       userDirective: this.active.userDirective,
     });
 
-    const { response, agentUsed } = await this.promptPlannerWithFallback(
+    const { response, agentUsed } = await this.promptPlannerSafely(
       planner,
       prompt,
     );
@@ -1882,7 +1882,7 @@ export class BlackboardRunner implements SwarmRunner {
         `Tier ${nextTier} response did not parse (${parsed.reason}). Issuing repair prompt.`,
       );
       const { response: repairResponse, agentUsed: repairAgent } =
-        await this.promptPlannerWithFallback(
+        await this.promptPlannerSafely(
           agentUsed,
           `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractRepairPrompt(
             response,
@@ -2022,14 +2022,14 @@ export class BlackboardRunner implements SwarmRunner {
       clonePath: this.active?.localPath ?? "",
       appendSystem: (text) => this.appendSystem(text),
     });
-    // Unit 24: planner fallback (see promptPlannerWithFallback comment).
+    // Unit 24: planner fallback (see promptPlannerSafely comment).
     // Unit 58: when a dedicated auditor agent was spawned, route the
     // audit prompt to it instead of reusing the planner. Workers can
     // continue draining new todos in parallel during the audit (they
-    // were idle on the planner-as-auditor path). promptPlannerWithFallback's
+    // were idle on the planner-as-auditor path). promptPlannerSafely's
     // fallback-to-worker safety net still kicks in if the auditor times out.
     const auditPrimary = this.auditor ?? planner;
-    const { response: firstResponse, agentUsed: auditAgent } = await this.promptPlannerWithFallback(
+    const { response: firstResponse, agentUsed: auditAgent } = await this.promptPlannerSafely(
       auditPrimary,
       `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorUserPrompt(seed)}`,
     );
@@ -2045,7 +2045,7 @@ export class BlackboardRunner implements SwarmRunner {
         `Auditor response did not parse (${parsed.reason}). Issuing repair prompt.`,
       );
       // Unit 58: repair pass also stays on the auditor (or falls back).
-      const { response: repairResponse, agentUsed: repairAgent } = await this.promptPlannerWithFallback(
+      const { response: repairResponse, agentUsed: repairAgent } = await this.promptPlannerSafely(
         auditAgent,
         `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorRepairPrompt(firstResponse, parsed.reason)}`,
       );
@@ -2751,8 +2751,8 @@ export class BlackboardRunner implements SwarmRunner {
     let response: string;
     let replanAgent: Agent;
     try {
-      // Unit 24: planner fallback (see promptPlannerWithFallback comment).
-      const r = await this.promptPlannerWithFallback(
+      // Unit 24: planner fallback (see promptPlannerSafely comment).
+      const r = await this.promptPlannerSafely(
         planner,
         `${REPLANNER_SYSTEM_PROMPT}\n\n${buildReplannerUserPrompt(seed)}`,
       );
@@ -2775,7 +2775,7 @@ export class BlackboardRunner implements SwarmRunner {
       let repair: string;
       let repairAgent: Agent;
       try {
-        const r = await this.promptPlannerWithFallback(
+        const r = await this.promptPlannerSafely(
           replanAgent,
           `${REPLANNER_SYSTEM_PROMPT}\n\n${buildReplannerRepairPrompt(response, parsed.reason)}`,
         );
@@ -3414,88 +3414,60 @@ export class BlackboardRunner implements SwarmRunner {
   // Prompting
   // ---------------------------------------------------------------------
 
-  // Absolute-cap-only watchdog. No idle-silence detection because OpenCode
-  // doesn't forward usable activity events for our ollama provider setup.
-  // Unit 24: planner-call fallback. Tries the primary planner first
-  // (already gets 3 retries via promptAgent → promptWithRetry). If that
-  // exhausts, falls through to each remaining live agent in index order
-  // — each gets its own fresh 3-retry budget against its own session.
-  // Planner identity stays with agent-1 in the UI/summary; only the
-  // CALL is routed elsewhere. Throws only if every agent exhausted.
+  // Task #220: replaces Unit 24 fallback chain (#195/#190) with a
+  // health-check + respawn approach. Why the change:
+  //   - The old fallback chain re-routed planner prompts to a worker
+  //     agent's session. Even with the model override (#195), the
+  //     worker session has accumulated context from prior worker
+  //     prompts — the planner's reasoning gets polluted.
+  //   - The "primary chip reset to ready" (#190) was misleading when
+  //     the primary's subprocess was actually dead — every subsequent
+  //     planner call wastes one attempt on the dead primary, then
+  //     fallback again, then chip resets to ready again. The UI looked
+  //     like the agent was alive when it was a corpse.
   //
-  // Why this works for ALL planner prompts (not just the contract):
-  // every planner call (contract / runPlanner / replanOne / runAuditor)
-  // builds its prompt fresh from in-memory state (contract object,
-  // board.listTodos(), file contents). The SDK session is just a
-  // transport — no per-session memory carries between calls. So
-  // routing the same prompt to a different agent's session yields an
-  // equally valid answer.
-  private async promptPlannerWithFallback(
+  // New behavior: before every planner-role call, ping the planner's
+  // /api/health. If alive → proceed. If dead → respawn the subprocess
+  // with the same identity (id, index, model) and a fresh session.
+  // Then prompt. Identity preserved, no context pollution, no misleading
+  // chip state. If respawn itself fails, the run ends cleanly with the
+  // actual root cause surfaced.
+  private async promptPlannerSafely(
     primaryAgent: Agent,
     promptText: string,
     agentName: "swarm" | "swarm-read" = "swarm-read",
   ): Promise<{ response: string; agentUsed: Agent }> {
-    // Unit 37: planner / auditor / replanner / tier-up calls default to
-    // `swarm-read` so they can actually inspect the code via read / grep /
-    // glob / list tools. Workers continue calling promptAgent directly
-    // with the default `swarm` (no tools) — see runWorker.
-    const fallbacks = this.opts.manager.list().filter((a) => a.id !== primaryAgent.id);
-    const tried: Agent[] = [primaryAgent, ...fallbacks];
-    // Task #195: when routing to a fallback agent, override its model with
-    // the primary planner's model. The session is just transport; the model
-    // produces the answer. Without this, gemma4 (worker model) gets handed
-    // the planner's JSON contract prompt and hallucinates markdown for
-    // ~14 minutes (debate-tcg run e3738692, 2026-04-26).
-    const plannerModel = primaryAgent.model;
-    let lastErr: unknown;
-    for (let i = 0; i < tried.length; i++) {
-      const agent = tried[i];
-      const modelOverride = i === 0 ? undefined : plannerModel;
+    let agent = primaryAgent;
+    // Quick health check. ~1s budget; cost negligible vs. a planner prompt.
+    const healthy = await this.opts.manager.pingAgentHealth(agent);
+    if (!healthy) {
+      this.appendSystem(`[${agent.id}] subprocess unresponsive — respawning…`);
       try {
-        const response = await this.promptAgent(agent, promptText, agentName, modelOverride);
-        if (i > 0) {
-          this.appendSystem(
-            `Planner call routed to ${agent.id} (using planner model ${plannerModel}) ` +
-              `after ${primaryAgent.id} exhausted retries. ` +
-              `Run continues; ${primaryAgent.id} keeps planner identity for future calls.`,
-          );
-          // Task #190: clear primary planner's "failed" chip after the
-          // fallback succeeded — the failure was for ONE call, the agent
-          // is still in the pool and will be tried again on the next
-          // planner call. Without this the UI shows a scary red "failed"
-          // panel for an entirely-recovered situation.
-          this.opts.manager.markStatus(primaryAgent.id, "ready", { lastMessageAt: Date.now() });
-          this.emitAgentState({
-            id: primaryAgent.id,
-            index: primaryAgent.index,
-            port: primaryAgent.port,
-            sessionId: primaryAgent.sessionId,
-            status: "ready",
-            lastMessageAt: Date.now(),
-          });
-        }
-        return { response, agentUsed: agent };
-      } catch (err) {
-        lastErr = err;
-        if (this.stopping) throw err;
-        const msg = err instanceof Error ? err.message : String(err);
-        const isLast = i === tried.length - 1;
+        agent = await this.opts.manager.respawnAgent(agent);
         this.appendSystem(
-          `[${agent.id}] planner call exhausted retries (${msg}). ` +
-            (isLast
-              ? "All fallback agents exhausted; planner-phase will fail."
-              : `Trying next fallback agent (${tried[i + 1].id}).`),
+          `[${agent.id}] respawned on port ${agent.port} (model=${agent.model}). Resuming planner call.`,
         );
+        // Update the runner's planner reference if this WAS the planner.
+        if (this.planner && this.planner.id === agent.id) {
+          this.planner = agent;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.appendSystem(`[${agent.id}] respawn failed: ${msg}. Run cannot continue.`);
+        throw new Error(`Planner subprocess respawn failed: ${msg}`);
       }
     }
-    throw lastErr ?? new Error("all planner fallbacks exhausted");
+    // Promptly run with retries (promptWithRetry handles transient transport
+    // errors; we don't catch+retry here because we don't want fallback to
+    // another agent — that was the bug we're removing).
+    const response = await this.promptAgent(agent, promptText, agentName);
+    return { response, agentUsed: agent };
   }
 
   private async promptAgent(
     agent: Agent,
     prompt: string,
     agentName: "swarm" | "swarm-read" = "swarm",
-    modelOverride?: string,
     // Task #196: default to "json" since virtually every blackboard
     // prompt (planner contract, worker hunks, auditor verdict, replanner)
     // expects JSON output. Pass "free" if a future prompt legitimately
@@ -3590,14 +3562,8 @@ export class BlackboardRunner implements SwarmRunner {
         // replaces the blocking 5-min headersTimeout that was wedging
         // on heavy planner / audit prompts.
         manager: this.opts.manager,
-        // Task #195: planner-fallback uses fallback agent's session as
-        // transport but should run the planner's model — without this
-        // the worker's model gets a planner JSON prompt and produces
-        // wrong-format hallucinated markdown for the entire turn cap.
-        modelOverride,
-        // Task #196: defense-in-depth even with #195 — early-format
-        // sniff aborts wrong-format responses in ~10s instead of waiting
-        // for the absolute turn cap to fire at 1200s.
+        // Task #196: early-format sniff aborts wrong-format responses
+        // in ~10s instead of waiting for the absolute turn cap (1200s).
         formatExpect,
         onTokens: ({ promptTokens, responseTokens }) => {
           if (promptTokens > 0) this.promptTokensPerAgent.set(agent.id, (this.promptTokensPerAgent.get(agent.id) ?? 0) + promptTokens);

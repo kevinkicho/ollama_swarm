@@ -22,6 +22,11 @@ export interface Agent {
   client: Client;
   child?: ChildProcess;
   model: string;
+  // Task #220: cwd captured from spawnOpts so respawnAgent can reconstruct
+  // the same subprocess context after a crash. Without this, the respawn
+  // path would need the BlackboardRunner to plumb clonePath through every
+  // call site — much messier than just storing it on the Agent.
+  cwd: string;
 }
 
 // Unit 41: killAll now reports whether every process was confirmed
@@ -552,7 +557,7 @@ export class AgentManager {
       const sessionId = this.readSessionId(created);
       if (!sessionId) throw new Error("session.create returned no session id");
 
-      const agent: Agent = { id, index: opts.index, port, sessionId, client, child, model: opts.model };
+      const agent: Agent = { id, index: opts.index, port, sessionId, client, child, model: opts.model, cwd: opts.cwd };
       this.agents.set(id, agent);
       this.touchActivity(sessionId);
       // Task #121: pidTracker.add moved to immediately-after-spawn (above).
@@ -592,6 +597,101 @@ export class AgentManager {
       this.setAgentState({ ...stateBase, status: "failed", error: msg });
       throw err;
     }
+  }
+
+  // Task #220: cheap liveness check used by callers (BlackboardRunner)
+  // before firing a high-cost prompt to detect a dead subprocess and
+  // trigger respawn. Hits the OpenCode subprocess's `/api/health`
+  // endpoint with a short timeout — if connection refused / timeout /
+  // 5xx, the subprocess is unreachable. ~1s budget; falls through to
+  // false on any unexpected error so callers default to safe (respawn).
+  async pingAgentHealth(agent: Agent): Promise<boolean> {
+    try {
+      const res = await Promise.race([
+        fetch(`http://127.0.0.1:${agent.port}/api/health`, {
+          method: "GET",
+          headers: { Authorization: basicAuthHeader() },
+        }),
+        new Promise<Response>((_, rej) =>
+          setTimeout(() => rej(new Error("health-check timeout")), 1500),
+        ),
+      ]);
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  // Task #220: tear down ONE agent without affecting siblings. Used by
+  // respawnAgent to clean up the dead subprocess before spawning fresh.
+  // killAll's full cleanup is too coarse here — it nukes every agent.
+  async killOneAgent(agent: Agent): Promise<void> {
+    // Cancel SSE event stream first so its for-await loop doesn't keep
+    // reconnecting to the dying port.
+    const abort = this.eventAborts.get(agent.id);
+    if (abort) {
+      abort.abort();
+      this.eventAborts.delete(agent.id);
+    }
+    // Reject any in-flight stream promise so callers unwedge.
+    const stream = this.streamingByAgent.get(agent.id);
+    if (stream) {
+      if (stream.timeoutHandle) clearTimeout(stream.timeoutHandle);
+      stream.signalCleanup?.();
+      stream.reject(new Error("agent respawning"));
+      this.streamingByAgent.delete(agent.id);
+    }
+    // Drop per-agent buffers so the respawned subprocess starts clean.
+    this.partialStreams.delete(agent.id);
+    this.partsByAgent.delete(agent.id);
+    this.messageRoles.delete(agent.id);
+    this.suppressStreamingFor.delete(agent.id);
+    this.rawSseCount.delete(agent.id);
+    const flushTimer = this.streamingFlushTimers.get(agent.id);
+    if (flushTimer) clearTimeout(flushTimer);
+    this.streamingFlushTimers.delete(agent.id);
+    this.latestStreamingText.delete(agent.id);
+    // Kill the child process tree.
+    if (agent.child) {
+      try {
+        await treeKill(agent.child);
+      } catch {
+        // best-effort
+      }
+    }
+    // Release port + drop registry entry. Port may already be released
+    // by child.on("exit") handler — release() is idempotent.
+    this.ports.release(agent.port);
+    this.agents.delete(agent.id);
+  }
+
+  // Task #220: respawn an agent with the same identity (id, index, model,
+  // role) after its subprocess has died. Allocates a new port, spawns a
+  // fresh OpenCode subprocess, creates a new session. Returns the new
+  // Agent — caller must replace its reference (e.g., this.planner).
+  //
+  // Why not just call spawnAgent directly: respawn must (a) tear down
+  // the dead subprocess first via killOneAgent, (b) preserve the agent's
+  // role-specific cwd and model, (c) emit clear lifecycle messages so the
+  // user sees what's happening rather than a silent ID swap.
+  async respawnAgent(agent: Agent): Promise<Agent> {
+    const oldId = agent.id;
+    await this.killOneAgent(agent);
+    const fresh = await this.spawnAgent({
+      cwd: agent.cwd,
+      index: agent.index,
+      model: agent.model,
+      // skipWarmup=false → warmup the fresh subprocess so the next
+      // real prompt isn't cold.
+    });
+    // spawnAgent reuses the agent.id derived from index, so the
+    // respawned agent has the SAME id as the original. Sanity check.
+    if (fresh.id !== oldId) {
+      throw new Error(
+        `respawn id mismatch: expected ${oldId} got ${fresh.id} (index reuse broke?)`,
+      );
+    }
+    return fresh;
   }
 
   // Unit 18: warm a batch of agents one at a time. Used by runners

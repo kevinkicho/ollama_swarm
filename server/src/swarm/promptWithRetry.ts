@@ -73,13 +73,6 @@ export interface PromptWithRetryOptions {
   // arrival. Backwards-compatible: callers that don't pass a manager
   // keep the old blocking behavior.
   manager?: AgentManager;
-  // Task #195: override the model used for this call. Defaults to
-  // agent.model. Used by the planner-fallback path: when the planner's
-  // call is routed to a worker agent, the worker's session is used as
-  // transport but the planner's model still produces the answer.
-  // Without this, gemma4 (worker model) gets handed a planner JSON
-  // prompt and hallucinates markdown for ~14 minutes.
-  modelOverride?: string;
   // Task #196: format expectation. When "json", AgentManager runs an
   // early-format sniff after EARLY_FORMAT_SNIFF_BYTES of streamed text.
   // If the head contains no JSON markers, abort early. Catches the
@@ -136,11 +129,10 @@ export async function promptWithRetry(
       // header explicitly to event.subscribe(); SSE events flow
       // again, streaming is viable.
       const STREAMING_ENABLED = true;
-      const modelID = opts.modelOverride ?? agent.model;
       if (STREAMING_ENABLED && opts.manager) {
         const text = await opts.manager.streamPrompt(agent, {
           agentName,
-          modelID,
+          modelID: agent.model,
           promptText,
           signal: opts.signal,
           perChunkTimeoutMs: STREAM_PER_CHUNK_TIMEOUT_MS,
@@ -152,7 +144,7 @@ export async function promptWithRetry(
           path: { id: agent.sessionId },
           body: {
             agent: agentName,
-            model: { providerID: "ollama", modelID },
+            model: { providerID: "ollama", modelID: agent.model },
             parts: [{ type: "text", text: promptText }],
           },
           signal: opts.signal,

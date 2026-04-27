@@ -11,6 +11,7 @@ function stubAgent(index: number): Agent {
     port: 0,
     sessionId: "",
     model: "test-model",
+    cwd: "/tmp/test",
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     client: {} as any,
   };
