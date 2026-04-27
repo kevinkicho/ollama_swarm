@@ -72,6 +72,17 @@ const evidence = {
   modelFallbackAttempts: [],
   // Issue 5: per-agent model surface
   perAgentModelLines: [],
+  // 2026-04-27: per-agent state-transition tracking. Catches the
+  // multi-worker death class (e.g. dev server restart killed all
+  // child opencode subprocesses → each agent flips to "stopped" with
+  // exit code 1). Without proactive alerting we only saw it via the
+  // user's UI; the snapshot capturer recorded it but didn't flag it.
+  agentDeaths: [],
+  // Multiple agents transitioning to stopped/failed in the same poll
+  // strongly suggests a dev server restart vs an isolated agent issue.
+  // Tracked so the report can call out "likely dev server restart"
+  // when ≥2 agents die within a few seconds.
+  multiAgentDeathEvents: [],
   // General run state
   finalSummary: null,
   finalPhase: null,
@@ -82,6 +93,10 @@ let monitorStartedAt = Date.now();
 let runStartedAt = null;
 let lastPhase = null;
 let seenEntries = new Set();
+// Per-agent last-known status. Used to detect transitions ABOVE the
+// snapshot level — if status flips from "ready"/"thinking" → "stopped"
+// or "failed", that's a death event we want to capture immediately.
+const lastAgentStatus = new Map();
 
 async function ensureRunDir() {
   if (!existsSync(RUN_DIR_ABS)) await mkdir(RUN_DIR_ABS, { recursive: true });
@@ -151,6 +166,55 @@ async function poll() {
     const kind = classifyEntry(e);
     if (kind) await log("evidence_capture", { kind, entryId: e.id });
   }
+  // 2026-04-27: per-agent state-transition tracking. Detect when an
+  // agent dies mid-run (stopped / failed with exit code) — pre-fix we
+  // only saw this via the user's UI; the monitor knew but didn't flag.
+  const deathsThisPoll = [];
+  for (const a of s.agents ?? []) {
+    const id = a.id;
+    if (!id) continue;
+    const prev = lastAgentStatus.get(id);
+    if (prev === a.status) continue;
+    lastAgentStatus.set(id, a.status);
+    await log("agent_state_change", {
+      agentId: id,
+      index: a.index,
+      from: prev ?? "(initial)",
+      to: a.status,
+      port: a.port,
+      error: a.error,
+    });
+    // Death = transition to stopped/failed AFTER we've seen a non-
+    // dead state for this agent. Pre-launch states (spawning →
+    // ready) don't count.
+    if ((a.status === "stopped" || a.status === "failed") && prev && prev !== "spawning") {
+      const death = {
+        agentId: id,
+        index: a.index,
+        prevStatus: prev,
+        nowStatus: a.status,
+        error: a.error ?? "(no error string)",
+        at: Date.now(),
+      };
+      evidence.agentDeaths.push(death);
+      deathsThisPoll.push(death);
+      await log("agent_death", death);
+    }
+  }
+  // Multiple deaths in the same poll cycle = simultaneous = strongly
+  // suggests a parent-process event (dev server restart, SIGTERM
+  // cascade) rather than independent agent failures.
+  if (deathsThisPoll.length >= 2) {
+    const event = {
+      at: Date.now(),
+      count: deathsThisPoll.length,
+      agents: deathsThisPoll.map((d) => `${d.agentId}(${d.error})`),
+      suspect: "dev server restart / SIGTERM cascade — child opencode subprocesses all killed at once",
+    };
+    evidence.multiAgentDeathEvents.push(event);
+    await log("multi_agent_death", event);
+  }
+
   evidence.finalPhase = s.phase;
   evidence.finalTranscriptLen = s.transcript?.length ?? 0;
 
@@ -323,9 +387,35 @@ async function writeReport() {
   }
   lines.push("");
 
+  // 2026-04-27: agent-death section. Surfaces the multi-worker-killed
+  // class that bit run 03a22386 (dev server tsx-watch restart killed
+  // all 4 worker subprocesses).
+  lines.push(`## Agent deaths during the run`);
+  lines.push("");
+  if (evidence.agentDeaths.length === 0) {
+    lines.push(`No agent transitioned to stopped/failed mid-run.`);
+  } else {
+    lines.push(`**${evidence.agentDeaths.length} agent death(s) recorded:**`);
+    for (const d of evidence.agentDeaths) {
+      const ts = new Date(d.at).toISOString();
+      lines.push(`- agent-${d.index}: ${d.prevStatus} → ${d.nowStatus} at ${ts} — \`${d.error}\``);
+    }
+    lines.push("");
+    if (evidence.multiAgentDeathEvents.length > 0) {
+      lines.push(`**Multi-agent death event(s) — likely a parent-process restart, NOT independent agent failures:**`);
+      for (const ev of evidence.multiAgentDeathEvents) {
+        const ts = new Date(ev.at).toISOString();
+        lines.push(`- ${ts}: ${ev.count} agents died simultaneously (${ev.agents.join(", ")})`);
+        lines.push(`  - Suspect: ${ev.suspect}`);
+        lines.push(`  - Mitigation: run \`npm run dev:nowatch\` (or \`npm run dev -- --no-watch\`) — disables tsx watch which auto-restarts on /mnt/c inotify noise`);
+      }
+    }
+  }
+  lines.push("");
+
   lines.push(`## Artifacts captured in this directory`);
   lines.push("");
-  lines.push(`- \`monitor-log.jsonl\` — every poll observation`);
+  lines.push(`- \`monitor-log.jsonl\` — every poll observation (incl. agent_state_change + agent_death events)`);
   lines.push(`- \`transcript-final.json\` — full transcript array at run end`);
   lines.push(`- \`summary.json\` — copy of the run's summary (if found)`);
   lines.push(`- \`event-log-slice.jsonl\` — runId-filtered slice of logs/current.jsonl`);

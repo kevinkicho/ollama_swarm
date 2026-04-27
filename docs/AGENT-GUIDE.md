@@ -72,6 +72,28 @@ Trade-off: code edits won't auto-restart the server. Best for "fire a swarm, wai
 
 Health: `curl -s http://localhost:8243/api/health` should return `{"ok":true,...}`. V2 flag inspection: `curl -s http://localhost:8243/api/v2/status`.
 
+### Standard monitor trio (use ALL THREE on every run)
+
+Whenever you fire a swarm run, attach all three monitors in background. Each captures a different layer; together they're the only way to debug what actually happened. Kevin can't reliably describe UI bugs ("dom name or class/id" not knowable to him) — these scripts are how YOU see what the user sees.
+
+```bash
+# Issue monitor — REST polling, classifies known bugs, agent-death detection
+cmd.exe /c "cd /d C:\\Users\\kevin\\Desktop\\ollama_swarm && node scripts\\monitor-blackboard-issues.mjs --port=8243 --runId=$RUNID --runDir=runs/_monitor/$RUNID --maxWaitMin=22"
+
+# Snapshot capturer — periodic full /api/swarm/status JSON dump (time-series)
+cmd.exe /c "cd /d C:\\Users\\kevin\\Desktop\\ollama_swarm && node scripts\\capture-status-snapshots.mjs --port=8243 --runId=$RUNID --runDir=runs/_monitor/$RUNID --intervalSec=30 --maxWaitMin=22"
+
+# UI watcher — Playwright opens the UI, captures WS frames + console + screenshots + DOM continuously
+cmd.exe /c "cd /d C:\\Users\\kevin\\Desktop\\ollama_swarm && node scripts\\watch-ui-during-run.mjs --webUrl=http://localhost:8244 --runId=$RUNID --runDir=runs/_monitor/$RUNID --intervalSec=30 --maxWaitMin=22"
+```
+
+Each writes to its own subdir under `runs/_monitor/<runId>/`. After the run, check:
+- `issues-report.md` — per-issue verdict + agent-death section
+- `snapshots/index.jsonl` — phase + board-counts time-series
+- `playwright/ui-watcher-report.md` — WS event breakdown + console errors
+- `playwright/screenshots/` — visual evolution of the UI
+- `playwright/ws-frames-received.jsonl` — every event the UI rendered
+
 ### Fire a swarm via REST
 
 ```bash
