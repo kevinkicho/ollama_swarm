@@ -67,6 +67,19 @@ interface MessageStreamState {
   formatExpect?: "json" | "free";
   /** Task #196: idempotency flag — sniff fires at-most-once per call. */
   formatChecked?: boolean;
+  /** 2026-04-27: messageRoles map size at stream_prompt_start. Used by
+   *  the session.idle handler to distinguish a stale idle from the
+   *  prior prompt's tail (warmup or earlier streamPrompt) vs the real
+   *  idle for OUR prompt. opencode emits message.updated for the new
+   *  user + assistant messages our prompt creates; messageRoles grows
+   *  by 2 once those land. session.idle that fires with no growth (i.e.
+   *  before our prompt's messages exist) is stale — ignore it. */
+  initialRolesSize: number;
+  /** 2026-04-27: set by handleSessionEvent when messageRoles size
+   *  exceeds initialRolesSize, signaling that opencode has registered
+   *  at least one new message for OUR prompt. session.idle is only
+   *  honored once this is true. */
+  sawNewMessage: boolean;
 }
 
 export interface StreamPromptOpts {
@@ -218,6 +231,11 @@ export class AgentManager {
       prior.signalCleanup?.();
     }
 
+    // 2026-04-27: snapshot messageRoles size BEFORE the new prompt fires.
+    // session.idle handler uses this to filter out stale idles arriving
+    // from a prior session.prompt's tail (warmup or earlier streamPrompt).
+    // See MessageStreamState.initialRolesSize for full reasoning.
+    const initialRolesSize = this.messageRoles.get(agent.id)?.size ?? 0;
     return new Promise<string>((resolve, reject) => {
       const state: MessageStreamState = {
         text: "",
@@ -226,6 +244,8 @@ export class AgentManager {
         reject,
         perChunkTimeoutMs: opts.perChunkTimeoutMs,
         formatExpect: opts.formatExpect,
+        initialRolesSize,
+        sawNewMessage: false,
       };
       const armChunkTimeout = () => {
         if (state.timeoutHandle) clearTimeout(state.timeoutHandle);
@@ -1228,6 +1248,13 @@ export class AgentManager {
           this.messageRoles.set(agent.id, roles);
         }
         roles.set(info.id, info.role);
+        // 2026-04-27: signal to streamPrompt's session.idle handler that
+        // OUR prompt's messages have arrived, so the next session.idle
+        // is genuinely ours (not a stale tail from warmup / prior prompt).
+        const liveStreamForRoles = this.streamingByAgent.get(agent.id);
+        if (liveStreamForRoles && roles.size > liveStreamForRoles.initialRolesSize) {
+          liveStreamForRoles.sawNewMessage = true;
+        }
       }
       return;
     }
@@ -1319,6 +1346,29 @@ export class AgentManager {
       return;
     }
     if (type === "session.idle") {
+      // 2026-04-27: stale-idle filter. session.idle from a prior
+      // session.prompt (warmup tail-end OR a previous streamPrompt that
+      // already settled) can arrive milliseconds after the next
+      // streamPrompt registers state. Without this filter the new
+      // prompt's stream resolves with empty text. Detect by checking
+      // whether messageRoles has grown since stream registration —
+      // opencode emits message.updated for the user + assistant
+      // messages our prompt creates BEFORE session.idle. If we haven't
+      // seen those, this idle is stale: ignore it. Real session.idle
+      // for OUR prompt always arrives AFTER its message.updated events,
+      // so sawNewMessage will be true by then.
+      const liveStream = this.streamingByAgent.get(agent.id);
+      if (liveStream && !liveStream.sawNewMessage && !this.suppressStreamingFor.has(agent.id)) {
+        this.logDiag({
+          type: "_stale_session_idle_skipped",
+          agentId: agent.id,
+          ourSessionId: agent.sessionId,
+          initialRolesSize: liveStream.initialRolesSize,
+          currentRolesSize: this.messageRoles.get(agent.id)?.size ?? 0,
+          ts: Date.now(),
+        });
+        return;
+      }
       // Task #181: skip both the diagnostic and the agent_streaming_end
       // emit when this agent is in warmup-suppression mode. The
       // _stream_complete log isn't useful for warmup pings, and we
