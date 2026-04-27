@@ -79,7 +79,6 @@ app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
     defaultModel: config.DEFAULT_MODEL,
-    orchestratorUrl: config.OPENCODE_BASE_URL,
     ollamaUrl: config.OLLAMA_BASE_URL,
   });
 });
@@ -215,7 +214,6 @@ void reclaimOrphans(repoRoot)
   .finally(() => {
     server.listen(config.SERVER_PORT, () => {
       console.log(`ollama_swarm server listening on http://127.0.0.1:${config.SERVER_PORT}`);
-      console.log(`  orchestrator opencode: ${config.OPENCODE_BASE_URL}`);
       console.log(`  ollama: ${config.OLLAMA_BASE_URL}`);
       console.log(`  default model: ${config.DEFAULT_MODEL}`);
       console.log(`  event log: ${eventLogger.path}`);

@@ -31,9 +31,6 @@
 
 ### Smaller cleanups
 
-- **Delete vestigial `getOrchestratorClient` + `OPENCODE_BASE_URL` (port 4096) plumbing.** `AgentManager.getOrchestratorClient()` is defined but never called anywhere. The startup log "orchestrator opencode: http://127.0.0.1:4096" is misleading. Could be deleted in a small PR. ~30 min. **Trigger**: anytime; safe.
-
-- **Make `USE_WORKER_PIPELINE_V2` per-run instead of env-only.** Currently set at dev-server start; means all runs share the flag. Adding a per-run `cfg.useWorkerPipelineV2` (defaulting to env value) lets users A/B without restart. ~1h including UI surface. **Trigger**: anytime; useful for incremental rollout.
 
 - **Replace tsx watch with `node --watch` for long-running validation sessions.** tsx watch SIGTERMs the dev server when `/mnt/c` inotify polling sees noise (`reference_wsl_sigterm_after_summary` memory). Lower-impact alternative: just run `tsx src/index.ts` (no watch) when validating, accept manual restart for code edits. **Trigger**: anytime user complains about SIGTERM-mid-validation again.
 

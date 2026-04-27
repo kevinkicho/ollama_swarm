@@ -243,6 +243,15 @@ export interface RunConfig {
    */
   executeNextAction?: boolean;
   /**
+   * Per-run override for the V2 worker pipeline (`USE_WORKER_PIPELINE_V2`
+   * env flag). When set, wins over the env value for THIS run only. When
+   * absent, the env flag decides. Lets the user A/B without restarting
+   * the dev server — useful while V2 is parallel-track and we want
+   * head-to-head runs against the same repo. Blackboard-only; silently
+   * ignored by discussion presets (no worker write path to gate).
+   */
+  useWorkerPipelineV2?: boolean;
+  /**
    * Task #36: app-level run id minted by the Orchestrator at run-start
    * (Unit 52d) and stashed into RunConfig here so runners can forward
    * it to their summary builders. Lets summary.json carry the same

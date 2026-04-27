@@ -102,7 +102,6 @@ Hit Start. You'll see each agent panel go from `spawning` → `ready` → `think
 | --- | --- | --- |
 | `OPENCODE_SERVER_USERNAME` | no (defaults to `opencode`) | HTTP basic auth username used by every spawned opencode subprocess |
 | `OPENCODE_SERVER_PASSWORD` | **yes** | HTTP basic auth password — any string; shared with spawned subprocesses |
-| `OPENCODE_BASE_URL` | no (defaults to `http://127.0.0.1:4096`) | Vestigial — `getOrchestratorClient` is defined but unused. Kept for backwards compat with the synthesized `opencode.json` writer; safe to ignore. |
 | `OLLAMA_BASE_URL` | no (defaults to `http://localhost:11434/v1`) | OpenAI-compatible Ollama endpoint, written into each agent's synthesized `opencode.json`. **Must end in `/v1`** — the proxy defensively appends it if missing (commit `bb0c509`). |
 | `DEFAULT_MODEL` | no (defaults to `deepseek-v4-pro:cloud`) | Model each agent uses when the form's model field is left blank. `nemotron-3-super:cloud` and `glm-5.1:cloud` remain available — type explicitly in the form. |
 | `OPENCODE_BIN` | no (defaults to `opencode`) | Path/name of the opencode CLI binary |

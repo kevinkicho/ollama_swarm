@@ -2436,7 +2436,11 @@ export class BlackboardRunner implements SwarmRunner {
       // search-anchor catches conflicts at apply time, see ARCHITECTURE-
       // V2.md section 5). Both paths still call board.commit/markStale
       // so V1 board state stays consistent for the parallel-track mirror.
-      const useV2Worker = process.env.USE_WORKER_PIPELINE_V2 === "1";
+      // Per-run cfg.useWorkerPipelineV2 wins over env when set; falls
+      // back to USE_WORKER_PIPELINE_V2 env flag when absent. Lets users
+      // A/B the V2 path without restarting the dev server.
+      const useV2Worker =
+        this.active?.useWorkerPipelineV2 ?? process.env.USE_WORKER_PIPELINE_V2 === "1";
       const outcome = useV2Worker
         ? await this.executeWorkerTodoV2(agent, todo)
         : await this.executeWorkerTodo(agent, todo);

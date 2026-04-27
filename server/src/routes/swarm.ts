@@ -118,6 +118,12 @@ const StartBody = z.object({
   autoStretchReflection: z.boolean().optional(),
   // Task #128: per-commit verifier (claim-vs-diff). Default off; opt-in.
   verifier: z.boolean().optional(),
+  // Per-run override for the V2 worker pipeline. When set, wins over
+  // the USE_WORKER_PIPELINE_V2 env flag for THIS run only. Lets the
+  // user A/B without restarting the dev server. Blackboard-only;
+  // ignored by discussion presets. (See SwarmRunner RunConfig comment
+  // for context.)
+  useWorkerPipelineV2: z.boolean().optional(),
   // Task #132: continuous mode — run-against-budget instead of
   // run-against-rounds. Requires at least one budget cap (tokenBudget
   // or wallClockCapMs); the start handler rejects otherwise.
@@ -378,6 +384,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         autoGenerateGoals: parsed.data.autoGenerateGoals,
         autoStretchReflection: parsed.data.autoStretchReflection,
         verifier: parsed.data.verifier,
+        useWorkerPipelineV2: parsed.data.useWorkerPipelineV2,
         continuous: parsed.data.continuous,
         autoMemory: parsed.data.autoMemory,
         autoDesignMemory: parsed.data.autoDesignMemory,

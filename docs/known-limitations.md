@@ -224,11 +224,11 @@ agent management layer — `AgentManager.spawnAgent` shelling to
 + `session.create`/`session.prompt`/SSE event subscription — still drives
 every preset.
 
-**The "orchestrator opencode at port 4096" claim in README/older docs is
-vestigial.** `AgentManager.getOrchestratorClient()` is defined but never
-called anywhere. The startup log "orchestrator opencode: http://127.0.0.1:4096"
-is misleading — that endpoint isn't actually used. Could be deleted in
-a small cleanup PR. Per-agent subprocesses (40125, 45819, etc.) ARE used.
+**The "orchestrator opencode at port 4096" claim was DELETED 2026-04-27**
+along with the `OPENCODE_BASE_URL` env var, `AgentManager.getOrchestratorClient()`,
+and the startup log line. Per-agent subprocesses (random ports) ARE used and
+remain the only opencode surface in the runner. Sentence kept here for
+post-mortem readers tracing why old runs/docs reference port 4096.
 
 **When this would need revisiting:** when shipping a single-binary install
 ("user just needs Ollama") becomes a goal. Per `ARCHITECTURE-V2.md`:

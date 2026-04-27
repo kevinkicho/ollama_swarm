@@ -29,7 +29,6 @@ function resolveServerPort(): number {
 const Schema = z.object({
   OPENCODE_SERVER_USERNAME: z.string().min(1).default("opencode"),
   OPENCODE_SERVER_PASSWORD: z.string().min(1, "OPENCODE_SERVER_PASSWORD is required in .env"),
-  OPENCODE_BASE_URL: z.string().url().default("http://127.0.0.1:4096"),
   OLLAMA_BASE_URL: z.string().url().default("http://localhost:11434/v1"),
   // Task #133: local Ollama proxy port. Server starts a thin HTTP
   // proxy on this port and rewrites the in-memory OLLAMA_BASE_URL to

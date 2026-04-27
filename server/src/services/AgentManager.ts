@@ -148,7 +148,6 @@ export class AgentManager {
   // Keyed by agent.id; survives process exit so the REST snapshot still
   // shows the terminal status until killAll() clears.
   private readonly agentStates = new Map<string, AgentState>();
-  private orchestratorClient?: Client;
   // Unit 38: persistent PID tracking for orphan reclamation across
   // dev-server restarts. When present, AgentManager appends a record
   // per successful spawn and removes it on clean exit / killAll. When
@@ -174,17 +173,6 @@ export class AgentManager {
 
   touchActivity(sessionId: string, ts: number = Date.now()): void {
     this.lastActivity.set(sessionId, ts);
-  }
-
-  getOrchestratorClient(): Client {
-    if (!this.orchestratorClient) {
-      this.orchestratorClient = createOpencodeClient({
-        baseUrl: config.OPENCODE_BASE_URL,
-        fetch: authedFetch,
-        throwOnError: true,
-      });
-    }
-    return this.orchestratorClient;
   }
 
   list(): Agent[] {
