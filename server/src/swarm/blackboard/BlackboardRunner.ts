@@ -1830,8 +1830,24 @@ export class BlackboardRunner implements SwarmRunner {
     // user directive). Rebuild from the active cfg — cheap and the
     // directive is carried on the run config.
     const clone = this.active.localPath;
-    const readmeExcerpt = await this.opts.repos.readReadme(clone).catch(() => null);
-    const repoFiles = await this.opts.repos.listRepoFiles(clone, { maxFiles: 150 }).catch(() => [] as string[]);
+    // Task #209: log tier-up file-read failures instead of silent fallback.
+    // Previously these `.catch(() => null/[])` swallows let a deleted-clone
+    // or unreadable-repo scenario produce an empty file list → planner
+    // posts 0 todos → run "succeeds" doing nothing. Surface the failure
+    // both to diag log and transcript so the user can recognize the
+    // degraded-context state.
+    const readmeExcerpt = await this.opts.repos.readReadme(clone).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.opts.logDiag?.({ type: "_tier_up_readme_failed", clone, error: msg });
+      this.appendSystem(`Tier-up README read failed (${msg}); planner gets no README context.`);
+      return null;
+    });
+    const repoFiles = await this.opts.repos.listRepoFiles(clone, { maxFiles: 150 }).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.opts.logDiag?.({ type: "_tier_up_files_failed", clone, error: msg });
+      this.appendSystem(`Tier-up file list failed (${msg}); planner gets empty file list.`);
+      return [] as string[];
+    });
 
     const prompt = buildTierUpPrompt({
       nextTier,

@@ -29,7 +29,15 @@ export async function resolveSafe(clone: string, relPath: string): Promise<strin
 
   let existing = abs;
   const tail: string[] = [];
+  // Task #208: paranoid iteration cap. The implicit exit (parent ===
+  // existing at filesystem root) handles the normal case, but a
+  // pathological symlink race could in theory loop indefinitely.
+  // 1000 levels is far beyond any plausible legitimate depth.
+  let depth = 0;
   while (true) {
+    if (++depth > 1000) {
+      throw new Error(`path resolution depth exceeded (>1000) for ${relPath}`);
+    }
     try {
       await fs.lstat(existing);
       break;
