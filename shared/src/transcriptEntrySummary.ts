@@ -208,4 +208,30 @@ export type TranscriptEntrySummary =
       kind: "quota_resumed";
       pausedMs: number;
       totalPausedMs: number;
+    }
+  // 2026-04-27: structured "agents ready" payload. Replaces the bare
+  // "N/M agents ready on ports X, Y, Z" system text with an expandable
+  // grid showing per-agent details (port, role, sessionId, model,
+  // warmupMs). Lets users RCA spawn issues like the cold-start empty-
+  // response chain (warmup_ok → stale session.idle → empty) without
+  // hunting through the diag log.
+  | {
+      kind: "agents_ready";
+      preset: string;
+      readyCount: number;
+      requestedCount: number;
+      spawnElapsedMs: number;
+      agents: Array<{
+        id: string;
+        index: number;
+        port: number;
+        model: string;
+        sessionId: string;
+        /** Free-form role label per preset: "Planner", "Worker", "Auditor",
+         *  "Lead", "Drafter", "Reducer", "Mapper", "Pro", "Con", "Judge", etc. */
+        role: string;
+        /** Warmup elapsedMs from AgentManager. Undefined when the runner
+         *  spawned with skipWarmup OR the warmup result wasn't recorded. */
+        warmupMs?: number;
+      }>;
     };

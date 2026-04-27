@@ -82,6 +82,9 @@ export function formatServerSummary(s: TranscriptEntrySummary): string {
     const min = Math.round(s.pausedMs / 60_000);
     return `Resumed — wall cleared after ~${min} min`;
   }
+  if (s.kind === "agents_ready") {
+    return `${s.readyCount}/${s.requestedCount} agents ready (preset: ${s.preset}, spawn ${Math.round(s.spawnElapsedMs / 1000)}s)`;
+  }
   // worker_hunks (only kind remaining after all the if-returns above)
   const opParts: string[] = [];
   if (s.ops.replace > 0) opParts.push(`${s.ops.replace} replace`);

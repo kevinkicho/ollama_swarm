@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Agent } from "../services/AgentManager.js";
+import { buildAgentsReadySummary } from "./agentsReadySummary.js";
 import type {
   AgentState,
   SwarmEvent,
@@ -134,6 +135,7 @@ export class DebateJudgeRunner implements SwarmRunner {
     this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
 
     this.setPhase("spawning");
+    const spawnStart = Date.now();
     const spawnTasks: Promise<Agent>[] = [];
     for (let i = 1; i <= cfg.agentCount; i++) {
       spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model }));
@@ -142,9 +144,6 @@ export class DebateJudgeRunner implements SwarmRunner {
     const ready = results
       .filter((r): r is PromiseFulfilledResult<Agent> => r.status === "fulfilled")
       .map((r) => r.value);
-    // This preset requires exactly 3 agents — the Zod schema + SetupForm
-    // also enforce this, but check here so a direct-API caller gets a clear
-    // error instead of a downstream "no judge" crash.
     if (ready.length !== 3) {
       throw new Error(
         `Debate + judge requires exactly 3 agents (got ${ready.length}). Agent 1 = Pro, Agent 2 = Con, Agent 3 = Judge.`,
@@ -152,6 +151,14 @@ export class DebateJudgeRunner implements SwarmRunner {
     }
     this.appendSystem(
       `3 agents ready on ports ${ready.map((a) => a.port).join(", ")}. Agent 1 = PRO, Agent 2 = CON, Agent 3 = JUDGE.`,
+      buildAgentsReadySummary({
+        manager: this.opts.manager,
+        preset: "debate-judge",
+        ready,
+        requestedCount: cfg.agentCount,
+        spawnElapsedMs: Date.now() - spawnStart,
+        roleResolver: (a) => (a.index === 1 ? "Pro" : a.index === 2 ? "Con" : "Judge"),
+      }),
     );
     this.stats.registerAgents(ready);
 

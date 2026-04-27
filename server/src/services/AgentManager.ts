@@ -191,6 +191,14 @@ export class AgentManager {
     return [...this.agents.values()].sort((a, b) => a.index - b.index);
   }
 
+  // 2026-04-27: per-agent warmup elapsed (ms). undefined when warmup
+  // hasn't completed yet OR was skipped at spawn. Runners read this
+  // when assembling the agents_ready summary so the UI can show
+  // cold-start cost per agent without grepping the diag log.
+  getWarmupElapsedMs(agentId: string): number | undefined {
+    return this.warmupElapsedByAgent.get(agentId);
+  }
+
   // Task #166: stream-aware replacement for `await agent.client.session.prompt(...)`.
   // Fires the prompt with `noReply: true` (server doesn't block on the response),
   // then accumulates text from the existing SSE event stream until session.idle
@@ -744,6 +752,9 @@ export class AgentManager {
   // user sees what's happening rather than a silent ID swap.
   async respawnAgent(agent: Agent): Promise<Agent> {
     const oldId = agent.id;
+    // 2026-04-27: drop prior warmup elapsed so spawnAgent's fresh
+    // warmup overwrites cleanly (rather than coexisting with stale).
+    this.warmupElapsedByAgent.delete(oldId);
     await this.killOneAgent(agent);
     const fresh = await this.spawnAgent({
       cwd: agent.cwd,
@@ -811,7 +822,9 @@ export class AgentManager {
           parts: [{ type: "text", text: WARMUP_PROMPT_TEXT }],
         },
       });
-      this.logDiag({ type: "_warmup_ok", agentId: agent.id, elapsedMs: Date.now() - t0 });
+      const elapsed = Date.now() - t0;
+      this.warmupElapsedByAgent.set(agent.id, elapsed);
+      this.logDiag({ type: "_warmup_ok", agentId: agent.id, elapsedMs: elapsed });
     } catch (err) {
       const msg = stringifyError(err);
       this.logDiag({
@@ -861,6 +874,10 @@ export class AgentManager {
   // calls are no-ops here (the per-attempt timing already lands
   // through onTiming).
   private firstPromptLogged = new Set<string>();
+  // 2026-04-27: per-agent warmup elapsedMs, populated on _warmup_ok.
+  // Surfaced via getWarmupElapsedMs so runners can include it in the
+  // "agents_ready" structured summary. Cleared on respawn + killAll.
+  private warmupElapsedByAgent = new Map<string, number>();
 
   // Task #39: per-agent partial-stream buffer. Updated on every
   // `message.part.updated` event with text content; cleared on
@@ -1057,6 +1074,9 @@ export class AgentManager {
     this.partsByAgent.clear();
     // Task #179: drop message-role classification for killed agents.
     this.messageRoles.clear();
+    // 2026-04-27: drop warmup timing cache so the next run doesn't
+    // surface a previous run's warmup elapsed in its agents_ready summary.
+    this.warmupElapsedByAgent.clear();
     if (escaped > 0) {
       // Unit 41: surface unkillable PIDs to the UI rather than swallowing
       // silently. The next dev-server startup sweep will still reclaim

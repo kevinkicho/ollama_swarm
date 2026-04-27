@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Agent } from "../services/AgentManager.js";
+import { buildAgentsReadySummary } from "./agentsReadySummary.js";
 import type {
   AgentState,
   SwarmEvent,
@@ -112,6 +113,7 @@ export class CouncilRunner implements SwarmRunner {
     this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
 
     this.setPhase("spawning");
+    const spawnStart = Date.now();
     const spawnTasks: Promise<Agent>[] = [];
     for (let i = 1; i <= cfg.agentCount; i++) {
       spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model }));
@@ -123,6 +125,14 @@ export class CouncilRunner implements SwarmRunner {
     if (ready.length === 0) throw new Error("No agents started successfully");
     this.appendSystem(
       `${ready.length}/${cfg.agentCount} agents ready on ports ${ready.map((a) => a.port).join(", ")}`,
+      buildAgentsReadySummary({
+        manager: this.opts.manager,
+        preset: "council",
+        ready,
+        requestedCount: cfg.agentCount,
+        spawnElapsedMs: Date.now() - spawnStart,
+        roleResolver: () => "Drafter",
+      }),
     );
     this.stats.registerAgents(ready);
 

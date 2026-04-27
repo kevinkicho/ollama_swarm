@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Agent } from "../services/AgentManager.js";
+import { buildAgentsReadySummary } from "./agentsReadySummary.js";
 import type {
   AgentState,
   SwarmEvent,
@@ -119,6 +120,7 @@ export class RoundRobinRunner implements SwarmRunner {
     this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
 
     this.setPhase("spawning");
+    const spawnStart = Date.now();
     const spawnTasks: Promise<Agent>[] = [];
     for (let i = 1; i <= cfg.agentCount; i++) {
       spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model }));
@@ -128,7 +130,17 @@ export class RoundRobinRunner implements SwarmRunner {
       .filter((r): r is PromiseFulfilledResult<Agent> => r.status === "fulfilled")
       .map((r) => r.value);
     if (ready.length === 0) throw new Error("No agents started successfully");
-    this.appendSystem(`${ready.length}/${cfg.agentCount} agents ready on ports ${ready.map((a) => a.port).join(", ")}`);
+    this.appendSystem(
+      `${ready.length}/${cfg.agentCount} agents ready on ports ${ready.map((a) => a.port).join(", ")}`,
+      buildAgentsReadySummary({
+        manager: this.opts.manager,
+        preset: "round-robin",
+        ready,
+        requestedCount: cfg.agentCount,
+        spawnElapsedMs: Date.now() - spawnStart,
+        roleResolver: () => "Discussant",
+      }),
+    );
     // Unit 33: register the spawned roster so buildPerAgentStats still
     // produces rows after AgentManager.killAll() clears its own roster.
     this.stats.registerAgents(ready);

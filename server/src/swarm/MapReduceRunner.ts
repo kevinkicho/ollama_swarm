@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Agent } from "../services/AgentManager.js";
+import { buildAgentsReadySummary } from "./agentsReadySummary.js";
 import type {
   AgentState,
   SwarmEvent,
@@ -123,6 +124,7 @@ export class MapReduceRunner implements SwarmRunner {
     this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
 
     this.setPhase("spawning");
+    const spawnStart = Date.now();
     const spawnTasks: Promise<Agent>[] = [];
     for (let i = 1; i <= cfg.agentCount; i++) {
       spawnTasks.push(this.opts.manager.spawnAgent({ cwd: destPath, index: i, model: cfg.model }));
@@ -138,6 +140,14 @@ export class MapReduceRunner implements SwarmRunner {
     }
     this.appendSystem(
       `${ready.length}/${cfg.agentCount} agents ready on ports ${ready.map((a) => a.port).join(", ")}. Agent 1 is the REDUCER; agents 2..${cfg.agentCount} are MAPPERS.`,
+      buildAgentsReadySummary({
+        manager: this.opts.manager,
+        preset: "map-reduce",
+        ready,
+        requestedCount: cfg.agentCount,
+        spawnElapsedMs: Date.now() - spawnStart,
+        roleResolver: (a) => (a.index === 1 ? "Reducer" : "Mapper"),
+      }),
     );
     this.stats.registerAgents(ready);
 

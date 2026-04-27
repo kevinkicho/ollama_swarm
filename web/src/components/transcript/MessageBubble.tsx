@@ -13,7 +13,7 @@
 // role_diff_synthesis, next_action_phase) into one component
 // parameterized by hue + label.
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { TranscriptEntry } from "../../types";
 import { summarizeAgentJson } from "../transcriptSummarize";
 import { agentBubblePalette, hueForAgent } from "../agentPalette";
@@ -93,6 +93,14 @@ function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
         ) : null}
       </div>
     );
+  }
+  // 2026-04-27: agents-ready expandable summary. Replaces the bare
+  // "N/M agents ready on ports X, Y, Z" line with a chip + click-to-
+  // expand per-agent grid showing port, role, model, sessionId, and
+  // warmup elapsed. Lets users RCA cold-start chains without grepping
+  // diag logs.
+  if (entry.summary?.kind === "agents_ready") {
+    return <AgentsReadyBubble summary={entry.summary} fallbackText={entry.text} ts={ts} />;
   }
   // 2026-04-26 fix: distinct visual style for transient parser/repair
   // recovery messages. These are normal recovery (system caught a bad
@@ -477,5 +485,79 @@ function DecoratedSynthesisBlock({
       header={decoratedHeader}
       text={text}
     />
+  );
+}
+
+// 2026-04-27: agents-ready system bubble. Default state is the same
+// terse one-line text the runner emitted ("N/M agents ready on ports
+// X, Y, Z"). Click "details" to expand into a per-agent grid showing
+// port, role, model, sessionId, warmupMs. Surfaces what previously
+// only existed in the diag log so spawn issues are visible in the UI.
+function AgentsReadyBubble({
+  summary,
+  fallbackText,
+  ts,
+}: {
+  summary: Extract<import("../../types").TranscriptEntrySummary, { kind: "agents_ready" }>;
+  fallbackText: string;
+  ts: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const slowest = summary.agents.reduce(
+    (max, a) => (a.warmupMs !== undefined && a.warmupMs > max ? a.warmupMs : max),
+    0,
+  );
+  return (
+    <div className="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono">
+      <div className="flex items-baseline gap-2 text-ink-500 mb-0.5">
+        <span>system · {ts}</span>
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="text-[10px] uppercase tracking-wide hover:text-ink-200"
+          title="Per-agent spawn details: port, role, model, sessionId, warmup elapsed"
+        >
+          {open ? "hide details" : "details"}
+        </button>
+        {slowest > 0 ? (
+          <span className={slowest > 30000 ? "text-amber-400" : "text-ink-500"}>
+            slowest warmup: {(slowest / 1000).toFixed(1)}s
+          </span>
+        ) : null}
+      </div>
+      <div className="text-ink-400">{fallbackText}</div>
+      {open ? (
+        <div className="mt-2 rounded border border-ink-700 bg-ink-950/40 p-2">
+          <div className="text-[10px] uppercase tracking-wide text-ink-500 mb-1">
+            preset: {summary.preset} · spawn elapsed: {(summary.spawnElapsedMs / 1000).toFixed(1)}s
+          </div>
+          <table className="w-full text-[10px]">
+            <thead>
+              <tr className="text-ink-500">
+                <th className="text-left px-1 py-0.5">id</th>
+                <th className="text-left px-1 py-0.5">role</th>
+                <th className="text-left px-1 py-0.5">port</th>
+                <th className="text-left px-1 py-0.5">model</th>
+                <th className="text-left px-1 py-0.5">warmup</th>
+                <th className="text-left px-1 py-0.5">session</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.agents.map((a) => (
+                <tr key={a.id} className="border-t border-ink-800">
+                  <td className="px-1 py-0.5 text-ink-300">{a.id}</td>
+                  <td className="px-1 py-0.5 text-emerald-300">{a.role}</td>
+                  <td className="px-1 py-0.5 text-ink-300">{a.port}</td>
+                  <td className="px-1 py-0.5 text-ink-300">{a.model}</td>
+                  <td className={`px-1 py-0.5 ${a.warmupMs && a.warmupMs > 30000 ? "text-amber-300" : "text-ink-300"}`}>
+                    {a.warmupMs !== undefined ? `${(a.warmupMs / 1000).toFixed(1)}s` : "—"}
+                  </td>
+                  <td className="px-1 py-0.5 text-ink-500 break-all">{a.sessionId.slice(0, 18)}…</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </div>
   );
 }
