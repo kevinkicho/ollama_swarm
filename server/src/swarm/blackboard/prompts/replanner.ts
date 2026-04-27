@@ -120,6 +120,7 @@ export const REPLANNER_SYSTEM_PROMPT = [
   "",
   "HARD RULES:",
   "1. Output ONLY a JSON object. No prose. No markdown fences. No commentary before or after.",
+  "1a. (2026-04-27) Do NOT emit raw XML tool-call syntax (e.g. `<read path='...' />`) AS the response — that's the SDK's internal tool-call format and parsing it as JSON fails closed. Use the actual tool functions; the SDK invokes them transparently. Visible response MUST be only the JSON object.",
   "2. Shape A (revise): {\"revised\": {\"description\": string, \"expectedFiles\": string[]}}",
   "3. Shape B (skip):   {\"skip\": true, \"reason\": string}",
   "4. Choose exactly one shape. Never include both `revised` and `skip` keys in the same response.",

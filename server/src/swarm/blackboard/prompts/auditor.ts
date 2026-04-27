@@ -198,6 +198,7 @@ export const AUDITOR_SYSTEM_PROMPT = [
   "",
   "HARD RULES:",
   "1. Output ONLY a single JSON object. No prose. No markdown fences. No commentary.",
+  "1a. (2026-04-27) Do NOT emit raw XML tool-call syntax (e.g. `<read path='...' />`) AS the response — that's the SDK's internal tool-call format and parsing it as JSON fails closed. Use the actual tool functions; the SDK invokes them transparently. Visible response MUST be only the JSON object.",
   "2. Shape: {\"verdicts\": [{\"id\": string, \"status\": \"met\"|\"wont-do\"|\"unmet\", \"rationale\": string, \"todos\"?: [...]}], \"newCriteria\"?: [{\"description\": string, \"expectedFiles\": string[]}]}.",
   "3. Every verdict's `id` MUST match an existing unmet criterion ID (c1, c2, ...). Do NOT include verdicts for criteria that are already met or wont-do.",
   "4. For `unmet` status, `todos` is REQUIRED and must contain 1–4 items; each todo names ≤2 expectedFiles (repo-relative paths).",

@@ -52,6 +52,19 @@ async function promptOnFreshSession(
   planner: Agent,
   prompt: string,
   label: string,
+  opts: {
+    /** Caller-provided abort signal — when fired, the in-flight
+     *  session.prompt call gets aborted. Used by the runner's hard
+     *  cap watchdog (issue B) so reflection passes don't extend a
+     *  run past the user's wallClockCapMs. */
+    signal?: AbortSignal;
+    /** Caller-provided status callback — fired with "thinking" when
+     *  the prompt starts, "ready" when it ends. Without this the UI
+     *  shows agent.status="ready" while the planner is actually
+     *  processing the reflection prompt (the agent.status mismatch
+     *  Kevin flagged). */
+    onStatusChange?: (status: "thinking" | "ready") => void;
+  } = {},
 ): Promise<string | undefined> {
   let sessionId: string;
   try {
@@ -65,6 +78,8 @@ async function promptOnFreshSession(
   } catch {
     return undefined;
   }
+  if (opts.signal?.aborted) return undefined;
+  opts.onStatusChange?.("thinking");
   try {
     const res = await planner.client.session.prompt({
       path: { id: sessionId },
@@ -73,10 +88,13 @@ async function promptOnFreshSession(
         model: { providerID: "ollama", modelID: planner.model },
         parts: [{ type: "text", text: prompt }],
       },
+      signal: opts.signal,
     });
     return extractText(res);
   } catch {
     return undefined;
+  } finally {
+    opts.onStatusChange?.("ready");
   }
 }
 
@@ -99,6 +117,18 @@ export interface ReflectionContext {
   contractCriteria: ExitContract["criteria"];
   /** App-level run id for the memory entry's runId field. */
   runId: string;
+  /** Issue B (2026-04-27): caller-provided abort signal. The runner
+   *  arms a watchdog that aborts this signal when wallClockCapMs is
+   *  exceeded, so reflection passes don't blow past the user's cap.
+   *  Each pass forwards it to its session.prompt call AND short-circuits
+   *  before its next prompt if the signal is already aborted. */
+  signal?: AbortSignal;
+  /** Issue C-min (2026-04-27): per-pass status callback. The runner
+   *  provides a function that updates the planner agent's UI status to
+   *  "thinking" (start) and "ready" (end). Without this the UI shows
+   *  the planner as "ready" while reflection prompts are actually
+   *  in-flight, masking real activity. */
+  onPlannerStatusChange?: (status: "thinking" | "ready") => void;
 }
 
 export async function runStretchGoalReflectionPass(
@@ -138,7 +168,7 @@ export async function runStretchGoalReflectionPass(
   try {
     // Task #183: fresh session — planner's main session has too much
     // context by reflection-pass time, was returning empty.
-    const text = await promptOnFreshSession(planner, prompt, "stretch");
+    const text = await promptOnFreshSession(planner, prompt, "stretch", { signal: ctx.signal, onStatusChange: ctx.onPlannerStatusChange });
     if (!text) {
       ctx.appendSystem("Stretch-goal reflection: planner returned empty.");
       return;
@@ -208,7 +238,7 @@ export async function runMemoryDistillationPass(
   ].join("\n");
 
   // Task #183: fresh session.
-  const responseText = await promptOnFreshSession(planner, prompt, "memory-distill");
+  const responseText = await promptOnFreshSession(planner, prompt, "memory-distill", { signal: ctx.signal, onStatusChange: ctx.onPlannerStatusChange });
   if (!responseText) {
     ctx.appendSystem("Memory distillation: planner returned empty.");
     return;
@@ -309,7 +339,7 @@ export async function runDesignMemoryUpdatePass(
   ].join("\n");
 
   // Task #183: fresh session.
-  const responseText = await promptOnFreshSession(planner, prompt, "design-memory");
+  const responseText = await promptOnFreshSession(planner, prompt, "design-memory", { signal: ctx.signal, onStatusChange: ctx.onPlannerStatusChange });
   if (!responseText) {
     ctx.appendSystem("Design memory update: planner returned empty.");
     return;

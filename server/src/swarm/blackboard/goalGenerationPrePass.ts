@@ -19,6 +19,14 @@ export async function runGoalGenerationPrePass(
   planner: Agent,
   seed: PlannerSeed,
   appendSystem: (text: string) => void,
+  // Issue C-min (2026-04-27): caller-provided callbacks so the UI
+  // shows agent.status="thinking" while this pass is in flight (was
+  // showing "ready" because this code path bypasses promptAgent),
+  // and so the runner can abort the prompt via signal if needed.
+  opts: {
+    signal?: AbortSignal;
+    onStatusChange?: (status: "thinking" | "ready") => void;
+  } = {},
 ): Promise<string | undefined> {
   appendSystem("Goal-generation pre-pass: asking planner to propose ambitious goals…");
   const topLevelText = seed.topLevel.slice(0, 60).join(", ");
@@ -46,6 +54,8 @@ export async function runGoalGenerationPrePass(
     "After the list, on a NEW LINE, write `TOP: <number>` (e.g. `TOP: 1`) — the single goal that has the best impact:effort ratio. The user will run a swarm against this top goal.",
   ].join("\n");
 
+  if (opts.signal?.aborted) return undefined;
+  opts.onStatusChange?.("thinking");
   try {
     const res = await planner.client.session.prompt({
       path: { id: planner.sessionId },
@@ -54,6 +64,7 @@ export async function runGoalGenerationPrePass(
         model: { providerID: "ollama", modelID: planner.model },
         parts: [{ type: "text", text: prompt }],
       },
+      signal: opts.signal,
     });
     const text = extractText(res);
     if (!text) return undefined;
@@ -67,5 +78,7 @@ export async function runGoalGenerationPrePass(
       `Goal-generation pre-pass failed (${err instanceof Error ? err.message : String(err)}); falling back to planner-from-scratch.`,
     );
     return undefined;
+  } finally {
+    opts.onStatusChange?.("ready");
   }
 }

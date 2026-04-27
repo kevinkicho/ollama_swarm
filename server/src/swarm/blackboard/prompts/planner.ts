@@ -167,6 +167,7 @@ export const PLANNER_SYSTEM_PROMPT = [
   "",
   "HARD RULES:",
   "1. Output ONLY a JSON array. No prose. No markdown fences. No commentary before or after.",
+  "1a. (2026-04-27) Output the JSON array as your FINAL response after using your tools. Do NOT emit raw XML tool-call syntax (e.g. `<read path='src/foo.ts' start_line='1' end_line='50'>` or `<grep pattern='...' />`) AS the response — that's the SDK's internal tool-call format and parsing it as JSON fails closed. Use the actual `read` / `grep` / `glob` / `list` tool functions you have access to; the SDK invokes them transparently. When you've finished gathering evidence, your VISIBLE response MUST be only the JSON array.",
   "2. Each element MUST be an object of shape: {\"description\": string, \"expectedFiles\": string[]}.",
   "3. `description` is one imperative sentence (e.g., \"Add a readme section explaining the API.\").",
   "4. `expectedFiles` lists 1 or 2 repo-relative paths the agent will need to touch. NEVER more than 2.",

@@ -59,35 +59,11 @@ divergences. The Group A-E fixes held under load.
   shows `model fallback attempts: 1`. Need to dig into the transcript
   to confirm the second attempt actually used a different model.
 
-- **deepseek-v4-pro tool-call format mismatch.** Multiple JSON-parse
-  failures in transcript caused by deepseek emitting raw XML tool
-  calls (`<read path='...' start_line='...' />`) instead of the
-  JSON envelope our parser expects. Recovery prompt fires correctly
-  so it's not fatal, but generates churn. **Fix direction**: either
-  (a) extend the parser to accept XML tool-call shape and translate
-  to our internal format, (b) tighten the system prompt to forbid
-  XML tool syntax explicitly, or (c) intercept XML output before
-  the JSON parser sees it. **Trigger**: anytime; (b) is cheapest
-  first attempt.
+- ✅ **deepseek-v4-pro tool-call format mismatch** — fixed (rule 1a added to all 4 prompt system messages: planner, first-pass-contract, auditor, replanner). Tells the model explicitly: do NOT emit raw `<read path='...' />` XML; use the actual SDK tool functions; visible response = JSON only. If deepseek still emits XML, parser-side stripping is the follow-up.
 
-- **Reflection-pass cap gating is too soft.** Cap was 20 min;
-  actual wallClockMs = 25.6 min (+5.6 min overshoot). My
-  `isOverWallClockCap` gate is per-pass — if memory distillation
-  starts at 19m30s with cap at 20m, it'll run for 3-5 more min
-  past cap. **Fix direction**: hard cap watchdog that aborts
-  in-flight reflection prompts once cap is hit (vs current per-
-  pass gating). **Trigger**: anytime; small targeted fix.
+- ✅ **Reflection-pass cap gating is too soft** — fixed via hard-cap watchdog. New `setInterval` polls `isOverWallClockCap` every 5s during the reflection block; on cap-hit, fires `reflectionAbort.signal` which forwards through `ReflectionContext.signal` to each pass's `session.prompt({signal})` call. In-flight reflection prompts now get aborted at the cap boundary, not allowed to run for 3-5 more min.
 
-- **agent.status not updated for goal-gen + reflection passes.**
-  `goalGenerationPrePass.ts`, stretch-goal reflection, memory
-  distillation, design memory update all use
-  `planner.client.session.prompt(...)` directly, bypassing
-  `promptAgent` which calls `markStatus(agent.id, "thinking")`.
-  Result: UI shows agent.status="ready" while these passes are
-  actively running. **Fix direction**: route all four through
-  `promptAgent` (or a new helper that does markStatus + the same
-  retry/streaming logic). **Trigger**: anytime; medium-touch but
-  centralizes prompt routing.
+- ✅ **agent.status not updated for goal-gen + reflection passes** — fixed via callback. `goalGenerationPrePass` + each of the 3 reflection passes now accept an `onStatusChange("thinking"|"ready")` callback. Runner provides one (via new `markPlannerStatus` helper) that calls `manager.markStatus` + `emitAgentState`, restoring the truthful UI signal. UI now shows the planner as "thinking" during these passes.
 
 ---
 

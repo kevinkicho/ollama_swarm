@@ -747,7 +747,15 @@ export class BlackboardRunner implements SwarmRunner {
       (!seed.userDirective || seed.userDirective.length === 0) &&
       cfg.autoGenerateGoals !== false;
     if (shouldGenerateGoals) {
-      const generated = await runGoalGenerationPrePassExtracted(planner, seed, (text) => this.appendSystem(text));
+      const generated = await runGoalGenerationPrePassExtracted(
+        planner,
+        seed,
+        (text) => this.appendSystem(text),
+        // Issue C-min: status callback so the UI shows the planner as
+        // thinking during the pre-pass (was showing "ready" because
+        // this code path bypassed promptAgent's markStatus).
+        { onStatusChange: (status) => this.markPlannerStatus(planner, status) },
+      );
       if (generated && generated.length > 0) {
         seed.userDirective = generated;
         this.appendSystem(
@@ -908,6 +916,27 @@ export class BlackboardRunner implements SwarmRunner {
           `Wall-clock cap (${capMin} min) already exceeded by the time the audit loop ended; skipping post-audit reflection passes (stretch goals, memory distillation, design memory) to honor the cap. Set wallClockCapMs higher to allow them.`,
         );
       }
+      // Issue B (2026-04-27): hard-cap watchdog for the reflection
+      // block. Pre-fix, isOverWallClockCap was checked PER-PASS so a
+      // pass starting at 19m30s with cap=20m would run for 3-5 more
+      // min past cap (run 04575ce4 overshot 20-min cap to 25.6 min).
+      // Now: a 5s-tick interval polls isOverWallClockCap and aborts
+      // the shared signal as soon as cap is hit. Each reflection pass
+      // forwards the signal to its session.prompt call, so an
+      // in-flight prompt past cap gets aborted promptly.
+      const reflectionAbort = new AbortController();
+      const reflectionWatchdog = setInterval(() => {
+        if (this.isOverWallClockCap() && !reflectionAbort.signal.aborted) {
+          const capMin = Math.round(
+            (this.active?.wallClockCapMs ?? WALL_CLOCK_CAP_MS) / 60_000,
+          );
+          this.appendSystem(
+            `Wall-clock cap (${capMin} min) hit during reflection passes — aborting any in-flight reflection prompt to honor the cap.`,
+          );
+          reflectionAbort.abort(new Error("wallClockCapMs hit during reflection passes"));
+        }
+      }, 5_000);
+      reflectionWatchdog.unref?.();
       // Task #164 (refactor): build the reflection context once and
       // pass to both extracted helpers.
       const reflectionCtx: ReflectionContext = {
@@ -918,6 +947,13 @@ export class BlackboardRunner implements SwarmRunner {
         committedCount: this.board.counts().committed,
         contractCriteria: this.contract?.criteria ?? [],
         runId: this.active?.runId ?? "unknown",
+        // Issue B: forward the cap-watchdog signal so reflection
+        // prompts get aborted when the cap fires mid-flight.
+        signal: reflectionAbort.signal,
+        // Issue C-min: status callback so the planner agent's UI
+        // status flips to "thinking" while reflection prompts are
+        // in-flight, restoring the truthful UI signal pre-fix lacked.
+        onPlannerStatusChange: (status) => this.markPlannerStatus(planner, status),
       };
       if (
         !errored &&
@@ -971,6 +1007,10 @@ export class BlackboardRunner implements SwarmRunner {
           this.appendSystem(`Design memory update failed: ${msg}`);
         }
       }
+      // Issue B: stop the reflection-cap watchdog now that all
+      // reflection passes are done. The setInterval would otherwise
+      // keep firing isOverWallClockCap probes until process exit.
+      clearInterval(reflectionWatchdog);
       // Phase 9: always try to write a summary, regardless of how we got
       // here (completed / stopped / failed / cap). Awaited so the file and
       // the broadcast event land before the terminal phase transition, so
@@ -3398,6 +3438,24 @@ export class BlackboardRunner implements SwarmRunner {
   // instead of trying to halt an already-finished audit loop.
   // Advances the tick accumulator so a long gap since the last
   // checkAndApplyCaps doesn't undercount the cap.
+  // Issue C-min (2026-04-27): UI-status helper for code paths that
+  // bypass promptAgent (goal-gen pre-pass, all 3 reflection passes).
+  // Those paths use planner.client.session.prompt(...) directly +
+  // never call manager.markStatus, so the UI shows the planner as
+  // "ready" while it's actually mid-prompt. Calling this from the
+  // bypass paths' onStatusChange callback restores truthful UI signal.
+  private markPlannerStatus(planner: Agent, status: "thinking" | "ready"): void {
+    this.opts.manager.markStatus(planner.id, status);
+    this.emitAgentState({
+      id: planner.id,
+      index: planner.index,
+      port: planner.port,
+      sessionId: planner.sessionId,
+      status,
+      ...(status === "thinking" ? { thinkingSince: Date.now() } : { lastMessageAt: Date.now() }),
+    });
+  }
+
   private isOverWallClockCap(): boolean {
     if (this.tickAccumulator === undefined) return false;
     const cap = this.active?.wallClockCapMs ?? WALL_CLOCK_CAP_MS;
