@@ -13,6 +13,7 @@ import type {
 } from "../../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "../SwarmRunner.js";
 import { Board } from "./Board.js";
+import { RunStateObserver } from "./RunStateObserver.js";
 import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaster.js";
 import {
   advanceTickAccumulator,
@@ -344,6 +345,30 @@ export class BlackboardRunner implements SwarmRunner {
   }> = [];
   private tierStartedAt?: number;
   private tierUpFailures = 0;
+  // V2 Step 3b: parallel-track state observer. User-action events
+  // (start/stop/drain/pause/resume/fatal) are wired here; internal
+  // events (todos posted, todo committed, auditor returned, tier-up
+  // decision) are NOT yet wired — that's Step 3b.2. checkPhase() is
+  // therefore not yet called against the V1 phase, since the V2
+  // reducer would lag without the internal events. The observer's
+  // current state still ships in the run summary as `v2State` for
+  // telemetry — Kevin can compare V2's user-action-only view to V1's
+  // setPhase trail.
+  private v2Observer = new RunStateObserver({
+    getCtx: () => {
+      const c = this.board.counts();
+      return {
+        openTodos: c.open,
+        claimedTodos: c.claimed,
+        staleTodos: c.stale,
+        auditInvocations: this.auditInvocations,
+        maxAuditInvocations: this.maxAuditInvocations,
+        currentTier: this.currentTier,
+        maxTiers: this.resolvedMaxTiers(),
+        allCriteriaResolved: this.allCriteriaResolvedSnapshot(),
+      };
+    },
+  });
 
   constructor(private readonly opts: RunnerOpts) {
     this.boardBroadcaster = createBoardBroadcaster(this.opts.emit);
@@ -354,6 +379,17 @@ export class BlackboardRunner implements SwarmRunner {
       },
     });
     this.boardBroadcaster.bindBoard(this.board);
+  }
+
+  // V2 Step 3b helper: derive whether all contract criteria have a
+  // terminal status (met/wont-do). Mirrors the logic the auditor uses
+  // when it decides "all resolved → completed". Returns false when
+  // there's no contract yet (planning hasn't completed).
+  private allCriteriaResolvedSnapshot(): boolean {
+    if (!this.contract) return false;
+    return this.contract.criteria.every(
+      (c) => c.status === "met" || c.status === "wont-do",
+    );
   }
 
   status(): SwarmStatus {
@@ -514,6 +550,9 @@ export class BlackboardRunner implements SwarmRunner {
     this.tierStartedAt = undefined;
     this.tierUpFailures = 0;
     this.active = cfg;
+    // V2 Step 3b: reset the parallel V2 reducer + fire start.
+    this.v2Observer.reset();
+    this.v2Observer.apply({ type: "start", ts: this.runBootedAt });
 
     this.setPhase("cloning");
     const cloneResult = await this.opts.repos.clone({
@@ -886,6 +925,14 @@ export class BlackboardRunner implements SwarmRunner {
     // Task #68: surface the kill result in the transcript.
     const killResult = await this.opts.manager.killAll();
     this.appendSystem(formatPortReleaseLine(killResult));
+    // V2 Step 3b: feed terminal event to the parallel reducer.
+    if (errored) {
+      this.v2Observer.apply({
+        type: "fatal-error",
+        ts: Date.now(),
+        message: crashMessage ?? "(no message)",
+      });
+    }
     this.setPhase(errored ? "failed" : "completed");
     // Unit 31: final non-debounced write so the on-disk state reflects the
     // terminal phase even if the debounced timer hasn't fired yet.
@@ -915,6 +962,8 @@ export class BlackboardRunner implements SwarmRunner {
     // user opted in to "finish work then stop", which is closer to
     // a natural completion than to a hard abort).
     this.wasDrained = true;
+    // V2 Step 3b: feed drain event to the parallel reducer.
+    this.v2Observer.apply({ type: "drain-requested", ts: this.drainStartedAt });
     this.setPhase("draining");
     this.appendSystem(
       `Drain & Stop requested. Workers will finish their current claim (${this.board.counts().claimed} in-flight); no new claims. ` +
@@ -973,6 +1022,8 @@ export class BlackboardRunner implements SwarmRunner {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    // V2 Step 3b: feed user-stop event to the parallel reducer.
+    this.v2Observer.apply({ type: "stop-requested", ts: Date.now() });
     this.setPhase("stopping");
     this.stopClaimExpiry();
     this.stopReplanWatcher();
@@ -2972,6 +3023,14 @@ export class BlackboardRunner implements SwarmRunner {
     if (this.paused) return;
     this.paused = true;
     this.pauseStartedAt = Date.now();
+    // V2 Step 3b: feed pause event (orthogonal in V2 model).
+    this.v2Observer.apply({
+      type: "pause-on-quota",
+      ts: this.pauseStartedAt,
+      reason: quotaState
+        ? `${quotaState.statusCode}: ${quotaState.reason.slice(0, 60)}`
+        : "(no quota detail)",
+    });
     this.setPhase("paused");
     const detail = quotaState
       ? `${quotaState.statusCode}: ${quotaState.reason.slice(0, 120)}`
@@ -3096,6 +3155,8 @@ export class BlackboardRunner implements SwarmRunner {
     if (this.tickAccumulator) {
       this.tickAccumulator = { ...this.tickAccumulator, lastTickAt: Date.now() };
     }
+    // V2 Step 3b: clear pausedReason on the parallel reducer.
+    this.v2Observer.apply({ type: "resume-from-quota", ts: Date.now() });
     this.setPhase("executing");
     this.appendSystem(
       `Quota wall cleared after ${Math.round(pauseDur / 60_000)} min. Resuming run (total paused this run: ${Math.round(this.totalPausedMs / 60_000)} min).`,
