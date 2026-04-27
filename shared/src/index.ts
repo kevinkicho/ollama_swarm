@@ -12,3 +12,18 @@ export type { TranscriptEntrySummary } from "./transcriptEntrySummary.js";
 
 export { summarizeAgentJson } from "./summarizeAgentJson.js";
 export type { AgentJsonSummary } from "./summarizeAgentJson.js";
+
+export {
+  INITIAL_STATE,
+  reduce,
+  isTerminal,
+  plannerShouldFire,
+  workersShouldClaim,
+  runFinished,
+} from "./runStateMachine.js";
+export type {
+  RunPhase,
+  RunState,
+  RunEvent,
+  RunContext,
+} from "./runStateMachine.js";
