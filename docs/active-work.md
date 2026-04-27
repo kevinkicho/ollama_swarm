@@ -78,7 +78,15 @@ plus the actual run output at `C:\mnt\c\Users\kevin\Desktop\ollama_swarm\runs\de
 
 - **AUDIT: review all JSON formatting scenarios end-to-end.** Each `summary.kind` bubble (run_finished, seed_announce, verifier_verdict, agents_ready, council_draft, debate_turn, council_synthesis, stigmergy_report, mapreduce_synthesis, role_diff_synthesis, stretch_goals, debate_verdict, next_action_phase, worker_hunks) has its own renderer in `web/src/components/transcript/MessageBubble.tsx`. The fallback chain (worker_hunks-detection → AgentJsonBubble → JsonPrettyBubble → segmented-prose → CollapsibleBlock) also needs verification. **Trigger**: anytime; method = render each kind in browser, screenshot, compare to expected. Pairs with the SSE-streaming-collapsible regression below — likely some are broken by the same root cause (commit `0b3cda6` outer-div wrap).
 
-- **REGRESSION: SSE streaming formatting via collapsibles broken.** Kevin reported "it worked previously but now its not." Most likely caused by commit `0b3cda6` (MessageBubble wrap with `data-entry-id` outer div) — wrapping the content in a new bare `<div>` may have changed the DOM structure that `useSegmentSplitter` / `StreamingDock` / `CollapsedSegment` rely on for collapsible-on-stream rendering. **Trigger**: anytime; investigate by checking whether the outer wrapper interferes with sticky-bottom scroll, segment measurement, or streaming-dock placement. Possible fix: move the data attrs onto the EXISTING outer wrapper of each child bubble (SystemBubble / AgentBubble / CollapsibleBlock) rather than adding a new wrapper.
+- **STREAMING-COLLAPSIBLES: replace pause-based with content-based segmentation.** Investigation of run 897a3d8f confirmed: `useSegmentSplitter` uses 5s pause-detection, but the V2 OllamaClient direct path delivers text in 1-2 big batches (no 5s pauses) so 0 segment splits form. My commit `0b3cda6` outer-div wrap was NOT the cause — the data attrs work fine; segmentSplitPoints is just always empty.
+
+  **Permanent fix (per Kevin's "what every modern chat UI does"):**
+  1. Replace `useSegmentSplitterWithPoints` pause-detection with content-boundary detection (`\n\n` paragraph, code-fence open/close, markdown headers)
+  2. Lower `STREAMING_THROTTLE_MS` 100 → 33 (30Hz) for smoother incremental render
+  3. (Bonus) When the SDK path is used, treat `message.part.updated` events as intrinsic part boundaries — opencode already segments for us, V2 direct bypass loses that
+  4. "Thinking" affordance visible while streaming even with no text yet
+
+  **Trigger**: explicit "fix streaming UI" — affects every blackboard run + every preset's live transcript display.
 
 - ✅ **Issue #1 (OllamaClient 60s idle)** — fixed. Now uses two-phase timeout: `firstChunkTimeoutMs` (default 180s) until first body chunk arrives, then `idleTimeoutMs` (default 60s) steady-state. Heavy reasoning models (deepseek-v4-pro, etc.) get the cold-start tolerance they need without weakening steady-state liveness. Mirrors the same pattern applied to streamPrompt for the SSE path.
 

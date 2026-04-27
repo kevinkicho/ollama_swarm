@@ -8,10 +8,10 @@
 // turn time (success path). Falls back to 60s for unknown models.
 // Update as new runs widen the dataset.
 const MODEL_TURN_SECONDS: Record<string, number> = {
-  // 2026-04-27 update: 35s → 65s after run 0254ca7c showed the
-  // planner role mean=65s/turn over 4 turns (deepseek's deeper
-  // reasoning is slower than nemotron's). Still provisional — single
-  // run, need ≥5 to widen confidence.
+  // 2026-04-27 update: deepseek-v4-pro provisional 65s based on
+  // run 0254ca7c (single data point). Reverted from default 2026-04-27
+  // afternoon due to Ollama serving congestion — kept here for the
+  // estimator since users can still pick it explicitly.
   "deepseek-v4-pro:cloud": 65,
   "nemotron-3-super:cloud": 30,
   "glm-5.1:cloud": 70,

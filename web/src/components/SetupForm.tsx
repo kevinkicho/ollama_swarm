@@ -40,13 +40,17 @@ import {
 //
 // 2026-04-27: REASONING flipped again, nemotron-3-super:cloud →
 // deepseek-v4-pro:cloud, per Kevin's directive after he pulled +
-// verified deepseek-v4-pro is loaded. nemotron-3-super:cloud and
-// glm-5.1:cloud both remain available — the form's Model field is
-// a free-text input so the user can type any model name to override
-// this default explicitly. Keep these constants separate so a
-// future per-role split (Unit 65 candidate) can target REASONING vs
-// CODING vs a future VERIFIER without touching every preset.
-const MODEL_REASONING = "deepseek-v4-pro:cloud";
+// verified deepseek-v4-pro is loaded.
+//
+// 2026-04-27 (later): REVERTED back to glm-5.1:cloud. deepseek showed
+// Ollama server-traffic congestion (HTTP 503 + slow batched chunks
+// that bypassed our streaming-collapsibles + emitted XML tool-call
+// syntax that broke JSON parsing). glm-5.1 + nemotron stay as the
+// reliable reasoning-tier pair until deepseek's serving stabilizes.
+// All three models remain available via the form's free-text Model
+// field. Keep constants separate so a future per-role split can
+// target REASONING / CODING / VERIFIER without touching every preset.
+const MODEL_REASONING = "glm-5.1:cloud";
 const MODEL_CODING = "gemma4:31b-cloud";
 
 // Keep server-side cap (max=8) in mind when editing `max` values here.

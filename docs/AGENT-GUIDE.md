@@ -175,7 +175,7 @@ EOF
 
 ### Cloud quota
 
-- The default planner model (`deepseek-v4-pro:cloud` since 2026-04-27; previously `glm-5.1:cloud`) can take 30–180s for first prompt cold-start. The SSE-aware watchdog (commit `189ca05`) accepts this as long as SSE chunks are flowing. `glm-5.1:cloud` specifically had a documented empty-response failure mode on parallel-spawn fanout (Pattern 5 in `project_run_patterns` memory); kept available but no longer default.
+- The default planner model (`glm-5.1:cloud` again as of 2026-04-27 afternoon — the brief deepseek-v4-pro default was reverted after Ollama capacity congestion / 503s + XML-tool-call format issues). Cold-start can take 30–180s; the SSE-aware watchdog (commit `189ca05`) accepts this as long as SSE chunks are flowing.
 - Quota walls (HTTP 429/503) trigger blackboard's `enterPause()` with 5-min probe loop, capped at 2h total pause before halting. Other presets fail-fast.
 - Token tracker captures via local proxy at `:11533`. Per-run totals visible in `RunSummary.totalPromptTokens` / `totalResponseTokens`.
 

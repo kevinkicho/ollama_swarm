@@ -178,13 +178,19 @@ function isV1Terminal(phase: SwarmPhase): boolean {
 // Issue #3 (2026-04-27): planner-empty model fallback. When the
 // primary planner returns 0 valid todos after parse + grounding +
 // repair, we re-prompt ONCE with a sibling model — same prompt,
-// different model. Hardcoded for the two REASONING-tier models we
-// ship; per-run cfg.plannerFallbackModel overrides. Returns
-// undefined for unknown / coding-tier / verifier-tier models so
-// the caller falls through to "no fallback."
+// different model. Hardcoded for the REASONING-tier models we ship;
+// per-run cfg.plannerFallbackModel overrides. Returns undefined for
+// unknown / coding-tier / verifier-tier models so the caller falls
+// through to "no fallback."
+//
+// 2026-04-27 (later): pair is glm-5.1 ↔ nemotron now. deepseek-v4-pro
+// kept as a fallback target FROM either (in case user picks it
+// explicitly), but it's unstable and not chosen as a sibling FOR
+// either. nemotron is the safer fallback for all three.
 const SIBLING_MODELS: Readonly<Record<string, string>> = {
+  "glm-5.1:cloud": "nemotron-3-super:cloud",
+  "nemotron-3-super:cloud": "glm-5.1:cloud",
   "deepseek-v4-pro:cloud": "nemotron-3-super:cloud",
-  "nemotron-3-super:cloud": "deepseek-v4-pro:cloud",
 };
 function siblingModelFor(model: string): string | undefined {
   return SIBLING_MODELS[model];
@@ -2254,7 +2260,7 @@ export class BlackboardRunner implements SwarmRunner {
       auditInvocation: this.auditInvocations,
       maxInvocations: this.maxAuditInvocations,
       uiUrl: this.active?.uiUrl,
-      model: this.active?.model ?? "deepseek-v4-pro:cloud",
+      model: this.active?.model ?? "glm-5.1:cloud",
       clonePath: this.active?.localPath ?? "",
       appendSystem: (text) => this.appendSystem(text),
     });

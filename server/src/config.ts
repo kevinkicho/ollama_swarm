@@ -37,7 +37,7 @@ const Schema = z.object({
   // to disable the proxy entirely (legacy direct-to-Ollama mode —
   // token tracking will be empty).
   OLLAMA_PROXY_PORT: z.coerce.number().int().min(0).max(65_535).default(11533),
-  DEFAULT_MODEL: z.string().default("deepseek-v4-pro:cloud"),
+  DEFAULT_MODEL: z.string().default("glm-5.1:cloud"),
   // Blackboard-only worker default. Workers do diff-generation and
   // benefit less from the planner's heavier reasoning model — gemma4
   // gives ~3-4× the tokens-per-second at acceptable code-edit quality.
