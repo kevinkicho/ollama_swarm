@@ -197,6 +197,18 @@ export class AgentManager {
   //   - session.idle reliably terminates because each agent's session has
   //     at most one in-flight prompt at a time (our serial usage pattern)
   async streamPrompt(agent: Agent, opts: StreamPromptOpts): Promise<string> {
+    // Task #223: track per-agent prompt count so diag logs distinguish
+    // 1st vs 2nd+ prompts (the wedge in run 68b76b79 hit on the 4th
+    // prompt to agent-3 — first 3 succeeded normally).
+    const promptN = (this.streamPromptCount.get(agent.id) ?? 0) + 1;
+    this.streamPromptCount.set(agent.id, promptN);
+    this.logDiag({
+      type: "_stream_prompt_start",
+      agentId: agent.id,
+      promptN,
+      perChunkTimeoutMs: opts.perChunkTimeoutMs,
+      ts: Date.now(),
+    });
     // One in-flight stream per agent. If a prior call somehow leaked,
     // reject it so its awaiter unblocks rather than wedging forever.
     const prior = this.streamingByAgent.get(agent.id);
@@ -218,6 +230,18 @@ export class AgentManager {
       const armChunkTimeout = () => {
         if (state.timeoutHandle) clearTimeout(state.timeoutHandle);
         state.timeoutHandle = setTimeout(() => {
+          // Task #223 diag: log every time the per-chunk timer fires.
+          // Lets us confirm the timer IS armed and firing for 2nd+
+          // prompts. Run 68b76b79 had ZERO probe events for agent-3's
+          // 4th prompt — either timer wasn't armed or never fired.
+          this.logDiag({
+            type: "_stream_chunk_timeout_fired",
+            agentId: agent.id,
+            promptN,
+            sinceLastChunkMs: Date.now() - state.lastChunkAt,
+            currentTextChars: state.text.length,
+            ts: Date.now(),
+          });
           // Task #192: silence ≠ death. Before rejecting, probe the
           // session via REST. If the latest assistant message has
           // grown since our last SSE chunk, the SSE channel is broken
@@ -371,10 +395,21 @@ export class AgentManager {
         ourSessionId: agent.sessionId,
         backfilledChars: gained,
         totalChars: probeText.length,
+        promptN: this.streamPromptCount.get(agent.id) ?? 0,
       });
       armChunkTimeout();
       return;
     }
+    // Task #223: log when probe confirms silence (about to reject).
+    // Distinguishes "subprocess actually silent" from "probe failed".
+    this.logDiag({
+      type: "_sse_probe_silence",
+      agentId: agent.id,
+      ourSessionId: agent.sessionId,
+      currentTextChars: state.text.length,
+      probeTextChars: probeText?.length ?? -1,
+      promptN: this.streamPromptCount.get(agent.id) ?? 0,
+    });
 
     // Probe agrees with SSE: model is silent. Reject as before.
     this.streamingByAgent.delete(agent.id);
@@ -419,6 +454,19 @@ export class AgentManager {
     // hardcoded "ready" we returned pre-Unit-21. Sorted by index for
     // deterministic UI ordering.
     return [...this.agentStates.values()].sort((a, b) => a.index - b.index);
+  }
+
+  // Task #222: returns true if any agent is currently in flight on a
+  // prompt. Used by the worker-wedge diag to suppress false-positive
+  // alarms when sibling workers are correctly waiting on a slow-but-
+  // alive worker. The wedge is for the case where ALL agents are idle
+  // but the board still has claimed work — that's when something is
+  // truly stuck. With one agent thinking, "claimed > 0" is normal.
+  anyAgentThinking(): boolean {
+    for (const s of this.agentStates.values()) {
+      if (s.status === "thinking" || s.status === "retrying") return true;
+    }
+    return false;
   }
 
   // Unit 21: single source-of-truth helper for state changes. Mirrors
@@ -810,6 +858,11 @@ export class AgentManager {
   // Only one in-flight stream per agent at a time — matches our
   // serial usage (each agent's session is single-message-in-flight).
   private streamingByAgent = new Map<string, MessageStreamState>();
+  // Task #223: per-agent prompt count for diag tracing. Increments
+  // every time streamPrompt is called. Used to distinguish 1st vs
+  // 2nd+ prompts in _stream_prompt_start / _stream_chunk_timeout_fired
+  // / _sse_probe_recovery diag entries.
+  private streamPromptCount = new Map<string, number>();
   // Task #172: trailing-edge throttle for agent_streaming WS events.
   // SSE text snapshots arrive every ~50ms during model output; emitting
   // each one to the UI causes "vibrating text" (full re-render) and

@@ -2227,7 +2227,12 @@ export class BlackboardRunner implements SwarmRunner {
         waitTickN += 1;
         const now = Date.now();
         const PERSISTENT_WEDGE_MIN_TICKS = 12; // ≈30s at WORKER_POLL_MS=2000+jitter
-        const sustainedWedge = waitTickN >= PERSISTENT_WEDGE_MIN_TICKS;
+        // Task #222: only fire the wedge diag when NO agent is in flight.
+        // Sibling waiting on a slow-but-alive worker is normal, not a wedge.
+        // The wedge is for the case where everyone's idle but state is
+        // stuck — that's when something is truly broken.
+        const someoneInFlight = this.opts.manager.anyAgentThinking();
+        const sustainedWedge = waitTickN >= PERSISTENT_WEDGE_MIN_TICKS && !someoneInFlight;
         if (sustainedWedge && now - lastWaitDiagAt > 30_000) {
           lastWaitDiagAt = now;
           this.opts.logDiag?.({
