@@ -54,7 +54,7 @@
 15-min run with deepseek-v4-pro planner; artifacts in `runs/_monitor/0254ca7c/`
 plus the actual run output at `C:\mnt\c\Users\kevin\Desktop\ollama_swarm\runs\debate-tcg\` (wrong path — see #PATH below).
 
-- **CRITICAL — path mangling at the REST boundary.** A WSL-style `parentPath: "/mnt/c/Users/..."` was interpreted by the Windows-side dev server as `C:\mnt\c\Users\...`, creating a parallel directory tree. Run output landed at `C:\mnt\c\...` instead of the WSL-visible `runs/`. Knock-on: auditor read the wrong path → verdicted criteria unmet despite worker actually committing. **Fix direction**: normalize `parentPath` at the route layer in `routes/swarm.ts` — strip `/mnt/<drive>/` prefix and convert to `<DRIVE>:\`, or reject WSL-style paths with a clear error. **Trigger**: anytime; high-impact UX bug.
+- ✅ **CRITICAL — path mangling at the REST boundary.** Fixed in `1ec038d` — `normalizeWslPath()` utility at the route layer in `routes/swarm.ts` (both `/preflight` and `/start`). `/mnt/<drive>/<rest>` → `<DRIVE>:\<rest>` on Windows; no-op everywhere else. 13 unit tests. End-to-end verified via preflight: `/mnt/c/Users/.../runs` → `C:\Users\...\runs\debate-tcg`.
 
 - **wallClockCapMs not enforced.** 15-min cap (`wallClockCapMs: 900000`) sent; actual `wallClockMs: 1140810` = 19 min. Either cap-check happens at infrequent boundaries (audit cycles, not turn boundaries) or cap math is broken. **Trigger**: anytime; investigate `checkAndApplyCaps` call sites + the `tickAccumulator` that was added in Unit 27.
 
@@ -106,6 +106,7 @@ not promote any of these to "needs-fixing" without re-checking the artifact.
 
 ### 2026-04-27 — late session: bug-fix round
 
+- ✅ `1ec038d` — WSL parentPath normalization at the route boundary. Prevents the `C:\mnt\c\...` parallel-tree bug surfaced by run 0254ca7c. New `server/src/services/pathNormalize.ts` + 13 unit tests. Both `/api/swarm/preflight` and `/api/swarm/start` apply the normalization; downstream code sees correct Windows paths so the auditor reads the same files the worker wrote to.
 - ✅ Default model swap: `glm-5.1:cloud` → `deepseek-v4-pro:cloud` (Kevin pulled + verified). Replaced in: `config.ts`, `.env.example`, `App.tsx` header, `BlackboardRunner.ts:2155` fallback, `scripts/poke-blackboard.ps1`, `SetupForm.tsx` MODEL_REASONING constant, `WallClockEstimate.tsx` (provisional 35s/turn). `nemotron-3-super:cloud` and `glm-5.1:cloud` remain available — type explicitly into the form's Model field.
 - ✅ `b794703` — issue #2 + #3 visibility + port defaults + monitor tooling
   - blackboard: stopReason="no-progress" for 0-work runs (was masquerading as "completed")
