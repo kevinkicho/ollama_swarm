@@ -166,6 +166,14 @@ const MAX_PAUSE_TOTAL_MS = 2 * 60 * 60_000;
 const DRAIN_DEADLINE_MS = 3 * 60_000;
 const DRAIN_WATCHER_INTERVAL_MS = 2_000;
 
+// V2 Step 3b.2: terminal V1 phases come from external triggers
+// (audit cap, user stop, crash) that V2's event-driven reducer
+// can't always derive. Skip checkPhase for these so the divergence
+// list isn't polluted with cosmetic late-stage mismatches.
+function isV1Terminal(phase: SwarmPhase): boolean {
+  return phase === "completed" || phase === "stopped" || phase === "failed";
+}
+
 export class BlackboardRunner implements SwarmRunner {
   private transcript: TranscriptEntry[] = [];
   private phase: SwarmPhase = "idle";
@@ -4238,6 +4246,16 @@ export class BlackboardRunner implements SwarmRunner {
     // The PHASE_MAPPING accepts coarse V1 → fine V2 transitions
     // (V1 executing → V2 {executing, auditing, tier-up}); only true
     // wedges fire here.
+    //
+    // Skip terminal phases (completed/stopped/failed): V1 reaches
+    // these via external triggers (audit cap, user stop, crash) that
+    // V2's event-driven reducer can't always derive — for instance,
+    // V1 hits "audit cap → completed" mid-tier-2 planning before V2
+    // ever gets the auditor-returned event. The divergence would be
+    // cosmetic, not a real V1↔V2 disagreement, and would pollute the
+    // run summary's divergences list. Terminal V1 phases are the
+    // ground truth here; V2 follows.
+    if (isV1Terminal(phase)) return;
     const ok = this.v2Observer.checkPhase(phase, Date.now(), "setPhase");
     if (!ok) {
       const last = this.v2Observer.getDivergences().slice(-1)[0];
