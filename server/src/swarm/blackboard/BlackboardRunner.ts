@@ -175,6 +175,21 @@ function isV1Terminal(phase: SwarmPhase): boolean {
   return phase === "completed" || phase === "stopped" || phase === "failed";
 }
 
+// Issue #3 (2026-04-27): planner-empty model fallback. When the
+// primary planner returns 0 valid todos after parse + grounding +
+// repair, we re-prompt ONCE with a sibling model — same prompt,
+// different model. Hardcoded for the two REASONING-tier models we
+// ship; per-run cfg.plannerFallbackModel overrides. Returns
+// undefined for unknown / coding-tier / verifier-tier models so
+// the caller falls through to "no fallback."
+const SIBLING_MODELS: Readonly<Record<string, string>> = {
+  "deepseek-v4-pro:cloud": "nemotron-3-super:cloud",
+  "nemotron-3-super:cloud": "deepseek-v4-pro:cloud",
+};
+function siblingModelFor(model: string): string | undefined {
+  return SIBLING_MODELS[model];
+}
+
 export class BlackboardRunner implements SwarmRunner {
   private transcript: TranscriptEntry[] = [];
   private phase: SwarmPhase = "idle";
@@ -1578,7 +1593,14 @@ export class BlackboardRunner implements SwarmRunner {
   // Planner
   // ---------------------------------------------------------------------
 
-  private async runPlanner(agent: Agent, seed: PlannerSeed): Promise<void> {
+  private async runPlanner(
+    agent: Agent,
+    seed: PlannerSeed,
+    // Issue #3 (2026-04-27): when the primary model produces 0 valid
+    // todos, this method recurses ONCE with the sibling model. The
+    // flag prevents infinite recursion if the fallback also fails.
+    isFallbackAttempt = false,
+  ): Promise<void> {
     // Unit 24: planner fallback (see promptPlannerSafely comment).
     const { response: firstResponse, agentUsed: planAgent } = await this.promptPlannerSafely(
       agent,
@@ -1685,18 +1707,41 @@ export class BlackboardRunner implements SwarmRunner {
     groundedTodos.push(...symbolGroundedTodos);
 
     if (groundedTodos.length === 0) {
-      // Issue #3 (2026-04-27): make this loud. The previous wording
-      // ("Planner produced 0 valid todos after grounding.") read as a
-      // benign system note; a user looking at the transcript wouldn't
-      // realize the run is now headed for a no-op terminal state.
-      // Stretch-goal reflection + memory distillation still run, but
-      // the headline below names the failure mode.
+      // Issue #3 (2026-04-27): minimal-viable model fallback. Per-run
+      // cfg.plannerFallbackModel wins; otherwise look up sibling
+      // (deepseek↔nemotron). Fallback is one shot — if the recursion
+      // also returns 0 todos, we declare failure.
+      const fallback = !isFallbackAttempt
+        ? this.active?.plannerFallbackModel ?? siblingModelFor(agent.model)
+        : undefined;
+      if (fallback && fallback !== agent.model) {
+        const original = agent.model;
+        this.appendSystem(
+          `Planner produced 0 valid todos with ${original}; retrying once with sibling model ${fallback}.`,
+        );
+        agent.model = fallback;
+        try {
+          await this.runPlanner(agent, seed, true);
+          return; // recursive call already handled posting OR loud-warn
+        } finally {
+          // Restore original so subsequent planner calls (replan,
+          // auditor pass, reflection) use the user's chosen model.
+          agent.model = original;
+        }
+      }
+      // Either no fallback exists, or fallback also produced 0 todos.
+      // Surface the failure loudly — previous wording ("Planner produced
+      // 0 valid todos after grounding.") read as a benign system note
+      // while the run was actually headed for a no-op terminal state.
       const dropDetail =
         parsed.dropped.length > 0 || todosDropped > 0
           ? `Planner returned only invalid/unbindable todos (${parsed.dropped.length} schema-dropped, ${todosDropped} grounding-dropped).`
           : "Planner returned an empty todo list — nothing actionable in the repo.";
+      const fallbackNote = isFallbackAttempt
+        ? " (sibling-model fallback also produced 0 todos)"
+        : "";
       this.appendSystem(
-        `⚠ Planner failed to produce actionable todos. ${dropDetail} The run will exit with stopReason="no-progress" after fallback reflection — no commits will land.`,
+        `⚠ Planner failed to produce actionable todos${fallbackNote}. ${dropDetail} The run will exit with stopReason="no-progress" after fallback reflection — no commits will land.`,
       );
       this.board.postFinding({
         agentId: agent.id,

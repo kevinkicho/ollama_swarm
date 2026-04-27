@@ -124,6 +124,10 @@ const StartBody = z.object({
   // ignored by discussion presets. (See SwarmRunner RunConfig comment
   // for context.)
   useWorkerPipelineV2: z.boolean().optional(),
+  // Issue #3: override the sibling-model fallback used when the
+  // planner returns 0 valid todos. Set to the same value as the
+  // planner model to disable fallback. Blackboard-only.
+  plannerFallbackModel: z.string().trim().min(1).max(200).optional(),
   // Task #132: continuous mode — run-against-budget instead of
   // run-against-rounds. Requires at least one budget cap (tokenBudget
   // or wallClockCapMs); the start handler rejects otherwise.
@@ -385,6 +389,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         autoStretchReflection: parsed.data.autoStretchReflection,
         verifier: parsed.data.verifier,
         useWorkerPipelineV2: parsed.data.useWorkerPipelineV2,
+        plannerFallbackModel: parsed.data.plannerFallbackModel,
         continuous: parsed.data.continuous,
         autoMemory: parsed.data.autoMemory,
         autoDesignMemory: parsed.data.autoDesignMemory,

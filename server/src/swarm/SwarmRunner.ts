@@ -252,6 +252,15 @@ export interface RunConfig {
    */
   useWorkerPipelineV2?: boolean;
   /**
+   * Issue #3 (2026-04-27): override the sibling-model used when the
+   * planner returns 0 valid todos. Absent → look up sibling from the
+   * hardcoded REASONING-tier pair (deepseek↔nemotron). Set explicitly
+   * to use a different model (e.g. "glm-5.1:cloud") when neither
+   * sibling-tier model fits. Set to the same value as `plannerModel`
+   * to effectively disable fallback. Blackboard-only.
+   */
+  plannerFallbackModel?: string;
+  /**
    * Task #36: app-level run id minted by the Orchestrator at run-start
    * (Unit 52d) and stashed into RunConfig here so runners can forward
    * it to their summary builders. Lets summary.json carry the same
