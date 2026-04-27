@@ -1405,6 +1405,31 @@ export class AgentManager {
   // latest text, the timer fires once and emits the latest snapshot.
   private static readonly STREAMING_THROTTLE_MS = 100;
 
+  // V2 Step 1: public hook for the Ollama-direct path (promptWithRetry).
+  // Bypasses the SSE/streamPrompt machinery entirely — caller already
+  // has the cumulative text from the chunked-HTTP read and just needs
+  // to mirror it into the existing per-agent buffers + trigger a UI
+  // emit (throttled, same as the SSE path).
+  recordStreamingText(agentId: string, agentIndex: number, cumulativeText: string): void {
+    this.partialStreams.set(agentId, { text: cumulativeText, updatedAt: Date.now() });
+    // Use the same throttled flush as the SSE path so the UI gets
+    // ~10Hz updates.
+    this.scheduleStreamingFlush({ id: agentId, index: agentIndex } as Agent, cumulativeText);
+  }
+
+  // V2 Step 1: emit the streaming-end event for the Ollama-direct path
+  // so the PersistentStreamBubble flips to "done ✓" the same way it
+  // does for the SSE path's session.idle.
+  markStreamingDone(agentId: string): void {
+    this.onEvent({ type: "agent_streaming_end", agentId });
+    // Drop per-agent partial-stream buffer — the response is final.
+    this.partialStreams.delete(agentId);
+    const flushTimer = this.streamingFlushTimers.get(agentId);
+    if (flushTimer) clearTimeout(flushTimer);
+    this.streamingFlushTimers.delete(agentId);
+    this.latestStreamingText.delete(agentId);
+  }
+
   private scheduleStreamingFlush(agent: Agent, text: string): void {
     this.latestStreamingText.set(agent.id, text);
     if (this.streamingFlushTimers.has(agent.id)) return;

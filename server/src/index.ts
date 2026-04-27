@@ -56,6 +56,9 @@ const orchestrator = new Orchestrator({
   // Unit 19: per-call timing telemetry from promptWithRetry lands here
   // (alongside the AgentManager's diag records). Same logs/current.jsonl.
   logDiag: (rec) => eventLogger.log(rec),
+  // V2 Step 1: Ollama base URL (proxy-aware) for the Ollama-direct
+  // path. Strip /v1 suffix so OllamaClient can append /api/chat.
+  ollamaBaseUrl: config.OLLAMA_BASE_URL.replace(/\/v1\/?$/, ""),
 });
 
 broadcaster.attach(wss, (ws) => {

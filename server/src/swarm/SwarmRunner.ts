@@ -265,6 +265,11 @@ export interface RunnerOpts {
   // existing tests don't have to construct one. Lands in the same
   // logs/current.jsonl that the WS event logger writes.
   logDiag?: (record: unknown) => void;
+  // V2 Step 1: Ollama base URL (without /v1 suffix). Threaded from the
+  // Orchestrator so the runner can pass it to OllamaClient when
+  // USE_OLLAMA_DIRECT=1 is set. Optional — falls through to a default
+  // if the runner doesn't need it (non-blackboard presets unchanged).
+  ollamaBaseUrl?: string;
 }
 
 // Every preset implementation fulfills this contract so the top-level

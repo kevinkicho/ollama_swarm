@@ -5,6 +5,7 @@ import {
   isRetryableSdkError,
 } from "./blackboard/retry.js";
 import { tokenTracker } from "../services/ollamaProxy.js";
+import { chat as ollamaChat } from "../services/OllamaClient.js";
 
 // Task #166: per-chunk timeout for streamed prompts. If no SSE text
 // chunks arrive for this many ms, the model is presumed dead and the
@@ -79,6 +80,11 @@ export interface PromptWithRetryOptions {
   // wrong-format hallucination class within ~10s instead of running to
   // the absolute turn cap (1200s).
   formatExpect?: "json" | "free";
+  // V2 Step 1: when set, route through OllamaClient (direct chunked-HTTP
+  // to Ollama) instead of the OpenCode SDK path. Caller passes baseUrl
+  // explicitly to avoid module-load-time config import (keeps this
+  // module unit-testable). When unset/false, the SDK path is used.
+  ollamaDirect?: { baseUrl: string };
 }
 
 export interface RetryInfo {
@@ -129,7 +135,43 @@ export async function promptWithRetry(
       // header explicitly to event.subscribe(); SSE events flow
       // again, streaming is viable.
       const STREAMING_ENABLED = true;
-      if (STREAMING_ENABLED && opts.manager) {
+      // V2 Step 1: when opts.ollamaDirect is provided, route through
+      // OllamaClient (direct chunked-HTTP to Ollama, no OpenCode subprocess,
+      // no SSE event stream, no per-chunk timeout/probe/reconnect dance).
+      // Side-by-side with the SDK path until validated. Once stable, the
+      // SDK path will be removed entirely (per docs/ARCHITECTURE-V2.md).
+      if (opts.ollamaDirect) {
+        const t0Direct = Date.now();
+        const result = await ollamaChat({
+          baseUrl: opts.ollamaDirect.baseUrl,
+          model: agent.model,
+          messages: [{ role: "user", content: promptText }],
+          signal: opts.signal,
+          // Default 60s idle timeout matches the V2 spec — if the body
+          // goes silent for this long, the model is dead. No probes.
+          onChunk: (cumulativeText) => {
+            // Surface streaming text into the agent's partial-stream
+            // buffer so the UI sees progress just like the SSE path.
+            opts.manager?.recordStreamingText(agent.id, agent.index, cumulativeText);
+          },
+          onTokens: ({ promptTokens, responseTokens }) => {
+            // Record into the existing tokenTracker so the usage
+            // widget keeps working unchanged.
+            tokenTracker.add({
+              ts: Date.now(),
+              promptTokens,
+              responseTokens,
+              durationMs: Date.now() - t0Direct,
+              model: agent.model,
+              path: "/api/chat (direct)",
+            });
+          },
+        });
+        // Surface streaming-end like the SDK path so the UI's
+        // PersistentStreamBubble flips to "done".
+        opts.manager?.markStreamingDone(agent.id);
+        res = { data: { parts: [{ type: "text", text: result.text }] } };
+      } else if (STREAMING_ENABLED && opts.manager) {
         const text = await opts.manager.streamPrompt(agent, {
           agentName,
           modelID: agent.model,

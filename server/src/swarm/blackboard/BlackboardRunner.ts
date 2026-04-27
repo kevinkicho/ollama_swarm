@@ -3598,6 +3598,13 @@ export class BlackboardRunner implements SwarmRunner {
         // Task #196: early-format sniff aborts wrong-format responses
         // in ~10s instead of waiting for the absolute turn cap (1200s).
         formatExpect,
+        // V2 Step 1: when USE_OLLAMA_DIRECT=1, route through OllamaClient
+        // (bypasses OpenCode subprocess entirely). config import here is
+        // safe — BlackboardRunner already depends on config. The flag
+        // gates by env so dev can flip between paths without rebuilding.
+        ollamaDirect: process.env.USE_OLLAMA_DIRECT === "1"
+          ? { baseUrl: this.opts.ollamaBaseUrl ?? "http://127.0.0.1:11533" }
+          : undefined,
         onTokens: ({ promptTokens, responseTokens }) => {
           if (promptTokens > 0) this.promptTokensPerAgent.set(agent.id, (this.promptTokensPerAgent.get(agent.id) ?? 0) + promptTokens);
           if (responseTokens > 0) this.responseTokensPerAgent.set(agent.id, (this.responseTokensPerAgent.get(agent.id) ?? 0) + responseTokens);
