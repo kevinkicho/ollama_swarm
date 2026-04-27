@@ -438,6 +438,8 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
         header={header}
         summary={oneLine}
         json={entry.text}
+        segmentSplitPoints={entry.segmentSplitPoints}
+        segmentHue={hue}
       />
     );
   }
@@ -467,6 +469,8 @@ function Bubble({ entry }: { entry: TranscriptEntry }) {
         header={header}
         summary={clientSummary.summary}
         json={clientSummary.json}
+        segmentSplitPoints={entry.segmentSplitPoints}
+        segmentHue={hue}
       />
     );
   }

@@ -39,6 +39,15 @@ export interface AgentJsonBubbleProps {
   header: React.ReactNode;
   className?: string;
   style?: React.CSSProperties;
+  // 2026-04-26: optional segment split points captured during streaming.
+  // When present, the Reasoning panel renders the prose preamble with
+  // the same segment structure the user saw live (CollapsedSegment per
+  // past segment + last segment expanded). Indices into the FULL response
+  // text — splits within the prose region apply to the prose preamble;
+  // splits past the JSON boundary are ignored.
+  segmentSplitPoints?: number[];
+  // Hue passed through so segments use the agent's color palette.
+  segmentHue?: number;
 }
 
 // Split a model response into prose preamble + JSON payload. Many models
@@ -68,12 +77,28 @@ function splitProseAndJson(text: string): { prose: string; json: string } {
   };
 }
 
-export function AgentJsonBubble({ summary, json, header, className, style }: AgentJsonBubbleProps) {
+export function AgentJsonBubble({ summary, json, header, className, style, segmentSplitPoints, segmentHue }: AgentJsonBubbleProps) {
   const [showJson, setShowJson] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
   const [jsonExpanded, setJsonExpanded] = useState(false);
   const { prose, json: jsonPart } = splitProseAndJson(json);
   const hasReasoning = prose.length > 0;
+  // 2026-04-26: filter segment splits to those within the prose region
+  // so the Reasoning panel can render with preserved structure.
+  const proseSegments = (() => {
+    if (!segmentSplitPoints || segmentSplitPoints.length === 0 || prose.length === 0) return null;
+    const proseSplits = segmentSplitPoints.filter((p) => p > 0 && p < prose.length);
+    if (proseSplits.length === 0) return null;
+    const out: string[] = [];
+    let cursor = 0;
+    for (const sp of proseSplits) {
+      if (sp <= cursor) continue;
+      out.push(prose.slice(cursor, sp));
+      cursor = sp;
+    }
+    out.push(prose.slice(cursor));
+    return out;
+  })();
   // Pretty-print JSON when it's parseable; otherwise show raw.
   const prettyJson = tryPrettyJson(jsonPart) ?? jsonPart;
   const jsonTooLong = prettyJson.length > JSON_COLLAPSE_THRESHOLD;
@@ -106,12 +131,17 @@ export function AgentJsonBubble({ summary, json, header, className, style }: Age
         <div className="mt-2 rounded border border-indigo-900/60 bg-indigo-950/20 p-2">
           <div className="text-[10px] uppercase tracking-wide text-indigo-300/80 mb-1">
             Reasoning preamble · {prose.length.toLocaleString()} chars
+            {proseSegments && proseSegments.length > 1 ? ` · ${proseSegments.length} segments` : ""}
           </div>
-          <CollapsibleBlock
-            className=""
-            header={null}
-            text={prose}
-          />
+          {proseSegments && proseSegments.length > 1 ? (
+            <ProseSegments segments={proseSegments} hue={segmentHue ?? 200} />
+          ) : (
+            <CollapsibleBlock
+              className=""
+              header={null}
+              text={prose}
+            />
+          )}
         </div>
       ) : null}
       {showJson ? (
@@ -166,6 +196,62 @@ export function JsonPrettyBubble({
         >
           {expanded ? "Show less" : `Show more (${json.length - JSON_COLLAPSE_THRESHOLD} chars)`}
         </button>
+      ) : null}
+    </div>
+  );
+}
+
+// 2026-04-26: prose-segments renderer for AgentJsonBubble's Reasoning
+// panel. Inlined here (not imported from StreamingDock) to avoid a
+// circular import — StreamingDock already imports from this file.
+function ProseSegments({ segments, hue }: { segments: string[]; hue: number }) {
+  return (
+    <div className="space-y-1.5">
+      {segments.slice(0, -1).map((seg, i) => (
+        <ProseSegment key={i} index={i} text={seg} hue={hue} />
+      ))}
+      {segments.length > 0 ? (
+        <div
+          className="whitespace-pre-wrap opacity-90 overflow-y-auto text-sm"
+          style={{ maxHeight: `${MAX_BUBBLE_HEIGHT_PX}px` }}
+        >
+          {segments[segments.length - 1] || " "}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ProseSegment({ index, text, hue }: { index: number; text: string; hue: number }) {
+  const [open, setOpen] = useState(false);
+  const charCount = text.length.toLocaleString();
+  const preview = text.replace(/\s+/g, " ").slice(0, 80);
+  const borderColor = `hsl(${hue} 25% 22%)`;
+  const bgColor = `hsl(${hue} 25% 9%)`;
+  const headerColor = `hsl(${hue} 30% 70%)`;
+  return (
+    <div className="rounded border text-xs" style={{ borderColor, background: bgColor }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full text-left px-2 py-1 flex items-center gap-1.5 hover:bg-black/20 transition"
+        style={{ color: headerColor }}
+      >
+        <span className="font-mono text-[10px]">{open ? "▾" : "▸"}</span>
+        <span className="font-semibold">Segment {index + 1}</span>
+        <span className="text-ink-500">·</span>
+        <span className="text-ink-500 flex-1 truncate" title={preview}>
+          {preview}{text.length > 80 ? "…" : ""}
+        </span>
+        <span className="text-ink-500 shrink-0">{charCount} chars</span>
+      </button>
+      {open ? (
+        <div
+          className="whitespace-pre-wrap opacity-80 overflow-y-auto px-2 pb-2 text-sm"
+          style={{ maxHeight: `${MAX_BUBBLE_HEIGHT_PX}px` }}
+        >
+          {text}
+        </div>
       ) : null}
     </div>
   );
