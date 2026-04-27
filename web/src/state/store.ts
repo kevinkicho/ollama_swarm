@@ -176,6 +176,24 @@ export const useSwarm = create<SwarmStore>((set) => ({
   appendEntry: (e) =>
     set((s) => {
       if (s.transcript.some((t) => t.id === e.id)) return s;
+      // 2026-04-26: dedup consecutive RUN-START dividers. The store-side
+      // resetForNewRun emits one for cross-run transitions; the server
+      // also emits one (commit 33e397e) so fresh page loads see a divider
+      // even when transcript starts empty. When BOTH fire (cross-run +
+      // server-side), we get duplicate "New run" cards. Skip the second.
+      if (e.role === "system" && e.text.startsWith("▸▸RUN-START▸▸")) {
+        const last = s.transcript[s.transcript.length - 1];
+        if (
+          last &&
+          last.role === "system" &&
+          last.text.startsWith("▸▸RUN-START▸▸")
+        ) {
+          // Extract runId from both for safety: only dedup if same run.
+          const lastRunId = (last.text.match(/runId=([^|]+)/) ?? [])[1] ?? "";
+          const newRunId = (e.text.match(/runId=([^|]+)/) ?? [])[1] ?? "";
+          if (lastRunId === newRunId) return s;
+        }
+      }
       const nextStreaming = { ...s.streaming };
       const nextMeta = { ...s.streamingMeta };
       const nextSegPts = { ...s.streamingSegmentPoints };
