@@ -1,4 +1,4 @@
-// V2 Step 5a tests: TodoQueueV2 substrate semantics.
+// V2 Step 5a tests: TodoQueue substrate semantics.
 //
 // Covers FIFO order, status transitions, retry bookkeeping, and the
 // guards that prevent invalid state transitions (e.g., completing a
@@ -7,11 +7,11 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { TodoQueueV2 } from "./TodoQueueV2.js";
+import { TodoQueue } from "./TodoQueue.js";
 
-describe("TodoQueueV2 — basic FIFO semantics", () => {
+describe("TodoQueue — basic FIFO semantics", () => {
   it("post + dequeue returns the oldest pending todo first", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id1 = q.post({ description: "first", expectedFiles: ["a.ts"], createdBy: "planner" });
     const id2 = q.post({ description: "second", expectedFiles: ["b.ts"], createdBy: "planner" });
     const id3 = q.post({ description: "third", expectedFiles: ["c.ts"], createdBy: "planner" });
@@ -24,7 +24,7 @@ describe("TodoQueueV2 — basic FIFO semantics", () => {
   });
 
   it("dequeue returns null when no pending todos", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     assert.equal(q.dequeue("worker-2"), null);
     q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("worker-2");
@@ -32,7 +32,7 @@ describe("TodoQueueV2 — basic FIFO semantics", () => {
   });
 
   it("dequeue marks todo in-progress + stamps workerId + startedAt", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     const t = q.dequeue("worker-7", undefined, 12345);
     assert.equal(t?.status, "in-progress");
@@ -41,7 +41,7 @@ describe("TodoQueueV2 — basic FIFO semantics", () => {
   });
 
   it("returned todos are defensive copies — mutating doesn't affect queue", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     q.post({ description: "x", expectedFiles: ["a.ts"], createdBy: "p" });
     const t = q.dequeue("worker-2");
     if (!t) throw new Error("dequeue returned null");
@@ -52,7 +52,7 @@ describe("TodoQueueV2 — basic FIFO semantics", () => {
   });
 
   it("ids are sequentially generated t1, t2, t3...", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const a = q.post({ description: "a", expectedFiles: [], createdBy: "p" });
     const b = q.post({ description: "b", expectedFiles: [], createdBy: "p" });
     const c = q.post({ description: "c", expectedFiles: [], createdBy: "p" });
@@ -62,9 +62,9 @@ describe("TodoQueueV2 — basic FIFO semantics", () => {
   });
 });
 
-describe("TodoQueueV2 — terminal transitions", () => {
+describe("TodoQueue — terminal transitions", () => {
   it("complete() transitions in-progress → completed + clears reason", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("worker-2");
     q.complete(id, 999);
@@ -75,7 +75,7 @@ describe("TodoQueueV2 — terminal transitions", () => {
   });
 
   it("fail() transitions in-progress → failed + records reason + bumps retries", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("worker-2");
     q.fail(id, "git apply rejected", 999);
@@ -86,7 +86,7 @@ describe("TodoQueueV2 — terminal transitions", () => {
   });
 
   it("skip() transitions in-progress → skipped (distinct from failed)", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("worker-2");
     q.skip(id, "out of scope", 999);
@@ -97,7 +97,7 @@ describe("TodoQueueV2 — terminal transitions", () => {
   });
 
   it("complete throws if todo isn't in-progress", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     assert.throws(() => q.complete(id), /status=pending/);
     q.dequeue("worker-2");
@@ -106,7 +106,7 @@ describe("TodoQueueV2 — terminal transitions", () => {
   });
 
   it("fail throws if todo isn't in-progress", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     assert.throws(() => q.fail(id, "x"), /status=pending/);
   });
@@ -114,7 +114,7 @@ describe("TodoQueueV2 — terminal transitions", () => {
   it("skip is allowed from any non-terminal status (V2 cutover Phase 2c)", () => {
     // Was originally "throws if not in-progress" — widened to match
     // Board.skip semantics (replanner skips from failed state too).
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const idP = q.post({ description: "from-pending", expectedFiles: [], createdBy: "p" });
     const idF = q.post({ description: "from-failed", expectedFiles: [], createdBy: "p" });
     q.dequeue("w");
@@ -127,7 +127,7 @@ describe("TodoQueueV2 — terminal transitions", () => {
   });
 
   it("skip throws if todo is already completed", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("w");
     q.complete(id);
@@ -135,7 +135,7 @@ describe("TodoQueueV2 — terminal transitions", () => {
   });
 
   it("skip is idempotent on already-skipped todos", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.skip(id, "first");
     q.skip(id, "second");
@@ -144,7 +144,7 @@ describe("TodoQueueV2 — terminal transitions", () => {
   });
 
   it("operations on unknown id throw", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     assert.throws(() => q.complete("nope"), /Unknown todo id/);
     assert.throws(() => q.fail("nope", "x"), /Unknown todo id/);
     assert.throws(() => q.skip("nope", "x"), /Unknown todo id/);
@@ -153,9 +153,9 @@ describe("TodoQueueV2 — terminal transitions", () => {
   });
 });
 
-describe("TodoQueueV2 — retry bookkeeping", () => {
+describe("TodoQueue — retry bookkeeping", () => {
   it("reset() returns failed → pending so dequeue picks it up again", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("worker-2");
     q.fail(id, "first failure");
@@ -166,7 +166,7 @@ describe("TodoQueueV2 — retry bookkeeping", () => {
   });
 
   it("retries persist across reset cycles for caller's max-retries policy", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("worker-2"); q.fail(id, "fail 1"); q.reset(id);
     q.dequeue("worker-2"); q.fail(id, "fail 2"); q.reset(id);
@@ -175,7 +175,7 @@ describe("TodoQueueV2 — retry bookkeeping", () => {
   });
 
   it("reset throws if todo isn't in failed state", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     assert.throws(() => q.reset(id), /only failed allowed/);
     q.dequeue("worker-2");
@@ -185,7 +185,7 @@ describe("TodoQueueV2 — retry bookkeeping", () => {
   });
 
   it("reset with updates revises description / files / anchors / kind / command (V2 cutover Phase 2c)", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({
       description: "old desc",
       expectedFiles: ["a.ts"],
@@ -212,7 +212,7 @@ describe("TodoQueueV2 — retry bookkeeping", () => {
   });
 
   it("reset with empty expectedAnchors clears prior anchors (Board.replan parity)", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({
       description: "x",
       expectedFiles: ["a.ts"],
@@ -226,7 +226,7 @@ describe("TodoQueueV2 — retry bookkeeping", () => {
   });
 
   it("reset with no updates leaves all fields unchanged (description preserved)", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({
       description: "preserved",
       expectedFiles: ["a.ts"],
@@ -240,7 +240,7 @@ describe("TodoQueueV2 — retry bookkeeping", () => {
   });
 
   it("reset throws on empty description in updates", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("w");
     q.fail(id, "x");
@@ -248,7 +248,7 @@ describe("TodoQueueV2 — retry bookkeeping", () => {
   });
 
   it("reset clears workerId, startedAt, endedAt, reason — fresh slate", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("worker-2", undefined, 100);
     q.fail(id, "first failure", 200);
@@ -261,9 +261,9 @@ describe("TodoQueueV2 — retry bookkeeping", () => {
   });
 });
 
-describe("TodoQueueV2 — counts + list + clear", () => {
+describe("TodoQueue — counts + list + clear", () => {
   it("counts() returns accurate per-status totals", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const a = q.post({ description: "a", expectedFiles: [], createdBy: "p" });
     const b = q.post({ description: "b", expectedFiles: [], createdBy: "p" });
     const c = q.post({ description: "c", expectedFiles: [], createdBy: "p" });
@@ -283,7 +283,7 @@ describe("TodoQueueV2 — counts + list + clear", () => {
   });
 
   it("list() preserves insertion order", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     q.post({ description: "first", expectedFiles: [], createdBy: "p" });
     q.post({ description: "second", expectedFiles: [], createdBy: "p" });
     q.post({ description: "third", expectedFiles: [], createdBy: "p" });
@@ -292,7 +292,7 @@ describe("TodoQueueV2 — counts + list + clear", () => {
   });
 
   it("list() returns defensive copies — mutating doesn't affect queue", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     q.post({ description: "x", expectedFiles: ["a.ts"], createdBy: "p" });
     const snap = q.list();
     snap[0].description = "hacked";
@@ -303,7 +303,7 @@ describe("TodoQueueV2 — counts + list + clear", () => {
   });
 
   it("clear() empties the queue + resets id counter", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     q.post({ description: "a", expectedFiles: [], createdBy: "p" });
     q.post({ description: "b", expectedFiles: [], createdBy: "p" });
     q.clear();
@@ -313,16 +313,16 @@ describe("TodoQueueV2 — counts + list + clear", () => {
   });
 });
 
-describe("TodoQueueV2 — mirror mode (syncStatus + postWithId)", () => {
+describe("TodoQueue — mirror mode (syncStatus + postWithId)", () => {
   it("postWithId uses the supplied id verbatim", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     q.postWithId("v1-uuid-abc", { description: "x", expectedFiles: [], createdBy: "p" });
     assert.equal(q.get("v1-uuid-abc")?.id, "v1-uuid-abc");
     assert.equal(q.counts().pending, 1);
   });
 
   it("postWithId throws on id collision", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     q.postWithId("dup", { description: "x", expectedFiles: [], createdBy: "p" });
     assert.throws(
       () => q.postWithId("dup", { description: "y", expectedFiles: [], createdBy: "p" }),
@@ -331,7 +331,7 @@ describe("TodoQueueV2 — mirror mode (syncStatus + postWithId)", () => {
   });
 
   it("syncStatus bypasses status guards (pending → completed direct)", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     q.postWithId("x", { description: "t", expectedFiles: [], createdBy: "p" });
     // Normal complete() would throw because status is pending. syncStatus skips the check.
     q.syncStatus("x", "completed", { ts: 999 });
@@ -340,7 +340,7 @@ describe("TodoQueueV2 — mirror mode (syncStatus + postWithId)", () => {
   });
 
   it("syncStatus to in-progress stamps workerId + startedAt", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     q.postWithId("x", { description: "t", expectedFiles: [], createdBy: "p" });
     q.syncStatus("x", "in-progress", { workerId: "w-2", ts: 100 });
     assert.equal(q.get("x")?.status, "in-progress");
@@ -349,7 +349,7 @@ describe("TodoQueueV2 — mirror mode (syncStatus + postWithId)", () => {
   });
 
   it("syncStatus to failed bumps retries", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     q.postWithId("x", { description: "t", expectedFiles: [], createdBy: "p" });
     q.syncStatus("x", "failed", { reason: "x" });
     assert.equal(q.getRetries("x"), 1);
@@ -359,7 +359,7 @@ describe("TodoQueueV2 — mirror mode (syncStatus + postWithId)", () => {
   });
 
   it("syncStatus to pending clears worker/timing/reason fields", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     q.postWithId("x", { description: "t", expectedFiles: [], createdBy: "p" });
     q.syncStatus("x", "in-progress", { workerId: "w", ts: 100 });
     q.syncStatus("x", "failed", { reason: "boom", ts: 200 });
@@ -372,12 +372,12 @@ describe("TodoQueueV2 — mirror mode (syncStatus + postWithId)", () => {
   });
 });
 
-describe("TodoQueueV2 — multi-worker concurrency model", () => {
+describe("TodoQueue — multi-worker concurrency model", () => {
   it("two workers dequeue different todos in FIFO order", () => {
     // The queue is the V2 model — workers don't claim files, they
     // just dequeue. Conflict handling (if two workers' hunks collide)
     // is handled by git apply downstream, not by the queue.
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     q.post({ description: "todo-A", expectedFiles: ["shared.ts"], createdBy: "p" });
     q.post({ description: "todo-B", expectedFiles: ["shared.ts"], createdBy: "p" });
     const w2 = q.dequeue("worker-2");
@@ -390,7 +390,7 @@ describe("TodoQueueV2 — multi-worker concurrency model", () => {
   });
 
   it("third worker gets null when only 2 todos exist", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     q.post({ description: "a", expectedFiles: [], createdBy: "p" });
     q.post({ description: "b", expectedFiles: [], createdBy: "p" });
     q.dequeue("w-2");
@@ -399,9 +399,9 @@ describe("TodoQueueV2 — multi-worker concurrency model", () => {
   });
 });
 
-describe("TodoQueueV2 — extended schema fields (V2 cutover Phase 2a)", () => {
+describe("TodoQueue — extended schema fields (V2 cutover Phase 2a)", () => {
   it("post forwards expectedAnchors, kind, command, preferredTag", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({
       description: "build api docs",
       expectedFiles: ["docs/api.md"],
@@ -419,7 +419,7 @@ describe("TodoQueueV2 — extended schema fields (V2 cutover Phase 2a)", () => {
   });
 
   it("post omits empty/missing schema fields", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: ["a.ts"], createdBy: "p" });
     const t = q.get(id)!;
     assert.equal(t.expectedAnchors, undefined);
@@ -429,7 +429,7 @@ describe("TodoQueueV2 — extended schema fields (V2 cutover Phase 2a)", () => {
   });
 
   it("post drops empty expectedAnchors arrays (matches V1 Board behavior)", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({
       description: "x",
       expectedFiles: ["a.ts"],
@@ -441,7 +441,7 @@ describe("TodoQueueV2 — extended schema fields (V2 cutover Phase 2a)", () => {
   });
 
   it("get returns defensive copy of expectedAnchors", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({
       description: "x",
       expectedFiles: ["a.ts"],
@@ -455,9 +455,9 @@ describe("TodoQueueV2 — extended schema fields (V2 cutover Phase 2a)", () => {
   });
 });
 
-describe("TodoQueueV2 — tag-preference dequeue (Phase 5c of #243)", () => {
+describe("TodoQueue — tag-preference dequeue (Phase 5c of #243)", () => {
   it("dequeue with preferTag returns matching todo before older non-matching", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const idOlder = q.post({
       description: "general work",
       expectedFiles: ["a.ts"],
@@ -476,7 +476,7 @@ describe("TodoQueueV2 — tag-preference dequeue (Phase 5c of #243)", () => {
   });
 
   it("dequeue falls back to FIFO when no matching tag found", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const idA = q.post({ description: "a", expectedFiles: ["a.ts"], createdBy: "p" });
     q.post({ description: "b", expectedFiles: ["b.ts"], createdBy: "p" });
     const t = q.dequeue("worker-2", "no-such-tag");
@@ -484,7 +484,7 @@ describe("TodoQueueV2 — tag-preference dequeue (Phase 5c of #243)", () => {
   });
 
   it("dequeue with no preferTag is pure FIFO regardless of tags", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const idA = q.post({ description: "a", expectedFiles: [], createdBy: "p" });
     q.post({
       description: "b-tagged",
@@ -497,7 +497,7 @@ describe("TodoQueueV2 — tag-preference dequeue (Phase 5c of #243)", () => {
   });
 
   it("preferTag empty string treated as no preference", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const idA = q.post({ description: "a", expectedFiles: [], createdBy: "p" });
     q.post({
       description: "b",
@@ -510,9 +510,9 @@ describe("TodoQueueV2 — tag-preference dequeue (Phase 5c of #243)", () => {
   });
 });
 
-describe("TodoQueueV2 — reapStaleInProgress (Phase 2 reaper)", () => {
+describe("TodoQueue — reapStaleInProgress (Phase 2 reaper)", () => {
   it("reaps in-progress todos older than maxAgeMs to failed", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("worker", undefined, 1_000); // startedAt = 1000
     const reaped = q.reapStaleInProgress(601_000, 600_000); // now - startedAt = 600s, > 600s? no, 600s > 600s false; let me fix
@@ -524,7 +524,7 @@ describe("TodoQueueV2 — reapStaleInProgress (Phase 2 reaper)", () => {
   });
 
   it("reaped todo records timeout reason + bumps retries", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("worker", undefined, 1_000);
     q.reapStaleInProgress(601_001, 600_000);
@@ -535,7 +535,7 @@ describe("TodoQueueV2 — reapStaleInProgress (Phase 2 reaper)", () => {
   });
 
   it("does not reap fresh in-progress todos", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("worker", undefined, 1_000);
     const reaped = q.reapStaleInProgress(2_000, 600_000); // 1s elapsed
@@ -544,7 +544,7 @@ describe("TodoQueueV2 — reapStaleInProgress (Phase 2 reaper)", () => {
   });
 
   it("does not reap completed/failed/skipped todos", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const idDone = q.post({ description: "done", expectedFiles: [], createdBy: "p" });
     const idFail = q.post({ description: "fail", expectedFiles: [], createdBy: "p" });
     const idSkip = q.post({ description: "skip", expectedFiles: [], createdBy: "p" });
@@ -559,7 +559,7 @@ describe("TodoQueueV2 — reapStaleInProgress (Phase 2 reaper)", () => {
   });
 
   it("idempotent — second reap of same window returns empty", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("worker", undefined, 1_000);
     const first = q.reapStaleInProgress(601_001, 600_000);
@@ -569,7 +569,7 @@ describe("TodoQueueV2 — reapStaleInProgress (Phase 2 reaper)", () => {
   });
 
   it("after reset(), reaped todo can be re-dequeued and re-reaped", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("worker", undefined, 1_000);
     q.reapStaleInProgress(601_001, 600_000);
@@ -582,7 +582,7 @@ describe("TodoQueueV2 — reapStaleInProgress (Phase 2 reaper)", () => {
   });
 
   it("complete() after reap throws (worker lost the race)", () => {
-    const q = new TodoQueueV2();
+    const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("worker", undefined, 1_000);
     q.reapStaleInProgress(601_001, 600_000);

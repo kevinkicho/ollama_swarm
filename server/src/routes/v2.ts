@@ -38,8 +38,8 @@ export function v2Router(deps: V2RouterDeps): Router {
       v2Substrates: {
         runStateMachine: "shared/src/runStateMachine.ts (Step 3a)",
         runStateObserver: "server/src/swarm/blackboard/RunStateObserver.ts (Step 3b)",
-        todoQueueV2: "server/src/swarm/blackboard/TodoQueueV2.ts (Step 5a)",
-        workerPipelineV2: "server/src/swarm/blackboard/WorkerPipelineV2.ts (Step 5b)",
+        todoQueueV2: "server/src/swarm/blackboard/TodoQueue.ts (Step 5a)",
+        workerPipelineV2: "server/src/swarm/blackboard/WorkerPipeline.ts (Step 5b)",
         v2Adapters: "server/src/swarm/blackboard/v2Adapters.ts (Step 5c.2)",
         eventLogReaderV2: "server/src/swarm/blackboard/EventLogReaderV2.ts (Step 6a)",
       },

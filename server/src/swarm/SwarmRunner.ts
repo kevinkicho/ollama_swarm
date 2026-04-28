@@ -250,7 +250,7 @@ export interface RunConfig {
    * head-to-head runs against the same repo. Blackboard-only; silently
    * ignored by discussion presets (no worker write path to gate).
    */
-  useWorkerPipelineV2?: boolean;
+  useWorkerPipeline?: boolean;
   /**
    * Issue #3 (2026-04-27): override the sibling-model used when the
    * planner returns 0 valid todos. Absent → look up sibling from the

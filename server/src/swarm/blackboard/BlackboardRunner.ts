@@ -24,11 +24,11 @@ import {
 } from "./boardWireCompat.js";
 import { RunStateObserver } from "./RunStateObserver.js";
 import {
-  TodoQueueV2,
-  type PostTodoV2Input,
-  type QueuedTodoV2,
-} from "./TodoQueueV2.js";
-import { applyAndCommitV2 } from "./WorkerPipelineV2.js";
+  TodoQueue,
+  type PostTodoInput,
+  type QueuedTodo,
+} from "./TodoQueue.js";
+import { applyAndCommit } from "./WorkerPipeline.js";
 import { realFilesystemAdapter, realGitAdapter } from "./v2Adapters.js";
 import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaster.js";
 import {
@@ -431,18 +431,12 @@ export class BlackboardRunner implements SwarmRunner {
   // current state still ships in the run summary as `v2State` for
   // telemetry — Kevin can compare V2's user-action-only view to V1's
   // setPhase trail.
-  // V2 Step 5c.1: parallel-track TodoQueueV2 mirror. Observability-
+  // V2 Step 5c.1: parallel-track TodoQueue mirror. Observability-
   // only — V1 Board is still the source of truth for worker
   // operations. Posts/commits/skips/stale events fan out to BOTH
   // here. Validates that the V2 queue's count semantics match V1's
   // board.counts() across a real run. Cleared on every start().
-  private v2TodoQueue = new TodoQueueV2();
-  // V1 Board id → V2 queue id translation. Board generates UUIDs;
-  // TodoQueueV2 uses caller-supplied ids via postWithId so the mirror
-  // can use the Board id directly. Map kept for backwards compat with
-  // any future translation needs.
-  private v1ToV2TodoId = new Map<string, string>();
-
+  private todoQueue = new TodoQueue();
   private v2Observer = new RunStateObserver({
     getCtx: () => {
       const c = this.boardCounts();
@@ -467,8 +461,8 @@ export class BlackboardRunner implements SwarmRunner {
     // translated to V1 wire shape via boardWireCompat — UI keeps
     // consuming board_state events unchanged.
     this.boardBroadcaster.bindSnapshotSource(() => ({
-      snapshot: buildWireSnapshot(this.v2TodoQueue.list(), this.findings.list()),
-      counts: v2QueueCountsToWireCounts(this.v2TodoQueue.counts()),
+      snapshot: buildWireSnapshot(this.todoQueue.list(), this.findings.list()),
+      counts: v2QueueCountsToWireCounts(this.todoQueue.counts()),
     }));
   }
 
@@ -645,8 +639,7 @@ export class BlackboardRunner implements SwarmRunner {
     this.v2Observer.reset();
     this.v2Observer.apply({ type: "start", ts: this.runBootedAt });
     // Reset the V2 todo-queue mirror so the run starts clean.
-    this.v2TodoQueue.clear();
-    this.v1ToV2TodoId.clear();
+    this.todoQueue.clear();
     this.findings.clear();
 
     this.setPhase("cloning");
@@ -2597,7 +2590,7 @@ export class BlackboardRunner implements SwarmRunner {
             // while V1 is sustained-executing, that's the wedge
             // bug class (#215, #219, #222) confirmed in real time.
             v2Phase: this.v2Observer.getState().phase,
-            v2QueueCounts: this.v2TodoQueue.counts(),
+            v2QueueCounts: this.todoQueue.counts(),
             ts: now,
           });
           // V2 cutover Phase 1a: explicit divergence-capture call
@@ -2646,14 +2639,14 @@ export class BlackboardRunner implements SwarmRunner {
 
       // #237 (2026-04-28): build-style TODOs short-circuit the hunks
       // pipeline entirely — dispatched through swarm-builder + opencode
-      // bash. Hunks TODOs go through executeWorkerTodoV2 (apply-and-commit
+      // bash. Hunks TODOs go through executeWorkerTodo (apply-and-commit
       // via search-anchor matching). V2 cutover Phase 2c removed the
       // V1 CAS-based pipeline; the env-gated A/B flag is gone with it.
       let outcome: "committed" | "stale" | "lost-race" | "aborted";
       if (todo.kind === "build") {
         outcome = await this.executeBuildTodo(agent, todo);
       } else {
-        outcome = await this.executeWorkerTodoV2(agent, todo);
+        outcome = await this.executeWorkerTodo(agent, todo);
       }
       if (outcome === "committed") {
         // Cooldown so one worker doesn't monopolize the board. Random jitter
@@ -2664,7 +2657,7 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   // #237 (2026-04-28): build-style TODO executor. Bypasses the
-  // hunks-emit pipeline (executeWorkerTodo / executeWorkerTodoV2)
+  // hunks-emit pipeline (executeWorkerTodo / executeWorkerTodo)
   // entirely. Flow: allowlist-check the command → prompt swarm-builder
   // agent to run it via opencode bash → check working tree for changes
   // → git add+commit if dirty → mark committed; else mark stale.
@@ -2760,11 +2753,11 @@ export class BlackboardRunner implements SwarmRunner {
 
   // The hunks worker pipeline. After V2 cutover Phase 2c (2026-04-28)
   // this is the only hunks pipeline — the V1 CAS-based pipeline was
-  // deleted with its env-gated A/B flag. Apply via applyAndCommitV2;
+  // deleted with its env-gated A/B flag. Apply via applyAndCommit;
   // search-anchor matching catches sibling-worker conflicts at apply
   // time. Method name keeps the V2 suffix until Phase 2g rename so
   // anyone reading the diff can see V1 truly went away.
-  private async executeWorkerTodoV2(
+  private async executeWorkerTodo(
     agent: Agent,
     todo: Todo,
   ): Promise<"committed" | "stale" | "lost-race" | "aborted"> {
@@ -2851,7 +2844,7 @@ export class BlackboardRunner implements SwarmRunner {
     // applyHunks anchor failure catches sibling-worker conflicts.
     const fsAdapter = realFilesystemAdapter(this.active!.localPath);
     const gitAdapter = realGitAdapter(this.active!.localPath);
-    const applyResult = await applyAndCommitV2({
+    const applyResult = await applyAndCommit({
       todoId: todo.id,
       workerId: agent.id,
       expectedFiles: todo.expectedFiles,
@@ -2860,7 +2853,7 @@ export class BlackboardRunner implements SwarmRunner {
       git: gitAdapter,
     });
     if (!applyResult.ok) {
-      this.failTodoQ(todo.id, `[v2] applyAndCommitV2 failed: ${applyResult.reason}`);
+      this.failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`);
       bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
       return "stale";
     }
@@ -3451,7 +3444,7 @@ export class BlackboardRunner implements SwarmRunner {
       // V2 TodoQueue snapshot at run end. After cutover Phase 1a,
       // divergence vs V1 Board is no longer recorded — counts only.
       v2QueueState: {
-        counts: this.v2TodoQueue.counts(),
+        counts: this.todoQueue.counts(),
       },
       // Phase 4a of #243: topology passthrough.
       topology: cfg.topology,
@@ -3641,14 +3634,14 @@ export class BlackboardRunner implements SwarmRunner {
 
   // V2 cutover Phase 2c (2026-04-28): hashExpectedFiles / hashFile /
   // writeDiff used only by V1 worker pipeline (CAS baseline + atomic
-  // write). V2 path uses applyAndCommitV2 which does its own read +
+  // write). V2 path uses applyAndCommit which does its own read +
   // write via the realFilesystemAdapter. Helpers removed with the V1
   // pipeline.
 
   // ---------------------------------------------------------------------
   // V2 queue mutation wrappers (V2 cutover Phase 2c, 2026-04-28)
   //
-  // Each wraps a TodoQueueV2 mutation + emits the equivalent BoardEvent
+  // Each wraps a TodoQueue mutation + emits the equivalent BoardEvent
   // through boardBroadcaster so the wire protocol (board_todo_*
   // SwarmEvents) stays unchanged for the UI. Findings + replan
   // bookkeeping happen inline. State writes are scheduled here so the
@@ -3656,9 +3649,9 @@ export class BlackboardRunner implements SwarmRunner {
   // ---------------------------------------------------------------------
 
   /** Post a new todo. Returns the queue-assigned id. */
-  private postTodoQ(input: PostTodoV2Input): string {
-    const id = this.v2TodoQueue.post(input);
-    const wire = v2QueueTodoToWireTodo(this.v2TodoQueue.get(id)!);
+  private postTodoQ(input: PostTodoInput): string {
+    const id = this.todoQueue.post(input);
+    const wire = v2QueueTodoToWireTodo(this.todoQueue.get(id)!);
     this.boardBroadcaster.emit({ type: "todo_posted", todo: wire });
     this.scheduleStateWrite();
     return id;
@@ -3668,8 +3661,8 @@ export class BlackboardRunner implements SwarmRunner {
    *  callers that need V1 Todo shape can translate via the helper.
    *  Emits board_todo_claimed for wire compat — synthesizes a Claim
    *  from the worker id + dequeue timestamp. */
-  private dequeueTodoQ(workerId: string, preferTag?: string): QueuedTodoV2 | null {
-    const t = this.v2TodoQueue.dequeue(workerId, preferTag);
+  private dequeueTodoQ(workerId: string, preferTag?: string): QueuedTodo | null {
+    const t = this.todoQueue.dequeue(workerId, preferTag);
     if (!t) return null;
     const wire = v2QueueTodoToWireTodo(t);
     if (wire.claim) {
@@ -3683,13 +3676,13 @@ export class BlackboardRunner implements SwarmRunner {
    *  committed event so the reducer can transition executing→auditing
    *  on drain. Emits board_todo_committed for wire compat. */
   private completeTodoQ(id: string): void {
-    this.v2TodoQueue.complete(id);
+    this.todoQueue.complete(id);
     this.boardBroadcaster.emit({ type: "todo_committed", todoId: id });
     this.scheduleStateWrite();
     this.v2Observer.apply({
       type: "todo-committed",
       ts: Date.now(),
-      remainingTodos: this.v2TodoQueue.counts().pending,
+      remainingTodos: this.todoQueue.counts().pending,
     });
   }
 
@@ -3698,8 +3691,8 @@ export class BlackboardRunner implements SwarmRunner {
    *  board_todo_stale for wire compat — replanCount comes from the
    *  V2 queue's retries counter. */
   private failTodoQ(id: string, reason: string): void {
-    this.v2TodoQueue.fail(id, reason);
-    const t = this.v2TodoQueue.get(id);
+    this.todoQueue.fail(id, reason);
+    const t = this.todoQueue.get(id);
     this.boardBroadcaster.emit({
       type: "todo_stale",
       todoId: id,
@@ -3715,13 +3708,13 @@ export class BlackboardRunner implements SwarmRunner {
    *  Distinct from failed — no replan retry. Fires v2Observer's
    *  todo-skipped event for the executing→auditing drain transition. */
   private skipTodoQ(id: string, reason: string): void {
-    this.v2TodoQueue.skip(id, reason);
+    this.todoQueue.skip(id, reason);
     this.boardBroadcaster.emit({ type: "todo_skipped", todoId: id, reason });
     this.scheduleStateWrite();
     this.v2Observer.apply({
       type: "todo-skipped",
       ts: Date.now(),
-      remainingTodos: this.v2TodoQueue.counts().pending,
+      remainingTodos: this.todoQueue.counts().pending,
     });
   }
 
@@ -3739,8 +3732,8 @@ export class BlackboardRunner implements SwarmRunner {
       command?: string;
     },
   ): void {
-    this.v2TodoQueue.reset(id, updates);
-    const t = this.v2TodoQueue.get(id);
+    this.todoQueue.reset(id, updates);
+    const t = this.todoQueue.get(id);
     if (t) {
       this.boardBroadcaster.emit({
         type: "todo_replanned",
@@ -3765,17 +3758,17 @@ export class BlackboardRunner implements SwarmRunner {
   // shapes so the rest of BlackboardRunner (and downstream consumers
   // like summary writer + crashSnapshot) keep working unchanged.
   private boardCounts() {
-    return v2QueueCountsToWireCounts(this.v2TodoQueue.counts());
+    return v2QueueCountsToWireCounts(this.todoQueue.counts());
   }
   private boardListTodos() {
-    return this.v2TodoQueue.list().map(v2QueueTodoToWireTodo);
+    return this.todoQueue.list().map(v2QueueTodoToWireTodo);
   }
   private boardSnapshot() {
-    return buildWireSnapshot(this.v2TodoQueue.list(), this.findings.list());
+    return buildWireSnapshot(this.todoQueue.list(), this.findings.list());
   }
   /** Lookup a single todo by id, returning the V1 wire shape. */
   private boardGetTodo(id: string) {
-    const t = this.v2TodoQueue.get(id);
+    const t = this.todoQueue.get(id);
     return t ? v2QueueTodoToWireTodo(t) : undefined;
   }
 
@@ -3823,7 +3816,7 @@ export class BlackboardRunner implements SwarmRunner {
   private startQueueReaper(): void {
     if (this.reaperTimer) return;
     this.reaperTimer = setInterval(() => {
-      const reaped = this.v2TodoQueue.reapStaleInProgress(
+      const reaped = this.todoQueue.reapStaleInProgress(
         Date.now(),
         IN_PROGRESS_TTL_MS,
       );

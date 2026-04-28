@@ -124,7 +124,7 @@ const StartBody = z.object({
   // user A/B without restarting the dev server. Blackboard-only;
   // ignored by discussion presets. (See SwarmRunner RunConfig comment
   // for context.)
-  useWorkerPipelineV2: z.boolean().optional(),
+  useWorkerPipeline: z.boolean().optional(),
   // Issue #3: override the sibling-model fallback used when the
   // planner returns 0 valid todos. Set to the same value as the
   // planner model to disable fallback. Blackboard-only.
@@ -413,7 +413,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         autoGenerateGoals: parsed.data.autoGenerateGoals,
         autoStretchReflection: parsed.data.autoStretchReflection,
         verifier: parsed.data.verifier,
-        useWorkerPipelineV2: parsed.data.useWorkerPipelineV2,
+        useWorkerPipeline: parsed.data.useWorkerPipeline,
         plannerFallbackModel: parsed.data.plannerFallbackModel,
         continuous: parsed.data.continuous,
         autoMemory: parsed.data.autoMemory,

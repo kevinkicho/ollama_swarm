@@ -11,7 +11,7 @@
 // to V2 vocabulary (todo_dequeued/completed/failed/etc.) and the
 // UI handlers are updated. Until then, it's the bridge.
 
-import type { QueuedTodoV2, TodoQueueCountsV2 } from "./TodoQueueV2.js";
+import type { QueuedTodo, TodoQueueCounts } from "./TodoQueue.js";
 import type { Todo, BoardSnapshot, BoardCounts, Claim, Finding } from "./types.js";
 
 const IN_PROGRESS_TTL_MS = 10 * 60_000;
@@ -22,7 +22,7 @@ const IN_PROGRESS_TTL_MS = 10 * 60_000;
  *  workerId+startedAt for in-progress todos so UI claim displays work
  *  unchanged. Reason field maps to staleReason / skippedReason
  *  depending on the terminal status. */
-export function v2QueueTodoToWireTodo(qt: QueuedTodoV2): Todo {
+export function v2QueueTodoToWireTodo(qt: QueuedTodo): Todo {
   const status =
     qt.status === "pending" ? "open"
       : qt.status === "in-progress" ? "claimed"
@@ -60,7 +60,7 @@ export function v2QueueTodoToWireTodo(qt: QueuedTodoV2): Todo {
 }
 
 /** Translate V2 queue counts to V1 BoardCounts wire shape. */
-export function v2QueueCountsToWireCounts(c: TodoQueueCountsV2): BoardCounts {
+export function v2QueueCountsToWireCounts(c: TodoQueueCounts): BoardCounts {
   return {
     open: c.pending,
     claimed: c.inProgress,
@@ -75,7 +75,7 @@ export function v2QueueCountsToWireCounts(c: TodoQueueCountsV2): BoardCounts {
  *  (for board_state wire events). Findings come separately since V2
  *  queue doesn't model them — the FindingsLog provides them. */
 export function buildWireSnapshot(
-  v2Todos: readonly QueuedTodoV2[],
+  v2Todos: readonly QueuedTodo[],
   findings: readonly Finding[],
 ): BoardSnapshot {
   return {

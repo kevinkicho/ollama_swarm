@@ -1,5 +1,5 @@
 // V2 substrate integration test: proves the four substrate pieces
-// (runStateMachine, RunStateObserver, TodoQueueV2, WorkerPipelineV2)
+// (runStateMachine, RunStateObserver, TodoQueue, WorkerPipeline)
 // compose correctly when driven by a realistic event sequence.
 //
 // No real network, no real fs/git, no BlackboardRunner — pure
@@ -9,13 +9,13 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { TodoQueueV2 } from "./TodoQueueV2.js";
+import { TodoQueue } from "./TodoQueue.js";
 import { RunStateObserver } from "./RunStateObserver.js";
 import {
-  applyAndCommitV2,
+  applyAndCommit,
   type FilesystemAdapter,
   type GitAdapter,
-} from "./WorkerPipelineV2.js";
+} from "./WorkerPipeline.js";
 import type { Hunk } from "./applyHunks.js";
 
 describe("V2 substrate integration", () => {
@@ -24,7 +24,7 @@ describe("V2 substrate integration", () => {
     // 3 todos, each with a single replace-hunk against a separate
     // file. After all 3 commit, the auditor "returns" with
     // allCriteriaResolved=true and we expect V2 → completed.
-    const queue = new TodoQueueV2();
+    const queue = new TodoQueue();
     const observer = new RunStateObserver({
       getCtx: () => ({
         openTodos: queue.counts().pending,
@@ -75,7 +75,7 @@ describe("V2 substrate integration", () => {
       const todo = queue.dequeue(`worker-${workerNum}`, undefined, dequeueTs);
       if (!todo) break;
       const hunks = workerHunks[todo.expectedFiles[0]];
-      const out = await applyAndCommitV2({
+      const out = await applyAndCommit({
         todoId: todo.id,
         workerId: todo.workerId!,
         expectedFiles: todo.expectedFiles,
@@ -83,7 +83,7 @@ describe("V2 substrate integration", () => {
         fs: filesystem.fs,
         git: git.git,
       });
-      assert.equal(out.ok, true, `applyAndCommitV2 should succeed for ${todo.id}`);
+      assert.equal(out.ok, true, `applyAndCommit should succeed for ${todo.id}`);
       queue.complete(todo.id, dequeueTs + 50);
       observer.apply({
         type: "todo-committed",
@@ -124,7 +124,7 @@ describe("V2 substrate integration", () => {
   });
 
   it("simulates a tier-up cycle: tier 1 complete → tier 2 starts", async () => {
-    const queue = new TodoQueueV2();
+    const queue = new TodoQueue();
     const observer = new RunStateObserver({
       getCtx: () => ({
         openTodos: queue.counts().pending,
@@ -171,7 +171,7 @@ describe("V2 substrate integration", () => {
     // value is verifying the reducer's terminal-state idempotence —
     // applying further events to a "completed" state must not
     // transition out.
-    const queue = new TodoQueueV2();
+    const queue = new TodoQueue();
     const observer = new RunStateObserver({
       getCtx: () => ({
         openTodos: queue.counts().pending,

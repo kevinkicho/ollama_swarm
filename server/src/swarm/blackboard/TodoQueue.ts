@@ -1,4 +1,4 @@
-// V2 Step 5a: TodoQueueV2 substrate. NOT yet integrated — Board.ts is
+// V2 Step 5a: TodoQueue substrate. NOT yet integrated — Board.ts is
 // still the active queue used by BlackboardRunner. This file is the
 // V2-track replacement that, once stable, will let us delete Board.ts
 // (~330 LOC of claim/CAS/lock-files/expiry/replan machinery) and the
@@ -15,21 +15,21 @@
 // Why "V2" suffix: lets the V1 Board run unchanged while this proves
 // out. Step 5b/c will integrate, then Board.ts gets deleted.
 
-export type TodoQueueStatusV2 =
+export type TodoQueueStatus =
   | "pending" // queued, not yet dequeued
   | "in-progress" // dequeued by a worker, not yet completed/failed
   | "completed" // worker finished + committed
   | "failed" // worker gave up after retry exhaustion
   | "skipped"; // worker declined (e.g., out of scope)
 
-export interface QueuedTodoV2 {
+export interface QueuedTodo {
   id: string;
   description: string;
   expectedFiles: readonly string[];
   /** Originator agent id — for telemetry, not access control. */
   createdBy: string;
   createdAt: number;
-  status: TodoQueueStatusV2;
+  status: TodoQueueStatus;
   /** Set when status moves to in-progress. Cleared on completion/skip. */
   workerId?: string;
   startedAt?: number;
@@ -58,7 +58,7 @@ export interface QueuedTodoV2 {
   preferredTag?: string;
 }
 
-export interface TodoQueueCountsV2 {
+export interface TodoQueueCounts {
   pending: number;
   inProgress: number;
   completed: number;
@@ -67,7 +67,7 @@ export interface TodoQueueCountsV2 {
   total: number;
 }
 
-export interface PostTodoV2Input {
+export interface PostTodoInput {
   description: string;
   expectedFiles: readonly string[];
   createdBy: string;
@@ -82,12 +82,12 @@ export interface PostTodoV2Input {
   preferredTag?: string;
 }
 
-export class TodoQueueV2 {
-  private todos: QueuedTodoV2[] = [];
+export class TodoQueue {
+  private todos: QueuedTodo[] = [];
   private nextIdCounter = 1;
 
   /** Append a new pending todo to the FIFO. Returns its assigned id. */
-  post(input: PostTodoV2Input): string {
+  post(input: PostTodoInput): string {
     const id = `t${this.nextIdCounter++}`;
     this.todos.push({
       id,
@@ -120,8 +120,8 @@ export class TodoQueueV2 {
     workerId: string,
     preferTag?: string,
     ts: number = Date.now(),
-  ): QueuedTodoV2 | null {
-    let next: QueuedTodoV2 | undefined;
+  ): QueuedTodo | null {
+    let next: QueuedTodo | undefined;
     const tag = preferTag?.trim();
     if (tag && tag.length > 0) {
       next = this.todos.find(
@@ -265,7 +265,7 @@ export class TodoQueueV2 {
     return this.findOrThrow(id).retries;
   }
 
-  counts(): TodoQueueCountsV2 {
+  counts(): TodoQueueCounts {
     let pending = 0,
       inProgress = 0,
       completed = 0,
@@ -290,12 +290,12 @@ export class TodoQueueV2 {
 
   /** Snapshot of all todos in insertion order. Returns defensive copies
    *  so the caller can't mutate internal state through the array. */
-  list(): QueuedTodoV2[] {
+  list(): QueuedTodo[] {
     return this.todos.map((t) => this.copyTodo(t));
   }
 
   /** Lookup by id. Returns undefined for unknown ids. */
-  get(id: string): QueuedTodoV2 | undefined {
+  get(id: string): QueuedTodo | undefined {
     const t = this.todos.find((x) => x.id === id);
     return t ? this.copyTodo(t) : undefined;
   }
@@ -303,7 +303,7 @@ export class TodoQueueV2 {
   /** Defensive copy — clones expectedFiles + expectedAnchors arrays so
    *  callers can't mutate internal state through them. Other fields
    *  are immutable scalars / strings. */
-  private copyTodo(t: QueuedTodoV2): QueuedTodoV2 {
+  private copyTodo(t: QueuedTodo): QueuedTodo {
     return {
       ...t,
       expectedFiles: t.expectedFiles.slice(),
@@ -323,7 +323,7 @@ export class TodoQueueV2 {
    *  changes don't follow the V2 lifecycle. Sets endedAt + reason
    *  on terminal transitions; clears them on returns to pending.
    *  Throws if id is unknown. */
-  syncStatus(id: string, status: TodoQueueStatusV2, opts: { reason?: string; ts?: number; workerId?: string } = {}): void {
+  syncStatus(id: string, status: TodoQueueStatus, opts: { reason?: string; ts?: number; workerId?: string } = {}): void {
     const t = this.findOrThrow(id);
     t.status = status;
     const ts = opts.ts ?? Date.now();
@@ -348,7 +348,7 @@ export class TodoQueueV2 {
   /** MIRROR-MODE ONLY: post a todo with a caller-provided id rather
    *  than auto-generating one. Used to keep mirror ids aligned with
    *  the external queue's ids. Throws if the id collides. */
-  postWithId(id: string, input: PostTodoV2Input): void {
+  postWithId(id: string, input: PostTodoInput): void {
     if (this.todos.some((t) => t.id === id)) {
       throw new Error(`Todo id collision: ${id}`);
     }
@@ -370,7 +370,7 @@ export class TodoQueueV2 {
     });
   }
 
-  private findOrThrow(id: string): QueuedTodoV2 {
+  private findOrThrow(id: string): QueuedTodo {
     const t = this.todos.find((x) => x.id === id);
     if (!t) throw new Error(`Unknown todo id: ${id}`);
     return t;

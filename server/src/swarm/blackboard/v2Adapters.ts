@@ -1,5 +1,5 @@
 // V2 Step 5c.2: real fs + git adapters for the V2 worker pipeline.
-// WorkerPipelineV2.applyAndCommitV2 is pure — these are the
+// WorkerPipeline.applyAndCommit is pure — these are the
 // production wiring that lets it actually touch disk + git.
 //
 // Both adapters are scoped to a single clonePath. Reads/writes
@@ -12,10 +12,10 @@ import path from "node:path";
 import simpleGit from "simple-git";
 import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
-import type { FilesystemAdapter, GitAdapter } from "./WorkerPipelineV2.js";
+import type { FilesystemAdapter, GitAdapter } from "./WorkerPipeline.js";
 
 /** Real filesystem adapter scoped to a clone. Reads return null on
- *  missing file (matches WorkerPipelineV2 semantics). Writes use
+ *  missing file (matches WorkerPipeline semantics). Writes use
  *  writeFileAtomic so a crash mid-write doesn't leave a half-file. */
 export function realFilesystemAdapter(clonePath: string): FilesystemAdapter {
   return {

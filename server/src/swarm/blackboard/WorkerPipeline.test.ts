@@ -7,10 +7,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
-  applyAndCommitV2,
+  applyAndCommit,
   type FilesystemAdapter,
   type GitAdapter,
-} from "./WorkerPipelineV2.js";
+} from "./WorkerPipeline.js";
 import type { Hunk } from "./applyHunks.js";
 
 interface FakeFsState {
@@ -58,14 +58,14 @@ function makeFakeGit(opts: { failReason?: string } = {}): {
   };
 }
 
-describe("applyAndCommitV2 — happy path", () => {
+describe("applyAndCommit — happy path", () => {
   it("applies a single replace hunk + commits + reports stats", async () => {
     const { fs, state: fsState } = makeFakeFs({ "a.ts": "hello world" });
     const { git, state: gitState } = makeFakeGit();
     const hunks: Hunk[] = [
       { op: "replace", file: "a.ts", search: "world", replace: "kevin" },
     ];
-    const out = await applyAndCommitV2({
+    const out = await applyAndCommit({
       todoId: "t1",
       workerId: "worker-2",
       expectedFiles: ["a.ts"],
@@ -89,7 +89,7 @@ describe("applyAndCommitV2 — happy path", () => {
     const hunks: Hunk[] = [
       { op: "create", file: "new.ts", content: "fresh\n" },
     ];
-    const out = await applyAndCommitV2({
+    const out = await applyAndCommit({
       todoId: "t1",
       workerId: "worker-2",
       expectedFiles: ["new.ts"],
@@ -107,7 +107,7 @@ describe("applyAndCommitV2 — happy path", () => {
     const hunks: Hunk[] = [
       { op: "append", file: "log.txt", content: "line 2\n" },
     ];
-    const out = await applyAndCommitV2({
+    const out = await applyAndCommit({
       todoId: "t1",
       workerId: "worker-2",
       expectedFiles: ["log.txt"],
@@ -130,7 +130,7 @@ describe("applyAndCommitV2 — happy path", () => {
       { op: "replace", file: "a.ts", search: "alpha", replace: "ALPHA" },
       { op: "replace", file: "c.ts", search: "gamma", replace: "GAMMA" },
     ];
-    const out = await applyAndCommitV2({
+    const out = await applyAndCommit({
       todoId: "t1",
       workerId: "worker-2",
       expectedFiles: ["a.ts", "b.ts", "c.ts"],
@@ -151,7 +151,7 @@ describe("applyAndCommitV2 — happy path", () => {
     const hunks: Hunk[] = [
       { op: "replace", file: "a.ts", search: "a\nb\nc\n", replace: "x\ny\n" },
     ];
-    const out = await applyAndCommitV2({
+    const out = await applyAndCommit({
       todoId: "t1",
       workerId: "worker-2",
       expectedFiles: ["a.ts"],
@@ -166,14 +166,14 @@ describe("applyAndCommitV2 — happy path", () => {
   });
 });
 
-describe("applyAndCommitV2 — failure modes", () => {
+describe("applyAndCommit — failure modes", () => {
   it("applyHunks failure: search anchor not found returns failedHunkIndex", async () => {
     const { fs } = makeFakeFs({ "a.ts": "alpha" });
     const { git, state: gitState } = makeFakeGit();
     const hunks: Hunk[] = [
       { op: "replace", file: "a.ts", search: "MISSING", replace: "x" },
     ];
-    const out = await applyAndCommitV2({
+    const out = await applyAndCommit({
       todoId: "t1",
       workerId: "worker-2",
       expectedFiles: ["a.ts"],
@@ -201,7 +201,7 @@ describe("applyAndCommitV2 — failure modes", () => {
     const hunks: Hunk[] = [
       { op: "replace", file: "a.ts", search: "hello", replace: "world" },
     ];
-    const out = await applyAndCommitV2({
+    const out = await applyAndCommit({
       todoId: "t1",
       workerId: "worker-2",
       expectedFiles: ["a.ts"],
@@ -223,7 +223,7 @@ describe("applyAndCommitV2 — failure modes", () => {
       async write() {},
     };
     const { git } = makeFakeGit();
-    const out = await applyAndCommitV2({
+    const out = await applyAndCommit({
       todoId: "t1",
       workerId: "worker-2",
       expectedFiles: ["a.ts"],
@@ -242,7 +242,7 @@ describe("applyAndCommitV2 — failure modes", () => {
     const hunks: Hunk[] = [
       { op: "replace", file: "a.ts", search: "hello", replace: "world" },
     ];
-    const out = await applyAndCommitV2({
+    const out = await applyAndCommit({
       todoId: "t1",
       workerId: "worker-2",
       expectedFiles: ["a.ts"],
@@ -257,14 +257,14 @@ describe("applyAndCommitV2 — failure modes", () => {
   });
 });
 
-describe("applyAndCommitV2 — no-op + empty cases", () => {
+describe("applyAndCommit — no-op + empty cases", () => {
   it("hunks that produce no diff result in ok with empty filesWritten + no commit", async () => {
     // Replace "x" with "x" — applyHunks succeeds but the result equals
     // the input. Pipeline elides the commit (clean tree, nothing to do).
     const { fs } = makeFakeFs({ "a.ts": "x" });
     const { git, state: gitState } = makeFakeGit();
     const hunks: Hunk[] = [{ op: "replace", file: "a.ts", search: "x", replace: "x" }];
-    const out = await applyAndCommitV2({
+    const out = await applyAndCommit({
       todoId: "t1",
       workerId: "worker-2",
       expectedFiles: ["a.ts"],
@@ -280,7 +280,7 @@ describe("applyAndCommitV2 — no-op + empty cases", () => {
   });
 });
 
-describe("applyAndCommitV2 — V2 conflict model", () => {
+describe("applyAndCommit — V2 conflict model", () => {
   it("worker B fails cleanly when worker A's commit changed the search anchor", async () => {
     // V2 conflict-detection scenario: two workers were assigned todos
     // touching the same file. Worker A committed first, changing the
@@ -292,7 +292,7 @@ describe("applyAndCommitV2 — V2 conflict model", () => {
     const workerBHunks: Hunk[] = [
       { op: "replace", file: "shared.ts", search: "// original anchor", replace: "// new" },
     ];
-    const out = await applyAndCommitV2({
+    const out = await applyAndCommit({
       todoId: "t-B",
       workerId: "worker-3",
       expectedFiles: ["shared.ts"],

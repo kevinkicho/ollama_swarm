@@ -66,8 +66,8 @@ export interface WorkerPipelineInput {
 
 /** V2 post-LLM pipeline: read files → apply hunks → write changed
  *  files → git commit. Returns a structured outcome the caller can
- *  feed back to TodoQueueV2 (complete on ok, fail on !ok). */
-export async function applyAndCommitV2(input: WorkerPipelineInput): Promise<WorkerOutcomeV2> {
+ *  feed back to TodoQueue (complete on ok, fail on !ok). */
+export async function applyAndCommit(input: WorkerPipelineInput): Promise<WorkerOutcomeV2> {
   // 1. Read all expected files. Missing files (null) are allowed —
   //    applyHunks treats them as "create allowed". Real filesystem
   //    errors (permission denied, etc.) bubble up as exceptions.

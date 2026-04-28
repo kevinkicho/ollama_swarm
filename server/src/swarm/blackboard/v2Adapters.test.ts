@@ -109,13 +109,13 @@ describe("realGitAdapter", () => {
   });
 });
 
-describe("v2Adapters — end-to-end with WorkerPipelineV2", () => {
-  it("applyAndCommitV2 against real adapters: hunks → file change → commit", async () => {
-    const { applyAndCommitV2 } = await import("./WorkerPipelineV2.js");
+describe("v2Adapters — end-to-end with WorkerPipeline", () => {
+  it("applyAndCommit against real adapters: hunks → file change → commit", async () => {
+    const { applyAndCommit } = await import("./WorkerPipeline.js");
     const repo = await freshRepo("e2e-pipeline");
     const fsAdapter = realFilesystemAdapter(repo);
     const gitAdapter = realGitAdapter(repo);
-    const out = await applyAndCommitV2({
+    const out = await applyAndCommit({
       todoId: "t1",
       workerId: "worker-2",
       expectedFiles: ["README.md"],
