@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { AgentJsonBubble, MAX_BUBBLE_HEIGHT_PX } from "./JsonBubbles";
 import { extractFirstBalancedJson } from "../extractJson";
 
@@ -74,6 +74,11 @@ export function WorkerHunksBubble({
   segmentHue?: number;
 }) {
   const [showRaw, setShowRaw] = useState(false);
+  // 2026-04-27 (UI Phase 3 follow-up per Kevin): collapsed by default,
+  // matching the "Posted N todos" / Contract bubble summary-then-expand
+  // pattern. Pre-fix, hunks rendered inline (capped via maxHeight) and
+  // every blackboard run visually drowned in diff blocks. Now: just
+  // the summary line + +/- counts; "Show diff" toggles the inline render.
   const [expanded, setExpanded] = useState(false);
   const hunks = useMemo(() => tryParseWorkerHunks(rawJson), [rawJson]);
   // Fallback: if we can't parse, defer to AgentJsonBubble.
@@ -100,56 +105,36 @@ export function WorkerHunksBubble({
     added += c.added;
     removed += c.removed;
   }
-  // Task #75 + #76: cap height + measure actual overflow so the
-  // Show more button only appears when there's hidden content.
-  const bodyStyle = expanded ? undefined : { maxHeight: MAX_BUBBLE_HEIGHT_PX, overflow: "hidden" as const };
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const [overflows, setOverflows] = useState(false);
-  useLayoutEffect(() => {
-    // See CollapsibleBlock — skip measurement when expanded so the
-    // "Show less" button stays visible.
-    if (expanded) return;
-    const el = bodyRef.current;
-    if (!el) return;
-    const isOverflowing = el.scrollHeight - el.clientHeight > 1;
-    if (isOverflowing !== overflows) setOverflows(isOverflowing);
-  }, [hunks, expanded, overflows]);
   return (
     <div className={className} style={style}>
       <div className="flex items-start justify-between gap-2 mb-1">
         <div className="flex-1">{header}</div>
-        <button
-          onClick={() => setShowRaw((v) => !v)}
-          className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200 shrink-0"
-        >
-          {showRaw ? "Hide raw" : "Raw JSON"}
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200"
+          >
+            {expanded ? "Hide diff" : `Show diff (${hunks.length} hunk${hunks.length === 1 ? "" : "s"})`}
+          </button>
+          <button
+            onClick={() => setShowRaw((v) => !v)}
+            className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200"
+          >
+            {showRaw ? "Hide raw" : "Raw JSON"}
+          </button>
+        </div>
       </div>
       <div className="flex items-baseline gap-2 mb-2 text-[11px]">
         <div className="text-ink-400 flex-1 min-w-0 truncate">{summary}</div>
         {added > 0 ? <div className="text-emerald-300 font-mono tabular-nums shrink-0">+{added}</div> : null}
         {removed > 0 ? <div className="text-rose-300 font-mono tabular-nums shrink-0">−{removed}</div> : null}
       </div>
-      <div className="relative">
-        <div ref={bodyRef} className="space-y-2" style={bodyStyle}>
+      {expanded ? (
+        <div className="space-y-2 overflow-y-auto" style={{ maxHeight: `${MAX_BUBBLE_HEIGHT_PX * 2}px` }}>
           {hunks.map((h, i) => (
             <HunkBlock key={i} hunk={h} index={i} />
           ))}
         </div>
-        {!expanded && overflows ? (
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-900 to-transparent"
-          />
-        ) : null}
-      </div>
-      {overflows ? (
-        <button
-          onClick={() => setExpanded((v) => !v)}
-          className="mt-1 text-xs underline text-ink-400 hover:text-ink-200"
-        >
-          {expanded ? "Show less" : "Show more"}
-        </button>
       ) : null}
       {showRaw ? (
         <div className="mt-2 rounded border border-ink-700 bg-ink-950 p-2">
