@@ -992,10 +992,21 @@ export class AgentManager {
     this.eventAborts.clear();
     let escaped = 0;
     const tasks = [...this.agents.values()].map(async (a) => {
+      // Bug: a hung opencode subprocess can leave session.abort() pending
+      // forever (HTTP request never returns), wedging killAll and blocking
+      // every subsequent run with phase=stopping. Race the abort against a
+      // 5s timeout so worst-case we proceed to the kill chain regardless.
+      // Found 2026-04-28 during the 9-preset tour after debate-judge
+      // hung post-run; orchestrator stayed in `stopping` 18+ minutes.
       try {
-        await a.client.session.abort({ sessionID: a.sessionId });
+        await Promise.race([
+          a.client.session.abort({ sessionID: a.sessionId }),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("session.abort timeout 5s")), 5000),
+          ),
+        ]);
       } catch {
-        // ignore
+        // ignore — fall through to treeKill / killByPid / killByPort
       }
       treeKill(a.child);
       // Unit 41 + Task #122: verified kill with three-stage escalation.
