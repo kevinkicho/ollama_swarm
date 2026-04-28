@@ -102,15 +102,88 @@ need more thought before runner refactors.
 - `swarm-builder` profile (#237) — separate concern, allows bash for build-style TODOs.
 - `/tmp/subtask-smoke.mjs` — captures the wire-shape result documented above.
 
-## Next session — concrete first move
+## Smoke 2 result (2026-04-28, scripts/subtask-smoke2.mjs)
 
-Don't refactor a runner. Instead: **run the smoke with two DIFFERENT
-agents** (e.g., parent=`swarm-orchestrator`, child=`swarm-read`) inside
-a real clone directory so our opencode.json is loaded. That isolates
-whether the "no `<task_result>` wrapper" finding is universal or
-specific to same-agent parent+child collapse. If the wrapper appears
-when agents differ → option 3 might work. If it doesn't → we're stuck
-with options 1 or 2.
+Re-ran smoke with parent=`swarm-orchestrator`, child=`swarm-read`,
+inside a real clone dir so our `opencode.json` was loaded. Sent 2
+subtask parts + 1 text "summarize" part. Inspected BOTH the immediate
+prompt response AND the full `session.messages` list afterward.
+
+**What we learned:**
+
+- ✅ **Subtasks DO produce structured output** — but as separate
+  MESSAGES with `parentID` linking back to the parent prompt. Not
+  as parts on the parent's response. Querying GET
+  `/session/{id}/message` after the prompt returns the parent message
+  PLUS one assistant message per subtask, agent-tagged.
+
+- ✅ **Child agent identity is preserved** — message[1] in our smoke
+  had `agent: "swarm-read"` (the subtask agent), distinct from the
+  parent's `agent: "swarm-orchestrator"`. So per-subtask attribution
+  IS recoverable.
+
+- ✅ **Parent synthesizes across subtask outputs** — the parent's
+  final text part was: `"SUMMARY: I saw 51 entries in src/ and 3 in
+  scripts/."` Real numbers from real subtask executions. The pattern
+  works end-to-end.
+
+- ❌ **Subtasks run SEQUENTIALLY, not in parallel.** 2 subtasks took
+  ~66s total. Per-subtask wall clock is ~30s. Single-subtask call
+  would be ~30s; 2 in parallel would be ~30s. 2 sequential = ~60s.
+  Matches our observation.
+
+  This is a genuine regression vs. the current `Promise.allSettled`
+  pattern in MapReduce/Council/OW. With N mappers, sequential dispatch
+  would be N× slower wall clock. For N=4 that's ~4 min instead of
+  ~1 min per cycle.
+
+## Updated cost/benefit for the runner migration
+
+| Aspect | Status quo (N parallel session.prompts) | SubtaskPartInput (sequential) |
+|---|---|---|
+| Wall clock for N mappers | ~T (parallel) | ~N×T (sequential) |
+| Per-agent stats / transcript | Clean — separate sessions | Recoverable via session.messages |
+| Subprocess count | N opencode subprocesses | 1 parent + N transient child sessions |
+| Code complexity | Manual fan-out + collect | One prompt + one messages query |
+| Native opencode parent/child | None | Yes (parentID linkage) |
+| Cancellation semantics | N session.abort calls | Probably 1 abort cancels all? (untested) |
+
+**The migration loses parallelism.** That's the new dominant trade-off.
+For runners where parallelism matters (MapReduce — N mappers exploring
+in parallel was the WHOLE POINT) the migration is a regression.
+
+## Revised recommendation
+
+**Don't migrate** MapReduce / Council / OW / OW-Deep wholesale. Their
+parallelism IS the architectural benefit. Switching to sequential
+SubtaskPartInput would erase that.
+
+Instead, keep #235 OPEN as a documented capability + foundation
+(subtaskPart helper + swarm-orchestrator profile + this smoke
+characterization) and use SubtaskPartInput in places where SEQUENTIAL
+dispatch is appropriate:
+
+- **Future: nested orchestrator-style subagents** that genuinely don't
+  benefit from parallelism (e.g., a planner that wants to delegate
+  one inspection-and-report subtask cleanly within its own prompt).
+- **Future: smaller helper subagents** within a primary agent's
+  workflow (e.g., a code reviewer that wants a one-off doc-lookup
+  subtask).
+
+Both of those are NEW patterns — not migrations of existing parallel
+runners.
+
+## Next session — concrete actions (not "migrate the runners")
+
+1. Verify subtask parallelism via opencode source. If a config flag
+   exists to opt into parallel dispatch (or there's a roadmap item
+   for it), the calculus could change later.
+2. Document the SubtaskPartInput helper as an "advanced/sequential"
+   primitive in our internal API surface. Don't deprecate it; just
+   don't push it as the migration target.
+3. Close #235 as "investigated, foundation shipped, full migration
+   not warranted given the parallelism trade-off." Re-open if upstream
+   adds parallel dispatch.
 
 ## (Original plan, kept for reference but DON'T execute as-is)
 

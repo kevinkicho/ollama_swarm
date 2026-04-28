@@ -1,0 +1,271 @@
+[
+  {
+    "info": {
+      "role": "user",
+      "time": {
+        "created": 1777390767869
+      },
+      "agent": "swarm-orchestrator",
+      "model": {
+        "providerID": "ollama",
+        "modelID": "glm-5.1:cloud"
+      },
+      "summary": {
+        "diffs": []
+      },
+      "id": "msg_dd4becefd001fnHqldJ6zeviQO",
+      "sessionID": "ses_22b4132f8ffeDpqaGsuRHc7oOT"
+    },
+    "parts": [
+      {
+        "type": "subtask",
+        "prompt": "Run a single tool call: list the top-level entries in src/. Reply with ONLY a JSON array of file names. No prose.",
+        "description": "list dir A",
+        "agent": "swarm-read",
+        "id": "prt_dd4becf0100127tVSi9mj6MIRW",
+        "sessionID": "ses_22b4132f8ffeDpqaGsuRHc7oOT",
+        "messageID": "msg_dd4becefd001fnHqldJ6zeviQO"
+      },
+      {
+        "type": "subtask",
+        "prompt": "Run a single tool call: list the top-level entries in scripts/. Reply with ONLY a JSON array of file names. No prose.",
+        "description": "list dir B",
+        "agent": "swarm-read",
+        "id": "prt_dd4becf01002WgALOsbP0VVJ9i",
+        "sessionID": "ses_22b4132f8ffeDpqaGsuRHc7oOT",
+        "messageID": "msg_dd4becefd001fnHqldJ6zeviQO"
+      },
+      {
+        "type": "text",
+        "text": "Above are two subtasks. After both complete, respond with: SUMMARY: I saw <N> entries in src/ and <M> in scripts/.",
+        "id": "prt_dd4becf01003crLljBCWyz9a6s",
+        "sessionID": "ses_22b4132f8ffeDpqaGsuRHc7oOT",
+        "messageID": "msg_dd4becefd001fnHqldJ6zeviQO"
+      }
+    ]
+  },
+  {
+    "info": {
+      "role": "assistant",
+      "parentID": "msg_dd4becefd001fnHqldJ6zeviQO",
+      "mode": "swarm-read",
+      "agent": "swarm-read",
+      "path": {
+        "cwd": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs_overnight9\\multi-agent-orchestrator",
+        "root": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs_overnight9\\multi-agent-orchestrator"
+      },
+      "cost": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      },
+      "modelID": "glm-5.1:cloud",
+      "providerID": "ollama",
+      "time": {
+        "created": 1777390768171,
+        "completed": 1777390780954
+      },
+      "finish": "tool-calls",
+      "id": "msg_dd4bed02b001cWm4wtKYP8BDhA",
+      "sessionID": "ses_22b4132f8ffeDpqaGsuRHc7oOT"
+    },
+    "parts": [
+      {
+        "type": "tool",
+        "callID": "01KQABXM1FY7J0M711NZ6481SV",
+        "tool": "task",
+        "state": {
+          "status": "completed",
+          "input": {
+            "prompt": "Run a single tool call: list the top-level entries in scripts/. Reply with ONLY a JSON array of file names. No prose.",
+            "description": "list dir B",
+            "subagent_type": "swarm-read"
+          },
+          "title": "list dir B",
+          "metadata": {
+            "sessionId": "ses_22b412fc7ffeBsY26mH6wP1rak",
+            "model": {
+              "modelID": "glm-5.1:cloud",
+              "providerID": "ollama"
+            },
+            "truncated": false
+          },
+          "output": "task_id: ses_22b412fc7ffeBsY26mH6wP1rak (for resuming to continue this task if needed)\n\n<task_result>\n[\"check-secrets.ts\", \"probe-opencode-headers.ts\", \"smoke-e2e.ts\"]\n</task_result>",
+          "time": {
+            "start": 1777390768176,
+            "end": 1777390780956
+          }
+        },
+        "id": "prt_dd4bed02f001mEHVXLIlNCmsEz",
+        "sessionID": "ses_22b4132f8ffeDpqaGsuRHc7oOT",
+        "messageID": "msg_dd4bed02b001cWm4wtKYP8BDhA"
+      }
+    ]
+  },
+  {
+    "info": {
+      "parentID": "msg_dd4becefd001fnHqldJ6zeviQO",
+      "role": "assistant",
+      "mode": "swarm-orchestrator",
+      "agent": "swarm-orchestrator",
+      "path": {
+        "cwd": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs_overnight9\\multi-agent-orchestrator",
+        "root": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs_overnight9\\multi-agent-orchestrator"
+      },
+      "cost": 0,
+      "tokens": {
+        "total": 4564,
+        "input": 4508,
+        "output": 56,
+        "reasoning": 0,
+        "cache": {
+          "write": 0,
+          "read": 0
+        }
+      },
+      "modelID": "glm-5.1:cloud",
+      "providerID": "ollama",
+      "time": {
+        "created": 1777390780960,
+        "completed": 1777390829112
+      },
+      "finish": "tool-calls",
+      "id": "msg_dd4bf02200011WM8mppH3WLn4B",
+      "sessionID": "ses_22b4132f8ffeDpqaGsuRHc7oOT"
+    },
+    "parts": [
+      {
+        "snapshot": "03f3550ed89eeb62834ccf43cb0bfb2b2bc76422",
+        "type": "step-start",
+        "id": "prt_dd4bf11fb001Y1nYL707Si2FJn",
+        "sessionID": "ses_22b4132f8ffeDpqaGsuRHc7oOT",
+        "messageID": "msg_dd4bf02200011WM8mppH3WLn4B"
+      },
+      {
+        "type": "tool",
+        "tool": "task",
+        "callID": "call_opht1q4i",
+        "state": {
+          "status": "completed",
+          "input": {
+            "description": "list dir A",
+            "prompt": "Run a single tool call: list the top-level entries in src/. Reply with ONLY a JSON array of file/directory names. No prose.",
+            "subagent_type": "swarm-read"
+          },
+          "output": "task_id: ses_22b40edfdffev5rDk3nlViOMRi (for resuming to continue this task if needed)\n\n<task_result>\n[\"__tests__\",\"agent.ts\",\"analytics.ts\",\"boot-check.ts\",\"brain-memory.ts\",\"brain-session.ts\",\"brain.ts\",\"chat-log.ts\",\"cli.ts\",\"command-recovery.ts\",\"conversation-checkpoint.ts\",\"dashboard-client.css\",\"dashboard-client.js\",\"dashboard.html\",\"dashboard.ts\",\"event-bus.ts\",\"events.ts\",\"failure-window.ts\",\"file-utils.ts\",\"fire-tracker.ts\",\"git-utils.ts\",\"github-api.ts\",\"index.ts\",\"launcher.ts\",\"lesson-extractor.ts\",\"llm-usage.ts\",\"message-utils.ts\",\"meta-reflection.ts\",\"opencode-config.ts\",\"opencode-runtime.ts\",\"orchestrator.ts\",\"pause-service.ts\",\"performance-log.ts\",\"progress-assessor.ts\",\"project-manager.ts\",\"prompt-ledger.ts\",\"providers.ts\",\"repo-identity.ts\",\"resource-manager.ts\",\"responsibilities.ts\",\"session-state.ts\",\"shared-knowledge.ts\",\"supervisor-parser.ts\",\"supervisor-prompts.ts\",\"supervisor.ts\",\"task-queue.ts\",\"team-manager.ts\",\"tests/\",\"token-tracker.ts\",\"transcript-compressor.ts\",\"tui-format.ts\"]\n</task_result>",
+          "metadata": {
+            "sessionId": "ses_22b40edfdffev5rDk3nlViOMRi",
+            "model": {
+              "modelID": "glm-5.1:cloud",
+              "providerID": "ollama"
+            },
+            "truncated": false
+          },
+          "title": "list dir A",
+          "time": {
+            "start": 1777390785043,
+            "end": 1777390827945
+          }
+        },
+        "id": "prt_dd4bf11fe00143zmwy6zbNHTfG",
+        "sessionID": "ses_22b4132f8ffeDpqaGsuRHc7oOT",
+        "messageID": "msg_dd4bf02200011WM8mppH3WLn4B"
+      },
+      {
+        "reason": "tool-calls",
+        "snapshot": "03f3550ed89eeb62834ccf43cb0bfb2b2bc76422",
+        "type": "step-finish",
+        "tokens": {
+          "total": 4564,
+          "input": 4508,
+          "output": 56,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0,
+        "id": "prt_dd4bfb9aa0014ASWiKpXts2U4D",
+        "sessionID": "ses_22b4132f8ffeDpqaGsuRHc7oOT",
+        "messageID": "msg_dd4bf02200011WM8mppH3WLn4B"
+      }
+    ]
+  },
+  {
+    "info": {
+      "parentID": "msg_dd4becefd001fnHqldJ6zeviQO",
+      "role": "assistant",
+      "mode": "swarm-orchestrator",
+      "agent": "swarm-orchestrator",
+      "path": {
+        "cwd": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs_overnight9\\multi-agent-orchestrator",
+        "root": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs_overnight9\\multi-agent-orchestrator"
+      },
+      "cost": 0,
+      "tokens": {
+        "total": 4845,
+        "input": 4827,
+        "output": 18,
+        "reasoning": 0,
+        "cache": {
+          "write": 0,
+          "read": 0
+        }
+      },
+      "modelID": "glm-5.1:cloud",
+      "providerID": "ollama",
+      "time": {
+        "created": 1777390829117,
+        "completed": 1777390833903
+      },
+      "finish": "stop",
+      "id": "msg_dd4bfbe3d001Adl2d21Be6FEYE",
+      "sessionID": "ses_22b4132f8ffeDpqaGsuRHc7oOT"
+    },
+    "parts": [
+      {
+        "snapshot": "03f3550ed89eeb62834ccf43cb0bfb2b2bc76422",
+        "type": "step-start",
+        "id": "prt_dd4bfc85f0013pwlbhJlP6v8Ox",
+        "sessionID": "ses_22b4132f8ffeDpqaGsuRHc7oOT",
+        "messageID": "msg_dd4bfbe3d001Adl2d21Be6FEYE"
+      },
+      {
+        "type": "text",
+        "text": "SUMMARY: I saw 51 entries in src/ and 3 in scripts/.",
+        "time": {
+          "start": 1777390831713,
+          "end": 1777390832795
+        },
+        "id": "prt_dd4bfc861001y234SeAGvt8llX",
+        "sessionID": "ses_22b4132f8ffeDpqaGsuRHc7oOT",
+        "messageID": "msg_dd4bfbe3d001Adl2d21Be6FEYE"
+      },
+      {
+        "reason": "stop",
+        "snapshot": "03f3550ed89eeb62834ccf43cb0bfb2b2bc76422",
+        "type": "step-finish",
+        "tokens": {
+          "total": 4845,
+          "input": 4827,
+          "output": 18,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "cost": 0,
+        "id": "prt_dd4bfcc9e001irMb5x4tL83vTf",
+        "sessionID": "ses_22b4132f8ffeDpqaGsuRHc7oOT",
+        "messageID": "msg_dd4bfbe3d001Adl2d21Be6FEYE"
+      }
+    ]
+  }
+]
