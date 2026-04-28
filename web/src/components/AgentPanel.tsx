@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useSwarm } from "../state/store";
 import type { AgentState, LatencySample } from "../types";
 import { CopyChip } from "./CopyChip";
@@ -131,7 +132,12 @@ export function AgentPanel({
   const elapsed = useElapsedTicker(agent.thinkingSince, agent.status === "thinking");
   const samples = useSwarm((s) => s.latency[agent.id] ?? EMPTY_SAMPLES);
   const phase = useSwarm((s) => s.phase);
-  const [hover, setHover] = useState(false);
+  // #291: portal-based tooltip. Sidebar is `<aside overflow-y-auto>`,
+  // so the prior `absolute bottom-full left-0` popover got clipped by
+  // the sidebar boundary on top-of-list agents AND overlapped the
+  // card's own header line. Portal + fixed positioning escapes both.
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const [hoverPos, setHoverPos] = useState<{ top: number; left: number; placeBelow: boolean } | null>(null);
   const retryLabel =
     agent.status === "retrying" && agent.retryAttempt && agent.retryMax
       ? `retrying ${agent.retryAttempt}/${agent.retryMax}${agent.retryReason ? ` · ${agent.retryReason}` : ""}`
@@ -154,9 +160,27 @@ export function AgentPanel({
       ? DONE_COLOR
       : STATUS_COLOR[agent.status];
   const isThinking = agent.status === "thinking" && agent.thinkingSince !== undefined;
-  const showPopover = hover && samples.length > 0;
+  // #291: show tooltip on hover regardless of sample count. Agents
+  // that haven't completed a prompt yet (auditor with turnsTaken=0,
+  // freshly-spawned, crashed pre-first-prompt) used to get NO
+  // tooltip at all — confusing because hover-cursor never appears.
+  const showPopover = hoverPos !== null;
   const last = samples.length > 0 ? samples[samples.length - 1] : null;
   const successCount = samples.filter((s) => s.success).length;
+  const computeHoverPos = () => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    // Prefer right of the sidebar (escapes the 280px column). Anchor
+    // top to the trigger's top. If trigger is in the lower half of
+    // the viewport, place above instead so the popover doesn't fall
+    // off-screen for sticky-bottom agents.
+    const placeBelow = rect.top < window.innerHeight / 2;
+    setHoverPos({
+      top: placeBelow ? rect.bottom + 4 : rect.top - 4,
+      left: rect.right + 8,
+      placeBelow,
+    });
+  };
   // Phase 2 of #243: color border for visual identification across
   // the UI. Falls back to the default border-l-ink-700 when no color
   // is set so the layout is identical for users who don't use colors.
@@ -193,30 +217,53 @@ export function AgentPanel({
         <span className="text-xs font-mono text-ink-400">:{agent.port}</span>
       </div>
       <div
-        className={`mt-1 text-xs text-ink-400 font-mono relative ${samples.length > 0 ? "cursor-help" : ""}`}
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
-        title={
-          !showPopover && isThinking
-            ? `Agent has been thinking since ${new Date(agent.thinkingSince!).toLocaleTimeString()}. This is normal — the cloud cold-start tail can take several minutes. If it passes ~5 min the client will give up and retry.`
-            : undefined
-        }
+        ref={triggerRef}
+        className="mt-1 text-xs text-ink-400 font-mono cursor-help"
+        onMouseEnter={computeHoverPos}
+        onMouseLeave={() => setHoverPos(null)}
       >
         {primaryLine}
-        {showPopover ? (
-          <div className="absolute z-10 bottom-full left-0 mb-1 bg-ink-900 border border-ink-600 rounded p-2 shadow-lg whitespace-nowrap">
-            <div className="text-[10px] text-ink-300 mb-1">
-              Recent {samples.length} attempt{samples.length === 1 ? "" : "s"} · {successCount} ok / {samples.length - successCount} fail
-            </div>
-            <Sparkline samples={samples} />
-            {last ? (
-              <div className="text-[10px] text-ink-400 mt-1">
-                last: {formatSampleMs(last.elapsedMs)} {last.success ? "✓" : "✗"}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
       </div>
+      {showPopover && hoverPos
+        ? createPortal(
+            <div
+              className="fixed z-50 bg-ink-900 border border-ink-600 rounded p-2 shadow-lg pointer-events-none"
+              style={{
+                top: hoverPos.placeBelow ? hoverPos.top : undefined,
+                bottom: hoverPos.placeBelow ? undefined : window.innerHeight - hoverPos.top,
+                left: hoverPos.left,
+                maxWidth: 320,
+              }}
+            >
+              <div className="text-[10px] text-ink-300 mb-1">
+                Agent {agent.index} · {role}
+              </div>
+              {samples.length > 0 ? (
+                <>
+                  <div className="text-[10px] text-ink-300 mb-1">
+                    Recent {samples.length} attempt{samples.length === 1 ? "" : "s"} · {successCount} ok / {samples.length - successCount} fail
+                  </div>
+                  <Sparkline samples={samples} />
+                  {last ? (
+                    <div className="text-[10px] text-ink-400 mt-1">
+                      last: {formatSampleMs(last.elapsedMs)} {last.success ? "✓" : "✗"}
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div className="text-[10px] text-ink-400">
+                  No completed prompts yet.
+                  {isThinking
+                    ? ` Thinking since ${new Date(agent.thinkingSince!).toLocaleTimeString()} — cloud cold-start can take minutes.`
+                    : agent.status === "spawning"
+                      ? " Waiting for opencode subprocess + first session."
+                      : ""}
+                </div>
+              )}
+            </div>,
+            document.body,
+          )
+        : null}
       {/* Unit 56: per-agent identifiers moved here from the previously-
           separate IdentifiersRow. session id (click-to-copy) is the
           load-bearing one for log forensics; model name is informational. */}

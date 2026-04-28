@@ -21,6 +21,7 @@ import {
   type SwarmPreset,
 } from "./setup/PresetExtras";
 import { TopologyGrid, topologyForPreset } from "./setup/TopologyGrid";
+import { PresetTooltip } from "./setup/PresetTooltip";
 import type { Topology } from "../../../shared/src/topology";
 
 // Two-tier model framework — see docs/autonomous-productivity.md
@@ -549,23 +550,34 @@ export function SetupForm() {
         </Section>
 
         <Section title="Pattern" subtitle="How the agents collaborate">
-          <Field
-            label="Preset"
-            hint={
-              isActive
-                ? preset.summary
-                : `${preset.summary} — not yet implemented; picking this disables Start.`
-            }
-          >
-            <select value={presetId} onChange={onPresetChange} className="input">
+          <div>
+            <div className="text-xs uppercase tracking-wide text-ink-400 mb-1 flex items-center">
+              Preset
+              <PresetTooltip preset={preset} />
+            </div>
+            <select
+              value={presetId}
+              onChange={onPresetChange}
+              className="input"
+              title={preset.summary}
+            >
               {PRESETS.map((p) => (
-                <option key={p.id} value={p.id}>
+                <option
+                  key={p.id}
+                  value={p.id}
+                  title={`${p.summary}${p.status === "planned" ? " — coming soon" : ""}`}
+                >
                   {p.label}
                   {p.status === "planned" ? " (coming soon)" : ""}
                 </option>
               ))}
             </select>
-          </Field>
+            <div className="text-xs text-ink-400 mt-1">
+              {isActive
+                ? preset.summary
+                : `${preset.summary} — not yet implemented; picking this disables Start.`}
+            </div>
+          </div>
 
           {preset.id === "blackboard" ? <BlackboardHelp /> : null}
 
