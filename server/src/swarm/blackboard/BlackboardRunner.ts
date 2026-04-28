@@ -124,9 +124,9 @@ import { parseGoalList } from "./goalListParser.js";
 // either feature into the V2 worker is a separate enhancement; revive
 // from git history (1110084 + prior) when needed.
 // Task #164 (refactor): goal-generation pre-pass split out.
-import { runGoalGenerationPrePass as runGoalGenerationPrePassExtracted } from "./goalGenerationPrePass.js";
+import { runGoalGenerationPrePass } from "./goalGenerationPrePass.js";
 // Task #164 (refactor): auditor seed builder + UI snapshot capture split out.
-import { buildAuditorSeed as buildAuditorSeedExtracted } from "./auditorSeedBuilder.js";
+import { buildAuditorSeed } from "./auditorSeedBuilder.js";
 import { truncate } from "./truncate.js";
 import { config } from "../../config.js";
 import { stripAgentText } from "../../../../shared/src/stripAgentText.js";
@@ -246,9 +246,8 @@ export class BlackboardRunner implements SwarmRunner {
   // Every in-flight prompt registers its AbortController so stop() can abort
   // them all at once without needing to know about planner vs worker.
   private activeAborts = new Set<AbortController>();
-  // V2 cutover Phase 2c (2026-04-28): timer for the V2 TodoQueue
-  // reaper. Sole TTL enforcer now that V1 Board's expireClaims is
-  // unreachable.
+  // Periodic sweep that fails any in-progress todo idle past
+  // IN_PROGRESS_TTL_MS (~10 min). Sole TTL enforcer.
   private reaperTimer?: NodeJS.Timeout;
   // Phase 6: replan orchestration. Planner is captured during executing and
   // reused to replan stale todos — see docs/known-limitations.md.
@@ -429,11 +428,8 @@ export class BlackboardRunner implements SwarmRunner {
   // current state still ships in the run summary as `v2State` for
   // telemetry — Kevin can compare V2's user-action-only view to V1's
   // setPhase trail.
-  // V2 Step 5c.1: parallel-track TodoQueue mirror. Observability-
-  // only — V1 Board is still the source of truth for worker
-  // operations. Posts/commits/skips/stale events fan out to BOTH
-  // here. Validates that the V2 queue's count semantics match V1's
-  // board.counts() across a real run. Cleared on every start().
+  // The swarm's todo store. Source of truth for all in-flight work
+  // and per-status counts. Cleared on every start().
   private todoQueue = new TodoQueue();
   private v2Observer = new RunStateObserver({
     getCtx: () => {
@@ -454,10 +450,8 @@ export class BlackboardRunner implements SwarmRunner {
   constructor(private readonly opts: RunnerOpts) {
     this.boardBroadcaster = createBoardBroadcaster(this.opts.emit);
     this.findings = new FindingsLog();
-    // V2 cutover Phase 2c (2026-04-28): the V1 Board instance is gone.
-    // The boardBroadcaster pulls snapshots from V2 queue + FindingsLog
-    // translated to V1 wire shape via boardWireCompat — UI keeps
-    // consuming board_state events unchanged.
+    // boardBroadcaster pulls live snapshots from the todo queue +
+    // findings log, translated to wire shape via boardWireCompat.
     this.boardBroadcaster.bindSnapshotSource(() => ({
       snapshot: buildWireSnapshot(this.todoQueue.list(), this.findings.list()),
       counts: v2QueueCountsToWireCounts(this.todoQueue.counts()),
@@ -781,7 +775,7 @@ export class BlackboardRunner implements SwarmRunner {
       (!seed.userDirective || seed.userDirective.length === 0) &&
       cfg.autoGenerateGoals !== false;
     if (shouldGenerateGoals) {
-      const generated = await runGoalGenerationPrePassExtracted(
+      const generated = await runGoalGenerationPrePass(
         planner,
         seed,
         (text) => this.appendSystem(text),
@@ -2326,7 +2320,7 @@ export class BlackboardRunner implements SwarmRunner {
     // but keep the explicit fire for symmetry with auditor-returned).
     this.v2Observer.apply({ type: "auditor-fired", ts: Date.now() });
 
-    const seed = await buildAuditorSeedExtracted({
+    const seed = await buildAuditorSeed({
       contract: this.contract!,
       todos: this.boardListTodos(),
       findings: this.findings.list(),
@@ -2873,11 +2867,10 @@ export class BlackboardRunner implements SwarmRunner {
   // ---------------------------------------------------------------------
   // Phase 6 — replan orchestration
   //
-  // Replan-enqueue used to flow through onBoardEvent (Board emitted
-  // todo_stale → enqueueReplan). After V2 cutover Phase 2c, each
-  // mutation wrapper (failTodoQ in particular) calls enqueueReplan
-  // directly — onBoardEvent + mirrorToV2Queue + their event listener
-  // are gone with V1 Board.
+  // The mutation wrappers (failTodoQ + the reaper) enqueue replans
+  // directly. The planner agent is captured during executing and
+  // reused across replans so each runs in the same session — see
+  // docs/known-limitations.md for why this matters.
   // ---------------------------------------------------------------------
 
   private enqueueReplan(todoId: string): void {
@@ -3429,8 +3422,9 @@ export class BlackboardRunner implements SwarmRunner {
         detail: this.v2Observer.getState().detail,
         pausedReason: this.v2Observer.getState().pausedReason,
       },
-      // V2 TodoQueue snapshot at run end. After cutover Phase 1a,
-      // divergence vs V1 Board is no longer recorded — counts only.
+      // TodoQueue counts at run end. Field name kept under v2QueueState
+      // for back-compat with summary.json consumers; rename happens in
+      // a later wire-protocol pass.
       v2QueueState: {
         counts: this.todoQueue.counts(),
       },
@@ -3796,12 +3790,7 @@ export class BlackboardRunner implements SwarmRunner {
   // Expiry watchdog
   // ---------------------------------------------------------------------
 
-  // V2 cutover Phase 2c (2026-04-28): startClaimExpiry / stopClaimExpiry
-  // removed — V1 Board.expireClaims has no callers now that V2 queue
-  // is the source of truth. The reaper (startQueueReaper, immediately
-  // below) is the sole TTL enforcer.
-
-  // Periodic sweep of the V2 TodoQueue. Reaps in-progress todos older
+  // Periodic sweep of the todo queue. Reaps in-progress todos older
   // than IN_PROGRESS_TTL_MS (default 10 min) by transitioning them to
   // failed via reapStaleInProgress. Each reaped id is then:
   //   1. broadcast as board_todo_stale (UI sync)

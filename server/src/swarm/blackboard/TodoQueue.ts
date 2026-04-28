@@ -1,19 +1,18 @@
-// V2 Step 5a: TodoQueue substrate. NOT yet integrated — Board.ts is
-// still the active queue used by BlackboardRunner. This file is the
-// V2-track replacement that, once stable, will let us delete Board.ts
-// (~330 LOC of claim/CAS/lock-files/expiry/replan machinery) and the
-// per-file lock cache (#205) along with it.
+// TodoQueue: the swarm's primary in-memory todo store. FIFO with
+// status bookkeeping (pending / in-progress / completed / failed /
+// skipped). The git-based conflict-handling lives in WorkerPipeline;
+// this module is queue + status only.
 //
-// Per ARCHITECTURE-V2.md section 5: Board's "claim with file lock"
-// model was reinventing what git already does for free. Workers
-// dequeue → write hunks → git apply → commit. Conflict detection is
-// the merge-conflict result, not a per-file lock check.
+// Per ARCHITECTURE-V2.md section 5: the older Board model that
+// preceded this file used "claim with file lock" semantics that
+// reinvented what git does for free. Workers now dequeue → write
+// hunks via search-anchor matching → git commit. Sibling-worker
+// conflict shows up as anchor-not-found at apply time.
 //
-// This module is the FIFO queue + status bookkeeping. The git-based
-// conflict-handling lives in the worker pipeline (Step 5b, future).
-//
-// Why "V2" suffix: lets the V1 Board run unchanged while this proves
-// out. Step 5b/c will integrate, then Board.ts gets deleted.
+// History: shipped 2026-04-26 as a parallel-track substrate while
+// the legacy Board.ts kept running. After zero divergences across
+// 7 SDK presets, the V2 cutover (commits 4e08092 → 85c5614, 2026-
+// 04-28) made this the only queue and Board.ts was deleted.
 
 export type TodoQueueStatus =
   | "pending" // queued, not yet dequeued
@@ -42,8 +41,9 @@ export interface QueuedTodo {
   /** Number of times this todo was retried after a failure. Capped per
    *  caller policy — the queue itself doesn't enforce a max. */
   retries: number;
-  // Phase 2 of V2 cutover (2026-04-28): fields ported from V1 Board.Todo
-  // so V2 can take over as primary without losing planner-time hints.
+  // Planner-time hints carried alongside the todo. Originally added
+  // to V1 Board's Todo type; ported here during the V2 cutover
+  // (commits 8177e90, 2026-04-28) so the new queue keeps parity.
   /** Unit 44b: planner-declared anchor strings the runner expands into
    *  ±25 lines of context in the worker prompt. Empty/absent → behaves
    *  like before (head + tail only). */
@@ -143,10 +143,9 @@ export class TodoQueue {
    *  the array of reaped ids so the caller can route them through
    *  the replan queue. Idempotent — running back-to-back is safe.
    *
-   *  This is the V2 equivalent of V1 Board.expireClaims(now). The
-   *  trigger is purely time-based; there's no per-claim TTL field on
-   *  the todo (V2 uses a single global threshold instead of recording
-   *  expiresAt per dequeue). */
+   *  Trigger is purely time-based — there's no per-claim TTL field on
+   *  the todo. The queue uses a single global threshold instead of
+   *  recording expiresAt per dequeue. */
   reapStaleInProgress(now: number, maxAgeMs: number): string[] {
     const reaped: string[] = [];
     for (const t of this.todos) {
@@ -317,58 +316,9 @@ export class TodoQueue {
     this.nextIdCounter = 1;
   }
 
-  /** MIRROR-MODE ONLY: force-sync a todo's status without going
-   *  through the dequeue/complete state machine. Use this when
-   *  shadowing an external queue (e.g., V1 Board) where status
-   *  changes don't follow the V2 lifecycle. Sets endedAt + reason
-   *  on terminal transitions; clears them on returns to pending.
-   *  Throws if id is unknown. */
-  syncStatus(id: string, status: TodoQueueStatus, opts: { reason?: string; ts?: number; workerId?: string } = {}): void {
-    const t = this.findOrThrow(id);
-    t.status = status;
-    const ts = opts.ts ?? Date.now();
-    if (status === "in-progress") {
-      t.workerId = opts.workerId;
-      t.startedAt = ts;
-      t.endedAt = undefined;
-      t.reason = undefined;
-    } else if (status === "pending") {
-      t.workerId = undefined;
-      t.startedAt = undefined;
-      t.endedAt = undefined;
-      t.reason = undefined;
-    } else {
-      // terminal: completed, failed, skipped
-      t.endedAt = ts;
-      t.reason = opts.reason;
-      if (status === "failed") t.retries += 1;
-    }
-  }
-
-  /** MIRROR-MODE ONLY: post a todo with a caller-provided id rather
-   *  than auto-generating one. Used to keep mirror ids aligned with
-   *  the external queue's ids. Throws if the id collides. */
-  postWithId(id: string, input: PostTodoInput): void {
-    if (this.todos.some((t) => t.id === id)) {
-      throw new Error(`Todo id collision: ${id}`);
-    }
-    this.todos.push({
-      id,
-      description: input.description,
-      expectedFiles: input.expectedFiles.slice(),
-      createdBy: input.createdBy,
-      createdAt: input.createdAt ?? Date.now(),
-      status: "pending",
-      criterionId: input.criterionId,
-      retries: 0,
-      ...(input.expectedAnchors && input.expectedAnchors.length > 0
-        ? { expectedAnchors: input.expectedAnchors.slice() }
-        : {}),
-      ...(input.kind ? { kind: input.kind } : {}),
-      ...(input.command ? { command: input.command } : {}),
-      ...(input.preferredTag ? { preferredTag: input.preferredTag } : {}),
-    });
-  }
+  // syncStatus + postWithId removed (audit, 2026-04-28). Both were
+  // V1-Board mirror helpers that bypassed the dequeue/complete state
+  // machine; with V1 gone they have no callers.
 
   private findOrThrow(id: string): QueuedTodo {
     const t = this.todos.find((x) => x.id === id);

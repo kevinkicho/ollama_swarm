@@ -2,10 +2,11 @@
 // BoardEvent as a SwarmEvent and sends a debounced full snapshot
 // every snapshotDebounceMs after mutations so bursts coalesce.
 //
-// V2 cutover Phase 2c (2026-04-28): originally bound to a V1 Board
-// instance via bindBoard(); now takes a snapshot getter callback so
-// the source can be the V2 TodoQueue (translated to wire shape via
-// boardWireCompat.ts).
+// `bindSnapshotSource(getSnapshot)` accepts a callback that returns
+// the current {snapshot, counts} pair — the broadcaster invokes it
+// at snapshot time so the data is always fresh. Caller assembles
+// the snapshot from whichever queue/log it owns (typically the
+// V2 TodoQueue + FindingsLog, translated via boardWireCompat).
 
 import type { SwarmEvent } from "../../types.js";
 import type { BoardEvent, BoardSnapshot, BoardCounts } from "./types.js";
