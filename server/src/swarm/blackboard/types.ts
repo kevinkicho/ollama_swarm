@@ -25,6 +25,14 @@ export interface Todo {
   // the omitted middle." Empty / absent → behaves like before
   // (head + tail only).
   expectedAnchors?: string[];
+  // #237 (2026-04-28): build-style TODO discriminator. Default
+  // "hunks" (unset = hunks). When "build", `command` is the shell
+  // command the swarm-builder agent runs via opencode bash; runner
+  // commits whatever changed in the working tree afterwards. Use for
+  // doc generators, codegen, formatters, type-checkers — work that
+  // can't be expressed as search/replace hunks.
+  kind?: "hunks" | "build";
+  command?: string;
 }
 
 export type ExitCriterionStatus = "unmet" | "met" | "wont-do";

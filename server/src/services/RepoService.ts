@@ -325,6 +325,26 @@ export class RepoService {
             task: "allow" as const,
           },
         },
+        // #237 (2026-04-28): builder profile — gets bash for executing
+        // project scripts (npm test, bun run docs:api, tsc, eslint, etc.)
+        // for TODOs whose work is "run this command + commit results"
+        // rather than "produce these JSON hunks". Defense-in-depth:
+        // BlackboardRunner.executeBuildTodo enforces a command allowlist
+        // (npm/bun/pnpm/yarn/tsc/eslint/prettier/...) BEFORE invoking;
+        // opencode's bash sandbox is the second layer. Edit/write are
+        // still hard-denied — workflow is run-then-commit, no in-place
+        // file edits.
+        "swarm-builder": {
+          mode: "primary" as const,
+          description: "Builder profile for run-then-commit TODOs. Bash + read tools enabled for project scripts (test/build/format/lint). Edit/write/webfetch hard-denied — file changes happen via the bash command's side effects, then the runner commits the working tree.",
+          permission: {
+            "*": "deny" as const,
+            read: "allow" as const,
+            grep: "allow" as const,
+            glob: "allow" as const,
+            bash: "allow" as const,
+          },
+        },
       },
     };
 
@@ -394,6 +414,16 @@ export class RepoService {
     } catch {
       return { porcelain: "", changedFiles: 0 };
     }
+  }
+
+  // #237 (2026-04-28): commit ALL working-tree changes (staged +
+  // untracked) with the given message. Used by the build-style TODO
+  // executor where bash side effects ARE the work — runner needs to
+  // commit whatever changed without per-file CAS.
+  async commitAll(clonePath: string, message: string): Promise<void> {
+    const git = simpleGit(clonePath);
+    await git.add(["-A"]);
+    await git.commit(message);
   }
 
   async listTopLevel(clonePath: string): Promise<string[]> {

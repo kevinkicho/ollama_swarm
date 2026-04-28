@@ -24,6 +24,12 @@ type PostTodoInput = {
   // expectedFiles. Pre-resolved by the runner at worker-prompt build time
   // to inject ±25 lines of context around each match.
   expectedAnchors?: string[];
+  // #237 (2026-04-28): build-style TODO discriminator + command. When
+  // kind="build", the runner dispatches via swarm-builder + opencode bash
+  // instead of the hunks-emit pipeline. Both fields are pass-through —
+  // Board doesn't interpret them.
+  kind?: "hunks" | "build";
+  command?: string;
 };
 
 type ClaimInput = {
@@ -116,6 +122,9 @@ export class Board {
         input.expectedAnchors && input.expectedAnchors.length > 0
           ? [...input.expectedAnchors]
           : undefined,
+      // #237: thread build-style discriminator + command.
+      ...(input.kind ? { kind: input.kind } : {}),
+      ...(input.command ? { command: input.command } : {}),
     };
     this.todos.set(todo.id, todo);
     this.emit({ type: "todo_posted", todo: this.copyTodo(todo) });
@@ -214,6 +223,24 @@ export class Board {
     todo.status = "committed";
     todo.committedAt = input.committedAt;
     this.lockedFilesCache = null; // Task #205: invalidate (commit removes locks)
+    this.emit({ type: "todo_committed", todoId: todo.id });
+    return { ok: true, todo: this.copyTodo(todo) };
+  }
+
+  // #237 (2026-04-28): build-style TODO commit. Bypasses commitTodo's
+  // CAS check because build TODOs don't claim through the per-file
+  // hash machinery — bash side effects ARE the work, and we trust
+  // git status + git commit on the working tree. Status is set to
+  // "committed" directly. lockedFilesCache invalidation isn't needed
+  // (build TODOs never enter "claimed" state).
+  markBuildCommitted(todoId: string): { ok: true; todo: Todo } | { ok: false; reason: string } {
+    const todo = this.todos.get(todoId);
+    if (!todo) return { ok: false, reason: "not_found" };
+    if (todo.status !== "open") {
+      return { ok: false, reason: `cannot mark build-committed from status=${todo.status}` };
+    }
+    todo.status = "committed";
+    todo.committedAt = Date.now();
     this.emit({ type: "todo_committed", todoId: todo.id });
     return { ok: true, todo: this.copyTodo(todo) };
   }

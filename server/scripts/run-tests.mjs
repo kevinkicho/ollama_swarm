@@ -76,6 +76,9 @@ const TEST_FILES = [
 
   // shared/
   "../shared/src/extractThinkTags.test.ts",
+  "../shared/src/extractToolCallMarkers.test.ts",
+  "../shared/src/subtaskPart.test.ts",
+  "src/swarm/blackboard/buildCommandAllowlist.test.ts",
 
   // services/
   "src/services/ollamaProxy.test.ts",

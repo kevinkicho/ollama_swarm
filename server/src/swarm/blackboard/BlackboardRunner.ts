@@ -122,6 +122,7 @@ import { buildAuditorSeed as buildAuditorSeedExtracted } from "./auditorSeedBuil
 import { truncate } from "./truncate.js";
 import { config } from "../../config.js";
 import { stripAgentText } from "../../../../shared/src/stripAgentText.js";
+import { checkBuildCommand } from "./buildCommandAllowlist.js";
 
 // Blackboard preset: planner posts TODOs, workers drain them in a
 // claim/execute loop. Workers produce full-file diffs as JSON; the runner
@@ -1850,6 +1851,11 @@ export class BlackboardRunner implements SwarmRunner {
         // → omitted in postTodo. Each surviving anchor gets resolved at
         // worker prompt build time.
         expectedAnchors: t.expectedAnchors,
+        // #237 (2026-04-28): forward kind + command for build-style
+        // TODOs. Defaults (kind="hunks", command undefined) keep the
+        // existing hunks-emit pipeline unchanged.
+        ...(t.kind ? { kind: t.kind } : {}),
+        ...(t.command ? { command: t.command } : {}),
       });
     }
     this.appendSystem(`Posted ${groundedTodos.length} todo(s) to the board.`);
@@ -2580,26 +2586,130 @@ export class BlackboardRunner implements SwarmRunner {
       const todo = this.board.findClaimableTodo();
       if (!todo) continue;
 
-      // V2 Step 5c.2: opt-in to V2 worker pipeline via env flag.
-      // Default OFF — V1 path is unchanged. When enabled, the V2 path
-      // skips CAS/lock-files/per-file-hashes (V2 model: applyHunks
-      // search-anchor catches conflicts at apply time, see ARCHITECTURE-
-      // V2.md section 5). Both paths still call board.commit/markStale
-      // so V1 board state stays consistent for the parallel-track mirror.
-      // Per-run cfg.useWorkerPipelineV2 wins over env when set; falls
-      // back to USE_WORKER_PIPELINE_V2 env flag when absent. Lets users
-      // A/B the V2 path without restarting the dev server.
-      const useV2Worker =
-        this.active?.useWorkerPipelineV2 ?? process.env.USE_WORKER_PIPELINE_V2 === "1";
-      const outcome = useV2Worker
-        ? await this.executeWorkerTodoV2(agent, todo)
-        : await this.executeWorkerTodo(agent, todo);
+      // #237 (2026-04-28): build-style TODOs short-circuit the V1/V2
+      // hunks pipelines entirely — they dispatch through the
+      // swarm-builder agent profile + opencode bash tool. Both V1
+      // and V2 hunks paths only handle hunks-emit TODOs.
+      let outcome: "committed" | "stale" | "lost-race" | "aborted";
+      if (todo.kind === "build") {
+        outcome = await this.executeBuildTodo(agent, todo);
+      } else {
+        // V2 Step 5c.2: opt-in to V2 worker pipeline via env flag.
+        // Default OFF — V1 path is unchanged. When enabled, the V2 path
+        // skips CAS/lock-files/per-file-hashes (V2 model: applyHunks
+        // search-anchor catches conflicts at apply time, see ARCHITECTURE-
+        // V2.md section 5). Both paths still call board.commit/markStale
+        // so V1 board state stays consistent for the parallel-track mirror.
+        // Per-run cfg.useWorkerPipelineV2 wins over env when set; falls
+        // back to USE_WORKER_PIPELINE_V2 env flag when absent. Lets users
+        // A/B the V2 path without restarting the dev server.
+        const useV2Worker =
+          this.active?.useWorkerPipelineV2 ?? process.env.USE_WORKER_PIPELINE_V2 === "1";
+        outcome = useV2Worker
+          ? await this.executeWorkerTodoV2(agent, todo)
+          : await this.executeWorkerTodo(agent, todo);
+      }
       if (outcome === "committed") {
         // Cooldown so one worker doesn't monopolize the board. Random jitter
         // helps desync workers that all finished around the same time.
         await this.sleep(WORKER_COOLDOWN_MS + Math.floor(Math.random() * 500));
       }
     }
+  }
+
+  // #237 (2026-04-28): build-style TODO executor. Bypasses the
+  // hunks-emit pipeline (executeWorkerTodo / executeWorkerTodoV2)
+  // entirely. Flow: allowlist-check the command → prompt swarm-builder
+  // agent to run it via opencode bash → check working tree for changes
+  // → git add+commit if dirty → mark committed; else mark stale.
+  // Defense-in-depth: buildCommandAllowlist enforces a binary
+  // allowlist + forbids shell metacharacters; opencode bash sandbox
+  // is the second safety layer.
+  private async executeBuildTodo(
+    agent: Agent,
+    todo: Todo,
+  ): Promise<"committed" | "stale" | "lost-race" | "aborted"> {
+    if (!todo.command || todo.command.trim().length === 0) {
+      this.appendSystem(`[${agent.id}] build TODO ${todo.id.slice(0, 8)} has no command — marking stale.`);
+      this.board.markStale(todo.id, "build TODO missing command field");
+      return "stale";
+    }
+    // Allowlist check BEFORE any model call. Refused commands never
+    // reach the agent.
+    const check = checkBuildCommand(todo.command);
+    if (!check.ok) {
+      this.appendSystem(
+        `[${agent.id}] build TODO ${todo.id.slice(0, 8)} command refused by allowlist: ${check.reason}`,
+      );
+      this.board.markStale(todo.id, `build command not allowed: ${check.reason}`);
+      return "stale";
+    }
+    this.appendSystem(
+      `[${agent.id}] running build command for todo ${todo.id.slice(0, 8)}: \`${todo.command}\` (binary: ${check.binary})`,
+    );
+
+    // Capture pre-state of git status so we can detect what changed.
+    const clonePath = this.active?.localPath;
+    if (!clonePath) {
+      this.board.markStale(todo.id, "no localPath — runner state corrupt");
+      return "stale";
+    }
+
+    // Prompt the agent. The model must invoke the bash tool with the
+    // exact command we whitelisted (we tell it the command verbatim).
+    const buildPrompt = [
+      "You are a build worker. Your job is to run ONE shell command via the bash tool.",
+      "",
+      `Command to run: ${todo.command}`,
+      `Working directory: ${clonePath}`,
+      "",
+      "Steps:",
+      "1. Invoke the bash tool with the EXACT command above. Do not modify, prefix, or chain.",
+      "2. After the command completes, respond with this JSON envelope and NOTHING ELSE:",
+      `   {"ok": true|false, "exitCode": <number>, "summary": "<one-line summary of what changed>"}`,
+      "",
+      "If the command exits non-zero, set ok=false. Do not edit files manually — bash side effects are the entire delivery mechanism.",
+    ].join("\n");
+
+    let response: string;
+    try {
+      response = await this.promptAgent(agent, buildPrompt, "swarm-builder", "json", "json");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(`[${agent.id}] build prompt failed: ${msg.slice(0, 120)}`);
+      this.board.markStale(todo.id, `build prompt failed: ${msg.slice(0, 200)}`);
+      return "stale";
+    }
+    this.appendAgent(agent, response);
+
+    // Check working tree for changes via git status.
+    const dirty = await this.opts.repos.gitStatus(clonePath);
+    if (!dirty.changedFiles || dirty.changedFiles === 0) {
+      this.appendSystem(
+        `[${agent.id}] build command ran but working tree is clean — marking todo stale.`,
+      );
+      this.board.markStale(todo.id, "build command produced no file changes");
+      return "stale";
+    }
+
+    // Commit. simpleGit add+commit reusing existing helper.
+    try {
+      await this.opts.repos.commitAll(clonePath, `build: ${todo.description.slice(0, 80)}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(`[${agent.id}] git commit failed: ${msg.slice(0, 120)}`);
+      this.board.markStale(todo.id, `git commit failed: ${msg.slice(0, 200)}`);
+      return "stale";
+    }
+
+    // Note: build TODOs don't go through Board.commitTodo's CAS check
+    // because there's no per-file hash baseline. Mark committed
+    // directly so the board state stays consistent.
+    this.board.markBuildCommitted(todo.id);
+    this.appendSystem(
+      `[${agent.id}] ✓ build commit landed for todo ${todo.id.slice(0, 8)} (${dirty.changedFiles} file change(s))`,
+    );
+    return "committed";
   }
 
   private async executeWorkerTodo(
@@ -4111,7 +4221,7 @@ export class BlackboardRunner implements SwarmRunner {
     // strip + surface the markers via stripAgentText + ToolCallsBlock).
     // See runs_overnight/_INVESTIGATION-231-pseudo-tool-calls.md for
     // the full RCA.
-    agentName: "swarm" | "swarm-read" = "swarm",
+    agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-orchestrator" = "swarm",
     // #233: forward Ollama structured-output constraint for parser-
     // strict prompts. Pass "json" to constrain the decoder to valid
     // JSON; the model literally cannot emit XML markers when this is
@@ -4176,7 +4286,7 @@ export class BlackboardRunner implements SwarmRunner {
   private async promptAgent(
     agent: Agent,
     prompt: string,
-    agentName: "swarm" | "swarm-read" = "swarm",
+    agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-orchestrator" = "swarm",
     // Task #196: default to "json" since virtually every blackboard
     // prompt (planner contract, worker hunks, auditor verdict, replanner)
     // expects JSON output. Pass "free" if a future prompt legitimately

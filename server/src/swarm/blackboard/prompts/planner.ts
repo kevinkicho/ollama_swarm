@@ -38,12 +38,35 @@ const SYMBOL_MAX_CHARS = 200;
 const SYMBOLS_MAX_PER_TODO = 4;
 const symbolEntry = z.string().trim().min(1).max(SYMBOL_MAX_CHARS);
 
-const PlannerTodoSchema = z.object({
+// Task #237 (2026-04-28): build-style TODO support. Two discriminants:
+//   kind: "hunks" (default, omit for backwards-compat) — worker emits
+//     a {hunks: [...]} JSON envelope, runner applies + commits.
+//   kind: "build" — worker runs `command` via opencode's bash tool
+//     (swarm-builder agent profile), runner commits whatever changed
+//     in the working tree. Use for TODOs that REQUIRE script execution
+//     (doc generators, codegen, formatters, type-checkers that emit
+//     fix files). Command is gated by buildCommandAllowlist.
+const PlannerTodoSchemaHunks = z.object({
+  kind: z.literal("hunks").optional(),
   description: z.string().trim().min(1).max(500),
   expectedFiles: z.array(filePathEntry).min(1).max(2),
   expectedAnchors: z.array(anchorEntry).max(ANCHOR_MAX_PER_TODO).optional(),
   expectedSymbols: z.array(symbolEntry).max(SYMBOLS_MAX_PER_TODO).optional(),
+  command: z.undefined().optional(),
 });
+const PlannerTodoSchemaBuild = z.object({
+  kind: z.literal("build"),
+  description: z.string().trim().min(1).max(500),
+  // For build TODOs, expectedFiles describes files we EXPECT the command
+  // to change (for the commit message + verification). At least one
+  // path so the auditor has something to verify; cap stays at 2 to
+  // discourage planner from proposing whole-tree builds.
+  expectedFiles: z.array(filePathEntry).min(1).max(2),
+  command: z.string().trim().min(1).max(500),
+  expectedAnchors: z.array(anchorEntry).max(ANCHOR_MAX_PER_TODO).optional(),
+  expectedSymbols: z.array(symbolEntry).max(SYMBOLS_MAX_PER_TODO).optional(),
+});
+const PlannerTodoSchema = z.union([PlannerTodoSchemaHunks, PlannerTodoSchemaBuild]);
 
 // Task #71 (2026-04-25): lowered cap from 20 → 5. Earlier blackboard
 // runs surfaced a "skip cascade" pattern — the planner posted up to 20
@@ -57,8 +80,17 @@ const MAX_TODOS_PER_BATCH = 5;
 const PlannerResponseSchema = z.array(PlannerTodoSchema).max(MAX_TODOS_PER_BATCH);
 
 export interface PlannerTodoInput {
+  /** #237 (2026-04-28): "hunks" (default) or "build". Hunks workers
+   *  emit a {hunks:[...]} JSON envelope and the runner applies them.
+   *  Build workers run a shell command via opencode's bash tool and
+   *  the runner commits whatever changed. */
+  kind?: "hunks" | "build";
   description: string;
   expectedFiles: string[];
+  /** #237: only set when kind="build". The shell command the
+   *  swarm-builder agent will execute via opencode bash. Gated by
+   *  buildCommandAllowlist before dispatch. */
+  command?: string;
   // Unit 44b: optional anchor strings. Forwarded into Board.postTodo
   // verbatim; resolved at worker-prompt build time.
   expectedAnchors?: string[];
@@ -124,9 +156,13 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
   for (const item of parsed) {
     const v = PlannerTodoSchema.safeParse(item);
     if (v.success) {
+      // #237: discriminated union — only one branch sets `command`.
+      const isBuild = v.data.kind === "build";
       todos.push({
+        kind: v.data.kind ?? "hunks",
         description: v.data.description,
         expectedFiles: v.data.expectedFiles,
+        ...(isBuild ? { command: v.data.command } : {}),
         expectedAnchors: v.data.expectedAnchors,
         expectedSymbols: v.data.expectedSymbols,
       });
@@ -178,6 +214,7 @@ export const PLANNER_SYSTEM_PROMPT = [
   "9. Ground every `expectedFiles` entry in the REPO FILE LIST provided in the user message. Each entry MUST either (a) appear verbatim in the list (for edits to existing files), or (b) be a new file whose parent directory appears in the list (for adding a new file to a known location). Do NOT invent paths whose parent directory is not in the list — the worker's file-hash pass will fail on EISDIR/ENOENT and stall the run.",
   "10. (Unit 44b) For TODOs that touch a SPECIFIC ROW or REGION of a large file (e.g., a single row in a 100-row markdown table, one entry in a 200-entry JSON object), include `expectedAnchors`: an array of 1-4 short verbatim substrings (≤ 200 chars each) that uniquely identify the target region. Workers see only HEAD + TAIL of files above 8 KB; anchors let the runner inject ±25 lines of context around each anchor so the worker can actually edit middle-region rows. Use grep/read first to confirm each anchor exists in the file. Examples: `\"| 7 | **ASE Holdings**\"`, `\"NVIDIA: { revenue:\"`. Omit `expectedAnchors` for whole-file edits, append-only TODOs, or files small enough to show in full.",
   "11. (Task #70) For TODOs that operate on EXISTING symbols (a function, class, or named export the worker is supposed to modify or document), include `expectedSymbols`: an array of 1-4 symbol names (≤ 200 chars each) the runner will word-boundary-grep in each expectedFile BEFORE posting the todo. If any symbol is missing from every expectedFile, the runner drops the todo with a finding — saves a wasted worker round-trip. Examples: `[\"createOrchestrator\"]`, `[\"AgentManager\", \"spawnAgent\"]`. OMIT for create-new-file TODOs (file doesn't exist yet) and for whole-file rewrites. Include for: \"add JSDoc to X\", \"add null guard to Y\", \"rename Z\", \"replace inline string with constant W\". When in doubt, include — being wrong about a symbol's existence is the planner's #1 failure mode.",
+  "12. (#237, 2026-04-28) BUILD-STYLE TODOS — for work that REQUIRES running a project script + committing the result (doc generators, codegen, formatters, linters with --fix, type-checkers that emit declaration files), use the build-style TODO shape: `{\"kind\": \"build\", \"description\": ...., \"expectedFiles\": [\"docs/api/index.md\"], \"command\": \"bun run docs:api\"}`. Constraints: `command` MUST start with one of {npm, npx, yarn, pnpm, bun, bunx, tsc, tsx, deno, eslint, prettier, biome, jest, vitest, mocha, make, task, just, typedoc, jsdoc, docusaurus} (the runner enforces an allowlist). NO shell metacharacters (`;`, `&&`, `||`, `|`, `>`, `<`, backticks, `$`) — chaining/piping is forbidden. expectedFiles describes paths the command WILL emit; the runner uses them for the auditor verification only. The default `kind` is `\"hunks\"` (or omitted entirely) — only mark `kind:\"build\"` when the work genuinely cannot be expressed as a search/replace patch.",
   "",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",
 ].join("\n");
