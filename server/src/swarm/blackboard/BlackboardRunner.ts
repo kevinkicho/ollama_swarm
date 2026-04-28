@@ -18,6 +18,10 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "../SwarmRunner.js";
 // dev.ts is migrated to the V2 queue.
 import { FindingsLog } from "./FindingsLog.js";
 import {
+  makeTodoQueueWrappers,
+  type TodoQueueWrappers,
+} from "./todoQueueWrappers.js";
+import {
   buildWireSnapshot,
   v2QueueCountsToWireCounts,
   v2QueueTodoToWireTodo,
@@ -243,6 +247,10 @@ export class BlackboardRunner implements SwarmRunner {
   // (which doesn't model findings) so the auditor + replanner still
   // have somewhere to emit diagnostic notes.
   private findings: FindingsLog;
+  // Mutation wrappers — bundle queue/findings ops with state-write +
+  // BoardEvent emit + lifecycle callbacks. Replaced inline private
+  // methods so the orchestration is unit-testable in isolation.
+  private wrappers!: TodoQueueWrappers;
   // Every in-flight prompt registers its AbortController so stop() can abort
   // them all at once without needing to know about planner vs worker.
   private activeAborts = new Set<AbortController>();
@@ -456,6 +464,26 @@ export class BlackboardRunner implements SwarmRunner {
       snapshot: buildWireSnapshot(this.todoQueue.list(), this.findings.list()),
       counts: v2QueueCountsToWireCounts(this.todoQueue.counts()),
     }));
+    // Mutation wrappers — see todoQueueWrappers.ts. The onTerminal
+    // callback feeds the V2 reducer's drain transition; onFailed
+    // routes through replan + bumps stale-events telemetry.
+    this.wrappers = makeTodoQueueWrappers({
+      todoQueue: this.todoQueue,
+      findings: this.findings,
+      emit: (ev) => this.boardBroadcaster.emit(ev),
+      scheduleStateWrite: () => this.scheduleStateWrite(),
+      onTerminal: (kind, remaining) => {
+        this.v2Observer.apply({
+          type: kind === "committed" ? "todo-committed" : "todo-skipped",
+          ts: Date.now(),
+          remainingTodos: remaining,
+        });
+      },
+      onFailed: (todoId) => {
+        this.staleEventCount++;
+        this.enqueueReplan(todoId);
+      },
+    });
   }
 
   // V2 Step 3b helper: derive whether all contract criteria have a
@@ -1868,7 +1896,7 @@ export class BlackboardRunner implements SwarmRunner {
 
     const now = Date.now();
     for (const t of groundedTodos) {
-      this.postTodoQ({
+      this.wrappers.postTodoQ({
         description: t.description,
         expectedFiles: t.expectedFiles,
         createdBy: agent.id,
@@ -2428,7 +2456,7 @@ export class BlackboardRunner implements SwarmRunner {
           continue;
         }
         for (const t of v.todos) {
-          this.postTodoQ({
+          this.wrappers.postTodoQ({
             description: t.description,
             expectedFiles: [...t.expectedFiles],
             createdBy: planner.id,
@@ -2615,7 +2643,7 @@ export class BlackboardRunner implements SwarmRunner {
       // findClaimableTodo+claimTodo two-step. The todo arrives already
       // in-progress; downstream executors no longer call claimTodo.
       const myTag = this.active?.topology?.agents.find((a) => a.index === agent.index)?.tag;
-      const queued = this.dequeueTodoQ(agent.id, myTag);
+      const queued = this.wrappers.dequeueTodoQ(agent.id, myTag);
       if (!queued) continue;
       const todo = v2QueueTodoToWireTodo(queued);
 
@@ -2652,7 +2680,7 @@ export class BlackboardRunner implements SwarmRunner {
   ): Promise<"committed" | "stale" | "lost-race" | "aborted"> {
     if (!todo.command || todo.command.trim().length === 0) {
       this.appendSystem(`[${agent.id}] build TODO ${todo.id.slice(0, 8)} has no command — marking stale.`);
-      this.failTodoQ(todo.id, "build TODO missing command field");
+      this.wrappers.failTodoQ(todo.id, "build TODO missing command field");
       return "stale";
     }
     // Allowlist check BEFORE any model call. Refused commands never
@@ -2662,7 +2690,7 @@ export class BlackboardRunner implements SwarmRunner {
       this.appendSystem(
         `[${agent.id}] build TODO ${todo.id.slice(0, 8)} command refused by allowlist: ${check.reason}`,
       );
-      this.failTodoQ(todo.id, `build command not allowed: ${check.reason}`);
+      this.wrappers.failTodoQ(todo.id, `build command not allowed: ${check.reason}`);
       return "stale";
     }
     this.appendSystem(
@@ -2672,7 +2700,7 @@ export class BlackboardRunner implements SwarmRunner {
     // Capture pre-state of git status so we can detect what changed.
     const clonePath = this.active?.localPath;
     if (!clonePath) {
-      this.failTodoQ(todo.id, "no localPath — runner state corrupt");
+      this.wrappers.failTodoQ(todo.id, "no localPath — runner state corrupt");
       return "stale";
     }
 
@@ -2698,7 +2726,7 @@ export class BlackboardRunner implements SwarmRunner {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.appendSystem(`[${agent.id}] build prompt failed: ${msg.slice(0, 120)}`);
-      this.failTodoQ(todo.id, `build prompt failed: ${msg.slice(0, 200)}`);
+      this.wrappers.failTodoQ(todo.id, `build prompt failed: ${msg.slice(0, 200)}`);
       return "stale";
     }
     this.appendAgent(agent, response);
@@ -2709,7 +2737,7 @@ export class BlackboardRunner implements SwarmRunner {
       this.appendSystem(
         `[${agent.id}] build command ran but working tree is clean — marking todo stale.`,
       );
-      this.failTodoQ(todo.id, "build command produced no file changes");
+      this.wrappers.failTodoQ(todo.id, "build command produced no file changes");
       return "stale";
     }
 
@@ -2719,14 +2747,14 @@ export class BlackboardRunner implements SwarmRunner {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.appendSystem(`[${agent.id}] git commit failed: ${msg.slice(0, 120)}`);
-      this.failTodoQ(todo.id, `git commit failed: ${msg.slice(0, 200)}`);
+      this.wrappers.failTodoQ(todo.id, `git commit failed: ${msg.slice(0, 200)}`);
       return "stale";
     }
 
     // Note: build TODOs don't go through Board.commitTodo's CAS check
     // because there's no per-file hash baseline. Mark committed
     // directly so the board state stays consistent.
-    this.completeTodoQ(todo.id);
+    this.wrappers.completeTodoQ(todo.id);
     this.appendSystem(
       `[${agent.id}] ✓ build commit landed for todo ${todo.id.slice(0, 8)} (${dirty.changedFiles} file change(s))`,
     );
@@ -2754,7 +2782,7 @@ export class BlackboardRunner implements SwarmRunner {
       contents = await this.readExpectedFiles(todo.expectedFiles);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.failTodoQ(todo.id, `[v2] read failure: ${msg}`);
+      this.wrappers.failTodoQ(todo.id, `[v2] read failure: ${msg}`);
       return "stale";
     }
 
@@ -2773,7 +2801,7 @@ export class BlackboardRunner implements SwarmRunner {
     } catch (err) {
       if (this.stopping) return "aborted";
       const msg = err instanceof Error ? err.message : String(err);
-      this.failTodoQ(todo.id, `[v2] worker prompt failed: ${msg}`);
+      this.wrappers.failTodoQ(todo.id, `[v2] worker prompt failed: ${msg}`);
       bumpAgentCounter(this.promptErrorsPerAgent, agent.id);
       bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
       return "stale";
@@ -2794,7 +2822,7 @@ export class BlackboardRunner implements SwarmRunner {
       } catch (err) {
         if (this.stopping) return "aborted";
         const msg = err instanceof Error ? err.message : String(err);
-        this.failTodoQ(todo.id, `[v2] worker repair prompt failed: ${msg}`);
+        this.wrappers.failTodoQ(todo.id, `[v2] worker repair prompt failed: ${msg}`);
         bumpAgentCounter(this.promptErrorsPerAgent, agent.id);
         bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
         return "stale";
@@ -2803,7 +2831,7 @@ export class BlackboardRunner implements SwarmRunner {
       this.appendAgent(agent, repair);
       parsed = parseWorkerResponse(repair, todo.expectedFiles);
       if (!parsed.ok) {
-        this.failTodoQ(todo.id, `[v2] worker produced invalid JSON after repair: ${parsed.reason}`);
+        this.wrappers.failTodoQ(todo.id, `[v2] worker produced invalid JSON after repair: ${parsed.reason}`);
         bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
         return "stale";
       }
@@ -2811,13 +2839,13 @@ export class BlackboardRunner implements SwarmRunner {
 
     if (parsed.skip) {
       this.appendSystem(`[${agent.id}] [v2] worker declined todo: ${parsed.skip}`);
-      this.failTodoQ(todo.id, `[v2] worker declined: ${parsed.skip}`);
+      this.wrappers.failTodoQ(todo.id, `[v2] worker declined: ${parsed.skip}`);
       bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
       return "stale";
     }
 
     if (parsed.hunks.length === 0) {
-      this.failTodoQ(todo.id, "[v2] worker returned empty hunks with no skip reason");
+      this.wrappers.failTodoQ(todo.id, "[v2] worker returned empty hunks with no skip reason");
       bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
       return "stale";
     }
@@ -2835,7 +2863,7 @@ export class BlackboardRunner implements SwarmRunner {
       git: gitAdapter,
     });
     if (!applyResult.ok) {
-      this.failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`);
+      this.wrappers.failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`);
       bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
       return "stale";
     }
@@ -2846,7 +2874,7 @@ export class BlackboardRunner implements SwarmRunner {
     // If the reaper transitioned this todo to failed mid-prompt
     // (worker timeout), complete() throws — caught here as lost-race.
     try {
-      this.completeTodoQ(todo.id);
+      this.wrappers.completeTodoQ(todo.id);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.appendSystem(`[${agent.id}] commit lost race (todo reaped): ${msg}`);
@@ -2903,7 +2931,7 @@ export class BlackboardRunner implements SwarmRunner {
           const msg = err instanceof Error ? err.message : String(err);
           this.appendSystem(`Replan handler crashed on todo ${todoId}: ${msg}`);
           try {
-            this.skipTodoQ(todoId, `replanner crashed: ${msg}`);
+            this.wrappers.skipTodoQ(todoId, `replanner crashed: ${msg}`);
           } catch {
             // skip can throw if the todo moved state meanwhile — ignore.
           }
@@ -2923,7 +2951,7 @@ export class BlackboardRunner implements SwarmRunner {
     if (todo.status !== "stale") return;
 
     if (todo.replanCount >= MAX_REPLAN_ATTEMPTS) {
-      this.skipTodoQ(
+      this.wrappers.skipTodoQ(
         todoId,
         `auto-skipped: replan attempts exhausted (${todo.replanCount})`,
       );
@@ -2938,7 +2966,7 @@ export class BlackboardRunner implements SwarmRunner {
       contents = await this.readExpectedFiles(todo.expectedFiles);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.skipTodoQ(todoId, `replanner unable to read files: ${msg}`);
+      this.wrappers.skipTodoQ(todoId, `replanner unable to read files: ${msg}`);
       return;
     }
 
@@ -2964,7 +2992,7 @@ export class BlackboardRunner implements SwarmRunner {
     } catch (err) {
       if (this.stopping) return;
       const msg = err instanceof Error ? err.message : String(err);
-      this.skipTodoQ(todoId, `replanner prompt failed: ${msg}`);
+      this.wrappers.skipTodoQ(todoId, `replanner prompt failed: ${msg}`);
       return;
     }
     if (this.stopping) return;
@@ -2987,14 +3015,14 @@ export class BlackboardRunner implements SwarmRunner {
       } catch (err) {
         if (this.stopping) return;
         const msg = err instanceof Error ? err.message : String(err);
-        this.skipTodoQ(todoId, `replanner repair prompt failed: ${msg}`);
+        this.wrappers.skipTodoQ(todoId, `replanner repair prompt failed: ${msg}`);
         return;
       }
       if (this.stopping) return;
       this.appendAgent(repairAgent, repair);
       parsed = parseReplannerResponse(repair);
       if (!parsed.ok) {
-        this.skipTodoQ(
+        this.wrappers.skipTodoQ(
           todoId,
           `replanner produced invalid JSON after repair: ${parsed.reason}`,
         );
@@ -3003,7 +3031,7 @@ export class BlackboardRunner implements SwarmRunner {
     }
 
     if (parsed.action === "skip") {
-      this.skipTodoQ(todoId, `replanner decided to skip: ${parsed.reason}`);
+      this.wrappers.skipTodoQ(todoId, `replanner decided to skip: ${parsed.reason}`);
       this.appendSystem(`Replanner skipped todo ${todoId}: ${parsed.reason}`);
       return;
     }
@@ -3013,7 +3041,7 @@ export class BlackboardRunner implements SwarmRunner {
     // description/files/anchors/kind/command; reset applies them
     // and transitions failed → pending atomically.
     try {
-      this.resetTodoQ(todoId, {
+      this.wrappers.resetTodoQ(todoId, {
         description: parsed.description,
         expectedFiles: parsed.expectedFiles,
         // Unit 44b: anchor revision is optional. undefined → keep prior
@@ -3051,7 +3079,7 @@ export class BlackboardRunner implements SwarmRunner {
         // workers would keep looping (counts.stale>0) waiting for them.
         for (const todo of this.boardListTodos()) {
           if (todo.status === "stale" && todo.replanCount >= MAX_REPLAN_ATTEMPTS) {
-            this.skipTodoQ(
+            this.wrappers.skipTodoQ(
               todo.id,
               `auto-skipped: replan attempts exhausted (${todo.replanCount})`,
             );
@@ -3619,131 +3647,6 @@ export class BlackboardRunner implements SwarmRunner {
   // write). V2 path uses applyAndCommit which does its own read +
   // write via the realFilesystemAdapter. Helpers removed with the V1
   // pipeline.
-
-  // ---------------------------------------------------------------------
-  // V2 queue mutation wrappers (V2 cutover Phase 2c, 2026-04-28)
-  //
-  // Each wraps a TodoQueue mutation + emits the equivalent BoardEvent
-  // through boardBroadcaster so the wire protocol (board_todo_*
-  // SwarmEvents) stays unchanged for the UI. Findings + replan
-  // bookkeeping happen inline. State writes are scheduled here so the
-  // caller doesn't have to remember.
-  // ---------------------------------------------------------------------
-
-  /** Post a new todo. Returns the queue-assigned id. */
-  private postTodoQ(input: PostTodoInput): string {
-    const id = this.todoQueue.post(input);
-    const wire = v2QueueTodoToWireTodo(this.todoQueue.get(id)!);
-    this.boardBroadcaster.emit({ type: "todo_posted", todo: wire });
-    this.scheduleStateWrite();
-    return id;
-  }
-
-  /** Dequeue the next todo for a worker. Returns the V2 queued shape;
-   *  callers that need V1 Todo shape can translate via the helper.
-   *  Emits board_todo_claimed for wire compat — synthesizes a Claim
-   *  from the worker id + dequeue timestamp. */
-  private dequeueTodoQ(workerId: string, preferTag?: string): QueuedTodo | null {
-    const t = this.todoQueue.dequeue(workerId, preferTag);
-    if (!t) return null;
-    const wire = v2QueueTodoToWireTodo(t);
-    if (wire.claim) {
-      this.boardBroadcaster.emit({ type: "todo_claimed", todoId: t.id, claim: wire.claim });
-    }
-    this.scheduleStateWrite();
-    return t;
-  }
-
-  /** Mark an in-progress todo completed. Fires v2Observer's todo-
-   *  committed event so the reducer can transition executing→auditing
-   *  on drain. Emits board_todo_committed for wire compat. */
-  private completeTodoQ(id: string): void {
-    this.todoQueue.complete(id);
-    this.boardBroadcaster.emit({ type: "todo_committed", todoId: id });
-    this.scheduleStateWrite();
-    this.v2Observer.apply({
-      type: "todo-committed",
-      ts: Date.now(),
-      remainingTodos: this.todoQueue.counts().pending,
-    });
-  }
-
-  /** Mark a todo failed (V1 vocabulary: "stale"). Routes through the
-   *  replan queue so the planner gets a chance to revise it. Emits
-   *  board_todo_stale for wire compat — replanCount comes from the
-   *  V2 queue's retries counter. */
-  private failTodoQ(id: string, reason: string): void {
-    this.todoQueue.fail(id, reason);
-    const t = this.todoQueue.get(id);
-    this.boardBroadcaster.emit({
-      type: "todo_stale",
-      todoId: id,
-      reason,
-      replanCount: t?.retries ?? 0,
-    });
-    this.scheduleStateWrite();
-    this.staleEventCount++;
-    this.enqueueReplan(id);
-  }
-
-  /** Mark a todo skipped (worker declined / replanner gave up).
-   *  Distinct from failed — no replan retry. Fires v2Observer's
-   *  todo-skipped event for the executing→auditing drain transition. */
-  private skipTodoQ(id: string, reason: string): void {
-    this.todoQueue.skip(id, reason);
-    this.boardBroadcaster.emit({ type: "todo_skipped", todoId: id, reason });
-    this.scheduleStateWrite();
-    this.v2Observer.apply({
-      type: "todo-skipped",
-      ts: Date.now(),
-      remainingTodos: this.todoQueue.counts().pending,
-    });
-  }
-
-  /** Reset a failed todo back to pending so workers can re-claim it.
-   *  Emits board_todo_replanned for wire compat. updates is the
-   *  optional revision the replanner produced (description / files /
-   *  anchors / kind / command). */
-  private resetTodoQ(
-    id: string,
-    updates?: {
-      description?: string;
-      expectedFiles?: readonly string[];
-      expectedAnchors?: readonly string[];
-      kind?: "hunks" | "build";
-      command?: string;
-    },
-  ): void {
-    this.todoQueue.reset(id, updates);
-    const t = this.todoQueue.get(id);
-    if (t) {
-      this.boardBroadcaster.emit({
-        type: "todo_replanned",
-        todoId: id,
-        description: t.description,
-        expectedFiles: t.expectedFiles.slice(),
-        replanCount: t.retries,
-        // Audit fix (2026-04-28): forward anchor revisions when the
-        // replanner produced them, matching the schema declared on
-        // BoardEvent.todo_replanned (types.ts) and the wire variant
-        // in web/src/types.ts. Snapshot also carries them, but the
-        // per-event update lets the UI's applyReplan hook attach
-        // them immediately instead of waiting for the next snapshot.
-        ...(t.expectedAnchors && t.expectedAnchors.length > 0
-          ? { expectedAnchors: t.expectedAnchors.slice() }
-          : {}),
-      });
-    }
-    this.scheduleStateWrite();
-  }
-
-  /** Append a finding (diagnostic note). Emits board_finding_posted
-   *  for wire compat. */
-  private postFindingQ(input: { agentId: string; text: string; createdAt: number }): void {
-    const f = this.findings.post(input);
-    this.boardBroadcaster.emit({ type: "finding_posted", finding: f });
-    this.scheduleStateWrite();
-  }
 
   // V2 cutover Phase 2c read helpers — translate V2 queue to V1 wire
   // shapes so the rest of BlackboardRunner (and downstream consumers
