@@ -127,6 +127,8 @@ import {
   getAgentOllamaOptions,
   type Topology,
 } from "../../../../shared/src/topology.js";
+import { describeSdkError } from "../sdkError.js";
+import { interruptibleSleep } from "../interruptibleSleep.js";
 
 // Phase 5c of #243: derive {tag → count} for the planner prompt's
 // AVAILABLE WORKER TAGS section. Empty array when no workers carry a
@@ -4266,7 +4268,7 @@ export class BlackboardRunner implements SwarmRunner {
     // strip + surface the markers via stripAgentText + ToolCallsBlock).
     // See runs_overnight/_INVESTIGATION-231-pseudo-tool-calls.md for
     // the full RCA.
-    agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-orchestrator" = "swarm",
+    agentName: "swarm" | "swarm-read" | "swarm-builder" = "swarm",
     // #233: forward Ollama structured-output constraint for parser-
     // strict prompts. Pass "json" to constrain the decoder to valid
     // JSON; the model literally cannot emit XML markers when this is
@@ -4331,7 +4333,7 @@ export class BlackboardRunner implements SwarmRunner {
   private async promptAgent(
     agent: Agent,
     prompt: string,
-    agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-orchestrator" = "swarm",
+    agentName: "swarm" | "swarm-read" | "swarm-builder" = "swarm",
     // Task #196: default to "json" since virtually every blackboard
     // prompt (planner contract, worker hunks, auditor verdict, replanner)
     // expects JSON output. Pass "free" if a future prompt legitimately
@@ -4463,8 +4465,8 @@ export class BlackboardRunner implements SwarmRunner {
           if (responseTokens > 0) this.responseTokensPerAgent.set(agent.id, (this.responseTokensPerAgent.get(agent.id) ?? 0) + responseTokens);
         },
         agentName,
-        describeError: (e) => this.describeSdkError(e),
-        sleep: (ms, sig) => this.interruptibleSleep(ms, sig),
+        describeError: (e) => describeSdkError(e),
+        sleep: (ms, sig) => interruptibleSleep(ms, sig),
         onTiming: ({ attempt, elapsedMs, success }) => {
           // Unit 21: per-agent stats for summary.json. Count every
           // attempt (incl. retries); only sample latency on success.
@@ -4548,7 +4550,7 @@ export class BlackboardRunner implements SwarmRunner {
       });
       return text;
     } catch (err) {
-      const msg = abortedReason ?? this.describeSdkError(err);
+      const msg = abortedReason ?? describeSdkError(err);
       this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
       this.opts.manager.markStatus(agent.id, "failed", { error: msg });
       this.emitAgentState({
@@ -4574,24 +4576,6 @@ export class BlackboardRunner implements SwarmRunner {
     return new Promise((r) => setTimeout(r, ms));
   }
 
-  // Resolves true if the full delay elapsed, false if `signal` aborted first.
-  // Used by the prompt-retry loop so a user stop / cap trip / watchdog can
-  // short-circuit the backoff instead of making the run wait 20+ seconds to
-  // notice it's cancelled.
-  private interruptibleSleep(ms: number, signal: AbortSignal): Promise<boolean> {
-    if (signal.aborted) return Promise.resolve(false);
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(true);
-      }, ms);
-      const onAbort = () => {
-        clearTimeout(timer);
-        resolve(false);
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
-  }
 
   private appendSystem(text: string, summary?: TranscriptEntrySummary): void {
     const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now(), summary };
@@ -4678,36 +4662,6 @@ export class BlackboardRunner implements SwarmRunner {
     this.opts.manager.recordAgentState(s);
   }
 
-  private describeSdkError(err: unknown): string {
-    if (err instanceof Error) {
-      const parts: string[] = [err.message];
-      let cause: unknown = (err as { cause?: unknown }).cause;
-      let depth = 0;
-      while (cause && depth < 4) {
-        if (cause instanceof Error) {
-          const code = (cause as { code?: string }).code;
-          parts.push(code ? `${cause.message} [${code}]` : cause.message);
-          cause = (cause as { cause?: unknown }).cause;
-        } else {
-          parts.push(String(cause));
-          cause = undefined;
-        }
-        depth++;
-      }
-      return parts.join(" <- ");
-    }
-    if (err && typeof err === "object") {
-      const o = err as { name?: string; message?: string };
-      const head = o.name ? `${o.name}: ` : "";
-      if (o.message) return head + o.message;
-      try {
-        return head + JSON.stringify(o).slice(0, 500);
-      } catch {
-        return head + String(err);
-      }
-    }
-    return String(err);
-  }
 
   private extractText(res: unknown): string | undefined {
     const any = res as {

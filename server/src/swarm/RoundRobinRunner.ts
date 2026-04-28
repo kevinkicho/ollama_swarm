@@ -22,6 +22,7 @@ import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import { getAgentAddendum } from "../../../shared/src/topology.js";
+import { describeSdkError } from "./sdkError.js";
 
 export interface RoundRobinOptions {
   // Unit 8: when set, every agent gets a per-index role prepended to its
@@ -359,7 +360,7 @@ export class RoundRobinRunner implements SwarmRunner {
         agentName: "swarm-read",
         // Phase 5b of #243: per-agent addendum from the topology row.
         promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
-        describeError: (e) => this.describeSdkError(e),
+        describeError: (e) => describeSdkError(e),
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(agent.id, success, elapsedMs);
           this.opts.logDiag?.({
@@ -462,7 +463,7 @@ export class RoundRobinRunner implements SwarmRunner {
       this.opts.manager.markStatus(agent.id, "ready", { lastMessageAt: entry.ts });
       this.emitAgentState({ id: agent.id, index: agent.index, port: agent.port, sessionId: agent.sessionId, status: "ready", lastMessageAt: entry.ts });
     } catch (err) {
-      const msg = watchdog.getAbortReason() ?? this.describeSdkError(err);
+      const msg = watchdog.getAbortReason() ?? describeSdkError(err);
       this.appendSystem(`[${agent.id}] error: ${msg}`);
       this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
       this.opts.manager.markStatus(agent.id, "failed", { error: msg });
@@ -514,7 +515,7 @@ export class RoundRobinRunner implements SwarmRunner {
         agentName: "swarm-read",
         // Phase 5b of #243: per-agent addendum from the topology row.
         promptAddendum: getAgentAddendum(this.active?.topology, lead.index),
-        describeError: (e) => this.describeSdkError(e),
+        describeError: (e) => describeSdkError(e),
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(lead.id, success, elapsedMs);
           this.opts.manager.recordPromptComplete(lead.id, { attempt, elapsedMs, success });
@@ -670,38 +671,6 @@ export class RoundRobinRunner implements SwarmRunner {
     this.opts.manager.recordAgentState(s);
   }
 
-  private describeSdkError(err: unknown): string {
-    if (err instanceof Error) {
-      // "fetch failed" is the generic undici wrapper — the useful detail lives on
-      // err.cause (ECONNRESET, ETIMEDOUT, socket hang up, etc.). Chase the chain.
-      const parts: string[] = [err.message];
-      let cause: unknown = (err as { cause?: unknown }).cause;
-      let depth = 0;
-      while (cause && depth < 4) {
-        if (cause instanceof Error) {
-          const code = (cause as { code?: string }).code;
-          parts.push(code ? `${cause.message} [${code}]` : cause.message);
-          cause = (cause as { cause?: unknown }).cause;
-        } else {
-          parts.push(String(cause));
-          cause = undefined;
-        }
-        depth++;
-      }
-      return parts.join(" <- ");
-    }
-    if (err && typeof err === "object") {
-      const o = err as { name?: string; message?: string; data?: unknown };
-      const head = o.name ? `${o.name}: ` : "";
-      if (o.message) return head + o.message;
-      try {
-        return head + JSON.stringify(o).slice(0, 500);
-      } catch {
-        return head + String(err);
-      }
-    }
-    return String(err);
-  }
 
 }
 

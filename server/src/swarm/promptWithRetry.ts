@@ -6,6 +6,9 @@ import {
 } from "./blackboard/retry.js";
 import { tokenTracker } from "../services/ollamaProxy.js";
 import { chat as ollamaChat } from "../services/OllamaClient.js";
+// 2026-04-28: shared interruptible sleep used by both this module's
+// retry-backoff and BlackboardRunner. One source of truth.
+import { interruptibleSleep as defaultInterruptibleSleep } from "./interruptibleSleep.js";
 
 // Task #166: per-chunk timeout for streamed prompts. If no SSE text
 // chunks arrive for this many ms, the model is presumed dead and the
@@ -300,21 +303,3 @@ function defaultDescribeError(err: unknown): string {
   return String(err);
 }
 
-// Promise-based interruptible sleep. Resolves true if the timeout
-// fires naturally, false if the abort signal interrupts it. Mirrors
-// BlackboardRunner.interruptibleSleep so behavior is identical.
-async function defaultInterruptibleSleep(ms: number, signal: AbortSignal): Promise<boolean> {
-  return new Promise((resolve) => {
-    if (signal.aborted) return resolve(false);
-    const onAbort = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      resolve(false);
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve(true);
-    }, ms);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}

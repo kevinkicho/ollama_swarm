@@ -21,6 +21,7 @@ import { formatCloneMessage } from "./cloneMessage.js";
 import { runEndReflection } from "./runEndReflection.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import { getAgentAddendum } from "../../../shared/src/topology.js";
+import { describeSdkError } from "./sdkError.js";
 
 // Debate + judge.
 // Agent 1 = PRO (argues FOR the proposition).
@@ -975,33 +976,3 @@ function parseLooseJson(raw: string): unknown {
 }
 
 
-function describeSdkError(err: unknown): string {
-  if (err instanceof Error) {
-    const parts: string[] = [err.message];
-    let cause: unknown = (err as { cause?: unknown }).cause;
-    let depth = 0;
-    while (cause && depth < 4) {
-      if (cause instanceof Error) {
-        const code = (cause as { code?: string }).code;
-        parts.push(code ? `${cause.message} [${code}]` : cause.message);
-        cause = (cause as { cause?: unknown }).cause;
-      } else {
-        parts.push(String(cause));
-        cause = undefined;
-      }
-      depth++;
-    }
-    return parts.join(" <- ");
-  }
-  if (err && typeof err === "object") {
-    const o = err as { name?: string; message?: string };
-    const head = o.name ? `${o.name}: ` : "";
-    if (o.message) return head + o.message;
-    try {
-      return head + JSON.stringify(o).slice(0, 500);
-    } catch {
-      return head + String(err);
-    }
-  }
-  return String(err);
-}

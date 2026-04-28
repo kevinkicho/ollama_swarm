@@ -9,12 +9,17 @@
 // opencode v1.14.28 packages/opencode/src/tool/task.ts).
 //
 // The CALLING AGENT (the one running the parent prompt) needs the
-// `task` permission allowed — see the swarm-orchestrator profile in
-// RepoService.writeOpencodeConfig.
+// `task` permission allowed. The previously-shipped swarm-orchestrator
+// profile (RepoService.writeOpencodeConfig) was deleted on 2026-04-28
+// after audit confirmed no runtime path dispatched subtasks. If the
+// migration is revisited, add a profile with `permission.task: "allow"`
+// and route the parent agent through it.
 //
-// Used by: planned migration of CouncilRunner, OrchestratorWorkerRunner,
-// OrchestratorWorkerDeepRunner, MapReduceRunner. See
-// docs/plans/subtask-migration-plan.md for the file-by-file blueprint.
+// Status: foundation kept (this builder + parser + tests) but full
+// migration was rejected as a regression — smoke test 749bb93 found
+// SubtaskPartInput dispatch is sequential, which is a 4× slowdown vs
+// our current parallel session.prompt model. See
+// docs/plans/subtask-migration-plan.md for the closed-out plan.
 
 export interface SubtaskPart {
   /** Discriminator. Matches opencode's SubtaskPartInput.type. */
