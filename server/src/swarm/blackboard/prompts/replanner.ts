@@ -29,11 +29,26 @@ const REPLAN_ANCHOR_MAX_CHARS = 200;
 const REPLAN_ANCHOR_MAX_PER_TODO = 4;
 const replanAnchorEntry = z.string().trim().min(1).max(REPLAN_ANCHOR_MAX_CHARS);
 
-const RevisedBody = z.object({
-  description: z.string().trim().min(1).max(500),
-  expectedFiles: z.array(filePathEntry).min(1).max(2),
-  expectedAnchors: z.array(replanAnchorEntry).max(REPLAN_ANCHOR_MAX_PER_TODO).optional(),
-});
+// #241 (2026-04-28): replanner can now revise to or from kind:"build".
+// Same discriminator as PlannerTodoSchema. When kind="build", `command`
+// is required. Default (omitted) is "hunks" for backward compat — old
+// replanner runs without the new field still parse cleanly.
+const RevisedBody = z.union([
+  z.object({
+    kind: z.literal("hunks").optional(),
+    description: z.string().trim().min(1).max(500),
+    expectedFiles: z.array(filePathEntry).min(1).max(2),
+    expectedAnchors: z.array(replanAnchorEntry).max(REPLAN_ANCHOR_MAX_PER_TODO).optional(),
+    command: z.undefined().optional(),
+  }),
+  z.object({
+    kind: z.literal("build"),
+    description: z.string().trim().min(1).max(500),
+    expectedFiles: z.array(filePathEntry).min(1).max(2),
+    command: z.string().trim().min(1).max(500),
+    expectedAnchors: z.array(replanAnchorEntry).max(REPLAN_ANCHOR_MAX_PER_TODO).optional(),
+  }),
+]);
 
 const RevisedSchema = z.object({ revised: RevisedBody });
 const SkipSchema = z.object({
@@ -47,6 +62,11 @@ export type ReplannerParseResult =
   | {
       ok: true;
       action: "revised";
+      // #241: revision can switch to/from kind:"build". When kind="build",
+      // `command` is set. When omitted/hunks, `command` is undefined and
+      // the existing hunks-emit pipeline runs.
+      kind?: "hunks" | "build";
+      command?: string;
       description: string;
       expectedFiles: string[];
       // Unit 44b: optional anchor revision. undefined → keep prior; empty
@@ -93,9 +113,12 @@ export function parseReplannerResponse(raw: string): ReplannerParseResult {
   }
 
   if ("revised" in v.data) {
+    const isBuild = v.data.revised.kind === "build";
     return {
       ok: true,
       action: "revised",
+      kind: v.data.revised.kind ?? "hunks",
+      ...(isBuild ? { command: v.data.revised.command } : {}),
       description: v.data.revised.description,
       expectedFiles: [...v.data.revised.expectedFiles],
       expectedAnchors: v.data.revised.expectedAnchors
@@ -129,6 +152,7 @@ export const REPLANNER_SYSTEM_PROMPT = [
   "7. Paths must be relative to the repo root. Never use absolute paths or `..`.",
   "8. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, or any path ending in `/` or `\\` — the parser rejects them and the revision is lost. If the original stale TODO pointed at a directory, revise to the specific files you see in the current contents or skip.",
   "9. (Unit 44b) When revising a row-level edit on a large file, you MAY include `expectedAnchors`: an array of 1-4 short verbatim substrings (≤ 200 chars each) the runner will use to inject ±25 lines of context around each match into the next worker's prompt. Use this when the prior attempt failed because the target row was in the file's omitted middle region. Omit `expectedAnchors` to keep whatever the original TODO had.",
+  "10. (#241, 2026-04-28) BUILD-STYLE REVISIONS — the original TODO might be hunks-style but the work actually requires running a project script (e.g. `npm run lint --fix`, `bun run docs:api`, `tsc --emitDeclarationOnly`). In that case revise to: `{\"revised\": {\"kind\": \"build\", \"description\": ..., \"expectedFiles\": [...], \"command\": \"npm run lint\"}}`. Constraints: command MUST start with one of {npm, npx, yarn, pnpm, bun, bunx, tsc, tsx, deno, eslint, prettier, biome, jest, vitest, mocha, make, task, just, typedoc, jsdoc, docusaurus} (runner enforces an allowlist). No shell metacharacters (`;`, `&&`, `||`, `|`, `>`, `<`, backticks, `$`). Use this when the worker's prior decline reason mentions \"cannot execute shell commands\" or \"hunks contract can't express this\". Default kind is \"hunks\" (omit the field for normal hunks revisions).",
   "",
   "Pick SKIP when: the current file contents already satisfy the original TODO, the original intent no longer applies to the repo as it stands now, or retrying would fail for the same reason the previous attempt failed.",
   "Pick REVISE when: the work still needs doing but the scope, files, or wording needs to shift to match what you see in the files NOW. Prefer shrinking scope over widening it — if the previous attempt was too large, split it and keep only the smaller half.",

@@ -131,3 +131,85 @@ describe("parseReplannerResponse — rejections", () => {
     if (!r.ok) assert.match(r.reason, /file path, not a directory/);
   });
 });
+
+// #241 (2026-04-28): build-style revisions — replanner can flip a
+// hunks-style stale TODO to kind:"build" with a command field, so the
+// runner dispatches it through executeBuildTodo + swarm-builder agent.
+describe("parseReplannerResponse — build-style (#241)", () => {
+  it("accepts a build-kind revision with command", () => {
+    const r = parseReplannerResponse(JSON.stringify({
+      revised: {
+        kind: "build",
+        description: "Run lint with auto-fix on all sources",
+        expectedFiles: ["src/index.ts"],
+        command: "npm run lint",
+      },
+    }));
+    expectRevised(r);
+    assert.equal(r.kind, "build");
+    assert.equal(r.command, "npm run lint");
+    assert.equal(r.description, "Run lint with auto-fix on all sources");
+    assert.deepEqual(r.expectedFiles, ["src/index.ts"]);
+  });
+
+  it("defaults kind to 'hunks' when omitted (back-compat)", () => {
+    const r = parseReplannerResponse(JSON.stringify({
+      revised: {
+        description: "tweak something",
+        expectedFiles: ["src/x.ts"],
+      },
+    }));
+    expectRevised(r);
+    assert.equal(r.kind, "hunks");
+    assert.equal(r.command, undefined);
+  });
+
+  it("explicit kind:'hunks' parses (no command field)", () => {
+    const r = parseReplannerResponse(JSON.stringify({
+      revised: {
+        kind: "hunks",
+        description: "edit the thing",
+        expectedFiles: ["src/y.ts"],
+      },
+    }));
+    expectRevised(r);
+    assert.equal(r.kind, "hunks");
+    assert.equal(r.command, undefined);
+  });
+
+  it("rejects build-kind WITHOUT command", () => {
+    const r = parseReplannerResponse(JSON.stringify({
+      revised: {
+        kind: "build",
+        description: "something",
+        expectedFiles: ["src/x.ts"],
+        // no command
+      },
+    }));
+    assert.equal(r.ok, false);
+  });
+
+  it("rejects hunks-kind WITH command (mismatched discriminator)", () => {
+    const r = parseReplannerResponse(JSON.stringify({
+      revised: {
+        kind: "hunks",
+        description: "a",
+        expectedFiles: ["src/x.ts"],
+        command: "npm test",
+      },
+    }));
+    assert.equal(r.ok, false);
+  });
+
+  it("rejects empty command string", () => {
+    const r = parseReplannerResponse(JSON.stringify({
+      revised: {
+        kind: "build",
+        description: "a",
+        expectedFiles: ["src/x.ts"],
+        command: "   ",
+      },
+    }));
+    assert.equal(r.ok, false);
+  });
+});

@@ -3521,6 +3521,12 @@ export class BlackboardRunner implements SwarmRunner {
       // Unit 44b: anchor revision is optional. undefined → keep prior
       // anchors; explicit array → replace them.
       expectedAnchors: parsed.expectedAnchors,
+      // #241 (2026-04-28): replanner can switch a todo's kind. When
+      // kind/command are present on the parsed result, Board.replan
+      // re-types the todo so the next claim dispatches through the
+      // appropriate executor (executeBuildTodo for kind:"build").
+      ...(parsed.kind ? { kind: parsed.kind } : {}),
+      ...(parsed.command ? { command: parsed.command } : {}),
     });
     if (!r.ok) {
       // Board refused (e.g. status changed between our read and the call).

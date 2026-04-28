@@ -261,7 +261,16 @@ export class Board {
 
   replan(
     todoId: string,
-    input: { description: string; expectedFiles: string[]; expectedAnchors?: string[] },
+    input: {
+      description: string;
+      expectedFiles: string[];
+      expectedAnchors?: string[];
+      // #241 (2026-04-28): replan can switch a todo's kind. When kind
+      // is set, command must accompany it for kind="build". Default
+      // (omitted) preserves the prior kind.
+      kind?: "hunks" | "build";
+      command?: string;
+    },
   ): ReplanResult {
     const todo = this.todos.get(todoId);
     if (!todo) return { ok: false, reason: "not_found" };
@@ -274,6 +283,12 @@ export class Board {
     if (input.expectedAnchors !== undefined) {
       todo.expectedAnchors =
         input.expectedAnchors.length > 0 ? [...input.expectedAnchors] : undefined;
+    }
+    // #241: revise kind + command together. Command is meaningful only
+    // when kind="build"; for kind="hunks" we clear it to be safe.
+    if (input.kind !== undefined) {
+      todo.kind = input.kind;
+      todo.command = input.kind === "build" ? input.command : undefined;
     }
     todo.status = "open";
     todo.replanCount += 1;
