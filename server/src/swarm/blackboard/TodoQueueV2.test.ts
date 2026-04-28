@@ -111,10 +111,36 @@ describe("TodoQueueV2 — terminal transitions", () => {
     assert.throws(() => q.fail(id, "x"), /status=pending/);
   });
 
-  it("skip throws if todo isn't in-progress", () => {
+  it("skip is allowed from any non-terminal status (V2 cutover Phase 2c)", () => {
+    // Was originally "throws if not in-progress" — widened to match
+    // Board.skip semantics (replanner skips from failed state too).
+    const q = new TodoQueueV2();
+    const idP = q.post({ description: "from-pending", expectedFiles: [], createdBy: "p" });
+    const idF = q.post({ description: "from-failed", expectedFiles: [], createdBy: "p" });
+    q.dequeue("w");
+    q.dequeue("w");
+    q.fail(idF, "first try failed");
+    q.skip(idP, "skipping pending");
+    q.skip(idF, "skipping failed");
+    assert.equal(q.get(idP)?.status, "skipped");
+    assert.equal(q.get(idF)?.status, "skipped");
+  });
+
+  it("skip throws if todo is already completed", () => {
     const q = new TodoQueueV2();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
-    assert.throws(() => q.skip(id, "x"), /status=pending/);
+    q.dequeue("w");
+    q.complete(id);
+    assert.throws(() => q.skip(id, "x"), /already completed/);
+  });
+
+  it("skip is idempotent on already-skipped todos", () => {
+    const q = new TodoQueueV2();
+    const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
+    q.skip(id, "first");
+    q.skip(id, "second");
+    assert.equal(q.get(id)?.status, "skipped");
+    assert.equal(q.get(id)?.reason, "first");
   });
 
   it("operations on unknown id throw", () => {
@@ -156,6 +182,69 @@ describe("TodoQueueV2 — retry bookkeeping", () => {
     assert.throws(() => q.reset(id), /only failed allowed/);
     q.complete(id);
     assert.throws(() => q.reset(id), /only failed allowed/);
+  });
+
+  it("reset with updates revises description / files / anchors / kind / command (V2 cutover Phase 2c)", () => {
+    const q = new TodoQueueV2();
+    const id = q.post({
+      description: "old desc",
+      expectedFiles: ["a.ts"],
+      createdBy: "p",
+      expectedAnchors: ["old-anchor"],
+      kind: "hunks",
+    });
+    q.dequeue("w");
+    q.fail(id, "first attempt failed");
+    q.reset(id, {
+      description: "new desc",
+      expectedFiles: ["b.ts", "c.ts"],
+      expectedAnchors: ["new-anchor-1", "new-anchor-2"],
+      kind: "build",
+      command: "bun run build",
+    });
+    const t = q.get(id)!;
+    assert.equal(t.status, "pending");
+    assert.equal(t.description, "new desc");
+    assert.deepEqual(t.expectedFiles, ["b.ts", "c.ts"]);
+    assert.deepEqual(t.expectedAnchors, ["new-anchor-1", "new-anchor-2"]);
+    assert.equal(t.kind, "build");
+    assert.equal(t.command, "bun run build");
+  });
+
+  it("reset with empty expectedAnchors clears prior anchors (Board.replan parity)", () => {
+    const q = new TodoQueueV2();
+    const id = q.post({
+      description: "x",
+      expectedFiles: ["a.ts"],
+      createdBy: "p",
+      expectedAnchors: ["old"],
+    });
+    q.dequeue("w");
+    q.fail(id, "x");
+    q.reset(id, { expectedAnchors: [] });
+    assert.equal(q.get(id)?.expectedAnchors, undefined);
+  });
+
+  it("reset with no updates leaves all fields unchanged (description preserved)", () => {
+    const q = new TodoQueueV2();
+    const id = q.post({
+      description: "preserved",
+      expectedFiles: ["a.ts"],
+      createdBy: "p",
+    });
+    q.dequeue("w");
+    q.fail(id, "x");
+    q.reset(id);
+    assert.equal(q.get(id)?.description, "preserved");
+    assert.deepEqual(q.get(id)?.expectedFiles, ["a.ts"]);
+  });
+
+  it("reset throws on empty description in updates", () => {
+    const q = new TodoQueueV2();
+    const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
+    q.dequeue("w");
+    q.fail(id, "x");
+    assert.throws(() => q.reset(id, { description: "   " }), /empty description/);
   });
 
   it("reset clears workerId, startedAt, endedAt, reason — fresh slate", () => {

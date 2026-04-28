@@ -1,18 +1,28 @@
+// Wire-event broadcaster for blackboard runs. Forwards each
+// BoardEvent as a SwarmEvent and sends a debounced full snapshot
+// every snapshotDebounceMs after mutations so bursts coalesce.
+//
+// V2 cutover Phase 2c (2026-04-28): originally bound to a V1 Board
+// instance via bindBoard(); now takes a snapshot getter callback so
+// the source can be the V2 TodoQueue (translated to wire shape via
+// boardWireCompat.ts).
+
 import type { SwarmEvent } from "../../types.js";
-import type { Board } from "./Board.js";
-import type { BoardEvent } from "./types.js";
+import type { BoardEvent, BoardSnapshot } from "./types.js";
+import type { BoardCounts } from "./Board.js";
 
 export interface BoardBroadcaster {
-  // Pass this to `new Board({ emit })`. Each BoardEvent is forwarded as a
-  // SwarmEvent and a full snapshot is scheduled on a trailing-edge timer so
-  // bursts of mutations coalesce into one snapshot.
+  // Forward this event upstream; also schedule a debounced snapshot
+  // so the post-mutation full state lands shortly.
   emit: (ev: BoardEvent) => void;
-  // Must be called after the Board is constructed so snapshots can read state.
-  bindBoard: (board: Board) => void;
-  // Cancel any pending snapshot and send a fresh one immediately. Used at run
-  // end so the UI never lags behind the final board state.
+  // Provide the snapshot+counts pair the broadcaster will sample on
+  // the debounce timer. Caller assembles the data from whichever
+  // queue/log it owns.
+  bindSnapshotSource: (getSnapshot: () => { snapshot: BoardSnapshot; counts: BoardCounts }) => void;
+  // Cancel any pending snapshot and send a fresh one immediately.
+  // Used at run end so the UI never lags behind the final state.
   flushSnapshot: () => void;
-  // Cancel pending timer and drop the board reference. Call on swarm stop.
+  // Cancel pending timer and drop the snapshot source. Call on stop.
   dispose: () => void;
 }
 
@@ -25,12 +35,13 @@ export function createBoardBroadcaster(
   opts: BoardBroadcasterOpts = {},
 ): BoardBroadcaster {
   const debounceMs = opts.snapshotDebounceMs ?? 500;
-  let board: Board | null = null;
+  let getSnapshot: (() => { snapshot: BoardSnapshot; counts: BoardCounts }) | null = null;
   let timer: NodeJS.Timeout | null = null;
 
   const sendSnapshot = () => {
-    if (!board) return;
-    broadcast({ type: "board_state", snapshot: board.snapshot(), counts: board.counts() });
+    if (!getSnapshot) return;
+    const { snapshot, counts } = getSnapshot();
+    broadcast({ type: "board_state", snapshot, counts });
   };
 
   const scheduleSnapshot = () => {
@@ -61,13 +72,13 @@ export function createBoardBroadcaster(
       clearTimeout(timer);
       timer = null;
     }
-    board = null;
+    getSnapshot = null;
   };
 
   return {
     emit,
-    bindBoard(b) {
-      board = b;
+    bindSnapshotSource(fn) {
+      getSnapshot = fn;
     },
     flushSnapshot,
     dispose,

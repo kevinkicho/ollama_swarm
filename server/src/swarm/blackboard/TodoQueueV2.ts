@@ -190,24 +190,47 @@ export class TodoQueueV2 {
     t.retries += 1;
   }
 
-  /** Mark an in-progress todo as skipped (worker declined this todo
-   *  for legitimate reasons — e.g., out of scope, file doesn't exist).
-   *  Distinct from "failed" so retry policies can ignore skips. */
+  /** Mark a todo as skipped (worker declined for legitimate reasons —
+   *  out of scope, file doesn't exist, replanner gave up). Allowed
+   *  from any non-terminal status; idempotent on already-skipped.
+   *  Distinct from "failed" so retry policies ignore skips.
+   *
+   *  V2 cutover Phase 2c (2026-04-28): widened from "in-progress only"
+   *  to "any non-terminal" to match Board.skip semantics — the
+   *  replanner skips todos it can't process from `failed` state too. */
   skip(id: string, reason: string, ts: number = Date.now()): void {
     const t = this.findOrThrow(id);
-    if (t.status !== "in-progress") {
-      throw new Error(`Cannot skip todo ${id}: status=${t.status}`);
+    if (t.status === "skipped") return;
+    if (t.status === "completed") {
+      throw new Error(`Cannot skip todo ${id}: already completed`);
     }
     t.status = "skipped";
     t.endedAt = ts;
     t.reason = reason;
+    t.workerId = undefined;
+    t.startedAt = undefined;
   }
 
   /** Reset a failed todo back to pending so dequeue picks it up again.
    *  Preserves the retry count — the caller has visibility to enforce
    *  a max-retries policy via getRetries(). Throws if id unknown or
-   *  not in failed state. */
-  reset(id: string): void {
+   *  not in failed state.
+   *
+   *  V2 cutover Phase 2c (2026-04-28): optional `updates` parameter
+   *  matches Board.replan — the replanner can revise the todo's
+   *  description / files / anchors / kind / command before re-pending
+   *  it. expectedAnchors=undefined keeps prior anchors; an explicit
+   *  empty array clears them (matches Board.replan policy). */
+  reset(
+    id: string,
+    updates?: {
+      description?: string;
+      expectedFiles?: readonly string[];
+      expectedAnchors?: readonly string[];
+      kind?: "hunks" | "build";
+      command?: string;
+    },
+  ): void {
     const t = this.findOrThrow(id);
     if (t.status !== "failed") {
       throw new Error(`Cannot reset todo ${id}: status=${t.status} (only failed allowed)`);
@@ -217,6 +240,23 @@ export class TodoQueueV2 {
     t.startedAt = undefined;
     t.endedAt = undefined;
     t.reason = undefined;
+    if (updates) {
+      if (updates.description !== undefined) {
+        if (!updates.description.trim()) {
+          throw new Error(`Cannot reset todo ${id}: empty description`);
+        }
+        t.description = updates.description;
+      }
+      if (updates.expectedFiles !== undefined) {
+        t.expectedFiles = updates.expectedFiles.slice();
+      }
+      if (updates.expectedAnchors !== undefined) {
+        t.expectedAnchors =
+          updates.expectedAnchors.length > 0 ? updates.expectedAnchors.slice() : undefined;
+      }
+      if (updates.kind !== undefined) t.kind = updates.kind;
+      if (updates.command !== undefined) t.command = updates.command;
+    }
   }
 
   /** Get the retry count for a todo. Useful for "give up after N

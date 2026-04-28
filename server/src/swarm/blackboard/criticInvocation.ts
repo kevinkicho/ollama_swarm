@@ -31,13 +31,21 @@ import {
   type CriticSeedPriorCommit,
   parseCriticResponse,
 } from "./prompts/critic.js";
-import type { Board } from "./Board.js";
 import type { ExitContract, Todo } from "./types.js";
 import { truncate } from "./truncate.js";
 
 export interface CriticContext {
   manager: AgentManager;
-  board: Board;
+  // V2 cutover Phase 2c (2026-04-28): no longer takes a Board reference.
+  // Callers pass a callback that fails the todo (V1 vocab: "markStale").
+  // BlackboardRunner's failTodoQ does the V2 queue mutation + emits
+  // the wire event + enqueues replan.
+  failTodo: (todoId: string, reason: string) => void;
+  /** Provider for the recent-committed-todos prompt context. Caller
+   *  pulls from whichever queue it owns. Critic doesn't care about
+   *  the source — only about a sorted-by-committedAt list of recent
+   *  committed entries (typically the last 16). */
+  recentCommittedTodos: () => readonly Todo[];
   /** Used to find the linked criterion for prompt-grounding. Pass an empty
    *  array (or undefined contract) when no contract is on file. */
   contractCriteria: ExitContract["criteria"];
@@ -74,11 +82,8 @@ export async function runCritic(
     after: d.newText,
   }));
 
-  const recentCommits: CriticSeedPriorCommit[] = ctx.board
-    .listTodos()
-    .filter((t) => t.status === "committed")
-    .sort((a, b) => (b.committedAt ?? 0) - (a.committedAt ?? 0))
-    .slice(0, 16)
+  const recentCommits: CriticSeedPriorCommit[] = ctx
+    .recentCommittedTodos()
     .map((t) => ({
       todoId: t.id,
       description: t.description,
@@ -181,7 +186,7 @@ export async function runCritic(
   }
 
   if (parsed.critic.verdict === "reject") {
-    ctx.board.markStale(
+    ctx.failTodo(
       todo.id,
       `critic rejected (${planner.id}): ${parsed.critic.rationale}`,
     );
@@ -240,7 +245,7 @@ async function runCriticEnsemble(
     const rejectingLane =
       successful.find((x) => x.lane.name === SUBSTANCE_CRITIC_NAME && x.verdict === "reject") ??
       successful.find((x) => x.verdict === "reject")!;
-    ctx.board.markStale(
+    ctx.failTodo(
       todo.id,
       `critic ensemble rejected (lead: ${rejectingLane.lane.name})`,
     );
