@@ -20,6 +20,7 @@ import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
 import { runEndReflection } from "./runEndReflection.js";
+import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 
 // Orchestrator–worker hierarchy.
 // Agent 1 is the LEAD: it reads the repo, produces a plan assigning one
@@ -482,14 +483,18 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
       // envelope (lead's turn 1 shape), attach a structured summary
       // so the UI renders a glance line + bullet list instead of
       // raw JSON. Workers' free-text responses get no summary.
+      // #230: strip <think> + XML pseudo-tool-call markers first.
+      const stripped = stripAgentText(text);
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
         agentId: agent.id,
         agentIndex: agent.index,
-        text,
+        text: stripped.finalText || "(empty response)",
         ts: Date.now(),
-        summary: parseAssignmentsSummary(text),
+        summary: parseAssignmentsSummary(stripped.finalText),
+        ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
+        ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
       };
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });

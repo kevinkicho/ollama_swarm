@@ -18,6 +18,7 @@ import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTr
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { runEndReflection } from "./runEndReflection.js";
+import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 
 // Stigmergy / pheromone trails — repo exploration mode.
 // No central planner, no role assignment. Agents post annotations on
@@ -453,16 +454,20 @@ export class StigmergyRunner implements SwarmRunner {
       });
       // Task #108: defensive guard — see CouncilRunner.runSynthesisPass.
       const isJunkSynthesis = looksLikeJunk(text) || extracted.isEmpty;
+      // #230: strip <think> + XML pseudo-tool-call markers first.
+      const stripped = stripAgentText(text);
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
         agentId: lead.id,
         agentIndex: lead.index,
-        text,
+        text: stripped.finalText || "(empty response)",
         ts: Date.now(),
         summary: isJunkSynthesis
           ? undefined
           : { kind: "stigmergy_report", filesRanked: ranked.length },
+        ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
+        ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
       };
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });
@@ -645,13 +650,17 @@ export class StigmergyRunner implements SwarmRunner {
         recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
         appendSystem: (msg) => this.appendSystem(msg),
       });
+      // #230: strip <think> + XML pseudo-tool-call markers first.
+      const strippedAgent = stripAgentText(text);
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
         agentId: agent.id,
         agentIndex: agent.index,
-        text,
+        text: strippedAgent.finalText || "(empty response)",
         ts: Date.now(),
+        ...(strippedAgent.thoughts.length > 0 ? { thoughts: strippedAgent.thoughts } : {}),
+        ...(strippedAgent.toolCalls.length > 0 ? { toolCalls: strippedAgent.toolCalls } : {}),
       };
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });

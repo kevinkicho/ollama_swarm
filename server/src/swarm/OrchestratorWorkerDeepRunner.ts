@@ -69,6 +69,7 @@ import {
   type Assignment,
 } from "./OrchestratorWorkerRunner.js";
 import { runEndReflection } from "./runEndReflection.js";
+import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 
 // Target workers per mid-lead. Picked empirically from #131's industry-
 // consensus note ("past ~8 workers, you need a tree"). At 6, the
@@ -600,13 +601,17 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
         recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
         appendSystem: (msg) => this.appendSystem(msg),
       });
+      // #230: strip <think> + XML pseudo-tool-call markers first.
+      const stripped = stripAgentText(text);
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
         agentId: agent.id,
         agentIndex: agent.index,
-        text,
+        text: stripped.finalText || "(empty response)",
         ts: Date.now(),
+        ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
+        ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
       };
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });

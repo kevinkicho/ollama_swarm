@@ -19,6 +19,7 @@ import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTr
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { runEndReflection } from "./runEndReflection.js";
+import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 
 // Debate + judge.
 // Agent 1 = PRO (argues FOR the proposition).
@@ -607,19 +608,23 @@ export class DebateJudgeRunner implements SwarmRunner {
       // Task #81: prefer the enriched summary when the caller provides
       // one (JUDGE upgrades to debate_verdict). Fall back to the
       // basic debate_turn tag for PRO/CON.
-      const enriched = enrichSummary?.(text);
+      // #230: strip <think> + XML pseudo-tool-call markers first.
+      const stripped = stripAgentText(text);
+      const enriched = enrichSummary?.(stripped.finalText);
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
         agentId: agent.id,
         agentIndex: agent.index,
-        text,
+        text: stripped.finalText || "(empty response)",
         ts: Date.now(),
         summary:
           enriched ??
           (debateTag
             ? { kind: "debate_turn", round: debateTag.round, role: debateTag.role }
             : undefined),
+        ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
+        ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
       };
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });

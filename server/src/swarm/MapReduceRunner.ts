@@ -20,6 +20,7 @@ import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { runEndReflection } from "./runEndReflection.js";
 import { staggerStart } from "./staggerStart.js";
+import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 
 // Map-reduce over the repo.
 // Agent 1 = REDUCER (silent during the map phase, then synthesizes).
@@ -521,15 +522,19 @@ export class MapReduceRunner implements SwarmRunner {
         recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
         appendSystem: (msg) => this.appendSystem(msg),
       });
+      // #230: strip <think> + XML pseudo-tool-call markers first.
+      const stripped = stripAgentText(text);
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
         agentId: agent.id,
         agentIndex: agent.index,
-        text,
+        text: stripped.finalText || "(empty response)",
         ts: Date.now(),
         // Task #82: optional enriched summary from the caller.
-        summary: enrichSummary?.(text),
+        summary: enrichSummary?.(stripped.finalText),
+        ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
+        ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
       };
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });
