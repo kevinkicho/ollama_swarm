@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { agentBubblePalette, hueForAgent } from "../agentPalette";
 import { useSegmentSplitterWithPoints } from "../useSegmentSplitter";
 import { useSwarm } from "../../state/store";
 import { MAX_BUBBLE_HEIGHT_PX } from "./JsonBubbles";
+import { extractToolCallMarkers } from "../../../../shared/src/extractToolCallMarkers";
 
 // Task #173 + #176 Phase A+B: per-agent streaming dock. Each agent
 // gets a STABLE bubble that persists from first chunk through
@@ -80,7 +81,20 @@ function PersistentStreamBubble({
   const sinceLastText = meta ? Math.max(0, now - meta.lastTextAt) : 0;
   const sinceStart = meta ? Math.max(0, now - meta.startedAt) : 0;
 
-  const { segments, splitPoints } = useSegmentSplitterWithPoints(text);
+  // 2026-04-27 evening (#231 follow-up 4): strip XML pseudo-tool-call
+  // markers from the LIVE streaming text before segmenting. RCA: the
+  // planner/auditor with tool grants emits dozens of <read>/<grep>
+  // markers as raw text; each marker followed by \n\n triggers a Phase 2
+  // content boundary, producing 100+ tiny "Segment 1: <read>..." entries
+  // per turn (Kevin saw 182 segments live in run 61d59783). Stripping
+  // here makes the live display readable; the marker count is surfaced
+  // separately. Server-side appendAgent ALSO strips for the final
+  // transcript entry, so the finalized bubble is clean too.
+  const { finalText: cleanedText, toolCalls } = useMemo(
+    () => extractToolCallMarkers(text),
+    [text],
+  );
+  const { segments, splitPoints } = useSegmentSplitterWithPoints(cleanedText);
   // 2026-04-26: persist split points to the store so the finalized
   // bubble can render the same segment structure after the response
   // completes. Without this, the structure user saw live disappears.
@@ -119,6 +133,14 @@ function PersistentStreamBubble({
       <div className="flex items-center gap-2 text-xs mb-1" style={{ color: palette.header }}>
         <span className="font-semibold">Agent {agentIndex}</span>
         <span className="text-ink-500">{subtitle}</span>
+        {/* #231 follow-up 4: surface the count of stripped pseudo-tool-
+            calls so the user knows the model emitted them (and they
+            were filtered out of the live segment view). */}
+        {toolCalls.length > 0 ? (
+          <span className="text-amber-400/70 text-[10px]">
+            🔧 {toolCalls.length} pseudo-tool-call{toolCalls.length === 1 ? "" : "s"} stripped
+          </span>
+        ) : null}
         {isDone ? (
           <span style={{ color: palette.accent }}>✓</span>
         ) : (
