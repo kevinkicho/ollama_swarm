@@ -58,6 +58,12 @@ export interface TranscriptEntry {
   // field carries the FINAL response only. UI renders thoughts as a
   // collapsed-by-default ThoughtsBlock above the main bubble.
   thoughts?: string;
+  // 2026-04-27 evening (#229): when an agent emitted XML pseudo-tool-
+  // call markers (<read>, <grep>, <list>, <glob>, <edit>, <bash>) as
+  // raw text, server-side appendAgent strips them via shared/
+  // extractToolCallMarkers. UI renders as a collapsed-by-default
+  // ToolCallsBlock above the main bubble.
+  toolCalls?: string[];
 }
 
 export type SwarmPhase =

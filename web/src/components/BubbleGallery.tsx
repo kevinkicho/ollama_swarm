@@ -398,6 +398,26 @@ const fixtures: Array<{ label: string; entries: TranscriptEntry[] }> = [
     entries: [entry({ role: "agent", agentIndex: 1, text: "[]", thoughts: "(would be the mid-stream prefix before the unpaired </think>)" })],
   },
   {
+    label: "[agent] tool-call markers extracted (#229 NEW - planner emitted 30+ <read>/<grep>)",
+    // Real shape from run af27f55c entry 10 — planner emitted dozens
+    // of XML tool-call markers as raw text. Pre-fix: leaked into bubble
+    // + caused contract parse failure. Post-fix: stripped server-side,
+    // surfaced in collapsed amber ToolCallsBlock above the bubble.
+    entries: [entry({
+      role: "agent",
+      agentIndex: 1,
+      text: "After scanning the codebase, the supervisor module needs three call sites updated to use the shared retry helper.",
+      toolCalls: [
+        "<read path='src/supervisor.ts' start_line='1' end_line='100'>",
+        "<read path='src/supervisor.ts' start_line='100' end_line='200'>",
+        "<read path='src/supervisor.ts' start_line='200' end_line='300'>",
+        "<grep path='src/supervisor.ts' pattern='retry|backoff|maxRetries'>",
+        "<list>src/__tests__/</list>",
+        "<glob>src/**/*.test.ts</glob>",
+      ],
+    })],
+  },
+  {
     label: "[agent client-fallback] segmented prose (segmentSplitPoints - shows collapsed-then-final-segment)",
     entries: [entry({ role: "agent", agentIndex: 2, text: "First segment: setting up the analysis. I want to look at the request handler structure carefully to decide where to make cuts.\n\nSecond segment: scanning src/handlers/api.ts. Found 3 distinct domains: users (4 handlers), orders (5 handlers), sessions (2 handlers). All currently colocated in one 800-LOC file.\n\nThird segment (final): the cleanest split is by domain. I'll create src/handlers/routes/{users,orders,sessions}.ts and have api.ts re-export them as a barrel.", segmentSplitPoints: [121, 354] })],
   },

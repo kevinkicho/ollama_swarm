@@ -122,6 +122,7 @@ import { buildAuditorSeed as buildAuditorSeedExtracted } from "./auditorSeedBuil
 import { truncate } from "./truncate.js";
 import { config } from "../../config.js";
 import { extractThinkTags } from "../../../../shared/src/extractThinkTags.js";
+import { extractToolCallMarkers } from "../../../../shared/src/extractToolCallMarkers.js";
 
 // Blackboard preset: planner posts TODOs, workers drain them in a
 // claim/execute loop. Workers produce full-file diffs as JSON; the runner
@@ -4377,12 +4378,23 @@ export class BlackboardRunner implements SwarmRunner {
     // markers. Pre-fix the bubble showed the raw text including stray
     // closing tags. Now thoughts go in their own field; UI renders
     // them as a collapsed-by-default ThoughtsBlock above the bubble.
-    const { thoughts, finalText } = extractThinkTags(text);
+    const { thoughts, finalText: postThink } = extractThinkTags(text);
+    // 2026-04-27 evening (#229): strip XML pseudo-tool-call markers
+    // (<read>, <grep>, <list>, <glob>, <edit>, <bash>). Some models
+    // (notably glm-5.1) emit these as raw text when they THINK they're
+    // invoking SDK tools. Pre-fix: clusters of 20-30 markers leaked
+    // into bubbles + caused contract/todos parse failures + over-
+    // segmented Phase 2. Now: stripped server-side, surfaced as a
+    // collapsed ToolCallsBlock so the user can see what the planner
+    // intended without that text bloating the bubble. RCA: preset 1
+    // run af27f55c, 2026-04-27 evening.
+    const { toolCalls, finalText } = extractToolCallMarkers(postThink);
     // Unit 54: attach a structured summary when the response parses
     // as a known JSON envelope. UI uses this to collapse worker
     // hunks/skips into a one-line summary by default. Summary parses
-    // against finalText (post-think-strip) so it doesn't mistake
-    // chain-of-thought prose for envelope content.
+    // against finalText (post-think + post-tool-call strip) so it
+    // doesn't mistake chain-of-thought prose or pseudo-tool-calls for
+    // envelope content.
     const summary = summarizeAgentResponse(finalText);
     const entry: TranscriptEntry = {
       id: randomUUID(),
@@ -4393,6 +4405,7 @@ export class BlackboardRunner implements SwarmRunner {
       ts: Date.now(),
       summary,
       ...(thoughts.length > 0 ? { thoughts } : {}),
+      ...(toolCalls.length > 0 ? { toolCalls } : {}),
     };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });

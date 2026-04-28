@@ -32,6 +32,7 @@ import { DebateVerdictBubble } from "./DebateVerdictBubble";
 import { RunStartDivider } from "./RunStartDivider";
 import { formatServerSummary } from "./formatServerSummary";
 import { ThoughtsBlock } from "./ThoughtsBlock";
+import { ToolCallsBlock } from "./ToolCallsBlock";
 import { ContractBubble } from "./ContractBubble";
 import { AuditorVerdictBubble } from "./AuditorVerdictBubble";
 import { TodosBubble } from "./TodosBubble";
@@ -50,6 +51,7 @@ export function MessageBubble({ entry }: { entry: TranscriptEntry }) {
       {...(entry.summary?.kind ? { "data-summary-kind": entry.summary.kind } : {})}
       {...(typeof entry.agentIndex === "number" ? { "data-agent-index": entry.agentIndex } : {})}
       {...(entry.thoughts ? { "data-has-thoughts": "true" } : {})}
+      {...(entry.toolCalls && entry.toolCalls.length > 0 ? { "data-has-tool-calls": String(entry.toolCalls.length) } : {})}
     >
       {/* Phase 1 (UI coherent-fix): render <think>...</think> content
           above the main bubble as a collapsed-by-default details
@@ -57,6 +59,14 @@ export function MessageBubble({ entry }: { entry: TranscriptEntry }) {
           model output stays scannable. */}
       {entry.thoughts && entry.thoughts.length > 0 ? (
         <ThoughtsBlock text={entry.thoughts} />
+      ) : null}
+      {/* Task #229 (2026-04-27 evening): render XML pseudo-tool-call
+          markers as a collapsed amber block. Separate from thoughts
+          because they're a different kind of leaked-intent signal —
+          these are tool invocations the model emitted as text instead
+          of via the SDK function. */}
+      {entry.toolCalls && entry.toolCalls.length > 0 ? (
+        <ToolCallsBlock markers={entry.toolCalls} />
       ) : null}
       {entry.role === "system" ? (
         <SystemBubble entry={entry} ts={ts} />

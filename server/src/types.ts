@@ -67,6 +67,13 @@ export interface TranscriptEntry {
   // collapsed-by-default ThoughtsBlock above the main bubble. Absent
   // on system/user entries and on agent entries with no <think> tags.
   thoughts?: string;
+  // 2026-04-27 evening (#229): when an agent emitted XML pseudo-tool-
+  // call markers (<read>, <grep>, <list>, <glob>, <edit>, <bash>) as
+  // raw text, server-side appendAgent strips them via shared/
+  // extractToolCallMarkers. UI renders as a collapsed-by-default
+  // ToolCallsBlock above the main bubble. Each entry is the raw
+  // marker text (e.g., `<read path='src/foo.ts' />`).
+  toolCalls?: string[];
 }
 
 export interface BoardCountsDTO {
