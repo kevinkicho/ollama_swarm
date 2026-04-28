@@ -30,11 +30,29 @@ interface EventLogResponse {
   totalRecords: number;
 }
 
+// #294: a slice is "infra-only" when it's a session-boundary slice
+// (boot marker, not a real run) AND there was no swarm activity AND
+// no runId got assigned. These are dev-server startup events — most
+// commonly EADDRINUSE crash loops when a previous server hasn't
+// fully released its ports. They pollute the panel with phantom
+// rows; hide by default with an opt-in toggle.
+function isInfraOnly(s: EventLogResponse["runs"][number]): boolean {
+  return (
+    s.isSessionBoundary &&
+    !s.derived.runId &&
+    s.derived.transcriptCount === 0 &&
+    s.derived.agentStateUpdates === 0
+  );
+}
+
 export function EventLogPanel() {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<EventLogResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // #294: hide infra-only sessions by default; user opts-in to see
+  // the boot/EADDRINUSE noise via the "show infra" toggle.
+  const [showInfra, setShowInfra] = useState(false);
   // Bump to force a refetch — useful when a run is in progress and
   // the user wants the latest derived state without closing the dropdown.
   const [refreshNonce, setRefreshNonce] = useState(0);
@@ -95,17 +113,34 @@ export function EventLogPanel() {
           ) : data && data.runs.length === 0 ? (
             <div className="text-ink-400 text-sm italic">No runs in log yet.</div>
           ) : data ? (
-            <>
-              <div className="text-[10px] text-ink-500 mb-2">
-                {data.runs.length} slice{data.runs.length === 1 ? "" : "s"} · {data.totalRecords} records
-                {data.malformed > 0 ? <span className="text-amber-400"> · {data.malformed} malformed</span> : null}
-              </div>
-              <ul className="space-y-1.5">
-                {data.runs.map((r, i) => (
-                  <RunRow key={i} run={r} />
-                ))}
-              </ul>
-            </>
+            (() => {
+              const infraCount = data.runs.filter(isInfraOnly).length;
+              const visible = showInfra ? data.runs : data.runs.filter((r) => !isInfraOnly(r));
+              return (
+                <>
+                  <div className="text-[10px] text-ink-500 mb-2 flex items-center gap-2">
+                    <span>
+                      {visible.length} slice{visible.length === 1 ? "" : "s"} · {data.totalRecords} records
+                      {data.malformed > 0 ? <span className="text-amber-400"> · {data.malformed} malformed</span> : null}
+                    </span>
+                    {infraCount > 0 ? (
+                      <button
+                        onClick={() => setShowInfra((v) => !v)}
+                        className="ml-auto text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-ink-800 hover:bg-ink-700 text-ink-400 hover:text-ink-200 border border-ink-700"
+                        title="Boot-only event log slices (server startup, EADDRINUSE crashes) with no swarm activity"
+                      >
+                        {showInfra ? `hide ${infraCount} infra` : `+ ${infraCount} infra`}
+                      </button>
+                    ) : null}
+                  </div>
+                  <ul className="space-y-1.5">
+                    {visible.map((r, i) => (
+                      <RunRow key={i} run={r} />
+                    ))}
+                  </ul>
+                </>
+              );
+            })()
           ) : null}
         </div>
       ) : null}

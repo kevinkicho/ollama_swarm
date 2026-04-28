@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
 import type { AgentManager } from "./AgentManager.js";
@@ -71,6 +71,102 @@ function writePersistedKnownParents(paths: string[]): void {
   }
 }
 
+// #293 (2026-04-28): when /tmp gets cleared (reboot, WSL session
+// reset, manual rm) the persisted parents file disappears AND
+// historical runs become invisible in the dropdown until the user
+// happens to re-run from those parents. The 95-vs-9 bug surfaced
+// during the 9-preset tour: only the CURRENT session's parent was
+// in the list, hiding 86 prior summaries.
+//
+// Fix: at orchestrator construction, scan project-relative `runs/`
+// + `runs_overnight*/` directories for any subfolder containing a
+// `summary*.json`. Treat those as known parents — backfills the
+// LRU list with everything we can see on disk regardless of /tmp
+// state. Cheap (one-shot dir walk, no I/O on individual summary
+// files), and idempotent — if /tmp already has the entries, the
+// existing dedupe handles it.
+/** #293: merge persisted (recent, ordered) + scanned (discovered)
+ *  parent paths into a single LRU list. Persisted entries keep their
+ *  order (most-recent first); scanned entries that aren't already in
+ *  the list get appended. Capped at KNOWN_PARENTS_MAX. */
+export function mergeKnownParents(persisted: string[], scanned: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of persisted) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    out.push(p);
+  }
+  for (const p of scanned) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    out.push(p);
+  }
+  return out.slice(0, KNOWN_PARENTS_MAX);
+}
+
+export function scanForRunParents(cwd: string): string[] {
+  const found = new Set<string>();
+  // dev.mjs launches the server with cwd=<root>/server, but the actual
+  // runs/ + runs_overnight*/ dirs live at the project root, one level
+  // up. Scan both bases so the discovery works regardless of where
+  // the orchestrator is launched from.
+  const bases = [cwd, nodePath.dirname(cwd)];
+  // Match runs, runs_overnight, runs_overnight2 — any top-level dir
+  // whose name suggests it holds run output.
+  const isRunRoot = (name: string) =>
+    name === "runs" || name.startsWith("runs_") || name.startsWith("runs-");
+  for (const base of bases) {
+    let topLevel: string[];
+    try {
+      topLevel = readdirSync(base);
+    } catch {
+      continue;
+    }
+    for (const name of topLevel) {
+      if (!isRunRoot(name)) continue;
+      const root = nodePath.join(base, name);
+      let stat;
+      try {
+        stat = statSync(root);
+      } catch {
+        continue;
+      }
+      if (!stat.isDirectory()) continue;
+      // Each clone-dir lives one level deep under the root.
+      let clones: string[];
+      try {
+        clones = readdirSync(root);
+      } catch {
+        continue;
+      }
+      for (const clone of clones) {
+        const cloneDir = nodePath.join(root, clone);
+        try {
+          if (!statSync(cloneDir).isDirectory()) continue;
+        } catch {
+          continue;
+        }
+        // Cheap probe: is there at least one summary*.json? Fast since
+        // we don't read it — just check the dir for any matching entry.
+        let hasSummary = false;
+        try {
+          for (const e of readdirSync(cloneDir)) {
+            if (e === "summary.json" || (e.startsWith("summary-") && e.endsWith(".json"))) {
+              hasSummary = true;
+              break;
+            }
+          }
+        } catch {
+          continue;
+        }
+        if (hasSummary) found.add(root);
+      }
+    }
+  }
+  return [...found];
+}
+
 // Thin preset dispatcher. Holds one `SwarmRunner` per run and delegates the
 // public surface to it. The state of a run lives on the runner itself.
 export class Orchestrator {
@@ -107,9 +203,21 @@ export class Orchestrator {
   // most-recent first. Lets the runs/memory routes aggregate across
   // parents (so the dropdown isn't empty when the user picks a fresh
   // parent dir, even though they have plenty of prior runs elsewhere).
-  private knownParentPaths: string[] = readPersistedKnownParents();
+  // #293: backfill from a project-relative scan so a /tmp wipe doesn't
+  // invisibly truncate this list. Persisted entries take precedence
+  // (LRU recency); scanned entries fill in the rest.
+  private knownParentPaths: string[] = mergeKnownParents(
+    readPersistedKnownParents(),
+    scanForRunParents(process.cwd()),
+  );
 
-  constructor(private readonly opts: OrchestratorOpts) {}
+  constructor(private readonly opts: OrchestratorOpts) {
+    // Persist the merged list back so the next read is consistent
+    // even if the project gets moved or the cwd changes.
+    if (this.knownParentPaths.length > 0) {
+      writePersistedKnownParents(this.knownParentPaths);
+    }
+  }
 
   status(): SwarmStatus {
     if (this.runner) {
