@@ -4061,7 +4061,18 @@ export class BlackboardRunner implements SwarmRunner {
   private async promptPlannerSafely(
     primaryAgent: Agent,
     promptText: string,
-    agentName: "swarm" | "swarm-read" = "swarm-read",
+    // #231 (2026-04-27 evening): default flipped from "swarm-read" → "swarm".
+    // Investigation showed glm-5.1 / nemotron-3-super / gemma4 don't emit
+    // OpenAI-style structured tool_calls — they hallucinate XML markers
+    // (<read path='X'>) which opencode never executes. The planner's
+    // "tool inspection" was always a fiction; removing the tool grant
+    // stops the hallucinations + the resulting JSON parse failures.
+    // Discussion presets keep using swarm-read because they don't strict-
+    // parse JSON envelopes; their prose tolerates the markers (and we now
+    // strip + surface the markers via stripAgentText + ToolCallsBlock).
+    // See runs_overnight/_INVESTIGATION-231-pseudo-tool-calls.md for
+    // the full RCA.
+    agentName: "swarm" | "swarm-read" = "swarm",
   ): Promise<{ response: string; agentUsed: Agent }> {
     let agent = primaryAgent;
     // Pre-call health check. ~1s budget; cost negligible vs a planner prompt.
