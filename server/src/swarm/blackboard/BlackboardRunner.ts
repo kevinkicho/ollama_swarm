@@ -1345,9 +1345,14 @@ export class BlackboardRunner implements SwarmRunner {
     // Unit 24: planner fallback. If primary planner exhausts retries,
     // fall through to each worker in turn so the run survives a
     // single-shard cloud cold-start failure.
+    // #233: pass ollamaFormat="json" so Ollama's decoder constrains
+    // output to valid JSON. Closes the XML marker leak (#231) at the
+    // source for the contract pass.
     const { response: firstResponse, agentUsed: contractAgent } = await this.promptPlannerSafely(
       agent,
       `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed)}`,
+      "swarm",
+      "json",
     );
     if (this.stopping) return;
     this.appendAgent(contractAgent, firstResponse);
@@ -1363,6 +1368,8 @@ export class BlackboardRunner implements SwarmRunner {
           firstResponse,
           parsed.reason,
         )}`,
+        "swarm",
+        "json",
       );
       if (this.stopping) return;
       this.appendAgent(repairAgent, repairResponse);
@@ -1674,10 +1681,16 @@ export class BlackboardRunner implements SwarmRunner {
           })),
         }
       : undefined;
+    // #233: pass ollamaFormat="json" so Ollama's decoder constrains
+    // output to a JSON array. Even though tools are enabled here for
+    // grounding (per #231 follow-up), the model can't emit XML
+    // markers as the FINAL output — they go in the marker-stripped
+    // path naturally, but the JSON envelope is structurally enforced.
     const { response: firstResponse, agentUsed: planAgent } = await this.promptPlannerSafely(
       agent,
       `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed, contractForPrompt)}`,
       "swarm-read",
+      "json",
     );
     if (this.stopping) return;
     this.appendAgent(planAgent, firstResponse);
@@ -1689,6 +1702,7 @@ export class BlackboardRunner implements SwarmRunner {
         planAgent,
         `${PLANNER_SYSTEM_PROMPT}\n\n${buildRepairPrompt(firstResponse, parsed.reason)}`,
         "swarm-read",
+        "json",
       );
       if (this.stopping) return;
       this.appendAgent(repairAgent, repairResponse);
@@ -4100,6 +4114,11 @@ export class BlackboardRunner implements SwarmRunner {
     // See runs_overnight/_INVESTIGATION-231-pseudo-tool-calls.md for
     // the full RCA.
     agentName: "swarm" | "swarm-read" = "swarm",
+    // #233: forward Ollama structured-output constraint for parser-
+    // strict prompts. Pass "json" to constrain the decoder to valid
+    // JSON; the model literally cannot emit XML markers when this is
+    // set. Effective only on USE_OLLAMA_DIRECT path.
+    ollamaFormat?: "json" | Record<string, unknown>,
   ): Promise<{ response: string; agentUsed: Agent }> {
     let agent = primaryAgent;
     // Pre-call health check. ~1s budget; cost negligible vs a planner prompt.
@@ -4112,7 +4131,7 @@ export class BlackboardRunner implements SwarmRunner {
     // respawn and retry once. If it fails for any other reason (model
     // returned bad JSON, format violation, etc.), propagate the error.
     try {
-      const response = await this.promptAgent(agent, promptText, agentName);
+      const response = await this.promptAgent(agent, promptText, agentName, "json", ollamaFormat);
       return { response, agentUsed: agent };
     } catch (err) {
       if (this.stopping) throw err;
@@ -4128,7 +4147,7 @@ export class BlackboardRunner implements SwarmRunner {
       );
       agent = await this.respawnAndUpdatePlanner(agent);
       // Retry once with the fresh subprocess.
-      const response = await this.promptAgent(agent, promptText, agentName);
+      const response = await this.promptAgent(agent, promptText, agentName, "json", ollamaFormat);
       return { response, agentUsed: agent };
     }
   }
@@ -4166,6 +4185,13 @@ export class BlackboardRunner implements SwarmRunner {
     // produces prose. Sniff only fires after 2048 chars accumulated, so
     // short answers pass through naturally.
     formatExpect: "json" | "free" = "json",
+    // #233 (2026-04-27 evening): Ollama structured-output passthrough.
+    // When set + USE_OLLAMA_DIRECT=1, the model's decoder is grammar-
+    // constrained to emit JSON (or output matching the schema). Closes
+    // #231 at the source: model literally cannot emit XML markers for
+    // parser-strict prompts. Pass "json" for free-form JSON, or a JSON
+    // Schema for strict shape validation. Ignored when on the SDK path.
+    ollamaFormat?: "json" | Record<string, unknown>,
   ): Promise<string> {
     // Unit 37: agentName defaults to "swarm" (no tools — preserved worker
     // behavior). Planner / auditor / replanner / tier-up / council-drafts
@@ -4264,6 +4290,9 @@ export class BlackboardRunner implements SwarmRunner {
         ollamaDirect: process.env.USE_OLLAMA_DIRECT === "1"
           ? { baseUrl: this.opts.ollamaBaseUrl ?? "http://127.0.0.1:11533" }
           : undefined,
+        // #233: pass structured-output constraint to Ollama when
+        // caller requested it AND we're on the direct path.
+        ...(ollamaFormat !== undefined ? { ollamaFormat } : {}),
         // V2 Step 1: thread the diag logger so OllamaClient's
         // _ollama_direct_call entries land in logs/current.jsonl.
         logDiag: this.opts.logDiag,

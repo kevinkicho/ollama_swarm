@@ -60,6 +60,15 @@ export interface ChatOpts {
    *  parsed from the final JSONL line. May be undefined if Ollama
    *  didn't include them (older models). */
   onTokens?: (counts: { promptTokens: number; responseTokens: number }) => void;
+  /** Task #233 (2026-04-27 evening): Ollama structured-output / JSON
+   *  mode. Constrains the model's decoder to emit output matching the
+   *  given schema (or just `"json"` for any valid JSON object). The
+   *  model literally cannot emit text outside the schema — fixes the
+   *  XML pseudo-tool-call marker leak (#231) at the source instead of
+   *  stripping after-the-fact. Pass `"json"` for free-form JSON,
+   *  pass a JSON Schema object for strict validation.
+   *  See https://github.com/ollama/ollama/blob/main/docs/api.md#request-json-mode */
+  format?: "json" | Record<string, unknown>;
 }
 
 export interface ChatResult {
@@ -94,6 +103,12 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
     model: opts.model,
     messages: opts.messages,
     stream: true,
+    // #233: forward Ollama's `format` parameter when caller supplied
+    // one. Ollama enforces it at the decoder level — model output is
+    // grammar-constrained to match the schema, so XML markers and
+    // other text-format hallucinations literally cannot be emitted
+    // for parser-strict prompts.
+    ...(opts.format !== undefined ? { format: opts.format } : {}),
   });
 
   // Compose the caller's signal with our idle-timeout signal so the

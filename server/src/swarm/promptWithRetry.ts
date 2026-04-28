@@ -85,6 +85,15 @@ export interface PromptWithRetryOptions {
   // explicitly to avoid module-load-time config import (keeps this
   // module unit-testable). When unset/false, the SDK path is used.
   ollamaDirect?: { baseUrl: string };
+  // Task #233 (2026-04-27 evening): Ollama structured-output passthrough.
+  // When set + ollamaDirect path is taken, the model's decoder is
+  // grammar-constrained to emit output matching the schema. Use "json"
+  // for any valid JSON object, or pass a JSON Schema for strict
+  // validation. Closes the XML pseudo-tool-call leak (#231) at the
+  // source: the model literally cannot emit `<` for parser-strict
+  // prompts. Ignored on the SDK path until that path also routes
+  // through Ollama natively.
+  ollamaFormat?: "json" | Record<string, unknown>;
   // V2 Step 1: optional diag logger threaded into OllamaClient so the
   // V2 path's call-start events land in the same logs/current.jsonl as
   // existing AgentManager diag entries. Lets us count V2 path uses
@@ -154,6 +163,10 @@ export async function promptWithRetry(
           signal: opts.signal,
           agentId: agent.id,
           logDiag: opts.logDiag,
+          // #233: forward structured-output constraint when caller
+          // requested it (parser-strict prompts: contract, todos,
+          // auditor verdict, replanner).
+          ...(opts.ollamaFormat !== undefined ? { format: opts.ollamaFormat } : {}),
           // Default 60s idle timeout matches the V2 spec — if the body
           // goes silent for this long, the model is dead. No probes.
           onChunk: (cumulativeText) => {
