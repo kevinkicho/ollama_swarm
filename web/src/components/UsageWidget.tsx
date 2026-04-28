@@ -72,11 +72,14 @@ const POLL_OPEN_MS = 10_000;
 const POLL_CLOSED_MS = 30_000;
 
 // localStorage keys for user-supplied caps. Numbers stored as strings.
+// #239 (2026-04-28): aligned to user-friendly labels — hourly / daily /
+// weekly / all-time. Replaced "5h" (oddball) with "all" so the panel
+// shows the natural rhythm: 1h, 1d, 1w, ∞.
 const CAP_KEYS = {
   "1h": "ollama-swarm:cap:1h",
-  "5h": "ollama-swarm:cap:5h",
-  "24h": "ollama-swarm:cap:24h",
-  "7d": "ollama-swarm:cap:7d",
+  "1d": "ollama-swarm:cap:1d",
+  "1w": "ollama-swarm:cap:1w",
+  "all": "ollama-swarm:cap:all",
 } as const;
 
 type WindowKey = keyof typeof CAP_KEYS;
@@ -122,19 +125,20 @@ export function UsageWidget() {
   const [error, setError] = useState<string | null>(null);
   const [caps, setCaps] = useState<Record<WindowKey, number | null>>(() => ({
     "1h": readCap("1h"),
-    "5h": readCap("5h"),
-    "24h": readCap("24h"),
-    "7d": readCap("7d"),
+    "1d": readCap("1d"),
+    "1w": readCap("1w"),
+    "all": readCap("all"),
   }));
   // Used as a "live snapshot" badge in the header even when closed —
   // shows the current 1h total so the user has at-a-glance awareness
   // without opening the panel. Polled once on mount, then while open.
   const [headerSnap, setHeaderSnap] = useState<number>(0);
-  // Task #169: scope toggle for the breakdown tables. "24h" = the
-  // existing rolling-window view (default); "all" = lifetime (every
-  // call seen since process start, capped at the 100k in-memory
-  // record buffer). Persists across panel open/close within session.
-  const [scope, setScope] = useState<"24h" | "all">("24h");
+  // Task #169 + #239 (2026-04-28): scope toggle for the breakdown
+  // tables. Now offers all four windows for symmetry with the cards
+  // above. Default "1d" (daily) — the most common useful view.
+  // Records persist across dev-server restarts (#239) so "all" is
+  // genuinely cross-session lifetime.
+  const [scope, setScope] = useState<"1h" | "1d" | "1w" | "all">("1d");
   // Task #139: quota-wall state, polled independently of `open` so
   // the header chip flips red as soon as the proxy detects a wall.
   const [quota, setQuota] = useState<QuotaState | null>(null);
@@ -258,7 +262,6 @@ export function UsageWidget() {
                 {(() => {
                   const oldest = data.recent.length > 0 ? data.recent[0].ts : null;
                   const allMatch =
-                    data.last1h.totalTokens === data.last5h.totalTokens &&
                     data.last1h.totalTokens === data.last24h.totalTokens &&
                     data.last1h.totalTokens === data.last7d.totalTokens &&
                     data.last1h.calls > 0;
@@ -276,50 +279,64 @@ export function UsageWidget() {
                     </div>
                   );
                 })()}
-                {/* Rolling-window cards */}
+                {/* #239 (2026-04-28): rolling-window cards aligned to
+                    user-friendly cadence (hourly / daily / weekly /
+                    all-time). Maps each card to the underlying API
+                    field; "all" falls back to last7d when the server
+                    doesn't ship lifetimeWindow (older builds). */}
                 <div className="grid grid-cols-2 gap-2">
-                  {(["1h", "5h", "24h", "7d"] as WindowKey[]).map((wk) => (
+                  {([
+                    { key: "1h" as const, win: data.last1h, label: "1h" },
+                    { key: "1d" as const, win: data.last24h, label: "1d" },
+                    { key: "1w" as const, win: data.last7d, label: "1w" },
+                    { key: "all" as const, win: data.lifetimeWindow ?? data.last7d, label: "all" },
+                  ]).map(({ key, win, label }) => (
                     <WindowCard
-                      key={wk}
-                      label={wk}
-                      window={data[`last${wk}` as "last1h" | "last5h" | "last24h" | "last7d"]}
-                      cap={caps[wk]}
-                      onCapChange={(v) => setCap(wk, v)}
+                      key={key}
+                      label={label}
+                      window={win}
+                      cap={caps[key]}
+                      onCapChange={(v) => setCap(key, v)}
                     />
                   ))}
                 </div>
-                {/* Task #169: scope toggle for the byModel/byPreset
-                    tables. "24h" = today's behavior, recent rolling
-                    window. "all" = every call since the process
-                    started (lifetime, in-memory cap = 100k records). */}
+                {/* #239 (2026-04-28): 4-option scope toggle —
+                    matches the cards above (1h / 1d / 1w / all). Lets
+                    users see byModel/byPreset breakdown for the same
+                    cadence they're inspecting in the totals. Records
+                    are now persisted across dev-server restarts so
+                    "all" is genuinely cross-session. */}
                 <div className="flex items-center gap-2 text-[11px] text-ink-400">
                   <span>Breakdown scope:</span>
                   <div className="inline-flex rounded border border-ink-700 overflow-hidden">
-                    <button
-                      onClick={() => setScope("24h")}
-                      className={`px-2 py-0.5 ${scope === "24h" ? "bg-ink-700 text-ink-100" : "hover:bg-ink-800 text-ink-400"}`}
-                      title="Calls within the last 24 hours (rolling window). Excludes older runs."
-                    >
-                      Last 24h
-                    </button>
-                    <button
-                      onClick={() => setScope("all")}
-                      className={`px-2 py-0.5 ${scope === "all" ? "bg-ink-700 text-ink-100" : "hover:bg-ink-800 text-ink-400"}`}
-                      title="All calls since the dev server started (capped at ~100k in-memory records)."
-                    >
-                      All time
-                    </button>
+                    {([
+                      { k: "1h" as const, label: "Hourly", title: "Calls in the last hour." },
+                      { k: "1d" as const, label: "Daily", title: "Calls in the last 24 hours." },
+                      { k: "1w" as const, label: "Weekly", title: "Calls in the last 7 days." },
+                      { k: "all" as const, label: "All time", title: "Every call we have on disk (persisted across dev-server restarts; ~30 days retention)." },
+                    ]).map(({ k, label, title }) => (
+                      <button
+                        key={k}
+                        onClick={() => setScope(k)}
+                        className={`px-2 py-0.5 ${scope === k ? "bg-ink-700 text-ink-100" : "hover:bg-ink-800 text-ink-400"}`}
+                        title={title}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
                 </div>
                 {/* Per-model + per-preset breakdowns — source switches
-                    based on toggle. Falls back to last24h if the
-                    server doesn't ship lifetimeWindow yet (graceful
-                    degradation for stale-server cases). */}
+                    based on toggle. */}
                 {(() => {
                   const win = scope === "all"
-                    ? (data.lifetimeWindow ?? data.last24h)
-                    : data.last24h;
-                  const scopeLabel = scope === "all" ? "all time" : "last 24h";
+                    ? (data.lifetimeWindow ?? data.last7d)
+                    : scope === "1w"
+                      ? data.last7d
+                      : scope === "1h"
+                        ? data.last1h
+                        : data.last24h;
+                  const scopeLabel = scope === "all" ? "all time" : scope === "1w" ? "last 7 days" : scope === "1h" ? "last hour" : "last 24 hours";
                   const empty = `(no calls in ${scopeLabel})`;
                   return (
                     <>

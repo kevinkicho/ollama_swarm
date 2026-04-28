@@ -25,6 +25,9 @@
 
 import { createServer, request as httpRequest } from "node:http";
 import { URL } from "node:url";
+import { appendFileSync, readFileSync, mkdirSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 
 export interface UsageRecord {
   ts: number;
@@ -121,8 +124,52 @@ const QUOTA_BODY_KEYWORDS: readonly RegExp[] = [
   ...QUOTA_TRANSIENT_KEYWORDS,
 ];
 
+// #239 (2026-04-28): persist token-usage records across dev-server
+// restarts. Append-only JSONL — one record per line, dropped on prune
+// when the file exceeds PERSIST_PRUNE_MAX_BYTES. Stored in tmpdir so
+// it survives `npm run dev` cycles but resets cleanly on host reboot.
+//
+// Format: each line is a JSON-serialized UsageRecord with ts (ms epoch).
+// Old records (older than PERSIST_RETENTION_MS) are filtered at load.
+const USAGE_PERSIST_FILE = join(tmpdir(), "ollama-swarm-usage.jsonl");
+const PERSIST_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const PERSIST_PRUNE_MAX_BYTES = 50 * 1024 * 1024; // 50 MB
+function loadPersistedRecords(): UsageRecord[] {
+  if (!existsSync(USAGE_PERSIST_FILE)) return [];
+  let raw: string;
+  try {
+    raw = readFileSync(USAGE_PERSIST_FILE, "utf8");
+  } catch {
+    return [];
+  }
+  const cutoff = Date.now() - PERSIST_RETENTION_MS;
+  const out: UsageRecord[] = [];
+  for (const line of raw.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      const obj = JSON.parse(t) as UsageRecord;
+      if (typeof obj.ts === "number" && obj.ts >= cutoff) out.push(obj);
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return out;
+}
+function appendPersistedRecord(rec: UsageRecord): void {
+  try {
+    mkdirSync(dirname(USAGE_PERSIST_FILE), { recursive: true });
+    appendFileSync(USAGE_PERSIST_FILE, JSON.stringify(rec) + "\n", "utf8");
+  } catch {
+    // best-effort persistence; in-memory cache still works
+  }
+}
+
 class TokenTracker {
-  private records: UsageRecord[] = [];
+  // Hydrate from disk on construct so dev-server restarts don't wipe
+  // history. Records older than PERSIST_RETENTION_MS are dropped at
+  // load time (see loadPersistedRecords).
+  private records: UsageRecord[] = loadPersistedRecords();
   private currentPreset?: string;
   private quota: QuotaState | null = null;
 
@@ -136,6 +183,9 @@ class TokenTracker {
     if (this.records.length > CACHE_LIMIT) {
       this.records.splice(0, this.records.length - CACHE_LIMIT);
     }
+    // #239: persist to disk so data survives dev-server restarts.
+    // Best-effort — in-memory cache is the source of truth for queries.
+    appendPersistedRecord(r);
   }
 
   /** Called from Orchestrator on run start / end. */

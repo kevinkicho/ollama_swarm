@@ -1,9 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 
-// Per-boot append-only log of every SwarmEvent we broadcast. The file is
-// truncated on server start so the newest run is always at a stable path,
-// which lets Claude (or any debug tool) read it without guessing a filename.
+// Cross-session append-only log of every SwarmEvent we broadcast.
+//
+// #242 (2026-04-28): switched from per-boot truncate to APPEND mode +
+// best-effort size cap. The previous "truncate on start" design wiped
+// the V2 event log on every dev-server restart, so the V2 EventLogPanel
+// in the UI never showed cross-session history. Now: events accumulate
+// across restarts; when the file exceeds MAX_BYTES (~50MB) we rotate
+// it to events-<iso-date>.jsonl and start a fresh current.jsonl. Old
+// rotations stay on disk for reference (gitignore'd via logs/ rule).
 //
 // Format: one JSON object per line, shape: { ts: number, event: SwarmEvent }.
 // JSONL keeps each line independently parseable even if the stream was cut
@@ -22,19 +28,40 @@ export interface EventLoggerOpts {
   filename?: string;
 }
 
+// #242 (2026-04-28): rotate when current.jsonl grows past this size.
+// 50 MB is generous for a JSONL log of swarm events (each line is
+// ~100-500 bytes, so ~50MB ≈ 100k-500k events ≈ many runs of history).
+const MAX_BYTES = 50 * 1024 * 1024;
+
+function maybeRotate(logPath: string): void {
+  try {
+    const stat = fs.statSync(logPath);
+    if (stat.size < MAX_BYTES) return;
+    const iso = new Date().toISOString().replace(/[:.]/g, "-");
+    const dir = path.dirname(logPath);
+    const archived = path.join(dir, `events-${iso}.jsonl`);
+    fs.renameSync(logPath, archived);
+  } catch {
+    // ENOENT (no log yet) or other → first run, no rotation needed.
+  }
+}
+
 export function createEventLogger(opts: EventLoggerOpts): EventLogger {
   fs.mkdirSync(opts.logDir, { recursive: true });
   const filename = opts.filename ?? "current.jsonl";
   const logPath = path.join(opts.logDir, filename);
-  // flags: "w" truncates. If we crash mid-write the old log is already gone
-  // but that's fine — we only care about the current run.
-  const stream = fs.createWriteStream(logPath, { flags: "w", encoding: "utf8" });
+  // #242: append mode preserves cross-session history. Rotation
+  // checked at startup so we don't grow unbounded over months.
+  maybeRotate(logPath);
+  const stream = fs.createWriteStream(logPath, { flags: "a", encoding: "utf8" });
   stream.on("error", (err) => {
     // Swallow — logging is best-effort, never the primary failure surface.
     console.error(`[eventLogger] stream error: ${err.message}`);
   });
 
-  // Stamp the top of the file so "was this a fresh boot?" is a one-line check.
+  // Stamp a session-started marker so consumers can tell where one
+  // dev-server boot ends and the next begins. EventLogReaderV2 already
+  // uses this marker as a session boundary in splitIntoRuns.
   stream.write(
     JSON.stringify({ ts: Date.now(), event: { type: "_session_started" } }) + "\n",
   );
