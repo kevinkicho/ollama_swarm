@@ -4,6 +4,7 @@ import { PreflightPreview } from "./PreflightPreview";
 import { StartConfirmModal } from "./StartConfirmModal";
 import type { PreflightState } from "../types";
 import { Field } from "./setup/SharedFields";
+import { ModelInput, MissingModelsHint } from "./setup/ModelInput";
 import { WallClockEstimate } from "./setup/WallClockEstimate";
 import {
   BlackboardHelp,
@@ -634,6 +635,7 @@ export function SetupForm() {
         </Section>
 
         <Section title="Run" subtitle="Rounds, default model, time budget">
+          <MissingModelsHint recommendedModel={preset.recommendedModel} />
           <div className="grid grid-cols-2 gap-4">
             <Field label="Rounds">
               <input
@@ -645,12 +647,8 @@ export function SetupForm() {
                 className="input"
               />
             </Field>
-            <Field label="Model">
-              <input
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                className="input font-mono"
-              />
+            <Field label="Model" hint="Type any Ollama model id, or pick from your installed list.">
+              <ModelInput value={model} onChange={setModel} ariaLabel="Default model" />
             </Field>
           </div>
 

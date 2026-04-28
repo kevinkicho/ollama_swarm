@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Field, ToggleField } from "./SharedFields";
+import { ModelInput } from "./ModelInput";
 
 // Tri-state for the blackboard council-contract knob.
 // "" = inherit server default (COUNCIL_CONTRACT_ENABLED env var).
@@ -81,11 +82,11 @@ export function BlackboardModelOverrides({
             : `Planner + critic + replanner + auditor will run on ${plannerModel.trim()}.`
         }
       >
-        <input
+        <ModelInput
           value={plannerModel}
-          onChange={(e) => setPlannerModel(e.target.value.slice(0, 200))}
+          onChange={(v) => setPlannerModel(v.slice(0, 200))}
           placeholder={`(blackboard recommended: ${BLACKBOARD_DEFAULT_PLANNER_MODEL})`}
-          className="input font-mono"
+          ariaLabel="Planner model override"
         />
       </Field>
       <Field
@@ -96,11 +97,11 @@ export function BlackboardModelOverrides({
             : `All worker agents will run on ${workerModel.trim()}.`
         }
       >
-        <input
+        <ModelInput
           value={workerModel}
-          onChange={(e) => setWorkerModel(e.target.value.slice(0, 200))}
+          onChange={(v) => setWorkerModel(v.slice(0, 200))}
           placeholder={`(blackboard recommended: ${BLACKBOARD_DEFAULT_WORKER_MODEL})`}
-          className="input font-mono"
+          ariaLabel="Worker model override"
         />
       </Field>
     </div>
@@ -240,12 +241,12 @@ export function BlackboardAgentTopology({
               : `Auditor agent will run on ${auditorModel.trim()}.`
         }
       >
-        <input
+        <ModelInput
           value={auditorModel}
-          onChange={(e) => setAuditorModel(e.target.value.slice(0, 200))}
+          onChange={(v) => setAuditorModel(v.slice(0, 200))}
           placeholder={`(blackboard recommended: ${BLACKBOARD_DEFAULT_AUDITOR_MODEL})`}
-          className="input font-mono"
-          disabled={!dedicatedAuditor}
+          ariaLabel="Auditor model override"
+          className={`input font-mono ${!dedicatedAuditor ? "opacity-50 pointer-events-none" : ""}`}
         />
       </Field>
       <ToggleField

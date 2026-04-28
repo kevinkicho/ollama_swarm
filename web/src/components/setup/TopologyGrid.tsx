@@ -22,6 +22,7 @@ import {
   isRoleStructural,
   synthesizeTopology,
 } from "../../../../shared/src/topology";
+import { ModelInput } from "./ModelInput";
 
 // Phase 2 of #243: tailwind color name → swatch CSS for the per-row
 // color picker. Single source of truth — AgentPanel's color border
@@ -558,12 +559,12 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel }: To
                   </td>
                 ) : null}
                 <td className="px-2 py-1.5">
-                  <input
-                    type="text"
+                  <ModelInput
                     value={a.model ?? ""}
-                    onChange={(e) => onModelChange(a.index, e.target.value)}
+                    onChange={(v) => onModelChange(a.index, v)}
                     placeholder={defaultModel || "(use default)"}
                     className="w-full bg-ink-950/60 border border-ink-700 rounded px-2 py-0.5 text-[11px] font-mono text-ink-200 placeholder:text-ink-600 focus:outline-none focus:border-ink-500"
+                    ariaLabel={`Model override for agent ${a.index}`}
                   />
                 </td>
                 {showTemp ? (

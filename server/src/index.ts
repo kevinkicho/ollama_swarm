@@ -83,6 +83,40 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
+// #288: list models the local Ollama install can run RIGHT NOW so the
+// SetupForm can autocomplete model fields. Hits Ollama's /api/tags
+// directly (NOT through the snooping proxy — tags isn't a chat call,
+// no point measuring tokens). Returns a sorted-by-recency string list
+// so the most-recently-pulled model surfaces first in the dropdown.
+//
+// On Ollama unreachable: 200 with { models: [], error: "..." } rather
+// than 5xx, so the form falls back gracefully to free-text without a
+// noisy console.error in the user's browser.
+app.get("/api/models", async (_req, res) => {
+  const upstreamRoot = config.OLLAMA_BASE_URL.replace(/\/v1\/?$/, "");
+  try {
+    const r = await fetch(`${upstreamRoot}/api/tags`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!r.ok) {
+      res.json({ models: [], error: `Ollama /api/tags returned HTTP ${r.status}` });
+      return;
+    }
+    const body = (await r.json()) as { models?: Array<{ name: string; modified_at?: string }> };
+    const sorted = (body.models ?? [])
+      .slice()
+      .sort((a, b) => (b.modified_at ?? "").localeCompare(a.modified_at ?? ""))
+      .map((m) => m.name)
+      .filter((n) => typeof n === "string" && n.length > 0);
+    res.json({ models: sorted });
+  } catch (err) {
+    res.json({
+      models: [],
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
 // Task #133: token-usage endpoint backed by the Ollama proxy. Returns
 // per-window aggregates derived from prompt_eval_count + eval_count
 // captured on every Ollama response. Empty when proxy is disabled
