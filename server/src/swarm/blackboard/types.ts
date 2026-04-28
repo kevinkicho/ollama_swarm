@@ -33,6 +33,13 @@ export interface Todo {
   // can't be expressed as search/replace hunks.
   kind?: "hunks" | "build";
   command?: string;
+  // Phase 5c of #243: optional planner-emitted hint to route this
+  // todo to a worker with a matching topology tag (e.g. "tests-expert"
+  // for test-touching work). The Board doesn't enforce — it just
+  // records the hint. The runner's claim selector reads it and
+  // prefers a matching worker over a generic one when multiple
+  // candidates are open. Absent → no preference (any worker is fine).
+  preferredTag?: string;
 }
 
 export type ExitCriterionStatus = "unmet" | "met" | "wont-do";

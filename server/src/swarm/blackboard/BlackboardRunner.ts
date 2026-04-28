@@ -122,7 +122,28 @@ import { buildAuditorSeed as buildAuditorSeedExtracted } from "./auditorSeedBuil
 import { truncate } from "./truncate.js";
 import { config } from "../../config.js";
 import { stripAgentText } from "../../../../shared/src/stripAgentText.js";
-import { getAgentAddendum } from "../../../../shared/src/topology.js";
+import {
+  getAgentAddendum,
+  getAgentOllamaOptions,
+  type Topology,
+} from "../../../../shared/src/topology.js";
+
+// Phase 5c of #243: derive {tag → count} for the planner prompt's
+// AVAILABLE WORKER TAGS section. Empty array when no workers carry a
+// tag — the planner sees no tag block + emits no preferredTag.
+function computeWorkerTagCounts(
+  topology: Topology | undefined,
+): Array<{ tag: string; count: number }> {
+  if (!topology) return [];
+  const counts = new Map<string, number>();
+  for (const a of topology.agents) {
+    if (!a.tag) continue;
+    const t = a.tag.trim();
+    if (t.length === 0) continue;
+    counts.set(t, (counts.get(t) ?? 0) + 1);
+  }
+  return Array.from(counts.entries()).map(([tag, count]) => ({ tag, count }));
+}
 import { checkBuildCommand } from "./buildCommandAllowlist.js";
 
 // Blackboard preset: planner posts TODOs, workers drain them in a
@@ -1237,6 +1258,11 @@ export class BlackboardRunner implements SwarmRunner {
         this.appendSystem(`Design memory read failed (${msg}); continuing without long-horizon vision context.`);
       }
     }
+    // Phase 5c of #243: derive {tag → count} for any workers that
+    // carry a topology tag. Renders into the planner prompt's
+    // AVAILABLE WORKER TAGS section so the planner can emit
+    // `preferredTag` per TODO. Empty array → no tags rendered.
+    const workerTags = computeWorkerTagCounts(cfg.topology);
     return {
       repoUrl: cfg.repoUrl,
       clonePath,
@@ -1250,6 +1276,7 @@ export class BlackboardRunner implements SwarmRunner {
       priorRunSummary,
       priorMemoryRendered,
       priorDesignMemoryRendered,
+      workerTags,
     };
   }
 
@@ -1857,6 +1884,9 @@ export class BlackboardRunner implements SwarmRunner {
         // existing hunks-emit pipeline unchanged.
         ...(t.kind ? { kind: t.kind } : {}),
         ...(t.command ? { command: t.command } : {}),
+        // Phase 5c of #243: forward planner-emitted tag preference for
+        // claim routing. Empty / absent → omitted (no preference).
+        ...(t.preferredTag ? { preferredTag: t.preferredTag } : {}),
       });
     }
     this.appendSystem(`Posted ${groundedTodos.length} todo(s) to the board.`);
@@ -2584,7 +2614,13 @@ export class BlackboardRunner implements SwarmRunner {
       // claim. When every open todo is locked we just continue —
       // another worker will commit/expire soon and free a file. The
       // jittered sleep at the top of the loop is the implicit backoff.
-      const todo = this.board.findClaimableTodo();
+      //
+      // Phase 5c of #243: pass this worker's topology tag so the
+      // selector picks a tag-matching TODO first when possible. Falls
+      // through to any open todo when no match. Untagged workers
+      // (no row tag in topology) get undefined → behaves like before.
+      const myTag = this.active?.topology?.agents.find((a) => a.index === agent.index)?.tag;
+      const todo = this.board.findClaimableTodo(myTag);
       if (!todo) continue;
 
       // #237 (2026-04-28): build-style TODOs short-circuit the V1/V2
@@ -4416,6 +4452,12 @@ export class BlackboardRunner implements SwarmRunner {
         // Phase 5b of #243: per-agent addendum from the topology row.
         // Active topology lives on this.active (set in start()).
         promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
+        // Phase 5a of #243: per-agent generation params (temperature)
+        // from the topology row. Effective only on USE_OLLAMA_DIRECT
+        // path — the SDK path drops these because session.prompt has
+        // no per-call generation-options field. To wire temperature
+        // for the SDK path we'd need per-index opencode.json profiles.
+        ollamaOptions: getAgentOllamaOptions(this.active?.topology, agent.index),
         onTokens: ({ promptTokens, responseTokens }) => {
           if (promptTokens > 0) this.promptTokensPerAgent.set(agent.id, (this.promptTokensPerAgent.get(agent.id) ?? 0) + promptTokens);
           if (responseTokens > 0) this.responseTokensPerAgent.set(agent.id, (this.responseTokensPerAgent.get(agent.id) ?? 0) + responseTokens);

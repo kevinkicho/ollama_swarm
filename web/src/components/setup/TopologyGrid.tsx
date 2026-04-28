@@ -402,7 +402,7 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel }: To
           {[
             { key: "color", label: "Color", val: showColor, setter: setShowColor, hint: "Per-row color badge for AgentPanel cards." },
             { key: "tag", label: "Tag", val: showTag, setter: setShowTag, hint: "Specialization label (e.g. 'tests-expert')." },
-            { key: "temp", label: "Temp", val: showTemp, setter: setShowTemp, hint: "Per-agent sampling temperature override (0-2)." },
+            { key: "temp", label: "Temp", val: showTemp, setter: setShowTemp, hint: "Per-agent sampling temperature override (0-2). Active for blackboard runs with USE_OLLAMA_DIRECT=1; the SDK path doesn't expose per-call temperature, so other runners drop this until per-index opencode.json profiles ship." },
             { key: "prompt", label: "Prompt+", val: showPrompt, setter: setShowPrompt, hint: "Per-agent system-prompt addendum (max 1000 chars)." },
           ].map(({ key, label, val, setter, hint }) => (
             <button

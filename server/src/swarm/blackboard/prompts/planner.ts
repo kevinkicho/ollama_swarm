@@ -53,6 +53,11 @@ const PlannerTodoSchemaHunks = z.object({
   expectedAnchors: z.array(anchorEntry).max(ANCHOR_MAX_PER_TODO).optional(),
   expectedSymbols: z.array(symbolEntry).max(SYMBOLS_MAX_PER_TODO).optional(),
   command: z.undefined().optional(),
+  // Phase 5c of #243: optional planner hint to route this TODO to a
+  // worker with a matching topology tag. Capped at 40 chars to mirror
+  // the AgentSpec.tag schema. Runner enforces tag-routing preference;
+  // schema just accepts the hint.
+  preferredTag: z.string().trim().max(40).optional(),
 });
 const PlannerTodoSchemaBuild = z.object({
   kind: z.literal("build"),
@@ -65,6 +70,9 @@ const PlannerTodoSchemaBuild = z.object({
   command: z.string().trim().min(1).max(500),
   expectedAnchors: z.array(anchorEntry).max(ANCHOR_MAX_PER_TODO).optional(),
   expectedSymbols: z.array(symbolEntry).max(SYMBOLS_MAX_PER_TODO).optional(),
+  // Phase 5c of #243: same preferredTag hint for build TODOs (e.g.
+  // a `bun run docs:api` TODO might prefer the `docs-expert` worker).
+  preferredTag: z.string().trim().max(40).optional(),
 });
 const PlannerTodoSchema = z.union([PlannerTodoSchemaHunks, PlannerTodoSchemaBuild]);
 
@@ -97,6 +105,9 @@ export interface PlannerTodoInput {
   // Task #70: optional symbol names the runner verifies exist in
   // expectedFiles before posting the todo. Drop-on-mismatch.
   expectedSymbols?: string[];
+  // Phase 5c of #243: planner-emitted tag preference. The runner's
+  // claim selector reads it; absent = no preference.
+  preferredTag?: string;
 }
 
 export type PlannerParseResult =
@@ -165,6 +176,8 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
         ...(isBuild ? { command: v.data.command } : {}),
         expectedAnchors: v.data.expectedAnchors,
         expectedSymbols: v.data.expectedSymbols,
+        // Phase 5c of #243: forward optional planner tag hint.
+        ...(v.data.preferredTag ? { preferredTag: v.data.preferredTag } : {}),
       });
     } else {
       const reason = v.error.issues
@@ -215,6 +228,7 @@ export const PLANNER_SYSTEM_PROMPT = [
   "10. (Unit 44b) For TODOs that touch a SPECIFIC ROW or REGION of a large file (e.g., a single row in a 100-row markdown table, one entry in a 200-entry JSON object), include `expectedAnchors`: an array of 1-4 short verbatim substrings (≤ 200 chars each) that uniquely identify the target region. Workers see only HEAD + TAIL of files above 8 KB; anchors let the runner inject ±25 lines of context around each anchor so the worker can actually edit middle-region rows. Use grep/read first to confirm each anchor exists in the file. Examples: `\"| 7 | **ASE Holdings**\"`, `\"NVIDIA: { revenue:\"`. Omit `expectedAnchors` for whole-file edits, append-only TODOs, or files small enough to show in full.",
   "11. (Task #70) For TODOs that operate on EXISTING symbols (a function, class, or named export the worker is supposed to modify or document), include `expectedSymbols`: an array of 1-4 symbol names (≤ 200 chars each) the runner will word-boundary-grep in each expectedFile BEFORE posting the todo. If any symbol is missing from every expectedFile, the runner drops the todo with a finding — saves a wasted worker round-trip. Examples: `[\"createOrchestrator\"]`, `[\"AgentManager\", \"spawnAgent\"]`. OMIT for create-new-file TODOs (file doesn't exist yet) and for whole-file rewrites. Include for: \"add JSDoc to X\", \"add null guard to Y\", \"rename Z\", \"replace inline string with constant W\". When in doubt, include — being wrong about a symbol's existence is the planner's #1 failure mode.",
   "12. (#237, 2026-04-28) BUILD-STYLE TODOS — for work that REQUIRES running a project script + committing the result (doc generators, codegen, formatters, linters with --fix, type-checkers that emit declaration files), use the build-style TODO shape: `{\"kind\": \"build\", \"description\": ...., \"expectedFiles\": [\"docs/api/index.md\"], \"command\": \"bun run docs:api\"}`. Constraints: `command` MUST start with one of {npm, npx, yarn, pnpm, bun, bunx, tsc, tsx, deno, eslint, prettier, biome, jest, vitest, mocha, make, task, just, typedoc, jsdoc, docusaurus} (the runner enforces an allowlist). NO shell metacharacters (`;`, `&&`, `||`, `|`, `>`, `<`, backticks, `$`) — chaining/piping is forbidden. expectedFiles describes paths the command WILL emit; the runner uses them for the auditor verification only. The default `kind` is `\"hunks\"` (or omitted entirely) — only mark `kind:\"build\"` when the work genuinely cannot be expressed as a search/replace patch.",
+  "13. (#243, 2026-04-28) WORKER SPECIALIZATION — when the user's topology declares per-worker tags (e.g. agent #3 tagged `tests-expert`, agent #5 tagged `frontend`), the AVAILABLE WORKER TAGS section of the user message lists them. For each TODO, you MAY add an optional `preferredTag` field that names the tag of the worker who should ideally claim it (e.g. `\"preferredTag\": \"tests-expert\"` for a TODO that touches test files). Only set it when one of the listed tags clearly fits — do NOT invent tags or use a tag that no worker carries. Workers preferentially claim TODOs matching their tag; absent or no-match TODOs fall through to any available worker, so unset = no preference. When the topology has no tagged workers, this section is empty and you SHOULD NOT emit `preferredTag`.",
   "",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",
 ].join("\n");
@@ -223,6 +237,13 @@ export interface PlannerSeed {
   repoUrl: string;
   clonePath: string;
   topLevel: string[];
+  // Phase 5c of #243: optional list of {tag, count} pairs for any
+  // workers in the topology that carry a specialization tag. The
+  // planner sees this in the AVAILABLE WORKER TAGS section of the
+  // user prompt and may emit a `preferredTag` on each TODO to route
+  // it to a matching worker. Absent / empty array → no tag section
+  // rendered + planner emits no preferences.
+  workerTags?: Array<{ tag: string; count: number }>;
   // Grounding Unit 6a: breadth-first listing of up to ~150 repo-relative
   // file paths (forward slashes), with common ignores stripped. Gives the
   // planner + first-pass-contract real structure to ground expectedFiles
@@ -324,12 +345,27 @@ export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionSt
         "",
       ].join("\n")
     : "";
+  // Phase 5c of #243: render the available worker tags so the planner
+  // can emit `preferredTag` per TODO. Renders nothing when no workers
+  // carry a tag — keeps the prompt clean for default topologies.
+  const workerTagsBlock =
+    seed.workerTags && seed.workerTags.length > 0
+      ? [
+          "=== AVAILABLE WORKER TAGS (per topology, planner may set TODO.preferredTag to one of these) ===",
+          ...seed.workerTags.map(({ tag, count }) =>
+            `  • ${tag} (${count} ${count === 1 ? "worker" : "workers"})`,
+          ),
+          "=== end WORKER TAGS ===",
+          "",
+        ].join("\n")
+      : "";
   return [
     designBlock + memoryBlock + directiveBlock + `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
     `Top-level entries: ${tree}`,
     "",
     contractBlock,
+    workerTagsBlock,
     "=== REPO FILE LIST (up to 150 paths, BFS order, ignores applied) ===",
     fileList,
     "=== end REPO FILE LIST ===",

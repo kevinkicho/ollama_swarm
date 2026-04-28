@@ -30,6 +30,9 @@ type PostTodoInput = {
   // Board doesn't interpret them.
   kind?: "hunks" | "build";
   command?: string;
+  // Phase 5c of #243: planner-emitted preferredTag pass-through. Board
+  // stores it; the runner's claim selector consults it.
+  preferredTag?: string;
 };
 
 type ClaimInput = {
@@ -125,6 +128,12 @@ export class Board {
       // #237: thread build-style discriminator + command.
       ...(input.kind ? { kind: input.kind } : {}),
       ...(input.command ? { command: input.command } : {}),
+      // Phase 5c of #243: planner-emitted tag preference for claim
+      // routing. Pass-through; runner consults it when picking which
+      // worker to hand the todo to.
+      ...(input.preferredTag && input.preferredTag.trim().length > 0
+        ? { preferredTag: input.preferredTag.trim() }
+        : {}),
     };
     this.todos.set(todo.id, todo);
     this.emit({ type: "todo_posted", todo: this.copyTodo(todo) });
@@ -146,9 +155,25 @@ export class Board {
   // sleep briefly and try again, since a commit/expiry will eventually
   // free up files. The order is the same as findOpenTodo (createdAt
   // ascending), so an unlocked older todo wins over a locked newer one.
-  findClaimableTodo(): Todo | undefined {
+  //
+  // Phase 5c of #243: optional `preferTag` parameter. When set, the
+  // search makes two passes: (1) any open + unlocked todo whose
+  // preferredTag matches; (2) any open + unlocked todo. This gives
+  // tagged workers first crack at matching todos but doesn't starve
+  // them — if no matching todo exists, they pick up anything else.
+  // Untagged workers (preferTag undefined) skip pass 1 and behave
+  // identically to pre-Phase-5c.
+  findClaimableTodo(preferTag?: string): Todo | undefined {
     const locked = this.collectLockedFiles();
-    const found = this.orderedTodos().find(
+    const ordered = this.orderedTodos();
+    if (preferTag && preferTag.trim().length > 0) {
+      const tag = preferTag.trim();
+      const matched = ordered.find(
+        (t) => t.status === "open" && t.preferredTag === tag && !this.todoOverlapsLockedFiles(t, locked),
+      );
+      if (matched) return this.copyTodo(matched);
+    }
+    const found = ordered.find(
       (t) => t.status === "open" && !this.todoOverlapsLockedFiles(t, locked),
     );
     return found ? this.copyTodo(found) : undefined;

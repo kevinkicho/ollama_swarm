@@ -106,6 +106,18 @@ export interface PromptWithRetryOptions {
   // identical regardless of transport. When undefined / empty,
   // prompt text passes through unchanged (pre-Phase-5 behavior).
   promptAddendum?: string;
+  // Phase 5a of #243: per-agent Ollama generation parameters from
+  // the topology row. Today this carries `temperature`; the schema
+  // is open-ended so future per-agent knobs (top_p, repeat_penalty)
+  // land here too. Effective only on the ollamaDirect path — the
+  // SDK path drops these because session.prompt has no per-call
+  // generation-options field. See AgentManager.streamPrompt for the
+  // matching SDK-side comment.
+  ollamaOptions?: {
+    temperature?: number;
+    top_p?: number;
+    [key: string]: unknown;
+  };
 }
 
 export interface RetryInfo {
@@ -181,6 +193,10 @@ export async function promptWithRetry(
           // requested it (parser-strict prompts: contract, todos,
           // auditor verdict, replanner).
           ...(opts.ollamaFormat !== undefined ? { format: opts.ollamaFormat } : {}),
+          // Phase 5a of #243: per-agent generation params (temperature,
+          // top_p, etc.) from topology row. Ignored when undefined —
+          // model uses its built-in defaults.
+          ...(opts.ollamaOptions !== undefined ? { options: opts.ollamaOptions } : {}),
           // Default 60s idle timeout matches the V2 spec — if the body
           // goes silent for this long, the model is dead. No probes.
           onChunk: (cumulativeText) => {

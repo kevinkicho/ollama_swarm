@@ -42,5 +42,6 @@ export {
   findAgentSpec,
   getAgentAddendum,
   getAgentTag,
+  getAgentOllamaOptions,
 } from "./topology.js";
 export type { AgentRole, AgentColor, AgentSpec, Topology } from "./topology.js";

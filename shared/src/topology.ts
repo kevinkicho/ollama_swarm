@@ -240,6 +240,23 @@ export function getAgentTag(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+// Phase 5a of #243: builds the Ollama `options` payload from the
+// per-agent topology row. Today this just carries temperature; future
+// per-agent knobs (top_p, repeat_penalty) land in the same shape.
+// Returns undefined when no overrides are set so callers can simply
+// spread the result without polluting the request body with empty
+// objects.
+export function getAgentOllamaOptions(
+  topology: Topology | undefined,
+  agentIndex: number,
+): { temperature?: number; top_p?: number } | undefined {
+  const spec = findAgentSpec(topology, agentIndex);
+  if (!spec) return undefined;
+  const out: { temperature?: number; top_p?: number } = {};
+  if (typeof spec.temperature === "number") out.temperature = spec.temperature;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 // Inverse of synthesizeTopology — given a topology, derive the legacy
 // fields the runners still consume. Used at the route boundary so
 // the runner side stays unchanged in Phase 1.

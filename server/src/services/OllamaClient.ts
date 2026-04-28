@@ -69,6 +69,15 @@ export interface ChatOpts {
    *  pass a JSON Schema object for strict validation.
    *  See https://github.com/ollama/ollama/blob/main/docs/api.md#request-json-mode */
   format?: "json" | Record<string, unknown>;
+  /** Phase 5a of #243: Ollama generation parameters. Forwarded as
+   *  the `options` field of /api/chat — temperature, top_p, etc.
+   *  Per-agent topology overrides set this from the per-row temperature
+   *  input. Undefined = inherit Ollama / model default behavior. */
+  options?: {
+    temperature?: number;
+    top_p?: number;
+    [key: string]: unknown;
+  };
 }
 
 export interface ChatResult {
@@ -109,6 +118,12 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
     // other text-format hallucinations literally cannot be emitted
     // for parser-strict prompts.
     ...(opts.format !== undefined ? { format: opts.format } : {}),
+    // Phase 5a of #243: per-agent generation parameters from the
+    // topology row (temperature, top_p, etc.). Ollama applies them
+    // server-side; absent → model defaults.
+    ...(opts.options !== undefined && Object.keys(opts.options).length > 0
+      ? { options: opts.options }
+      : {}),
   });
 
   // Compose the caller's signal with our idle-timeout signal so the
