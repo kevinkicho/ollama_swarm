@@ -230,43 +230,44 @@ test("writeOpencodeConfig — both swarm and swarm-read agent profiles present",
   }
 });
 
-test("writeOpencodeConfig — swarm profile has ALL tools disabled (blackboard worker safety)", async () => {
+// #234 (2026-04-27 evening): migrated to v2 SDK. The deprecated `tools`
+// field no longer exists; v2 Agent type uses `permission: PermissionRuleset`
+// exclusively. Tests now assert permission-rule shape instead.
+test("writeOpencodeConfig — swarm profile denies all tools (blackboard worker safety)", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-cfg-"));
   try {
     const repos = new RepoService();
     await repos.writeOpencodeConfig(root, "test-model");
     const cfg = JSON.parse(await fs.readFile(path.join(root, "opencode.json"), "utf8")) as {
-      agent: Record<string, { tools: Record<string, boolean> }>;
+      agent: Record<string, { tools?: unknown; permission?: Record<string, string> }>;
     };
-    const tools = cfg.agent["swarm"].tools;
-    for (const [name, enabled] of Object.entries(tools)) {
-      assert.equal(enabled, false, `swarm.tools.${name} must be false (blackboard workers must not use tools — they return JSON diffs)`);
-    }
+    const profile = cfg.agent["swarm"];
+    assert.equal(profile.tools, undefined, "swarm profile must NOT carry the deprecated v1 tools field");
+    assert.equal(profile.permission?.["*"], "deny", "swarm.permission['*'] must deny all tools");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
 
-test("writeOpencodeConfig — swarm-read enables read tools, denies write/edit/bash", async () => {
+test("writeOpencodeConfig — swarm-read allows read/grep/glob, denies everything else", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-cfg-"));
   try {
     const repos = new RepoService();
     await repos.writeOpencodeConfig(root, "test-model");
     const cfg = JSON.parse(await fs.readFile(path.join(root, "opencode.json"), "utf8")) as {
-      agent: Record<string, { tools: Record<string, boolean>; permission?: Record<string, string> }>;
+      agent: Record<string, { tools?: unknown; permission?: Record<string, string> }>;
     };
     const profile = cfg.agent["swarm-read"];
-    // Read-side: should be ON
-    assert.equal(profile.tools.read, true, "swarm-read.tools.read must be true");
-    assert.equal(profile.tools.grep, true, "swarm-read.tools.grep must be true");
-    assert.equal(profile.tools.glob, true, "swarm-read.tools.glob must be true");
-    // Write-side: must stay OFF (the safety property)
-    assert.equal(profile.tools.write, false, "swarm-read.tools.write must be false (discussion-only)");
-    assert.equal(profile.tools.edit, false, "swarm-read.tools.edit must be false (discussion-only)");
-    assert.equal(profile.tools.bash, false, "swarm-read.tools.bash must be false (discussion-only)");
-    // Belt-and-suspenders permission deny
-    assert.equal(profile.permission?.edit, "deny");
-    assert.equal(profile.permission?.bash, "deny");
+    assert.equal(profile.tools, undefined, "swarm-read must NOT carry the deprecated v1 tools field");
+    // Catch-all deny first, then specific allows. Last-rule-wins per opencode docs.
+    assert.equal(profile.permission?.["*"], "deny", "swarm-read.permission['*'] must be the catch-all deny");
+    assert.equal(profile.permission?.read, "allow");
+    assert.equal(profile.permission?.grep, "allow");
+    assert.equal(profile.permission?.glob, "allow");
+    // Write-side stays denied via the catch-all (no explicit allow override)
+    assert.notEqual(profile.permission?.edit, "allow", "edit must NOT be allowed in swarm-read");
+    assert.notEqual(profile.permission?.bash, "allow", "bash must NOT be allowed in swarm-read");
+    assert.notEqual(profile.permission?.write, "allow", "write must NOT be allowed in swarm-read");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

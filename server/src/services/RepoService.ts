@@ -284,53 +284,29 @@ export class RepoService {
       //   write / edit / bash hard-denied so they can't accidentally
       //   modify the clone — discussion-only stays discussion-only by
       //   enforcement, not by hope.
+      // #234 (2026-04-27 evening): migrated from deprecated v1 `tools`
+      // field to v2 `permission` ruleset. v2 Agent type has no `tools`
+      // field at all (per node_modules/@opencode-ai/sdk/dist/v2/gen/
+      // types.gen.d.ts:1804). Permissions are the unified replacement.
+      // Simple-object form (`{ "*": "deny", "read": "allow" }`) is
+      // documented at opencode.ai/docs/permissions; last matching rule
+      // wins, so place catch-all `*` first then specific overrides.
       agent: {
         swarm: {
           mode: "primary" as const,
           description: "Pure text-in/text-out agent for the ollama_swarm blackboard worker. No filesystem or shell access.",
-          tools: {
-            read: false,
-            write: false,
-            edit: false,
-            multiedit: false,
-            patch: false,
-            bash: false,
-            grep: false,
-            glob: false,
-            list: false,
-            webfetch: false,
-            task: false,
-            todoread: false,
-            todowrite: false,
-          },
           permission: {
-            edit: "deny" as const,
-            bash: "deny" as const,
-            webfetch: "deny" as const,
+            "*": "deny" as const,
           },
         },
         "swarm-read": {
           mode: "primary" as const,
-          description: "Read-only inspection agent for the ollama_swarm discussion presets. Read / grep / glob / list enabled; edit / write / bash hard-denied.",
-          tools: {
-            read: true,
-            grep: true,
-            glob: true,
-            list: true,
-            write: false,
-            edit: false,
-            multiedit: false,
-            patch: false,
-            bash: false,
-            webfetch: false,
-            task: false,
-            todoread: false,
-            todowrite: false,
-          },
+          description: "Read-only inspection agent for the ollama_swarm discussion presets. Read / grep / glob enabled; edit / write / bash hard-denied.",
           permission: {
-            edit: "deny" as const,
-            bash: "deny" as const,
-            webfetch: "deny" as const,
+            "*": "deny" as const,
+            read: "allow" as const,
+            grep: "allow" as const,
+            glob: "allow" as const,
           },
         },
       },
@@ -355,21 +331,14 @@ export class RepoService {
         mode: "primary" as const,
         description:
           "UI-inspection agent with Playwright MCP browser access. Read-only filesystem; can navigate, snapshot, screenshot, and interact with the target app's live UI for verification of user-facing criteria.",
-        tools: {
-          // Filesystem: read-only, same as swarm-read profile
-          read: true,
-          grep: true,
-          glob: true,
-          list: true,
-          write: false,
-          edit: false,
-          multiedit: false,
-          patch: false,
-          bash: false,
-          webfetch: false,
-          task: false,
-          todoread: false,
-          todowrite: false,
+        // #234: v2 permission ruleset replaces the deprecated v1 tools field.
+        // MCP tools (the playwright_* family) flow through opencode's MCP
+        // bridge — granted via the `mcp` field below, not via permission rules.
+        permission: {
+          "*": "deny" as const,
+          read: "allow" as const,
+          grep: "allow" as const,
+          glob: "allow" as const,
         },
         mcp: {
           // Enable all tools exposed by the playwright MCP server
@@ -377,11 +346,6 @@ export class RepoService {
           // evaluate / wait_for / press_key etc.). OpenCode exposes
           // them to the agent with `playwright_*` prefixes.
           playwright: true,
-        },
-        permission: {
-          edit: "deny" as const,
-          bash: "deny" as const,
-          webfetch: "deny" as const,
         },
       };
     }
