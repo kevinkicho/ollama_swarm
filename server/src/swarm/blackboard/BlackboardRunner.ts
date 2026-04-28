@@ -163,6 +163,11 @@ import { checkBuildCommand } from "./buildCommandAllowlist.js";
 
 const CLAIM_TTL_MS = 10 * 60_000;
 const CLAIM_EXPIRY_INTERVAL_MS = 30_000;
+// V2 cutover Phase 2b (2026-04-28): reaper for the V2 TodoQueue.
+// Mirrors V1's CLAIM_TTL_MS / CLAIM_EXPIRY_INTERVAL_MS — same value
+// so behavior carries over once V1 Board is removed.
+const IN_PROGRESS_TTL_MS = 10 * 60_000;
+const REAPER_INTERVAL_MS = 30_000;
 const WORKER_POLL_MS = 2_000;
 const WORKER_POLL_JITTER_MS = 500;
 const WORKER_COOLDOWN_MS = 5_000;
@@ -231,6 +236,9 @@ export class BlackboardRunner implements SwarmRunner {
   // them all at once without needing to know about planner vs worker.
   private activeAborts = new Set<AbortController>();
   private expiryTimer?: NodeJS.Timeout;
+  // V2 cutover Phase 2b (2026-04-28): timer for the V2 TodoQueue
+  // reaper. Replaces V1's expiryTimer once Board.ts is gone (Phase 2f).
+  private reaperTimer?: NodeJS.Timeout;
   // Phase 6: replan orchestration. Planner is captured during executing and
   // reused to replan stale todos — see docs/known-limitations.md.
   private planner?: Agent;
@@ -845,6 +853,7 @@ export class BlackboardRunner implements SwarmRunner {
         this.tickAccumulator = createTickAccumulator(this.runStartedAt);
         this.setPhase("executing");
         this.startClaimExpiry();
+        this.startQueueReaper();
         this.planner = planner;
         this.startReplanWatcher();
         await this.runAuditedExecution(planner, workers);
@@ -873,6 +882,7 @@ export class BlackboardRunner implements SwarmRunner {
       }
     } finally {
       this.stopClaimExpiry();
+      this.stopQueueReaper();
       this.stopReplanWatcher();
       // Cap-trip audit: one last pass so the summary's contract reflects
       // true met/wont-do/unmet distribution instead of leaving every
@@ -1160,6 +1170,7 @@ export class BlackboardRunner implements SwarmRunner {
     this.v2Observer.apply({ type: "stop-requested", ts: Date.now() });
     this.setPhase("stopping");
     this.stopClaimExpiry();
+    this.stopQueueReaper();
     this.stopReplanWatcher();
     // Task #165: cancel any in-flight quota-pause probe so it doesn't
     // try to resume a run that's being torn down.
@@ -4183,6 +4194,38 @@ export class BlackboardRunner implements SwarmRunner {
   private stopClaimExpiry(): void {
     if (this.expiryTimer) clearInterval(this.expiryTimer);
     this.expiryTimer = undefined;
+  }
+
+  // V2 cutover Phase 2b (2026-04-28): periodic sweep of the V2
+  // TodoQueue. Reaps in-progress todos older than IN_PROGRESS_TTL_MS
+  // (default 10 min) by transitioning them to failed. Reaped ids are
+  // routed through enqueueReplan so the planner can decide whether
+  // to retry or skip — same downstream path as V1's markStale →
+  // todo_stale → enqueueReplan.
+  //
+  // Runs alongside startClaimExpiry during the cutover. After Board
+  // is removed (Phase 2f), this becomes the sole TTL enforcer.
+  private startQueueReaper(): void {
+    if (this.reaperTimer) return;
+    this.reaperTimer = setInterval(() => {
+      const reaped = this.v2TodoQueue.reapStaleInProgress(
+        Date.now(),
+        IN_PROGRESS_TTL_MS,
+      );
+      if (reaped.length > 0) {
+        this.appendSystem(
+          `[v2-reaper] Reaped ${reaped.length} stale in-progress todo(s) past ${Math.round(IN_PROGRESS_TTL_MS / 60_000)}min TTL: ${reaped.join(", ")}`,
+        );
+        // Route through replan so the planner re-shapes or skips them.
+        for (const id of reaped) this.enqueueReplan(id);
+      }
+    }, REAPER_INTERVAL_MS);
+    this.reaperTimer.unref?.();
+  }
+
+  private stopQueueReaper(): void {
+    if (this.reaperTimer) clearInterval(this.reaperTimer);
+    this.reaperTimer = undefined;
   }
 
   // ---------------------------------------------------------------------
