@@ -7,6 +7,7 @@ import { RunHistoryDropdown } from "./components/RunHistory";
 import { EventLogPanel } from "./components/EventLogPanel";
 import { UsageWidget } from "./components/UsageWidget";
 import { ErrorBanner } from "./components/ErrorBanner";
+import { BubbleGallery } from "./components/BubbleGallery";
 import type { RunSummary } from "./types";
 
 // Task #65 (2026-04-24): URL-based review mode. When the user opens a
@@ -24,7 +25,22 @@ function parseReviewParams(): { runId: string; clonePath: string } | null {
   return { runId, clonePath };
 }
 
+// Validation tour fixture (2026-04-27): ?gallery=1 short-circuits the
+// app and renders BubbleGallery instead. Lets us audit every bubble in
+// isolation without waiting for runs to surface each summary.kind.
+function isGalleryMode(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).has("gallery");
+}
+
 export default function App() {
+  // Gallery short-circuit: rendered as a sibling, not nested inside
+  // AppMain, so the conditional doesn't violate rules-of-hooks.
+  if (isGalleryMode()) return <BubbleGallery />;
+  return <AppMain />;
+}
+
+function AppMain() {
   const review = parseReviewParams();
   // Skip the live WS in review mode; the saved summary is the source.
   useSwarmSocket(review === null);
