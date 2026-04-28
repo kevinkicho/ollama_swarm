@@ -121,6 +121,7 @@ import { runGoalGenerationPrePass as runGoalGenerationPrePassExtracted } from ".
 import { buildAuditorSeed as buildAuditorSeedExtracted } from "./auditorSeedBuilder.js";
 import { truncate } from "./truncate.js";
 import { config } from "../../config.js";
+import { extractThinkTags } from "../../../../shared/src/extractThinkTags.js";
 
 // Blackboard preset: planner posts TODOs, workers drain them in a
 // claim/execute loop. Workers produce full-file diffs as JSON; the runner
@@ -4370,18 +4371,28 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   private appendAgent(agent: Agent, text: string): void {
+    // 2026-04-27 (UI Phase 1): split <think>...</think> reasoning out
+    // of the visible response. Reasoning models (deepseek, glm-5.1
+    // in some modes, gpt-o1) emit chain-of-thought wrapped in these
+    // markers. Pre-fix the bubble showed the raw text including stray
+    // closing tags. Now thoughts go in their own field; UI renders
+    // them as a collapsed-by-default ThoughtsBlock above the bubble.
+    const { thoughts, finalText } = extractThinkTags(text);
     // Unit 54: attach a structured summary when the response parses
     // as a known JSON envelope. UI uses this to collapse worker
-    // hunks/skips into a one-line summary by default.
-    const summary = summarizeAgentResponse(text);
+    // hunks/skips into a one-line summary by default. Summary parses
+    // against finalText (post-think-strip) so it doesn't mistake
+    // chain-of-thought prose for envelope content.
+    const summary = summarizeAgentResponse(finalText);
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "agent",
       agentId: agent.id,
       agentIndex: agent.index,
-      text: text || "(empty response)",
+      text: finalText || "(empty response)",
       ts: Date.now(),
       summary,
+      ...(thoughts.length > 0 ? { thoughts } : {}),
     };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });

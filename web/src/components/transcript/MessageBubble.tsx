@@ -31,6 +31,9 @@ import { RunFinishedGrid, SeedAnnounceGrid } from "./RunFinishedGrid";
 import { DebateVerdictBubble } from "./DebateVerdictBubble";
 import { RunStartDivider } from "./RunStartDivider";
 import { formatServerSummary } from "./formatServerSummary";
+import { ThoughtsBlock } from "./ThoughtsBlock";
+import { ContractBubble } from "./ContractBubble";
+import { AuditorVerdictBubble } from "./AuditorVerdictBubble";
 
 export function MessageBubble({ entry }: { entry: TranscriptEntry }) {
   const ts = new Date(entry.ts).toLocaleTimeString();
@@ -45,7 +48,15 @@ export function MessageBubble({ entry }: { entry: TranscriptEntry }) {
       data-entry-role={entry.role}
       {...(entry.summary?.kind ? { "data-summary-kind": entry.summary.kind } : {})}
       {...(typeof entry.agentIndex === "number" ? { "data-agent-index": entry.agentIndex } : {})}
+      {...(entry.thoughts ? { "data-has-thoughts": "true" } : {})}
     >
+      {/* Phase 1 (UI coherent-fix): render <think>...</think> content
+          above the main bubble as a collapsed-by-default details
+          block. Separate from the final-response bubble so reasoning
+          model output stays scannable. */}
+      {entry.thoughts && entry.thoughts.length > 0 ? (
+        <ThoughtsBlock text={entry.thoughts} />
+      ) : null}
       {entry.role === "system" ? (
         <SystemBubble entry={entry} ts={ts} />
       ) : entry.role === "user" ? (
@@ -392,6 +403,32 @@ function AgentClientFallback({
     );
   }
   if (clientSummary) {
+    // Phase 3 (UI coherent-fix, 2026-04-27): route to a dedicated
+    // structured-expand component when the envelope kind is one we
+    // ship a bubble for. Falls back to AgentJsonBubble for kinds
+    // marked "unknown" (worker hunks, replanner, etc. — those route
+    // via the looseHunks check above OR don't have a dedicated
+    // bubble yet).
+    if (clientSummary.parsed.kind === "contract") {
+      return (
+        <ContractBubble
+          envelope={clientSummary.parsed}
+          header={header}
+          className={className}
+          style={style}
+        />
+      );
+    }
+    if (clientSummary.parsed.kind === "auditor") {
+      return (
+        <AuditorVerdictBubble
+          envelope={clientSummary.parsed}
+          header={header}
+          className={className}
+          style={style}
+        />
+      );
+    }
     return (
       <AgentJsonBubble
         className={className}

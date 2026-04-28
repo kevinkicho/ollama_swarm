@@ -60,6 +60,13 @@ export interface TranscriptEntry {
   // click-to-expand. Absent on system/user entries and on agent
   // entries that don't parse as a recognized envelope.
   summary?: TranscriptEntrySummary;
+  // 2026-04-27 (UI Phase 1): when an agent emitted <think>...</think>
+  // markers (reasoning models), the server-side appendAgent strips
+  // them out into this field via shared/extractThinkTags. The text
+  // field carries the FINAL response only. UI renders thoughts as a
+  // collapsed-by-default ThoughtsBlock above the main bubble. Absent
+  // on system/user entries and on agent entries with no <think> tags.
+  thoughts?: string;
 }
 
 export interface BoardCountsDTO {

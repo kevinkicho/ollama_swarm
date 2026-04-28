@@ -74,6 +74,9 @@ const TEST_FILES = [
   "src/routes/swarm.test.ts",
   "src/routes/v2.test.ts",
 
+  // shared/
+  "../shared/src/extractThinkTags.test.ts",
+
   // services/
   "src/services/ollamaProxy.test.ts",
   "src/services/OllamaClient.test.ts",

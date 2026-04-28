@@ -1470,7 +1470,13 @@ export class AgentManager {
   // per STREAMING_THROTTLE_MS (100ms = 10 Hz). Trailing-edge timer:
   // first chunk schedules a flush, subsequent chunks just update the
   // latest text, the timer fires once and emits the latest snapshot.
-  private static readonly STREAMING_THROTTLE_MS = 100;
+  // 2026-04-27 (UI Phase 2): dropped 100 → 33 (30Hz). At 100ms (10Hz)
+  // the throttle was visibly choppy when chunks arrived rapidly — and
+  // when chunks arrived in BIG batches (V2 OllamaClient direct path),
+  // the throttle would deliver a single big update with nothing
+  // visually in between. 33ms (~30Hz) lets the UI feel smooth without
+  // overwhelming the WS channel — same cadence modern chat UIs use.
+  private static readonly STREAMING_THROTTLE_MS = 33;
 
   // V2 Step 1: public hook for the Ollama-direct path (promptWithRetry).
   // Bypasses the SSE/streamPrompt machinery entirely — caller already

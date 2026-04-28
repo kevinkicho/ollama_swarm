@@ -15,9 +15,44 @@
 
 import { extractFirstBalancedJson } from "./extractJson.js";
 
+// Phase 3 (UI coherent-fix package, 2026-04-27): structured parse
+// result returned alongside the summary string so the web side can
+// route to a kind-specific expandable bubble (ContractBubble,
+// AuditorVerdictBubble) instead of dropping straight to raw-JSON
+// view when the user clicks "VIEW JSON". The summary string is
+// preserved exactly as before for back-compat with existing
+// AgentJsonBubble rendering. `kind: "unknown"` means we recognized
+// the shape enough to summarize but the web doesn't have a dedicated
+// component for it yet (worker_hunks, replanner — those still
+// route to existing bubbles via different detectors).
+export type ParsedEnvelope =
+  | {
+      kind: "contract";
+      missionStatement: string;
+      criteria: Array<{ description: string; expectedFiles: string[] }>;
+    }
+  | {
+      kind: "auditor";
+      verdicts: Array<{
+        id: string;
+        status: string;
+        rationale: string;
+        todos?: unknown[];
+      }>;
+      newCriteria?: Array<{ description: string; expectedFiles: string[] }>;
+    }
+  | { kind: "todos"; todos: Array<{ description: string; expectedFiles: string[] }> }
+  | { kind: "unknown" };
+
 export interface AgentJsonSummary {
   summary: string;
   json: string;
+  // Phase 3 (2026-04-27): always populated; defaults to {kind:"unknown"}
+  // for envelope shapes the summarizer recognized but the web doesn't
+  // have a dedicated bubble for. Web's MessageBubble routes on
+  // parsed.kind to choose between ContractBubble / AuditorVerdictBubble
+  // / AgentJsonBubble fallback.
+  parsed: ParsedEnvelope;
 }
 
 export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
@@ -38,10 +73,10 @@ export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
   if (isObject(parsed) && Array.isArray((parsed as { hunks?: unknown }).hunks)) {
     const p = parsed as { hunks: unknown[]; skip?: unknown };
     if (typeof p.skip === "string" && p.skip.trim().length > 0) {
-      return { summary: `Declined: ${truncate(p.skip, 160)}`, json: pretty };
+      return { summary: `Declined: ${truncate(p.skip, 160)}`, json: pretty, parsed: { kind: "unknown" } };
     }
     if (p.hunks.length === 0) {
-      return { summary: "Returned no changes", json: pretty };
+      return { summary: "Returned no changes", json: pretty, parsed: { kind: "unknown" } };
     }
     const parts = p.hunks.map((h) => {
       if (!isObject(h) || typeof h.file !== "string") return "[malformed hunk]";
@@ -59,7 +94,7 @@ export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
       }
       return `[unknown hunk on ${file}]`;
     });
-    return { summary: `Wrote ${parts.join(", ")}`, json: pretty };
+    return { summary: `Wrote ${parts.join(", ")}`, json: pretty, parsed: { kind: "unknown" } };
   }
 
   // Worker v1 (legacy): { diffs: [...], skip?: string }. Kept so replays of
@@ -67,10 +102,10 @@ export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
   if (isObject(parsed) && Array.isArray((parsed as { diffs?: unknown }).diffs)) {
     const p = parsed as { diffs: unknown[]; skip?: unknown };
     if (typeof p.skip === "string" && p.skip.trim().length > 0) {
-      return { summary: `Declined: ${truncate(p.skip, 160)}`, json: pretty };
+      return { summary: `Declined: ${truncate(p.skip, 160)}`, json: pretty, parsed: { kind: "unknown" } };
     }
     if (p.diffs.length === 0) {
-      return { summary: "Returned no changes", json: pretty };
+      return { summary: "Returned no changes", json: pretty, parsed: { kind: "unknown" } };
     }
     const parts = p.diffs.map((d) => {
       if (isObject(d) && typeof d.file === "string" && typeof d.newText === "string") {
@@ -78,7 +113,7 @@ export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
       }
       return "[malformed diff]";
     });
-    return { summary: `Wrote ${parts.join(", ")}`, json: pretty };
+    return { summary: `Wrote ${parts.join(", ")}`, json: pretty, parsed: { kind: "unknown" } };
   }
 
   // Replanner revise: { revised: { description, expectedFiles } }
@@ -89,14 +124,14 @@ export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
       ? r.expectedFiles.filter((f): f is string => typeof f === "string")
       : [];
     const filesSuffix = files.length > 0 ? ` → ${files.join(", ")}` : "";
-    return { summary: `Revised: ${truncate(desc, 120)}${filesSuffix}`, json: pretty };
+    return { summary: `Revised: ${truncate(desc, 120)}${filesSuffix}`, json: pretty, parsed: { kind: "unknown" } };
   }
 
   // Replanner skip: { skip: true, reason: string }
   if (isObject(parsed) && (parsed as { skip?: unknown }).skip === true) {
     const p = parsed as { reason?: unknown };
     const reason = typeof p.reason === "string" ? p.reason : "(no reason)";
-    return { summary: `Skipped: ${truncate(reason, 160)}`, json: pretty };
+    return { summary: `Skipped: ${truncate(reason, 160)}`, json: pretty, parsed: { kind: "unknown" } };
   }
 
   // First-pass contract: { missionStatement: string, criteria: [{description, expectedFiles}] }
@@ -122,9 +157,26 @@ export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
     const critBlock = n === 0
       ? "0 criteria"
       : `${n} criteri${n === 1 ? "on" : "a"}:\n${previewLines.join("\n")}${moreSuffix}`;
+    // Phase 3 (2026-04-27): also return the structured criteria so
+    // ContractBubble can render the full list with an interactive
+    // expand instead of the stringified preview.
+    const criteriaForUi: Array<{ description: string; expectedFiles: string[] }> = [];
+    for (const c of p.criteria) {
+      if (!isObject(c)) continue;
+      const desc = typeof c.description === "string" ? c.description : "";
+      const files = Array.isArray(c.expectedFiles)
+        ? c.expectedFiles.filter((f): f is string => typeof f === "string")
+        : [];
+      if (desc) criteriaForUi.push({ description: desc, expectedFiles: files });
+    }
     return {
       summary: `Contract: ${truncate(p.missionStatement, 120)}\n${critBlock}`,
       json: pretty,
+      parsed: {
+        kind: "contract",
+        missionStatement: p.missionStatement,
+        criteria: criteriaForUi,
+      },
     };
   }
 
@@ -151,7 +203,44 @@ export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
       unknown ? `${unknown} ?` : null,
     ].filter(Boolean).join(", ") || "0 verdicts";
     const newSuffix = newN > 0 ? ` (+${newN} new criteri${newN === 1 ? "on" : "a"})` : "";
-    return { summary: `Audit: ${counts}${newSuffix}`, json: pretty };
+    // Phase 3 (2026-04-27): also return the structured verdicts so
+    // AuditorVerdictBubble can render the full list with rationale +
+    // interactive expand.
+    const verdictsForUi: Array<{ id: string; status: string; rationale: string; todos?: unknown[] }> = [];
+    for (const v of p.verdicts) {
+      if (!isObject(v)) continue;
+      const id = typeof (v as { id?: unknown }).id === "string" ? (v as { id: string }).id : "";
+      const status = typeof (v as { status?: unknown }).status === "string"
+        ? (v as { status: string }).status
+        : "unknown";
+      const rationale = typeof (v as { rationale?: unknown }).rationale === "string"
+        ? (v as { rationale: string }).rationale
+        : "";
+      const todos = Array.isArray((v as { todos?: unknown }).todos)
+        ? (v as { todos: unknown[] }).todos
+        : undefined;
+      if (id) verdictsForUi.push({ id, status, rationale, todos });
+    }
+    const newCriteriaForUi: Array<{ description: string; expectedFiles: string[] }> = [];
+    if (Array.isArray(p.newCriteria)) {
+      for (const c of p.newCriteria) {
+        if (!isObject(c)) continue;
+        const desc = typeof c.description === "string" ? c.description : "";
+        const files = Array.isArray(c.expectedFiles)
+          ? c.expectedFiles.filter((f): f is string => typeof f === "string")
+          : [];
+        if (desc) newCriteriaForUi.push({ description: desc, expectedFiles: files });
+      }
+    }
+    return {
+      summary: `Audit: ${counts}${newSuffix}`,
+      json: pretty,
+      parsed: {
+        kind: "auditor",
+        verdicts: verdictsForUi,
+        ...(newCriteriaForUi.length > 0 ? { newCriteria: newCriteriaForUi } : {}),
+      },
+    };
   }
 
   // Planner: top-level array of { description, expectedFiles }
@@ -162,9 +251,22 @@ export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
     if (looksLikeTodos) {
       const first = (parsed[0] as { description: string }).description;
       const more = parsed.length > 1 ? ` (+${parsed.length - 1} more)` : "";
+      // Phase 3 (2026-04-27): also return structured todos.
+      const todosForUi: Array<{ description: string; expectedFiles: string[] }> = [];
+      for (const t of parsed) {
+        if (!isObject(t)) continue;
+        const desc = typeof (t as { description?: unknown }).description === "string"
+          ? (t as { description: string }).description
+          : "";
+        const files = Array.isArray((t as { expectedFiles?: unknown }).expectedFiles)
+          ? (t as { expectedFiles: unknown[] }).expectedFiles.filter((f): f is string => typeof f === "string")
+          : [];
+        if (desc) todosForUi.push({ description: desc, expectedFiles: files });
+      }
       return {
         summary: `Posted ${parsed.length} todo${parsed.length === 1 ? "" : "s"}: ${truncate(first, 100)}${more}`,
         json: pretty,
+        parsed: { kind: "todos", todos: todosForUi },
       };
     }
   }

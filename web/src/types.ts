@@ -52,6 +52,12 @@ export interface TranscriptEntry {
   // bubble can render with the same segment structure the user saw
   // live. Indices into `text`. Never set by server (typed optional).
   segmentSplitPoints?: number[];
+  // 2026-04-27 (UI Phase 1): when an agent emitted <think>...</think>
+  // markers (reasoning models), the server-side appendAgent strips
+  // them out into this field via shared/extractThinkTags. The text
+  // field carries the FINAL response only. UI renders thoughts as a
+  // collapsed-by-default ThoughtsBlock above the main bubble.
+  thoughts?: string;
 }
 
 export type SwarmPhase =
