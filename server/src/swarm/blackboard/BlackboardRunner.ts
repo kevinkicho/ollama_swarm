@@ -13,6 +13,7 @@ import type {
 } from "../../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "../SwarmRunner.js";
 import { Board } from "./Board.js";
+import { FindingsLog } from "./FindingsLog.js";
 import { RunStateObserver } from "./RunStateObserver.js";
 import { TodoQueueV2 } from "./TodoQueueV2.js";
 import { applyAndCommitV2 } from "./WorkerPipelineV2.js";
@@ -232,6 +233,11 @@ export class BlackboardRunner implements SwarmRunner {
   private active?: RunConfig;
   private board: Board;
   private boardBroadcaster: BoardBroadcaster;
+  // V2 cutover Phase 2c-pre (2026-04-28): findings extracted from Board
+  // into their own append-only log. Lives alongside the V2 TodoQueue
+  // (which doesn't model findings) so the auditor + replanner still
+  // have somewhere to emit diagnostic notes.
+  private findings: FindingsLog;
   // Every in-flight prompt registers its AbortController so stop() can abort
   // them all at once without needing to know about planner vs worker.
   private activeAborts = new Set<AbortController>();
@@ -455,6 +461,7 @@ export class BlackboardRunner implements SwarmRunner {
       },
     });
     this.boardBroadcaster.bindBoard(this.board);
+    this.findings = new FindingsLog();
   }
 
   // V2 Step 3b helper: derive whether all contract criteria have a
@@ -632,6 +639,7 @@ export class BlackboardRunner implements SwarmRunner {
     // Reset the V2 todo-queue mirror so the run starts clean.
     this.v2TodoQueue.clear();
     this.v1ToV2TodoId.clear();
+    this.findings.clear();
 
     this.setPhase("cloning");
     const cloneResult = await this.opts.repos.clone({
@@ -1605,7 +1613,7 @@ export class BlackboardRunner implements SwarmRunner {
     const groundedCriteria = parsed.criteria.map((c, idx) => {
       const { accepted, rejected } = classifyExpectedFiles(c.expectedFiles, seed.repoFiles);
       for (const r of rejected) {
-        this.board.postFinding({
+        this.findings.post({
           agentId: ownerAgent.id,
           text: `Contract c${idx + 1}: stripped suspicious path '${r.path}' (${r.reason}). Unit 5d linked-commit fallback will rebind from later commits.`,
           createdAt: Date.now(),
@@ -1738,7 +1746,7 @@ export class BlackboardRunner implements SwarmRunner {
       parsed = parsePlannerResponse(repairResponse);
       if (!parsed.ok) {
         this.appendSystem(`Planner still invalid after repair (${parsed.reason}). Giving up this run.`);
-        this.board.postFinding({
+        this.findings.post({
           agentId: agent.id,
           text: `Planner failed to produce valid JSON after one repair attempt. Last error: ${parsed.reason}`,
           createdAt: Date.now(),
@@ -1765,7 +1773,7 @@ export class BlackboardRunner implements SwarmRunner {
       const { accepted, rejected } = classifyExpectedFiles(t.expectedFiles, seed.repoFiles);
       for (const r of rejected) {
         suspiciousStripped += 1;
-        this.board.postFinding({
+        this.findings.post({
           agentId: agent.id,
           text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": stripped suspicious path '${r.path}' (${r.reason}).`,
           createdAt: Date.now(),
@@ -1773,7 +1781,7 @@ export class BlackboardRunner implements SwarmRunner {
       }
       if (accepted.length === 0) {
         todosDropped += 1;
-        this.board.postFinding({
+        this.findings.post({
           agentId: agent.id,
           text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": dropped entirely — all ${t.expectedFiles.length} path(s) rejected by grounding check.`,
           createdAt: Date.now(),
@@ -1805,7 +1813,7 @@ export class BlackboardRunner implements SwarmRunner {
       const result = await checkExpectedSymbols(t, seed.clonePath);
       if (!result.ok) {
         symbolDropped += 1;
-        this.board.postFinding({
+        this.findings.post({
           agentId: agent.id,
           text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": dropped by symbol-grounding — missing ${result.missing.map((m) => `'${m.symbol}' in ${m.file}`).join(", ")}.`,
           createdAt: Date.now(),
@@ -1860,7 +1868,7 @@ export class BlackboardRunner implements SwarmRunner {
       this.appendSystem(
         `⚠ Planner failed to produce actionable todos${fallbackNote}. ${dropDetail} The run will exit with stopReason="no-progress" after fallback reflection — no commits will land.`,
       );
-      this.board.postFinding({
+      this.findings.post({
         agentId: agent.id,
         text: dropDetail,
         createdAt: Date.now(),
@@ -2234,7 +2242,7 @@ export class BlackboardRunner implements SwarmRunner {
     const appendedCriteria = parsed.contract.criteria.map((c, idx) => {
       const { accepted, rejected } = classifyExpectedFiles(c.expectedFiles, repoFiles);
       for (const r of rejected) {
-        this.board.postFinding({
+        this.findings.post({
           agentId: planner.id,
           text: `Tier ${nextTier} c${priorMaxId + idx + 1}: stripped suspicious path '${r.path}' (${r.reason}).`,
           createdAt: Date.now(),
@@ -2334,7 +2342,8 @@ export class BlackboardRunner implements SwarmRunner {
 
     const seed = await buildAuditorSeedExtracted({
       contract: this.contract!,
-      board: this.board,
+      todos: this.board.listTodos(),
+      findings: this.findings.list(),
       readExpectedFiles: (paths) => this.readExpectedFiles(paths),
       auditInvocation: this.auditInvocations,
       maxInvocations: this.maxAuditInvocations,

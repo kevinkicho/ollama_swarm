@@ -22,12 +22,17 @@ import {
   buildAuditorSeedCore,
   type AuditorSeed,
 } from "./prompts/auditor.js";
-import type { Board } from "./Board.js";
-import type { ExitContract } from "./types.js";
+import type { ExitContract, Todo, Finding } from "./types.js";
 
 export interface AuditorSeedContext {
   contract: ExitContract;
-  board: Board;
+  // V2 cutover Phase 2c-pre (2026-04-28): take todos + findings as
+  // pre-collected snapshots instead of a Board reference. The caller
+  // (BlackboardRunner) has already migrated to V2 queue + FindingsLog;
+  // letting them assemble the snapshot here keeps this module
+  // independent of which queue impl is in use.
+  todos: readonly Todo[];
+  findings: readonly Finding[];
   readExpectedFiles: (paths: string[]) => Promise<Record<string, string | null>>;
   auditInvocation: number;
   maxInvocations: number;
@@ -68,8 +73,8 @@ export async function buildAuditorSeed(ctx: AuditorSeedContext): Promise<Auditor
 
   return buildAuditorSeedCore({
     contract: ctx.contract,
-    todos: ctx.board.listTodos(),
-    findings: ctx.board.listFindings(),
+    todos: ctx.todos.slice(),
+    findings: ctx.findings.slice(),
     readFiles: (paths) => ctx.readExpectedFiles(paths),
     auditInvocation: ctx.auditInvocation,
     maxInvocations: ctx.maxInvocations,
