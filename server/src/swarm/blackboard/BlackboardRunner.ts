@@ -118,13 +118,11 @@ import {
 // Task #164 (refactor): goal-list parser split out (used by both
 // goal-generation pre-pass and stretch reflection).
 import { parseGoalList } from "./goalListParser.js";
-// Task #164 (refactor): per-commit critic + verifier invocations
-// split out into criticInvocation.ts + verifierInvocation.ts. After
-// V2 cutover Phase 2c (2026-04-28) neither is currently called — V1
-// worker pipeline (their only caller) was deleted. The modules stay
-// available for re-wiring into the V2 worker as separate enhancements;
-// criticEnabled() / verifierEnabled() below are the
-// gate flag callers will check when that wiring lands.
+// V2 cutover (2026-04-28): per-commit critic + verifier modules were
+// deleted with the V1 worker pipeline. cfg.critic / cfg.verifier /
+// cfg.criticEnsemble route flags are accepted but no-op. Re-wiring
+// either feature into the V2 worker is a separate enhancement; revive
+// from git history (1110084 + prior) when needed.
 // Task #164 (refactor): goal-generation pre-pass split out.
 import { runGoalGenerationPrePass as runGoalGenerationPrePassExtracted } from "./goalGenerationPrePass.js";
 // Task #164 (refactor): auditor seed builder + UI snapshot capture split out.
@@ -2296,22 +2294,12 @@ export class BlackboardRunner implements SwarmRunner {
     return max;
   }
 
-  // Unit 35: resolve whether the critic should fire for this run.
-  // Per-run `cfg.critic` wins over env when present (explicit on/off);
-  // otherwise CRITIC_ENABLED env decides.
-  // Task #164 (refactor): single + ensemble critic implementations
-  // moved to ./criticInvocation.ts; this method is just the gate.
-  private criticEnabled(): boolean {
-    const perRun = this.active?.critic;
-    if (perRun !== undefined) return perRun;
-    return config.CRITIC_ENABLED;
-  }
-
-  // Task #128 / #164: per-commit verifier — opt-in via cfg.verifier.
-  // Implementation in ./verifierInvocation.ts; this method just gates.
-  private verifierEnabled(): boolean {
-    return this.active?.verifier === true;
-  }
+  // Audit fix (2026-04-28): criticEnabled() / verifierEnabled() gate
+  // methods removed — neither feature has been re-wired into the V2
+  // worker pipeline since V2 cutover Phase 2c. cfg.critic / cfg.verifier
+  // / cfg.criticEnsemble flags continue to be accepted by the route
+  // schema for back-compat (older clients won't 400) but are no-op.
+  // When the features get re-wired, the gates come back with them.
 
   // Unit 11: the drain-audit-repeat loop's backstop. Reads from cfg.rounds so
   // the user's setup-form "Rounds" slider actually has teeth in blackboard
@@ -3741,6 +3729,15 @@ export class BlackboardRunner implements SwarmRunner {
         description: t.description,
         expectedFiles: t.expectedFiles.slice(),
         replanCount: t.retries,
+        // Audit fix (2026-04-28): forward anchor revisions when the
+        // replanner produced them, matching the schema declared on
+        // BoardEvent.todo_replanned (types.ts) and the wire variant
+        // in web/src/types.ts. Snapshot also carries them, but the
+        // per-event update lets the UI's applyReplan hook attach
+        // them immediately instead of waiting for the next snapshot.
+        ...(t.expectedAnchors && t.expectedAnchors.length > 0
+          ? { expectedAnchors: t.expectedAnchors.slice() }
+          : {}),
       });
     }
     this.scheduleStateWrite();
@@ -3804,15 +3801,18 @@ export class BlackboardRunner implements SwarmRunner {
   // is the source of truth. The reaper (startQueueReaper, immediately
   // below) is the sole TTL enforcer.
 
-  // V2 cutover Phase 2b (2026-04-28): periodic sweep of the V2
-  // TodoQueue. Reaps in-progress todos older than IN_PROGRESS_TTL_MS
-  // (default 10 min) by transitioning them to failed. Reaped ids are
-  // routed through enqueueReplan so the planner can decide whether
-  // to retry or skip — same downstream path as V1's markStale →
-  // todo_stale → enqueueReplan.
+  // Periodic sweep of the V2 TodoQueue. Reaps in-progress todos older
+  // than IN_PROGRESS_TTL_MS (default 10 min) by transitioning them to
+  // failed via reapStaleInProgress. Each reaped id is then:
+  //   1. broadcast as board_todo_stale (UI sync)
+  //   2. scheduleStateWrite (persist transition)
+  //   3. enqueueReplan (planner decides retry vs skip)
   //
-  // Runs alongside startClaimExpiry during the cutover. After Board
-  // is removed (Phase 2f), this becomes the sole TTL enforcer.
+  // Audit fix (2026-04-28): the broadcast + persist were missing —
+  // UI lagged the actual state by the snapshot debounce window.
+  // The wrapper failTodoQ can't be reused here because the queue
+  // already mutated to "failed" inside reapStaleInProgress; calling
+  // failTodoQ would throw "Cannot fail todo: status=failed".
   private startQueueReaper(): void {
     if (this.reaperTimer) return;
     this.reaperTimer = setInterval(() => {
@@ -3820,13 +3820,23 @@ export class BlackboardRunner implements SwarmRunner {
         Date.now(),
         IN_PROGRESS_TTL_MS,
       );
-      if (reaped.length > 0) {
-        this.appendSystem(
-          `[v2-reaper] Reaped ${reaped.length} stale in-progress todo(s) past ${Math.round(IN_PROGRESS_TTL_MS / 60_000)}min TTL: ${reaped.join(", ")}`,
-        );
-        // Route through replan so the planner re-shapes or skips them.
-        for (const id of reaped) this.enqueueReplan(id);
+      if (reaped.length === 0) return;
+      this.appendSystem(
+        `[v2-reaper] Reaped ${reaped.length} stale in-progress todo(s) past ${Math.round(IN_PROGRESS_TTL_MS / 60_000)}min TTL: ${reaped.join(", ")}`,
+      );
+      for (const id of reaped) {
+        const t = this.todoQueue.get(id);
+        const reason = t?.reason ?? `worker timeout (>${Math.round(IN_PROGRESS_TTL_MS / 60_000)}min in-progress)`;
+        this.boardBroadcaster.emit({
+          type: "todo_stale",
+          todoId: id,
+          reason,
+          replanCount: t?.retries ?? 0,
+        });
+        this.staleEventCount++;
+        this.enqueueReplan(id);
       }
+      this.scheduleStateWrite();
     }, REAPER_INTERVAL_MS);
     this.reaperTimer.unref?.();
   }

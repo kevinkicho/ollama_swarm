@@ -108,6 +108,11 @@ function toSwarmEvent(ev: BoardEvent): SwarmEvent {
         description: ev.description,
         expectedFiles: ev.expectedFiles,
         replanCount: ev.replanCount,
+        // Audit fix (2026-04-28): forward anchor revisions to the wire.
+        // Both BoardEvent.todo_replanned + the wire SwarmEvent variant
+        // declare expectedAnchors as optional; without this passthrough
+        // the UI's applyReplan handler never sees it.
+        ...(ev.expectedAnchors ? { expectedAnchors: ev.expectedAnchors } : {}),
       };
     case "finding_posted":
       return { type: "board_finding_posted", finding: ev.finding };

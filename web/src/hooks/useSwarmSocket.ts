@@ -78,7 +78,13 @@ function applyEvent(ev: SwarmEvent): void {
       s.markSkipped(ev.todoId, ev.reason);
       break;
     case "board_todo_replanned":
-      s.applyReplan(ev.todoId, ev.description, ev.expectedFiles, ev.replanCount);
+      s.applyReplan(
+        ev.todoId,
+        ev.description,
+        ev.expectedFiles,
+        ev.replanCount,
+        ev.expectedAnchors,
+      );
       break;
     case "board_finding_posted":
       s.appendFinding(ev.finding);

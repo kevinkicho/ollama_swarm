@@ -95,7 +95,13 @@ interface SwarmStore {
   markCommitted: (todoId: string) => void;
   markStale: (todoId: string, reason: string, replanCount: number) => void;
   markSkipped: (todoId: string, reason: string) => void;
-  applyReplan: (todoId: string, description: string, expectedFiles: string[], replanCount: number) => void;
+  applyReplan: (
+    todoId: string,
+    description: string,
+    expectedFiles: string[],
+    replanCount: number,
+    expectedAnchors?: string[],
+  ) => void;
   appendFinding: (f: Finding) => void;
   replaceBoard: (snapshot: BoardSnapshot) => void;
   setContract: (c: ExitContract) => void;
@@ -324,7 +330,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
         },
       };
     }),
-  applyReplan: (todoId, description, expectedFiles, replanCount) =>
+  applyReplan: (todoId, description, expectedFiles, replanCount, expectedAnchors) =>
     set((s) => {
       const existing = s.todos[todoId];
       if (!existing) return s;
@@ -336,6 +342,9 @@ export const useSwarm = create<SwarmStore>((set) => ({
             description,
             expectedFiles,
             replanCount,
+            // Audit fix (2026-04-28): apply anchor revisions when the
+            // replanner explicitly revised them. undefined = keep prior.
+            ...(expectedAnchors !== undefined ? { expectedAnchors } : {}),
             status: "open",
             staleReason: undefined,
             claim: undefined,
