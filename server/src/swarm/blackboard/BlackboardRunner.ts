@@ -1658,9 +1658,22 @@ export class BlackboardRunner implements SwarmRunner {
     // path sees clean JSON via extractFirstBalanced. Contract pass keeps
     // the new "swarm" default since FIRST_PASS_CONTRACT_SYSTEM_PROMPT is
     // tool-agnostic (file list is supplied in the user prompt).
+    // #231 follow-up: pass the just-produced contract into the todos
+    // prompt so the planner can ground each TODO against a specific
+    // criterion. RCA: without this, the model returns [] because it has
+    // no actionable target.
+    const contractForPrompt = this.contract
+      ? {
+          missionStatement: this.contract.missionStatement,
+          criteria: this.contract.criteria.map((c) => ({
+            description: c.description,
+            expectedFiles: c.expectedFiles,
+          })),
+        }
+      : undefined;
     const { response: firstResponse, agentUsed: planAgent } = await this.promptPlannerSafely(
       agent,
-      `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed)}`,
+      `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed, contractForPrompt)}`,
       "swarm-read",
     );
     if (this.stopping) return;

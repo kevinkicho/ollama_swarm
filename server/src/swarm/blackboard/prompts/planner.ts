@@ -242,7 +242,7 @@ export interface PriorRunSummary {
 // 20 criteria × 400 chars = ~8 KB max for the prior block — bounded.
 export const PRIOR_RATIONALE_MAX_CHARS = 400;
 
-export function buildPlannerUserPrompt(seed: PlannerSeed): string {
+export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionStatement: string; criteria: Array<{ description: string; expectedFiles: string[] }> }): string {
   const tree = seed.topLevel.length > 0 ? seed.topLevel.join(", ") : "(empty)";
   const readme = seed.readmeExcerpt
     ? seed.readmeExcerpt.slice(0, 4000)
@@ -264,11 +264,35 @@ export function buildPlannerUserPrompt(seed: PlannerSeed): string {
     ? `${seed.priorDesignMemoryRendered}\n\n` +
       "GUIDANCE: honor the north star + recent decisions when proposing TODOs. Prefer work that advances the roadmap. If a TODO would contradict a prior decision, propose updating the decision first instead.\n\n"
     : "";
+  // #231 follow-up (2026-04-27 evening): include the user's directive
+  // AND the just-produced contract directly in the todos prompt. RCA
+  // from runs af27f55c / 07e37525 / 00347ab2 found the planner was
+  // returning empty arrays because it had no actionable target — the
+  // contract was produced separately and never fed back. The user
+  // directive was in the seed but never rendered. Now both are
+  // explicit. Per HARD RULE 6 the planner returns [] only when there's
+  // genuinely nothing to do; with directive + criteria visible it can
+  // ground todos against them.
+  const directiveBlock = seed.userDirective && seed.userDirective.trim().length > 0
+    ? `=== USER DIRECTIVE (the work the user wants done) ===\n${seed.userDirective.trim()}\n=== end USER DIRECTIVE ===\n\n`
+    : "";
+  const contractBlock = contract
+    ? [
+        "=== CONTRACT (just produced; your TODOs should make these criteria met) ===",
+        `Mission: ${contract.missionStatement}`,
+        ...contract.criteria.map((c, i) =>
+          `  ${i + 1}. ${c.description}${c.expectedFiles.length > 0 ? ` [files: ${c.expectedFiles.join(", ")}]` : ""}`,
+        ),
+        "=== end CONTRACT ===",
+        "",
+      ].join("\n")
+    : "";
   return [
-    designBlock + memoryBlock + `Repository: ${seed.repoUrl}`,
+    designBlock + memoryBlock + directiveBlock + `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
     `Top-level entries: ${tree}`,
     "",
+    contractBlock,
     "=== REPO FILE LIST (up to 150 paths, BFS order, ignores applied) ===",
     fileList,
     "=== end REPO FILE LIST ===",
@@ -277,7 +301,7 @@ export function buildPlannerUserPrompt(seed: PlannerSeed): string {
     readme,
     "=== end README ===",
     "",
-    "Using ONLY the information above, output your JSON array of TODOs now.",
+    "Using the directive + contract + file list above, output your JSON array of TODOs now. Each TODO should be a concrete step toward making the contract criteria met.",
     "Remember: JSON array, no prose, <=2 files per TODO. Prefer paths that appear in the REPO FILE LIST; if creating a new file, its parent directory should appear there.",
   ].join("\n");
 }
