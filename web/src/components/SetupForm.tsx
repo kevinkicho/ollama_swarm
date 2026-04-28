@@ -19,6 +19,8 @@ import {
   directiveHintFor,
   type SwarmPreset,
 } from "./setup/PresetExtras";
+import { TopologyGrid, topologyForPreset } from "./setup/TopologyGrid";
+import type { Topology } from "../../../shared/src/topology";
 
 // Two-tier model framework — see docs/autonomous-productivity.md
 // "Per-preset distribution" for the full rationale.
@@ -215,6 +217,13 @@ export function SetupForm() {
   const [parentPath, setParentPath] = useState("C:\\users\\you\\projects");
   const [presetId, setPresetId] = useState<string>("round-robin");
   const [agentCount, setAgentCount] = useState(3);
+  // Phase 1 of #243: topology is the new source of truth. agentCount
+  // remains for WallClockEstimate + back-compat with the legacy POST
+  // shape, but it's kept in sync with topology.agents.length on every
+  // mutation. Initialized to the round-robin default (3 peers).
+  const [topology, setTopology] = useState<Topology>(() =>
+    topologyForPreset("round-robin", 3),
+  );
   // Model defaults to the initial preset's recommendation so the
   // form renders with a sensible Model field on first paint.
   // onPresetChange refreshes this when the user switches presets.
@@ -274,18 +283,83 @@ export function SetupForm() {
     const next = PRESETS.find((p) => p.id === e.target.value);
     if (!next) return;
     setPresetId(next.id);
-    setAgentCount(clamp(next.recommended, next.min, next.max));
+    const recommended = clamp(next.recommended, next.min, next.max);
+    setAgentCount(recommended);
     // Match the agentCount auto-update pattern: switching presets
     // also flips the main Model to the new preset's recommendation
     // (e.g. round-robin → stigmergy lands you on MODEL_CODING).
     // User can override after.
     setModel(next.recommendedModel);
+    // Regenerate the topology grid for the new preset. dedicatedAuditor
+    // applies only to blackboard; pre-seed planner/worker/auditor models
+    // from the existing per-role state so users don't lose what they typed.
+    setTopology(
+      topologyForPreset(next.id, recommended, {
+        dedicatedAuditor: next.id === "blackboard" ? dedicatedAuditor : undefined,
+        plannerModel: next.id === "blackboard" ? plannerModel : undefined,
+        workerModel: next.id === "blackboard" ? workerModel : undefined,
+        auditorModel: next.id === "blackboard" ? auditorModel : undefined,
+      }),
+    );
   };
 
-  const onAgentCountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const raw = Number(e.target.value);
-    if (!Number.isFinite(raw)) return;
-    setAgentCount(clamp(raw, preset.min, preset.max));
+  // Phase 1 (#243): topology grid is the count knob now. Keep
+  // agentCount mirrored so WallClockEstimate + legacy paths keep
+  // working. agents.length is always the truthy value.
+  const onTopologyChange = (next: Topology) => {
+    setTopology(next);
+    setAgentCount(next.agents.length);
+  };
+
+  // Phase 1d of #243: when the user edits the per-role model fields in
+  // the Advanced section (planner/worker/auditor), propagate that into
+  // every topology row matching that role. This way the Advanced
+  // section behaves like a "set all planner rows to X" macro — each
+  // individual row in the grid still wins for finer-grained overrides.
+  // Empty value = clear the row's override (falls back to top-level
+  // Model field via the same mechanism as TopologyGrid's placeholder).
+  const updateRoleModel = (roles: ReadonlyArray<string>, value: string) => {
+    const trimmed = value.trim();
+    setTopology((t) => ({
+      agents: t.agents.map((a) =>
+        roles.includes(a.role)
+          ? { ...a, model: trimmed.length > 0 ? trimmed : undefined }
+          : a,
+      ),
+    }));
+  };
+  const setPlannerModelSync = (m: string) => {
+    setPlannerModel(m);
+    // "planner-tier" roles share the planner model: planner itself plus
+    // orchestrator / reducer / judge in non-blackboard presets.
+    updateRoleModel(["planner", "orchestrator", "reducer", "judge"], m);
+  };
+  const setWorkerModelSync = (m: string) => {
+    setWorkerModel(m);
+    updateRoleModel(
+      ["worker", "mid-lead", "mapper", "drafter", "explorer", "peer", "pro", "con", "role-diff"],
+      m,
+    );
+  };
+  const setAuditorModelSync = (m: string) => {
+    setAuditorModel(m);
+    updateRoleModel(["auditor"], m);
+  };
+  // Toggling dedicatedAuditor changes the *count* (blackboard adds
+  // one extra agent for the auditor when on). Resync the topology
+  // rows so the grid reflects the new count without losing user
+  // edits to other rows' models.
+  const setDedicatedAuditorSync = (v: boolean) => {
+    setDedicatedAuditor(v);
+    if (preset.id !== "blackboard") return;
+    setTopology(
+      topologyForPreset(preset.id, agentCount, {
+        dedicatedAuditor: v,
+        plannerModel,
+        workerModel,
+        auditorModel,
+      }),
+    );
   };
 
   // Actual POST → /api/swarm/start. Called directly when preflight
@@ -370,6 +444,11 @@ export function SetupForm() {
           // Unit 25: shape blackboard's first-pass contract via a user
           // directive. Trimmed/empty goes as undefined (zod strips anyway).
           userDirective: userDirective.trim() || undefined,
+          // Phase 1 of #243: topology supersedes legacy fields server-
+          // side. Always send it — the route's deriveLegacyFields()
+          // re-derives agentCount + per-role models from this so the
+          // user's grid choices win over the form's older inputs.
+          topology,
           ...presetSpecific,
         }),
       });
@@ -513,18 +592,18 @@ export function SetupForm() {
           proposition={proposition}
           setProposition={setProposition}
           plannerModel={plannerModel}
-          setPlannerModel={setPlannerModel}
+          setPlannerModel={setPlannerModelSync}
           workerModel={workerModel}
-          setWorkerModel={setWorkerModel}
+          setWorkerModel={setWorkerModelSync}
           fallbackModel={model}
           wallClockCapMin={wallClockCapMin}
           setWallClockCapMin={setWallClockCapMin}
           ambitionTiers={ambitionTiers}
           setAmbitionTiers={setAmbitionTiers}
           dedicatedAuditor={dedicatedAuditor}
-          setDedicatedAuditor={setDedicatedAuditor}
+          setDedicatedAuditor={setDedicatedAuditorSync}
           auditorModel={auditorModel}
-          setAuditorModel={setAuditorModel}
+          setAuditorModel={setAuditorModelSync}
           specializedWorkers={specializedWorkers}
           setSpecializedWorkers={setSpecializedWorkers}
           criticEnsemble={criticEnsemble}
@@ -533,25 +612,19 @@ export function SetupForm() {
           setUiUrl={setUiUrl}
         />
 
-        <div className="grid grid-cols-3 gap-4">
-          <Field
-            label="Agents"
-            hint={
-              preset.min === preset.max
-                ? `Fixed at ${preset.min}`
-                : `Min ${preset.min} · Max ${preset.max} · Fits ${preset.recommended}`
-            }
-          >
-            <input
-              type="number"
-              min={preset.min}
-              max={preset.max}
-              value={agentCount}
-              onChange={onAgentCountChange}
-              className="input"
-              disabled={preset.min === preset.max}
-            />
-          </Field>
+        {/* Phase 1 (#243): topology grid replaces the standalone Agents
+            number input. The grid is the source of truth — it owns the
+            count via +/− buttons and surfaces per-row Role + Model
+            override. agentCount stays mirrored from topology.agents.length
+            so WallClockEstimate keeps working. */}
+        <TopologyGrid
+          preset={{ id: preset.id, min: preset.min, max: preset.max }}
+          topology={topology}
+          setTopology={onTopologyChange}
+          defaultModel={model}
+        />
+
+        <div className="grid grid-cols-2 gap-4">
           <Field label="Rounds">
             <input
               type="number"

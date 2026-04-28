@@ -3,6 +3,7 @@ import path from "node:path";
 import { promises as fs, readFileSync } from "node:fs";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
+import { TopologySchema, deriveLegacyFields } from "../../../shared/src/topology.js";
 import { config } from "../config.js";
 import { validateContinuousMode } from "./continuousMode.js";
 import type { Orchestrator } from "../services/Orchestrator.js";
@@ -147,6 +148,16 @@ const StartBody = z.object({
   // Default false — explicit opt-in so the UI's normal Start button
   // can't accidentally clobber a healthy run.
   force: z.boolean().optional(),
+  // Phase 1 of the topology refactor (#243): explicit per-agent specs.
+  // When present, supersedes legacy fields (agentCount, plannerModel,
+  // workerModel, auditorModel, dedicatedAuditor) — those are derived
+  // from the topology via deriveLegacyFields() and re-injected into
+  // the runner's RunConfig. When absent (older clients), the legacy
+  // fields drive the run unchanged. Synthesis happens at the end of
+  // the handler via synthesizeTopology(), so the post-resolution
+  // RunConfig.topology is always populated for downstream phases
+  // (4a History column, 4b AgentPanel mirroring) to consume.
+  topology: TopologySchema.optional(),
 });
 
 const SayBody = z.object({ text: z.string().min(1) });
@@ -270,14 +281,28 @@ export function swarmRouter(orch: Orchestrator): Router {
         // ignore — proceed to start; if it fails it'll fail with a real reason
       }
     }
+    // Phase 1 (#243): when the client posted a topology, derive the
+    // legacy agentCount + per-role models from it. Topology wins over
+    // any conflicting legacy fields the same payload happens to carry.
+    // This single-source-of-truth shift lets the runner side stay
+    // unchanged for now — it still consumes agentCount + plannerModel
+    // etc., but those values came from the user's grid choices.
+    const legacy = parsed.data.topology
+      ? deriveLegacyFields(parsed.data.topology, parsed.data.preset)
+      : null;
+    const effAgentCount = legacy?.agentCount ?? parsed.data.agentCount;
+    const effDedicatedAuditor = legacy?.dedicatedAuditor ?? parsed.data.dedicatedAuditor;
+    const effPlannerModel = legacy?.plannerModel ?? parsed.data.plannerModel;
+    const effWorkerModel = legacy?.workerModel ?? parsed.data.workerModel;
+    const effAuditorModel = legacy?.auditorModel ?? parsed.data.auditorModel;
     // Task #109: map-reduce floor agentCount=4 (1 reducer + 3 mappers).
     // Smaller setups (agentCount=3 = 2 mappers) leave one mapper with a
     // trivially-small slice that the model collapses on; full RCA in
     // run 2bcf662f. The 2-mapper minimum is enforced inside the runner
     // anyway, but rejecting at the schema layer gives a clearer error.
-    if (parsed.data.preset === "map-reduce" && parsed.data.agentCount < 4) {
+    if (parsed.data.preset === "map-reduce" && effAgentCount < 4) {
       res.status(400).json({
-        error: `Map-reduce requires at least 4 agents (1 reducer + 3 mappers). With fewer mappers, slice quality degrades sharply and one mapper typically gets stuck on a tiny slice. Got agentCount=${parsed.data.agentCount}.`,
+        error: `Map-reduce requires at least 4 agents (1 reducer + 3 mappers). With fewer mappers, slice quality degrades sharply and one mapper typically gets stuck on a tiny slice. Got agentCount=${effAgentCount}.`,
       });
       return;
     }
@@ -286,9 +311,9 @@ export function swarmRouter(orch: Orchestrator): Router {
     // Below that, the topology degenerates (mid-lead gets 0-1 workers
     // and the deep tier is just extra latency). Match map-reduce's
     // policy: reject at the route layer with a clear message.
-    if (parsed.data.preset === "orchestrator-worker-deep" && parsed.data.agentCount < 4) {
+    if (parsed.data.preset === "orchestrator-worker-deep" && effAgentCount < 4) {
       res.status(400).json({
-        error: `orchestrator-worker-deep requires at least 4 agents (1 orchestrator + 1 mid-lead + 2 workers). With fewer, the deep tier degenerates into flat OW with extra latency. Got agentCount=${parsed.data.agentCount}.`,
+        error: `orchestrator-worker-deep requires at least 4 agents (1 orchestrator + 1 mid-lead + 2 workers). With fewer, the deep tier degenerates into flat OW with extra latency. Got agentCount=${effAgentCount}.`,
       });
       return;
     }
@@ -328,7 +353,7 @@ export function swarmRouter(orch: Orchestrator): Router {
       await orch.start({
         repoUrl: parsed.data.repoUrl,
         localPath,
-        agentCount: parsed.data.agentCount,
+        agentCount: effAgentCount,
         rounds: effectiveRounds,
         model: parsed.data.model ?? config.DEFAULT_MODEL,
         preset: parsed.data.preset,
@@ -352,12 +377,12 @@ export function swarmRouter(orch: Orchestrator): Router {
         ambitionTiers: parsed.data.ambitionTiers,
         critic: parsed.data.critic,
         uiUrl: parsed.data.uiUrl,
-        plannerModel: parsed.data.plannerModel,
+        plannerModel: effPlannerModel,
         // Blackboard workers default to DEFAULT_WORKER_MODEL (gemma4) so
         // the planner's heavier reasoning model isn't burned on every
         // worker turn. Other presets share `model` across all agents.
         workerModel:
-          parsed.data.workerModel ??
+          effWorkerModel ??
           (parsed.data.preset === "blackboard"
             ? config.DEFAULT_WORKER_MODEL
             : undefined),
@@ -367,7 +392,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         // via DEFAULT_DEDICATED_AUDITOR). Explicit per-run value
         // always wins — including explicit `false` to disable.
         dedicatedAuditor:
-          parsed.data.dedicatedAuditor ??
+          effDedicatedAuditor ??
           (parsed.data.preset === "blackboard"
             ? config.DEFAULT_DEDICATED_AUDITOR
             : undefined),
@@ -376,9 +401,9 @@ export function swarmRouter(orch: Orchestrator): Router {
         // fires rarely so its latency is amortized; cross-criterion
         // synthesis benefits most from the strongest reasoning tier.
         auditorModel:
-          parsed.data.auditorModel ??
+          effAuditorModel ??
           (parsed.data.preset === "blackboard" &&
-          (parsed.data.dedicatedAuditor ?? config.DEFAULT_DEDICATED_AUDITOR)
+          (effDedicatedAuditor ?? config.DEFAULT_DEDICATED_AUDITOR)
             ? config.DEFAULT_AUDITOR_MODEL
             : undefined),
         specializedWorkers: parsed.data.specializedWorkers,

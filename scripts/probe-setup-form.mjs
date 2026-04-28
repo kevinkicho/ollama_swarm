@@ -278,43 +278,84 @@ await probe(page, {
   },
 });
 
-// ─── Section 5: numeric knobs ─────────────────────────────────────
-console.log("\n[Section 5] Numeric knobs");
+// ─── Section 5: topology grid + numeric knobs ─────────────────────
+// Phase 1 of #243: the standalone Agents number input was replaced by
+// the TopologyGrid table. The grid owns count via +/− buttons and
+// surfaces per-row Role + Model. Probe its key surfaces.
+console.log("\n[Section 5] Topology grid + numeric knobs");
 await probe(page, {
-  label: "agents-number-input",
-  action: async (p) => {
-    const input = p.locator('input[type="number"]').first();
-    await input.click();
-    await input.fill("4");
-    await p.waitForTimeout(300);
+  label: "topology-grid-rendered",
+  action: async (p) => { /* just inspect */ },
+  expect: async (p) => {
+    // The "Topology" label uses CSS uppercase but textContent is
+    // "Topology" — same pattern as the tokens panel labels.
+    return await p.locator('text=/topology/i').first().isVisible({ timeout: 2000 });
   },
-  expect: async (p) => (await p.locator('input[type="number"]').first().inputValue()) === "4",
+});
+
+await probe(page, {
+  label: "topology-add-worker",
+  action: async (p) => {
+    // Capture the row count before, click +, expect 1 more after.
+    const before = await p.locator('table tbody tr').count();
+    const addBtn = p.locator('button:has-text("add worker"), button:has-text("add peer"), button:has-text("add mapper"), button:has-text("add drafter"), button:has-text("add explorer")').first();
+    await addBtn.click();
+    await p.waitForTimeout(300);
+    const after = await p.locator('table tbody tr').count();
+    console.log(`    rows: ${before} → ${after}`);
+    if (after !== before + 1) throw new Error(`expected +1 row, got ${after - before}`);
+  },
+});
+
+await probe(page, {
+  label: "topology-remove-worker",
+  action: async (p) => {
+    const before = await p.locator('table tbody tr').count();
+    // − button is rendered as text "−" (U+2212 minus) on removable rows.
+    // Click the first one we find.
+    const removeBtn = p.locator('button[title^="Remove agent"]').first();
+    await removeBtn.click();
+    await p.waitForTimeout(300);
+    const after = await p.locator('table tbody tr').count();
+    console.log(`    rows: ${before} → ${after}`);
+    if (after !== before - 1) throw new Error(`expected -1 row, got ${after - before}`);
+  },
+});
+
+await probe(page, {
+  label: "topology-row-model-override-typing",
+  action: async (p) => {
+    // Per-row Model input is a text input inside the topology table.
+    // Type into the first row's Model cell (planner row in blackboard).
+    const cell = p.locator('table tbody tr').first().locator('input[type="text"]').first();
+    await cell.click();
+    await cell.fill("");
+    await cell.type("custom-model:cloud");
+    await p.waitForTimeout(200);
+  },
+  expect: async (p) => {
+    const v = await p.locator('table tbody tr').first().locator('input[type="text"]').first().inputValue();
+    return v === "custom-model:cloud";
+  },
 });
 
 await probe(page, {
   label: "rounds-number-input",
   action: async (p) => {
-    const inputs = p.locator('input[type="number"]');
-    const count = await inputs.count();
-    if (count >= 2) {
-      const second = inputs.nth(1);
-      await second.click();
-      await second.fill("5");
-    }
+    // Phase 1 of #243 dropped the Agents number input, so Rounds is
+    // now the only input[type="number"] on the form.
+    const input = p.locator('input[type="number"]').first();
+    await input.click();
+    await input.fill("5");
     await p.waitForTimeout(300);
   },
-  expect: async (p) => {
-    const inputs = p.locator('input[type="number"]');
-    const count = await inputs.count();
-    if (count < 2) return false;
-    return (await inputs.nth(1).inputValue()) === "5";
-  },
+  expect: async (p) => (await p.locator('input[type="number"]').first().inputValue()) === "5",
 });
 
 await probe(page, {
   label: "model-text-input",
   action: async (p) => {
-    // The Model field is the third in the Agents/Rounds/Model grid.
+    // The Model field is now in a 2-column grid alongside Rounds.
     // Anchor on its label, then walk to the sibling input.
     const modelInput = p.locator('label:has(div:text-is("Model")) input').first();
     await modelInput.waitFor({ state: "visible", timeout: 2000 });

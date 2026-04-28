@@ -29,3 +29,14 @@ export type {
   RunEvent,
   RunContext,
 } from "./runStateMachine.js";
+
+export {
+  AGENT_ROLES,
+  AgentSpecSchema,
+  TopologySchema,
+  defaultRoleForIndex,
+  isRoleStructural,
+  synthesizeTopology,
+  deriveLegacyFields,
+} from "./topology.js";
+export type { AgentRole, AgentSpec, Topology } from "./topology.js";
