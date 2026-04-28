@@ -502,12 +502,13 @@ export function SetupForm() {
 
   return (
     <>
-    <div className="h-full overflow-auto flex items-center justify-center p-8">
+    <div className="h-full overflow-auto flex justify-center items-start px-6 pt-6 pb-12">
       <form
         onSubmit={onSubmit}
-        className="w-full max-w-xl bg-ink-800 border border-ink-700 rounded-lg p-6 space-y-4 shadow-xl"
+        className="w-full max-w-3xl space-y-5"
+        data-testid="setup-form"
       >
-        <div>
+        <div className="bg-ink-800 border border-ink-700 rounded-lg p-5 shadow-xl">
           <h2 className="text-xl font-semibold mb-1">Start a swarm</h2>
           <p className="text-sm text-ink-400">
             Clone a GitHub repo and spawn N OpenCode agents inside it. Pick a pattern to decide how
@@ -515,151 +516,157 @@ export function SetupForm() {
           </p>
         </div>
 
-        <Field label="GitHub URL" hint="Public repo, or private if GITHUB_TOKEN is set in .env">
-          <input
-            required
-            value={repoUrl}
-            onChange={(e) => setRepoUrl(e.target.value)}
-            className="input"
-            placeholder="https://github.com/owner/repo"
-          />
-        </Field>
+        <Section title="Repository" subtitle="Where the swarm reads from + clones into">
+          <div className="grid lg:grid-cols-2 gap-4">
+            <Field label="GitHub URL" hint="Public repo, or private if GITHUB_TOKEN is set in .env">
+              <input
+                required
+                value={repoUrl}
+                onChange={(e) => setRepoUrl(e.target.value)}
+                className="input"
+                placeholder="https://github.com/owner/repo"
+              />
+            </Field>
+            <Field
+              label="Parent folder"
+              hint={
+                previewClonePath
+                  ? `Will clone into ${previewClonePath}`
+                  : "Repo is cloned into a subfolder named after the repo (e.g. is-odd)."
+              }
+            >
+              <input
+                required
+                value={parentPath}
+                onChange={(e) => setParentPath(e.target.value)}
+                className="input font-mono"
+                placeholder="C:\\Users\\you\\projects"
+              />
+            </Field>
+          </div>
+          <PreflightPreview repoUrl={repoUrl} parentPath={parentPath} />
+        </Section>
 
-        <Field
-          label="Parent folder"
-          hint={
-            previewClonePath
-              ? `The repo will be cloned into ${previewClonePath}`
-              : "Parent folder. The repo is cloned into a subfolder named after the repo (e.g. is-odd)."
-          }
-        >
-          <input
-            required
-            value={parentPath}
-            onChange={(e) => setParentPath(e.target.value)}
-            className="input font-mono"
-            placeholder="C:\\Users\\you\\projects"
-          />
-        </Field>
-
-        <PreflightPreview repoUrl={repoUrl} parentPath={parentPath} />
-
-        <Field
-          label="Pattern"
-          hint={
-            isActive
-              ? preset.summary
-              : `${preset.summary} — not yet implemented; picking this disables Start.`
-          }
-        >
-          <select value={presetId} onChange={onPresetChange} className="input">
-            {PRESETS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-                {p.status === "planned" ? " (coming soon)" : ""}
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        {preset.id === "blackboard" ? <BlackboardHelp /> : null}
-
-        <Field
-          label="User directive (optional)"
-          hint={directiveHintFor(preset)}
-        >
-          <DirectiveBadge preset={preset} />
-          <textarea
-            value={userDirective}
-            onChange={(e) => setUserDirective(e.target.value.slice(0, 4000))}
-            placeholder="e.g., Make this project actually deliver every feature the README claims to support."
-            rows={3}
-            className="input"
-            style={{ fontFamily: "inherit", resize: "vertical", minHeight: 60 }}
-          />
-          <button
-            type="button"
-            onClick={() => setUserDirective(DIRECTIVE_README_AND_RESEARCH)}
-            title="Click to paste this preset directive into the field above"
-            className="mt-2 inline-block text-xs px-3 py-1 rounded-full bg-ink-700 hover:bg-ink-600 text-ink-300 hover:text-ink-100 border border-ink-600 transition"
+        <Section title="Pattern" subtitle="How the agents collaborate">
+          <Field
+            label="Preset"
+            hint={
+              isActive
+                ? preset.summary
+                : `${preset.summary} — not yet implemented; picking this disables Start.`
+            }
           >
-            + Deliver every README feature + research
-          </button>
-        </Field>
+            <select value={presetId} onChange={onPresetChange} className="input">
+              {PRESETS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                  {p.status === "planned" ? " (coming soon)" : ""}
+                </option>
+              ))}
+            </select>
+          </Field>
 
-        <PresetAdvancedSettings
-          presetId={preset.id}
-          roles={roles}
-          setRoles={setRoles}
-          councilContractPref={councilContractPref}
-          setCouncilContractPref={setCouncilContractPref}
-          proposition={proposition}
-          setProposition={setProposition}
-          plannerModel={plannerModel}
-          setPlannerModel={setPlannerModelSync}
-          workerModel={workerModel}
-          setWorkerModel={setWorkerModelSync}
-          fallbackModel={model}
-          wallClockCapMin={wallClockCapMin}
-          setWallClockCapMin={setWallClockCapMin}
-          ambitionTiers={ambitionTiers}
-          setAmbitionTiers={setAmbitionTiers}
-          dedicatedAuditor={dedicatedAuditor}
-          setDedicatedAuditor={setDedicatedAuditorSync}
-          auditorModel={auditorModel}
-          setAuditorModel={setAuditorModelSync}
-          specializedWorkers={specializedWorkers}
-          setSpecializedWorkers={setSpecializedWorkers}
-          criticEnsemble={criticEnsemble}
-          setCriticEnsemble={setCriticEnsemble}
-          uiUrl={uiUrl}
-          setUiUrl={setUiUrl}
-        />
+          {preset.id === "blackboard" ? <BlackboardHelp /> : null}
 
-        {/* Phase 1 (#243): topology grid replaces the standalone Agents
-            number input. The grid is the source of truth — it owns the
-            count via +/− buttons and surfaces per-row Role + Model
-            override. agentCount stays mirrored from topology.agents.length
-            so WallClockEstimate keeps working. */}
-        <TopologyGrid
-          preset={{ id: preset.id, min: preset.min, max: preset.max }}
-          topology={topology}
-          setTopology={onTopologyChange}
-          defaultModel={model}
-        />
-
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="Rounds">
-            <input
-              type="number"
-              min={1}
-              max={100}
-              value={rounds}
-              onChange={(e) => setRounds(Number(e.target.value))}
+          <Field
+            label="User directive (optional)"
+            hint={directiveHintFor(preset)}
+          >
+            <DirectiveBadge preset={preset} />
+            <textarea
+              value={userDirective}
+              onChange={(e) => setUserDirective(e.target.value.slice(0, 4000))}
+              placeholder="e.g., Make this project actually deliver every feature the README claims to support."
+              rows={3}
               className="input"
+              style={{ fontFamily: "inherit", resize: "vertical", minHeight: 60 }}
             />
+            <button
+              type="button"
+              onClick={() => setUserDirective(DIRECTIVE_README_AND_RESEARCH)}
+              title="Click to paste this preset directive into the field above"
+              className="mt-2 inline-block text-xs px-3 py-1 rounded-full bg-ink-700 hover:bg-ink-600 text-ink-300 hover:text-ink-100 border border-ink-600 transition"
+            >
+              + Deliver every README feature + research
+            </button>
           </Field>
-          <Field label="Model">
-            <input
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="input font-mono"
-            />
-          </Field>
-        </div>
 
-        <WallClockEstimate
-          presetId={preset.id}
-          agentCount={agentCount}
-          rounds={rounds}
-          mainModel={model}
-          wallClockCapMin={wallClockCapMin}
-        />
+          <PresetAdvancedSettings
+            presetId={preset.id}
+            roles={roles}
+            setRoles={setRoles}
+            councilContractPref={councilContractPref}
+            setCouncilContractPref={setCouncilContractPref}
+            proposition={proposition}
+            setProposition={setProposition}
+            plannerModel={plannerModel}
+            setPlannerModel={setPlannerModelSync}
+            workerModel={workerModel}
+            setWorkerModel={setWorkerModelSync}
+            fallbackModel={model}
+            wallClockCapMin={wallClockCapMin}
+            setWallClockCapMin={setWallClockCapMin}
+            ambitionTiers={ambitionTiers}
+            setAmbitionTiers={setAmbitionTiers}
+            dedicatedAuditor={dedicatedAuditor}
+            setDedicatedAuditor={setDedicatedAuditorSync}
+            auditorModel={auditorModel}
+            setAuditorModel={setAuditorModelSync}
+            specializedWorkers={specializedWorkers}
+            setSpecializedWorkers={setSpecializedWorkers}
+            criticEnsemble={criticEnsemble}
+            setCriticEnsemble={setCriticEnsemble}
+            uiUrl={uiUrl}
+            setUiUrl={setUiUrl}
+          />
+        </Section>
+
+        <Section title="Topology" subtitle="Per-agent role + model overrides">
+          {/* Phase 1 (#243): topology grid is the count knob — owns +/−,
+              per-row Role + Model. agentCount stays mirrored from
+              topology.agents.length so WallClockEstimate keeps working. */}
+          <TopologyGrid
+            preset={{ id: preset.id, min: preset.min, max: preset.max }}
+            topology={topology}
+            setTopology={onTopologyChange}
+            defaultModel={model}
+          />
+        </Section>
+
+        <Section title="Run" subtitle="Rounds, default model, time budget">
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Rounds">
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={rounds}
+                onChange={(e) => setRounds(Number(e.target.value))}
+                className="input"
+              />
+            </Field>
+            <Field label="Model">
+              <input
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                className="input font-mono"
+              />
+            </Field>
+          </div>
+
+          <WallClockEstimate
+            presetId={preset.id}
+            agentCount={agentCount}
+            rounds={rounds}
+            mainModel={model}
+            wallClockCapMin={wallClockCapMin}
+          />
+        </Section>
 
         <button
           type="submit"
           disabled={busy || !isActive}
-          className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-ink-600 disabled:cursor-not-allowed text-white font-medium rounded px-4 py-2 transition"
+          className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-ink-600 disabled:cursor-not-allowed text-white font-medium rounded px-4 py-3 text-base transition shadow-lg"
         >
           {busy ? "Starting…" : isActive ? "Start swarm" : "Coming soon"}
         </button>
@@ -690,5 +697,28 @@ export function SetupForm() {
       />
     ) : null}
     </>
+  );
+}
+
+// Visual section wrapper. Each section is its own bordered card so the
+// form reads as scannable groups instead of one tall stack — fixes the
+// overflow-into-scroll-purgatory issue when many fields are visible.
+function Section({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="bg-ink-800 border border-ink-700 rounded-lg p-5 shadow-xl space-y-4">
+      <header>
+        <h3 className="text-sm font-semibold text-ink-100 uppercase tracking-wider">{title}</h3>
+        {subtitle ? <p className="text-xs text-ink-400 mt-0.5">{subtitle}</p> : null}
+      </header>
+      {children}
+    </section>
   );
 }
