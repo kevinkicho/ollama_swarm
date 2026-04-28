@@ -41,23 +41,23 @@ export interface ResetUpdates {
 export interface TodoQueueWrappers {
   /** Post a new todo. Returns the queue-assigned id. */
   postTodoQ: (input: PostTodoInput) => string;
-  /** Dequeue + atomic claim. Emits board_todo_claimed (with synthesized
+  /** Dequeue + atomic claim. Emits todo_claimed (with synthesized
    *  Claim payload) when a todo is returned. */
   dequeueTodoQ: (workerId: string, preferTag?: string) => QueuedTodo | null;
-  /** Mark in-progress → completed; emits board_todo_committed + fires
+  /** Mark in-progress → completed; emits todo_committed + fires
    *  the onTerminal callback for the runner's reducer. */
   completeTodoQ: (id: string) => void;
-  /** Mark in-progress → failed; emits board_todo_stale + fires
+  /** Mark in-progress → failed; emits todo_failed + fires
    *  onFailed for replan-queue routing + telemetry. */
   failTodoQ: (id: string, reason: string) => void;
-  /** Mark any non-terminal → skipped; emits board_todo_skipped + fires
+  /** Mark any non-terminal → skipped; emits todo_skipped + fires
    *  onTerminal. */
   skipTodoQ: (id: string, reason: string) => void;
   /** Reset failed → pending with optional revisions (description /
-   *  files / anchors / kind / command). Emits board_todo_replanned. */
+   *  files / anchors / kind / command). Emits todo_replanned. */
   resetTodoQ: (id: string, updates?: ResetUpdates) => void;
   /** Append a diagnostic finding (auditor / replanner notes). Emits
-   *  board_finding_posted. */
+   *  finding_posted. */
   postFindingQ: (input: { agentId: string; text: string; createdAt: number }) => void;
 }
 

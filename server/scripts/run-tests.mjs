@@ -21,7 +21,6 @@ const env = {
 
 const TEST_FILES = [
   // blackboard/
-  "src/swarm/blackboard/Board.test.ts",
   "src/swarm/blackboard/prompts/planner.test.ts",
   "src/swarm/blackboard/prompts/worker.test.ts",
   "src/swarm/blackboard/prompts/replanner.test.ts",
@@ -40,18 +39,22 @@ const TEST_FILES = [
   "src/swarm/blackboard/finalAudit.test.ts",
   "src/swarm/blackboard/retry.test.ts",
   "src/swarm/blackboard/applyHunks.test.ts",
+  "src/swarm/blackboard/applyHunksPipeline.test.ts",
   "src/swarm/blackboard/windowFile.test.ts",
-  "src/swarm/blackboard/workerPipeline.test.ts",
   "src/swarm/blackboard/transcriptSummary.test.ts",
   "src/swarm/blackboard/workerRoles.test.ts",
   "src/swarm/blackboard/memoryStore.test.ts",
   "src/swarm/blackboard/RunStateObserver.test.ts",
-  "src/swarm/blackboard/TodoQueueV2.test.ts",
-  "src/swarm/blackboard/WorkerPipelineV2.test.ts",
+  "src/swarm/blackboard/TodoQueue.test.ts",
+  "src/swarm/blackboard/WorkerPipeline.test.ts",
   "src/swarm/blackboard/v2Adapters.test.ts",
   "src/swarm/blackboard/EventLogReaderV2.test.ts",
   "src/swarm/blackboard/v2Integration.test.ts",
   "src/swarm/blackboard/formatServerSummary.test.ts",
+  "src/swarm/blackboard/FindingsLog.test.ts",
+  "src/swarm/blackboard/boardBroadcaster.test.ts",
+  "src/swarm/blackboard/boardWireCompat.test.ts",
+  "src/swarm/blackboard/todoQueueWrappers.test.ts",
 
   // swarm/ (non-blackboard)
   "src/swarm/roles.test.ts",

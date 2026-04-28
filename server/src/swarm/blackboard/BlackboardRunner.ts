@@ -3696,7 +3696,7 @@ export class BlackboardRunner implements SwarmRunner {
   // Periodic sweep of the todo queue. Reaps in-progress todos older
   // than IN_PROGRESS_TTL_MS (default 10 min) by transitioning them to
   // failed via reapStaleInProgress. Each reaped id is then:
-  //   1. broadcast as board_todo_stale (UI sync)
+  //   1. broadcast as todo_failed (UI sync)
   //   2. scheduleStateWrite (persist transition)
   //   3. enqueueReplan (planner decides retry vs skip)
   //

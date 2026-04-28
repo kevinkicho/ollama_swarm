@@ -92,20 +92,20 @@ export type SwarmEvent =
   | { type: "agent_streaming"; agentId: string; agentIndex: number; text: string }
   | { type: "agent_streaming_end"; agentId: string }
   | { type: "error"; message: string }
-  | { type: "board_todo_posted"; todo: Todo }
-  | { type: "board_todo_claimed"; todoId: string; claim: Claim }
-  | { type: "board_todo_committed"; todoId: string }
-  | { type: "board_todo_stale"; todoId: string; reason: string; replanCount: number }
-  | { type: "board_todo_skipped"; todoId: string; reason: string }
+  | { type: "todo_posted"; todo: Todo }
+  | { type: "todo_claimed"; todoId: string; claim: Claim }
+  | { type: "todo_committed"; todoId: string }
+  | { type: "todo_failed"; todoId: string; reason: string; replanCount: number }
+  | { type: "todo_skipped"; todoId: string; reason: string }
   | {
-      type: "board_todo_replanned";
+      type: "todo_replanned";
       todoId: string;
       description: string;
       expectedFiles: string[];
       replanCount: number;
     }
-  | { type: "board_finding_posted"; finding: Finding }
-  | { type: "board_state"; snapshot: BoardSnapshot; counts: BoardCountsDTO }
+  | { type: "finding_posted"; finding: Finding }
+  | { type: "queue_state"; snapshot: BoardSnapshot; counts: BoardCountsDTO }
   | { type: "contract_updated"; contract: ExitContract }
   | { type: "run_summary"; summary: RunSummary }
   // Phase 2a (2026-04-24): stigmergy pheromone update fired per
@@ -276,7 +276,7 @@ export interface SwarmStatusPheromoneEntry {
 
 // Unit 62: shapes for the SwarmStatus catch-up payload. Mirror of
 // the same fields the WS broadcasts in clone_state / run_started /
-// board_state / agent_latency_sample events — keeping them
+// queue_state / agent_latency_sample events — keeping them
 // duplicated in a snapshot type is the simplest way to let the web
 // hydrate from one HTTP call without juggling event-shaped data.
 export interface SwarmStatusCloneState {

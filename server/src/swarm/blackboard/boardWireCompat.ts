@@ -2,7 +2,7 @@
 // TodoQueue and the wire protocol the UI consumes.
 //
 // The UI handlers in web/src/hooks/useSwarmSocket.ts speak Board's
-// vocabulary — board_todo_posted/claimed/committed/stale/skipped/etc.
+// vocabulary — todo_posted/claimed/committed/stale/skipped/etc.
 // Rather than rewrite the wire protocol + UI handlers in lockstep
 // with the V2 cutover, we translate V2 events on the way out so the
 // UI stays unchanged.
@@ -72,7 +72,7 @@ export function v2QueueCountsToWireCounts(c: TodoQueueCounts): BoardCounts {
 }
 
 /** Build a BoardSnapshot-shaped object from a V2 queue snapshot
- *  (for board_state wire events). Findings come separately since V2
+ *  (for queue_state wire events). Findings come separately since V2
  *  queue doesn't model them — the FindingsLog provides them. */
 export function buildWireSnapshot(
   v2Todos: readonly QueuedTodo[],

@@ -45,7 +45,7 @@ describe("boardBroadcaster — emit forwards events", () => {
       },
     });
     assert.equal(events.length, 1);
-    assert.equal(events[0].type, "board_todo_posted");
+    assert.equal(events[0].type, "todo_posted");
   });
 
   it("emits the swarm-event for each BoardEvent variant", () => {
@@ -65,10 +65,10 @@ describe("boardBroadcaster — emit forwards events", () => {
     });
     const types = events.map((e) => e.type);
     assert.deepEqual(types, [
-      "board_todo_committed",
-      "board_todo_skipped",
-      "board_todo_stale",
-      "board_finding_posted",
+      "todo_committed",
+      "todo_skipped",
+      "todo_failed",
+      "finding_posted",
     ]);
   });
 });
@@ -84,7 +84,7 @@ describe("boardBroadcaster — debounced snapshot", () => {
     bb.emit({ type: "todo_committed", todoId: "t1" });
     await new Promise((r) => setTimeout(r, 30));
     assert.equal(snapshotCallCount, 1);
-    const snaps = events.filter((e) => e.type === "board_state");
+    const snaps = events.filter((e) => e.type === "queue_state");
     assert.equal(snaps.length, 1);
   });
 
@@ -100,7 +100,7 @@ describe("boardBroadcaster — debounced snapshot", () => {
     }
     await new Promise((r) => setTimeout(r, 30));
     assert.equal(snapshotCallCount, 1, "snapshot getter only invoked once after burst");
-    const snaps = events.filter((e) => e.type === "board_state");
+    const snaps = events.filter((e) => e.type === "queue_state");
     assert.equal(snaps.length, 1);
     // 10 individual events + 1 snapshot = 11 total
     assert.equal(events.length, 11);
@@ -119,7 +119,7 @@ describe("boardBroadcaster — flushSnapshot", () => {
     assert.equal(snapshotCallCount, 0, "no snapshot before flush — still in debounce");
     bb.flushSnapshot();
     assert.equal(snapshotCallCount, 1);
-    const snaps = events.filter((e) => e.type === "board_state");
+    const snaps = events.filter((e) => e.type === "queue_state");
     assert.equal(snaps.length, 1);
   });
 
@@ -127,7 +127,7 @@ describe("boardBroadcaster — flushSnapshot", () => {
     const { bb, events } = setup();
     bb.bindSnapshotSource(makeSnapshot);
     bb.flushSnapshot();
-    const snaps = events.filter((e) => e.type === "board_state");
+    const snaps = events.filter((e) => e.type === "queue_state");
     assert.equal(snaps.length, 1);
   });
 
@@ -145,7 +145,7 @@ describe("boardBroadcaster — dispose", () => {
     bb.emit({ type: "todo_committed", todoId: "t1" });
     bb.dispose();
     await new Promise((r) => setTimeout(r, 30));
-    const snaps = events.filter((e) => e.type === "board_state");
+    const snaps = events.filter((e) => e.type === "queue_state");
     assert.equal(snaps.length, 0, "dispose cancelled the debounced snapshot");
   });
 
@@ -154,7 +154,7 @@ describe("boardBroadcaster — dispose", () => {
     bb.bindSnapshotSource(makeSnapshot);
     bb.dispose();
     bb.flushSnapshot();
-    const snaps = events.filter((e) => e.type === "board_state");
+    const snaps = events.filter((e) => e.type === "queue_state");
     assert.equal(snaps.length, 0);
   });
 
@@ -181,7 +181,7 @@ describe("boardBroadcaster — snapshot getter is invoked at fire time, not bind
     bb.flushSnapshot();
     bb.flushSnapshot();
     const snaps = events.filter(
-      (e): e is Extract<SwarmEvent, { type: "board_state" }> => e.type === "board_state",
+      (e): e is Extract<SwarmEvent, { type: "queue_state" }> => e.type === "queue_state",
     );
     assert.equal(snaps.length, 3);
     assert.equal(snaps[0].counts.open, 1);

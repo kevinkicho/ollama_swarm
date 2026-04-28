@@ -41,7 +41,7 @@ export function createBoardBroadcaster(
   const sendSnapshot = () => {
     if (!getSnapshot) return;
     const { snapshot, counts } = getSnapshot();
-    broadcast({ type: "board_state", snapshot, counts });
+    broadcast({ type: "queue_state", snapshot, counts });
   };
 
   const scheduleSnapshot = () => {
@@ -88,23 +88,23 @@ export function createBoardBroadcaster(
 function toSwarmEvent(ev: BoardEvent): SwarmEvent {
   switch (ev.type) {
     case "todo_posted":
-      return { type: "board_todo_posted", todo: ev.todo };
+      return { type: "todo_posted", todo: ev.todo };
     case "todo_claimed":
-      return { type: "board_todo_claimed", todoId: ev.todoId, claim: ev.claim };
+      return { type: "todo_claimed", todoId: ev.todoId, claim: ev.claim };
     case "todo_committed":
-      return { type: "board_todo_committed", todoId: ev.todoId };
+      return { type: "todo_committed", todoId: ev.todoId };
     case "todo_stale":
       return {
-        type: "board_todo_stale",
+        type: "todo_failed",
         todoId: ev.todoId,
         reason: ev.reason,
         replanCount: ev.replanCount,
       };
     case "todo_skipped":
-      return { type: "board_todo_skipped", todoId: ev.todoId, reason: ev.reason };
+      return { type: "todo_skipped", todoId: ev.todoId, reason: ev.reason };
     case "todo_replanned":
       return {
-        type: "board_todo_replanned",
+        type: "todo_replanned",
         todoId: ev.todoId,
         description: ev.description,
         expectedFiles: ev.expectedFiles,
@@ -116,6 +116,6 @@ function toSwarmEvent(ev: BoardEvent): SwarmEvent {
         ...(ev.expectedAnchors ? { expectedAnchors: ev.expectedAnchors } : {}),
       };
     case "finding_posted":
-      return { type: "board_finding_posted", finding: ev.finding };
+      return { type: "finding_posted", finding: ev.finding };
   }
 }

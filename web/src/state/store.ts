@@ -299,7 +299,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
     set((s) => {
       const existing = s.todos[todoId];
       if (!existing) return s;
-      // committedAt here is a UI-side approximation; a follow-up board_state
+      // committedAt here is a UI-side approximation; a follow-up queue_state
       // snapshot replaces it with the authoritative server timestamp.
       return {
         todos: {

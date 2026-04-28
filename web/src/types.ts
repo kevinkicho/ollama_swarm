@@ -254,13 +254,13 @@ export type SwarmEvent =
   | { type: "agent_streaming"; agentId: string; agentIndex: number; text: string }
   | { type: "agent_streaming_end"; agentId: string }
   | { type: "error"; message: string }
-  | { type: "board_todo_posted"; todo: Todo }
-  | { type: "board_todo_claimed"; todoId: string; claim: Claim }
-  | { type: "board_todo_committed"; todoId: string }
-  | { type: "board_todo_stale"; todoId: string; reason: string; replanCount: number }
-  | { type: "board_todo_skipped"; todoId: string; reason: string }
+  | { type: "todo_posted"; todo: Todo }
+  | { type: "todo_claimed"; todoId: string; claim: Claim }
+  | { type: "todo_committed"; todoId: string }
+  | { type: "todo_failed"; todoId: string; reason: string; replanCount: number }
+  | { type: "todo_skipped"; todoId: string; reason: string }
   | {
-      type: "board_todo_replanned";
+      type: "todo_replanned";
       todoId: string;
       description: string;
       expectedFiles: string[];
@@ -269,8 +269,8 @@ export type SwarmEvent =
       // replanner explicitly revised anchors; absent means "keep prior."
       expectedAnchors?: string[];
     }
-  | { type: "board_finding_posted"; finding: Finding }
-  | { type: "board_state"; snapshot: BoardSnapshot; counts: BoardCountsDTO }
+  | { type: "finding_posted"; finding: Finding }
+  | { type: "queue_state"; snapshot: BoardSnapshot; counts: BoardCountsDTO }
   | { type: "contract_updated"; contract: ExitContract }
   | { type: "run_summary"; summary: RunSummary }
   // Phase 2a: stigmergy pheromone update.

@@ -62,22 +62,22 @@ function applyEvent(ev: SwarmEvent): void {
     case "error":
       s.setError(ev.message);
       break;
-    case "board_todo_posted":
+    case "todo_posted":
       s.upsertTodo(ev.todo);
       break;
-    case "board_todo_claimed":
+    case "todo_claimed":
       s.applyClaim(ev.todoId, ev.claim);
       break;
-    case "board_todo_committed":
+    case "todo_committed":
       s.markCommitted(ev.todoId);
       break;
-    case "board_todo_stale":
+    case "todo_failed":
       s.markStale(ev.todoId, ev.reason, ev.replanCount);
       break;
-    case "board_todo_skipped":
+    case "todo_skipped":
       s.markSkipped(ev.todoId, ev.reason);
       break;
-    case "board_todo_replanned":
+    case "todo_replanned":
       s.applyReplan(
         ev.todoId,
         ev.description,
@@ -86,10 +86,10 @@ function applyEvent(ev: SwarmEvent): void {
         ev.expectedAnchors,
       );
       break;
-    case "board_finding_posted":
+    case "finding_posted":
       s.appendFinding(ev.finding);
       break;
-    case "board_state":
+    case "queue_state":
       s.replaceBoard(ev.snapshot);
       break;
     case "contract_updated":
