@@ -72,7 +72,7 @@ describe("V2 substrate integration", () => {
     let dequeueTs = 1400;
     let workerNum = 2;
     while (queue.counts().pending > 0) {
-      const todo = queue.dequeue(`worker-${workerNum}`, dequeueTs);
+      const todo = queue.dequeue(`worker-${workerNum}`, undefined, dequeueTs);
       if (!todo) break;
       const hunks = workerHunks[todo.expectedFiles[0]];
       const out = await applyAndCommitV2({

@@ -42,6 +42,20 @@ export interface QueuedTodoV2 {
   /** Number of times this todo was retried after a failure. Capped per
    *  caller policy — the queue itself doesn't enforce a max. */
   retries: number;
+  // Phase 2 of V2 cutover (2026-04-28): fields ported from V1 Board.Todo
+  // so V2 can take over as primary without losing planner-time hints.
+  /** Unit 44b: planner-declared anchor strings the runner expands into
+   *  ±25 lines of context in the worker prompt. Empty/absent → behaves
+   *  like before (head + tail only). */
+  expectedAnchors?: readonly string[];
+  /** #237: build-style discriminator. Default "hunks" (omit). When
+   *  "build", `command` is the shell command swarm-builder runs. */
+  kind?: "hunks" | "build";
+  command?: string;
+  /** Phase 5c of #243: planner-emitted tag preference for claim
+   *  routing. dequeue(workerId, preferTag) prefers todos whose tag
+   *  matches the worker's tag. */
+  preferredTag?: string;
 }
 
 export interface TodoQueueCountsV2 {
@@ -59,6 +73,13 @@ export interface PostTodoV2Input {
   createdBy: string;
   createdAt?: number;
   criterionId?: string;
+  // Phase 2 of V2 cutover (2026-04-28): pass-through for V1-equivalent
+  // planner hints. The queue stores them; consumers (worker prompt
+  // builder, claim selector) read them.
+  expectedAnchors?: readonly string[];
+  kind?: "hunks" | "build";
+  command?: string;
+  preferredTag?: string;
 }
 
 export class TodoQueueV2 {
@@ -77,20 +98,71 @@ export class TodoQueueV2 {
       status: "pending",
       criterionId: input.criterionId,
       retries: 0,
+      ...(input.expectedAnchors && input.expectedAnchors.length > 0
+        ? { expectedAnchors: input.expectedAnchors.slice() }
+        : {}),
+      ...(input.kind ? { kind: input.kind } : {}),
+      ...(input.command ? { command: input.command } : {}),
+      ...(input.preferredTag ? { preferredTag: input.preferredTag } : {}),
     });
     return id;
   }
 
-  /** Dequeue the oldest pending todo, mark it in-progress, return it.
-   *  Returns null if no pending todos. Preserves insertion order
-   *  (FIFO) — older todos go out before newer ones. */
-  dequeue(workerId: string, ts: number = Date.now()): QueuedTodoV2 | null {
-    const next = this.todos.find((t) => t.status === "pending");
+  /** Dequeue the next pending todo. Two-pass semantics when preferTag
+   *  is supplied (Phase 5c of #243): first scan for a pending todo
+   *  whose preferredTag matches; if none found, fall through to the
+   *  oldest pending todo regardless of tag. preferTag undefined →
+   *  pure FIFO. Returns null when no pending todos remain.
+   *
+   *  Stamps in-progress + workerId + startedAt on the matched todo
+   *  before returning a defensive copy. */
+  dequeue(
+    workerId: string,
+    preferTag?: string,
+    ts: number = Date.now(),
+  ): QueuedTodoV2 | null {
+    let next: QueuedTodoV2 | undefined;
+    const tag = preferTag?.trim();
+    if (tag && tag.length > 0) {
+      next = this.todos.find(
+        (t) => t.status === "pending" && t.preferredTag === tag,
+      );
+    }
+    if (!next) {
+      next = this.todos.find((t) => t.status === "pending");
+    }
     if (!next) return null;
     next.status = "in-progress";
     next.workerId = workerId;
     next.startedAt = ts;
-    return { ...next, expectedFiles: next.expectedFiles.slice() };
+    return this.copyTodo(next);
+  }
+
+  /** Phase 2 reaper: scan in-progress todos and transition any whose
+   *  startedAt is more than maxAgeMs in the past to `failed`. Returns
+   *  the array of reaped ids so the caller can route them through
+   *  the replan queue. Idempotent — running back-to-back is safe.
+   *
+   *  This is the V2 equivalent of V1 Board.expireClaims(now). The
+   *  trigger is purely time-based; there's no per-claim TTL field on
+   *  the todo (V2 uses a single global threshold instead of recording
+   *  expiresAt per dequeue). */
+  reapStaleInProgress(now: number, maxAgeMs: number): string[] {
+    const reaped: string[] = [];
+    for (const t of this.todos) {
+      if (
+        t.status === "in-progress" &&
+        t.startedAt !== undefined &&
+        now - t.startedAt > maxAgeMs
+      ) {
+        t.status = "failed";
+        t.endedAt = now;
+        t.reason = `worker timeout (>${Math.round(maxAgeMs / 60_000)}min in-progress)`;
+        t.retries += 1;
+        reaped.push(t.id);
+      }
+    }
+    return reaped;
   }
 
   /** Mark an in-progress todo as completed. Throws if id unknown or
@@ -179,17 +251,24 @@ export class TodoQueueV2 {
   /** Snapshot of all todos in insertion order. Returns defensive copies
    *  so the caller can't mutate internal state through the array. */
   list(): QueuedTodoV2[] {
-    return this.todos.map((t) => ({
-      ...t,
-      expectedFiles: t.expectedFiles.slice(),
-    }));
+    return this.todos.map((t) => this.copyTodo(t));
   }
 
   /** Lookup by id. Returns undefined for unknown ids. */
   get(id: string): QueuedTodoV2 | undefined {
     const t = this.todos.find((x) => x.id === id);
-    if (!t) return undefined;
-    return { ...t, expectedFiles: t.expectedFiles.slice() };
+    return t ? this.copyTodo(t) : undefined;
+  }
+
+  /** Defensive copy — clones expectedFiles + expectedAnchors arrays so
+   *  callers can't mutate internal state through them. Other fields
+   *  are immutable scalars / strings. */
+  private copyTodo(t: QueuedTodoV2): QueuedTodoV2 {
+    return {
+      ...t,
+      expectedFiles: t.expectedFiles.slice(),
+      ...(t.expectedAnchors ? { expectedAnchors: t.expectedAnchors.slice() } : {}),
+    };
   }
 
   /** Empty the queue. Useful for tests + run-restart. */
@@ -242,6 +321,12 @@ export class TodoQueueV2 {
       status: "pending",
       criterionId: input.criterionId,
       retries: 0,
+      ...(input.expectedAnchors && input.expectedAnchors.length > 0
+        ? { expectedAnchors: input.expectedAnchors.slice() }
+        : {}),
+      ...(input.kind ? { kind: input.kind } : {}),
+      ...(input.command ? { command: input.command } : {}),
+      ...(input.preferredTag ? { preferredTag: input.preferredTag } : {}),
     });
   }
 

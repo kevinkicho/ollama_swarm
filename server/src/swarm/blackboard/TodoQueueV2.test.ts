@@ -34,7 +34,7 @@ describe("TodoQueueV2 — basic FIFO semantics", () => {
   it("dequeue marks todo in-progress + stamps workerId + startedAt", () => {
     const q = new TodoQueueV2();
     q.post({ description: "x", expectedFiles: [], createdBy: "p" });
-    const t = q.dequeue("worker-7", 12345);
+    const t = q.dequeue("worker-7", undefined, 12345);
     assert.equal(t?.status, "in-progress");
     assert.equal(t?.workerId, "worker-7");
     assert.equal(t?.startedAt, 12345);
@@ -161,7 +161,7 @@ describe("TodoQueueV2 — retry bookkeeping", () => {
   it("reset clears workerId, startedAt, endedAt, reason — fresh slate", () => {
     const q = new TodoQueueV2();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
-    q.dequeue("worker-2", 100);
+    q.dequeue("worker-2", undefined, 100);
     q.fail(id, "first failure", 200);
     q.reset(id);
     const t = q.get(id);
@@ -307,5 +307,200 @@ describe("TodoQueueV2 — multi-worker concurrency model", () => {
     q.dequeue("w-2");
     q.dequeue("w-3");
     assert.equal(q.dequeue("w-4"), null);
+  });
+});
+
+describe("TodoQueueV2 — extended schema fields (V2 cutover Phase 2a)", () => {
+  it("post forwards expectedAnchors, kind, command, preferredTag", () => {
+    const q = new TodoQueueV2();
+    const id = q.post({
+      description: "build api docs",
+      expectedFiles: ["docs/api.md"],
+      createdBy: "planner",
+      expectedAnchors: ["## API"],
+      kind: "build",
+      command: "bun run docs:api",
+      preferredTag: "docs-expert",
+    });
+    const t = q.get(id)!;
+    assert.deepEqual(t.expectedAnchors, ["## API"]);
+    assert.equal(t.kind, "build");
+    assert.equal(t.command, "bun run docs:api");
+    assert.equal(t.preferredTag, "docs-expert");
+  });
+
+  it("post omits empty/missing schema fields", () => {
+    const q = new TodoQueueV2();
+    const id = q.post({ description: "x", expectedFiles: ["a.ts"], createdBy: "p" });
+    const t = q.get(id)!;
+    assert.equal(t.expectedAnchors, undefined);
+    assert.equal(t.kind, undefined);
+    assert.equal(t.command, undefined);
+    assert.equal(t.preferredTag, undefined);
+  });
+
+  it("post drops empty expectedAnchors arrays (matches V1 Board behavior)", () => {
+    const q = new TodoQueueV2();
+    const id = q.post({
+      description: "x",
+      expectedFiles: ["a.ts"],
+      createdBy: "p",
+      expectedAnchors: [],
+    });
+    const t = q.get(id)!;
+    assert.equal(t.expectedAnchors, undefined);
+  });
+
+  it("get returns defensive copy of expectedAnchors", () => {
+    const q = new TodoQueueV2();
+    const id = q.post({
+      description: "x",
+      expectedFiles: ["a.ts"],
+      createdBy: "p",
+      expectedAnchors: ["anchor-1"],
+    });
+    const t = q.get(id)!;
+    (t.expectedAnchors as string[])[0] = "MUTATED";
+    const t2 = q.get(id)!;
+    assert.equal(t2.expectedAnchors?.[0], "anchor-1");
+  });
+});
+
+describe("TodoQueueV2 — tag-preference dequeue (Phase 5c of #243)", () => {
+  it("dequeue with preferTag returns matching todo before older non-matching", () => {
+    const q = new TodoQueueV2();
+    const idOlder = q.post({
+      description: "general work",
+      expectedFiles: ["a.ts"],
+      createdBy: "p",
+    });
+    const idMatching = q.post({
+      description: "test work",
+      expectedFiles: ["b.test.ts"],
+      createdBy: "p",
+      preferredTag: "tests-expert",
+    });
+    const t = q.dequeue("worker-2", "tests-expert");
+    assert.equal(t?.id, idMatching);
+    // The non-matching older todo is still pending.
+    assert.equal(q.get(idOlder)?.status, "pending");
+  });
+
+  it("dequeue falls back to FIFO when no matching tag found", () => {
+    const q = new TodoQueueV2();
+    const idA = q.post({ description: "a", expectedFiles: ["a.ts"], createdBy: "p" });
+    q.post({ description: "b", expectedFiles: ["b.ts"], createdBy: "p" });
+    const t = q.dequeue("worker-2", "no-such-tag");
+    assert.equal(t?.id, idA);
+  });
+
+  it("dequeue with no preferTag is pure FIFO regardless of tags", () => {
+    const q = new TodoQueueV2();
+    const idA = q.post({ description: "a", expectedFiles: [], createdBy: "p" });
+    q.post({
+      description: "b-tagged",
+      expectedFiles: [],
+      createdBy: "p",
+      preferredTag: "x",
+    });
+    const t = q.dequeue("worker-2");
+    assert.equal(t?.id, idA);
+  });
+
+  it("preferTag empty string treated as no preference", () => {
+    const q = new TodoQueueV2();
+    const idA = q.post({ description: "a", expectedFiles: [], createdBy: "p" });
+    q.post({
+      description: "b",
+      expectedFiles: [],
+      createdBy: "p",
+      preferredTag: "x",
+    });
+    const t = q.dequeue("worker", "  ");
+    assert.equal(t?.id, idA);
+  });
+});
+
+describe("TodoQueueV2 — reapStaleInProgress (Phase 2 reaper)", () => {
+  it("reaps in-progress todos older than maxAgeMs to failed", () => {
+    const q = new TodoQueueV2();
+    const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
+    q.dequeue("worker", undefined, 1_000); // startedAt = 1000
+    const reaped = q.reapStaleInProgress(601_000, 600_000); // now - startedAt = 600s, > 600s? no, 600s > 600s false; let me fix
+    assert.deepEqual(reaped, []);
+    // Re-reap with now slightly later — should fire.
+    const reaped2 = q.reapStaleInProgress(601_001, 600_000);
+    assert.deepEqual(reaped2, [id]);
+    assert.equal(q.get(id)?.status, "failed");
+  });
+
+  it("reaped todo records timeout reason + bumps retries", () => {
+    const q = new TodoQueueV2();
+    const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
+    q.dequeue("worker", undefined, 1_000);
+    q.reapStaleInProgress(601_001, 600_000);
+    const t = q.get(id)!;
+    assert.match(t.reason ?? "", /worker timeout/);
+    assert.equal(t.retries, 1);
+    assert.equal(t.endedAt, 601_001);
+  });
+
+  it("does not reap fresh in-progress todos", () => {
+    const q = new TodoQueueV2();
+    const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
+    q.dequeue("worker", undefined, 1_000);
+    const reaped = q.reapStaleInProgress(2_000, 600_000); // 1s elapsed
+    assert.deepEqual(reaped, []);
+    assert.equal(q.get(id)?.status, "in-progress");
+  });
+
+  it("does not reap completed/failed/skipped todos", () => {
+    const q = new TodoQueueV2();
+    const idDone = q.post({ description: "done", expectedFiles: [], createdBy: "p" });
+    const idFail = q.post({ description: "fail", expectedFiles: [], createdBy: "p" });
+    const idSkip = q.post({ description: "skip", expectedFiles: [], createdBy: "p" });
+    q.dequeue("w", undefined, 1_000);
+    q.complete(idDone);
+    q.dequeue("w", undefined, 1_000);
+    q.fail(idFail, "reason");
+    q.dequeue("w", undefined, 1_000);
+    q.skip(idSkip, "reason");
+    const reaped = q.reapStaleInProgress(601_001, 600_000);
+    assert.deepEqual(reaped, []);
+  });
+
+  it("idempotent — second reap of same window returns empty", () => {
+    const q = new TodoQueueV2();
+    const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
+    q.dequeue("worker", undefined, 1_000);
+    const first = q.reapStaleInProgress(601_001, 600_000);
+    assert.deepEqual(first, [id]);
+    const second = q.reapStaleInProgress(601_001, 600_000);
+    assert.deepEqual(second, []);
+  });
+
+  it("after reset(), reaped todo can be re-dequeued and re-reaped", () => {
+    const q = new TodoQueueV2();
+    const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
+    q.dequeue("worker", undefined, 1_000);
+    q.reapStaleInProgress(601_001, 600_000);
+    q.reset(id);
+    const t = q.dequeue("worker", undefined, 700_000);
+    assert.equal(t?.id, id);
+    const reaped = q.reapStaleInProgress(1_300_001, 600_000);
+    assert.deepEqual(reaped, [id]);
+    assert.equal(q.get(id)?.retries, 2);
+  });
+
+  it("complete() after reap throws (worker lost the race)", () => {
+    const q = new TodoQueueV2();
+    const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
+    q.dequeue("worker", undefined, 1_000);
+    q.reapStaleInProgress(601_001, 600_000);
+    // Worker eventually returns and tries to complete — should throw.
+    assert.throws(
+      () => q.complete(id),
+      /Cannot complete todo .* status=failed/,
+    );
   });
 });
