@@ -99,6 +99,13 @@ export interface PromptWithRetryOptions {
   // existing AgentManager diag entries. Lets us count V2 path uses
   // regardless of whether the call eventually produced tokens.
   logDiag?: (record: unknown) => void;
+  // Phase 5b of #243: per-agent system-prompt addendum from the
+  // topology row. Forwarded to AgentManager.streamPrompt where it's
+  // prepended to the user prompt with a clear framing block. The
+  // ollamaDirect path applies the same prepend so behavior is
+  // identical regardless of transport. When undefined / empty,
+  // prompt text passes through unchanged (pre-Phase-5 behavior).
+  promptAddendum?: string;
 }
 
 export interface RetryInfo {
@@ -156,10 +163,17 @@ export async function promptWithRetry(
       // SDK path will be removed entirely (per docs/ARCHITECTURE-V2.md).
       if (opts.ollamaDirect) {
         const t0Direct = Date.now();
+        // Phase 5b of #243: prepend per-agent addendum the same way the
+        // SDK path does (see AgentManager.streamPrompt). Keeps behavior
+        // identical regardless of transport.
+        const addendum = opts.promptAddendum?.trim() ?? "";
+        const effectivePromptText = addendum.length > 0
+          ? `[Per-agent specialization for this swarm member]\n${addendum}\n[End specialization. Original prompt follows.]\n\n${promptText}`
+          : promptText;
         const result = await ollamaChat({
           baseUrl: opts.ollamaDirect.baseUrl,
           model: agent.model,
-          messages: [{ role: "user", content: promptText }],
+          messages: [{ role: "user", content: effectivePromptText }],
           signal: opts.signal,
           agentId: agent.id,
           logDiag: opts.logDiag,
@@ -199,6 +213,10 @@ export async function promptWithRetry(
           signal: opts.signal,
           perChunkTimeoutMs: STREAM_PER_CHUNK_TIMEOUT_MS,
           formatExpect: opts.formatExpect,
+          // Phase 5b of #243: forward addendum to the SDK path's
+          // streamPrompt — it does the same prepend the ollamaDirect
+          // branch does just above.
+          promptAddendum: opts.promptAddendum,
         });
         res = { data: { parts: [{ type: "text", text }] } };
       } else {

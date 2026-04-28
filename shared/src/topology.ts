@@ -211,6 +211,35 @@ export function synthesizeTopology(
   return { agents };
 }
 
+// Phase 5 of #243: lookup helpers used by runners to fetch a
+// specific agent's spec when wiring per-agent runtime overrides
+// (promptAddendum, tag) into prompt calls. Optional-chained
+// callers stay safe when topology is undefined (legacy clients).
+export function findAgentSpec(
+  topology: Topology | undefined,
+  agentIndex: number,
+): AgentSpec | undefined {
+  return topology?.agents.find((a) => a.index === agentIndex);
+}
+export function getAgentAddendum(
+  topology: Topology | undefined,
+  agentIndex: number,
+): string | undefined {
+  const spec = findAgentSpec(topology, agentIndex);
+  if (!spec?.promptAddendum) return undefined;
+  const trimmed = spec.promptAddendum.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+export function getAgentTag(
+  topology: Topology | undefined,
+  agentIndex: number,
+): string | undefined {
+  const spec = findAgentSpec(topology, agentIndex);
+  if (!spec?.tag) return undefined;
+  const trimmed = spec.tag.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 // Inverse of synthesizeTopology — given a topology, derive the legacy
 // fields the runners still consume. Used at the route boundary so
 // the runner side stays unchanged in Phase 1.

@@ -122,6 +122,7 @@ import { buildAuditorSeed as buildAuditorSeedExtracted } from "./auditorSeedBuil
 import { truncate } from "./truncate.js";
 import { config } from "../../config.js";
 import { stripAgentText } from "../../../../shared/src/stripAgentText.js";
+import { getAgentAddendum } from "../../../../shared/src/topology.js";
 import { checkBuildCommand } from "./buildCommandAllowlist.js";
 
 // Blackboard preset: planner posts TODOs, workers drain them in a
@@ -4412,6 +4413,9 @@ export class BlackboardRunner implements SwarmRunner {
         // V2 Step 1: thread the diag logger so OllamaClient's
         // _ollama_direct_call entries land in logs/current.jsonl.
         logDiag: this.opts.logDiag,
+        // Phase 5b of #243: per-agent addendum from the topology row.
+        // Active topology lives on this.active (set in start()).
+        promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         onTokens: ({ promptTokens, responseTokens }) => {
           if (promptTokens > 0) this.promptTokensPerAgent.set(agent.id, (this.promptTokensPerAgent.get(agent.id) ?? 0) + promptTokens);
           if (responseTokens > 0) this.responseTokensPerAgent.set(agent.id, (this.responseTokensPerAgent.get(agent.id) ?? 0) + responseTokens);

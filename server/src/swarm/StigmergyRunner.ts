@@ -19,6 +19,7 @@ import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { runEndReflection } from "./runEndReflection.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
+import { getAgentAddendum } from "../../../shared/src/topology.js";
 
 // Stigmergy / pheromone trails — repo exploration mode.
 // No central planner, no role assignment. Agents post annotations on
@@ -415,6 +416,8 @@ export class StigmergyRunner implements SwarmRunner {
         manager: this.opts.manager,
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens),
         agentName: "swarm-read",
+        // Phase 5b of #243: per-agent addendum from the topology row.
+        promptAddendum: getAgentAddendum(this.active?.topology, lead.index),
         describeError: describeSdkError,
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(lead.id, success, elapsedMs);
@@ -585,6 +588,8 @@ export class StigmergyRunner implements SwarmRunner {
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
         // Unit 20: read-only tools for discussion presets.
         agentName: "swarm-read",
+        // Phase 5b of #243: per-agent addendum from the topology row.
+        promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         describeError: describeSdkError,
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(agent.id, success, elapsedMs);

@@ -21,6 +21,7 @@ import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
 import { runEndReflection } from "./runEndReflection.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
+import { getAgentAddendum } from "../../../shared/src/topology.js";
 
 // Council / parallel drafts + reconcile.
 // Round 1: every agent drafts independently. Each agent's prompt contains
@@ -410,6 +411,8 @@ export class CouncilRunner implements SwarmRunner {
         signal: controller.signal,
         manager: this.opts.manager,
         agentName: "swarm-read",
+        // Phase 5b of #243: per-agent addendum from the topology row.
+        promptAddendum: getAgentAddendum(cfg.topology, lead.index),
         describeError: describeSdkError,
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(lead.id, success, elapsedMs);
@@ -540,6 +543,8 @@ export class CouncilRunner implements SwarmRunner {
         manager: this.opts.manager,
         // Unit 20: read-only tools for discussion presets.
         agentName: "swarm-read",
+        // Phase 5b of #243: per-agent addendum from the topology row.
+        promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         describeError: describeSdkError,
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
         onTiming: ({ attempt, elapsedMs, success }) => {

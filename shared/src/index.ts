@@ -39,5 +39,8 @@ export {
   isRoleStructural,
   synthesizeTopology,
   deriveLegacyFields,
+  findAgentSpec,
+  getAgentAddendum,
+  getAgentTag,
 } from "./topology.js";
 export type { AgentRole, AgentColor, AgentSpec, Topology } from "./topology.js";

@@ -70,6 +70,7 @@ import {
 } from "./OrchestratorWorkerRunner.js";
 import { runEndReflection } from "./runEndReflection.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
+import { getAgentAddendum } from "../../../shared/src/topology.js";
 
 // Target workers per mid-lead. Picked empirically from #131's industry-
 // consensus note ("past ~8 workers, you need a tree"). At 6, the
@@ -541,6 +542,8 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
         signal: controller.signal,
         manager: this.opts.manager,
         agentName: "swarm-read",
+        // Phase 5b of #243: per-agent addendum from the topology row.
+        promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         describeError: describeSdkError,
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(agent.id, success, elapsedMs);

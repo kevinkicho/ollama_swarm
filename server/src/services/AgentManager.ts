@@ -100,6 +100,19 @@ export interface StreamPromptOpts {
    *  hallucinations (e.g. worker model handed a planner JSON prompt
    *  rambling markdown for ~14 minutes) within ~10s of streaming. */
   formatExpect?: "json" | "free";
+  /** Phase 5b of #243: per-agent system-prompt addendum from the
+   *  topology row. When set, prepended to promptText with an explicit
+   *  framing header so the model treats it as additional context.
+   *  Empty / undefined leaves the prompt untouched (pre-Phase-5
+   *  behavior).
+   *
+   *  We prepend rather than using the SDK's `system` field because
+   *  `system` REPLACES the agent profile's prompt (which carries the
+   *  role-specific instructions like "you are a worker, return JSON").
+   *  Prepending preserves the role prompt and adds the addendum on
+   *  top — closer to what a thoughtful per-agent instruction would
+   *  intuitively do. */
+  promptAddendum?: string;
 }
 
 // Task #196: stream-text threshold for the format sniff. Set generously
@@ -326,12 +339,21 @@ export class AgentManager {
       // OpenCode skips emitting message.part.updated events for our
       // setup — every prompt 90s-timed-out with zero chunks. So we
       // fire the regular prompt; the HTTP body just goes unread.
+      // Phase 5b of #243: per-agent prompt addendum from topology row.
+      // Prepended with a clear framing block so the model treats it
+      // as additional standing instructions on top of the role-level
+      // system prompt (which lives in the agent profile and is
+      // preserved). Empty addendum → text passes through unchanged.
+      const effectivePromptText =
+        opts.promptAddendum && opts.promptAddendum.trim().length > 0
+          ? `[Per-agent specialization for this swarm member]\n${opts.promptAddendum.trim()}\n[End specialization. Original prompt follows.]\n\n${opts.promptText}`
+          : opts.promptText;
       void agent.client.session.prompt(
         {
           sessionID: agent.sessionId,
           agent: opts.agentName,
           model: { providerID: "ollama", modelID: opts.modelID },
-          parts: [{ type: "text", text: opts.promptText }],
+          parts: [{ type: "text", text: effectivePromptText }],
         },
         { signal: opts.signal },
       ).catch((err) => {

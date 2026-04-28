@@ -21,6 +21,7 @@ import { runEndReflection } from "./runEndReflection.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
+import { getAgentAddendum } from "../../../shared/src/topology.js";
 
 export interface RoundRobinOptions {
   // Unit 8: when set, every agent gets a per-index role prepended to its
@@ -356,6 +357,8 @@ export class RoundRobinRunner implements SwarmRunner {
         // Unit 20: read-only tools (file-read / grep / glob / list).
         // Discussion-only presets — never edits.
         agentName: "swarm-read",
+        // Phase 5b of #243: per-agent addendum from the topology row.
+        promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         describeError: (e) => this.describeSdkError(e),
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(agent.id, success, elapsedMs);
@@ -509,6 +512,8 @@ export class RoundRobinRunner implements SwarmRunner {
         manager: this.opts.manager,
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens),
         agentName: "swarm-read",
+        // Phase 5b of #243: per-agent addendum from the topology row.
+        promptAddendum: getAgentAddendum(this.active?.topology, lead.index),
         describeError: (e) => this.describeSdkError(e),
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(lead.id, success, elapsedMs);

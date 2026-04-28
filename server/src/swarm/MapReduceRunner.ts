@@ -21,6 +21,7 @@ import { formatCloneMessage } from "./cloneMessage.js";
 import { runEndReflection } from "./runEndReflection.js";
 import { staggerStart } from "./staggerStart.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
+import { getAgentAddendum } from "../../../shared/src/topology.js";
 
 // Map-reduce over the repo.
 // Agent 1 = REDUCER (silent during the map phase, then synthesizes).
@@ -457,6 +458,8 @@ export class MapReduceRunner implements SwarmRunner {
         manager: this.opts.manager,
         // Unit 20: read-only tools for discussion presets.
         agentName: "swarm-read",
+        // Phase 5b of #243: per-agent addendum from the topology row.
+        promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         describeError: describeSdkError,
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(agent.id, success, elapsedMs);

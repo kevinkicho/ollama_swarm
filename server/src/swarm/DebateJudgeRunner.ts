@@ -20,6 +20,7 @@ import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { runEndReflection } from "./runEndReflection.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
+import { getAgentAddendum } from "../../../shared/src/topology.js";
 
 // Debate + judge.
 // Agent 1 = PRO (argues FOR the proposition).
@@ -540,6 +541,8 @@ export class DebateJudgeRunner implements SwarmRunner {
         // Unit 20: read-only tools for discussion presets.
         // Task #102: implementer turn opts into "swarm" (write tools).
         agentName,
+        // Phase 5b of #243: per-agent addendum from the topology row.
+        promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         describeError: describeSdkError,
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(agent.id, success, elapsedMs);

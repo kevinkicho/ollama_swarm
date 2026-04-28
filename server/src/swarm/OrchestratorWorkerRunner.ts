@@ -21,6 +21,7 @@ import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
 import { runEndReflection } from "./runEndReflection.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
+import { getAgentAddendum } from "../../../shared/src/topology.js";
 
 // Orchestrator–worker hierarchy.
 // Agent 1 is the LEAD: it reads the repo, produces a plan assigning one
@@ -414,6 +415,8 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
         manager: this.opts.manager,
         // Unit 20: read-only tools for discussion presets.
         agentName: "swarm-read",
+        // Phase 5b of #243: per-agent addendum from the topology row.
+        promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         describeError: describeSdkError,
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(agent.id, success, elapsedMs);
