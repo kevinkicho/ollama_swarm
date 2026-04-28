@@ -1458,10 +1458,13 @@ export class BlackboardRunner implements SwarmRunner {
 
     const draftResults = await Promise.allSettled(
       allAgents.map(async (a) => {
-        // Unit 37: council drafts are PLANNER-role prompts (agents
-        // drafting contracts, not producing diffs) — route through
-        // swarm-read so the agent can inspect the code before drafting.
-        const text = await this.promptAgent(a, draftPrompt, "swarm-read");
+        // #231 (2026-04-27 evening): drop tools for council contract
+        // drafts. FIRST_PASS_CONTRACT_SYSTEM_PROMPT is tool-agnostic;
+        // file list comes from the user prompt. With tools enabled,
+        // glm-5.1 / nemotron-3-super hallucinate <read>/<grep> markers
+        // that prefix the JSON envelope and cause parse failures (RCA
+        // run 6a256a18, 2026-04-27 evening).
+        const text = await this.promptAgent(a, draftPrompt, "swarm");
         return { agent: a, text };
       }),
     );
