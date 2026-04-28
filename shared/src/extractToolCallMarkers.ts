@@ -46,6 +46,20 @@ const MARKER_TAGS = [
   "tree",
   "ls",
   "cat",
+  // #292 (2026-04-28): MCP-style tool-call wrappers. The blackboard
+  // tour run 3c4a2da1 surfaced 100+ raw `<tool_use><server_name>...
+  // </server_name><tool_name>read_file</tool_name><arguments>...
+  // </arguments></tool_use>` blocks from the planner. Same hallucination
+  // shape as the bare-XML markers above, just nested. The PAIRED_TAG_RE
+  // catches the outer wrapper and `[\s\S]*?` consumes the nested
+  // children as content, so adding the wrapper tag is sufficient.
+  // function_call + invoke cover GPT/Claude-flavored equivalents seen
+  // in stripToolCallLeak's marker list (server/src/swarm/extractText.ts
+  // lines 113-118) so the two extraction layers stay aligned.
+  "tool_use",
+  "tool_call",
+  "function_call",
+  "invoke",
 ] as const;
 
 // Match an XML-style tag at any position. Handles:

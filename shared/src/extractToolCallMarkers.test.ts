@@ -132,3 +132,61 @@ describe("extractToolCallMarkers — edge cases + safety", () => {
     assert.equal(r.finalText, "final");
   });
 });
+
+// #292 (2026-04-28): MCP-style nested tool_use blocks observed during
+// the 9-preset tour. Blackboard planner emitted ~100 of these in a
+// single response, fragmenting the bubble + likely poisoning the
+// contract JSON downstream.
+describe("extractToolCallMarkers — MCP-style nested wrappers (#292)", () => {
+  it("strips <tool_use> with nested <server_name> + <tool_name> + <arguments>", () => {
+    const text = `Let me inspect the codebase first.
+<tool_use> <server_name>filesystem</server_name> <tool_name>read_file</tool_name> <arguments>{"path":"src/foo.ts"}</arguments> </tool_use>
+final prose`;
+    const r = extractToolCallMarkers(text);
+    assert.equal(r.toolCalls.length, 1);
+    assert.match(r.toolCalls[0]!, /<server_name>filesystem<\/server_name>/);
+    assert.match(r.toolCalls[0]!, /<tool_name>read_file<\/tool_name>/);
+    assert.match(r.finalText, /Let me inspect/);
+    assert.match(r.finalText, /final prose/);
+    assert.doesNotMatch(r.finalText, /<tool_use>/);
+    assert.doesNotMatch(r.finalText, /<server_name>/);
+  });
+
+  it("strips a 100-block <tool_use> cluster (blackboard tour shape)", () => {
+    // Reproduces the run 3c4a2da1 pattern: planner emitted ~100 raw
+    // <tool_use> blocks instead of executing real tools, fragmenting
+    // the bubble into 100+ micro-segments.
+    const block = (i: number) =>
+      `<tool_use> <server_name>filesystem</server_name> <tool_name>read_file</tool_name> <arguments>{"path":"src/f${i}.ts"}</arguments> </tool_use>`;
+    const cluster = Array.from({ length: 100 }, (_, i) => block(i)).join("\n");
+    const text = `Inspecting:\n${cluster}\n\nNow let me compile findings.`;
+    const r = extractToolCallMarkers(text);
+    assert.equal(r.toolCalls.length, 100);
+    assert.match(r.finalText, /Inspecting:/);
+    assert.match(r.finalText, /Now let me compile findings\./);
+    assert.doesNotMatch(r.finalText, /<tool_use>/);
+  });
+
+  it("strips <function_call> (GPT-flavored)", () => {
+    const text = `pre <function_call name="read"><arg>x</arg></function_call> post`;
+    const r = extractToolCallMarkers(text);
+    assert.equal(r.toolCalls.length, 1);
+    assert.match(r.finalText, /pre.*post/);
+  });
+
+  it("strips <invoke> (Claude-flavored)", () => {
+    const text = `pre <invoke name="get_file"><parameter>x</parameter></invoke> post`;
+    const r = extractToolCallMarkers(text);
+    assert.equal(r.toolCalls.length, 1);
+    assert.match(r.finalText, /pre.*post/);
+  });
+
+  it("strips unclosed <tool_use> opener as a single-tag form", () => {
+    const text = "<tool_use server='filesystem'>still typing";
+    const r = extractToolCallMarkers(text);
+    assert.equal(r.toolCalls.length, 1);
+    // finalText falls back to original when extraction produces a
+    // worse-than-input result; here `still typing` survives.
+    assert.match(r.finalText, /still typing/);
+  });
+});
