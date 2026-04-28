@@ -1649,9 +1649,19 @@ export class BlackboardRunner implements SwarmRunner {
     isFallbackAttempt = false,
   ): Promise<void> {
     // Unit 24: planner fallback (see promptPlannerSafely comment).
+    // #231 follow-up (2026-04-27 evening): the todos pass uses
+    // PLANNER_SYSTEM_PROMPT which explicitly requires tool use ("USE
+    // THEM", "REQUIRED VERIFICATION: GREP for the symbol FIRST"). With
+    // tools removed, the model returns empty (validation run 07e37525).
+    // Pass "swarm-read" explicitly here so todos has tool access. Marker
+    // leaks are now caught by stripAgentText (#229+#230) so the parse
+    // path sees clean JSON via extractFirstBalanced. Contract pass keeps
+    // the new "swarm" default since FIRST_PASS_CONTRACT_SYSTEM_PROMPT is
+    // tool-agnostic (file list is supplied in the user prompt).
     const { response: firstResponse, agentUsed: planAgent } = await this.promptPlannerSafely(
       agent,
       `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed)}`,
+      "swarm-read",
     );
     if (this.stopping) return;
     this.appendAgent(planAgent, firstResponse);
@@ -1662,6 +1672,7 @@ export class BlackboardRunner implements SwarmRunner {
       const { response: repairResponse, agentUsed: repairAgent } = await this.promptPlannerSafely(
         planAgent,
         `${PLANNER_SYSTEM_PROMPT}\n\n${buildRepairPrompt(firstResponse, parsed.reason)}`,
+        "swarm-read",
       );
       if (this.stopping) return;
       this.appendAgent(repairAgent, repairResponse);
