@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Agent } from "../../services/AgentManager.js";
@@ -2634,28 +2634,17 @@ export class BlackboardRunner implements SwarmRunner {
       const todo = this.board.findClaimableTodo(myTag);
       if (!todo) continue;
 
-      // #237 (2026-04-28): build-style TODOs short-circuit the V1/V2
-      // hunks pipelines entirely — they dispatch through the
-      // swarm-builder agent profile + opencode bash tool. Both V1
-      // and V2 hunks paths only handle hunks-emit TODOs.
+      // #237 (2026-04-28): build-style TODOs short-circuit the hunks
+      // pipeline entirely — dispatched through swarm-builder + opencode
+      // bash. Hunks TODOs go through executeWorkerTodoV2 (apply-and-commit
+      // via search-anchor matching). V2 cutover Phase 2c (2026-04-28)
+      // removed the V1 CAS-based pipeline; the env-gated A/B flag is
+      // gone with it.
       let outcome: "committed" | "stale" | "lost-race" | "aborted";
       if (todo.kind === "build") {
         outcome = await this.executeBuildTodo(agent, todo);
       } else {
-        // V2 Step 5c.2: opt-in to V2 worker pipeline via env flag.
-        // Default OFF — V1 path is unchanged. When enabled, the V2 path
-        // skips CAS/lock-files/per-file-hashes (V2 model: applyHunks
-        // search-anchor catches conflicts at apply time, see ARCHITECTURE-
-        // V2.md section 5). Both paths still call board.commit/markStale
-        // so V1 board state stays consistent for the parallel-track mirror.
-        // Per-run cfg.useWorkerPipelineV2 wins over env when set; falls
-        // back to USE_WORKER_PIPELINE_V2 env flag when absent. Lets users
-        // A/B the V2 path without restarting the dev server.
-        const useV2Worker =
-          this.active?.useWorkerPipelineV2 ?? process.env.USE_WORKER_PIPELINE_V2 === "1";
-        outcome = useV2Worker
-          ? await this.executeWorkerTodoV2(agent, todo)
-          : await this.executeWorkerTodo(agent, todo);
+        outcome = await this.executeWorkerTodoV2(agent, todo);
       }
       if (outcome === "committed") {
         // Cooldown so one worker doesn't monopolize the board. Random jitter
@@ -2760,400 +2749,17 @@ export class BlackboardRunner implements SwarmRunner {
     return "committed";
   }
 
-  private async executeWorkerTodo(
-    agent: Agent,
-    todo: Todo,
-  ): Promise<"committed" | "stale" | "lost-race" | "aborted"> {
-    // Hash files BEFORE claiming so the claim records the CAS baseline. If we
-    // lose the race with another worker, we throw away the hashes but the
-    // operation was read-only so no harm done.
-    let hashes: Record<string, string>;
-    try {
-      hashes = await this.hashExpectedFiles(todo.expectedFiles);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // Can't even hash the paths — usually means path escape or a bad
-      // planner output. Mark stale so Phase 6 replan can see it.
-      this.appendSystem(`[${agent.id}] cannot hash todo "${truncate(todo.description)}": ${msg}`);
-      this.board.markStale(todo.id, `hash failure: ${msg}`);
-      return "stale";
-    }
-
-    const now = Date.now();
-    const claim = this.board.claimTodo({
-      todoId: todo.id,
-      agentId: agent.id,
-      fileHashes: hashes,
-      claimedAt: now,
-      expiresAt: now + CLAIM_TTL_MS,
-    });
-    if (!claim.ok) {
-      // Another worker got it or it went stale/committed between find and claim.
-      // Back off briefly to desync from whoever won.
-      return "lost-race";
-    }
-
-    // Read current contents to feed the prompt. Use the same resolve-safe
-    // check so we never leak anything outside the clone via a symlink.
-    let contents: Record<string, string | null>;
-    try {
-      contents = await this.readExpectedFiles(todo.expectedFiles);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.board.markStale(todo.id, `read failure: ${msg}`);
-      return "stale";
-    }
-
-    const seed: WorkerSeed = {
-      todoId: todo.id,
-      description: todo.description,
-      expectedFiles: todo.expectedFiles,
-      fileContents: contents,
-      // Unit 44b: pass anchors through. buildWorkerUserPrompt switches
-      // to the anchored window view when this is non-empty.
-      expectedAnchors: todo.expectedAnchors,
-      // Unit 59 (59a): inject the assigned role bias for this worker.
-      // Empty string when specializedWorkers is off; buildWorkerUserPrompt
-      // skips the preamble when absent → byte-identical pre-Unit-59 prompt.
-      roleGuidance: this.workerRoles.get(agent.id),
-    };
-
-    let response: string;
-    try {
-      response = await this.promptAgent(agent, `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`);
-    } catch (err) {
-      if (this.stopping) return "aborted";
-      const msg = err instanceof Error ? err.message : String(err);
-      this.board.markStale(todo.id, `worker prompt failed: ${msg}`);
-      // Task #67: hard error during this agent's worker prompt.
-      bumpAgentCounter(this.promptErrorsPerAgent, agent.id);
-      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-      return "stale";
-    }
-    if (this.stopping) return "aborted";
-    this.appendAgent(agent, response);
-
-    let parsed = parseWorkerResponse(response, todo.expectedFiles);
-    if (!parsed.ok) {
-      // Task #67: JSON-invalid first attempt. Informational counter even
-      // if the repair below succeeds — tells us which workers struggle
-      // with the JSON envelope.
-      bumpAgentCounter(this.jsonRepairsPerAgent, agent.id);
-      this.appendSystem(`[${agent.id}] worker JSON invalid (${parsed.reason}); issuing repair prompt.`);
-      let repair: string;
-      try {
-        repair = await this.promptAgent(
-          agent,
-          `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerRepairPrompt(response, parsed.reason)}`,
-        );
-      } catch (err) {
-        if (this.stopping) return "aborted";
-        const msg = err instanceof Error ? err.message : String(err);
-        this.board.markStale(todo.id, `worker repair prompt failed: ${msg}`);
-        bumpAgentCounter(this.promptErrorsPerAgent, agent.id);
-        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-        return "stale";
-      }
-      if (this.stopping) return "aborted";
-      this.appendAgent(agent, repair);
-      parsed = parseWorkerResponse(repair, todo.expectedFiles);
-      if (!parsed.ok) {
-        this.board.markStale(todo.id, `worker produced invalid JSON after repair: ${parsed.reason}`);
-        // Repair didn't fix it; this attempt is fully wasted.
-        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-        return "stale";
-      }
-    }
-
-    if (parsed.skip) {
-      this.appendSystem(`[${agent.id}] worker declined todo: ${parsed.skip}`);
-      // Mark stale (not skipped) so Phase 6 replan can decide whether to
-      // re-prompt or formally skip it. Skipped is a human/planner decision.
-      this.board.markStale(todo.id, `worker declined: ${parsed.skip}`);
-      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-      return "stale";
-    }
-
-    if (parsed.hunks.length === 0) {
-      this.board.markStale(todo.id, "worker returned empty hunks with no skip reason");
-      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-      return "stale";
-    }
-
-    // Phase 5: re-hash the claimed files; if any drifted since claim time,
-    // mark the todo stale and bail without writing. Otherwise apply hunks to
-    // the pre-prompt contents, validate the resulting texts, and write each
-    // touched file via tmp+rename before recording the commit on the board.
-    let currentHashes: Record<string, string>;
-    try {
-      currentHashes = await this.hashExpectedFiles(todo.expectedFiles);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.board.markStale(todo.id, `re-hash failure: ${msg}`);
-      return "stale";
-    }
-
-    const mismatched: string[] = [];
-    for (const [p, claimed] of Object.entries(hashes)) {
-      if ((currentHashes[p] ?? "") !== claimed) mismatched.push(p);
-    }
-    if (mismatched.length > 0) {
-      this.board.markStale(todo.id, `CAS mismatch before write: ${mismatched.join(", ")}`);
-      // Task #67: lost the optimistic-CAS race; agent's work is wasted.
-      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-      return "stale";
-    }
-
-    // Apply hunks against pre-prompt contents. CAS above already proved no
-    // one touched these files since, so contents is the correct base. Any
-    // hunk failure (anchor not unique, create on an existing file, etc.) is
-    // surfaced with a hunk-index prefix from applyHunks — replanner can use
-    // that to tell the worker which hunk to fix.
-    let applied = applyHunks(contents, parsed.hunks);
-    // Task #78: self-repair when the failure is a "search" mismatch
-    // (whitespace drift, the worker imagined a slightly-different file).
-    // Send the actual file content + failed hunks back to the SAME worker
-    // for one corrective round. Cheaper than markStale → replan from
-    // scratch with a fresh worker, which loses all the worker's context.
-    if (!applied.ok && /text not found/.test(applied.error) && !this.stopping) {
-      this.appendSystem(
-        `[${agent.id}] hunk apply failed (search mismatch); issuing repair prompt with actual file content.`,
-      );
-      let repair: string;
-      // Filter out files we couldn't read (null = not present); they
-      // can't have a search-mismatch failure anyway.
-      const readableContents: Record<string, string> = {};
-      for (const [f, t] of Object.entries(contents)) {
-        if (typeof t === "string") readableContents[f] = t;
-      }
-      try {
-        repair = await this.promptAgent(
-          agent,
-          `${WORKER_SYSTEM_PROMPT}\n\n${buildHunkRepairPrompt(parsed.hunks, applied.error, readableContents)}`,
-        );
-      } catch (err) {
-        if (this.stopping) return "aborted";
-        const msg = err instanceof Error ? err.message : String(err);
-        this.board.markStale(todo.id, `hunk repair prompt failed: ${msg}`);
-        bumpAgentCounter(this.promptErrorsPerAgent, agent.id);
-        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-        return "stale";
-      }
-      if (this.stopping) return "aborted";
-      this.appendAgent(agent, repair);
-      const repairParsed = parseWorkerResponse(repair, todo.expectedFiles);
-      if (!repairParsed.ok) {
-        // Repair also produced bad JSON — give up and markStale with
-        // the original applyHunks error (more actionable than the
-        // repair-parse error).
-        this.board.markStale(todo.id, `hunk apply failed: ${applied.error}`);
-        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-        return "stale";
-      }
-      if (repairParsed.skip || repairParsed.hunks.length === 0) {
-        // Worker decided the todo wasn't doable after seeing the file.
-        // Honor it as a decline; the replanner can re-route.
-        const reason = repairParsed.skip || "empty hunks after repair";
-        this.board.markStale(todo.id, `worker declined after hunk repair: ${reason}`);
-        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-        return "stale";
-      }
-      // Re-apply with the repaired hunks. The pre-prompt contents are
-      // still the right base — CAS still holds (we haven't yielded
-      // since the re-hash above).
-      const reapplied = applyHunks(contents, repairParsed.hunks);
-      if (!reapplied.ok) {
-        this.board.markStale(todo.id, `hunk apply failed after repair: ${reapplied.error}`);
-        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-        return "stale";
-      }
-      this.appendSystem(`[${agent.id}] hunk repair succeeded.`);
-      // Promote the repaired result into the downstream pipeline.
-      applied = reapplied;
-      parsed = repairParsed;
-    }
-    if (!applied.ok) {
-      this.board.markStale(todo.id, `hunk apply failed: ${applied.error}`);
-      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-      return "stale";
-    }
-
-    // Convert the per-file post-apply output into the {file, newText} shape
-    // the existing validators expect. Only files that actually had hunks are
-    // present (applyHunks preserves that contract).
-    const resultingDiffs = Object.entries(applied.newTextsByFile).map(
-      ([file, newText]) => ({ file, newText }),
-    );
-
-    // Block a worker from zeroing out a previously non-empty file. We check
-    // on the post-apply text, not on raw hunks — a sequence of replaces that
-    // whittles a file down to "" would slip past a per-hunk check.
-    const zeroed = findZeroedFiles(resultingDiffs, contents);
-    if (zeroed.length > 0) {
-      this.board.markStale(
-        todo.id,
-        `worker would zero non-empty file(s): ${zeroed.join(", ")}`,
-      );
-      return "stale";
-    }
-
-    // Reject leading UTF-8 BOMs in the resulting text. Writing one through
-    // silently breaks tooling (git diffs look empty, node parsers throw,
-    // linters lie).
-    const bomFiles = findBomPrefixed(resultingDiffs);
-    if (bomFiles.length > 0) {
-      this.board.markStale(
-        todo.id,
-        `worker output has leading UTF-8 BOM in: ${bomFiles.join(", ")}`,
-      );
-      return "stale";
-    }
-
-    // Unit 35: critic intercept. Between CAS pass and disk write, a peer
-    // agent reviews the diff for busywork patterns (duplicate content,
-    // stub implementations, rename-only reorgs, tests-without-behavior,
-    // etc.). Reject → markStale, no disk mutation, no commit burned.
-    // Opt-in per run / env; when neither is set the critic is SKIPPED
-    // and the worker-commit flow is byte-identical to pre-Unit-35.
-    if (this.criticEnabled()) {
-      const criticCtx: CriticContext = {
-        manager: this.opts.manager,
-        board: this.board,
-        contractCriteria: this.contract?.criteria ?? [],
-        appendSystem: (text, summary) => this.appendSystem(text, summary),
-        isStopping: () => this.stopping,
-        bumpRejected: (agentId) =>
-          bumpAgentCounter(this.rejectedAttemptsPerAgent, agentId),
-        ensembleEnabled: this.active?.criticEnsemble === true,
-      };
-      const verdict = await runCriticExtracted(
-        todo,
-        agent,
-        contents,
-        resultingDiffs,
-        criticCtx,
-      );
-      if (this.stopping) return "stale";
-      if (verdict === "reject") {
-        // The "stale reason" is populated inside runCritic via
-        // markStale-with-rationale; we just return the status bucket.
-        return "stale";
-      }
-    }
-
-    // Task #128: verifier intercept. After critic accept (or critic
-    // disabled), an independent claim-checker reads the todo + diff
-    // and asks "does this diff actually action this specific todo?".
-    // FALSE blocks the commit (markStale → replanner picks a fresh
-    // angle). PARTIAL / VERIFIED proceed; UNVERIFIABLE proceeds with
-    // a logged warning. Opt-in via cfg.verifier — when off the worker
-    // pipeline is byte-identical to pre-#128.
-    if (this.verifierEnabled()) {
-      const verifierCtx: VerifierContext = {
-        manager: this.opts.manager,
-        board: this.board,
-        appendSystem: (text, summary) => this.appendSystem(text, summary),
-        isStopping: () => this.stopping,
-        bumpRejected: (agentId) =>
-          bumpAgentCounter(this.rejectedAttemptsPerAgent, agentId),
-      };
-      const verdict = await runVerifierExtracted(
-        todo,
-        agent,
-        contents,
-        resultingDiffs,
-        verifierCtx,
-      );
-      if (this.stopping) return "stale";
-      if (verdict === "reject") {
-        return "stale";
-      }
-    }
-
-    // CAS passed locally. Write atomically; on any write error we leave the
-    // claim in place — TTL expiry will convert it to stale and Phase 6 replan
-    // will observe whatever state the partial write left on disk.
-    try {
-      for (const { file, newText } of resultingDiffs) {
-        await this.writeDiff(file, newText);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(`[${agent.id}] write failed mid-commit: ${msg}`);
-      this.opts.emit({
-        type: "error",
-        message: `Write failed after CAS pass for todo ${todo.id}: ${msg}`,
-      });
-      this.board.markStale(todo.id, `write failed: ${msg}`);
-      return "stale";
-    }
-
-    // Record on the board. Trivially passes CAS since nothing touched the
-    // files between our re-hash above and these writes (same event-loop tick).
-    const commit = this.board.commitTodo({
-      todoId: todo.id,
-      agentId: agent.id,
-      currentHashes,
-      committedAt: Date.now(),
-    });
-    if (!commit.ok) {
-      // Unexpected: we just verified the hashes. Surface as an error and
-      // mark stale so the run can continue.
-      this.appendSystem(`[${agent.id}] unexpected commit refusal: ${commit.reason}`);
-      this.board.markStale(todo.id, `commit refused after write: ${commit.reason}`);
-      return "stale";
-    }
-
-    const summary = resultingDiffs
-      .map((d) => `${d.file} (${d.newText.length} chars)`)
-      .join(", ");
-    this.appendSystem(
-      `[${agent.id}] committed ${parsed.hunks.length} hunk(s): ${summary}`,
-    );
-    // Task #66: attribute this commit + line counts to the agent so the
-    // history modal's per-agent table can show who produced code.
-    this.commitsPerAgent.set(agent.id, (this.commitsPerAgent.get(agent.id) ?? 0) + 1);
-    let added = 0;
-    let removed = 0;
-    for (const h of parsed.hunks) {
-      if (h.op === "replace") {
-        added += countNewlines(h.replace);
-        removed += countNewlines(h.search);
-      } else if (h.op === "create" || h.op === "append") {
-        added += countNewlines(h.content);
-      }
-    }
-    this.linesAddedPerAgent.set(
-      agent.id,
-      (this.linesAddedPerAgent.get(agent.id) ?? 0) + added,
-    );
-    this.linesRemovedPerAgent.set(
-      agent.id,
-      (this.linesRemovedPerAgent.get(agent.id) ?? 0) + removed,
-    );
-    return "committed";
-  }
-
-  // V2 Step 5c.2: opt-in worker pipeline. Same prompt → parse → repair
-  // flow as V1's executeWorkerTodo, but writes via WorkerPipelineV2's
-  // applyAndCommitV2 instead of CAS+lock+writeFileAtomic+board.commit.
-  // V1 board still tracks claim/commit so the parallel-track mirror
-  // (Step 5c.1) stays consistent. Gated by USE_WORKER_PIPELINE_V2 env.
-  //
-  // Skipped vs V1:
-  // - No file-hash CAS (V2 conflict detection is applyHunks anchor failure)
-  // - No per-file lock cache (#205) — git is the conflict resolver
-  // - No re-hash before write (same reason)
-  //
-  // Kept vs V1:
-  // - Claim through V1 board (so two workers don't race on same todo)
-  // - Worker prompt + JSON repair on parse failure
-  // - All board state mutations (claim/commit/markStale) for mirror parity
+  // The hunks worker pipeline. After V2 cutover Phase 2c (2026-04-28)
+  // this is the only hunks pipeline — the V1 CAS-based pipeline was
+  // deleted with its env-gated A/B flag. Apply via applyAndCommitV2;
+  // search-anchor matching catches sibling-worker conflicts at apply
+  // time. Method name keeps the V2 suffix until Phase 2g rename so
+  // anyone reading the diff can see V1 truly went away.
   private async executeWorkerTodoV2(
     agent: Agent,
     todo: Todo,
   ): Promise<"committed" | "stale" | "lost-race" | "aborted"> {
-    // V2: empty hash map for the claim — we don't use CAS. The claim
+    // Empty hash map for the claim — we don't use CAS. The claim
     // still serves to prevent two workers picking the same todo.
     const now = Date.now();
     const claim = this.board.claimTodo({
@@ -4141,26 +3747,11 @@ export class BlackboardRunner implements SwarmRunner {
   // File I/O helpers
   // ---------------------------------------------------------------------
 
-  private async hashExpectedFiles(files: string[]): Promise<Record<string, string>> {
-    const out: Record<string, string> = {};
-    for (const f of files) out[f] = await this.hashFile(f);
-    return out;
-  }
-
-  private async hashFile(relPath: string): Promise<string> {
-    const abs = await this.resolveSafe(relPath);
-    try {
-      const buf = await fs.readFile(abs);
-      return createHash("sha256").update(buf).digest("hex");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
-      throw err;
-    }
-  }
-
-  private async writeDiff(relPath: string, contents: string): Promise<void> {
-    await writeFileAtomic(await this.resolveSafe(relPath), contents);
-  }
+  // V2 cutover Phase 2c (2026-04-28): hashExpectedFiles / hashFile /
+  // writeDiff used only by V1 worker pipeline (CAS baseline + atomic
+  // write). V2 path uses applyAndCommitV2 which does its own read +
+  // write via the realFilesystemAdapter. Helpers removed with the V1
+  // pipeline.
 
   private async readExpectedFiles(files: string[]): Promise<Record<string, string | null>> {
     const out: Record<string, string | null> = {};
