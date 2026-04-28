@@ -121,3 +121,37 @@ describe("extractThinkTags — edge cases + safety", () => {
     assert.match(r.finalText, /c<\/think>d|c.*d/);
   });
 });
+
+describe("extractThinkTags — unpaired </think> at head (RCA preset 1, 2026-04-27)", () => {
+  // Some models stream a response that starts mid-thought — there's a
+  // </think> closer with no matching opening <think>. Pre-fix, the
+  // closer leaked into the visible bubble (e.g. the planner's empty
+  // todos response was literally "</think>```json[]```" rendered raw).
+  it("strips an unpaired </think> at the head and treats prefix as a thought", () => {
+    const r = extractThinkTags("about to commit</think>```json\n[]\n```");
+    assert.equal(r.thoughts, "about to commit");
+    assert.match(r.finalText, /```json/);
+    assert.doesNotMatch(r.finalText, /<\/think>/);
+  });
+
+  it("handles bare </think> at the very start (no thought prefix)", () => {
+    const r = extractThinkTags("</think>just the response");
+    // Empty prefix → no thought stored; closer still consumed.
+    assert.equal(r.thoughts, "");
+    assert.equal(r.finalText, "just the response");
+  });
+
+  it("does NOT strip </think> when it follows a paired <think>", () => {
+    // Paired blocks remain the primary path.
+    const r = extractThinkTags("<think>paired</think>response");
+    assert.equal(r.thoughts, "paired");
+    assert.equal(r.finalText, "response");
+  });
+
+  it("handles unpaired closer + later paired block", () => {
+    const r = extractThinkTags("first thought</think>middle<think>second</think>end");
+    assert.equal(r.thoughts, "first thought\n\n---\n\nsecond");
+    assert.match(r.finalText, /middle/);
+    assert.match(r.finalText, /end/);
+  });
+});

@@ -32,13 +32,32 @@ export function extractThinkTags(text: string): {
   thoughts: string;
   finalText: string;
 } {
-  if (!text || !text.includes("<think>")) {
+  if (!text) return { thoughts: "", finalText: text };
+  // Fast path: no markers at all.
+  if (!text.includes("<think>") && !text.includes("</think>")) {
     return { thoughts: "", finalText: text };
   }
 
-  const thinkRe = /<think>([\s\S]*?)<\/think>/g;
   const thoughts: string[] = [];
-  let stripped = text.replace(thinkRe, (_match, content: string) => {
+  let working = text;
+
+  // Edge case (RCA from preset 1, run af27f55c, 2026-04-27 evening):
+  // some models stream a response that STARTS mid-thought — there's a
+  // </think> closer before any <think> opener. Treat the prefix as a
+  // thought and consume the leaked closing tag. Without this, the
+  // closer leaked into the visible bubble (e.g. "</think>```json[]```"
+  // displayed as raw text in the planner output).
+  const firstClose = working.indexOf("</think>");
+  const firstOpen = working.indexOf("<think>");
+  if (firstClose !== -1 && (firstOpen === -1 || firstClose < firstOpen)) {
+    const head = working.slice(0, firstClose).trim();
+    if (head.length > 0) thoughts.push(head);
+    working = working.slice(firstClose + "</think>".length);
+  }
+
+  // Paired blocks.
+  const thinkRe = /<think>([\s\S]*?)<\/think>/g;
+  let stripped = working.replace(thinkRe, (_match, content: string) => {
     const trimmed = content.trim();
     if (trimmed.length > 0) thoughts.push(trimmed);
     return "";

@@ -390,6 +390,14 @@ const fixtures: Array<{ label: string; entries: TranscriptEntry[] }> = [
     entries: [entry({ role: "agent", agentIndex: 1, text: proseTextWithThoughts, thoughts: "Let me think about this carefully. The request is to split a monolithic handler into per-route modules. The trade-offs are: split-by-domain (matches existing folder structure, simpler imports) vs split-by-feature (more flexible long-term but more refactoring work upfront).\n\nGiven the current scale (3 domains), split-by-domain is the right call. The constructor-arg concern is real and needs addressing.\n\nI'll write a clear, concise final response that picks the cleaner option without over-explaining the deliberation." })],
   },
   {
+    label: "[agent client-fallback] unpaired </think> closer (RCA preset 1, fixed in #228)",
+    // Real shape from run af27f55c entry 14 — model emitted an empty
+    // todos array preceded by a leaked </think> with no opening tag.
+    // Pre-fix: closer rendered as raw text. Post-fix: prefix becomes a
+    // thought, closer consumed.
+    entries: [entry({ role: "agent", agentIndex: 1, text: "[]", thoughts: "(would be the mid-stream prefix before the unpaired </think>)" })],
+  },
+  {
     label: "[agent client-fallback] segmented prose (segmentSplitPoints - shows collapsed-then-final-segment)",
     entries: [entry({ role: "agent", agentIndex: 2, text: "First segment: setting up the analysis. I want to look at the request handler structure carefully to decide where to make cuts.\n\nSecond segment: scanning src/handlers/api.ts. Found 3 distinct domains: users (4 handlers), orders (5 handlers), sessions (2 handlers). All currently colocated in one 800-LOC file.\n\nThird segment (final): the cleanest split is by domain. I'll create src/handlers/routes/{users,orders,sessions}.ts and have api.ts re-export them as a barrel.", segmentSplitPoints: [121, 354] })],
   },
