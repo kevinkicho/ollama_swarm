@@ -117,8 +117,10 @@ describe("V2 substrate integration", () => {
     assert.equal(filesystem.state.files.get("src/b.ts"), "// beta REAL");
     assert.equal(filesystem.state.files.get("src/c.ts"), "// gamma REAL");
 
-    // ── VERIFY: zero divergences (V2 mirrored the simulated V1) ───
-    assert.equal(observer.getDivergences().length, 0);
+    // ── VERIFY: V2 reducer terminated cleanly (post-cutover, divergence
+    // tracking is gone — agreement is verified by V2 reaching the
+    // expected terminal state on its own).
+    assert.equal(observer.getState().phase, "completed");
   });
 
   it("simulates a tier-up cycle: tier 1 complete → tier 2 starts", async () => {
@@ -161,10 +163,14 @@ describe("V2 substrate integration", () => {
     assert.equal(observer.getState().phase, "planning");
   });
 
-  it("simulates the wedge case: V2 catches V1 stuck in executing", async () => {
-    // Setup: V2 reducer reaches "completed" but a hypothetical V1
-    // would still be stuck in "executing" because of flag-soup. The
-    // observer's checkPhase fires divergence with a precise reason.
+  it("V2 reducer terminates correctly even when fed extra events post-completion", async () => {
+    // V2 cutover Phase 1a: this test was originally about the
+    // observer's checkPhase firing a divergence when V1 wedged in
+    // executing while V2 had reached completed. After cutover,
+    // checkPhase + divergence tracking are gone. The remaining
+    // value is verifying the reducer's terminal-state idempotence —
+    // applying further events to a "completed" state must not
+    // transition out.
     const queue = new TodoQueueV2();
     const observer = new RunStateObserver({
       getCtx: () => ({
@@ -195,13 +201,9 @@ describe("V2 substrate integration", () => {
     });
     assert.equal(observer.getState().phase, "completed");
 
-    // Simulated V1 still in executing — wedge!
-    const ok = observer.checkPhase("executing", 7, "wedge-simulation");
-    assert.equal(ok, false);
-    assert.equal(observer.getDivergences().length, 1);
-    const d = observer.getDivergences()[0];
-    assert.equal(d.v1Phase, "executing");
-    assert.equal(d.v2Phase, "completed");
+    // Apply a stray event after completion — terminal state is sticky.
+    observer.apply({ type: "todo-committed", ts: 7, remainingTodos: 0 });
+    assert.equal(observer.getState().phase, "completed");
   });
 });
 

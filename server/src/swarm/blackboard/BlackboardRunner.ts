@@ -198,14 +198,6 @@ const MAX_PAUSE_TOTAL_MS = 2 * 60 * 60_000;
 const DRAIN_DEADLINE_MS = 3 * 60_000;
 const DRAIN_WATCHER_INTERVAL_MS = 2_000;
 
-// V2 Step 3b.2: terminal V1 phases come from external triggers
-// (audit cap, user stop, crash) that V2's event-driven reducer
-// can't always derive. Skip checkPhase for these so the divergence
-// list isn't polluted with cosmetic late-stage mismatches.
-function isV1Terminal(phase: SwarmPhase): boolean {
-  return phase === "completed" || phase === "stopped" || phase === "failed";
-}
-
 // Issue #3 (2026-04-27): planner-empty model fallback. When the
 // primary planner returns 0 valid todos after parse + grounding +
 // repair, we re-prompt ONCE with a sibling model — same prompt,
@@ -425,18 +417,10 @@ export class BlackboardRunner implements SwarmRunner {
   // board.counts() across a real run. Cleared on every start().
   private v2TodoQueue = new TodoQueueV2();
   // V1 Board id → V2 queue id translation. Board generates UUIDs;
-  // TodoQueueV2 generates t1/t2/... so we need a bridge for the
-  // mirror to update the right V2 todo on commit/skip events.
+  // TodoQueueV2 uses caller-supplied ids via postWithId so the mirror
+  // can use the Board id directly. Map kept for backwards compat with
+  // any future translation needs.
   private v1ToV2TodoId = new Map<string, string>();
-  // Accumulator for divergences between V1 board.counts() and
-  // V2 queue.counts(). Snapshot at runSummary time. Zero divergences
-  // = the V2 queue tracked V1 perfectly through the run.
-  private v2QueueDivergences: Array<{
-    ts: number;
-    v1: { open: number; claimed: number; committed: number; stale: number; skipped: number };
-    v2: { pending: number; inProgress: number; completed: number; failed: number; skipped: number };
-    trigger: string;
-  }> = [];
 
   private v2Observer = new RunStateObserver({
     getCtx: () => {
@@ -637,11 +621,9 @@ export class BlackboardRunner implements SwarmRunner {
     // V2 Step 3b: reset the parallel V2 reducer + fire start.
     this.v2Observer.reset();
     this.v2Observer.apply({ type: "start", ts: this.runBootedAt });
-    // V2 Step 5c.1: reset the parallel V2 todo-queue mirror + its
-    // divergence accumulator so the run starts with a clean slate.
+    // Reset the V2 todo-queue mirror so the run starts clean.
     this.v2TodoQueue.clear();
     this.v1ToV2TodoId.clear();
-    this.v2QueueDivergences = [];
 
     this.setPhase("cloning");
     const cloneResult = await this.opts.repos.clone({
@@ -2593,9 +2575,11 @@ export class BlackboardRunner implements SwarmRunner {
             v2QueueCounts: this.v2TodoQueue.counts(),
             ts: now,
           });
-          // Also fire checkPhase explicitly so the divergence list
-          // captures the wedge as a discrete entry in the run summary.
-          this.v2Observer.checkPhase(this.phase, now, "_worker_wait_wedge");
+          // V2 cutover Phase 1a: explicit divergence-capture call
+          // removed (was: this.v2Observer.checkPhase(...) — the
+          // checkPhase method no longer exists). The diag emit above
+          // still records the V2 phase + queue counts so wedges are
+          // visible in logs/current.jsonl.
           // Surface to transcript ONCE per worker, the first time we
           // cross the persistent threshold. Subsequent re-logs (every
           // 30s while still wedged) only update the diag log, not the
@@ -3393,35 +3377,10 @@ export class BlackboardRunner implements SwarmRunner {
         ts: Date.now(),
       });
     }
-    // After mirror, snapshot divergences between V1 board.counts() and
-    // V2 queue.counts(). The two should agree on the post-event state.
-    const b = this.board.counts();
-    const v2 = this.v2TodoQueue.counts();
-    // V1 "open" + "claimed" maps to V2 "pending" + "inProgress" (work
-    // still in flight). V1 "committed" → V2 "completed". V1 "stale"
-    // is V2 "failed" (recoverable mid-flight). V1 "skipped" → V2 "skipped".
-    const inFlightV1 = b.open + b.claimed;
-    const inFlightV2 = v2.pending + v2.inProgress;
-    const diverges =
-      inFlightV1 !== inFlightV2 ||
-      b.committed !== v2.completed ||
-      b.skipped !== v2.skipped ||
-      b.stale !== v2.failed;
-    if (diverges) {
-      this.v2QueueDivergences.push({
-        ts: Date.now(),
-        v1: { ...b },
-        v2: { ...v2 },
-        trigger: ev.type,
-      });
-      this.opts.logDiag?.({
-        type: "_v2_queue_divergence",
-        boardEventType: ev.type,
-        v1: { ...b },
-        v2: { ...v2 },
-        ts: Date.now(),
-      });
-    }
+    // V2 cutover Phase 1a (2026-04-28): per-event divergence comparison
+    // between V1 board.counts() and V2 queue.counts() removed after
+    // validation runs confirmed agreement. Mirror still runs (above)
+    // so v2TodoQueue.counts() stays populated for summary.v2QueueState.
   }
 
   private enqueueReplan(todoId: string): void {
@@ -3962,30 +3921,19 @@ export class BlackboardRunner implements SwarmRunner {
       tierHistory: this.tierHistory.length > 0 ? this.tierHistory.slice() : undefined,
       // Task #65: persist transcript so the modal + review view can replay.
       transcript: this.transcript,
-      // V2 Step 3b.2: parallel-track reducer snapshot. Includes the
-      // current V2 phase + accumulated divergence list. Zero divergences
-      // = V1↔V2 agreement across the full run (promotion-ready).
+      // V2 reducer snapshot at run end. After cutover Phase 1a
+      // (2026-04-28), divergence tracking is gone; the field captures
+      // the reducer's final phase + pause state for forward compat.
       v2State: {
         phase: this.v2Observer.getState().phase,
         enteredAt: this.v2Observer.getState().enteredAt,
         detail: this.v2Observer.getState().detail,
         pausedReason: this.v2Observer.getState().pausedReason,
-        divergenceCount: this.v2Observer.getDivergences().length,
-        divergences: this.v2Observer.getDivergences().map((d) => ({
-          v1Phase: d.v1Phase,
-          v2Phase: d.v2Phase,
-          expectedV2Phases: d.expectedV2Phases,
-          ts: d.ts,
-          trigger: d.trigger,
-        })),
       },
-      // V2 Step 5c.1: parallel-track TodoQueue snapshot. Counts at
-      // run end + per-event divergences vs V1 board.counts(). Zero
-      // divergences = the V2 queue mirror tracked V1 perfectly.
+      // V2 TodoQueue snapshot at run end. After cutover Phase 1a,
+      // divergence vs V1 Board is no longer recorded — counts only.
       v2QueueState: {
         counts: this.v2TodoQueue.counts(),
-        divergenceCount: this.v2QueueDivergences.length,
-        divergences: this.v2QueueDivergences.slice(),
       },
       // Phase 4a of #243: topology passthrough.
       topology: cfg.topology,
@@ -4625,36 +4573,13 @@ export class BlackboardRunner implements SwarmRunner {
     // Unit 31: phase is a first-class state change; persist it so an
     // observer tailing blackboard-state.json sees the transition promptly.
     this.scheduleStateWrite();
-    // V2 Step 3b.2: compare V1 phase to V2 reducer state. Default
-    // observer divergence callback is a no-op; we surface to diag log
-    // here so telemetry consumers can spot V1↔V2 drift in real time.
-    // The PHASE_MAPPING accepts coarse V1 → fine V2 transitions
-    // (V1 executing → V2 {executing, auditing, tier-up}); only true
-    // wedges fire here.
-    //
-    // Skip terminal phases (completed/stopped/failed): V1 reaches
-    // these via external triggers (audit cap, user stop, crash) that
-    // V2's event-driven reducer can't always derive — for instance,
-    // V1 hits "audit cap → completed" mid-tier-2 planning before V2
-    // ever gets the auditor-returned event. The divergence would be
-    // cosmetic, not a real V1↔V2 disagreement, and would pollute the
-    // run summary's divergences list. Terminal V1 phases are the
-    // ground truth here; V2 follows.
-    if (isV1Terminal(phase)) return;
-    const ok = this.v2Observer.checkPhase(phase, Date.now(), "setPhase");
-    if (!ok) {
-      const last = this.v2Observer.getDivergences().slice(-1)[0];
-      if (last) {
-        this.opts.logDiag?.({
-          type: "_v2_state_divergence",
-          v1Phase: last.v1Phase,
-          v2Phase: last.v2Phase,
-          expected: last.expectedV2Phases,
-          ts: last.ts,
-          trigger: last.trigger,
-        });
-      }
-    }
+    // V2 cutover Phase 1a (2026-04-28): the parallel-track divergence
+    // check that lived here was removed after 7/7 SDK presets validated
+    // zero divergences. V2 events still flow through this.v2Observer.apply
+    // at their explicit call sites — that's all the V2 reducer needs
+    // to stay in sync with V1's transitions. The reducer's snapshot
+    // ships in summary.v2State for forward compat with Phase 1b/3
+    // (UI-driven by V2 phase).
   }
 
   private emitAgentState(s: AgentState): void {

@@ -209,26 +209,18 @@ export interface RunSummary {
   // TRANSCRIPT_MAX_ENTRIES; transcriptTruncated=true when capped.
   transcript?: TranscriptEntry[];
   transcriptTruncated?: boolean;
-  // V2 Step 3b.2: end-of-run snapshot of the parallel V2 reducer state
-  // and accumulated divergences. Blackboard-only. Optional — older
-  // summaries don't have it. Zero divergences = V1↔V2 agreement.
+  // V2 reducer snapshot at run end. Blackboard-only. After cutover
+  // Phase 1a (2026-04-28), divergence tracking is gone — the field
+  // captures the reducer's terminal phase + pause state.
   v2State?: {
     phase: string;
     enteredAt: number;
     detail?: string;
     pausedReason?: string;
-    divergenceCount: number;
-    divergences: Array<{
-      v1Phase: string;
-      v2Phase: string;
-      expectedV2Phases: string;
-      ts: number;
-      trigger: string;
-    }>;
   };
-  // V2 Step 5c.1: parallel-track V2 TodoQueue mirror. Blackboard-only.
-  // Counts at run end + per-event divergences vs V1 board.counts().
-  // Zero divergences = the V2 queue tracked V1 perfectly across the run.
+  // V2 TodoQueue snapshot at run end. Blackboard-only. After cutover
+  // Phase 1a, divergence vs V1 Board is no longer recorded — only
+  // the queue's terminal counts.
   v2QueueState?: {
     counts: {
       pending: number;
@@ -238,13 +230,6 @@ export interface RunSummary {
       skipped: number;
       total: number;
     };
-    divergenceCount: number;
-    divergences: Array<{
-      ts: number;
-      trigger: string;
-      v1: { open: number; claimed: number; committed: number; stale: number; skipped: number };
-      v2: { pending: number; inProgress: number; completed: number; failed: number; skipped: number };
-    }>;
   };
   // Phase 4a of #243: the topology used for this run, threaded from
   // RunConfig.topology. Optional — older summaries written before this

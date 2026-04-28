@@ -634,103 +634,33 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
             </section>
           ) : null}
 
-          {/* V2 Step 3b.2: parallel-track reducer state. Blackboard-only.
-              Renders as a chip with phase + a count of divergences. Zero
-              divergences (the common case) shows a green badge; any
-              divergences expand into a small table for diagnosis. */}
-          {summary?.v2State ? (
+          {/* V2 reducer + queue state. Blackboard-only. After cutover
+              Phase 1a (2026-04-28), the divergence-tracking chips +
+              tables are gone — V2 events ran clean across 7/7 SDK
+              presets and 4 V2 worker commits, so the parallel-track
+              comparison was retired. The remaining display is a
+              single-line snapshot of where V2 ended up. */}
+          {summary?.v2State || summary?.v2QueueState ? (
             <section>
-              <SectionLabel>V2 reducer state</SectionLabel>
-              <div className="flex items-baseline gap-2 mb-1 text-[11px]">
-                <span className={`px-2 py-0.5 rounded font-mono text-[10px] uppercase tracking-wider ${
-                  summary.v2State.divergenceCount === 0
-                    ? "bg-emerald-900/60 text-emerald-200"
-                    : "bg-amber-900/60 text-amber-200"
-                }`}>
-                  v2 phase: {summary.v2State.phase}
-                </span>
-                <span className="text-ink-400">
-                  {summary.v2State.divergenceCount === 0
-                    ? "✓ V1↔V2 agreement throughout the run"
-                    : `${summary.v2State.divergenceCount} divergence${summary.v2State.divergenceCount === 1 ? "" : "s"}`}
-                </span>
-                {summary.v2State.pausedReason ? (
+              <SectionLabel>V2 final state</SectionLabel>
+              <div className="flex flex-wrap items-baseline gap-2 text-[11px]">
+                {summary.v2State ? (
+                  <span className="px-2 py-0.5 rounded font-mono text-[10px] uppercase tracking-wider bg-emerald-900/60 text-emerald-200">
+                    phase: {summary.v2State.phase}
+                  </span>
+                ) : null}
+                {summary.v2QueueState ? (
+                  <span className="px-2 py-0.5 rounded font-mono text-[10px] uppercase tracking-wider bg-emerald-900/60 text-emerald-200">
+                    queue: {summary.v2QueueState.counts.completed}/{summary.v2QueueState.counts.total}
+                  </span>
+                ) : null}
+                {summary.v2State?.pausedReason ? (
                   <span className="text-amber-300 text-[10px]">paused: {summary.v2State.pausedReason}</span>
                 ) : null}
+                {summary.v2State?.detail ? (
+                  <span className="text-ink-400 text-[10px]">{summary.v2State.detail}</span>
+                ) : null}
               </div>
-              {summary.v2State.divergences.length > 0 ? (
-                <table className="w-full text-[10px] font-mono">
-                  <thead>
-                    <tr className="text-ink-500">
-                      <th className="text-left px-1 py-0.5">when</th>
-                      <th className="text-left px-1 py-0.5">trigger</th>
-                      <th className="text-left px-1 py-0.5">v1</th>
-                      <th className="text-left px-1 py-0.5">v2</th>
-                      <th className="text-left px-1 py-0.5">expected</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {summary.v2State.divergences.map((d, i) => (
-                      <tr key={i} className="border-t border-ink-800">
-                        <td className="px-1 py-0.5 text-ink-400">{new Date(d.ts).toLocaleTimeString()}</td>
-                        <td className="px-1 py-0.5 text-ink-300">{d.trigger}</td>
-                        <td className="px-1 py-0.5 text-amber-300">{d.v1Phase}</td>
-                        <td className="px-1 py-0.5 text-rose-300">{d.v2Phase}</td>
-                        <td className="px-1 py-0.5 text-ink-400">{d.expectedV2Phases}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : null}
-            </section>
-          ) : null}
-
-          {/* V2 Step 5c.1: TodoQueue mirror state. Same shape as v2State
-              section above — chip with counts + divergence count badge,
-              expandable table when divergences are non-zero. */}
-          {summary?.v2QueueState ? (
-            <section>
-              <SectionLabel>V2 TodoQueue mirror</SectionLabel>
-              <div className="flex items-baseline gap-2 mb-1 text-[11px]">
-                <span className={`px-2 py-0.5 rounded font-mono text-[10px] uppercase tracking-wider ${
-                  summary.v2QueueState.divergenceCount === 0
-                    ? "bg-emerald-900/60 text-emerald-200"
-                    : "bg-amber-900/60 text-amber-200"
-                }`}>
-                  v2 queue: {summary.v2QueueState.counts.completed}/{summary.v2QueueState.counts.total}
-                </span>
-                <span className="text-ink-400">
-                  {summary.v2QueueState.divergenceCount === 0
-                    ? "✓ V1 board ↔ V2 queue agreement throughout the run"
-                    : `${summary.v2QueueState.divergenceCount} divergence${summary.v2QueueState.divergenceCount === 1 ? "" : "s"}`}
-                </span>
-              </div>
-              {summary.v2QueueState.divergences.length > 0 ? (
-                <table className="w-full text-[10px] font-mono">
-                  <thead>
-                    <tr className="text-ink-500">
-                      <th className="text-left px-1 py-0.5">when</th>
-                      <th className="text-left px-1 py-0.5">trigger</th>
-                      <th className="text-left px-1 py-0.5">v1 (open/claimed/committed/stale/skipped)</th>
-                      <th className="text-left px-1 py-0.5">v2 (pending/inProgress/completed/failed/skipped)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {summary.v2QueueState.divergences.map((d, i) => (
-                      <tr key={i} className="border-t border-ink-800">
-                        <td className="px-1 py-0.5 text-ink-400">{new Date(d.ts).toLocaleTimeString()}</td>
-                        <td className="px-1 py-0.5 text-ink-300">{d.trigger}</td>
-                        <td className="px-1 py-0.5 text-amber-300">
-                          {d.v1.open}/{d.v1.claimed}/{d.v1.committed}/{d.v1.stale}/{d.v1.skipped}
-                        </td>
-                        <td className="px-1 py-0.5 text-rose-300">
-                          {d.v2.pending}/{d.v2.inProgress}/{d.v2.completed}/{d.v2.failed}/{d.v2.skipped}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : null}
             </section>
           ) : null}
 

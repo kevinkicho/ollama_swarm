@@ -165,28 +165,22 @@ export interface RunSummary {
     startedAt: number;
     endedAt: number;
   }>;
-  // V2 Step 3b.2: end-of-run snapshot of the parallel V2 reducer state
-  // + accumulated divergences across the run. Blackboard-only. Allows
-  // post-run inspection of whether the V2 model agreed with V1 phase
-  // transitions (zero divergences = promotion-ready). Optional for
+  // V2 reducer snapshot at run end. Blackboard-only. After cutover
+  // Phase 1a (2026-04-28), divergence tracking is gone — the field
+  // now records the reducer's final phase + pause state for forward
+  // compat with Phase 1b (UI-driven by V2 phase). Optional for
   // back-compat with summaries written before this field landed.
   v2State?: {
     phase: string;
     enteredAt: number;
     detail?: string;
     pausedReason?: string;
-    divergenceCount: number;
-    divergences: Array<{
-      v1Phase: string;
-      v2Phase: string;
-      expectedV2Phases: string;
-      ts: number;
-      trigger: string;
-    }>;
   };
-  // V2 Step 5c.1: end-of-run snapshot of the parallel V2 TodoQueue
-  // mirror + per-event divergences vs V1 board.counts(). Zero
-  // divergences = the V2 queue tracked V1 perfectly; promotion-ready.
+  // V2 TodoQueue snapshot at run end. Blackboard-only. After
+  // cutover Phase 1a, divergence vs V1 board is no longer recorded —
+  // the field captures the queue's final counts for parity with
+  // Board.counts() so consumers reading either side see identical
+  // numbers.
   v2QueueState?: {
     counts: {
       pending: number;
@@ -196,13 +190,6 @@ export interface RunSummary {
       skipped: number;
       total: number;
     };
-    divergenceCount: number;
-    divergences: Array<{
-      ts: number;
-      trigger: string;
-      v1: { open: number; claimed: number; committed: number; stale: number; skipped: number };
-      v2: { pending: number; inProgress: number; completed: number; failed: number; skipped: number };
-    }>;
   };
   // Phase 4a of #243: persist the topology used for this run so
   // history (dropdown chip, modal full grid) and review-mode
