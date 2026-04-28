@@ -20,6 +20,7 @@ import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
 import { runEndReflection } from "./runEndReflection.js";
+import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 
 // Council / parallel drafts + reconcile.
 // Round 1: every agent drafts independently. Each agent's prompt contains
@@ -451,16 +452,19 @@ export class CouncilRunner implements SwarmRunner {
       // shows what happened) but without the synthesis kind, the
       // UI won't render a single character as the "consensus".
       const isJunkSynthesis = looksLikeJunk(text) || extracted.isEmpty;
+      const stripped = stripAgentText(text);
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
         agentId: lead.id,
         agentIndex: lead.index,
-        text,
+        text: stripped.finalText || "(empty response)",
         ts: Date.now(),
         summary: isJunkSynthesis
           ? undefined
           : { kind: "council_synthesis", rounds: cfg.rounds },
+        ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
+        ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
       };
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });
@@ -608,12 +612,15 @@ export class CouncilRunner implements SwarmRunner {
         recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
         appendSystem: (msg) => this.appendSystem(msg),
       });
+      // #230: strip <think> + XML tool-call markers before saving
+      // (matches BlackboardRunner.appendAgent treatment).
+      const stripped = stripAgentText(text);
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
         agentId: agent.id,
         agentIndex: agent.index,
-        text,
+        text: stripped.finalText || "(empty response)",
         ts: Date.now(),
         // Phase 2b: tag with round + phase so the DraftMatrix can
         // bucket without fragile index math. Round 1 = independent
@@ -624,6 +631,8 @@ export class CouncilRunner implements SwarmRunner {
           round,
           phase: round === 1 ? "draft" : "reveal",
         },
+        ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
+        ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
       };
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });

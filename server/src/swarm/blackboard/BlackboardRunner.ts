@@ -121,8 +121,7 @@ import { runGoalGenerationPrePass as runGoalGenerationPrePassExtracted } from ".
 import { buildAuditorSeed as buildAuditorSeedExtracted } from "./auditorSeedBuilder.js";
 import { truncate } from "./truncate.js";
 import { config } from "../../config.js";
-import { extractThinkTags } from "../../../../shared/src/extractThinkTags.js";
-import { extractToolCallMarkers } from "../../../../shared/src/extractToolCallMarkers.js";
+import { stripAgentText } from "../../../../shared/src/stripAgentText.js";
 
 // Blackboard preset: planner posts TODOs, workers drain them in a
 // claim/execute loop. Workers produce full-file diffs as JSON; the runner
@@ -4372,29 +4371,20 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   private appendAgent(agent: Agent, text: string): void {
-    // 2026-04-27 (UI Phase 1): split <think>...</think> reasoning out
-    // of the visible response. Reasoning models (deepseek, glm-5.1
-    // in some modes, gpt-o1) emit chain-of-thought wrapped in these
-    // markers. Pre-fix the bubble showed the raw text including stray
-    // closing tags. Now thoughts go in their own field; UI renders
-    // them as a collapsed-by-default ThoughtsBlock above the bubble.
-    const { thoughts, finalText: postThink } = extractThinkTags(text);
-    // 2026-04-27 evening (#229): strip XML pseudo-tool-call markers
-    // (<read>, <grep>, <list>, <glob>, <edit>, <bash>). Some models
-    // (notably glm-5.1) emit these as raw text when they THINK they're
-    // invoking SDK tools. Pre-fix: clusters of 20-30 markers leaked
-    // into bubbles + caused contract/todos parse failures + over-
-    // segmented Phase 2. Now: stripped server-side, surfaced as a
-    // collapsed ToolCallsBlock so the user can see what the planner
-    // intended without that text bloating the bubble. RCA: preset 1
-    // run af27f55c, 2026-04-27 evening.
-    const { toolCalls, finalText } = extractToolCallMarkers(postThink);
+    // Two-stage strip via shared helper (#230, 2026-04-27 evening):
+    //  1. extractThinkTags pulls <think>...</think> reasoning into
+    //     entry.thoughts (UI Phase 1, 2026-04-27).
+    //  2. extractToolCallMarkers pulls <read>/<grep>/<list>/etc. into
+    //     entry.toolCalls (#229, 2026-04-27 evening). Some models
+    //     (notably glm-5.1) emit these as raw text when they think
+    //     they're invoking SDK tools. Pre-fix they leaked into bubbles
+    //     AND caused contract/todos parse failures.
+    const { finalText, thoughts, toolCalls } = stripAgentText(text);
     // Unit 54: attach a structured summary when the response parses
     // as a known JSON envelope. UI uses this to collapse worker
     // hunks/skips into a one-line summary by default. Summary parses
-    // against finalText (post-think + post-tool-call strip) so it
-    // doesn't mistake chain-of-thought prose or pseudo-tool-calls for
-    // envelope content.
+    // against finalText (post-strip) so it doesn't mistake chain-of-
+    // thought prose or pseudo-tool-calls for envelope content.
     const summary = summarizeAgentResponse(finalText);
     const entry: TranscriptEntry = {
       id: randomUUID(),
