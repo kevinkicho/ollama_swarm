@@ -8,8 +8,7 @@
 // boardWireCompat.ts).
 
 import type { SwarmEvent } from "../../types.js";
-import type { BoardEvent, BoardSnapshot } from "./types.js";
-import type { BoardCounts } from "./Board.js";
+import type { BoardEvent, BoardSnapshot, BoardCounts } from "./types.js";
 
 export interface BoardBroadcaster {
   // Forward this event upstream; also schedule a debounced snapshot

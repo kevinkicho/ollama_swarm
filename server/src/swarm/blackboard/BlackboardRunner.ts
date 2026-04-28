@@ -118,16 +118,12 @@ import {
 // Task #164 (refactor): goal-list parser split out (used by both
 // goal-generation pre-pass and stretch reflection).
 import { parseGoalList } from "./goalListParser.js";
-// Task #164 (refactor): per-commit verifier invocation split out.
-import {
-  runVerifier as runVerifierExtracted,
-  type VerifierContext,
-} from "./verifierInvocation.js";
-// Task #164 (refactor): per-commit critic + ensemble split out into
-// criticInvocation.ts. After V2 cutover Phase 2c (2026-04-28) the
-// critic isn't currently called — V1 worker pipeline (its only caller)
-// was deleted. The module stays available for re-wiring into the V2
-// worker as a separate enhancement; criticEnabled() below is the
+// Task #164 (refactor): per-commit critic + verifier invocations
+// split out into criticInvocation.ts + verifierInvocation.ts. After
+// V2 cutover Phase 2c (2026-04-28) neither is currently called — V1
+// worker pipeline (their only caller) was deleted. The modules stay
+// available for re-wiring into the V2 worker as separate enhancements;
+// criticEnabled() / verifierEnabled() below are the
 // gate flag callers will check when that wiring lands.
 // Task #164 (refactor): goal-generation pre-pass split out.
 import { runGoalGenerationPrePass as runGoalGenerationPrePassExtracted } from "./goalGenerationPrePass.js";

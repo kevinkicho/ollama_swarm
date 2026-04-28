@@ -79,6 +79,19 @@ export interface BoardSnapshot {
   findings: Finding[];
 }
 
+// Kept under the Board* name for wire-protocol parity (UI consumes
+// these field names via board_state events). After V2 cutover Phase
+// 2c, the values come from the V2 TodoQueue translated by
+// boardWireCompat — there's no V1 Board class anymore.
+export interface BoardCounts {
+  open: number;
+  claimed: number;
+  committed: number;
+  stale: number;
+  skipped: number;
+  total: number;
+}
+
 export interface HashMismatch {
   path: string;
   expected: string;

@@ -12,8 +12,7 @@
 // UI handlers are updated. Until then, it's the bridge.
 
 import type { QueuedTodoV2, TodoQueueCountsV2 } from "./TodoQueueV2.js";
-import type { BoardCounts } from "./Board.js";
-import type { Todo, BoardSnapshot, Claim, Finding } from "./types.js";
+import type { Todo, BoardSnapshot, BoardCounts, Claim, Finding } from "./types.js";
 
 const IN_PROGRESS_TTL_MS = 10 * 60_000;
 
