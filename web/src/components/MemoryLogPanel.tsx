@@ -95,7 +95,7 @@ export function MemoryLogPanel({ clonePath }: { clonePath: string | undefined })
     <div className="space-y-3 p-3">
       <div className="text-xs text-ink-400 flex items-center justify-between">
         <span>
-          {entries.length} memory entry{entries.length === 1 ? "" : "ies"} · newest first
+          {entries.length} memory {entries.length === 1 ? "entry" : "entries"} · newest first
         </span>
         <span className="text-ink-600 font-mono text-[10px]">.swarm-memory.jsonl</span>
       </div>
