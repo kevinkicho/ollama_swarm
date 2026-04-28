@@ -405,7 +405,7 @@ export class StigmergyRunner implements SwarmRunner {
       manager: this.opts.manager,
       sessionId: lead.sessionId,
       controller,
-      abortSession: () => lead.client.session.abort({ path: { id: lead.sessionId } }).then(() => {}),
+      abortSession: () => lead.client.session.abort({ sessionID: lead.sessionId }).then(() => {}),
     });
     try {
       const res = await promptWithRetry(lead, prompt, {
@@ -572,7 +572,7 @@ export class StigmergyRunner implements SwarmRunner {
       manager: this.opts.manager,
       sessionId: agent.sessionId,
       controller,
-      abortSession: () => agent.client.session.abort({ path: { id: agent.sessionId } }).then(() => {}),
+      abortSession: () => agent.client.session.abort({ sessionID: agent.sessionId }).then(() => {}),
     });
 
     try {

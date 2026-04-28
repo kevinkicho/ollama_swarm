@@ -103,7 +103,7 @@ export async function runCritic(
   let sessionId: string;
   try {
     const created = await planner.client.session.create({
-      body: { title: `critic-${todo.id}-${Date.now()}` },
+      title: `critic-${todo.id}-${Date.now()}`,
     });
     const any = created as { data?: { id?: string; info?: { id?: string } }; id?: string };
     const sid = any?.data?.id ?? any?.data?.info?.id ?? any?.id;
@@ -119,12 +119,10 @@ export async function runCritic(
 
   const promptOnce = async (text: string): Promise<string> => {
     const res = await planner.client.session.prompt({
-      path: { id: sessionId },
-      body: {
-        agent: "swarm-read",
-        model: { providerID: "ollama", modelID: planner.model },
-        parts: [{ type: "text", text }],
-      },
+      sessionID: sessionId,
+      agent: "swarm-read",
+      model: { providerID: "ollama", modelID: planner.model },
+      parts: [{ type: "text", text }],
     });
     const any = res as {
       data?: {
@@ -262,7 +260,7 @@ async function runCriticLane(
   let sessionId: string;
   try {
     const created = await planner.client.session.create({
-      body: { title: `critic-${laneName}-${todo.id}-${Date.now()}` },
+      title: `critic-${laneName}-${todo.id}-${Date.now()}`,
     });
     const any = created as { data?: { id?: string; info?: { id?: string } }; id?: string };
     const sid = any?.data?.id ?? any?.data?.info?.id ?? any?.id;
@@ -275,12 +273,10 @@ async function runCriticLane(
   }
   const promptOnce = async (text: string): Promise<string> => {
     const res = await planner.client.session.prompt({
-      path: { id: sessionId },
-      body: {
-        agent: "swarm-read",
-        model: { providerID: "ollama", modelID: planner.model },
-        parts: [{ type: "text", text }],
-      },
+      sessionID: sessionId,
+      agent: "swarm-read",
+      model: { providerID: "ollama", modelID: planner.model },
+      parts: [{ type: "text", text }],
     });
     const any = res as {
       data?: {

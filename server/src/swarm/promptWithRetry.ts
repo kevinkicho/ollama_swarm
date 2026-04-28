@@ -202,15 +202,27 @@ export async function promptWithRetry(
         });
         res = { data: { parts: [{ type: "text", text }] } };
       } else {
-        res = await agent.client.session.prompt({
-          path: { id: agent.sessionId },
-          body: {
+        // #233 + #234: with v2 SDK we now have proper `format` typing
+        // — pass it through when caller requested constrained decoding
+        // (parser-strict prompts: contract, todos, auditor verdict).
+        // The model's decoder is grammar-constrained to emit JSON for
+        // these prompts; XML pseudo-tool-call markers (#231) become
+        // impossible at the source, not stripped after-the-fact.
+        const sdkFormat = opts.ollamaFormat === "json"
+          ? { type: "json_schema" as const, schema: {} }
+          : (typeof opts.ollamaFormat === "object" && opts.ollamaFormat !== null
+              ? { type: "json_schema" as const, schema: opts.ollamaFormat }
+              : undefined);
+        res = await agent.client.session.prompt(
+          {
+            sessionID: agent.sessionId,
             agent: agentName,
             model: { providerID: "ollama", modelID: agent.model },
             parts: [{ type: "text", text: promptText }],
+            ...(sdkFormat ? { format: sdkFormat } : {}),
           },
-          signal: opts.signal,
-        });
+          { signal: opts.signal },
+        );
       }
       opts.onTiming?.({ attempt, elapsedMs: Date.now() - t0, success: true });
       return res;

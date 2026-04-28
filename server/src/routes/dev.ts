@@ -192,12 +192,10 @@ export function devRouter(deps: DevRouterDeps): Router {
 
       const t1 = Date.now();
       const response = await agent.client.session.prompt({
-        path: { id: agent.sessionId },
-        body: {
-          agent: "swarm-ui",
-          model: { providerID: "ollama", modelID: agent.model },
-          parts: [{ type: "text", text: promptText }],
-        },
+        sessionID: agent.sessionId,
+        agent: "swarm-ui",
+        model: { providerID: "ollama", modelID: agent.model },
+        parts: [{ type: "text", text: promptText }],
       });
       const promptElapsedMs = Date.now() - t1;
 

@@ -1,5 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createOpencodeClient } from "@opencode-ai/sdk";
+// #234 (2026-04-27 evening): migrated v1 → v2 client. v2 has proper
+// `format` typing (closes #233 for blackboard parser-strict prompts),
+// deprecates the per-call `tools` field in favor of session-level
+// permissions, and renames `path: { id }` → `sessionID` everywhere.
+import { createOpencodeClient } from "@opencode-ai/sdk/v2";
 import { config, basicAuthHeader } from "../config.js";
 import { PortAllocator } from "./PortAllocator.js";
 import { treeKill, killByPid, killByPort, isProcessAlive } from "./treeKill.js";
@@ -322,15 +326,15 @@ export class AgentManager {
       // OpenCode skips emitting message.part.updated events for our
       // setup — every prompt 90s-timed-out with zero chunks. So we
       // fire the regular prompt; the HTTP body just goes unread.
-      void agent.client.session.prompt({
-        path: { id: agent.sessionId },
-        body: {
+      void agent.client.session.prompt(
+        {
+          sessionID: agent.sessionId,
           agent: opts.agentName,
           model: { providerID: "ollama", modelID: opts.modelID },
           parts: [{ type: "text", text: opts.promptText }],
         },
-        signal: opts.signal,
-      }).catch((err) => {
+        { signal: opts.signal },
+      ).catch((err) => {
         // Task #170 fix: when streaming via SSE, HTTP-level errors
         // (UND_ERR_HEADERS_TIMEOUT in particular) are NOISE if SSE has
         // been actively delivering events. The OpenCode HTTP path
@@ -396,7 +400,7 @@ export class AgentManager {
 
     let probeText: string | null = null;
     try {
-      const res = await agent.client.session.messages({ path: { id: agent.sessionId } });
+      const res = await agent.client.session.messages({ sessionID: agent.sessionId });
       probeText = extractLatestAssistantText(res);
     } catch (err) {
       // REST probe failed — fall back to "treat as dead". Caller's
@@ -457,7 +461,7 @@ export class AgentManager {
   private async reconcileAfterReconnect(agent: Agent): Promise<void> {
     const stream = this.streamingByAgent.get(agent.id);
     if (!stream) return; // no in-flight prompt to reconcile
-    const res = await agent.client.session.messages({ path: { id: agent.sessionId } });
+    const res = await agent.client.session.messages({ sessionID: agent.sessionId });
     const probeText = extractLatestAssistantText(res);
     if (probeText !== null && probeText.length > stream.text.length) {
       const gained = probeText.length - stream.text.length;
@@ -812,12 +816,10 @@ export class AgentManager {
     this.suppressStreamingFor.add(agent.id);
     try {
       await agent.client.session.prompt({
-        path: { id: agent.sessionId },
-        body: {
-          agent: "swarm",
-          model: { providerID: "ollama", modelID: agent.model },
-          parts: [{ type: "text", text: WARMUP_PROMPT_TEXT }],
-        },
+        sessionID: agent.sessionId,
+        agent: "swarm",
+        model: { providerID: "ollama", modelID: agent.model },
+        parts: [{ type: "text", text: WARMUP_PROMPT_TEXT }],
       });
       const elapsed = Date.now() - t0;
       this.warmupElapsedByAgent.set(agent.id, elapsed);
@@ -969,7 +971,7 @@ export class AgentManager {
     let escaped = 0;
     const tasks = [...this.agents.values()].map(async (a) => {
       try {
-        await a.client.session.abort({ path: { id: a.sessionId } });
+        await a.client.session.abort({ sessionID: a.sessionId });
       } catch {
         // ignore
       }
@@ -1122,10 +1124,13 @@ export class AgentManager {
           // _raw_sse log entries across all logs prior to this fix.
           // Pass the Authorization header explicitly here so the
           // bare-fetch path inside the SDK has it.
-          const sub = await agent.client.event.subscribe({
-            signal: abort.signal,
-            headers: { Authorization: basicAuthHeader() },
-          });
+          const sub = await agent.client.event.subscribe(
+            {},
+            {
+              signal: abort.signal,
+              headers: { Authorization: basicAuthHeader() },
+            },
+          );
           // Task #194: on reconnect, backfill any text we missed while
           // the SSE channel was down. Same probe path as #192, run once
           // before resuming the for-await so the streamingByAgent state
@@ -1562,7 +1567,7 @@ export class AgentManager {
     let lastErr: unknown;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
-        return await client.session.create({ body: { title: agentId } });
+        return await client.session.create({ title: agentId });
       } catch (err) {
         lastErr = err;
         this.logDiag({

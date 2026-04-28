@@ -69,7 +69,7 @@ async function promptOnFreshSession(
   let sessionId: string;
   try {
     const created = await planner.client.session.create({
-      body: { title: `${label}-${Date.now()}` },
+      title: `${label}-${Date.now()}`,
     });
     const any = created as { data?: { id?: string; info?: { id?: string } }; id?: string };
     const sid = any?.data?.id ?? any?.data?.info?.id ?? any?.id;
@@ -81,15 +81,15 @@ async function promptOnFreshSession(
   if (opts.signal?.aborted) return undefined;
   opts.onStatusChange?.("thinking");
   try {
-    const res = await planner.client.session.prompt({
-      path: { id: sessionId },
-      body: {
+    const res = await planner.client.session.prompt(
+      {
+        sessionID: sessionId,
         agent: "swarm-read",
         model: { providerID: "ollama", modelID: planner.model },
         parts: [{ type: "text", text: prompt }],
       },
-      signal: opts.signal,
-    });
+      { signal: opts.signal },
+    );
     return extractText(res);
   } catch {
     return undefined;

@@ -398,7 +398,7 @@ export class CouncilRunner implements SwarmRunner {
       manager: this.opts.manager,
       sessionId: lead.sessionId,
       controller,
-      abortSession: () => lead.client.session.abort({ path: { id: lead.sessionId } }).then(() => {}),
+      abortSession: () => lead.client.session.abort({ sessionID: lead.sessionId }).then(() => {}),
     });
     try {
       const onTokens = ({ promptTokens, responseTokens }: { promptTokens: number; responseTokens: number }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens);
@@ -527,7 +527,7 @@ export class CouncilRunner implements SwarmRunner {
       manager: this.opts.manager,
       sessionId: agent.sessionId,
       controller,
-      abortSession: () => agent.client.session.abort({ path: { id: agent.sessionId } }).then(() => {}),
+      abortSession: () => agent.client.session.abort({ sessionID: agent.sessionId }).then(() => {}),
     });
 
     try {

@@ -54,20 +54,20 @@ export async function retryEmptyResponse(
     retryAbort.abort(new Error(`retry deadline ${RETRY_DEADLINE_MS / 1000}s`));
     // Tell the OpenCode session to stop serving the abandoned prompt
     // so a subsequent prompt on the same session isn't queued behind it.
-    void agent.client.session.abort({ path: { id: agent.sessionId } }).catch(() => {});
+    void agent.client.session.abort({ sessionID: agent.sessionId }).catch(() => {});
   }, RETRY_DEADLINE_MS);
   try {
-    const retryRes = await agent.client.session.prompt({
-      path: { id: agent.sessionId },
-      body: {
+    const retryRes = await agent.client.session.prompt(
+      {
+        sessionID: agent.sessionId,
         agent: agentName,
         model: { providerID: "ollama", modelID: agent.model },
         parts: [
           { type: "text", text: originalPrompt + EMPTY_RESPONSE_RETRY_SUFFIX },
         ],
       },
-      signal: retryAbort.signal,
-    });
+      { signal: retryAbort.signal },
+    );
     const { text, isEmpty } = extractTextWithDiag(retryRes, diagCtx);
     // Pattern 8: also reject the retry if it came back as junk-short
     // single-token output (the failure mode we tried to recover from

@@ -401,7 +401,7 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
       manager: this.opts.manager,
       sessionId: agent.sessionId,
       controller,
-      abortSession: () => agent.client.session.abort({ path: { id: agent.sessionId } }).then(() => {}),
+      abortSession: () => agent.client.session.abort({ sessionID: agent.sessionId }).then(() => {}),
     });
 
     try {

@@ -121,12 +121,10 @@ export async function runEndReflection(
   let responseText: string;
   try {
     const res = await ctx.agent.client.session.prompt({
-      path: { id: ctx.agent.sessionId },
-      body: {
-        agent: "swarm-read",
-        model: { providerID: "ollama", modelID: ctx.agent.model },
-        parts: [{ type: "text", text: prompt }],
-      },
+      sessionID: ctx.agent.sessionId,
+      agent: "swarm-read",
+      model: { providerID: "ollama", modelID: ctx.agent.model },
+      parts: [{ type: "text", text: prompt }],
     });
     responseText = extractText(res) ?? "";
   } catch (err) {

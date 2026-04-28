@@ -105,12 +105,10 @@ async function captureUiSnapshot(
       skipWarmup: true,
     });
     const response = await uiAgent.client.session.prompt({
-      path: { id: uiAgent.sessionId },
-      body: {
-        agent: "swarm-ui",
-        model: { providerID: "ollama", modelID: uiAgent.model },
-        parts: [{ type: "text", text: promptText }],
-      },
+      sessionID: uiAgent.sessionId,
+      agent: "swarm-ui",
+      model: { providerID: "ollama", modelID: uiAgent.model },
+      parts: [{ type: "text", text: promptText }],
     });
     const any = response as {
       data?: {

@@ -74,7 +74,7 @@ export async function runVerifier(
   let sessionId: string;
   try {
     const created = await planner.client.session.create({
-      body: { title: `verifier-${todo.id}-${Date.now()}` },
+      title: `verifier-${todo.id}-${Date.now()}`,
     });
     const any = created as { data?: { id?: string; info?: { id?: string } }; id?: string };
     const sid = any?.data?.id ?? any?.data?.info?.id ?? any?.id;
@@ -91,12 +91,10 @@ export async function runVerifier(
   let responseText: string;
   try {
     const res = await planner.client.session.prompt({
-      path: { id: sessionId },
-      body: {
-        agent: "swarm-read",
-        model: { providerID: "ollama", modelID: planner.model },
-        parts: [{ type: "text", text: fullPrompt }],
-      },
+      sessionID: sessionId,
+      agent: "swarm-read",
+      model: { providerID: "ollama", modelID: planner.model },
+      parts: [{ type: "text", text: fullPrompt }],
     });
     const any = res as {
       data?: {

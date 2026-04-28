@@ -3680,18 +3680,16 @@ export class BlackboardRunner implements SwarmRunner {
     let probeOk = false;
     try {
       const created = await planner.client.session.create({
-        body: { title: `quota-probe-${Date.now()}` },
+        title: `quota-probe-${Date.now()}`,
       });
       const any = created as { data?: { id?: string; info?: { id?: string } }; id?: string };
       const sid = any?.data?.id ?? any?.data?.info?.id ?? any?.id;
       if (!sid) throw new Error("session.create returned no session id");
       await planner.client.session.prompt({
-        path: { id: sid },
-        body: {
-          agent: "swarm-read",
-          model: { providerID: "ollama", modelID: planner.model },
-          parts: [{ type: "text", text: "ping" }],
-        },
+        sessionID: sid,
+        agent: "swarm-read",
+        model: { providerID: "ollama", modelID: planner.model },
+        parts: [{ type: "text", text: "ping" }],
       });
       probeOk = true;
     } catch (err) {
@@ -4251,7 +4249,7 @@ export class BlackboardRunner implements SwarmRunner {
             : "no SSE chunks received";
           abortedReason = `absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s, ${sseQuiet})`;
           controller.abort(new Error(abortedReason));
-          void agent.client.session.abort({ path: { id: agent.sessionId } }).catch(() => {});
+          void agent.client.session.abort({ sessionID: agent.sessionId }).catch(() => {});
           this.appendSystem(
             `[${agent.id}] absolute turn cap (${ABSOLUTE_MAX_MS / 1000}s) hit — ${sseQuiet}. Abort signaled.`,
           );
