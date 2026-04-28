@@ -309,6 +309,22 @@ export class RepoService {
             glob: "allow" as const,
           },
         },
+        // #235 (2026-04-27 evening): orchestrator profile — same read
+        // perms as swarm-read PLUS the `task` tool so this agent can
+        // dispatch SubtaskPartInput parts. Used by the parent prompt
+        // in council/orchestrator-worker/mapreduce/etc patterns. Child
+        // subtasks run as their own (still-restricted) agent profile.
+        "swarm-orchestrator": {
+          mode: "primary" as const,
+          description: "Orchestrator profile that dispatches subtasks to other swarm agents. Inherits swarm-read filesystem perms + grants the `task` tool for SubtaskPartInput dispatch.",
+          permission: {
+            "*": "deny" as const,
+            read: "allow" as const,
+            grep: "allow" as const,
+            glob: "allow" as const,
+            task: "allow" as const,
+          },
+        },
       },
     };
 
