@@ -39,7 +39,11 @@ export function MemoryLogPanel({ clonePath }: { clonePath: string | undefined })
     async function load() {
       setLoading(true);
       try {
-        const r = await fetch(`/api/swarm/memory?clonePath=${encodeURIComponent(clonePath as string)}`);
+        // #240 (2026-04-28): includeOtherParents=true aggregates memory
+        // entries from clones with the same name under EVERY known
+        // parent path. Lets the panel show prior-clone lessons even
+        // when the active parent is fresh.
+        const r = await fetch(`/api/swarm/memory?clonePath=${encodeURIComponent(clonePath as string)}&includeOtherParents=true`);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const body = (await r.json()) as MemoryResponse;
         if (cancelled) return;

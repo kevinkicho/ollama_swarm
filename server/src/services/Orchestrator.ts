@@ -47,6 +47,30 @@ function writePersistedLastParent(p: string): void {
   }
 }
 
+// #238 + #240 (2026-04-28): persisted set of ALL parent paths the
+// user has ever started a run from. Lets /api/swarm/runs and /api/
+// swarm/memory aggregate across parents instead of being scoped to
+// just the active clone's parent dir. Bounded to KNOWN_PARENTS_MAX
+// entries (LRU on add) so the file doesn't grow unbounded.
+const KNOWN_PARENTS_FILE = nodePath.join(tmpdir(), "ollama-swarm-known-parents.json");
+const KNOWN_PARENTS_MAX = 32;
+function readPersistedKnownParents(): string[] {
+  try {
+    const raw = readFileSync(KNOWN_PARENTS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function writePersistedKnownParents(paths: string[]): void {
+  try {
+    writeFileSync(KNOWN_PARENTS_FILE, JSON.stringify(paths.slice(0, KNOWN_PARENTS_MAX)), "utf8");
+  } catch {
+    // best-effort
+  }
+}
+
 // Thin preset dispatcher. Holds one `SwarmRunner` per run and delegates the
 // public surface to it. The state of a run lives on the runner itself.
 export class Orchestrator {
@@ -79,6 +103,11 @@ export class Orchestrator {
   // reset only on full host reboot (acceptable — user runs once
   // post-reboot and it's set again).
   private lastParentPath?: string = readPersistedLastParent();
+  // #238 + #240: every parent path the user has started a run from,
+  // most-recent first. Lets the runs/memory routes aggregate across
+  // parents (so the dropdown isn't empty when the user picks a fresh
+  // parent dir, even though they have plenty of prior runs elsewhere).
+  private knownParentPaths: string[] = readPersistedKnownParents();
 
   constructor(private readonly opts: OrchestratorOpts) {}
 
@@ -115,6 +144,15 @@ export class Orchestrator {
   // when no run is currently active.
   getLastParentPath(): string | undefined {
     return this.lastParentPath;
+  }
+
+  // #238 + #240: union of every parent dir the user has ever started
+  // a run from this session (or in prior sessions, persisted). Used
+  // by /api/swarm/runs?includeOtherParents=true and /api/swarm/memory
+  // aggregation so the UI can show prior runs even when the active
+  // parent is fresh. Most-recent first.
+  getKnownParentPaths(): string[] {
+    return [...this.knownParentPaths];
   }
 
   injectUser(text: string): void {
@@ -206,6 +244,12 @@ export class Orchestrator {
     // to /tmp so a dev-server restart doesn't lose it.
     this.lastParentPath = nodePath.dirname(nodePath.resolve(cfg.localPath));
     writePersistedLastParent(this.lastParentPath);
+    // #238 + #240: append to known-parents list (LRU on duplicates).
+    this.knownParentPaths = [
+      this.lastParentPath,
+      ...this.knownParentPaths.filter((p) => p !== this.lastParentPath),
+    ].slice(0, 32);
+    writePersistedKnownParents(this.knownParentPaths);
     this.opts.emit({
       type: "run_started",
       runId,

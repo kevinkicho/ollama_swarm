@@ -91,7 +91,11 @@ export function RunHistoryDropdown() {
     (async () => {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          const r = await fetch("/api/swarm/runs");
+          // #238 (2026-04-28): pass includeOtherParents=true so the
+          // dropdown surfaces runs from EVERY parent path the user has
+          // started runs from — not just the active parent dir. UI
+          // groups by parent so the active parent's runs lead.
+          const r = await fetch("/api/swarm/runs?includeOtherParents=true");
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           const body = await r.json();
           if (cancelled) return;

@@ -492,25 +492,31 @@ export function swarmRouter(orch: Orchestrator): Router {
   // so the UI dropdown + modal can render without further fetches.
   // Returns 200 with an empty list when no run is active or the
   // parent dir is unreadable — never throws.
-  r.get("/runs", async (_req: Request, res: Response) => {
+  r.get("/runs", async (req: Request, res: Response) => {
     const status = orch.status();
     // 2026-04-24: when idle (no active run, status.localPath
     // undefined), fall back to the orchestrator's cached
     // lastParentPath so the dropdown stays useful between runs.
     // Without this fallback the dropdown was empty whenever the user
     // wasn't mid-run — which is most of the time.
-    const parent = status.localPath
+    const activeParent = status.localPath
       ? path.dirname(path.resolve(status.localPath))
       : orch.getLastParentPath();
-    if (!parent) {
-      res.json({ runs: [] });
-      return;
+    // #238 (2026-04-28): when ?includeOtherParents=true, also scan
+    // every parent path the orchestrator has tracked. Lets the UI
+    // show prior runs even when the active parent is fresh (per the
+    // option-C UX: clone-scoped first + a footer link surfacing the
+    // global view).
+    const includeOtherParents =
+      typeof req.query.includeOtherParents === "string" &&
+      req.query.includeOtherParents.toLowerCase() === "true";
+    const parentsToScan = new Set<string>();
+    if (activeParent) parentsToScan.add(activeParent);
+    if (includeOtherParents) {
+      for (const p of orch.getKnownParentPaths()) parentsToScan.add(p);
     }
-    let entries: string[];
-    try {
-      entries = await fs.readdir(parent);
-    } catch {
-      res.json({ runs: [] });
+    if (parentsToScan.size === 0) {
+      res.json({ runs: [], parents: [] });
       return;
     }
     const activeClone = status.localPath ? path.resolve(status.localPath) : null;
@@ -518,33 +524,46 @@ export function swarmRouter(orch: Orchestrator): Router {
       ? status.runId ?? null
       : null;
     const runs: RunSummaryDigest[] = [];
-    for (const name of entries) {
-      const cloneDir = path.join(parent, name);
-      let stat: import("node:fs").Stats;
+    const parentsScanned: string[] = [];
+    for (const parent of parentsToScan) {
+      let entries: string[];
       try {
-        stat = await fs.stat(cloneDir);
+        entries = await fs.readdir(parent);
       } catch {
         continue;
       }
-      if (!stat.isDirectory()) continue;
-      // 2026-04-24: surface EVERY per-run summary (summary-<iso>.json),
-      // not just the latest. A target run 8 times now contributes 8
-      // dropdown rows instead of 1.
-      const digests = await readAllRunDigests(cloneDir, name);
-      for (const d of digests) {
-        // Active = the run whose clonePath matches AND whose runId
-        // matches the orchestrator's current runId. Without the runId
-        // check, every prior run on the active target's clone dir
-        // would falsely flag as "active".
-        d.isActive = activeClone !== null && cloneDir === activeClone && d.runId !== undefined && d.runId === activeRunId;
-        runs.push(d);
+      parentsScanned.push(parent);
+      for (const name of entries) {
+        const cloneDir = path.join(parent, name);
+        let stat: import("node:fs").Stats;
+        try {
+          stat = await fs.stat(cloneDir);
+        } catch {
+          continue;
+        }
+        if (!stat.isDirectory()) continue;
+        // 2026-04-24: surface EVERY per-run summary (summary-<iso>.json),
+        // not just the latest. A target run 8 times now contributes 8
+        // dropdown rows instead of 1.
+        const digests = await readAllRunDigests(cloneDir, name);
+        for (const d of digests) {
+          // Active = the run whose clonePath matches AND whose runId
+          // matches the orchestrator's current runId. Without the runId
+          // check, every prior run on the active target's clone dir
+          // would falsely flag as "active".
+          d.isActive = activeClone !== null && cloneDir === activeClone && d.runId !== undefined && d.runId === activeRunId;
+          // #238: tag each digest with its parent so the UI can group
+          // by parent in the cross-parent view.
+          (d as RunSummaryDigest & { parentPath?: string }).parentPath = parent;
+          runs.push(d);
+        }
       }
     }
     // Newest first by startedAt (descending). Falls back to dir name
     // when startedAt is missing (shouldn't happen with a real
     // summary, but defensive).
     runs.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
-    res.json({ runs });
+    res.json({ runs, parents: parentsScanned });
   });
 
   // Single full-summary fetch for the history modal (2026-04-24).
@@ -609,31 +628,72 @@ export function swarmRouter(orch: Orchestrator): Router {
       res.status(400).json({ error: "clonePath required" });
       return;
     }
-    const memPath = path.join(clonePath, ".swarm-memory.jsonl");
-    let raw: string;
-    try {
-      raw = await fs.readFile(memPath, "utf8");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        res.json({ entries: [] });
+    // #240 (2026-04-28): when ?includeOtherParents=true, also aggregate
+    // memory entries from clones in OTHER known parent paths. Each
+    // entry gets tagged with its source clone so the UI can group.
+    const includeOtherParents =
+      typeof req.query.includeOtherParents === "string" &&
+      req.query.includeOtherParents.toLowerCase() === "true";
+    const clonesToScan: string[] = [clonePath];
+    const otherClones: string[] = [];
+    if (includeOtherParents) {
+      const cloneName = path.basename(clonePath);
+      const activeParent = path.dirname(path.resolve(clonePath));
+      for (const parent of orch.getKnownParentPaths()) {
+        if (parent === activeParent) continue;
+        // Look for the same target clone name under each other parent.
+        const candidate = path.join(parent, cloneName);
+        try {
+          const stat = await fs.stat(candidate);
+          if (stat.isDirectory()) {
+            clonesToScan.push(candidate);
+            otherClones.push(candidate);
+          }
+        } catch {
+          // skip parent dirs that don't have this clone
+        }
+      }
+    }
+    const entries: Array<Record<string, unknown> & { _sourceClone?: string }> = [];
+    let primaryEntries = 0;
+    let otherParentEntries = 0;
+    for (const dir of clonesToScan) {
+      const memPath = path.join(dir, ".swarm-memory.jsonl");
+      let raw: string;
+      try {
+        raw = await fs.readFile(memPath, "utf8");
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        // Other read errors on a SECONDARY clone shouldn't fail the
+        // whole request — primary clone errors propagate as before.
+        if (dir !== clonePath) continue;
+        res.status(500).json({ error: (err as Error).message });
         return;
       }
-      res.status(500).json({ error: (err as Error).message });
-      return;
-    }
-    const entries: Array<Record<string, unknown>> = [];
-    for (const line of raw.split("\n")) {
-      const t = line.trim();
-      if (!t) continue;
-      try {
-        const obj = JSON.parse(t);
-        if (obj && typeof obj === "object") entries.push(obj);
-      } catch {
-        // skip malformed lines silently — same policy as memoryStore.readMemory
+      for (const line of raw.split("\n")) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const obj = JSON.parse(t);
+          if (obj && typeof obj === "object") {
+            entries.push({ ...obj, _sourceClone: dir });
+            if (dir === clonePath) primaryEntries++;
+            else otherParentEntries++;
+          }
+        } catch {
+          // skip malformed lines silently — same policy as memoryStore.readMemory
+        }
       }
     }
     entries.sort((a, b) => Number(b.ts ?? 0) - Number(a.ts ?? 0));
-    res.json({ entries });
+    // #240: surface counts so the UI can render "5 entries from this
+    // clone + 12 from 3 other clones" without re-counting client-side.
+    res.json({
+      entries,
+      ...(includeOtherParents
+        ? { primaryEntries, otherParentEntries, otherClones }
+        : {}),
+    });
   });
 
   return r;
