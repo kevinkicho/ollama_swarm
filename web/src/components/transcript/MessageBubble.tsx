@@ -34,6 +34,7 @@ import { formatServerSummary } from "./formatServerSummary";
 import { ThoughtsBlock } from "./ThoughtsBlock";
 import { ContractBubble } from "./ContractBubble";
 import { AuditorVerdictBubble } from "./AuditorVerdictBubble";
+import { TodosBubble } from "./TodosBubble";
 
 export function MessageBubble({ entry }: { entry: TranscriptEntry }) {
   const ts = new Date(entry.ts).toLocaleTimeString();
@@ -114,6 +115,48 @@ function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
             <span className="text-ink-500">why:</span> {v.rationale}
           </div>
         ) : null}
+      </div>
+    );
+  }
+  // 2026-04-27 (evening): quota pause/resume ribbons. Same colored-
+  // ribbon pattern as verifier_verdict. Amber for paused, emerald for
+  // resumed. Pause/resume events are runtime-significant — surfacing
+  // them as ribbons (vs the default neutral system chip) lets a user
+  // scanning the transcript spot pause windows immediately.
+  if (entry.summary?.kind === "quota_paused") {
+    const v = entry.summary;
+    return (
+      <div className="rounded-md border-2 border-amber-700/70 bg-amber-950/30 px-3 py-2 text-xs space-y-1">
+        <div className="flex items-center gap-2">
+          <span className="inline-block bg-amber-900/60 text-amber-200 font-mono uppercase tracking-wider px-1.5 py-0.5 rounded">
+            ⏸ paused
+          </span>
+          <span className="text-ink-400">
+            {v.statusCode ? `HTTP ${v.statusCode}` : "quota"} · {ts}
+          </span>
+        </div>
+        {v.reason ? (
+          <div className="text-ink-300">
+            <span className="text-ink-500">why:</span> {v.reason}
+          </div>
+        ) : null}
+        <div className="text-ink-400">{entry.text}</div>
+      </div>
+    );
+  }
+  if (entry.summary?.kind === "quota_resumed") {
+    const v = entry.summary;
+    const pausedMin = (v.pausedMs / 60_000).toFixed(1);
+    const totalMin = (v.totalPausedMs / 60_000).toFixed(1);
+    return (
+      <div className="rounded-md border-2 border-emerald-700/70 bg-emerald-950/30 px-3 py-2 text-xs space-y-1">
+        <div className="flex items-center gap-2">
+          <span className="inline-block bg-emerald-900/60 text-emerald-200 font-mono uppercase tracking-wider px-1.5 py-0.5 rounded">
+            ▶ resumed
+          </span>
+          <span className="text-ink-400">paused {pausedMin}m · total {totalMin}m · {ts}</span>
+        </div>
+        <div className="text-ink-400">{entry.text}</div>
       </div>
     );
   }
@@ -422,6 +465,16 @@ function AgentClientFallback({
     if (clientSummary.parsed.kind === "auditor") {
       return (
         <AuditorVerdictBubble
+          envelope={clientSummary.parsed}
+          header={header}
+          className={className}
+          style={style}
+        />
+      );
+    }
+    if (clientSummary.parsed.kind === "todos") {
+      return (
+        <TodosBubble
           envelope={clientSummary.parsed}
           header={header}
           className={className}

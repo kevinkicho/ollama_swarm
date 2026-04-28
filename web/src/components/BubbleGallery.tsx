@@ -245,15 +245,16 @@ const auditorEnvelope = JSON.stringify({
   ],
 }, null, 2);
 
-const todosEnvelope = JSON.stringify({
-  todos: [
-    { description: "Identify the request handler that needs refactoring (should be src/handlers/api.ts)", agentId: "agent-2", expectedFiles: ["src/handlers/api.ts"] },
-    { description: "Create src/handlers/routes/users.ts with the user-related route handlers extracted from api.ts", agentId: "agent-2", expectedFiles: ["src/handlers/routes/users.ts", "src/handlers/api.ts"] },
-    { description: "Create src/handlers/routes/orders.ts with the order-related route handlers extracted from api.ts", agentId: "agent-3", expectedFiles: ["src/handlers/routes/orders.ts", "src/handlers/api.ts"] },
-    { description: "Add zod input validation schemas to both new route modules", agentId: "agent-3", expectedFiles: ["src/handlers/routes/users.ts", "src/handlers/routes/orders.ts"] },
-    { description: "Verify that the existing api.test.ts tests still pass against the refactored modules", agentId: "agent-4", expectedFiles: ["src/handlers/__tests__/api.test.ts"] },
-  ],
-}, null, 2);
+// Real planner shape: top-level array of {description, expectedFiles, expectedSymbols?}.
+// (NOT wrapped in {todos: [...]} — the parser at shared/summarizeAgentJson.ts:247
+// only matches Array.isArray(parsed).)
+const todosEnvelope = JSON.stringify([
+  { description: "Identify the request handler that needs refactoring (should be src/handlers/api.ts)", expectedFiles: ["src/handlers/api.ts"], expectedSymbols: ["api"] },
+  { description: "Create src/handlers/routes/users.ts with the user-related route handlers extracted from api.ts", expectedFiles: ["src/handlers/routes/users.ts", "src/handlers/api.ts"], expectedSymbols: ["users"] },
+  { description: "Create src/handlers/routes/orders.ts with the order-related route handlers extracted from api.ts", expectedFiles: ["src/handlers/routes/orders.ts", "src/handlers/api.ts"], expectedSymbols: ["orders"] },
+  { description: "Add zod input validation schemas to both new route modules", expectedFiles: ["src/handlers/routes/users.ts", "src/handlers/routes/orders.ts"] },
+  { description: "Verify that the existing api.test.ts tests still pass against the refactored modules", expectedFiles: ["src/handlers/__tests__/api.test.ts"] },
+], null, 2);
 
 const workerHunksRawJson = JSON.stringify({
   hunks: [
@@ -373,7 +374,7 @@ const fixtures: Array<{ label: string; entries: TranscriptEntry[] }> = [
     entries: [entry({ role: "agent", agentIndex: 5, text: auditorEnvelope })],
   },
   {
-    label: "[agent client-fallback] todos envelope (AgentJsonBubble fallback - parsed.kind=todos but no dedicated bubble)",
+    label: "[agent client-fallback] todos envelope (TodosBubble - 3 tabs, NEW 2026-04-27 evening)",
     entries: [entry({ role: "agent", agentIndex: 1, text: todosEnvelope })],
   },
   {
@@ -397,14 +398,14 @@ const fixtures: Array<{ label: string; entries: TranscriptEntry[] }> = [
     entries: [entry({ role: "agent", agentIndex: 4, text: "I've completed the analysis. The next step is to write the per-route modules and verify the existing tests still pass." })],
   },
 
-  // ─── Quota pause/resume (no dedicated bubble; falls through SystemBubble) ───
+  // ─── Quota pause/resume ribbons (system entries; NEW 2026-04-27 evening) ───
   {
-    label: "[agent] quota_paused (no dedicated bubble - AgentJsonBubble fallback)",
-    entries: [entry({ role: "agent", agentIndex: 1, text: JSON.stringify({ paused: true, reason: "503 quota wall" }, null, 2), summary: sumQuotaPaused })],
+    label: "[system] quota_paused (amber ribbon, NEW 2026-04-27 evening)",
+    entries: [entry({ role: "system", text: "Ollama quota wall hit (503: rate limit). Pausing run; will probe upstream every 5 min and resume when it clears. Total pause cap: 60 min.", summary: sumQuotaPaused })],
   },
   {
-    label: "[agent] quota_resumed (no dedicated bubble - AgentJsonBubble fallback)",
-    entries: [entry({ role: "agent", agentIndex: 1, text: JSON.stringify({ resumed: true, pausedMs: 312000 }, null, 2), summary: sumQuotaResumed })],
+    label: "[system] quota_resumed (emerald ribbon, NEW 2026-04-27 evening)",
+    entries: [entry({ role: "system", text: "Quota wall cleared after 5.2 min. Resuming planner pump.", summary: sumQuotaResumed })],
   },
 ];
 
