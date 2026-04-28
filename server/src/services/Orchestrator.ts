@@ -236,6 +236,12 @@ export class Orchestrator {
       clonePath: cfg.localPath,
       agentCount: cfg.agentCount,
       rounds: cfg.rounds,
+      // Phase 4b of #243: include the resolved topology so the UI can
+      // mirror exact agent specs (role chip + model override) without
+      // re-deriving from preset+index. cfg.topology is always populated
+      // by the route layer (synthesized from legacy fields when client
+      // didn't post one).
+      topology: cfg.topology,
     };
     this.runConfig = runConfig;
     this.runStartedAt = startedAt;

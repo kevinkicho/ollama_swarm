@@ -149,6 +149,9 @@ function applyEvent(ev: SwarmEvent): void {
         clonePath: ev.clonePath,
         agentCount: ev.agentCount,
         rounds: ev.rounds,
+        // Phase 4b of #243: thread topology into the store so
+        // SwarmView's agentRole/agentModel helpers can use it.
+        topology: ev.topology,
       });
       break;
   }

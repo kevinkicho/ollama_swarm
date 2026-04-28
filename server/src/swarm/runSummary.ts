@@ -57,6 +57,10 @@ export interface DiscussionSummaryInput {
   // older callers that haven't been updated yet still produce valid
   // summaries (just without transcript replay).
   transcript?: TranscriptEntry[];
+  // Phase 4a of #243: pass-through to RunSummary.topology so the
+  // history dropdown / review-mode hydration can show exact agent
+  // specs without re-deriving from preset+count.
+  topology?: RunSummary["topology"];
 }
 
 export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummary {
@@ -125,6 +129,8 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
     agents: input.agents.slice(),
     transcript,
     transcriptTruncated,
+    // Phase 4a of #243: topology passthrough.
+    topology: input.topology,
   };
 }
 

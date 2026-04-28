@@ -305,6 +305,8 @@ export class RoundRobinRunner implements SwarmRunner {
       finalGitStatus: gitStatus.porcelain,
       agents: this.stats.buildPerAgentStats(),
       transcript: this.transcript,
+      // Phase 4a of #243: topology passthrough.
+      topology: cfg.topology,
     });
     try {
       await writeRunSummary(cfg.localPath, summary);

@@ -204,6 +204,12 @@ export interface RunSummary {
       v2: { pending: number; inProgress: number; completed: number; failed: number; skipped: number };
     }>;
   };
+  // Phase 4a of #243: persist the topology used for this run so
+  // history (dropdown chip, modal full grid) and review-mode
+  // hydration can show the exact agent specs without re-deriving
+  // from preset+agentCount. Optional for back-compat with summaries
+  // written pre-#243.
+  topology?: import("../../../../shared/src/topology.js").Topology;
 }
 
 export interface SummaryConfig {
@@ -259,6 +265,8 @@ export interface BuildSummaryInput {
   v2State?: RunSummary["v2State"];
   // V2 Step 5c.1: parallel-track V2 TodoQueue state at run end.
   v2QueueState?: RunSummary["v2QueueState"];
+  // Phase 4a of #243: pass-through to RunSummary.topology.
+  topology?: RunSummary["topology"];
 }
 
 export function buildSummary(input: BuildSummaryInput): RunSummary {
@@ -323,6 +331,8 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     v2State: input.v2State,
     // V2 Step 5c.1: parallel-track TodoQueue state passthrough.
     v2QueueState: input.v2QueueState,
+    // Phase 4a of #243: topology passthrough.
+    topology: input.topology,
   };
 }
 

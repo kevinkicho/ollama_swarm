@@ -301,6 +301,12 @@ export interface SwarmStatusRunConfig {
   clonePath: string;
   agentCount: number;
   rounds: number;
+  // Phase 4b of #243: topology snapshot. When present, AgentPanel and
+  // SwarmView prefer it over re-deriving role+model from preset+index
+  // (the `agentRole`/`agentModel` helpers in SwarmView were the third
+  // copy of that logic). Optional during the rollout — older clients
+  // and tests still work via the legacy fields.
+  topology?: import("../../shared/src/topology.js").Topology;
 }
 
 export interface SwarmStatusBoard {

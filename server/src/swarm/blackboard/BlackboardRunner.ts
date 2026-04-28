@@ -3943,6 +3943,8 @@ export class BlackboardRunner implements SwarmRunner {
         divergenceCount: this.v2QueueDivergences.length,
         divergences: this.v2QueueDivergences.slice(),
       },
+      // Phase 4a of #243: topology passthrough.
+      topology: cfg.topology,
     });
 
     // Unit 49: dual write — per-run timestamped file (never overwrites

@@ -272,6 +272,16 @@ export interface RunConfig {
    * on the type so tests that build bare RunConfigs stay valid.
    */
   runId?: string;
+  /**
+   * Phase 4a of #243: the explicit topology used for this run, set by
+   * the route layer (synthesized from agentCount + per-role models
+   * when the client didn't post one). Threaded into RunSummary so
+   * History can show the exact agent specs and review-mode hydration
+   * can recreate the grid as it was. Not consumed at runtime in
+   * Phase 1 — the runners still use agentCount/plannerModel/etc. —
+   * but Phase 2 will start consuming per-row model overrides.
+   */
+  topology?: import("../../../shared/src/topology.js").Topology;
 }
 
 export interface RunnerOpts {

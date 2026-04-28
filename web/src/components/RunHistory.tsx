@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { PerAgentStat, RunSummary, RunSummaryDigest } from "../types";
+import type { AgentRole, Topology } from "../../../shared/src/topology";
 import { copyText } from "../utils/copyText";
 import { truncateLeft } from "./IdentityStrip";
 
@@ -199,6 +200,12 @@ export function RunHistoryDropdown() {
                     <th className="px-2 py-1.5 font-semibold">Run</th>
                     <th className="px-2 py-1.5 font-semibold">Preset</th>
                     <th className="px-2 py-1.5 font-semibold">Result</th>
+                    <th
+                      className="px-2 py-1.5 font-semibold"
+                      title="Phase 4a of #243: agent topology used for this run (e.g. 1P · 4W · 1A means 1 planner + 4 workers + 1 auditor)."
+                    >
+                      Topology
+                    </th>
                     <th className="px-2 py-1.5 font-semibold text-right">Commits</th>
                     <th className="px-2 py-1.5 font-semibold text-right">Todos</th>
                     <th className="px-2 py-1.5 font-semibold text-right">Wall</th>
@@ -249,6 +256,9 @@ export function RunHistoryDropdown() {
                         ) : (
                           <span className="text-ink-600 text-[10px]">—</span>
                         )}
+                      </td>
+                      <td className="px-2 py-1">
+                        <TopologyChip topology={r.topology} />
                       </td>
                       {/* 2026-04-25 fine-tune (Kevin): empty / zero values show
                           "—" at 0.5 opacity so the columns stay visually anchored
@@ -483,6 +493,47 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
               ) : null}
             </div>
           </section>
+
+          {/* Phase 4a of #243: full topology read-only grid. Shows the
+              exact agent specs the run used (planner role, model overrides,
+              etc.) so users can audit decisions after the fact. Falls
+              back to "(no topology recorded)" for older summaries. */}
+          {summary?.topology ? (
+            <section>
+              <SectionLabel>
+                Topology — {summary.topology.agents.length}{" "}
+                {summary.topology.agents.length === 1 ? "agent" : "agents"}
+              </SectionLabel>
+              <div className="rounded border border-ink-700 overflow-hidden">
+                <table className="w-full text-[11px]">
+                  <thead className="bg-ink-800/60 text-[9px] uppercase tracking-wider text-ink-500">
+                    <tr>
+                      <th className="px-2 py-1 text-left w-10">#</th>
+                      <th className="px-2 py-1 text-left">Role</th>
+                      <th className="px-2 py-1 text-left">Model</th>
+                      <th className="px-2 py-1 text-left">Removable</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {summary.topology.agents.map((a) => (
+                      <tr key={a.index} className="border-t border-ink-800/60">
+                        <td className="px-2 py-1 text-ink-400 font-mono">{a.index}</td>
+                        <td className="px-2 py-1 text-ink-200">
+                          {a.removable ? a.role : `🔒 ${a.role}`}
+                        </td>
+                        <td className="px-2 py-1 text-ink-300 font-mono">
+                          {a.model ?? <span className="text-ink-600">(default)</span>}
+                        </td>
+                        <td className="px-2 py-1 text-ink-500">
+                          {a.removable ? "yes" : "structural"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : null}
 
           {/* Run-level counters */}
           {summary ? (
@@ -894,6 +945,55 @@ function formatRuntimeMs(ms: number): string {
   if (h > 0) return `${h} h ${m} m ${s} s`;
   if (m > 0) return `${m} m ${s} s`;
   return `${s} s`;
+}
+
+// Phase 4a of #243: compact topology chip for the dropdown row. Shows
+// role-letter · count groups (e.g. 1P · 4W · 1A) so users can scan
+// "what shape was this run" at a glance. Hover reveals the full role
+// list. Older summaries without topology render "—" at half opacity.
+const ROLE_LETTER: Record<AgentRole, string> = {
+  planner: "P",
+  worker: "W",
+  auditor: "A",
+  orchestrator: "O",
+  "mid-lead": "M",
+  reducer: "R",
+  mapper: "M",
+  drafter: "D",
+  explorer: "E",
+  peer: "·",
+  pro: "+",
+  con: "−",
+  judge: "J",
+  "role-diff": "R",
+};
+function TopologyChip({ topology }: { topology: Topology | undefined }) {
+  if (!topology || topology.agents.length === 0) {
+    return <span className="text-ink-400 opacity-50">—</span>;
+  }
+  // Group consecutive same-role rows for the compact summary. Use a
+  // Map keyed by role to preserve first-seen order while collapsing
+  // identical roles together.
+  const counts = new Map<AgentRole, number>();
+  for (const a of topology.agents) {
+    counts.set(a.role, (counts.get(a.role) ?? 0) + 1);
+  }
+  const compact = Array.from(counts.entries())
+    .map(([role, n]) => `${n}${ROLE_LETTER[role] ?? "?"}`)
+    .join(" · ");
+  // Title surfaces the full role list so users hovering can see
+  // exact specs without opening the modal.
+  const tooltip = topology.agents
+    .map((a) => `#${a.index} ${a.role}${a.model ? ` (${a.model})` : ""}`)
+    .join("\n");
+  return (
+    <span
+      className="text-[10px] px-1.5 py-0.5 rounded border bg-ink-800/60 border-ink-700/60 text-ink-300 font-mono"
+      title={tooltip}
+    >
+      {compact}
+    </span>
+  );
 }
 
 // Task #86 (2026-04-25): color-coded chip per swarm preset. Same

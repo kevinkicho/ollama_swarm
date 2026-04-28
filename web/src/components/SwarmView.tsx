@@ -138,7 +138,21 @@ export function SwarmView() {
   //   - stigmergy: all explorers (self-organizing, no lead)
   //   - round-robin: all peers (no specialization)
   // Default when cfg is unknown: planner + worker shape (blackboard-ish).
+  // Phase 4b of #243: prefer cfg.topology (explicit per-agent specs)
+  // when present. Falls back to the legacy preset+index derivation
+  // for older clients/runs that didn't ship topology. Role-diff still
+  // uses its catalog overlay since topology stores generic "role-diff"
+  // labels — the catalog names are richer.
   const agentRole = (idx: number): string => {
+    if (cfg?.topology) {
+      const spec = cfg.topology.agents.find((a) => a.index === idx);
+      if (spec) {
+        if (cfg.preset === "role-diff" && cfg.roles && cfg.roles.length > 0) {
+          return cfg.roles[(idx - 1) % cfg.roles.length];
+        }
+        return spec.role;
+      }
+    }
     if (!cfg) return idx === 1 ? "planner" : "worker";
     // Role-diff overlays catalog names with modulo wrap, matching the
     // server's roleForAgent resolution.
@@ -182,6 +196,12 @@ export function SwarmView() {
     }
   };
   const agentModel = (idx: number): string | undefined => {
+    // Phase 4b of #243: per-agent model override from topology row
+    // wins over the legacy planner/worker/auditor model fields.
+    if (cfg?.topology) {
+      const spec = cfg.topology.agents.find((a) => a.index === idx);
+      if (spec?.model) return spec.model;
+    }
     if (!cfg) return undefined;
     if (idx === 1) return cfg.plannerModel;
     if (cfg.dedicatedAuditor && idx > cfg.agentCount) return cfg.auditorModel;

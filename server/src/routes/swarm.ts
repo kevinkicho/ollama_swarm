@@ -3,7 +3,7 @@ import path from "node:path";
 import { promises as fs, readFileSync } from "node:fs";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
-import { TopologySchema, deriveLegacyFields } from "../../../shared/src/topology.js";
+import { TopologySchema, deriveLegacyFields, synthesizeTopology } from "../../../shared/src/topology.js";
 import { config } from "../config.js";
 import { validateContinuousMode } from "./continuousMode.js";
 import type { Orchestrator } from "../services/Orchestrator.js";
@@ -418,6 +418,18 @@ export function swarmRouter(orch: Orchestrator): Router {
         continuous: parsed.data.continuous,
         autoMemory: parsed.data.autoMemory,
         autoDesignMemory: parsed.data.autoDesignMemory,
+        // Phase 4a of #243: store the resolved topology on RunConfig so
+        // summary.json can carry it. Synthesized from the legacy fields
+        // when the client didn't post one — older clients still get a
+        // populated topology, just one derived from preset+count.
+        topology:
+          parsed.data.topology ??
+          synthesizeTopology(parsed.data.preset, effAgentCount, {
+            dedicatedAuditor: effDedicatedAuditor,
+            plannerModel: effPlannerModel,
+            workerModel: effWorkerModel,
+            auditorModel: effAuditorModel,
+          }),
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {
@@ -745,6 +757,10 @@ interface RunSummaryDigest {
   // IdentityStrip chip so transcript references like "run 7302..."
   // can be located in the history list.
   runId?: string;
+  // Phase 4a of #243: topology surfaced in the dropdown row so users
+  // can scan agent specs at a glance. Optional — older summaries
+  // don't have it, in which case the row shows "—".
+  topology?: import("../../../shared/src/topology.js").Topology;
 }
 
 function parseSummaryToDigest(
@@ -762,6 +778,16 @@ function parseSummaryToDigest(
   const obj = parsed as Record<string, unknown>;
   if (typeof obj.preset !== "string" || typeof obj.startedAt !== "number") return null;
   const contract = obj.contract as Record<string, unknown> | undefined;
+  // Phase 4a of #243: parse topology from summary.json if present.
+  // Permissive — a malformed topology doesn't fail the digest, just
+  // skips the field. The schema would catch it if we re-validated,
+  // but since the dropdown can fall back to "—" we just trust it.
+  const topology =
+    obj.topology &&
+    typeof obj.topology === "object" &&
+    Array.isArray((obj.topology as { agents?: unknown }).agents)
+      ? (obj.topology as RunSummaryDigest["topology"])
+      : undefined;
   return {
     name,
     clonePath: cloneDir,
@@ -776,6 +802,7 @@ function parseSummaryToDigest(
     hasContract: contract !== undefined && Array.isArray(contract.criteria),
     isActive: false,
     runId: typeof obj.runId === "string" ? obj.runId : undefined,
+    topology,
   };
 }
 

@@ -246,6 +246,11 @@ export interface RunSummary {
       v2: { pending: number; inProgress: number; completed: number; failed: number; skipped: number };
     }>;
   };
+  // Phase 4a of #243: the topology used for this run, threaded from
+  // RunConfig.topology. Optional — older summaries written before this
+  // landed don't have it (the modal falls back to a synthesized
+  // best-guess from preset+agentCount in that case).
+  topology?: import("../../shared/src/topology").Topology;
 }
 
 export interface BoardCountsDTO {
@@ -342,6 +347,10 @@ export type SwarmEvent =
       clonePath: string;
       agentCount: number;
       rounds: number;
+      // Phase 4b of #243: topology event payload mirrors the run_config
+      // snapshot so SwarmView's hydration on page-refresh sees the same
+      // shape as the live event-driven path.
+      topology?: import("../../shared/src/topology").Topology;
     };
 
 // Shared shape returned by GET /api/swarm/preflight. Drives both the
@@ -404,6 +413,10 @@ export interface RunConfigSnapshot {
   clonePath: string;
   agentCount: number;
   rounds: number;
+  // Phase 4b of #243: topology from run_started. SwarmView reads this
+  // to color the AgentPanel cards in topology row order with the
+  // exact role + per-row model. Optional during rollout.
+  topology?: import("../../shared/src/topology").Topology;
 }
 
 // Unit 52e: digest returned by GET /api/runs for the run-history
@@ -427,6 +440,11 @@ export interface RunSummaryDigest {
   // Task #36: app-level runId (uuid) from the summary.json. Absent on
   // pre-task-36 runs so the dropdown renders "—" for legacy rows.
   runId?: string;
+  // Phase 4a of #243: topology surfaced in the dropdown row so users
+  // can see the agent specs (1 planner + 4 workers + 1 auditor) at a
+  // glance. Optional — older summaries don't carry it; the row shows
+  // "—" in that case.
+  topology?: import("../../shared/src/topology").Topology;
 }
 
 // Unit 62: shape returned by GET /api/swarm/status. Mirror of the

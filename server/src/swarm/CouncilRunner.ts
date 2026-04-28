@@ -351,6 +351,9 @@ export class CouncilRunner implements SwarmRunner {
       agents: this.stats.buildPerAgentStats(),
       // Task #65: persist transcript so the history modal can replay.
       transcript: this.transcript,
+      // Phase 4a of #243: topology passthrough so summary.json carries
+      // the exact agent specs (history dropdown chip + review-mode rehydrate).
+      topology: cfg.topology,
     });
     try {
       await writeRunSummary(cfg.localPath, summary);
