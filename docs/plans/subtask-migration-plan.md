@@ -1,9 +1,9 @@
 # SubtaskPartInput migration plan (#235)
 
-> Concrete, file-by-file blueprint for migrating our 4 multi-agent
-> runners off the N-subprocess + N-session model onto opencode v2's
-> native `SubtaskPartInput` (one parent session that dispatches
-> subtasks via the `task` tool).
+> **2026-04-28 update — smoke test finding:** the naive SubtaskPartInput
+> approach doesn't give the structured output I'd assumed. **See "Smoke
+> test result" section at the bottom.** This plan should NOT be executed
+> as drafted; needs revision before any runner refactor.
 
 ## Why
 
@@ -11,43 +11,108 @@ Today: each agent has its own opencode subprocess + session. Multi-agent
 runners (Council/OW/OW-Deep/MapReduce) orchestrate N parallel
 `session.prompt` calls themselves.
 
-With v2: parent runs ONE session, includes `{ type: "subtask", agent,
+Hypothesis: parent runs ONE session, includes `{ type: "subtask", agent,
 prompt, description }` parts in its prompt body. opencode auto-dispatches
 each subtask via `TaskTool` to a child session linked by `parentID`.
 Subtask results return inline in the parent's response wrapped as
 `<task_result>...</task_result>`.
 
-Wins:
-- Native parent/child relationship (better UI, logging, cancellation)
-- Less subprocess overhead (1 parent + N short-lived child sessions
-  instead of N long-lived subprocesses)
-- Aligns with the queued "drop opencode subprocess" work in
-  `docs/active-work.md`
+## Smoke test result (2026-04-28)
 
-Risks:
-- **Per-agent stats** — today we track tokens/turns per subprocess; with
-  subtasks all roll up to the parent. Need to either accept loss of
-  granularity OR have opencode emit per-subtask token deltas (unverified).
-- **Failure semantics** — what happens when a subtask fails mid-prompt?
-  Does the parent prompt abort, or does the parent get an error
-  `<task_result>` and continue? Unverified.
-- **Concurrency model** — does opencode dispatch multiple subtask parts
-  in parallel or sequentially? Source uses `yield*` (sequential
-  generator pattern); needs runtime confirmation.
-- **Context isolation** — subtasks get isolated child sessions; parent's
-  message history doesn't leak (verified from source). But parent system
-  prompt — does it inherit? Unverified.
+Ran `/tmp/subtask-smoke.mjs` against a fresh `opencode serve` on
+v1.14.28. Sent `parts: [{type:"subtask", description, prompt, agent}, {type:"text", ...}]` to `/session/{id}/message`.
 
-## Foundation already shipped (commit covering #235 base)
+**What worked:**
+- ✅ status 200 — opencode ACCEPTED the part type without rejecting
+- ✅ The subtask's prompt did execute (response "Hello" matched the
+  subtask's `prompt: "Reply with the single word: hello"`)
+- ✅ Confirmed our `swarm-orchestrator` profile is needed in
+  opencode.json — when standalone (no clone dir), opencode reported
+  `Agent not found: swarm-orchestrator. Available agents: build, explore,
+  general, plan`. Within a clone with our config, the agent resolves.
+
+**What DIDN'T work as planned:**
+- ❌ Response had only THREE parts: `step-start`, `text`, `step-finish`
+- ❌ NO `<task_result>` wrapper in any text content
+- ❌ NO `subtask` part in the response (the subtask's output collapsed
+  into the parent's `text` part)
+
+Full response saved at `runs_overnight9/subtask-smoke-output.json`.
+
+## What this means
+
+The `<task_result>` wrapping in opencode source applies specifically to
+**model-emitted `task` tool calls** — i.e., when the LLM decides at
+runtime to invoke TaskTool. SubtaskPartInput is a different code path
+where the CALLER pre-supplies the subtask intent in the prompt body. The
+two paths share some plumbing (per opencode source's `handleSubtask`
+function) but the output shape differs:
+
+- **Model-emitted task tool**: result wrapped in `<task_result>...</task_result>` so the model can see the result inline and continue.
+- **Caller-emitted SubtaskPartInput**: subtask runs but its output collapses into the parent's text without explicit demarcation (at least when parent + child use the same agent, as our smoke did).
+
+## Why this matters for runner refactors
+
+The MapReduce migration plan below assumed I could parse N
+`<task_result>` blocks from the parent's response to recover per-mapper
+outputs. **That doesn't work as drafted.** Without distinct delimiters,
+N parallel mapper outputs collapse into one merged blob in the parent's
+text — losing the per-mapper boundaries the runner needs for stats,
+transcript display, and per-agent attribution.
+
+## Revised approach options
+
+1. **Use the model to emit `task` tool calls explicitly.**
+   - Parent agent's prompt: "For each of these N subtasks, invoke the
+     `task` tool with the given args."
+   - Model emits N `task` tool_calls; opencode dispatches each; results
+     come back as `<task_result>` blocks the model sees + can synthesize.
+   - Trade-off: depends on the model reliably emitting structured tool
+     calls — same risk as the XML-marker hallucination we fought (#231).
+     glm-5.1 / nemotron-3-super likely fail this; would need a tool-
+     capable model like qwen2.5 / llama3.1 / claude-*.
+
+2. **Keep N separate `session.prompt` calls (status quo).**
+   - Each subtask gets its own session.prompt → its own response → clean
+     per-subtask output.
+   - This is what we already do; the refactor would just rename it.
+
+3. **Use SubtaskPartInput but structure the parent prompt to ask the
+   model to delimit its synthesis explicitly.**
+   - "Run these N subtasks, then for each one report `--- result N ---`
+     followed by the subtask's output."
+   - Fragile (model has to reliably delimit), but closer to the wire
+     ergonomics SubtaskPartInput offers.
+
+4. **PR opencode upstream to add structured subtask output in the
+   response.**
+   - Make opencode add a `subtask` part type to the response that
+     wraps each subtask's result with metadata.
+   - Right long-term but slow; depends on upstream merge.
+
+None of these is "ship the migration tonight" — each needs design,
+prototyping, and live validation. The smoke test demonstrates the
+foundation works at the wire-format level but the output ergonomics
+need more thought before runner refactors.
+
+## Foundation already shipped (commits this overnight)
 
 - `shared/src/subtaskPart.ts` — typed `subtaskPart()` builder + `extractSubtaskResults()` parser. 9 unit tests pass.
 - `swarm-orchestrator` agent profile in `RepoService.writeOpencodeConfig` — same read perms as `swarm-read` plus `task: "allow"`. Used as the parent agent for subtask dispatch.
+- `swarm-builder` profile (#237) — separate concern, allows bash for build-style TODOs.
+- `/tmp/subtask-smoke.mjs` — captures the wire-shape result documented above.
 
-## Spike strategy
+## Next session — concrete first move
 
-Migrate runners in order of complexity (simplest first). RUN each one
-against a live opencode instance after migration to validate runtime
-behavior. Don't migrate the next one until the previous validates.
+Don't refactor a runner. Instead: **run the smoke with two DIFFERENT
+agents** (e.g., parent=`swarm-orchestrator`, child=`swarm-read`) inside
+a real clone directory so our opencode.json is loaded. That isolates
+whether the "no `<task_result>` wrapper" finding is universal or
+specific to same-agent parent+child collapse. If the wrapper appears
+when agents differ → option 3 might work. If it doesn't → we're stuck
+with options 1 or 2.
+
+## (Original plan, kept for reference but DON'T execute as-is)
 
 ### Order:
 1. **MapReduceRunner** — simplest pattern (N mappers + 1 reducer). Spike here.
@@ -61,89 +126,5 @@ behavior. Don't migrate the next one until the previous validates.
 - RoundRobinRunner — sequential by definition.
 - BlackboardRunner — different architecture (planner+workers via blackboard, not direct dispatch). Migration would also touch the V2 worker pipeline which is mid-cutover.
 
-## MapReduceRunner spike (the proof-of-concept)
-
-### Today's flow (`server/src/swarm/MapReduceRunner.ts`)
-
-```
-spawnAgent x N → mappers spawn 1..N
-spawnAgent → reducer (agent 1)
-loop {
-  // Map phase
-  Promise.allSettled([
-    mapper2.session.prompt({ ... slice 2 ... }),
-    mapper3.session.prompt({ ... slice 3 ... }),
-    ...
-  ])
-  // Reduce phase
-  reducer.session.prompt({ ... synthesize all mapper outputs ... })
-}
-```
-
-### After migration
-
-```
-spawnAgent → reducer (agent 1) — only ONE subprocess needed
-loop {
-  // Map + reduce in ONE prompt to the reducer
-  reducer.session.prompt({
-    sessionID, agent: "swarm-orchestrator",
-    parts: [
-      subtaskPart({ description: "map slice 2", prompt: "...", agent: "swarm-read" }),
-      subtaskPart({ description: "map slice 3", prompt: "...", agent: "swarm-read" }),
-      ...
-      { type: "text", text: "Now synthesize the above subtask outputs into a single reducer summary." },
-    ],
-  })
-  // Parse <task_result> blocks via extractSubtaskResults() to get
-  // per-mapper outputs for the transcript display.
-}
-```
-
-### Files to modify
-
-- `server/src/swarm/MapReduceRunner.ts` — gut the parallel-prompt loop, replace with single-parent-session-with-subtask-parts. Update mapperSlices tracking. Re-derive per-mapper agent indices from subtask result order.
-- `server/src/services/AgentManager.ts` — no change strictly needed (we'd just not spawn the mapper subprocesses), but should add a way to NOT spawn N agents for runners that use subtasks. Could be a flag on the runner or a different code path. Probably: pass `agentCount: 1` for the reducer-only runners post-migration.
-- `server/src/swarm/MapReduceRunner.test.ts` (if exists) — update to match new shape.
-
-### Validation
-1. Restart dev server (so v2 SDK + new opencode.json + #235 foundation are live)
-2. Run map-reduce preset against multi-agent-orchestrator with a real directive
-3. Verify in transcript: should see ONE agent-1 entry per cycle that contains the synthesized text + `<task_result>` blocks visible in the raw response
-4. Verify in summary.json: 1 agent in agents[] (the reducer), not N
-
-### Open questions surfaced during spike
-- Does opencode parallelize multiple subtask parts in one prompt, or run them sequentially? (matters for token-budget pacing)
-- Do per-subtask token deltas surface in the SSE stream, or only get rolled up to the parent's totals?
-- What happens on subtask failure — abort the parent, or get an error `<task_result>` and continue?
-
-## Other runners (after MapReduce validates)
-
-### CouncilRunner
-- Parent: agent-1 as `swarm-orchestrator` per round
-- Round 1: dispatch N subtask parts (one per drafter), each with `agent: "swarm-read"` and a prompt that's just the seed (no peer drafts visible — natural since subtasks have isolated context)
-- Round 2+: same dispatch but include prior round's drafts in each subtask prompt (visibility per design)
-- Synthesis: continue with same parent session
-- Per-round subtask dispatch + isolation is naturally enforced by opencode's child-session model
-
-### OrchestratorWorkerRunner
-- Parent: agent-1 as `swarm-orchestrator`
-- Cycle: parent emits a plan + N subtask parts (one per worker subtask), each with `agent: "swarm-read"`
-- Synthesis: parent's text continuation after the subtask parts
-- Reports per worker map to per `<task_result>` block in parent's response
-
-### OrchestratorWorkerDeepRunner
-- 3-tier: top orchestrator dispatches K mid-lead subtasks; each mid-lead subtask itself dispatches its workers as nested subtasks
-- Need to verify opencode supports nested `task` invocations (one subtask spawning more subtasks via the same `task` tool)
-- Probably yes since each subtask is a regular session that can invoke any tool granted to its agent profile (would need `swarm-orchestrator` permission for mid-leads)
-
-### Migration cost summary
-
-| Runner | LOC est. | Risk |
-|---|---|---|
-| MapReduceRunner | ~150 | medium (spike target) |
-| OrchestratorWorkerRunner | ~180 | medium |
-| CouncilRunner | ~220 | high (Round 1 isolation needs careful prompt construction) |
-| OrchestratorWorkerDeepRunner | ~300 | very high (nested subtasks unverified) |
-
-Total: ~850 LOC of careful work. Plus per-runner validation runs. Estimate: 2-3 focused days.
+(File-by-file blueprint preserved below — but DON'T execute until the
+output-shape question above is answered.)
