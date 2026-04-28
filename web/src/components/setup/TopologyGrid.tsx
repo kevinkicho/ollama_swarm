@@ -11,6 +11,7 @@
 //   - mirroring into AgentPanel + History (Phase 4)
 // Each later phase adds columns or adjacent UI without restructuring.
 
+import { useEffect, useMemo, useState } from "react";
 import {
   type AgentRole,
   type AgentSpec,
@@ -19,6 +20,65 @@ import {
   isRoleStructural,
   synthesizeTopology,
 } from "../../../../shared/src/topology";
+
+// Phase 3 of #243: saved-topology library + per-preset last-used
+// persistence in localStorage. Survives dev-server restarts so the
+// user's preferred shape comes back automatically.
+//
+// Schema:
+//   ollama-swarm:topology:last-used:{preset} → Topology (last shape
+//     used on this preset, written on every grid change)
+//   ollama-swarm:topology:saved → SavedTopology[] (named entries the
+//     user explicitly saved). Capped at 32 entries; oldest evicted
+//     when full.
+
+const LAST_USED_PREFIX = "ollama-swarm:topology:last-used:";
+const SAVED_KEY = "ollama-swarm:topology:saved";
+const SAVED_MAX = 32;
+
+interface SavedTopology {
+  name: string;
+  preset: string;
+  topology: Topology;
+  ts: number;
+}
+
+function readLastUsed(presetId: string): Topology | null {
+  try {
+    const raw = localStorage.getItem(`${LAST_USED_PREFIX}${presetId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && Array.isArray(parsed.agents)) return parsed as Topology;
+  } catch {
+    // localStorage disabled / parse error — silent fallback to defaults.
+  }
+  return null;
+}
+function writeLastUsed(presetId: string, t: Topology): void {
+  try {
+    localStorage.setItem(`${LAST_USED_PREFIX}${presetId}`, JSON.stringify(t));
+  } catch {
+    // quota / disabled — silent.
+  }
+}
+function readSavedList(): SavedTopology[] {
+  try {
+    const raw = localStorage.getItem(SAVED_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as SavedTopology[];
+  } catch {
+    // ignore
+  }
+  return [];
+}
+function writeSavedList(list: SavedTopology[]): void {
+  try {
+    localStorage.setItem(SAVED_KEY, JSON.stringify(list.slice(0, SAVED_MAX)));
+  } catch {
+    // ignore
+  }
+}
 
 interface TopologyGridProps {
   preset: {
@@ -99,6 +159,59 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel }: To
   const addableRole = nextAddableRole(preset.id);
   const canAdd = !atMax && addableRole !== null;
 
+  // Phase 3: auto-save last-used topology on every change so the
+  // user's preferred shape survives dev-server restarts and the
+  // next "switch back to this preset" recovers their setup.
+  useEffect(() => {
+    writeLastUsed(preset.id, topology);
+  }, [preset.id, topology]);
+
+  // Saved-list state — re-read on every render of the library
+  // dropdown so manual edits to localStorage in another tab show up.
+  const [savedList, setSavedList] = useState<SavedTopology[]>(() => readSavedList());
+  // Filtered saved entries that match the current preset (only those
+  // are loadable into this grid — cross-preset shapes wouldn't make
+  // sense). Computed lazily so render is cheap.
+  const presetSaved = useMemo(
+    () => savedList.filter((s) => s.preset === preset.id),
+    [savedList, preset.id],
+  );
+  const [showLibrary, setShowLibrary] = useState(false);
+  const [pendingName, setPendingName] = useState("");
+
+  const onSaveAs = () => {
+    const name = pendingName.trim();
+    if (name.length === 0) return;
+    const next: SavedTopology = {
+      name,
+      preset: preset.id,
+      topology,
+      ts: Date.now(),
+    };
+    // De-dupe by name within preset (overwrite if exists).
+    const filtered = savedList.filter(
+      (s) => !(s.preset === preset.id && s.name === name),
+    );
+    const updated = [next, ...filtered].slice(0, SAVED_MAX);
+    writeSavedList(updated);
+    setSavedList(updated);
+    setPendingName("");
+  };
+  const onLoadSaved = (entry: SavedTopology) => {
+    setTopology(entry.topology);
+    setShowLibrary(false);
+  };
+  const onDeleteSaved = (entry: SavedTopology) => {
+    const updated = savedList.filter(
+      (s) => !(s.preset === entry.preset && s.name === entry.name && s.ts === entry.ts),
+    );
+    writeSavedList(updated);
+    setSavedList(updated);
+  };
+  const onResetToDefaults = () => {
+    setTopology(synthesizeTopology(preset.id, preset.min === preset.max ? preset.min : (topology.agents.length || preset.min)));
+  };
+
   const renumber = (agents: AgentSpec[]): AgentSpec[] => {
     // After +/-, re-derive role + index for every row so the auditor
     // stays at the bottom (blackboard) and mid-lead/worker boundaries
@@ -164,17 +277,105 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel }: To
 
   return (
     <div className="space-y-2">
-      <div className="flex items-baseline justify-between">
+      <div className="flex items-baseline justify-between gap-2 flex-wrap">
         <div className="text-xs uppercase tracking-wide text-ink-400">
           Topology
           <span className="ml-2 text-ink-500 normal-case">
             {total} {total === 1 ? "agent" : "agents"} · min {preset.min} · max {preset.max}
           </span>
         </div>
-        {preset.min === preset.max ? (
-          <span className="text-[10px] text-ink-500 italic">Fixed for this preset</span>
-        ) : null}
+        <div className="flex items-center gap-1.5 text-[10px]">
+          {/* Phase 3 of #243: library — load / save / reset. Per-preset
+              last-used auto-restores; saved entries are explicit
+              named snapshots the user can curate. */}
+          <button
+            type="button"
+            onClick={() => setShowLibrary((v) => !v)}
+            className="px-2 py-0.5 rounded bg-ink-800 hover:bg-ink-700 text-ink-300 hover:text-ink-100 border border-ink-700 transition"
+            title="Open the saved-topology library for this preset"
+          >
+            {showLibrary ? "▾" : "▸"} Library
+            {presetSaved.length > 0 ? (
+              <span className="ml-1 text-ink-500">({presetSaved.length})</span>
+            ) : null}
+          </button>
+          <button
+            type="button"
+            onClick={onResetToDefaults}
+            className="px-2 py-0.5 rounded bg-ink-800 hover:bg-ink-700 text-ink-300 hover:text-ink-100 border border-ink-700 transition"
+            title="Reset the grid to this preset's recommended defaults (drops your customizations)"
+          >
+            ↺ Reset
+          </button>
+          {preset.min === preset.max ? (
+            <span className="text-ink-500 italic">Fixed for this preset</span>
+          ) : null}
+        </div>
       </div>
+      {showLibrary ? (
+        <div className="rounded border border-ink-700 bg-ink-900/40 p-2 space-y-2 text-[11px]">
+          <div className="flex items-center gap-1">
+            <input
+              type="text"
+              value={pendingName}
+              onChange={(e) => setPendingName(e.target.value.slice(0, 60))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  onSaveAs();
+                }
+              }}
+              placeholder="Save current as… (e.g. 'my blackboard 7')"
+              className="flex-1 bg-ink-950/60 border border-ink-700 rounded px-2 py-1 text-[11px] text-ink-200 placeholder:text-ink-600 focus:outline-none focus:border-ink-500"
+            />
+            <button
+              type="button"
+              onClick={onSaveAs}
+              disabled={pendingName.trim().length === 0}
+              className="px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600 disabled:bg-ink-700 disabled:text-ink-500 disabled:cursor-not-allowed text-white text-[11px] border border-emerald-600 transition"
+              title="Save the current grid under this name (per-preset)"
+            >
+              + save
+            </button>
+          </div>
+          {presetSaved.length === 0 ? (
+            <div className="text-ink-500 italic px-1">
+              No saved topologies for {preset.id} yet. Save the current grid above.
+              {/* The last-used auto-save is invisible — it just makes
+                  switching back to this preset restore your last shape. */}
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {presetSaved.map((s) => (
+                <div
+                  key={`${s.name}-${s.ts}`}
+                  className="flex items-center justify-between gap-2 rounded border border-ink-800/60 bg-ink-950/40 px-2 py-1"
+                >
+                  <button
+                    type="button"
+                    onClick={() => onLoadSaved(s)}
+                    className="flex-1 text-left text-ink-200 hover:text-ink-100 truncate"
+                    title={`Load "${s.name}" — ${s.topology.agents.length} agents · saved ${new Date(s.ts).toLocaleString()}`}
+                  >
+                    <span className="text-ink-300 font-medium">{s.name}</span>
+                    <span className="ml-2 text-ink-500 text-[10px] font-mono">
+                      {s.topology.agents.length}A · {new Date(s.ts).toLocaleDateString()}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDeleteSaved(s)}
+                    className="text-ink-500 hover:text-rose-300 px-1"
+                    title="Delete this saved entry"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
       <div className="rounded border border-ink-700 bg-ink-900/60 overflow-hidden">
         <table className="w-full text-[11px]">
           <thead className="bg-ink-800/60 text-[10px] uppercase tracking-wider text-ink-500">
@@ -246,7 +447,12 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel }: To
 }
 
 // Convenience: build the initial topology when SetupForm picks a
-// preset for the first time or the user switches presets.
+// preset for the first time or the user switches presets. Phase 3
+// adds a `lastUsed` opt-in that consults localStorage for the user's
+// previous shape on this preset; SetupForm passes lastUsed=true on
+// preset-change so switching back to a preset restores what the user
+// had set up before. Fresh page-load also benefits since the
+// auto-save survives reloads.
 export function topologyForPreset(
   presetId: string,
   agentCount: number,
@@ -255,7 +461,12 @@ export function topologyForPreset(
     plannerModel?: string;
     workerModel?: string;
     auditorModel?: string;
+    lastUsed?: boolean;
   },
 ): Topology {
+  if (options?.lastUsed) {
+    const recovered = readLastUsed(presetId);
+    if (recovered && recovered.agents.length >= 1) return recovered;
+  }
   return synthesizeTopology(presetId, agentCount, options);
 }

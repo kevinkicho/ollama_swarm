@@ -339,6 +339,66 @@ await probe(page, {
   },
 });
 
+// Phase 3 of #243: library save/load roundtrip.
+await probe(page, {
+  label: "topology-library-toggle-opens",
+  action: async (p) => {
+    const btn = p.locator('button:has-text("Library")').first();
+    await btn.click();
+    await p.waitForTimeout(300);
+  },
+  expect: async (p) => {
+    return await p.locator('input[placeholder*="Save current as"]').first().isVisible({ timeout: 2000 });
+  },
+});
+
+await probe(page, {
+  label: "topology-library-save-named",
+  action: async (p) => {
+    const input = p.locator('input[placeholder*="Save current as"]').first();
+    await input.click();
+    await input.fill("");
+    await input.type("probe-test-blackboard");
+    const saveBtn = p.locator('button:has-text("save")').first();
+    await saveBtn.click();
+    await p.waitForTimeout(300);
+  },
+  expect: async (p) => {
+    return await p.locator('text=/probe-test-blackboard/').first().isVisible({ timeout: 2000 });
+  },
+});
+
+await probe(page, {
+  label: "topology-library-delete",
+  action: async (p) => {
+    // The ✕ button on the saved entry deletes it. Find via title.
+    const delBtn = p.locator('button[title="Delete this saved entry"]').first();
+    await delBtn.click();
+    await p.waitForTimeout(300);
+  },
+  expect: async (p) => {
+    // After delete, the entry should be gone.
+    const visible = await p.locator('text=/probe-test-blackboard/').first().isVisible({ timeout: 500 }).catch(() => false);
+    return !visible;
+  },
+});
+
+await probe(page, {
+  label: "topology-reset-to-defaults",
+  action: async (p) => {
+    const btn = p.locator('button:has-text("Reset")').first();
+    await btn.click();
+    await p.waitForTimeout(300);
+  },
+  expect: async (p) => {
+    // After reset, the per-row Model fields should be empty (default placeholder)
+    // OR populated from preset defaults — either way, the topology should still
+    // be valid (have rows). Confirm at least 1 row remains.
+    const rowCount = await p.locator('table tbody tr').count();
+    return rowCount >= 1;
+  },
+});
+
 await probe(page, {
   label: "rounds-number-input",
   action: async (p) => {

@@ -220,9 +220,10 @@ export function SetupForm() {
   // Phase 1 of #243: topology is the new source of truth. agentCount
   // remains for WallClockEstimate + back-compat with the legacy POST
   // shape, but it's kept in sync with topology.agents.length on every
-  // mutation. Initialized to the round-robin default (3 peers).
+  // mutation. Initialized to the user's last-used shape for the
+  // initial preset (Phase 3) — falls back to defaults if no prior.
   const [topology, setTopology] = useState<Topology>(() =>
-    topologyForPreset("round-robin", 3),
+    topologyForPreset("round-robin", 3, { lastUsed: true }),
   );
   // Model defaults to the initial preset's recommendation so the
   // form renders with a sensible Model field on first paint.
@@ -295,6 +296,9 @@ export function SetupForm() {
     // from the existing per-role state so users don't lose what they typed.
     setTopology(
       topologyForPreset(next.id, recommended, {
+        // Phase 3: prefer the user's last-used shape for this preset.
+        // synthesizeTopology() is the fallback when no prior exists.
+        lastUsed: true,
         dedicatedAuditor: next.id === "blackboard" ? dedicatedAuditor : undefined,
         plannerModel: next.id === "blackboard" ? plannerModel : undefined,
         workerModel: next.id === "blackboard" ? workerModel : undefined,
