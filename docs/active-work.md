@@ -40,7 +40,15 @@
 
 *(Move items here from "Queued" when started; move to "Done recently" when shipped)*
 
-- ✅ **Validation tour: 32 bubble fixtures audited** (2026-04-27 evening). Built `web/src/components/BubbleGallery.tsx` + `?gallery=1` route. Captured per-fixture PNGs via Playwright. Report: `runs/_validation-tour/2026-04-28T01-38-42-355Z/REPORT.md`. 30/32 render correctly. Two gaps surfaced (queued as #226 + #227 below).
+— see "Done recently → 2026-04-27 evening" below for tonight's 8 commits + final report —
+
+### Surfaced from overnight tour (queued for next session)
+
+- **#231 Investigate why models emit XML pseudo-tool-call markers as raw text.** Bonus 10 (blackboard re-run with #229+#230 fixes) confirmed both `glm-5.1:cloud` AND its sibling fallback `nemotron-3-super:cloud` emit `<read>/<grep>/<list>` markers as plain text instead of using SDK tool functions. Two models from different families = systemic, not glm-5.1-specific. Likely the planner system prompt OR opencode SDK tool-grant context is leading the model to emit granted tools as text. Investigate: (a) what tool definitions are in the agent system prompt? (b) does opencode itself recognize these emitted markers and execute them silently? (c) would explicitly disabling tool grants for the planner role fix it? **Trigger**: explicit "investigate marker root cause."
+
+### Validation-tour follow-ups (DONE 2026-04-27 evening, see commits below)
+
+- ✅ **Validation tour: 32 → 34 bubble fixtures audited** (2026-04-27 evening). Built `web/src/components/BubbleGallery.tsx` + `?gallery=1` route. Captured per-fixture PNGs via Playwright. Report: `runs/_validation-tour/2026-04-28T01-38-42-355Z/REPORT.md`. 34/34 render correctly. Original 30/32 + #226 TodosBubble + #227 quota ribbons + #228 unpaired think-closer + #229 ToolCallsBlock fixtures.
 
 ### Validation-tour follow-ups
 
@@ -83,6 +91,8 @@ plus the actual run output at `C:\mnt\c\Users\kevin\Desktop\ollama_swarm\runs\de
 - ✅ **wallClockCapMs not enforced** — fixed. Root cause: post-audit reflection passes (stretch goals, memory distillation, design memory update) ran unconditionally even after the audit loop ended past the cap. Each is a 1-3 min planner prompt; on run 0254ca7c that pushed 14-min audit work to 19 min total. Fix gates each pass on `isOverWallClockCap()` (a non-mutating cap probe); when over, transcript surfaces a clear "cap exceeded; skipping bonus passes" message. Test suite (987/987) clean.
 
 - **AUDIT: review all JSON formatting scenarios end-to-end.** Each `summary.kind` bubble (run_finished, seed_announce, verifier_verdict, agents_ready, council_draft, debate_turn, council_synthesis, stigmergy_report, mapreduce_synthesis, role_diff_synthesis, stretch_goals, debate_verdict, next_action_phase, worker_hunks) has its own renderer in `web/src/components/transcript/MessageBubble.tsx`. The fallback chain (worker_hunks-detection → AgentJsonBubble → JsonPrettyBubble → segmented-prose → CollapsibleBlock) also needs verification. **Trigger**: anytime; method = render each kind in browser, screenshot, compare to expected. Pairs with the SSE-streaming-collapsible regression below — likely some are broken by the same root cause (commit `0b3cda6` outer-div wrap).
+
+- ✅ **#229 + #230 (2026-04-27 evening): server-side strip of XML pseudo-tool-call markers** in all 8 runners via `shared/stripAgentText.ts`. Closes the UI-noise + Phase 2 over-segmentation pieces. **NOT addressed** by this fix: when the model emits ONLY markers + nothing else (no JSON envelope), the planner parse correctly fails and the existing repair-prompt path fires. That is a model-behavior issue, not a parser issue. Discussion presets (council, debate-judge, role-diff, mapreduce, stigmergy, round-robin) all PASS overnight; blackboard + ow-deep still fail when the planner emits empty/garbage envelopes.
 
 - **TOOL-CALL XML MARKERS leak into visible bubble + over-segment Phase 2.** Run 0fa1dd98 (with all 3 UI Phase fixes) showed glm-5.1 planner emitting `<read>src/foo</read>` / `<grep>pattern</grep>` / `<list>src/</list>` / `<glob>...</glob>` markers as raw text in the response. Each tool-call line is followed by `\n\n`, so Phase 2's content-boundary detector creates a separate micro-segment per call → 28 segments of one tool call each (run 0fa1dd98 first planner turn). **Two-layer fix needed**: (1) extract tool-call markers server-side at appendAgent (mirror extractThinkTags pattern — split into `toolCalls: string[]; finalText: string`); render as a collapsed `🔧 N tool calls` block similar to ThoughtsBlock; OR (2) if these ARE real SDK tool invocations being echoed in the text response, suppress them server-side entirely. (3) Independently, raise `MIN_SEGMENT_CHARS` from 20 to ~200, OR require content beyond just XML tool-call markers per segment. **Trigger**: anytime; pairs with Phase 1+2 of the UI coherent-fix.
 
@@ -147,6 +157,17 @@ not promote any of these to "needs-fixing" without re-checking the artifact.
 ---
 
 ## Done recently (last 30 days; older lands in archive/blackboard-changelog.md)
+
+### 2026-04-27 evening — overnight validation tour
+
+Full report at `runs_overnight/_OVERNIGHT-FINAL-REPORT.md`. 10 preset runs (8 + 2 bonus): 7 PASS / 3 FAIL. All FAILs are blackboard or ow-deep with empty/marker-only planner responses (model behavior issue, not parser issue).
+
+- ✅ `4291b4c` — Validation tour: BubbleGallery fixture for `?gallery=1` (32 hand-crafted fixtures across every summary.kind variant)
+- ✅ `2b4e871` — TodosBubble + quota_paused/resumed colored ribbons (#226 + #227 follow-ups from validation tour)
+- ✅ `796d034` — `#228` strip unpaired `</think>` closer at head (RCA from preset 1 bonus catch — extends extractThinkTags 15→19 tests)
+- ✅ `372809e` — `#229` server-side strip of XML pseudo-tool-call markers (new shared/extractToolCallMarkers + ToolCallsBlock + BlackboardRunner integration)
+- ✅ `a8a66d4` — `#230` shared `stripAgentText` helper + CouncilRunner integration (refactor of #229 work into reusable helper)
+- ✅ `9b9b0c4` — `#230` apply stripAgentText across remaining 6 runners (DebateJudge, MapReduce, OW, OW-Deep, RoundRobin, Stigmergy)
 
 ### 2026-04-27 — late session: bug-fix round
 
