@@ -99,14 +99,34 @@ function formatSampleMs(ms: number): string {
 // "Tester", etc.) as arbitrary strings. Renderer branches on the
 // fixed names for colored badges; any other string renders with a
 // distinct violet badge to signal "custom role from catalog".
+// Phase 2 of #243: AgentPanel accepts optional color + tag from the
+// topology. Color renders as a left-edge bar so the user can find
+// "the green agent" at a glance; tag renders as a small chip next to
+// the role. Both fields are optional — undefined leaves the card
+// looking exactly like the pre-Phase-2 default.
+const COLOR_BORDER_CLASS: Record<string, string> = {
+  emerald: "border-l-emerald-500",
+  sky: "border-l-sky-500",
+  amber: "border-l-amber-500",
+  violet: "border-l-violet-500",
+  rose: "border-l-rose-500",
+  teal: "border-l-teal-500",
+  fuchsia: "border-l-fuchsia-500",
+  lime: "border-l-lime-500",
+};
+
 export function AgentPanel({
   agent,
   role,
   model,
+  color,
+  tag,
 }: {
   agent: AgentState;
   role: string;
   model?: string;
+  color?: string;
+  tag?: string;
 }) {
   const elapsed = useElapsedTicker(agent.thinkingSince, agent.status === "thinking");
   const samples = useSwarm((s) => s.latency[agent.id] ?? EMPTY_SAMPLES);
@@ -137,10 +157,16 @@ export function AgentPanel({
   const showPopover = hover && samples.length > 0;
   const last = samples.length > 0 ? samples[samples.length - 1] : null;
   const successCount = samples.filter((s) => s.success).length;
+  // Phase 2 of #243: color border for visual identification across
+  // the UI. Falls back to the default border-l-ink-700 when no color
+  // is set so the layout is identical for users who don't use colors.
+  const colorBorderCls = color && COLOR_BORDER_CLASS[color]
+    ? `${COLOR_BORDER_CLASS[color]} border-l-4`
+    : "border-l-ink-700";
   return (
-    <div className="border border-ink-700 rounded-md p-3 bg-ink-800">
+    <div className={`border border-ink-700 ${colorBorderCls} rounded-md p-3 bg-ink-800`}>
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-2 min-w-0 flex-wrap">
           <span
             className={`inline-block h-2 w-2 rounded-full ${dotColor} shrink-0`}
             title={agent.status === "stopped" && runCompletedCleanly ? "Exited cleanly when the run completed (not a crash)" : undefined}
@@ -155,6 +181,14 @@ export function AgentPanel({
           >
             {role}
           </span>
+          {tag ? (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded bg-ink-700/60 border border-ink-600/60 text-ink-300 shrink-0"
+              title={`Specialization tag: ${tag}`}
+            >
+              #{tag}
+            </span>
+          ) : null}
         </div>
         <span className="text-xs font-mono text-ink-400">:{agent.port}</span>
       </div>

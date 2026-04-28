@@ -207,6 +207,15 @@ export function SwarmView() {
     if (cfg.dedicatedAuditor && idx > cfg.agentCount) return cfg.auditorModel;
     return cfg.workerModel;
   };
+  // Phase 2 of #243: per-agent color + tag pulled from topology when
+  // present. Both undefined → AgentPanel renders without the color
+  // border / tag chip (pre-Phase-2 default).
+  const agentColor = (idx: number): string | undefined => {
+    return cfg?.topology?.agents.find((a) => a.index === idx)?.color;
+  };
+  const agentTag = (idx: number): string | undefined => {
+    return cfg?.topology?.agents.find((a) => a.index === idx)?.tag;
+  };
 
   return (
     <div className="h-full flex flex-col">
@@ -252,7 +261,14 @@ export function SwarmView() {
           )}
         </div>
         {agentList.map((a) => (
-          <AgentPanel key={a.id} agent={a} role={agentRole(a.index)} model={agentModel(a.index)} />
+          <AgentPanel
+            key={a.id}
+            agent={a}
+            role={agentRole(a.index)}
+            model={agentModel(a.index)}
+            color={agentColor(a.index)}
+            tag={agentTag(a.index)}
+          />
         ))}
         {/* 2026-04-25: when the live agents map is empty (run completed
             and killAll cleared the roster), fall back to a compact

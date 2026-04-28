@@ -34,6 +34,22 @@ export const AGENT_ROLES = [
 
 export type AgentRole = (typeof AGENT_ROLES)[number];
 
+// Phase 2 of #243 (color palette): a small fixed set so users build
+// muscle memory ("agent #3 is the green one") and the AgentPanel +
+// transcript bubbles can pick a consistent border color. Tailwind
+// names — runtime maps these to actual class strings.
+export const AGENT_COLORS = [
+  "emerald",
+  "sky",
+  "amber",
+  "violet",
+  "rose",
+  "teal",
+  "fuchsia",
+  "lime",
+] as const;
+export type AgentColor = (typeof AGENT_COLORS)[number];
+
 export const AgentSpecSchema = z.object({
   index: z.number().int().min(1).max(16),
   role: z.enum(AGENT_ROLES),
@@ -45,6 +61,30 @@ export const AgentSpecSchema = z.object({
   // Structural slots (planner/auditor/orchestrator/judge/...) are
   // false; flexible workers/peers/mappers are true.
   removable: z.boolean(),
+  // Phase 2 of #243: per-agent properties. All optional — the grid
+  // hides their columns by default to stay scannable.
+  //
+  // tag — free-text specialization label (e.g. "tests-expert").
+  //   Phase 2 surfaces it in AgentPanel + transcript bubbles for
+  //   visual identification. Future phases wire it into planner
+  //   claim routing so todos with matching tags route to specialized
+  //   workers preferentially. Capped at 40 chars to fit chip layouts.
+  tag: z.string().trim().max(40).optional(),
+  // color — fixed-palette badge for AgentPanel cards + transcript
+  //   bubbles. Cosmetic; helps the eye lock onto "agent #3" across
+  //   the UI.
+  color: z.enum(AGENT_COLORS).optional(),
+  // temperature — opencode session sampling temperature. 0–2 range
+  //   matches the OpenAI/Ollama convention. Empty = inherit the
+  //   model default (no override). Runtime wiring lands incrementally;
+  //   Phase 2 adds the schema + grid input.
+  temperature: z.number().min(0).max(2).optional(),
+  // promptAddendum — appended to this agent's opencode system
+  //   prompt at session creation. Lets users specialize specific
+  //   workers (e.g. "Focus on test files only.") without changing
+  //   the preset's prompt template. Capped at 1000 chars to keep
+  //   per-prompt overhead bounded.
+  promptAddendum: z.string().trim().max(1000).optional(),
 });
 export type AgentSpec = z.infer<typeof AgentSpecSchema>;
 

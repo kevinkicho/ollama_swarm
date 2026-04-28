@@ -32,6 +32,7 @@ export type {
 
 export {
   AGENT_ROLES,
+  AGENT_COLORS,
   AgentSpecSchema,
   TopologySchema,
   defaultRoleForIndex,
@@ -39,4 +40,4 @@ export {
   synthesizeTopology,
   deriveLegacyFields,
 } from "./topology.js";
-export type { AgentRole, AgentSpec, Topology } from "./topology.js";
+export type { AgentRole, AgentColor, AgentSpec, Topology } from "./topology.js";

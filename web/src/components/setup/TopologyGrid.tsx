@@ -13,13 +13,29 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
+  type AgentColor,
   type AgentRole,
   type AgentSpec,
   type Topology,
+  AGENT_COLORS,
   defaultRoleForIndex,
   isRoleStructural,
   synthesizeTopology,
 } from "../../../../shared/src/topology";
+
+// Phase 2 of #243: tailwind color name → swatch CSS for the per-row
+// color picker. Single source of truth — AgentPanel's color border
+// uses the same palette so picks are consistent across the UI.
+const COLOR_SWATCH_CLASS: Record<AgentColor, string> = {
+  emerald: "bg-emerald-500",
+  sky: "bg-sky-500",
+  amber: "bg-amber-500",
+  violet: "bg-violet-500",
+  rose: "bg-rose-500",
+  teal: "bg-teal-500",
+  fuchsia: "bg-fuchsia-500",
+  lime: "bg-lime-500",
+};
 
 // Phase 3 of #243: saved-topology library + per-preset last-used
 // persistence in localStorage. Survives dev-server restarts so the
@@ -141,6 +157,31 @@ const ROLE_CHIP_STYLES: Record<AgentRole, string> = {
   "role-diff": "bg-fuchsia-900/40 border-fuchsia-700/50 text-fuchsia-200",
 };
 
+function ColorPicker({
+  value,
+  onChange,
+}: {
+  value: AgentColor | undefined;
+  onChange: (c: AgentColor | undefined) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1 flex-wrap">
+      {AGENT_COLORS.map((c) => (
+        <button
+          key={c}
+          type="button"
+          onClick={() => onChange(value === c ? undefined : c)}
+          className={`w-4 h-4 rounded-full ${COLOR_SWATCH_CLASS[c]} ${
+            value === c ? "ring-2 ring-ink-100 ring-offset-1 ring-offset-ink-900" : "opacity-60 hover:opacity-100"
+          } transition`}
+          title={value === c ? `${c} (click to clear)` : c}
+          aria-label={`Pick color ${c}`}
+        />
+      ))}
+    </div>
+  );
+}
+
 function RoleChip({ role, structural }: { role: AgentRole; structural: boolean }) {
   return (
     <span
@@ -178,6 +219,30 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel }: To
   );
   const [showLibrary, setShowLibrary] = useState(false);
   const [pendingName, setPendingName] = useState("");
+
+  // Phase 2 of #243: column-toggle state. Default-off so the grid
+  // stays scannable for users who don't need per-agent specialization.
+  // Toggling on reveals the column for every row at once. State lives
+  // in localStorage so the user's preference survives reloads.
+  const [showColor, setShowColor] = useState<boolean>(() =>
+    typeof window !== "undefined" && localStorage.getItem("ollama-swarm:topology:col:color") === "on",
+  );
+  const [showTag, setShowTag] = useState<boolean>(() =>
+    typeof window !== "undefined" && localStorage.getItem("ollama-swarm:topology:col:tag") === "on",
+  );
+  const [showTemp, setShowTemp] = useState<boolean>(() =>
+    typeof window !== "undefined" && localStorage.getItem("ollama-swarm:topology:col:temp") === "on",
+  );
+  const [showPrompt, setShowPrompt] = useState<boolean>(() =>
+    typeof window !== "undefined" && localStorage.getItem("ollama-swarm:topology:col:prompt") === "on",
+  );
+  const persistColToggle = (key: string, on: boolean) => {
+    try {
+      localStorage.setItem(`ollama-swarm:topology:col:${key}`, on ? "on" : "off");
+    } catch {
+      // ignore
+    }
+  };
 
   const onSaveAs = () => {
     const name = pendingName.trim();
@@ -274,6 +339,52 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel }: To
       ),
     });
   };
+  // Phase 2 of #243: per-row mutators for the new optional fields.
+  const onTagChange = (index: number, value: string) => {
+    const trimmed = value.trim();
+    setTopology({
+      agents: topology.agents.map((a) =>
+        a.index === index
+          ? { ...a, tag: trimmed.length > 0 ? trimmed : undefined }
+          : a,
+      ),
+    });
+  };
+  const onColorChange = (index: number, color: AgentColor | undefined) => {
+    setTopology({
+      agents: topology.agents.map((a) =>
+        a.index === index ? { ...a, color } : a,
+      ),
+    });
+  };
+  const onTempChange = (index: number, value: string) => {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      setTopology({
+        agents: topology.agents.map((a) =>
+          a.index === index ? { ...a, temperature: undefined } : a,
+        ),
+      });
+      return;
+    }
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n < 0 || n > 2) return;
+    setTopology({
+      agents: topology.agents.map((a) =>
+        a.index === index ? { ...a, temperature: n } : a,
+      ),
+    });
+  };
+  const onPromptChange = (index: number, value: string) => {
+    const trimmed = value.trim();
+    setTopology({
+      agents: topology.agents.map((a) =>
+        a.index === index
+          ? { ...a, promptAddendum: trimmed.length > 0 ? trimmed : undefined }
+          : a,
+      ),
+    });
+  };
 
   return (
     <div className="space-y-2">
@@ -284,7 +395,36 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel }: To
             {total} {total === 1 ? "agent" : "agents"} · min {preset.min} · max {preset.max}
           </span>
         </div>
-        <div className="flex items-center gap-1.5 text-[10px]">
+        <div className="flex items-center gap-1.5 text-[10px] flex-wrap">
+          {/* Phase 2 of #243: column-toggle pills. Default-off so the
+              grid stays compact for casual users; power users opt in
+              to the columns they need. Each toggle persists its state. */}
+          {[
+            { key: "color", label: "Color", val: showColor, setter: setShowColor, hint: "Per-row color badge for AgentPanel cards." },
+            { key: "tag", label: "Tag", val: showTag, setter: setShowTag, hint: "Specialization label (e.g. 'tests-expert')." },
+            { key: "temp", label: "Temp", val: showTemp, setter: setShowTemp, hint: "Per-agent sampling temperature override (0-2)." },
+            { key: "prompt", label: "Prompt+", val: showPrompt, setter: setShowPrompt, hint: "Per-agent system-prompt addendum (max 1000 chars)." },
+          ].map(({ key, label, val, setter, hint }) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => {
+                setter((v) => {
+                  const next = !v;
+                  persistColToggle(key, next);
+                  return next;
+                });
+              }}
+              className={`px-1.5 py-0.5 rounded border transition ${
+                val
+                  ? "bg-ink-700 text-ink-100 border-ink-600"
+                  : "bg-ink-900 text-ink-500 border-ink-800 hover:text-ink-300 hover:bg-ink-800"
+              }`}
+              title={`${val ? "Hide" : "Show"} the ${label} column. ${hint}`}
+            >
+              {val ? "✓" : "+"} {label}
+            </button>
+          ))}
           {/* Phase 3 of #243: library — load / save / reset. Per-preset
               last-used auto-restores; saved entries are explicit
               named snapshots the user can curate. */}
@@ -381,8 +521,12 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel }: To
           <thead className="bg-ink-800/60 text-[10px] uppercase tracking-wider text-ink-500">
             <tr>
               <th className="px-2 py-1.5 text-left w-10">#</th>
+              {showColor ? <th className="px-2 py-1.5 text-left w-20">Color</th> : null}
               <th className="px-2 py-1.5 text-left">Role</th>
+              {showTag ? <th className="px-2 py-1.5 text-left">Tag</th> : null}
               <th className="px-2 py-1.5 text-left">Model override</th>
+              {showTemp ? <th className="px-2 py-1.5 text-left w-20">Temp</th> : null}
+              {showPrompt ? <th className="px-2 py-1.5 text-left">Prompt+</th> : null}
               <th className="px-2 py-1.5 text-right w-12">Action</th>
             </tr>
           </thead>
@@ -390,9 +534,29 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel }: To
             {topology.agents.map((a) => (
               <tr key={a.index} className="border-t border-ink-800/60">
                 <td className="px-2 py-1.5 text-ink-400 font-mono">{a.index}</td>
+                {showColor ? (
+                  <td className="px-2 py-1.5">
+                    <ColorPicker
+                      value={a.color}
+                      onChange={(c) => onColorChange(a.index, c)}
+                    />
+                  </td>
+                ) : null}
                 <td className="px-2 py-1.5">
                   <RoleChip role={a.role} structural={!a.removable} />
                 </td>
+                {showTag ? (
+                  <td className="px-2 py-1.5">
+                    <input
+                      type="text"
+                      value={a.tag ?? ""}
+                      onChange={(e) => onTagChange(a.index, e.target.value)}
+                      placeholder="(none)"
+                      maxLength={40}
+                      className="w-full bg-ink-950/60 border border-ink-700 rounded px-2 py-0.5 text-[11px] text-ink-200 placeholder:text-ink-600 focus:outline-none focus:border-ink-500"
+                    />
+                  </td>
+                ) : null}
                 <td className="px-2 py-1.5">
                   <input
                     type="text"
@@ -402,6 +566,32 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel }: To
                     className="w-full bg-ink-950/60 border border-ink-700 rounded px-2 py-0.5 text-[11px] font-mono text-ink-200 placeholder:text-ink-600 focus:outline-none focus:border-ink-500"
                   />
                 </td>
+                {showTemp ? (
+                  <td className="px-2 py-1.5">
+                    <input
+                      type="number"
+                      step="0.1"
+                      min={0}
+                      max={2}
+                      value={a.temperature !== undefined ? String(a.temperature) : ""}
+                      onChange={(e) => onTempChange(a.index, e.target.value)}
+                      placeholder="—"
+                      className="w-full bg-ink-950/60 border border-ink-700 rounded px-2 py-0.5 text-[11px] font-mono text-ink-200 placeholder:text-ink-600 focus:outline-none focus:border-ink-500"
+                    />
+                  </td>
+                ) : null}
+                {showPrompt ? (
+                  <td className="px-2 py-1.5">
+                    <input
+                      type="text"
+                      value={a.promptAddendum ?? ""}
+                      onChange={(e) => onPromptChange(a.index, e.target.value)}
+                      placeholder="(none — appends to system prompt)"
+                      maxLength={1000}
+                      className="w-full bg-ink-950/60 border border-ink-700 rounded px-2 py-0.5 text-[11px] text-ink-200 placeholder:text-ink-600 focus:outline-none focus:border-ink-500"
+                    />
+                  </td>
+                ) : null}
                 <td className="px-2 py-1.5 text-right">
                   {a.removable && !atMin ? (
                     <button
@@ -422,7 +612,12 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel }: To
           {canAdd ? (
             <tfoot>
               <tr className="border-t border-ink-800/60">
-                <td colSpan={4} className="px-2 py-1.5 text-right">
+                <td
+                  colSpan={
+                    4 + (showColor ? 1 : 0) + (showTag ? 1 : 0) + (showTemp ? 1 : 0) + (showPrompt ? 1 : 0)
+                  }
+                  className="px-2 py-1.5 text-right"
+                >
                   <button
                     type="button"
                     onClick={onAdd}

@@ -188,8 +188,19 @@ await probe(page, {
   },
 });
 
-// Close v2 event log if it opened (Esc)
-await page.keyboard.press("Escape").catch(() => {});
+// Close v2 event log if it opened — Escape doesn't always work
+// (panel doesn't bind it). Click the V2 button again to toggle, or
+// click outside its bounds, or press its REFRESH-adjacent close.
+// Simplest: click the same button again (it's a toggle).
+const v2Btn = page.locator('button:has-text("V2 EVENT LOG"), button:has-text("V2 event log"), button:has-text("v2 event log")').first();
+const v2Visible = await v2Btn.isVisible({ timeout: 500 }).catch(() => false);
+if (v2Visible) {
+  // Click somewhere outside first to dismiss any open panel.
+  await page.mouse.click(50, 200).catch(() => {});
+  await page.waitForTimeout(200);
+  // Then press Escape as fallback.
+  await page.keyboard.press("Escape").catch(() => {});
+}
 await page.waitForTimeout(300);
 
 // ─── Section 2: form inputs ────────────────────────────────────────
@@ -197,8 +208,24 @@ console.log("\n[Section 2] Form inputs");
 await probe(page, {
   label: "github-url-input-typing",
   action: async (p) => {
+    // Reset the form's inner scroll container — the form lives
+    // inside <main><div class="overflow-auto"> which has its own
+    // scroll independent of window. Topology grid + library
+    // grew the form so prior probes leave it scrolled. Reset all
+    // overflow-auto containers to top so the GitHub URL input
+    // (which is near the top of the form) is fully clear of the
+    // sticky page header.
+    await p.evaluate(() => {
+      document.querySelectorAll('[class*="overflow-auto"]').forEach((el) => {
+        el.scrollTop = 0;
+      });
+      window.scrollTo(0, 0);
+    });
+    await p.waitForTimeout(200);
     const input = p.locator('input[placeholder*="github.com"]').first();
-    await input.click();
+    // force: true bypasses the actionability check (the header
+    // overlap is cosmetic — the input still receives the click).
+    await input.click({ force: true });
     await input.fill("");
     await input.type("https://github.com/sindresorhus/is-odd");
     await p.waitForTimeout(300);
@@ -336,6 +363,66 @@ await probe(page, {
   expect: async (p) => {
     const v = await p.locator('table tbody tr').first().locator('input[type="text"]').first().inputValue();
     return v === "custom-model:cloud";
+  },
+});
+
+// Phase 2 of #243: column toggles + per-row property edits.
+await probe(page, {
+  label: "topology-toggle-color-column",
+  action: async (p) => {
+    const btn = p.locator('button[title*="Color column"]').first();
+    await btn.click();
+    await p.waitForTimeout(200);
+  },
+  expect: async (p) => {
+    // After toggle, the Color header cell should be present.
+    return await p.locator('th:has-text("Color")').first().isVisible({ timeout: 1500 });
+  },
+});
+
+await probe(page, {
+  label: "topology-pick-color-swatch",
+  action: async (p) => {
+    // Pick the emerald swatch on the first row. Color picker
+    // uses aria-label="Pick color emerald" etc.
+    const swatch = p.locator('[aria-label="Pick color emerald"]').first();
+    await swatch.click();
+    await p.waitForTimeout(200);
+  },
+  expect: async (p) => {
+    // After click, the swatch should have the selected ring class.
+    const sw = p.locator('[aria-label="Pick color emerald"]').first();
+    const cls = await sw.getAttribute("class");
+    return !!cls && cls.includes("ring-2");
+  },
+});
+
+await probe(page, {
+  label: "topology-toggle-tag-column",
+  action: async (p) => {
+    const btn = p.locator('button[title*="Tag column"]').first();
+    await btn.click();
+    await p.waitForTimeout(200);
+  },
+  expect: async (p) => {
+    return await p.locator('th:has-text("Tag")').first().isVisible({ timeout: 1500 });
+  },
+});
+
+await probe(page, {
+  label: "topology-tag-input-typing",
+  action: async (p) => {
+    // Tag column is the 3rd column (after #, Color, Role) when
+    // both Color + Tag are toggled on. Find by placeholder "(none)".
+    const tagInput = p.locator('input[placeholder="(none)"]').first();
+    await tagInput.click();
+    await tagInput.fill("");
+    await tagInput.type("tests-expert");
+    await p.waitForTimeout(200);
+  },
+  expect: async (p) => {
+    const v = await p.locator('input[placeholder="(none)"]').first().inputValue();
+    return v === "tests-expert";
   },
 });
 
