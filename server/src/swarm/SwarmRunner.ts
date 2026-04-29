@@ -12,7 +12,8 @@ export type PresetId =
   | "orchestrator-worker-deep"
   | "debate-judge"
   | "map-reduce"
-  | "stigmergy";
+  | "stigmergy"
+  | "baseline";
 
 export interface RunConfig {
   repoUrl: string;

@@ -15,6 +15,7 @@ import { OrchestratorWorkerDeepRunner } from "../swarm/OrchestratorWorkerDeepRun
 import { DebateJudgeRunner } from "../swarm/DebateJudgeRunner.js";
 import { MapReduceRunner } from "../swarm/MapReduceRunner.js";
 import { StigmergyRunner } from "../swarm/StigmergyRunner.js";
+import { BaselineRunner } from "../swarm/BaselineRunner.js";
 import { DEFAULT_ROLES, roleForAgent } from "../swarm/roles.js";
 import { ConformanceMonitor } from "./ConformanceMonitor.js";
 import { EmbeddingDriftMonitor } from "./EmbeddingDriftMonitor.js";
@@ -592,6 +593,12 @@ export class Orchestrator {
         // pick their own next file based on a shared annotation table
         // (pheromone trail) that the runner maintains in memory.
         return new StigmergyRunner(opts);
+      case "baseline":
+        // Phase 5 of #314: thinnest honest single-agent runner. One
+        // agent, one prompt, one apply step, one commit. Used by the
+        // scoreboard sweep to anchor "did the swarm beat doing it
+        // alone?" comparisons.
+        return new BaselineRunner(opts);
       default: {
         // Exhaustiveness check — if a new preset is added to PresetId, TS errors here.
         const _exhaustive: never = preset;

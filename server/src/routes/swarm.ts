@@ -48,6 +48,7 @@ const StartBody = z.object({
       "debate-judge",
       "map-reduce",
       "stigmergy",
+      "baseline",
     ])
     .default("round-robin"),
   // Unit 25: optional free-text directive that shapes the blackboard
@@ -114,6 +115,11 @@ const StartBody = z.object({
   // Task #124: optional per-run hard cap on total tokens (prompt +
   // response) consumed. User-supplied number, no defaults.
   tokenBudget: z.number().int().positive().optional(),
+  // Phase 2 of #314: optional per-run dollar ceiling for paid
+  // providers. Capped at $100 to prevent obvious typos (extra zero)
+  // from authorizing a runaway run; users with legitimately bigger
+  // budgets can lift this in the schema after deliberate review.
+  maxCostUsd: z.number().positive().max(100).optional(),
   // Task #127: when no userDirective is set, auto-generate one via a
   // pre-pass. Default true (caller can pass false to disable).
   autoGenerateGoals: z.boolean().optional(),
@@ -419,6 +425,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         criticEnsemble: parsed.data.criticEnsemble,
         executeNextAction: parsed.data.executeNextAction,
         tokenBudget: parsed.data.tokenBudget,
+        maxCostUsd: parsed.data.maxCostUsd,
         autoGenerateGoals: parsed.data.autoGenerateGoals,
         autoStretchReflection: parsed.data.autoStretchReflection,
         verifier: parsed.data.verifier,

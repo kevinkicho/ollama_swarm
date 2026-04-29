@@ -65,6 +65,7 @@ const TEST_FILES = [
   "src/swarm/MapReduceRunner.test.ts",
   "src/swarm/StigmergyRunner.test.ts",
   "src/swarm/StigmergyRunner.stripAnnotation.test.ts",
+  "src/swarm/BaselineRunner.test.ts",
   "src/swarm/extractText.test.ts",
   "src/swarm/runEndReflection.test.ts",
   "src/swarm/staggerStart.test.ts",
