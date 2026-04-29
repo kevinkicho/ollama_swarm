@@ -3,6 +3,12 @@
 // eval/catalog.json against a target repo, scores each run from
 // summary.json, and produces a per-run-and-aggregate report.
 //
+// Phase 7 of #314: --seeds=N runs each (preset, task) pair N times.
+// Each attempt is a fresh /api/swarm/start call. Multi-seed scoring
+// reduces noise from non-deterministic LLM outputs — the aggregator
+// (eval/aggregate.mjs) consumes results.json and computes per-cell
+// median + IQR for the published eval/RESULTS.md scoreboard.
+//
 // Usage:
 //   node eval/run-eval.mjs \
 //     --repo=https://github.com/kevinkicho/multi-agent-orchestrator \
@@ -10,7 +16,8 @@
 //     [--out=runs/_eval/<timestamp>] \
 //     [--server=http://127.0.0.1:8243] \
 //     [--only=<task-id>[,<task-id>...]] \
-//     [--presets=<preset>[,<preset>...]]
+//     [--presets=<preset>[,<preset>...]] \
+//     [--seeds=N]                          # default 1; scoreboard sweep uses 3–5
 //
 // Outputs in <out>/:
 //   results.json          — array of one row per (preset,task) attempt
@@ -32,6 +39,7 @@ let OUT_DIR = "";
 let PARENT_PATH = "";
 let ONLY_TASKS = null;
 let ONLY_PRESETS = null;
+let SEEDS = 1;
 let logFile = "";
 
 function log(msg) {
@@ -224,6 +232,11 @@ async function main() {
   PARENT_PATH = args.parent ?? path.resolve("runs", "_eval-clones");
   ONLY_TASKS = args.only ? String(args.only).split(",") : null;
   ONLY_PRESETS = args.presets ? String(args.presets).split(",") : null;
+  // Phase 7 of #314: multi-seed support. Default 1 (single attempt).
+  // Scoreboard sweeps use 3–5 to reduce LLM-output noise. Capped at
+  // 20 client-side so a typo can't authorize a 200-run accidental.
+  const seedsRaw = Number(args.seeds ?? 1);
+  SEEDS = Number.isFinite(seedsRaw) && seedsRaw >= 1 && seedsRaw <= 20 ? Math.floor(seedsRaw) : 1;
 
   mkdirSync(OUT_DIR, { recursive: true });
   mkdirSync(path.join(OUT_DIR, "per-run"), { recursive: true });
@@ -235,7 +248,7 @@ async function main() {
   );
   logFile = path.join(OUT_DIR, "progress.log");
 
-  log(`==== eval harness — ${tasks.length} tasks against ${REPO} ====`);
+  log(`==== eval harness — ${tasks.length} tasks against ${REPO} (seeds=${SEEDS}) ====`);
   log(`Catalog: ${CATALOG_PATH}`);
   log(`Output:  ${OUT_DIR}`);
 
@@ -244,57 +257,54 @@ async function main() {
     const presets = (task.presets ?? []).filter(
       (p) => !ONLY_PRESETS || ONLY_PRESETS.includes(p),
     );
-    log(`---- task ${task.id} (${presets.length} presets) ----`);
+    log(`---- task ${task.id} (${presets.length} presets × ${SEEDS} seeds) ----`);
     for (const preset of presets) {
-      log(`  preset=${preset}`);
-      const startTs = Date.now();
-      const payload = buildPayload(task, preset);
-      const fired = await fireStart(payload);
-      if (!fired.ok) {
-        log(`    start FAILED: ${fired.reason}`);
-        results.push({
-          taskId: task.id, preset, ok: false, reason: fired.reason,
-          score: { total: 0, components: {}, notes: "start_failed" },
-          wallS: 0, ts: startTs,
-        });
-        await sleep(5000);
-        continue;
-      }
-      const safetyMs = (task.wallClockCapMs ?? 600_000) + 120_000;
-      const final = await waitUntilIdle(safetyMs);
-      const wallS = Math.round((Date.now() - startTs) / 1000);
-      const status = await fetchStatus();
-      const clonePath = status.repoUrl
-        ? null /* not directly available; derive */
-        : null;
-      // derive clonePath from runs/_eval-clones/<repo-name>
-      const repoName =
-        REPO.replace(/\.git$/, "")
-          .split("/")
-          .filter(Boolean)
-          .pop() ?? "repo";
-      const derivedClone = path.join(PARENT_PATH, repoName);
-      const summary = await readSummary(derivedClone);
-      const score = scoreRun(summary, task);
-      log(`    done — phase=${final.phase} score=${score.total} (${score.notes})`);
-      // Snapshot summary for the report
-      if (summary) {
-        try {
-          writeFileSync(
-            path.join(OUT_DIR, "per-run", `${task.id}__${preset}__${startTs}.json`),
-            JSON.stringify(summary, null, 2),
-          );
-        } catch {
-          // ignore
+      for (let seed = 1; seed <= SEEDS; seed++) {
+        log(`  preset=${preset} seed=${seed}/${SEEDS}`);
+        const startTs = Date.now();
+        const payload = buildPayload(task, preset);
+        const fired = await fireStart(payload);
+        if (!fired.ok) {
+          log(`    start FAILED: ${fired.reason}`);
+          results.push({
+            taskId: task.id, preset, seed, ok: false, reason: fired.reason,
+            score: { total: 0, components: {}, notes: "start_failed" },
+            wallS: 0, ts: startTs,
+          });
+          await sleep(5000);
+          continue;
         }
+        const safetyMs = (task.wallClockCapMs ?? 600_000) + 120_000;
+        const final = await waitUntilIdle(safetyMs);
+        const wallS = Math.round((Date.now() - startTs) / 1000);
+        // derive clonePath from runs/_eval-clones/<repo-name>
+        const repoName =
+          REPO.replace(/\.git$/, "")
+            .split("/")
+            .filter(Boolean)
+            .pop() ?? "repo";
+        const derivedClone = path.join(PARENT_PATH, repoName);
+        const summary = await readSummary(derivedClone);
+        const score = scoreRun(summary, task);
+        log(`    done — phase=${final.phase} score=${score.total} (${score.notes})`);
+        if (summary) {
+          try {
+            writeFileSync(
+              path.join(OUT_DIR, "per-run", `${task.id}__${preset}__seed${seed}__${startTs}.json`),
+              JSON.stringify(summary, null, 2),
+            );
+          } catch {
+            // ignore
+          }
+        }
+        results.push({
+          taskId: task.id, preset, seed, ok: final.phase !== "timeout",
+          phase: final.phase, runId: fired.runId, wallS, ts: startTs, score,
+        });
+        // Persist results after every attempt so a partial run still has data
+        writeFileSync(path.join(OUT_DIR, "results.json"), JSON.stringify(results, null, 2));
+        await sleep(8000);
       }
-      results.push({
-        taskId: task.id, preset, ok: final.phase !== "timeout",
-        phase: final.phase, runId: fired.runId, wallS, ts: startTs, score,
-      });
-      // Persist results after every preset so a partial run still has data
-      writeFileSync(path.join(OUT_DIR, "results.json"), JSON.stringify(results, null, 2));
-      await sleep(8000);
     }
   }
 
