@@ -33,7 +33,7 @@ import {
   type QueuedTodo,
 } from "./TodoQueue.js";
 import { applyAndCommit } from "./WorkerPipeline.js";
-import { realFilesystemAdapter, realGitAdapter } from "./v2Adapters.js";
+import { realFilesystemAdapter, realGitAdapter, realVerifyAdapter } from "./v2Adapters.js";
 import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaster.js";
 import {
   advanceTickAccumulator,
@@ -2854,6 +2854,15 @@ export class BlackboardRunner implements SwarmRunner {
     // applyHunks anchor failure catches sibling-worker conflicts.
     const fsAdapter = realFilesystemAdapter(this.active!.localPath);
     const gitAdapter = realGitAdapter(this.active!.localPath);
+    // #296: pre-commit verify gate. Only constructed when the user
+    // supplied a verifyCommand on RunConfig — undefined skips the
+    // verify step in WorkerPipeline and the legacy commit-without-
+    // verify behavior is preserved.
+    const verifyCommand = this.active?.verifyCommand?.trim();
+    const verifyAdapter =
+      verifyCommand && verifyCommand.length > 0
+        ? realVerifyAdapter(this.active!.localPath, verifyCommand)
+        : undefined;
     const applyResult = await applyAndCommit({
       todoId: todo.id,
       workerId: agent.id,
@@ -2861,6 +2870,7 @@ export class BlackboardRunner implements SwarmRunner {
       hunks: parsed.hunks,
       fs: fsAdapter,
       git: gitAdapter,
+      ...(verifyAdapter ? { verify: verifyAdapter } : {}),
     });
     if (!applyResult.ok) {
       this.wrappers.failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`);

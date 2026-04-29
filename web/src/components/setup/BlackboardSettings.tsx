@@ -269,6 +269,36 @@ export function BlackboardAgentTopology({
 // MCP_PLAYWRIGHT_ENABLED=true is also required for the swarm-ui
 // agent to actually capture; the hint surfaces this so users don't
 // silently get file-only audits when they expected a snapshot.
+// #296: pre-commit verify command for the blackboard worker pipeline.
+// When set, every worker's hunks pass through this command BEFORE
+// landing as a git commit. Non-zero exit → revert + mark todo failed.
+export function BlackboardVerifyCommand({
+  verifyCommand,
+  setVerifyCommand,
+}: {
+  verifyCommand: string;
+  setVerifyCommand: (s: string) => void;
+}) {
+  const trimmed = verifyCommand.trim();
+  return (
+    <Field
+      label="Pre-commit verify command (#296)"
+      hint={
+        trimmed.length === 0
+          ? "Optional. When set, runs after each worker writes hunks and BEFORE the git commit. Non-zero exit → revert writes + mark the todo failed (replanner sees verifyFailed=true and prompts the worker to fix the bug, not re-emit the same patch). Bounded to 60s. Examples: `npm test`, `bun test`, `tsc --noEmit`, `npm run lint`. Empty = legacy commit-without-verify."
+          : `Each commit will run \`${trimmed}\` first; failures revert the worker's writes.`
+      }
+    >
+      <input
+        value={verifyCommand}
+        onChange={(e) => setVerifyCommand(e.target.value.slice(0, 500))}
+        placeholder="(empty: skip verify gate)"
+        className="input font-mono"
+      />
+    </Field>
+  );
+}
+
 export function BlackboardUiUrl({
   uiUrl,
   setUiUrl,

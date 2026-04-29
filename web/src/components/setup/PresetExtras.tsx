@@ -6,6 +6,7 @@ import {
   BlackboardAmbitionTiers,
   BlackboardAgentTopology,
   BlackboardUiUrl,
+  BlackboardVerifyCommand,
   type CouncilContractPref,
 } from "./BlackboardSettings";
 import { RoleDiffAdvanced, type SwarmRoleWeb } from "./RoleDiffSettings";
@@ -145,6 +146,8 @@ export function PresetAdvancedSettings(props: {
   setCriticEnsemble: (v: boolean) => void;
   uiUrl: string;
   setUiUrl: (s: string) => void;
+  verifyCommand: string;
+  setVerifyCommand: (s: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const {
@@ -174,6 +177,8 @@ export function PresetAdvancedSettings(props: {
     setCriticEnsemble,
     uiUrl,
     setUiUrl,
+    verifyCommand,
+    setVerifyCommand,
   } = props;
 
   const hasAdvanced =
@@ -248,6 +253,10 @@ export function PresetAdvancedSettings(props: {
                 fallbackModel={fallbackModel}
               />
               <BlackboardUiUrl uiUrl={uiUrl} setUiUrl={setUiUrl} />
+              <BlackboardVerifyCommand
+                verifyCommand={verifyCommand}
+                setVerifyCommand={setVerifyCommand}
+              />
             </>
           ) : null}
           {presetId === "debate-judge" ? (

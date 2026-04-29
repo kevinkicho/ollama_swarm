@@ -101,6 +101,20 @@ export interface RunConfig {
    */
   wallClockCapMs?: number;
   /**
+   * #296 (2026-04-28): pre-commit verification command for the
+   * blackboard worker pipeline. When set, runs after each worker's
+   * hunks are written to disk but BEFORE the git commit lands. On
+   * non-zero exit the writes are reverted and the todo is marked
+   * failed with the command's output as the reason — the replanner
+   * sees verifyFailed=true and prompts the worker to fix the bug
+   * rather than re-emit the same patch.
+   *
+   * Examples: "npm test", "bun test", "tsc --noEmit", "npm run lint".
+   * Bounded to 60s wall-clock; longer commands get killed and treated
+   * as failure. Blackboard-only; other presets don't write code.
+   */
+  verifyCommand?: string;
+  /**
    * Task #124: optional per-run hard cap on total tokens consumed
    * (prompt + response). When set, the runner polls the proxy-backed
    * tokenTracker every cap-check tick; once cumulative-since-start

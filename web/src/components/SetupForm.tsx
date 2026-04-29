@@ -270,6 +270,9 @@ export function SetupForm() {
   const [specializedWorkers, setSpecializedWorkers] = useState(false);
   const [criticEnsemble, setCriticEnsemble] = useState(false);
   const [uiUrl, setUiUrl] = useState("");
+  // #296: pre-commit verify command for blackboard worker pipeline.
+  // Empty = legacy commit-without-verify behavior.
+  const [verifyCommand, setVerifyCommand] = useState("");
   const [busy, setBusy] = useState(false);
   const setError = useSwarm((s) => s.setError);
   const reset = useSwarm((s) => s.reset);
@@ -435,6 +438,11 @@ export function SetupForm() {
         // so trim and only send when non-empty.
         const ui = uiUrl.trim();
         if (ui.length > 0) presetSpecific.uiUrl = ui;
+        // #296: pre-commit verify command. Trimmed empty → omit (server
+        // route's z.string().min(1) would otherwise reject the empty
+        // string).
+        const vc = verifyCommand.trim();
+        if (vc.length > 0) presetSpecific.verifyCommand = vc;
       }
 
       const res = await fetch("/api/swarm/start", {
@@ -631,6 +639,8 @@ export function SetupForm() {
             setCriticEnsemble={setCriticEnsemble}
             uiUrl={uiUrl}
             setUiUrl={setUiUrl}
+            verifyCommand={verifyCommand}
+            setVerifyCommand={setVerifyCommand}
           />
         </Section>
 

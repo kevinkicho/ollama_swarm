@@ -306,3 +306,123 @@ describe("applyAndCommit — V2 conflict model", () => {
     // The "// CHANGED BY WORKER A" stays — worker B's failure didn't roll back.
   });
 });
+
+// #296: pre-commit verification gate. Verify hook runs after writes
+// land and before git commit. On failure: revert the writes + return
+// failure with verifyFailed flag set so the replanner can
+// distinguish "broken patch" from "stale anchor".
+describe("applyAndCommit — verification gate (#296)", () => {
+  it("commits normally when verify returns ok", async () => {
+    const { fs, state: fsState } = makeFakeFs({ "a.ts": "hello world" });
+    const { git, state: gitState } = makeFakeGit();
+    let verifyCalled = 0;
+    const out = await applyAndCommit({
+      todoId: "t1",
+      workerId: "worker-1",
+      expectedFiles: ["a.ts"],
+      hunks: [{ op: "replace", file: "a.ts", search: "world", replace: "kevin" }],
+      fs,
+      git,
+      verify: {
+        async run() {
+          verifyCalled++;
+          return { ok: true };
+        },
+      },
+    });
+    assert.equal(verifyCalled, 1);
+    assert.equal(out.ok, true);
+    if (!out.ok) return;
+    assert.equal(fsState.files.get("a.ts"), "hello kevin");
+    assert.equal(gitState.commits.length, 1);
+  });
+
+  it("reverts writes + skips commit when verify fails", async () => {
+    const { fs, state: fsState } = makeFakeFs({ "a.ts": "hello world" });
+    const { git, state: gitState } = makeFakeGit();
+    const out = await applyAndCommit({
+      todoId: "t1",
+      workerId: "worker-1",
+      expectedFiles: ["a.ts"],
+      hunks: [{ op: "replace", file: "a.ts", search: "world", replace: "broken" }],
+      fs,
+      git,
+      verify: {
+        async run() {
+          return { ok: false, reason: "npm test failed: 3 tests failing" };
+        },
+      },
+    });
+    assert.equal(out.ok, false);
+    if (out.ok) return;
+    assert.equal(out.verifyFailed, true);
+    assert.match(out.reason, /verify failed/i);
+    assert.match(out.reason, /3 tests failing/);
+    // File reverted to pre-hunk state
+    assert.equal(fsState.files.get("a.ts"), "hello world");
+    // No commit was made
+    assert.equal(gitState.commits.length, 0);
+  });
+
+  it("truncates very long verify output to 800 chars", async () => {
+    const { fs } = makeFakeFs({ "a.ts": "x" });
+    const { git } = makeFakeGit();
+    const huge = "stack trace: " + "x".repeat(5000);
+    const out = await applyAndCommit({
+      todoId: "t1", workerId: "w", expectedFiles: ["a.ts"],
+      hunks: [{ op: "replace", file: "a.ts", search: "x", replace: "y" }],
+      fs, git,
+      verify: { async run() { return { ok: false, reason: huge }; } },
+    });
+    assert.equal(out.ok, false);
+    if (out.ok) return;
+    // "verify failed: " prefix (15 chars) + 800-char truncation
+    assert.ok(out.reason.length <= 15 + 800 + 5);
+  });
+
+  it("doesn't run verify when there are no writes (empty diff)", async () => {
+    const { fs } = makeFakeFs({ "a.ts": "hello" });
+    const { git } = makeFakeGit();
+    let verifyCalled = 0;
+    // No-op replace: search === replace → no actual write
+    const out = await applyAndCommit({
+      todoId: "t1", workerId: "w", expectedFiles: ["a.ts"],
+      hunks: [{ op: "replace", file: "a.ts", search: "hello", replace: "hello" }],
+      fs, git,
+      verify: { async run() { verifyCalled++; return { ok: true }; } },
+    });
+    assert.equal(verifyCalled, 0, "verify should not run on empty diff");
+    assert.equal(out.ok, true);
+  });
+
+  it("leaves newly-created files in place on revert (no fs.delete adapter)", async () => {
+    const { fs, state: fsState } = makeFakeFs({});
+    const { git } = makeFakeGit();
+    const out = await applyAndCommit({
+      todoId: "t1", workerId: "w", expectedFiles: ["new.ts"],
+      hunks: [{ op: "create", file: "new.ts", content: "freshly created" }],
+      fs, git,
+      verify: { async run() { return { ok: false, reason: "lint error" }; } },
+    });
+    assert.equal(out.ok, false);
+    if (out.ok) return;
+    assert.equal(out.verifyFailed, true);
+    // The newly-created file remains; we don't have a delete adapter.
+    // The next worker turn will see it and either modify or skip.
+    assert.equal(fsState.files.get("new.ts"), "freshly created");
+  });
+
+  it("when no verify adapter supplied, behaves identically to pre-#296", async () => {
+    const { fs, state: fsState } = makeFakeFs({ "a.ts": "hello world" });
+    const { git, state: gitState } = makeFakeGit();
+    const out = await applyAndCommit({
+      todoId: "t1", workerId: "w", expectedFiles: ["a.ts"],
+      hunks: [{ op: "replace", file: "a.ts", search: "world", replace: "kevin" }],
+      fs, git,
+      // verify omitted
+    });
+    assert.equal(out.ok, true);
+    assert.equal(fsState.files.get("a.ts"), "hello kevin");
+    assert.equal(gitState.commits.length, 1);
+  });
+});

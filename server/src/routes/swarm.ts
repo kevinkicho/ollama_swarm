@@ -86,6 +86,11 @@ const StartBody = z.object({
     .min(60_000)
     .max(8 * 60 * 60_000)
     .optional(),
+  // #296 (2026-04-28): pre-commit verify command (e.g. "npm test").
+  // Bounded length so we don't accept a 100KB shell script via the
+  // route. Trimmed; empty string → undefined → skip the gate
+  // entirely (legacy behavior). Blackboard-only.
+  verifyCommand: z.string().trim().min(1).max(500).optional(),
   // Unit 51: reload contract + tier state from prior run's
   // blackboard-state.json instead of re-deriving via first-pass-
   // contract. Blackboard-only. Default false = existing behavior.
@@ -387,6 +392,10 @@ export function swarmRouter(orch: Orchestrator): Router {
             ? config.DEFAULT_WORKER_MODEL
             : undefined),
         wallClockCapMs: parsed.data.wallClockCapMs,
+        // #296: pre-commit verify command. Threaded into the runner
+        // so BlackboardRunner.executeWorkerTodoV2 can construct the
+        // verify adapter when present. Other presets ignore.
+        verifyCommand: parsed.data.verifyCommand,
         resumeContract: parsed.data.resumeContract,
         // Blackboard defaults dedicatedAuditor to ON (env-overridable
         // via DEFAULT_DEDICATED_AUDITOR). Explicit per-run value

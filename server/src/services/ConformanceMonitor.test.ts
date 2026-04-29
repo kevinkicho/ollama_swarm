@@ -280,10 +280,11 @@ describe("ConformanceMonitor — polling + emit", () => {
   it("skips when an in-flight poll is already pending (no pile-up)", async () => {
     const rec = makeRecorder();
     let calls = 0;
-    let resolveFetch: ((v: Response) => void) | null = null;
+    type Resolver = (v: Response) => void;
+    let resolveFetch: Resolver | null = null;
     const slowFetch = (async () => {
       calls += 1;
-      return new Promise<Response>((resolve) => {
+      return new Promise<Response>((resolve: Resolver) => {
         resolveFetch = resolve;
       });
     }) as typeof fetch;
@@ -298,7 +299,8 @@ describe("ConformanceMonitor — polling + emit", () => {
     const p2 = m.pollOnce();
     assert.equal(calls, 1, "second poll should not have hit fetch");
     // Resolve the in-flight call so we can clean up
-    resolveFetch?.({
+    const resolver = resolveFetch as Resolver | null;
+    resolver?.({
       ok: true,
       json: async () => ({ message: { content: '{"score":50}' } }),
     } as unknown as Response);

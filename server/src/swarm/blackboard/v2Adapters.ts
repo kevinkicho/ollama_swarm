@@ -9,10 +9,14 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
 import simpleGit from "simple-git";
 import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
-import type { FilesystemAdapter, GitAdapter } from "./WorkerPipeline.js";
+import type { FilesystemAdapter, GitAdapter, VerifyAdapter } from "./WorkerPipeline.js";
+
+const execAsync = promisify(exec);
 
 /** Real filesystem adapter scoped to a clone. Reads return null on
  *  missing file (matches WorkerPipeline semantics). Writes use
@@ -36,6 +40,51 @@ export function realFilesystemAdapter(clonePath: string): FilesystemAdapter {
       // src/sub/foo.ts when src/sub/ wasn't there).
       await fs.mkdir(path.dirname(abs), { recursive: true });
       await writeFileAtomic(abs, content);
+    },
+  };
+}
+
+/** #296: real verify adapter scoped to a clone. Spawns the
+ *  user-supplied command via shell in the clone directory; success =
+ *  exit code 0. Killed at VERIFY_TIMEOUT_MS (60s default) so a hung
+ *  command doesn't stall the worker pipeline indefinitely. The
+ *  combined stdout+stderr (truncated) becomes the failure reason so
+ *  the user sees what the verifier actually reported. */
+const VERIFY_TIMEOUT_MS = 60_000;
+export function realVerifyAdapter(
+  clonePath: string,
+  command: string,
+): VerifyAdapter {
+  return {
+    async run() {
+      try {
+        await execAsync(command, {
+          cwd: clonePath,
+          timeout: VERIFY_TIMEOUT_MS,
+          maxBuffer: 1024 * 1024, // 1 MB of output captured
+          // shell:true is implicit for exec() — accepts pipes, &&,
+          // env-var expansion. Caller is the user; injection isn't
+          // a threat surface (it's their own machine).
+        });
+        return { ok: true };
+      } catch (err) {
+        // execAsync rejects with an error that carries stdout + stderr
+        // properties when the command exits non-zero or times out.
+        const e = err as { stdout?: string; stderr?: string; signal?: string; killed?: boolean; message?: string };
+        const stdout = (e.stdout ?? "").toString();
+        const stderr = (e.stderr ?? "").toString();
+        const tailOf = (s: string, n: number) => (s.length > n ? "…" + s.slice(-n) : s);
+        // Prefer stderr (where test failures usually print); fall back
+        // to stdout, then the raw error message.
+        const detail = stderr.trim() || stdout.trim() || (e.message ?? "verify exec failed");
+        const reasonHead = e.killed
+          ? `verify killed after ${Math.round(VERIFY_TIMEOUT_MS / 1000)}s timeout`
+          : `verify command exited non-zero`;
+        return {
+          ok: false,
+          reason: `${reasonHead}: ${tailOf(detail, 700)}`,
+        };
+      }
     },
   };
 }

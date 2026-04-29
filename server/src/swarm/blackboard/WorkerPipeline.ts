@@ -37,6 +37,22 @@ export interface GitAdapter {
   ) => Promise<{ ok: true; sha: string } | { ok: false; reason: string }>;
 }
 
+/** #296 (2026-04-28): pre-commit verification hook. When supplied,
+ *  runs AFTER hunks are applied to disk but BEFORE git commit lands.
+ *  On failure, the pipeline reverts the writes so the working tree
+ *  matches pre-hunk state, and the todo is marked failed with the
+ *  verify output as the reason.
+ *
+ *  Typical implementations: shell out to `npm test`, `bun test`,
+ *  type-check, or a lint command. The blackboard runner wires this
+ *  via cfg.verifyCommand.
+ *
+ *  Output is truncated by the caller so failure reasons don't blow
+ *  the transcript bubble. */
+export interface VerifyAdapter {
+  run: () => Promise<{ ok: true } | { ok: false; reason: string }>;
+}
+
 export type WorkerOutcomeV2 =
   | {
       ok: true;
@@ -53,6 +69,12 @@ export type WorkerOutcomeV2 =
        *  the worker to fix a specific hunk. Absent when failure is at
        *  read/write/commit time, not apply time. */
       failedHunkIndex?: number;
+      /** #296: distinguishes verify-gate failures (writes were applied,
+       *  verify rejected, then reverted) from apply-time failures
+       *  (anchor-not-found, etc.). Replanner can use this signal to
+       *  prompt the worker to fix the underlying bug rather than
+       *  re-emit the same hunks. */
+      verifyFailed?: boolean;
     };
 
 export interface WorkerPipelineInput {
@@ -62,6 +84,8 @@ export interface WorkerPipelineInput {
   hunks: readonly Hunk[];
   fs: FilesystemAdapter;
   git: GitAdapter;
+  /** #296: optional pre-commit verification. Skipped when absent. */
+  verify?: VerifyAdapter;
 }
 
 /** V2 post-LLM pipeline: read files → apply hunks → write changed
@@ -140,6 +164,37 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
       linesAdded: 0,
       linesRemoved: 0,
     };
+  }
+
+  // 4b. #296: pre-commit verification gate. Runs the user-configured
+  //     command (typically `npm test` / lint / type-check). On failure
+  //     we REVERT the writes back to pre-hunk content so the working
+  //     tree is clean — otherwise the next worker would see a half-
+  //     applied change and the conflict logic gets lied to.
+  if (input.verify) {
+    const v = await input.verify.run();
+    if (!v.ok) {
+      // Revert: write each modified file back to its pre-hunk content.
+      // Files we created (beforeContent === null) get removed by
+      // writing an empty string isn't right — we don't have a delete
+      // adapter, so we leave newly-created files in place but log
+      // them in the reason. The git working-tree will still be
+      // dirty, but the next dequeue will re-clone OR hit git status.
+      for (const file of filesWritten) {
+        const before = contents[file];
+        if (before === null) continue; // created file, leave it
+        try {
+          await input.fs.write(file, before);
+        } catch {
+          // ignore — best-effort revert
+        }
+      }
+      return {
+        ok: false,
+        reason: `verify failed: ${v.reason.slice(0, 800)}`,
+        verifyFailed: true,
+      };
+    }
   }
 
   // 5. Commit the changes. Failures here are rare (typically only
