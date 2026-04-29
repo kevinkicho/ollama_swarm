@@ -71,6 +71,17 @@ const Schema = z.object({
   // the browser, never persisted to localStorage.
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
+  // E3 Phase 2 (per docs/E3-drop-opencode-plan.md): when "true"/"1"/"yes",
+  // promptWithRetry routes prompts through the SessionProvider
+  // abstraction (server/src/providers/) instead of through opencode
+  // session.prompt OR streamPrompt OR the older USE_OLLAMA_DIRECT
+  // branch. Default OFF — existing behavior unchanged. Flip on per-run
+  // for the validation gate (5+ stable runs across all presets) before
+  // Phase 3 (replace AgentManager.spawnAgent) starts.
+  USE_SESSION_PROVIDER: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
   // Unit 17: send a tiny "reply with: ok" prompt to each agent right
   // after spawn so its first REAL prompt isn't a cold-start. Default
   // on; set to "false"/"0"/"no" to disable (e.g. for unit-test rigs

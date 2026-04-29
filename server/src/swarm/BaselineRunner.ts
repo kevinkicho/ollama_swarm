@@ -34,6 +34,9 @@ import { applyHunks, type Hunk } from "./blackboard/applyHunks.js";
 import { parseWorkerResponse } from "./blackboard/prompts/worker.js";
 import { realFilesystemAdapter, realGitAdapter } from "./blackboard/v2Adapters.js";
 import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
+import { pickProvider } from "../providers/pickProvider.js";
+import { config } from "../config.js";
+import { tokenTracker } from "../services/ollamaProxy.js";
 
 export class BaselineRunner implements SwarmRunner {
   private transcript: TranscriptEntry[] = [];
@@ -140,15 +143,50 @@ export class BaselineRunner implements SwarmRunner {
     let raw: string;
     const abortController = new AbortController();
     try {
-      raw = await this.opts.manager.streamPrompt(agent, {
-        agentName: "swarm",
-        modelID: cfg.model,
-        promptText: prompt,
-        signal: abortController.signal,
-        // 90s per-chunk liveness — same default as promptWithRetry.
-        perChunkTimeoutMs: 90_000,
-        formatExpect: "json",
-      });
+      // E3 Phase 2: when USE_SESSION_PROVIDER=1 OR the model is a paid
+      // provider (anthropic/* or openai/* prefix), route through the
+      // SessionProvider abstraction instead of opencode's streamPrompt.
+      // Paid providers REQUIRE this path because opencode would need
+      // its own AI-SDK config wired (which exists, but the direct path
+      // is cleaner — fewer hops, direct token capture, no MCP overhead).
+      const { provider, modelId } = pickProvider(cfg.model);
+      const useProvider = config.USE_SESSION_PROVIDER || provider.id !== "ollama";
+      if (useProvider) {
+        const t0 = Date.now();
+        const result = await provider.chat({
+          model: modelId,
+          messages: [{ role: "user", content: prompt }],
+          signal: abortController.signal,
+          agentId: agent.id,
+        });
+        if (result.usage) {
+          tokenTracker.add({
+            ts: Date.now(),
+            promptTokens: result.usage.promptTokens,
+            responseTokens: result.usage.responseTokens,
+            durationMs: Date.now() - t0,
+            model: cfg.model,
+            path: `/sdk-direct (${provider.id})`,
+          });
+        }
+        if (result.finishReason === "error") {
+          throw new Error(result.errorMessage ?? "session provider chat error");
+        }
+        if (result.finishReason === "aborted") {
+          throw new Error("aborted");
+        }
+        raw = result.text;
+      } else {
+        raw = await this.opts.manager.streamPrompt(agent, {
+          agentName: "swarm",
+          modelID: cfg.model,
+          promptText: prompt,
+          signal: abortController.signal,
+          // 90s per-chunk liveness — same default as promptWithRetry.
+          perChunkTimeoutMs: 90_000,
+          formatExpect: "json",
+        });
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.appendSystem(`Baseline prompt failed: ${msg}`);

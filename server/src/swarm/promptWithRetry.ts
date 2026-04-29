@@ -7,6 +7,8 @@ import {
 } from "./blackboard/retry.js";
 import { tokenTracker } from "../services/ollamaProxy.js";
 import { chat as ollamaChat } from "../services/OllamaClient.js";
+import { pickProvider } from "../providers/pickProvider.js";
+import { config } from "../config.js";
 // 2026-04-28: shared interruptible sleep used by both this module's
 // retry-backoff and BlackboardRunner. One source of truth.
 import { interruptibleSleep as defaultInterruptibleSleep } from "./interruptibleSleep.js";
@@ -172,12 +174,58 @@ export async function promptWithRetry(
       // header explicitly to event.subscribe(); SSE events flow
       // again, streaming is viable.
       const STREAMING_ENABLED = true;
-      // V2 Step 1: when opts.ollamaDirect is provided, route through
-      // OllamaClient (direct chunked-HTTP to Ollama, no OpenCode subprocess,
-      // no SSE event stream, no per-chunk timeout/probe/reconnect dance).
-      // Side-by-side with the SDK path until validated. Once stable, the
-      // SDK path will be removed entirely (per docs/ARCHITECTURE-V2.md).
-      if (opts.ollamaDirect) {
+      // E3 Phase 2 (per docs/E3-drop-opencode-plan.md): when
+      // USE_SESSION_PROVIDER=1, route every prompt through the
+      // SessionProvider abstraction (server/src/providers/). This is
+      // the eventual unified path — Ollama, Anthropic, OpenAI all
+      // resolve via pickProvider(agent.model). Wins over both the
+      // older USE_OLLAMA_DIRECT path AND the streamPrompt SDK path.
+      // Default OFF; flip per-run for the validation gate.
+      if (config.USE_SESSION_PROVIDER) {
+        const t0Provider = Date.now();
+        const addendum = opts.promptAddendum?.trim() ?? "";
+        const effectivePromptText = addendum.length > 0
+          ? `[Per-agent specialization for this swarm member]\n${addendum}\n[End specialization. Original prompt follows.]\n\n${promptText}`
+          : promptText;
+        const { provider, modelId } = pickProvider(agent.model);
+        const result = await provider.chat({
+          model: modelId,
+          messages: [{ role: "user", content: effectivePromptText }],
+          signal: opts.signal,
+          agentId: agent.id,
+          logDiag: opts.logDiag,
+          ...(opts.ollamaOptions !== undefined ? { options: opts.ollamaOptions } : {}),
+        });
+        // Record token usage into tokenTracker so the cost cap +
+        // /api/usage widget keep working unchanged. Provider returns
+        // counts when the upstream API surfaced them.
+        if (result.usage) {
+          tokenTracker.add({
+            ts: Date.now(),
+            promptTokens: result.usage.promptTokens,
+            responseTokens: result.usage.responseTokens,
+            durationMs: Date.now() - t0Provider,
+            model: agent.model, // keep prefixed form so detectProvider works downstream
+            path: `/sdk-direct (${provider.id})`,
+          });
+        }
+        // Surface streaming-end so the UI's PersistentStreamBubble flips to "done".
+        opts.manager?.markStreamingDone(agent.id);
+        // Adapt to the SDK-shaped {data: {parts}} return shape every
+        // caller already handles. Future cleanup: callers consume
+        // ChatResult directly. Keep parity for now — this is a
+        // dispatch-path swap, not a refactor of every consumer.
+        if (result.finishReason === "error") {
+          throw new Error(result.errorMessage ?? "session provider chat error");
+        }
+        if (result.finishReason === "aborted") {
+          // Mirror the SDK's behavior on abort — the outer signal is
+          // already aborted; downstream catches it and treats as
+          // intentional cancellation, not a retryable error.
+          throw new Error("aborted");
+        }
+        res = { data: { parts: [{ type: "text", text: result.text }] } };
+      } else if (opts.ollamaDirect) {
         const t0Direct = Date.now();
         // Phase 5b of #243: prepend per-agent addendum the same way the
         // SDK path does (see AgentManager.streamPrompt). Keeps behavior
