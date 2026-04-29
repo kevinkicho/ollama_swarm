@@ -46,6 +46,14 @@ export interface ConformanceMonitorOpts {
   getTranscript: () => readonly TranscriptEntry[];
   /** Emit a SwarmEvent — typically routed through the broadcaster. */
   emit: (ev: SwarmEvent) => void;
+  /** #295 fix: optional liveness check. When supplied, the monitor
+   *  self-stops on the first poll where isActive() returns false.
+   *  Workaround for the discussion-runner pattern where runner.start()
+   *  returns BEFORE the run finishes (`void this.loop()`), making the
+   *  orchestrator's finally{} fire monitor.stop() too early. With
+   *  isActive bound, the monitor outlives runner.start() and only
+   *  cleans up when the run actually ends. */
+  isActive?: () => boolean;
   /** Optional override for the underlying fetch — tests inject a stub. */
   fetchImpl?: typeof fetch;
 }
@@ -90,6 +98,16 @@ export class ConformanceMonitor {
 
   private async poll(): Promise<void> {
     if (this.stopped || this.inflight) return;
+    // Self-stop when the run is no longer active. The orchestrator's
+    // start() returns BEFORE discussion runners' loops finish (`void
+    // this.loop()` fire-and-forget), so we can't tie our lifecycle
+    // to start()'s return. isActive() is bound to runner.isRunning()
+    // by the orchestrator — when the runner's loop ends naturally,
+    // we self-clean.
+    if (this.opts.isActive && !this.opts.isActive()) {
+      this.stop();
+      return;
+    }
     const transcript = this.opts.getTranscript();
     const excerpt = buildExcerpt(
       transcript,
@@ -190,7 +208,14 @@ Respond ONLY with valid JSON of shape {"score": <0-100 integer>, "reason": "<one
   const body = (await r.json()) as { message?: { content?: string } };
   const content = body.message?.content?.trim() ?? "";
   if (content.length === 0) throw new Error("Ollama returned empty content");
-  const parsed = JSON.parse(content) as { score?: unknown; reason?: unknown };
+  // glm-5.1 sometimes wraps JSON in ```json...``` fences despite the
+  // format:"json" hint. Strip the fences before parsing — common
+  // grader-robustness pattern (RAGAs/LangSmith do the same).
+  const stripped = content
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .trim();
+  const parsed = JSON.parse(stripped) as { score?: unknown; reason?: unknown };
   const rawScore = Number(parsed.score);
   if (!Number.isFinite(rawScore)) throw new Error(`Score not numeric: ${parsed.score}`);
   const score = Math.max(0, Math.min(100, Math.round(rawScore)));

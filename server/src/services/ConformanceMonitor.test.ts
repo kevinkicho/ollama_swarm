@@ -108,6 +108,32 @@ describe("gradeWithOllama", () => {
     assert.equal(r.score, 73);
   });
 
+  it("strips ```json ... ``` markdown fences before parsing (glm-5.1 quirk)", async () => {
+    const fenced = "```json\n{\"score\":85,\"reason\":\"on track\"}\n```";
+    const stub = (async () => ({
+      ok: true,
+      json: async () => ({ message: { content: fenced } }),
+    } as unknown as Response)) as typeof fetch;
+    const r = await gradeWithOllama({
+      directive: "x", excerpt: "y", baseUrl: "u", model: "m",
+      fetchImpl: stub,
+    });
+    assert.equal(r.score, 85);
+    assert.equal(r.reason, "on track");
+  });
+
+  it("handles bare ``` fences (no language tag) too", async () => {
+    const stub = (async () => ({
+      ok: true,
+      json: async () => ({ message: { content: "```\n{\"score\":50}\n```" } }),
+    } as unknown as Response)) as typeof fetch;
+    const r = await gradeWithOllama({
+      directive: "x", excerpt: "y", baseUrl: "u", model: "m",
+      fetchImpl: stub,
+    });
+    assert.equal(r.score, 50);
+  });
+
   it("strips /v1 from base URL when forming the chat endpoint", async () => {
     let capturedUrl = "";
     const stub = (async (url: string) => {

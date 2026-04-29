@@ -216,6 +216,11 @@ export class Orchestrator {
   // Opened on run start; runner reads via getAmendments(); closed on
   // run end (success OR failure).
   private readonly amendments = new AmendmentsBuffer();
+  // #295: live conformance monitor. Class field (vs local var) so
+  // its lifecycle survives runner.start()'s return — discussion
+  // runners use `void this.loop(cfg)` so runner.start returns long
+  // before the run actually ends.
+  private conformanceMonitor?: ConformanceMonitor;
 
   constructor(private readonly opts: OrchestratorOpts) {
     // Persist the merged list back so the next read is consistent
@@ -410,7 +415,6 @@ export class Orchestrator {
     // on-topic is the recent transcript?" prompt. Skipped entirely
     // for runs without a directive (nothing to grade against) and
     // when CONFORMANCE_MONITOR=off in the env (escape hatch).
-    let monitor: ConformanceMonitor | undefined;
     const trimmedDirective = cfg.userDirective?.trim();
     if (
       trimmedDirective &&
@@ -418,15 +422,24 @@ export class Orchestrator {
       process.env.CONFORMANCE_MONITOR !== "off" &&
       this.opts.ollamaBaseUrl
     ) {
-      monitor = new ConformanceMonitor({
+      // #295 fix: monitor lives as a class field so its lifecycle is
+      // decoupled from runner.start()'s return. Discussion runners
+      // fire-and-forget their loop (`void this.loop(cfg)`) so
+      // runner.start resolves in seconds even when the run will
+      // continue for minutes — putting monitor.stop() in finally{}
+      // killed the timer before any tick fired. Now: bind isActive
+      // so the monitor self-stops when the run actually ends.
+      this.conformanceMonitor?.stop(); // defensive: clear any stale
+      this.conformanceMonitor = new ConformanceMonitor({
         runId,
         directive: trimmedDirective,
         ollamaBaseUrl: this.opts.ollamaBaseUrl,
         graderModel: cfg.model,
         getTranscript: () => this.runner?.status().transcript ?? [],
         emit: this.opts.emit,
+        isActive: () => this.runner !== null && (this.runner?.isRunning() ?? false),
       });
-      monitor.start();
+      this.conformanceMonitor.start();
     }
     try {
       await runner.start(cfg);
@@ -449,10 +462,15 @@ export class Orchestrator {
       }
       throw err;
     } finally {
-      // #295: stop the conformance monitor on EITHER successful run end
-      // OR mid-flight failure. Idempotent stop is safe.
-      monitor?.stop();
-      // #299: close the amendments buffer for this run. Idempotent.
+      // #295 fix: do NOT stop the conformance monitor here. Discussion
+      // runners' `runner.start()` returns before the actual run ends
+      // (fire-and-forget loop), so this finally{} fires too early.
+      // The monitor's own isActive() check (bound to runner.isRunning)
+      // self-stops it when the run truly ends. orchestrator.stop()
+      // also calls conformanceMonitor.stop() as a backstop.
+      // #299: close the amendments buffer for this run. Safe here
+      // because amendments are only consumed at planner-tier prompts;
+      // by the time we get here the START phase is done.
       this.amendments.close(runId);
     }
   }
@@ -475,6 +493,11 @@ export class Orchestrator {
     try {
       await runner.stop();
     } finally {
+      // #295 fix: backstop for the conformance monitor — covers the
+      // explicit /api/swarm/stop path. Natural-completion path
+      // self-stops via isActive() in the poll loop.
+      this.conformanceMonitor?.stop();
+      this.conformanceMonitor = undefined;
       // Task #125: clear preset tag — calls between runs (e.g. an
       // exploratory direct curl to the proxy) bucket as "(idle)".
       tokenTracker.setCurrentPreset(undefined);
