@@ -25,13 +25,18 @@ const LATENCY_WINDOW = 20;
 // the full series anyway.
 const CONFORMANCE_WINDOW = 30;
 
-// #295: latest conformance score the UI renders. `samples` powers
-// the sparkline; `latest` is the smoothed single-number readout.
+// #295 + #301: latest conformance score the UI renders. `samples`
+// powers the sparkline; per-sample grader metadata feeds the
+// tooltip infographic.
 export interface ConformanceSample {
   ts: number;
   score: number;
   smoothedScore: number;
   reason?: string;
+  graderModel?: string;
+  latencyMs?: number;
+  excerptChars?: number;
+  windowScores?: number[];
 }
 
 // #299: user-submitted mid-run directive amendments. Cleared on
@@ -39,6 +44,18 @@ export interface ConformanceSample {
 export interface DirectiveAmendment {
   ts: number;
   text: string;
+}
+
+// #302 Phase B: embedding-similarity drift sample (the second signal
+// alongside ConformanceSample). Independent measurement methodology
+// — pure cosine similarity of directive vs recent transcript.
+export interface DriftSample {
+  ts: number;
+  similarity: number;
+  smoothedSimilarity: number;
+  embeddingModel: string;
+  excerptChars: number;
+  windowSimilarities: number[];
 }
 
 interface SwarmStore {
@@ -74,6 +91,9 @@ interface SwarmStore {
   // Empty array when no run is active OR the run had no userDirective
   // (server doesn't emit samples in those cases).
   conformance: ConformanceSample[];
+  // #302 Phase B: embedding-similarity drift samples (second signal
+  // alongside conformance). Empty when embedding model isn't pulled.
+  drift: DriftSample[];
   // #299: user-submitted mid-run directive amendments for the
   // active run. Cleared on reset/resetForNewRun.
   amendments: DirectiveAmendment[];
@@ -137,6 +157,8 @@ interface SwarmStore {
   pushLatencySample: (agentId: string, sample: LatencySample) => void;
   // #295: append a conformance sample to the rolling window.
   pushConformanceSample: (sample: ConformanceSample) => void;
+  // #302: append an embedding-drift sample to the rolling window.
+  pushDriftSample: (sample: DriftSample) => void;
   // #299: append a mid-run amendment received via WS.
   pushAmendment: (amendment: DirectiveAmendment) => void;
   setCloneState: (c: CloneState) => void;
@@ -187,6 +209,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   error: undefined,
   latency: {},
   conformance: [],
+  drift: [],
   amendments: [],
   cloneState: undefined,
   cloneBannerDismissed: false,
@@ -414,6 +437,14 @@ export const useSwarm = create<SwarmStore>((set) => ({
       }
       return { conformance: next };
     }),
+  pushDriftSample: (sample) =>
+    set((s) => {
+      const next = s.drift.concat(sample);
+      if (next.length > CONFORMANCE_WINDOW) {
+        next.splice(0, next.length - CONFORMANCE_WINDOW);
+      }
+      return { drift: next };
+    }),
   pushAmendment: (amendment) =>
     set((s) => ({ amendments: s.amendments.concat(amendment) })),
   // Unit 47: clone_state arrives once per run. Setting it ALSO clears
@@ -450,6 +481,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       error: undefined,
       latency: {},
       conformance: [],
+      drift: [],
       amendments: [],
       cloneState: undefined,
       cloneBannerDismissed: false,
@@ -503,7 +535,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       // divide yet, and it avoids the "first-paint shows a divider"
       // weirdness at run start.
       if (s.transcript.length === 0) {
-        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, conformance: [], amendments: [], ...blackboardReset };
+        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, conformance: [], drift: [], amendments: [], ...blackboardReset };
       }
       // Task #46 also: dedupe consecutive dividers. If the last entry
       // is already a run-start marker, don't stack a second one —
@@ -515,7 +547,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
         (lastEntry.text === "— new run started —" ||
           lastEntry.text.startsWith("▸▸RUN-START▸▸"));
       if (isLastADivider) {
-        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, conformance: [], amendments: [], ...blackboardReset };
+        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, conformance: [], drift: [], amendments: [], ...blackboardReset };
       }
       // Build the divider text. When metadata is supplied, prefix
       // with the sentinel + encode fields as a pipe-separated line
@@ -537,6 +569,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
         streaming: {}, streamingMeta: {}, streamingSegmentPoints: {},
         latency: {},
         conformance: [],
+        drift: [],
         amendments: [],
         ...blackboardReset,
         transcript: [

@@ -149,12 +149,37 @@ export type SwarmEvent =
       ts: number;
       text: string;
     }
+  // #302 Phase B (2026-04-28): live embedding-similarity drift sample.
+  // Independent second signal alongside conformance_sample (LLM-judge).
+  // Emitted by EmbeddingDriftMonitor when an embedding model is
+  // available (default `nomic-embed-text`). When the model isn't
+  // pulled, no events fire — UI surfaces a "pull model X to enable"
+  // hint when conformance samples land but drift samples don't.
+  | {
+      type: "drift_sample";
+      runId: string;
+      ts: number;
+      /** Raw 0-100 similarity score for THIS poll (higher = closer
+       *  to the directive's semantic neighborhood). */
+      similarity: number;
+      /** 3-poll moving average. */
+      smoothedSimilarity: number;
+      /** Embedding model id used. */
+      embeddingModel: string;
+      /** Char count of the transcript excerpt that was embedded. */
+      excerptChars: number;
+      /** Raw similarities currently in the smoothing window (≤ 3). */
+      windowSimilarities: number[];
+    }
   // #295 (2026-04-28): live directive-conformance gauge sample. Emitted
   // by ConformanceMonitor every CONFORMANCE_INTERVAL_MS (default 90s)
   // during runs that have a non-empty userDirective. The smoothed score
   // is a 3-poll moving average so the UI sparkline isn't noisy. Only
   // ever emitted when the monitor is active — runs without directives
   // emit no samples at all.
+  // #301 Phase A: enriched with grader metadata (model, latency, excerpt
+  // size, raw window scores) for the tooltip infographic. All optional
+  // for back-compat with summaries from before the enrichment landed.
   | {
       type: "conformance_sample";
       runId: string;
@@ -165,6 +190,14 @@ export type SwarmEvent =
       smoothedScore: number;
       /** Optional one-line "why" from the grader (≤200 chars). */
       reason?: string;
+      /** Grader model id used for THIS sample. */
+      graderModel?: string;
+      /** Wall-clock ms for the grader call. */
+      latencyMs?: number;
+      /** Char count of the transcript excerpt sent to the grader. */
+      excerptChars?: number;
+      /** The raw scores currently in the smoothing window (≤ 3). */
+      windowScores?: number[];
     }
   // Unit 47: emitted once per run, right after RepoService.clone
   // resolves. `alreadyPresent` distinguishes a fresh shallow clone

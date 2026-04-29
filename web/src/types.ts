@@ -307,10 +307,8 @@ export type SwarmEvent =
       ts: number;
       text: string;
     }
-  // #295: live directive-conformance sample. Emitted by the server's
-  // ConformanceMonitor every ~90s during runs with a non-empty
-  // userDirective. UI accumulates samples into a bounded rolling
-  // window for the IdentityStrip sparkline.
+  // #295 + #301: live directive-conformance sample. Per-poll grader
+  // metadata enriches the IdentityStrip tooltip infographic.
   | {
       type: "conformance_sample";
       runId: string;
@@ -318,6 +316,21 @@ export type SwarmEvent =
       score: number;
       smoothedScore: number;
       reason?: string;
+      graderModel?: string;
+      latencyMs?: number;
+      excerptChars?: number;
+      windowScores?: number[];
+    }
+  // #302 Phase B: independent embedding-similarity drift sample.
+  | {
+      type: "drift_sample";
+      runId: string;
+      ts: number;
+      similarity: number;
+      smoothedSimilarity: number;
+      embeddingModel: string;
+      excerptChars: number;
+      windowSimilarities: number[];
     }
   // Unit 47: emitted once per run, right after the clone completes.
   // alreadyPresent=true means the runner reused an existing clone

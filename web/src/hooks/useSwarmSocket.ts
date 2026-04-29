@@ -112,10 +112,24 @@ function applyEvent(ev: SwarmEvent): void {
         score: ev.score,
         smoothedScore: ev.smoothedScore,
         ...(ev.reason ? { reason: ev.reason } : {}),
+        ...(ev.graderModel ? { graderModel: ev.graderModel } : {}),
+        ...(typeof ev.latencyMs === "number" ? { latencyMs: ev.latencyMs } : {}),
+        ...(typeof ev.excerptChars === "number" ? { excerptChars: ev.excerptChars } : {}),
+        ...(Array.isArray(ev.windowScores) ? { windowScores: ev.windowScores } : {}),
       });
       break;
     case "directive_amended":
       s.pushAmendment({ ts: ev.ts, text: ev.text });
+      break;
+    case "drift_sample":
+      s.pushDriftSample({
+        ts: ev.ts,
+        similarity: ev.similarity,
+        smoothedSimilarity: ev.smoothedSimilarity,
+        embeddingModel: ev.embeddingModel,
+        excerptChars: ev.excerptChars,
+        windowSimilarities: ev.windowSimilarities,
+      });
       break;
     case "clone_state":
       s.setCloneState({

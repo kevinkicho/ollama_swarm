@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useSwarm } from "../state/store";
 import { CopyChip } from "./CopyChip";
+import type { ConformanceSample, DriftSample } from "../state/store";
 
 // Truncate-from-LEFT (per Kevin's Unit 52c spec preference): the
 // distinguishing tail of a path is the run-name + repo-name, not the
@@ -21,6 +23,7 @@ export function IdentityStrip() {
   const cfg = useSwarm((s) => s.runConfig);
   const runId = useSwarm((s) => s.runId);
   const conformance = useSwarm((s) => s.conformance);
+  const drift = useSwarm((s) => s.drift);
   const phase = useSwarm((s) => s.phase);
   const amendments = useSwarm((s) => s.amendments);
   // Task #85: history dropdown moved to the App-level header so it's
@@ -98,7 +101,7 @@ export function IdentityStrip() {
               excludes the dedicated auditor (Unit 58) so the count was
               wrong for 4-agent runs, and the live agent count is already
               in the left sidebar header. Dedup over fix-the-count. */}
-          <ConformanceGauge samples={conformance} />
+          <ConformanceGauge samples={conformance} drift={drift} />
           {runId && phase !== "idle" && phase !== "completed" && phase !== "stopped" ? (
             <AmendButton runId={runId} amendmentCount={amendments.length} />
           ) : null}
@@ -116,19 +119,24 @@ export function IdentityStrip() {
   );
 }
 
-// #295: real-time conformance gauge. Renders nothing when no samples
-// have arrived (most runs without a userDirective; or first ~90s
-// before the first poll lands). On a sample, renders a tiny
-// sparkline + the latest smoothed score, color-graded by health:
+// #295 + #301: real-time conformance gauge. Renders nothing when no
+// samples have arrived (most runs without a userDirective; or first
+// ~90s before the first poll lands). On hover, opens a portal-based
+// infographic tooltip showing how the score is computed.
+//
+// Color grading:
 //   ≥ 70 = emerald (on-topic)
 //   40–69 = amber (mixed/drifting)
 //   < 40 = rose (drifted)
-// Hover surfaces the latest reason from the grader.
 function ConformanceGauge({
   samples,
+  drift,
 }: {
-  samples: ReadonlyArray<{ ts: number; score: number; smoothedScore: number; reason?: string }>;
+  samples: ReadonlyArray<ConformanceSample>;
+  drift: ReadonlyArray<DriftSample>;
 }) {
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   if (samples.length === 0) return null;
   const latest = samples[samples.length - 1];
   const score = latest.smoothedScore;
@@ -145,20 +153,178 @@ function ConformanceGauge({
   const xs = samples.map((_, i) => (samples.length === 1 ? 0 : (i / (samples.length - 1)) * W));
   const ys = samples.map((s) => H - (Math.max(0, Math.min(100, s.smoothedScore)) / 100) * H);
   const path = xs.map((x, i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${ys[i].toFixed(1)}`).join(" ");
-  const tooltip =
-    `Conformance to directive: ${score}/100 (${samples.length} sample${samples.length === 1 ? "" : "s"})` +
-    (latest.reason ? `\nLast: ${latest.reason}` : "");
+  const onEnter = () => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    setPos({ top: rect.bottom + 6, left: rect.left });
+  };
   return (
-    <span
-      className={`inline-flex items-center gap-1.5 ml-3 ${color}`}
-      title={tooltip}
+    <>
+      <span
+        ref={triggerRef}
+        onMouseEnter={onEnter}
+        onMouseLeave={() => setPos(null)}
+        className={`inline-flex items-center gap-1.5 ml-3 cursor-help ${color}`}
+      >
+        <span className="text-[9px] uppercase tracking-wider text-ink-500">conf</span>
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="overflow-visible">
+          <path d={path} className={stroke} fill="none" strokeWidth={1.25} />
+        </svg>
+        <span className="font-mono text-[11px] tabular-nums">{score}</span>
+      </span>
+      {pos
+        ? createPortal(
+            <ConformanceTooltip latest={latest} samples={samples} drift={drift} pos={pos} />,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
+// #301 Phase A + #302 Phase B: rich infographic tooltip showing how
+// the conformance score is computed (Phase A) and how it correlates
+// with an independent embedding-similarity signal (Phase B). When
+// the embedding model isn't pulled, the drift section surfaces a
+// "pull <model> to enable" hint instead of a sparkline.
+function ConformanceTooltip({
+  latest,
+  samples,
+  drift,
+  pos,
+}: {
+  latest: ConformanceSample;
+  samples: ReadonlyArray<ConformanceSample>;
+  drift: ReadonlyArray<DriftSample>;
+  pos: { top: number; left: number };
+}) {
+  const score = latest.smoothedScore;
+  const accent =
+    score >= 70 ? { text: "text-emerald-300", bar: "bg-emerald-500", label: "ON-TOPIC" }
+    : score >= 40 ? { text: "text-amber-300", bar: "bg-amber-500", label: "DRIFTING" }
+    : { text: "text-rose-300", bar: "bg-rose-500", label: "DRIFTED" };
+  const window = latest.windowScores ?? [];
+  const latestDrift = drift.length > 0 ? drift[drift.length - 1] : null;
+  return (
+    <div
+      className="fixed z-50 bg-ink-900 border border-ink-600 rounded-md p-3 shadow-xl pointer-events-none text-[11px]"
+      style={{ top: pos.top, left: pos.left, width: 360 }}
     >
-      <span className="text-[9px] uppercase tracking-wider text-ink-500">conf</span>
-      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="overflow-visible">
-        <path d={path} className={stroke} fill="none" strokeWidth={1.25} />
-      </svg>
-      <span className="font-mono text-[11px] tabular-nums">{score}</span>
-    </span>
+      <div className="flex items-baseline justify-between mb-2">
+        <div className="text-[9px] uppercase tracking-wider text-ink-500">
+          conformance to directive
+        </div>
+        <div className={`text-[9px] uppercase tracking-wider font-semibold ${accent.text}`}>
+          {accent.label}
+        </div>
+      </div>
+      {/* Big colored score */}
+      <div className="flex items-baseline gap-2 mb-2">
+        <span className={`text-3xl font-mono font-semibold tabular-nums ${accent.text}`}>{score}</span>
+        <span className="text-ink-500 text-[10px]">/ 100 (smoothed)</span>
+      </div>
+      {/* Score bar */}
+      <div className="h-1.5 bg-ink-950 rounded overflow-hidden mb-3">
+        <div className={`h-full ${accent.bar}`} style={{ width: `${score}%` }} />
+      </div>
+
+      {/* Smoothing window — last 3 raw scores */}
+      {window.length > 0 ? (
+        <div className="mb-2">
+          <div className="text-[9px] uppercase tracking-wider text-ink-500 mb-1">
+            smoothing window (last {window.length})
+          </div>
+          <div className="flex items-end gap-1 h-8">
+            {window.map((s, i) => (
+              <div key={i} className="flex-1 flex flex-col items-center gap-0.5">
+                <div
+                  className="w-full bg-ink-700 rounded-t"
+                  style={{ height: `${Math.max(2, s)}%` }}
+                />
+                <span className="text-[9px] font-mono text-ink-400 tabular-nums">{s}</span>
+              </div>
+            ))}
+          </div>
+          <div className="text-[9px] text-ink-500 mt-0.5">
+            mean = {Math.round(window.reduce((a, b) => a + b, 0) / window.length)} → smoothed score
+          </div>
+        </div>
+      ) : null}
+
+      {/* Phase B: independent embedding-similarity signal */}
+      <div className="mt-2 pt-2 border-t border-ink-700">
+        <div className="flex items-baseline justify-between mb-1">
+          <div className="text-[9px] uppercase tracking-wider text-ink-500">
+            embedding similarity (independent signal)
+          </div>
+          {latestDrift ? (
+            <span className="text-[9px] font-mono tabular-nums text-ink-300">
+              {latestDrift.smoothedSimilarity}/100
+            </span>
+          ) : null}
+        </div>
+        {latestDrift ? (
+          <>
+            <div className="h-1.5 bg-ink-950 rounded overflow-hidden">
+              <div
+                className="h-full bg-sky-500/70"
+                style={{ width: `${latestDrift.smoothedSimilarity}%` }}
+              />
+            </div>
+            <AgreementHint llmJudge={score} embedding={latestDrift.smoothedSimilarity} />
+            <div className="text-[9px] text-ink-500 mt-0.5">
+              via <span className="font-mono">{latestDrift.embeddingModel}</span> · cosine
+              of directive vs last {latestDrift.excerptChars.toLocaleString()} chars
+            </div>
+          </>
+        ) : (
+          <div className="text-[10px] text-amber-300/80 leading-snug">
+            Drift gauge inactive. Run{" "}
+            <code className="bg-ink-950/60 px-1 rounded font-mono text-[10px]">
+              ollama pull nomic-embed-text
+            </code>{" "}
+            to enable a second independent signal.
+          </div>
+        )}
+      </div>
+
+      {/* Metadata grid */}
+      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] mt-2 border-t border-ink-700 pt-2">
+        {latest.graderModel ? (
+          <>
+            <span className="text-ink-500">grader</span>
+            <span className="font-mono text-ink-300 truncate" title={latest.graderModel}>
+              {latest.graderModel}
+            </span>
+          </>
+        ) : null}
+        {typeof latest.latencyMs === "number" ? (
+          <>
+            <span className="text-ink-500">grader latency</span>
+            <span className="font-mono text-ink-300">{(latest.latencyMs / 1000).toFixed(1)}s</span>
+          </>
+        ) : null}
+        {typeof latest.excerptChars === "number" ? (
+          <>
+            <span className="text-ink-500">excerpt size</span>
+            <span className="font-mono text-ink-300">
+              {latest.excerptChars.toLocaleString()} chars
+            </span>
+          </>
+        ) : null}
+        <span className="text-ink-500">samples so far</span>
+        <span className="font-mono text-ink-300">{samples.length}</span>
+        <span className="text-ink-500">poll interval</span>
+        <span className="font-mono text-ink-300">90s</span>
+      </div>
+
+      {/* Grader's reason for the LATEST score */}
+      {latest.reason ? (
+        <div className="mt-2 pt-2 border-t border-ink-700 text-ink-300 leading-snug italic">
+          “{latest.reason}”
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -192,6 +358,33 @@ function PresetBadge({ preset }: { preset: string }) {
     >
       {preset}
     </span>
+  );
+}
+
+// #302 Phase B: agreement-hint between LLM-judge and embedding signals.
+// When both methods land within 15 points of each other, that's high
+// confidence in the score. Disagreement signals noise — either the
+// LLM-judge is biased OR the embedding picked up incidental similarity.
+function AgreementHint({ llmJudge, embedding }: { llmJudge: number; embedding: number }) {
+  const delta = Math.abs(llmJudge - embedding);
+  if (delta <= 15) {
+    return (
+      <div className="text-[9px] text-emerald-300/80 mt-0.5">
+        ✓ Both signals agree (Δ = {delta} pts) — high confidence.
+      </div>
+    );
+  }
+  if (delta <= 30) {
+    return (
+      <div className="text-[9px] text-amber-300/80 mt-0.5">
+        Signals partly disagree (Δ = {delta} pts) — treat as noisy.
+      </div>
+    );
+  }
+  return (
+    <div className="text-[9px] text-rose-300/80 mt-0.5">
+      Signals disagree strongly (Δ = {delta} pts) — score may be unreliable.
+    </div>
   );
 }
 

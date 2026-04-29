@@ -17,6 +17,7 @@ import { MapReduceRunner } from "../swarm/MapReduceRunner.js";
 import { StigmergyRunner } from "../swarm/StigmergyRunner.js";
 import { DEFAULT_ROLES, roleForAgent } from "../swarm/roles.js";
 import { ConformanceMonitor } from "./ConformanceMonitor.js";
+import { EmbeddingDriftMonitor } from "./EmbeddingDriftMonitor.js";
 import { AmendmentsBuffer, type Amendment } from "./AmendmentsBuffer.js";
 
 export interface OrchestratorOpts extends RunnerOpts {
@@ -221,6 +222,9 @@ export class Orchestrator {
   // runners use `void this.loop(cfg)` so runner.start returns long
   // before the run actually ends.
   private conformanceMonitor?: ConformanceMonitor;
+  // #302: independent second signal (embedding-similarity drift).
+  // No-ops gracefully when the embedding model isn't pulled.
+  private embeddingDriftMonitor?: EmbeddingDriftMonitor;
 
   constructor(private readonly opts: OrchestratorOpts) {
     // Persist the merged list back so the next read is consistent
@@ -440,6 +444,21 @@ export class Orchestrator {
         isActive: () => this.runner !== null && (this.runner?.isRunning() ?? false),
       });
       this.conformanceMonitor.start();
+
+      // #302 Phase B: independent embedding-similarity signal.
+      // Async-start because it embeds the directive once before the
+      // poll loop kicks off. No-ops silently when the embedding
+      // model isn't pulled (typical fresh-Ollama install).
+      this.embeddingDriftMonitor?.stop();
+      this.embeddingDriftMonitor = new EmbeddingDriftMonitor({
+        runId,
+        directive: trimmedDirective,
+        ollamaBaseUrl: this.opts.ollamaBaseUrl,
+        getTranscript: () => this.runner?.status().transcript ?? [],
+        emit: this.opts.emit,
+        isActive: () => this.runner !== null && (this.runner?.isRunning() ?? false),
+      });
+      void this.embeddingDriftMonitor.start();
     }
     try {
       await runner.start(cfg);
@@ -498,6 +517,9 @@ export class Orchestrator {
       // self-stops via isActive() in the poll loop.
       this.conformanceMonitor?.stop();
       this.conformanceMonitor = undefined;
+      // #302: same backstop for the embedding drift monitor.
+      this.embeddingDriftMonitor?.stop();
+      this.embeddingDriftMonitor = undefined;
       // Task #125: clear preset tag — calls between runs (e.g. an
       // exploratory direct curl to the proxy) bucket as "(idle)".
       tokenTracker.setCurrentPreset(undefined);

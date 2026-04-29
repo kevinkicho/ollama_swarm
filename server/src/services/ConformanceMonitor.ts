@@ -116,6 +116,7 @@ export class ConformanceMonitor {
     if (excerpt.length === 0) return;
 
     this.inflight = true;
+    const requestStart = Date.now();
     try {
       const result = await gradeWithOllama({
         directive: this.opts.directive,
@@ -125,6 +126,7 @@ export class ConformanceMonitor {
         fetchImpl: this.opts.fetchImpl ?? fetch,
       });
       if (this.stopped) return;
+      const latencyMs = Date.now() - requestStart;
       this.rawScores.push(result.score);
       if (this.rawScores.length > SMOOTHING_WINDOW) this.rawScores.shift();
       const smoothed = Math.round(
@@ -136,6 +138,13 @@ export class ConformanceMonitor {
         ts: Date.now(),
         score: result.score,
         smoothedScore: smoothed,
+        // #301 Phase A: enrich the per-sample event with metadata
+        // the UI infographic surfaces in the tooltip. Lets the user
+        // see WHAT generated the score, not just the score itself.
+        graderModel: this.opts.graderModel,
+        latencyMs,
+        excerptChars: excerpt.length,
+        windowScores: this.rawScores.slice(),
         ...(result.reason ? { reason: result.reason } : {}),
       });
     } catch {
