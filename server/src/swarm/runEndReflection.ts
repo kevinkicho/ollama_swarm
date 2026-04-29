@@ -19,6 +19,7 @@
 // generous.
 
 import type { Agent } from "../services/AgentManager.js";
+import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
 import {
   appendMemoryEntry,
   type MemoryEntry,
@@ -123,7 +124,7 @@ export async function runEndReflection(
     const res = await ctx.agent.client.session.prompt({
       sessionID: ctx.agent.sessionId,
       agent: "swarm-read",
-      model: { providerID: "ollama", modelID: ctx.agent.model },
+      model: toOpenCodeModelRef(ctx.agent.model),
       parts: [{ type: "text", text: prompt }],
     });
     responseText = extractText(res) ?? "";

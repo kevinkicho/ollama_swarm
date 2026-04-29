@@ -62,6 +62,15 @@ const Schema = z.object({
   DEFAULT_AUDITOR_MODEL: z.string().default("nemotron-3-super:cloud"),
   OPENCODE_BIN: z.string().default("opencode"),
   GITHUB_TOKEN: z.string().optional(),
+  // Phase 1 of #314 (multi-provider): API keys for the paid SDKs.
+  // Both optional — when unset the corresponding provider is greyed
+  // out in the setup-form dropdown. The opencode subprocess inherits
+  // process.env, so the AI-SDK packages (@ai-sdk/anthropic, @ai-sdk/
+  // openai) read these directly without needing apiKey wired through
+  // opencode.json. Keep keys server-side only — never echoed back to
+  // the browser, never persisted to localStorage.
+  ANTHROPIC_API_KEY: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
   // Unit 17: send a tiny "reply with: ok" prompt to each agent right
   // after spawn so its first REAL prompt isn't a cold-start. Default
   // on; set to "false"/"0"/"no" to disable (e.g. for unit-test rigs

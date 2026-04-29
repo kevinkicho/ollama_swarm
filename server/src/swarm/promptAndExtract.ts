@@ -19,6 +19,7 @@
 // per-runner watchdogs use.
 
 import type { Agent } from "../services/AgentManager.js";
+import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
 import {
   EMPTY_RESPONSE_RETRY_SUFFIX,
   extractTextWithDiag,
@@ -61,7 +62,7 @@ export async function retryEmptyResponse(
       {
         sessionID: agent.sessionId,
         agent: agentName,
-        model: { providerID: "ollama", modelID: agent.model },
+        model: toOpenCodeModelRef(agent.model),
         parts: [
           { type: "text", text: originalPrompt + EMPTY_RESPONSE_RETRY_SUFFIX },
         ],

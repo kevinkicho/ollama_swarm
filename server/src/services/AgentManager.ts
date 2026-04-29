@@ -9,6 +9,7 @@ import { PortAllocator } from "./PortAllocator.js";
 import { treeKill, killByPid, killByPort, isProcessAlive } from "./treeKill.js";
 import { AgentPidTracker } from "./agentPids.js";
 import type { AgentState, SwarmEvent } from "../types.js";
+import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
 
 type Client = ReturnType<typeof createOpencodeClient>;
 
@@ -352,7 +353,7 @@ export class AgentManager {
         {
           sessionID: agent.sessionId,
           agent: opts.agentName,
-          model: { providerID: "ollama", modelID: opts.modelID },
+          model: toOpenCodeModelRef(opts.modelID),
           parts: [{ type: "text", text: effectivePromptText }],
         },
         { signal: opts.signal },
@@ -840,7 +841,7 @@ export class AgentManager {
       await agent.client.session.prompt({
         sessionID: agent.sessionId,
         agent: "swarm",
-        model: { providerID: "ollama", modelID: agent.model },
+        model: toOpenCodeModelRef(agent.model),
         parts: [{ type: "text", text: WARMUP_PROMPT_TEXT }],
       });
       const elapsed = Date.now() - t0;

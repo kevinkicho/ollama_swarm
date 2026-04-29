@@ -11,6 +11,7 @@
 // Costs one planner prompt; cheap. Failure-open everywhere.
 
 import type { Agent } from "../../services/AgentManager.js";
+import { toOpenCodeModelRef } from "../../../../shared/src/providers.js";
 import { extractText } from "../extractText.js";
 import { parseGoalList } from "./goalListParser.js";
 import type { PlannerSeed } from "./prompts/planner.js";
@@ -61,7 +62,7 @@ export async function runGoalGenerationPrePass(
       {
         sessionID: planner.sessionId,
         agent: "swarm-read",
-        model: { providerID: "ollama", modelID: planner.model },
+        model: toOpenCodeModelRef(planner.model),
         parts: [{ type: "text", text: prompt }],
       },
       { signal: opts.signal },

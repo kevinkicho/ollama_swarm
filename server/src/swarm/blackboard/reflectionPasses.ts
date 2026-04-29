@@ -16,6 +16,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { Agent } from "../../services/AgentManager.js";
+import { toOpenCodeModelRef } from "../../../../shared/src/providers.js";
 import type {
   TranscriptEntry,
   TranscriptEntrySummary,
@@ -85,7 +86,7 @@ async function promptOnFreshSession(
       {
         sessionID: sessionId,
         agent: "swarm-read",
-        model: { providerID: "ollama", modelID: planner.model },
+        model: toOpenCodeModelRef(planner.model),
         parts: [{ type: "text", text: prompt }],
       },
       { signal: opts.signal },

@@ -1,4 +1,5 @@
 import type { Agent, AgentManager } from "../services/AgentManager.js";
+import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
 import {
   RETRY_MAX_ATTEMPTS,
   RETRY_BACKOFF_MS,
@@ -254,7 +255,7 @@ export async function promptWithRetry(
           {
             sessionID: agent.sessionId,
             agent: agentName,
-            model: { providerID: "ollama", modelID: agent.model },
+            model: toOpenCodeModelRef(agent.model),
             parts: [{ type: "text", text: promptText }],
             ...(sdkFormat ? { format: sdkFormat } : {}),
           },

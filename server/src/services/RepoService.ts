@@ -3,6 +3,11 @@ import type { Dirent } from "node:fs";
 import path from "node:path";
 import simpleGit from "simple-git";
 import { config } from "../config.js";
+import {
+  detectProvider,
+  stripProviderPrefix,
+  type Provider,
+} from "../../../shared/src/providers.js";
 
 export interface CloneOptions {
   url: string;
@@ -251,18 +256,62 @@ export class RepoService {
     if (uniqueModels.length === 0) {
       throw new Error("writeOpencodeConfig: at least one model required");
     }
-    const modelsBlock: Record<string, { name: string }> = {};
-    for (const m of uniqueModels) modelsBlock[m] = { name: m };
+    // Phase 1 of #314 (multi-provider): group models by detected
+    // provider, emit one provider block per group. Models without a
+    // prefix default to ollama (preserves the historical shape: a
+    // single ollama provider with /v1-suffixed baseURL pointing at the
+    // local proxy). Anthropic/OpenAI blocks rely on env-var-default
+    // apiKey resolution by the AI-SDK packages — we don't echo keys
+    // into opencode.json.
+    const byProvider = new Map<Provider, string[]>();
+    for (const m of uniqueModels) {
+      const p = detectProvider(m);
+      const list = byProvider.get(p) ?? [];
+      list.push(stripProviderPrefix(m));
+      byProvider.set(p, list);
+    }
+
+    const buildModelsBlock = (modelIds: readonly string[]) => {
+      const block: Record<string, { name: string }> = {};
+      for (const id of modelIds) block[id] = { name: id };
+      return block;
+    };
+
+    const providerBlock: Record<string, Record<string, unknown>> = {};
+    for (const [provider, modelIds] of byProvider) {
+      switch (provider) {
+        case "ollama":
+          providerBlock.ollama = {
+            npm: "@ai-sdk/openai-compatible",
+            name: "Ollama (local)",
+            options: { baseURL: config.OLLAMA_BASE_URL },
+            models: buildModelsBlock(modelIds),
+          };
+          break;
+        case "anthropic":
+          providerBlock.anthropic = {
+            npm: "@ai-sdk/anthropic",
+            name: "Anthropic",
+            // No apiKey here — the AI-SDK package reads
+            // ANTHROPIC_API_KEY from env, which the opencode subprocess
+            // inherits from the dev server (config.ts loads .env).
+            models: buildModelsBlock(modelIds),
+          };
+          break;
+        case "openai":
+          providerBlock.openai = {
+            npm: "@ai-sdk/openai",
+            name: "OpenAI",
+            // No apiKey here — same env-inheritance pattern as anthropic.
+            models: buildModelsBlock(modelIds),
+          };
+          break;
+      }
+    }
+
     const payload = {
       $schema: "https://opencode.ai/config.json",
-      provider: {
-        ollama: {
-          npm: "@ai-sdk/openai-compatible",
-          name: "Ollama (local)",
-          options: { baseURL: config.OLLAMA_BASE_URL },
-          models: modelsBlock,
-        },
-      },
+      provider: providerBlock,
       // Two agent profiles:
       //
       // - `swarm` — used by BlackboardRunner workers. Tools + filesystem

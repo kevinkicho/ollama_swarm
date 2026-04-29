@@ -18,6 +18,7 @@
 
 import { AgentManager } from "../../services/AgentManager.js";
 import { config } from "../../config.js";
+import { toOpenCodeModelRef } from "../../../../shared/src/providers.js";
 import {
   buildAuditorSeedCore,
   type AuditorSeed,
@@ -112,7 +113,7 @@ async function captureUiSnapshot(
     const response = await uiAgent.client.session.prompt({
       sessionID: uiAgent.sessionId,
       agent: "swarm-ui",
-      model: { providerID: "ollama", modelID: uiAgent.model },
+      model: toOpenCodeModelRef(uiAgent.model),
       parts: [{ type: "text", text: promptText }],
     });
     const any = response as {

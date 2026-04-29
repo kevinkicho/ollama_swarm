@@ -45,3 +45,15 @@ export {
   getAgentOllamaOptions,
 } from "./topology.js";
 export type { AgentRole, AgentColor, AgentSpec, Topology } from "./topology.js";
+
+export {
+  PROVIDERS,
+  detectProvider,
+  stripProviderPrefix,
+  withProviderPrefix,
+  toOpenCodeModelRef,
+  modelsForProvider,
+  ANTHROPIC_MODELS,
+  OPENAI_MODELS,
+} from "./providers.js";
+export type { Provider, OpenCodeModelRef } from "./providers.js";

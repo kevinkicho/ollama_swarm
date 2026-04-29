@@ -6,6 +6,7 @@ import type { Broadcaster } from "../ws/broadcast.js";
 import { AgentManager, type Agent } from "../services/AgentManager.js";
 import type { RepoService } from "../services/RepoService.js";
 import { config } from "../config.js";
+import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
 
 // Extracted from RoundRobinRunner.extractText — the session.prompt response
 // shape (SDK parts array) is the same regardless of which agent profile was
@@ -116,7 +117,7 @@ export function devRouter(deps: DevRouterDeps): Router {
       const response = await agent.client.session.prompt({
         sessionID: agent.sessionId,
         agent: "swarm-ui",
-        model: { providerID: "ollama", modelID: agent.model },
+        model: toOpenCodeModelRef(agent.model),
         parts: [{ type: "text", text: promptText }],
       });
       const promptElapsedMs = Date.now() - t1;

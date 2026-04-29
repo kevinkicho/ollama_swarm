@@ -299,6 +299,88 @@ test("writeOpencodeConfig — mcp block absent by default (Unit 26 OFF)", async 
   }
 });
 
+// Phase 1 of #314 (multi-provider): writeOpencodeConfig groups input
+// models by detected provider (anthropic/, openai/, or unprefixed →
+// ollama). For each non-empty group, an appropriate provider block
+// lands in opencode.json. Backward-compatible with the historical
+// single-string-ollama-model call signature — every existing test
+// above passes "test-model" with no prefix and gets the same shape.
+
+test("writeOpencodeConfig — anthropic-prefixed model emits an anthropic provider block (no ollama block)", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-cfg-"));
+  try {
+    const repos = new RepoService();
+    await repos.writeOpencodeConfig(root, "anthropic/claude-opus-4-7");
+    const cfg = JSON.parse(await fs.readFile(path.join(root, "opencode.json"), "utf8")) as {
+      provider: Record<string, { npm?: string; options?: Record<string, unknown>; models?: Record<string, unknown> }>;
+    };
+    assert.ok(cfg.provider.anthropic, "anthropic provider block must exist");
+    assert.equal(cfg.provider.anthropic.npm, "@ai-sdk/anthropic");
+    // No apiKey echoed into config — env-inherited
+    assert.equal(cfg.provider.anthropic.options, undefined);
+    // Model id stored WITHOUT the anthropic/ prefix (provider key
+    // already names the provider; opencode resolves <providerKey>/<modelID>)
+    assert.ok(cfg.provider.anthropic.models?.["claude-opus-4-7"], "bare model id must be the key");
+    assert.equal(cfg.provider.ollama, undefined, "no ollama block when only anthropic models supplied");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("writeOpencodeConfig — openai-prefixed model emits an openai provider block", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-cfg-"));
+  try {
+    const repos = new RepoService();
+    await repos.writeOpencodeConfig(root, "openai/gpt-5");
+    const cfg = JSON.parse(await fs.readFile(path.join(root, "opencode.json"), "utf8")) as {
+      provider: Record<string, { npm?: string; models?: Record<string, unknown> }>;
+    };
+    assert.ok(cfg.provider.openai);
+    assert.equal(cfg.provider.openai.npm, "@ai-sdk/openai");
+    assert.ok(cfg.provider.openai.models?.["gpt-5"]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("writeOpencodeConfig — unprefixed model still emits an ollama provider block (backward compat)", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-cfg-"));
+  try {
+    const repos = new RepoService();
+    await repos.writeOpencodeConfig(root, "glm-5.1:cloud");
+    const cfg = JSON.parse(await fs.readFile(path.join(root, "opencode.json"), "utf8")) as {
+      provider: Record<string, { npm?: string; options?: { baseURL?: string }; models?: Record<string, unknown> }>;
+    };
+    assert.ok(cfg.provider.ollama);
+    assert.equal(cfg.provider.ollama.npm, "@ai-sdk/openai-compatible");
+    assert.ok(cfg.provider.ollama.options?.baseURL, "baseURL preserved for ollama");
+    assert.ok(cfg.provider.ollama.models?.["glm-5.1:cloud"]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("writeOpencodeConfig — mixed provider input emits one block per provider", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-cfg-"));
+  try {
+    const repos = new RepoService();
+    await repos.writeOpencodeConfig(root, [
+      "glm-5.1:cloud",
+      "anthropic/claude-opus-4-7",
+      "openai/gpt-5",
+    ]);
+    const cfg = JSON.parse(await fs.readFile(path.join(root, "opencode.json"), "utf8")) as {
+      provider: Record<string, { models?: Record<string, unknown> }>;
+    };
+    // All three providers present; each carries only its own models.
+    assert.ok(cfg.provider.ollama?.models?.["glm-5.1:cloud"]);
+    assert.ok(cfg.provider.anthropic?.models?.["claude-opus-4-7"]);
+    assert.ok(cfg.provider.openai?.models?.["gpt-5"]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Unit 48: excludeRunnerArtifacts — append runner-written file patterns to
 // the clone's local .git/info/exclude so they don't pollute `git status`.

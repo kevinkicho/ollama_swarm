@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Agent } from "../../services/AgentManager.js";
 import { AgentManager } from "../../services/AgentManager.js";
+import { toOpenCodeModelRef } from "../../../../shared/src/providers.js";
 import type {
   AgentState,
   SwarmEvent,
@@ -3350,7 +3351,7 @@ export class BlackboardRunner implements SwarmRunner {
       await planner.client.session.prompt({
         sessionID: sid,
         agent: "swarm-read",
-        model: { providerID: "ollama", modelID: planner.model },
+        model: toOpenCodeModelRef(planner.model),
         parts: [{ type: "text", text: "ping" }],
       });
       probeOk = true;
