@@ -53,7 +53,20 @@
 
 ### Surfaced from overnight tour (queued for next session)
 
-- **#231 Investigate why models emit XML pseudo-tool-call markers as raw text.** Bonus 10 (blackboard re-run with #229+#230 fixes) confirmed both `glm-5.1:cloud` AND its sibling fallback `nemotron-3-super:cloud` emit `<read>/<grep>/<list>` markers as plain text instead of using SDK tool functions. Two models from different families = systemic, not glm-5.1-specific. Likely the planner system prompt OR opencode SDK tool-grant context is leading the model to emit granted tools as text. Investigate: (a) what tool definitions are in the agent system prompt? (b) does opencode itself recognize these emitted markers and execute them silently? (c) would explicitly disabling tool grants for the planner role fix it? **Trigger**: explicit "investigate marker root cause."
+- **#231 — XML pseudo-tool-call markers ROOT-CAUSED 2026-04-29 (training-prior, not opencode).** Investigation findings:
+
+  - The opencode v2 SDK (`node_modules/@opencode-ai/sdk/dist/v2/`) does NOT contain any XML tool-call format anywhere; greps for `tool_use` / `<read` / `<grep` / `XML.*tool` return zero hits. Hypothesis B (opencode injects XML examples) ruled out.
+  - The PLANNER_SYSTEM_PROMPT already has explicit rule 1a (2026-04-27): `Do NOT emit raw XML tool-call syntax... that's the SDK's internal tool-call format`. Models still emit it → prompting alone can't fix this. Hypothesis A ruled in (training prior).
+  - Both `glm-5.1:cloud` and `nemotron-3-super:cloud` route through Ollama's OpenAI-compatible bridge. When opencode declares `read`/`grep`/`glob` as tools via the OpenAI function-call schema, the model's weights reach for whatever tool format they were trained on — for many open-weights coding models, that's Anthropic-style XML tags (since those leaked into training corpora as exemplars). Hypothesis C confirmed: this is an OpenAI-bridge mismatch.
+
+  **Practical impact:** the markers get stripped server-side via `shared/stripAgentText` (#229/#230) so runs still complete; the cost is wasted tokens emitting XML the runner discards.
+
+  **Three actionable fixes, ranked:**
+  1. **Try with Anthropic provider** (now possible post-#314). If Claude models don't emit the XML mismatch when opencode targets the native Anthropic API directly (no OpenAI-bridge translation), this becomes a "use the right provider for tool-using prompts" doc note. **Trigger**: paste an `ANTHROPIC_API_KEY` + run a blackboard planner turn against `anthropic/claude-sonnet-4-6` — observe whether `<read>` tags still appear.
+  2. **Add an XML→JSON tool-call translator** in `extractUsageFromMessageInfo`'s sibling slot — when the parser sees `<read path="X">`, dispatch a real `read` tool call against the clone, splice the result back into the prompt, re-prompt the model. Reproduces what an "agent loop" would do. ~6h work, complex error paths, fragile.
+  3. **Strip tool grants from the planner profile** (set `swarm-read` permissions for planner-only sessions to `*: deny`). Cost: planner can't grep before emitting TODOs → drops the grounding loop the prompt relies on. Likely net-worse for run quality. Not recommended unless live testing shows wasted-token cost dominates over grounding benefit.
+
+  **Recommended next step:** option 1 — cheap experimental check that probably solves the problem entirely without code changes. Pair with the live UI test of multi-provider work. **Trigger**: when running the first Claude-keyed test session.
 
 - **First paid scoreboard sweep + 7 more fixtures.** Phase 6 shipped 3 starter fixtures + the framework; 7 more are queued in `eval/fixtures/README.md` (add-null-guard, extract-pure-helper, fix-failing-test, audit-console-logs, categorize-deps, multistep-add-script, multistep-config-then-test). After at least 5 fixtures land, run a 3-seed × Sonnet 4.6 sweep (~$5–15) and overwrite `eval/RESULTS.md` with real numbers. **Trigger**: explicit "go run paid sweep" with budget authorization.
 
