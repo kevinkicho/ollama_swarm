@@ -20,24 +20,31 @@ eval/fixtures/<task-id>/
 - **One concept per fixture.** A fixture that tests three skills at once dilutes the signal — split into three.
 - **Vendored Node version assumption.** Tested against Node 24.x; pin in `engines` if a fixture needs something different.
 
-## Current fixtures
+## Current fixtures (10 total — all verified-fail-on-broken-state)
+
+### Code-modify (6)
 
 | Task id | What it tests | Verify |
 |---|---|---|
-| [`fix-off-by-one`](./fix-off-by-one/) | Code-modify: change a loop terminator | `node verify.mjs` (3 asserts) |
-| [`add-readme-section`](./add-readme-section/) | Docs: add a `## Usage` heading with content | `grep` + content gate |
-| [`rename-symbol`](./rename-symbol/) | Code-modify: rename a function across multiple files | grep absence + behavior assert |
+| [`fix-off-by-one`](./fix-off-by-one/) | Change a loop terminator | 3 `countDown` asserts |
+| [`add-null-guard`](./add-null-guard/) | Add a null guard at the top of a function | Happy path + null/undefined fallback asserts |
+| [`extract-pure-helper`](./extract-pure-helper/) | Refactor without behavior change | Behavior preserved + helper-name grep |
+| [`fix-failing-test`](./fix-failing-test/) | Fix a wrong assertion (not the function) | `node --test` runs green |
+| [`rename-symbol`](./rename-symbol/) | Rename a function across multiple files | Old-name grep absence + behavior assert |
+| [`add-readme-section`](./add-readme-section/) | Add a `## Usage` heading with content | Heading regex + content length gate |
 
-## Adding more (queued from the original Phase 6 plan)
+### Analysis (2)
 
-The plan called for 10 fixtures across code-modify / analysis / multi-step. The three above are the proven-pattern starting set; the remaining seven from the plan are deliberate follow-ups so the framework lands first:
+| Task id | What it tests | Verify |
+|---|---|---|
+| [`audit-console-logs`](./audit-console-logs/) | Produce a JSON report listing every console.log call | report.json shape: `{count: 5, calls: [{file, line}, ...]}` |
+| [`categorize-deps`](./categorize-deps/) | Read package.json, classify deps as runtime/dev/optional | categories.json shape with set-equal name lists |
 
-- `add-null-guard` — function dereferences possibly-null arg; verified by an added test
-- `extract-pure-helper` — refactor without behavior change; `npm test` verifies behavior preserved
-- `fix-failing-test` — pre-broken test in the fixture; `npm test` verifies it's now green
-- `audit-console-logs` — analysis task; verifier checks JSON output shape
-- `categorize-deps` — analysis task; verifier checks JSON output shape
-- `multistep-add-script-then-call-it` — add npm script + invoke from another file; both grep checks
-- `multistep-config-then-test` — add config option + write test exercising it; `npm test` verifies
+### Multi-step (2)
 
-Add by following the pattern above and updating `eval/catalog.json` (when local-fixture support lands in Phase 7's run-eval.mjs revisions).
+| Task id | What it tests | Verify |
+|---|---|---|
+| [`multistep-add-script`](./multistep-add-script/) | Create entry + add npm script that runs it | package.json script + main.js content + actual stdout `"hello, world!"` |
+| [`multistep-config-then-test`](./multistep-config-then-test/) | Extend a function with a new option AND write a test exercising it | Both behaviors + new test file references `verbose` AND passes |
+
+All ten verify scripts: exit 0 on success, exit 1 with a single `FAIL: <reason>` line on failure. All deps-free; pin Node 24+ via your `engines` field if the fixture needs it.

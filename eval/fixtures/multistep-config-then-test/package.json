@@ -1,0 +1,7 @@
+{
+  "name": "multistep-config-then-test-fixture",
+  "type": "module",
+  "scripts": {
+    "test": "node verify.mjs"
+  }
+}

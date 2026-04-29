@@ -1,0 +1,7 @@
+{
+  "name": "fix-failing-test-fixture",
+  "type": "module",
+  "scripts": {
+    "test": "node verify.mjs"
+  }
+}

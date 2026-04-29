@@ -1,0 +1,7 @@
+{
+  "name": "multistep-add-script-fixture",
+  "type": "module",
+  "scripts": {
+    "test": "node verify.mjs"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "audit-console-logs-fixture",
+  "type": "module",
+  "scripts": {
+    "test": "node verify.mjs"
+  }
+}

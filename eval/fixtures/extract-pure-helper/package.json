@@ -1,0 +1,7 @@
+{
+  "name": "extract-pure-helper-fixture",
+  "type": "module",
+  "scripts": {
+    "test": "node verify.mjs"
+  }
+}
