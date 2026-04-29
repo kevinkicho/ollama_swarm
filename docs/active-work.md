@@ -18,11 +18,11 @@
 
 ### Risky cutovers (need stable validation first)
 
-- **V2 Step 5c.3 — delete Board.ts.** Requires: USE_WORKER_PIPELINE_V2=1 default-on for 2+ stable runs (currently opt-in). When deleting: drop `Board.ts` (~330 LOC), `executeWorkerTodo` V1 path (~140 LOC), per-file lock cache (#205), v1ToV2TodoId Map. TodoQueueV2 becomes the queue (not a mirror). **Trigger**: 2+ blackboard runs with USE_WORKER_PIPELINE_V2=1 producing real commits + 0 V2 queue divergences.
+- ✅ **V2 Step 5c.3 — delete Board.ts.** SHIPPED 2026-04-28 during V2 cutover Phase 2c. Confirmed 2026-04-29 audit: `Board.ts` no longer exists; only stale comments in BlackboardRunner / TodoQueue reference its prior existence. (active-work.md note was stale.)
 
-- **V2 Step 6c — UI cuts over to event-log-derived state.** Currently EventLogReaderV2 is read-only (replay/debug); the live UI still derives state from WebSocket snapshots. Cutting over means the UI subscribes to the JSONL stream and rebuilds state via `deriveRunState`. **Trigger**: more user appetite for the V2 vision; could parallel-track first.
+- **V2 Step 6c — UI cuts over to event-log-derived state.** Genuinely pending. Currently EventLogReaderV2 is read-only (replay/debug); the live UI still derives state from WebSocket snapshots. Cutting over means the UI subscribes to the JSONL stream and rebuilds state via `deriveRunState`. ~1-2 days. **Trigger**: more user appetite for the V2 vision; could parallel-track first.
 
-- **Drop opencode subprocess dependency entirely.** ~1 week of refactor:
+- **Drop opencode subprocess dependency entirely.** Genuinely pending. `USE_OLLAMA_DIRECT` is opt-in (referenced 14× in swarm/, gated `process.env.USE_OLLAMA_DIRECT === "1"`); opencode subprocess is still the default path. ~1 week of refactor:
   1. Wire `ollamaDirect` through the 6 non-blackboard runners (1d) — then USE_OLLAMA_DIRECT bypasses opencode for *all* presets
   2. Replace `AgentManager.spawnAgent` with our own session-state class (3d) — drops the opencode subprocess
   3. Delete `opencode.json` writing in `RepoService.ts`. Replace agent profile + tool-grant logic with our own simple config (2d)
@@ -190,6 +190,17 @@ End-to-end multi-provider support (Ollama / Anthropic / OpenAI), cost cap, singl
 - ✅ `baaf159` — `#320` Phase 7: multi-seed runner + scoreboard aggregator. `--seeds=N` flag (default 1, capped at 20). New `eval/aggregate.mjs` reads sweep results, computes per-cell median + IQR, writes `eval/RESULTS.md` + `eval/results.json`. Placeholder RESULTS.md ships pending first paid sweep. +6 tests.
 
 Live verified via 90-second Playwright demo at `runs/_demo-providers-2026-04-29T17-04-18-794Z/`: provider dropdown, per-provider model autocomplete, cost-cap-field reveal, 0 console errors. Saved gotcha to memory: `feedback_ci_test_runner_flags.md`.
+
+### 2026-04-29 (cont.) — backlog sweep + #231 RCA + fixture harness
+
+Six follow-ups in one pass:
+
+- ✅ `60d83b4` — Refresh active-work.md + README for multi-provider. Doc was 2 days stale.
+- ✅ `59c5caa` — `#231` root-caused (training-prior, not opencode). Three actionable fixes ranked in active-work.md; recommended path: try Anthropic provider first.
+- ✅ `b255630` — Ship the 7 queued Phase 6 fixtures (add-null-guard, extract-pure-helper, fix-failing-test, audit-console-logs, categorize-deps, multistep-add-script, multistep-config-then-test). Catalog now has 10 fixtures across code-modify / analysis / multi-step. All verify-fail-on-broken-state.
+- ✅ `e6dfc55` — `scripts/audit-bubble-gallery.mjs` (D from backlog): headless Playwright probe of `?gallery=1` for regression checks. First run: 24 nodes / 18 distinct kinds / 0 console errors. Multi-provider work caused zero bubble regressions.
+- ✅ `e0de102` — Add `--fixture-dir` mode to run-eval.mjs (unblocks F). Per-attempt fixture stage + git-init + file:// clone, post-run verify.mjs exec, score adjusted by ±50/-30. One sample catalog entry (fixture-fix-off-by-one) wired and smoke-tested locally.
+- ✅ Audit findings: 5 of the 6 "pending UX items" in active-work.md were already shipped (Playwright-friendly transcripts, think-tag rendering, contract bubble structured expand, content-boundary segmentation, tool-call marker over-segmentation). Doc was tracking ghost work. Stale entries removed; the 6th (#231) is now researched + queued for Anthropic-key empirical check.
 
 ### 2026-04-27 evening — overnight validation tour
 
