@@ -34,14 +34,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node 22
+      - name: Setup Node 24
         uses: actions/setup-node@v4
         with:
-          # Use 22.x LTS in CI (locally Kevin runs 25.x; both work
-          # because we don't pin via package.json#engines). 22 has
-          # native test runner + tsx loader without the experimental
-          # warnings that 18/20 emit.
-          node-version: "22.x"
+          # Use 24.x in CI to get stable --test-isolation=none flag
+          # (was experimental in 22.x). Locally Kevin runs 25.x; both
+          # support the flag we use in CI mode for a 5x speedup over
+          # process isolation.
+          node-version: "24.x"
           cache: "npm"
 
       - name: Install dependencies
