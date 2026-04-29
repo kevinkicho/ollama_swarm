@@ -20,6 +20,10 @@ export interface EventLogRun {
     hasSummary: boolean;
     runId?: string;
     preset?: string;
+    // EventLogPanel.tsx already consumes this shape — kept in sync.
+    startedAt?: number;
+    finishedAt?: number;
+    finalPhase?: string;
   };
   recordCount: number;
   isSessionBoundary: boolean;
