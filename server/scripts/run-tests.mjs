@@ -104,9 +104,15 @@ const TEST_FILES = [
 //   node scripts/run-tests.mjs --test-name-pattern=foo
 const extraArgs = process.argv.slice(2);
 
+// CI bypass: disable per-test-file process isolation in CI (slow on
+// shared runners — 70 cold node spawns = 20+ min on ubuntu-latest).
+// Local dev keeps default isolation. Tests don't share global state
+// (each spins its own tmpdir + adapters) so this is safe.
+const ciFlags = process.env.CI === "true" ? ["--test-isolation=none"] : [];
+
 const r = spawnSync(
   process.execPath,
-  ["--import", "tsx", "--test", ...extraArgs, ...TEST_FILES],
+  ["--import", "tsx", "--test", ...ciFlags, ...extraArgs, ...TEST_FILES],
   { stdio: "inherit", env },
 );
 process.exit(r.status ?? 1);

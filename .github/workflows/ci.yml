@@ -24,11 +24,13 @@ jobs:
   test:
     name: Type-check + server tests
     runs-on: ubuntu-latest
-    # 25 min — locally the suite runs in ~12s with 1100+ tests but
-    # CI's `--test-isolation=process` mode + slower runner I/O can
-    # take 15-20 min. Bumped from 15 after the first run cancelled
-    # mid-test (commit d10e339).
-    timeout-minutes: 25
+    # 40 min budget. Locally the suite runs in ~12s with 1100+ tests.
+    # On CI we disable per-file process isolation (CI=true triggers
+    # --test-isolation=none in run-tests.mjs) because 70 cold node
+    # spawns × CI's slow disk = 25+ min, and our tests don't share
+    # global state (each uses its own tmpdir + fresh adapters). With
+    # isolation disabled, CI should land in ~3-5 min.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
