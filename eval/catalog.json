@@ -46,6 +46,18 @@
       "wallClockCapMs": 600000,
       "expectFilesChanged": false,
       "$rationale": "Repo-walk task. Stigmergy's pheromone-trail design fits naturally; map-reduce's per-file slicing also works; round-robin baseline."
+    },
+    {
+      "id": "fixture-fix-off-by-one",
+      "title": "Fix the countDown off-by-one (fixture mode)",
+      "directive": "src/countdown.js has a loop that exits one iteration too early — countDown(3) returns [3, 2] instead of [3, 2, 1]. Change the loop terminator so the returned array includes the final 1. Make the smallest possible edit; do not refactor.",
+      "fixture": "fix-off-by-one",
+      "presets": ["baseline", "blackboard"],
+      "rounds": 3,
+      "agentCount": 3,
+      "wallClockCapMs": 300000,
+      "expectFilesChanged": true,
+      "$rationale": "First fixture-mode catalog entry — exercises end-to-end fixture staging + verify. Run: node eval/run-eval.mjs --fixture-dir=eval/fixtures --only=fixture-fix-off-by-one --presets=baseline. Other fixtures (add-null-guard, extract-pure-helper, fix-failing-test, audit-console-logs, categorize-deps, multistep-add-script, multistep-config-then-test, rename-symbol, add-readme-section) follow the same shape — add their catalog entries when ready to sweep."
     }
   ],
   "$presetOverrides": {

@@ -26,9 +26,10 @@
 //   per-run/<id>.json     — captured summary.json for each finished run
 //   progress.log          — human-readable timeline
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, cpSync, rmSync, existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { spawnSync } from "node:child_process";
 
 // Module-level state set inside main() — kept local so the file can
 // be imported by the test without triggering the CLI run.
@@ -40,6 +41,12 @@ let PARENT_PATH = "";
 let ONLY_TASKS = null;
 let ONLY_PRESETS = null;
 let SEEDS = 1;
+// Phase 7+ (#314): when set, ignore --repo and source the swarm's
+// target from a local self-contained fixture directory under
+// eval/fixtures/. Each iteration cp -r's the fixture into PARENT_PATH,
+// git-inits it, and points the swarm at the file:// URL. Verification
+// runs the fixture's verify.mjs; exit 0 = pass.
+let FIXTURE_DIR = "";
 let logFile = "";
 
 function log(msg) {
@@ -69,6 +76,48 @@ function buildPayload(task, preset) {
     payload.proposition = task.proposition;
   }
   return payload;
+}
+
+// Phase 7+ (#314): stage a local fixture as a git-init'd directory the
+// swarm can clone via simple-git's file:// transport. Each attempt gets
+// its own copy under PARENT_PATH so concurrent runs don't collide.
+// Returns the file:// URL the swarm should clone from.
+function stageFixture(fixtureDir, fixtureName, attemptId) {
+  const stagePath = path.join(PARENT_PATH, `${fixtureName}__${attemptId}`);
+  // Wipe any prior stage; cpSync expects a non-existent or empty dest
+  if (existsSync(stagePath)) rmSync(stagePath, { recursive: true, force: true });
+  cpSync(fixtureDir, stagePath, { recursive: true });
+  // git-init the staged copy so simple-git.clone can pull from it
+  const gitInit = spawnSync("git", ["init", "--quiet"], { cwd: stagePath });
+  if (gitInit.status !== 0) {
+    throw new Error(`git init failed in ${stagePath}: ${gitInit.stderr?.toString() ?? "no stderr"}`);
+  }
+  // Stage + commit so the clone has a HEAD to check out
+  spawnSync("git", ["add", "-A"], { cwd: stagePath });
+  spawnSync(
+    "git",
+    [
+      "-c", "user.name=eval-fixture",
+      "-c", "user.email=eval@local",
+      "commit", "--quiet", "-m", "fixture seed",
+    ],
+    { cwd: stagePath },
+  );
+  return { fileUrl: `file://${stagePath}`, stagePath };
+}
+
+// Run the fixture's verify.mjs and return { ok: bool, output: string }.
+// Path is the fixture's STAGED directory (the cp -r destination), so
+// swarm-applied changes are what we're verifying.
+function runFixtureVerify(stagePath) {
+  const r = spawnSync(process.execPath, ["verify.mjs"], {
+    cwd: stagePath,
+    timeout: 30_000,
+  });
+  return {
+    ok: r.status === 0,
+    output: ((r.stdout?.toString() ?? "") + (r.stderr?.toString() ?? "")).slice(-1000),
+  };
 }
 
 async function fireStart(payload) {
@@ -219,9 +268,11 @@ async function main() {
       return m ? [m[1], m[2]] : [a.replace(/^--/, ""), true];
     }),
   );
-  REPO = args.repo;
-  if (!REPO) {
-    console.error("--repo=<github-url> is required");
+  REPO = args.repo ?? "";
+  // --repo OR --fixture-dir is required; fixture-mode tasks supply
+  // their own per-attempt repo via stageFixture.
+  if (!REPO && !args["fixture-dir"] && !args.fixtureDir) {
+    console.error("--repo=<github-url> OR --fixture-dir=<dir> is required");
     process.exit(2);
   }
   CATALOG_PATH = args.catalog ?? CATALOG_PATH;
@@ -232,6 +283,7 @@ async function main() {
   PARENT_PATH = args.parent ?? path.resolve("runs", "_eval-clones");
   ONLY_TASKS = args.only ? String(args.only).split(",") : null;
   ONLY_PRESETS = args.presets ? String(args.presets).split(",") : null;
+  FIXTURE_DIR = args["fixture-dir"] ?? args.fixtureDir ?? "";
   // Phase 7 of #314: multi-seed support. Default 1 (single attempt).
   // Scoreboard sweeps use 3–5 to reduce LLM-output noise. Capped at
   // 20 client-side so a typo can't authorize a 200-run accidental.
@@ -263,6 +315,38 @@ async function main() {
         log(`  preset=${preset} seed=${seed}/${SEEDS}`);
         const startTs = Date.now();
         const payload = buildPayload(task, preset);
+        // Phase 7+ (#314): fixture-mode override. When the task has a
+        // `fixture: "<name>"` field AND --fixture-dir is set, stage
+        // the fixture as a local file:// repo per attempt. The swarm
+        // sees a freshly-init'd clone with one seed commit; verify
+        // runs after the swarm finishes.
+        let stage = null;
+        if (task.fixture && FIXTURE_DIR) {
+          const fixtureSrc = path.join(FIXTURE_DIR, task.fixture);
+          if (!existsSync(fixtureSrc)) {
+            log(`    fixture missing: ${fixtureSrc}`);
+            results.push({
+              taskId: task.id, preset, seed, ok: false, reason: `fixture missing: ${fixtureSrc}`,
+              score: { total: 0, components: {}, notes: "fixture_missing" },
+              wallS: 0, ts: startTs,
+            });
+            continue;
+          }
+          try {
+            stage = stageFixture(fixtureSrc, task.fixture, `${preset}-${seed}-${startTs}`);
+            payload.repoUrl = stage.fileUrl;
+            log(`    staged fixture → ${stage.stagePath}`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log(`    stage FAILED: ${msg}`);
+            results.push({
+              taskId: task.id, preset, seed, ok: false, reason: `stage failed: ${msg}`,
+              score: { total: 0, components: {}, notes: "stage_failed" },
+              wallS: 0, ts: startTs,
+            });
+            continue;
+          }
+        }
         const fired = await fireStart(payload);
         if (!fired.ok) {
           log(`    start FAILED: ${fired.reason}`);
@@ -277,15 +361,41 @@ async function main() {
         const safetyMs = (task.wallClockCapMs ?? 600_000) + 120_000;
         const final = await waitUntilIdle(safetyMs);
         const wallS = Math.round((Date.now() - startTs) / 1000);
-        // derive clonePath from runs/_eval-clones/<repo-name>
-        const repoName =
-          REPO.replace(/\.git$/, "")
-            .split("/")
-            .filter(Boolean)
-            .pop() ?? "repo";
-        const derivedClone = path.join(PARENT_PATH, repoName);
+        // derive clonePath: in fixture mode, swarm clones from the
+        // file:// URL into PARENT_PATH/<basename-of-fileurl>; basename
+        // is the staged dir's leaf, which is `<fixture>__<attemptId>`
+        // since git doesn't strip the path at clone time the same way
+        // it strips remote URLs. Easiest: use the stage path directly.
+        let derivedClone;
+        if (stage) {
+          // Swarm.deriveCloneDir(file://, parent) → parent/<basename>;
+          // basename of file://<stagePath> is the trailing dir name.
+          derivedClone = path.join(PARENT_PATH, path.basename(stage.stagePath));
+        } else {
+          const repoName =
+            REPO.replace(/\.git$/, "")
+              .split("/")
+              .filter(Boolean)
+              .pop() ?? "repo";
+          derivedClone = path.join(PARENT_PATH, repoName);
+        }
         const summary = await readSummary(derivedClone);
         const score = scoreRun(summary, task);
+        // Phase 7+ (#314): if this was a fixture run, exec verify.mjs
+        // and add a +50 bonus on pass (or zero out completion on fail).
+        // Verify runs in the SWARM's clone path (where edits landed),
+        // not the original fixture src — so the test sees real changes.
+        let verify = null;
+        if (stage) {
+          verify = runFixtureVerify(derivedClone);
+          if (verify.ok) {
+            score.total += 50;
+            score.notes = `${score.notes} · verify=PASS`;
+          } else {
+            score.total = Math.max(0, score.total - 30);
+            score.notes = `${score.notes} · verify=FAIL`;
+          }
+        }
         log(`    done — phase=${final.phase} score=${score.total} (${score.notes})`);
         if (summary) {
           try {
@@ -300,6 +410,8 @@ async function main() {
         results.push({
           taskId: task.id, preset, seed, ok: final.phase !== "timeout",
           phase: final.phase, runId: fired.runId, wallS, ts: startTs, score,
+          ...(verify ? { verify: { ok: verify.ok, output: verify.output } } : {}),
+          ...(stage ? { stagePath: stage.stagePath } : {}),
         });
         // Persist results after every attempt so a partial run still has data
         writeFileSync(path.join(OUT_DIR, "results.json"), JSON.stringify(results, null, 2));
