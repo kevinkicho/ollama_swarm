@@ -512,10 +512,32 @@ export class StigmergyRunner implements SwarmRunner {
       candidatePaths,
       annotations: this.annotations,
     });
-    const text = await this.runAgent(agent, prompt);
+    // #303: parse the annotation INSIDE the runAgent transform so
+    // the JSON envelope gets stripped from visible bubble text + the
+    // entry carries a structured stigmergy_annotation summary the UI
+    // bubble can render as a card. Capture the parsed annotation here
+    // for the applyAnnotation call below.
+    let parsedAnn: ParsedAnnotation | null = null;
+    const text = await this.runAgent(agent, prompt, {
+      transformEntry: (entryText) => {
+        parsedAnn = parseAnnotation(entryText);
+        if (!parsedAnn) return { text: entryText };
+        const cleanText = stripAnnotationEnvelope(entryText);
+        return {
+          text: cleanText.length > 0 ? cleanText : entryText,
+          summary: {
+            kind: "stigmergy_annotation",
+            file: parsedAnn.file,
+            interest: parsedAnn.interest,
+            confidence: parsedAnn.confidence,
+            note: parsedAnn.note,
+          },
+        };
+      },
+    });
     if (this.stopping || !text) return;
-    const ann = parseAnnotation(text);
-    if (ann) {
+    if (parsedAnn) {
+      const ann = parsedAnn as ParsedAnnotation;
       this.applyAnnotation(ann);
       this.appendSystem(
         `Annotation update — ${ann.file}: interest=${ann.interest}, confidence=${ann.confidence}, total visits=${this.annotations.get(ann.file)?.visits ?? 0}`,
@@ -559,7 +581,18 @@ export class StigmergyRunner implements SwarmRunner {
     });
   }
 
-  private async runAgent(agent: Agent, prompt: string): Promise<string> {
+  /** #303: optional transform applied to the post-strip text BEFORE
+   *  the transcript entry is pushed. Lets callers (currently only
+   *  runExplorerTurn) remove envelope JSON from the visible text and
+   *  attach a structured TranscriptEntrySummary so the UI bubble
+   *  renders a card instead of raw markup. */
+  private async runAgent(
+    agent: Agent,
+    prompt: string,
+    opts?: {
+      transformEntry?: (text: string) => { text: string; summary?: TranscriptEntrySummary };
+    },
+  ): Promise<string> {
     this.opts.manager.markStatus(agent.id, "thinking");
     this.emitAgentState({
       id: agent.id,
@@ -659,13 +692,23 @@ export class StigmergyRunner implements SwarmRunner {
       });
       // #230: strip <think> + XML pseudo-tool-call markers first.
       const strippedAgent = stripAgentText(text);
+      let entryText = strippedAgent.finalText || "(empty response)";
+      let entrySummary: TranscriptEntrySummary | undefined;
+      // #303: apply caller-supplied transform (e.g. strip stigmergy
+      // annotation JSON from visible text + attach structured kind).
+      if (opts?.transformEntry) {
+        const transformed = opts.transformEntry(entryText);
+        entryText = transformed.text;
+        entrySummary = transformed.summary;
+      }
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
         agentId: agent.id,
         agentIndex: agent.index,
-        text: strippedAgent.finalText || "(empty response)",
+        text: entryText,
         ts: Date.now(),
+        ...(entrySummary ? { summary: entrySummary } : {}),
         ...(strippedAgent.thoughts.length > 0 ? { thoughts: strippedAgent.thoughts } : {}),
         ...(strippedAgent.toolCalls.length > 0 ? { toolCalls: strippedAgent.toolCalls } : {}),
       };
@@ -742,6 +785,23 @@ export interface ParsedAnnotation {
 // "no pheromone update this turn" and just keeps the agent's text in the
 // transcript. Lenient on integer-vs-float; clamps interest/confidence to
 // [0, 10] so a confused model can't poison the table with extremes.
+/** #303: strip the annotation JSON envelope from agent text so the
+ *  visible bubble shows prose only. Removes (in order):
+ *    1. ```json ... ``` fenced blocks
+ *    2. ``` ... ``` (no language tag) blocks
+ *    3. Trailing bare {...} blocks
+ *  Trims trailing whitespace. Returns the cleaned text. Exported for
+ *  tests. */
+export function stripAnnotationEnvelope(text: string): string {
+  let out = text;
+  // Fenced JSON block (most common)
+  out = out.replace(/```(?:json)?\s*\{[\s\S]*?\}\s*```\s*$/i, "");
+  // Bare trailing {...} block (less common but the model sometimes
+  // skips the fences and just emits raw JSON at the end)
+  out = out.replace(/\s*\{[\s\S]*?\}\s*$/, "");
+  return out.trimEnd();
+}
+
 export function parseAnnotation(raw: string): ParsedAnnotation | null {
   const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
   const candidates = [fenceMatch ? fenceMatch[1] : null, raw].filter(Boolean) as string[];

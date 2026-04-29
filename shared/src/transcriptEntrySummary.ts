@@ -68,6 +68,20 @@ export type TranscriptEntrySummary =
       kind: "stigmergy_report";
       filesRanked: number;
     }
+  // #303 (2026-04-28): per-explorer-turn stigmergy annotation. The
+  // agent emits a JSON envelope { file, interest, confidence, note }
+  // alongside its prose. Pre-#303 the JSON was left dangling at the
+  // end of the bubble's text, escaping the segmenter. Now the
+  // runner parses the envelope, strips it from the visible text,
+  // and tags the entry with this kind so the bubble renders the
+  // structured fields (interest/confidence bars + note) as a card.
+  | {
+      kind: "stigmergy_annotation";
+      file: string;
+      interest: number; // 0-10
+      confidence: number; // 0-10
+      note: string;
+    }
   // Task #100 (2026-04-25): role-diff synthesis (closes the missing-
   // synthesis gap noted in the 5-preset tour). Agent-1 takes every
   // role's findings and produces a cross-role consolidation. Doubles

@@ -284,6 +284,19 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
         />
       );
     }
+    // #303: stigmergy explorer's per-turn annotation. Renders the
+    // structured envelope (file + interest/confidence bars + note)
+    // as a card BELOW the prose, instead of leaving raw JSON
+    // dangling outside any segment.
+    if (entry.summary.kind === "stigmergy_annotation") {
+      return (
+        <StigmergyAnnotationBubble
+          header={header}
+          text={entry.text}
+          summary={entry.summary}
+        />
+      );
+    }
     if (entry.summary.kind === "mapreduce_synthesis") {
       const c = entry.summary.cycle;
       return (
@@ -597,6 +610,72 @@ function DecoratedSynthesisBlock({
       header={decoratedHeader}
       text={text}
     />
+  );
+}
+
+// #303: stigmergy explorer's per-turn annotation bubble. Renders the
+// agent's prose at top, then a structured card with file path +
+// interest/confidence bars + the note. The raw JSON envelope used to
+// dangle outside the segmenter; now the runner strips it and the
+// parsed values render here as readable UI.
+function StigmergyAnnotationBubble({
+  header,
+  text,
+  summary,
+}: {
+  header: React.ReactNode;
+  text: string;
+  summary: { kind: "stigmergy_annotation"; file: string; interest: number; confidence: number; note: string };
+}) {
+  return (
+    <div className="rounded-md p-3 border-2 border-teal-700/60 bg-teal-950/20 text-sm space-y-2">
+      {header}
+      {text && text !== "(empty response)" ? (
+        <div className="text-ink-200 whitespace-pre-wrap">{text}</div>
+      ) : null}
+      {/* Structured annotation card */}
+      <div className="rounded border border-teal-800/60 bg-ink-950/40 p-2 space-y-1.5">
+        <div className="flex items-baseline gap-2">
+          <span className="text-[9px] uppercase tracking-wider text-teal-400/80">file</span>
+          <span className="font-mono text-[12px] text-teal-200 break-all">{summary.file}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+          <ScoreBar label="interest" value={summary.interest} max={10} hue="teal" />
+          <ScoreBar label="confidence" value={summary.confidence} max={10} hue="sky" />
+        </div>
+        {summary.note ? (
+          <div className="text-[11px] text-ink-300 italic leading-snug border-t border-teal-900/40 pt-1.5">
+            “{summary.note}”
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ScoreBar({
+  label,
+  value,
+  max,
+  hue,
+}: {
+  label: string;
+  value: number;
+  max: number;
+  hue: "teal" | "sky";
+}) {
+  const pct = Math.max(0, Math.min(100, (value / max) * 100));
+  const barColor = hue === "teal" ? "bg-teal-500" : "bg-sky-500";
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <span className="text-[9px] uppercase tracking-wider text-ink-500 w-16 shrink-0">{label}</span>
+      <div className="flex-1 h-1.5 bg-ink-900 rounded overflow-hidden min-w-[40px]">
+        <div className={`h-full ${barColor}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-[10px] font-mono tabular-nums text-ink-300 w-10 text-right">
+        {value}/{max}
+      </span>
+    </div>
   );
 }
 

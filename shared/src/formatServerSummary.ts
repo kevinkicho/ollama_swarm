@@ -85,6 +85,9 @@ export function formatServerSummary(s: TranscriptEntrySummary): string {
   if (s.kind === "agents_ready") {
     return `${s.readyCount}/${s.requestedCount} agents ready (preset: ${s.preset}, spawn ${Math.round(s.spawnElapsedMs / 1000)}s)`;
   }
+  if (s.kind === "stigmergy_annotation") {
+    return `Annotated ${s.file} — interest ${s.interest}/10, confidence ${s.confidence}/10`;
+  }
   // worker_hunks (only kind remaining after all the if-returns above)
   const opParts: string[] = [];
   if (s.ops.replace > 0) opParts.push(`${s.ops.replace} replace`);
