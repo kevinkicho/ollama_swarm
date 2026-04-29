@@ -298,6 +298,15 @@ export type SwarmEvent =
       success: boolean;
       ts: number;
     }
+  // #299: user submitted a mid-run directive amendment. Emitted by
+  // the server's POST /api/swarm/amend handler so all WS clients
+  // (multiple tabs viewing the same run) mirror the addition.
+  | {
+      type: "directive_amended";
+      runId: string;
+      ts: number;
+      text: string;
+    }
   // #295: live directive-conformance sample. Emitted by the server's
   // ConformanceMonitor every ~90s during runs with a non-empty
   // userDirective. UI accumulates samples into a bounded rolling

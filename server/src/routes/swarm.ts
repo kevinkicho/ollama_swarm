@@ -457,6 +457,32 @@ export function swarmRouter(orch: Orchestrator): Router {
     }
   });
 
+  // #299: mid-run directive amend. The user submits an addendum
+  // (typically when the conformance gauge drops) and the orchestrator
+  // appends it to the active run's amendments buffer. Each runner
+  // reads via opts.getAmendments(runId) on its next prompt cycle —
+  // the nudge takes effect at the next turn boundary, not instantly.
+  // Returns 404 when no run is active or the runId doesn't match.
+  const AmendBody = z.object({
+    runId: z.string().min(1).max(40),
+    text: z.string().trim().min(1).max(1000),
+  });
+  r.post("/amend", async (req: Request, res: Response) => {
+    const parsed = AmendBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.flatten() });
+      return;
+    }
+    const stored = orch.addAmendment(parsed.data.runId, parsed.data.text);
+    if (!stored) {
+      res.status(404).json({ error: "No active run with that runId, or text was empty" });
+      return;
+    }
+    // Broadcast happens inside orch.addAmendment via opts.emit so
+    // all WS clients see the directive_amended event in realtime.
+    res.json({ ok: true, amendment: stored });
+  });
+
   // Task #167: soft-stop. Workers finish currently-claimed todos
   // (no in-flight commits get lost), no new claims, then escalate
   // to hard stop. Backstopped at 3 min — user can press hard /stop

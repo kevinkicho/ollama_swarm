@@ -114,6 +114,9 @@ function applyEvent(ev: SwarmEvent): void {
         ...(ev.reason ? { reason: ev.reason } : {}),
       });
       break;
+    case "directive_amended":
+      s.pushAmendment({ ts: ev.ts, text: ev.text });
+      break;
     case "clone_state":
       s.setCloneState({
         alreadyPresent: ev.alreadyPresent,

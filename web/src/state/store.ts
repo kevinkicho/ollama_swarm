@@ -34,6 +34,13 @@ export interface ConformanceSample {
   reason?: string;
 }
 
+// #299: user-submitted mid-run directive amendments. Cleared on
+// run reset.
+export interface DirectiveAmendment {
+  ts: number;
+  text: string;
+}
+
 interface SwarmStore {
   phase: SwarmPhase;
   round: number;
@@ -67,6 +74,9 @@ interface SwarmStore {
   // Empty array when no run is active OR the run had no userDirective
   // (server doesn't emit samples in those cases).
   conformance: ConformanceSample[];
+  // #299: user-submitted mid-run directive amendments for the
+  // active run. Cleared on reset/resetForNewRun.
+  amendments: DirectiveAmendment[];
   // Unit 47: latest clone_state event for the current run, or
   // undefined before the runner emits it. UI uses this to show the
   // "you're resuming an existing clone" banner.
@@ -127,6 +137,8 @@ interface SwarmStore {
   pushLatencySample: (agentId: string, sample: LatencySample) => void;
   // #295: append a conformance sample to the rolling window.
   pushConformanceSample: (sample: ConformanceSample) => void;
+  // #299: append a mid-run amendment received via WS.
+  pushAmendment: (amendment: DirectiveAmendment) => void;
   setCloneState: (c: CloneState) => void;
   dismissCloneBanner: () => void;
   setRunStartedAt: (ts: number) => void;
@@ -175,6 +187,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   error: undefined,
   latency: {},
   conformance: [],
+  amendments: [],
   cloneState: undefined,
   cloneBannerDismissed: false,
   runStartedAt: undefined,
@@ -401,6 +414,8 @@ export const useSwarm = create<SwarmStore>((set) => ({
       }
       return { conformance: next };
     }),
+  pushAmendment: (amendment) =>
+    set((s) => ({ amendments: s.amendments.concat(amendment) })),
   // Unit 47: clone_state arrives once per run. Setting it ALSO clears
   // the dismissed flag so a fresh run shows its banner even if a
   // prior banner was dismissed mid-session (each run has its own
@@ -435,6 +450,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       error: undefined,
       latency: {},
       conformance: [],
+      amendments: [],
       cloneState: undefined,
       cloneBannerDismissed: false,
       runStartedAt: undefined,
@@ -487,7 +503,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       // divide yet, and it avoids the "first-paint shows a divider"
       // weirdness at run start.
       if (s.transcript.length === 0) {
-        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, conformance: [], ...blackboardReset };
+        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, conformance: [], amendments: [], ...blackboardReset };
       }
       // Task #46 also: dedupe consecutive dividers. If the last entry
       // is already a run-start marker, don't stack a second one —
@@ -499,7 +515,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
         (lastEntry.text === "— new run started —" ||
           lastEntry.text.startsWith("▸▸RUN-START▸▸"));
       if (isLastADivider) {
-        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, conformance: [], ...blackboardReset };
+        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, conformance: [], amendments: [], ...blackboardReset };
       }
       // Build the divider text. When metadata is supplied, prefix
       // with the sentinel + encode fields as a pipe-separated line
@@ -521,6 +537,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
         streaming: {}, streamingMeta: {}, streamingSegmentPoints: {},
         latency: {},
         conformance: [],
+        amendments: [],
         ...blackboardReset,
         transcript: [
           ...s.transcript,

@@ -312,6 +312,13 @@ export interface RunnerOpts {
   // USE_OLLAMA_DIRECT=1 is set. Optional — falls through to a default
   // if the runner doesn't need it (non-blackboard presets unchanged).
   ollamaBaseUrl?: string;
+  // #299: read live user-submitted directive amendments for the
+  // active run. The orchestrator pre-binds the active runId so the
+  // runner doesn't need to track it. Returns [] when no amendments
+  // / no active run. Runners use this to weave HITL nudges into
+  // their next prompt's context. Optional so older test rigs /
+  // minimal harnesses can skip wiring it; default = no amendments.
+  getAmendments?: () => Array<{ ts: number; text: string }>;
 }
 
 // Every preset implementation fulfills this contract so the top-level

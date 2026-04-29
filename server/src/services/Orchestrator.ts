@@ -17,6 +17,7 @@ import { MapReduceRunner } from "../swarm/MapReduceRunner.js";
 import { StigmergyRunner } from "../swarm/StigmergyRunner.js";
 import { DEFAULT_ROLES, roleForAgent } from "../swarm/roles.js";
 import { ConformanceMonitor } from "./ConformanceMonitor.js";
+import { AmendmentsBuffer, type Amendment } from "./AmendmentsBuffer.js";
 
 export interface OrchestratorOpts extends RunnerOpts {
   manager: AgentManager;
@@ -211,6 +212,10 @@ export class Orchestrator {
     readPersistedKnownParents(),
     scanForRunParents(process.cwd()),
   );
+  // #299: per-run buffer of user-submitted directive amendments.
+  // Opened on run start; runner reads via getAmendments(); closed on
+  // run end (success OR failure).
+  private readonly amendments = new AmendmentsBuffer();
 
   constructor(private readonly opts: OrchestratorOpts) {
     // Persist the merged list back so the next read is consistent
@@ -246,6 +251,32 @@ export class Orchestrator {
 
   isRunning(): boolean {
     return this.runner?.isRunning() ?? false;
+  }
+
+  /** #299: append a user-submitted amendment to the active run.
+   *  Returns the stored amendment, or null when there's no active
+   *  run / the runId doesn't match / the text is empty. Emits a
+   *  directive_amended SwarmEvent on success so all WS-connected
+   *  tabs mirror the addition + the runner's next prompt picks it
+   *  up via getAmendments(). */
+  addAmendment(runId: string, text: string): Amendment | null {
+    if (!this.runId || this.runId !== runId) return null;
+    const stored = this.amendments.add(runId, text);
+    if (stored) {
+      this.opts.emit({
+        type: "directive_amended",
+        runId,
+        ts: stored.ts,
+        text: stored.text,
+      });
+    }
+    return stored;
+  }
+
+  /** #299: read all amendments for a run, oldest first. Used by the
+   *  runner to weave them into prompts. Defensive copy. */
+  getAmendments(runId: string): Amendment[] {
+    return this.amendments.list(runId);
   }
 
   // Returns the parent dir of the last successfully-started run.
@@ -371,6 +402,9 @@ export class Orchestrator {
       startedAt,
       ...runConfig,
     });
+    // #299: open the amendments buffer for this run. /api/swarm/amend
+    // appends here; runners read via getAmendments(runId) on each turn.
+    this.amendments.open(runId);
     // #295: spin up the conformance monitor when the run carries a
     // user directive. Polls Ollama every 90s with a "rate 0–100 how
     // on-topic is the recent transcript?" prompt. Skipped entirely
@@ -418,6 +452,8 @@ export class Orchestrator {
       // #295: stop the conformance monitor on EITHER successful run end
       // OR mid-flight failure. Idempotent stop is safe.
       monitor?.stop();
+      // #299: close the amendments buffer for this run. Idempotent.
+      this.amendments.close(runId);
     }
   }
 
@@ -454,9 +490,20 @@ export class Orchestrator {
   }
 
   private buildRunner(preset: PresetId, cfg: RunConfig): SwarmRunner {
+    // #299: thread getAmendments into runner opts so each runner can
+    // read live HITL nudges via this.opts.getAmendments(). The
+    // amendments buffer lives on the orchestrator; we bind it here
+    // (pre-bound to the active runId) so the runner doesn't need a
+    // direct reference to AmendmentsBuffer or the runId. Returns []
+    // safely when called before runId is minted (start-time race).
+    const opts = {
+      ...this.opts,
+      getAmendments: () =>
+        this.runId ? this.amendments.list(this.runId) : [],
+    };
     switch (preset) {
       case "round-robin":
-        return new RoundRobinRunner(this.opts);
+        return new RoundRobinRunner(opts);
       case "role-diff": {
         // Unit 32: optional user-supplied roles take precedence over the
         // default catalog. The route validates shape (name + guidance,
@@ -467,39 +514,39 @@ export class Orchestrator {
         // (roleForAgent throws on an empty array).
         const roles =
           cfg.roles && cfg.roles.length > 0 ? cfg.roles : DEFAULT_ROLES;
-        return new RoundRobinRunner(this.opts, { roles });
+        return new RoundRobinRunner(opts, { roles });
       }
       case "blackboard":
-        return new BlackboardRunner(this.opts);
+        return new BlackboardRunner(opts);
       case "council":
         // Parallel drafts + reconcile. Round 1 hides peer drafts from each
         // agent's prompt; Round 2+ reveals them. Discussion-only.
-        return new CouncilRunner(this.opts);
+        return new CouncilRunner(opts);
       case "orchestrator-worker":
         // Agent 1 = lead (plans + synthesizes), 2..N = workers (parallel,
         // isolated subtasks). `rounds` = plan→execute→synthesize cycles.
-        return new OrchestratorWorkerRunner(this.opts);
+        return new OrchestratorWorkerRunner(opts);
       case "orchestrator-worker-deep":
         // Task #131: 3-tier OW. Agent 1 = orchestrator, agents 2..K+1 =
         // mid-leads (K = max(1, ceil((N-1)/6))), agents K+2..N = workers
         // partitioned across mid-leads. Per cycle: top-plan → mid-plan →
         // workers → mid-synth → top-synth. Scales coverage past ~8
         // workers without inflating any single tier's prompt context.
-        return new OrchestratorWorkerDeepRunner(this.opts);
+        return new OrchestratorWorkerDeepRunner(opts);
       case "debate-judge":
         // Fixed 3 agents: Agent 1 = PRO, Agent 2 = CON, Agent 3 = JUDGE.
         // Per round Pro+Con exchange; Judge scores on the final round.
-        return new DebateJudgeRunner(this.opts);
+        return new DebateJudgeRunner(opts);
       case "map-reduce":
         // Agent 1 = reducer, 2..N = mappers. Mappers each get a round-robin
         // slice of top-level repo entries and inspect them in isolation;
         // reducer synthesizes all mapper reports per cycle.
-        return new MapReduceRunner(this.opts);
+        return new MapReduceRunner(opts);
       case "stigmergy":
         // Self-organizing repo exploration. No planner, no roles — agents
         // pick their own next file based on a shared annotation table
         // (pheromone trail) that the runner maintains in memory.
-        return new StigmergyRunner(this.opts);
+        return new StigmergyRunner(opts);
       default: {
         // Exhaustiveness check — if a new preset is added to PresetId, TS errors here.
         const _exhaustive: never = preset;

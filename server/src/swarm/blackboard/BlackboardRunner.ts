@@ -2208,7 +2208,10 @@ export class BlackboardRunner implements SwarmRunner {
       committedFiles,
       repoFiles,
       readmeExcerpt,
-      userDirective: this.active.userDirective,
+      // #299: weave any user-submitted mid-run amendments into the
+      // tier-upgrade directive. The next contract authoring sees
+      // them as if they were part of the original directive.
+      userDirective: this.directiveWithAmendments(),
     });
 
     const { response, agentUsed } = await this.promptPlannerSafely(
@@ -4097,6 +4100,31 @@ export class BlackboardRunner implements SwarmRunner {
     const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now(), summary };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
+  }
+
+  /** #299: returns the active directive with any mid-run user
+   *  amendments appended. Helper used everywhere a planner-tier
+   *  prompt reads userDirective so HITL nudges take effect at the
+   *  next prompt boundary. Returns the original directive unchanged
+   *  when no amendments exist or getAmendments isn't wired (older
+   *  test rigs). */
+  private directiveWithAmendments(): string | undefined {
+    const base = this.active?.userDirective?.trim() ?? "";
+    const amendments = this.opts.getAmendments?.() ?? [];
+    if (amendments.length === 0) {
+      return base.length > 0 ? base : undefined;
+    }
+    const nudges = amendments
+      .map((a, i) => {
+        const stamp = new Date(a.ts).toISOString();
+        return `[user nudge #${i + 1} @ ${stamp}] ${a.text}`;
+      })
+      .join("\n");
+    const header =
+      "MID-RUN USER NUDGES (treat as additions to the directive — incorporate into the next contract):";
+    return base.length > 0
+      ? `${base}\n\n${header}\n${nudges}`
+      : `${header}\n${nudges}`;
   }
 
   private appendAgent(agent: Agent, text: string): void {

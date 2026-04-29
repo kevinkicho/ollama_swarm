@@ -139,6 +139,16 @@ export type SwarmEvent =
       success: boolean;
       ts: number;
     }
+  // #299 (2026-04-28): user submitted a mid-run directive amendment.
+  // Broadcast to all WS clients so multiple tabs viewing the same
+  // run mirror the addition. Runners pick up the amendment on their
+  // next prompt cycle via getAmendments().
+  | {
+      type: "directive_amended";
+      runId: string;
+      ts: number;
+      text: string;
+    }
   // #295 (2026-04-28): live directive-conformance gauge sample. Emitted
   // by ConformanceMonitor every CONFORMANCE_INTERVAL_MS (default 90s)
   // during runs that have a non-empty userDirective. The smoothed score
