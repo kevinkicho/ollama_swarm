@@ -1,0 +1,58 @@
+{
+  "$comment": "#297: Reference-task catalog for the eval harness. Each entry is one task that gets run against each preset (or a subset). Add new tasks by appending to the array; the harness picks them up on next run. Keep tasks small so the full sweep finishes in a few hours.",
+  "version": 1,
+  "tasks": [
+    {
+      "id": "audit-readme-claims",
+      "title": "Audit README claims for accuracy",
+      "directive": "Read the README. For each feature claimed, verify the code actually implements it. List discrepancies (claims with no implementation; implementation with no docs).",
+      "presets": ["round-robin", "council", "role-diff", "map-reduce", "stigmergy", "orchestrator-worker", "blackboard"],
+      "rounds": 2,
+      "agentCount": 4,
+      "wallClockCapMs": 600000,
+      "expectFilesChanged": false,
+      "$rationale": "Pure analysis task. Tests whether each preset can produce a coherent audit list. Blackboard included because its planner can extract auditable claims into todos."
+    },
+    {
+      "id": "fix-todos",
+      "title": "Resolve TODO/FIXME comments",
+      "directive": "Find every TODO, FIXME, and XXX comment in src/. For each, either resolve it (commit a fix) or convert it to an issue-tracker reference. Be conservative — only fix when the resolution is clear from context.",
+      "presets": ["blackboard"],
+      "rounds": 20,
+      "agentCount": 4,
+      "wallClockCapMs": 600000,
+      "expectFilesChanged": true,
+      "$rationale": "Code-modification task. Blackboard-only because other presets are discussion-only. Tight scope (per-comment small commits) suits the worker pipeline."
+    },
+    {
+      "id": "council-architecture-decision",
+      "title": "Choose: stay with Express or migrate to Fastify?",
+      "directive": "Evaluate whether this project should keep using Express or migrate to Fastify. Consider performance, ecosystem maturity, migration cost, and team familiarity. Produce a clear recommendation with rationale.",
+      "presets": ["council", "debate-judge", "role-diff"],
+      "rounds": 2,
+      "agentCount": 4,
+      "wallClockCapMs": 600000,
+      "expectFilesChanged": false,
+      "proposition": "This project should migrate from Express to Fastify.",
+      "$rationale": "Decision task with two clear sides. Council parallel-drafts pros/cons; debate-judge formal PRO/CON; role-diff different angles. Tests preset suitability for architectural decisions."
+    },
+    {
+      "id": "stigmergy-coverage-map",
+      "title": "Build a coverage map of which modules are well-tested vs not",
+      "directive": "Walk the repo. For each source file, identify whether it has corresponding tests, what fraction of its API surface is covered, and where the test gaps are. Produce a coverage table.",
+      "presets": ["stigmergy", "map-reduce", "round-robin"],
+      "rounds": 3,
+      "agentCount": 4,
+      "wallClockCapMs": 600000,
+      "expectFilesChanged": false,
+      "$rationale": "Repo-walk task. Stigmergy's pheromone-trail design fits naturally; map-reduce's per-file slicing also works; round-robin baseline."
+    }
+  ],
+  "$presetOverrides": {
+    "$comment": "Per-preset minimum-agent overrides. Catalog tasks can specify smaller agentCount; the harness clamps up to preset.min.",
+    "blackboard": { "min": 3 },
+    "map-reduce": { "min": 4 },
+    "orchestrator-worker-deep": { "min": 4 },
+    "debate-judge": { "min": 3, "max": 3 }
+  }
+}
