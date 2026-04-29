@@ -3,17 +3,28 @@
 // SetupForm asks for a model id (top-level Model field, blackboard
 // per-role overrides, TopologyGrid per-row overrides).
 //
+// Phase 4 of #314: optional `provider` prop. When provider="anthropic"
+// or provider="openai", the autocomplete switches to the hardcoded
+// model list from shared/src/providers.ts (no /api/tags equivalent
+// for paid providers). When omitted or "ollama", behavior is the
+// historical Ollama-tags datalist.
+//
 // Behavior:
 //   - Free text always works; user can type any model id.
-//   - The datalist surfaces locally-available models so first-time
-//     users get a one-click pick instead of memorizing valid strings.
-//   - When Ollama returns 0 models, MissingModelsHint renders a single
-//     line above the field group instructing the user to pull one.
+//   - Datalist surfaces the right per-provider candidates.
+//   - When Ollama returns 0 models AND provider is ollama, the
+//     MissingModelsHint renders a single line with `ollama pull`
+//     instructions. Hidden for paid providers (no equivalent action).
 //   - Each ModelInput needs a unique listId across the page (browser
-//     requirement) — caller-provided so render order is deterministic.
+//     requirement) — useId provides one.
 
 import { useId } from "react";
 import { useAvailableModels } from "../../hooks/useAvailableModels";
+import {
+  ANTHROPIC_MODELS,
+  OPENAI_MODELS,
+  type Provider,
+} from "../../../../shared/src/providers";
 
 export function ModelInput({
   value,
@@ -21,15 +32,23 @@ export function ModelInput({
   placeholder,
   className,
   ariaLabel,
+  provider = "ollama",
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   className?: string;
   ariaLabel?: string;
+  provider?: Provider;
 }) {
-  const { models } = useAvailableModels();
+  const ollamaModels = useAvailableModels().models;
   const listId = useId();
+  const candidates =
+    provider === "anthropic"
+      ? ANTHROPIC_MODELS
+      : provider === "openai"
+        ? OPENAI_MODELS
+        : ollamaModels;
   return (
     <>
       <input
@@ -44,7 +63,7 @@ export function ModelInput({
         aria-label={ariaLabel}
       />
       <datalist id={listId}>
-        {models.map((m) => (
+        {candidates.map((m) => (
           <option key={m} value={m} />
         ))}
       </datalist>
@@ -56,13 +75,17 @@ export function ModelInput({
 // Ollama returned zero models. Suggests pulling the recommended
 // default. Returns null when models are present (no clutter for the
 // happy path) and also when the fetch is still in-flight (avoids
-// flashing the hint then hiding it on first paint).
+// flashing the hint then hiding it on first paint). Phase 4: only
+// shown when provider is ollama; paid providers have no equivalent.
 export function MissingModelsHint({
   recommendedModel,
+  provider = "ollama",
 }: {
   recommendedModel: string;
+  provider?: Provider;
 }) {
   const { models, loading, error } = useAvailableModels();
+  if (provider !== "ollama") return null;
   if (loading || models.length > 0) return null;
   const cmd = `ollama pull ${recommendedModel}`;
   return (

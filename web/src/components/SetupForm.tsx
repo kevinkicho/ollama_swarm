@@ -5,6 +5,8 @@ import { StartConfirmModal } from "./StartConfirmModal";
 import type { PreflightState } from "../types";
 import { Field } from "./setup/SharedFields";
 import { ModelInput, MissingModelsHint } from "./setup/ModelInput";
+import { useProviders } from "../hooks/useProviders";
+import { detectProvider, type Provider } from "../../../shared/src/providers";
 import { WallClockEstimate } from "./setup/WallClockEstimate";
 import {
   BlackboardHelp,
@@ -192,6 +194,32 @@ const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(ma
 const DIRECTIVE_README_AND_RESEARCH =
   "Make this project actually deliver every feature the README claims to support. Also, creatively enhance its functionalities by adding in more pipelines by conducting research online and then implement them";
 
+// Phase 4 of #314: per-provider hint copy. Provider hint flips between
+// "no key configured" warning and a one-line summary of where the
+// API key gets read from. Model hint matches the autocomplete source.
+function providerHint(
+  provider: Provider,
+  status: ReturnType<typeof useProviders>,
+): string {
+  if (provider === "ollama") return "Local LLM via your Ollama install. No API key needed.";
+  if (status.loading) return "Checking key status…";
+  const ps = status.providers?.[provider];
+  if (!ps?.hasKey) {
+    return provider === "anthropic"
+      ? "Set ANTHROPIC_API_KEY in .env to enable Claude models."
+      : "Set OPENAI_API_KEY in .env to enable GPT models.";
+  }
+  return provider === "anthropic"
+    ? "Anthropic Claude. Reads ANTHROPIC_API_KEY from server env."
+    : "OpenAI GPT. Reads OPENAI_API_KEY from server env.";
+}
+
+function modelHint(provider: Provider): string {
+  if (provider === "ollama") return "Type any Ollama model id, or pick from your installed list.";
+  if (provider === "anthropic") return "Pick a Claude model. Cost varies wildly — opus ≫ sonnet ≫ haiku.";
+  return "Pick a GPT-5 family model. Cost: gpt-5 > mini > nano.";
+}
+
 // Mirror of server's deriveCloneDir for the preview hint under the Parent
 // folder field. Server is the source of truth; this is a best-effort UX
 // preview. Returns "" if the URL isn't parseable yet (so the user gets the
@@ -231,6 +259,17 @@ export function SetupForm() {
   // form renders with a sensible Model field on first paint.
   // onPresetChange refreshes this when the user switches presets.
   const [model, setModel] = useState(PRESETS[0].recommendedModel);
+  // Phase 4 of #314: provider state — derived from the model string's
+  // prefix at first paint (so existing model defaults stay valid),
+  // but also user-selectable via the provider dropdown. Changing the
+  // provider clears `model` so the user picks a model that exists for
+  // the new provider rather than carrying a now-invalid Ollama tag
+  // into a Claude run.
+  const [provider, setProvider] = useState<Provider>(() =>
+    detectProvider(PRESETS[0].recommendedModel),
+  );
+  const providersStatus = useProviders();
+  const [maxCostUsd, setMaxCostUsd] = useState<string>("");
   const [rounds, setRounds] = useState(3);
   const [userDirective, setUserDirective] = useState("");
   // Unit 32: per-preset knobs. State lives in SetupForm so it persists
@@ -443,6 +482,18 @@ export function SetupForm() {
         // string).
         const vc = verifyCommand.trim();
         if (vc.length > 0) presetSpecific.verifyCommand = vc;
+        // Phase 4 of #314: per-run cost cap (USD). Empty / 0 → omit so
+        // the runner runs without a cost gate (existing behavior).
+        // Otherwise pass through; BlackboardRunner's cap watchdog stops
+        // the run with cap:cost when sum-of-spend reaches the ceiling.
+        // Ollama-only runs ignore the cap (every record costs $0).
+        const costTrim = maxCostUsd.trim();
+        if (costTrim.length > 0) {
+          const cost = Number(costTrim);
+          if (Number.isFinite(cost) && cost > 0) {
+            presetSpecific.maxCostUsd = cost;
+          }
+        }
       }
 
       const res = await fetch("/api/swarm/start", {
@@ -657,8 +708,8 @@ export function SetupForm() {
         </Section>
 
         <Section title="Run" subtitle="Rounds, default model, time budget">
-          <MissingModelsHint recommendedModel={preset.recommendedModel} />
-          <div className="grid grid-cols-2 gap-4">
+          <MissingModelsHint recommendedModel={preset.recommendedModel} provider={provider} />
+          <div className="grid grid-cols-3 gap-4">
             <Field label="Rounds">
               <input
                 type="number"
@@ -669,10 +720,52 @@ export function SetupForm() {
                 className="input"
               />
             </Field>
-            <Field label="Model" hint="Type any Ollama model id, or pick from your installed list.">
-              <ModelInput value={model} onChange={setModel} ariaLabel="Default model" />
+            <Field label="Provider" hint={providerHint(provider, providersStatus)}>
+              <select
+                className="input"
+                value={provider}
+                onChange={(e) => {
+                  const next = e.target.value as Provider;
+                  setProvider(next);
+                  // Reset model so the user picks a valid one for the
+                  // new provider (carrying glm-5.1:cloud into a Claude
+                  // run would 404 on session.create).
+                  setModel("");
+                }}
+                aria-label="Provider"
+              >
+                <option value="ollama">Ollama (local)</option>
+                <option
+                  value="anthropic"
+                  disabled={providersStatus.providers ? !providersStatus.providers.anthropic.available : false}
+                >
+                  Anthropic{providersStatus.providers && !providersStatus.providers.anthropic.available ? " — no key" : ""}
+                </option>
+                <option
+                  value="openai"
+                  disabled={providersStatus.providers ? !providersStatus.providers.openai.available : false}
+                >
+                  OpenAI{providersStatus.providers && !providersStatus.providers.openai.available ? " — no key" : ""}
+                </option>
+              </select>
+            </Field>
+            <Field label="Model" hint={modelHint(provider)}>
+              <ModelInput value={model} onChange={setModel} ariaLabel="Default model" provider={provider} />
             </Field>
           </div>
+          {provider !== "ollama" ? (
+            <Field label="Max cost ($USD)" hint="Per-run cap for paid providers. Stops the run with cap:cost when reached. Ollama-only runs ignore this.">
+              <input
+                type="number"
+                min={0}
+                step={0.10}
+                value={maxCostUsd}
+                onChange={(e) => setMaxCostUsd(e.target.value)}
+                placeholder="e.g. 0.50"
+                className="input"
+              />
+            </Field>
+          ) : null}
 
           <WallClockEstimate
             presetId={preset.id}
