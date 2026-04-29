@@ -107,6 +107,53 @@ describe("realGitAdapter", () => {
     const result = await gitAdapter.commitAll("empty", "worker-2");
     assert.equal(result.ok, false);
   });
+
+  // #304 (2026-04-28): RCA on tour v2 blackboard 0-commits.
+  // The production failure mode was clones with NO local git
+  // user.name + user.email config (typical for fresh clones).
+  // git commit silently fails with "Committer identity unknown"
+  // even when --author is supplied. The adapter now passes
+  // identity inline via `-c user.name=... -c user.email=...` so
+  // it doesn't depend on global git config OR pollute the local
+  // config. This test reproduces a clone with no committer
+  // identity + verifies commits land cleanly.
+  it("commitAll succeeds when the clone has no committer identity (#304)", async () => {
+    // Fresh repo WITHOUT setting user.email/user.name.
+    const repo = path.join(tmpRoot, "git-no-identity");
+    await fs.mkdir(repo, { recursive: true });
+    execSync("git init -q", { cwd: repo });
+    // Explicitly UNSET any inherited config so we mimic the
+    // production scenario where the worker's clone has no identity.
+    try { execSync("git config --unset user.email", { cwd: repo }); } catch {}
+    try { execSync("git config --unset user.name", { cwd: repo }); } catch {}
+    await fs.writeFile(path.join(repo, "first.txt"), "init\n", "utf8");
+    // Even the initial commit needs identity — bootstrap with the
+    // same inline -c flags the adapter uses, so the test setup
+    // doesn't depend on global config.
+    execSync(
+      'git -c user.name=test-init -c user.email=init@test commit -q -m initial --allow-empty',
+      { cwd: repo },
+    );
+    execSync("git add first.txt", { cwd: repo });
+    execSync(
+      'git -c user.name=test-init -c user.email=init@test commit -q -m bootstrap',
+      { cwd: repo },
+    );
+
+    // Now exercise the adapter — should succeed even without local
+    // config thanks to the inline -c flags it injects.
+    await fs.writeFile(path.join(repo, "added.txt"), "by adapter\n", "utf8");
+    const gitAdapter = realGitAdapter(repo);
+    const result = await gitAdapter.commitAll("worker commit", "worker-3");
+    assert.equal(result.ok, true, "commit should succeed without local user.* config");
+    if (!result.ok) return;
+    assert.match(result.sha, /^[a-f0-9]{7,}$/);
+    // Verify committer identity + author identity are both correctly set.
+    const committer = execSync("git log --pretty=format:%cn -1", { cwd: repo }).toString().trim();
+    const author = execSync("git log --pretty=format:%an -1", { cwd: repo }).toString().trim();
+    assert.equal(committer, "ollama-swarm", `committer should be ollama-swarm, got ${committer}`);
+    assert.equal(author, "worker-3", `author should be worker-3, got ${author}`);
+  });
 });
 
 describe("v2Adapters — end-to-end with WorkerPipeline", () => {

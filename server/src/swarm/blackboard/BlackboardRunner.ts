@@ -257,6 +257,13 @@ export class BlackboardRunner implements SwarmRunner {
   // Periodic sweep that fails any in-progress todo idle past
   // IN_PROGRESS_TTL_MS (~10 min). Sole TTL enforcer.
   private reaperTimer?: NodeJS.Timeout;
+  // #305 (2026-04-28): run-long cap watchdog. Polls isOverWallClockCap
+  // every 5s and aborts in-flight prompts when the cap fires. Pre-fix,
+  // cap checks only happened at top of audit loop iterations + per
+  // worker-poll; long planner calls (runAuditor + planner-fallback,
+  // 2-3 min each) could elapse 5+ min between checks, blowing the
+  // cap by minutes. Tour v2 blackboard overshot 15-min cap to 20m 14s.
+  private capWatchdog?: NodeJS.Timeout;
   // Phase 6: replan orchestration. Planner is captured during executing and
   // reused to replan stale todos — see docs/known-limitations.md.
   private planner?: Agent;
@@ -882,6 +889,7 @@ export class BlackboardRunner implements SwarmRunner {
         this.tickAccumulator = createTickAccumulator(this.runStartedAt);
         this.setPhase("executing");
         this.startQueueReaper();
+        this.startCapWatchdog();
         this.planner = planner;
         this.startReplanWatcher();
         await this.runAuditedExecution(planner, workers);
@@ -910,6 +918,7 @@ export class BlackboardRunner implements SwarmRunner {
       }
     } finally {
       this.stopQueueReaper();
+      this.stopCapWatchdog();
       this.stopReplanWatcher();
       // Cap-trip audit: one last pass so the summary's contract reflects
       // true met/wont-do/unmet distribution instead of leaving every
@@ -1197,6 +1206,7 @@ export class BlackboardRunner implements SwarmRunner {
     this.v2Observer.apply({ type: "stop-requested", ts: Date.now() });
     this.setPhase("stopping");
     this.stopQueueReaper();
+    this.stopCapWatchdog();
     this.stopReplanWatcher();
     // Task #165: cancel any in-flight quota-pause probe so it doesn't
     // try to resume a run that's being torn down.
@@ -3718,6 +3728,37 @@ export class BlackboardRunner implements SwarmRunner {
   // The wrapper failTodoQ can't be reused here because the queue
   // already mutated to "failed" inside reapStaleInProgress; calling
   // failTodoQ would throw "Cannot fail todo: status=failed".
+  /** #305: run-long cap watchdog. Polls isOverWallClockCap every 5s
+   *  and aborts in-flight prompts when the cap fires. Necessary
+   *  because the audit cycle's long planner calls (runAuditor +
+   *  runPlannerFallbackForUnmetCriteria) can elapse 4-5 min between
+   *  the existing per-iteration cap checks. Pre-watchdog, tour v2
+   *  blackboard overshot a 15-min cap to 20m 14s before the tour
+   *  script's safety net force-stopped it.
+   *
+   *  Mirrors the pattern of startQueueReaper (setInterval, idempotent
+   *  start, cleared in cleanup). When the cap trips, calls
+   *  checkAndApplyCaps which appends "Stopping: wall-clock cap
+   *  reached" + sets stopping=true + aborts every activeAborts
+   *  controller — the in-flight prompts unwind naturally. */
+  private startCapWatchdog(): void {
+    if (this.capWatchdog) return;
+    this.capWatchdog = setInterval(() => {
+      if (this.stopping) {
+        // Self-stop on terminal — no further work for the watchdog.
+        if (this.capWatchdog) {
+          clearInterval(this.capWatchdog);
+          this.capWatchdog = undefined;
+        }
+        return;
+      }
+      // checkAndApplyCaps does the full work: tick accumulator
+      // advance + cap-reason resolution + abort propagation.
+      this.checkAndApplyCaps();
+    }, 5_000);
+    this.capWatchdog.unref?.();
+  }
+
   private startQueueReaper(): void {
     if (this.reaperTimer) return;
     this.reaperTimer = setInterval(() => {
@@ -3749,6 +3790,11 @@ export class BlackboardRunner implements SwarmRunner {
   private stopQueueReaper(): void {
     if (this.reaperTimer) clearInterval(this.reaperTimer);
     this.reaperTimer = undefined;
+  }
+
+  private stopCapWatchdog(): void {
+    if (this.capWatchdog) clearInterval(this.capWatchdog);
+    this.capWatchdog = undefined;
   }
 
   // ---------------------------------------------------------------------

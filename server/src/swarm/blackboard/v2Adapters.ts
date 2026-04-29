@@ -99,17 +99,43 @@ export function realGitAdapter(clonePath: string): GitAdapter {
       const git = simpleGit(clonePath);
       try {
         await git.add(".");
-        // simple-git's commit() returns CommitResult with .commit hash.
-        const result = await git.commit(message, undefined, {
-          // Use --author so we attribute the commit to the worker
-          // without overriding the global git config (which may not
-          // be set in CI / fresh clones).
-          "--author": `${author} <${author}@ollama-swarm>`,
-        });
-        if (!result.commit) {
-          return { ok: false, reason: "git commit produced no SHA (nothing staged?)" };
+        // #304 (2026-04-28): RCA on tour v2 blackboard 0-commits.
+        // git commit ALWAYS needs a committer identity (user.name +
+        // user.email), even when `--author` is supplied. Fresh
+        // clones have no local config + Kevin's global may not be
+        // set. Force per-commit identity inline via `-c` flags so
+        // we don't depend on the user's global git config OR pollute
+        // the local config with persistent values.
+        // The author flag remains for attribution (worker-2 vs
+        // worker-3) — committer is the swarm itself.
+        // Track HEAD before/after to distinguish "real commit landed"
+        // from "nothing to commit" (which raw() doesn't reliably
+        // throw on across simple-git versions).
+        let headBefore: string | null;
+        try {
+          headBefore = (await git.revparse(["HEAD"])).trim();
+        } catch {
+          // No HEAD yet (empty repo) — that's fine; the commit will be the first.
+          headBefore = null;
         }
-        return { ok: true, sha: result.commit };
+        const result = await git.raw(
+          "-c", "user.name=ollama-swarm",
+          "-c", "user.email=swarm@ollama-swarm.local",
+          "commit",
+          "-m", message,
+          `--author=${author} <${author}@ollama-swarm>`,
+        );
+        const headAfter = (await git.revparse(["HEAD"])).trim();
+        if (headBefore !== null && headAfter === headBefore) {
+          return {
+            ok: false,
+            reason: `git commit produced no new SHA — likely "nothing to commit" (output: ${result.slice(0, 200)})`,
+          };
+        }
+        if (!headAfter || headAfter.length < 7) {
+          return { ok: false, reason: `git commit returned an invalid SHA (output: ${result.slice(0, 200)})` };
+        }
+        return { ok: true, sha: headAfter };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return { ok: false, reason: msg };
