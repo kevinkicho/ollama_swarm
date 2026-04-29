@@ -24,7 +24,11 @@ jobs:
   test:
     name: Type-check + server tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 25 min — locally the suite runs in ~12s with 1100+ tests but
+    # CI's `--test-isolation=process` mode + slower runner I/O can
+    # take 15-20 min. Bumped from 15 after the first run cancelled
+    # mid-test (commit d10e339).
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
