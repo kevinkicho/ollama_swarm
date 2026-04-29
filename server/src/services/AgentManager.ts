@@ -10,6 +10,7 @@ import { treeKill, killByPid, killByPort, isProcessAlive } from "./treeKill.js";
 import { AgentPidTracker } from "./agentPids.js";
 import type { AgentState, SwarmEvent } from "../types.js";
 import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
+import { tokenTracker } from "./ollamaProxy.js";
 
 type Client = ReturnType<typeof createOpencodeClient>;
 
@@ -18,6 +19,47 @@ type Client = ReturnType<typeof createOpencodeClient>;
 // content, only about loading model state on the cloud shard so the
 // runner's first real prompt doesn't pay cold-start latency.
 export const WARMUP_PROMPT_TEXT = "Reply with one word: ok";
+
+// Phase 3 of #314: pure extractor — given a message.updated event's
+// info payload, return a UsageRecord-shaped object when the message
+// is a finished assistant turn from a non-Ollama provider with real
+// token counts. Ollama is excluded because the proxy already captures
+// it; double-counting would inflate the cost cap. Returns null in
+// every other case so the caller's call site stays one branch.
+export interface ExtractedUsage {
+  ts: number;
+  promptTokens: number;
+  responseTokens: number;
+  durationMs: number;
+  model: string;
+  path: string;
+}
+
+export function extractUsageFromMessageInfo(info: {
+  role?: string;
+  providerID?: string;
+  modelID?: string;
+  time?: { completed?: number };
+  tokens?: { input?: number; output?: number };
+}): ExtractedUsage | null {
+  if (info.role !== "assistant") return null;
+  if (!info.providerID || info.providerID === "ollama") return null;
+  if (info.time?.completed === undefined) return null;
+  const promptTokens = info.tokens?.input ?? 0;
+  const responseTokens = info.tokens?.output ?? 0;
+  if (promptTokens + responseTokens <= 0) return null;
+  // Reconstruct the prefixed model string so CostTracker.detectProvider
+  // works downstream. Fallback to providerID alone when modelID missing.
+  const model = info.modelID ? `${info.providerID}/${info.modelID}` : info.providerID;
+  return {
+    ts: Date.now(),
+    promptTokens,
+    responseTokens,
+    durationMs: 0,
+    model,
+    path: "/sdk-direct",
+  };
+}
 
 export interface Agent {
   id: string;
@@ -745,6 +787,7 @@ export class AgentManager {
     this.partialStreams.delete(agent.id);
     this.partsByAgent.delete(agent.id);
     this.messageRoles.delete(agent.id);
+    this.capturedUsageMessageIds.delete(agent.id);
     this.suppressStreamingFor.delete(agent.id);
     this.rawSseCount.delete(agent.id);
     const flushTimer = this.streamingFlushTimers.get(agent.id);
@@ -959,6 +1002,11 @@ export class AgentManager {
   // message.updated events; cleared on session.idle along with the
   // per-part accumulator.
   private messageRoles = new Map<string, Map<string, "user" | "assistant">>();
+  // Phase 3 of #314: dedupe usage capture for paid providers. opencode
+  // emits message.updated multiple times during streaming — we only
+  // record once per message id, when time.completed is set. Cleared on
+  // session.idle along with messageRoles + partsByAgent.
+  private capturedUsageMessageIds = new Map<string, Set<string>>();
   // Task #181: when an agent.id is in this set, all UI-facing streaming
   // events (agent_streaming, agent_streaming_end) are suppressed, the
   // partialStreams REST catch-up buffer is not populated, and the
@@ -1107,6 +1155,8 @@ export class AgentManager {
     this.partsByAgent.clear();
     // Task #179: drop message-role classification for killed agents.
     this.messageRoles.clear();
+    // Phase 3 of #314: drop usage-capture dedupe set.
+    this.capturedUsageMessageIds.clear();
     // 2026-04-27: drop warmup timing cache so the next run doesn't
     // surface a previous run's warmup elapsed in its agents_ready summary.
     this.warmupElapsedByAgent.clear();
@@ -1296,7 +1346,16 @@ export class AgentManager {
     // remains the canonical "prompt boundary" that clears parts;
     // mid-stream id changes are now safe — new parts just append.
     if (type === "message.updated") {
-      const info = props.info as { id?: string; role?: string } | undefined;
+      const info = props.info as
+        | {
+            id?: string;
+            role?: string;
+            providerID?: string;
+            modelID?: string;
+            time?: { completed?: number };
+            tokens?: { input?: number; output?: number };
+          }
+        | undefined;
       if ((info?.role === "user" || info?.role === "assistant") && typeof info.id === "string") {
         let roles = this.messageRoles.get(agent.id);
         if (!roles) {
@@ -1310,6 +1369,27 @@ export class AgentManager {
         const liveStreamForRoles = this.streamingByAgent.get(agent.id);
         if (liveStreamForRoles && roles.size > liveStreamForRoles.initialRolesSize) {
           liveStreamForRoles.sawNewMessage = true;
+        }
+      }
+      // Phase 3 of #314: capture usage from completed assistant messages
+      // for non-Ollama providers. The Ollama proxy already records every
+      // /v1/chat/completions roundtrip, so duplicating from session
+      // events would double-count. Anthropic/OpenAI go directly via the
+      // AI-SDK packages (no proxy in path), so opencode's session events
+      // are the only place we see their token counts. Extracted helper
+      // returns the UsageRecord shape when applicable, null otherwise.
+      if (info && typeof info.id === "string") {
+        const usage = extractUsageFromMessageInfo(info);
+        if (usage) {
+          let captured = this.capturedUsageMessageIds.get(agent.id);
+          if (!captured) {
+            captured = new Set();
+            this.capturedUsageMessageIds.set(agent.id, captured);
+          }
+          if (!captured.has(info.id)) {
+            captured.add(info.id);
+            tokenTracker.add(usage);
+          }
         }
       }
       return;
@@ -1434,6 +1514,7 @@ export class AgentManager {
         this.partialStreams.delete(agent.id);
         this.partsByAgent.delete(agent.id);
         this.messageRoles.delete(agent.id);
+        this.capturedUsageMessageIds.delete(agent.id);
         const stream = this.streamingByAgent.get(agent.id);
         if (stream) {
           this.streamingByAgent.delete(agent.id);
@@ -1487,6 +1568,8 @@ export class AgentManager {
       // Task #179: clear message-role tracking for this agent. Next
       // prompt's first message.updated starts fresh classification.
       this.messageRoles.delete(agent.id);
+      // Phase 3 of #314: drop usage-capture dedupe set on session.idle.
+      this.capturedUsageMessageIds.delete(agent.id);
       // Task #172: flush any pending throttled streaming text so the
       // UI lands on the FINAL state before we tell it the stream
       // ended. Without this, the trailing-edge throttle could leave
