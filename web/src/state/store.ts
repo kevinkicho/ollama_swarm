@@ -20,6 +20,20 @@ import type {
 // attempts?" without unbounded growth over a multi-hour run.
 const LATENCY_WINDOW = 20;
 
+// #295: cap conformance sparkline window. 30 samples × 90s ≈ 45 min
+// of history. Plenty for the IdentityStrip gauge; the run summary has
+// the full series anyway.
+const CONFORMANCE_WINDOW = 30;
+
+// #295: latest conformance score the UI renders. `samples` powers
+// the sparkline; `latest` is the smoothed single-number readout.
+export interface ConformanceSample {
+  ts: number;
+  score: number;
+  smoothedScore: number;
+  reason?: string;
+}
+
 interface SwarmStore {
   phase: SwarmPhase;
   round: number;
@@ -49,6 +63,10 @@ interface SwarmStore {
   // from a long-dead run is obvious to the user (and can be dismissed).
   error?: { message: string; runId?: string; ts: number };
   latency: Record<string, LatencySample[]>;
+  // #295: rolling window of conformance scores for the live gauge.
+  // Empty array when no run is active OR the run had no userDirective
+  // (server doesn't emit samples in those cases).
+  conformance: ConformanceSample[];
   // Unit 47: latest clone_state event for the current run, or
   // undefined before the runner emits it. UI uses this to show the
   // "you're resuming an existing clone" banner.
@@ -107,6 +125,8 @@ interface SwarmStore {
   setContract: (c: ExitContract) => void;
   setSummary: (s: RunSummary) => void;
   pushLatencySample: (agentId: string, sample: LatencySample) => void;
+  // #295: append a conformance sample to the rolling window.
+  pushConformanceSample: (sample: ConformanceSample) => void;
   setCloneState: (c: CloneState) => void;
   dismissCloneBanner: () => void;
   setRunStartedAt: (ts: number) => void;
@@ -154,6 +174,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
   summary: undefined,
   error: undefined,
   latency: {},
+  conformance: [],
   cloneState: undefined,
   cloneBannerDismissed: false,
   runStartedAt: undefined,
@@ -372,6 +393,14 @@ export const useSwarm = create<SwarmStore>((set) => ({
       if (next.length > LATENCY_WINDOW) next.splice(0, next.length - LATENCY_WINDOW);
       return { latency: { ...s.latency, [agentId]: next } };
     }),
+  pushConformanceSample: (sample) =>
+    set((s) => {
+      const next = s.conformance.concat(sample);
+      if (next.length > CONFORMANCE_WINDOW) {
+        next.splice(0, next.length - CONFORMANCE_WINDOW);
+      }
+      return { conformance: next };
+    }),
   // Unit 47: clone_state arrives once per run. Setting it ALSO clears
   // the dismissed flag so a fresh run shows its banner even if a
   // prior banner was dismissed mid-session (each run has its own
@@ -405,6 +434,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       summary: undefined,
       error: undefined,
       latency: {},
+      conformance: [],
       cloneState: undefined,
       cloneBannerDismissed: false,
       runStartedAt: undefined,
@@ -457,7 +487,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
       // divide yet, and it avoids the "first-paint shows a divider"
       // weirdness at run start.
       if (s.transcript.length === 0) {
-        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, ...blackboardReset };
+        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, conformance: [], ...blackboardReset };
       }
       // Task #46 also: dedupe consecutive dividers. If the last entry
       // is already a run-start marker, don't stack a second one —
@@ -469,7 +499,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
         (lastEntry.text === "— new run started —" ||
           lastEntry.text.startsWith("▸▸RUN-START▸▸"));
       if (isLastADivider) {
-        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, ...blackboardReset };
+        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, conformance: [], ...blackboardReset };
       }
       // Build the divider text. When metadata is supplied, prefix
       // with the sentinel + encode fields as a pipe-separated line
@@ -490,6 +520,7 @@ export const useSwarm = create<SwarmStore>((set) => ({
         agents: {},
         streaming: {}, streamingMeta: {}, streamingSegmentPoints: {},
         latency: {},
+        conformance: [],
         ...blackboardReset,
         transcript: [
           ...s.transcript,

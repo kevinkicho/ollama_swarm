@@ -94,6 +94,7 @@ const TEST_FILES = [
   "src/services/reclaimOrphans.test.ts",
   "src/services/warmup.test.ts",
   "src/services/Orchestrator.test.ts",
+  "src/services/ConformanceMonitor.test.ts",
 ];
 
 // Forward CLI args so callers can pass --test-name-pattern etc:

@@ -139,6 +139,23 @@ export type SwarmEvent =
       success: boolean;
       ts: number;
     }
+  // #295 (2026-04-28): live directive-conformance gauge sample. Emitted
+  // by ConformanceMonitor every CONFORMANCE_INTERVAL_MS (default 90s)
+  // during runs that have a non-empty userDirective. The smoothed score
+  // is a 3-poll moving average so the UI sparkline isn't noisy. Only
+  // ever emitted when the monitor is active — runs without directives
+  // emit no samples at all.
+  | {
+      type: "conformance_sample";
+      runId: string;
+      ts: number;
+      /** Raw 0–100 grader score for this poll. */
+      score: number;
+      /** 3-poll moving average. Same value as `score` until 3 samples land. */
+      smoothedScore: number;
+      /** Optional one-line "why" from the grader (≤200 chars). */
+      reason?: string;
+    }
   // Unit 47: emitted once per run, right after RepoService.clone
   // resolves. `alreadyPresent` distinguishes a fresh shallow clone
   // from a build-on-existing-clone resume. The 3 counts give the UI

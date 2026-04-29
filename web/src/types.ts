@@ -298,6 +298,18 @@ export type SwarmEvent =
       success: boolean;
       ts: number;
     }
+  // #295: live directive-conformance sample. Emitted by the server's
+  // ConformanceMonitor every ~90s during runs with a non-empty
+  // userDirective. UI accumulates samples into a bounded rolling
+  // window for the IdentityStrip sparkline.
+  | {
+      type: "conformance_sample";
+      runId: string;
+      ts: number;
+      score: number;
+      smoothedScore: number;
+      reason?: string;
+    }
   // Unit 47: emitted once per run, right after the clone completes.
   // alreadyPresent=true means the runner reused an existing clone
   // (build-on-existing-clone work pattern) — UI surfaces a banner so

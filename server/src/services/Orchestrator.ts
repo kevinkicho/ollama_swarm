@@ -16,6 +16,7 @@ import { DebateJudgeRunner } from "../swarm/DebateJudgeRunner.js";
 import { MapReduceRunner } from "../swarm/MapReduceRunner.js";
 import { StigmergyRunner } from "../swarm/StigmergyRunner.js";
 import { DEFAULT_ROLES, roleForAgent } from "../swarm/roles.js";
+import { ConformanceMonitor } from "./ConformanceMonitor.js";
 
 export interface OrchestratorOpts extends RunnerOpts {
   manager: AgentManager;
@@ -370,6 +371,29 @@ export class Orchestrator {
       startedAt,
       ...runConfig,
     });
+    // #295: spin up the conformance monitor when the run carries a
+    // user directive. Polls Ollama every 90s with a "rate 0–100 how
+    // on-topic is the recent transcript?" prompt. Skipped entirely
+    // for runs without a directive (nothing to grade against) and
+    // when CONFORMANCE_MONITOR=off in the env (escape hatch).
+    let monitor: ConformanceMonitor | undefined;
+    const trimmedDirective = cfg.userDirective?.trim();
+    if (
+      trimmedDirective &&
+      trimmedDirective.length > 0 &&
+      process.env.CONFORMANCE_MONITOR !== "off" &&
+      this.opts.ollamaBaseUrl
+    ) {
+      monitor = new ConformanceMonitor({
+        runId,
+        directive: trimmedDirective,
+        ollamaBaseUrl: this.opts.ollamaBaseUrl,
+        graderModel: cfg.model,
+        getTranscript: () => this.runner?.status().transcript ?? [],
+        emit: this.opts.emit,
+      });
+      monitor.start();
+    }
     try {
       await runner.start(cfg);
     } catch (err) {
@@ -390,6 +414,10 @@ export class Orchestrator {
         this.runStartedAt = undefined;
       }
       throw err;
+    } finally {
+      // #295: stop the conformance monitor on EITHER successful run end
+      // OR mid-flight failure. Idempotent stop is safe.
+      monitor?.stop();
     }
   }
 

@@ -19,6 +19,7 @@ export function truncateLeft(s: string, maxLen: number): string {
 export function IdentityStrip() {
   const cfg = useSwarm((s) => s.runConfig);
   const runId = useSwarm((s) => s.runId);
+  const conformance = useSwarm((s) => s.conformance);
   // Task #85: history dropdown moved to the App-level header so it's
   // also reachable from the SetupForm. IdentityStrip no longer
   // renders it — keep `history = null` so existing layout doesn't
@@ -94,6 +95,7 @@ export function IdentityStrip() {
               excludes the dedicated auditor (Unit 58) so the count was
               wrong for 4-agent runs, and the live agent count is already
               in the left sidebar header. Dedup over fix-the-count. */}
+          <ConformanceGauge samples={conformance} />
           <button
             onClick={onOpen}
             title={`Open in OS file manager — ${cfg.clonePath}`}
@@ -105,6 +107,52 @@ export function IdentityStrip() {
       ) : null}
       {history}
     </div>
+  );
+}
+
+// #295: real-time conformance gauge. Renders nothing when no samples
+// have arrived (most runs without a userDirective; or first ~90s
+// before the first poll lands). On a sample, renders a tiny
+// sparkline + the latest smoothed score, color-graded by health:
+//   ≥ 70 = emerald (on-topic)
+//   40–69 = amber (mixed/drifting)
+//   < 40 = rose (drifted)
+// Hover surfaces the latest reason from the grader.
+function ConformanceGauge({
+  samples,
+}: {
+  samples: ReadonlyArray<{ ts: number; score: number; smoothedScore: number; reason?: string }>;
+}) {
+  if (samples.length === 0) return null;
+  const latest = samples[samples.length - 1];
+  const score = latest.smoothedScore;
+  const color =
+    score >= 70 ? "text-emerald-300"
+    : score >= 40 ? "text-amber-300"
+    : "text-rose-300";
+  const stroke =
+    score >= 70 ? "stroke-emerald-400"
+    : score >= 40 ? "stroke-amber-400"
+    : "stroke-rose-400";
+  // Build a 60×14 SVG sparkline of smoothed scores
+  const W = 60, H = 14;
+  const xs = samples.map((_, i) => (samples.length === 1 ? 0 : (i / (samples.length - 1)) * W));
+  const ys = samples.map((s) => H - (Math.max(0, Math.min(100, s.smoothedScore)) / 100) * H);
+  const path = xs.map((x, i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${ys[i].toFixed(1)}`).join(" ");
+  const tooltip =
+    `Conformance to directive: ${score}/100 (${samples.length} sample${samples.length === 1 ? "" : "s"})` +
+    (latest.reason ? `\nLast: ${latest.reason}` : "");
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 ml-3 ${color}`}
+      title={tooltip}
+    >
+      <span className="text-[9px] uppercase tracking-wider text-ink-500">conf</span>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="overflow-visible">
+        <path d={path} className={stroke} fill="none" strokeWidth={1.25} />
+      </svg>
+      <span className="font-mono text-[11px] tabular-nums">{score}</span>
+    </span>
   );
 }
 

@@ -106,6 +106,14 @@ function applyEvent(ev: SwarmEvent): void {
         attempt: ev.attempt,
       });
       break;
+    case "conformance_sample":
+      s.pushConformanceSample({
+        ts: ev.ts,
+        score: ev.score,
+        smoothedScore: ev.smoothedScore,
+        ...(ev.reason ? { reason: ev.reason } : {}),
+      });
+      break;
     case "clone_state":
       s.setCloneState({
         alreadyPresent: ev.alreadyPresent,
