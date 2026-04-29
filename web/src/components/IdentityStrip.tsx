@@ -1,6 +1,18 @@
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useSwarm } from "../state/store";
+import { useEventLogStream } from "../hooks/useEventLogStream";
+
+// E2 incremental cutover (#336): when ?useEventLogRunId=1 is set in the
+// URL, the run-id chip pulls from the event-log stream instead of the
+// WebSocket-derived store. Smallest practical "wire one field to the
+// event-log source" step — proves the data path on a single value
+// before generalizing to phase / preset / counts. Default: WS source
+// (unchanged behavior).
+function shouldUseEventLogRunId(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).has("useEventLogRunId");
+}
 import { CopyChip } from "./CopyChip";
 import type { ConformanceSample, DriftSample } from "../state/store";
 
@@ -21,7 +33,14 @@ export function truncateLeft(s: string, maxLen: number): string {
 // carries run-level metadata.
 export function IdentityStrip() {
   const cfg = useSwarm((s) => s.runConfig);
-  const runId = useSwarm((s) => s.runId);
+  const wsRunId = useSwarm((s) => s.runId);
+  // Always subscribe to the event-log stream so the hook stays warm —
+  // the conditional consumes the value but the subscription cost is
+  // negligible (one fetch every 10s shared across all consumers).
+  const eventLog = useEventLogStream();
+  const runId = shouldUseEventLogRunId()
+    ? eventLog.runs[eventLog.runs.length - 1]?.derived.runId ?? wsRunId
+    : wsRunId;
   const conformance = useSwarm((s) => s.conformance);
   const drift = useSwarm((s) => s.drift);
   const phase = useSwarm((s) => s.phase);
