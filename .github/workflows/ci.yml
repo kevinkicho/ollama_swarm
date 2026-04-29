@@ -1,0 +1,52 @@
+# #307 (2026-04-28): minimal CI gate. Runs the type-check + the
+# server unit-test suite on every push and PR. Catches regressions
+# the local dev loop misses (e.g. when tsx watch on /mnt/c silently
+# reloads stale code, or when a subtle import path break only
+# surfaces in a fresh checkout).
+#
+# Tests run with OPENCODE_SERVER_PASSWORD=test-only because the
+# zod config schema in server/src/config.ts requires the env var to
+# be set at module-load (see reference_test_command_password.md
+# memory entry).
+#
+# Web side: type-check only — no UI runtime tests in the suite yet.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Type-check + server tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          # Use 22.x LTS in CI (locally Kevin runs 25.x; both work
+          # because we don't pin via package.json#engines). 22 has
+          # native test runner + tsx loader without the experimental
+          # warnings that 18/20 emit.
+          node-version: "22.x"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check (server + web + shared)
+        run: |
+          npx tsc --noEmit -p server/tsconfig.json
+          npx tsc --noEmit -p web/tsconfig.json
+
+      - name: Run server test suite
+        env:
+          OPENCODE_SERVER_PASSWORD: test-only
+        run: npm test --workspace=server

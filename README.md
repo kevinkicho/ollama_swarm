@@ -1,23 +1,33 @@
 # ollama_swarm
 
-> **For agents picking up this codebase**: read [`docs/STATUS.md`](docs/STATUS.md) first — it's the single "what's true right now" pointer + map. This README is the user-facing intro and skews toward stable claims; STATUS.md tracks recent fixes + V2 substrate progress.
+> **For agents picking up this codebase**: read [`docs/STATUS.md`](docs/STATUS.md) first — it's the single "what's true right now" pointer + map. This README is the user-facing intro.
 
 A local web app that spawns a **swarm of [OpenCode](https://opencode.ai) agents** — each backed by an [Ollama](https://ollama.com) model such as `glm-5.1:cloud` — to clone a GitHub repository and collaboratively figure out what the project is, what's working, what's missing, and what to build next.
 
-You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. Eight patterns ship today:
+You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. **Nine patterns** ship today:
 
 - **Round-robin transcript** — N identical agents take turns on a shared transcript; every agent sees every other agent's reply and responds. Discussion-only.
 - **Blackboard (optimistic + small units)** — planner posts atomic todos to a shared board; workers claim and commit in parallel, with CAS on file hashes catching stale plans. **The only write-capable preset** — workers actually modify the clone.
 - **Role differentiation** — round-robin loop with each agent given a distinct role (Architect, Tester, Security reviewer, etc.). Discussion-only.
 - **Council** — N drafters write in private round 1, then read peers' drafts in subsequent rounds and converge. Has early-stop convergence detection. Discussion-only.
-- **Orchestrator-worker** (flat + deep) — agent-1 is the lead and dispatches subtasks; agents 2..N execute in parallel. Deep variant adds a mid-tier lead. Discussion-only.
+- **Orchestrator-worker** — agent-1 is the lead and dispatches subtasks; agents 2..N execute in parallel. Discussion-only.
+- **Orchestrator-worker (deep)** — 3-tier variant for ≥4 agents: orchestrator → mid-leads → workers. Discussion-only.
 - **Debate-judge** — Pro / Con / Judge (exactly 3 agents). Multi-round structured debate ending in a JSON verdict. Optional post-verdict "build phase" turns Pro into implementer. Discussion-by-default; `executeNextAction: true` enables file edits.
 - **Map-reduce** — agent-1 is reducer, agents 2..N are mappers slicing the repo and summarizing in parallel. Convergence detector stops on consecutive empty cycles. Discussion-only.
-- **Stigmergy** — pheromone-table + report-out pattern. Discussion-only.
+- **Stigmergy** — pheromone-table + per-file ranking pattern. Self-organizing exploration; agents pick the next file based on a shared annotation table. Discussion-only.
 
 A live transcript streams into the browser as it's generated — you see each agent type token-by-token, can inject your own message into the conversation at any time, and stop the whole thing with one click. The blackboard preset adds a **Board** tab showing todos in five columns (Open / Claimed / Committed / Stale / Skipped), plus a run summary card when the run terminates.
 
-**See [`docs/ARCHITECTURE-V2.md`](docs/ARCHITECTURE-V2.md) for current architecture status** — the V2 substrate has shipped (state machine, TodoQueueV2, WorkerPipelineV2, OllamaClient, EventLogReaderV2) and is parallel-track instrumented; flip `USE_OLLAMA_DIRECT=1` and `USE_WORKER_PIPELINE_V2=1` to opt the blackboard preset onto the V2 paths.
+### Recent observability + reliability features
+
+- **Conformance gauge** — during runs with a User Directive, a live LLM-as-judge polls the transcript every 90s and renders a colored sparkline + numeric score (0–100) in the topbar showing how on-topic the run stays. Hover for the smoothing-window math + grader metadata.
+- **Embedding-similarity drift** — independent second signal alongside the LLM-judge. Pull `nomic-embed-text` to enable; the tooltip shows agreement vs disagreement between the two signals.
+- **Mid-run nudge** — submit a directive amendment without restarting; the planner picks it up at the next cycle.
+- **Cost-share breakdown** — per-agent token shares + savings hint when one role dominates with a coding-tier-suitable model.
+- **Pre-commit verify gate (blackboard)** — set `verifyCommand` (e.g. `npm test`) to gate worker hunks; failures revert the writes and mark the todo for replan.
+- **Eval harness** — `node eval/run-eval.mjs --repo=<url>` runs every preset against a curated catalog and writes a preset×task scoreboard.
+
+**Current architecture is V2 substrate** — the original opencode-SDK-streaming path was retired 2026-04-28; runs go through `OllamaClient` (direct `/api/chat`) + `WorkerPipelineV2` + `TodoQueue` + `RunStateObserver` + `EventLogReaderV2`. See [`server/src/swarm/blackboard/ARCHITECTURE.md`](server/src/swarm/blackboard/ARCHITECTURE.md) for the deep dive.
 
 ## Architecture
 
@@ -63,27 +73,47 @@ Phased implementation notes (now shipped) live in [`docs/blackboard-plan.md`](do
 
 ## Prerequisites
 
-- **Node 20+**
-- **`opencode` CLI** on `PATH`. The dev server spawns one `opencode serve --port N` subprocess per agent; you do **not** keep a long-running opencode running yourself.
-- **`OPENCODE_SERVER_PASSWORD`** in `.env` — any string. Used as the shared HTTP-basic-auth secret with the per-agent subprocesses we spawn.
-- **Ollama** running at `http://localhost:11434` with your desired model pulled (e.g. `ollama pull glm-5.1:cloud`).
-- **git** on `PATH`.
+- **Node 22 LTS or 25** (CI runs 22.x; local dev tested on both)
+- **[Ollama](https://ollama.com) running** at `http://localhost:11434` with at least one model pulled. Default is `glm-5.1:cloud`:
+  ```bash
+  ollama pull glm-5.1:cloud
+  ```
+  Optional but recommended: `ollama pull nomic-embed-text` to enable the embedding-similarity drift gauge alongside the LLM-judge conformance gauge.
+- **`opencode` CLI** on `PATH`. The dev server spawns one `opencode serve --port N` subprocess per agent.
+- **git** on `PATH`. (No need to set `user.name` / `user.email` globally — the worker pipeline injects them inline per-commit.)
 
-## Setup
+## First-time setup
 
 ```bash
+# 1. Clone + install
 git clone https://github.com/kevinkicho/ollama_swarm.git
 cd ollama_swarm
-cp .env.example .env
-# Fill in OPENCODE_SERVER_PASSWORD with any string — it's the basic-auth secret
-# the dev server uses with the opencode subprocesses it spawns.
 npm install
+
+# 2. Configure secrets
+cp .env.example .env
+# Edit .env — set OPENCODE_SERVER_PASSWORD to any string.
+# It's the HTTP-basic-auth secret shared with the spawned opencode subprocesses.
+
+# 3. Start the dev server (backend + frontend together)
 npm run dev
 ```
 
-`npm run dev` starts both the backend and the frontend in one process. By default the backend binds `127.0.0.1:8243` and the web dev server binds `[::1]:8244` (override via `SERVER_PORT` / `WEB_PORT` env vars). Open `http://localhost:8244`, fill in the form, hit **Start swarm**.
+`npm run dev` binds the backend to `127.0.0.1:8243` and the web app to `[::1]:8244` (override via `SERVER_PORT` / `WEB_PORT`).
 
-> Pre-2026-04-27 defaults were `52243` / `52244`. They were moved to dodge Windows' Hyper-V reserved range (52199–52398), which would `EACCES` on most Windows hosts.
+### Your first run
+
+1. Open **http://localhost:8244/** (or the WSL guest IP if you're hitting it from Windows — see `ip addr show eth0` for the address).
+2. The Setup Form opens by default. Fill in:
+   - **GitHub URL** — public repo, or private if you set `GITHUB_TOKEN` in `.env`
+   - **Parent folder** — absolute path to the directory the repo will be cloned INTO (the form previews the resolved clone path)
+   - **Pattern** — pick from the 9 presets. Hover the "?" next to "Preset" for a rich tooltip showing the preset's metadata + directive behavior
+   - **User directive (optional)** — what you want the swarm to do. Required for the conformance gauge to fire. Blackboard uses this to seed the planner's contract; discussion presets pass it as context.
+3. Hit **Start swarm**. The transcript streams in real-time. Switch to the **Board** tab during a blackboard run to watch todos move through Open → Claimed → Committed.
+4. The conformance gauge appears in the topbar after ~90s. Drift gauge appears next to it if `nomic-embed-text` is installed.
+5. Click the **+ nudge** button next to the gauge to submit a mid-run directive amendment when you spot drift.
+
+> If you previously ran on the older default ports (52243 / 52244), those moved on 2026-04-27 to dodge Windows' Hyper-V reserved range. New defaults are 8243 / 8244.
 
 ## Usage walkthrough
 
@@ -91,7 +121,7 @@ npm run dev
 2. **Parent folder** — an absolute path to a _parent_ directory. The server derives the repo name from the URL and clones into `<parentFolder>/<repo-name>` (e.g. parent `C:\...\runs` + URL ending in `/is-odd` → clone at `C:\...\runs\is-odd`). Parent is created if missing; the subfolder must be empty, absent, or already a matching git clone. The form shows a live preview of the resolved clone path under the field.
 3. **Pattern** — one of the eight listed at the top of this README. Selecting blackboard reveals collapsible help explaining CAS and stale-replan; each pattern's `<PresetAdvancedSettings>` panel shows pattern-specific knobs.
 4. **Agents** — how many concurrent agents to spawn (2–8 for most presets). On blackboard, agent 1 is the planner and the remaining N−1 are workers. `debate-judge` requires exactly 3; `map-reduce` and `orchestrator-worker-deep` require ≥4.
-5. **Rounds** — for discussion presets: how many full passes through the agents. For blackboard: the maximum number of **auditor invocations** (plan → work → audit cycles) before the run stops even if unresolved criteria remain. Blackboard still stops earlier on the hard caps (per-run `wallClockCapMs` / 200 commits / 300 todos) or when every criterion is resolved. With non-blackboard presets, high values can mean hours of wall-clock and proportional cloud-token spend.
+5. **Rounds** — for discussion presets: how many full passes through the agents. For blackboard: the maximum number of **auditor invocations** (plan → work → audit cycles) before the run stops even if unresolved criteria remain. Blackboard still stops earlier on the hard caps (per-run `wallClockCapMs` defaults to **8 hours** if not set, plus baked-in 200-commits / 300-todos backstops) or when every criterion is resolved. The cap is enforced by a 5s-tick watchdog (`#305`), so runs stop within ~5 seconds of the threshold rather than waiting for the next phase boundary. With non-blackboard presets, high values can mean hours of wall-clock and proportional cloud-token spend.
 6. **Model** — any model string registered in Ollama and declared in the synthesized `opencode.json` (defaults to `glm-5.1:cloud`).
 
 Hit Start. You'll see each agent panel go from `spawning` → `ready` → `thinking` → `ready`, with live streaming bubbles in the transcript as each agent works. On blackboard runs, switch to the **Board** tab to watch todos flow through Open → Claimed → Committed (or Stale → back to Open on CAS rejection). When the run terminates the phase pill flips to `completed` / `stopped` / `failed` and a summary card appears at the top of the Board tab; a **New swarm** button is available in the sidebar.
@@ -107,9 +137,9 @@ Hit Start. You'll see each agent panel go from `spawning` → `ready` → `think
 | `OPENCODE_BIN` | no (defaults to `opencode`) | Path/name of the opencode CLI binary |
 | `SERVER_PORT` | no (defaults to `8243`) | Override the backend HTTP+WS port |
 | `WEB_PORT` | no (defaults to `8244`) | Override the Vite dev-server port |
-| `USE_OLLAMA_DIRECT` | no (defaults off) | Bypass opencode SDK; talk to Ollama directly. Currently only honored by `BlackboardRunner` (V2 path). |
-| `USE_WORKER_PIPELINE_V2` | no (defaults off) | Route blackboard worker writes through the V2 `WorkerPipelineV2` substrate. |
+| `USE_OLLAMA_DIRECT` | no (defaults off) | Bypass opencode SDK; talk to Ollama directly. Honored by `BlackboardRunner`. |
 | `GITHUB_TOKEN` | no | GitHub PAT for cloning private repos |
+| `CONFORMANCE_MONITOR` | no (defaults on) | Set to `off` to skip the LLM-judge conformance gauge for runs with a directive |
 
 ## Project structure
 
@@ -130,7 +160,7 @@ See [`docs/known-limitations.md`](docs/known-limitations.md) for the full list w
 - **One swarm at a time.** Stop the current swarm before starting another (or pass `force: true` on `/api/swarm/start`).
 - **In-memory transcript** — restarting the server loses live history. Per-run `summary.json` + per-event `logs/current.jsonl` are durable; the run-history dropdown reads the former.
 - **Localhost assumed.** No auth on the web app itself.
-- **OpenCode subprocess remains a runtime dep.** V2 substrate (state machine, TodoQueueV2, WorkerPipelineV2, OllamaClient) has shipped but is opt-in via env flags. Dropping the subprocess entirely is ~1 week of focused refactor; see `docs/ARCHITECTURE-V2.md` Status section.
+- **OpenCode subprocess remains a runtime dep.** V2 substrate (state machine, TodoQueue, WorkerPipeline, OllamaClient) is now the primary path; the V1 SDK loop was retired 2026-04-28. Dropping the subprocess entirely is feasible via `USE_OLLAMA_DIRECT=1` but not yet the default for all presets.
 - **`/mnt/c` (WSL) flakiness.** tsx watch occasionally SIGTERMs the dev server when files in `/mnt/c` change rapidly; restart the dev server when this happens. Does not affect production.
 
 ## Troubleshooting

@@ -1,48 +1,66 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-04-27
+**Last updated:** 2026-04-28
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 ---
 
 ## What ships today
 
-8 swarm presets (one write-capable, seven discussion):
+**9 swarm presets** (one write-capable, eight discussion):
 
 | Preset | Write-capable? | Notes |
 |---|---|---|
-| `blackboard` | ✅ | planner + workers + auditor; tier ratchet; Aider-style hunks |
+| `blackboard` | ✅ | planner + workers + auditor; tier ratchet; Aider-style hunks; pre-commit verify gate (`verifyCommand`) |
 | `round-robin` | ❌ | shared transcript, no role differentiation |
 | `role-diff` | ❌ | per-agent role bias (Architect / Tester / etc.) |
 | `council` | ❌ | private draft → reveal → converge; early-stop on convergence |
 | `orchestrator-worker` (flat) | ❌ | lead dispatches subtasks |
-| `orchestrator-worker-deep` | ❌ | flat + mid-tier lead |
+| `orchestrator-worker-deep` | ❌ | flat + mid-tier lead (≥4 agents) |
 | `debate-judge` | ❌ (default) | exactly 3 agents Pro/Con/Judge; `executeNextAction: true` opts into a write phase |
 | `map-reduce` | ❌ | reducer + N mappers; convergence on consecutive empty cycles |
-| `stigmergy` | ❌ | pheromone-table + report-out |
+| `stigmergy` | ❌ | pheromone-table + per-file annotations; structured-card bubbles (#303) |
 
-Validation: 7/7 SDK-path presets passed clean (0 empty / 0 stale-idle / 0 SSE-abort) on 2026-04-27 against `kevinkicho/debate-tcg` with the post-2026-04-27 fix set.
+Validation: tour v2 (2026-04-28) ran all 9 sequentially. 8/9 self-terminated cleanly; blackboard hit safety net at 20m due to two pre-fix bugs (#304 git committer identity + #305 cap watchdog overshoot). Both blockers patched + tested; fresh blackboard validation pending in #306.
 
 ---
 
-## V2 architectural rewrite — substrate complete, integration partial
+## Observability + reliability stack (2026-04-28)
 
-See `docs/ARCHITECTURE-V2.md` for full spec. Status:
+| Feature | What it does | Code |
+|---|---|---|
+| Conformance gauge | LLM-as-judge polls every 90s; sparkline + numeric score in topbar | `server/src/services/ConformanceMonitor.ts` |
+| Embedding drift gauge | Independent cosine-similarity signal; agreement hint vs LLM-judge | `server/src/services/EmbeddingDriftMonitor.ts` |
+| Mid-run amend | User submits directive addendum; planner picks up at next cycle | `server/src/services/AmendmentsBuffer.ts` + `/api/swarm/amend` |
+| Cost-share breakdown | Per-agent token shares + savings hint in run summary | `web/src/lib/costBreakdown.ts` |
+| Eval harness | preset×task scoreboard | `eval/run-eval.mjs` + `eval/catalog.json` |
+| Pre-commit verify gate | Worker hunks gated by user shell command (npm test, lint, etc.) | `WorkerPipeline.VerifyAdapter` |
+| HITL nudge channel | `/api/swarm/amend` + topbar textarea | `IdentityStrip.AmendButton` |
+| V2 event log | `/api/v2/event-log/runs` + UI EventLogPanel; infra-only filter | `EventLogReaderV2` |
+| Run history (95+ runs) | History dropdown auto-scans `runs*/` at startup | `Orchestrator.scanForRunParents` |
+| Model autocomplete | `/api/models` proxies Ollama tags into datalist on every model field | `useAvailableModels` hook |
+| Cap watchdog (5s tick) | Wall-clock + commits + todos caps fire promptly during any phase | `BlackboardRunner.startCapWatchdog` (#305) |
+| `runs/` retention | `node scripts/prune-runs.mjs --apply` keeps last N + last 7 days | `scripts/prune-runs.mjs` |
+| CI | GitHub Actions runs npm test + type-check on push/PR | `.github/workflows/ci.yml` |
 
-| Substrate | File | Tests | Integration |
-|---|---|---|---|
-| State machine | `shared/src/runStateMachine.ts` | 33 | wired into `BlackboardRunner` via `RunStateObserver` (parallel-track + `checkPhase` at every `setPhase`) |
-| Observer | `server/src/swarm/blackboard/RunStateObserver.ts` | 15 | live in `BlackboardRunner`; `v2State` ships in `RunSummary` |
-| TODO queue | `server/src/swarm/blackboard/TodoQueueV2.ts` | 28 | mirror via `onBoardEvent`; `v2QueueState` ships in `RunSummary` |
-| Worker pipeline | `server/src/swarm/blackboard/WorkerPipelineV2.ts` | 11 | gated by `USE_WORKER_PIPELINE_V2=1`; `executeWorkerTodoV2` validated 4 commits |
-| Real fs+git adapters | `server/src/swarm/blackboard/v2Adapters.ts` | 10 | live |
-| Ollama direct client | `server/src/services/OllamaClient.ts` | 6 | gated by `USE_OLLAMA_DIRECT=1`; only `BlackboardRunner` uses it |
-| Event log reader | `server/src/swarm/blackboard/EventLogReaderV2.ts` | 18 | `/api/v2/event-log/runs` + UI `EventLogPanel` ship the read path |
-| `formatServerSummary` | `shared/src/formatServerSummary.ts` | 26 | shared between server + web |
+---
 
-Total: **972 tests passing**.
+## V2 substrate — primary path
 
-To opt the blackboard preset onto V2 paths: `USE_OLLAMA_DIRECT=1 USE_WORKER_PIPELINE_V2=1` env vars on dev server start.
+The V1 SDK loop (per-agent opencode subprocess + SSE chunked streaming) was retired 2026-04-28 alongside the V2 cutover commits. Current architecture:
+
+| Component | File | Status |
+|---|---|---|
+| State machine | `shared/src/runStateMachine.ts` | primary |
+| Observer | `server/src/swarm/blackboard/RunStateObserver.ts` | primary |
+| TODO queue | `server/src/swarm/blackboard/TodoQueue.ts` (renamed from V2) | primary |
+| Worker pipeline | `server/src/swarm/blackboard/WorkerPipeline.ts` (renamed) | primary; `VerifyAdapter` hook for pre-commit gates (#296) |
+| Real fs+git adapters | `server/src/swarm/blackboard/v2Adapters.ts` | primary; #304 fixed inline committer identity |
+| Ollama direct client | `server/src/services/OllamaClient.ts` | gated by `USE_OLLAMA_DIRECT=1` per-preset |
+| Event log reader | `server/src/swarm/blackboard/EventLogReaderV2.ts` | primary; backs `/api/v2/event-log/runs` |
+| `formatServerSummary` | `shared/src/formatServerSummary.ts` | shared between server + web |
+
+**Test totals:** 1100+ server tests passing (was 972 at V2 cutover; +130 from this session's observability + RCA + lifecycle work).
 
 ---
 
