@@ -4,7 +4,7 @@
 > `TaskCreate` items die when the session ends; this file is the durable
 > equivalent. **Update it when you finish or queue work.**
 >
-> Last refreshed: 2026-04-27
+> Last refreshed: 2026-04-29
 
 ---
 
@@ -40,21 +40,26 @@
 
 *(Move items here from "Queued" when started; move to "Done recently" when shipped)*
 
-— see "Done recently → 2026-04-27 evening" below for tonight's 8 commits + final report —
+### 2026-04-29 — multi-provider + scoreboard
+
+— see "Done recently → 2026-04-29" below for the 7-phase plan (#314–#320) + CI fix (#313) shipped today; live validation pending —
+
+**Verified ALREADY shipped during 2026-04-29 doc audit (notes in this file were stale):**
+- Playwright-friendly transcripts: `MessageBubble.tsx:48-54` already has `data-entry-id`, `data-entry-role`, `data-summary-kind`, `data-agent-index`, `data-has-thoughts`, `data-has-tool-calls`.
+- Think-tag rendering: server splits `{thoughts, finalText}` via `shared/extractThinkTags`; web's `ThoughtsBlock` renders thoughts collapsed-by-default above the main bubble.
+- Contract bubble structured expand: `web/src/components/transcript/ContractBubble.tsx` is a 3-tab interactive component (Summary / All N criteria / JSON). Replaces JsonPrettyBubble fallback for the planner's contract envelope.
+- Streaming-collapsibles content-boundary segmentation: `useSegmentSplitter.ts:32-70` implements `findContentBoundaries` (`\n\n` / code fences / markdown headers / `<think>` tags). Pause-based is a 15s fallback only.
+- Tool-call marker over-segmentation: server-side `stripAgentText` removes markers BEFORE the segmenter sees them, so the 28-micro-segment scenario can no longer reach the UI.
 
 ### Surfaced from overnight tour (queued for next session)
 
 - **#231 Investigate why models emit XML pseudo-tool-call markers as raw text.** Bonus 10 (blackboard re-run with #229+#230 fixes) confirmed both `glm-5.1:cloud` AND its sibling fallback `nemotron-3-super:cloud` emit `<read>/<grep>/<list>` markers as plain text instead of using SDK tool functions. Two models from different families = systemic, not glm-5.1-specific. Likely the planner system prompt OR opencode SDK tool-grant context is leading the model to emit granted tools as text. Investigate: (a) what tool definitions are in the agent system prompt? (b) does opencode itself recognize these emitted markers and execute them silently? (c) would explicitly disabling tool grants for the planner role fix it? **Trigger**: explicit "investigate marker root cause."
 
-### Validation-tour follow-ups (DONE 2026-04-27 evening, see commits below)
+- **First paid scoreboard sweep + 7 more fixtures.** Phase 6 shipped 3 starter fixtures + the framework; 7 more are queued in `eval/fixtures/README.md` (add-null-guard, extract-pure-helper, fix-failing-test, audit-console-logs, categorize-deps, multistep-add-script, multistep-config-then-test). After at least 5 fixtures land, run a 3-seed × Sonnet 4.6 sweep (~$5–15) and overwrite `eval/RESULTS.md` with real numbers. **Trigger**: explicit "go run paid sweep" with budget authorization.
 
-- ✅ **Validation tour: 32 → 34 bubble fixtures audited** (2026-04-27 evening). Built `web/src/components/BubbleGallery.tsx` + `?gallery=1` route. Captured per-fixture PNGs via Playwright. Report: `runs/_validation-tour/2026-04-28T01-38-42-355Z/REPORT.md`. 34/34 render correctly. Original 30/32 + #226 TodosBubble + #227 quota ribbons + #228 unpaired think-closer + #229 ToolCallsBlock fixtures.
+- **Live UI test of multi-provider work.** The 90-second Playwright demo on 2026-04-29 confirmed the dropdown + autocomplete + cost-cap-field-reveal all work visually. NOT yet exercised: a real Anthropic-keyed run that flows through opencode subprocess → AI-SDK package → token capture → cost-cap stop. **Trigger**: paste an `ANTHROPIC_API_KEY` into `.env` + explicit "kick a $0.10-capped Claude run."
 
-### Validation-tour follow-ups
-
-- **Build TodosBubble for parsed.kind=todos envelope** (#226). Today: planner's `{todos: [...]}` envelope falls through to `JsonPrettyBubble` (raw JSON dump). Should mirror the 3-tab `ContractBubble` pattern: summary (first 3 todos), all N todos with assignee + expectedFiles, raw JSON. **Trigger**: anytime; ~30 min UX win for every blackboard run's planner output.
-
-- **Add quota_paused/resumed colored ribbon** (#227). Today: both fall through `AgentJsonBubble` with a VIEW JSON toggle. Pause/resume events are runtime-significant — should be amber + emerald system-style ribbons like `verifier_verdict`'s, so a transcript scanner spots pause windows immediately. **Trigger**: anytime; ~20 min fix in `MessageBubble.tsx` SystemBubble.
+- **summary.kind bubble re-audit.** 14+ envelope kinds (run_finished, seed_announce, verifier_verdict, agents_ready, council_draft, debate_turn, council_synthesis, stigmergy_report, mapreduce_synthesis, role_diff_synthesis, stretch_goals, debate_verdict, next_action_phase, worker_hunks). Render each in browser, screenshot, compare to expected. The 34/34 BubbleGallery audit (2026-04-28) covered them at fixture level — this is the live-data version that catches regressions from the 2026-04-29 multi-provider work. **Trigger**: anytime; pair with the live UI test above.
 
 ---
 
@@ -157,6 +162,21 @@ not promote any of these to "needs-fixing" without re-checking the artifact.
 ---
 
 ## Done recently (last 30 days; older lands in archive/blackboard-changelog.md)
+
+### 2026-04-29 — multi-provider + scoreboard (#313–#320)
+
+End-to-end multi-provider support (Ollama / Anthropic / OpenAI), cost cap, single-agent baseline, fixture framework, multi-seed scoreboard aggregator. CI gate for the same. 8 commits, 1209 server tests passing, both type-checks clean.
+
+- ✅ `70b3bf4` — `#313` CI: add `--test-force-exit` so leaked handles don't wedge runner. Run #25113724147 hung 40 min after last PASS event because `--test-isolation=none` shares one process and accumulates `setInterval` leaks. Pair the flag with `--test-isolation=none` permanently.
+- ✅ `fce5323` — `#314` Phase 1: opencode.json provider abstraction. Model strings now carry the provider in their prefix (`anthropic/claude-opus-4-7`, `openai/gpt-5`, unprefixed = ollama). `shared/src/providers.ts` is the single source of truth. 9 hardcoded `providerID: "ollama"` sites replaced with `toOpenCodeModelRef`. +13 tests.
+- ✅ `c4496b6` — `#315` Phase 2: cost cap + `GET /api/providers`. `CostTracker.ts` per-(provider, model) pricing table. `RunConfig.maxCostUsd` field; `BlackboardRunner.checkAndApplyCaps` adds cost-cap line beside wall-clock and token-budget. /api/providers reports configured keys without echoing them. +10 tests.
+- ✅ `5c1eb03` — `#316` Phase 3: capture token usage from paid-provider session events. `AgentManager.handleSessionEvent` parses `message.updated` events from non-Ollama providers and emits a UsageRecord into tokenTracker. Ollama path unchanged (proxy already records). +8 tests.
+- ✅ `8f5f5f4` — `#317` Phase 4: setup form provider dropdown. 3-column Run grid (Rounds / Provider / Model). Provider `<select>` greys out Anthropic/OpenAI when keys are absent. Model autocomplete switches between dynamic (Ollama) and hardcoded (Claude / GPT). Max-cost field reveals only for paid providers.
+- ✅ `7f3b0e6` — `#318` Phase 5: BaselineRunner — single agent, single prompt, single apply step. Honestly minimal so the scoreboard's "did the swarm beat doing it alone?" comparison is fair. Reuses worker prompt + parseWorkerResponse + v2Adapters. +7 tests.
+- ✅ `efbe4d8` — `#319` Phase 6: scoreboard fixture framework + 3 starter tasks (fix-off-by-one / add-readme-section / rename-symbol). All deps-free, all verified-fail-on-broken-state. Pattern documented in `eval/fixtures/README.md`. 7 more fixtures queued.
+- ✅ `baaf159` — `#320` Phase 7: multi-seed runner + scoreboard aggregator. `--seeds=N` flag (default 1, capped at 20). New `eval/aggregate.mjs` reads sweep results, computes per-cell median + IQR, writes `eval/RESULTS.md` + `eval/results.json`. Placeholder RESULTS.md ships pending first paid sweep. +6 tests.
+
+Live verified via 90-second Playwright demo at `runs/_demo-providers-2026-04-29T17-04-18-794Z/`: provider dropdown, per-provider model autocomplete, cost-cap-field reveal, 0 console errors. Saved gotcha to memory: `feedback_ci_test_runner_flags.md`.
 
 ### 2026-04-27 evening — overnight validation tour
 

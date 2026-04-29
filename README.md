@@ -2,9 +2,11 @@
 
 > **For agents picking up this codebase**: read [`docs/STATUS.md`](docs/STATUS.md) first — it's the single "what's true right now" pointer + map. This README is the user-facing intro.
 
-A local web app that spawns a **swarm of [OpenCode](https://opencode.ai) agents** — each backed by an [Ollama](https://ollama.com) model such as `glm-5.1:cloud` — to clone a GitHub repository and collaboratively figure out what the project is, what's working, what's missing, and what to build next.
+A local web app that spawns a **swarm of [OpenCode](https://opencode.ai) agents** — each backed by an LLM you choose — to clone a GitHub repository and collaboratively figure out what the project is, what's working, what's missing, and what to build next.
 
-You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. **Nine patterns** ship today:
+**Multi-provider:** runs against **local [Ollama](https://ollama.com)** (free, runs on your GPU), **[Anthropic Claude](https://www.anthropic.com)** (paste an `ANTHROPIC_API_KEY`, no GPU needed), or **[OpenAI](https://openai.com)** (`OPENAI_API_KEY`). Pick the provider in the setup form's dropdown; per-run `maxCostUsd` cap stops paid runs at your dollar ceiling. Ollama is the default.
+
+You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. **Ten patterns** ship today (one write-capable, eight discussion, plus a single-agent baseline for evaluation):
 
 - **Round-robin transcript** — N identical agents take turns on a shared transcript; every agent sees every other agent's reply and responds. Discussion-only.
 - **Blackboard (optimistic + small units)** — planner posts atomic todos to a shared board; workers claim and commit in parallel, with CAS on file hashes catching stale plans. **The only write-capable preset** — workers actually modify the clone.
@@ -15,6 +17,7 @@ You fill in a GitHub URL, a local clone path, an agent count, and pick a **patte
 - **Debate-judge** — Pro / Con / Judge (exactly 3 agents). Multi-round structured debate ending in a JSON verdict. Optional post-verdict "build phase" turns Pro into implementer. Discussion-by-default; `executeNextAction: true` enables file edits.
 - **Map-reduce** — agent-1 is reducer, agents 2..N are mappers slicing the repo and summarizing in parallel. Convergence detector stops on consecutive empty cycles. Discussion-only.
 - **Stigmergy** — pheromone-table + per-file ranking pattern. Self-organizing exploration; agents pick the next file based on a shared annotation table. Discussion-only.
+- **Baseline** — single agent, single prompt, single apply step. The "thinnest honest comparison" the eval scoreboard uses to anchor "did the swarm beat doing it alone?" Code-modify capable; not surfaced in the form's normal preset list (eval-harness path).
 
 A live transcript streams into the browser as it's generated — you see each agent type token-by-token, can inject your own message into the conversation at any time, and stop the whole thing with one click. The blackboard preset adds a **Board** tab showing todos in five columns (Open / Claimed / Committed / Stale / Skipped), plus a run summary card when the run terminates.
 
@@ -25,7 +28,8 @@ A live transcript streams into the browser as it's generated — you see each ag
 - **Mid-run nudge** — submit a directive amendment without restarting; the planner picks it up at the next cycle.
 - **Cost-share breakdown** — per-agent token shares + savings hint when one role dominates with a coding-tier-suitable model.
 - **Pre-commit verify gate (blackboard)** — set `verifyCommand` (e.g. `npm test`) to gate worker hunks; failures revert the writes and mark the todo for replan.
-- **Eval harness** — `node eval/run-eval.mjs --repo=<url>` runs every preset against a curated catalog and writes a preset×task scoreboard.
+- **Cost cap (paid providers)** — every run on Anthropic/OpenAI checks cumulative spend against `maxCostUsd` every 5 seconds; stops cleanly with `cap:cost` when the ceiling is reached. Ollama runs ignore the cap (every record costs $0).
+- **Eval harness + scoreboard** — `node eval/run-eval.mjs --repo=<url> --seeds=5` runs every preset against the catalog, then `node eval/aggregate.mjs runs/_eval/<ts>` writes `eval/RESULTS.md` with median + IQR per cell. See [`eval/fixtures/README.md`](eval/fixtures/README.md) for the self-contained fixture pattern.
 
 **Current architecture is V2 substrate** — the original opencode-SDK-streaming path was retired 2026-04-28; runs go through `OllamaClient` (direct `/api/chat`) + `WorkerPipelineV2` + `TodoQueue` + `RunStateObserver` + `EventLogReaderV2`. See [`server/src/swarm/blackboard/ARCHITECTURE.md`](server/src/swarm/blackboard/ARCHITECTURE.md) for the deep dive.
 
@@ -133,7 +137,9 @@ Hit Start. You'll see each agent panel go from `spawning` → `ready` → `think
 | `OPENCODE_SERVER_USERNAME` | no (defaults to `opencode`) | HTTP basic auth username used by every spawned opencode subprocess |
 | `OPENCODE_SERVER_PASSWORD` | **yes** | HTTP basic auth password — any string; shared with spawned subprocesses |
 | `OLLAMA_BASE_URL` | no (defaults to `http://localhost:11434/v1`) | OpenAI-compatible Ollama endpoint, written into each agent's synthesized `opencode.json`. **Must end in `/v1`** — the proxy defensively appends it if missing (commit `bb0c509`). |
-| `DEFAULT_MODEL` | no (defaults to `glm-5.1:cloud`) | Model each agent uses when the form's model field is left blank. `nemotron-3-super:cloud` and `glm-5.1:cloud` remain available — type explicitly in the form. |
+| `ANTHROPIC_API_KEY` | no (only when using Anthropic provider) | Read by `@ai-sdk/anthropic` directly via `process.env`. Never echoed into `opencode.json` or sent to the browser. Setup form's provider dropdown greys out Anthropic when unset. |
+| `OPENAI_API_KEY` | no (only when using OpenAI provider) | Same pattern as `ANTHROPIC_API_KEY`. |
+| `DEFAULT_MODEL` | no (defaults to `glm-5.1:cloud`) | Model each agent uses when the form's model field is left blank. `nemotron-3-super:cloud` and `glm-5.1:cloud` remain available — type explicitly in the form. For paid providers use the prefixed form: `anthropic/claude-opus-4-7`, `openai/gpt-5`, etc. |
 | `OPENCODE_BIN` | no (defaults to `opencode`) | Path/name of the opencode CLI binary |
 | `SERVER_PORT` | no (defaults to `8243`) | Override the backend HTTP+WS port |
 | `WEB_PORT` | no (defaults to `8244`) | Override the Vite dev-server port |
