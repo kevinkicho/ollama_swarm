@@ -108,7 +108,15 @@ const extraArgs = process.argv.slice(2);
 // shared runners — 70 cold node spawns = 20+ min on ubuntu-latest).
 // Local dev keeps default isolation. Tests don't share global state
 // (each spins its own tmpdir + adapters) so this is safe.
-const ciFlags = process.env.CI === "true" ? ["--test-isolation=none"] : [];
+//
+// --test-force-exit: when isolation is off, all 70 test files share
+// one process. A leaked setInterval (ConformanceMonitor poll) or
+// unclosed http.Server (ollamaProxy test) keeps the loop alive past
+// the last assertion — locally that's hidden because each file gets
+// its own process that exits anyway. CI run #25113724147 hung 40 min
+// after the last visible PASS event for exactly this reason.
+const ciFlags =
+  process.env.CI === "true" ? ["--test-isolation=none", "--test-force-exit"] : [];
 
 const r = spawnSync(
   process.execPath,
