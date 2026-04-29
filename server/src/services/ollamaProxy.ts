@@ -332,6 +332,19 @@ class TokenTracker {
     const t = this.total();
     return t.promptTokens + t.responseTokens - baseline;
   }
+
+  /** Phase 2 of #314: every UsageRecord with ts >= sinceMs. The
+   *  cost-cap watchdog passes the run's start timestamp; CostTracker
+   *  multiplies each record by its (provider, model) price and sums.
+   *  Cheap — records are pre-sorted by insertion time, but a linear
+   *  scan over CACHE_LIMIT (100k) is fine at the ~5s cap-tick cadence. */
+  recordsSinceTs(sinceMs: number): readonly UsageRecord[] {
+    const out: UsageRecord[] = [];
+    for (const rec of this.records) {
+      if (rec.ts >= sinceMs) out.push(rec);
+    }
+    return out;
+  }
 }
 
 /** Task #124: snapshot helper — runner calls at run-start to capture

@@ -126,6 +126,17 @@ export interface RunConfig {
    */
   tokenBudget?: number;
   /**
+   * Phase 2 of #314 (multi-provider cost cap): per-run dollar ceiling
+   * for paid providers (Anthropic, OpenAI). Same 5-second cap-tick
+   * cadence as wallClockCapMs / tokenBudget; on trip the runner halts
+   * with reason "cap:cost". Ollama-only runs ignore the cap (every
+   * record costs $0). Undefined / 0 = no cost cap. Recommended default
+   * for paid-API runs is small (e.g. $0.50–$1.00) so a runaway retry
+   * loop can't accidentally burn $100 of tokens. Blackboard-only for
+   * now — discussion presets don't have the same 5s watchdog tick.
+   */
+  maxCostUsd?: number;
+  /**
    * Task #127: when no userDirective is set, run a one-shot
    * goal-generation pre-pass using the planner agent — it inspects
    * the repo and proposes 3-5 ambitious-but-feasible improvements,

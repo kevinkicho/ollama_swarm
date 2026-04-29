@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Agent } from "../../services/AgentManager.js";
 import { AgentManager } from "../../services/AgentManager.js";
 import { toOpenCodeModelRef } from "../../../../shared/src/providers.js";
+import { costCapExceeded } from "../../services/CostTracker.js";
 import type {
   AgentState,
   SwarmEvent,
@@ -3225,6 +3226,17 @@ export class BlackboardRunner implements SwarmRunner {
     )
       ? `token-budget reached (${this.active?.tokenBudget?.toLocaleString()} tokens)`
       : null;
+    // Phase 2 of #314: cost-cap check for paid providers (Anthropic /
+    // OpenAI). Ollama records cost $0 so an Ollama-only run never
+    // trips even when maxCostUsd is set. Independent of token-budget;
+    // a high token count on Sonnet may cost less than a small token
+    // count on Opus, so the two caps catch different overrun shapes.
+    const costReason = (
+      this.runStartedAt !== undefined &&
+      costCapExceeded(tokenTracker.recordsSinceTs(this.runStartedAt), this.active?.maxCostUsd)
+    )
+      ? `cost-cap reached ($${this.active?.maxCostUsd?.toFixed(2)} USD)`
+      : null;
     // Task #165 (was #137-halt): quota-exhausted check. Was an
     // immediate halt; now triggers enterPause() which suspends new
     // prompts + probes upstream every 5 min. Persistent walls that
@@ -3236,7 +3248,7 @@ export class BlackboardRunner implements SwarmRunner {
       this.enterPause(quotaState);
       return false;
     }
-    const finalReason = reason ?? tokenReason;
+    const finalReason = reason ?? tokenReason ?? costReason;
     if (!finalReason) return false;
     this.terminationReason = finalReason;
     this.appendSystem(`Stopping: ${finalReason}`);

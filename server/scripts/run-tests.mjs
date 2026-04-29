@@ -99,6 +99,7 @@ const TEST_FILES = [
   "src/services/ConformanceMonitor.test.ts",
   "src/services/AmendmentsBuffer.test.ts",
   "src/services/EmbeddingDriftMonitor.test.ts",
+  "src/services/CostTracker.test.ts",
 ];
 
 // Forward CLI args so callers can pass --test-name-pattern etc:

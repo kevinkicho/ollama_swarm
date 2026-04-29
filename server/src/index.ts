@@ -165,6 +165,26 @@ app.post("/api/usage/clear-quota", (_req, res) => {
   res.json({ ok: true });
 });
 
+// Phase 2 of #314: setup form polls this to know which providers can
+// be selected. Ollama is "available" whenever the local server is up
+// (the form's existing /api/models call already checks Ollama
+// reachability — this just reports whether the API key is wired);
+// anthropic/openai are "available" only when the matching env var is
+// set. Keys are NEVER echoed back; just a boolean per provider.
+app.get("/api/providers", (_req, res) => {
+  res.json({
+    ollama: { available: true, hasKey: true },
+    anthropic: {
+      available: !!config.ANTHROPIC_API_KEY,
+      hasKey: !!config.ANTHROPIC_API_KEY,
+    },
+    openai: {
+      available: !!config.OPENAI_API_KEY,
+      hasKey: !!config.OPENAI_API_KEY,
+    },
+  });
+});
+
 app.use("/api/swarm", swarmRouter(orchestrator));
 app.use("/api/dev", devRouter({ broadcaster, repos }));
 // V2 Step 6b: read-only event-log endpoint for the eventual UI cutover.
