@@ -1,0 +1,7 @@
+{
+  "name": "add-readme-section-fixture",
+  "type": "module",
+  "scripts": {
+    "test": "node verify.mjs"
+  }
+}

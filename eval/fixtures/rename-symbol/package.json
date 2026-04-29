@@ -1,0 +1,7 @@
+{
+  "name": "rename-symbol-fixture",
+  "type": "module",
+  "scripts": {
+    "test": "node verify.mjs"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "fix-off-by-one-fixture",
+  "type": "module",
+  "scripts": {
+    "test": "node verify.mjs"
+  }
+}
