@@ -2,6 +2,7 @@ import { memo, useMemo, useState } from "react";
 import { useSwarm } from "../state/store";
 import type { Finding, RunSummary, Todo, TodoStatus } from "../types";
 import { PlannerThinkingPanel } from "./PlannerThinkingPanel";
+import { computeCostBreakdown } from "../lib/costBreakdown";
 
 const COLUMNS: { key: TodoStatus; label: string; accent: string; help: string }[] = [
   {
@@ -246,6 +247,7 @@ function SummaryCard({ summary }: SummaryCardProps) {
               ))}
             </div>
           </div>
+          <CostBreakdownSection summary={summary} />
           <div>
             <div className="text-ink-500 mb-1">
               git status --porcelain
@@ -296,6 +298,55 @@ function formatDuration(ms: number): string {
   const s = totalSec % 60;
   return `${m}m${s.toString().padStart(2, "0")}s`;
 }
+
+// #298 Phase 1: cost-share breakdown rendered inside the SummaryCard
+// details. Shows per-agent token shares + a savings hint when one
+// agent dominates with a role that could plausibly use a cheaper
+// model. Memoized — recomputes only when summary identity changes.
+const CostBreakdownSection = memo(function CostBreakdownSection({
+  summary,
+}: {
+  summary: RunSummary;
+}) {
+  const breakdown = useMemo(() => computeCostBreakdown(summary), [summary]);
+  if (breakdown.totalTokens === 0) return null;
+  return (
+    <div>
+      <div className="text-ink-500 mb-1">
+        Cost breakdown <span className="text-ink-600">· {breakdown.totalTokens.toLocaleString()} tokens total</span>
+      </div>
+      <div className="space-y-0.5">
+        {breakdown.byAgent.map((a) => (
+          <div key={a.agentIndex} className="flex items-center gap-2 font-mono text-[11px]">
+            <span className="text-ink-300 w-16 shrink-0">Agent {a.agentIndex}</span>
+            <span className="text-ink-500 w-20 shrink-0 truncate" title={a.role}>
+              {a.role}
+            </span>
+            <div className="flex-1 h-2 bg-ink-900 rounded overflow-hidden min-w-[60px]">
+              <div
+                className={
+                  a.pctOfTotal >= 40
+                    ? "h-full bg-amber-500/70"
+                    : "h-full bg-ink-500/60"
+                }
+                style={{ width: `${a.pctOfTotal}%` }}
+              />
+            </div>
+            <span className="text-ink-300 w-8 text-right tabular-nums">{a.pctOfTotal}%</span>
+            <span className="text-ink-600 w-24 text-right tabular-nums">
+              {a.totalTokens.toLocaleString()}
+            </span>
+          </div>
+        ))}
+      </div>
+      {breakdown.savingHint ? (
+        <div className="mt-1.5 rounded border border-amber-700/50 bg-amber-900/20 text-amber-200 text-[11px] px-2 py-1.5 leading-snug">
+          💡 {breakdown.savingHint}
+        </div>
+      ) : null}
+    </div>
+  );
+});
 
 function stopReasonAccent(reason: RunSummary["stopReason"]): { badge: string; border: string } {
   switch (reason) {
