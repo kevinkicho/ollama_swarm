@@ -29,7 +29,9 @@
   - Phase 4 (`18facec`, `20aa431`, `0416d97`, `5461575`, `75a7505`): ToolDispatcher (read/grep/glob/list/bash) + Anthropic tool_use loop + OpenAI tool_calls loop + dispatcher wired through chatOnce + promptWithRetry
   - Phase 5: defaults for USE_SESSION_PROVIDER + USE_SESSION_NO_OPENCODE flipped to TRUE — opencode subprocess unreachable on the default path
   
-  Remaining cleanup (low priority): physically delete `@opencode-ai/sdk` from `server/package.json` + `AgentManager.spawnAgent` (legacy path) + `RepoService.writeOpencodeConfig`. The dep stays in tree as an escape hatch (`USE_SESSION_NO_OPENCODE=false`) until the new defaults bake across enough runs. **Trigger for cleanup**: explicit "delete opencode dep" after the new defaults have run cleanly for several weeks.
+  ✅ **Cleanup pt 1** (commit `d9bee86`): `AgentManager.spawnAgent` legacy 165-LOC body deleted (delegates to `spawnAgentNoOpencode`); `RepoService.writeOpencodeConfig` deleted (~180 LOC); 8 RepoService.test.ts tests for opencode.json shape removed; all 10 callers stopped invoking it.
+
+  ✅ **Cleanup pt 2** (commit `d189f0d`): `@opencode-ai/sdk` removed from `server/package.json`; `createOpencodeClient` import + `Client` type alias replaced with a local `SessionClient` stub interface in AgentManager.ts. Dead opencode-only methods (handleSessionEvent, attachEventStream, streamPrompt, warmupAgent, respawnAgent — ~1000 LOC of unreachable code) still in tree but type-check against the stub. They're never called at runtime; physical deletion is a focused future cleanup session that has no functional impact.
 
 ### Smaller cleanups
 
