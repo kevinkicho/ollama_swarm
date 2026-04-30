@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readAnthropicStream, AnthropicProvider } from "./AnthropicProvider.js";
+import { readAnthropicStream, readAnthropicStreamFull, AnthropicProvider } from "./AnthropicProvider.js";
 import { readOpenAiStream, OpenAIProvider } from "./OpenAIProvider.js";
 import { pickProvider, __resetProviderSingletons } from "./pickProvider.js";
 
@@ -78,6 +78,33 @@ test("readAnthropicStream — first-chunk timeout triggers idle-timeout finish",
     Date.now(),
   );
   assert.equal(result.finishReason, "idle-timeout");
+});
+
+test("readAnthropicStreamFull — captures tool_use blocks with parsed input", async () => {
+  // Realistic-shape Anthropic tool-use stream: text + tool_use both
+  // emitted, indexed at 0 and 1, JSON streamed across multiple deltas.
+  const events =
+    `event: message_start\ndata: {"type":"message_start","message":{"id":"m1","usage":{"input_tokens":50}}}\n\n` +
+    `event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}\n\n` +
+    `event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I'll grep for it."}}\n\n` +
+    `event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n` +
+    `event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_x","name":"grep"}}\n\n` +
+    `event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"pattern\\":"}}\n\n` +
+    `event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\\"function add\\"}"}}\n\n` +
+    `event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n` +
+    `event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":30}}\n\n` +
+    `event: message_stop\ndata: {"type":"message_stop"}\n\n`;
+  const result = await readAnthropicStreamFull(streamOf([events]), { signal: noopSignal });
+  assert.equal(result.finishReason, "done");
+  assert.equal(result.stopReason, "tool_use");
+  assert.equal(result.blocks.length, 2);
+  assert.deepEqual(result.blocks[0], { type: "text", text: "I'll grep for it." });
+  assert.deepEqual(result.blocks[1], {
+    type: "tool_use",
+    id: "toolu_x",
+    name: "grep",
+    input: { pattern: "function add" },
+  });
 });
 
 test("AnthropicProvider — chat returns error when no API key set", async () => {

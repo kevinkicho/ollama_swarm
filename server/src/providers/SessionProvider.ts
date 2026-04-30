@@ -41,6 +41,21 @@ export interface ChatOpts {
    *  no-opencode mode where there's no SSE event stream to relay.
    *  Implementations call this synchronously inside the chunk loop. */
   onChunk?: (cumulativeText: string) => void;
+  /** E3 Phase 4 part 2: list of tool names the agent may invoke.
+   *  Each provider translates this to its own tool-definition shape
+   *  (Anthropic input_schema, OpenAI function-call schema). Must be
+   *  paired with `dispatcher` when set; the provider runs a multi-turn
+   *  loop, dispatching tool calls through `dispatcher.dispatch(...)`
+   *  and feeding results back to the model until it emits a text-only
+   *  response (or hits a 10-turn safety cap). */
+  tools?: ReadonlyArray<"read" | "grep" | "glob" | "list" | "bash">;
+  /** Required when `tools` is set. Owns the security-gated execution
+   *  of each tool (profile permission table, path safety, allowlist
+   *  for bash). See server/src/tools/ToolDispatcher.ts. */
+  dispatcher?: import("../tools/ToolDispatcher.js").ToolDispatcher;
+  /** Diagnostic callback fired for each tool invocation (name + result
+   *  ok/error) so the UI can render tool-call timeline entries. */
+  onTool?: (info: { tool: string; ok: boolean; preview: string }) => void;
 }
 
 export type FinishReason = "done" | "aborted" | "idle-timeout" | "error";
