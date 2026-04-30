@@ -32,6 +32,23 @@ export type ToolName = "read" | "grep" | "glob" | "list" | "bash" | "write" | "e
 export type ProfileName = "swarm" | "swarm-read" | "swarm-builder";
 export type Permission = "allow" | "deny";
 
+// Default tools list to advertise to the model per profile. Mirrors
+// what opencode's permission system grants today. Used by chatOnce /
+// promptWithRetry callers to derive `tools` for SessionProvider.chat
+// without each caller having to spell out the per-profile list.
+export function defaultToolsForProfile(
+  profile: ProfileName,
+): ReadonlyArray<"read" | "grep" | "glob" | "list" | "bash"> {
+  switch (profile) {
+    case "swarm":
+      return [];
+    case "swarm-read":
+      return ["read", "grep", "glob", "list"];
+    case "swarm-builder":
+      return ["read", "grep", "glob", "list", "bash"];
+  }
+}
+
 export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
   swarm: {
     read: "deny",

@@ -14,6 +14,7 @@ import { pickProvider } from "../providers/pickProvider.js";
 import { config } from "../config.js";
 import { tokenTracker } from "../services/ollamaProxy.js";
 import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
+import { ToolDispatcher, defaultToolsForProfile, type ProfileName } from "../tools/ToolDispatcher.js";
 
 export interface ChatOnceOpts {
   /** opencode agent profile to invoke under (swarm / swarm-read / swarm-builder / swarm-ui).
@@ -29,6 +30,13 @@ export interface ChatOnceOpts {
   onChunk?: (cumulativeText: string) => void;
   /** Diagnostic logger (provider path only today). */
   logDiag?: (record: unknown) => void;
+  /** E3 Phase 4 part 2: when set + provider path, the model gets tools
+   *  bound to this clone. Profile (read from agentName) gates which
+   *  tools the dispatcher will execute. Without clonePath, no tools
+   *  are advertised — the model answers from prompt context only. */
+  clonePath?: string;
+  /** Tool-call notification callback — fires per dispatch with name + ok + preview. */
+  onTool?: (info: { tool: string; ok: boolean; preview: string }) => void;
 }
 
 // Mirrors what `agent.client.session.prompt` returns so callers don't
@@ -48,6 +56,22 @@ export async function chatOnce(
   if (config.USE_SESSION_NO_OPENCODE || config.USE_SESSION_PROVIDER) {
     const t0 = Date.now();
     const { provider, modelId } = pickProvider(agent.model);
+    // E3 Phase 4 part 2: bind tools to the dispatcher when clonePath
+    // is supplied AND the agent profile grants any tools.
+    const profileForTools: ProfileName | null =
+      opts.agentName === "swarm" || opts.agentName === "swarm-read" || opts.agentName === "swarm-builder"
+        ? (opts.agentName as ProfileName)
+        : opts.agentName === "swarm-ui"
+          ? "swarm-read" // swarm-ui inherits read-side tools
+          : null;
+    // Default clonePath to agent.cwd (set by AgentManager.spawnAgent /
+    // spawnAgentNoOpencode) so callers don't have to plumb it through
+    // explicitly. Override via opts.clonePath when needed.
+    const clonePath = opts.clonePath ?? agent.cwd;
+    const tools = clonePath && profileForTools ? defaultToolsForProfile(profileForTools) : [];
+    const dispatcher = clonePath && profileForTools && tools.length > 0
+      ? new ToolDispatcher(profileForTools, clonePath)
+      : undefined;
     const result = await provider.chat({
       model: modelId,
       messages: [{ role: "user", content: opts.promptText }],
@@ -55,6 +79,9 @@ export async function chatOnce(
       agentId: agent.id,
       logDiag: opts.logDiag,
       ...(opts.onChunk ? { onChunk: opts.onChunk } : {}),
+      ...(tools.length > 0 ? { tools } : {}),
+      ...(dispatcher ? { dispatcher } : {}),
+      ...(opts.onTool ? { onTool: opts.onTool } : {}),
     });
     if (result.usage) {
       tokenTracker.add({

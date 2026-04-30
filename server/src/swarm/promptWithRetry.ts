@@ -9,6 +9,7 @@ import { tokenTracker } from "../services/ollamaProxy.js";
 import { chat as ollamaChat } from "../services/OllamaClient.js";
 import { pickProvider } from "../providers/pickProvider.js";
 import { config } from "../config.js";
+import { ToolDispatcher, defaultToolsForProfile, type ProfileName } from "../tools/ToolDispatcher.js";
 // 2026-04-28: shared interruptible sleep used by both this module's
 // retry-backoff and BlackboardRunner. One source of truth.
 import { interruptibleSleep as defaultInterruptibleSleep } from "./interruptibleSleep.js";
@@ -188,6 +189,22 @@ export async function promptWithRetry(
           ? `[Per-agent specialization for this swarm member]\n${addendum}\n[End specialization. Original prompt follows.]\n\n${promptText}`
           : promptText;
         const { provider, modelId } = pickProvider(agent.model);
+        // E3 Phase 4 part 2: bind tools to a dispatcher when the agent
+        // has a clone-rooted cwd AND the profile (from agentName) grants
+        // any tools. Workers ("swarm") get nothing; planner/auditor
+        // ("swarm-read") get read-side tools; build-style TODOs
+        // ("swarm-builder") additionally get bash. Without this the
+        // model answers from prompt context only — fine for some
+        // discussion presets but harmful for the planner that needs to
+        // grep before posting TODOs.
+        const profileForTools: ProfileName | null =
+          agentName === "swarm" || agentName === "swarm-read" || agentName === "swarm-builder"
+            ? (agentName as ProfileName)
+            : null;
+        const tools = profileForTools && agent.cwd ? defaultToolsForProfile(profileForTools) : [];
+        const dispatcher = tools.length > 0 && profileForTools && agent.cwd
+          ? new ToolDispatcher(profileForTools, agent.cwd)
+          : undefined;
         const result = await provider.chat({
           model: modelId,
           messages: [{ role: "user", content: effectivePromptText }],
@@ -195,11 +212,11 @@ export async function promptWithRetry(
           agentId: agent.id,
           logDiag: opts.logDiag,
           ...(opts.ollamaOptions !== undefined ? { options: opts.ollamaOptions } : {}),
-          // Thread streaming text into the agent's per-agent buffer so
-          // PersistentStreamBubble stays live in no-opencode mode.
           onChunk: (cumulativeText) => {
             opts.manager?.recordStreamingText(agent.id, agent.index, cumulativeText);
           },
+          ...(tools.length > 0 ? { tools } : {}),
+          ...(dispatcher ? { dispatcher } : {}),
         });
         // Record token usage into tokenTracker so the cost cap +
         // /api/usage widget keep working unchanged. Provider returns
