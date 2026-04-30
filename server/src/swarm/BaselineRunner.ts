@@ -113,14 +113,25 @@ export class BaselineRunner implements SwarmRunner {
     if (this.stopping) return;
 
     this.setPhase("spawning");
-    const agent = await this.opts.manager.spawnAgent({
-      cwd: destPath,
-      index: 1,
-      model: cfg.model,
-    });
+    // E3 Phase 3 (slice): when USE_SESSION_NO_OPENCODE=1, skip the
+    // opencode subprocess entirely. The agent is a stub that holds
+    // sessionId + model only; prompt routing falls back to the Phase 2
+    // pickProvider path (forced below by skipping the streamPrompt
+    // branch when agent.client is the throwing stub).
+    const agent = config.USE_SESSION_NO_OPENCODE
+      ? await this.opts.manager.spawnAgentNoOpencode({ cwd: destPath, index: 1, model: cfg.model })
+      : await this.opts.manager.spawnAgent({ cwd: destPath, index: 1, model: cfg.model });
     if (this.stopping) return;
-    this.appendSystem(`Baseline agent ready on port ${agent.port}`);
-    await this.opts.manager.warmupAgent(agent);
+    this.appendSystem(
+      config.USE_SESSION_NO_OPENCODE
+        ? `Baseline agent ready (no-opencode mode, session=${agent.sessionId.slice(0, 8)})`
+        : `Baseline agent ready on port ${agent.port}`,
+    );
+    // Warmup is opencode-specific (a trivial first prompt to wake the
+    // subprocess); skip in no-opencode mode where there's no subprocess.
+    if (!config.USE_SESSION_NO_OPENCODE) {
+      await this.opts.manager.warmupAgent(agent);
+    }
 
     // No "running" phase exists in SwarmPhase. The discussion runners
     // use "discussing" for the active loop; the blackboard runner uses
@@ -150,7 +161,13 @@ export class BaselineRunner implements SwarmRunner {
       // its own AI-SDK config wired (which exists, but the direct path
       // is cleaner — fewer hops, direct token capture, no MCP overhead).
       const { provider, modelId } = pickProvider(cfg.model);
-      const useProvider = config.USE_SESSION_PROVIDER || provider.id !== "ollama";
+      // Force the provider path when there's no opencode subprocess
+      // available (otherwise streamPrompt would hit the stubbed client
+      // and throw with the diagnostic message).
+      const useProvider =
+        config.USE_SESSION_PROVIDER ||
+        config.USE_SESSION_NO_OPENCODE ||
+        provider.id !== "ollama";
       if (useProvider) {
         const t0 = Date.now();
         const result = await provider.chat({

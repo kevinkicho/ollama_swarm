@@ -11,6 +11,7 @@ import { AgentPidTracker } from "./agentPids.js";
 import type { AgentState, SwarmEvent } from "../types.js";
 import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
 import { tokenTracker } from "./ollamaProxy.js";
+import { createSession } from "./Session.js";
 
 type Client = ReturnType<typeof createOpencodeClient>;
 
@@ -571,6 +572,52 @@ export class AgentManager {
   private setAgentState(s: AgentState): void {
     this.agentStates.set(s.id, s);
     this.onState(s);
+  }
+
+  // E3 Phase 3 (slice): construct an Agent without spawning an opencode
+  // subprocess. The returned agent has a stubbed `client` that throws
+  // on use — any caller that still touches agent.client.session.* in
+  // no-opencode mode is a logic bug that should fail loud, not fall
+  // back silently to opencode behavior.
+  //
+  // Today only BaselineRunner uses this. killAll handles agent.child=
+  // undefined gracefully (the existing `agent.child?.pid` chain).
+  async spawnAgentNoOpencode(opts: SpawnOpts): Promise<Agent> {
+    const id = `agent-${opts.index}`;
+    const session = createSession(opts.model);
+    const port = 0; // sentinel — no real port allocated
+    const stateBase: AgentState = {
+      id,
+      index: opts.index,
+      port,
+      status: "ready",
+      sessionId: session.id,
+    };
+    this.setAgentState(stateBase);
+    // Stub the client so any unmigrated call site fails loud.
+    const stubClient = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error(
+            "AgentManager.spawnAgentNoOpencode: agent.client is not available in no-opencode mode. " +
+              "This caller still depends on the opencode SDK; route it through pickProvider instead.",
+          );
+        },
+      },
+    ) as unknown as Client;
+    const agent: Agent = {
+      id,
+      index: opts.index,
+      port,
+      sessionId: session.id,
+      client: stubClient,
+      child: undefined,
+      model: opts.model,
+      cwd: opts.cwd,
+    };
+    this.agents.set(id, agent);
+    return agent;
   }
 
   async spawnAgent(opts: SpawnOpts): Promise<Agent> {

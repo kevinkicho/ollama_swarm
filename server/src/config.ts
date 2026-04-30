@@ -82,6 +82,18 @@ const Schema = z.object({
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // E3 Phase 3 (slice, per docs/E3-drop-opencode-plan.md): when "true",
+  // BaselineRunner skips spawning an opencode subprocess and instead
+  // runs the prompt directly through pickProvider. AgentManager still
+  // spawns opencode for the other 8 runners (Phase 3 full migration is
+  // multi-day; this slice proves the no-opencode path works for the
+  // simplest runner first). Default OFF — existing behavior unchanged.
+  // Pre-flight gate before the full Phase 3 rollout: this slice + 5+
+  // stable runs.
+  USE_SESSION_NO_OPENCODE: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
   // Unit 17: send a tiny "reply with: ok" prompt to each agent right
   // after spawn so its first REAL prompt isn't a cold-start. Default
   // on; set to "false"/"0"/"no" to disable (e.g. for unit-test rigs
