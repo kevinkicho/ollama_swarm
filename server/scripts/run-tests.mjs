@@ -17,20 +17,6 @@ const env = {
     process.env.OPENCODE_SERVER_PASSWORD && process.env.OPENCODE_SERVER_PASSWORD.length > 0
       ? process.env.OPENCODE_SERVER_PASSWORD
       : "test-only",
-  // E3 Phase 5 (2026-04-29): runtime defaults flipped to USE_SESSION_*
-  // = true (no opencode subprocess by default). Tests still mock the
-  // opencode SDK directly (agent.client.session.prompt) — they're a
-  // closed system that doesn't need the new dispatch path. Force the
-  // legacy path here so existing tests don't have to be rewritten.
-  // The runtime default still flips for real users via .env.
-  USE_SESSION_PROVIDER:
-    process.env.USE_SESSION_PROVIDER && process.env.USE_SESSION_PROVIDER.length > 0
-      ? process.env.USE_SESSION_PROVIDER
-      : "false",
-  USE_SESSION_NO_OPENCODE:
-    process.env.USE_SESSION_NO_OPENCODE && process.env.USE_SESSION_NO_OPENCODE.length > 0
-      ? process.env.USE_SESSION_NO_OPENCODE
-      : "false",
 };
 
 const TEST_FILES = [

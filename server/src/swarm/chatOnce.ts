@@ -11,9 +11,7 @@
 
 import type { Agent } from "../services/AgentManager.js";
 import { pickProvider } from "../providers/pickProvider.js";
-import { config } from "../config.js";
 import { tokenTracker } from "../services/ollamaProxy.js";
-import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
 import { ToolDispatcher, defaultToolsForProfile, type ProfileName } from "../tools/ToolDispatcher.js";
 
 export interface ChatOnceOpts {
@@ -53,7 +51,8 @@ export async function chatOnce(
   opts: ChatOnceOpts,
 ): Promise<ChatOnceResult> {
   const signal = opts.signal ?? new AbortController().signal;
-  if (config.USE_SESSION_NO_OPENCODE || config.USE_SESSION_PROVIDER) {
+  // E3 Phase 5: provider path is the only path. Legacy SDK fallback gone.
+  {
     const t0 = Date.now();
     const { provider, modelId } = pickProvider(agent.model);
     // E3 Phase 4 part 2: bind tools to the dispatcher when clonePath
@@ -101,15 +100,4 @@ export async function chatOnce(
     }
     return { data: { parts: [{ type: "text", text: result.text }] } };
   }
-  // Legacy SDK path — preserved verbatim from the old call sites.
-  const res = await agent.client.session.prompt(
-    {
-      sessionID: agent.sessionId,
-      agent: opts.agentName,
-      model: toOpenCodeModelRef(agent.model),
-      parts: [{ type: "text", text: opts.promptText }],
-    },
-    { signal },
-  );
-  return res as unknown as ChatOnceResult;
 }

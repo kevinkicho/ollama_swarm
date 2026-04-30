@@ -1,31 +1,42 @@
-import { describe, it } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { promptWithRetry, type RetryInfo } from "./promptWithRetry.js";
 import type { Agent } from "../services/AgentManager.js";
+import type { SessionProvider } from "../providers/SessionProvider.js";
+import { __setTestProviderOverride, __resetProviderSingletons } from "../providers/pickProvider.js";
 
-// Build a fake Agent whose session.prompt is a programmable mock. The
-// real Agent type pulls in the SDK + child process types — we cast
-// through unknown because the helper only touches `client.session.prompt`,
-// `sessionId`, and `model`.
-function makeAgent(promptImpl: (call: number) => Promise<unknown>): {
+// Build a fake Agent + install a mock SessionProvider via the
+// pickProvider test seam. promptWithRetry routes through the
+// SessionProvider abstraction, so tests inject behavior at that layer.
+// promptImpl returns the bare assistant text per call (or throws to
+// simulate transient/permanent failures).
+function makeAgent(promptImpl: (call: number) => Promise<string>): {
   agent: Agent;
   callCount: () => number;
 } {
   let n = 0;
+  const provider: SessionProvider = {
+    id: "ollama",
+    async chat(_opts) {
+      n += 1;
+      const text = await promptImpl(n);
+      return { text, elapsedMs: 0, finishReason: "done" };
+    },
+  };
+  __setTestProviderOverride(provider);
   const agent = {
+    id: "agent-1",
+    index: 1,
+    port: 0,
     sessionId: "sess-1",
     model: "test-model",
-    client: {
-      session: {
-        prompt: async () => {
-          n += 1;
-          return promptImpl(n);
-        },
-      },
-    },
+    cwd: "",
   } as unknown as Agent;
   return { agent, callCount: () => n };
 }
+
+beforeEach(() => __resetProviderSingletons());
+afterEach(() => __resetProviderSingletons());
 
 // A retryable error per retry.ts's classifier — uses one of the
 // recognized codes so isRetryableSdkError returns true.
@@ -48,16 +59,19 @@ const fastSleep = async (_ms: number, signal: AbortSignal): Promise<boolean> => 
 };
 
 describe("promptWithRetry — happy path", () => {
-  it("returns the SDK response on first attempt success", async () => {
-    const { agent, callCount } = makeAgent(async () => ({ data: { text: "ok" } }));
+  it("returns the SDK-shaped response on first attempt success", async () => {
+    const { agent, callCount } = makeAgent(async () => "ok");
     const ctrl = new AbortController();
     const res = await promptWithRetry(agent, "hello", { signal: ctrl.signal, sleep: fastSleep });
-    assert.deepEqual(res, { data: { text: "ok" } });
+    // promptWithRetry wraps the provider's text into the SDK-shaped
+    // {data: {parts: [{type:"text", text}]}} so existing callers keep
+    // working without per-site shape adaptation.
+    assert.deepEqual(res, { data: { parts: [{ type: "text", text: "ok" }] } });
     assert.equal(callCount(), 1);
   });
 
   it("does not call onRetry when the first attempt succeeds", async () => {
-    const { agent } = makeAgent(async () => ({ data: { text: "ok" } }));
+    const { agent } = makeAgent(async () => "ok");
     const ctrl = new AbortController();
     let retryCalls = 0;
     await promptWithRetry(agent, "hi", {
@@ -75,7 +89,7 @@ describe("promptWithRetry — retry on transient", () => {
   it("retries once and succeeds on attempt 2", async () => {
     const { agent, callCount } = makeAgent(async (n) => {
       if (n === 1) throw transientError();
-      return { data: { text: "ok-after-retry" } };
+      return "ok-after-retry";
     });
     const ctrl = new AbortController();
     const seen: RetryInfo[] = [];
@@ -84,7 +98,7 @@ describe("promptWithRetry — retry on transient", () => {
       sleep: fastSleep,
       onRetry: (info) => seen.push(info),
     });
-    assert.deepEqual(res, { data: { text: "ok-after-retry" } });
+    assert.deepEqual(res, { data: { parts: [{ type: "text", text: "ok-after-retry" }] } });
     assert.equal(callCount(), 2);
     assert.equal(seen.length, 1);
     assert.equal(seen[0].attempt, 2, "onRetry reports the attempt about to start (1-based, so attempt 2)");
@@ -96,7 +110,7 @@ describe("promptWithRetry — retry on transient", () => {
   it("retries twice (attempts 2 and 3) and succeeds on attempt 3", async () => {
     const { agent, callCount } = makeAgent(async (n) => {
       if (n < 3) throw transientError();
-      return { ok: true };
+      return "ok";
     });
     const ctrl = new AbortController();
     const seen: RetryInfo[] = [];
@@ -201,7 +215,7 @@ describe("promptWithRetry — describeError customization", () => {
   it("uses the custom describeError for the reasonShort field", async () => {
     const { agent } = makeAgent(async (n) => {
       if (n === 1) throw transientError();
-      return { ok: true };
+      return "ok";
     });
     const ctrl = new AbortController();
     let captured = "";

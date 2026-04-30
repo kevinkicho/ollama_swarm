@@ -23,7 +23,6 @@ import { formatCloneMessage } from "./cloneMessage.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import { getAgentAddendum } from "../../../shared/src/topology.js";
 import { describeSdkError } from "./sdkError.js";
-import { config } from "../config.js";
 
 export interface RoundRobinOptions {
   // Unit 8: when set, every agent gets a per-index role prepended to its
@@ -128,13 +127,7 @@ export class RoundRobinRunner implements SwarmRunner {
     const spawnStart = Date.now();
     const spawnTasks: Promise<Agent>[] = [];
     for (let i = 1; i <= cfg.agentCount; i++) {
-      // E3 Phase 3: in no-opencode mode, skip spawning a real opencode
-      // subprocess. Prompts route through pickProvider via promptWithRetry's
-      // USE_SESSION_PROVIDER branch (b3c5689 + earlier).
-      const spawnFn = config.USE_SESSION_NO_OPENCODE
-        ? this.opts.manager.spawnAgentNoOpencode.bind(this.opts.manager)
-        : this.opts.manager.spawnAgent.bind(this.opts.manager);
-      spawnTasks.push(spawnFn({ cwd: destPath, index: i, model: cfg.model }));
+      spawnTasks.push(this.opts.manager.spawnAgentNoOpencode({ cwd: destPath, index: i, model: cfg.model }));
     }
     const results = await Promise.allSettled(spawnTasks);
     const ready = results

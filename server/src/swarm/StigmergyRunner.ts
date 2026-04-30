@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Agent } from "../services/AgentManager.js";
 import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
-import { config } from "../config.js";
 import type {
   AgentState,
   SwarmEvent,
@@ -139,10 +138,7 @@ export class StigmergyRunner implements SwarmRunner {
     this.setPhase("spawning");
     const spawnTasks: Promise<Agent>[] = [];
     for (let i = 1; i <= cfg.agentCount; i++) {
-      const spawnFn = config.USE_SESSION_NO_OPENCODE
-        ? this.opts.manager.spawnAgentNoOpencode.bind(this.opts.manager)
-        : this.opts.manager.spawnAgent.bind(this.opts.manager);
-      spawnTasks.push(spawnFn({ cwd: destPath, index: i, model: cfg.model }));
+      spawnTasks.push(this.opts.manager.spawnAgentNoOpencode({ cwd: destPath, index: i, model: cfg.model }));
     }
     const results = await Promise.allSettled(spawnTasks);
     const ready = results

@@ -71,36 +71,11 @@ const Schema = z.object({
   // the browser, never persisted to localStorage.
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
-  // E3 Phase 2 (per docs/E3-drop-opencode-plan.md): when "true"/"1"/"yes",
-  // promptWithRetry routes prompts through the SessionProvider
-  // abstraction (server/src/providers/) instead of through opencode
-  // session.prompt OR streamPrompt OR the older USE_OLLAMA_DIRECT
-  // branch. Default OFF — existing behavior unchanged. Flip on per-run
-  // for the validation gate (5+ stable runs across all presets) before
-  // Phase 3 (replace AgentManager.spawnAgent) starts.
-  // E3 Phase 5: defaults flipped to TRUE 2026-04-29 after Phases 1-4
-  // landed. Both flags now default ON; opencode subprocess + opencode
-  // session API are unreachable on the default path. Set either to
-  // false ONLY as an escape hatch if a regression turns up.
-  USE_SESSION_PROVIDER: z
-    .enum(["true", "false", "1", "0", "yes", "no"])
-    .default("true")
-    .transform((v) => v === "true" || v === "1" || v === "yes"),
-  // E3 Phase 5: every runner spawns without an opencode subprocess by
-  // default. The opencode CLI is no longer required on PATH. Prompts
-  // route directly to Ollama / Anthropic / OpenAI via SessionProvider;
-  // tools (read/grep/glob/list/bash) dispatched by ToolDispatcher with
-  // the same per-profile permissions opencode used to enforce.
-  //
-  // The legacy AgentManager.spawnAgent + RepoService.writeOpencodeConfig
-  // + @opencode-ai/sdk import remain in tree as a fallback (set
-  // USE_SESSION_NO_OPENCODE=false to force them on). The expectation is
-  // they're deleted entirely in a follow-up cleanup once this default
-  // has baked across enough runs.
-  USE_SESSION_NO_OPENCODE: z
-    .enum(["true", "false", "1", "0", "yes", "no"])
-    .default("true")
-    .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // E3 Phase 5 cleanup pt 4 (2026-04-29): USE_SESSION_PROVIDER +
+  // USE_SESSION_NO_OPENCODE env flags REMOVED. The provider path is
+  // now the only path; the opencode subprocess fallback no longer
+  // exists in code. No escape hatch — if you hit a regression you
+  // file a bug, you don't toggle a flag.
   // Unit 17: send a tiny "reply with: ok" prompt to each agent right
   // after spawn so its first REAL prompt isn't a cold-start. Default
   // on; set to "false"/"0"/"no" to disable (e.g. for unit-test rigs

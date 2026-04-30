@@ -1,12 +1,10 @@
 import type { Agent, AgentManager } from "../services/AgentManager.js";
-import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
 import {
   RETRY_MAX_ATTEMPTS,
   RETRY_BACKOFF_MS,
   isRetryableSdkError,
 } from "./blackboard/retry.js";
 import { tokenTracker } from "../services/ollamaProxy.js";
-import { chat as ollamaChat } from "../services/OllamaClient.js";
 import { pickProvider } from "../providers/pickProvider.js";
 import { config } from "../config.js";
 import { ToolDispatcher, defaultToolsForProfile, type ProfileName } from "../tools/ToolDispatcher.js";
@@ -166,23 +164,10 @@ export async function promptWithRetry(
     const t0 = Date.now();
     try {
       let res: unknown;
-      // Task #166 streaming path. RE-ENABLED 2026-04-26 after Task
-      // #170 (Path B) found the root cause of the prior failure:
-      // SDK's createSseClient bypasses our authedFetch wrapper and
-      // uses globalThis.fetch directly → /event returned 401 →
-      // SDK retried silently → 0 events delivered. Fix at
-      // AgentManager.attachEventStream now passes Authorization
-      // header explicitly to event.subscribe(); SSE events flow
-      // again, streaming is viable.
-      const STREAMING_ENABLED = true;
-      // E3 Phase 2 (per docs/E3-drop-opencode-plan.md): when
-      // USE_SESSION_PROVIDER=1, route every prompt through the
-      // SessionProvider abstraction (server/src/providers/). This is
-      // the eventual unified path — Ollama, Anthropic, OpenAI all
-      // resolve via pickProvider(agent.model). Wins over both the
-      // older USE_OLLAMA_DIRECT path AND the streamPrompt SDK path.
-      // Default OFF; flip per-run for the validation gate.
-      if (config.USE_SESSION_PROVIDER) {
+      // E3 Phase 5 cleanup pt 4: USE_SESSION_PROVIDER + ollamaDirect +
+      // streamPrompt + session.prompt branches DELETED. The provider
+      // path is now the only path. opencode subprocess + SDK gone.
+      {
         const t0Provider = Date.now();
         const addendum = opts.promptAddendum?.trim() ?? "";
         const effectivePromptText = addendum.length > 0
@@ -247,90 +232,6 @@ export async function promptWithRetry(
           throw new Error("aborted");
         }
         res = { data: { parts: [{ type: "text", text: result.text }] } };
-      } else if (opts.ollamaDirect) {
-        const t0Direct = Date.now();
-        // Phase 5b of #243: prepend per-agent addendum the same way the
-        // SDK path does (see AgentManager.streamPrompt). Keeps behavior
-        // identical regardless of transport.
-        const addendum = opts.promptAddendum?.trim() ?? "";
-        const effectivePromptText = addendum.length > 0
-          ? `[Per-agent specialization for this swarm member]\n${addendum}\n[End specialization. Original prompt follows.]\n\n${promptText}`
-          : promptText;
-        const result = await ollamaChat({
-          baseUrl: opts.ollamaDirect.baseUrl,
-          model: agent.model,
-          messages: [{ role: "user", content: effectivePromptText }],
-          signal: opts.signal,
-          agentId: agent.id,
-          logDiag: opts.logDiag,
-          // #233: forward structured-output constraint when caller
-          // requested it (parser-strict prompts: contract, todos,
-          // auditor verdict, replanner).
-          ...(opts.ollamaFormat !== undefined ? { format: opts.ollamaFormat } : {}),
-          // Phase 5a of #243: per-agent generation params (temperature,
-          // top_p, etc.) from topology row. Ignored when undefined —
-          // model uses its built-in defaults.
-          ...(opts.ollamaOptions !== undefined ? { options: opts.ollamaOptions } : {}),
-          // Default 60s idle timeout matches the V2 spec — if the body
-          // goes silent for this long, the model is dead. No probes.
-          onChunk: (cumulativeText) => {
-            // Surface streaming text into the agent's partial-stream
-            // buffer so the UI sees progress just like the SSE path.
-            opts.manager?.recordStreamingText(agent.id, agent.index, cumulativeText);
-          },
-          onTokens: ({ promptTokens, responseTokens }) => {
-            // Record into the existing tokenTracker so the usage
-            // widget keeps working unchanged.
-            tokenTracker.add({
-              ts: Date.now(),
-              promptTokens,
-              responseTokens,
-              durationMs: Date.now() - t0Direct,
-              model: agent.model,
-              path: "/api/chat (direct)",
-            });
-          },
-        });
-        // Surface streaming-end like the SDK path so the UI's
-        // PersistentStreamBubble flips to "done".
-        opts.manager?.markStreamingDone(agent.id);
-        res = { data: { parts: [{ type: "text", text: result.text }] } };
-      } else if (STREAMING_ENABLED && opts.manager) {
-        const text = await opts.manager.streamPrompt(agent, {
-          agentName,
-          modelID: agent.model,
-          promptText,
-          signal: opts.signal,
-          perChunkTimeoutMs: STREAM_PER_CHUNK_TIMEOUT_MS,
-          formatExpect: opts.formatExpect,
-          // Phase 5b of #243: forward addendum to the SDK path's
-          // streamPrompt — it does the same prepend the ollamaDirect
-          // branch does just above.
-          promptAddendum: opts.promptAddendum,
-        });
-        res = { data: { parts: [{ type: "text", text }] } };
-      } else {
-        // #233 + #234: with v2 SDK we now have proper `format` typing
-        // — pass it through when caller requested constrained decoding
-        // (parser-strict prompts: contract, todos, auditor verdict).
-        // The model's decoder is grammar-constrained to emit JSON for
-        // these prompts; XML pseudo-tool-call markers (#231) become
-        // impossible at the source, not stripped after-the-fact.
-        const sdkFormat = opts.ollamaFormat === "json"
-          ? { type: "json_schema" as const, schema: {} }
-          : (typeof opts.ollamaFormat === "object" && opts.ollamaFormat !== null
-              ? { type: "json_schema" as const, schema: opts.ollamaFormat }
-              : undefined);
-        res = await agent.client.session.prompt(
-          {
-            sessionID: agent.sessionId,
-            agent: agentName,
-            model: toOpenCodeModelRef(agent.model),
-            parts: [{ type: "text", text: promptText }],
-            ...(sdkFormat ? { format: sdkFormat } : {}),
-          },
-          { signal: opts.signal },
-        );
       }
       opts.onTiming?.({ attempt, elapsedMs: Date.now() - t0, success: true });
       return res;

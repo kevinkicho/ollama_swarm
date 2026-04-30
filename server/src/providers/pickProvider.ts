@@ -15,6 +15,12 @@ let ollamaSingleton: OllamaProvider | null = null;
 let anthropicSingleton: AnthropicProvider | null = null;
 let openaiSingleton: OpenAIProvider | null = null;
 
+// Test seam: when set, every pickProvider() call returns this provider
+// regardless of the model string's prefix. Lets unit tests bypass the
+// real OllamaProvider / AnthropicProvider / OpenAIProvider impls and
+// inject deterministic behavior. Cleared via __resetProviderSingletons.
+let testProviderOverride: SessionProvider | null = null;
+
 export interface PickedProvider {
   provider: SessionProvider;
   /** The bare model id to pass to provider.chat({ model }). */
@@ -22,8 +28,9 @@ export interface PickedProvider {
 }
 
 export function pickProvider(modelString: string): PickedProvider {
-  const which = detectProvider(modelString);
   const modelId = stripProviderPrefix(modelString);
+  if (testProviderOverride) return { provider: testProviderOverride, modelId };
+  const which = detectProvider(modelString);
   switch (which) {
     case "ollama":
       ollamaSingleton ??= new OllamaProvider();
@@ -37,10 +44,18 @@ export function pickProvider(modelString: string): PickedProvider {
   }
 }
 
+// Test seam: install a mock SessionProvider that overrides every
+// pickProvider() result. Pair with __resetProviderSingletons() in
+// afterEach to clear between cases.
+export function __setTestProviderOverride(provider: SessionProvider | null): void {
+  testProviderOverride = provider;
+}
+
 // Test seam: lets unit tests reset the singletons between cases (e.g.
 // to swap the API key the AnthropicProvider was constructed with).
 export function __resetProviderSingletons(): void {
   ollamaSingleton = null;
   anthropicSingleton = null;
   openaiSingleton = null;
+  testProviderOverride = null;
 }

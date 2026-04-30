@@ -21,7 +21,6 @@
 import type { Agent } from "../services/AgentManager.js";
 import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
 import { chatOnce } from "./chatOnce.js";
-import { config } from "../config.js";
 import {
   EMPTY_RESPONSE_RETRY_SUFFIX,
   extractTextWithDiag,
@@ -57,12 +56,8 @@ export async function retryEmptyResponse(
     retryAbort.abort(new Error(`retry deadline ${RETRY_DEADLINE_MS / 1000}s`));
     // Tell the OpenCode session to stop serving the abandoned prompt
     // so a subsequent prompt on the same session isn't queued behind it.
-    // Opencode-specific session abort. Skip when there's no opencode
-    // subprocess (the AbortController.signal already handles cancellation
-    // for the provider path).
-    if (!config.USE_SESSION_NO_OPENCODE && !config.USE_SESSION_PROVIDER) {
-      void agent.client.session.abort({ sessionID: agent.sessionId }).catch(() => {});
-    }
+    // E3 Phase 5: opencode session.abort is gone. AbortController.signal
+    // handles cancellation through the provider path.
   }, RETRY_DEADLINE_MS);
   try {
     const retryRes = await chatOnce(agent, {

@@ -35,7 +35,6 @@ import { parseWorkerResponse } from "./blackboard/prompts/worker.js";
 import { realFilesystemAdapter, realGitAdapter } from "./blackboard/v2Adapters.js";
 import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
 import { pickProvider } from "../providers/pickProvider.js";
-import { config } from "../config.js";
 import { tokenTracker } from "../services/ollamaProxy.js";
 
 export class BaselineRunner implements SwarmRunner {
@@ -113,25 +112,15 @@ export class BaselineRunner implements SwarmRunner {
     if (this.stopping) return;
 
     this.setPhase("spawning");
-    // E3 Phase 3 (slice): when USE_SESSION_NO_OPENCODE=1, skip the
-    // opencode subprocess entirely. The agent is a stub that holds
-    // sessionId + model only; prompt routing falls back to the Phase 2
-    // pickProvider path (forced below by skipping the streamPrompt
-    // branch when agent.client is the throwing stub).
-    const agent = config.USE_SESSION_NO_OPENCODE
-      ? await this.opts.manager.spawnAgentNoOpencode({ cwd: destPath, index: 1, model: cfg.model })
-      : await this.opts.manager.spawnAgent({ cwd: destPath, index: 1, model: cfg.model });
+    // E3 Phase 5: opencode subprocess is gone. Agent is a lightweight
+    // Session stub; no port, no warmup, no SSE event stream.
+    const agent = await this.opts.manager.spawnAgentNoOpencode({
+      cwd: destPath,
+      index: 1,
+      model: cfg.model,
+    });
     if (this.stopping) return;
-    this.appendSystem(
-      config.USE_SESSION_NO_OPENCODE
-        ? `Baseline agent ready (no-opencode mode, session=${agent.sessionId.slice(0, 8)})`
-        : `Baseline agent ready on port ${agent.port}`,
-    );
-    // Warmup is opencode-specific (a trivial first prompt to wake the
-    // subprocess); skip in no-opencode mode where there's no subprocess.
-    if (!config.USE_SESSION_NO_OPENCODE) {
-      await this.opts.manager.warmupAgent(agent);
-    }
+    this.appendSystem(`Baseline agent ready (session=${agent.sessionId.slice(0, 8)})`);
 
     // No "running" phase exists in SwarmPhase. The discussion runners
     // use "discussing" for the active loop; the blackboard runner uses
@@ -154,56 +143,32 @@ export class BaselineRunner implements SwarmRunner {
     let raw: string;
     const abortController = new AbortController();
     try {
-      // E3 Phase 2: when USE_SESSION_PROVIDER=1 OR the model is a paid
-      // provider (anthropic/* or openai/* prefix), route through the
-      // SessionProvider abstraction instead of opencode's streamPrompt.
-      // Paid providers REQUIRE this path because opencode would need
-      // its own AI-SDK config wired (which exists, but the direct path
-      // is cleaner — fewer hops, direct token capture, no MCP overhead).
+      // E3 Phase 5: provider path is the only path. opencode streamPrompt gone.
       const { provider, modelId } = pickProvider(cfg.model);
-      // Force the provider path when there's no opencode subprocess
-      // available (otherwise streamPrompt would hit the stubbed client
-      // and throw with the diagnostic message).
-      const useProvider =
-        config.USE_SESSION_PROVIDER ||
-        config.USE_SESSION_NO_OPENCODE ||
-        provider.id !== "ollama";
-      if (useProvider) {
-        const t0 = Date.now();
-        const result = await provider.chat({
-          model: modelId,
-          messages: [{ role: "user", content: prompt }],
-          signal: abortController.signal,
-          agentId: agent.id,
-        });
-        if (result.usage) {
-          tokenTracker.add({
-            ts: Date.now(),
-            promptTokens: result.usage.promptTokens,
-            responseTokens: result.usage.responseTokens,
-            durationMs: Date.now() - t0,
-            model: cfg.model,
-            path: `/sdk-direct (${provider.id})`,
-          });
-        }
-        if (result.finishReason === "error") {
-          throw new Error(result.errorMessage ?? "session provider chat error");
-        }
-        if (result.finishReason === "aborted") {
-          throw new Error("aborted");
-        }
-        raw = result.text;
-      } else {
-        raw = await this.opts.manager.streamPrompt(agent, {
-          agentName: "swarm",
-          modelID: cfg.model,
-          promptText: prompt,
-          signal: abortController.signal,
-          // 90s per-chunk liveness — same default as promptWithRetry.
-          perChunkTimeoutMs: 90_000,
-          formatExpect: "json",
+      const t0 = Date.now();
+      const result = await provider.chat({
+        model: modelId,
+        messages: [{ role: "user", content: prompt }],
+        signal: abortController.signal,
+        agentId: agent.id,
+      });
+      if (result.usage) {
+        tokenTracker.add({
+          ts: Date.now(),
+          promptTokens: result.usage.promptTokens,
+          responseTokens: result.usage.responseTokens,
+          durationMs: Date.now() - t0,
+          model: cfg.model,
+          path: `/sdk-direct (${provider.id})`,
         });
       }
+      if (result.finishReason === "error") {
+        throw new Error(result.errorMessage ?? "session provider chat error");
+      }
+      if (result.finishReason === "aborted") {
+        throw new Error("aborted");
+      }
+      raw = result.text;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.appendSystem(`Baseline prompt failed: ${msg}`);

@@ -282,184 +282,6 @@ export class AgentManager {
   //     streamingByAgent accumulator
   //   - session.idle reliably terminates because each agent's session has
   //     at most one in-flight prompt at a time (our serial usage pattern)
-  async streamPrompt(agent: Agent, opts: StreamPromptOpts): Promise<string> {
-    // Task #223: track per-agent prompt count so diag logs distinguish
-    // 1st vs 2nd+ prompts (the wedge in run 68b76b79 hit on the 4th
-    // prompt to agent-3 — first 3 succeeded normally).
-    const promptN = (this.streamPromptCount.get(agent.id) ?? 0) + 1;
-    this.streamPromptCount.set(agent.id, promptN);
-    // 2026-04-27: cold-start tolerance. The first prompt to an agent
-    // can hit a multi-minute first-byte tail on heavy reasoning models
-    // (deepseek-v4-pro: observed ≥60s, see run 0254ca7c). Default 90s
-    // per-chunk fires too eagerly on those. Double it for promptN === 1
-    // so cold-start completes; steady-state (promptN ≥ 2) keeps the
-    // sharper 90s signal. Caller can still override via opts.perChunkTimeoutMs.
-    const effectivePerChunkTimeoutMs =
-      promptN === 1 ? Math.max(opts.perChunkTimeoutMs, 180_000) : opts.perChunkTimeoutMs;
-    this.logDiag({
-      type: "_stream_prompt_start",
-      agentId: agent.id,
-      promptN,
-      perChunkTimeoutMs: effectivePerChunkTimeoutMs,
-      coldStartBoosted: promptN === 1 && effectivePerChunkTimeoutMs > opts.perChunkTimeoutMs,
-      ts: Date.now(),
-    });
-    // One in-flight stream per agent. If a prior call somehow leaked,
-    // reject it so its awaiter unblocks rather than wedging forever.
-    const prior = this.streamingByAgent.get(agent.id);
-    if (prior) {
-      prior.reject(new Error("superseded by new streamPrompt call"));
-      if (prior.timeoutHandle) clearTimeout(prior.timeoutHandle);
-      prior.signalCleanup?.();
-    }
-
-    // 2026-04-27: snapshot messageRoles size BEFORE the new prompt fires.
-    // session.idle handler uses this to filter out stale idles arriving
-    // from a prior session.prompt's tail (warmup or earlier streamPrompt).
-    // See MessageStreamState.initialRolesSize for full reasoning.
-    const initialRolesSize = this.messageRoles.get(agent.id)?.size ?? 0;
-    return new Promise<string>((resolve, reject) => {
-      const state: MessageStreamState = {
-        text: "",
-        lastChunkAt: Date.now(),
-        resolve,
-        reject,
-        perChunkTimeoutMs: effectivePerChunkTimeoutMs,
-        formatExpect: opts.formatExpect,
-        initialRolesSize,
-        sawNewMessage: false,
-      };
-      const armChunkTimeout = () => {
-        if (state.timeoutHandle) clearTimeout(state.timeoutHandle);
-        state.timeoutHandle = setTimeout(() => {
-          // Task #223 diag: log every time the per-chunk timer fires.
-          // Lets us confirm the timer IS armed and firing for 2nd+
-          // prompts. Run 68b76b79 had ZERO probe events for agent-3's
-          // 4th prompt — either timer wasn't armed or never fired.
-          this.logDiag({
-            type: "_stream_chunk_timeout_fired",
-            agentId: agent.id,
-            promptN,
-            sinceLastChunkMs: Date.now() - state.lastChunkAt,
-            currentTextChars: state.text.length,
-            ts: Date.now(),
-          });
-          // Task #192: silence ≠ death. Before rejecting, probe the
-          // session via REST. If the latest assistant message has
-          // grown since our last SSE chunk, the SSE channel is broken
-          // but the model is still producing — reset the timer and
-          // backfill any missed text. Only reject if the probe also
-          // shows no growth (genuinely stuck).
-          this.probeAndDecide(agent, state, armChunkTimeout, reject).catch((probeErr) => {
-            // Probe itself failed — fall back to the original behavior
-            // (reject as if no SSE chunks). Logged for diagnosis.
-            const cur = this.streamingByAgent.get(agent.id);
-            if (cur !== state) return; // already settled
-            this.streamingByAgent.delete(agent.id);
-            state.signalCleanup?.();
-            reject(new Error(
-              `per-chunk timeout: no SSE chunks for ${effectivePerChunkTimeoutMs}ms ` +
-              `(probe also failed: ${probeErr instanceof Error ? probeErr.message : String(probeErr)})`,
-            ));
-          });
-        }, effectivePerChunkTimeoutMs);
-      };
-      const onAbort = () => {
-        const cur = this.streamingByAgent.get(agent.id);
-        if (cur === state) this.streamingByAgent.delete(agent.id);
-        if (state.timeoutHandle) clearTimeout(state.timeoutHandle);
-        reject(new Error("aborted"));
-      };
-      opts.signal.addEventListener("abort", onAbort, { once: true });
-      state.signalCleanup = () => opts.signal.removeEventListener("abort", onAbort);
-      armChunkTimeout();
-      this.streamingByAgent.set(agent.id, state);
-      // Override resolve/reject to also clean up signal listener.
-      const wrappedResolve = (text: string) => {
-        state.signalCleanup?.();
-        if (state.timeoutHandle) clearTimeout(state.timeoutHandle);
-        resolve(text);
-      };
-      const wrappedReject = (err: Error) => {
-        state.signalCleanup?.();
-        if (state.timeoutHandle) clearTimeout(state.timeoutHandle);
-        reject(err);
-      };
-      state.resolve = wrappedResolve;
-      state.reject = wrappedReject;
-
-      // Fire the prompt asynchronously. noReply=true means the server
-      // We `void` (don't await) the SDK call so its HTTP duration
-      // doesn't matter to us — SSE events drive completion via
-      // session.idle. The underlying HTTP request may still take 5+
-      // min on heavy prompts, but we'll have resolved long before.
-      //
-      // Note: we tried `noReply: true` initially (intended to make the
-      // server release the HTTP early) but observed that with noReply
-      // OpenCode skips emitting message.part.updated events for our
-      // setup — every prompt 90s-timed-out with zero chunks. So we
-      // fire the regular prompt; the HTTP body just goes unread.
-      // Phase 5b of #243: per-agent prompt addendum from topology row.
-      // Prepended with a clear framing block so the model treats it
-      // as additional standing instructions on top of the role-level
-      // system prompt (which lives in the agent profile and is
-      // preserved). Empty addendum → text passes through unchanged.
-      const effectivePromptText =
-        opts.promptAddendum && opts.promptAddendum.trim().length > 0
-          ? `[Per-agent specialization for this swarm member]\n${opts.promptAddendum.trim()}\n[End specialization. Original prompt follows.]\n\n${opts.promptText}`
-          : opts.promptText;
-      void agent.client.session.prompt(
-        {
-          sessionID: agent.sessionId,
-          agent: opts.agentName,
-          model: toOpenCodeModelRef(opts.modelID),
-          parts: [{ type: "text", text: effectivePromptText }],
-        },
-        { signal: opts.signal },
-      ).catch((err) => {
-        // Task #170 fix: when streaming via SSE, HTTP-level errors
-        // (UND_ERR_HEADERS_TIMEOUT in particular) are NOISE if SSE has
-        // been actively delivering events. The OpenCode HTTP path
-        // doesn't send response headers until generation completes —
-        // on a heavy 10+ min prompt, undici's headersTimeout will
-        // fire even though SSE chunks are flowing fine. SSE is the
-        // source of truth in streaming mode; the HTTP error is just
-        // a side-channel signal.
-        //
-        // Heuristic: if we received any SSE chunk within the last
-        // 10 seconds (lastChunkAt was just bumped by the SSE handler),
-        // ignore the HTTP error. Per-chunk timeout (default 90s) is
-        // the real liveness signal — if SSE then goes silent, that
-        // path will reject. Otherwise session.idle resolves us.
-        //
-        // Only reject from the HTTP catch when SSE has ALSO been
-        // silent — that's a true failure (e.g. auth, network).
-        const cur = this.streamingByAgent.get(agent.id);
-        if (cur !== state) return; // already settled
-        // Task #200: if SSE channel died (for-await loop exited without
-        // session.idle), the lastChunkAt heuristic is unreliable — last
-        // chunks may have arrived very recently right before the channel
-        // dropped. Propagate the HTTP error instead of waiting for the
-        // per-chunk timer that will never fire because no events are
-        // arriving anymore.
-        if (state.sseStreamDied) {
-          this.streamingByAgent.delete(agent.id);
-          wrappedReject(err instanceof Error ? err : new Error(String(err)));
-          return;
-        }
-        const sinceLastChunk = Date.now() - state.lastChunkAt;
-        if (sinceLastChunk < 10_000) {
-          // SSE is live; trust the per-chunk timer + session.idle
-          // to drive completion. Don't reject from HTTP side.
-          return;
-        }
-        this.streamingByAgent.delete(agent.id);
-        wrappedReject(err instanceof Error ? err : new Error(String(err)));
-      });
-      // armChunkTimeout above kicks in immediately — gives us a "request
-      // never produced any chunk" signal even before any SSE event.
-    });
-  }
 
   // Task #192: when the per-chunk SSE timer fires, probe the session
   // via REST before declaring death. If the latest assistant message
@@ -470,63 +292,6 @@ export class AgentManager {
   // This decouples "SSE channel health" from "model health" — they're
   // two independent failure modes that previously both presented as
   // "no chunks in 90s = abort".
-  private async probeAndDecide(
-    agent: Agent,
-    state: MessageStreamState,
-    armChunkTimeout: () => void,
-    reject: (err: Error) => void,
-  ): Promise<void> {
-    // Re-check we're still the in-flight stream — caller may have
-    // settled us between timer fire and this microtask.
-    if (this.streamingByAgent.get(agent.id) !== state) return;
-
-    let probeText: string | null = null;
-    try {
-      const res = await agent.client.session.messages({ sessionID: agent.sessionId });
-      probeText = extractLatestAssistantText(res);
-    } catch (err) {
-      // REST probe failed — fall back to "treat as dead". Caller's
-      // .catch handles the reject path.
-      throw err instanceof Error ? err : new Error(String(err));
-    }
-
-    // Re-check after the await — anything could have changed.
-    if (this.streamingByAgent.get(agent.id) !== state) return;
-
-    if (probeText !== null && probeText.length > state.text.length) {
-      // Model is alive; SSE channel is broken. Backfill the chars we
-      // missed, reset the per-chunk timer, and keep waiting. Surface
-      // to the diag log so we know SSE is unhealthy on this agent.
-      const gained = probeText.length - state.text.length;
-      state.text = probeText;
-      state.lastChunkAt = Date.now();
-      this.logDiag({
-        type: "_sse_probe_recovery",
-        agentId: agent.id,
-        ourSessionId: agent.sessionId,
-        backfilledChars: gained,
-        totalChars: probeText.length,
-        promptN: this.streamPromptCount.get(agent.id) ?? 0,
-      });
-      armChunkTimeout();
-      return;
-    }
-    // Task #223: log when probe confirms silence (about to reject).
-    // Distinguishes "subprocess actually silent" from "probe failed".
-    this.logDiag({
-      type: "_sse_probe_silence",
-      agentId: agent.id,
-      ourSessionId: agent.sessionId,
-      currentTextChars: state.text.length,
-      probeTextChars: probeText?.length ?? -1,
-      promptN: this.streamPromptCount.get(agent.id) ?? 0,
-    });
-
-    // Probe agrees with SSE: model is silent. Reject as before.
-    this.streamingByAgent.delete(agent.id);
-    state.signalCleanup?.();
-    reject(new Error(`per-chunk timeout: no SSE chunks for ${state.perChunkTimeoutMs}ms (probe confirmed silence)`));
-  }
 
   // Task #191: lastChunkAt accessor so BlackboardRunner's ABSOLUTE_MAX_MS
   // watchdog can consult SSE liveness before firing. The existing per-
@@ -632,67 +397,17 @@ export class AgentManager {
   // trigger respawn. Hits the OpenCode subprocess's `/doc` endpoint —
   // the same endpoint waitForReady uses for spawn-time readiness, which
   // proves it exists on every opencode subprocess. (Initial b6d91d13
-  // implementation tried `/api/health` which is OUR dev-server endpoint,
-  // NOT opencode's — every ping returned 404, every planner call
-  // triggered needless respawn.) Short 1.5s timeout via authedFetch;
-  // falls through to false on any error so callers default to respawn.
-  async pingAgentHealth(agent: Agent): Promise<boolean> {
-    try {
-      const res = await Promise.race([
-        authedFetch(`http://127.0.0.1:${agent.port}/doc`),
-        new Promise<Response>((_, rej) =>
-          setTimeout(() => rej(new Error("health-check timeout")), 1500),
-        ),
-      ]);
-      return res.ok;
-    } catch {
-      return false;
-    }
+  // E3 Phase 5: with no opencode subprocess, there's nothing to ping.
+  // Always healthy. Kept as a method so BlackboardRunner's recovery
+  // code path still type-checks; in practice the recovery branch is
+  // never taken because this returns true.
+  async pingAgentHealth(_agent: Agent): Promise<boolean> {
+    return true;
   }
 
   // Task #220: tear down ONE agent without affecting siblings. Used by
   // respawnAgent to clean up the dead subprocess before spawning fresh.
   // killAll's full cleanup is too coarse here — it nukes every agent.
-  async killOneAgent(agent: Agent): Promise<void> {
-    // Cancel SSE event stream first so its for-await loop doesn't keep
-    // reconnecting to the dying port.
-    const abort = this.eventAborts.get(agent.id);
-    if (abort) {
-      abort.abort();
-      this.eventAborts.delete(agent.id);
-    }
-    // Reject any in-flight stream promise so callers unwedge.
-    const stream = this.streamingByAgent.get(agent.id);
-    if (stream) {
-      if (stream.timeoutHandle) clearTimeout(stream.timeoutHandle);
-      stream.signalCleanup?.();
-      stream.reject(new Error("agent respawning"));
-      this.streamingByAgent.delete(agent.id);
-    }
-    // Drop per-agent buffers so the respawned subprocess starts clean.
-    this.partialStreams.delete(agent.id);
-    this.partsByAgent.delete(agent.id);
-    this.messageRoles.delete(agent.id);
-    this.capturedUsageMessageIds.delete(agent.id);
-    this.suppressStreamingFor.delete(agent.id);
-    this.rawSseCount.delete(agent.id);
-    const flushTimer = this.streamingFlushTimers.get(agent.id);
-    if (flushTimer) clearTimeout(flushTimer);
-    this.streamingFlushTimers.delete(agent.id);
-    this.latestStreamingText.delete(agent.id);
-    // Kill the child process tree.
-    if (agent.child) {
-      try {
-        await treeKill(agent.child);
-      } catch {
-        // best-effort
-      }
-    }
-    // Release port + drop registry entry. Port may already be released
-    // by child.on("exit") handler — release() is idempotent.
-    this.ports.release(agent.port);
-    this.agents.delete(agent.id);
-  }
 
   // Task #220: respawn an agent with the same identity (id, index, model,
   // role) after its subprocess has died. Allocates a new port, spawns a
@@ -703,27 +418,12 @@ export class AgentManager {
   // the dead subprocess first via killOneAgent, (b) preserve the agent's
   // role-specific cwd and model, (c) emit clear lifecycle messages so the
   // user sees what's happening rather than a silent ID swap.
+  // E3 Phase 5: with no opencode subprocess, "respawn" is meaningless.
+  // BlackboardRunner's recovery path still calls this when pingAgentHealth
+  // returns false — which never happens now (pingAgentHealth always returns
+  // true). Returning the same agent keeps the call site type-safe.
   async respawnAgent(agent: Agent): Promise<Agent> {
-    const oldId = agent.id;
-    // 2026-04-27: drop prior warmup elapsed so spawnAgent's fresh
-    // warmup overwrites cleanly (rather than coexisting with stale).
-    this.warmupElapsedByAgent.delete(oldId);
-    await this.killOneAgent(agent);
-    const fresh = await this.spawnAgent({
-      cwd: agent.cwd,
-      index: agent.index,
-      model: agent.model,
-      // skipWarmup=false → warmup the fresh subprocess so the next
-      // real prompt isn't cold.
-    });
-    // spawnAgent reuses the agent.id derived from index, so the
-    // respawned agent has the SAME id as the original. Sanity check.
-    if (fresh.id !== oldId) {
-      throw new Error(
-        `respawn id mismatch: expected ${oldId} got ${fresh.id} (index reuse broke?)`,
-      );
-    }
-    return fresh;
+    return agent;
   }
 
   // Unit 18: warm a batch of agents one at a time. Used by runners
@@ -733,12 +433,6 @@ export class AgentManager {
   // apparent inability to load N shards in parallel for the same
   // client (battle test v3 showed parallel warmups didn't help
   // map-reduce, council, OW — same outcome as no warmup at all).
-  async warmupSerially(agents: readonly Agent[]): Promise<void> {
-    if (!config.AGENT_WARMUP_ENABLED) return;
-    for (const a of agents) {
-      await this.warmupAgent(a);
-    }
-  }
 
   // Unit 18: warm a batch of agents in parallel. Used by parallel-fan-out
   // runners (council/OW/map-reduce) immediately before each runner's
@@ -746,10 +440,6 @@ export class AgentManager {
   // prompts (warmup) better than N parallel large prompts (real turns
   // with full transcript), so paying the parallel cold-start cost on
   // small prompts spares the real batch from the same penalty.
-  async warmupParallel(agents: readonly Agent[]): Promise<void> {
-    if (!config.AGENT_WARMUP_ENABLED) return;
-    await Promise.allSettled(agents.map((a) => this.warmupAgent(a)));
-  }
 
   // Unit 17: send a trivial prompt to the agent right after spawn so
   // the cloud shard loads model state BEFORE the runner asks for real
@@ -759,39 +449,6 @@ export class AgentManager {
   // real prompt has at minimum told the cloud shard we exist.
   // Unit 18: made public so runners can call it explicitly via
   // warmupSerially / warmupParallel after a parallel spawn batch.
-  async warmupAgent(agent: Agent): Promise<void> {
-    const t0 = Date.now();
-    // Task #181: hide warmup bubbles from UI. The "ok" response
-    // appearing as a streaming chat bubble is noise; the existing
-    // "Worker agent X ready on port Y" system message already
-    // communicates readiness more cleanly.
-    this.suppressStreamingFor.add(agent.id);
-    try {
-      await agent.client.session.prompt({
-        sessionID: agent.sessionId,
-        agent: "swarm",
-        model: toOpenCodeModelRef(agent.model),
-        parts: [{ type: "text", text: WARMUP_PROMPT_TEXT }],
-      });
-      const elapsed = Date.now() - t0;
-      this.warmupElapsedByAgent.set(agent.id, elapsed);
-      this.logDiag({ type: "_warmup_ok", agentId: agent.id, elapsedMs: elapsed });
-    } catch (err) {
-      const msg = stringifyError(err);
-      this.logDiag({
-        type: "_warmup_failed",
-        agentId: agent.id,
-        elapsedMs: Date.now() - t0,
-        error: msg,
-      });
-      // Intentional swallow — warmup is best-effort. The runner's first
-      // real prompt will retry through the Unit 16 wrapper if needed.
-    } finally {
-      // Task #181: clear suppression so subsequent real prompts on
-      // this agent flow through to the UI normally.
-      this.suppressStreamingFor.delete(agent.id);
-    }
-  }
 
   markStatus(id: string, status: AgentState["status"], extra: Partial<AgentState> = {}): void {
     const a = this.agents.get(id);
