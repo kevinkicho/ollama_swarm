@@ -19,7 +19,14 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
 import { resolveSafe } from "../swarm/blackboard/resolveSafe.js";
+import { checkBuildCommand } from "../swarm/blackboard/buildCommandAllowlist.js";
+
+const execAsync = promisify(exec);
+const BASH_TIMEOUT_MS = 60_000;
+const BASH_OUTPUT_CAP = 200 * 1024;
 
 export type ToolName = "read" | "grep" | "glob" | "list" | "bash" | "write" | "edit";
 export type ProfileName = "swarm" | "swarm-read" | "swarm-builder";
@@ -174,6 +181,42 @@ async function grepTool(clone: string, args: Record<string, unknown>): Promise<T
   }
 }
 
+async function bashTool(clone: string, args: Record<string, unknown>): Promise<ToolResult> {
+  const command = String(args.command ?? "");
+  if (!command) return { ok: false, error: "bash: missing `command` arg" };
+  // Layer 1 (defense in depth): the existing buildCommandAllowlist.
+  // Rejects empty cmds, shell metacharacters (;, &&, ||, |, >, <, $, `),
+  // and binaries not in the curated set (npm/npx/yarn/pnpm/bun/tsc/
+  // tsx/deno/eslint/prettier/biome/jest/vitest/mocha/make/task/just/
+  // typedoc/jsdoc/docusaurus). Same rules opencode's swarm-builder uses.
+  const allow = checkBuildCommand(command);
+  if (!allow.ok) {
+    return { ok: false, error: `bash refused: ${allow.reason ?? "(no reason)"}` };
+  }
+  // Layer 2: cwd-bound exec with a hard wall-clock timeout. cwd is the
+  // clone path so working-dir-relative paths in the command resolve
+  // safely. Combined with the metachar block above, the command can't
+  // escape into the broader filesystem via cd /; rm or similar.
+  try {
+    const r = await execAsync(command, {
+      cwd: clone,
+      timeout: BASH_TIMEOUT_MS,
+      maxBuffer: BASH_OUTPUT_CAP,
+    });
+    const out = (r.stdout ?? "") + (r.stderr ? `\n[stderr]\n${r.stderr}` : "");
+    return { ok: true, output: out.length > BASH_OUTPUT_CAP ? out.slice(0, BASH_OUTPUT_CAP) + "\n…(truncated)" : out };
+  } catch (err) {
+    const e = err as { stdout?: string; stderr?: string; killed?: boolean; message?: string };
+    const stdout = (e.stdout ?? "").toString();
+    const stderr = (e.stderr ?? "").toString();
+    const detail = stderr.trim() || stdout.trim() || (e.message ?? "exec failed");
+    if (e.killed) {
+      return { ok: false, error: `bash killed after ${Math.round(BASH_TIMEOUT_MS / 1000)}s timeout: ${detail.slice(-500)}` };
+    }
+    return { ok: false, error: `bash exited non-zero: ${detail.slice(-700)}` };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Dispatcher.
 // ---------------------------------------------------------------------------
@@ -202,13 +245,7 @@ export class ToolDispatcher {
       case "grep":
         return grepTool(this.clonePath, call.args);
       case "bash":
-        // Profile says allow but the handler refuses until the security
-        // review lands. Mirror the rule shape so the eventual wiring
-        // is just "delete this throw + import the bash handler."
-        return {
-          ok: false,
-          error: "bash dispatch not yet implemented (Phase 4 part 2 — pending security review)",
-        };
+        return bashTool(this.clonePath, call.args);
       case "write":
       case "edit":
         // No profile allows these today; if we ever change that, the
