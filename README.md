@@ -2,11 +2,60 @@
 
 > **For agents picking up this codebase**: read [`docs/STATUS.md`](docs/STATUS.md) first — it's the single "what's true right now" pointer + map. This README is the user-facing intro.
 
-A local web app that spawns a **swarm of agents** — each backed by an LLM you choose — to clone a GitHub repository and collaboratively figure out what the project is, what's working, what's missing, and what to build next.
+A local web app that spawns a **swarm of agents** — each backed by an LLM you choose — to clone a GitHub repository and collaboratively figure out what the project is, what's working, what's missing, and what to build next. **Multi-provider:** local [Ollama](https://ollama.com), [Anthropic Claude](https://www.anthropic.com), or [OpenAI](https://openai.com); pick in the form. Ollama is the default and runs free on your GPU.
 
-> **2026-04-29 — opencode dependency removed.** Earlier versions spawned an `opencode serve` subprocess per agent. E3 (Phases 1–5) replaced that with a direct provider abstraction (Ollama / Anthropic / OpenAI) + an in-process tool dispatcher. The opencode CLI is no longer required.
+> **2026-04-29 — opencode subprocess fully removed (E3 Phases 1–5).** Earlier
+> versions spawned an `opencode serve` HTTP subprocess per agent. That whole
+> path is gone. Every prompt now runs through a direct provider abstraction
+> (`pickProvider` → `chatOnce`); tool-using turns route through an in-process
+> `ToolDispatcher` (read / grep / glob / list / bash with a hard allowlist).
+> The opencode CLI is no longer a runtime dep. Some env vars (notably
+> `OPENCODE_SERVER_PASSWORD`) are still required at config-load time so
+> existing setups don't break, but they're otherwise unused.
 
-**Multi-provider:** runs against **local [Ollama](https://ollama.com)** (free, runs on your GPU), **[Anthropic Claude](https://www.anthropic.com)** (paste an `ANTHROPIC_API_KEY`, no GPU needed), or **[OpenAI](https://openai.com)** (`OPENAI_API_KEY`). Pick the provider in the setup form's dropdown; per-run `maxCostUsd` cap stops paid runs at your dollar ceiling. Ollama is the default.
+## Quickstart
+
+```bash
+# 1. Clone + install (run npm install from a Windows/macOS/Linux shell —
+#    NOT from WSL if your repo lives under /mnt/c, see Troubleshooting)
+git clone https://github.com/kevinkicho/ollama_swarm.git
+cd ollama_swarm
+npm install
+
+# 2. Configure secrets
+cp .env.example .env
+# Edit .env — set OPENCODE_SERVER_PASSWORD to any non-empty string (still
+# required at config-load time post-E3, otherwise unused). Set
+# ANTHROPIC_API_KEY / OPENAI_API_KEY only if you plan to use those providers.
+
+# 3. Pull the default Ollama model (skip if you'll only use paid providers)
+ollama pull glm-5.1:cloud
+# Optional second signal for the drift gauge:
+ollama pull nomic-embed-text
+
+# 4. Start the dev stack (backend on :8243, web UI on :8244)
+npm run dev
+```
+
+Then open **http://localhost:8244/** (or the WSL guest IP if you're hitting it from Windows — `ip addr show eth0` for the address). Fill in the form, hit **Start swarm**, watch agents stream into the transcript live.
+
+> **Heads-up:** `npm run start` runs *only* the backend (Express + WS at `:8243`); it does **not** serve the SPA. Use `npm run dev` for local use. If you previously ran with the older default ports (52243 / 52244), those moved on 2026-04-27 to dodge Windows' Hyper-V reserved range — new defaults are 8243 / 8244.
+
+## Tour
+
+**1. Setup form.** Pick a repo, a parent folder to clone into, an agent count, and one of the **ten patterns** (nine swarm presets + a single-agent baseline). Optional User Directive seeds the conformance gauge and feeds presets that consume directives.
+
+![Setup form — GitHub URL, parent folder, pattern picker, agents/rounds/model fields](docs/images/setup-form.png)
+
+**2. Live transcript.** Per-agent panels on the left show status (`spawning` → `ready` → `thinking` → `ready`). Each agent's reply streams in token-by-token; you can inject a `[HUMAN]` line into the shared transcript at any time. The topbar shows elapsed time, idle/active state, and a token-usage popover.
+
+![Live transcript with five agents collaborating on a shared discussion](docs/images/transcript.png)
+
+**3. Board (blackboard preset only).** Five-column kanban — **Open / Claimed / Committed / Stale / Skipped** — plus a Findings pane. Worker cards show which agent is holding them and how long; stale cards show the CAS rejection reason. A run-summary card pins to the top when the run terminates.
+
+![Blackboard view with todos flowing through Open → Claimed → Committed → Stale → Skipped columns](docs/images/board.png)
+
+## What it does
 
 You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. **Ten patterns** ship today (one write-capable, eight discussion, plus a single-agent baseline for evaluation):
 
@@ -65,12 +114,12 @@ and the historical port-4096 plumbing are gone with the subprocess.
 
 ### How the round-robin preset works
 
-1. **Seed** — a system message drops the clone path, repo URL, and top-level file listing into the shared transcript, and instructs agents to use their own file-read / grep / find tools to inspect the repo.
-2. **Round-robin turn loop** — for `rounds` iterations, each agent in turn receives a prompt containing the **entire transcript so far** plus role instructions ("you are Agent N, respond in under 250 words, cite file paths"). The agent uses OpenCode tools to read files and produces a reply.
-3. **SSE-aware idle watchdog** (commit `189ca05`) — we don't use a fixed wall-clock turn timeout. Each agent's opencode server pushes SSE events (`message.part.updated`, `session.idle`, `session.error`, etc.); the runner consults `AgentManager.getLastActivity()` and aborts a turn only if no SSE chunk has arrived for 90 seconds, with a 30-minute hard ceiling as a safety net. Long-tail latency that's still producing tokens isn't killed.
-4. **Live streaming to the UI** — `message.part.updated` events forward partial text to the browser as an `agent_streaming` WebSocket event; you see a pulsing "typing" bubble that fills in as tokens arrive. On turn completion the streaming bubble is replaced by the final transcript entry.
+1. **Seed** — a system message drops the clone path, repo URL, and top-level file listing into the shared transcript, and instructs agents to use their tool dispatcher (read / grep / glob / list) to inspect the repo.
+2. **Round-robin turn loop** — for `rounds` iterations, each agent in turn receives a prompt containing the **entire transcript so far** plus role instructions ("you are Agent N, respond in under 250 words, cite file paths"). The agent uses its tool dispatcher to read files and produces a reply.
+3. **SSE-aware idle watchdog** (commit `189ca05`) — we don't use a fixed wall-clock turn timeout. The provider streams partial chunks; the runner consults `AgentManager.getLastActivity()` and aborts a turn only if no chunk has arrived for 90 seconds, with a 30-minute hard ceiling as a safety net. Long-tail latency that's still producing tokens isn't killed.
+4. **Live streaming to the UI** — partial-chunk events forward to the browser as `agent_streaming` WebSocket messages; you see a pulsing "typing" bubble that fills in as tokens arrive. On turn completion the streaming bubble is replaced by the final transcript entry.
 5. **User injection** — the input at the bottom of the transcript view lets you post a `[HUMAN] ...` line into the shared transcript at any time; every agent sees it on their next turn.
-6. **Stop / New swarm** — Stop aborts all sessions and kills the spawned processes; the UI then shows a "New swarm" button that returns you to the setup form.
+6. **Stop / New swarm** — Stop aborts all in-flight turns; the UI then shows a "New swarm" button that returns you to the setup form.
 
 ### How the blackboard preset works
 
@@ -95,58 +144,26 @@ Phased implementation notes (now shipped) live in [`docs/blackboard-plan.md`](do
 - **git** on `PATH`. (No need to set `user.name` / `user.email` globally — the worker pipeline injects them inline per-commit.)
 - (Optional) **`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`** in `.env` if you want to run against Claude or GPT instead of Ollama.
 
-## First-time setup
-
-```bash
-# 1. Clone + install
-git clone https://github.com/kevinkicho/ollama_swarm.git
-cd ollama_swarm
-npm install
-
-# 2. Configure secrets
-cp .env.example .env
-# Edit .env — set OPENCODE_SERVER_PASSWORD to any string (still required at
-# config-load time post-E3; production runs ignore it). Add ANTHROPIC_API_KEY
-# / OPENAI_API_KEY if you want to use those providers.
-
-# 3. Start the dev server (backend + frontend together)
-npm run dev
-```
-
-`npm run dev` binds the backend to `127.0.0.1:8243` and the web app to `[::1]:8244` (override via `SERVER_PORT` / `WEB_PORT`).
-
-### Your first run
-
-1. Open **http://localhost:8244/** (or the WSL guest IP if you're hitting it from Windows — see `ip addr show eth0` for the address).
-2. The Setup Form opens by default. Fill in:
-   - **GitHub URL** — public repo, or private if you set `GITHUB_TOKEN` in `.env`
-   - **Parent folder** — absolute path to the directory the repo will be cloned INTO (the form previews the resolved clone path)
-   - **Pattern** — pick from the 9 presets. Hover the "?" next to "Preset" for a rich tooltip showing the preset's metadata + directive behavior
-   - **User directive (optional)** — what you want the swarm to do. Required for the conformance gauge to fire. Blackboard uses this to seed the planner's contract; discussion presets pass it as context.
-3. Hit **Start swarm**. The transcript streams in real-time. Switch to the **Board** tab during a blackboard run to watch todos move through Open → Claimed → Committed.
-4. The conformance gauge appears in the topbar after ~90s. Drift gauge appears next to it if `nomic-embed-text` is installed.
-5. Click the **+ nudge** button next to the gauge to submit a mid-run directive amendment when you spot drift.
-
-> If you previously ran on the older default ports (52243 / 52244), those moved on 2026-04-27 to dodge Windows' Hyper-V reserved range. New defaults are 8243 / 8244.
-
 ## Usage walkthrough
 
 1. **GitHub URL** — a public repo URL, or a private one if `GITHUB_TOKEN` is set in `.env` (the token is spliced into the clone URL).
 2. **Parent folder** — an absolute path to a _parent_ directory. The server derives the repo name from the URL and clones into `<parentFolder>/<repo-name>` (e.g. parent `C:\...\runs` + URL ending in `/is-odd` → clone at `C:\...\runs\is-odd`). Parent is created if missing; the subfolder must be empty, absent, or already a matching git clone. The form shows a live preview of the resolved clone path under the field.
-3. **Pattern** — one of the eight listed at the top of this README. Selecting blackboard reveals collapsible help explaining CAS and stale-replan; each pattern's `<PresetAdvancedSettings>` panel shows pattern-specific knobs.
+3. **Pattern** — one of the nine presets at the top of this README. Selecting blackboard reveals collapsible help explaining CAS and stale-replan; each pattern's `<PresetAdvancedSettings>` panel shows pattern-specific knobs.
 4. **Agents** — how many concurrent agents to spawn (2–8 for most presets). On blackboard, agent 1 is the planner and the remaining N−1 are workers. `debate-judge` requires exactly 3; `map-reduce` and `orchestrator-worker-deep` require ≥4.
 5. **Rounds** — for discussion presets: how many full passes through the agents. For blackboard: the maximum number of **auditor invocations** (plan → work → audit cycles) before the run stops even if unresolved criteria remain. Blackboard still stops earlier on the hard caps (per-run `wallClockCapMs` defaults to **8 hours** if not set, plus baked-in 200-commits / 300-todos backstops) or when every criterion is resolved. The cap is enforced by a 5s-tick watchdog (`#305`), so runs stop within ~5 seconds of the threshold rather than waiting for the next phase boundary. With non-blackboard presets, high values can mean hours of wall-clock and proportional cloud-token spend.
-6. **Model** — any model string registered in Ollama and declared in the synthesized `opencode.json` (defaults to `glm-5.1:cloud`).
+6. **Model** — any model string the active provider can serve. For Ollama, this must be a model the local install can run (`ollama list`); the form's autocomplete reads `/api/models` for matches. For paid providers, prefix with the provider name: `anthropic/claude-opus-4-7`, `openai/gpt-5`, etc.
 
 Hit Start. You'll see each agent panel go from `spawning` → `ready` → `thinking` → `ready`, with live streaming bubbles in the transcript as each agent works. On blackboard runs, switch to the **Board** tab to watch todos flow through Open → Claimed → Committed (or Stale → back to Open on CAS rejection). When the run terminates the phase pill flips to `completed` / `stopped` / `failed` and a summary card appears at the top of the Board tab; a **New swarm** button is available in the sidebar.
+
+Hit the **+ nudge** button next to the conformance gauge to submit a mid-run directive amendment when you spot drift. The drift gauge appears next to it if `nomic-embed-text` is installed.
 
 ## Environment variables
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `OPENCODE_SERVER_PASSWORD` | **yes for `npm test`** | Historical opencode HTTP-basic-auth secret. The opencode subprocess is gone (E3 Phase 5) but the env var is still required at config-load time so the test runner doesn't fail at zod validation. Set to any string. Production runs ignore it. |
-| `OLLAMA_BASE_URL` | no (defaults to `http://localhost:11434`) | Ollama base URL. The provider stack normalizes a trailing `/v1` defensively (so legacy values still work). |
-| `ANTHROPIC_API_KEY` | no (only when using Anthropic provider) | Read by the in-process AnthropicProvider via `process.env`. Setup form's provider dropdown greys out Anthropic when unset. |
+| `OPENCODE_SERVER_PASSWORD` | **yes (at config-load time)** | Historical opencode HTTP-basic-auth secret. The opencode subprocess is gone (E3 Phase 5) but the env var is still validated by `config.ts` so existing `npm test` / `npm run dev` setups don't break. Set to any non-empty string. Production runs ignore it. |
+| `OLLAMA_BASE_URL` | no (defaults to `http://localhost:11434/v1`) | Ollama base URL. The provider stack normalizes a trailing `/v1` defensively (so legacy values still work). |
+| `ANTHROPIC_API_KEY` | no (only when using Anthropic provider) | Read by the in-process `AnthropicProvider` via `process.env`. The setup form's provider dropdown greys out Anthropic when unset. |
 | `OPENAI_API_KEY` | no (only when using OpenAI provider) | Same pattern as `ANTHROPIC_API_KEY`. |
 | `DEFAULT_MODEL` | no (defaults to `glm-5.1:cloud`) | Model each agent uses when the form's model field is left blank. For paid providers use the prefixed form: `anthropic/claude-opus-4-7`, `openai/gpt-5`, etc. |
 | `SERVER_PORT` | no (defaults to `8243`) | Override the backend HTTP+WS port |
@@ -173,16 +190,17 @@ See [`docs/known-limitations.md`](docs/known-limitations.md) for the full list w
 - **One swarm at a time.** Stop the current swarm before starting another (or pass `force: true` on `/api/swarm/start`).
 - **In-memory transcript** — restarting the server loses live history. Per-run `summary.json` + per-event `logs/current.jsonl` are durable; the run-history dropdown reads the former.
 - **Localhost assumed.** No auth on the web app itself.
-- **OpenCode subprocess remains a runtime dep.** V2 substrate (state machine, TodoQueue, WorkerPipeline, OllamaClient) is now the primary path; the V1 SDK loop was retired 2026-04-28. Dropping the subprocess entirely is feasible via `USE_OLLAMA_DIRECT=1` but not yet the default for all presets.
-- **`/mnt/c` (WSL) flakiness.** tsx watch occasionally SIGTERMs the dev server when files in `/mnt/c` change rapidly; restart the dev server when this happens. Does not affect production.
+- **`npm run start` doesn't serve the SPA.** Backend-only. Use `npm run dev` for local use; production deployment with a static-served `web/dist` is not yet wired.
+- **`/mnt/c` (WSL) flakiness.** tsx watch occasionally SIGTERMs the dev server when files in `/mnt/c` change rapidly; restart the dev server when this happens. Does not affect production. Don't `npm install` from WSL on a `/mnt/c` repo — it swaps esbuild's binary for Linux and breaks the next Windows-side dev server.
 
 ## Troubleshooting
 
-- **`OPENCODE_SERVER_PASSWORD is required in .env`** — you haven't copied `.env.example` to `.env` or haven't set the password.
-- **Agents spawn but every turn errors with `fetch failed` / 404 on `/chat/completions`** — usually Ollama isn't running, the model isn't pulled, or `OLLAMA_BASE_URL` is missing the `/v1` suffix. The proxy now defensively appends `/v1` (commit `bb0c509`), but check `curl http://localhost:11434/api/tags` first.
-- **Empty agent responses across multiple presets** — most often the `/v1` issue above. If that's clean, check `streamPrompt` isn't getting stale `session.idle` from a prior prompt's tail (commit `18a7749` filters this).
+- **`OPENCODE_SERVER_PASSWORD is required in .env`** — you haven't copied `.env.example` to `.env` or haven't set the password. Set it to any non-empty string; nothing reads its value post-E3.
+- **Startup log says `orchestrator opencode: http://127.0.0.1:4096`** — you're running a stale `dist/` from before E3 Phase 5. Rebuild: `npm -w server run build`. The current source no longer prints that line and no longer connects to port 4096.
+- **`http://localhost:8243/` shows nothing** — that's the backend port. The web UI is on **`http://localhost:8244/`** (Vite). Use `npm run dev` to start both.
+- **Empty agent responses across multiple presets** — usually Ollama isn't running, the model isn't pulled, or `OLLAMA_BASE_URL` is missing the `/v1` suffix. The proxy now defensively appends `/v1` (commit `bb0c509`), but check `curl http://localhost:11434/api/tags` first.
 - **Port conflicts** — defaults are `SERVER_PORT=8243` / `WEB_PORT=8244`. If something else is bound, set either env var to a free port and restart. On Windows, check `netsh int ipv4 show excludedportrange protocol=tcp` if you get `EACCES` — Windows reserves chunks of ports for Hyper-V.
-- **`turn silent for Ns` errors** — the SSE-aware watchdog (commit `189ca05`) aborts on 90s SSE silence OR a 30-min hard ceiling. Long-tail latency that's still producing tokens isn't killed. The swarm will continue on the next agent; check the `[agent-N]` lines in the backend terminal for the underlying opencode error.
+- **`turn silent for Ns` errors** — the SSE-aware watchdog (commit `189ca05`) aborts on 90s SSE silence OR a 30-min hard ceiling. Long-tail latency that's still producing tokens isn't killed. The swarm will continue on the next agent; check the `[agent-N]` lines in the backend terminal for the underlying provider error.
 
 ## License
 

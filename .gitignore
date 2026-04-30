@@ -7,11 +7,9 @@ build/
 *.log
 .DS_Store
 runs/
-# 2026-04-27 overnight tour: cloned repos live under runs_overnight/<name>/.
-# Keep the *_RCA.md + _OVERNIGHT-FINAL-REPORT.md docs (force-added),
-# but ignore the embedded clones to avoid submodule-pointer churn.
-runs_overnight/*/
-runs_overnight2/
 logs/
+# Personal browser screenshots — embed copies under docs/images/ if they
+# need to live in the README. The screenshots/ folder itself is local-only.
+screenshots/
 .claude/
 *.tsbuildinfo
