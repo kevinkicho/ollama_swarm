@@ -104,6 +104,7 @@ const TEST_FILES = [
   "src/services/AgentManager.usage.test.ts",
   "src/providers/providers.test.ts",
   "src/services/Session.test.ts",
+  "src/tools/ToolDispatcher.test.ts",
 ];
 
 // Forward CLI args so callers can pass --test-name-pattern etc:
