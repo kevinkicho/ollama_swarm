@@ -1,0 +1,2258 @@
+<!DOCTYPE html><html lang="en"><head>
+    <script type="module">import { injectIntoGlobalHook } from "/@react-refresh";
+injectIntoGlobalHook(window);
+window.$RefreshReg$ = () => {};
+window.$RefreshSig$ = () => (type) => type;</script>
+
+    <script type="module" src="/@vite/client"></script>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <title>ollama_swarm</title>
+  <style type="text/css" data-vite-dev-id="C:/Users/kevin/Desktop/ollama_swarm/web/src/index.css">*, ::before, ::after {
+  --tw-border-spacing-x: 0;
+  --tw-border-spacing-y: 0;
+  --tw-translate-x: 0;
+  --tw-translate-y: 0;
+  --tw-rotate: 0;
+  --tw-skew-x: 0;
+  --tw-skew-y: 0;
+  --tw-scale-x: 1;
+  --tw-scale-y: 1;
+  --tw-pan-x:  ;
+  --tw-pan-y:  ;
+  --tw-pinch-zoom:  ;
+  --tw-scroll-snap-strictness: proximity;
+  --tw-gradient-from-position:  ;
+  --tw-gradient-via-position:  ;
+  --tw-gradient-to-position:  ;
+  --tw-ordinal:  ;
+  --tw-slashed-zero:  ;
+  --tw-numeric-figure:  ;
+  --tw-numeric-spacing:  ;
+  --tw-numeric-fraction:  ;
+  --tw-ring-inset:  ;
+  --tw-ring-offset-width: 0px;
+  --tw-ring-offset-color: #fff;
+  --tw-ring-color: rgb(59 130 246 / 0.5);
+  --tw-ring-offset-shadow: 0 0 #0000;
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-shadow: 0 0 #0000;
+  --tw-shadow-colored: 0 0 #0000;
+  --tw-blur:  ;
+  --tw-brightness:  ;
+  --tw-contrast:  ;
+  --tw-grayscale:  ;
+  --tw-hue-rotate:  ;
+  --tw-invert:  ;
+  --tw-saturate:  ;
+  --tw-sepia:  ;
+  --tw-drop-shadow:  ;
+  --tw-backdrop-blur:  ;
+  --tw-backdrop-brightness:  ;
+  --tw-backdrop-contrast:  ;
+  --tw-backdrop-grayscale:  ;
+  --tw-backdrop-hue-rotate:  ;
+  --tw-backdrop-invert:  ;
+  --tw-backdrop-opacity:  ;
+  --tw-backdrop-saturate:  ;
+  --tw-backdrop-sepia:  ;
+  --tw-contain-size:  ;
+  --tw-contain-layout:  ;
+  --tw-contain-paint:  ;
+  --tw-contain-style:  ;
+}
+
+::backdrop {
+  --tw-border-spacing-x: 0;
+  --tw-border-spacing-y: 0;
+  --tw-translate-x: 0;
+  --tw-translate-y: 0;
+  --tw-rotate: 0;
+  --tw-skew-x: 0;
+  --tw-skew-y: 0;
+  --tw-scale-x: 1;
+  --tw-scale-y: 1;
+  --tw-pan-x:  ;
+  --tw-pan-y:  ;
+  --tw-pinch-zoom:  ;
+  --tw-scroll-snap-strictness: proximity;
+  --tw-gradient-from-position:  ;
+  --tw-gradient-via-position:  ;
+  --tw-gradient-to-position:  ;
+  --tw-ordinal:  ;
+  --tw-slashed-zero:  ;
+  --tw-numeric-figure:  ;
+  --tw-numeric-spacing:  ;
+  --tw-numeric-fraction:  ;
+  --tw-ring-inset:  ;
+  --tw-ring-offset-width: 0px;
+  --tw-ring-offset-color: #fff;
+  --tw-ring-color: rgb(59 130 246 / 0.5);
+  --tw-ring-offset-shadow: 0 0 #0000;
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-shadow: 0 0 #0000;
+  --tw-shadow-colored: 0 0 #0000;
+  --tw-blur:  ;
+  --tw-brightness:  ;
+  --tw-contrast:  ;
+  --tw-grayscale:  ;
+  --tw-hue-rotate:  ;
+  --tw-invert:  ;
+  --tw-saturate:  ;
+  --tw-sepia:  ;
+  --tw-drop-shadow:  ;
+  --tw-backdrop-blur:  ;
+  --tw-backdrop-brightness:  ;
+  --tw-backdrop-contrast:  ;
+  --tw-backdrop-grayscale:  ;
+  --tw-backdrop-hue-rotate:  ;
+  --tw-backdrop-invert:  ;
+  --tw-backdrop-opacity:  ;
+  --tw-backdrop-saturate:  ;
+  --tw-backdrop-sepia:  ;
+  --tw-contain-size:  ;
+  --tw-contain-layout:  ;
+  --tw-contain-paint:  ;
+  --tw-contain-style:  ;
+}/*
+! tailwindcss v3.4.19 | MIT License | https://tailwindcss.com
+*//*
+1. Prevent padding and border from affecting element width. (https://github.com/mozdevs/cssremedy/issues/4)
+2. Allow adding a border to an element by just adding a border-width. (https://github.com/tailwindcss/tailwindcss/pull/116)
+*/
+
+*,
+::before,
+::after {
+  box-sizing: border-box; /* 1 */
+  border-width: 0; /* 2 */
+  border-style: solid; /* 2 */
+  border-color: #e5e7eb; /* 2 */
+}
+
+::before,
+::after {
+  --tw-content: '';
+}
+
+/*
+1. Use a consistent sensible line-height in all browsers.
+2. Prevent adjustments of font size after orientation changes in iOS.
+3. Use a more readable tab size.
+4. Use the user's configured `sans` font-family by default.
+5. Use the user's configured `sans` font-feature-settings by default.
+6. Use the user's configured `sans` font-variation-settings by default.
+7. Disable tap highlights on iOS
+*/
+
+html,
+:host {
+  line-height: 1.5; /* 1 */
+  -webkit-text-size-adjust: 100%; /* 2 */
+  -moz-tab-size: 4; /* 3 */
+  -o-tab-size: 4;
+     tab-size: 4; /* 3 */
+  font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"; /* 4 */
+  font-feature-settings: normal; /* 5 */
+  font-variation-settings: normal; /* 6 */
+  -webkit-tap-highlight-color: transparent; /* 7 */
+}
+
+/*
+1. Remove the margin in all browsers.
+2. Inherit line-height from `html` so users can set them as a class directly on the `html` element.
+*/
+
+body {
+  margin: 0; /* 1 */
+  line-height: inherit; /* 2 */
+}
+
+/*
+1. Add the correct height in Firefox.
+2. Correct the inheritance of border color in Firefox. (https://bugzilla.mozilla.org/show_bug.cgi?id=190655)
+3. Ensure horizontal rules are visible by default.
+*/
+
+hr {
+  height: 0; /* 1 */
+  color: inherit; /* 2 */
+  border-top-width: 1px; /* 3 */
+}
+
+/*
+Add the correct text decoration in Chrome, Edge, and Safari.
+*/
+
+abbr:where([title]) {
+  -webkit-text-decoration: underline dotted;
+          text-decoration: underline dotted;
+}
+
+/*
+Remove the default font size and weight for headings.
+*/
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+/*
+Reset links to optimize for opt-in styling instead of opt-out.
+*/
+
+a {
+  color: inherit;
+  text-decoration: inherit;
+}
+
+/*
+Add the correct font weight in Edge and Safari.
+*/
+
+b,
+strong {
+  font-weight: bolder;
+}
+
+/*
+1. Use the user's configured `mono` font-family by default.
+2. Use the user's configured `mono` font-feature-settings by default.
+3. Use the user's configured `mono` font-variation-settings by default.
+4. Correct the odd `em` font sizing in all browsers.
+*/
+
+code,
+kbd,
+samp,
+pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; /* 1 */
+  font-feature-settings: normal; /* 2 */
+  font-variation-settings: normal; /* 3 */
+  font-size: 1em; /* 4 */
+}
+
+/*
+Add the correct font size in all browsers.
+*/
+
+small {
+  font-size: 80%;
+}
+
+/*
+Prevent `sub` and `sup` elements from affecting the line height in all browsers.
+*/
+
+sub,
+sup {
+  font-size: 75%;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+}
+
+sub {
+  bottom: -0.25em;
+}
+
+sup {
+  top: -0.5em;
+}
+
+/*
+1. Remove text indentation from table contents in Chrome and Safari. (https://bugs.chromium.org/p/chromium/issues/detail?id=999088, https://bugs.webkit.org/show_bug.cgi?id=201297)
+2. Correct table border color inheritance in all Chrome and Safari. (https://bugs.chromium.org/p/chromium/issues/detail?id=935729, https://bugs.webkit.org/show_bug.cgi?id=195016)
+3. Remove gaps between table borders by default.
+*/
+
+table {
+  text-indent: 0; /* 1 */
+  border-color: inherit; /* 2 */
+  border-collapse: collapse; /* 3 */
+}
+
+/*
+1. Change the font styles in all browsers.
+2. Remove the margin in Firefox and Safari.
+3. Remove default padding in all browsers.
+*/
+
+button,
+input,
+optgroup,
+select,
+textarea {
+  font-family: inherit; /* 1 */
+  font-feature-settings: inherit; /* 1 */
+  font-variation-settings: inherit; /* 1 */
+  font-size: 100%; /* 1 */
+  font-weight: inherit; /* 1 */
+  line-height: inherit; /* 1 */
+  letter-spacing: inherit; /* 1 */
+  color: inherit; /* 1 */
+  margin: 0; /* 2 */
+  padding: 0; /* 3 */
+}
+
+/*
+Remove the inheritance of text transform in Edge and Firefox.
+*/
+
+button,
+select {
+  text-transform: none;
+}
+
+/*
+1. Correct the inability to style clickable types in iOS and Safari.
+2. Remove default button styles.
+*/
+
+button,
+input:where([type='button']),
+input:where([type='reset']),
+input:where([type='submit']) {
+  -webkit-appearance: button; /* 1 */
+  background-color: transparent; /* 2 */
+  background-image: none; /* 2 */
+}
+
+/*
+Use the modern Firefox focus style for all focusable elements.
+*/
+
+:-moz-focusring {
+  outline: auto;
+}
+
+/*
+Remove the additional `:invalid` styles in Firefox. (https://github.com/mozilla/gecko-dev/blob/2f9eacd9d3d995c937b4251a5557d95d494c9be1/layout/style/res/forms.css#L728-L737)
+*/
+
+:-moz-ui-invalid {
+  box-shadow: none;
+}
+
+/*
+Add the correct vertical alignment in Chrome and Firefox.
+*/
+
+progress {
+  vertical-align: baseline;
+}
+
+/*
+Correct the cursor style of increment and decrement buttons in Safari.
+*/
+
+::-webkit-inner-spin-button,
+::-webkit-outer-spin-button {
+  height: auto;
+}
+
+/*
+1. Correct the odd appearance in Chrome and Safari.
+2. Correct the outline style in Safari.
+*/
+
+[type='search'] {
+  -webkit-appearance: textfield; /* 1 */
+  outline-offset: -2px; /* 2 */
+}
+
+/*
+Remove the inner padding in Chrome and Safari on macOS.
+*/
+
+::-webkit-search-decoration {
+  -webkit-appearance: none;
+}
+
+/*
+1. Correct the inability to style clickable types in iOS and Safari.
+2. Change font properties to `inherit` in Safari.
+*/
+
+::-webkit-file-upload-button {
+  -webkit-appearance: button; /* 1 */
+  font: inherit; /* 2 */
+}
+
+/*
+Add the correct display in Chrome and Safari.
+*/
+
+summary {
+  display: list-item;
+}
+
+/*
+Removes the default spacing and border for appropriate elements.
+*/
+
+blockquote,
+dl,
+dd,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+hr,
+figure,
+p,
+pre {
+  margin: 0;
+}
+
+fieldset {
+  margin: 0;
+  padding: 0;
+}
+
+legend {
+  padding: 0;
+}
+
+ol,
+ul,
+menu {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/*
+Reset default styling for dialogs.
+*/
+dialog {
+  padding: 0;
+}
+
+/*
+Prevent resizing textareas horizontally by default.
+*/
+
+textarea {
+  resize: vertical;
+}
+
+/*
+1. Reset the default placeholder opacity in Firefox. (https://github.com/tailwindlabs/tailwindcss/issues/3300)
+2. Set the default placeholder color to the user's configured gray 400 color.
+*/
+
+input::-moz-placeholder, textarea::-moz-placeholder {
+  opacity: 1; /* 1 */
+  color: #9ca3af; /* 2 */
+}
+
+input::placeholder,
+textarea::placeholder {
+  opacity: 1; /* 1 */
+  color: #9ca3af; /* 2 */
+}
+
+/*
+Set the default cursor for buttons.
+*/
+
+button,
+[role="button"] {
+  cursor: pointer;
+}
+
+/*
+Make sure disabled buttons don't get the pointer cursor.
+*/
+:disabled {
+  cursor: default;
+}
+
+/*
+1. Make replaced elements `display: block` by default. (https://github.com/mozdevs/cssremedy/issues/14)
+2. Add `vertical-align: middle` to align replaced elements more sensibly by default. (https://github.com/jensimmons/cssremedy/issues/14#issuecomment-634934210)
+   This can trigger a poorly considered lint error in some tools but is included by design.
+*/
+
+img,
+svg,
+video,
+canvas,
+audio,
+iframe,
+embed,
+object {
+  display: block; /* 1 */
+  vertical-align: middle; /* 2 */
+}
+
+/*
+Constrain images and videos to the parent width and preserve their intrinsic aspect ratio. (https://github.com/mozdevs/cssremedy/issues/14)
+*/
+
+img,
+video {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Make elements with the HTML hidden attribute stay hidden by default */
+[hidden]:where(:not([hidden="until-found"])) {
+  display: none;
+}
+.container {
+  width: 100%;
+}
+@media (min-width: 640px) {
+
+  .container {
+    max-width: 640px;
+  }
+}
+@media (min-width: 768px) {
+
+  .container {
+    max-width: 768px;
+  }
+}
+@media (min-width: 1024px) {
+
+  .container {
+    max-width: 1024px;
+  }
+}
+@media (min-width: 1280px) {
+
+  .container {
+    max-width: 1280px;
+  }
+}
+@media (min-width: 1536px) {
+
+  .container {
+    max-width: 1536px;
+  }
+}
+.pointer-events-none {
+  pointer-events: none;
+}
+.visible {
+  visibility: visible;
+}
+.invisible {
+  visibility: hidden;
+}
+.collapse {
+  visibility: collapse;
+}
+.fixed {
+  position: fixed;
+}
+.absolute {
+  position: absolute;
+}
+.relative {
+  position: relative;
+}
+.sticky {
+  position: sticky;
+}
+.inset-0 {
+  inset: 0px;
+}
+.inset-x-0 {
+  left: 0px;
+  right: 0px;
+}
+.bottom-0 {
+  bottom: 0px;
+}
+.bottom-4 {
+  bottom: 1rem;
+}
+.bottom-full {
+  bottom: 100%;
+}
+.left-0 {
+  left: 0px;
+}
+.right-0 {
+  right: 0px;
+}
+.right-4 {
+  right: 1rem;
+}
+.top-0 {
+  top: 0px;
+}
+.top-full {
+  top: 100%;
+}
+.z-10 {
+  z-index: 10;
+}
+.z-20 {
+  z-index: 20;
+}
+.z-30 {
+  z-index: 30;
+}
+.z-40 {
+  z-index: 40;
+}
+.z-50 {
+  z-index: 50;
+}
+.mx-2 {
+  margin-left: 0.5rem;
+  margin-right: 0.5rem;
+}
+.mx-auto {
+  margin-left: auto;
+  margin-right: auto;
+}
+.my-2 {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.my-3 {
+  margin-top: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.-mt-1 {
+  margin-top: -0.25rem;
+}
+.mb-0\.5 {
+  margin-bottom: 0.125rem;
+}
+.mb-1 {
+  margin-bottom: 0.25rem;
+}
+.mb-1\.5 {
+  margin-bottom: 0.375rem;
+}
+.mb-2 {
+  margin-bottom: 0.5rem;
+}
+.mb-3 {
+  margin-bottom: 0.75rem;
+}
+.mb-4 {
+  margin-bottom: 1rem;
+}
+.mb-6 {
+  margin-bottom: 1.5rem;
+}
+.ml-0\.5 {
+  margin-left: 0.125rem;
+}
+.ml-1 {
+  margin-left: 0.25rem;
+}
+.ml-2 {
+  margin-left: 0.5rem;
+}
+.ml-5 {
+  margin-left: 1.25rem;
+}
+.ml-6 {
+  margin-left: 1.5rem;
+}
+.ml-auto {
+  margin-left: auto;
+}
+.mr-1\.5 {
+  margin-right: 0.375rem;
+}
+.mr-2 {
+  margin-right: 0.5rem;
+}
+.mt-0\.5 {
+  margin-top: 0.125rem;
+}
+.mt-1 {
+  margin-top: 0.25rem;
+}
+.mt-1\.5 {
+  margin-top: 0.375rem;
+}
+.mt-2 {
+  margin-top: 0.5rem;
+}
+.mt-3 {
+  margin-top: 0.75rem;
+}
+.mt-6 {
+  margin-top: 1.5rem;
+}
+.block {
+  display: block;
+}
+.inline-block {
+  display: inline-block;
+}
+.inline {
+  display: inline;
+}
+.flex {
+  display: flex;
+}
+.inline-flex {
+  display: inline-flex;
+}
+.table {
+  display: table;
+}
+.grid {
+  display: grid;
+}
+.hidden {
+  display: none;
+}
+.h-1 {
+  height: 0.25rem;
+}
+.h-1\.5 {
+  height: 0.375rem;
+}
+.h-2 {
+  height: 0.5rem;
+}
+.h-3 {
+  height: 0.75rem;
+}
+.h-4 {
+  height: 1rem;
+}
+.h-8 {
+  height: 2rem;
+}
+.h-full {
+  height: 100%;
+}
+.h-px {
+  height: 1px;
+}
+.max-h-40 {
+  max-height: 10rem;
+}
+.max-h-48 {
+  max-height: 12rem;
+}
+.max-h-56 {
+  max-height: 14rem;
+}
+.max-h-72 {
+  max-height: 18rem;
+}
+.max-h-\[60vh\] {
+  max-height: 60vh;
+}
+.max-h-\[70vh\] {
+  max-height: 70vh;
+}
+.max-h-\[90vh\] {
+  max-height: 90vh;
+}
+.min-h-0 {
+  min-height: 0px;
+}
+.min-h-\[1\.25rem\] {
+  min-height: 1.25rem;
+}
+.min-h-full {
+  min-height: 100%;
+}
+.w-1 {
+  width: 0.25rem;
+}
+.w-1\.5 {
+  width: 0.375rem;
+}
+.w-10 {
+  width: 2.5rem;
+}
+.w-16 {
+  width: 4rem;
+}
+.w-2 {
+  width: 0.5rem;
+}
+.w-24 {
+  width: 6rem;
+}
+.w-4 {
+  width: 1rem;
+}
+.w-\[480px\] {
+  width: 480px;
+}
+.w-\[min\(1400px\2c 95vw\)\] {
+  width: min(1400px, 95vw);
+}
+.w-\[min\(720px\2c calc\(100vw-2rem\)\)\] {
+  width: min(720px, calc(100vw - 2rem));
+}
+.w-\[min\(960px\2c calc\(100vw-2rem\)\)\] {
+  width: min(960px, calc(100vw - 2rem));
+}
+.w-full {
+  width: 100%;
+}
+.w-max {
+  width: -moz-max-content;
+  width: max-content;
+}
+.min-w-0 {
+  min-width: 0px;
+}
+.min-w-\[900px\] {
+  min-width: 900px;
+}
+.max-w-2xl {
+  max-width: 42rem;
+}
+.max-w-4xl {
+  max-width: 56rem;
+}
+.max-w-\[100px\] {
+  max-width: 100px;
+}
+.max-w-\[140px\] {
+  max-width: 140px;
+}
+.max-w-\[260px\] {
+  max-width: 260px;
+}
+.max-w-lg {
+  max-width: 32rem;
+}
+.max-w-md {
+  max-width: 28rem;
+}
+.max-w-xl {
+  max-width: 36rem;
+}
+.max-w-xs {
+  max-width: 20rem;
+}
+.flex-1 {
+  flex: 1 1 0%;
+}
+.shrink-0 {
+  flex-shrink: 0;
+}
+@keyframes pulse {
+
+  50% {
+    opacity: .5;
+  }
+}
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+.cursor-help {
+  cursor: help;
+}
+.cursor-pointer {
+  cursor: pointer;
+}
+.select-none {
+  -webkit-user-select: none;
+     -moz-user-select: none;
+          user-select: none;
+}
+.resize {
+  resize: both;
+}
+.list-inside {
+  list-style-position: inside;
+}
+.list-decimal {
+  list-style-type: decimal;
+}
+.list-disc {
+  list-style-type: disc;
+}
+.list-none {
+  list-style-type: none;
+}
+.grid-cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.grid-cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.grid-cols-5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.grid-cols-\[280px_1fr\] {
+  grid-template-columns: 280px 1fr;
+}
+.grid-cols-\[auto_1fr\] {
+  grid-template-columns: auto 1fr;
+}
+.grid-cols-\[auto_auto_auto\] {
+  grid-template-columns: auto auto auto;
+}
+.grid-cols-\[max-content_1fr\] {
+  grid-template-columns: max-content 1fr;
+}
+.flex-col {
+  flex-direction: column;
+}
+.flex-wrap {
+  flex-wrap: wrap;
+}
+.items-start {
+  align-items: flex-start;
+}
+.items-end {
+  align-items: flex-end;
+}
+.items-center {
+  align-items: center;
+}
+.items-baseline {
+  align-items: baseline;
+}
+.justify-end {
+  justify-content: flex-end;
+}
+.justify-center {
+  justify-content: center;
+}
+.justify-between {
+  justify-content: space-between;
+}
+.gap-0\.5 {
+  gap: 0.125rem;
+}
+.gap-1 {
+  gap: 0.25rem;
+}
+.gap-1\.5 {
+  gap: 0.375rem;
+}
+.gap-2 {
+  gap: 0.5rem;
+}
+.gap-2\.5 {
+  gap: 0.625rem;
+}
+.gap-3 {
+  gap: 0.75rem;
+}
+.gap-4 {
+  gap: 1rem;
+}
+.gap-x-2 {
+  -moz-column-gap: 0.5rem;
+       column-gap: 0.5rem;
+}
+.gap-x-3 {
+  -moz-column-gap: 0.75rem;
+       column-gap: 0.75rem;
+}
+.gap-x-4 {
+  -moz-column-gap: 1rem;
+       column-gap: 1rem;
+}
+.gap-y-0\.5 {
+  row-gap: 0.125rem;
+}
+.gap-y-1 {
+  row-gap: 0.25rem;
+}
+.space-y-0\.5 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(0.125rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(0.125rem * var(--tw-space-y-reverse));
+}
+.space-y-1 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(0.25rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(0.25rem * var(--tw-space-y-reverse));
+}
+.space-y-1\.5 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(0.375rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(0.375rem * var(--tw-space-y-reverse));
+}
+.space-y-2 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(0.5rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(0.5rem * var(--tw-space-y-reverse));
+}
+.space-y-3 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(0.75rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(0.75rem * var(--tw-space-y-reverse));
+}
+.space-y-4 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(1rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(1rem * var(--tw-space-y-reverse));
+}
+.space-y-6 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(1.5rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(1.5rem * var(--tw-space-y-reverse));
+}
+.overflow-auto {
+  overflow: auto;
+}
+.overflow-hidden {
+  overflow: hidden;
+}
+.overflow-x-auto {
+  overflow-x: auto;
+}
+.overflow-y-auto {
+  overflow-y: auto;
+}
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.whitespace-nowrap {
+  white-space: nowrap;
+}
+.whitespace-pre-wrap {
+  white-space: pre-wrap;
+}
+.break-words {
+  overflow-wrap: break-word;
+}
+.break-all {
+  word-break: break-all;
+}
+.rounded {
+  border-radius: 0.25rem;
+}
+.rounded-full {
+  border-radius: 9999px;
+}
+.rounded-lg {
+  border-radius: 0.5rem;
+}
+.rounded-md {
+  border-radius: 0.375rem;
+}
+.border {
+  border-width: 1px;
+}
+.border-2 {
+  border-width: 2px;
+}
+.border-b {
+  border-bottom-width: 1px;
+}
+.border-b-2 {
+  border-bottom-width: 2px;
+}
+.border-l {
+  border-left-width: 1px;
+}
+.border-l-2 {
+  border-left-width: 2px;
+}
+.border-l-4 {
+  border-left-width: 4px;
+}
+.border-r {
+  border-right-width: 1px;
+}
+.border-t {
+  border-top-width: 1px;
+}
+.border-amber-500\/40 {
+  border-color: rgb(245 158 11 / 0.4);
+}
+.border-amber-500\/50 {
+  border-color: rgb(245 158 11 / 0.5);
+}
+.border-amber-600 {
+  --tw-border-opacity: 1;
+  border-color: rgb(217 119 6 / var(--tw-border-opacity, 1));
+}
+.border-amber-600\/60 {
+  border-color: rgb(217 119 6 / 0.6);
+}
+.border-amber-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(180 83 9 / var(--tw-border-opacity, 1));
+}
+.border-amber-700\/40 {
+  border-color: rgb(180 83 9 / 0.4);
+}
+.border-amber-700\/50 {
+  border-color: rgb(180 83 9 / 0.5);
+}
+.border-amber-700\/60 {
+  border-color: rgb(180 83 9 / 0.6);
+}
+.border-amber-700\/70 {
+  border-color: rgb(180 83 9 / 0.7);
+}
+.border-amber-800\/60 {
+  border-color: rgb(146 64 14 / 0.6);
+}
+.border-blue-700\/50 {
+  border-color: rgb(29 78 216 / 0.5);
+}
+.border-emerald-500 {
+  --tw-border-opacity: 1;
+  border-color: rgb(16 185 129 / var(--tw-border-opacity, 1));
+}
+.border-emerald-500\/40 {
+  border-color: rgb(16 185 129 / 0.4);
+}
+.border-emerald-500\/50 {
+  border-color: rgb(16 185 129 / 0.5);
+}
+.border-emerald-600 {
+  --tw-border-opacity: 1;
+  border-color: rgb(5 150 105 / var(--tw-border-opacity, 1));
+}
+.border-emerald-600\/40 {
+  border-color: rgb(5 150 105 / 0.4);
+}
+.border-emerald-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(4 120 87 / var(--tw-border-opacity, 1));
+}
+.border-emerald-700\/40 {
+  border-color: rgb(4 120 87 / 0.4);
+}
+.border-emerald-700\/50 {
+  border-color: rgb(4 120 87 / 0.5);
+}
+.border-emerald-700\/60 {
+  border-color: rgb(4 120 87 / 0.6);
+}
+.border-emerald-700\/70 {
+  border-color: rgb(4 120 87 / 0.7);
+}
+.border-emerald-800\/30 {
+  border-color: rgb(6 95 70 / 0.3);
+}
+.border-emerald-800\/50 {
+  border-color: rgb(6 95 70 / 0.5);
+}
+.border-emerald-900\/40 {
+  border-color: rgb(6 78 59 / 0.4);
+}
+.border-emerald-900\/60 {
+  border-color: rgb(6 78 59 / 0.6);
+}
+.border-fuchsia-700\/50 {
+  border-color: rgb(162 28 175 / 0.5);
+}
+.border-indigo-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(67 56 202 / var(--tw-border-opacity, 1));
+}
+.border-indigo-700\/60 {
+  border-color: rgb(67 56 202 / 0.6);
+}
+.border-indigo-900\/60 {
+  border-color: rgb(49 46 129 / 0.6);
+}
+.border-ink-500 {
+  --tw-border-opacity: 1;
+  border-color: rgb(58 65 80 / var(--tw-border-opacity, 1));
+}
+.border-ink-500\/60 {
+  border-color: rgb(58 65 80 / 0.6);
+}
+.border-ink-600 {
+  --tw-border-opacity: 1;
+  border-color: rgb(42 47 58 / var(--tw-border-opacity, 1));
+}
+.border-ink-600\/50 {
+  border-color: rgb(42 47 58 / 0.5);
+}
+.border-ink-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(28 32 40 / var(--tw-border-opacity, 1));
+}
+.border-ink-700\/50 {
+  border-color: rgb(28 32 40 / 0.5);
+}
+.border-ink-700\/60 {
+  border-color: rgb(28 32 40 / 0.6);
+}
+.border-ink-800 {
+  --tw-border-opacity: 1;
+  border-color: rgb(19 22 27 / var(--tw-border-opacity, 1));
+}
+.border-ink-800\/60 {
+  border-color: rgb(19 22 27 / 0.6);
+}
+.border-red-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(185 28 28 / var(--tw-border-opacity, 1));
+}
+.border-red-800 {
+  --tw-border-opacity: 1;
+  border-color: rgb(153 27 27 / var(--tw-border-opacity, 1));
+}
+.border-red-900 {
+  --tw-border-opacity: 1;
+  border-color: rgb(127 29 29 / var(--tw-border-opacity, 1));
+}
+.border-red-900\/50 {
+  border-color: rgb(127 29 29 / 0.5);
+}
+.border-rose-500 {
+  --tw-border-opacity: 1;
+  border-color: rgb(244 63 94 / var(--tw-border-opacity, 1));
+}
+.border-rose-500\/40 {
+  border-color: rgb(244 63 94 / 0.4);
+}
+.border-rose-500\/50 {
+  border-color: rgb(244 63 94 / 0.5);
+}
+.border-rose-600 {
+  --tw-border-opacity: 1;
+  border-color: rgb(225 29 72 / var(--tw-border-opacity, 1));
+}
+.border-rose-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(190 18 60 / var(--tw-border-opacity, 1));
+}
+.border-rose-700\/40 {
+  border-color: rgb(190 18 60 / 0.4);
+}
+.border-rose-700\/50 {
+  border-color: rgb(190 18 60 / 0.5);
+}
+.border-rose-700\/60 {
+  border-color: rgb(190 18 60 / 0.6);
+}
+.border-rose-700\/70 {
+  border-color: rgb(190 18 60 / 0.7);
+}
+.border-rose-900 {
+  --tw-border-opacity: 1;
+  border-color: rgb(136 19 55 / var(--tw-border-opacity, 1));
+}
+.border-rose-900\/40 {
+  border-color: rgb(136 19 55 / 0.4);
+}
+.border-sky-500\/40 {
+  border-color: rgb(14 165 233 / 0.4);
+}
+.border-sky-500\/50 {
+  border-color: rgb(14 165 233 / 0.5);
+}
+.border-sky-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(3 105 161 / var(--tw-border-opacity, 1));
+}
+.border-sky-700\/40 {
+  border-color: rgb(3 105 161 / 0.4);
+}
+.border-sky-700\/50 {
+  border-color: rgb(3 105 161 / 0.5);
+}
+.border-sky-700\/60 {
+  border-color: rgb(3 105 161 / 0.6);
+}
+.border-teal-500\/50 {
+  border-color: rgb(20 184 166 / 0.5);
+}
+.border-teal-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(15 118 110 / var(--tw-border-opacity, 1));
+}
+.border-teal-700\/50 {
+  border-color: rgb(15 118 110 / 0.5);
+}
+.border-transparent {
+  border-color: transparent;
+}
+.border-violet-500\/50 {
+  border-color: rgb(139 92 246 / 0.5);
+}
+.border-violet-700\/40 {
+  border-color: rgb(109 40 217 / 0.4);
+}
+.border-violet-700\/50 {
+  border-color: rgb(109 40 217 / 0.5);
+}
+.border-violet-700\/60 {
+  border-color: rgb(109 40 217 / 0.6);
+}
+.border-b-ink-700 {
+  --tw-border-opacity: 1;
+  border-bottom-color: rgb(28 32 40 / var(--tw-border-opacity, 1));
+}
+.border-l-amber-500 {
+  --tw-border-opacity: 1;
+  border-left-color: rgb(245 158 11 / var(--tw-border-opacity, 1));
+}
+.border-l-emerald-500 {
+  --tw-border-opacity: 1;
+  border-left-color: rgb(16 185 129 / var(--tw-border-opacity, 1));
+}
+.border-l-ink-400 {
+  --tw-border-opacity: 1;
+  border-left-color: rgb(107 114 128 / var(--tw-border-opacity, 1));
+}
+.border-l-rose-500 {
+  --tw-border-opacity: 1;
+  border-left-color: rgb(244 63 94 / var(--tw-border-opacity, 1));
+}
+.border-l-sky-500 {
+  --tw-border-opacity: 1;
+  border-left-color: rgb(14 165 233 / var(--tw-border-opacity, 1));
+}
+.bg-amber-400 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(251 191 36 / var(--tw-bg-opacity, 1));
+}
+.bg-amber-500 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(245 158 11 / var(--tw-bg-opacity, 1));
+}
+.bg-amber-700 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(180 83 9 / var(--tw-bg-opacity, 1));
+}
+.bg-amber-900\/30 {
+  background-color: rgb(120 53 15 / 0.3);
+}
+.bg-amber-900\/40 {
+  background-color: rgb(120 53 15 / 0.4);
+}
+.bg-amber-900\/50 {
+  background-color: rgb(120 53 15 / 0.5);
+}
+.bg-amber-900\/60 {
+  background-color: rgb(120 53 15 / 0.6);
+}
+.bg-amber-950\/15 {
+  background-color: rgb(69 26 3 / 0.15);
+}
+.bg-amber-950\/20 {
+  background-color: rgb(69 26 3 / 0.2);
+}
+.bg-amber-950\/30 {
+  background-color: rgb(69 26 3 / 0.3);
+}
+.bg-amber-950\/40 {
+  background-color: rgb(69 26 3 / 0.4);
+}
+.bg-amber-950\/60 {
+  background-color: rgb(69 26 3 / 0.6);
+}
+.bg-black\/40 {
+  background-color: rgb(0 0 0 / 0.4);
+}
+.bg-black\/60 {
+  background-color: rgb(0 0 0 / 0.6);
+}
+.bg-black\/70 {
+  background-color: rgb(0 0 0 / 0.7);
+}
+.bg-blue-400 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(96 165 250 / var(--tw-bg-opacity, 1));
+}
+.bg-blue-700 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(29 78 216 / var(--tw-bg-opacity, 1));
+}
+.bg-blue-900\/40 {
+  background-color: rgb(30 58 138 / 0.4);
+}
+.bg-emerald-400 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(52 211 153 / var(--tw-bg-opacity, 1));
+}
+.bg-emerald-500 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(16 185 129 / var(--tw-bg-opacity, 1));
+}
+.bg-emerald-500\/10 {
+  background-color: rgb(16 185 129 / 0.1);
+}
+.bg-emerald-500\/50 {
+  background-color: rgb(16 185 129 / 0.5);
+}
+.bg-emerald-600 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(5 150 105 / var(--tw-bg-opacity, 1));
+}
+.bg-emerald-600\/60 {
+  background-color: rgb(5 150 105 / 0.6);
+}
+.bg-emerald-700 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(4 120 87 / var(--tw-bg-opacity, 1));
+}
+.bg-emerald-700\/30 {
+  background-color: rgb(4 120 87 / 0.3);
+}
+.bg-emerald-900 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(6 78 59 / var(--tw-bg-opacity, 1));
+}
+.bg-emerald-900\/20 {
+  background-color: rgb(6 78 59 / 0.2);
+}
+.bg-emerald-900\/30 {
+  background-color: rgb(6 78 59 / 0.3);
+}
+.bg-emerald-900\/40 {
+  background-color: rgb(6 78 59 / 0.4);
+}
+.bg-emerald-900\/50 {
+  background-color: rgb(6 78 59 / 0.5);
+}
+.bg-emerald-900\/60 {
+  background-color: rgb(6 78 59 / 0.6);
+}
+.bg-emerald-950\/15 {
+  background-color: rgb(2 44 34 / 0.15);
+}
+.bg-emerald-950\/20 {
+  background-color: rgb(2 44 34 / 0.2);
+}
+.bg-emerald-950\/30 {
+  background-color: rgb(2 44 34 / 0.3);
+}
+.bg-emerald-950\/40 {
+  background-color: rgb(2 44 34 / 0.4);
+}
+.bg-fuchsia-900\/40 {
+  background-color: rgb(112 26 117 / 0.4);
+}
+.bg-indigo-900\/30 {
+  background-color: rgb(49 46 129 / 0.3);
+}
+.bg-indigo-950\/20 {
+  background-color: rgb(30 27 75 / 0.2);
+}
+.bg-ink-400 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(107 114 128 / var(--tw-bg-opacity, 1));
+}
+.bg-ink-600 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(42 47 58 / var(--tw-bg-opacity, 1));
+}
+.bg-ink-700 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(28 32 40 / var(--tw-bg-opacity, 1));
+}
+.bg-ink-800 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(19 22 27 / var(--tw-bg-opacity, 1));
+}
+.bg-ink-800\/30 {
+  background-color: rgb(19 22 27 / 0.3);
+}
+.bg-ink-800\/40 {
+  background-color: rgb(19 22 27 / 0.4);
+}
+.bg-ink-800\/50 {
+  background-color: rgb(19 22 27 / 0.5);
+}
+.bg-ink-800\/60 {
+  background-color: rgb(19 22 27 / 0.6);
+}
+.bg-ink-900 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(11 13 16 / var(--tw-bg-opacity, 1));
+}
+.bg-ink-900\/40 {
+  background-color: rgb(11 13 16 / 0.4);
+}
+.bg-ink-900\/60 {
+  background-color: rgb(11 13 16 / 0.6);
+}
+.bg-ink-900\/80 {
+  background-color: rgb(11 13 16 / 0.8);
+}
+.bg-red-500 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(239 68 68 / var(--tw-bg-opacity, 1));
+}
+.bg-red-700 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(185 28 28 / var(--tw-bg-opacity, 1));
+}
+.bg-red-900 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(127 29 29 / var(--tw-bg-opacity, 1));
+}
+.bg-red-900\/40 {
+  background-color: rgb(127 29 29 / 0.4);
+}
+.bg-rose-500 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(244 63 94 / var(--tw-bg-opacity, 1));
+}
+.bg-rose-900\/40 {
+  background-color: rgb(136 19 55 / 0.4);
+}
+.bg-rose-900\/60 {
+  background-color: rgb(136 19 55 / 0.6);
+}
+.bg-rose-950\/20 {
+  background-color: rgb(76 5 25 / 0.2);
+}
+.bg-rose-950\/30 {
+  background-color: rgb(76 5 25 / 0.3);
+}
+.bg-rose-950\/40 {
+  background-color: rgb(76 5 25 / 0.4);
+}
+.bg-rose-950\/60 {
+  background-color: rgb(76 5 25 / 0.6);
+}
+.bg-sky-500\/50 {
+  background-color: rgb(14 165 233 / 0.5);
+}
+.bg-sky-900\/40 {
+  background-color: rgb(12 74 110 / 0.4);
+}
+.bg-sky-900\/60 {
+  background-color: rgb(12 74 110 / 0.6);
+}
+.bg-sky-950\/20 {
+  background-color: rgb(8 47 73 / 0.2);
+}
+.bg-sky-950\/30 {
+  background-color: rgb(8 47 73 / 0.3);
+}
+.bg-teal-900\/30 {
+  background-color: rgb(19 78 74 / 0.3);
+}
+.bg-teal-900\/40 {
+  background-color: rgb(19 78 74 / 0.4);
+}
+.bg-violet-900\/40 {
+  background-color: rgb(76 29 149 / 0.4);
+}
+.bg-violet-900\/50 {
+  background-color: rgb(76 29 149 / 0.5);
+}
+.bg-violet-950\/15 {
+  background-color: rgb(46 16 101 / 0.15);
+}
+.bg-violet-950\/20 {
+  background-color: rgb(46 16 101 / 0.2);
+}
+.bg-gradient-to-t {
+  background-image: linear-gradient(to top, var(--tw-gradient-stops));
+}
+.from-ink-900 {
+  --tw-gradient-from: #0b0d10 var(--tw-gradient-from-position);
+  --tw-gradient-to: rgb(11 13 16 / 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+}
+.to-transparent {
+  --tw-gradient-to: transparent var(--tw-gradient-to-position);
+}
+.p-1 {
+  padding: 0.25rem;
+}
+.p-2 {
+  padding: 0.5rem;
+}
+.p-3 {
+  padding: 0.75rem;
+}
+.p-4 {
+  padding: 1rem;
+}
+.p-5 {
+  padding: 1.25rem;
+}
+.p-6 {
+  padding: 1.5rem;
+}
+.p-8 {
+  padding: 2rem;
+}
+.px-1 {
+  padding-left: 0.25rem;
+  padding-right: 0.25rem;
+}
+.px-1\.5 {
+  padding-left: 0.375rem;
+  padding-right: 0.375rem;
+}
+.px-2 {
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+.px-2\.5 {
+  padding-left: 0.625rem;
+  padding-right: 0.625rem;
+}
+.px-3 {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+.px-4 {
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+.px-5 {
+  padding-left: 1.25rem;
+  padding-right: 1.25rem;
+}
+.px-6 {
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
+}
+.py-0 {
+  padding-top: 0px;
+  padding-bottom: 0px;
+}
+.py-0\.5 {
+  padding-top: 0.125rem;
+  padding-bottom: 0.125rem;
+}
+.py-1 {
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+}
+.py-1\.5 {
+  padding-top: 0.375rem;
+  padding-bottom: 0.375rem;
+}
+.py-2 {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+.py-3 {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+.py-6 {
+  padding-top: 1.5rem;
+  padding-bottom: 1.5rem;
+}
+.pb-1 {
+  padding-bottom: 0.25rem;
+}
+.pb-2 {
+  padding-bottom: 0.5rem;
+}
+.pb-3 {
+  padding-bottom: 0.75rem;
+}
+.pl-2 {
+  padding-left: 0.5rem;
+}
+.pl-3 {
+  padding-left: 0.75rem;
+}
+.pl-8 {
+  padding-left: 2rem;
+}
+.pt-1 {
+  padding-top: 0.25rem;
+}
+.pt-2 {
+  padding-top: 0.5rem;
+}
+.pt-3 {
+  padding-top: 0.75rem;
+}
+.text-left {
+  text-align: left;
+}
+.text-center {
+  text-align: center;
+}
+.text-right {
+  text-align: right;
+}
+.align-middle {
+  vertical-align: middle;
+}
+.align-bottom {
+  vertical-align: bottom;
+}
+.font-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.text-\[10px\] {
+  font-size: 10px;
+}
+.text-\[11px\] {
+  font-size: 11px;
+}
+.text-\[12px\] {
+  font-size: 12px;
+}
+.text-\[13px\] {
+  font-size: 13px;
+}
+.text-\[9px\] {
+  font-size: 9px;
+}
+.text-base {
+  font-size: 1rem;
+  line-height: 1.5rem;
+}
+.text-lg {
+  font-size: 1.125rem;
+  line-height: 1.75rem;
+}
+.text-sm {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+.text-xl {
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+}
+.text-xs {
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+.font-bold {
+  font-weight: 700;
+}
+.font-medium {
+  font-weight: 500;
+}
+.font-semibold {
+  font-weight: 600;
+}
+.uppercase {
+  text-transform: uppercase;
+}
+.normal-case {
+  text-transform: none;
+}
+.italic {
+  font-style: italic;
+}
+.tabular-nums {
+  --tw-numeric-spacing: tabular-nums;
+  font-variant-numeric: var(--tw-ordinal) var(--tw-slashed-zero) var(--tw-numeric-figure) var(--tw-numeric-spacing) var(--tw-numeric-fraction);
+}
+.leading-none {
+  line-height: 1;
+}
+.leading-snug {
+  line-height: 1.375;
+}
+.tracking-tight {
+  letter-spacing: -0.025em;
+}
+.tracking-wide {
+  letter-spacing: 0.025em;
+}
+.tracking-wider {
+  letter-spacing: 0.05em;
+}
+.text-amber-100 {
+  --tw-text-opacity: 1;
+  color: rgb(254 243 199 / var(--tw-text-opacity, 1));
+}
+.text-amber-200 {
+  --tw-text-opacity: 1;
+  color: rgb(253 230 138 / var(--tw-text-opacity, 1));
+}
+.text-amber-200\/70 {
+  color: rgb(253 230 138 / 0.7);
+}
+.text-amber-200\/80 {
+  color: rgb(253 230 138 / 0.8);
+}
+.text-amber-200\/90 {
+  color: rgb(253 230 138 / 0.9);
+}
+.text-amber-300 {
+  --tw-text-opacity: 1;
+  color: rgb(252 211 77 / var(--tw-text-opacity, 1));
+}
+.text-amber-300\/80 {
+  color: rgb(252 211 77 / 0.8);
+}
+.text-amber-400 {
+  --tw-text-opacity: 1;
+  color: rgb(251 191 36 / var(--tw-text-opacity, 1));
+}
+.text-amber-400\/70 {
+  color: rgb(251 191 36 / 0.7);
+}
+.text-amber-400\/80 {
+  color: rgb(251 191 36 / 0.8);
+}
+.text-blue-100 {
+  --tw-text-opacity: 1;
+  color: rgb(219 234 254 / var(--tw-text-opacity, 1));
+}
+.text-blue-300 {
+  --tw-text-opacity: 1;
+  color: rgb(147 197 253 / var(--tw-text-opacity, 1));
+}
+.text-blue-300\/70 {
+  color: rgb(147 197 253 / 0.7);
+}
+.text-emerald-100 {
+  --tw-text-opacity: 1;
+  color: rgb(209 250 229 / var(--tw-text-opacity, 1));
+}
+.text-emerald-200 {
+  --tw-text-opacity: 1;
+  color: rgb(167 243 208 / var(--tw-text-opacity, 1));
+}
+.text-emerald-200\/80 {
+  color: rgb(167 243 208 / 0.8);
+}
+.text-emerald-200\/90 {
+  color: rgb(167 243 208 / 0.9);
+}
+.text-emerald-300 {
+  --tw-text-opacity: 1;
+  color: rgb(110 231 183 / var(--tw-text-opacity, 1));
+}
+.text-emerald-300\/60 {
+  color: rgb(110 231 183 / 0.6);
+}
+.text-emerald-300\/70 {
+  color: rgb(110 231 183 / 0.7);
+}
+.text-emerald-300\/80 {
+  color: rgb(110 231 183 / 0.8);
+}
+.text-emerald-400 {
+  --tw-text-opacity: 1;
+  color: rgb(52 211 153 / var(--tw-text-opacity, 1));
+}
+.text-emerald-400\/70 {
+  color: rgb(52 211 153 / 0.7);
+}
+.text-emerald-400\/80 {
+  color: rgb(52 211 153 / 0.8);
+}
+.text-fuchsia-200 {
+  --tw-text-opacity: 1;
+  color: rgb(245 208 254 / var(--tw-text-opacity, 1));
+}
+.text-indigo-200 {
+  --tw-text-opacity: 1;
+  color: rgb(199 210 254 / var(--tw-text-opacity, 1));
+}
+.text-indigo-300 {
+  --tw-text-opacity: 1;
+  color: rgb(165 180 252 / var(--tw-text-opacity, 1));
+}
+.text-indigo-300\/80 {
+  color: rgb(165 180 252 / 0.8);
+}
+.text-ink-100 {
+  --tw-text-opacity: 1;
+  color: rgb(229 231 235 / var(--tw-text-opacity, 1));
+}
+.text-ink-400 {
+  --tw-text-opacity: 1;
+  color: rgb(107 114 128 / var(--tw-text-opacity, 1));
+}
+.text-ink-500 {
+  --tw-text-opacity: 1;
+  color: rgb(58 65 80 / var(--tw-text-opacity, 1));
+}
+.text-ink-600 {
+  --tw-text-opacity: 1;
+  color: rgb(42 47 58 / var(--tw-text-opacity, 1));
+}
+.text-red-100 {
+  --tw-text-opacity: 1;
+  color: rgb(254 226 226 / var(--tw-text-opacity, 1));
+}
+.text-red-200 {
+  --tw-text-opacity: 1;
+  color: rgb(254 202 202 / var(--tw-text-opacity, 1));
+}
+.text-red-300 {
+  --tw-text-opacity: 1;
+  color: rgb(252 165 165 / var(--tw-text-opacity, 1));
+}
+.text-red-400 {
+  --tw-text-opacity: 1;
+  color: rgb(248 113 113 / var(--tw-text-opacity, 1));
+}
+.text-rose-100 {
+  --tw-text-opacity: 1;
+  color: rgb(255 228 230 / var(--tw-text-opacity, 1));
+}
+.text-rose-200 {
+  --tw-text-opacity: 1;
+  color: rgb(254 205 211 / var(--tw-text-opacity, 1));
+}
+.text-rose-300 {
+  --tw-text-opacity: 1;
+  color: rgb(253 164 175 / var(--tw-text-opacity, 1));
+}
+.text-rose-300\/80 {
+  color: rgb(253 164 175 / 0.8);
+}
+.text-rose-400 {
+  --tw-text-opacity: 1;
+  color: rgb(251 113 133 / var(--tw-text-opacity, 1));
+}
+.text-rose-400\/70 {
+  color: rgb(251 113 133 / 0.7);
+}
+.text-rose-500\/70 {
+  color: rgb(244 63 94 / 0.7);
+}
+.text-sky-100 {
+  --tw-text-opacity: 1;
+  color: rgb(224 242 254 / var(--tw-text-opacity, 1));
+}
+.text-sky-200 {
+  --tw-text-opacity: 1;
+  color: rgb(186 230 253 / var(--tw-text-opacity, 1));
+}
+.text-sky-200\/80 {
+  color: rgb(186 230 253 / 0.8);
+}
+.text-sky-200\/90 {
+  color: rgb(186 230 253 / 0.9);
+}
+.text-sky-300 {
+  --tw-text-opacity: 1;
+  color: rgb(125 211 252 / var(--tw-text-opacity, 1));
+}
+.text-sky-400\/70 {
+  color: rgb(56 189 248 / 0.7);
+}
+.text-teal-200 {
+  --tw-text-opacity: 1;
+  color: rgb(153 246 228 / var(--tw-text-opacity, 1));
+}
+.text-teal-300 {
+  --tw-text-opacity: 1;
+  color: rgb(94 234 212 / var(--tw-text-opacity, 1));
+}
+.text-violet-100 {
+  --tw-text-opacity: 1;
+  color: rgb(237 233 254 / var(--tw-text-opacity, 1));
+}
+.text-violet-200 {
+  --tw-text-opacity: 1;
+  color: rgb(221 214 254 / var(--tw-text-opacity, 1));
+}
+.text-violet-300 {
+  --tw-text-opacity: 1;
+  color: rgb(196 181 253 / var(--tw-text-opacity, 1));
+}
+.text-violet-400\/70 {
+  color: rgb(167 139 250 / 0.7);
+}
+.text-white {
+  --tw-text-opacity: 1;
+  color: rgb(255 255 255 / var(--tw-text-opacity, 1));
+}
+.underline {
+  text-decoration-line: underline;
+}
+.accent-emerald-500 {
+  accent-color: #10b981;
+}
+.opacity-50 {
+  opacity: 0.5;
+}
+.opacity-70 {
+  opacity: 0.7;
+}
+.opacity-80 {
+  opacity: 0.8;
+}
+.opacity-90 {
+  opacity: 0.9;
+}
+.shadow-2xl {
+  --tw-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+  --tw-shadow-colored: 0 25px 50px -12px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+.shadow-lg {
+  --tw-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --tw-shadow-colored: 0 10px 15px -3px var(--tw-shadow-color), 0 4px 6px -4px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+.shadow-xl {
+  --tw-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+  --tw-shadow-colored: 0 20px 25px -5px var(--tw-shadow-color), 0 8px 10px -6px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+.shadow-black\/50 {
+  --tw-shadow-color: rgb(0 0 0 / 0.5);
+  --tw-shadow: var(--tw-shadow-colored);
+}
+.outline {
+  outline-style: solid;
+}
+.ring {
+  --tw-ring-offset-shadow: var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
+  --tw-ring-shadow: var(--tw-ring-inset) 0 0 0 calc(3px + var(--tw-ring-offset-width)) var(--tw-ring-color);
+  box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000);
+}
+.filter {
+  filter: var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow);
+}
+.transition {
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+.transition-all {
+  transition-property: all;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+.transition-colors {
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+.duration-300 {
+  transition-duration: 300ms;
+}
+
+html, body, #root { height: 100%; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.last\:border-r-0:last-child {
+  border-right-width: 0px;
+}
+
+.hover\:border-amber-600:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(217 119 6 / var(--tw-border-opacity, 1));
+}
+
+.hover\:border-emerald-600:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(5 150 105 / var(--tw-border-opacity, 1));
+}
+
+.hover\:border-ink-600:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(42 47 58 / var(--tw-border-opacity, 1));
+}
+
+.hover\:border-ink-600\/60:hover {
+  border-color: rgb(42 47 58 / 0.6);
+}
+
+.hover\:border-ink-700:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(28 32 40 / var(--tw-border-opacity, 1));
+}
+
+.hover\:border-rose-600:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(225 29 72 / var(--tw-border-opacity, 1));
+}
+
+.hover\:bg-amber-600:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(217 119 6 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-amber-800\/50:hover {
+  background-color: rgb(146 64 14 / 0.5);
+}
+
+.hover\:bg-amber-900\/60:hover {
+  background-color: rgb(120 53 15 / 0.6);
+}
+
+.hover\:bg-black\/20:hover {
+  background-color: rgb(0 0 0 / 0.2);
+}
+
+.hover\:bg-blue-800\/40:hover {
+  background-color: rgb(30 64 175 / 0.4);
+}
+
+.hover\:bg-emerald-500:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(16 185 129 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-emerald-600:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(5 150 105 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-emerald-900\/40:hover {
+  background-color: rgb(6 78 59 / 0.4);
+}
+
+.hover\:bg-ink-600:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(42 47 58 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-ink-700:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(28 32 40 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-ink-800:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(19 22 27 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-ink-800\/40:hover {
+  background-color: rgb(19 22 27 / 0.4);
+}
+
+.hover\:bg-ink-800\/70:hover {
+  background-color: rgb(19 22 27 / 0.7);
+}
+
+.hover\:bg-red-600:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(220 38 38 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-red-800:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(153 27 27 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-red-900\/60:hover {
+  background-color: rgb(127 29 29 / 0.6);
+}
+
+.hover\:bg-rose-700\/50:hover {
+  background-color: rgb(190 18 60 / 0.5);
+}
+
+.hover\:bg-rose-800\/50:hover {
+  background-color: rgb(159 18 57 / 0.5);
+}
+
+.hover\:bg-rose-900\/80:hover {
+  background-color: rgb(136 19 55 / 0.8);
+}
+
+.hover\:text-amber-200:hover {
+  --tw-text-opacity: 1;
+  color: rgb(253 230 138 / var(--tw-text-opacity, 1));
+}
+
+.hover\:text-blue-100:hover {
+  --tw-text-opacity: 1;
+  color: rgb(219 234 254 / var(--tw-text-opacity, 1));
+}
+
+.hover\:text-emerald-200:hover {
+  --tw-text-opacity: 1;
+  color: rgb(167 243 208 / var(--tw-text-opacity, 1));
+}
+
+.hover\:text-ink-100:hover {
+  --tw-text-opacity: 1;
+  color: rgb(229 231 235 / var(--tw-text-opacity, 1));
+}
+
+.hover\:text-rose-100:hover {
+  --tw-text-opacity: 1;
+  color: rgb(255 228 230 / var(--tw-text-opacity, 1));
+}
+
+.hover\:text-sky-200:hover {
+  --tw-text-opacity: 1;
+  color: rgb(186 230 253 / var(--tw-text-opacity, 1));
+}
+
+.hover\:text-white:hover {
+  --tw-text-opacity: 1;
+  color: rgb(255 255 255 / var(--tw-text-opacity, 1));
+}
+
+.hover\:underline:hover {
+  text-decoration-line: underline;
+}
+
+.hover\:opacity-100:hover {
+  opacity: 1;
+}
+
+.focus\:border-emerald-500:focus {
+  --tw-border-opacity: 1;
+  border-color: rgb(16 185 129 / var(--tw-border-opacity, 1));
+}
+
+.focus\:outline-none:focus {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+.disabled\:cursor-not-allowed:disabled {
+  cursor: not-allowed;
+}
+
+.disabled\:bg-ink-600:disabled {
+  --tw-bg-opacity: 1;
+  background-color: rgb(42 47 58 / var(--tw-bg-opacity, 1));
+}
+
+.disabled\:opacity-40:disabled {
+  opacity: 0.4;
+}
+
+.disabled\:opacity-50:disabled {
+  opacity: 0.5;
+}
+
+@media (min-width: 640px) {
+
+  .sm\:grid-cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 768px) {
+
+  .md\:grid-cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+</style></head>
+  <body class="bg-ink-900 text-ink-100">
+    <div id="root"><div class="h-full flex flex-col"><header class="px-6 py-3 border-b border-ink-700 flex items-center justify-between"><div class="flex items-baseline gap-3"><h1 class="text-lg font-semibold tracking-tight">ollama_swarm</h1><span class="text-xs text-ink-400 font-mono">glm-5.1:cloud · opencode</span></div><div class="flex items-center gap-3"><span class="text-xs font-mono tabular-nums text-ink-400" title="Run started 4/27/2026, 10:51:40 PM">13m19s</span><span class="px-2 py-0.5 rounded text-xs font-mono whitespace-nowrap bg-emerald-900 text-emerald-100" title="Phase: completed
+Todos: 18 committed · 0 open · 0 claimed · 0 stale · 2 skipped (20 total)
+Agents: 5 stopped
+Criteria: 13 met · 6 unmet · 1 wont-do">completed · 18 commits</span><span class="relative"><button title="Token usage — click to expand" class="rounded px-2 py-0.5 border transition flex items-center gap-1.5 text-ink-400 hover:text-ink-100 hover:bg-ink-800/70 border-ink-700 hover:border-ink-600"><span>tokens</span><span class="font-mono text-[10px] text-ink-500">790.8k/1h</span><span>▾</span></button></span><span class="relative"><button title="Show prior runs in this parent folder" class="text-ink-400 hover:text-ink-100 hover:bg-ink-800/70 rounded px-2 py-0.5 border border-ink-700 hover:border-ink-600 transition">history ▾</button></span><div class="relative"><button class="text-[11px] uppercase tracking-wide px-2 py-1 rounded bg-ink-800 hover:bg-ink-700 text-ink-300 border border-ink-600" title="V2 Step 6b: per-run summaries derived from logs/current.jsonl via EventLogReaderV2">V2 event log</button></div></div></header><main class="flex-1 overflow-hidden"><div class="h-full flex flex-col"><div class="bg-ink-900/60 border-b border-ink-700 px-4 py-1.5 flex items-center gap-2.5 text-xs font-mono text-ink-300 flex-wrap"><button title="run: b2ee7f04-59ed-4c11-914a-feb5cd99a33c  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">run</span><span>b2ee7f04</span><span class="text-[10px] w-2 "></span></button><span title="Preset: blackboard" class="inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] uppercase tracking-wider font-semibold bg-emerald-900/40 text-emerald-200 border-emerald-700">blackboard</span><span class="text-ink-600">·</span><span class="text-ink-100 font-semibold">multi-agent-orchestrator</span><span class="text-ink-600">·</span><span title="Planner model"><span class="text-ink-500">planner</span> glm-5.1:cloud</span><span class="text-ink-600">·</span><span title="Worker model"><span class="text-ink-500">worker</span> gemma4:31b-cloud</span><button title="Open in OS file manager — C:\Users\kevin\Desktop\ollama_swarm\runs_overnight8\multi-agent-orchestrator" class="text-ink-400 hover:text-ink-100 hover:underline truncate max-w-md inline-block align-bottom ml-auto">…sktop\ollama_swarm\runs_overnight8\multi-agent-orchestrator</button></div><div class="flex-1 grid grid-cols-[280px_1fr] min-h-0"><aside class="border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800"><div class="flex items-center justify-between mb-2"><div class="text-xs uppercase tracking-wide text-ink-400">Agents <span class="text-ink-500 font-mono normal-case">(5)</span></div><button class="text-xs px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500" title="Reset the UI to the setup form. Doesn't affect the just-finished run's saved summary.">New swarm</button></div><div class="border border-ink-700 rounded-md p-3 bg-ink-800"><div class="flex items-center justify-between"><div class="flex items-center gap-2 min-w-0"><span class="inline-block h-2 w-2 rounded-full bg-emerald-600/60 shrink-0" title="Exited cleanly when the run completed (not a crash)"></span><span class="font-medium">Agent 1</span><span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 border-amber-500/50 text-amber-300" title="Planner / replanner / critic (runs audit too when no dedicated auditor)">planner</span></div><span class="text-xs font-mono text-ink-400">:64124</span></div><div class="mt-1 text-xs text-ink-400 font-mono relative cursor-help">done</div><div class="mt-1.5 flex flex-wrap items-baseline gap-1 text-[10px] font-mono text-ink-400"><button title="session: ses_22d5b3cb9ffeQjNRYtjy2ARMNf  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">session</span><span>ses_22d5b3cb…</span><span class="text-[10px] w-2 "></span></button><button title="model: glm-5.1:cloud  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">model</span><span>glm-5.1:cloud</span><span class="text-[10px] w-2 "></span></button></div></div><div class="border border-ink-700 rounded-md p-3 bg-ink-800"><div class="flex items-center justify-between"><div class="flex items-center gap-2 min-w-0"><span class="inline-block h-2 w-2 rounded-full bg-emerald-600/60 shrink-0" title="Exited cleanly when the run completed (not a crash)"></span><span class="font-medium">Agent 2</span><span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 border-ink-600 text-ink-400" title="Worker (claims + commits todos)">worker</span></div><span class="text-xs font-mono text-ink-400">:64140</span></div><div class="mt-1 text-xs text-ink-400 font-mono relative cursor-help">done</div><div class="mt-1.5 flex flex-wrap items-baseline gap-1 text-[10px] font-mono text-ink-400"><button title="session: ses_22d5b2231fferpXr1tcWMHNet5  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">session</span><span>ses_22d5b223…</span><span class="text-[10px] w-2 "></span></button><button title="model: gemma4:31b-cloud  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">model</span><span>gemma4:31b-cloud</span><span class="text-[10px] w-2 "></span></button></div></div><div class="border border-ink-700 rounded-md p-3 bg-ink-800"><div class="flex items-center justify-between"><div class="flex items-center gap-2 min-w-0"><span class="inline-block h-2 w-2 rounded-full bg-emerald-600/60 shrink-0" title="Exited cleanly when the run completed (not a crash)"></span><span class="font-medium">Agent 3</span><span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 border-ink-600 text-ink-400" title="Worker (claims + commits todos)">worker</span></div><span class="text-xs font-mono text-ink-400">:64141</span></div><div class="mt-1 text-xs text-ink-400 font-mono relative cursor-help">done</div><div class="mt-1.5 flex flex-wrap items-baseline gap-1 text-[10px] font-mono text-ink-400"><button title="session: ses_22d5b2218ffe6LEgb5B5X0sVpj  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">session</span><span>ses_22d5b221…</span><span class="text-[10px] w-2 "></span></button><button title="model: gemma4:31b-cloud  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">model</span><span>gemma4:31b-cloud</span><span class="text-[10px] w-2 "></span></button></div></div><div class="border border-ink-700 rounded-md p-3 bg-ink-800"><div class="flex items-center justify-between"><div class="flex items-center gap-2 min-w-0"><span class="inline-block h-2 w-2 rounded-full bg-emerald-600/60 shrink-0" title="Exited cleanly when the run completed (not a crash)"></span><span class="font-medium">Agent 4</span><span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 border-ink-600 text-ink-400" title="Worker (claims + commits todos)">worker</span></div><span class="text-xs font-mono text-ink-400">:64142</span></div><div class="mt-1 text-xs text-ink-400 font-mono relative cursor-help">done</div><div class="mt-1.5 flex flex-wrap items-baseline gap-1 text-[10px] font-mono text-ink-400"><button title="session: ses_22d5b2230ffeOdXr3qFohzZMl6  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">session</span><span>ses_22d5b223…</span><span class="text-[10px] w-2 "></span></button><button title="model: gemma4:31b-cloud  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">model</span><span>gemma4:31b-cloud</span><span class="text-[10px] w-2 "></span></button></div></div><div class="border border-ink-700 rounded-md p-3 bg-ink-800"><div class="flex items-center justify-between"><div class="flex items-center gap-2 min-w-0"><span class="inline-block h-2 w-2 rounded-full bg-emerald-600/60 shrink-0" title="Exited cleanly when the run completed (not a crash)"></span><span class="font-medium">Agent 5</span><span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 border-sky-500/50 text-sky-300" title="Dedicated auditor (Unit 58) — judges contract criteria only, frees the planner to focus on todo authorship">auditor</span></div><span class="text-xs font-mono text-ink-400">:64175</span></div><div class="mt-1 text-xs text-ink-400 font-mono relative cursor-help">done</div><div class="mt-1.5 flex flex-wrap items-baseline gap-1 text-[10px] font-mono text-ink-400"><button title="session: ses_22d5b0a8cffe7PRj0hBLAe19rO  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">session</span><span>ses_22d5b0a8…</span><span class="text-[10px] w-2 "></span></button><button title="model: nemotron-3-super:cloud  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">model</span><span>nemotron-3-super:cloud</span><span class="text-[10px] w-2 "></span></button></div></div></aside><section class="flex flex-col overflow-hidden"><div class="flex border-b border-ink-700 bg-ink-800 text-sm"><button class="px-4 py-2 border-b-2 transition-colors border-emerald-500 text-emerald-300">Transcript</button><button class="px-4 py-2 border-b-2 transition-colors border-transparent text-ink-400 hover:text-ink-200">Metrics</button><button class="px-4 py-2 border-b-2 transition-colors border-transparent text-ink-400 hover:text-ink-200">Board</button><button class="px-4 py-2 border-b-2 transition-colors border-transparent text-ink-400 hover:text-ink-200">Contract</button><button class="px-4 py-2 border-b-2 transition-colors border-transparent text-ink-400 hover:text-ink-200">Memory</button></div><div class="flex-1 overflow-hidden"><div class="h-full relative"><div class="h-full overflow-y-auto p-4 space-y-3 bg-ink-900"><div data-entry-id="a615d9c4-fbba-4282-8392-5895935c989f" data-entry-role="system"><div class="my-3" role="separator"><div class="flex items-center gap-2"><div class="flex-1 h-px bg-ink-700"></div><div class="text-[10px] uppercase tracking-wider text-ink-500 font-semibold shrink-0">New run</div><div class="flex-1 h-px bg-ink-700"></div></div><div class="mt-2 text-xs text-ink-300 font-mono text-center"><div><span class="text-ink-100 font-semibold">b2ee7f04</span><span class="text-ink-600 mx-2">·</span><span class="text-ink-400">4/27/2026, 10:51:40 PM</span></div><div class="mt-0.5 text-ink-400"><span>blackboard</span><span class="text-ink-600 mx-2">·</span><span>planner glm-5.1:cloud</span><span class="text-ink-600 mx-2">·</span><span>worker gemma4:31b-cloud</span><span class="text-ink-600 mx-2">·</span><span>4 agents</span></div><div class="mt-0.5 text-ink-500 truncate">https://github.com/kevinkicho/multi-agent-orchestrator</div></div></div></div><div data-entry-id="f260e7ad-f364-4dd0-9f52-f148b22cc413" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:51:43 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Cloned https://github.com/kevinkicho/multi-agent-orchestrator -&gt; C:\Users\kevin\Desktop\ollama_swarm\runs_overnight8\multi-agent-orchestrator</div></div></div></div><div data-entry-id="4cfb8cce-0133-4be4-8ae4-a60313ed0400" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:51:43 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Per-agent models: planner=glm-5.1:cloud, workers=gemma4:31b-cloud</div></div></div></div><div data-entry-id="b89a6d56-9004-4db0-bba8-b1c02eb7566f" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:51:43 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Per-agent models: auditor=nemotron-3-super:cloud</div></div></div></div><div data-entry-id="e3063e33-3f09-49b0-aac8-601525c36a17" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:51:49 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Planner agent ready on port 64124</div></div></div></div><div data-entry-id="13f5b33a-69ab-4e4f-9c52-2efce516c7ed" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:51:55 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Worker agent agent-2 ready on port 64140</div></div></div></div><div data-entry-id="617e498a-74d7-4c49-aafe-2b1ce13cc044" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:51:55 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Worker agent agent-3 ready on port 64141</div></div></div></div><div data-entry-id="a6332cf6-3dda-4c59-9a40-64ac42291ffc" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:51:55 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Worker agent agent-4 ready on port 64142</div></div></div></div><div data-entry-id="995fdc0e-72e3-4a32-93ec-d759a88f3591" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:52:04 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Auditor agent agent-5 ready on port 64175 (model=nemotron-3-super:cloud). Audit calls will route here in parallel with workers.</div></div></div></div><div data-entry-id="5ea7e2c3-e8a9-4a88-82c1-b9d3f7990d8e" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:52:04 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Seed: 13 top-level entries, README 56903 chars.</div></div></div></div><div data-entry-id="98b73139-f59c-44f2-aba6-32075fee82ff" data-entry-role="agent" data-agent-index="1"><div class="rounded border-2 border-emerald-700/50 bg-emerald-950/15 p-3 my-2 text-sm rounded-md p-3 border text-sm" style="border-color: rgb(54, 99, 69); background: rgb(21, 40, 28);"><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:52:07 PM</div><div class="text-ink-200 font-medium mb-1.5">Contract: Add JSDoc documentation with one-line descriptions and @param/@returns annotations to every public method of the TokenTracker class in src/token-tracker.ts.</div><div class="flex items-center gap-1 mb-2"><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition bg-emerald-900/50 text-emerald-200 border border-emerald-700/60">Summary</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">All 3 criteria</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">JSON</button></div><ol class="list-decimal list-inside space-y-1 text-ink-300 text-[13px]"><li>Each public method of TokenTracker has a JSDoc block starting with a one-line description…</li><li>Every parameter of each public method is annotated with a @param tag in its JSDoc.</li><li>Every public method that returns a value (non-void) has a @returns annotation in its JSDo…</li></ol></div></div><div data-entry-id="fa67dfd9-8731-4e1f-bbc9-21e9dd49f22b" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:52:07 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Contract (tier 1): "Add JSDoc documentation with one-line descriptions and @param/@returns annotations to every public method of the TokenTracker class in src/token-tracker.ts." (3 criteria).</div></div></div></div><div data-entry-id="cd258baf-4faa-4af0-b515-d9c24f5025f3" data-entry-role="agent" data-agent-index="1"><div class="rounded border-2 border-emerald-700/50 bg-emerald-950/15 p-3 my-2 text-sm rounded-md p-3 border text-sm" style="border-color: rgb(54, 99, 69); background: rgb(21, 40, 28);"><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:52:30 PM</div><div class="text-ink-200 font-medium mb-1.5">Posted 3 todos to the board</div><div class="flex items-center gap-1 mb-2"><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition bg-emerald-900/50 text-emerald-200 border border-emerald-700/60">Summary</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">All 3 todos</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">JSON</button></div><div class="text-ink-300 text-[13px] space-y-1"><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500 shrink-0">1.</span><span class="text-ink-300">Add JSDoc blocks with one-line description, @param, and @returns to the constructor, record, and checkBudget methods of TokenTracker in src/token-tracker.ts.</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500 shrink-0">2.</span><span class="text-ink-300">Add JSDoc blocks with one-line description, @param, and @returns to getAgentStats, getAllStats, and getTotalTokens methods of TokenTracker in src/token-tracker.ts.</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500 shrink-0">3.</span><span class="text-ink-300">Add JSDoc blocks with one-line description, @param, and @returns to getRecent, getCycleTokens, formatSummary, and setBudget methods of TokenTracker in src/token-tracker.ts.</span></div></div></div></div><div data-entry-id="cc1ea445-b911-4f9c-8450-cbff396618b9" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:52:30 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Posted 3 todo(s) to the board.</div></div></div></div><div data-entry-id="89926a01-2d86-4f02-9656-c288584b69db" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="3"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(69, 54, 99); background: rgb(28, 21, 40);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(163, 133, 224);">Agent 3 · 10:53:19 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (3 hunks)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 3 hunks (3 replace) in src/token-tracker.ts (1,150 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+21</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−5</div></div></div></div><div data-entry-id="2689d853-9bbd-4be1-9d40-2c6dd3482fb5" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:53:19 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-3] committed 3 hunk(s): src/token-tracker.ts (5414 chars)</div></div></div></div><div data-entry-id="7907fe99-d3bf-40ce-8754-5a93f6f7c33e" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="2"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(54, 84, 99); background: rgb(21, 34, 40);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(133, 194, 224);">Agent 2 · 10:53:35 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (3 hunks)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 3 hunks (3 replace) in src/token-tracker.ts (768 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+16</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−6</div></div></div></div><div data-entry-id="0ebab11e-9c0d-482a-b1df-cbcc11c6bcd4" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:53:35 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-2] committed 3 hunk(s): src/token-tracker.ts (5656 chars)</div></div></div></div><div data-entry-id="212d8c30-f598-4b78-a528-369a3f34522e" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="4"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(99, 77, 54); background: rgb(40, 31, 21);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(224, 179, 133);">Agent 4 · 10:54:10 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (4 hunks)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 4 hunks (4 replace) in src/token-tracker.ts (1,066 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+24</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−8</div></div></div></div><div data-entry-id="f9f7695e-1340-42d7-93dc-39885d143907" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:54:10 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-4] committed 4 hunk(s): src/token-tracker.ts (6036 chars)</div></div></div></div><div data-entry-id="82e89946-1587-494e-98a9-8f656f993026" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:54:18 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">auditor invocation 1/6.</div></div></div></div><div data-entry-id="6efd5fd5-eb92-48e3-9833-bc4ae93f89e4" data-entry-role="agent" data-agent-index="5"><div class="rounded border-2 border-violet-700/50 bg-violet-950/15 p-3 my-2 text-sm rounded-md p-3 border text-sm" style="border-color: rgb(99, 54, 84); background: rgb(40, 21, 34);"><div class="text-xs mb-1" style="color: rgb(224, 133, 194);">Agent 5 · 10:54:25 PM</div><div class="text-ink-200 font-medium mb-1.5 flex flex-wrap items-baseline gap-2"><span>Audit:</span><span class="text-emerald-300">3 met</span></div><div class="flex items-center gap-1 mb-2"><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition bg-violet-900/50 text-violet-200 border border-violet-700/60">Summary</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">All 3 verdicts</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">JSON</button></div><div class="text-ink-300 text-[13px] space-y-0.5"><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c1</span><span class="text-emerald-300">met</span><span class="text-ink-400">— Each public method has a JSDoc block starting with a one-line description (e.g., constructor: 'Initializes the token tracker with an optional budget.')</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c2</span><span class="text-emerald-300">met</span><span class="text-ink-400">— Every parameter of each public method is annotated with a @param tag (e.g., record method has @param for agentName, model, usage, etc.)</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c3</span><span class="text-emerald-300">met</span><span class="text-ink-400">— Every public method that returns a value has a @returns annotation (e.g., getAgentStats has @returns Token statistics for the agent or undefined if not found)</span></div></div></div></div><div data-entry-id="71be82c4-4926-416d-a97d-80c7603004d2" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:54:25 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Auditor applied: 3 status change(s), 0 new todo(s), 0 new criterion(s).</div></div></div></div><div data-entry-id="13999a03-e24a-4cbd-99f8-2174b8ceb293" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:54:27 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Ambition ratchet: all tier 1 criteria resolved; attempting tier 2 (max 5).</div></div></div></div><div data-entry-id="0a1d38a3-4402-4ce7-a6fe-26fe75d8308a" data-entry-role="agent" data-agent-index="1"><div class="rounded border-2 border-emerald-700/50 bg-emerald-950/15 p-3 my-2 text-sm rounded-md p-3 border text-sm" style="border-color: rgb(54, 99, 69); background: rgb(21, 40, 28);"><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:55:04 PM</div><div class="text-ink-200 font-medium mb-1.5">Contract: Deepen TokenTracker JSDoc with @example and @throws annotations and extend the same JSDoc standard to the FireTracker class and shared resource-manager module.</div><div class="flex items-center gap-1 mb-2"><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition bg-emerald-900/50 text-emerald-200 border border-emerald-700/60">Summary</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">All 6 criteria</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">JSON</button></div><ol class="list-decimal list-inside space-y-1 text-ink-300 text-[13px]"><li>Every public method on TokenTracker that can throw or reject has a @throws annotation in…</li><li>Every public method on TokenTracker with non-trivial behavior has an @example tag showing…</li><li>Every exported type in token-tracker.ts (TokenRecord, AgentTokenStats, TokenBudget) has a…</li><li class="list-none italic text-ink-500 mt-1">…+3 more (click <span class="text-emerald-300">All 6 criteria</span> above)</li></ol></div></div><div data-entry-id="58ab970d-2dfc-43c2-95f0-2efe9cc1bd47" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:55:04 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Contract (tier 2): "Deepen TokenTracker JSDoc with @example and @throws annotations and extend the same JSDoc standard to the FireTracker class and shared resource-manager module." (+6 new criteria, 9 total).</div></div></div></div><div data-entry-id="55f2805a-66ec-47a7-82e3-25b627a7fb6b" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:55:07 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">auditor invocation 2/6.</div></div></div></div><div data-entry-id="db2a46a0-8fcf-404c-a38a-4a156b3c59f0" data-entry-role="agent" data-agent-index="5"><div class="rounded border-2 border-violet-700/50 bg-violet-950/15 p-3 my-2 text-sm rounded-md p-3 border text-sm" style="border-color: rgb(99, 54, 84); background: rgb(40, 21, 34);"><div class="text-xs mb-1" style="color: rgb(224, 133, 194);">Agent 5 · 10:55:19 PM</div><div class="text-ink-200 font-medium mb-1.5 flex flex-wrap items-baseline gap-2"><span>Audit:</span><span class="text-amber-300">6 unmet</span></div><div class="flex items-center gap-1 mb-2"><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition bg-violet-900/50 text-violet-200 border border-violet-700/60">Summary</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">All 6 verdicts</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">JSON</button></div><div class="text-ink-300 text-[13px] space-y-0.5"><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c4</span><span class="text-amber-300">unmet</span><span class="text-ink-400">— No @throws annotations found in TokenTracker JSDoc despite potential exceptions (e.g., budget callbacks)</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c5</span><span class="text-amber-300">unmet</span><span class="text-ink-400">— No @example tags found in TokenTracker JSDoc for any public methods</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c6</span><span class="text-amber-300">unmet</span><span class="text-ink-400">— Exported types TokenRecord, AgentTokenStats, TokenBudget lack JSDoc descriptions on the types and their fields</span></div><div class="italic text-ink-500 mt-1">…+3 more (click <span class="text-violet-300">All 6 verdicts</span> above)</div></div></div></div><div data-entry-id="f6d7fa8f-68d9-4ab2-9bc1-f774a85a7795" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:55:19 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Auditor applied: 0 status change(s), 6 new todo(s), 0 new criterion(s).</div></div></div></div><div data-entry-id="5242577e-44ff-4b60-b6d4-f83a162432ed" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="3"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(69, 54, 99); background: rgb(28, 21, 40);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(163, 133, 224);">Agent 3 · 10:55:28 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (1 hunk)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 1 hunk (1 replace) in src/fire-tracker.ts (504 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+8</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−2</div></div></div></div><div data-entry-id="55840df6-99f1-4549-9e1e-2f2f0e1e74d2" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:55:28 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-3] committed 1 hunk(s): src/fire-tracker.ts (2510 chars)</div></div></div></div><div data-entry-id="1b921ea7-be3a-4a17-a733-cadb485ecd8f" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="4"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(99, 77, 54); background: rgb(40, 31, 21);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(224, 179, 133);">Agent 4 · 10:55:28 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (1 hunk)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 1 hunk (1 replace) in src/token-tracker.ts (487 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+6</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−5</div></div></div></div><div data-entry-id="a0264490-9a58-4421-b55f-a526a66bbf1a" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:55:28 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-4] committed 1 hunk(s): src/token-tracker.ts (6085 chars)</div></div></div></div><div data-entry-id="80afdc84-9131-40c7-9694-2b59b1e76a61" data-entry-role="agent" data-summary-kind="worker_skip" data-agent-index="4"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(99, 77, 54); background: rgb(40, 31, 21);"><div class="flex items-start justify-between gap-2"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(224, 179, 133);">Agent 4 · 10:55:39 PM</div></div><div class="flex gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">View JSON</button></div></div><div class="whitespace-pre-wrap">Declined: BehavioralNote is imported from ./brain-memory and not defined in this file; no exported types to document.</div></div></div><div data-entry-id="e5e14e14-1238-460f-9537-a40a5f57d1d9" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:55:39 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-4] worker declined todo: BehavioralNote is imported from ./brain-memory and not defined in this file; no exported types to document.</div></div></div></div><div data-entry-id="90322d43-f4b0-44da-91c7-974d8d9bf6c9" data-entry-role="agent" data-agent-index="1"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(54, 99, 69); background: rgb(21, 40, 28);"><div class="flex items-start justify-between gap-2"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:55:42 PM</div></div><div class="flex gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">View JSON</button></div></div><div class="whitespace-pre-wrap">Skipped: BehavioralNote is imported from ./brain-memory, not defined in this file; the file's only exported function already has full JSDoc with @param and @returns. No…</div></div></div><div data-entry-id="e0663761-a88e-4efa-ab2f-60a0104ee35d" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:55:42 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Replanner skipped todo 3c6aa403-c6ee-4293-a903-9a470ee77071: BehavioralNote is imported from ./brain-memory, not defined in this file; the file's only exported function already has full JSDoc with @param and @returns. Nothing left to document here.</div></div></div></div><div data-entry-id="6c56dfa2-bbad-4e46-ba95-5b43fbe1fd24" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="3"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(69, 54, 99); background: rgb(28, 21, 40);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(163, 133, 224);">Agent 3 · 10:55:44 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (2 hunks)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 2 hunks (2 replace) in src/token-tracker.ts (822 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+13</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−7</div></div></div></div><div data-entry-id="a5c3542b-5663-44de-9fa3-90118da81600" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:55:44 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-3] committed 2 hunk(s): src/token-tracker.ts (6309 chars)</div></div></div></div><div data-entry-id="5b6a2207-7173-44a3-ad13-5495269eae2d" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="2"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(54, 84, 99); background: rgb(21, 34, 40);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(133, 194, 224);">Agent 2 · 10:55:49 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (8 hunks)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 8 hunks (8 replace) in src/resource-manager.ts (2,142 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+45</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−16</div></div></div></div><div data-entry-id="0e43ebce-8f6d-4397-b78e-558bcb2f376d" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:55:49 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-2] committed 8 hunk(s): src/resource-manager.ts (9104 chars)</div></div></div></div><div data-entry-id="48d1c5b1-041b-4b32-99ef-63ab9c91a307" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="4"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(99, 77, 54); background: rgb(40, 31, 21);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(224, 179, 133);">Agent 4 · 10:56:05 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (3 hunks)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 3 hunks (3 replace) in src/token-tracker.ts (1,546 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+42</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−19</div></div></div></div><div data-entry-id="452fbd68-68a4-40af-b377-873461095883" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:56:05 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-4] committed 3 hunk(s): src/token-tracker.ts (7043 chars)</div></div></div></div><div data-entry-id="d86b9655-9592-44a0-ab68-26cab52295c0" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:56:12 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">auditor invocation 3/6.</div></div></div></div><div data-entry-id="02315dde-3254-4b7f-970f-f16e7d831255" data-entry-role="agent" data-agent-index="5"><div class="rounded border-2 border-violet-700/50 bg-violet-950/15 p-3 my-2 text-sm rounded-md p-3 border text-sm" style="border-color: rgb(99, 54, 84); background: rgb(40, 21, 34);"><div class="text-xs mb-1" style="color: rgb(224, 133, 194);">Agent 5 · 10:56:18 PM</div><div class="text-ink-200 font-medium mb-1.5 flex flex-wrap items-baseline gap-2"><span>Audit:</span><span class="text-emerald-300">5 met</span><span class="text-ink-400">1 wont-do</span></div><div class="flex items-center gap-1 mb-2"><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition bg-violet-900/50 text-violet-200 border border-violet-700/60">Summary</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">All 6 verdicts</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">JSON</button></div><div class="text-ink-300 text-[13px] space-y-0.5"><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c4</span><span class="text-emerald-300">met</span><span class="text-ink-400">— checkBudget method has @throws annotation describing budget callback exceptions</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c5</span><span class="text-emerald-300">met</span><span class="text-ink-400">— record and checkBudget methods have @example tags showing usage snippets</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c6</span><span class="text-emerald-300">met</span><span class="text-ink-400">— TokenRecord, AgentTokenStats, TokenBudget types have JSDoc descriptions on the type and each field</span></div><div class="italic text-ink-500 mt-1">…+3 more (click <span class="text-violet-300">All 6 verdicts</span> above)</div></div></div></div><div data-entry-id="978c1af5-e9d0-4989-adda-f18647444120" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:56:18 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Auditor applied: 6 status change(s), 0 new todo(s), 0 new criterion(s).</div></div></div></div><div data-entry-id="9011e1cc-6897-4b09-aba2-6d54a3af0f79" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:56:21 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Ambition ratchet: all tier 2 criteria resolved; attempting tier 3 (max 5).</div></div></div></div><div data-entry-id="b1942daf-016f-4a56-887d-97d90325a98a" data-entry-role="agent" data-agent-index="1"><div class="rounded border-2 border-emerald-700/50 bg-emerald-950/15 p-3 my-2 text-sm rounded-md p-3 border text-sm" style="border-color: rgb(54, 99, 69); background: rgb(21, 40, 28);"><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:56:30 PM</div><div class="text-ink-200 font-medium mb-1.5">Contract: Extend the JSDoc documentation standard established for TokenTracker to its direct dependency chain (brain module types, LLM usage tracker) and wire up a TypeDoc pipeline so the accumulated JSDoc can…</div><div class="flex items-center gap-1 mb-2"><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition bg-emerald-900/50 text-emerald-200 border border-emerald-700/60">Summary</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">All 5 criteria</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">JSON</button></div><ol class="list-decimal list-inside space-y-1 text-ink-300 text-[13px]"><li>Every exported type and public method in src/brain.ts that TokenTracker depends on has a…</li><li>Every exported public function and class in src/llm-usage.ts has a JSDoc block with one-l…</li><li>The project has a typedoc.json config file that targets src/ and outputs API docs to docs…</li><li class="list-none italic text-ink-500 mt-1">…+2 more (click <span class="text-emerald-300">All 5 criteria</span> above)</li></ol></div></div><div data-entry-id="1de92bb1-4101-49d1-94e7-bda39dc0b06a" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:56:30 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Contract (tier 3): "Extend the JSDoc documentation standard established for TokenTracker to its direct dependency chain (brain module types, LLM usage tracker) and wire up a TypeDoc pipeline so the accumulated JSDoc can generate a published API reference." (+5 new criteria, 14 total).</div></div></div></div><div data-entry-id="627e09cf-56b2-4c5d-b2f9-3beca45f745b" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:56:33 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">auditor invocation 4/6.</div></div></div></div><div data-entry-id="35298e3c-cbd1-42ea-b2ab-4f61ad8af6fe" data-entry-role="agent" data-agent-index="5"><div class="rounded border-2 border-violet-700/50 bg-violet-950/15 p-3 my-2 text-sm rounded-md p-3 border text-sm" style="border-color: rgb(99, 54, 84); background: rgb(40, 21, 34);"><div class="text-xs mb-1" style="color: rgb(224, 133, 194);">Agent 5 · 10:56:44 PM</div><div class="text-ink-200 font-medium mb-1.5 flex flex-wrap items-baseline gap-2"><span>Audit:</span><span class="text-amber-300">5 unmet</span></div><div class="flex items-center gap-1 mb-2"><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition bg-violet-900/50 text-violet-200 border border-violet-700/60">Summary</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">All 5 verdicts</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">JSON</button></div><div class="text-ink-300 text-[13px] space-y-0.5"><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c10</span><span class="text-amber-300">unmet</span><span class="text-ink-400">— src/brain.ts lacks JSDoc on exported types TokenUsage and Brain, and public methods like runBrain</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c11</span><span class="text-amber-300">unmet</span><span class="text-ink-400">— src/llm-usage.ts lacks JSDoc on exported types and public functions like recordLLMUsage</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c12</span><span class="text-amber-300">unmet</span><span class="text-ink-400">— typedoc.json file does not exist</span></div><div class="italic text-ink-500 mt-1">…+2 more (click <span class="text-violet-300">All 5 verdicts</span> above)</div></div></div></div><div data-entry-id="d9e7a2e1-6a06-4a0c-ba88-878b6921aea1" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:56:44 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Auditor applied: 0 status change(s), 5 new todo(s), 0 new criterion(s).</div></div></div></div><div data-entry-id="786890f8-4e7a-45fc-8b7a-bacffeedddb5" data-entry-role="agent" data-summary-kind="worker_skip" data-agent-index="4"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(99, 77, 54); background: rgb(40, 31, 21);"><div class="flex items-start justify-between gap-2"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(224, 179, 133);">Agent 4 · 10:56:51 PM</div></div><div class="flex gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">View JSON</button></div></div><div class="whitespace-pre-wrap">Declined: The target types (TokenUsage, Brain) and function (runBrain) are not present in the provided windowed contents of src/brain.ts. Since they are not in the head or tail, I cannot safely locate the exact text needed for a 'replace' operation without the full file.</div></div></div><div data-entry-id="b0df346d-f47e-426e-82d7-fe1afc2ad073" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:56:51 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-4] worker declined todo: The target types (TokenUsage, Brain) and function (runBrain) are not present in the provided windowed contents of src/brain.ts. Since they are not in the head or tail, I cannot safely locate the exact text needed for a 'replace' operation without the full file.</div></div></div></div><div data-entry-id="b0e1db0d-a8a0-415d-acc6-010d33a95480" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="3"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(69, 54, 99); background: rgb(28, 21, 40);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(163, 133, 224);">Agent 3 · 10:56:51 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (1 hunk)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 1 hunk (1 create) in typedoc.json (92 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+5</div></div></div></div><div data-entry-id="e76f455e-7923-4bca-90d9-9388eeeb66b7" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:56:51 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-3] committed 1 hunk(s): typedoc.json (92 chars)</div></div></div></div><div data-entry-id="71f60c90-c80b-4617-a8a0-d8ec3841e41d" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="2"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(54, 84, 99); background: rgb(21, 34, 40);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(133, 194, 224);">Agent 2 · 10:56:55 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (3 hunks)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 3 hunks (3 replace) in src/llm-usage.ts (545 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+14</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−3</div></div></div></div><div data-entry-id="a70b48d1-5b33-4e7b-b1a5-95965b17cd6f" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:56:55 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-2] committed 3 hunk(s): src/llm-usage.ts (4945 chars)</div></div></div></div><div data-entry-id="b08c6791-1dc1-4b1e-a341-d4607c9fab81" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="4"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(99, 77, 54); background: rgb(40, 31, 21);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(224, 179, 133);">Agent 4 · 10:56:58 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (1 hunk)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 1 hunk (1 replace) in package.json (135 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+2</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−1</div></div></div></div><div data-entry-id="15c4d8c5-9c9e-4ab8-8ae5-5390d33459a1" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:56:58 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-4] committed 1 hunk(s): package.json (810 chars)</div></div></div></div><div data-entry-id="9ea99c69-a51c-4a9d-b914-8488a5f4e8c1" data-entry-role="agent" data-agent-index="1"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(54, 99, 69); background: rgb(21, 40, 28);"><div class="flex items-start justify-between gap-2"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:57:00 PM</div></div><div class="flex gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">View JSON</button></div></div><div class="whitespace-pre-wrap">Revised: Add JSDoc with @param and @returns to chatCompletionWithUsage and add JSDoc descriptions to the TokenUsage, BrainObserv… → src/brain.ts</div></div></div><div data-entry-id="0be85f02-ae4d-4191-9eb9-2ce83f59315d" data-entry-role="system"><div class="border-l-2 border-amber-700/60 pl-3 py-1 text-xs text-amber-300/80 font-mono"><div class="text-amber-400/70 mb-0.5"><span class="inline-block px-1 py-0 text-[9px] uppercase tracking-wider rounded bg-amber-900/40 mr-1.5">recovery</span>10:57:00 PM</div><div class="whitespace-pre-wrap">Replanner JSON invalid for 431c45cd-b5cb-45cd-971f-2019eebfa0f8 (revised.expectedAnchors: Array must contain at most 4 element(s)); issuing repair prompt.</div></div></div><div data-entry-id="96751ce3-c2c2-4cb2-8bec-80282f5d25ac" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="3"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(69, 54, 99); background: rgb(28, 21, 40);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(163, 133, 224);">Agent 3 · 10:57:16 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (7 hunks)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 7 hunks (7 replace) in src/brain.ts (1,509 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+16</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−16</div></div></div></div><div data-entry-id="6567ac38-f4c1-49b4-ac33-76d4eb68f53a" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:57:16 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-3] committed 7 hunk(s): src/brain.ts (40751 chars)</div></div></div></div><div data-entry-id="451c6038-2e94-4578-a650-a3627146278b" data-entry-role="agent" data-agent-index="1"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(54, 99, 69); background: rgb(21, 40, 28);"><div class="flex items-start justify-between gap-2"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:57:20 PM</div></div><div class="flex gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">View JSON</button></div></div><div class="whitespace-pre-wrap">Revised: Add JSDoc with @param and @returns to chatCompletionWithUsage and add JSDoc descriptions to the TokenUsage, BrainObserv… → src/brain.ts</div></div></div><div data-entry-id="ba0d6cb5-1edb-46d6-aaa6-0fa856350583" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:57:20 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Replanned todo 431c45cd-b5cb-45cd-971f-2019eebfa0f8 (attempt 1): "Add JSDoc with @param and @returns to chatCompletionWithUsage and add JSDoc des…"</div></div></div></div><div data-entry-id="eb74392e-0cec-4781-acf7-1893ebf60477" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="4"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(99, 77, 54); background: rgb(40, 31, 21);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(224, 179, 133);">Agent 4 · 10:57:40 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (4 hunks)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 4 hunks (4 replace) in src/brain.ts (2,405 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+54</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−22</div></div></div></div><div data-entry-id="0bfde665-495d-4cce-af38-aaaac889d016" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:57:40 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-4] committed 4 hunk(s): src/brain.ts (41690 chars)</div></div></div></div><div data-entry-id="cd7e1afc-3d7c-4b51-8df2-c0ce864bab1c" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:57:48 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">auditor invocation 5/6.</div></div></div></div><div data-entry-id="ef72e1d4-23b1-404d-9e5e-c7f08971f91d" data-entry-role="agent" data-agent-index="5"><div class="rounded border-2 border-violet-700/50 bg-violet-950/15 p-3 my-2 text-sm rounded-md p-3 border text-sm" style="border-color: rgb(99, 54, 84); background: rgb(40, 21, 34);"><div class="text-xs mb-1" style="color: rgb(224, 133, 194);">Agent 5 · 10:57:53 PM</div><div class="text-ink-200 font-medium mb-1.5 flex flex-wrap items-baseline gap-2"><span>Audit:</span><span class="text-emerald-300">5 met</span></div><div class="flex items-center gap-1 mb-2"><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition bg-violet-900/50 text-violet-200 border border-violet-700/60">Summary</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">All 5 verdicts</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">JSON</button></div><div class="text-ink-300 text-[13px] space-y-0.5"><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c10</span><span class="text-emerald-300">met</span><span class="text-ink-400">— TokenUsage and BrainConfig types in src/brain.ts have JSDoc descriptions on the type and each field</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c11</span><span class="text-emerald-300">met</span><span class="text-ink-400">— LLMUsageEntry and LLMUsageStore types in src/llm-usage.ts have JSDoc descriptions, and recordLLMUsage has @param and @returns</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c12</span><span class="text-emerald-300">met</span><span class="text-ink-400">— typedoc.json exists with entryPoints targeting src/ and out set to docs/api/</span></div><div class="italic text-ink-500 mt-1">…+2 more (click <span class="text-violet-300">All 5 verdicts</span> above)</div></div></div></div><div data-entry-id="914ddbff-d508-4cb4-874f-f0e61fa31477" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:57:53 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Auditor applied: 5 status change(s), 0 new todo(s), 0 new criterion(s).</div></div></div></div><div data-entry-id="abb1b605-9700-4547-af9f-2d90ca1480eb" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:57:56 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Ambition ratchet: all tier 3 criteria resolved; attempting tier 4 (max 5).</div></div></div></div><div data-entry-id="29578acf-89d5-4d0c-b5d4-a4d1de7af790" data-entry-role="agent" data-agent-index="1"><div class="rounded border-2 border-emerald-700/50 bg-emerald-950/15 p-3 my-2 text-sm rounded-md p-3 border text-sm" style="border-color: rgb(54, 99, 69); background: rgb(21, 40, 28);"><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:58:04 PM</div><div class="text-ink-200 font-medium mb-1.5">Contract: Enforce the JSDoc standard project-wide by extending coverage to the remaining core modules and adding CI-level validation that prevents undocumented public APIs from being merged.</div><div class="flex items-center gap-1 mb-2"><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition bg-emerald-900/50 text-emerald-200 border border-emerald-700/60">Summary</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">All 6 criteria</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">JSON</button></div><ol class="list-decimal list-inside space-y-1 text-ink-300 text-[13px]"><li>Every exported public function and class method in src/supervisor.ts has a JSDoc block wi…</li><li>Every exported public function and class method in src/orchestrator.ts has a JSDoc block…</li><li>Every exported public function, class, and type in src/providers.ts has a JSDoc block wit…</li><li class="list-none italic text-ink-500 mt-1">…+3 more (click <span class="text-emerald-300">All 6 criteria</span> above)</li></ol></div></div><div data-entry-id="62bfc616-edbe-4bdf-b628-9804d197a05f" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:58:04 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Contract (tier 4): "Enforce the JSDoc standard project-wide by extending coverage to the remaining core modules and adding CI-level validation that prevents undocumented public APIs from being merged." (+6 new criteria, 20 total).</div></div></div></div><div data-entry-id="3232d2a6-caab-4b6b-b1d3-fd7a47ade5ad" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:58:06 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">auditor invocation 6/6.</div></div></div></div><div data-entry-id="04fe507b-9298-44b9-8f0c-465486bf7157" data-entry-role="agent" data-agent-index="5"><div class="rounded border-2 border-violet-700/50 bg-violet-950/15 p-3 my-2 text-sm rounded-md p-3 border text-sm" style="border-color: rgb(99, 54, 84); background: rgb(40, 21, 34);"><div class="text-xs mb-1" style="color: rgb(224, 133, 194);">Agent 5 · 10:58:14 PM</div><div class="text-ink-200 font-medium mb-1.5 flex flex-wrap items-baseline gap-2"><span>Audit:</span><span class="text-amber-300">6 unmet</span></div><div class="flex items-center gap-1 mb-2"><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition bg-violet-900/50 text-violet-200 border border-violet-700/60">Summary</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">All 6 verdicts</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">JSON</button></div><div class="text-ink-300 text-[13px] space-y-0.5"><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c15</span><span class="text-amber-300">unmet</span><span class="text-ink-400">— src/supervisor.ts lacks JSDoc on exported public functions like runAgentSupervisor</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c16</span><span class="text-amber-300">unmet</span><span class="text-ink-400">— src/orchestrator.ts lacks JSDoc on exported public Orchestrator class methods like prompt and promptAll</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c17</span><span class="text-amber-300">unmet</span><span class="text-ink-400">— src/providers.ts lacks JSDoc on exported types and functions like callOpenAICompatible</span></div><div class="italic text-ink-500 mt-1">…+3 more (click <span class="text-violet-300">All 6 verdicts</span> above)</div></div></div></div><div data-entry-id="6ca9ee9b-e1e3-49f9-baee-e444737e69b5" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:58:14 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Auditor applied: 0 status change(s), 6 new todo(s), 0 new criterion(s).</div></div></div></div><div data-entry-id="92c2a79b-06b6-4a7f-9b6e-79e2cf80e141" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="2"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(54, 84, 99); background: rgb(21, 34, 40);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(133, 194, 224);">Agent 2 · 10:58:25 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (1 hunk)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 1 hunk (1 replace) in src/supervisor.ts (530 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+10</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−4</div></div></div></div><div data-entry-id="ac5a2bc5-8e40-4327-b22e-6f9c09060012" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:58:25 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-2] committed 1 hunk(s): src/supervisor.ts (111510 chars)</div></div></div></div><div data-entry-id="d9d44107-bf25-4c23-a0c4-cb19184e97b6" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="3"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(69, 54, 99); background: rgb(28, 21, 40);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(163, 133, 224);">Agent 3 · 10:58:34 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (2 hunks)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 2 hunks (2 replace) in src/providers.ts (510 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+10</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−4</div></div></div></div><div data-entry-id="17c13eb5-ff2d-4f13-8aa8-43f49877f4e4" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:58:35 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-3] committed 2 hunk(s): src/providers.ts (24583 chars)</div></div></div></div><div data-entry-id="84f9ec90-49be-4ff5-ac3e-f6207d5c767e" data-entry-role="agent" data-summary-kind="worker_skip" data-agent-index="2"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(54, 84, 99); background: rgb(21, 34, 40);"><div class="flex items-start justify-between gap-2"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(133, 194, 224);">Agent 2 · 10:58:37 PM</div></div><div class="flex gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">View JSON</button></div></div><div class="whitespace-pre-wrap">Declined: BrainMemoryStore type and loadBrainMemory function are in the omitted middle region of the windowed file; anchors not provided.</div></div></div><div data-entry-id="353546e9-5a4a-49d3-be72-b53af18573fe" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:58:37 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-2] worker declined todo: BrainMemoryStore type and loadBrainMemory function are in the omitted middle region of the windowed file; anchors not provided.</div></div></div></div><div data-entry-id="a6a5e2b7-52c9-451a-8e6b-fac719e1ef59" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="4"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(99, 77, 54); background: rgb(40, 31, 21);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(224, 179, 133);">Agent 4 · 10:58:37 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (5 hunks)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 5 hunks (5 replace) in src/orchestrator.ts (2,160 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+30</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−10</div></div></div></div><div data-entry-id="902dad6e-8c5a-450d-8980-ccdc69a4fd2d" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:58:37 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-4] committed 5 hunk(s): src/orchestrator.ts (20646 chars)</div></div></div></div><div data-entry-id="a72a04b0-41d5-475a-8228-f1aeb9a6279a" data-entry-role="agent" data-agent-index="1"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(54, 99, 69); background: rgb(21, 40, 28);"><div class="flex items-start justify-between gap-2"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:58:42 PM</div></div><div class="flex gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">View JSON</button></div></div><div class="whitespace-pre-wrap">Revised: Add JSDoc with one-line description, @param, and @returns to loadBrainMemory and saveBrainMemory functions, and add JSD… → src/brain-memory.ts</div></div></div><div data-entry-id="b90e33fc-fcda-4281-8a7e-40764c75bfe4" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:58:42 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Replanned todo a64ed406-6f15-4512-891d-5d767f48f510 (attempt 1): "Add JSDoc with one-line description, @param, and @returns to loadBrainMemory an…"</div></div></div></div><div data-entry-id="f18540bc-2b7b-4c8e-873a-f8de378f047a" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="2"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(54, 84, 99); background: rgb(21, 34, 40);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(133, 194, 224);">Agent 2 · 10:58:43 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (1 hunk)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 1 hunk (1 replace) in .github/workflows/ci.yml (113 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+3</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−1</div></div></div></div><div data-entry-id="a117880f-34a9-4db5-8543-26f75a34d503" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:58:43 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-2] committed 1 hunk(s): .github/workflows/ci.yml (490 chars)</div></div></div></div><div data-entry-id="2af87abd-eddd-4882-a9f3-6916fb437a04" data-entry-role="agent" data-summary-kind="worker_skip" data-agent-index="3"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(69, 54, 99); background: rgb(28, 21, 40);"><div class="flex items-start justify-between gap-2"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(163, 133, 224);">Agent 3 · 10:58:46 PM</div></div><div class="flex gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">View JSON</button></div></div><div class="whitespace-pre-wrap">Declined: I cannot run scripts or commit files via JSON hunks; these are system actions.</div></div></div><div data-entry-id="6942cb5f-ad93-447a-b901-1dad11107ded" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:58:46 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-3] worker declined todo: I cannot run scripts or commit files via JSON hunks; these are system actions.</div></div></div></div><div data-entry-id="8f6f6ef2-ed4d-4bf6-8c6d-1720f1d5b952" data-entry-role="agent" data-agent-index="1"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(54, 99, 69); background: rgb(21, 40, 28);"><div class="flex items-start justify-between gap-2"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:58:54 PM</div></div><div class="flex gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">View JSON</button></div></div><div class="whitespace-pre-wrap">Skipped: Workers cannot execute scripts or git commit; this TODO requires running `bun run docs:api` and committing generated output, which are system actions outside t…</div></div></div><div data-entry-id="05490ca6-d1ab-4f28-a001-5551ea408c30" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:58:54 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Replanner skipped todo 5c7ff632-eef3-4511-8241-6bd748c544f0: Workers cannot execute scripts or git commit; this TODO requires running `bun run docs:api` and committing generated output, which are system actions outside the worker's capability.</div></div></div></div><div data-entry-id="94a00c6c-2ae9-43fd-bc2a-2e97421e6862" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="4"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(99, 77, 54); background: rgb(40, 31, 21);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(224, 179, 133);">Agent 4 · 10:58:54 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (3 hunks)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 3 hunks (3 replace) in src/brain-memory.ts (816 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+15</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−3</div></div></div></div><div data-entry-id="3a972d18-9195-4e9d-b424-0e41b05a075c" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:58:54 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">[agent-4] committed 3 hunk(s): src/brain-memory.ts (40118 chars)</div></div></div></div><div data-entry-id="256054e3-1dc8-4f8b-bd9e-f7b86972dec3" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:59:02 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Auditor invocation cap reached (6). Stopping with unresolved criteria. Raise "Rounds" on the setup form if you want more plan-audit cycles.</div></div></div></div><div data-entry-id="9eaf04a2-9034-4757-85bc-b05e3de8586e" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:59:02 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Stretch-goal reflection: asking planner what a more ambitious version would have done…</div></div></div></div><div data-entry-id="74a71568-b50e-4857-b480-40a93e38522f" data-entry-role="agent" data-summary-kind="stretch_goals" data-agent-index="1"><div class="rounded-md p-3 border-2 border-violet-700/60 bg-violet-950/20 text-sm"><div><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 11:02:24 PM</div><div class="text-[10px] uppercase tracking-wider font-semibold text-violet-300 mb-1">✦ Stretch goals · 5 ranked · tier 4 · 18 commits ✦</div></div><ol class="text-sm text-ink-200 list-decimal list-inside space-y-1 mt-1"><li class="text-violet-100">**Hard JSDoc CI gate with `treatWarningsAsErrors`** — Configure typedoc.json with `validation: { requiredToBeDocumented: ["class", "function", "type", "interface"] }` and make `bun run typedoc --validation` fail the CI on any missing doc, turning coverage from aspiration to invariant. (files: `typedoc.json`, `.github/workflows/ci.yml`) — Stretch because criterion 19 asked for a failing CI step but the swarm delivered a soft `--validation` run that passes even with 4 modules undocumented.</li><li class="text-violet-100">**Decompose `supervisor.ts` (2212 lines) into a `supervisor/` directory** — Extract the cycle-loop, prompt-building, memory-management, and command-recovery logic into focused submodules, each small enough to document completely in one pass. (files: `src/supervisor.ts`, `src/supervisor-prompts.ts`, `src/supervisor-parser.ts`, new `src/supervisor/*.ts` files) — Stretch because criterion 15 was unmet precisely due to the file's monolith size; the contract asked to *document* the structure, not *change* it, but restructuring would have made all 5 unmet doc criteria tractable.</li><li class="text-violet-100">**Committed `docs/api/` with CI freshness check** — Generate the TypeDoc output, commit it, and add a CI step that regenerates and diffs the directory so API drift is caught in PRs. (files: `docs/api/index.html`, `.github/workflows/ci.yml`, `package.json`) — Stretch because criterion 20 was unmet (no committed output) and a freshness diff goes beyond the contract's static generation request.</li><li class="text-violet-100">**`@public`/`@internal` boundary enforcement via TypeDoc** — Tag deliberate public API exports with `@public` and internal helpers with `@internal`, then configure TypeDoc to only document `@public` symbols, creating an explicit, enforced API surface rather than documenting every export equally. (files: `src/index.ts`, `typedoc.json`, `src/supervisor.ts`, `src/providers.ts`) — Stretch because the contract assumed all exports deserve equal doc effort, but a real library needs a deliberate public surface — the swarm couldn't distinguish signal from noise.</li><li class="text-violet-100">**Zod schema validation on all exported config types** — Replace bare TypeScript type aliases for `OrchestratorConfig`, `SupervisorLimits`, `LLMProvider`, `BrainMemoryStore` etc. with Zod schemas that validate at runtime, giving both JSDoc-extracted docs *and* runtime correctness. (files: `src/supervisor.ts`, `src/orchestrator.ts`, `src/providers.ts`, `src/brain-memory.ts`) — Stretch because the contract asked only for documentation, but the 4 unmet modules all accept unvalidated config objects from callers — docs without runtime guards leaves the hardest-correctness invariant on the table.</li></ol><div class="text-xs text-ink-400 mt-2"><div class="text-[10px] uppercase tracking-wider text-ink-500 mb-0.5">raw planner response</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">1. **Hard JSDoc CI gate with `treatWarningsAsErrors`** — Configure typedoc.json with `validation: { requiredToBeDocumented: ["class", "function", "type", "interface"] }` and make `bun run typedoc --validation` fail the CI on any missing doc, turning coverage from aspiration to invariant. (files: `typedoc.json`, `.github/workflows/ci.yml`) — Stretch because criterion 19 asked for a failing CI step but the swarm delivered a soft `--validation` run that passes even with 4 modules undocumented.
+
+2. **Decompose `supervisor.ts` (2212 lines) into a `supervisor/` directory** — Extract the cycle-loop,…</div><div aria-hidden="true" class="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-ink-900 to-transparent"></div></div><button class="mt-1 text-xs underline text-ink-400 hover:text-ink-200">Show more (2044 more chars)</button></div></div></div><div data-entry-id="bf66574c-d8a5-4a38-8db3-87bb0a46ae86" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 11:02:24 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Stretch-goal reflection: 5 goal(s) recorded for next-run consideration.</div></div></div></div><div data-entry-id="ec28ef0c-8756-4501-b67e-3aadfd1de382" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 11:02:24 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Memory distillation: asking planner for lessons-learned bullets to log into .swarm-memory.jsonl…</div></div></div></div><div data-entry-id="33faf914-cee9-4c5c-a9c5-5959ad8cb4e9" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 11:03:22 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Memory distillation: appended 3 lesson(s) to .swarm-memory.jsonl (1 entries on file).</div></div></div></div><div data-entry-id="199552ee-b4fa-4cf4-8ed5-3663c432560b" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 11:03:22 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Design memory update: asking planner to refresh north-star / decisions / roadmap…</div></div></div></div><div data-entry-id="99ce8727-0e03-4a39-92a9-745f60b457df" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 11:05:00 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Design memory update: north-star refreshed, 2 decision(s) appended, roadmap of 5 items written → .swarm-design/</div></div></div></div><div data-entry-id="6282808e-9bf1-4463-af2d-37ff73de7139" data-entry-role="system" data-summary-kind="run_finished"><div class="rounded border border-emerald-700/50 bg-emerald-950/20 p-3 my-2"><div class="flex items-baseline justify-between gap-2 mb-2"><div class="text-emerald-300 font-semibold tracking-wide text-xs uppercase">═ Run finished — completed in 13m 19s ═</div><div class="text-[10px] text-ink-500 font-mono">11:05:00 PM</div></div><div class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 text-[11px] font-mono mb-3 px-1"><div class="text-ink-500">Run ID</div><div class="text-ink-300 break-all">b2ee7f04-59ed-4c11-914a-feb5cd99a33c</div><div class="text-ink-500">Preset</div><div class="text-ink-200">blackboard</div><div class="text-ink-500">Model</div><div class="text-ink-200">glm-5.1:cloud</div><div class="text-ink-500">Repo</div><div class="text-ink-200 break-all"><a href="https://github.com/kevinkicho/multi-agent-orchestrator" target="_blank" rel="noopener noreferrer" class="text-sky-300 hover:text-sky-200 underline">https://github.com/kevinkicho/multi-agent-orchestrator</a></div><div class="text-ink-500">Clone</div><div class="text-ink-300 break-all">C:\Users\kevin\Desktop\ollama_swarm\runs_overnight8\multi-agent-orchestrator</div><div class="text-ink-500">Started</div><div class="text-ink-200">4/27/2026, 10:51:40 PM</div><div class="text-ink-500">Ended</div><div class="text-ink-200">4/27/2026, 11:05:00 PM</div><div class="text-ink-500">Duration</div><div class="text-ink-200">13m 19s</div><div class="text-ink-500">Stop reason</div><div class="text-emerald-300">completed<span class="text-ink-400 italic"> — auditor invocation cap reached (6)</span></div></div><div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3"><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Files changed</div><div class="font-mono text-sm text-ink-100">15</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Commits</div><div class="font-mono text-sm text-ink-100">18</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">+ Lines</div><div class="font-mono text-sm text-emerald-300">334</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">− Lines</div><div class="font-mono text-sm text-rose-300">132</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Total todos</div><div class="font-mono text-sm text-ink-100">20</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Skipped todos</div><div class="font-mono text-sm text-ink-100">2</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Stale events</div><div class="font-mono text-sm text-ink-100">4</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Agents</div><div class="font-mono text-sm text-ink-100">5</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Tokens in</div><div class="font-mono text-sm text-sky-300">773.1k</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Tokens out</div><div class="font-mono text-sm text-violet-300">17.7k</div></div></div><div class="text-[10px] uppercase tracking-wider text-ink-500 font-semibold mb-1">Per-agent (5)</div><div class="overflow-x-auto rounded border border-ink-700/60"><table class="w-full text-[11px] font-mono"><thead class="bg-ink-800/60 text-ink-400 text-left"><tr><th class="px-2 py-1">#</th><th class="px-2 py-1">Role</th><th class="px-2 py-1 text-right">Turns</th><th class="px-2 py-1 text-right">Att</th><th class="px-2 py-1 text-right">Ret</th><th class="px-2 py-1 text-right">Mean</th><th class="px-2 py-1 text-right">Commits</th><th class="px-2 py-1 text-right text-emerald-400/70">+L</th><th class="px-2 py-1 text-right text-rose-400/70">−L</th><th class="px-2 py-1 text-right text-rose-400/70">Rejected</th><th class="px-2 py-1 text-right text-amber-400/70">JSON⚠</th><th class="px-2 py-1 text-right text-rose-500/70">Errors</th><th class="px-2 py-1 text-right text-sky-400/70" title="Approximate for parallel runners — see #163">Tok in</th><th class="px-2 py-1 text-right text-violet-400/70" title="Approximate for parallel runners — see #163">Tok out</th></tr></thead><tbody><tr class="border-t border-ink-700/60"><td class="px-2 py-1 text-ink-300">1</td><td class="px-2 py-1 text-ink-200">planner</td><td class="px-2 py-1 text-right text-ink-200">10</td><td class="px-2 py-1 text-right text-ink-300">10</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300">12.6s</td><td class="px-2 py-1 text-right text-ink-200 opacity-50">—</td><td class="px-2 py-1 text-right text-emerald-300 opacity-50">—</td><td class="px-2 py-1 text-right text-rose-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right font-mono text-sky-300">307.6k</td><td class="px-2 py-1 text-right font-mono text-violet-300">5.6k</td></tr><tr class="border-t border-ink-700/60"><td class="px-2 py-1 text-ink-300">2</td><td class="px-2 py-1 text-ink-200">worker</td><td class="px-2 py-1 text-right text-ink-200">6</td><td class="px-2 py-1 text-right text-ink-300">6</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300">11.4s</td><td class="px-2 py-1 text-right text-ink-200">5</td><td class="px-2 py-1 text-right text-emerald-300">88</td><td class="px-2 py-1 text-right text-rose-300">30</td><td class="px-2 py-1 text-right text-rose-300 font-semibold">1</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right font-mono text-sky-300">210.9k</td><td class="px-2 py-1 text-right font-mono text-violet-300">4.3k</td></tr><tr class="border-t border-ink-700/60"><td class="px-2 py-1 text-ink-300">3</td><td class="px-2 py-1 text-ink-200">worker</td><td class="px-2 py-1 text-right text-ink-200">7</td><td class="px-2 py-1 text-right text-ink-300">7</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300">15.3s</td><td class="px-2 py-1 text-right text-ink-200">6</td><td class="px-2 py-1 text-right text-emerald-300">73</td><td class="px-2 py-1 text-right text-rose-300">34</td><td class="px-2 py-1 text-right text-rose-300 font-semibold">1</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right font-mono text-sky-300">141.5k</td><td class="px-2 py-1 text-right font-mono text-violet-300">2.7k</td></tr><tr class="border-t border-ink-700/60"><td class="px-2 py-1 text-ink-300">4</td><td class="px-2 py-1 text-ink-200">worker</td><td class="px-2 py-1 text-right text-ink-200">9</td><td class="px-2 py-1 text-right text-ink-300">9</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300">13.6s</td><td class="px-2 py-1 text-right text-ink-200">7</td><td class="px-2 py-1 text-right text-emerald-300">173</td><td class="px-2 py-1 text-right text-rose-300">68</td><td class="px-2 py-1 text-right text-rose-300 font-semibold">2</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right font-mono text-sky-300">288.5k</td><td class="px-2 py-1 text-right font-mono text-violet-300">6.2k</td></tr><tr class="border-t border-ink-700/60"><td class="px-2 py-1 text-ink-300">5</td><td class="px-2 py-1 text-ink-200">auditor</td><td class="px-2 py-1 text-right text-ink-200">6</td><td class="px-2 py-1 text-right text-ink-300">6</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300">8.3s</td><td class="px-2 py-1 text-right text-ink-200 opacity-50">—</td><td class="px-2 py-1 text-right text-emerald-300 opacity-50">—</td><td class="px-2 py-1 text-right text-rose-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right font-mono text-sky-300">139.8k</td><td class="px-2 py-1 text-right font-mono text-violet-300">2.0k</td></tr></tbody></table></div></div></div><div data-entry-id="45d39448-c9c3-43cd-807e-99f0b39ff53a" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 11:05:00 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Wrote run summary to C:\Users\kevin\Desktop\ollama_swarm\runs_overnight8\multi-agent-orchestrator\summary-2026-04-28T05-51-40-738Z.json + C:\Users\kevin\Desktop\ollama_swarm\runs_overnight8\multi-agent-orchestrator\summary.json (stopReason=completed, commits=18, files=15).</div></div></div></div><div data-entry-id="1cf7eea7-f83a-4292-9c3d-da38e4a322bb" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 11:05:04 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">✓ All 5 agent ports released cleanly.</div></div></div></div><div></div></div></div></div><form class="border-t border-ink-700 p-3 bg-ink-800 flex gap-2"><input placeholder="Inject a message into the discussion (as orchestrator)…" class="flex-1 bg-ink-900 border border-ink-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-emerald-500" value="" style=""><button type="submit" class="px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-sm">Send</button></form></section></div></div></main></div></div>
+    <script type="module" src="/src/main.tsx"></script>
+  
+
+</body></html>

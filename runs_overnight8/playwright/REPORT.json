@@ -1,0 +1,28 @@
+{
+  "runId": "b2ee7f04",
+  "url": "http://172.24.32.1:8244/",
+  "outDir": "/mnt/c/Users/kevin/Desktop/ollama_swarm/runs_overnight8/playwright",
+  "durationMs": 757423,
+  "consoleErrors": 0,
+  "consoleWarnings": 0,
+  "pageErrors": 0,
+  "wsFrames": {
+    "received": 919,
+    "sent": 25
+  },
+  "totalEntries": 106,
+  "byRole": {
+    "system": 67,
+    "user": 0,
+    "agent": 39
+  },
+  "summaryKindCounts": {
+    "worker_hunks": 18,
+    "worker_skip": 4,
+    "stretch_goals": 1,
+    "run_finished": 1
+  },
+  "entriesWithThoughts": 0,
+  "entriesWithToolCalls": 0,
+  "snapshotCount": 38
+}

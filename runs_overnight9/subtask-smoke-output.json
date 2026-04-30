@@ -1,0 +1,71 @@
+{
+  "info": {
+    "parentID": "msg_dd4b92658001YIGWQDOFdhXKM1",
+    "role": "assistant",
+    "mode": "general",
+    "agent": "general",
+    "path": {
+      "cwd": "C:\\Users\\kevin\\Desktop\\ollama_swarm",
+      "root": "C:\\Users\\kevin\\Desktop\\ollama_swarm"
+    },
+    "cost": 0,
+    "tokens": {
+      "total": 8796,
+      "input": 8794,
+      "output": 2,
+      "reasoning": 0,
+      "cache": {
+        "write": 0,
+        "read": 0
+      }
+    },
+    "modelID": "glm-5.1:cloud",
+    "providerID": "ollama",
+    "time": {
+      "created": 1777390407735,
+      "completed": 1777390413853
+    },
+    "finish": "stop",
+    "id": "msg_dd4b95037001FRJaLIlGVbpbMV",
+    "sessionID": "ses_22b46db1bffer7B76EZmCHOwg5"
+  },
+  "parts": [
+    {
+      "snapshot": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "type": "step-start",
+      "id": "prt_dd4b95fcd001FKuN3vcsSK4YF1",
+      "sessionID": "ses_22b46db1bffer7B76EZmCHOwg5",
+      "messageID": "msg_dd4b95037001FRJaLIlGVbpbMV"
+    },
+    {
+      "type": "text",
+      "text": "Hello",
+      "time": {
+        "start": 1777390411729,
+        "end": 1777390411937
+      },
+      "id": "prt_dd4b95fd1001eYX1xyQNxdqFLe",
+      "sessionID": "ses_22b46db1bffer7B76EZmCHOwg5",
+      "messageID": "msg_dd4b95037001FRJaLIlGVbpbMV"
+    },
+    {
+      "reason": "stop",
+      "snapshot": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "type": "step-finish",
+      "tokens": {
+        "total": 8796,
+        "input": 8794,
+        "output": 2,
+        "reasoning": 0,
+        "cache": {
+          "write": 0,
+          "read": 0
+        }
+      },
+      "cost": 0,
+      "id": "prt_dd4b960a3001u5LEPcahm3AMF3",
+      "sessionID": "ses_22b46db1bffer7B76EZmCHOwg5",
+      "messageID": "msg_dd4b95037001FRJaLIlGVbpbMV"
+    }
+  ]
+}

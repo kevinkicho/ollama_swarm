@@ -121,7 +121,7 @@ export class RoundRobinRunner implements SwarmRunner {
     // Unit 48: hide runner-written artifacts from `git status` via the
     // clone's local .git/info/exclude (NOT the user's .gitignore).
     await this.opts.repos.excludeRunnerArtifacts(destPath);
-    await this.opts.repos.writeOpencodeConfig(destPath, cfg.model);
+    // E3 Phase 5: opencode.json no longer needed.
     this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
 
     this.setPhase("spawning");

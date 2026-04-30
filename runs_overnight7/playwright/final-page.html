@@ -1,0 +1,2280 @@
+<!DOCTYPE html><html lang="en"><head>
+    <script type="module">import { injectIntoGlobalHook } from "/@react-refresh";
+injectIntoGlobalHook(window);
+window.$RefreshReg$ = () => {};
+window.$RefreshSig$ = () => (type) => type;</script>
+
+    <script type="module" src="/@vite/client"></script>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <title>ollama_swarm</title>
+  <style type="text/css" data-vite-dev-id="C:/Users/kevin/Desktop/ollama_swarm/web/src/index.css">*, ::before, ::after {
+  --tw-border-spacing-x: 0;
+  --tw-border-spacing-y: 0;
+  --tw-translate-x: 0;
+  --tw-translate-y: 0;
+  --tw-rotate: 0;
+  --tw-skew-x: 0;
+  --tw-skew-y: 0;
+  --tw-scale-x: 1;
+  --tw-scale-y: 1;
+  --tw-pan-x:  ;
+  --tw-pan-y:  ;
+  --tw-pinch-zoom:  ;
+  --tw-scroll-snap-strictness: proximity;
+  --tw-gradient-from-position:  ;
+  --tw-gradient-via-position:  ;
+  --tw-gradient-to-position:  ;
+  --tw-ordinal:  ;
+  --tw-slashed-zero:  ;
+  --tw-numeric-figure:  ;
+  --tw-numeric-spacing:  ;
+  --tw-numeric-fraction:  ;
+  --tw-ring-inset:  ;
+  --tw-ring-offset-width: 0px;
+  --tw-ring-offset-color: #fff;
+  --tw-ring-color: rgb(59 130 246 / 0.5);
+  --tw-ring-offset-shadow: 0 0 #0000;
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-shadow: 0 0 #0000;
+  --tw-shadow-colored: 0 0 #0000;
+  --tw-blur:  ;
+  --tw-brightness:  ;
+  --tw-contrast:  ;
+  --tw-grayscale:  ;
+  --tw-hue-rotate:  ;
+  --tw-invert:  ;
+  --tw-saturate:  ;
+  --tw-sepia:  ;
+  --tw-drop-shadow:  ;
+  --tw-backdrop-blur:  ;
+  --tw-backdrop-brightness:  ;
+  --tw-backdrop-contrast:  ;
+  --tw-backdrop-grayscale:  ;
+  --tw-backdrop-hue-rotate:  ;
+  --tw-backdrop-invert:  ;
+  --tw-backdrop-opacity:  ;
+  --tw-backdrop-saturate:  ;
+  --tw-backdrop-sepia:  ;
+  --tw-contain-size:  ;
+  --tw-contain-layout:  ;
+  --tw-contain-paint:  ;
+  --tw-contain-style:  ;
+}
+
+::backdrop {
+  --tw-border-spacing-x: 0;
+  --tw-border-spacing-y: 0;
+  --tw-translate-x: 0;
+  --tw-translate-y: 0;
+  --tw-rotate: 0;
+  --tw-skew-x: 0;
+  --tw-skew-y: 0;
+  --tw-scale-x: 1;
+  --tw-scale-y: 1;
+  --tw-pan-x:  ;
+  --tw-pan-y:  ;
+  --tw-pinch-zoom:  ;
+  --tw-scroll-snap-strictness: proximity;
+  --tw-gradient-from-position:  ;
+  --tw-gradient-via-position:  ;
+  --tw-gradient-to-position:  ;
+  --tw-ordinal:  ;
+  --tw-slashed-zero:  ;
+  --tw-numeric-figure:  ;
+  --tw-numeric-spacing:  ;
+  --tw-numeric-fraction:  ;
+  --tw-ring-inset:  ;
+  --tw-ring-offset-width: 0px;
+  --tw-ring-offset-color: #fff;
+  --tw-ring-color: rgb(59 130 246 / 0.5);
+  --tw-ring-offset-shadow: 0 0 #0000;
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-shadow: 0 0 #0000;
+  --tw-shadow-colored: 0 0 #0000;
+  --tw-blur:  ;
+  --tw-brightness:  ;
+  --tw-contrast:  ;
+  --tw-grayscale:  ;
+  --tw-hue-rotate:  ;
+  --tw-invert:  ;
+  --tw-saturate:  ;
+  --tw-sepia:  ;
+  --tw-drop-shadow:  ;
+  --tw-backdrop-blur:  ;
+  --tw-backdrop-brightness:  ;
+  --tw-backdrop-contrast:  ;
+  --tw-backdrop-grayscale:  ;
+  --tw-backdrop-hue-rotate:  ;
+  --tw-backdrop-invert:  ;
+  --tw-backdrop-opacity:  ;
+  --tw-backdrop-saturate:  ;
+  --tw-backdrop-sepia:  ;
+  --tw-contain-size:  ;
+  --tw-contain-layout:  ;
+  --tw-contain-paint:  ;
+  --tw-contain-style:  ;
+}/*
+! tailwindcss v3.4.19 | MIT License | https://tailwindcss.com
+*//*
+1. Prevent padding and border from affecting element width. (https://github.com/mozdevs/cssremedy/issues/4)
+2. Allow adding a border to an element by just adding a border-width. (https://github.com/tailwindcss/tailwindcss/pull/116)
+*/
+
+*,
+::before,
+::after {
+  box-sizing: border-box; /* 1 */
+  border-width: 0; /* 2 */
+  border-style: solid; /* 2 */
+  border-color: #e5e7eb; /* 2 */
+}
+
+::before,
+::after {
+  --tw-content: '';
+}
+
+/*
+1. Use a consistent sensible line-height in all browsers.
+2. Prevent adjustments of font size after orientation changes in iOS.
+3. Use a more readable tab size.
+4. Use the user's configured `sans` font-family by default.
+5. Use the user's configured `sans` font-feature-settings by default.
+6. Use the user's configured `sans` font-variation-settings by default.
+7. Disable tap highlights on iOS
+*/
+
+html,
+:host {
+  line-height: 1.5; /* 1 */
+  -webkit-text-size-adjust: 100%; /* 2 */
+  -moz-tab-size: 4; /* 3 */
+  -o-tab-size: 4;
+     tab-size: 4; /* 3 */
+  font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"; /* 4 */
+  font-feature-settings: normal; /* 5 */
+  font-variation-settings: normal; /* 6 */
+  -webkit-tap-highlight-color: transparent; /* 7 */
+}
+
+/*
+1. Remove the margin in all browsers.
+2. Inherit line-height from `html` so users can set them as a class directly on the `html` element.
+*/
+
+body {
+  margin: 0; /* 1 */
+  line-height: inherit; /* 2 */
+}
+
+/*
+1. Add the correct height in Firefox.
+2. Correct the inheritance of border color in Firefox. (https://bugzilla.mozilla.org/show_bug.cgi?id=190655)
+3. Ensure horizontal rules are visible by default.
+*/
+
+hr {
+  height: 0; /* 1 */
+  color: inherit; /* 2 */
+  border-top-width: 1px; /* 3 */
+}
+
+/*
+Add the correct text decoration in Chrome, Edge, and Safari.
+*/
+
+abbr:where([title]) {
+  -webkit-text-decoration: underline dotted;
+          text-decoration: underline dotted;
+}
+
+/*
+Remove the default font size and weight for headings.
+*/
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+/*
+Reset links to optimize for opt-in styling instead of opt-out.
+*/
+
+a {
+  color: inherit;
+  text-decoration: inherit;
+}
+
+/*
+Add the correct font weight in Edge and Safari.
+*/
+
+b,
+strong {
+  font-weight: bolder;
+}
+
+/*
+1. Use the user's configured `mono` font-family by default.
+2. Use the user's configured `mono` font-feature-settings by default.
+3. Use the user's configured `mono` font-variation-settings by default.
+4. Correct the odd `em` font sizing in all browsers.
+*/
+
+code,
+kbd,
+samp,
+pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; /* 1 */
+  font-feature-settings: normal; /* 2 */
+  font-variation-settings: normal; /* 3 */
+  font-size: 1em; /* 4 */
+}
+
+/*
+Add the correct font size in all browsers.
+*/
+
+small {
+  font-size: 80%;
+}
+
+/*
+Prevent `sub` and `sup` elements from affecting the line height in all browsers.
+*/
+
+sub,
+sup {
+  font-size: 75%;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+}
+
+sub {
+  bottom: -0.25em;
+}
+
+sup {
+  top: -0.5em;
+}
+
+/*
+1. Remove text indentation from table contents in Chrome and Safari. (https://bugs.chromium.org/p/chromium/issues/detail?id=999088, https://bugs.webkit.org/show_bug.cgi?id=201297)
+2. Correct table border color inheritance in all Chrome and Safari. (https://bugs.chromium.org/p/chromium/issues/detail?id=935729, https://bugs.webkit.org/show_bug.cgi?id=195016)
+3. Remove gaps between table borders by default.
+*/
+
+table {
+  text-indent: 0; /* 1 */
+  border-color: inherit; /* 2 */
+  border-collapse: collapse; /* 3 */
+}
+
+/*
+1. Change the font styles in all browsers.
+2. Remove the margin in Firefox and Safari.
+3. Remove default padding in all browsers.
+*/
+
+button,
+input,
+optgroup,
+select,
+textarea {
+  font-family: inherit; /* 1 */
+  font-feature-settings: inherit; /* 1 */
+  font-variation-settings: inherit; /* 1 */
+  font-size: 100%; /* 1 */
+  font-weight: inherit; /* 1 */
+  line-height: inherit; /* 1 */
+  letter-spacing: inherit; /* 1 */
+  color: inherit; /* 1 */
+  margin: 0; /* 2 */
+  padding: 0; /* 3 */
+}
+
+/*
+Remove the inheritance of text transform in Edge and Firefox.
+*/
+
+button,
+select {
+  text-transform: none;
+}
+
+/*
+1. Correct the inability to style clickable types in iOS and Safari.
+2. Remove default button styles.
+*/
+
+button,
+input:where([type='button']),
+input:where([type='reset']),
+input:where([type='submit']) {
+  -webkit-appearance: button; /* 1 */
+  background-color: transparent; /* 2 */
+  background-image: none; /* 2 */
+}
+
+/*
+Use the modern Firefox focus style for all focusable elements.
+*/
+
+:-moz-focusring {
+  outline: auto;
+}
+
+/*
+Remove the additional `:invalid` styles in Firefox. (https://github.com/mozilla/gecko-dev/blob/2f9eacd9d3d995c937b4251a5557d95d494c9be1/layout/style/res/forms.css#L728-L737)
+*/
+
+:-moz-ui-invalid {
+  box-shadow: none;
+}
+
+/*
+Add the correct vertical alignment in Chrome and Firefox.
+*/
+
+progress {
+  vertical-align: baseline;
+}
+
+/*
+Correct the cursor style of increment and decrement buttons in Safari.
+*/
+
+::-webkit-inner-spin-button,
+::-webkit-outer-spin-button {
+  height: auto;
+}
+
+/*
+1. Correct the odd appearance in Chrome and Safari.
+2. Correct the outline style in Safari.
+*/
+
+[type='search'] {
+  -webkit-appearance: textfield; /* 1 */
+  outline-offset: -2px; /* 2 */
+}
+
+/*
+Remove the inner padding in Chrome and Safari on macOS.
+*/
+
+::-webkit-search-decoration {
+  -webkit-appearance: none;
+}
+
+/*
+1. Correct the inability to style clickable types in iOS and Safari.
+2. Change font properties to `inherit` in Safari.
+*/
+
+::-webkit-file-upload-button {
+  -webkit-appearance: button; /* 1 */
+  font: inherit; /* 2 */
+}
+
+/*
+Add the correct display in Chrome and Safari.
+*/
+
+summary {
+  display: list-item;
+}
+
+/*
+Removes the default spacing and border for appropriate elements.
+*/
+
+blockquote,
+dl,
+dd,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+hr,
+figure,
+p,
+pre {
+  margin: 0;
+}
+
+fieldset {
+  margin: 0;
+  padding: 0;
+}
+
+legend {
+  padding: 0;
+}
+
+ol,
+ul,
+menu {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/*
+Reset default styling for dialogs.
+*/
+dialog {
+  padding: 0;
+}
+
+/*
+Prevent resizing textareas horizontally by default.
+*/
+
+textarea {
+  resize: vertical;
+}
+
+/*
+1. Reset the default placeholder opacity in Firefox. (https://github.com/tailwindlabs/tailwindcss/issues/3300)
+2. Set the default placeholder color to the user's configured gray 400 color.
+*/
+
+input::-moz-placeholder, textarea::-moz-placeholder {
+  opacity: 1; /* 1 */
+  color: #9ca3af; /* 2 */
+}
+
+input::placeholder,
+textarea::placeholder {
+  opacity: 1; /* 1 */
+  color: #9ca3af; /* 2 */
+}
+
+/*
+Set the default cursor for buttons.
+*/
+
+button,
+[role="button"] {
+  cursor: pointer;
+}
+
+/*
+Make sure disabled buttons don't get the pointer cursor.
+*/
+:disabled {
+  cursor: default;
+}
+
+/*
+1. Make replaced elements `display: block` by default. (https://github.com/mozdevs/cssremedy/issues/14)
+2. Add `vertical-align: middle` to align replaced elements more sensibly by default. (https://github.com/jensimmons/cssremedy/issues/14#issuecomment-634934210)
+   This can trigger a poorly considered lint error in some tools but is included by design.
+*/
+
+img,
+svg,
+video,
+canvas,
+audio,
+iframe,
+embed,
+object {
+  display: block; /* 1 */
+  vertical-align: middle; /* 2 */
+}
+
+/*
+Constrain images and videos to the parent width and preserve their intrinsic aspect ratio. (https://github.com/mozdevs/cssremedy/issues/14)
+*/
+
+img,
+video {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Make elements with the HTML hidden attribute stay hidden by default */
+[hidden]:where(:not([hidden="until-found"])) {
+  display: none;
+}
+.container {
+  width: 100%;
+}
+@media (min-width: 640px) {
+
+  .container {
+    max-width: 640px;
+  }
+}
+@media (min-width: 768px) {
+
+  .container {
+    max-width: 768px;
+  }
+}
+@media (min-width: 1024px) {
+
+  .container {
+    max-width: 1024px;
+  }
+}
+@media (min-width: 1280px) {
+
+  .container {
+    max-width: 1280px;
+  }
+}
+@media (min-width: 1536px) {
+
+  .container {
+    max-width: 1536px;
+  }
+}
+.pointer-events-none {
+  pointer-events: none;
+}
+.visible {
+  visibility: visible;
+}
+.invisible {
+  visibility: hidden;
+}
+.collapse {
+  visibility: collapse;
+}
+.fixed {
+  position: fixed;
+}
+.absolute {
+  position: absolute;
+}
+.relative {
+  position: relative;
+}
+.sticky {
+  position: sticky;
+}
+.inset-0 {
+  inset: 0px;
+}
+.inset-x-0 {
+  left: 0px;
+  right: 0px;
+}
+.bottom-0 {
+  bottom: 0px;
+}
+.bottom-4 {
+  bottom: 1rem;
+}
+.bottom-full {
+  bottom: 100%;
+}
+.left-0 {
+  left: 0px;
+}
+.right-0 {
+  right: 0px;
+}
+.right-4 {
+  right: 1rem;
+}
+.top-0 {
+  top: 0px;
+}
+.top-full {
+  top: 100%;
+}
+.z-10 {
+  z-index: 10;
+}
+.z-20 {
+  z-index: 20;
+}
+.z-30 {
+  z-index: 30;
+}
+.z-40 {
+  z-index: 40;
+}
+.z-50 {
+  z-index: 50;
+}
+.mx-2 {
+  margin-left: 0.5rem;
+  margin-right: 0.5rem;
+}
+.my-2 {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.my-3 {
+  margin-top: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.mx-auto {
+  margin-left: auto;
+  margin-right: auto;
+}
+.-mt-1 {
+  margin-top: -0.25rem;
+}
+.mb-0\.5 {
+  margin-bottom: 0.125rem;
+}
+.mb-1 {
+  margin-bottom: 0.25rem;
+}
+.mb-1\.5 {
+  margin-bottom: 0.375rem;
+}
+.mb-2 {
+  margin-bottom: 0.5rem;
+}
+.mb-3 {
+  margin-bottom: 0.75rem;
+}
+.mb-4 {
+  margin-bottom: 1rem;
+}
+.mb-6 {
+  margin-bottom: 1.5rem;
+}
+.ml-0\.5 {
+  margin-left: 0.125rem;
+}
+.ml-1 {
+  margin-left: 0.25rem;
+}
+.ml-2 {
+  margin-left: 0.5rem;
+}
+.ml-6 {
+  margin-left: 1.5rem;
+}
+.ml-auto {
+  margin-left: auto;
+}
+.mr-1\.5 {
+  margin-right: 0.375rem;
+}
+.mt-0\.5 {
+  margin-top: 0.125rem;
+}
+.mt-1 {
+  margin-top: 0.25rem;
+}
+.mt-1\.5 {
+  margin-top: 0.375rem;
+}
+.mt-2 {
+  margin-top: 0.5rem;
+}
+.mt-3 {
+  margin-top: 0.75rem;
+}
+.mt-6 {
+  margin-top: 1.5rem;
+}
+.ml-5 {
+  margin-left: 1.25rem;
+}
+.mr-2 {
+  margin-right: 0.5rem;
+}
+.block {
+  display: block;
+}
+.inline-block {
+  display: inline-block;
+}
+.inline {
+  display: inline;
+}
+.flex {
+  display: flex;
+}
+.inline-flex {
+  display: inline-flex;
+}
+.table {
+  display: table;
+}
+.grid {
+  display: grid;
+}
+.hidden {
+  display: none;
+}
+.h-1 {
+  height: 0.25rem;
+}
+.h-1\.5 {
+  height: 0.375rem;
+}
+.h-10 {
+  height: 2.5rem;
+}
+.h-2 {
+  height: 0.5rem;
+}
+.h-3 {
+  height: 0.75rem;
+}
+.h-4 {
+  height: 1rem;
+}
+.h-8 {
+  height: 2rem;
+}
+.h-full {
+  height: 100%;
+}
+.h-px {
+  height: 1px;
+}
+.max-h-40 {
+  max-height: 10rem;
+}
+.max-h-48 {
+  max-height: 12rem;
+}
+.max-h-56 {
+  max-height: 14rem;
+}
+.max-h-72 {
+  max-height: 18rem;
+}
+.max-h-\[60vh\] {
+  max-height: 60vh;
+}
+.max-h-\[70vh\] {
+  max-height: 70vh;
+}
+.max-h-\[90vh\] {
+  max-height: 90vh;
+}
+.min-h-0 {
+  min-height: 0px;
+}
+.min-h-\[1\.25rem\] {
+  min-height: 1.25rem;
+}
+.min-h-full {
+  min-height: 100%;
+}
+.w-1 {
+  width: 0.25rem;
+}
+.w-1\.5 {
+  width: 0.375rem;
+}
+.w-10 {
+  width: 2.5rem;
+}
+.w-16 {
+  width: 4rem;
+}
+.w-2 {
+  width: 0.5rem;
+}
+.w-24 {
+  width: 6rem;
+}
+.w-4 {
+  width: 1rem;
+}
+.w-\[480px\] {
+  width: 480px;
+}
+.w-\[min\(1400px\2c 95vw\)\] {
+  width: min(1400px, 95vw);
+}
+.w-\[min\(720px\2c calc\(100vw-2rem\)\)\] {
+  width: min(720px, calc(100vw - 2rem));
+}
+.w-\[min\(960px\2c calc\(100vw-2rem\)\)\] {
+  width: min(960px, calc(100vw - 2rem));
+}
+.w-full {
+  width: 100%;
+}
+.w-max {
+  width: -moz-max-content;
+  width: max-content;
+}
+.min-w-0 {
+  min-width: 0px;
+}
+.min-w-\[900px\] {
+  min-width: 900px;
+}
+.max-w-2xl {
+  max-width: 42rem;
+}
+.max-w-\[100px\] {
+  max-width: 100px;
+}
+.max-w-\[140px\] {
+  max-width: 140px;
+}
+.max-w-\[260px\] {
+  max-width: 260px;
+}
+.max-w-lg {
+  max-width: 32rem;
+}
+.max-w-md {
+  max-width: 28rem;
+}
+.max-w-xl {
+  max-width: 36rem;
+}
+.max-w-xs {
+  max-width: 20rem;
+}
+.max-w-4xl {
+  max-width: 56rem;
+}
+.flex-1 {
+  flex: 1 1 0%;
+}
+.shrink-0 {
+  flex-shrink: 0;
+}
+@keyframes pulse {
+
+  50% {
+    opacity: .5;
+  }
+}
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+.cursor-help {
+  cursor: help;
+}
+.cursor-pointer {
+  cursor: pointer;
+}
+.select-none {
+  -webkit-user-select: none;
+     -moz-user-select: none;
+          user-select: none;
+}
+.resize {
+  resize: both;
+}
+.list-inside {
+  list-style-position: inside;
+}
+.list-decimal {
+  list-style-type: decimal;
+}
+.list-disc {
+  list-style-type: disc;
+}
+.list-none {
+  list-style-type: none;
+}
+.grid-cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.grid-cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.grid-cols-5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.grid-cols-\[280px_1fr\] {
+  grid-template-columns: 280px 1fr;
+}
+.grid-cols-\[auto_1fr\] {
+  grid-template-columns: auto 1fr;
+}
+.grid-cols-\[auto_auto_auto\] {
+  grid-template-columns: auto auto auto;
+}
+.grid-cols-\[max-content_1fr\] {
+  grid-template-columns: max-content 1fr;
+}
+.flex-col {
+  flex-direction: column;
+}
+.flex-wrap {
+  flex-wrap: wrap;
+}
+.items-start {
+  align-items: flex-start;
+}
+.items-end {
+  align-items: flex-end;
+}
+.items-center {
+  align-items: center;
+}
+.items-baseline {
+  align-items: baseline;
+}
+.justify-end {
+  justify-content: flex-end;
+}
+.justify-center {
+  justify-content: center;
+}
+.justify-between {
+  justify-content: space-between;
+}
+.gap-0\.5 {
+  gap: 0.125rem;
+}
+.gap-1 {
+  gap: 0.25rem;
+}
+.gap-1\.5 {
+  gap: 0.375rem;
+}
+.gap-2 {
+  gap: 0.5rem;
+}
+.gap-2\.5 {
+  gap: 0.625rem;
+}
+.gap-3 {
+  gap: 0.75rem;
+}
+.gap-4 {
+  gap: 1rem;
+}
+.gap-x-2 {
+  -moz-column-gap: 0.5rem;
+       column-gap: 0.5rem;
+}
+.gap-x-3 {
+  -moz-column-gap: 0.75rem;
+       column-gap: 0.75rem;
+}
+.gap-x-4 {
+  -moz-column-gap: 1rem;
+       column-gap: 1rem;
+}
+.gap-y-0\.5 {
+  row-gap: 0.125rem;
+}
+.gap-y-1 {
+  row-gap: 0.25rem;
+}
+.space-y-0\.5 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(0.125rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(0.125rem * var(--tw-space-y-reverse));
+}
+.space-y-1 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(0.25rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(0.25rem * var(--tw-space-y-reverse));
+}
+.space-y-1\.5 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(0.375rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(0.375rem * var(--tw-space-y-reverse));
+}
+.space-y-2 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(0.5rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(0.5rem * var(--tw-space-y-reverse));
+}
+.space-y-3 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(0.75rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(0.75rem * var(--tw-space-y-reverse));
+}
+.space-y-4 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(1rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(1rem * var(--tw-space-y-reverse));
+}
+.space-y-6 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(1.5rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(1.5rem * var(--tw-space-y-reverse));
+}
+.overflow-auto {
+  overflow: auto;
+}
+.overflow-hidden {
+  overflow: hidden;
+}
+.overflow-x-auto {
+  overflow-x: auto;
+}
+.overflow-y-auto {
+  overflow-y: auto;
+}
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.whitespace-nowrap {
+  white-space: nowrap;
+}
+.whitespace-pre-wrap {
+  white-space: pre-wrap;
+}
+.break-words {
+  overflow-wrap: break-word;
+}
+.break-all {
+  word-break: break-all;
+}
+.rounded {
+  border-radius: 0.25rem;
+}
+.rounded-full {
+  border-radius: 9999px;
+}
+.rounded-lg {
+  border-radius: 0.5rem;
+}
+.rounded-md {
+  border-radius: 0.375rem;
+}
+.border {
+  border-width: 1px;
+}
+.border-2 {
+  border-width: 2px;
+}
+.border-b {
+  border-bottom-width: 1px;
+}
+.border-b-2 {
+  border-bottom-width: 2px;
+}
+.border-l {
+  border-left-width: 1px;
+}
+.border-l-2 {
+  border-left-width: 2px;
+}
+.border-l-4 {
+  border-left-width: 4px;
+}
+.border-r {
+  border-right-width: 1px;
+}
+.border-t {
+  border-top-width: 1px;
+}
+.border-amber-500\/40 {
+  border-color: rgb(245 158 11 / 0.4);
+}
+.border-amber-500\/50 {
+  border-color: rgb(245 158 11 / 0.5);
+}
+.border-amber-600 {
+  --tw-border-opacity: 1;
+  border-color: rgb(217 119 6 / var(--tw-border-opacity, 1));
+}
+.border-amber-600\/60 {
+  border-color: rgb(217 119 6 / 0.6);
+}
+.border-amber-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(180 83 9 / var(--tw-border-opacity, 1));
+}
+.border-amber-700\/40 {
+  border-color: rgb(180 83 9 / 0.4);
+}
+.border-amber-700\/50 {
+  border-color: rgb(180 83 9 / 0.5);
+}
+.border-amber-700\/60 {
+  border-color: rgb(180 83 9 / 0.6);
+}
+.border-amber-700\/70 {
+  border-color: rgb(180 83 9 / 0.7);
+}
+.border-amber-800\/60 {
+  border-color: rgb(146 64 14 / 0.6);
+}
+.border-blue-700\/50 {
+  border-color: rgb(29 78 216 / 0.5);
+}
+.border-emerald-500 {
+  --tw-border-opacity: 1;
+  border-color: rgb(16 185 129 / var(--tw-border-opacity, 1));
+}
+.border-emerald-500\/40 {
+  border-color: rgb(16 185 129 / 0.4);
+}
+.border-emerald-500\/50 {
+  border-color: rgb(16 185 129 / 0.5);
+}
+.border-emerald-600 {
+  --tw-border-opacity: 1;
+  border-color: rgb(5 150 105 / var(--tw-border-opacity, 1));
+}
+.border-emerald-600\/40 {
+  border-color: rgb(5 150 105 / 0.4);
+}
+.border-emerald-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(4 120 87 / var(--tw-border-opacity, 1));
+}
+.border-emerald-700\/40 {
+  border-color: rgb(4 120 87 / 0.4);
+}
+.border-emerald-700\/50 {
+  border-color: rgb(4 120 87 / 0.5);
+}
+.border-emerald-700\/60 {
+  border-color: rgb(4 120 87 / 0.6);
+}
+.border-emerald-700\/70 {
+  border-color: rgb(4 120 87 / 0.7);
+}
+.border-emerald-800\/30 {
+  border-color: rgb(6 95 70 / 0.3);
+}
+.border-emerald-800\/50 {
+  border-color: rgb(6 95 70 / 0.5);
+}
+.border-emerald-900\/40 {
+  border-color: rgb(6 78 59 / 0.4);
+}
+.border-emerald-900\/60 {
+  border-color: rgb(6 78 59 / 0.6);
+}
+.border-fuchsia-700\/50 {
+  border-color: rgb(162 28 175 / 0.5);
+}
+.border-indigo-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(67 56 202 / var(--tw-border-opacity, 1));
+}
+.border-indigo-700\/60 {
+  border-color: rgb(67 56 202 / 0.6);
+}
+.border-indigo-900\/60 {
+  border-color: rgb(49 46 129 / 0.6);
+}
+.border-ink-500 {
+  --tw-border-opacity: 1;
+  border-color: rgb(58 65 80 / var(--tw-border-opacity, 1));
+}
+.border-ink-500\/60 {
+  border-color: rgb(58 65 80 / 0.6);
+}
+.border-ink-600 {
+  --tw-border-opacity: 1;
+  border-color: rgb(42 47 58 / var(--tw-border-opacity, 1));
+}
+.border-ink-600\/50 {
+  border-color: rgb(42 47 58 / 0.5);
+}
+.border-ink-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(28 32 40 / var(--tw-border-opacity, 1));
+}
+.border-ink-700\/50 {
+  border-color: rgb(28 32 40 / 0.5);
+}
+.border-ink-700\/60 {
+  border-color: rgb(28 32 40 / 0.6);
+}
+.border-ink-800 {
+  --tw-border-opacity: 1;
+  border-color: rgb(19 22 27 / var(--tw-border-opacity, 1));
+}
+.border-ink-800\/60 {
+  border-color: rgb(19 22 27 / 0.6);
+}
+.border-red-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(185 28 28 / var(--tw-border-opacity, 1));
+}
+.border-red-800 {
+  --tw-border-opacity: 1;
+  border-color: rgb(153 27 27 / var(--tw-border-opacity, 1));
+}
+.border-red-900 {
+  --tw-border-opacity: 1;
+  border-color: rgb(127 29 29 / var(--tw-border-opacity, 1));
+}
+.border-red-900\/50 {
+  border-color: rgb(127 29 29 / 0.5);
+}
+.border-rose-500 {
+  --tw-border-opacity: 1;
+  border-color: rgb(244 63 94 / var(--tw-border-opacity, 1));
+}
+.border-rose-500\/40 {
+  border-color: rgb(244 63 94 / 0.4);
+}
+.border-rose-500\/50 {
+  border-color: rgb(244 63 94 / 0.5);
+}
+.border-rose-600 {
+  --tw-border-opacity: 1;
+  border-color: rgb(225 29 72 / var(--tw-border-opacity, 1));
+}
+.border-rose-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(190 18 60 / var(--tw-border-opacity, 1));
+}
+.border-rose-700\/40 {
+  border-color: rgb(190 18 60 / 0.4);
+}
+.border-rose-700\/50 {
+  border-color: rgb(190 18 60 / 0.5);
+}
+.border-rose-700\/60 {
+  border-color: rgb(190 18 60 / 0.6);
+}
+.border-rose-700\/70 {
+  border-color: rgb(190 18 60 / 0.7);
+}
+.border-rose-900 {
+  --tw-border-opacity: 1;
+  border-color: rgb(136 19 55 / var(--tw-border-opacity, 1));
+}
+.border-rose-900\/40 {
+  border-color: rgb(136 19 55 / 0.4);
+}
+.border-sky-500\/40 {
+  border-color: rgb(14 165 233 / 0.4);
+}
+.border-sky-500\/50 {
+  border-color: rgb(14 165 233 / 0.5);
+}
+.border-sky-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(3 105 161 / var(--tw-border-opacity, 1));
+}
+.border-sky-700\/40 {
+  border-color: rgb(3 105 161 / 0.4);
+}
+.border-sky-700\/50 {
+  border-color: rgb(3 105 161 / 0.5);
+}
+.border-sky-700\/60 {
+  border-color: rgb(3 105 161 / 0.6);
+}
+.border-teal-500\/50 {
+  border-color: rgb(20 184 166 / 0.5);
+}
+.border-teal-700 {
+  --tw-border-opacity: 1;
+  border-color: rgb(15 118 110 / var(--tw-border-opacity, 1));
+}
+.border-teal-700\/50 {
+  border-color: rgb(15 118 110 / 0.5);
+}
+.border-transparent {
+  border-color: transparent;
+}
+.border-violet-500\/50 {
+  border-color: rgb(139 92 246 / 0.5);
+}
+.border-violet-700\/40 {
+  border-color: rgb(109 40 217 / 0.4);
+}
+.border-violet-700\/50 {
+  border-color: rgb(109 40 217 / 0.5);
+}
+.border-violet-700\/60 {
+  border-color: rgb(109 40 217 / 0.6);
+}
+.border-b-ink-700 {
+  --tw-border-opacity: 1;
+  border-bottom-color: rgb(28 32 40 / var(--tw-border-opacity, 1));
+}
+.border-l-amber-500 {
+  --tw-border-opacity: 1;
+  border-left-color: rgb(245 158 11 / var(--tw-border-opacity, 1));
+}
+.border-l-emerald-500 {
+  --tw-border-opacity: 1;
+  border-left-color: rgb(16 185 129 / var(--tw-border-opacity, 1));
+}
+.border-l-ink-400 {
+  --tw-border-opacity: 1;
+  border-left-color: rgb(107 114 128 / var(--tw-border-opacity, 1));
+}
+.border-l-rose-500 {
+  --tw-border-opacity: 1;
+  border-left-color: rgb(244 63 94 / var(--tw-border-opacity, 1));
+}
+.border-l-sky-500 {
+  --tw-border-opacity: 1;
+  border-left-color: rgb(14 165 233 / var(--tw-border-opacity, 1));
+}
+.bg-amber-400 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(251 191 36 / var(--tw-bg-opacity, 1));
+}
+.bg-amber-500 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(245 158 11 / var(--tw-bg-opacity, 1));
+}
+.bg-amber-700 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(180 83 9 / var(--tw-bg-opacity, 1));
+}
+.bg-amber-900\/30 {
+  background-color: rgb(120 53 15 / 0.3);
+}
+.bg-amber-900\/40 {
+  background-color: rgb(120 53 15 / 0.4);
+}
+.bg-amber-900\/50 {
+  background-color: rgb(120 53 15 / 0.5);
+}
+.bg-amber-900\/60 {
+  background-color: rgb(120 53 15 / 0.6);
+}
+.bg-amber-950\/20 {
+  background-color: rgb(69 26 3 / 0.2);
+}
+.bg-amber-950\/30 {
+  background-color: rgb(69 26 3 / 0.3);
+}
+.bg-amber-950\/40 {
+  background-color: rgb(69 26 3 / 0.4);
+}
+.bg-amber-950\/60 {
+  background-color: rgb(69 26 3 / 0.6);
+}
+.bg-black\/40 {
+  background-color: rgb(0 0 0 / 0.4);
+}
+.bg-black\/60 {
+  background-color: rgb(0 0 0 / 0.6);
+}
+.bg-black\/70 {
+  background-color: rgb(0 0 0 / 0.7);
+}
+.bg-blue-400 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(96 165 250 / var(--tw-bg-opacity, 1));
+}
+.bg-blue-700 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(29 78 216 / var(--tw-bg-opacity, 1));
+}
+.bg-blue-900\/40 {
+  background-color: rgb(30 58 138 / 0.4);
+}
+.bg-emerald-400 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(52 211 153 / var(--tw-bg-opacity, 1));
+}
+.bg-emerald-500 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(16 185 129 / var(--tw-bg-opacity, 1));
+}
+.bg-emerald-500\/10 {
+  background-color: rgb(16 185 129 / 0.1);
+}
+.bg-emerald-500\/50 {
+  background-color: rgb(16 185 129 / 0.5);
+}
+.bg-emerald-600 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(5 150 105 / var(--tw-bg-opacity, 1));
+}
+.bg-emerald-600\/60 {
+  background-color: rgb(5 150 105 / 0.6);
+}
+.bg-emerald-700 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(4 120 87 / var(--tw-bg-opacity, 1));
+}
+.bg-emerald-700\/30 {
+  background-color: rgb(4 120 87 / 0.3);
+}
+.bg-emerald-900 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(6 78 59 / var(--tw-bg-opacity, 1));
+}
+.bg-emerald-900\/20 {
+  background-color: rgb(6 78 59 / 0.2);
+}
+.bg-emerald-900\/30 {
+  background-color: rgb(6 78 59 / 0.3);
+}
+.bg-emerald-900\/40 {
+  background-color: rgb(6 78 59 / 0.4);
+}
+.bg-emerald-900\/50 {
+  background-color: rgb(6 78 59 / 0.5);
+}
+.bg-emerald-900\/60 {
+  background-color: rgb(6 78 59 / 0.6);
+}
+.bg-emerald-950\/15 {
+  background-color: rgb(2 44 34 / 0.15);
+}
+.bg-emerald-950\/20 {
+  background-color: rgb(2 44 34 / 0.2);
+}
+.bg-emerald-950\/30 {
+  background-color: rgb(2 44 34 / 0.3);
+}
+.bg-emerald-950\/40 {
+  background-color: rgb(2 44 34 / 0.4);
+}
+.bg-fuchsia-900\/40 {
+  background-color: rgb(112 26 117 / 0.4);
+}
+.bg-indigo-900\/30 {
+  background-color: rgb(49 46 129 / 0.3);
+}
+.bg-indigo-950\/20 {
+  background-color: rgb(30 27 75 / 0.2);
+}
+.bg-ink-400 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(107 114 128 / var(--tw-bg-opacity, 1));
+}
+.bg-ink-600 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(42 47 58 / var(--tw-bg-opacity, 1));
+}
+.bg-ink-700 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(28 32 40 / var(--tw-bg-opacity, 1));
+}
+.bg-ink-800 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(19 22 27 / var(--tw-bg-opacity, 1));
+}
+.bg-ink-800\/40 {
+  background-color: rgb(19 22 27 / 0.4);
+}
+.bg-ink-800\/50 {
+  background-color: rgb(19 22 27 / 0.5);
+}
+.bg-ink-800\/60 {
+  background-color: rgb(19 22 27 / 0.6);
+}
+.bg-ink-900 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(11 13 16 / var(--tw-bg-opacity, 1));
+}
+.bg-ink-900\/40 {
+  background-color: rgb(11 13 16 / 0.4);
+}
+.bg-ink-900\/60 {
+  background-color: rgb(11 13 16 / 0.6);
+}
+.bg-ink-900\/80 {
+  background-color: rgb(11 13 16 / 0.8);
+}
+.bg-red-500 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(239 68 68 / var(--tw-bg-opacity, 1));
+}
+.bg-red-700 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(185 28 28 / var(--tw-bg-opacity, 1));
+}
+.bg-red-900 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(127 29 29 / var(--tw-bg-opacity, 1));
+}
+.bg-red-900\/40 {
+  background-color: rgb(127 29 29 / 0.4);
+}
+.bg-rose-500 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(244 63 94 / var(--tw-bg-opacity, 1));
+}
+.bg-rose-900\/40 {
+  background-color: rgb(136 19 55 / 0.4);
+}
+.bg-rose-900\/60 {
+  background-color: rgb(136 19 55 / 0.6);
+}
+.bg-rose-950\/20 {
+  background-color: rgb(76 5 25 / 0.2);
+}
+.bg-rose-950\/30 {
+  background-color: rgb(76 5 25 / 0.3);
+}
+.bg-rose-950\/40 {
+  background-color: rgb(76 5 25 / 0.4);
+}
+.bg-rose-950\/60 {
+  background-color: rgb(76 5 25 / 0.6);
+}
+.bg-sky-500\/50 {
+  background-color: rgb(14 165 233 / 0.5);
+}
+.bg-sky-900\/40 {
+  background-color: rgb(12 74 110 / 0.4);
+}
+.bg-sky-900\/60 {
+  background-color: rgb(12 74 110 / 0.6);
+}
+.bg-sky-950\/20 {
+  background-color: rgb(8 47 73 / 0.2);
+}
+.bg-sky-950\/30 {
+  background-color: rgb(8 47 73 / 0.3);
+}
+.bg-teal-900\/30 {
+  background-color: rgb(19 78 74 / 0.3);
+}
+.bg-teal-900\/40 {
+  background-color: rgb(19 78 74 / 0.4);
+}
+.bg-violet-900\/40 {
+  background-color: rgb(76 29 149 / 0.4);
+}
+.bg-violet-900\/50 {
+  background-color: rgb(76 29 149 / 0.5);
+}
+.bg-violet-950\/15 {
+  background-color: rgb(46 16 101 / 0.15);
+}
+.bg-violet-950\/20 {
+  background-color: rgb(46 16 101 / 0.2);
+}
+.bg-ink-800\/30 {
+  background-color: rgb(19 22 27 / 0.3);
+}
+.bg-amber-950\/15 {
+  background-color: rgb(69 26 3 / 0.15);
+}
+.bg-gradient-to-t {
+  background-image: linear-gradient(to top, var(--tw-gradient-stops));
+}
+.from-ink-900 {
+  --tw-gradient-from: #0b0d10 var(--tw-gradient-from-position);
+  --tw-gradient-to: rgb(11 13 16 / 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+}
+.to-transparent {
+  --tw-gradient-to: transparent var(--tw-gradient-to-position);
+}
+.p-1 {
+  padding: 0.25rem;
+}
+.p-2 {
+  padding: 0.5rem;
+}
+.p-3 {
+  padding: 0.75rem;
+}
+.p-4 {
+  padding: 1rem;
+}
+.p-5 {
+  padding: 1.25rem;
+}
+.p-6 {
+  padding: 1.5rem;
+}
+.p-8 {
+  padding: 2rem;
+}
+.px-1 {
+  padding-left: 0.25rem;
+  padding-right: 0.25rem;
+}
+.px-1\.5 {
+  padding-left: 0.375rem;
+  padding-right: 0.375rem;
+}
+.px-2 {
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+.px-2\.5 {
+  padding-left: 0.625rem;
+  padding-right: 0.625rem;
+}
+.px-3 {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+.px-4 {
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+.px-5 {
+  padding-left: 1.25rem;
+  padding-right: 1.25rem;
+}
+.px-6 {
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
+}
+.py-0 {
+  padding-top: 0px;
+  padding-bottom: 0px;
+}
+.py-0\.5 {
+  padding-top: 0.125rem;
+  padding-bottom: 0.125rem;
+}
+.py-1 {
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+}
+.py-1\.5 {
+  padding-top: 0.375rem;
+  padding-bottom: 0.375rem;
+}
+.py-2 {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+.py-3 {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+.py-6 {
+  padding-top: 1.5rem;
+  padding-bottom: 1.5rem;
+}
+.pb-1 {
+  padding-bottom: 0.25rem;
+}
+.pb-2 {
+  padding-bottom: 0.5rem;
+}
+.pb-3 {
+  padding-bottom: 0.75rem;
+}
+.pl-2 {
+  padding-left: 0.5rem;
+}
+.pl-3 {
+  padding-left: 0.75rem;
+}
+.pl-8 {
+  padding-left: 2rem;
+}
+.pt-1 {
+  padding-top: 0.25rem;
+}
+.pt-2 {
+  padding-top: 0.5rem;
+}
+.pt-3 {
+  padding-top: 0.75rem;
+}
+.text-left {
+  text-align: left;
+}
+.text-center {
+  text-align: center;
+}
+.text-right {
+  text-align: right;
+}
+.align-middle {
+  vertical-align: middle;
+}
+.align-bottom {
+  vertical-align: bottom;
+}
+.font-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.text-\[10px\] {
+  font-size: 10px;
+}
+.text-\[11px\] {
+  font-size: 11px;
+}
+.text-\[12px\] {
+  font-size: 12px;
+}
+.text-\[13px\] {
+  font-size: 13px;
+}
+.text-\[9px\] {
+  font-size: 9px;
+}
+.text-base {
+  font-size: 1rem;
+  line-height: 1.5rem;
+}
+.text-lg {
+  font-size: 1.125rem;
+  line-height: 1.75rem;
+}
+.text-sm {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+.text-xl {
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+}
+.text-xs {
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+.font-bold {
+  font-weight: 700;
+}
+.font-medium {
+  font-weight: 500;
+}
+.font-semibold {
+  font-weight: 600;
+}
+.uppercase {
+  text-transform: uppercase;
+}
+.normal-case {
+  text-transform: none;
+}
+.italic {
+  font-style: italic;
+}
+.tabular-nums {
+  --tw-numeric-spacing: tabular-nums;
+  font-variant-numeric: var(--tw-ordinal) var(--tw-slashed-zero) var(--tw-numeric-figure) var(--tw-numeric-spacing) var(--tw-numeric-fraction);
+}
+.leading-none {
+  line-height: 1;
+}
+.leading-snug {
+  line-height: 1.375;
+}
+.tracking-tight {
+  letter-spacing: -0.025em;
+}
+.tracking-wide {
+  letter-spacing: 0.025em;
+}
+.tracking-wider {
+  letter-spacing: 0.05em;
+}
+.text-amber-100 {
+  --tw-text-opacity: 1;
+  color: rgb(254 243 199 / var(--tw-text-opacity, 1));
+}
+.text-amber-200 {
+  --tw-text-opacity: 1;
+  color: rgb(253 230 138 / var(--tw-text-opacity, 1));
+}
+.text-amber-200\/70 {
+  color: rgb(253 230 138 / 0.7);
+}
+.text-amber-200\/80 {
+  color: rgb(253 230 138 / 0.8);
+}
+.text-amber-200\/90 {
+  color: rgb(253 230 138 / 0.9);
+}
+.text-amber-300 {
+  --tw-text-opacity: 1;
+  color: rgb(252 211 77 / var(--tw-text-opacity, 1));
+}
+.text-amber-300\/80 {
+  color: rgb(252 211 77 / 0.8);
+}
+.text-amber-400 {
+  --tw-text-opacity: 1;
+  color: rgb(251 191 36 / var(--tw-text-opacity, 1));
+}
+.text-amber-400\/70 {
+  color: rgb(251 191 36 / 0.7);
+}
+.text-blue-100 {
+  --tw-text-opacity: 1;
+  color: rgb(219 234 254 / var(--tw-text-opacity, 1));
+}
+.text-blue-300 {
+  --tw-text-opacity: 1;
+  color: rgb(147 197 253 / var(--tw-text-opacity, 1));
+}
+.text-blue-300\/70 {
+  color: rgb(147 197 253 / 0.7);
+}
+.text-emerald-100 {
+  --tw-text-opacity: 1;
+  color: rgb(209 250 229 / var(--tw-text-opacity, 1));
+}
+.text-emerald-200 {
+  --tw-text-opacity: 1;
+  color: rgb(167 243 208 / var(--tw-text-opacity, 1));
+}
+.text-emerald-200\/80 {
+  color: rgb(167 243 208 / 0.8);
+}
+.text-emerald-200\/90 {
+  color: rgb(167 243 208 / 0.9);
+}
+.text-emerald-300 {
+  --tw-text-opacity: 1;
+  color: rgb(110 231 183 / var(--tw-text-opacity, 1));
+}
+.text-emerald-300\/60 {
+  color: rgb(110 231 183 / 0.6);
+}
+.text-emerald-300\/70 {
+  color: rgb(110 231 183 / 0.7);
+}
+.text-emerald-300\/80 {
+  color: rgb(110 231 183 / 0.8);
+}
+.text-emerald-400 {
+  --tw-text-opacity: 1;
+  color: rgb(52 211 153 / var(--tw-text-opacity, 1));
+}
+.text-emerald-400\/70 {
+  color: rgb(52 211 153 / 0.7);
+}
+.text-emerald-400\/80 {
+  color: rgb(52 211 153 / 0.8);
+}
+.text-fuchsia-200 {
+  --tw-text-opacity: 1;
+  color: rgb(245 208 254 / var(--tw-text-opacity, 1));
+}
+.text-indigo-200 {
+  --tw-text-opacity: 1;
+  color: rgb(199 210 254 / var(--tw-text-opacity, 1));
+}
+.text-indigo-300 {
+  --tw-text-opacity: 1;
+  color: rgb(165 180 252 / var(--tw-text-opacity, 1));
+}
+.text-indigo-300\/80 {
+  color: rgb(165 180 252 / 0.8);
+}
+.text-ink-100 {
+  --tw-text-opacity: 1;
+  color: rgb(229 231 235 / var(--tw-text-opacity, 1));
+}
+.text-ink-400 {
+  --tw-text-opacity: 1;
+  color: rgb(107 114 128 / var(--tw-text-opacity, 1));
+}
+.text-ink-500 {
+  --tw-text-opacity: 1;
+  color: rgb(58 65 80 / var(--tw-text-opacity, 1));
+}
+.text-ink-600 {
+  --tw-text-opacity: 1;
+  color: rgb(42 47 58 / var(--tw-text-opacity, 1));
+}
+.text-red-100 {
+  --tw-text-opacity: 1;
+  color: rgb(254 226 226 / var(--tw-text-opacity, 1));
+}
+.text-red-200 {
+  --tw-text-opacity: 1;
+  color: rgb(254 202 202 / var(--tw-text-opacity, 1));
+}
+.text-red-300 {
+  --tw-text-opacity: 1;
+  color: rgb(252 165 165 / var(--tw-text-opacity, 1));
+}
+.text-red-400 {
+  --tw-text-opacity: 1;
+  color: rgb(248 113 113 / var(--tw-text-opacity, 1));
+}
+.text-rose-100 {
+  --tw-text-opacity: 1;
+  color: rgb(255 228 230 / var(--tw-text-opacity, 1));
+}
+.text-rose-200 {
+  --tw-text-opacity: 1;
+  color: rgb(254 205 211 / var(--tw-text-opacity, 1));
+}
+.text-rose-300 {
+  --tw-text-opacity: 1;
+  color: rgb(253 164 175 / var(--tw-text-opacity, 1));
+}
+.text-rose-300\/80 {
+  color: rgb(253 164 175 / 0.8);
+}
+.text-rose-400 {
+  --tw-text-opacity: 1;
+  color: rgb(251 113 133 / var(--tw-text-opacity, 1));
+}
+.text-rose-400\/70 {
+  color: rgb(251 113 133 / 0.7);
+}
+.text-rose-500\/70 {
+  color: rgb(244 63 94 / 0.7);
+}
+.text-sky-100 {
+  --tw-text-opacity: 1;
+  color: rgb(224 242 254 / var(--tw-text-opacity, 1));
+}
+.text-sky-200 {
+  --tw-text-opacity: 1;
+  color: rgb(186 230 253 / var(--tw-text-opacity, 1));
+}
+.text-sky-200\/80 {
+  color: rgb(186 230 253 / 0.8);
+}
+.text-sky-200\/90 {
+  color: rgb(186 230 253 / 0.9);
+}
+.text-sky-300 {
+  --tw-text-opacity: 1;
+  color: rgb(125 211 252 / var(--tw-text-opacity, 1));
+}
+.text-sky-400\/70 {
+  color: rgb(56 189 248 / 0.7);
+}
+.text-teal-200 {
+  --tw-text-opacity: 1;
+  color: rgb(153 246 228 / var(--tw-text-opacity, 1));
+}
+.text-teal-300 {
+  --tw-text-opacity: 1;
+  color: rgb(94 234 212 / var(--tw-text-opacity, 1));
+}
+.text-violet-100 {
+  --tw-text-opacity: 1;
+  color: rgb(237 233 254 / var(--tw-text-opacity, 1));
+}
+.text-violet-200 {
+  --tw-text-opacity: 1;
+  color: rgb(221 214 254 / var(--tw-text-opacity, 1));
+}
+.text-violet-300 {
+  --tw-text-opacity: 1;
+  color: rgb(196 181 253 / var(--tw-text-opacity, 1));
+}
+.text-violet-400\/70 {
+  color: rgb(167 139 250 / 0.7);
+}
+.text-white {
+  --tw-text-opacity: 1;
+  color: rgb(255 255 255 / var(--tw-text-opacity, 1));
+}
+.text-amber-400\/80 {
+  color: rgb(251 191 36 / 0.8);
+}
+.underline {
+  text-decoration-line: underline;
+}
+.accent-emerald-500 {
+  accent-color: #10b981;
+}
+.opacity-50 {
+  opacity: 0.5;
+}
+.opacity-70 {
+  opacity: 0.7;
+}
+.opacity-80 {
+  opacity: 0.8;
+}
+.opacity-90 {
+  opacity: 0.9;
+}
+.shadow-2xl {
+  --tw-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+  --tw-shadow-colored: 0 25px 50px -12px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+.shadow-lg {
+  --tw-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --tw-shadow-colored: 0 10px 15px -3px var(--tw-shadow-color), 0 4px 6px -4px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+.shadow-xl {
+  --tw-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+  --tw-shadow-colored: 0 20px 25px -5px var(--tw-shadow-color), 0 8px 10px -6px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+.shadow-black\/50 {
+  --tw-shadow-color: rgb(0 0 0 / 0.5);
+  --tw-shadow: var(--tw-shadow-colored);
+}
+.outline {
+  outline-style: solid;
+}
+.ring {
+  --tw-ring-offset-shadow: var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
+  --tw-ring-shadow: var(--tw-ring-inset) 0 0 0 calc(3px + var(--tw-ring-offset-width)) var(--tw-ring-color);
+  box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000);
+}
+.filter {
+  filter: var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow);
+}
+.transition {
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+.transition-all {
+  transition-property: all;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+.transition-colors {
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+.duration-300 {
+  transition-duration: 300ms;
+}
+
+html, body, #root { height: 100%; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.last\:border-r-0:last-child {
+  border-right-width: 0px;
+}
+
+.hover\:border-amber-600:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(217 119 6 / var(--tw-border-opacity, 1));
+}
+
+.hover\:border-emerald-600:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(5 150 105 / var(--tw-border-opacity, 1));
+}
+
+.hover\:border-ink-600:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(42 47 58 / var(--tw-border-opacity, 1));
+}
+
+.hover\:border-ink-600\/60:hover {
+  border-color: rgb(42 47 58 / 0.6);
+}
+
+.hover\:border-ink-700:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(28 32 40 / var(--tw-border-opacity, 1));
+}
+
+.hover\:border-rose-600:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(225 29 72 / var(--tw-border-opacity, 1));
+}
+
+.hover\:bg-amber-600:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(217 119 6 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-amber-800\/50:hover {
+  background-color: rgb(146 64 14 / 0.5);
+}
+
+.hover\:bg-amber-900\/60:hover {
+  background-color: rgb(120 53 15 / 0.6);
+}
+
+.hover\:bg-black\/20:hover {
+  background-color: rgb(0 0 0 / 0.2);
+}
+
+.hover\:bg-blue-800\/40:hover {
+  background-color: rgb(30 64 175 / 0.4);
+}
+
+.hover\:bg-emerald-500:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(16 185 129 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-emerald-600:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(5 150 105 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-emerald-900\/40:hover {
+  background-color: rgb(6 78 59 / 0.4);
+}
+
+.hover\:bg-ink-600:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(42 47 58 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-ink-700:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(28 32 40 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-ink-800:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(19 22 27 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-ink-800\/40:hover {
+  background-color: rgb(19 22 27 / 0.4);
+}
+
+.hover\:bg-ink-800\/70:hover {
+  background-color: rgb(19 22 27 / 0.7);
+}
+
+.hover\:bg-red-600:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(220 38 38 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-red-800:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(153 27 27 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-red-900\/60:hover {
+  background-color: rgb(127 29 29 / 0.6);
+}
+
+.hover\:bg-rose-700\/50:hover {
+  background-color: rgb(190 18 60 / 0.5);
+}
+
+.hover\:bg-rose-800\/50:hover {
+  background-color: rgb(159 18 57 / 0.5);
+}
+
+.hover\:bg-rose-900\/80:hover {
+  background-color: rgb(136 19 55 / 0.8);
+}
+
+.hover\:text-blue-100:hover {
+  --tw-text-opacity: 1;
+  color: rgb(219 234 254 / var(--tw-text-opacity, 1));
+}
+
+.hover\:text-emerald-200:hover {
+  --tw-text-opacity: 1;
+  color: rgb(167 243 208 / var(--tw-text-opacity, 1));
+}
+
+.hover\:text-ink-100:hover {
+  --tw-text-opacity: 1;
+  color: rgb(229 231 235 / var(--tw-text-opacity, 1));
+}
+
+.hover\:text-rose-100:hover {
+  --tw-text-opacity: 1;
+  color: rgb(255 228 230 / var(--tw-text-opacity, 1));
+}
+
+.hover\:text-sky-200:hover {
+  --tw-text-opacity: 1;
+  color: rgb(186 230 253 / var(--tw-text-opacity, 1));
+}
+
+.hover\:text-white:hover {
+  --tw-text-opacity: 1;
+  color: rgb(255 255 255 / var(--tw-text-opacity, 1));
+}
+
+.hover\:text-amber-200:hover {
+  --tw-text-opacity: 1;
+  color: rgb(253 230 138 / var(--tw-text-opacity, 1));
+}
+
+.hover\:underline:hover {
+  text-decoration-line: underline;
+}
+
+.hover\:opacity-100:hover {
+  opacity: 1;
+}
+
+.focus\:border-emerald-500:focus {
+  --tw-border-opacity: 1;
+  border-color: rgb(16 185 129 / var(--tw-border-opacity, 1));
+}
+
+.focus\:outline-none:focus {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+.disabled\:cursor-not-allowed:disabled {
+  cursor: not-allowed;
+}
+
+.disabled\:bg-ink-600:disabled {
+  --tw-bg-opacity: 1;
+  background-color: rgb(42 47 58 / var(--tw-bg-opacity, 1));
+}
+
+.disabled\:opacity-40:disabled {
+  opacity: 0.4;
+}
+
+.disabled\:opacity-50:disabled {
+  opacity: 0.5;
+}
+
+@media (min-width: 640px) {
+
+  .sm\:grid-cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 768px) {
+
+  .md\:grid-cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+</style></head>
+  <body class="bg-ink-900 text-ink-100">
+    <div id="root"><div class="h-full flex flex-col"><header class="px-6 py-3 border-b border-ink-700 flex items-center justify-between"><div class="flex items-baseline gap-3"><h1 class="text-lg font-semibold tracking-tight">ollama_swarm</h1><span class="text-xs text-ink-400 font-mono">glm-5.1:cloud · opencode</span></div><div class="flex items-center gap-3"><span class="text-xs font-mono tabular-nums text-ink-400" title="Run started 4/27/2026, 10:13:42 PM">2m27s</span><span class="px-2 py-0.5 rounded text-xs font-mono whitespace-nowrap bg-emerald-900 text-emerald-100" title="Phase: completed
+Todos: 1 committed · 0 open · 0 claimed · 0 stale · 1 skipped (2 total)
+Agents: 5 stopped
+Criteria: 1 met · 3 unmet · 0 wont-do">completed · 1 commits</span><span class="relative"><button title="Token usage — click to expand" class="rounded px-2 py-0.5 border transition flex items-center gap-1.5 text-ink-400 hover:text-ink-100 hover:bg-ink-800/70 border-ink-700 hover:border-ink-600"><span>tokens</span><span class="font-mono text-[10px] text-ink-500">143.9k/1h</span><span>▾</span></button></span><span class="relative"><button title="Show prior runs in this parent folder" class="text-ink-400 hover:text-ink-100 hover:bg-ink-800/70 rounded px-2 py-0.5 border border-ink-700 hover:border-ink-600 transition">history ▾</button></span><div class="relative"><button class="text-[11px] uppercase tracking-wide px-2 py-1 rounded bg-ink-800 hover:bg-ink-700 text-ink-300 border border-ink-600" title="V2 Step 6b: per-run summaries derived from logs/current.jsonl via EventLogReaderV2">V2 event log</button></div></div></header><main class="flex-1 overflow-hidden"><div class="h-full flex flex-col"><div class="bg-ink-900/60 border-b border-ink-700 px-4 py-1.5 flex items-center gap-2.5 text-xs font-mono text-ink-300 flex-wrap"><button title="run: e88ed24f-f9cb-4d09-a24a-821f3726ada7  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">run</span><span>e88ed24f</span><span class="text-[10px] w-2 "></span></button><span title="Preset: blackboard" class="inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] uppercase tracking-wider font-semibold bg-emerald-900/40 text-emerald-200 border-emerald-700">blackboard</span><span class="text-ink-600">·</span><span class="text-ink-100 font-semibold">multi-agent-orchestrator</span><span class="text-ink-600">·</span><span title="Planner model"><span class="text-ink-500">planner</span> glm-5.1:cloud</span><span class="text-ink-600">·</span><span title="Worker model"><span class="text-ink-500">worker</span> gemma4:31b-cloud</span><button title="Open in OS file manager — C:\Users\kevin\Desktop\ollama_swarm\runs_overnight7\multi-agent-orchestrator" class="text-ink-400 hover:text-ink-100 hover:underline truncate max-w-md inline-block align-bottom ml-auto">…sktop\ollama_swarm\runs_overnight7\multi-agent-orchestrator</button></div><div class="flex-1 grid grid-cols-[280px_1fr] min-h-0"><aside class="border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800"><div class="flex items-center justify-between mb-2"><div class="text-xs uppercase tracking-wide text-ink-400">Agents <span class="text-ink-500 font-mono normal-case">(5)</span></div><button class="text-xs px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500" title="Reset the UI to the setup form. Doesn't affect the just-finished run's saved summary.">New swarm</button></div><div class="border border-ink-700 rounded-md p-3 bg-ink-800"><div class="flex items-center justify-between"><div class="flex items-center gap-2 min-w-0"><span class="inline-block h-2 w-2 rounded-full bg-emerald-600/60 shrink-0" title="Exited cleanly when the run completed (not a crash)"></span><span class="font-medium">Agent 1</span><span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 border-amber-500/50 text-amber-300" title="Planner / replanner / critic (runs audit too when no dedicated auditor)">planner</span></div><span class="text-xs font-mono text-ink-400">:58026</span></div><div class="mt-1 text-xs text-ink-400 font-mono relative cursor-help">done</div><div class="mt-1.5 flex flex-wrap items-baseline gap-1 text-[10px] font-mono text-ink-400"><button title="session: ses_22d7e08d1ffeEw4BBBewDSq1O6  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">session</span><span>ses_22d7e08d…</span><span class="text-[10px] w-2 "></span></button><button title="model: glm-5.1:cloud  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">model</span><span>glm-5.1:cloud</span><span class="text-[10px] w-2 "></span></button></div></div><div class="border border-ink-700 rounded-md p-3 bg-ink-800"><div class="flex items-center justify-between"><div class="flex items-center gap-2 min-w-0"><span class="inline-block h-2 w-2 rounded-full bg-emerald-600/60 shrink-0" title="Exited cleanly when the run completed (not a crash)"></span><span class="font-medium">Agent 2</span><span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 border-ink-600 text-ink-400" title="Worker (claims + commits todos)">worker</span></div><span class="text-xs font-mono text-ink-400">:52482</span></div><div class="mt-1 text-xs text-ink-400 font-mono relative cursor-help">done</div><div class="mt-1.5 flex flex-wrap items-baseline gap-1 text-[10px] font-mono text-ink-400"><button title="session: ses_22d7df132ffe12zqylyNf4xWm1  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">session</span><span>ses_22d7df13…</span><span class="text-[10px] w-2 "></span></button><button title="model: gemma4:31b-cloud  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">model</span><span>gemma4:31b-cloud</span><span class="text-[10px] w-2 "></span></button></div></div><div class="border border-ink-700 rounded-md p-3 bg-ink-800"><div class="flex items-center justify-between"><div class="flex items-center gap-2 min-w-0"><span class="inline-block h-2 w-2 rounded-full bg-emerald-600/60 shrink-0" title="Exited cleanly when the run completed (not a crash)"></span><span class="font-medium">Agent 3</span><span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 border-ink-600 text-ink-400" title="Worker (claims + commits todos)">worker</span></div><span class="text-xs font-mono text-ink-400">:52483</span></div><div class="mt-1 text-xs text-ink-400 font-mono relative cursor-help">done</div><div class="mt-1.5 flex flex-wrap items-baseline gap-1 text-[10px] font-mono text-ink-400"><button title="session: ses_22d7df132ffeoK78ph4CjrZpRO  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">session</span><span>ses_22d7df13…</span><span class="text-[10px] w-2 "></span></button><button title="model: gemma4:31b-cloud  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">model</span><span>gemma4:31b-cloud</span><span class="text-[10px] w-2 "></span></button></div></div><div class="border border-ink-700 rounded-md p-3 bg-ink-800"><div class="flex items-center justify-between"><div class="flex items-center gap-2 min-w-0"><span class="inline-block h-2 w-2 rounded-full bg-emerald-600/60 shrink-0" title="Exited cleanly when the run completed (not a crash)"></span><span class="font-medium">Agent 4</span><span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 border-ink-600 text-ink-400" title="Worker (claims + commits todos)">worker</span></div><span class="text-xs font-mono text-ink-400">:52484</span></div><div class="mt-1 text-xs text-ink-400 font-mono relative ">done</div><div class="mt-1.5 flex flex-wrap items-baseline gap-1 text-[10px] font-mono text-ink-400"><button title="session: ses_22d7df132ffeHPHg636LET1y99  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">session</span><span>ses_22d7df13…</span><span class="text-[10px] w-2 "></span></button><button title="model: gemma4:31b-cloud  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">model</span><span>gemma4:31b-cloud</span><span class="text-[10px] w-2 "></span></button></div></div><div class="border border-ink-700 rounded-md p-3 bg-ink-800"><div class="flex items-center justify-between"><div class="flex items-center gap-2 min-w-0"><span class="inline-block h-2 w-2 rounded-full bg-emerald-600/60 shrink-0" title="Exited cleanly when the run completed (not a crash)"></span><span class="font-medium">Agent 5</span><span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 border-sky-500/50 text-sky-300" title="Dedicated auditor (Unit 58) — judges contract criteria only, frees the planner to focus on todo authorship">auditor</span></div><span class="text-xs font-mono text-ink-400">:56733</span></div><div class="mt-1 text-xs text-ink-400 font-mono relative cursor-help">done</div><div class="mt-1.5 flex flex-wrap items-baseline gap-1 text-[10px] font-mono text-ink-400"><button title="session: ses_22d7ddce2ffeI7r85jlcAVhR57  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">session</span><span>ses_22d7ddce…</span><span class="text-[10px] w-2 "></span></button><button title="model: nemotron-3-super:cloud  (click to copy)" class="inline-flex items-baseline gap-1.5 hover:text-ink-200 hover:bg-ink-800/70 rounded px-1.5 py-0.5 border border-transparent hover:border-ink-700 transition"><span class="text-ink-500">model</span><span>nemotron-3-super:cloud</span><span class="text-[10px] w-2 "></span></button></div></div></aside><section class="flex flex-col overflow-hidden"><div class="flex border-b border-ink-700 bg-ink-800 text-sm"><button class="px-4 py-2 border-b-2 transition-colors border-emerald-500 text-emerald-300">Transcript</button><button class="px-4 py-2 border-b-2 transition-colors border-transparent text-ink-400 hover:text-ink-200">Metrics</button><button class="px-4 py-2 border-b-2 transition-colors border-transparent text-ink-400 hover:text-ink-200">Board</button><button class="px-4 py-2 border-b-2 transition-colors border-transparent text-ink-400 hover:text-ink-200">Contract</button><button class="px-4 py-2 border-b-2 transition-colors border-transparent text-ink-400 hover:text-ink-200">Memory</button></div><div class="flex-1 overflow-hidden"><div class="h-full relative"><div class="h-full overflow-y-auto p-4 space-y-3 bg-ink-900"><div data-entry-id="14a6c025-f488-4d0c-8bac-d491a95cc9a6" data-entry-role="system"><div class="my-3" role="separator"><div class="flex items-center gap-2"><div class="flex-1 h-px bg-ink-700"></div><div class="text-[10px] uppercase tracking-wider text-ink-500 font-semibold shrink-0">New run</div><div class="flex-1 h-px bg-ink-700"></div></div><div class="mt-2 text-xs text-ink-300 font-mono text-center"><div><span class="text-ink-100 font-semibold">e88ed24f</span><span class="text-ink-600 mx-2">·</span><span class="text-ink-400">4/27/2026, 10:13:42 PM</span></div><div class="mt-0.5 text-ink-400"><span>blackboard</span><span class="text-ink-600 mx-2">·</span><span>planner glm-5.1:cloud</span><span class="text-ink-600 mx-2">·</span><span>worker gemma4:31b-cloud</span><span class="text-ink-600 mx-2">·</span><span>4 agents</span></div><div class="mt-0.5 text-ink-500 truncate">https://github.com/kevinkicho/multi-agent-orchestrator</div></div></div></div><div data-entry-id="3b7f157c-1a76-48aa-bfb7-f25b8b9b8e15" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:13:43 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Cloned https://github.com/kevinkicho/multi-agent-orchestrator -&gt; C:\Users\kevin\Desktop\ollama_swarm\runs_overnight7\multi-agent-orchestrator</div></div></div></div><div data-entry-id="50e316ec-c913-4835-84a9-a02e20c2939e" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:13:43 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Per-agent models: planner=glm-5.1:cloud, workers=gemma4:31b-cloud</div></div></div></div><div data-entry-id="22fe2102-94cb-4bb8-bf33-e8bc20935508" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:13:43 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Per-agent models: auditor=nemotron-3-super:cloud</div></div></div></div><div data-entry-id="ae477217-a578-487d-aca2-6d2745c9f6bf" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:13:49 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Planner agent ready on port 58026</div></div></div></div><div data-entry-id="cacf2120-18ab-4fe8-81fa-89684906f2ec" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:13:55 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Worker agent agent-2 ready on port 52482</div></div></div></div><div data-entry-id="d6507b17-bb93-40c4-85e4-47c0b76e9d2d" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:13:55 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Worker agent agent-3 ready on port 52483</div></div></div></div><div data-entry-id="50c5325a-4425-41d2-ac51-52d1290c6e4e" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:13:55 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Worker agent agent-4 ready on port 52484</div></div></div></div><div data-entry-id="b08d926a-234c-4f5c-82a6-c38873a98457" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:13:59 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Auditor agent agent-5 ready on port 56733 (model=nemotron-3-super:cloud). Audit calls will route here in parallel with workers.</div></div></div></div><div data-entry-id="2b2e3c1d-b324-4905-a83c-7a407165d288" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:13:59 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Seed: 13 top-level entries, README 56903 chars.</div></div></div></div><div data-entry-id="a6753ecd-161c-475c-855f-902629f7e8bb" data-entry-role="agent" data-agent-index="1"><div class="rounded border-2 border-emerald-700/50 bg-emerald-950/15 p-3 my-2 text-sm rounded-md p-3 border text-sm" style="border-color: rgb(54, 99, 69); background: rgb(21, 40, 28);"><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:14:00 PM</div><div class="text-ink-200 font-medium mb-1.5">Contract: Add JSDoc documentation with one-line descriptions and @param/@returns annotations to every public method of the TokenTracker class in src/token-tracker.ts.</div><div class="flex items-center gap-1 mb-2"><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition bg-emerald-900/50 text-emerald-200 border border-emerald-700/60">Summary</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">All 4 criteria</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">JSON</button></div><ol class="list-decimal list-inside space-y-1 text-ink-300 text-[13px]"><li>Every public method of the TokenTracker class has a JSDoc comment block containing a one-…</li><li>Every public method's JSDoc includes a @param tag for each parameter the method accepts.</li><li>Every public method's JSDoc includes a @returns tag describing the return value.</li><li class="list-none italic text-ink-500 mt-1">…+1 more (click <span class="text-emerald-300">All 4 criteria</span> above)</li></ol></div></div><div data-entry-id="7ac4d310-9ce2-42bd-8e94-7405af8311c7" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:14:00 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Contract (tier 1): "Add JSDoc documentation with one-line descriptions and @param/@returns annotations to every public method of the TokenTracker class in src/token-tracker.ts." (4 criteria).</div></div></div></div><div data-entry-id="57afd04d-cb15-4032-8286-7f762066b06c" data-entry-role="agent" data-agent-index="1"><div class="rounded border-2 border-emerald-700/50 bg-emerald-950/15 p-3 my-2 text-sm rounded-md p-3 border text-sm" style="border-color: rgb(54, 99, 69); background: rgb(21, 40, 28);"><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:14:35 PM</div><div class="text-ink-200 font-medium mb-1.5">Posted 5 todos to the board</div><div class="flex items-center gap-1 mb-2"><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition bg-emerald-900/50 text-emerald-200 border border-emerald-700/60">Summary</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">All 5 todos</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">JSON</button></div><div class="text-ink-300 text-[13px] space-y-1"><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500 shrink-0">1.</span><span class="text-ink-300">Add a unit test file for src/token-tracker.ts covering token counting, budget enforcement, and usage tracking.</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500 shrink-0">2.</span><span class="text-ink-300">Add a unit test file for src/chat-log.ts covering log entry creation, formatting, and retrieval.</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500 shrink-0">3.</span><span class="text-ink-300">Add a unit test file for src/fire-tracker.ts covering fire event tracking, windowing, and threshold detection.</span></div><div class="italic text-ink-500 mt-1">…+2 more (click <span class="text-emerald-300">All 5 todos</span> above)</div></div></div></div><div data-entry-id="9c4da797-b34c-4dd4-9514-472875a2a527" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:14:35 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Symbol-grounding check: dropped 3 todo(s) whose declared expectedSymbols don't exist in expectedFiles.</div></div></div></div><div data-entry-id="107b674e-58b5-4d62-ae7a-af48aa405ff9" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:14:35 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Posted 2 todo(s) to the board.</div></div></div></div><div data-entry-id="d5c8ac9b-b218-49ff-9115-0e6754d9f191" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="3"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(69, 54, 99); background: rgb(28, 21, 40);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(163, 133, 224);">Agent 3 · 10:14:41 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (1 hunk)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 1 hunk (1 replace) in README.md (661 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+11</div><div class="text-rose-300 font-mono tabular-nums shrink-0">−5</div></div></div></div><div data-entry-id="0a885bb5-573d-42fd-9687-b88861d7fa28" data-entry-role="agent" data-agent-index="1"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(54, 99, 69); background: rgb(21, 40, 28);"><div class="flex items-start justify-between gap-2"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:14:48 PM</div></div><div class="flex gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">View JSON</button></div></div><div class="whitespace-pre-wrap">Skipped: The File Reference table in README.md already lists token-tracker.ts, chat-log.ts, conversation-checkpoint.ts, tui-format.ts, and launcher.ts — 5 of the 6 file…</div></div></div><div data-entry-id="c046bd2e-460c-478b-9706-f39597bf7a25" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:14:48 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Replanner skipped todo 336a37eb-91f0-4b75-b132-56298aef2189: The File Reference table in README.md already lists token-tracker.ts, chat-log.ts, conversation-checkpoint.ts, tui-format.ts, and launcher.ts — 5 of the 6 files the original TODO wanted added. The 6th (fire-tracker) does not appear in the current source file table and likely does not exist in the repo. The original TODO's intent is already satisfied by the current file state.</div></div></div></div><div data-entry-id="637012f0-51c3-4d72-a010-32f31eaa26d2" data-entry-role="agent" data-summary-kind="worker_hunks" data-agent-index="2"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(54, 84, 99); background: rgb(21, 34, 40);"><div class="flex items-start justify-between gap-2 mb-1"><div class="flex-1"><div class="text-xs mb-1" style="color: rgb(133, 194, 224);">Agent 2 · 10:15:08 PM</div></div><div class="flex items-center gap-2 shrink-0"><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Show diff (1 hunk)</button><button class="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200">Raw JSON</button></div></div><div class="flex items-baseline gap-2 mb-2 text-[11px]"><div class="text-ink-400 flex-1 min-w-0 truncate">Wrote 1 hunk (1 create) in src/tests/token-tracker.test.ts (2,824 chars)</div><div class="text-emerald-300 font-mono tabular-nums shrink-0">+76</div></div></div></div><div data-entry-id="7dd58fe1-f639-4392-be49-66dea1b4833a" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:15:16 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">auditor invocation 1/6.</div></div></div></div><div data-entry-id="d9884c5e-2cdb-4eeb-a271-91442f949897" data-entry-role="agent" data-agent-index="5"><div class="rounded border-2 border-violet-700/50 bg-violet-950/15 p-3 my-2 text-sm rounded-md p-3 border text-sm" style="border-color: rgb(99, 54, 84); background: rgb(40, 21, 34);"><div class="text-xs mb-1" style="color: rgb(224, 133, 194);">Agent 5 · 10:15:22 PM</div><div class="text-ink-200 font-medium mb-1.5 flex flex-wrap items-baseline gap-2"><span>Audit:</span><span class="text-emerald-300">1 met</span><span class="text-amber-300">3 unmet</span></div><div class="flex items-center gap-1 mb-2"><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition bg-violet-900/50 text-violet-200 border border-violet-700/60">Summary</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">All 4 verdicts</button><button class="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60">JSON</button></div><div class="text-ink-300 text-[13px] space-y-0.5"><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c1</span><span class="text-amber-300">unmet</span><span class="text-ink-400">— The file shows some methods lack JSDoc comments (e.g., record, checkBudget, getAgentStats, getAllStats, getTotalTokens, getRecent, getCycleTokens, formatSummar…</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c2</span><span class="text-amber-300">unmet</span><span class="text-ink-400">— While some methods have @param tags, not all public methods' JSDoc includes @param for each parameter (e.g., record method's JSDoc lacks @param tags for all it…</span></div><div class="flex items-baseline gap-2"><span class="font-mono text-ink-500">c3</span><span class="text-amber-300">unmet</span><span class="text-ink-400">— Some methods lack @returns tags in their JSDoc (e.g., record, checkBudget, getAgentStats, getAllStats, getTotalTokens, getRecent, getCycleTokens, formatSummary…</span></div><div class="italic text-ink-500 mt-1">…+1 more (click <span class="text-violet-300">All 4 verdicts</span> above)</div></div></div></div><div data-entry-id="3ffdf9da-0d9c-4a92-b3a6-4851a077d482" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:15:22 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Auditor dropped 3 invalid item(s): todos.0.expectedFiles: Required | todos.0.expectedFiles: Required | todos.0.expectedFiles: Required</div></div></div></div><div data-entry-id="1fcdf5af-b257-4d4c-ada4-81037f0d2b57" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:15:22 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Auditor applied: 1 status change(s), 0 new todo(s), 0 new criterion(s).</div></div></div></div><div data-entry-id="6feecdc9-8fb9-449b-aada-c9e9232e1f2b" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:15:22 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Auditor produced no new work; trying a planner pass against the current contract before stopping.</div></div></div></div><div data-entry-id="2112e1c8-e25d-4c4b-855b-5d4fe5a4b0d3" data-entry-role="agent" data-agent-index="1"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(54, 99, 69); background: rgb(21, 40, 28);"><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:15:23 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">(empty response)</div></div></div></div><div data-entry-id="09439069-3aed-4252-8f53-b212ef4a5bcf" data-entry-role="system"><div class="border-l-2 border-amber-700/60 pl-3 py-1 text-xs text-amber-300/80 font-mono"><div class="text-amber-400/70 mb-0.5"><span class="inline-block px-1 py-0 text-[9px] uppercase tracking-wider rounded bg-amber-900/40 mr-1.5">recovery</span>10:15:23 PM</div><div class="whitespace-pre-wrap">Planner response did not parse (JSON parse failed: Unexpected end of JSON input). Issuing repair prompt.</div></div></div><div data-entry-id="43c3150c-fd02-4340-9ba3-a93d781ffa99" data-entry-role="agent" data-agent-index="1"><div class="rounded-md p-3 border text-sm" style="border-color: rgb(54, 99, 69); background: rgb(21, 40, 28);"><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:15:24 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">&lt;list path='.'&gt;&lt;/list&gt;
+
+&lt;list path='.'&gt;
+&lt;/list&gt;
+
+&lt;glob pattern='*'&gt;&lt;/glob&gt;
+
+&lt;glob pattern='**/*'&gt;&lt;/glob&gt;
+
+&lt;glob pattern='**/*'&gt;&lt;/glob&gt;
+
+&lt;glob pattern='*'&gt;&lt;/glob&gt;
+
+&lt;list path='/'&gt;&lt;/list&gt;
+
+&lt;list path='.'&gt;&lt;/list&gt;&lt;/think&gt;&lt;glob pattern='**'&gt;&lt;/glob&gt;
+
+&lt;list path='.'&gt;&lt;/list&gt;
+
+&lt;grep pattern='.' path='.'&gt;&lt;/grep&gt;</div><div aria-hidden="true" class="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-ink-900 to-transparent"></div></div><button class="mt-1 text-xs underline text-ink-400 hover:text-ink-200">Show more</button></div></div><div data-entry-id="294734fe-a8bf-4190-964b-3d4ea8791cf7" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:15:24 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Planner still invalid after repair (JSON parse failed: Unexpected token '&lt;', "&lt;list path"... is not valid JSON). Giving up this run.</div></div></div></div><div data-entry-id="33954a9c-23d1-40c2-b2b5-c84424ce2a43" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:15:24 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">auditor + planner produced no new work; unresolved criteria remain.</div></div></div></div><div data-entry-id="4781a9a6-1d4e-476e-aa6d-d3df64c32f5b" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:15:24 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Stretch-goal reflection: asking planner what a more ambitious version would have done…</div></div></div></div><div data-entry-id="5f465460-b22f-4f74-84e0-9ac311c82f2a" data-entry-role="agent" data-summary-kind="stretch_goals" data-agent-index="1"><div class="rounded-md p-3 border-2 border-violet-700/60 bg-violet-950/20 text-sm"><div><div class="text-xs mb-1" style="color: rgb(133, 224, 163);">Agent 1 · 10:15:46 PM</div><div class="text-[10px] uppercase tracking-wider font-semibold text-violet-300 mb-1">✦ Stretch goals · 5 ranked · tier 1 · 1 commits ✦</div></div><ol class="text-sm text-ink-200 list-decimal list-inside space-y-1 mt-1"><li class="text-violet-100">**Ring-buffer correctness invariant** — Fix the consistency bug where `totalTokens` and `agentStats` diverge from `records` after the ring buffer truncates (lines 93-95 slice records but never adjust the running totals), then add a test that asserts `totalTokens === sum(records.totalTokens)` after overflow. (files: `src/token-tracker.ts`, `src/tests/token-tracker.test.ts`) — Stretch because the completed contract treated TokenTracker as a documentation target only, missing a real correctness bug in the truncation logic that corrupts all downstream budget checks and dashboard reporting.</li><li class="text-violet-100">**Token tracking integration at the LLM call boundary** — Make `brain.ts:chatCompletionWithUsage` automatically route token usage into a `TokenTracker` instance (via dependency injection or callback), eliminating the gap where any LLM call made outside the supervisor loop (e.g., direct `llmCall` usage, brain warmup) silently bypasses tracking. (files: `src/brain.ts`, `src/token-tracker.ts`, `src/supervisor.ts`) — Stretch because the contract scoped itself to JSDoc on the tracker class, ignoring that the tracker's adoption is incomplete — it only records from supervisor.ts:934, leaving untracked token spend as a cost-control blind spot.</li><li class="text-violet-100">**Serializable tracker state for cross-process and crash-recovery** — Add `serialize()`/`deserialize()` methods (or `toJSON`/`fromJSON`) to TokenTracker so its state can be persisted to disk and restored across orchestrator restarts or shared between parallel supervisor processes, complementing the existing `SessionState` checkpoint system. (files: `src/token-tracker.ts`, `src/session-state.ts`, `src/index.ts`) — Stretch because the contract spent its tier budget on documentation surface, while the tracker remains purely ephemeral — a crash or restart loses all cost data, making the budget enforcement it provides unreliable across the multi-agent lifecycle.</li><li class="text-violet-100">**O(1) cycle-token lookup via index** — Replace the O(n) linear scan in `getCycleTokens` (which filters all records on every call) with a `Map&lt;string, Map&lt;number, number&gt;&gt;` secondary index keyed by `(agentName, cycleNumber)` that's maintained on `record()`, then benchmark or test the improvement. (files: `src/token-tracker.ts`, `src/tests/token-tracker.test.ts`) — Stretch because the contract chose to annotate the existing implementation rather than address the algorithmic cost, and this method is called per-agent per-cycle in hot paths like budget checks and dashboard rendering.</li><li class="text-violet-100">**Partial-budget merge semantics in `setBudget`** — Change `setBudget` from full replacement (`this.budget = budget`) to a deep-merge that preserves existing budget fields not explicitly overridden, and add an `onBudgetExceeded` persistence guarantee so swapping budgets at runtime doesn't silently drop the callback. (files: `src/token-tracker.ts`, `src/tests/token-tracker.test.ts`) — Stretch because the completed contract documented the method signature without examining that its current semantics make runtime budget reconfiguration (used by the dashboard) a footgun that can nullify cost controls.</li></ol><div class="text-xs text-ink-400 mt-2"><div class="text-[10px] uppercase tracking-wider text-ink-500 mb-0.5">raw planner response</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">1. **Ring-buffer correctness invariant** — Fix the consistency bug where `totalTokens` and `agentStats` diverge from `records` after the ring buffer truncates (lines 93-95 slice records but never adjust the running totals), then add a test that asserts `totalTokens === sum(records.totalTokens)` after overflow. (files: `src/token-tracker.ts`, `src/tests/token-tracker.test.ts`) — Stretch because the completed contract treated TokenTracker as a documentation target only, missing a real correctness bug in the truncation logic that corrupts all downstream budget checks and dashboard reporting.
+
+2.…</div><div aria-hidden="true" class="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-ink-900 to-transparent"></div></div><button class="mt-1 text-xs underline text-ink-400 hover:text-ink-200">Show more (2513 more chars)</button></div></div></div><div data-entry-id="9d4edd3e-c7af-40fd-9805-dc62a56004c2" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:15:46 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Stretch-goal reflection: 5 goal(s) recorded for next-run consideration.</div></div></div></div><div data-entry-id="b90a0718-9dba-4dd3-9631-cd9cbfb736a5" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:15:46 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Memory distillation: asking planner for lessons-learned bullets to log into .swarm-memory.jsonl…</div></div></div></div><div data-entry-id="38f528c1-1a23-444a-a396-45b93e8192e4" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:15:54 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Memory distillation: appended 3 lesson(s) to .swarm-memory.jsonl (1 entries on file).</div></div></div></div><div data-entry-id="1b3c76e7-16d5-49f6-ab62-fa2c345273ad" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:15:54 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Design memory update: asking planner to refresh north-star / decisions / roadmap…</div></div></div></div><div data-entry-id="a591c61f-5534-462a-9826-d5b6c3bca5a0" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:16:10 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Design memory update: north-star refreshed, 2 decision(s) appended, roadmap of 6 items written → .swarm-design/</div></div></div></div><div data-entry-id="e3d7feaa-0b1d-49bc-a6dd-cc36c5b3aa0a" data-entry-role="system" data-summary-kind="run_finished"><div class="rounded border border-emerald-700/50 bg-emerald-950/20 p-3 my-2"><div class="flex items-baseline justify-between gap-2 mb-2"><div class="text-emerald-300 font-semibold tracking-wide text-xs uppercase">═ Run finished — completed in 2m 27s ═</div><div class="text-[10px] text-ink-500 font-mono">10:16:10 PM</div></div><div class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 text-[11px] font-mono mb-3 px-1"><div class="text-ink-500">Run ID</div><div class="text-ink-300 break-all">e88ed24f-f9cb-4d09-a24a-821f3726ada7</div><div class="text-ink-500">Preset</div><div class="text-ink-200">blackboard</div><div class="text-ink-500">Model</div><div class="text-ink-200">glm-5.1:cloud</div><div class="text-ink-500">Repo</div><div class="text-ink-200 break-all"><a href="https://github.com/kevinkicho/multi-agent-orchestrator" target="_blank" rel="noopener noreferrer" class="text-sky-300 hover:text-sky-200 underline">https://github.com/kevinkicho/multi-agent-orchestrator</a></div><div class="text-ink-500">Clone</div><div class="text-ink-300 break-all">C:\Users\kevin\Desktop\ollama_swarm\runs_overnight7\multi-agent-orchestrator</div><div class="text-ink-500">Started</div><div class="text-ink-200">4/27/2026, 10:13:42 PM</div><div class="text-ink-500">Ended</div><div class="text-ink-200">4/27/2026, 10:16:10 PM</div><div class="text-ink-500">Duration</div><div class="text-ink-200">2m 27s</div><div class="text-ink-500">Stop reason</div><div class="text-emerald-300">completed<span class="text-ink-400 italic"> — auditor + planner produced no new work; unresolved criteria remain</span></div></div><div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3"><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Files changed</div><div class="font-mono text-sm text-ink-100">2</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Commits</div><div class="font-mono text-sm text-ink-100">1</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">+ Lines</div><div class="font-mono text-sm text-emerald-300">76</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">− Lines</div><div class="font-mono text-sm text-ink-400 opacity-50">—</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Total todos</div><div class="font-mono text-sm text-ink-100">2</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Skipped todos</div><div class="font-mono text-sm text-ink-100">1</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Stale events</div><div class="font-mono text-sm text-ink-100">1</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Agents</div><div class="font-mono text-sm text-ink-100">5</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Tokens in</div><div class="font-mono text-sm text-sky-300">173.1k</div></div><div class="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5"><div class="text-[9px] uppercase tracking-wider text-ink-500">Tokens out</div><div class="font-mono text-sm text-violet-300">13.3k</div></div></div><div class="text-[10px] uppercase tracking-wider text-ink-500 font-semibold mb-1">Per-agent (5)</div><div class="overflow-x-auto rounded border border-ink-700/60"><table class="w-full text-[11px] font-mono"><thead class="bg-ink-800/60 text-ink-400 text-left"><tr><th class="px-2 py-1">#</th><th class="px-2 py-1">Role</th><th class="px-2 py-1 text-right">Turns</th><th class="px-2 py-1 text-right">Att</th><th class="px-2 py-1 text-right">Ret</th><th class="px-2 py-1 text-right">Mean</th><th class="px-2 py-1 text-right">Commits</th><th class="px-2 py-1 text-right text-emerald-400/70">+L</th><th class="px-2 py-1 text-right text-rose-400/70">−L</th><th class="px-2 py-1 text-right text-rose-400/70">Rejected</th><th class="px-2 py-1 text-right text-amber-400/70">JSON⚠</th><th class="px-2 py-1 text-right text-rose-500/70">Errors</th><th class="px-2 py-1 text-right text-sky-400/70" title="Approximate for parallel runners — see #163">Tok in</th><th class="px-2 py-1 text-right text-violet-400/70" title="Approximate for parallel runners — see #163">Tok out</th></tr></thead><tbody><tr class="border-t border-ink-700/60"><td class="px-2 py-1 text-ink-300">1</td><td class="px-2 py-1 text-ink-200">planner</td><td class="px-2 py-1 text-right text-ink-200">5</td><td class="px-2 py-1 text-right text-ink-300">5</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300">8.9s</td><td class="px-2 py-1 text-right text-ink-200 opacity-50">—</td><td class="px-2 py-1 text-right text-emerald-300 opacity-50">—</td><td class="px-2 py-1 text-right text-rose-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right font-mono text-sky-300">25.1k</td><td class="px-2 py-1 text-right font-mono text-violet-300">8.5k</td></tr><tr class="border-t border-ink-700/60"><td class="px-2 py-1 text-ink-300">2</td><td class="px-2 py-1 text-ink-200">worker</td><td class="px-2 py-1 text-right text-ink-200">1</td><td class="px-2 py-1 text-right text-ink-300">1</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300">31.5s</td><td class="px-2 py-1 text-right text-ink-200">1</td><td class="px-2 py-1 text-right text-emerald-300">76</td><td class="px-2 py-1 text-right text-rose-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right font-mono text-sky-300">18.9k</td><td class="px-2 py-1 text-right font-mono text-violet-300">2.3k</td></tr><tr class="border-t border-ink-700/60"><td class="px-2 py-1 text-ink-300">3</td><td class="px-2 py-1 text-ink-200">worker</td><td class="px-2 py-1 text-right text-ink-200">1</td><td class="px-2 py-1 text-right text-ink-300">1</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300">4.5s</td><td class="px-2 py-1 text-right text-ink-200 opacity-50">—</td><td class="px-2 py-1 text-right text-emerald-300 opacity-50">—</td><td class="px-2 py-1 text-right text-rose-300 opacity-50">—</td><td class="px-2 py-1 text-right text-rose-300 font-semibold">1</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right font-mono text-sky-300">2.8k</td><td class="px-2 py-1 text-right font-mono text-violet-300">225</td></tr><tr class="border-t border-ink-700/60"><td class="px-2 py-1 text-ink-300">4</td><td class="px-2 py-1 text-ink-200">worker</td><td class="px-2 py-1 text-right text-ink-200">0</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300">—</td><td class="px-2 py-1 text-right text-ink-200 opacity-50">—</td><td class="px-2 py-1 text-right text-emerald-300 opacity-50">—</td><td class="px-2 py-1 text-right text-rose-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right font-mono text-ink-500 opacity-50">—</td><td class="px-2 py-1 text-right font-mono text-ink-500 opacity-50">—</td></tr><tr class="border-t border-ink-700/60"><td class="px-2 py-1 text-ink-300">5</td><td class="px-2 py-1 text-ink-200">auditor</td><td class="px-2 py-1 text-right text-ink-200">1</td><td class="px-2 py-1 text-right text-ink-300">1</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300">5.3s</td><td class="px-2 py-1 text-right text-ink-200 opacity-50">—</td><td class="px-2 py-1 text-right text-emerald-300 opacity-50">—</td><td class="px-2 py-1 text-right text-rose-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right text-ink-300 opacity-50">—</td><td class="px-2 py-1 text-right font-mono text-sky-300">3.4k</td><td class="px-2 py-1 text-right font-mono text-violet-300">395</td></tr></tbody></table></div></div></div><div data-entry-id="b63ce24d-d154-42fc-b770-bdcfcda02349" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:16:10 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">Wrote run summary to C:\Users\kevin\Desktop\ollama_swarm\runs_overnight7\multi-agent-orchestrator\summary-2026-04-28T05-13-42-483Z.json + C:\Users\kevin\Desktop\ollama_swarm\runs_overnight7\multi-agent-orchestrator\summary.json (stopReason=completed, commits=1, files=2).</div></div></div></div><div data-entry-id="7fd3a397-6f1e-4b23-a1ea-afc575449562" data-entry-role="system"><div class="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"><div class="text-ink-500 mb-0.5">system · 10:16:13 PM</div><div class="relative"><div class="whitespace-pre-wrap" style="max-height: 384px; overflow: hidden;">✓ All 5 agent ports released cleanly.</div></div></div></div><div></div></div></div></div><form class="border-t border-ink-700 p-3 bg-ink-800 flex gap-2"><input placeholder="Inject a message into the discussion (as orchestrator)…" class="flex-1 bg-ink-900 border border-ink-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-emerald-500" value="" style=""><button type="submit" class="px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-sm">Send</button></form></section></div></div></main></div></div>
+    <script type="module" src="/src/main.tsx?t=1777346894430"></script>
+  
+
+</body></html>

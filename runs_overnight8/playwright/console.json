@@ -1,0 +1,17 @@
+[
+  {
+    "type": "debug",
+    "text": "[vite] connecting...",
+    "at": 1777355550445
+  },
+  {
+    "type": "debug",
+    "text": "[vite] connected.",
+    "at": 1777355550475
+  },
+  {
+    "type": "info",
+    "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+    "at": 1777355550638
+  }
+]

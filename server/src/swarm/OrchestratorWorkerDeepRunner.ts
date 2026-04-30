@@ -207,7 +207,7 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
       priorUntrackedFiles: cloneResult.priorUntrackedFiles,
     });
     await this.opts.repos.excludeRunnerArtifacts(destPath);
-    await this.opts.repos.writeOpencodeConfig(destPath, cfg.model);
+    // E3 Phase 5: opencode.json no longer needed.
     this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
 
     this.setPhase("spawning");

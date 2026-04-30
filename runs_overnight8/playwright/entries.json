@@ -1,0 +1,850 @@
+[
+  {
+    "entryId": "a615d9c4-fbba-4282-8392-5895935c989f",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "f260e7ad-f364-4dd0-9f52-f148b22cc413",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "4cfb8cce-0133-4be4-8ae4-a60313ed0400",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "b89a6d56-9004-4db0-bba8-b1c02eb7566f",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "e3063e33-3f09-49b0-aac8-601525c36a17",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "13f5b33a-69ab-4e4f-9c52-2efce516c7ed",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "617e498a-74d7-4c49-aafe-2b1ce13cc044",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "a6332cf6-3dda-4c59-9a40-64ac42291ffc",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "995fdc0e-72e3-4a32-93ec-d759a88f3591",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "5ea7e2c3-e8a9-4a88-82c1-b9d3f7990d8e",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "98b73139-f59c-44f2-aba6-32075fee82ff",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "1",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "fa67dfd9-8731-4e1f-bbc9-21e9dd49f22b",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "cd258baf-4faa-4af0-b515-d9c24f5025f3",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "1",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "cc1ea445-b911-4f9c-8450-cbff396618b9",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "89926a01-2d86-4f02-9656-c288584b69db",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "3",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "2689d853-9bbd-4be1-9d40-2c6dd3482fb5",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "7907fe99-d3bf-40ce-8754-5a93f6f7c33e",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "2",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "0ebab11e-9c0d-482a-b1df-cbcc11c6bcd4",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "212d8c30-f598-4b78-a528-369a3f34522e",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "4",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "f9f7695e-1340-42d7-93dc-39885d143907",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "82e89946-1587-494e-98a9-8f656f993026",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "6efd5fd5-eb92-48e3-9833-bc4ae93f89e4",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "5",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "71be82c4-4926-416d-a97d-80c7603004d2",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "13999a03-e24a-4cbd-99f8-2174b8ceb293",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "0a1d38a3-4402-4ce7-a6fe-26fe75d8308a",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "1",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "58ab970d-2dfc-43c2-95f0-2efe9cc1bd47",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "55f2805a-66ec-47a7-82e3-25b627a7fb6b",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "db2a46a0-8fcf-404c-a38a-4a156b3c59f0",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "5",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "f6d7fa8f-68d9-4ab2-9bc1-f774a85a7795",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "5242577e-44ff-4b60-b6d4-f83a162432ed",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "3",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "55840df6-99f1-4549-9e1e-2f2f0e1e74d2",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "1b921ea7-be3a-4a17-a733-cadb485ecd8f",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "4",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "a0264490-9a58-4421-b55f-a526a66bbf1a",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "80afdc84-9131-40c7-9694-2b59b1e76a61",
+    "role": "agent",
+    "summaryKind": "worker_skip",
+    "agentIndex": "4",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "e5e14e14-1238-460f-9537-a40a5f57d1d9",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "90322d43-f4b0-44da-91c7-974d8d9bf6c9",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "1",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "e0663761-a88e-4efa-ab2f-60a0104ee35d",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "6c56dfa2-bbad-4e46-ba95-5b43fbe1fd24",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "3",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "a5c3542b-5663-44de-9fa3-90118da81600",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "5b6a2207-7173-44a3-ad13-5495269eae2d",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "2",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "0e43ebce-8f6d-4397-b78e-558bcb2f376d",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "48d1c5b1-041b-4b32-99ef-63ab9c91a307",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "4",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "452fbd68-68a4-40af-b377-873461095883",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "d86b9655-9592-44a0-ab68-26cab52295c0",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "02315dde-3254-4b7f-970f-f16e7d831255",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "5",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "978c1af5-e9d0-4989-adda-f18647444120",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "9011e1cc-6897-4b09-aba2-6d54a3af0f79",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "b1942daf-016f-4a56-887d-97d90325a98a",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "1",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "1de92bb1-4101-49d1-94e7-bda39dc0b06a",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "627e09cf-56b2-4c5d-b2f9-3beca45f745b",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "35298e3c-cbd1-42ea-b2ab-4f61ad8af6fe",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "5",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "d9e7a2e1-6a06-4a0c-ba88-878b6921aea1",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "786890f8-4e7a-45fc-8b7a-bacffeedddb5",
+    "role": "agent",
+    "summaryKind": "worker_skip",
+    "agentIndex": "4",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "b0df346d-f47e-426e-82d7-fe1afc2ad073",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "b0e1db0d-a8a0-415d-acc6-010d33a95480",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "3",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "e76f455e-7923-4bca-90d9-9388eeeb66b7",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "71f60c90-c80b-4617-a8a0-d8ec3841e41d",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "2",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "a70b48d1-5b33-4e7b-b1a5-95965b17cd6f",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "b08c6791-1dc1-4b1e-a341-d4607c9fab81",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "4",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "15c4d8c5-9c9e-4ab8-8ae5-5390d33459a1",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "9ea99c69-a51c-4a9d-b914-8488a5f4e8c1",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "1",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "0be85f02-ae4d-4191-9eb9-2ce83f59315d",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "96751ce3-c2c2-4cb2-8bec-80282f5d25ac",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "3",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "6567ac38-f4c1-49b4-ac33-76d4eb68f53a",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "451c6038-2e94-4578-a650-a3627146278b",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "1",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "ba0d6cb5-1edb-46d6-aaa6-0fa856350583",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "eb74392e-0cec-4781-acf7-1893ebf60477",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "4",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "0bfde665-495d-4cce-af38-aaaac889d016",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "cd7e1afc-3d7c-4b51-8df2-c0ce864bab1c",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "ef72e1d4-23b1-404d-9e5e-c7f08971f91d",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "5",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "914ddbff-d508-4cb4-874f-f0e61fa31477",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "abb1b605-9700-4547-af9f-2d90ca1480eb",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "29578acf-89d5-4d0c-b5d4-a4d1de7af790",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "1",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "62bfc616-edbe-4bdf-b628-9804d197a05f",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "3232d2a6-caab-4b6b-b1d3-fd7a47ade5ad",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "04fe507b-9298-44b9-8f0c-465486bf7157",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "5",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "6ca9ee9b-e1e3-49f9-baee-e444737e69b5",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "92c2a79b-06b6-4a7f-9b6e-79e2cf80e141",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "2",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "ac5a2bc5-8e40-4327-b22e-6f9c09060012",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "d9d44107-bf25-4c23-a0c4-cb19184e97b6",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "3",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "17c13eb5-ff2d-4f13-8aa8-43f49877f4e4",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "84f9ec90-49be-4ff5-ac3e-f6207d5c767e",
+    "role": "agent",
+    "summaryKind": "worker_skip",
+    "agentIndex": "2",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "353546e9-5a4a-49d3-be72-b53af18573fe",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "a6a5e2b7-52c9-451a-8e6b-fac719e1ef59",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "4",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "902dad6e-8c5a-450d-8980-ccdc69a4fd2d",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "a72a04b0-41d5-475a-8228-f1aeb9a6279a",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "1",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "b90e33fc-fcda-4281-8a7e-40764c75bfe4",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "f18540bc-2b7b-4c8e-873a-f8de378f047a",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "2",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "a117880f-34a9-4db5-8543-26f75a34d503",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "2af87abd-eddd-4882-a9f3-6916fb437a04",
+    "role": "agent",
+    "summaryKind": "worker_skip",
+    "agentIndex": "3",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "6942cb5f-ad93-447a-b901-1dad11107ded",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "8f6f6ef2-ed4d-4bf6-8c6d-1720f1d5b952",
+    "role": "agent",
+    "summaryKind": null,
+    "agentIndex": "1",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "05490ca6-d1ab-4f28-a001-5551ea408c30",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "94a00c6c-2ae9-43fd-bc2a-2e97421e6862",
+    "role": "agent",
+    "summaryKind": "worker_hunks",
+    "agentIndex": "4",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "3a972d18-9195-4e9d-b424-0e41b05a075c",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "256054e3-1dc8-4f8b-bd9e-f7b86972dec3",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "9eaf04a2-9034-4757-85bc-b05e3de8586e",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "74a71568-b50e-4857-b480-40a93e38522f",
+    "role": "agent",
+    "summaryKind": "stretch_goals",
+    "agentIndex": "1",
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "bf66574c-d8a5-4a38-8db3-87bb0a46ae86",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "ec28ef0c-8756-4501-b67e-3aadfd1de382",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "33faf914-cee9-4c5c-a9c5-5959ad8cb4e9",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "199552ee-b4fa-4cf4-8ed5-3663c432560b",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "99ce8727-0e03-4a39-92a9-745f60b457df",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "6282808e-9bf1-4463-af2d-37ff73de7139",
+    "role": "system",
+    "summaryKind": "run_finished",
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "45d39448-c9c3-43cd-807e-99f0b39ff53a",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  },
+  {
+    "entryId": "1cf7eea7-f83a-4292-9c3d-da38e4a322bb",
+    "role": "system",
+    "summaryKind": null,
+    "agentIndex": null,
+    "hasThoughts": null,
+    "hasToolCalls": null
+  }
+]

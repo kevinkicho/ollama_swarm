@@ -114,7 +114,7 @@ export class CouncilRunner implements SwarmRunner {
     });
     // Unit 48: hide runner artifacts from `git status` (see RoundRobinRunner).
     await this.opts.repos.excludeRunnerArtifacts(destPath);
-    await this.opts.repos.writeOpencodeConfig(destPath, cfg.model);
+    // E3 Phase 5: opencode.json no longer needed — no opencode subprocess.
     this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
 
     this.setPhase("spawning");

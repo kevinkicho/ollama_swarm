@@ -709,13 +709,7 @@ export class BlackboardRunner implements SwarmRunner {
     // `git status` via the clone's local .git/info/exclude — NOT the
     // user's .gitignore. See RepoService.excludeRunnerArtifacts.
     await this.opts.repos.excludeRunnerArtifacts(destPath);
-    // Unit 58: opencode.json must declare every distinct model so any
-    // spawned agent can resolve at session.create time. dedupe in
-    // writeOpencodeConfig handles the no-op case when models match.
-    const declaredModels = cfg.dedicatedAuditor
-      ? [plannerModel, workerModel, auditorModel]
-      : [plannerModel, workerModel];
-    await this.opts.repos.writeOpencodeConfig(destPath, declaredModels);
+    // E3 Phase 5: opencode.json no longer needed — prompts route through pickProvider directly.
     this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
     if (plannerModel !== workerModel) {
       this.appendSystem(`Per-agent models: planner=${plannerModel}, workers=${workerModel}`);

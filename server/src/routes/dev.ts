@@ -90,10 +90,7 @@ export function devRouter(deps: DevRouterDeps): Router {
 
     try {
       await fs.mkdir(tempDir, { recursive: true });
-      // Reuse the production opencode.json writer so the smoke tests the
-      // SAME shape real runs get. If Unit 26's MCP config is broken, the
-      // smoke fails the same way a real swarm would.
-      await repos.writeOpencodeConfig(tempDir, config.DEFAULT_MODEL);
+      // E3 Phase 5: opencode.json no longer needed.
 
       const promptText =
         promptOverride ??
