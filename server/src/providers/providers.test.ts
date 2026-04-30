@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readAnthropicStream, readAnthropicStreamFull, AnthropicProvider } from "./AnthropicProvider.js";
-import { readOpenAiStream, OpenAIProvider } from "./OpenAIProvider.js";
+import { readOpenAiStream, readOpenAiStreamFull, OpenAIProvider } from "./OpenAIProvider.js";
 import { pickProvider, __resetProviderSingletons } from "./pickProvider.js";
 
 // Helper: build a ReadableStream from an array of byte chunks.
@@ -142,6 +142,26 @@ test("readOpenAiStream — terminates on [DONE] even without usage block", async
   assert.equal(result.text, "only");
   assert.equal(result.finishReason, "done");
   assert.equal(result.usage, undefined);
+});
+
+test("readOpenAiStreamFull — captures tool_calls with arguments streamed across chunks", async () => {
+  // OpenAI streams tool-call name on first chunk, then arguments JSON
+  // in fragments, finally finish_reason="tool_calls".
+  const events =
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x","type":"function","function":{"name":"grep","arguments":""}}]}}]}\n` +
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"pattern\\":"}}]}}]}\n` +
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"function add\\"}"}}]}}]}\n` +
+    `data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":40,"completion_tokens":15}}\n` +
+    `data: [DONE]\n`;
+  const result = await readOpenAiStreamFull(streamOf([events]), { signal: noopSignal });
+  assert.equal(result.finishReason, "done");
+  assert.equal(result.stopReason, "tool_calls");
+  assert.equal(result.toolCalls.length, 1);
+  assert.equal(result.toolCalls[0].id, "call_x");
+  assert.equal(result.toolCalls[0].name, "grep");
+  assert.deepEqual(JSON.parse(result.toolCalls[0].argsJson), { pattern: "function add" });
+  assert.equal(result.promptTokens, 40);
+  assert.equal(result.responseTokens, 15);
 });
 
 test("OpenAIProvider — chat returns error when no API key set", async () => {
