@@ -20,14 +20,16 @@
 
 - ✅ **V2 Step 5c.3 — delete Board.ts.** SHIPPED 2026-04-28 during V2 cutover Phase 2c. Confirmed 2026-04-29 audit: `Board.ts` no longer exists; only stale comments in BlackboardRunner / TodoQueue reference its prior existence. (active-work.md note was stale.)
 
-- **V2 Step 6c — UI cuts over to event-log-derived state.** Genuinely pending. Currently EventLogReaderV2 is read-only (replay/debug); the live UI still derives state from WebSocket snapshots. Cutting over means the UI subscribes to the JSONL stream and rebuilds state via `deriveRunState`. ~1-2 days. **Trigger**: more user appetite for the V2 vision; could parallel-track first.
+- **V2 Step 6c — UI cuts over to event-log-derived state.** Foundation slice (`useEventLogStream` hook + `EventLogMirrorPanel` + `?useEventLogRunId=1` field cutover) shipped 2026-04-29. Full cutover (every WS dispatch path replaced with event-log derivation) genuinely pending. ~1-2 days. **Trigger**: more user appetite for the V2 vision; could parallel-track first.
 
-- **Drop opencode subprocess dependency entirely.** Genuinely pending. `USE_OLLAMA_DIRECT` is opt-in (referenced 14× in swarm/, gated `process.env.USE_OLLAMA_DIRECT === "1"`); opencode subprocess is still the default path. ~1 week of refactor:
-  1. Wire `ollamaDirect` through the 6 non-blackboard runners (1d) — then USE_OLLAMA_DIRECT bypasses opencode for *all* presets
-  2. Replace `AgentManager.spawnAgent` with our own session-state class (3d) — drops the opencode subprocess
-  3. Delete `opencode.json` writing in `RepoService.ts`. Replace agent profile + tool-grant logic with our own simple config (2d)
+- ✅ **E3 — Drop opencode subprocess dependency.** SHIPPED 2026-04-29 across multiple commits. Phases 1-5 complete:
+  - Phase 1 (`8dcf0b5`): SessionProvider abstraction + 3 raw-HTTP impls (Ollama / Anthropic / OpenAI)
+  - Phase 2 (`f44fb28`): promptWithRetry + BaselineRunner route through pickProvider behind `USE_SESSION_PROVIDER`
+  - Phase 3 (`47b15ba`, `2603d5b`, `e4f377c`, `fd5d6de`, `76e9e28`): all 9 runners spawn without opencode + 5 direct session.prompt callers migrated via chatOnce + onChunk streaming preserved
+  - Phase 4 (`18facec`, `20aa431`, `0416d97`, `5461575`, `75a7505`): ToolDispatcher (read/grep/glob/list/bash) + Anthropic tool_use loop + OpenAI tool_calls loop + dispatcher wired through chatOnce + promptWithRetry
+  - Phase 5: defaults for USE_SESSION_PROVIDER + USE_SESSION_NO_OPENCODE flipped to TRUE — opencode subprocess unreachable on the default path
   
-  Result: single-binary install where users just need Ollama. **Trigger**: explicit "drop opencode."
+  Remaining cleanup (low priority): physically delete `@opencode-ai/sdk` from `server/package.json` + `AgentManager.spawnAgent` (legacy path) + `RepoService.writeOpencodeConfig`. The dep stays in tree as an escape hatch (`USE_SESSION_NO_OPENCODE=false`) until the new defaults bake across enough runs. **Trigger for cleanup**: explicit "delete opencode dep" after the new defaults have run cleanly for several weeks.
 
 ### Smaller cleanups
 
