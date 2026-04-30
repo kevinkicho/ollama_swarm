@@ -16,7 +16,6 @@
 
 import { randomUUID } from "node:crypto";
 import type { Agent } from "../../services/AgentManager.js";
-import { toOpenCodeModelRef } from "../../../../shared/src/providers.js";
 import type {
   TranscriptEntry,
   TranscriptEntrySummary,
@@ -39,13 +38,16 @@ import {
 } from "./designMemoryStore.js";
 import { parseGoalList } from "./goalListParser.js";
 
-// Task #183: helper to send a reflection-pass prompt on a FRESH
-// session (mirrors the critic/verifier pattern). The planner's main
-// session has accumulated huge context by reflection-pass time
-// (every prompt + response from the run); reusing it caused glm-5.1
-// to return empty for stretch / memory / design passes — observed
-// across multiple runs. A fresh session per pass keeps each prompt's
-// context bounded to just the pass's prompt itself.
+// Task #183: helper to send a reflection-pass prompt on a fresh
+// chatOnce call. The planner's main session has accumulated huge
+// context by reflection-pass time (every prompt + response from the
+// run); reusing it caused glm-5.1 to return empty for stretch /
+// memory / design passes. chatOnce starts each call with no prior
+// session history, so context is bounded to just this prompt.
+//
+// E3 Phase 5: previously created an opencode session via
+// planner.client.session.create then chatOnce; opencode is gone so
+// the explicit session.create is removed — chatOnce is the only step.
 //
 // Returns the extracted text (or undefined if the prompt failed in a
 // way that should be logged + skipped). Failure-open: any error
@@ -53,7 +55,7 @@ import { parseGoalList } from "./goalListParser.js";
 async function promptOnFreshSession(
   planner: Agent,
   prompt: string,
-  label: string,
+  _label: string,
   opts: {
     /** Caller-provided abort signal — when fired, the in-flight
      *  session.prompt call gets aborted. Used by the runner's hard
@@ -68,18 +70,6 @@ async function promptOnFreshSession(
     onStatusChange?: (status: "thinking" | "ready") => void;
   } = {},
 ): Promise<string | undefined> {
-  let sessionId: string;
-  try {
-    const created = await planner.client.session.create({
-      title: `${label}-${Date.now()}`,
-    });
-    const any = created as { data?: { id?: string; info?: { id?: string } }; id?: string };
-    const sid = any?.data?.id ?? any?.data?.info?.id ?? any?.id;
-    if (!sid) return undefined;
-    sessionId = sid;
-  } catch {
-    return undefined;
-  }
   if (opts.signal?.aborted) return undefined;
   opts.onStatusChange?.("thinking");
   try {

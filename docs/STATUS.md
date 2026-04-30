@@ -1,7 +1,16 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-04-28
+**Last updated:** 2026-04-29
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
+
+> **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
+> now goes through a direct `SessionProvider` (Ollama / Anthropic / OpenAI)
+> via `chatOnce`. Tool-using turns route through an in-process `ToolDispatcher`
+> (read/grep/glob/list/bash with a hard allowlist). `Agent.client`, the
+> `@opencode-ai/sdk` dep, the `PortAllocator`, and the spawn-subprocess code
+> path are all gone. `OPENCODE_SERVER_PASSWORD` is still required at
+> config-load time so existing `npm test` setups don't break, but it's
+> otherwise unused.
 
 ---
 
@@ -86,11 +95,19 @@ server/src/
   index.ts                                   bootstrap, broadcaster, eventLogger, route mount
   config.ts                                  zod-validated env loading
   services/
-    AgentManager.ts                          spawn opencode subprocesses, SSE event subscription, streamPrompt
+    AgentManager.ts                          in-process Agent records, warmup, killAll (no subprocess post-E3)
     Orchestrator.ts                          runner factory + status getter
-    OllamaClient.ts                          V2 direct chunked-HTTP path
-    RepoService.ts                           git clone, opencode.json synthesis
+    OllamaClient.ts                          legacy direct chunked-HTTP path; still used by some discussion runners
+    RepoService.ts                           git clone (opencode.json synthesis deleted in E3 Phase 5)
     ollamaProxy.ts                           local proxy at :11533 for token tracking + quota detection
+    Session.ts                               in-process session shim (replaces opencode session.create)
+  providers/                                  E3: SessionProvider abstraction
+    pickProvider.ts                          factory: Ollama | Anthropic | OpenAI by model prefix
+    OllamaProvider.ts, AnthropicProvider.ts, OpenAIProvider.ts
+  swarm/
+    chatOnce.ts                              one-shot prompt helper (used everywhere)
+  tools/
+    ToolDispatcher.ts                        in-process read/grep/glob/list/bash with allowlist
   routes/
     swarm.ts                                 POST /api/swarm/start /stop /drain /say
     v2.ts                                    GET /api/v2/status /event-log/runs
@@ -130,11 +147,11 @@ web/src/
 
 ## Active design constraints (don't accidentally break these)
 
-- **One opencode subprocess per agent.** Intentional isolation — confirmed by Kevin 2026-04-23. Don't propose collapsing.
+- **No more opencode subprocess.** E3 Phase 5 removed it. Every prompt goes through `pickProvider` → `chatOnce`. Don't reintroduce subprocess spawning without checking ADR 001 (which is now historical).
 - **Don't rotate the planner role.** Single-session context continuity matters — see `feedback_blackboard_planner_design.md` in memory.
-- **Workers MUST stay on `swarm` agent profile** (no read tools — they return JSON envelopes only). Planner/auditor are a separate question (see known-limitations.md).
-- **Discussion presets read-only via `swarm-read` profile.** Only blackboard's workers can write.
-- **Test command requires `OPENCODE_SERVER_PASSWORD=test-only` prefix** — fixed in commit `3ad6869`. Without it, tests that transitively import config.ts fail at zod validation.
+- **Workers return JSON envelopes only** (no tool grants). Planner/auditor get the in-process `ToolDispatcher` (read/grep/glob/list/bash) — not the legacy opencode permission system.
+- **Discussion presets are read-only.** Only blackboard's workers commit to the clone.
+- **Test command requires `OPENCODE_SERVER_PASSWORD=test-only` prefix** — config.ts still validates the env var even though no subprocess uses it. Without the prefix, tests fail at module load.
 - **`/mnt/c` is the project root** (WSL → Windows). npm install hazards from WSL — see `feedback_wsl_windows_esbuild` in memory.
 
 ---

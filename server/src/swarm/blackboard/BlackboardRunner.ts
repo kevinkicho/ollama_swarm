@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Agent } from "../../services/AgentManager.js";
 import { AgentManager } from "../../services/AgentManager.js";
 import { toOpenCodeModelRef } from "../../../../shared/src/providers.js";
+import { chatOnce } from "../chatOnce.js";
 import { costCapExceeded } from "../../services/CostTracker.js";
 import type {
   AgentState,
@@ -3151,10 +3152,10 @@ export class BlackboardRunner implements SwarmRunner {
   // checkAndApplyCaps doesn't undercount the cap.
   // Issue C-min (2026-04-27): UI-status helper for code paths that
   // bypass promptAgent (goal-gen pre-pass, all 3 reflection passes).
-  // Those paths use planner.client.session.prompt(...) directly +
-  // never call manager.markStatus, so the UI shows the planner as
-  // "ready" while it's actually mid-prompt. Calling this from the
-  // bypass paths' onStatusChange callback restores truthful UI signal.
+  // Those paths use chatOnce(planner, ...) directly + never call
+  // manager.markStatus, so the UI shows the planner as "ready" while
+  // it's actually mid-prompt. Calling this from the bypass paths'
+  // onStatusChange callback restores truthful UI signal.
   private markPlannerStatus(planner: Agent, status: "thinking" | "ready"): void {
     this.opts.manager.markStatus(planner.id, status);
     this.emitAgentState({
@@ -3353,18 +3354,13 @@ export class BlackboardRunner implements SwarmRunner {
     }
     let probeOk = false;
     try {
-      const created = await planner.client.session.create({
-        title: `quota-probe-${Date.now()}`,
+      // E3 Phase 5: opencode session.create + session.prompt gone.
+      // Probe via chatOnce against the existing session — same effect.
+      const probeRes = await chatOnce(planner, {
+        agentName: "swarm-read",
+        promptText: "ping",
       });
-      const any = created as { data?: { id?: string; info?: { id?: string } }; id?: string };
-      const sid = any?.data?.id ?? any?.data?.info?.id ?? any?.id;
-      if (!sid) throw new Error("session.create returned no session id");
-      await planner.client.session.prompt({
-        sessionID: sid,
-        agent: "swarm-read",
-        model: toOpenCodeModelRef(planner.model),
-        parts: [{ type: "text", text: "ping" }],
-      });
+      void probeRes;
       probeOk = true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -3852,59 +3848,13 @@ export class BlackboardRunner implements SwarmRunner {
     // set. Effective only on USE_OLLAMA_DIRECT path.
     ollamaFormat?: "json" | Record<string, unknown>,
   ): Promise<{ response: string; agentUsed: Agent }> {
-    let agent = primaryAgent;
-    // Pre-call health check. ~1s budget; cost negligible vs a planner prompt.
-    // Catches "subprocess died before this call started".
-    if (!(await this.opts.manager.pingAgentHealth(agent))) {
-      agent = await this.respawnAndUpdatePlanner(agent);
-    }
-    // Try the prompt. If it fails with a transport-style error AND the
-    // subprocess is now dead, this means the subprocess died MID-CALL —
-    // respawn and retry once. If it fails for any other reason (model
-    // returned bad JSON, format violation, etc.), propagate the error.
-    try {
-      const response = await this.promptAgent(agent, promptText, agentName, "json", ollamaFormat);
-      return { response, agentUsed: agent };
-    } catch (err) {
-      if (this.stopping) throw err;
-      const stillHealthy = await this.opts.manager.pingAgentHealth(agent);
-      if (stillHealthy) {
-        // Real failure (model bad output, etc.) — propagate.
-        throw err;
-      }
-      // Subprocess died mid-call. Respawn and retry.
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(
-        `[${agent.id}] subprocess died mid-call (${msg.slice(0, 80)}); respawning + retrying…`,
-      );
-      agent = await this.respawnAndUpdatePlanner(agent);
-      // Retry once with the fresh subprocess.
-      const response = await this.promptAgent(agent, promptText, agentName, "json", ollamaFormat);
-      return { response, agentUsed: agent };
-    }
-  }
-
-  // Task #220: respawn an agent's subprocess and update the runner's
-  // planner reference if applicable. Returns the fresh Agent. Throws
-  // with a clear message if respawn fails — the run can't continue
-  // without a working planner subprocess.
-  private async respawnAndUpdatePlanner(agent: Agent): Promise<Agent> {
-    this.appendSystem(`[${agent.id}] subprocess unresponsive — respawning…`);
-    let fresh: Agent;
-    try {
-      fresh = await this.opts.manager.respawnAgent(agent);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(`[${agent.id}] respawn failed: ${msg}. Run cannot continue.`);
-      throw new Error(`Planner subprocess respawn failed: ${msg}`);
-    }
-    this.appendSystem(
-      `[${fresh.id}] respawned on port ${fresh.port} (model=${fresh.model}). Resuming planner work.`,
-    );
-    if (this.planner && this.planner.id === fresh.id) {
-      this.planner = fresh;
-    }
-    return fresh;
+    // E3 Phase 5 cleanup pt 5: subprocess-death recovery dance removed.
+    // With no opencode subprocess there's no subprocess to die — every
+    // failure is now either model output (bad JSON) or transport (HTTP
+    // error from the provider). Both propagate naturally; promptWithRetry's
+    // retry loop handles transient transport errors at a layer below.
+    const response = await this.promptAgent(primaryAgent, promptText, agentName, "json", ollamaFormat);
+    return { response, agentUsed: primaryAgent };
   }
 
   private async promptAgent(
@@ -3983,7 +3933,7 @@ export class BlackboardRunner implements SwarmRunner {
             : "no SSE chunks received";
           abortedReason = `absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s, ${sseQuiet})`;
           controller.abort(new Error(abortedReason));
-          void agent.client.session.abort({ sessionID: agent.sessionId }).catch(() => {});
+          // E3 Phase 5: opencode session.abort gone; AbortController above is the only abort.
           this.appendSystem(
             `[${agent.id}] absolute turn cap (${ABSOLUTE_MAX_MS / 1000}s) hit — ${sseQuiet}. Abort signaled.`,
           );

@@ -344,7 +344,7 @@ export class RoundRobinRunner implements SwarmRunner {
       manager: this.opts.manager,
       sessionId: agent.sessionId,
       controller,
-      abortSession: () => agent.client.session.abort({ sessionID: agent.sessionId }).then(() => {}),
+      abortSession: async () => {},
     });
 
     try {
@@ -505,7 +505,7 @@ export class RoundRobinRunner implements SwarmRunner {
       manager: this.opts.manager,
       sessionId: lead.sessionId,
       controller,
-      abortSession: () => lead.client.session.abort({ sessionID: lead.sessionId }).then(() => {}),
+      abortSession: async () => {},
     });
     try {
       const res = await promptWithRetry(lead, prompt, {

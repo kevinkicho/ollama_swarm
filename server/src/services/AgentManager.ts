@@ -1,35 +1,14 @@
-import { spawn, type ChildProcess } from "node:child_process";
-// E3 Phase 5 (2026-04-29): @opencode-ai/sdk/v2 import REMOVED. The SDK
-// client was used by spawnAgent's now-dead body + handleSessionEvent +
-// streamPrompt + warmupAgent + respawnAgent (~1000 LOC of unreachable
-// code that still type-checked because the Client type comes from the
-// SDK). With this delete, the SDK is no longer in any code path.
-//
-// `Client` is replaced with a stub interface so the dead-code methods
-// in this file still compile — they're unreachable from spawnAgentNoOpencode
-// callers but TypeScript needs them well-formed. The eventual cleanup
-// commit will delete all the dead methods + the stub.
-type SessionClient = {
-  session: {
-    prompt(opts: unknown, signalOpts?: unknown): Promise<unknown>;
-    abort(opts: unknown): Promise<unknown>;
-    messages(opts: unknown): Promise<unknown>;
-    create(opts?: unknown): Promise<unknown>;
-  };
-  event: {
-    subscribe(opts: unknown, signalOpts?: unknown): Promise<unknown>;
-  };
-};
-import { config, basicAuthHeader } from "../config.js";
-import { PortAllocator } from "./PortAllocator.js";
+// E3 Phase 5 cleanup pt 5 (2026-04-29): @opencode-ai/sdk + the
+// `Client` / `SessionClient` stub types REMOVED. Agent no longer
+// carries a `client` field; every prompt routes through pickProvider
+// and every spawn through spawnAgentNoOpencode (no real subprocess).
+import type { ChildProcess } from "node:child_process";
+import { config } from "../config.js";
 import { treeKill, killByPid, killByPort, isProcessAlive } from "./treeKill.js";
 import { AgentPidTracker } from "./agentPids.js";
 import type { AgentState, SwarmEvent } from "../types.js";
-import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
 import { tokenTracker } from "./ollamaProxy.js";
 import { createSession } from "./Session.js";
-
-type Client = SessionClient;
 
 // Unit 17: minimal-token warmup prompt sent to each new agent right
 // after spawn. Intentionally trivial — we don't care about the response
@@ -81,15 +60,16 @@ export function extractUsageFromMessageInfo(info: {
 export interface Agent {
   id: string;
   index: number;
+  /** Sentinel 0 in no-opencode mode (no real port allocated). Kept on
+   *  the type for back-compat with callers that grep for it. */
   port: number;
   sessionId: string;
-  client: Client;
+  /** Always undefined post-E3 (no opencode subprocess). Field kept for
+   *  callers that still type-narrow with `agent.child?.pid`. */
   child?: ChildProcess;
   model: string;
-  // Task #220: cwd captured from spawnOpts so respawnAgent can reconstruct
-  // the same subprocess context after a crash. Without this, the respawn
-  // path would need the BlackboardRunner to plumb clonePath through every
-  // call site — much messier than just storing it on the Agent.
+  /** Clone path the agent operates on. Used by ToolDispatcher to scope
+   *  read/grep/glob/list/bash to this agent's working tree. */
   cwd: string;
 }
 
@@ -198,23 +178,7 @@ export interface SpawnOpts {
   skipWarmup?: boolean;
 }
 
-const authedFetch: typeof fetch = async (input, init) => {
-  // The SDK calls fetch with a Request object and no init. If we pass our own
-  // init to fetch(Request, init), init.headers REPLACES the Request's headers
-  // wholesale — nuking Content-Type and dropping the body's JSON framing. So
-  // rebuild a new Request that inherits everything and just add the auth header.
-  if (input instanceof Request && !init) {
-    const headers = new Headers(input.headers);
-    if (!headers.has("Authorization")) headers.set("Authorization", basicAuthHeader());
-    return fetch(new Request(input, { headers }));
-  }
-  const headers = new Headers(init?.headers ?? {});
-  if (!headers.has("Authorization")) headers.set("Authorization", basicAuthHeader());
-  return fetch(input, { ...init, headers });
-};
-
 export class AgentManager {
-  private readonly ports = new PortAllocator();
   private readonly agents = new Map<string, Agent>();
   private readonly lastActivity = new Map<string, number>(); // sessionID -> ts
   private readonly eventAborts = new Map<string, AbortController>(); // agent.id -> abort
@@ -357,24 +321,11 @@ export class AgentManager {
       sessionId: session.id,
     };
     this.setAgentState(stateBase);
-    // Stub the client so any unmigrated call site fails loud.
-    const stubClient = new Proxy(
-      {},
-      {
-        get() {
-          throw new Error(
-            "AgentManager.spawnAgentNoOpencode: agent.client is not available in no-opencode mode. " +
-              "This caller still depends on the opencode SDK; route it through pickProvider instead.",
-          );
-        },
-      },
-    ) as unknown as Client;
     const agent: Agent = {
       id,
       index: opts.index,
       port,
       sessionId: session.id,
-      client: stubClient,
       child: undefined,
       model: opts.model,
       cwd: opts.cwd,
@@ -392,39 +343,10 @@ export class AgentManager {
     return this.spawnAgentNoOpencode(opts);
   }
 
-  // Task #220: cheap liveness check used by callers (BlackboardRunner)
-  // before firing a high-cost prompt to detect a dead subprocess and
-  // trigger respawn. Hits the OpenCode subprocess's `/doc` endpoint —
-  // the same endpoint waitForReady uses for spawn-time readiness, which
-  // proves it exists on every opencode subprocess. (Initial b6d91d13
-  // E3 Phase 5: with no opencode subprocess, there's nothing to ping.
-  // Always healthy. Kept as a method so BlackboardRunner's recovery
-  // code path still type-checks; in practice the recovery branch is
-  // never taken because this returns true.
-  async pingAgentHealth(_agent: Agent): Promise<boolean> {
-    return true;
-  }
-
-  // Task #220: tear down ONE agent without affecting siblings. Used by
-  // respawnAgent to clean up the dead subprocess before spawning fresh.
-  // killAll's full cleanup is too coarse here — it nukes every agent.
-
-  // Task #220: respawn an agent with the same identity (id, index, model,
-  // role) after its subprocess has died. Allocates a new port, spawns a
-  // fresh OpenCode subprocess, creates a new session. Returns the new
-  // Agent — caller must replace its reference (e.g., this.planner).
-  //
-  // Why not just call spawnAgent directly: respawn must (a) tear down
-  // the dead subprocess first via killOneAgent, (b) preserve the agent's
-  // role-specific cwd and model, (c) emit clear lifecycle messages so the
-  // user sees what's happening rather than a silent ID swap.
-  // E3 Phase 5: with no opencode subprocess, "respawn" is meaningless.
-  // BlackboardRunner's recovery path still calls this when pingAgentHealth
-  // returns false — which never happens now (pingAgentHealth always returns
-  // true). Returning the same agent keeps the call site type-safe.
-  async respawnAgent(agent: Agent): Promise<Agent> {
-    return agent;
-  }
+  // E3 Phase 5: pingAgentHealth + respawnAgent shims removed. With no
+  // opencode subprocess to crash, BlackboardRunner's subprocess-death
+  // recovery dance is dead code. The recovery dance was simplified out
+  // in the same phase, so these no-op stubs have no callers.
 
   // Unit 18: warm a batch of agents one at a time. Used by runners
   // that pass skipWarmup:true to spawnAgent and then warm explicitly
@@ -590,16 +512,7 @@ export class AgentManager {
       // 5s timeout so worst-case we proceed to the kill chain regardless.
       // Found 2026-04-28 during the 9-preset tour after debate-judge
       // hung post-run; orchestrator stayed in `stopping` 18+ minutes.
-      try {
-        await Promise.race([
-          a.client.session.abort({ sessionID: a.sessionId }),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("session.abort timeout 5s")), 5000),
-          ),
-        ]);
-      } catch {
-        // ignore — fall through to treeKill / killByPid / killByPort
-      }
+      // E3 Phase 5: opencode session.abort gone; nothing to abort.
       treeKill(a.child);
       // Unit 41 + Task #122: verified kill with three-stage escalation.
       // We do NOT return until every PID we spawned is confirmed dead,
@@ -666,7 +579,7 @@ export class AgentManager {
           // ignore — remove() already swallows errors internally
         }
       }
-      this.ports.release(a.port);
+      // E3 Phase 5: no port allocator — port is sentinel 0.
       this.lastActivity.delete(a.sessionId);
       this.setAgentState({ id: a.id, index: a.index, port: a.port, sessionId: a.sessionId, status: "stopped" });
     });

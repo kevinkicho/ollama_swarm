@@ -4,7 +4,7 @@
 > `TaskCreate` items die when the session ends; this file is the durable
 > equivalent. **Update it when you finish or queue work.**
 >
-> Last refreshed: 2026-04-29
+> Last refreshed: 2026-04-29 (E3 Phase 5 cleanup pt 5: cosmetic surgery on Agent.client + recovery shims)
 
 ---
 
@@ -32,6 +32,14 @@
   ✅ **Cleanup pt 1** (commit `d9bee86`): `AgentManager.spawnAgent` legacy 165-LOC body deleted (delegates to `spawnAgentNoOpencode`); `RepoService.writeOpencodeConfig` deleted (~180 LOC); 8 RepoService.test.ts tests for opencode.json shape removed; all 10 callers stopped invoking it.
 
   ✅ **Cleanup pt 2** (commit `d189f0d`): `@opencode-ai/sdk` removed from `server/package.json`; `createOpencodeClient` import + `Client` type alias replaced with a local `SessionClient` stub interface in AgentManager.ts. Dead opencode-only methods (handleSessionEvent, attachEventStream, streamPrompt, warmupAgent, respawnAgent — ~1000 LOC of unreachable code) still in tree but type-check against the stub. They're never called at runtime; physical deletion is a focused future cleanup session that has no functional impact.
+
+  ✅ **Cleanup pt 3** (commit `c5ea7b1`): dead SSE-chain methods physically deleted from AgentManager (~470 LOC). `handleSessionEvent`, `attachEventStream`, `streamPrompt`, `warmupAgent` gone; the SSE event subscription bookkeeping (`lastActivity`, `messageRouters`, `idleResolvers`) gone. Type-check + test suite pass (no callers).
+
+  ✅ **Cleanup pt 4** (commit `85e8980`): every legacy opencode code path deleted (~660 LOC). `spawnAgent` two-branch logic collapsed to delegate-only; `dev.ts` `swarm-ui-poke` returns 410 Gone (Playwright-MCP-via-opencode is no longer reachable); 9 runner `abortSession` callbacks reduced to no-ops.
+
+  ✅ **Cleanup pt 5** (uncommitted as of 2026-04-29): `Agent.client` field deleted; `SessionClient` stub interface deleted; `pingAgentHealth` + `respawnAgent` no-op shims deleted; `BlackboardRunner` recovery dance (subprocess-death detection) replaced with single direct prompt; `reflectionPasses.promptOnFreshSession` no longer creates an opencode session before chatOnce; one absolute-turn-cap `agent.client.session.abort` call site replaced with comment (AbortController is the only abort needed). Type-check clean. Tests pending.
+
+  **Still on disk (manual cleanup required):** `node_modules/@opencode-ai/sdk` and `node_modules/opencode-ai` directories. The dep is gone from `server/package.json` but `npm install` from WSL is forbidden (`feedback_wsl_hazards` — esbuild swap). Run `npm install` from a Windows shell to physically remove the package directory.
 
 ### Smaller cleanups
 

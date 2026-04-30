@@ -41,20 +41,27 @@ A live transcript streams into the browser as it's generated — you see each ag
 Browser (React + Vite + Zustand + Tailwind)
    │   WebSocket /ws      REST /api/*
    ▼
-Node server (Express + ws + @opencode-ai/sdk)
-   ├── RepoService     git-clone target repo, drop opencode.json at clone root
-   ├── PortAllocator   reserve free high TCP ports for spawned opencode servers
-   ├── AgentManager    spawn `opencode serve --port N` per agent, one SDK client each,
-   │                   subscribe to each agent's SSE event stream
+Node server (Express + ws)
+   ├── RepoService     git-clone target repo
+   ├── pickProvider    factory returning OllamaProvider | AnthropicProvider | OpenAIProvider
+   ├── AgentManager    in-process Agent records (id, index, model, cwd) — no subprocess
+   ├── ToolDispatcher  in-process read / grep / glob / list / bash for tool-using turns
    └── Orchestrator    shared-transcript message bus; round-robin turn loop gated
-                       on SSE event activity (not wall-clock)
+                       on SSE-aware liveness watchdog (not wall-clock)
       │
-      └── agent-1 opencode serve :random   → Ollama http://localhost:11434/v1
-          agent-2 opencode serve :random   → Ollama http://localhost:11434/v1
-          agent-N opencode serve :random   → Ollama http://localhost:11434/v1
+      └── chatOnce(agent, prompt) → SessionProvider.chat()
+              ├─ Ollama   : POST localhost:11434/api/chat   (default)
+              ├─ Anthropic: POST api.anthropic.com/v1/messages   (tool_use loop)
+              └─ OpenAI   : POST api.openai.com/v1/chat/completions   (tool_calls loop)
 ```
 
-Each agent gets its own `opencode serve` subprocess on a random free port (per [ADR 001](docs/decisions/001-per-agent-subprocess.md) — intentional isolation). There is no fixed "orchestrator opencode" requirement; the historical port-4096 plumbing in code is vestigial.
+**E3 (2026-04-29) removed the per-agent `opencode serve` subprocess.** Earlier
+versions spawned one opencode HTTP server per agent on a random port and held
+an SDK client per agent; the SDK is now uninstalled and `Agent` no longer
+carries a `client` field. Every prompt goes through a direct provider call
+via `chatOnce` and (for tool-using turns) a local `ToolDispatcher` that
+implements read/grep/glob/list/bash with a hard allowlist. `PortAllocator`
+and the historical port-4096 plumbing are gone with the subprocess.
 
 ### How the round-robin preset works
 
@@ -98,8 +105,9 @@ npm install
 
 # 2. Configure secrets
 cp .env.example .env
-# Edit .env — set OPENCODE_SERVER_PASSWORD to any string.
-# It's the HTTP-basic-auth secret shared with the spawned opencode subprocesses.
+# Edit .env — set OPENCODE_SERVER_PASSWORD to any string (still required at
+# config-load time post-E3; production runs ignore it). Add ANTHROPIC_API_KEY
+# / OPENAI_API_KEY if you want to use those providers.
 
 # 3. Start the dev server (backend + frontend together)
 npm run dev
@@ -136,16 +144,13 @@ Hit Start. You'll see each agent panel go from `spawning` → `ready` → `think
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `OPENCODE_SERVER_USERNAME` | no (defaults to `opencode`) | HTTP basic auth username used by every spawned opencode subprocess |
-| `OPENCODE_SERVER_PASSWORD` | **yes** | HTTP basic auth password — any string; shared with spawned subprocesses |
-| `OLLAMA_BASE_URL` | no (defaults to `http://localhost:11434/v1`) | OpenAI-compatible Ollama endpoint, written into each agent's synthesized `opencode.json`. **Must end in `/v1`** — the proxy defensively appends it if missing (commit `bb0c509`). |
-| `ANTHROPIC_API_KEY` | no (only when using Anthropic provider) | Read by `@ai-sdk/anthropic` directly via `process.env`. Never echoed into `opencode.json` or sent to the browser. Setup form's provider dropdown greys out Anthropic when unset. |
+| `OPENCODE_SERVER_PASSWORD` | **yes for `npm test`** | Historical opencode HTTP-basic-auth secret. The opencode subprocess is gone (E3 Phase 5) but the env var is still required at config-load time so the test runner doesn't fail at zod validation. Set to any string. Production runs ignore it. |
+| `OLLAMA_BASE_URL` | no (defaults to `http://localhost:11434`) | Ollama base URL. The provider stack normalizes a trailing `/v1` defensively (so legacy values still work). |
+| `ANTHROPIC_API_KEY` | no (only when using Anthropic provider) | Read by the in-process AnthropicProvider via `process.env`. Setup form's provider dropdown greys out Anthropic when unset. |
 | `OPENAI_API_KEY` | no (only when using OpenAI provider) | Same pattern as `ANTHROPIC_API_KEY`. |
-| `DEFAULT_MODEL` | no (defaults to `glm-5.1:cloud`) | Model each agent uses when the form's model field is left blank. `nemotron-3-super:cloud` and `glm-5.1:cloud` remain available — type explicitly in the form. For paid providers use the prefixed form: `anthropic/claude-opus-4-7`, `openai/gpt-5`, etc. |
-| `OPENCODE_BIN` | no (defaults to `opencode`) | Path/name of the opencode CLI binary |
+| `DEFAULT_MODEL` | no (defaults to `glm-5.1:cloud`) | Model each agent uses when the form's model field is left blank. For paid providers use the prefixed form: `anthropic/claude-opus-4-7`, `openai/gpt-5`, etc. |
 | `SERVER_PORT` | no (defaults to `8243`) | Override the backend HTTP+WS port |
 | `WEB_PORT` | no (defaults to `8244`) | Override the Vite dev-server port |
-| `USE_OLLAMA_DIRECT` | no (defaults off) | Bypass opencode SDK; talk to Ollama directly. Honored by `BlackboardRunner`. |
 | `GITHUB_TOKEN` | no | GitHub PAT for cloning private repos |
 | `CONFORMANCE_MONITOR` | no (defaults on) | Set to `off` to skip the LLM-judge conformance gauge for runs with a directive |
 
@@ -153,7 +158,7 @@ Hit Start. You'll see each agent panel go from `spawning` → `ready` → `think
 
 Three npm workspaces:
 
-- **`server/`** — Express + ws + `@opencode-ai/sdk` + `simple-git` + zod. Hosts the runners, the AgentManager, the proxy, and the REST + WS routes.
+- **`server/`** — Express + ws + `simple-git` + zod + `undici` (raw HTTP to provider APIs). Hosts the runners, the AgentManager, the proxy, the ToolDispatcher, and the REST + WS routes.
 - **`web/`** — Vite + React + Zustand + Tailwind. Setup form, transcript, board, run-history modal.
 - **`shared/`** — pure types + parsers consumed by both sides (state machine reducer, JSON extractors, summary formatter).
 

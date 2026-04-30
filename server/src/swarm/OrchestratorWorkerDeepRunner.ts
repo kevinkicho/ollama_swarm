@@ -535,7 +535,7 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
       manager: this.opts.manager,
       sessionId: agent.sessionId,
       controller,
-      abortSession: () => agent.client.session.abort({ sessionID: agent.sessionId }).then(() => {}),
+      abortSession: async () => {},
     });
     try {
       const res = await promptWithRetry(agent, prompt, {
