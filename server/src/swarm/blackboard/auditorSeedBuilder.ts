@@ -24,6 +24,7 @@ import {
   type AuditorSeed,
 } from "./prompts/auditor.js";
 import type { ExitContract, Todo, Finding } from "./types.js";
+import { chatOnce } from "../chatOnce.js";
 
 export interface AuditorSeedContext {
   contract: ExitContract;
@@ -110,11 +111,9 @@ async function captureUiSnapshot(
       model: ctx.model,
       skipWarmup: true,
     });
-    const response = await uiAgent.client.session.prompt({
-      sessionID: uiAgent.sessionId,
-      agent: "swarm-ui",
-      model: toOpenCodeModelRef(uiAgent.model),
-      parts: [{ type: "text", text: promptText }],
+    const response = await chatOnce(uiAgent, {
+      agentName: "swarm-ui",
+      promptText,
     });
     const any = response as {
       data?: {

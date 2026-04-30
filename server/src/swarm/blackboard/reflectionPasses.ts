@@ -24,6 +24,7 @@ import type {
 } from "../../types.js";
 import type { ExitContract } from "./types.js";
 import { extractText } from "../extractText.js";
+import { chatOnce } from "../chatOnce.js";
 import {
   appendMemoryEntry,
   parseMemoryLessons,
@@ -82,15 +83,11 @@ async function promptOnFreshSession(
   if (opts.signal?.aborted) return undefined;
   opts.onStatusChange?.("thinking");
   try {
-    const res = await planner.client.session.prompt(
-      {
-        sessionID: sessionId,
-        agent: "swarm-read",
-        model: toOpenCodeModelRef(planner.model),
-        parts: [{ type: "text", text: prompt }],
-      },
-      { signal: opts.signal },
-    );
+    const res = await chatOnce(planner, {
+      agentName: "swarm-read",
+      promptText: prompt,
+      signal: opts.signal,
+    });
     return extractText(res);
   } catch {
     return undefined;

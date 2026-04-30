@@ -20,6 +20,8 @@
 
 import type { Agent } from "../services/AgentManager.js";
 import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
+import { chatOnce } from "./chatOnce.js";
+import { config } from "../config.js";
 import {
   EMPTY_RESPONSE_RETRY_SUFFIX,
   extractTextWithDiag,
@@ -55,20 +57,19 @@ export async function retryEmptyResponse(
     retryAbort.abort(new Error(`retry deadline ${RETRY_DEADLINE_MS / 1000}s`));
     // Tell the OpenCode session to stop serving the abandoned prompt
     // so a subsequent prompt on the same session isn't queued behind it.
-    void agent.client.session.abort({ sessionID: agent.sessionId }).catch(() => {});
+    // Opencode-specific session abort. Skip when there's no opencode
+    // subprocess (the AbortController.signal already handles cancellation
+    // for the provider path).
+    if (!config.USE_SESSION_NO_OPENCODE && !config.USE_SESSION_PROVIDER) {
+      void agent.client.session.abort({ sessionID: agent.sessionId }).catch(() => {});
+    }
   }, RETRY_DEADLINE_MS);
   try {
-    const retryRes = await agent.client.session.prompt(
-      {
-        sessionID: agent.sessionId,
-        agent: agentName,
-        model: toOpenCodeModelRef(agent.model),
-        parts: [
-          { type: "text", text: originalPrompt + EMPTY_RESPONSE_RETRY_SUFFIX },
-        ],
-      },
-      { signal: retryAbort.signal },
-    );
+    const retryRes = await chatOnce(agent, {
+      agentName,
+      promptText: originalPrompt + EMPTY_RESPONSE_RETRY_SUFFIX,
+      signal: retryAbort.signal,
+    });
     const { text, isEmpty } = extractTextWithDiag(retryRes, diagCtx);
     // Pattern 8: also reject the retry if it came back as junk-short
     // single-token output (the failure mode we tried to recover from

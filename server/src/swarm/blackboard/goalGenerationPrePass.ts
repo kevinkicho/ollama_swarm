@@ -15,6 +15,7 @@ import { toOpenCodeModelRef } from "../../../../shared/src/providers.js";
 import { extractText } from "../extractText.js";
 import { parseGoalList } from "./goalListParser.js";
 import type { PlannerSeed } from "./prompts/planner.js";
+import { chatOnce } from "../chatOnce.js";
 
 export async function runGoalGenerationPrePass(
   planner: Agent,
@@ -58,15 +59,11 @@ export async function runGoalGenerationPrePass(
   if (opts.signal?.aborted) return undefined;
   opts.onStatusChange?.("thinking");
   try {
-    const res = await planner.client.session.prompt(
-      {
-        sessionID: planner.sessionId,
-        agent: "swarm-read",
-        model: toOpenCodeModelRef(planner.model),
-        parts: [{ type: "text", text: prompt }],
-      },
-      { signal: opts.signal },
-    );
+    const res = await chatOnce(planner, {
+      agentName: "swarm-read",
+      promptText: prompt,
+      signal: opts.signal,
+    });
     const text = extractText(res);
     if (!text) return undefined;
     const topMatch = /^\s*TOP\s*:\s*(\d+)\s*$/im.exec(text);

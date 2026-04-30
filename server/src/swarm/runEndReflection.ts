@@ -25,6 +25,7 @@ import {
   type MemoryEntry,
 } from "./blackboard/memoryStore.js";
 import { extractText } from "./extractText.js";
+import { chatOnce } from "./chatOnce.js";
 
 export interface ReflectionResult {
   score: number;
@@ -121,11 +122,9 @@ export async function runEndReflection(
   const prompt = buildReflectionPrompt(ctx.preset, ctx.contextSummary);
   let responseText: string;
   try {
-    const res = await ctx.agent.client.session.prompt({
-      sessionID: ctx.agent.sessionId,
-      agent: "swarm-read",
-      model: toOpenCodeModelRef(ctx.agent.model),
-      parts: [{ type: "text", text: prompt }],
+    const res = await chatOnce(ctx.agent, {
+      agentName: "swarm-read",
+      promptText: prompt,
     });
     responseText = extractText(res) ?? "";
   } catch (err) {
