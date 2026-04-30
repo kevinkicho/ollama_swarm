@@ -1,9 +1,25 @@
 import { spawn, type ChildProcess } from "node:child_process";
-// #234 (2026-04-27 evening): migrated v1 → v2 client. v2 has proper
-// `format` typing (closes #233 for blackboard parser-strict prompts),
-// deprecates the per-call `tools` field in favor of session-level
-// permissions, and renames `path: { id }` → `sessionID` everywhere.
-import { createOpencodeClient } from "@opencode-ai/sdk/v2";
+// E3 Phase 5 (2026-04-29): @opencode-ai/sdk/v2 import REMOVED. The SDK
+// client was used by spawnAgent's now-dead body + handleSessionEvent +
+// streamPrompt + warmupAgent + respawnAgent (~1000 LOC of unreachable
+// code that still type-checked because the Client type comes from the
+// SDK). With this delete, the SDK is no longer in any code path.
+//
+// `Client` is replaced with a stub interface so the dead-code methods
+// in this file still compile — they're unreachable from spawnAgentNoOpencode
+// callers but TypeScript needs them well-formed. The eventual cleanup
+// commit will delete all the dead methods + the stub.
+type SessionClient = {
+  session: {
+    prompt(opts: unknown, signalOpts?: unknown): Promise<unknown>;
+    abort(opts: unknown): Promise<unknown>;
+    messages(opts: unknown): Promise<unknown>;
+    create(opts?: unknown): Promise<unknown>;
+  };
+  event: {
+    subscribe(opts: unknown, signalOpts?: unknown): Promise<unknown>;
+  };
+};
 import { config, basicAuthHeader } from "../config.js";
 import { PortAllocator } from "./PortAllocator.js";
 import { treeKill, killByPid, killByPort, isProcessAlive } from "./treeKill.js";
@@ -13,7 +29,7 @@ import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
 import { tokenTracker } from "./ollamaProxy.js";
 import { createSession } from "./Session.js";
 
-type Client = ReturnType<typeof createOpencodeClient>;
+type Client = SessionClient;
 
 // Unit 17: minimal-token warmup prompt sent to each new agent right
 // after spawn. Intentionally trivial — we don't care about the response
