@@ -737,7 +737,16 @@ export class BlackboardRunner implements SwarmRunner {
     // Planner is always index 1. Workers take 2..N. If the user picks
     // agentCount=1 there are no workers — planner posts TODOs, nothing drains
     // them, and we transition straight to completed. Documented in README.
-    const planner = await this.opts.manager.spawnAgent({
+    // E3 Phase 3 (final runner): conditional spawn. USE_SESSION_NO_OPENCODE=1
+    // skips the opencode subprocess. NOTE: BlackboardRunner has direct
+    // agent.client.session.prompt callers (auditorSeedBuilder, goalGenerationPrePass,
+    // reflectionPasses, runEndReflection, promptAndExtract) that will throw
+    // against the stub client until they're migrated. Those land in a
+    // follow-up commit.
+    const spawnFn = config.USE_SESSION_NO_OPENCODE
+      ? this.opts.manager.spawnAgentNoOpencode.bind(this.opts.manager)
+      : this.opts.manager.spawnAgent.bind(this.opts.manager);
+    const planner = await spawnFn({
       cwd: destPath,
       index: 1,
       model: plannerModel,
@@ -750,7 +759,7 @@ export class BlackboardRunner implements SwarmRunner {
       // Parallel spawn: each opencode serve takes a few seconds to boot,
       // sequential would compound that for every extra worker.
       const workerSpawns = Array.from({ length: workerCount }, (_, i) =>
-        this.opts.manager.spawnAgent({ cwd: destPath, index: 2 + i, model: workerModel }),
+        spawnFn({ cwd: destPath, index: 2 + i, model: workerModel }),
       );
       const spawned = await Promise.all(workerSpawns);
       workers.push(...spawned);
@@ -778,7 +787,7 @@ export class BlackboardRunner implements SwarmRunner {
     // 2..N=workers, N+1=auditor). Total agents = agentCount + 1.
     if (cfg.dedicatedAuditor) {
       const auditorIndex = cfg.agentCount + 1;
-      this.auditor = await this.opts.manager.spawnAgent({
+      this.auditor = await spawnFn({
         cwd: destPath,
         index: auditorIndex,
         model: auditorModel,
