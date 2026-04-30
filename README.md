@@ -2,7 +2,9 @@
 
 > **For agents picking up this codebase**: read [`docs/STATUS.md`](docs/STATUS.md) first — it's the single "what's true right now" pointer + map. This README is the user-facing intro.
 
-A local web app that spawns a **swarm of [OpenCode](https://opencode.ai) agents** — each backed by an LLM you choose — to clone a GitHub repository and collaboratively figure out what the project is, what's working, what's missing, and what to build next.
+A local web app that spawns a **swarm of agents** — each backed by an LLM you choose — to clone a GitHub repository and collaboratively figure out what the project is, what's working, what's missing, and what to build next.
+
+> **2026-04-29 — opencode dependency removed.** Earlier versions spawned an `opencode serve` subprocess per agent. E3 (Phases 1–5) replaced that with a direct provider abstraction (Ollama / Anthropic / OpenAI) + an in-process tool dispatcher. The opencode CLI is no longer required.
 
 **Multi-provider:** runs against **local [Ollama](https://ollama.com)** (free, runs on your GPU), **[Anthropic Claude](https://www.anthropic.com)** (paste an `ANTHROPIC_API_KEY`, no GPU needed), or **[OpenAI](https://openai.com)** (`OPENAI_API_KEY`). Pick the provider in the setup form's dropdown; per-run `maxCostUsd` cap stops paid runs at your dollar ceiling. Ollama is the default.
 
@@ -83,8 +85,8 @@ Phased implementation notes (now shipped) live in [`docs/blackboard-plan.md`](do
   ollama pull glm-5.1:cloud
   ```
   Optional but recommended: `ollama pull nomic-embed-text` to enable the embedding-similarity drift gauge alongside the LLM-judge conformance gauge.
-- **`opencode` CLI** on `PATH`. The dev server spawns one `opencode serve --port N` subprocess per agent.
 - **git** on `PATH`. (No need to set `user.name` / `user.email` globally — the worker pipeline injects them inline per-commit.)
+- (Optional) **`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`** in `.env` if you want to run against Claude or GPT instead of Ollama.
 
 ## First-time setup
 
