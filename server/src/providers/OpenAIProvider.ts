@@ -94,7 +94,7 @@ export class OpenAIProvider implements SessionProvider {
 
 export async function readOpenAiStream(
   body: ReadableStream<Uint8Array>,
-  opts: Pick<ChatOpts, "signal" | "idleTimeoutMs" | "firstChunkTimeoutMs">,
+  opts: Pick<ChatOpts, "signal" | "idleTimeoutMs" | "firstChunkTimeoutMs" | "onChunk">,
   t0: number,
 ): Promise<ChatResult> {
   const reader = body.getReader();
@@ -175,7 +175,10 @@ export async function readOpenAiStream(
           continue;
         }
         const delta = ev.choices?.[0]?.delta?.content;
-        if (typeof delta === "string") text += delta;
+        if (typeof delta === "string") {
+          text += delta;
+          opts.onChunk?.(text);
+        }
         if (ev.usage) {
           promptTokens = ev.usage.prompt_tokens ?? promptTokens;
           responseTokens = ev.usage.completion_tokens ?? responseTokens;

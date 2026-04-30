@@ -36,6 +36,11 @@ export interface ChatOpts {
   logDiag?: (record: unknown) => void;
   /** Optional correlation id for diag entries. */
   agentId?: string;
+  /** E3 Phase 3: streaming callback fired with cumulative text after
+   *  every chunk. Keeps the UI's PersistentStreamBubble live in
+   *  no-opencode mode where there's no SSE event stream to relay.
+   *  Implementations call this synchronously inside the chunk loop. */
+  onChunk?: (cumulativeText: string) => void;
 }
 
 export type FinishReason = "done" | "aborted" | "idle-timeout" | "error";

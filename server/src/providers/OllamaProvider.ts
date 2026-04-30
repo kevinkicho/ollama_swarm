@@ -38,6 +38,7 @@ export class OllamaProvider implements SessionProvider {
         usagePrompt = counts.promptTokens;
         usageResponse = counts.responseTokens;
       },
+      ...(opts.onChunk ? { onChunk: opts.onChunk } : {}),
     });
 
     return {

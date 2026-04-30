@@ -195,6 +195,11 @@ export async function promptWithRetry(
           agentId: agent.id,
           logDiag: opts.logDiag,
           ...(opts.ollamaOptions !== undefined ? { options: opts.ollamaOptions } : {}),
+          // Thread streaming text into the agent's per-agent buffer so
+          // PersistentStreamBubble stays live in no-opencode mode.
+          onChunk: (cumulativeText) => {
+            opts.manager?.recordStreamingText(agent.id, agent.index, cumulativeText);
+          },
         });
         // Record token usage into tokenTracker so the cost cap +
         // /api/usage widget keep working unchanged. Provider returns

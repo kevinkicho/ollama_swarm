@@ -116,7 +116,7 @@ export class AnthropicProvider implements SessionProvider {
 
 export async function readAnthropicStream(
   body: ReadableStream<Uint8Array>,
-  opts: Pick<ChatOpts, "signal" | "idleTimeoutMs" | "firstChunkTimeoutMs">,
+  opts: Pick<ChatOpts, "signal" | "idleTimeoutMs" | "firstChunkTimeoutMs" | "onChunk">,
   t0: number,
 ): Promise<ChatResult> {
   const reader = body.getReader();
@@ -203,6 +203,7 @@ export async function readAnthropicStream(
           case "content_block_delta":
             if (ev.delta?.type === "text_delta" && typeof ev.delta.text === "string") {
               text += ev.delta.text;
+              opts.onChunk?.(text);
             }
             break;
           case "message_start":
