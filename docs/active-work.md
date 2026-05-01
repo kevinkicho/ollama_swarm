@@ -179,6 +179,8 @@ plus the actual run output at `C:\mnt\c\Users\kevin\Desktop\ollama_swarm\runs\de
 
 - ✅ **Catalog wiring** (commit `f3d0aeb`): added catalog entries for `fixture-add-null-guard` + `fixture-extract-pure-helper` (fixture dirs were on disk since `b255630` but never wired into the catalog).
 
+- ✅ **First paid scoreboard sweep — partial validation** at `runs/_eval/sonnet-2026-05-01/`. 9 of 18 attempts captured (sweep stopped early — directional signal already validated, no need to burn the rest). Real findings: blackboard 3/3 PASS (scores 127/121/127) on `fix-off-by-one` where baseline 0/3 failed (search-not-unique hunk rejection); baseline 3/3 PASS in 17s on `add-null-guard`. **Two presets aren't competitors — they have different sweet spots**, which is the whole point of having a scoreboard. Spend: ~$2–3.
+
 ### 2026-04-29 — multi-provider + scoreboard (#313–#320)
 
 ### 2026-04-29 — multi-provider + scoreboard (#313–#320)
