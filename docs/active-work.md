@@ -16,6 +16,8 @@
 
 - **Long-horizon blackboard run with tier ratchet.** 2-4 hours of continuous mode against a target with a real directive. Validates pause/resume, audit cap behavior, tier promotion, stretch-goal reflection at scale. **Trigger**: explicit "go long-run."
 
+> **Strategic note (2026-05-01):** the project's value prop is **open-weights multi-agent parallelism**, not paid-provider wrapping. Scoreboard work going forward should compare **Ollama models against each other** (glm-5.1 vs nemotron vs gemma4 vs deepseek across presets), not Claude vs baseline. Multi-provider abstractions stay (the streaming bug fix made them usable), but don't expand multi-provider feature work for its own sake. See `project_value_prop_open_weights_first.md` in memory.
+
 ### Risky cutovers (need stable validation first)
 
 - ✅ **V2 Step 5c.3 — delete Board.ts.** SHIPPED 2026-04-28 during V2 cutover Phase 2c. Confirmed 2026-04-29 audit: `Board.ts` no longer exists; only stale comments in BlackboardRunner / TodoQueue reference its prior existence. (active-work.md note was stale.)
