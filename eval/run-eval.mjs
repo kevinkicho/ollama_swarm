@@ -56,6 +56,16 @@ let MODEL_OVERRIDE = "";
 // attempt in the sweep. Bounds runaway spend on paid providers. 0 =
 // no cap. Capped server-side at $100; eval also clamps for sanity.
 let MAX_COST_USD = 0;
+// 2026-05-01 (scoreboard pre-flight): MoA per-layer model overrides.
+// --moa-proposer-model + --moa-aggregator-model surface
+// RunConfig.moaProposerModel / moaAggregatorModel (added in #98) so
+// Config E (heterogeneous MoA — gemma4 proposers + nemotron aggregator)
+// is one-command runnable. Only effective when preset === "moa".
+let MOA_PROPOSER_MODEL = "";
+let MOA_AGGREGATOR_MODEL = "";
+// --moa-aggregator-count surfaces cfg.moaAggregatorCount (1..3, default
+// 1). Lets multi-aggregator-vote experiments run from the CLI too.
+let MOA_AGGREGATOR_COUNT = 0;
 let logFile = "";
 
 function log(msg) {
@@ -89,6 +99,13 @@ function buildPayload(task, preset) {
   // every (task, preset, seed) attempt.
   if (MODEL_OVERRIDE) payload.model = MODEL_OVERRIDE;
   if (MAX_COST_USD > 0) payload.maxCostUsd = MAX_COST_USD;
+  // 2026-05-01 (scoreboard pre-flight): MoA per-layer model overrides.
+  // Only meaningful when preset === "moa". Other presets ignore them.
+  if (preset === "moa") {
+    if (MOA_PROPOSER_MODEL) payload.moaProposerModel = MOA_PROPOSER_MODEL;
+    if (MOA_AGGREGATOR_MODEL) payload.moaAggregatorModel = MOA_AGGREGATOR_MODEL;
+    if (MOA_AGGREGATOR_COUNT > 0) payload.moaAggregatorCount = MOA_AGGREGATOR_COUNT;
+  }
   return payload;
 }
 
@@ -379,8 +396,17 @@ async function main() {
   MAX_COST_USD = Number.isFinite(maxCostRaw) && maxCostRaw > 0 && maxCostRaw <= 100
     ? maxCostRaw
     : 0;
+  MOA_PROPOSER_MODEL = args["moa-proposer-model"] ?? args.moaProposerModel ?? "";
+  MOA_AGGREGATOR_MODEL = args["moa-aggregator-model"] ?? args.moaAggregatorModel ?? "";
+  const aggCountRaw = Number(args["moa-aggregator-count"] ?? args.moaAggregatorCount ?? 0);
+  MOA_AGGREGATOR_COUNT = Number.isFinite(aggCountRaw) && aggCountRaw >= 1 && aggCountRaw <= 3
+    ? Math.floor(aggCountRaw)
+    : 0;
   if (MODEL_OVERRIDE) console.log(`[eval] model override: ${MODEL_OVERRIDE}`);
   if (MAX_COST_USD > 0) console.log(`[eval] per-attempt cost cap: $${MAX_COST_USD}`);
+  if (MOA_PROPOSER_MODEL) console.log(`[eval] MoA proposer model: ${MOA_PROPOSER_MODEL}`);
+  if (MOA_AGGREGATOR_MODEL) console.log(`[eval] MoA aggregator model: ${MOA_AGGREGATOR_MODEL}`);
+  if (MOA_AGGREGATOR_COUNT > 0) console.log(`[eval] MoA aggregator count: ${MOA_AGGREGATOR_COUNT}`);
 
   mkdirSync(OUT_DIR, { recursive: true });
   mkdirSync(path.join(OUT_DIR, "per-run"), { recursive: true });

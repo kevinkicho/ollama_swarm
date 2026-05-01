@@ -6,7 +6,15 @@
       "id": "audit-readme-claims",
       "title": "Audit README claims for accuracy",
       "directive": "Read the README. For each feature claimed, verify the code actually implements it. List discrepancies (claims with no implementation; implementation with no docs).",
-      "presets": ["round-robin", "council", "role-diff", "map-reduce", "stigmergy", "orchestrator-worker", "blackboard"],
+      "presets": [
+        "round-robin",
+        "council",
+        "role-diff",
+        "map-reduce",
+        "stigmergy",
+        "orchestrator-worker",
+        "blackboard"
+      ],
       "rounds": 2,
       "agentCount": 4,
       "wallClockCapMs": 600000,
@@ -17,7 +25,9 @@
       "id": "fix-todos",
       "title": "Resolve TODO/FIXME comments",
       "directive": "Find every TODO, FIXME, and XXX comment in src/. For each, either resolve it (commit a fix) or convert it to an issue-tracker reference. Be conservative — only fix when the resolution is clear from context.",
-      "presets": ["blackboard"],
+      "presets": [
+        "blackboard"
+      ],
       "rounds": 20,
       "agentCount": 4,
       "wallClockCapMs": 600000,
@@ -28,7 +38,11 @@
       "id": "council-architecture-decision",
       "title": "Choose: stay with Express or migrate to Fastify?",
       "directive": "Evaluate whether this project should keep using Express or migrate to Fastify. Consider performance, ecosystem maturity, migration cost, and team familiarity. Produce a clear recommendation with rationale.",
-      "presets": ["council", "debate-judge", "role-diff"],
+      "presets": [
+        "council",
+        "debate-judge",
+        "role-diff"
+      ],
       "rounds": 2,
       "agentCount": 4,
       "wallClockCapMs": 600000,
@@ -40,7 +54,11 @@
       "id": "stigmergy-coverage-map",
       "title": "Build a coverage map of which modules are well-tested vs not",
       "directive": "Walk the repo. For each source file, identify whether it has corresponding tests, what fraction of its API surface is covered, and where the test gaps are. Produce a coverage table.",
-      "presets": ["stigmergy", "map-reduce", "round-robin"],
+      "presets": [
+        "stigmergy",
+        "map-reduce",
+        "round-robin"
+      ],
       "rounds": 3,
       "agentCount": 4,
       "wallClockCapMs": 600000,
@@ -52,7 +70,11 @@
       "title": "Fix the countDown off-by-one (fixture mode)",
       "directive": "src/countdown.js has a loop that exits one iteration too early — countDown(3) returns [3, 2] instead of [3, 2, 1]. Change the loop terminator so the returned array includes the final 1. Make the smallest possible edit; do not refactor.",
       "fixture": "fix-off-by-one",
-      "presets": ["baseline", "blackboard"],
+      "presets": [
+        "baseline",
+        "blackboard",
+        "moa"
+      ],
       "rounds": 3,
       "agentCount": 3,
       "wallClockCapMs": 300000,
@@ -64,7 +86,11 @@
       "title": "Add a null-guard so formatUser(null) doesn't throw",
       "directive": "src/format.js exports formatUser(input). It currently dereferences input.name and input.email without checking input — calling formatUser(null) throws. Make it safe: when input is null or undefined, return the string 'Anonymous <unknown>'. Preserve the happy path exactly.",
       "fixture": "add-null-guard",
-      "presets": ["baseline", "blackboard"],
+      "presets": [
+        "baseline",
+        "blackboard",
+        "moa"
+      ],
       "rounds": 3,
       "agentCount": 3,
       "wallClockCapMs": 300000,
@@ -76,7 +102,11 @@
       "title": "Extract inlined tax math into a pure helper applyTax(amount)",
       "directive": "src/calc.js has computePrice(items) with the tax math inlined (subtotal + subtotal * 0.07). Extract that into a pure helper named applyTax(amount) returning amount * 1.07. computePrice should call applyTax. Behavior must be preserved exactly; the exported computePrice signature must not change.",
       "fixture": "extract-pure-helper",
-      "presets": ["baseline", "blackboard"],
+      "presets": [
+        "baseline",
+        "blackboard",
+        "moa"
+      ],
       "rounds": 3,
       "agentCount": 3,
       "wallClockCapMs": 300000,
@@ -88,7 +118,11 @@
       "title": "Rename oldSum to sum across src/",
       "directive": "Multiple files under src/ import + use a function named oldSum. Rename it to sum everywhere — both the export site (src/sum.js) and every import site. After the rename, NO file under src/ should reference the old name oldSum, and the renamed function must still be callable and produce the correct result (1+2=3).",
       "fixture": "rename-symbol",
-      "presets": ["baseline", "blackboard"],
+      "presets": [
+        "baseline",
+        "blackboard",
+        "moa"
+      ],
       "rounds": 3,
       "agentCount": 3,
       "wallClockCapMs": 300000,
@@ -100,7 +134,11 @@
       "title": "Fix the wrong assertion in src/sum.test.mjs",
       "directive": "src/sum.test.mjs has a broken assertion: sum(2,3) is asserted to equal 6. The production function src/sum.js is correct (returns 5). Fix the assertion (or test description) so all tests pass — WITHOUT modifying src/sum.js. The test must reflect the function's actual behavior.",
       "fixture": "fix-failing-test",
-      "presets": ["baseline", "blackboard"],
+      "presets": [
+        "baseline",
+        "blackboard",
+        "moa"
+      ],
       "rounds": 3,
       "agentCount": 3,
       "wallClockCapMs": 300000,
@@ -112,7 +150,11 @@
       "title": "Add a Usage section to tinypkg's README.md",
       "directive": "The tinypkg README.md is missing a `## Usage` section that documents how to call the exported function. Read the package source to understand the function's signature, then add a Usage section to README.md with at least one minimal code example.",
       "fixture": "add-readme-section",
-      "presets": ["baseline", "blackboard"],
+      "presets": [
+        "baseline",
+        "blackboard",
+        "moa"
+      ],
       "rounds": 3,
       "agentCount": 3,
       "wallClockCapMs": 300000,
@@ -124,7 +166,11 @@
       "title": "Scan src/ + write a JSON report of console.log calls",
       "directive": "Walk src/ and find every console.log call. Write report.json at the repo root with this shape: {\"count\": N, \"calls\": [{\"file\": \"src/main.js\", \"line\": 7}, ...]}. Lists must contain real file paths + 1-based line numbers; count must equal calls.length.",
       "fixture": "audit-console-logs",
-      "presets": ["baseline", "blackboard"],
+      "presets": [
+        "baseline",
+        "blackboard",
+        "moa"
+      ],
       "rounds": 3,
       "agentCount": 3,
       "wallClockCapMs": 300000,
@@ -136,7 +182,11 @@
       "title": "Read package.json + emit a categorized dep report",
       "directive": "Read package.json. Write categories.json at the repo root with three lists — `runtime`, `dev`, `optional` — each containing the dependency NAMES (not version strings) from `dependencies`, `devDependencies`, and `optionalDependencies` respectively.",
       "fixture": "categorize-deps",
-      "presets": ["baseline", "blackboard"],
+      "presets": [
+        "baseline",
+        "blackboard",
+        "moa"
+      ],
       "rounds": 3,
       "agentCount": 3,
       "wallClockCapMs": 300000,
@@ -148,7 +198,11 @@
       "title": "Create entry point + wire npm script",
       "directive": "Two steps: (1) Create src/main.js that imports `greet` from ./greeter.js and calls greet(\"world\"), printing the result. (2) Add a `greet` script to package.json that invokes src/main.js (canonical: `\"greet\": \"node src/main.js\"`). When `npm run greet` runs, it should print `hello, world!`.",
       "fixture": "multistep-add-script",
-      "presets": ["baseline", "blackboard"],
+      "presets": [
+        "baseline",
+        "blackboard",
+        "moa"
+      ],
       "rounds": 3,
       "agentCount": 3,
       "wallClockCapMs": 300000,
@@ -160,7 +214,11 @@
       "title": "Add a verbose option to formatLog + write the test",
       "directive": "Two steps: (1) In src/log.js, extend formatLog(level, msg, opts) so that when opts.verbose === true the returned string includes a [v] marker after the level (e.g. \"INFO [v]: hello\"). Default behavior unchanged when opts.verbose is absent or false. (2) Create src/log.test.mjs using node:test that asserts BOTH the verbose-true case AND the default-no-marker case. Tests must pass.",
       "fixture": "multistep-config-then-test",
-      "presets": ["baseline", "blackboard"],
+      "presets": [
+        "baseline",
+        "blackboard",
+        "moa"
+      ],
       "rounds": 3,
       "agentCount": 3,
       "wallClockCapMs": 300000,
@@ -170,9 +228,18 @@
   ],
   "$presetOverrides": {
     "$comment": "Per-preset minimum-agent overrides. Catalog tasks can specify smaller agentCount; the harness clamps up to preset.min.",
-    "blackboard": { "min": 3 },
-    "map-reduce": { "min": 4 },
-    "orchestrator-worker-deep": { "min": 4 },
-    "debate-judge": { "min": 3, "max": 3 }
+    "blackboard": {
+      "min": 3
+    },
+    "map-reduce": {
+      "min": 4
+    },
+    "orchestrator-worker-deep": {
+      "min": 4
+    },
+    "debate-judge": {
+      "min": 3,
+      "max": 3
+    }
   }
 }
