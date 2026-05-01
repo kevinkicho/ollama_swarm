@@ -32,7 +32,7 @@ function fmtElapsed(startMs: number | null, endMs: number | null): string {
 
 export function TimeTravelReplayPanel() {
   const runId = pickRunIdFromUrl();
-  const { loading, error, totalRecords, cursor, setCursor, snapshot, records } =
+  const { loading, error, totalRecords, cursor, setCursor, snapshot, diff, records } =
     useReplayState(runId);
 
   if (!runId) {
@@ -139,9 +139,73 @@ export function TimeTravelReplayPanel() {
         <Cell label="elapsed" value={fmtElapsed(snapshot.startedAt, snapshot.finishedAt)} />
         <Cell label="transcript entries" value={snapshot.transcript.length} />
         <Cell label="agents seen" value={snapshot.agents.length} />
-        <Cell label="started" value={fmtTs(snapshot.startedAt)} />
+        <Cell label="todos" value={snapshot.todos.length} />
+        <Cell label="findings" value={snapshot.findings.length} />
+        <Cell label="conformance" value={snapshot.conformanceScore !== null ? snapshot.conformanceScore.toFixed(0) : "—"} />
+        <Cell label="drift" value={snapshot.driftScore !== null ? snapshot.driftScore.toFixed(2) : "—"} />
+        <Cell label="errors" value={snapshot.errors.length} />
         <Cell label="terminal?" value={snapshot.hasSummary ? "yes" : "no"} />
       </section>
+
+      {/* What changed at this tick */}
+      {diff && (
+        <section className="mb-6 bg-ink-900/40 border border-ink-800 rounded p-3">
+          <h2 className="text-sm uppercase tracking-wide text-ink-400 mb-2">
+            What changed at tick {cursor}
+          </h2>
+          <ul className="text-xs font-mono space-y-1 text-ink-300">
+            {diff.phaseChanged && (
+              <li>
+                phase: <span className="text-rose-300">{diff.phaseChanged.from}</span> →{" "}
+                <span className="text-emerald-300">{diff.phaseChanged.to}</span>
+              </li>
+            )}
+            {diff.newTranscriptIds.length > 0 && (
+              <li>+{diff.newTranscriptIds.length} transcript entry({diff.newTranscriptIds.length === 1 ? "" : "s"})</li>
+            )}
+            {diff.agentStatusChanges.map((c) => (
+              <li key={`as-${c.agentId}`}>
+                {c.agentId}: <span className="text-rose-300">{c.from ?? "—"}</span> →{" "}
+                <span className="text-emerald-300">{c.to ?? "—"}</span>
+              </li>
+            ))}
+            {diff.todoStatusChanges.map((c) => (
+              <li key={`ts-${c.todoId}`}>
+                todo {c.todoId.slice(0, 8)}: <span className="text-rose-300">{c.from ?? "—"}</span> →{" "}
+                <span className="text-emerald-300">{c.to}</span>
+              </li>
+            ))}
+            {diff.newFindingIds.length > 0 && (
+              <li>+{diff.newFindingIds.length} finding({diff.newFindingIds.length === 1 ? "" : "s"})</li>
+            )}
+            {diff.newErrors > 0 && (
+              <li className="text-rose-200">+{diff.newErrors} error({diff.newErrors === 1 ? "" : "s"})</li>
+            )}
+            {diff.conformanceDelta !== null && diff.conformanceDelta !== 0 && (
+              <li>
+                conformance: {diff.conformanceDelta > 0 ? "+" : ""}{diff.conformanceDelta.toFixed(1)}
+              </li>
+            )}
+            {diff.driftDelta !== null && diff.driftDelta !== 0 && (
+              <li>
+                drift: {diff.driftDelta > 0 ? "+" : ""}{diff.driftDelta.toFixed(3)}
+              </li>
+            )}
+            {diff.contractChanged && <li className="text-amber-300">contract updated</li>}
+            {diff.directiveChanged && <li className="text-amber-300">directive amended</li>}
+            {diff.phaseChanged === null &&
+              diff.newTranscriptIds.length === 0 &&
+              diff.agentStatusChanges.length === 0 &&
+              diff.todoStatusChanges.length === 0 &&
+              diff.newFindingIds.length === 0 &&
+              diff.newErrors === 0 &&
+              !diff.contractChanged &&
+              !diff.directiveChanged && (
+                <li className="text-ink-500 italic">no observable state change at this tick</li>
+              )}
+          </ul>
+        </section>
+      )}
 
       {/* Agent grid */}
       <section className="mb-6">

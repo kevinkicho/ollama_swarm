@@ -38,6 +38,14 @@ export interface ReplayAgentSnapshot {
   model?: string;
 }
 
+export interface ReplayTodoSnapshot {
+  id: string;
+  description?: string;
+  status: "open" | "claimed" | "committed" | "stale" | "skipped";
+  workerId?: string;
+  staleReason?: string;
+}
+
 export interface ReplaySnapshot {
   runId: string | null;
   preset: string | null;
@@ -47,6 +55,17 @@ export interface ReplaySnapshot {
   finishedAt: number | null;
   transcript: ReadonlyArray<{ id: string; role: string; text: string; ts: number; agentId?: string; agentIndex?: number }>;
   agents: ReadonlyArray<ReplayAgentSnapshot>;
+  todos: ReadonlyArray<ReplayTodoSnapshot>;
+  findings: ReadonlyArray<{ id: string; text: string; ts: number }>;
+  contract: { missionStatement?: string; criteria?: ReadonlyArray<{ description: string; status?: string }> } | null;
+  /** Last directive amendment text, if any. */
+  directive: string | null;
+  /** Latest conformance score (0..100), null if never sampled. */
+  conformanceScore: number | null;
+  /** Latest drift score (0..1), null if never sampled. */
+  driftScore: number | null;
+  /** Error events accumulated. */
+  errors: ReadonlyArray<{ message: string; ts: number }>;
   hasSummary: boolean;
 }
 
@@ -71,20 +90,40 @@ const EMPTY_SNAPSHOT: ReplaySnapshot = {
   finishedAt: null,
   transcript: [],
   agents: [],
+  todos: [],
+  findings: [],
+  contract: null,
+  directive: null,
+  conformanceScore: null,
+  driftScore: null,
+  errors: [],
   hasSummary: false,
 };
 
 /** Pure reducer — fold records[0..n] into a single snapshot.
- *  Exported for unit tests. */
+ *  Exported for unit tests.
+ *
+ *  #94 deeper (2026-05-01): coverage extended from 5 → 14 event types.
+ *  Added: error, todo_posted/claimed/committed/failed/skipped/replanned,
+ *  finding_posted, contract_updated, directive_amended, conformance_sample,
+ *  drift_sample. Streaming/latency events still skipped (not load-bearing
+ *  for replay — final transcript_append carries the result; agent_latency
+ *  is per-attempt diagnostic noise). */
 export function reduceToSnapshot(records: ReadonlyArray<ReplayRecord>): ReplaySnapshot {
   const snap: ReplaySnapshot = {
     ...EMPTY_SNAPSHOT,
     transcript: [],
     agents: [],
+    todos: [],
+    findings: [],
+    errors: [],
   };
   // Mutating local copies for accumulation; freeze before return.
   const transcript: Array<ReplaySnapshot["transcript"][number]> = [];
   const agents: Map<string, ReplayAgentSnapshot> = new Map();
+  const todos: Map<string, ReplayTodoSnapshot> = new Map();
+  const findings: Array<{ id: string; text: string; ts: number }> = [];
+  const errors: Array<{ message: string; ts: number }> = [];
 
   for (const record of records) {
     const ev = record.event;
@@ -127,6 +166,74 @@ export function reduceToSnapshot(records: ReadonlyArray<ReplayRecord>): ReplaySn
           });
         }
         break;
+      case "todo_posted":
+        if (typeof ev.id === "string") {
+          todos.set(ev.id, {
+            id: ev.id,
+            description: typeof ev.description === "string" ? ev.description : undefined,
+            status: "open",
+          });
+        }
+        break;
+      case "todo_claimed":
+        if (typeof ev.id === "string") {
+          const prior = todos.get(ev.id) ?? { id: ev.id, status: "open" as const };
+          todos.set(ev.id, {
+            ...prior,
+            status: "claimed",
+            ...(typeof ev.workerId === "string" ? { workerId: ev.workerId } : {}),
+          });
+        }
+        break;
+      case "todo_committed":
+        if (typeof ev.id === "string") {
+          const prior = todos.get(ev.id) ?? { id: ev.id, status: "open" as const };
+          todos.set(ev.id, { ...prior, status: "committed" });
+        }
+        break;
+      case "todo_failed":
+      case "todo_replanned":
+        if (typeof ev.id === "string") {
+          const prior = todos.get(ev.id) ?? { id: ev.id, status: "open" as const };
+          todos.set(ev.id, {
+            ...prior,
+            status: "stale",
+            ...(typeof ev.reason === "string" ? { staleReason: ev.reason } : {}),
+          });
+        }
+        break;
+      case "todo_skipped":
+        if (typeof ev.id === "string") {
+          const prior = todos.get(ev.id) ?? { id: ev.id, status: "open" as const };
+          todos.set(ev.id, { ...prior, status: "skipped" });
+        }
+        break;
+      case "finding_posted":
+        if (typeof ev.id === "string" && typeof ev.text === "string") {
+          findings.push({ id: ev.id, text: ev.text, ts: record.ts });
+        }
+        break;
+      case "contract_updated":
+        if (ev.contract && typeof ev.contract === "object") {
+          snap.contract = ev.contract as ReplaySnapshot["contract"];
+        }
+        break;
+      case "directive_amended":
+        if (typeof ev.text === "string") snap.directive = ev.text;
+        break;
+      case "conformance_sample":
+        if (typeof ev.score === "number") snap.conformanceScore = ev.score;
+        else if (typeof ev.smoothed === "number") snap.conformanceScore = ev.smoothed;
+        break;
+      case "drift_sample":
+        if (typeof ev.score === "number") snap.driftScore = ev.score;
+        else if (typeof ev.similarity === "number") snap.driftScore = ev.similarity;
+        break;
+      case "error":
+        if (typeof ev.message === "string") {
+          errors.push({ message: ev.message, ts: record.ts });
+        }
+        break;
       case "run_summary":
         snap.hasSummary = true;
         snap.finishedAt = record.ts;
@@ -143,6 +250,72 @@ export function reduceToSnapshot(records: ReadonlyArray<ReplayRecord>): ReplaySn
     ...snap,
     transcript: Object.freeze(transcript),
     agents: Object.freeze([...agents.values()].sort((a, b) => (a.index ?? 0) - (b.index ?? 0))),
+    todos: Object.freeze([...todos.values()]),
+    findings: Object.freeze(findings),
+    errors: Object.freeze(errors),
+  };
+}
+
+/** Compute what changed between two snapshots. Used by the time-travel
+ *  UI's "what happened at this tick?" panel. */
+export interface SnapshotDiff {
+  phaseChanged: { from: string; to: string } | null;
+  newTranscriptIds: string[];
+  agentStatusChanges: Array<{ agentId: string; from: string | undefined; to: string | undefined }>;
+  todoStatusChanges: Array<{ todoId: string; from: string | undefined; to: string }>;
+  newFindingIds: string[];
+  newErrors: number;
+  conformanceDelta: number | null;
+  driftDelta: number | null;
+  contractChanged: boolean;
+  directiveChanged: boolean;
+}
+
+export function diffSnapshots(prev: ReplaySnapshot, curr: ReplaySnapshot): SnapshotDiff {
+  const phaseChanged =
+    prev.phase !== curr.phase ? { from: prev.phase, to: curr.phase } : null;
+
+  const prevTranscriptIds = new Set(prev.transcript.map((e) => e.id));
+  const newTranscriptIds = curr.transcript.filter((e) => !prevTranscriptIds.has(e.id)).map((e) => e.id);
+
+  const prevAgentStatus = new Map(prev.agents.map((a) => [a.id, a.status]));
+  const agentStatusChanges: SnapshotDiff["agentStatusChanges"] = [];
+  for (const a of curr.agents) {
+    const prior = prevAgentStatus.get(a.id);
+    if (prior !== a.status) {
+      agentStatusChanges.push({ agentId: a.id, from: prior, to: a.status });
+    }
+  }
+
+  const prevTodoStatus = new Map(prev.todos.map((t) => [t.id, t.status]));
+  const todoStatusChanges: SnapshotDiff["todoStatusChanges"] = [];
+  for (const t of curr.todos) {
+    const prior = prevTodoStatus.get(t.id);
+    if (prior !== t.status) {
+      todoStatusChanges.push({ todoId: t.id, from: prior, to: t.status });
+    }
+  }
+
+  const prevFindingIds = new Set(prev.findings.map((f) => f.id));
+  const newFindingIds = curr.findings.filter((f) => !prevFindingIds.has(f.id)).map((f) => f.id);
+
+  return {
+    phaseChanged,
+    newTranscriptIds,
+    agentStatusChanges,
+    todoStatusChanges,
+    newFindingIds,
+    newErrors: curr.errors.length - prev.errors.length,
+    conformanceDelta:
+      prev.conformanceScore !== null && curr.conformanceScore !== null
+        ? curr.conformanceScore - prev.conformanceScore
+        : null,
+    driftDelta:
+      prev.driftScore !== null && curr.driftScore !== null
+        ? curr.driftScore - prev.driftScore
+        : null,
+    contractChanged: JSON.stringify(prev.contract) !== JSON.stringify(curr.contract),
+    directiveChanged: prev.directive !== curr.directive,
   };
 }
 
@@ -155,6 +328,9 @@ export interface UseReplayStateResult {
   setCursor: (n: number) => void;
   /** Snapshot folded from records[0..cursor]. */
   snapshot: ReplaySnapshot;
+  /** Diff between snapshot at cursor-1 vs cursor, useful for showing
+   *  "what happened on this tick?" — null when cursor === 0. */
+  diff: SnapshotDiff | null;
   /** Raw records for advanced UI (timeline density visualization, etc.). */
   records: ReadonlyArray<ReplayRecord>;
 }
@@ -208,6 +384,12 @@ export function useReplayState(runId: string | null): UseReplayStateResult {
     [records, safeCursor],
   );
 
+  const diff = useMemo(() => {
+    if (safeCursor === 0) return null;
+    const priorSnap = reduceToSnapshot(records.slice(0, safeCursor - 1));
+    return diffSnapshots(priorSnap, snapshot);
+  }, [records, safeCursor, snapshot]);
+
   return {
     loading,
     error,
@@ -215,6 +397,7 @@ export function useReplayState(runId: string | null): UseReplayStateResult {
     cursor: safeCursor,
     setCursor,
     snapshot,
+    diff,
     records,
   };
 }

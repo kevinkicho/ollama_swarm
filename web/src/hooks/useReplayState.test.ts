@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { reduceToSnapshot, type ReplayRecord } from "./useReplayState.js";
+import { reduceToSnapshot, diffSnapshots, type ReplayRecord } from "./useReplayState.js";
 
 const ts = (n: number): number => 1700000000000 + n * 1000;
 
@@ -135,4 +135,175 @@ test("reduceToSnapshot — agents sorted by index ascending", () => {
     rec(2, "agent_state", { id: "a2", index: 2 }),
   ]);
   assert.deepEqual(snap.agents.map((a) => a.id), ["a1", "a2", "a3"]);
+});
+
+// #94 deeper (2026-05-01): tests for the extended event coverage + diff.
+
+test("reduceToSnapshot — todo_posted creates an open todo", () => {
+  const snap = reduceToSnapshot([
+    rec(0, "todo_posted", { id: "t1", description: "Fix the off-by-one" }),
+  ]);
+  assert.equal(snap.todos.length, 1);
+  assert.equal(snap.todos[0].id, "t1");
+  assert.equal(snap.todos[0].status, "open");
+  assert.equal(snap.todos[0].description, "Fix the off-by-one");
+});
+
+test("reduceToSnapshot — todo lifecycle: posted → claimed → committed", () => {
+  const snap = reduceToSnapshot([
+    rec(0, "todo_posted", { id: "t1", description: "x" }),
+    rec(1, "todo_claimed", { id: "t1", workerId: "agent-2" }),
+    rec(2, "todo_committed", { id: "t1" }),
+  ]);
+  assert.equal(snap.todos.length, 1);
+  assert.equal(snap.todos[0].status, "committed");
+  assert.equal(snap.todos[0].workerId, "agent-2");
+});
+
+test("reduceToSnapshot — todo_failed marks stale with reason", () => {
+  const snap = reduceToSnapshot([
+    rec(0, "todo_posted", { id: "t1" }),
+    rec(1, "todo_failed", { id: "t1", reason: "search not found" }),
+  ]);
+  assert.equal(snap.todos[0].status, "stale");
+  assert.equal(snap.todos[0].staleReason, "search not found");
+});
+
+test("reduceToSnapshot — todo_skipped marks skipped", () => {
+  const snap = reduceToSnapshot([
+    rec(0, "todo_posted", { id: "t1" }),
+    rec(1, "todo_skipped", { id: "t1" }),
+  ]);
+  assert.equal(snap.todos[0].status, "skipped");
+});
+
+test("reduceToSnapshot — finding_posted accumulates findings", () => {
+  const snap = reduceToSnapshot([
+    rec(0, "finding_posted", { id: "f1", text: "auth bypass possible" }),
+    rec(1, "finding_posted", { id: "f2", text: "race condition" }),
+  ]);
+  assert.equal(snap.findings.length, 2);
+  assert.equal(snap.findings[0].id, "f1");
+  assert.equal(snap.findings[1].text, "race condition");
+});
+
+test("reduceToSnapshot — contract_updated stores the contract", () => {
+  const contract = {
+    missionStatement: "ship MoA",
+    criteria: [{ description: "tests pass", status: "met" }],
+  };
+  const snap = reduceToSnapshot([rec(0, "contract_updated", { contract })]);
+  assert.deepEqual(snap.contract, contract);
+});
+
+test("reduceToSnapshot — directive_amended sets latest directive text", () => {
+  const snap = reduceToSnapshot([
+    rec(0, "directive_amended", { text: "first amendment" }),
+    rec(1, "directive_amended", { text: "second amendment" }),
+  ]);
+  assert.equal(snap.directive, "second amendment", "latest wins");
+});
+
+test("reduceToSnapshot — conformance_sample tracks latest score", () => {
+  const snap = reduceToSnapshot([
+    rec(0, "conformance_sample", { score: 75 }),
+    rec(1, "conformance_sample", { score: 82 }),
+  ]);
+  assert.equal(snap.conformanceScore, 82);
+});
+
+test("reduceToSnapshot — drift_sample tracks latest score (similarity field also accepted)", () => {
+  const snap = reduceToSnapshot([
+    rec(0, "drift_sample", { similarity: 0.91 }),
+    rec(1, "drift_sample", { score: 0.87 }),
+  ]);
+  assert.equal(snap.driftScore, 0.87);
+});
+
+test("reduceToSnapshot — error events accumulate in errors array", () => {
+  const snap = reduceToSnapshot([
+    rec(0, "error", { message: "Ollama timeout" }),
+    rec(1, "error", { message: "git commit failed" }),
+  ]);
+  assert.equal(snap.errors.length, 2);
+  assert.equal(snap.errors[0].message, "Ollama timeout");
+});
+
+// ---------------------------------------------------------------------------
+// diffSnapshots
+// ---------------------------------------------------------------------------
+
+test("diffSnapshots — phase change captured", () => {
+  const a = reduceToSnapshot([rec(0, "swarm_state", { phase: "spawning" })]);
+  const b = reduceToSnapshot([
+    rec(0, "swarm_state", { phase: "spawning" }),
+    rec(1, "swarm_state", { phase: "executing" }),
+  ]);
+  const d = diffSnapshots(a, b);
+  assert.deepEqual(d.phaseChanged, { from: "spawning", to: "executing" });
+});
+
+test("diffSnapshots — new transcript ids reported", () => {
+  const a = reduceToSnapshot([rec(0, "transcript_append", { entry: { id: "e1", role: "agent", text: "x" } })]);
+  const b = reduceToSnapshot([
+    rec(0, "transcript_append", { entry: { id: "e1", role: "agent", text: "x" } }),
+    rec(1, "transcript_append", { entry: { id: "e2", role: "agent", text: "y" } }),
+    rec(2, "transcript_append", { entry: { id: "e3", role: "agent", text: "z" } }),
+  ]);
+  const d = diffSnapshots(a, b);
+  assert.deepEqual(d.newTranscriptIds, ["e2", "e3"]);
+});
+
+test("diffSnapshots — agent status transitions reported", () => {
+  const a = reduceToSnapshot([rec(0, "agent_state", { id: "a1", status: "ready" })]);
+  const b = reduceToSnapshot([
+    rec(0, "agent_state", { id: "a1", status: "ready" }),
+    rec(1, "agent_state", { id: "a1", status: "thinking" }),
+  ]);
+  const d = diffSnapshots(a, b);
+  assert.equal(d.agentStatusChanges.length, 1);
+  assert.deepEqual(d.agentStatusChanges[0], { agentId: "a1", from: "ready", to: "thinking" });
+});
+
+test("diffSnapshots — todo status transitions reported", () => {
+  const a = reduceToSnapshot([rec(0, "todo_posted", { id: "t1" })]);
+  const b = reduceToSnapshot([
+    rec(0, "todo_posted", { id: "t1" }),
+    rec(1, "todo_claimed", { id: "t1", workerId: "w1" }),
+  ]);
+  const d = diffSnapshots(a, b);
+  assert.equal(d.todoStatusChanges.length, 1);
+  assert.deepEqual(d.todoStatusChanges[0], { todoId: "t1", from: "open", to: "claimed" });
+});
+
+test("diffSnapshots — conformance + drift deltas computed when both present", () => {
+  const a = reduceToSnapshot([
+    rec(0, "conformance_sample", { score: 70 }),
+    rec(1, "drift_sample", { score: 0.85 }),
+  ]);
+  const b = reduceToSnapshot([
+    rec(0, "conformance_sample", { score: 70 }),
+    rec(1, "drift_sample", { score: 0.85 }),
+    rec(2, "conformance_sample", { score: 78 }),
+    rec(3, "drift_sample", { score: 0.92 }),
+  ]);
+  const d = diffSnapshots(a, b);
+  assert.equal(d.conformanceDelta, 8);
+  assert.ok(d.driftDelta !== null && Math.abs(d.driftDelta - 0.07) < 0.001);
+});
+
+test("diffSnapshots — empty diff when nothing changed", () => {
+  const records = [
+    rec(0, "swarm_state", { phase: "executing" }),
+    rec(1, "agent_state", { id: "a1", status: "ready" }),
+  ];
+  const a = reduceToSnapshot(records);
+  const b = reduceToSnapshot(records);
+  const d = diffSnapshots(a, b);
+  assert.equal(d.phaseChanged, null);
+  assert.equal(d.newTranscriptIds.length, 0);
+  assert.equal(d.agentStatusChanges.length, 0);
+  assert.equal(d.todoStatusChanges.length, 0);
+  assert.equal(d.contractChanged, false);
+  assert.equal(d.directiveChanged, false);
 });
