@@ -269,6 +269,23 @@ export interface RunConfig {
    */
   selfConsistencyK?: number;
   /**
+   * #93 deeper (2026-05-01): MoA aggregator count. When > 1, K
+   * aggregators each synthesize independently in parallel, and the
+   * runner picks the "most central" synthesis (highest mean Jaccard
+   * with the others). Capped at 3. Default 1 (single aggregator).
+   * MoA-only — other presets ignore this.
+   */
+  moaAggregatorCount?: number;
+  /**
+   * #93 deeper (2026-05-01): MoA convergence threshold. After each
+   * round, if round-N synthesis has Jaccard similarity ≥ this with
+   * round-(N-1) synthesis, declare convergence and stop early.
+   * Range [0, 1]. Default 0.7 (empirically settles for agreed-upon
+   * topics). Set to 1 to disable convergence (always run all rounds).
+   * MoA-only.
+   */
+  moaConvergenceThreshold?: number;
+  /**
    * Task #102: opt-in post-verdict "build" round for debate-judge.
    * After the JUDGE returns a verdict with confidence ≥ medium and a
    * non-tie winner, the same 3 agents pivot to: PRO=implementer

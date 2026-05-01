@@ -38,6 +38,7 @@ import { extractText } from "./extractText.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { describeSdkError } from "./sdkError.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
+import { detectConvergence, pickMostCentralAggregator } from "./moaConsensus.js";
 
 export class MoaRunner implements SwarmRunner {
   private transcript: TranscriptEntry[] = [];
@@ -115,13 +116,13 @@ export class MoaRunner implements SwarmRunner {
     if (this.stopping) return;
 
     this.setPhase("spawning");
-    // Spawn N proposers + 1 aggregator. Aggregator is the LAST agent
-    // (highest index) so per-agent panel rendering shows proposers in
-    // order then the aggregator. The N count comes from cfg.agentCount;
-    // the aggregator is in addition (not subtracted) so the user's
-    // "5 agents" gets 5 proposers + 1 aggregator = 6 total.
+    // Spawn N proposers + K aggregators. Aggregators are the LAST K
+    // agents (highest indices). #93 deeper (2026-05-01): K configurable
+    // via cfg.moaAggregatorCount (default 1, capped at 3). agentCount
+    // covers proposers; aggregators are in ADDITION.
     const proposerCount = cfg.agentCount;
-    const totalAgents = proposerCount + 1;
+    const aggregatorCount = Math.max(1, Math.min(3, cfg.moaAggregatorCount ?? 1));
+    const totalAgents = proposerCount + aggregatorCount;
     const agents: Agent[] = [];
     for (let i = 1; i <= totalAgents; i++) {
       const agent = await this.opts.manager.spawnAgentNoOpencode({
@@ -133,9 +134,9 @@ export class MoaRunner implements SwarmRunner {
       if (this.stopping) return;
     }
     const proposers = agents.slice(0, proposerCount);
-    const aggregator = agents[agents.length - 1];
+    const aggregators = agents.slice(proposerCount);
     this.appendSystem(
-      `MoA ready: ${proposerCount} proposer(s) + 1 aggregator (${aggregator.id})`,
+      `MoA ready: ${proposerCount} proposer(s) + ${aggregatorCount} aggregator(s) (${aggregators.map((a) => a.id).join(", ")})`,
     );
 
     const directive = (cfg.userDirective ?? "").trim();
@@ -151,8 +152,11 @@ export class MoaRunner implements SwarmRunner {
 
     let priorSynthesis: string | null = null;
     const rounds = Math.max(1, Math.min(10, cfg.rounds ?? 1));
+    const convergenceThreshold = cfg.moaConvergenceThreshold ?? 0.7;
+    let actualRoundsRun = 0;
     for (let round = 1; round <= rounds; round++) {
       this.round = round;
+      actualRoundsRun = round;
       this.appendSystem(`── MoA Round ${round}/${rounds} — Layer 1: ${proposerCount} proposers (peer-hidden) ──`);
 
       const proposerPrompt = buildProposerPrompt({
@@ -184,24 +188,71 @@ export class MoaRunner implements SwarmRunner {
         return;
       }
 
-      this.appendSystem(`── Layer 2: aggregator synthesizing ${validProposals.length}/${proposerCount} proposals ──`);
+      // #93 deeper (2026-05-01): K aggregators in parallel + central pick.
+      // Each aggregator gets a slightly different system-prompt variation
+      // (clarity / completeness / actionability). When K=1, the rotation
+      // collapses to the canonical prompt = current behavior.
+      this.appendSystem(
+        `── Layer 2: ${aggregators.length} aggregator(s) synthesizing ${validProposals.length}/${proposerCount} proposals (parallel) ──`,
+      );
 
-      const synthPrompt = buildAggregatorPrompt({ seed, proposals: validProposals });
-      let synthesis: string;
-      try {
-        synthesis = await this.runOne(aggregator, synthPrompt, "aggregator");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.appendSystem(`[${aggregator.id}] aggregator failed: ${msg}`);
+      const synthResults = await Promise.all(
+        aggregators.map((agg, idx) => {
+          const variant = AGGREGATOR_VARIANTS[idx % AGGREGATOR_VARIANTS.length];
+          const synthPrompt = buildAggregatorPrompt({
+            seed,
+            proposals: validProposals,
+            variantBias: variant,
+          });
+          return this.runOne(agg, synthPrompt, `aggregator-${idx + 1}-${variant}`)
+            .then((text) => ({ ok: true as const, idx, text, agg }))
+            .catch((err) => ({ ok: false as const, idx, err, agg }));
+        }),
+      );
+      if (this.stopping) return;
+
+      const validSyntheses = synthResults.filter(
+        (r): r is { ok: true; idx: number; text: string; agg: Agent } => r.ok,
+      );
+      if (validSyntheses.length === 0) {
+        this.appendSystem(`MoA round ${round}: all ${aggregators.length} aggregator(s) failed; aborting.`);
         this.setPhase("failed");
         return;
       }
-      if (this.stopping) return;
+
+      let synthesis: string;
+      if (validSyntheses.length === 1) {
+        synthesis = validSyntheses[0].text;
+      } else {
+        const central = pickMostCentralAggregator(validSyntheses.map((s) => s.text));
+        synthesis = validSyntheses[central.winnerIdx].text;
+        this.appendSystem(
+          `[multi-aggregator] ${validSyntheses.length}/${aggregators.length} synthesized · winner=aggregator-${central.winnerIdx + 1} · meanJaccard=${central.meanSimilarity.toFixed(3)}` +
+            ` · perCandidate=[${central.perCandidateMean.map((m) => m.toFixed(2)).join(", ")}]`,
+        );
+      }
+
+      // #93 deeper: convergence detection. After round 2+, check if the
+      // new synthesis is similar enough to the prior round's that we can
+      // stop early. Saves rounds × (proposer + K aggregator) calls.
+      if (priorSynthesis !== null) {
+        const verdict = detectConvergence(priorSynthesis, synthesis, convergenceThreshold);
+        this.appendSystem(
+          `[convergence] round ${round} vs ${round - 1}: jaccard=${verdict.similarity.toFixed(3)} threshold=${verdict.threshold} converged=${verdict.converged}`,
+        );
+        if (verdict.converged) {
+          this.appendSystem(
+            `MoA converged after round ${round} (similarity ${verdict.similarity.toFixed(3)} ≥ ${verdict.threshold}); stopping early.`,
+          );
+          priorSynthesis = synthesis;
+          break;
+        }
+      }
 
       priorSynthesis = synthesis;
     }
 
-    this.appendSystem(`MoA finished after ${rounds} round(s).`);
+    this.appendSystem(`MoA finished after ${actualRoundsRun} round(s) (capped at ${rounds}).`);
     this.setPhase("completed");
   }
 
@@ -285,12 +336,29 @@ export function buildProposerPrompt(input: ProposerPromptInput): string {
   return parts.join("\n");
 }
 
+export type AggregatorVariant = "balanced" | "clarity" | "completeness" | "actionability";
+
+/** Variant rotation list — used by MoaRunner when multiple aggregators
+ *  run in parallel. Position [0] is the canonical "balanced" prompt
+ *  (preserves single-aggregator behavior when K=1). */
+export const AGGREGATOR_VARIANTS: AggregatorVariant[] = [
+  "balanced",
+  "clarity",
+  "actionability",
+];
+
 export interface AggregatorPromptInput {
   seed: string;
   proposals: ReadonlyArray<{ workerId: string; text: string }>;
+  /** Optional per-aggregator bias — shapes the system instructions
+   *  toward one of: balanced (default), clarity, completeness,
+   *  actionability. K-aggregator multi-vote rotates through these so
+   *  each parallel synthesis emphasizes a different dimension. */
+  variantBias?: AggregatorVariant;
 }
 
 export function buildAggregatorPrompt(input: AggregatorPromptInput): string {
+  const variant = input.variantBias ?? "balanced";
   const parts: string[] = [];
   parts.push(
     "You are the aggregator on a Mixture-of-Agents team. You see N independent proposers' answers to the same seed. Synthesize a single coherent answer that:",
@@ -299,6 +367,24 @@ export function buildAggregatorPrompt(input: AggregatorPromptInput): string {
   parts.push("  - Notes where proposers disagreed, and pick the strongest argument for each side.");
   parts.push("  - Drops ideas only one proposer mentioned UNLESS they're clearly correct on technical merit.");
   parts.push("  - Produces ONE answer, not N answers stitched together.");
+  // Variant-specific bias — shapes which axis the synthesis optimizes
+  // for. Empirically lets K parallel aggregators produce diverse
+  // syntheses that the central-pick step can rank against each other.
+  switch (variant) {
+    case "clarity":
+      parts.push("  - **Bias toward CLARITY**: prefer concrete language, short sentences, no jargon. If you have to choose between technically-correct and easy-to-understand, pick easy-to-understand.");
+      break;
+    case "completeness":
+      parts.push("  - **Bias toward COMPLETENESS**: include every point any proposer raised that has merit, even at the cost of length. Cap at 800 words.");
+      break;
+    case "actionability":
+      parts.push("  - **Bias toward ACTIONABILITY**: structure the answer as concrete next steps. Each paragraph should end with a thing the reader can DO. If a proposer was abstract, translate to concrete.");
+      break;
+    case "balanced":
+    default:
+      // No additional bias.
+      break;
+  }
   parts.push("");
   parts.push("Original seed:");
   parts.push(input.seed);

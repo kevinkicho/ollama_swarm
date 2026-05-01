@@ -67,6 +67,7 @@ const TEST_FILES = [
   "src/swarm/DebateJudgeRunner.test.ts",
   "src/swarm/MapReduceRunner.test.ts",
   "src/swarm/MoaRunner.test.ts",
+  "src/swarm/moaConsensus.test.ts",
   "src/swarm/StigmergyRunner.test.ts",
   "src/swarm/StigmergyRunner.stripAnnotation.test.ts",
   "src/swarm/BaselineRunner.test.ts",

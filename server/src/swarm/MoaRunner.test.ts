@@ -77,3 +77,38 @@ test("buildAggregatorPrompt — handles 0-proposer edge case (header still says 
   const prompt = buildAggregatorPrompt({ seed: "s", proposals: [] });
   assert.match(prompt, /Proposers \(0\)/);
 });
+
+// #93 deeper (2026-05-01): variant-bias tests for multi-aggregator MoA.
+
+test("buildAggregatorPrompt — default variant 'balanced' adds no bias section", () => {
+  const prompt = buildAggregatorPrompt({ seed: "s", proposals: [] });
+  assert.doesNotMatch(prompt, /Bias toward/);
+});
+
+test("buildAggregatorPrompt — variant 'clarity' adds clarity bias", () => {
+  const prompt = buildAggregatorPrompt({
+    seed: "s",
+    proposals: [],
+    variantBias: "clarity",
+  });
+  assert.match(prompt, /Bias toward CLARITY/);
+  assert.doesNotMatch(prompt, /Bias toward COMPLETENESS/);
+});
+
+test("buildAggregatorPrompt — variant 'completeness' adds completeness bias", () => {
+  const prompt = buildAggregatorPrompt({
+    seed: "s",
+    proposals: [],
+    variantBias: "completeness",
+  });
+  assert.match(prompt, /Bias toward COMPLETENESS/);
+});
+
+test("buildAggregatorPrompt — variant 'actionability' adds actionability bias", () => {
+  const prompt = buildAggregatorPrompt({
+    seed: "s",
+    proposals: [],
+    variantBias: "actionability",
+  });
+  assert.match(prompt, /Bias toward ACTIONABILITY/);
+});

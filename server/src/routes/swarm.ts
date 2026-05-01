@@ -113,6 +113,11 @@ const StartBody = z.object({
   // the worker prompt K times per todo + applies the majority-voted
   // hunks envelope. Capped at 5 to bound token cost. Blackboard-only.
   selfConsistencyK: z.number().int().min(1).max(5).optional(),
+  // #93 deeper (2026-05-01): MoA aggregator count + convergence threshold.
+  // moaAggregatorCount > 1 = K aggregators in parallel, pick most-central.
+  // moaConvergenceThreshold gates round-to-round early stop. MoA-only.
+  moaAggregatorCount: z.number().int().min(1).max(3).optional(),
+  moaConvergenceThreshold: z.number().min(0).max(1).optional(),
   // Task #102 (2026-04-25): opt-in post-verdict "build" round for
   // debate-judge — PRO becomes implementer, CON reviewer, JUDGE
   // signoff. Default off; debate-judge-only.
@@ -429,6 +434,8 @@ export function swarmRouter(orch: Orchestrator): Router {
         specializedWorkers: parsed.data.specializedWorkers,
         criticEnsemble: parsed.data.criticEnsemble,
         selfConsistencyK: parsed.data.selfConsistencyK,
+        moaAggregatorCount: parsed.data.moaAggregatorCount,
+        moaConvergenceThreshold: parsed.data.moaConvergenceThreshold,
         executeNextAction: parsed.data.executeNextAction,
         tokenBudget: parsed.data.tokenBudget,
         maxCostUsd: parsed.data.maxCostUsd,
