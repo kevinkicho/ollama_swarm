@@ -10,6 +10,7 @@ import { ErrorBanner } from "./components/ErrorBanner";
 import { BubbleGallery } from "./components/BubbleGallery";
 import { EventLogMirrorPanel } from "./components/EventLogMirrorPanel";
 import { TimeTravelReplayPanel } from "./components/TimeTravelReplayPanel";
+import { RunCompareReplayPanel } from "./components/RunCompareReplayPanel";
 import type { RunSummary } from "./types";
 
 // Task #65 (2026-04-24): URL-based review mode. When the user opens a
@@ -51,11 +52,20 @@ function isReplayMode(): boolean {
   return new URLSearchParams(window.location.search).has("replay");
 }
 
+// #99 (2026-05-01): ?compare=<runIdA>,<runIdB> routes to the two-run
+// side-by-side comparison panel. Loads BOTH runs via independent
+// useReplayState hooks; supports independent + lock-step scrubbers.
+function isCompareMode(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).has("compare");
+}
+
 export default function App() {
   // Short-circuits: rendered as siblings (not nested inside AppMain)
   // so the conditional doesn't violate rules-of-hooks.
   if (isGalleryMode()) return <BubbleGallery />;
   if (isEventLogMirrorMode()) return <EventLogMirrorPanel />;
+  if (isCompareMode()) return <RunCompareReplayPanel />;
   if (isReplayMode()) return <TimeTravelReplayPanel />;
   return <AppMain />;
 }
