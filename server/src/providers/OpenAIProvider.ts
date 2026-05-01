@@ -267,19 +267,26 @@ export async function readOpenAiStreamFull(
     };
   };
 
+  // Bug fix 2026-05-01: see AnthropicProvider.ts for the full story.
+  // tl;dr: the previous version called reader.read() inside Promise.race
+  // every iteration, abandoning in-flight reads on timeout. Abandoned
+  // reads silently consumed subsequent chunks, truncating responses.
+  // Fix: keep one in-flight read across iterations.
+  const TIMEOUT_TICK_MS = 200;
+  const timeoutSentinel: unique symbol = Symbol("timeout") as never;
+  let pendingRead: Promise<{ done: boolean; value?: Uint8Array }> = reader.read();
+
   while (true) {
     if (opts.signal.aborted) return finalize("aborted");
     const timeoutReason = checkTimeout();
     if (timeoutReason) return finalize(timeoutReason);
 
     let chunk: { done: boolean; value?: Uint8Array };
-    const TIMEOUT_TICK_MS = 200;
     try {
-      const timeoutSentinel = Symbol("timeout");
       const raced = await Promise.race<typeof timeoutSentinel | { done: boolean; value?: Uint8Array }>([
-        reader.read(),
+        pendingRead,
         new Promise<typeof timeoutSentinel>((resolve) =>
-          setTimeout(() => resolve(timeoutSentinel), TIMEOUT_TICK_MS),
+          setTimeout(() => resolve(timeoutSentinel as never), TIMEOUT_TICK_MS),
         ),
       ]);
       if (raced === timeoutSentinel) continue;
@@ -289,6 +296,7 @@ export async function readOpenAiStreamFull(
       return finalize("error", err instanceof Error ? err.message : String(err));
     }
     if (chunk.done) break;
+    pendingRead = reader.read();
     if (chunk.value && chunk.value.length > 0) {
       lastChunkAt = Date.now();
       firstChunkSeen = true;

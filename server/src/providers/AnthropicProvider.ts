@@ -285,6 +285,22 @@ export async function readAnthropicStreamFull(
 
   let cumulativeText = "";
 
+  // Bug fix 2026-05-01: previous version called `reader.read()` inside a
+  // `Promise.race([read(), timeout])` on every loop iteration. When the
+  // timeout won, the in-flight `reader.read()` was abandoned but kept
+  // running — and when the next chunk arrived, IT consumed that chunk.
+  // The next iteration's `reader.read()` then waited for the chunk
+  // AFTER that one. Result: every other chunk silently dropped, so
+  // streaming responses were truncated to whatever arrived in the
+  // first SSE batch (e.g. "Here" from "Here you go: One, two, ...").
+  // Fix: keep ONE in-flight read promise across iterations and race
+  // against a fresh timeout each tick. The pending read isn't
+  // abandoned — we only re-call `read()` AFTER a chunk has been
+  // consumed.
+  const TIMEOUT_TICK_MS = 200;
+  const timeoutSentinel: unique symbol = Symbol("timeout") as never;
+  let pendingRead: Promise<{ done: boolean; value?: Uint8Array }> = reader.read();
+
   while (true) {
     if (opts.signal.aborted) {
       return blocksFromState(blockState, stopReason, promptTokens, responseTokens, "aborted");
@@ -294,16 +310,14 @@ export async function readAnthropicStreamFull(
       return blocksFromState(blockState, stopReason, promptTokens, responseTokens, timeoutReason);
     }
     let chunk: { done: boolean; value?: Uint8Array };
-    const TIMEOUT_TICK_MS = 200;
     try {
-      const timeoutSentinel = Symbol("timeout");
       const raced = await Promise.race<typeof timeoutSentinel | { done: boolean; value?: Uint8Array }>([
-        reader.read(),
+        pendingRead,
         new Promise<typeof timeoutSentinel>((resolve) =>
-          setTimeout(() => resolve(timeoutSentinel), TIMEOUT_TICK_MS),
+          setTimeout(() => resolve(timeoutSentinel as never), TIMEOUT_TICK_MS),
         ),
       ]);
-      if (raced === timeoutSentinel) continue;
+      if (raced === timeoutSentinel) continue; // pendingRead still in flight; tick again
       chunk = raced;
     } catch (err) {
       if (opts.signal.aborted) {
@@ -314,6 +328,9 @@ export async function readAnthropicStreamFull(
       return result;
     }
     if (chunk.done) break;
+    // Got a chunk — start the next read BEFORE processing this one so
+    // network and CPU overlap.
+    pendingRead = reader.read();
     if (chunk.value && chunk.value.length > 0) {
       lastChunkAt = Date.now();
       firstChunkSeen = true;
