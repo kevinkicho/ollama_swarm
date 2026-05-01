@@ -33,6 +33,7 @@ const TEST_FILES = [
   "src/swarm/blackboard/writeFileAtomic.test.ts",
   "src/swarm/blackboard/diffValidation.test.ts",
   "src/swarm/blackboard/hunkVoting.test.ts",
+  "src/swarm/blackboard/hunkJudgePrompt.test.ts",
   "src/swarm/blackboard/resolveSafe.test.ts",
   "src/swarm/blackboard/caps.test.ts",
   "src/swarm/blackboard/crashSnapshot.test.ts",

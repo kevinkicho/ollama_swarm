@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { voteOnHunks, type HunkVote } from "./hunkVoting.js";
+import { voteOnHunks, voteOnHunksWithJudge, type HunkVote, type JudgeFn } from "./hunkVoting.js";
 import type { Hunk } from "./applyHunks.js";
 
 const REPLACE = "replace" as const;
@@ -111,4 +111,93 @@ test("voteOnHunks — multi-hunk envelopes vote as units, not per-hunk", () => {
   ]);
   assert.equal(result.distinctShapes, 3, "envelope-level voting, not per-hunk");
   assert.equal(result.hasMajority, false);
+});
+
+// #92 (2026-05-01): LLM-as-judge tiebreak tests.
+
+test("voteOnHunksWithJudge — judge picks the winner when no majority", async () => {
+  const judge: JudgeFn = async (candidates) => {
+    // Pick the one with file y.ts (deterministic for the test)
+    const yCandidate = candidates.find((c) => c.hunks.some((h) => h.file === "src/y.ts"));
+    return yCandidate ? yCandidate.id : null;
+  };
+  const result = await voteOnHunksWithJudge(
+    [vote("w1", [HUNK_A]), vote("w2", [HUNK_B]), vote("w3", [HUNK_C])],
+    judge,
+  );
+  assert.deepEqual(result.winner, [HUNK_C]);
+  assert.equal(result.tiebreak, "llm-judge");
+  assert.equal(result.hasMajority, false);
+  assert.equal(result.agreementCount, 1, "winner had 1 worker (HUNK_C / w3)");
+  assert.deepEqual(result.agreedWorkers, ["w3"]);
+});
+
+test("voteOnHunksWithJudge — judge skipped entirely when there's a strict majority", async () => {
+  let judgeCalled = false;
+  const judge: JudgeFn = async () => {
+    judgeCalled = true;
+    return null;
+  };
+  const result = await voteOnHunksWithJudge(
+    [vote("w1", [HUNK_A]), vote("w2", [HUNK_A]), vote("w3", [HUNK_B])],
+    judge,
+  );
+  assert.deepEqual(result.winner, [HUNK_A]);
+  assert.equal(result.tiebreak, "none", "majority case skips the judge");
+  assert.equal(judgeCalled, false, "judge must NOT be called when majority exists");
+});
+
+test("voteOnHunksWithJudge — judge returns null → lexical-first fallback", async () => {
+  const judge: JudgeFn = async () => null;
+  const result = await voteOnHunksWithJudge(
+    [vote("w1", [HUNK_A]), vote("w2", [HUNK_B]), vote("w3", [HUNK_C])],
+    judge,
+  );
+  assert.equal(result.tiebreak, "llm-judge-failed-fallback-lexical");
+  assert.notEqual(result.winner, null, "fallback still produces a winner");
+});
+
+test("voteOnHunksWithJudge — judge returns invalid id → lexical-first fallback", async () => {
+  const judge: JudgeFn = async () => "not-a-real-candidate-id";
+  const result = await voteOnHunksWithJudge(
+    [vote("w1", [HUNK_A]), vote("w2", [HUNK_B]), vote("w3", [HUNK_C])],
+    judge,
+  );
+  assert.equal(result.tiebreak, "llm-judge-failed-fallback-lexical");
+  assert.notEqual(result.winner, null);
+});
+
+test("voteOnHunksWithJudge — judge throws → lexical-first fallback", async () => {
+  const judge: JudgeFn = async () => {
+    throw new Error("LLM API failed");
+  };
+  const result = await voteOnHunksWithJudge(
+    [vote("w1", [HUNK_A]), vote("w2", [HUNK_B]), vote("w3", [HUNK_C])],
+    judge,
+  );
+  assert.equal(result.tiebreak, "llm-judge-failed-fallback-lexical");
+  assert.notEqual(result.winner, null, "exception still produces a winner");
+});
+
+test("voteOnHunksWithJudge — judge sees all candidates with workerIds populated", async () => {
+  let candidatesSeen: any = null;
+  const judge: JudgeFn = async (candidates) => {
+    candidatesSeen = candidates;
+    return candidates[0].id;
+  };
+  await voteOnHunksWithJudge(
+    [
+      vote("w1", [HUNK_A]),
+      vote("w2", [HUNK_A]),
+      vote("w3", [HUNK_B]),
+      vote("w4", [HUNK_B]),
+      vote("w5", [HUNK_C]),
+    ],
+    judge,
+  );
+  assert.equal(candidatesSeen.length, 3);
+  // Sorted highest-count first, lexical-tiebreak. HUNK_A and HUNK_B both
+  // have 2 workers; one will be position 0.
+  const totalWorkers = candidatesSeen.reduce((sum: number, c: any) => sum + c.workerIds.length, 0);
+  assert.equal(totalWorkers, 5);
 });

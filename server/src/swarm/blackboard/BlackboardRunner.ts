@@ -37,7 +37,8 @@ import {
 } from "./TodoQueue.js";
 import { applyAndCommit } from "./WorkerPipeline.js";
 import type { Hunk } from "./applyHunks.js";
-import { voteOnHunks, type HunkVote } from "./hunkVoting.js";
+import { voteOnHunks, voteOnHunksWithJudge, type HunkVote, type JudgeFn } from "./hunkVoting.js";
+import { buildJudgePrompt } from "./hunkJudgePrompt.js";
 import { realFilesystemAdapter, realGitAdapter, realVerifyAdapter } from "./v2Adapters.js";
 import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaster.js";
 import {
@@ -2882,54 +2883,97 @@ export class BlackboardRunner implements SwarmRunner {
       return "stale";
     }
 
-    // #87 (2026-05-01): self-consistency voting. When cfg.selfConsistencyK > 1,
-    // run K-1 additional worker prompts (same agent, same seed), then vote on
-    // the majority-agreed hunks-envelope. Cheap fan-out — sequential not
-    // parallel because the agent's status field, token tracking, and abort
-    // controllers all assume one-call-in-flight; serialization keeps the
-    // change small and avoids those invariants. Cost: K× tokens per
-    // committable todo. Quality lift: measurable on tasks with > 1 plausible
-    // patch (search-not-unique → unique-after-grounding, etc.).
+    // #87 (2026-05-01) + #92 deeper (2026-05-01): self-consistency voting.
+    // When cfg.selfConsistencyK > 1, run K-1 additional worker prompts in
+    // PARALLEL (Promise.allSettled), collect attempts that parsed cleanly,
+    // and vote on the majority-agreed hunks-envelope. Tied votes go through
+    // an LLM-as-judge that asks the auditor (or planner if no auditor)
+    // which patch is best. Cost: K× tokens per committable todo + 1 judge
+    // call when no majority. Quality lift: measurable on tasks with > 1
+    // plausible patch.
     const k = Math.max(1, Math.min(5, this.active?.selfConsistencyK ?? 1));
     let hunksToCommit: readonly Hunk[] = parsed.hunks;
     if (k > 1) {
-      const votes: HunkVote[] = [{ workerId: `${agent.id}#1`, hunks: parsed.hunks }];
-      for (let i = 2; i <= k; i++) {
-        if (this.stopping) return "aborted";
-        let extraResponse: string;
-        try {
-          extraResponse = await this.promptAgent(
-            agent,
-            `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`,
-          );
-        } catch (err) {
-          if (this.stopping) return "aborted";
-          // Don't fail the whole todo — this is one of K attempts. The
-          // already-collected votes might still produce a valid winner.
+      const initialVotes: HunkVote[] = [{ workerId: `${agent.id}#1`, hunks: parsed.hunks }];
+      // Parallel fan-out: K-1 additional prompts on the SAME agent. The
+      // provider stack handles concurrent in-flight calls fine (raw
+      // fetch, separate AbortControllers per call). UI status will
+      // flicker between "thinking" and "ready" K times, which is
+      // acceptable for an opt-in feature.
+      const extraPromises = Array.from({ length: k - 1 }, (_, idx) =>
+        this.promptAgent(
+          agent,
+          `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`,
+        )
+          .then((response) => ({ ok: true as const, idx: idx + 2, response }))
+          .catch((err) => ({ ok: false as const, idx: idx + 2, err })),
+      );
+      const settled = await Promise.allSettled(extraPromises);
+      if (this.stopping) return "aborted";
+      for (const s of settled) {
+        if (s.status === "rejected") continue; // never happens (catch above)
+        const r = s.value;
+        if (!r.ok) {
           this.appendSystem(
-            `[${agent.id}] [v2] self-consistency attempt ${i}/${k} prompt failed: ${
-              err instanceof Error ? err.message : String(err)
-            } — continuing with prior votes`,
+            `[${agent.id}] [v2] self-consistency attempt ${r.idx}/${k} prompt failed: ${
+              r.err instanceof Error ? r.err.message : String(r.err)
+            } — excluded from vote`,
           );
           continue;
         }
-        this.appendAgent(agent, extraResponse);
-        const extraParsed = parseWorkerResponse(extraResponse, todo.expectedFiles);
+        this.appendAgent(agent, r.response);
+        const extraParsed = parseWorkerResponse(r.response, todo.expectedFiles);
         if (!extraParsed.ok) {
           this.appendSystem(
-            `[${agent.id}] [v2] self-consistency attempt ${i}/${k} parse failed: ${extraParsed.reason} — excluded from vote`,
+            `[${agent.id}] [v2] self-consistency attempt ${r.idx}/${k} parse failed: ${extraParsed.reason} — excluded from vote`,
           );
           continue;
         }
         if (extraParsed.skip || extraParsed.hunks.length === 0) {
           this.appendSystem(
-            `[${agent.id}] [v2] self-consistency attempt ${i}/${k} declined or empty — excluded from vote`,
+            `[${agent.id}] [v2] self-consistency attempt ${r.idx}/${k} declined or empty — excluded from vote`,
           );
           continue;
         }
-        votes.push({ workerId: `${agent.id}#${i}`, hunks: extraParsed.hunks });
+        initialVotes.push({ workerId: `${agent.id}#${r.idx}`, hunks: extraParsed.hunks });
       }
-      const verdict = voteOnHunks(votes);
+
+      // Build LLM-as-judge: only consulted when there's no strict
+      // majority. Routes through the auditor (or planner) — those are
+      // the agents with read tools enabled, which the judge needs to
+      // evaluate which patch actually fits the codebase.
+      const judgeAgent = this.auditor ?? agent;
+      const judgeFn: JudgeFn = async (candidates) => {
+        if (this.stopping) return null;
+        const judgePrompt = buildJudgePrompt({
+          todoDescription: todo.description,
+          expectedFiles: todo.expectedFiles,
+          candidates,
+        });
+        let judgeResponse: string;
+        try {
+          judgeResponse = await this.promptAgent(judgeAgent, judgePrompt, "swarm-read", "json", {
+            type: "object",
+            properties: { winner: { type: "integer", minimum: 1, maximum: candidates.length } },
+            required: ["winner"],
+          });
+        } catch (err) {
+          this.appendSystem(
+            `[${agent.id}] [v2] LLM-judge call failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return null;
+        }
+        try {
+          const parsed = JSON.parse(judgeResponse);
+          const winnerIdx = typeof parsed.winner === "number" ? parsed.winner : -1;
+          if (winnerIdx < 1 || winnerIdx > candidates.length) return null;
+          return candidates[winnerIdx - 1].id;
+        } catch {
+          return null;
+        }
+      };
+
+      const verdict = await voteOnHunksWithJudge(initialVotes, judgeFn);
       this.appendSystem(
         `[${agent.id}] [v2] self-consistency vote: ${verdict.agreementCount}/${verdict.totalConsidered} agreed` +
           ` · ${verdict.distinctShapes} distinct shape(s)` +

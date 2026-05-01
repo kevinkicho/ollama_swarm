@@ -38,8 +38,24 @@ export interface VoteResult {
   /** True when the winning shape had a strict plurality (> any other). */
   hasMajority: boolean;
   /** Tiebreak path taken when no strict majority — diagnostic. */
-  tiebreak: "none" | "lexical-first";
+  tiebreak: "none" | "lexical-first" | "llm-judge" | "llm-judge-failed-fallback-lexical";
 }
+
+/** Candidate shape passed to a judgeFn when no strict majority exists.
+ *  Each entry represents one distinct envelope shape (de-duped) with
+ *  the workerIds that voted for it. */
+export interface JudgeCandidate {
+  /** Stable id (the same hash voteOnHunks uses internally). Pass this
+   *  back as the winner from judgeFn. */
+  id: string;
+  hunks: readonly Hunk[];
+  workerIds: string[];
+}
+
+/** Optional async judge — called ONLY when there's no strict majority.
+ *  Should return the candidate id that wins (one of the candidates'
+ *  `id` fields), or null to fall back to lexical-first. */
+export type JudgeFn = (candidates: readonly JudgeCandidate[]) => Promise<string | null>;
 
 /** Normalize a hunk for hashing: trim whitespace, fold consecutive
  *  spaces, normalize line endings. Two hunks that differ only in
@@ -74,6 +90,31 @@ function hashHunks(hunks: readonly Hunk[]): string {
 }
 
 export function voteOnHunks(votes: readonly HunkVote[]): VoteResult {
+  return voteOnHunksImpl(votes, null);
+}
+
+/** Async variant — when no strict majority, calls judgeFn (typically
+ *  an LLM) to pick the winner among candidates. Falls back to
+ *  lexical-first if judgeFn returns null or throws. */
+export async function voteOnHunksWithJudge(
+  votes: readonly HunkVote[],
+  judgeFn: JudgeFn,
+): Promise<VoteResult> {
+  return voteOnHunksImpl(votes, judgeFn);
+}
+
+async function voteOnHunksImpl(
+  votes: readonly HunkVote[],
+  judgeFn: JudgeFn | null,
+): Promise<VoteResult>;
+function voteOnHunksImpl(
+  votes: readonly HunkVote[],
+  judgeFn: null,
+): VoteResult;
+function voteOnHunksImpl(
+  votes: readonly HunkVote[],
+  judgeFn: JudgeFn | null,
+): VoteResult | Promise<VoteResult> {
   // Empty / no-hunks votes don't count toward the denominator. A worker
   // that returned `{hunks: []}` is signalling "I don't know how to do
   // this" and shouldn't pull the consensus toward 0.
@@ -104,10 +145,6 @@ export function voteOnHunks(votes: readonly HunkVote[]): VoteResult {
   }
 
   // Sort buckets: highest count first; tie → lexically-first hash.
-  // Lexical-first as a tiebreak is deterministic and surfaces SOME
-  // result for the runner to commit. Future iteration could swap in
-  // an LLM-as-judge tiebreak; document hook for that is the
-  // VoteResult.tiebreak field.
   const sorted = [...buckets.entries()].sort((a, b) => {
     if (a[1].workers.length !== b[1].workers.length) {
       return b[1].workers.length - a[1].workers.length;
@@ -121,14 +158,91 @@ export function voteOnHunks(votes: readonly HunkVote[]): VoteResult {
   const hasMajority = !second || topCount > second[1].workers.length;
   const unanimous = topCount === eligible.length;
 
-  return {
-    winner: top[1].hunks,
-    agreementCount: topCount,
-    totalConsidered: eligible.length,
-    distinctShapes: buckets.size,
-    agreedWorkers: top[1].workers,
-    unanimous,
-    hasMajority,
-    tiebreak: hasMajority ? "none" : "lexical-first",
-  };
+  // Strict-majority case — no need to call the judge, just return.
+  if (hasMajority) {
+    return {
+      winner: top[1].hunks,
+      agreementCount: topCount,
+      totalConsidered: eligible.length,
+      distinctShapes: buckets.size,
+      agreedWorkers: top[1].workers,
+      unanimous,
+      hasMajority: true,
+      tiebreak: "none",
+    };
+  }
+
+  // No-majority case + no judge → lexical-first (sync path).
+  if (judgeFn === null) {
+    return {
+      winner: top[1].hunks,
+      agreementCount: topCount,
+      totalConsidered: eligible.length,
+      distinctShapes: buckets.size,
+      agreedWorkers: top[1].workers,
+      unanimous: false,
+      hasMajority: false,
+      tiebreak: "lexical-first",
+    };
+  }
+
+  // No-majority case + judge → consult the judge async.
+  const candidates: JudgeCandidate[] = sorted.map(([id, b]) => ({
+    id,
+    hunks: b.hunks,
+    workerIds: b.workers,
+  }));
+  return Promise.resolve(judgeFn(candidates))
+    .then((winnerId) => {
+      if (winnerId === null) {
+        // Judge declined → lexical-first fallback.
+        return {
+          winner: top[1].hunks,
+          agreementCount: topCount,
+          totalConsidered: eligible.length,
+          distinctShapes: buckets.size,
+          agreedWorkers: top[1].workers,
+          unanimous: false,
+          hasMajority: false,
+          tiebreak: "llm-judge-failed-fallback-lexical" as const,
+        };
+      }
+      const judgeWinner = buckets.get(winnerId);
+      if (!judgeWinner) {
+        // Judge returned a non-candidate id → lexical-first fallback.
+        return {
+          winner: top[1].hunks,
+          agreementCount: topCount,
+          totalConsidered: eligible.length,
+          distinctShapes: buckets.size,
+          agreedWorkers: top[1].workers,
+          unanimous: false,
+          hasMajority: false,
+          tiebreak: "llm-judge-failed-fallback-lexical" as const,
+        };
+      }
+      return {
+        winner: judgeWinner.hunks,
+        agreementCount: judgeWinner.workers.length,
+        totalConsidered: eligible.length,
+        distinctShapes: buckets.size,
+        agreedWorkers: judgeWinner.workers,
+        unanimous: false,
+        hasMajority: false,
+        tiebreak: "llm-judge" as const,
+      };
+    })
+    .catch(() => {
+      // Judge threw → lexical-first fallback.
+      return {
+        winner: top[1].hunks,
+        agreementCount: topCount,
+        totalConsidered: eligible.length,
+        distinctShapes: buckets.size,
+        agreedWorkers: top[1].workers,
+        unanimous: false,
+        hasMajority: false,
+        tiebreak: "llm-judge-failed-fallback-lexical" as const,
+      };
+    });
 }
