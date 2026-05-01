@@ -196,3 +196,59 @@ export const CRITIC_ENVELOPE_JSON_SCHEMA = {
   },
   required: ["verdict", "rationale"],
 } as const;
+
+/** Mirrors `WorkerResponseSchema` in `worker.ts` — the highest-frequency
+ *  parse-failure path in the system because workers emit complex multi-
+ *  line search/replace strings. Discriminated union via `oneOf` covers
+ *  the three hunk variants (replace / create / append).
+ *
+ *  Cap of 8 hunks per response matches MAX_HUNKS. Search/replace cap
+ *  at 50K, content cap at 200K — same as the zod schema. The schema
+ *  optionally accepts a `skip` field; when present, the runner treats
+ *  the response as "worker declined this todo with reason X." */
+export const WORKER_HUNKS_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    hunks: {
+      type: "array",
+      maxItems: 8,
+      items: {
+        oneOf: [
+          // replace variant: { op: "replace", file, search, replace }
+          {
+            type: "object",
+            properties: {
+              op: { type: "string", enum: ["replace"] },
+              file: { type: "string", minLength: 1, maxLength: 1000 },
+              search: { type: "string", minLength: 1, maxLength: 50_000 },
+              replace: { type: "string", maxLength: 50_000},
+            },
+            required: ["op", "file", "search", "replace"],
+          },
+          // create variant: { op: "create", file, content }
+          {
+            type: "object",
+            properties: {
+              op: { type: "string", enum: ["create"] },
+              file: { type: "string", minLength: 1, maxLength: 1000 },
+              content: { type: "string", maxLength: 200_000 },
+            },
+            required: ["op", "file", "content"],
+          },
+          // append variant: { op: "append", file, content }
+          {
+            type: "object",
+            properties: {
+              op: { type: "string", enum: ["append"] },
+              file: { type: "string", minLength: 1, maxLength: 1000 },
+              content: { type: "string", minLength: 1, maxLength: 200_000 },
+            },
+            required: ["op", "file", "content"],
+          },
+        ],
+      },
+    },
+    skip: { type: "string", minLength: 1, maxLength: 500 },
+  },
+  required: ["hunks"],
+} as const;

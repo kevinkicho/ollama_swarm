@@ -89,6 +89,7 @@ import {
   PLANNER_TODOS_JSON_SCHEMA,
   AUDITOR_VERDICT_JSON_SCHEMA,
   CRITIC_ENVELOPE_JSON_SCHEMA,
+  WORKER_HUNKS_JSON_SCHEMA,
 } from "./prompts/jsonSchemas.js";
 import {
   AUDITOR_SYSTEM_PROMPT,
@@ -2830,7 +2831,20 @@ export class BlackboardRunner implements SwarmRunner {
 
     let response: string;
     try {
-      response = await this.promptAgent(agent, `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`);
+      // #96 (2026-05-01): pass strict WORKER_HUNKS_JSON_SCHEMA so Ollama
+      // constrains output to the {hunks: [...replace|create|append]}
+      // shape. This is the highest-frequency parse-failure path in the
+      // system — workers emit complex multi-line search/replace strings
+      // that frequently break JSON validity. The schema kills the failure
+      // class on the Ollama path. Anthropic + OpenAI ignore format
+      // gracefully (they have their own structured-output paths).
+      response = await this.promptAgent(
+        agent,
+        `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`,
+        "swarm",
+        "json",
+        WORKER_HUNKS_JSON_SCHEMA,
+      );
     } catch (err) {
       if (this.stopping) return "aborted";
       const msg = err instanceof Error ? err.message : String(err);
@@ -2851,6 +2865,9 @@ export class BlackboardRunner implements SwarmRunner {
         repair = await this.promptAgent(
           agent,
           `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerRepairPrompt(response, parsed.reason)}`,
+          "swarm",
+          "json",
+          WORKER_HUNKS_JSON_SCHEMA,
         );
       } catch (err) {
         if (this.stopping) return "aborted";
@@ -2904,6 +2921,9 @@ export class BlackboardRunner implements SwarmRunner {
         this.promptAgent(
           agent,
           `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`,
+          "swarm",
+          "json",
+          WORKER_HUNKS_JSON_SCHEMA,
         )
           .then((response) => ({ ok: true as const, idx: idx + 2, response }))
           .catch((err) => ({ ok: false as const, idx: idx + 2, err })),

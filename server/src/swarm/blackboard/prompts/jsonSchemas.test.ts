@@ -18,11 +18,13 @@ import {
   PLANNER_TODOS_JSON_SCHEMA,
   AUDITOR_VERDICT_JSON_SCHEMA,
   CRITIC_ENVELOPE_JSON_SCHEMA,
+  WORKER_HUNKS_JSON_SCHEMA,
 } from "./jsonSchemas.js";
 import { parseFirstPassContractResponse } from "./firstPassContract.js";
 import { parsePlannerResponse } from "./planner.js";
 import { parseAuditorResponse } from "./auditor.js";
 import { parseCriticResponse } from "./critic.js";
+import { parseWorkerResponse } from "./worker.js";
 
 // ---------------------------------------------------------------------------
 // Cross-check: a payload that the zod parser ACCEPTS should also have
@@ -134,4 +136,64 @@ test("PLANNER_TODOS_JSON_SCHEMA — expectedAnchors + expectedSymbols + preferre
     assert.ok(!required.includes("expectedSymbols"));
     assert.ok(!required.includes("preferredTag"));
   }
+});
+
+// #96 (2026-05-01): WORKER_HUNKS schema cross-checks. Worker is the
+// highest-frequency parse-failure path — coverage here matters most.
+
+test("WORKER_HUNKS_JSON_SCHEMA — replace hunk parses + matches schema", () => {
+  const payload = {
+    hunks: [{ op: "replace", file: "src/x.ts", search: "old", replace: "new" }],
+  };
+  const parsed = parseWorkerResponse(JSON.stringify(payload), ["src/x.ts"]);
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(WORKER_HUNKS_JSON_SCHEMA.required, ["hunks"]);
+  assert.equal(WORKER_HUNKS_JSON_SCHEMA.properties.hunks.maxItems, 8, "matches MAX_HUNKS");
+});
+
+test("WORKER_HUNKS_JSON_SCHEMA — create hunk parses + schema variant present", () => {
+  const payload = {
+    hunks: [{ op: "create", file: "src/new.ts", content: "export const x = 1;\n" }],
+  };
+  const parsed = parseWorkerResponse(JSON.stringify(payload), ["src/new.ts"]);
+  assert.equal(parsed.ok, true);
+  // Find the create variant in the oneOf
+  const variants = WORKER_HUNKS_JSON_SCHEMA.properties.hunks.items.oneOf;
+  const createVariant = variants.find((v) =>
+    ([...v.properties.op.enum] as string[]).includes("create"),
+  );
+  assert.ok(createVariant, "create variant must exist in oneOf");
+  assert.deepEqual([...createVariant.required].sort(), ["content", "file", "op"]);
+});
+
+test("WORKER_HUNKS_JSON_SCHEMA — append hunk parses + schema variant present", () => {
+  const payload = {
+    hunks: [{ op: "append", file: "CHANGELOG.md", content: "- new entry\n" }],
+  };
+  const parsed = parseWorkerResponse(JSON.stringify(payload), ["CHANGELOG.md"]);
+  assert.equal(parsed.ok, true);
+  const variants = WORKER_HUNKS_JSON_SCHEMA.properties.hunks.items.oneOf;
+  const appendVariant = variants.find((v) =>
+    ([...v.properties.op.enum] as string[]).includes("append"),
+  );
+  assert.ok(appendVariant, "append variant must exist in oneOf");
+});
+
+test("WORKER_HUNKS_JSON_SCHEMA — skip-only response (no hunks beyond empty)", () => {
+  const payload = {
+    hunks: [],
+    skip: "Cannot find the function described in the todo",
+  };
+  const parsed = parseWorkerResponse(JSON.stringify(payload), ["src/x.ts"]);
+  assert.equal(parsed.ok, true);
+  // skip is optional in the schema (zod has .optional())
+  const required = WORKER_HUNKS_JSON_SCHEMA.required as readonly string[];
+  assert.ok(!required.includes("skip"), "skip must be optional");
+});
+
+test("WORKER_HUNKS_JSON_SCHEMA — three variants in oneOf", () => {
+  const variants = WORKER_HUNKS_JSON_SCHEMA.properties.hunks.items.oneOf;
+  assert.equal(variants.length, 3, "replace + create + append");
+  const ops = variants.map((v) => ([...v.properties.op.enum] as string[])[0]);
+  assert.deepEqual([...ops].sort(), ["append", "create", "replace"]);
 });
