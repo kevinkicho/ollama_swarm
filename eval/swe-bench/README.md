@@ -71,9 +71,38 @@ node eval/run-eval.mjs \
 - `adapter.mjs` — pure adapter that converts a SWE-Bench task JSON into the catalog-entry shape `run-eval.mjs` already understands
 - `adapter.test.mjs` — covers happy path, missing fields, env-incompatible classification
 - `sample.jsonl` — 2 synthetic tasks (NOT real SWE-Bench data — just shape examples) so you can run the harness end-to-end without downloading the real dataset
+- `--swe-bench-dataset=<path>` flag on `run-eval.mjs` — loads + adapts the dataset, with companion `--swe-bench-task=<id>`, `--swe-bench-limit=<N>`, and `--swe-bench-dry-run` flags for filtering and previewing
+- Dry-run mode (`--swe-bench-dry-run`) — prints which tasks would be executed (compatible vs env-incompatible-skipped) and exits
+
+## Quick verify (no real dataset needed)
+
+```bash
+# Use the synthetic sample.jsonl — 2 fabricated tasks
+node eval/run-eval.mjs \
+  --swe-bench-dataset=eval/swe-bench/sample.jsonl \
+  --swe-bench-dry-run
+
+# Filter to one task
+node eval/run-eval.mjs \
+  --swe-bench-dataset=eval/swe-bench/sample.jsonl \
+  --swe-bench-task=express__express-1 \
+  --swe-bench-dry-run
+
+# Limit to first N tasks
+node eval/run-eval.mjs \
+  --swe-bench-dataset=eval/swe-bench/sample.jsonl \
+  --swe-bench-limit=1 \
+  --swe-bench-dry-run
+```
 
 ## What's NOT in this slice (queued)
 
-- Wiring `--swe-bench-dataset` flag into `run-eval.mjs`'s arg parser (~1h)
-- Docker-based test execution (a future evolution; for now, we trust the local Node env or skip)
-- Aggregate report comparing our pass-rate to the published per-model baselines table
+- **Docker-based test execution** — the load-bearing piece for actually running SWE-Bench. Without dry-run, the harness exits with a clear error pointing here. The execution path needs:
+  1. `docker pull` the per-task image (or `docker build` from the official Dockerfile)
+  2. Mount the staged repo into the container at `/workspace`
+  3. Run the task's test command (typically `pytest <test_file>::test_function`) inside the container
+  4. Capture the exit code as pass/fail
+  5. Cleanup containers/volumes between attempts
+  6. Surface env-setup failures distinctly from test failures so the score table doesn't conflate "swarm produced wrong patch" with "Docker image had a bad pip install"
+  Total effort: ~1 day focused work. Not in this slice because Docker integration touches enough surface (container lifecycle, volume mounting on Windows, image caching) to deserve its own session.
+- **Aggregate report comparing our pass-rate to the published per-model baselines table** — adds an `eval/swe-bench/RESULTS.md` builder that reads our results.json + a hand-curated table of "GPT-4 = 33%, Sonnet = 49%, Devin = 13%" etc. and renders side-by-side. ~2h after Docker is wired.

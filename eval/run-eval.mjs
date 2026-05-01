@@ -296,10 +296,68 @@ async function main() {
     }),
   );
   REPO = args.repo ?? "";
-  // --repo OR --fixture-dir is required; fixture-mode tasks supply
-  // their own per-attempt repo via stageFixture.
-  if (!REPO && !args["fixture-dir"] && !args.fixtureDir) {
-    console.error("--repo=<github-url> OR --fixture-dir=<dir> is required");
+  const SWE_BENCH_DATASET = args["swe-bench-dataset"] ?? args.sweBenchDataset ?? "";
+  const SWE_BENCH_TASK = args["swe-bench-task"] ?? args.sweBenchTask ?? "";
+  const SWE_BENCH_LIMIT_RAW = args["swe-bench-limit"] ?? args.sweBenchLimit;
+  const SWE_BENCH_LIMIT = SWE_BENCH_LIMIT_RAW !== undefined ? Number(SWE_BENCH_LIMIT_RAW) : null;
+  const SWE_BENCH_DRY_RUN = args["swe-bench-dry-run"] === true || args.sweBenchDryRun === true;
+  // --repo OR --fixture-dir OR --swe-bench-dataset is required; each
+  // supplies its own per-attempt staging.
+  if (!REPO && !args["fixture-dir"] && !args.fixtureDir && !SWE_BENCH_DATASET) {
+    console.error("--repo=<github-url> OR --fixture-dir=<dir> OR --swe-bench-dataset=<path> is required");
+    process.exit(2);
+  }
+
+  // SWE-Bench mode: load dataset, adapt to catalog entries, optionally
+  // dry-run (print what would run + exit). Full execution requires
+  // Docker isolation per the official SWE-Bench harness — until that
+  // wiring lands (see eval/swe-bench/README.md), --swe-bench-dry-run
+  // is the supported mode.
+  if (SWE_BENCH_DATASET) {
+    const { adaptSweBenchJsonl } = await import("./swe-bench/adapter.mjs");
+    let datasetText;
+    try {
+      datasetText = readFileSync(SWE_BENCH_DATASET, "utf8");
+    } catch (err) {
+      console.error(`failed to read --swe-bench-dataset=${SWE_BENCH_DATASET}: ${err.message}`);
+      process.exit(2);
+    }
+    const limit = Number.isFinite(SWE_BENCH_LIMIT) && SWE_BENCH_LIMIT > 0 ? SWE_BENCH_LIMIT : undefined;
+    const { entries, errors } = adaptSweBenchJsonl(datasetText, limit !== undefined ? { limit } : {});
+    let filtered = entries;
+    if (SWE_BENCH_TASK) {
+      filtered = entries.filter((e) => e.sweBenchInstanceId === SWE_BENCH_TASK);
+      if (filtered.length === 0) {
+        console.error(`--swe-bench-task=${SWE_BENCH_TASK} not found in dataset (${entries.length} tasks loaded)`);
+        process.exit(2);
+      }
+    }
+    const compatible = filtered.filter((e) => !e.skipReason);
+    const skipped = filtered.filter((e) => e.skipReason);
+    console.log(`SWE-Bench dataset: ${entries.length} tasks loaded, ${errors.length} parse errors`);
+    if (SWE_BENCH_TASK) console.log(`  filtered to --swe-bench-task=${SWE_BENCH_TASK}: ${filtered.length} match(es)`);
+    console.log(`  ${compatible.length} compatible, ${skipped.length} skipped (env-incompatible)`);
+    console.log();
+    if (SWE_BENCH_DRY_RUN) {
+      console.log("DRY RUN — would execute:");
+      for (const e of compatible.slice(0, 20)) {
+        console.log(`  ${e.id}  (${e.title})`);
+      }
+      if (compatible.length > 20) console.log(`  ... and ${compatible.length - 20} more`);
+      console.log();
+      if (skipped.length > 0) {
+        console.log("SKIPPED (env-incompatible):");
+        for (const e of skipped.slice(0, 5)) {
+          console.log(`  ${e.id}: ${e.skipReason?.slice(0, 80)}`);
+        }
+        if (skipped.length > 5) console.log(`  ... and ${skipped.length - 5} more`);
+      }
+      process.exit(0);
+    }
+    console.error(
+      "SWE-Bench full execution mode requires Docker-based test isolation, which isn't wired yet.\n" +
+        "Use --swe-bench-dry-run to preview which tasks would run, OR see eval/swe-bench/README.md for the Docker integration plan.",
+    );
     process.exit(2);
   }
   CATALOG_PATH = args.catalog ?? CATALOG_PATH;
