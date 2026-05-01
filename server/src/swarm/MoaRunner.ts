@@ -120,23 +120,37 @@ export class MoaRunner implements SwarmRunner {
     // agents (highest indices). #93 deeper (2026-05-01): K configurable
     // via cfg.moaAggregatorCount (default 1, capped at 3). agentCount
     // covers proposers; aggregators are in ADDITION.
+    //
+    // #98 (2026-05-01): heterogeneous models per layer. Proposers use
+    // cfg.moaProposerModel (defaults to cfg.model — e.g. gemma4 for
+    // cheap fast drafts), aggregators use cfg.moaAggregatorModel
+    // (defaults to cfg.model — e.g. nemotron / sonnet for synthesis).
+    // Setting both to cfg.model preserves homogeneous-model behavior
+    // for back-compat.
     const proposerCount = cfg.agentCount;
     const aggregatorCount = Math.max(1, Math.min(3, cfg.moaAggregatorCount ?? 1));
     const totalAgents = proposerCount + aggregatorCount;
+    const proposerModel = cfg.moaProposerModel ?? cfg.model;
+    const aggregatorModel = cfg.moaAggregatorModel ?? cfg.model;
     const agents: Agent[] = [];
     for (let i = 1; i <= totalAgents; i++) {
+      const isAggregator = i > proposerCount;
+      const model = isAggregator ? aggregatorModel : proposerModel;
       const agent = await this.opts.manager.spawnAgentNoOpencode({
         cwd: destPath,
         index: i,
-        model: cfg.model,
+        model,
       });
       agents.push(agent);
       if (this.stopping) return;
     }
     const proposers = agents.slice(0, proposerCount);
     const aggregators = agents.slice(proposerCount);
+    const heterogeneous = proposerModel !== aggregatorModel;
     this.appendSystem(
-      `MoA ready: ${proposerCount} proposer(s) + ${aggregatorCount} aggregator(s) (${aggregators.map((a) => a.id).join(", ")})`,
+      heterogeneous
+        ? `MoA ready (heterogeneous): ${proposerCount} proposer(s) on ${proposerModel} + ${aggregatorCount} aggregator(s) on ${aggregatorModel} (${aggregators.map((a) => a.id).join(", ")})`
+        : `MoA ready: ${proposerCount} proposer(s) + ${aggregatorCount} aggregator(s) (${aggregators.map((a) => a.id).join(", ")}) — single model: ${cfg.model}`,
     );
 
     const directive = (cfg.userDirective ?? "").trim();

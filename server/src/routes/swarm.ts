@@ -118,6 +118,10 @@ const StartBody = z.object({
   // moaConvergenceThreshold gates round-to-round early stop. MoA-only.
   moaAggregatorCount: z.number().int().min(1).max(3).optional(),
   moaConvergenceThreshold: z.number().min(0).max(1).optional(),
+  // #98 (2026-05-01): heterogeneous models per MoA layer. Tests the
+  // value prop "N small + 1 big > 1 big alone" cleanly. MoA-only.
+  moaProposerModel: z.string().trim().min(1).max(200).optional(),
+  moaAggregatorModel: z.string().trim().min(1).max(200).optional(),
   // Task #102 (2026-04-25): opt-in post-verdict "build" round for
   // debate-judge — PRO becomes implementer, CON reviewer, JUDGE
   // signoff. Default off; debate-judge-only.
@@ -436,6 +440,8 @@ export function swarmRouter(orch: Orchestrator): Router {
         selfConsistencyK: parsed.data.selfConsistencyK,
         moaAggregatorCount: parsed.data.moaAggregatorCount,
         moaConvergenceThreshold: parsed.data.moaConvergenceThreshold,
+        moaProposerModel: parsed.data.moaProposerModel,
+        moaAggregatorModel: parsed.data.moaAggregatorModel,
         executeNextAction: parsed.data.executeNextAction,
         tokenBudget: parsed.data.tokenBudget,
         maxCostUsd: parsed.data.maxCostUsd,

@@ -286,6 +286,23 @@ export interface RunConfig {
    */
   moaConvergenceThreshold?: number;
   /**
+   * #98 (2026-05-01): heterogeneous models per MoA layer. The whole
+   * point of MoA per the original Together AI paper is that N small
+   * fast models proposing + 1 big reasoning model aggregating beats
+   * any single model alone. Without per-layer models, both layers use
+   * cfg.model and the test is contaminated.
+   *
+   * - moaProposerModel: model used for the N proposers in Layer 1
+   *   (cheap + fast, e.g. gemma4:31b-cloud)
+   * - moaAggregatorModel: model used for the K aggregators in Layer 2
+   *   (slower + smarter, e.g. nemotron-3-super:cloud or sonnet)
+   *
+   * Each falls back to cfg.model when absent — preserves single-model
+   * behavior. MoA-only.
+   */
+  moaProposerModel?: string;
+  moaAggregatorModel?: string;
+  /**
    * Task #102: opt-in post-verdict "build" round for debate-judge.
    * After the JUDGE returns a verdict with confidence ≥ medium and a
    * non-tie winner, the same 3 agents pivot to: PRO=implementer
