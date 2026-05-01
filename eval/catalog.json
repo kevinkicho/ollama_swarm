@@ -82,6 +82,90 @@
       "wallClockCapMs": 300000,
       "expectFilesChanged": true,
       "$rationale": "Refactor fixture. Tests whether the swarm/baseline can extract a pure helper while preserving behavior. Verify checks computePrice still works AND applyTax exists."
+    },
+    {
+      "id": "fixture-rename-symbol",
+      "title": "Rename oldSum to sum across src/",
+      "directive": "Multiple files under src/ import + use a function named oldSum. Rename it to sum everywhere — both the export site (src/sum.js) and every import site. After the rename, NO file under src/ should reference the old name oldSum, and the renamed function must still be callable and produce the correct result (1+2=3).",
+      "fixture": "rename-symbol",
+      "presets": ["baseline", "blackboard"],
+      "rounds": 3,
+      "agentCount": 3,
+      "wallClockCapMs": 300000,
+      "expectFilesChanged": true,
+      "$rationale": "Multi-file consistency edit. Tests whether the agent finds + updates ALL call sites, not just the export."
+    },
+    {
+      "id": "fixture-fix-failing-test",
+      "title": "Fix the wrong assertion in src/sum.test.mjs",
+      "directive": "src/sum.test.mjs has a broken assertion: sum(2,3) is asserted to equal 6. The production function src/sum.js is correct (returns 5). Fix the assertion (or test description) so all tests pass — WITHOUT modifying src/sum.js. The test must reflect the function's actual behavior.",
+      "fixture": "fix-failing-test",
+      "presets": ["baseline", "blackboard"],
+      "rounds": 3,
+      "agentCount": 3,
+      "wallClockCapMs": 300000,
+      "expectFilesChanged": true,
+      "$rationale": "Constraint-respecting fix. Tests whether the agent honors the 'do not modify src/sum.js' constraint and changes only the test assertion."
+    },
+    {
+      "id": "fixture-add-readme-section",
+      "title": "Add a Usage section to tinypkg's README.md",
+      "directive": "The tinypkg README.md is missing a `## Usage` section that documents how to call the exported function. Read the package source to understand the function's signature, then add a Usage section to README.md with at least one minimal code example.",
+      "fixture": "add-readme-section",
+      "presets": ["baseline", "blackboard"],
+      "rounds": 3,
+      "agentCount": 3,
+      "wallClockCapMs": 300000,
+      "expectFilesChanged": true,
+      "$rationale": "Doc-writing task with code-grounding. Tests whether the agent reads source to write accurate docs (vs hallucinating an API)."
+    },
+    {
+      "id": "fixture-audit-console-logs",
+      "title": "Scan src/ + write a JSON report of console.log calls",
+      "directive": "Walk src/ and find every console.log call. Write report.json at the repo root with this shape: {\"count\": N, \"calls\": [{\"file\": \"src/main.js\", \"line\": 7}, ...]}. Lists must contain real file paths + 1-based line numbers; count must equal calls.length.",
+      "fixture": "audit-console-logs",
+      "presets": ["baseline", "blackboard"],
+      "rounds": 3,
+      "agentCount": 3,
+      "wallClockCapMs": 300000,
+      "expectFilesChanged": true,
+      "$rationale": "Analysis-style task: scan + structured-emit. Tests whether the agent can produce JSON with file:line precision (not hallucinated lines)."
+    },
+    {
+      "id": "fixture-categorize-deps",
+      "title": "Read package.json + emit a categorized dep report",
+      "directive": "Read package.json. Write categories.json at the repo root with three lists — `runtime`, `dev`, `optional` — each containing the dependency NAMES (not version strings) from `dependencies`, `devDependencies`, and `optionalDependencies` respectively.",
+      "fixture": "categorize-deps",
+      "presets": ["baseline", "blackboard"],
+      "rounds": 3,
+      "agentCount": 3,
+      "wallClockCapMs": 300000,
+      "expectFilesChanged": true,
+      "$rationale": "Structured-data extraction. Tests whether the agent reads JSON correctly + emits the right shape (names not versions, three buckets)."
+    },
+    {
+      "id": "fixture-multistep-add-script",
+      "title": "Create entry point + wire npm script",
+      "directive": "Two steps: (1) Create src/main.js that imports `greet` from ./greeter.js and calls greet(\"world\"), printing the result. (2) Add a `greet` script to package.json that invokes src/main.js (canonical: `\"greet\": \"node src/main.js\"`). When `npm run greet` runs, it should print `hello, world!`.",
+      "fixture": "multistep-add-script",
+      "presets": ["baseline", "blackboard"],
+      "rounds": 3,
+      "agentCount": 3,
+      "wallClockCapMs": 300000,
+      "expectFilesChanged": true,
+      "$rationale": "Multi-file change requiring two coordinated edits. Single-shot baseline often hits one half but not the other — good test of swarm sequencing."
+    },
+    {
+      "id": "fixture-multistep-config-then-test",
+      "title": "Add a verbose option to formatLog + write the test",
+      "directive": "Two steps: (1) In src/log.js, extend formatLog(level, msg, opts) so that when opts.verbose === true the returned string includes a [v] marker after the level (e.g. \"INFO [v]: hello\"). Default behavior unchanged when opts.verbose is absent or false. (2) Create src/log.test.mjs using node:test that asserts BOTH the verbose-true case AND the default-no-marker case. Tests must pass.",
+      "fixture": "multistep-config-then-test",
+      "presets": ["baseline", "blackboard"],
+      "rounds": 3,
+      "agentCount": 3,
+      "wallClockCapMs": 300000,
+      "expectFilesChanged": true,
+      "$rationale": "Code-and-test paired change. Tests both implementation skill AND test-writing skill in one task."
     }
   ],
   "$presetOverrides": {
