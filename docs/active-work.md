@@ -65,6 +65,8 @@
 
 ### Surfaced from overnight tour (queued for next session)
 
+- ✅ **#231 — XML pseudo-tool-call markers CLOSED 2026-05-01.** Empirical check ran a 2-min Claude blackboard run via `pickProvider("anthropic/claude-sonnet-4-6")` against octocat/Hello-World. **Result: zero `<read>` / `<grep>` / `<list>` / `<glob>` / `<bash>` markers across 1,975 chars of planner output.** Hypothesis confirmed: native Anthropic provider with native `tool_use` blocks bypasses the OpenAI-bridge mismatch that makes open-weights coding models reach for trained-in XML formats. **Action**: docs note added — for tool-using prompts, prefer paid providers if quality matters more than cost. Investigation history retained below.
+
 - **#231 — XML pseudo-tool-call markers ROOT-CAUSED 2026-04-29 (training-prior, not opencode).** Investigation findings:
 
   - The opencode v2 SDK (`node_modules/@opencode-ai/sdk/dist/v2/`) does NOT contain any XML tool-call format anywhere; greps for `tool_use` / `<read` / `<grep` / `XML.*tool` return zero hits. Hypothesis B (opencode injects XML examples) ruled out.
@@ -88,7 +90,7 @@
 
 - **First paid scoreboard sweep + 7 more fixtures.** Phase 6 shipped 3 starter fixtures + the framework; 7 more are queued in `eval/fixtures/README.md` (add-null-guard, extract-pure-helper, fix-failing-test, audit-console-logs, categorize-deps, multistep-add-script, multistep-config-then-test). After at least 5 fixtures land, run a 3-seed × Sonnet 4.6 sweep (~$5–15) and overwrite `eval/RESULTS.md` with real numbers. **Trigger**: explicit "go run paid sweep" with budget authorization.
 
-- **Live UI test of multi-provider work.** The 90-second Playwright demo on 2026-04-29 confirmed the dropdown + autocomplete + cost-cap-field-reveal all work visually. NOT yet exercised: a real Anthropic-keyed run that flows through `pickProvider` → `AnthropicProvider` → token capture → cost-cap stop. (Reference to "opencode subprocess → AI-SDK package" was correct at write time but stale post-E3 Phase 5 — opencode is gone.) **Trigger**: paste an `ANTHROPIC_API_KEY` into `.env` + explicit "kick a $0.10-capped Claude run." Pairs with the #231 check above — same key, same run.
+- ✅ **Live multi-provider end-to-end** — exercised 2026-05-01 alongside #231. Real Anthropic-keyed blackboard run (`anthropic/claude-sonnet-4-6` planner + Ollama workers + Ollama auditor) cloned octocat/Hello-World, planner emitted 3 contract envelopes (1,975 chars), workers committed 2 hunks, run ended on auditor cap in 1m 59s. `maxCostUsd=0.50` cap not hit. Token capture worked, no console errors, no agent deaths. The path `pickProvider` → `AnthropicProvider` → native `tool_use` is now production-validated.
 
 - **summary.kind bubble re-audit.** 14+ envelope kinds (run_finished, seed_announce, verifier_verdict, agents_ready, council_draft, debate_turn, council_synthesis, stigmergy_report, mapreduce_synthesis, role_diff_synthesis, stretch_goals, debate_verdict, next_action_phase, worker_hunks). Render each in browser, screenshot, compare to expected. The 34/34 BubbleGallery audit (2026-04-28) covered them at fixture level — this is the live-data version that catches regressions from the 2026-04-29 multi-provider work. **Trigger**: anytime; pair with the live UI test above.
 
@@ -158,14 +160,18 @@ plus the actual run output at `C:\mnt\c\Users\kevin\Desktop\ollama_swarm\runs\de
 
 ## Done recently (last 30 days; older lands in archive/blackboard-changelog.md)
 
-### 2026-05-01 — E3 cleanup pt 6 + bubble re-audit + #231 runbook + dotenv fix + doc rot
+### 2026-05-01 — E3 cleanup pt 6 + bubble re-audit + #231 RESOLVED + dotenv + provider streaming fix + doc rot
 
 - ✅ `npm install` from PowerShell physically removed `node_modules/@opencode-ai/sdk` (75 lockfile lines deleted). The dep was already gone from `package.json` since cleanup pt 2 (`d189f0d`); this catches `package-lock.json` up. Commit `4190afe`.
 - ✅ Bubble-gallery re-audit against live `?gallery=1`: 24 fixture nodes, 18 distinct `summary.kind`, 0 console errors. Matches the 2026-04-29 baseline → multi-provider work caused zero bubble regressions live. New `scripts/audit-bubble-gallery-win.mjs` is the Windows-host variant of the WSL-only original. Report: `runs/_bubble-audit-2026-05-01T15-29-25-615Z/REPORT.md`.
 - ✅ Updated #231 entry above with concrete 6-step runbook reflecting post-E3 reality (no opencode layer; `pickProvider` → `AnthropicProvider` direct).
 - ✅ **Latent dotenv-path bug fixed in `server/src/config.ts`** — `dev.mjs` spawns the server with `cwd=server/`, so `import "dotenv/config"`'s default cwd-based lookup was missing the documented repo-root `.env`. `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` would never have loaded until this fix; never noticed because nobody had keys to test with. Replaced with explicit `dotenv.config({ path: <repoRoot>/.env })`. Commit `4190afe`.
 - ✅ **Doc rot pass** — pruned 5+ ghost items from "Data-grounded findings 2026-04-27" sections that had silently shipped: think-tag rendering, contract bubble, content-boundary segmentation, tool-call marker over-segmentation, Playwright-friendly transcripts, Issues #1/#3/#4 from f78342b7. The active-work.md tracked-as-pending count dropped accordingly.
-- ✅ **Root-level `npm test` script** added to root `package.json` so `npm test` works from any shell, any cwd, no env prefix. The cross-env shim itself (`server/scripts/run-tests.mjs`) had already shipped 2026-04-27 (`0b3cda6`) — only the root-delegation wrapper was missing. CLAUDE.md prefix instruction is now stale.
+- ✅ **Root-level `npm test` script** added to root `package.json` so `npm test` works from any shell, any cwd, no env prefix. The cross-env shim itself (`server/scripts/run-tests.mjs`) had already shipped 2026-04-27 (`0b3cda6`) — only the root-delegation wrapper was missing. CLAUDE.md prefix instruction updated.
+
+- ✅ **Streaming chunk-drop bug fixed** in `AnthropicProvider` + `OpenAIProvider` (commit `eff8c4f`). The `Promise.race([reader.read(), timeout(200ms)])` pattern abandoned in-flight reads on timeout; abandoned reads silently consumed subsequent chunks, truncating responses to whatever fit in the first SSE batch. Discovered while empirically validating #231 — Claude was returning "Here" for "Count from 1 to 10" (28 tokens generated, 4 captured). Regression test added (commit `5c13b10`) using a 250ms-delay async stream.
+
+- ✅ **#231 EMPIRICALLY CLOSED** — Claude on native Anthropic provider produced 1,975 chars of planner output across 3 contract envelopes with **zero XML pseudo-tool-call markers**. Hypothesis confirmed; the OpenAI-bridge mismatch theory was correct. Action: docs note for "use paid providers when tool-call quality matters."
 
 ### 2026-04-29 — multi-provider + scoreboard (#313–#320)
 
