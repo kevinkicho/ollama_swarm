@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { buildProposerPrompt, buildAggregatorPrompt } from "./MoaRunner.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const MOA_RUNNER_SRC = readFileSync(join(__dirname, "MoaRunner.ts"), "utf8");
 
 test("buildProposerPrompt — peer-hidden framing + seed + repo files", () => {
   const prompt = buildProposerPrompt({
@@ -111,4 +117,50 @@ test("buildAggregatorPrompt — variant 'actionability' adds actionability bias"
     variantBias: "actionability",
   });
   assert.match(prompt, /Bias toward ACTIONABILITY/);
+});
+
+// 2026-05-01 regression — Kevin reported MoA agent sidebar status was
+// stuck at spawn-time state. Root cause: MoaRunner.runOne had ZERO
+// markStatus + emitAgentState calls (other discussion runners have
+// 9-13 each). Fixed in commit f8ed703 by wrapping the prompt call in
+// try/finally with markStatus(thinking) before + markStatus(ready) in
+// finally. These structural tests catch a regression at the source-
+// code level — cheaper than mock-based unit tests for a one-line bug
+// in an integration-shaped method, and the bug class is "missing
+// calls" which structural matching catches well.
+
+test("MoaRunner.runOne — emits markStatus(thinking) before the prompt", () => {
+  // Find the runOne method body
+  const runOneMatch = MOA_RUNNER_SRC.match(/private async runOne[\s\S]*?\n  \}/);
+  assert.ok(runOneMatch, "runOne private method must exist");
+  assert.match(runOneMatch[0], /markStatus\([^)]*"thinking"\)/, "must mark thinking before prompt");
+  assert.match(runOneMatch[0], /emitAgentState\([^,]+,\s*"thinking"/, "must emitAgentState(thinking) so WS sees the transition");
+});
+
+test("MoaRunner.runOne — emits markStatus(ready) in a finally block (fires even on prompt error)", () => {
+  const runOneMatch = MOA_RUNNER_SRC.match(/private async runOne[\s\S]*?\n  \}/);
+  assert.ok(runOneMatch, "runOne private method must exist");
+  const body = runOneMatch[0];
+  assert.match(body, /try\s*\{/, "must use try/...");
+  assert.match(body, /\}\s*finally\s*\{/, "...finally block so ready state always fires");
+  // Make sure the ready emission is inside the finally, not after the try
+  const finallyMatch = body.match(/finally\s*\{[\s\S]*?\}\s*$/);
+  assert.ok(finallyMatch, "finally block must exist");
+  assert.match(finallyMatch[0], /markStatus\([^)]*"ready"\)/, "finally must mark ready");
+  assert.match(finallyMatch[0], /emitAgentState\([^,]+,\s*"ready"\)/, "finally must emitAgentState(ready)");
+});
+
+test("MoaRunner — emitAgentState helper exists with the right signature", () => {
+  // Helper takes (agent, status, thinkingSince?) and emits the
+  // {type:"agent_state", agent: AgentState} shape per server/src/types.ts.
+  assert.match(
+    MOA_RUNNER_SRC,
+    /private emitAgentState\(agent: Agent, status: "thinking" \| "ready", thinkingSince\?:/,
+    "emitAgentState signature must match the convention used by other runners",
+  );
+  assert.match(
+    MOA_RUNNER_SRC,
+    /type: "agent_state",\s*agent:\s*\{/,
+    "emitAgentState must emit the {type, agent} shape (not flat fields)",
+  );
 });
