@@ -4,7 +4,7 @@
 > `TaskCreate` items die when the session ends; this file is the durable
 > equivalent. **Update it when you finish or queue work.**
 >
-> Last refreshed: 2026-05-01 (streaming bug fix + dotenv path fix + V2 6c first slice + #231 closed + value-prop reframe + doc rot pass)
+> Last refreshed: 2026-05-01 PM (5 features × 3 layers each + 3 UI bug fixes + scoreboard publishing prep + 2 sweeps in flight)
 
 ---
 
@@ -162,7 +162,34 @@ plus the actual run output at `C:\mnt\c\Users\kevin\Desktop\ollama_swarm\runs\de
 
 ## Done recently (last 30 days; older lands in archive/blackboard-changelog.md)
 
-### 2026-05-01 — E3 cleanup pt 6 + bubble re-audit + #231 RESOLVED + dotenv + provider streaming fix + doc rot
+### 2026-05-01 PM — 5 features × 3 layers + 3 UI bug fixes + scoreboard publishing prep
+
+Building on the morning's bug-fixes + #231 closure, the afternoon shipped 5 features at three layers of depth each (first-cut → deeper → deepest), 3 user-reported UI bug fixes, and the prep work for the open-weights MoA scoreboard publish. 18 commits.
+
+**5 features, 3 layers each:**
+
+- ✅ **#2 Constrained decoding** — `47566d7` (initial: format passthrough + CONTRACT_JSON_SCHEMA), `36e290d` (deeper: PLANNER_TODOS + AUDITOR_VERDICT + CRITIC_ENVELOPE schemas), `f0b6b00` (deepest: WORKER_HUNKS_JSON_SCHEMA — highest-frequency parser-failure path closed).
+- ✅ **#3 Self-consistency hunks** — `053faa2` (initial: K-attempt sequential vote), `de6a25f` (deeper: parallel fan-out via Promise.allSettled + LLM-as-judge tiebreak with 4 fallback paths), `1da8cd4` (deepest: cross-agent fan-out — K calls round-robin across worker pool).
+- ✅ **#1 Mixture of Agents preset** — `9ba4772` (initial: MoaRunner with proposers + aggregator + multi-round), `7dc422f` (deeper: convergence detection via Jaccard + K-aggregator central-pick + 3 variant-bias prompts), `c33a435` (deepest: heterogeneous models per layer — `moaProposerModel` + `moaAggregatorModel`).
+- ✅ **#5 SWE-Bench Lite integration** — `fce1226` (initial: adapter + 9 tests + sample.jsonl), `241bb86` (deeper: --swe-bench-dataset + --swe-bench-task + --swe-bench-limit + --swe-bench-dry-run flags), `92b6641` (deepest: Docker executor module + 13 mocked tests + runSweBenchVerify wrapper; real-Docker validation pending Kevin's smoke-test).
+- ✅ **#4 Time-travel replay UI** — `be107f2` (initial: useReplayState reducer + scrubber UI + per-run replay endpoint consumer), `13bd527` (deeper: reducer expanded 5 → 14 event types + diffSnapshots + tick-to-tick "what changed" panel), `2dfe978` (deepest: side-by-side two-run comparison panel via `?compare=A,B` with cross-run diff + lock-step scrubbers).
+
+**Scoreboard publishing prep:**
+
+- ✅ `db28481` — `docs/SCOREBOARD-PUBLISHING-PLAN.md` — 5-config matrix, decision-gates, methodology, honest-limitations.
+- ✅ `96484e1` — `--moa-proposer-model` + `--moa-aggregator-model` + `--moa-aggregator-count` CLI flags. `scripts/scoreboard-tour.mjs` smoke-tests all 4 free configs against one fixture before kicking the 150-attempt sweep.
+- ✅ `fb41336` — Catalog reframe: bumped fixture `wallClockCapMs` 300s → 600s (so blackboard isn't unfairly cut off). Added `moa` to the analysis-style non-fixture tasks (audit-readme-claims, council-architecture-decision, stigmergy-coverage-map). The original scoreboard plan had MoA against code-modify fixtures; corrected because **MoA is discussion-only — never writes files**, so can't pass code-modify verifies. Now two scoreboards: code-modify (baseline + blackboard) and analysis (moa + council + round-robin). See `project_moa_discussion_only.md` in memory.
+- 🟡 **Sweep 1A baseline complete** — 6/30 verify=PASS (20%), 7.5min wall-clock, 0 console errors. Baseline handles `add-null-guard` + `add-readme-section` cleanly; fails on the other 8 fixtures (bug-fixes-with-context, refactors, multi-file, structured-emit, multi-step). Real floor.
+- 🟡 **Sweep 1B blackboard in flight** — running at time of writing; 30 attempts × ~5-10min each = ~3-4h. Will produce per-task pass-rate + wall-clock.
+- ⏳ **Sweep 2 analysis** — pending; 3 tasks × 3 discussion presets × 3 seeds = 27 attempts, needs a real target repo.
+
+**3 UI bug fixes (Kevin reported during sweep watching):**
+
+- ✅ `f8ed703` — **Streaming bubbles violently swap positions.** StreamingDock sorted by `lastTextAt` DESC, so every chunk re-sorted the list and React reordered DOM nodes. Two parallel agents took turns being "most recent" → swapped slots multiple times per second. Fixed by sorting on stable `agentIndex`.
+- ✅ `f8ed703` — **MoA agent sidebar status stuck at spawn-time state.** MoaRunner.ts had ZERO `emitAgentState` calls (the other 7 discussion runners have 9-13 each). Agents went thinking → ready silently; WS never saw the transition; sidebar froze on initial state. Fixed via try/finally in `runOne()` that wraps each prompt with markStatus + emitAgentState.
+- ✅ `faa601f` — **Last segment "escapes" the collapsible bracket on finalized chat bubbles.** MessageBubble rendered `segments.slice(0,-1)` collapsed + last segment as raw expanded prose. Worked for live streaming (latest grows visibly), but on finalized bubbles the last segment hung outside the structure. Fixed by uniformly collapsing all segments. Live StreamingDock unchanged.
+
+### 2026-05-01 AM — E3 cleanup pt 6 + bubble re-audit + #231 RESOLVED + dotenv + provider streaming fix + doc rot
 
 - ✅ `npm install` from PowerShell physically removed `node_modules/@opencode-ai/sdk` (75 lockfile lines deleted). The dep was already gone from `package.json` since cleanup pt 2 (`d189f0d`); this catches `package-lock.json` up. Commit `4190afe`.
 - ✅ Bubble-gallery re-audit against live `?gallery=1`: 24 fixture nodes, 18 distinct `summary.kind`, 0 console errors. Matches the 2026-04-29 baseline → multi-provider work caused zero bubble regressions live. New `scripts/audit-bubble-gallery-win.mjs` is the Windows-host variant of the WSL-only original. Report: `runs/_bubble-audit-2026-05-01T15-29-25-615Z/REPORT.md`.
@@ -182,8 +209,6 @@ plus the actual run output at `C:\mnt\c\Users\kevin\Desktop\ollama_swarm\runs\de
 - ✅ **Catalog wiring** (commit `f3d0aeb`): added catalog entries for `fixture-add-null-guard` + `fixture-extract-pure-helper` (fixture dirs were on disk since `b255630` but never wired into the catalog).
 
 - ✅ **First paid scoreboard sweep — partial validation** at `runs/_eval/sonnet-2026-05-01/`. 9 of 18 attempts captured (sweep stopped early — directional signal already validated, no need to burn the rest). Real findings: blackboard 3/3 PASS (scores 127/121/127) on `fix-off-by-one` where baseline 0/3 failed (search-not-unique hunk rejection); baseline 3/3 PASS in 17s on `add-null-guard`. **Two presets aren't competitors — they have different sweet spots**, which is the whole point of having a scoreboard. Spend: ~$2–3.
-
-### 2026-04-29 — multi-provider + scoreboard (#313–#320)
 
 ### 2026-04-29 — multi-provider + scoreboard (#313–#320)
 

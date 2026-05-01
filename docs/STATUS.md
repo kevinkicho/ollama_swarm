@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-05-01
+**Last updated:** 2026-05-01 (afternoon — 31 commits today)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -73,11 +73,22 @@ The V1 SDK loop (per-agent opencode subprocess + SSE chunked streaming) was reti
 
 ---
 
+## What landed 2026-05-01 (31 commits)
+
+A long day. Headline categories:
+
+- **Two load-bearing bug fixes:** provider streaming chunk-drop (`eff8c4f`) — paid-provider responses were silently truncated to the first SSE batch; dotenv root-path (`4190afe`) — paid keys never loaded.
+- **5 features × 3 layers each:** constrained decoding (#86 → #91 → #96), self-consistency hunks (#87 → #92 → #97), Mixture of Agents preset (#88 → #93 → #98), time-travel replay UI (#90 → #94 → #99), SWE-Bench Lite integration (#89 → #95 → #100). Each shipped first-cut, deeper, then deepest.
+- **3 UI bug fixes:** stable streaming-bubble order (`f8ed703`), MoA emits agent_state (`f8ed703`), finalized chat bubble collapses all segments (`faa601f`).
+- **Scoreboard publishing prep:** plan doc (`db28481`), MoA per-layer model CLI flags + tour script (`96484e1`), catalog reframe with corrected MoA scope (`fb41336`).
+- **Doc-rot pass + memory cleanup:** ghost items pruned, scoreboard plan corrected for MoA discussion-only nature.
+
 ## Recent fixes worth knowing about
 
 - **`eff8c4f` (2026-05-01)** — provider streaming chunk-drop bug in `AnthropicProvider` + `OpenAIProvider`. `Promise.race([reader.read(), timeout])` was abandoning in-flight reads on every 200ms tick; abandoned reads silently consumed subsequent chunks, truncating responses to whatever fit in the first SSE batch. Pre-fix: Claude Sonnet returned `"Here"` for `"Count from 1 to 10"` (28 tokens generated, 4 captured). Fix keeps one in-flight read across iterations. Regression test in `5c13b10` uses 250ms-delay async streams to surface the bug if reintroduced.
 - **`4190afe` (2026-05-01)** — latent dotenv path bug. `server/src/config.ts` did `import "dotenv/config"` which resolved relative to `process.cwd()`. `dev.mjs` runs the server with `cwd=server/`, so the canonical repo-root `.env` was silently ignored. Paid keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) would never load. Replaced with explicit `dotenv.config({ path: <repoRoot>/.env })`.
 - **`f3d0aeb` (2026-05-01)** — V2 Step 6c first thin slice: `GET /api/v2/event-log/runs/:runId` per-run record replay endpoint + 5 tests. Pure backend addition; unblocks every UI cutover step that follows. Full remaining cutover scoped in `docs/V2-STEP-6C.md`.
+- **`f8ed703` + `faa601f` (2026-05-01)** — three UI bugs: streaming bubbles violently swapped positions (sort-by-recency caused re-render thrash; fixed by sorting by stable agentIndex); MoA agent panel sidebar showed spawn-time state forever (MoaRunner had zero `emitAgentState` calls; the other 7 discussion runners had 9-13 each); finalized chat bubble's last segment "escaped" the collapsible bracket as raw prose (fixed by uniformly collapsing all segments).
 - **`bb0c509`** — proxy always terminates rewritten `OLLAMA_BASE_URL` with `/v1`. Pre-fix, env var without `/v1` silently broke every opencode prompt with empty responses (404 on `/chat/completions`).
 - **`189ca05`** — wall-clock 4-min "absolute turn cap" replaced with SSE-aware liveness watchdog (`sseAwareTurnWatchdog.ts`). Aborts on 90s SSE silence OR 30-min hard ceiling. Long-tail latency that's still producing tokens isn't killed.
 - **`cfee38d`** — `agents_ready` structured summary; expandable per-agent grid in UI showing port, role, model, sessionId, warmup elapsed.
