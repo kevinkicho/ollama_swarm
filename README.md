@@ -2,7 +2,9 @@
 
 > **For agents picking up this codebase**: read [`docs/STATUS.md`](docs/STATUS.md) first — it's the single "what's true right now" pointer + map. This README is the user-facing intro.
 
-A local web app that spawns a **swarm of agents** — each backed by an LLM you choose — to clone a GitHub repository and collaboratively figure out what the project is, what's working, what's missing, and what to build next. **Multi-provider:** local [Ollama](https://ollama.com), [Anthropic Claude](https://www.anthropic.com), or [OpenAI](https://openai.com); pick in the form. Ollama is the default and runs free on your GPU.
+A local web app that runs **N open-weights coding agents in parallel** against a single GitHub repo — they collaborate in one shared transcript, each potentially a different [Ollama](https://ollama.com)-served model (e.g. planner=`glm-5.1:cloud`, worker=`gemma4:31b-cloud`, auditor=`nemotron-3-super:cloud`). The design point is **multi-model parallelism on your own hardware** — Claude Code does single-agent-Claude beautifully, but it can't run five different open-weights models reviewing the same code at the same time. That's what this is for.
+
+Paid providers ([Anthropic Claude](https://www.anthropic.com), [OpenAI](https://openai.com)) are wired in for users who want them — pick in the form, set the API key in `.env`. Ollama is the default and runs free on your GPU.
 
 > **2026-04-29 — opencode subprocess fully removed (E3 Phases 1–5).** Earlier
 > versions spawned an `opencode serve` HTTP subprocess per agent. That whole
@@ -57,7 +59,7 @@ Then open **http://localhost:8244/** (or the WSL guest IP if you're hitting it f
 
 ## What it does
 
-You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. **Ten patterns** ship today (one write-capable, eight discussion, plus a single-agent baseline for evaluation):
+You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. The agents spawn, clone the repo, and start collaborating — each running an open-weights model on your local Ollama (or, optionally, a paid provider). **Ten patterns** ship today (one write-capable, eight discussion, plus a single-agent baseline for evaluation):
 
 - **Round-robin transcript** — N identical agents take turns on a shared transcript; every agent sees every other agent's reply and responds. Discussion-only.
 - **Blackboard (optimistic + small units)** — planner posts atomic todos to a shared board; workers claim and commit in parallel, with CAS on file hashes catching stale plans. **The only write-capable preset** — workers actually modify the clone.
