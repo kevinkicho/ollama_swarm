@@ -34,11 +34,14 @@ export function StreamingDock({
 
   if (ids.length === 0) return null;
 
-  // Sort by lastTextAt descending (most recent activity first). The
-  // top entry gets natural visual focus; multiple parallel agents
-  // stack below it. No collapse-by-default — Phase A keeps every
-  // active stream visible so the user never loses sight of any
-  // agent's content.
+  // Sort by stable agentIndex (ascending) so bubbles keep a fixed
+  // visual position. Pre-fix: sort by lastTextAt descending caused
+  // bubbles to swap positions on every chunk arrival as different
+  // agents took turns being "most recent" — visually a violent flash
+  // where adjacent bubbles traded slots multiple times per second.
+  // Stable sort by agentIndex eliminates the swap entirely; the
+  // user's eye learns "agent-1 is always at top" and stops fighting
+  // for focus.
   const ordered = ids
     .map((id) => ({
       id,
@@ -46,7 +49,7 @@ export function StreamingDock({
       text: streaming[id] ?? "",
       meta: streamingMeta[id],
     }))
-    .sort((a, b) => (b.meta?.lastTextAt ?? 0) - (a.meta?.lastTextAt ?? 0));
+    .sort((a, b) => a.agentIndex - b.agentIndex);
 
   return (
     <div className="space-y-2">

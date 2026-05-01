@@ -272,30 +272,63 @@ export class MoaRunner implements SwarmRunner {
 
   /** One prompt → cleaned text. Records the agent message in the
    *  transcript. Throws on transport errors so the caller can decide
-   *  whether to abort the whole round. */
+   *  whether to abort the whole round.
+   *
+   *  2026-05-01 bug fix: emit agent_state events around the prompt so
+   *  the UI sidebar shows current status. Pre-fix: MoaRunner had zero
+   *  emitAgentState calls (BlackboardRunner has 5+); the sidebar
+   *  showed agents at their initial spawn state ("ready") forever
+   *  while they were actually thinking. */
   private async runOne(agent: Agent, prompt: string, label: string): Promise<string> {
     const ctrl = new AbortController();
-    const res = (await promptWithRetry(agent, prompt, {
-      signal: ctrl.signal,
-      manager: this.opts.manager,
-      formatExpect: "free",
-      describeError: (e) => describeSdkError(e),
-    })) as { data: { parts: Array<{ type: "text"; text: string }> } };
-    const raw = extractText(res) ?? "";
-    const stripped = stripAgentText(raw);
-    const cleaned = stripped.finalText;
-    const entry: TranscriptEntry = {
-      id: randomUUID(),
-      role: "agent",
-      agentId: agent.id,
-      agentIndex: agent.index,
-      text: cleaned,
-      ts: Date.now(),
-    };
-    this.transcript.push(entry);
-    this.opts.emit({ type: "transcript_append", entry });
-    void label;
-    return cleaned;
+    const startedAt = Date.now();
+    this.opts.manager.markStatus(agent.id, "thinking");
+    this.emitAgentState(agent, "thinking", startedAt);
+    try {
+      const res = (await promptWithRetry(agent, prompt, {
+        signal: ctrl.signal,
+        manager: this.opts.manager,
+        formatExpect: "free",
+        describeError: (e) => describeSdkError(e),
+      })) as { data: { parts: Array<{ type: "text"; text: string }> } };
+      const raw = extractText(res) ?? "";
+      const stripped = stripAgentText(raw);
+      const cleaned = stripped.finalText;
+      const entry: TranscriptEntry = {
+        id: randomUUID(),
+        role: "agent",
+        agentId: agent.id,
+        agentIndex: agent.index,
+        text: cleaned,
+        ts: Date.now(),
+      };
+      this.transcript.push(entry);
+      this.opts.emit({ type: "transcript_append", entry });
+      void label;
+      return cleaned;
+    } finally {
+      // Always reset status — the agent isn't thinking anymore even if
+      // the prompt threw.
+      this.opts.manager.markStatus(agent.id, "ready");
+      this.emitAgentState(agent, "ready");
+    }
+  }
+
+  /** Mirror of BlackboardRunner.emitAgentState — surfaces per-agent
+   *  status flips to the WS so the sidebar's AgentPanel updates live.
+   *  Without this the panel shows the spawn-time state forever. */
+  private emitAgentState(agent: Agent, status: "thinking" | "ready", thinkingSince?: number): void {
+    this.opts.emit({
+      type: "agent_state",
+      agent: {
+        id: agent.id,
+        index: agent.index,
+        port: agent.port,
+        sessionId: agent.sessionId,
+        status,
+        ...(thinkingSince !== undefined ? { thinkingSince } : {}),
+      },
+    });
   }
 
   private setPhase(p: SwarmPhase): void {
