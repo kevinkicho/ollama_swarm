@@ -184,6 +184,19 @@ const PRESETS: readonly SwarmPreset[] = [
     status: "active",
     directive: "ignored",
   },
+  {
+    id: "moa",
+    label: "Mixture of Agents (MoA)",
+    summary: "N proposers each draft independently (peer-hidden, parallel). One aggregator synthesizes their drafts. Reproducibly beats single-large-model on reasoning benchmarks using only small open-weights models.",
+    min: 2,
+    max: 8,
+    recommended: 5,
+    // Aggregator does the heavy synthesis lift; reasoning-tier helps.
+    // Proposers can be coding-tier (fast independent drafts).
+    recommendedModel: MODEL_REASONING,
+    status: "active",
+    directive: "honored",
+  },
 ];
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));

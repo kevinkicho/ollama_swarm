@@ -14,6 +14,7 @@ import { OrchestratorWorkerRunner } from "../swarm/OrchestratorWorkerRunner.js";
 import { OrchestratorWorkerDeepRunner } from "../swarm/OrchestratorWorkerDeepRunner.js";
 import { DebateJudgeRunner } from "../swarm/DebateJudgeRunner.js";
 import { MapReduceRunner } from "../swarm/MapReduceRunner.js";
+import { MoaRunner } from "../swarm/MoaRunner.js";
 import { StigmergyRunner } from "../swarm/StigmergyRunner.js";
 import { BaselineRunner } from "../swarm/BaselineRunner.js";
 import { DEFAULT_ROLES, roleForAgent } from "../swarm/roles.js";
@@ -599,6 +600,13 @@ export class Orchestrator {
         // scoreboard sweep to anchor "did the swarm beat doing it
         // alone?" comparisons.
         return new BaselineRunner(opts);
+      case "moa":
+        // #88 (2026-05-01): Mixture of Agents. Layer 1 = N peer-hidden
+        // proposers (parallel). Layer 2 = 1 aggregator that synthesizes
+        // their N drafts into one answer. Discussion-only; reproducibly
+        // beats single-large-model on reasoning benchmarks using only
+        // small open-weights models — exactly this project's value prop.
+        return new MoaRunner(opts);
       default: {
         // Exhaustiveness check — if a new preset is added to PresetId, TS errors here.
         const _exhaustive: never = preset;

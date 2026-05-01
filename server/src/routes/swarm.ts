@@ -49,6 +49,7 @@ const StartBody = z.object({
       "map-reduce",
       "stigmergy",
       "baseline",
+      "moa",
     ])
     .default("round-robin"),
   // Unit 25: optional free-text directive that shapes the blackboard

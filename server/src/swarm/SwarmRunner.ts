@@ -13,7 +13,8 @@ export type PresetId =
   | "debate-judge"
   | "map-reduce"
   | "stigmergy"
-  | "baseline";
+  | "baseline"
+  | "moa";
 
 export interface RunConfig {
   repoUrl: string;
