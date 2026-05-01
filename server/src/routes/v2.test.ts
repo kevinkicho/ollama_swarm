@@ -161,3 +161,122 @@ describe("v2Router /event-log/runs", () => {
     });
   });
 });
+
+// V2 Step 6c first-thin-slice (2026-05-01): per-run record replay endpoint.
+function getRunByIdHandler(router: import("express").Router): (
+  req: import("express").Request,
+  res: import("express").Response,
+) => Promise<void> {
+  const stack = (router as unknown as { stack: Array<{
+    route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: unknown }> };
+  }> }).stack;
+  for (const layer of stack) {
+    if (layer.route?.path === "/event-log/runs/:runId" && layer.route.methods.get) {
+      return layer.route.stack[0].handle as (
+        req: import("express").Request,
+        res: import("express").Response,
+      ) => Promise<void>;
+    }
+  }
+  throw new Error("could not find handler for GET /event-log/runs/:runId");
+}
+
+describe("v2Router /event-log/runs/:runId", () => {
+  const sampleLog = [
+    JSON.stringify({ ts: 1000, event: { type: "_session_started" } }),
+    JSON.stringify({ ts: 1100, event: { type: "run_started", runId: "r1", preset: "blackboard" } }),
+    JSON.stringify({ ts: 1200, event: { type: "transcript_append", entry: { id: "e1" } } }),
+    JSON.stringify({ ts: 1300, event: { type: "swarm_state", phase: "completed" } }),
+    JSON.stringify({ ts: 1400, event: { type: "run_summary" } }),
+    JSON.stringify({ ts: 1500, event: { type: "run_started", runId: "r2", preset: "council" } }),
+    JSON.stringify({ ts: 1600, event: { type: "transcript_append" } }),
+  ].join("\n");
+
+  it("returns the records + derived state for a matching runId", async () => {
+    await withTempLog(sampleLog, async (logPath) => {
+      const router = v2Router({ eventLogPath: logPath });
+      const handler = getRunByIdHandler(router);
+      const { res, mock } = makeRes();
+      await handler(
+        { params: { runId: "r1" } } as unknown as import("express").Request,
+        res,
+      );
+      assert.equal(mock.statusCode, 200);
+      const body = mock.body as {
+        runId: string;
+        derived: { runId?: string; preset?: string; finalPhase?: string; hasSummary: boolean };
+        records: Array<{ ts: number; event: { type: string } }>;
+        isSessionBoundary: boolean;
+      };
+      assert.equal(body.runId, "r1");
+      assert.equal(body.derived.runId, "r1");
+      assert.equal(body.derived.preset, "blackboard");
+      assert.equal(body.derived.finalPhase, "completed");
+      assert.equal(body.derived.hasSummary, true);
+      assert.equal(body.isSessionBoundary, false);
+      // Should include all 4 records belonging to the r1 slice (run_started + 3 events)
+      assert.equal(body.records.length, 4);
+      assert.equal(body.records[0].event.type, "run_started");
+      assert.equal(body.records[3].event.type, "run_summary");
+    });
+  });
+
+  it("matches the second run when multiple runs share a log", async () => {
+    await withTempLog(sampleLog, async (logPath) => {
+      const router = v2Router({ eventLogPath: logPath });
+      const handler = getRunByIdHandler(router);
+      const { res, mock } = makeRes();
+      await handler(
+        { params: { runId: "r2" } } as unknown as import("express").Request,
+        res,
+      );
+      assert.equal(mock.statusCode, 200);
+      const body = mock.body as { runId: string; records: unknown[]; derived: { preset?: string } };
+      assert.equal(body.runId, "r2");
+      assert.equal(body.derived.preset, "council");
+      assert.equal(body.records.length, 2); // run_started + transcript_append
+    });
+  });
+
+  it("returns 404 for an unknown runId", async () => {
+    await withTempLog(sampleLog, async (logPath) => {
+      const router = v2Router({ eventLogPath: logPath });
+      const handler = getRunByIdHandler(router);
+      const { res, mock } = makeRes();
+      await handler(
+        { params: { runId: "does-not-exist" } } as unknown as import("express").Request,
+        res,
+      );
+      assert.equal(mock.statusCode, 404);
+      const body = mock.body as { error: string; totalSlices: number };
+      assert.match(body.error, /no run with id does-not-exist/);
+      assert.equal(body.totalSlices, 3); // session + r1 + r2
+    });
+  });
+
+  it("returns 400 for missing/oversize runId", async () => {
+    await withTempLog(sampleLog, async (logPath) => {
+      const router = v2Router({ eventLogPath: logPath });
+      const handler = getRunByIdHandler(router);
+      const { res, mock } = makeRes();
+      await handler(
+        { params: { runId: "x".repeat(200) } } as unknown as import("express").Request,
+        res,
+      );
+      assert.equal(mock.statusCode, 400);
+    });
+  });
+
+  it("returns 404 when log doesn't exist (ENOENT)", async () => {
+    const router = v2Router({ eventLogPath: "/nonexistent/log.jsonl" });
+    const handler = getRunByIdHandler(router);
+    const { res, mock } = makeRes();
+    await handler(
+      { params: { runId: "r1" } } as unknown as import("express").Request,
+      res,
+    );
+    assert.equal(mock.statusCode, 404);
+    const body = mock.body as { error: string };
+    assert.match(body.error, /no event log/);
+  });
+});

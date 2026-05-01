@@ -49,7 +49,7 @@ export function v2Router(deps: V2RouterDeps): Router {
   // GET /api/v2/event-log/runs → { runs: [{ derived, recordCount }] }
   // Reads the event log, parses + slices into runs, and returns
   // derived state per slice. Suitable for a sidebar list — for
-  // detailed replay use /api/v2/event-log/runs/:idx (TODO).
+  // detailed per-run records use /api/v2/event-log/runs/:runId.
   r.get("/event-log/runs", async (_req: Request, res: Response) => {
     let raw: string;
     try {
@@ -77,6 +77,57 @@ export function v2Router(deps: V2RouterDeps): Router {
       malformed: malformed.length,
       source: deps.eventLogPath,
       totalRecords: records.length,
+    });
+  });
+
+  // V2 Step 6c first thin slice (2026-05-01): per-run record replay.
+  // The aggregated /event-log/runs endpoint is enough for a sidebar
+  // list, but the eventual UI cutover needs the FULL record stream
+  // for any specific run so it can re-derive state without going
+  // through the WS path. This endpoint unblocks that work without
+  // touching any WS dispatch code yet.
+  //
+  // Returns: { runId, derived, records: LoggedRecord[], isSessionBoundary, malformed }
+  // 404 if no slice has the requested runId. Records are returned in
+  // log order — caller's responsibility to fold into UI state.
+  r.get("/event-log/runs/:runId", async (req: Request, res: Response) => {
+    const wantId = req.params.runId;
+    if (!wantId || wantId.length > 100) {
+      res.status(400).json({ error: "runId required (max 100 chars)" });
+      return;
+    }
+    let raw: string;
+    try {
+      raw = await fs.readFile(deps.eventLogPath, "utf8");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/ENOENT/.test(msg)) {
+        res.status(404).json({ error: `no event log at ${deps.eventLogPath}` });
+        return;
+      }
+      res.status(500).json({ error: `failed to read event log: ${msg}` });
+      return;
+    }
+    const { records, malformed } = parseEventLog(raw);
+    const slices = splitIntoRuns(records);
+    // Match by either the run_started event's runId or a derived runId.
+    // Slices are forward-compat — if a future slice format hides the
+    // runId behind a derived field, we still find it.
+    const matched = slices.find((s) => {
+      const derived = deriveRunState(s);
+      return derived.runId === wantId;
+    });
+    if (!matched) {
+      res.status(404).json({ error: `no run with id ${wantId}`, totalSlices: slices.length });
+      return;
+    }
+    res.json({
+      runId: wantId,
+      derived: deriveRunState(matched),
+      records: matched.records,
+      isSessionBoundary: matched.isSessionBoundary,
+      malformed: malformed.length,
+      source: deps.eventLogPath,
     });
   });
 

@@ -47,6 +47,15 @@ let SEEDS = 1;
 // git-inits it, and points the swarm at the file:// URL. Verification
 // runs the fixture's verify.mjs; exit 0 = pass.
 let FIXTURE_DIR = "";
+// 2026-05-01: --model overrides what the server uses for every attempt
+// in this sweep. Lets a paid scoreboard run (Sonnet 4.6 / GPT-5) target
+// a specific model without touching .env or restarting dev. Empty =
+// server default.
+let MODEL_OVERRIDE = "";
+// 2026-05-01: --maxCostUsd applies the per-run dollar ceiling to every
+// attempt in the sweep. Bounds runaway spend on paid providers. 0 =
+// no cap. Capped server-side at $100; eval also clamps for sanity.
+let MAX_COST_USD = 0;
 let logFile = "";
 
 function log(msg) {
@@ -75,6 +84,11 @@ function buildPayload(task, preset) {
   if (preset === "debate-judge" && task.proposition) {
     payload.proposition = task.proposition;
   }
+  // 2026-05-01: --model + --maxCostUsd override per sweep so paid runs
+  // don't require touching .env / restarting dev. Applied uniformly to
+  // every (task, preset, seed) attempt.
+  if (MODEL_OVERRIDE) payload.model = MODEL_OVERRIDE;
+  if (MAX_COST_USD > 0) payload.maxCostUsd = MAX_COST_USD;
   return payload;
 }
 
@@ -122,9 +136,17 @@ function runFixtureVerify(stagePath) {
 
 async function fireStart(payload) {
   // Mirror the full-tour fix: fire POST + poll status (route awaits
-  // entire warmup which can exceed any reasonable curl timeout). If
-  // status transitions out of idle within 60s, treat as "started ok"
-  // regardless of whether POST has returned.
+  // entire warmup which can exceed any reasonable curl timeout). Treat
+  // as "started" when EITHER the runId has changed OR the phase has
+  // moved off whatever terminal state the prior run left behind.
+  // 2026-05-01 fix: previous version accepted phase=completed/stopped
+  // as "started" — it falsely passed when the prior run was already
+  // terminal and the POST silently failed (returned old runId again).
+  const preStatus = await fetchStatus();
+  const priorRunId = preStatus.runId ?? "";
+  const priorPhase = preStatus.phase ?? "";
+  const TRANSIENT_PHASES = ["spawning", "running", "discussing", "executing", "planning"];
+
   const ctrl = new AbortController();
   const post = fetch(`${SERVER}/api/swarm/start`, {
     method: "POST",
@@ -136,14 +158,16 @@ async function fireStart(payload) {
   for (let i = 0; i < 30; i++) {
     await sleep(2000);
     const s = await fetchStatus();
-    if (
-      s.phase &&
-      ["spawning", "running", "discussing", "executing", "completed", "stopped", "failed"].includes(s.phase)
-    ) {
-      // Best-effort cancel the in-flight POST since we no longer need it
+    const runIdChanged = s.runId && s.runId !== priorRunId;
+    const enteredTransient = TRANSIENT_PHASES.includes(s.phase ?? "");
+    if (runIdChanged || enteredTransient) {
       ctrl.abort();
       return { ok: true, runId: s.runId ?? "" };
     }
+    // If phase remains in the same terminal state with same runId after
+    // 30s, the POST hasn't taken effect — fall through to await the
+    // actual response below.
+    void priorPhase;
   }
   // Not transitioned in 60s — fall through to the POST result
   const r = await post;
@@ -152,6 +176,9 @@ async function fireStart(payload) {
   const body = await r.json().catch(() => ({}));
   if (body.ok === false) return { ok: false, reason: body.error ?? "unknown" };
   const s = await fetchStatus();
+  if (s.runId === priorRunId) {
+    return { ok: false, reason: `runId unchanged after POST (still ${priorRunId})` };
+  }
   return { ok: true, runId: s.runId ?? "" };
 }
 
@@ -289,6 +316,13 @@ async function main() {
   // 20 client-side so a typo can't authorize a 200-run accidental.
   const seedsRaw = Number(args.seeds ?? 1);
   SEEDS = Number.isFinite(seedsRaw) && seedsRaw >= 1 && seedsRaw <= 20 ? Math.floor(seedsRaw) : 1;
+  MODEL_OVERRIDE = args.model ?? "";
+  const maxCostRaw = Number(args.maxCostUsd ?? args["max-cost-usd"] ?? 0);
+  MAX_COST_USD = Number.isFinite(maxCostRaw) && maxCostRaw > 0 && maxCostRaw <= 100
+    ? maxCostRaw
+    : 0;
+  if (MODEL_OVERRIDE) console.log(`[eval] model override: ${MODEL_OVERRIDE}`);
+  if (MAX_COST_USD > 0) console.log(`[eval] per-attempt cost cap: $${MAX_COST_USD}`);
 
   mkdirSync(OUT_DIR, { recursive: true });
   mkdirSync(path.join(OUT_DIR, "per-run"), { recursive: true });
@@ -484,6 +518,10 @@ function buildReport(tasksDef, results) {
 }
 
 // Only run main() when invoked as a CLI; importing for tests skips it.
-if (import.meta.url === `file://${process.argv[1]}`) {
+// 2026-05-01: cross-platform guard — `file://${process.argv[1]}` doesn't
+// match `import.meta.url` on Windows (backslashes + triple-slash). Use
+// pathToFileURL so the comparison is reliable on every platform.
+import { pathToFileURL } from "node:url";
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main();
 }
