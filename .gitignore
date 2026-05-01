@@ -13,3 +13,5 @@ logs/
 screenshots/
 .claude/
 *.tsbuildinfo
+# SWE-Bench Lite dataset (~5MB, not licensed for redistribution)
+eval/swe-bench/dataset/
