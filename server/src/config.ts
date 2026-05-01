@@ -1,13 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import "dotenv/config";
+import dotenv from "dotenv";
 import { z } from "zod";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // server/src/config.ts (dev) or server/dist/config.ts (built) → up two to repo root.
 const repoRoot = path.resolve(here, "..", "..");
 const portFile = path.join(repoRoot, ".server-port");
+// Load .env from repo root explicitly. `dev.mjs` spawns the server with
+// cwd=server/, so dotenv/config's default cwd-based lookup misses the
+// canonical repo-root .env that .env.example documents.
+dotenv.config({ path: path.join(repoRoot, ".env") });
 
 function resolveServerPort(): number {
   // Explicit env wins over the auto-pick file so a user can still pin a port.

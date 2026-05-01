@@ -74,15 +74,21 @@
   **Practical impact:** the markers get stripped server-side via `shared/stripAgentText` (#229/#230) so runs still complete; the cost is wasted tokens emitting XML the runner discards.
 
   **Three actionable fixes, ranked:**
-  1. **Try with Anthropic provider** (now possible post-#314). If Claude models don't emit the XML mismatch when opencode targets the native Anthropic API directly (no OpenAI-bridge translation), this becomes a "use the right provider for tool-using prompts" doc note. **Trigger**: paste an `ANTHROPIC_API_KEY` + run a blackboard planner turn against `anthropic/claude-sonnet-4-6` — observe whether `<read>` tags still appear.
-  2. **Add an XML→JSON tool-call translator** in `extractUsageFromMessageInfo`'s sibling slot — when the parser sees `<read path="X">`, dispatch a real `read` tool call against the clone, splice the result back into the prompt, re-prompt the model. Reproduces what an "agent loop" would do. ~6h work, complex error paths, fragile.
-  3. **Strip tool grants from the planner profile** (set `swarm-read` permissions for planner-only sessions to `*: deny`). Cost: planner can't grep before emitting TODOs → drops the grounding loop the prompt relies on. Likely net-worse for run quality. Not recommended unless live testing shows wasted-token cost dominates over grounding benefit.
+  1. **Try with Anthropic provider.** Post-E3 Phase 5 the path is even cleaner than the original note assumed: `pickProvider("anthropic/...")` → `AnthropicProvider` → raw fetch to `api.anthropic.com` with **native** `tool_use`/`tool_result` blocks, fully bypassing both opencode and any OpenAI-compat bridge. Hypothesis predicts: zero XML pseudo-tool-call leak with Claude on this path. **Runbook:**
+     1. Drop `ANTHROPIC_API_KEY=sk-ant-...` into `.env`.
+     2. Restart `npm run dev` so the server re-reads env.
+     3. In the setup form: pick provider = Anthropic, model = `anthropic/claude-sonnet-4-6`, set `maxCostUsd=0.50`, preset = blackboard, agent count = 2 (planner + 1 worker).
+     4. Use a small target repo (the existing tour fixtures work) and a tight directive ("add a one-line README badge" suffices — we just want one planner turn).
+     5. Inspect first planner-bubble's raw text: search for `<read`, `<grep`, `<list`, `<glob`. Expectation = zero hits.
+     6. Save the run dir under `runs/_anthropic-231-check-<ts>/` for the record. If clean → close #231 with a doc note "use Anthropic provider for tool-using prompts." If not → escalate to option 2.
+  2. **Add an XML→JSON tool-call translator** in the runner — when the parser sees `<read path="X">`, dispatch a real `read` tool call against the clone, splice the result back into the prompt, re-prompt the model. ~6h work, complex error paths, fragile.
+  3. **Strip tool grants from the planner profile**. Cost: planner can't grep before emitting TODOs → drops the grounding loop the prompt relies on. Likely net-worse for run quality.
 
-  **Recommended next step:** option 1 — cheap experimental check that probably solves the problem entirely without code changes. Pair with the live UI test of multi-provider work. **Trigger**: when running the first Claude-keyed test session.
+  **Recommended next step:** option 1 — cheap, has the strongest theoretical reason to work, and exercises the multi-provider path live for the first time (kills two birds). **Trigger**: when Kevin pastes the key.
 
 - **First paid scoreboard sweep + 7 more fixtures.** Phase 6 shipped 3 starter fixtures + the framework; 7 more are queued in `eval/fixtures/README.md` (add-null-guard, extract-pure-helper, fix-failing-test, audit-console-logs, categorize-deps, multistep-add-script, multistep-config-then-test). After at least 5 fixtures land, run a 3-seed × Sonnet 4.6 sweep (~$5–15) and overwrite `eval/RESULTS.md` with real numbers. **Trigger**: explicit "go run paid sweep" with budget authorization.
 
-- **Live UI test of multi-provider work.** The 90-second Playwright demo on 2026-04-29 confirmed the dropdown + autocomplete + cost-cap-field-reveal all work visually. NOT yet exercised: a real Anthropic-keyed run that flows through opencode subprocess → AI-SDK package → token capture → cost-cap stop. **Trigger**: paste an `ANTHROPIC_API_KEY` into `.env` + explicit "kick a $0.10-capped Claude run."
+- **Live UI test of multi-provider work.** The 90-second Playwright demo on 2026-04-29 confirmed the dropdown + autocomplete + cost-cap-field-reveal all work visually. NOT yet exercised: a real Anthropic-keyed run that flows through `pickProvider` → `AnthropicProvider` → token capture → cost-cap stop. (Reference to "opencode subprocess → AI-SDK package" was correct at write time but stale post-E3 Phase 5 — opencode is gone.) **Trigger**: paste an `ANTHROPIC_API_KEY` into `.env` + explicit "kick a $0.10-capped Claude run." Pairs with the #231 check above — same key, same run.
 
 - **summary.kind bubble re-audit.** 14+ envelope kinds (run_finished, seed_announce, verifier_verdict, agents_ready, council_draft, debate_turn, council_synthesis, stigmergy_report, mapreduce_synthesis, role_diff_synthesis, stretch_goals, debate_verdict, next_action_phase, worker_hunks). Render each in browser, screenshot, compare to expected. The 34/34 BubbleGallery audit (2026-04-28) covered them at fixture level — this is the live-data version that catches regressions from the 2026-04-29 multi-provider work. **Trigger**: anytime; pair with the live UI test above.
 
@@ -187,6 +193,12 @@ not promote any of these to "needs-fixing" without re-checking the artifact.
 ---
 
 ## Done recently (last 30 days; older lands in archive/blackboard-changelog.md)
+
+### 2026-05-01 — E3 cleanup pt 6 + bubble re-audit + #231 runbook
+
+- ✅ `npm install` from PowerShell physically removed `node_modules/@opencode-ai/sdk` (75 lockfile lines deleted). The dep was already gone from `package.json` since cleanup pt 2 (`d189f0d`); this catches `package-lock.json` up.
+- ✅ Bubble-gallery re-audit against live `?gallery=1`: 24 fixture nodes, 18 distinct `summary.kind`, 0 console errors. Matches the 2026-04-29 baseline → multi-provider work caused zero bubble regressions live (was previously verified only at fixture level via `audit-bubble-gallery.mjs`). New `scripts/audit-bubble-gallery-win.mjs` is the Windows-host variant of the WSL-only original — uses `localhost:8244` instead of `ip route`, writes under `runs/_bubble-audit-<ts>/`. Report: `runs/_bubble-audit-2026-05-01T15-29-25-615Z/REPORT.md`.
+- ✅ Updated #231 entry above with concrete 6-step runbook reflecting post-E3 reality (no opencode layer; `pickProvider` → `AnthropicProvider` direct). Updated "Live UI test of multi-provider work" entry similarly. Both items now ready for Kevin to kick with one key paste.
 
 ### 2026-04-29 — multi-provider + scoreboard (#313–#320)
 
