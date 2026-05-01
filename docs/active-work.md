@@ -126,79 +126,48 @@ plus the actual run output at `C:\mnt\c\Users\kevin\Desktop\ollama_swarm\runs\de
 
 - ✅ **wallClockCapMs not enforced** — fixed. Root cause: post-audit reflection passes (stretch goals, memory distillation, design memory update) ran unconditionally even after the audit loop ended past the cap. Each is a 1-3 min planner prompt; on run 0254ca7c that pushed 14-min audit work to 19 min total. Fix gates each pass on `isOverWallClockCap()` (a non-mutating cap probe); when over, transcript surfaces a clear "cap exceeded; skipping bonus passes" message. Test suite (987/987) clean.
 
-- **AUDIT: review all JSON formatting scenarios end-to-end.** Each `summary.kind` bubble (run_finished, seed_announce, verifier_verdict, agents_ready, council_draft, debate_turn, council_synthesis, stigmergy_report, mapreduce_synthesis, role_diff_synthesis, stretch_goals, debate_verdict, next_action_phase, worker_hunks) has its own renderer in `web/src/components/transcript/MessageBubble.tsx`. The fallback chain (worker_hunks-detection → AgentJsonBubble → JsonPrettyBubble → segmented-prose → CollapsibleBlock) also needs verification. **Trigger**: anytime; method = render each kind in browser, screenshot, compare to expected. Pairs with the SSE-streaming-collapsible regression below — likely some are broken by the same root cause (commit `0b3cda6` outer-div wrap).
+- **AUDIT: review all JSON formatting scenarios with LIVE data.** Fixture-level coverage of every `summary.kind` is verified clean (2026-04-29 + 2026-05-01 BubbleGallery audits, both 0 console errors). The live-data version — render bubbles as they arrive during a real run, screenshot, compare — is genuinely pending. Pairs with the #231 Anthropic check above (same run can drive both). **Trigger**: when the next paid live run kicks.
 
-- ✅ **#229 + #230 (2026-04-27 evening): server-side strip of XML pseudo-tool-call markers** in all 8 runners via `shared/stripAgentText.ts`. Closes the UI-noise + Phase 2 over-segmentation pieces. **NOT addressed** by this fix: when the model emits ONLY markers + nothing else (no JSON envelope), the planner parse correctly fails and the existing repair-prompt path fires. That is a model-behavior issue, not a parser issue. Discussion presets (council, debate-judge, role-diff, mapreduce, stigmergy, round-robin) all PASS overnight; blackboard + ow-deep still fail when the planner emits empty/garbage envelopes.
+- ✅ **#229 + #230 (2026-04-27 evening): server-side strip of XML pseudo-tool-call markers** in all 8 runners via `shared/stripAgentText.ts`. Closes the UI-noise + Phase 2 over-segmentation pieces. **NOT addressed** by this fix: when the model emits ONLY markers + nothing else (no JSON envelope), the planner parse correctly fails and the existing repair-prompt path fires. That is a model-behavior issue, not a parser issue. Discussion presets (council, debate-judge, role-diff, mapreduce, stigmergy, round-robin) all PASS overnight; blackboard + ow-deep still fail when the planner emits empty/garbage envelopes — covered by #231 work.
 
-- **TOOL-CALL XML MARKERS leak into visible bubble + over-segment Phase 2.** Run 0fa1dd98 (with all 3 UI Phase fixes) showed glm-5.1 planner emitting `<read>src/foo</read>` / `<grep>pattern</grep>` / `<list>src/</list>` / `<glob>...</glob>` markers as raw text in the response. Each tool-call line is followed by `\n\n`, so Phase 2's content-boundary detector creates a separate micro-segment per call → 28 segments of one tool call each (run 0fa1dd98 first planner turn). **Two-layer fix needed**: (1) extract tool-call markers server-side at appendAgent (mirror extractThinkTags pattern — split into `toolCalls: string[]; finalText: string`); render as a collapsed `🔧 N tool calls` block similar to ThoughtsBlock; OR (2) if these ARE real SDK tool invocations being echoed in the text response, suppress them server-side entirely. (3) Independently, raise `MIN_SEGMENT_CHARS` from 20 to ~200, OR require content beyond just XML tool-call markers per segment. **Trigger**: anytime; pairs with Phase 1+2 of the UI coherent-fix.
+- ✅ **TOOL-CALL XML MARKERS leak / over-segmentation** — shipped via #229/#230 (`shared/stripAgentText.ts`) + `extractToolCallMarkers` + `web/src/components/transcript/ToolCallsBlock.tsx`. Server strips before the segmenter sees them; collapsed tool-call block renders the markers separately.
 
-- **THINK-TAG SUPPORT: model `<think>...</think>` content is rendered as raw text + leaks closing tags.** Modern reasoning models (deepseek, glm-5.1, gpt-o1, claude-extended-thinking) wrap their internal chain-of-thought in `<think>...</think>` markers. Every modern chat UI (opencode itself, ChatGPT, Claude.ai, Cursor) detects these markers and renders the thoughts collapsed-by-default with a "show thinking" expand affordance. Ours renders them as plain text — including stray `</think>` closing tags when the bubble starts mid-thought. **Fix direction**: at server-side `appendAgent` (or a new pre-render pass), detect `<think>...</think>` markers, split into `{ thoughts: string; finalText: string }` shape on the entry. MessageBubble renders thoughts as a `<details>`-style collapsed section by default, distinct from the final response. Pairs with the streaming-collapsibles fix below — the same content-boundary detection (`\n\n`, code-fence) extends naturally to `<think>` tag boundaries. **Trigger**: explicit "implement think-tag rendering" — affects every blackboard run + every preset using a reasoning model.
+- ✅ **THINK-TAG SUPPORT** — shipped via `shared/extractThinkTags` + `web/src/components/transcript/ThoughtsBlock.tsx`. Server splits `{thoughts, finalText}`; web renders thoughts collapsed-by-default above the main bubble.
 
-- **CONTRACT BUBBLE: "+N more" suffix is non-interactive.** When the planner emits `{missionStatement, criteria: [...]}`, the bubble shows first 3 criteria + literal "…+N more" string. To see criteria 4-N the user must click "VIEW JSON" and read raw JSON — no structured expand. **Fix direction**: either (a) add a dedicated `ContractBubble` component (matching the `RunFinishedGrid` / `DebateVerdictBubble` pattern) with its own expand state that renders all criteria in the structured layout, or (b) extend `AgentJsonBubble` with a "show full structured view" toggle that re-renders the envelope using kind-specific layout instead of dropping to raw JSON. Should pair with same fix applied to: auditor verdict envelopes (verdict count truncated similarly), worker hunks (when many hunks emitted), debate-judge verdicts. **Trigger**: anytime; UX win for every blackboard run.
+- ✅ **CONTRACT BUBBLE structured expand** — shipped at `web/src/components/transcript/ContractBubble.tsx` as a 3-tab interactive component (Summary / All N criteria / JSON).
 
-- **STREAMING-COLLAPSIBLES: replace pause-based with content-based segmentation.** Investigation of run 897a3d8f confirmed: `useSegmentSplitter` uses 5s pause-detection, but the V2 OllamaClient direct path delivers text in 1-2 big batches (no 5s pauses) so 0 segment splits form. My commit `0b3cda6` outer-div wrap was NOT the cause — the data attrs work fine; segmentSplitPoints is just always empty.
+- ✅ **STREAMING-COLLAPSIBLES content-boundary segmentation** — shipped at `web/src/components/useSegmentSplitter.ts:32` (`findContentBoundaries`). Pause-based fallback retained at 15s.
 
-  **Permanent fix (per Kevin's "what every modern chat UI does"):**
-  1. Replace `useSegmentSplitterWithPoints` pause-detection with content-boundary detection (`\n\n` paragraph, code-fence open/close, markdown headers)
-  2. Lower `STREAMING_THROTTLE_MS` 100 → 33 (30Hz) for smoother incremental render
-  3. (Bonus) When the SDK path is used, treat `message.part.updated` events as intrinsic part boundaries — opencode already segments for us, V2 direct bypass loses that
-  4. "Thinking" affordance visible while streaming even with no text yet
+- ✅ **Issue #1 (OllamaClient 60s idle)** — fixed via two-phase timeout (firstChunkTimeoutMs=180s + idleTimeoutMs=60s).
 
-  **Trigger**: explicit "fix streaming UI" — affects every blackboard run + every preset's live transcript display.
+- ✅ **Issue #3 (planner empty → repair → 0-todos)** — fixed via SIBLING_MODELS map + one-shot fallback; preserved across E3 Phase 5 cleanup.
 
-- ✅ **Issue #1 (OllamaClient 60s idle)** — fixed. Now uses two-phase timeout: `firstChunkTimeoutMs` (default 180s) until first body chunk arrives, then `idleTimeoutMs` (default 60s) steady-state. Heavy reasoning models (deepseek-v4-pro, etc.) get the cold-start tolerance they need without weakening steady-state liveness. Mirrors the same pattern applied to streamPrompt for the SSE path.
+- ✅ **Monitor script reads wrong summary.json** — fixed 2026-05-01 (this session); now probes both WSL and Windows path shapes and matches by runId.
 
-- ✅ **Issue #3 (planner empty → repair → 0-todos)** — fixed. Drove the design call: hardcoded sibling-model pair (deepseek↔nemotron via `SIBLING_MODELS` map in `BlackboardRunner.ts`), per-prompt model swap on the same opencode session (no agent re-spawn), one fallback attempt with `isFallbackAttempt` flag preventing infinite recursion. Per-run override via `cfg.plannerFallbackModel` for callers who want a different fallback. When fallback also produces 0 todos, falls through to the existing loud-warn + `stopReason: "no-progress"` path with " (sibling-model fallback also produced 0 todos)" appended.
+- ✅ **Playwright capture still gets 0 bubbles** — verified shipped at `MessageBubble.tsx:49-51` (`data-entry-id` + `data-summary-kind` + `data-agent-index` etc.).
 
-- **Monitor script reads wrong summary.json.** It hardcodes `runs/<repo>/summary.json` (WSL path). When the path mangling above fires, it reads stale data. **Fix direction**: monitor should look up summary by `runId` match, or probe both `/mnt/c/...` and `C:\mnt\c\...` paths. **Trigger**: anytime; small fix.
-
-- **Playwright capture still gets 0 bubbles** — no `data-entry-id` on MessageBubble's wrapping div. Already in queue as the issue #4 follow-up. **Trigger**: explicit "make transcript entries Playwright-friendly."
-
-- **deepseek-v4-pro mean latency = 65s/turn (planner role, 4 turns)** in this run. The provisional 35s I added to `WallClockEstimate.tsx` is too low. Needs ≥5 runs of data before re-estimating, but heads-up: estimate is currently underselling deepseek's wall-clock budget. **Trigger**: re-estimate after a few more runs land.
+- *(Removed: deepseek-v4-pro 65s/turn latency estimate. Default model reverted to glm-5.1:cloud per `user_environment.md`; the deepseek estimate is no longer load-bearing.)*
 
 ---
 
 ## Data-grounded findings from earlier 2026-04-27 blackboard run f78342b7
 
-Each item below is anchored to an artifact in `runs/_monitor/f78342b7/`. Do
-not promote any of these to "needs-fixing" without re-checking the artifact.
-
-- **Issue #3 — planner empty → repair → 0-todos** is structural. f78342b7
-  reproduced it with no model fallback attempted. Visibility fix in commit
-  `b794703` makes the failure loud; the **structural fix (model fallback
-  when planner returns empty/garbage)** is queued. **Trigger**: explicit
-  "design model-fallback for planner-empty."
-
-- **Issue #1 — OllamaClient 60s idle timer** was NOT exercised in f78342b7
-  (no `Ollama idle timeout` strings). The empty response in this run came
-  from a different cause (Ollama returned an empty response body within the
-  timer, before the 60s elapsed). Need a separate reproducer that forces
-  cold-start >60s. **Trigger**: explicit "reproduce cold-start idle
-  timeout" — likely needs a fresh Ollama process or deliberately-slow model.
-
-- **Issue #4 — WebUI bubble routing** partially verified. `run_finished`
-  bubble works (now amber for no-progress, emerald for completed — see
-  commit `b794703`). Earlier planner-output bubbles weren't captured
-  because Playwright's selector net (`[data-entry-id]`, `.transcript-entry`,
-  etc.) doesn't match anything in the current React tree — there are no
-  stable per-entry attributes. **Trigger**: explicit "make transcript
-  entries Playwright-friendly" — add `data-entry-id={entry.id}` +
-  `data-summary-kind={summary?.kind}` to MessageBubble's wrapping div.
-
-- **`npm test` script is bash-only** — current `OPENCODE_SERVER_PASSWORD=test-only npm test`
-  prefix syntax fails when run from Windows `cmd.exe`. Tests work via
-  `cmd.exe /c "set OPENCODE_SERVER_PASSWORD=test-only && ..."` but that's
-  manual. **Trigger**: anytime; cross-env or a small shim wrapper.
+*(Issues #1, #3, #4 from this section all shipped — #3 via SIBLING_MODELS fallback, #1 via two-phase timeout, #4 via `data-entry-id` attrs on MessageBubble. The `npm test` cross-env shim is also shipped 2026-05-01 in this session — see "Done recently" below. Section retained as a pointer to the artifact at `runs/_monitor/f78342b7/` for narrative archaeology.)*
 
 ---
 
 ## Done recently (last 30 days; older lands in archive/blackboard-changelog.md)
 
-### 2026-05-01 — E3 cleanup pt 6 + bubble re-audit + #231 runbook
+### 2026-05-01 — E3 cleanup pt 6 + bubble re-audit + #231 runbook + dotenv fix + doc rot
 
-- ✅ `npm install` from PowerShell physically removed `node_modules/@opencode-ai/sdk` (75 lockfile lines deleted). The dep was already gone from `package.json` since cleanup pt 2 (`d189f0d`); this catches `package-lock.json` up.
-- ✅ Bubble-gallery re-audit against live `?gallery=1`: 24 fixture nodes, 18 distinct `summary.kind`, 0 console errors. Matches the 2026-04-29 baseline → multi-provider work caused zero bubble regressions live (was previously verified only at fixture level via `audit-bubble-gallery.mjs`). New `scripts/audit-bubble-gallery-win.mjs` is the Windows-host variant of the WSL-only original — uses `localhost:8244` instead of `ip route`, writes under `runs/_bubble-audit-<ts>/`. Report: `runs/_bubble-audit-2026-05-01T15-29-25-615Z/REPORT.md`.
-- ✅ Updated #231 entry above with concrete 6-step runbook reflecting post-E3 reality (no opencode layer; `pickProvider` → `AnthropicProvider` direct). Updated "Live UI test of multi-provider work" entry similarly. Both items now ready for Kevin to kick with one key paste.
+- ✅ `npm install` from PowerShell physically removed `node_modules/@opencode-ai/sdk` (75 lockfile lines deleted). The dep was already gone from `package.json` since cleanup pt 2 (`d189f0d`); this catches `package-lock.json` up. Commit `4190afe`.
+- ✅ Bubble-gallery re-audit against live `?gallery=1`: 24 fixture nodes, 18 distinct `summary.kind`, 0 console errors. Matches the 2026-04-29 baseline → multi-provider work caused zero bubble regressions live. New `scripts/audit-bubble-gallery-win.mjs` is the Windows-host variant of the WSL-only original. Report: `runs/_bubble-audit-2026-05-01T15-29-25-615Z/REPORT.md`.
+- ✅ Updated #231 entry above with concrete 6-step runbook reflecting post-E3 reality (no opencode layer; `pickProvider` → `AnthropicProvider` direct).
+- ✅ **Latent dotenv-path bug fixed in `server/src/config.ts`** — `dev.mjs` spawns the server with `cwd=server/`, so `import "dotenv/config"`'s default cwd-based lookup was missing the documented repo-root `.env`. `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` would never have loaded until this fix; never noticed because nobody had keys to test with. Replaced with explicit `dotenv.config({ path: <repoRoot>/.env })`. Commit `4190afe`.
+- ✅ **Doc rot pass** — pruned 5+ ghost items from "Data-grounded findings 2026-04-27" sections that had silently shipped: think-tag rendering, contract bubble, content-boundary segmentation, tool-call marker over-segmentation, Playwright-friendly transcripts, Issues #1/#3/#4 from f78342b7. The active-work.md tracked-as-pending count dropped accordingly.
+- ✅ **Root-level `npm test` script** added to root `package.json` so `npm test` works from any shell, any cwd, no env prefix. The cross-env shim itself (`server/scripts/run-tests.mjs`) had already shipped 2026-04-27 (`0b3cda6`) — only the root-delegation wrapper was missing. CLAUDE.md prefix instruction is now stale.
+
+### 2026-04-29 — multi-provider + scoreboard (#313–#320)
 
 ### 2026-04-29 — multi-provider + scoreboard (#313–#320)
 

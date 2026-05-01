@@ -17,7 +17,7 @@ This file is auto-loaded into every session. Keep it short; link out for depth.
 ## Conventions specific to this repo
 
 - **Commit author**: `git -c user.name='Kevin' -c user.email='kevinkicho@gmail.com' commit ...` — Kevin's git config isn't always set; pass inline.
-- **Test command**: `OPENCODE_SERVER_PASSWORD=test-only npm test` — the prefix is required (zod-validated config; without it 47 tests fail at module load).
+- **Test command**: `npm test` from any shell, any cwd. The runner shim (`server/scripts/run-tests.mjs`) sets `OPENCODE_SERVER_PASSWORD=test-only` if not already set. The bash-only `OPENCODE_SERVER_PASSWORD=test-only npm test` prefix is no longer needed (was: until 2026-04-27 commit `0b3cda6`).
 - **Don't push without explicit user approval.** This is a solo repo with a public mirror — Kevin reviews diffs before they leave the machine.
 - **Don't `npm install` from WSL.** It swaps esbuild binaries and breaks Kevin's next Windows dev-server. See `feedback_wsl_windows_esbuild` in memory.
 
