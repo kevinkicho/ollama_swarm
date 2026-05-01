@@ -25,6 +25,7 @@ const TEST_FILES = [
   "src/swarm/blackboard/prompts/worker.test.ts",
   "src/swarm/blackboard/prompts/replanner.test.ts",
   "src/swarm/blackboard/prompts/firstPassContract.test.ts",
+  "src/swarm/blackboard/prompts/jsonSchemas.test.ts",
   "src/swarm/blackboard/prompts/auditor.test.ts",
   "src/swarm/blackboard/prompts/critic.test.ts",
   "src/swarm/blackboard/prompts/verifier.test.ts",

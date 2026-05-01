@@ -56,3 +56,143 @@ export const CONTRACT_JSON_SCHEMA = {
   },
   required: ["missionStatement", "criteria"],
 } as const;
+
+/** Mirrors `PlannerResponseSchema` in `planner.ts` — array of TODOs
+ *  (max 5 per batch, MAX_TODOS_PER_BATCH). The discriminated union of
+ *  hunks/build is encoded with `oneOf` since Ollama's format accepts
+ *  any JSON Schema. Constrains the planner's per-cycle TODO emission
+ *  so it can't emit prose preamble or XML markers. */
+export const PLANNER_TODOS_JSON_SCHEMA = {
+  type: "array",
+  minItems: 0,
+  maxItems: 5,
+  items: {
+    oneOf: [
+      // hunks variant (default)
+      {
+        type: "object",
+        properties: {
+          kind: { type: "string", enum: ["hunks"] },
+          description: { type: "string", minLength: 1, maxLength: 500 },
+          expectedFiles: {
+            type: "array",
+            minItems: 1,
+            maxItems: 2,
+            items: { type: "string", minLength: 1 },
+          },
+          expectedAnchors: {
+            type: "array",
+            maxItems: 4,
+            items: { type: "string", minLength: 1 },
+          },
+          expectedSymbols: {
+            type: "array",
+            maxItems: 4,
+            items: { type: "string", minLength: 1 },
+          },
+          preferredTag: { type: "string", maxLength: 40 },
+        },
+        required: ["description", "expectedFiles"],
+      },
+      // build variant (#237) — runs a shell command via swarm-builder agent
+      {
+        type: "object",
+        properties: {
+          kind: { type: "string", enum: ["build"] },
+          description: { type: "string", minLength: 1, maxLength: 500 },
+          expectedFiles: {
+            type: "array",
+            minItems: 1,
+            maxItems: 2,
+            items: { type: "string", minLength: 1 },
+          },
+          command: { type: "string", minLength: 1, maxLength: 500 },
+          expectedAnchors: {
+            type: "array",
+            maxItems: 4,
+            items: { type: "string", minLength: 1 },
+          },
+          expectedSymbols: {
+            type: "array",
+            maxItems: 4,
+            items: { type: "string", minLength: 1 },
+          },
+          preferredTag: { type: "string", maxLength: 40 },
+        },
+        required: ["kind", "description", "expectedFiles", "command"],
+      },
+    ],
+  },
+} as const;
+
+/** Mirrors `AuditorResponseSchema` in `auditor.ts`. Constrains the
+ *  per-criterion verdicts + optional new-criteria emission. Pre-fix,
+ *  the auditor sometimes emitted prose ("Looking at the verdicts...")
+ *  or wrapped the response in markdown fences — both go away. */
+export const AUDITOR_VERDICT_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    verdicts: {
+      type: "array",
+      minItems: 0,
+      maxItems: 20,
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string", minLength: 1, maxLength: 64 },
+          status: { type: "string", enum: ["met", "wont-do", "unmet"] },
+          rationale: { type: "string", minLength: 1, maxLength: 800 },
+          todos: {
+            type: "array",
+            maxItems: 4,
+            items: {
+              type: "object",
+              properties: {
+                description: { type: "string", minLength: 1, maxLength: 500 },
+                expectedFiles: {
+                  type: "array",
+                  minItems: 1,
+                  maxItems: 2,
+                  items: { type: "string", minLength: 1 },
+                },
+              },
+              required: ["description", "expectedFiles"],
+            },
+          },
+        },
+        required: ["id", "status", "rationale"],
+      },
+    },
+    newCriteria: {
+      type: "array",
+      maxItems: 8,
+      items: {
+        type: "object",
+        properties: {
+          description: { type: "string", minLength: 1, maxLength: 400 },
+          expectedFiles: {
+            type: "array",
+            minItems: 0,
+            maxItems: 4,
+            items: { type: "string", minLength: 1 },
+          },
+        },
+        required: ["description", "expectedFiles"],
+      },
+    },
+  },
+  required: ["verdicts"],
+} as const;
+
+/** Mirrors `CriticResponseSchema` in `critic.ts`. Tiny envelope —
+ *  verdict + rationale. The constraint is mostly value: the critic
+ *  fires per commit (potentially every 30s), so even small JSON-repair
+ *  retries add up. Pinning the shape eliminates them. */
+export const CRITIC_ENVELOPE_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    verdict: { type: "string", enum: ["accept", "reject"] },
+    rationale: { type: "string", minLength: 1, maxLength: 400 },
+  },
+  required: ["verdict", "rationale"],
+} as const;

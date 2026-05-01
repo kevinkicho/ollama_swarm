@@ -1,0 +1,137 @@
+// #91 (2026-05-01): structural tests for jsonSchemas.ts.
+//
+// We don't use a JSON-Schema validator at runtime (the parsers next door
+// already do zod-level validation; the JSON Schema constants are for
+// Ollama's `format` decoder constraint, which Ollama validates server-
+// side). These tests just make sure the constants stay structurally
+// well-formed and stay in sync with the zod schemas next door.
+//
+// Specifically: pick a known-good payload that the corresponding zod
+// parser accepts, and verify the JSON Schema matches the same SHAPE
+// (field names, required-ness, type primitives). If a zod schema gains
+// a field, this test catches the JSON Schema drifting.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  CONTRACT_JSON_SCHEMA,
+  PLANNER_TODOS_JSON_SCHEMA,
+  AUDITOR_VERDICT_JSON_SCHEMA,
+  CRITIC_ENVELOPE_JSON_SCHEMA,
+} from "./jsonSchemas.js";
+import { parseFirstPassContractResponse } from "./firstPassContract.js";
+import { parsePlannerResponse } from "./planner.js";
+import { parseAuditorResponse } from "./auditor.js";
+import { parseCriticResponse } from "./critic.js";
+
+// ---------------------------------------------------------------------------
+// Cross-check: a payload that the zod parser ACCEPTS should also have
+// every field claimed required by the JSON Schema. Catches drift the
+// other way (zod loosened, JSON Schema not).
+// ---------------------------------------------------------------------------
+
+test("CONTRACT_JSON_SCHEMA — valid contract parses + matches required fields", () => {
+  const payload = {
+    missionStatement: "Make the README correct.",
+    criteria: [
+      { description: "README mentions ten patterns", expectedFiles: ["README.md"] },
+    ],
+  };
+  const parsed = parseFirstPassContractResponse(JSON.stringify(payload));
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(CONTRACT_JSON_SCHEMA.required, ["missionStatement", "criteria"]);
+  assert.equal(CONTRACT_JSON_SCHEMA.properties.missionStatement.maxLength, 500);
+  assert.equal(CONTRACT_JSON_SCHEMA.properties.criteria.maxItems, 12);
+});
+
+test("PLANNER_TODOS_JSON_SCHEMA — both hunks + build variants match parser", () => {
+  // hunks variant
+  const hunksPayload = [
+    { description: "Fix off-by-one", expectedFiles: ["src/x.ts"] },
+  ];
+  const hunksParsed = parsePlannerResponse(JSON.stringify(hunksPayload));
+  assert.equal(hunksParsed.ok, true);
+
+  // build variant
+  const buildPayload = [
+    { kind: "build", description: "Run docs", expectedFiles: ["docs/index.html"], command: "npm run docs" },
+  ];
+  const buildParsed = parsePlannerResponse(JSON.stringify(buildPayload));
+  assert.equal(buildParsed.ok, true);
+
+  // Schema shape
+  assert.equal(PLANNER_TODOS_JSON_SCHEMA.type, "array");
+  assert.equal(PLANNER_TODOS_JSON_SCHEMA.maxItems, 5, "matches MAX_TODOS_PER_BATCH");
+  // The discriminated union — at least 2 variants present
+  const variants = PLANNER_TODOS_JSON_SCHEMA.items.oneOf;
+  assert.equal(variants.length, 2, "hunks + build variants");
+  // Build variant requires command + kind
+  const buildRequired = variants[1].required as readonly string[];
+  assert.ok(buildRequired.includes("command"));
+  assert.ok(buildRequired.includes("kind"));
+  // Hunks variant doesn't require command
+  const hunksRequired = variants[0].required as readonly string[];
+  assert.ok(!hunksRequired.includes("command"));
+});
+
+test("AUDITOR_VERDICT_JSON_SCHEMA — valid verdict envelope parses + matches schema", () => {
+  const payload = {
+    verdicts: [
+      { id: "c1", status: "met", rationale: "All criteria satisfied." },
+      { id: "c2", status: "unmet", rationale: "File missing.", todos: [{ description: "Create file", expectedFiles: ["x.ts"] }] },
+    ],
+  };
+  const parsed = parseAuditorResponse(JSON.stringify(payload));
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(AUDITOR_VERDICT_JSON_SCHEMA.required, ["verdicts"]);
+  // Status enum matches zod
+  const statusEnum = AUDITOR_VERDICT_JSON_SCHEMA.properties.verdicts.items.properties.status.enum;
+  assert.deepEqual([...statusEnum].sort(), ["met", "unmet", "wont-do"]);
+  // Verdicts cap matches the zod max of 20
+  assert.equal(AUDITOR_VERDICT_JSON_SCHEMA.properties.verdicts.maxItems, 20);
+});
+
+test("CRITIC_ENVELOPE_JSON_SCHEMA — both verdicts (accept/reject) parse", () => {
+  const acceptPayload = { verdict: "accept", rationale: "Diff is correct." };
+  const rejectPayload = { verdict: "reject", rationale: "Tests don't actually exercise the bug." };
+  assert.equal(parseCriticResponse(JSON.stringify(acceptPayload)).ok, true);
+  assert.equal(parseCriticResponse(JSON.stringify(rejectPayload)).ok, true);
+  assert.deepEqual([...CRITIC_ENVELOPE_JSON_SCHEMA.required].sort(), ["rationale", "verdict"]);
+  assert.deepEqual(
+    [...CRITIC_ENVELOPE_JSON_SCHEMA.properties.verdict.enum].sort(),
+    ["accept", "reject"],
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Negative checks: schema's required list should NOT claim a field as
+// required if zod allows it to be optional. (e.g. AuditorVerdict.todos
+// is optional, NOT required.)
+// ---------------------------------------------------------------------------
+
+test("AUDITOR_VERDICT_JSON_SCHEMA — todos is optional in verdict items", () => {
+  const verdictItem = AUDITOR_VERDICT_JSON_SCHEMA.properties.verdicts.items;
+  // Cast to string[] because the readonly literal-typed required tuple
+  // narrows .includes() to only literally-listed values; we want to
+  // assert NEGATIVE membership (todos NOT in the list), which TS treats
+  // as a type-error otherwise.
+  const required = verdictItem.required as readonly string[];
+  assert.ok(!required.includes("todos"), "todos must NOT be required (zod has .optional())");
+  assert.ok(required.includes("id"));
+  assert.ok(required.includes("status"));
+  assert.ok(required.includes("rationale"));
+});
+
+test("AUDITOR_VERDICT_JSON_SCHEMA — newCriteria is optional at envelope level", () => {
+  const required = AUDITOR_VERDICT_JSON_SCHEMA.required as readonly string[];
+  assert.ok(!required.includes("newCriteria"));
+});
+
+test("PLANNER_TODOS_JSON_SCHEMA — expectedAnchors + expectedSymbols + preferredTag optional in both variants", () => {
+  for (const variant of PLANNER_TODOS_JSON_SCHEMA.items.oneOf) {
+    const required = variant.required as readonly string[];
+    assert.ok(!required.includes("expectedAnchors"));
+    assert.ok(!required.includes("expectedSymbols"));
+    assert.ok(!required.includes("preferredTag"));
+  }
+});

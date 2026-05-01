@@ -83,7 +83,12 @@ import {
   parseFirstPassContractResponse,
   type ParsedContract,
 } from "./prompts/firstPassContract.js";
-import { CONTRACT_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
+import {
+  CONTRACT_JSON_SCHEMA,
+  PLANNER_TODOS_JSON_SCHEMA,
+  AUDITOR_VERDICT_JSON_SCHEMA,
+  CRITIC_ENVELOPE_JSON_SCHEMA,
+} from "./prompts/jsonSchemas.js";
 import {
   AUDITOR_SYSTEM_PROMPT,
   buildAuditorRepairPrompt,
@@ -1753,16 +1758,16 @@ export class BlackboardRunner implements SwarmRunner {
           })),
         }
       : undefined;
-    // #233: pass ollamaFormat="json" so Ollama's decoder constrains
-    // output to a JSON array. Even though tools are enabled here for
-    // grounding (per #231 follow-up), the model can't emit XML
-    // markers as the FINAL output — they go in the marker-stripped
-    // path naturally, but the JSON envelope is structurally enforced.
+    // #91 (2026-05-01): pass the strict PLANNER_TODOS_JSON_SCHEMA
+    // instead of bare "json" so Ollama's decoder constrains output to
+    // the array-of-todos SHAPE (with discriminated hunks/build union),
+    // not just any JSON. The repair-prompt path becomes effectively
+    // dead code on the Ollama path.
     const { response: firstResponse, agentUsed: planAgent } = await this.promptPlannerSafely(
       agent,
       `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed, contractForPrompt)}`,
       "swarm-read",
-      "json",
+      PLANNER_TODOS_JSON_SCHEMA,
     );
     if (this.stopping) return;
     this.appendAgent(planAgent, firstResponse);
@@ -1774,7 +1779,7 @@ export class BlackboardRunner implements SwarmRunner {
         planAgent,
         `${PLANNER_SYSTEM_PROMPT}\n\n${buildRepairPrompt(firstResponse, parsed.reason)}`,
         "swarm-read",
-        "json",
+        PLANNER_TODOS_JSON_SCHEMA,
       );
       if (this.stopping) return;
       this.appendAgent(repairAgent, repairResponse);
@@ -2387,9 +2392,14 @@ export class BlackboardRunner implements SwarmRunner {
     // were idle on the planner-as-auditor path). promptPlannerSafely's
     // fallback-to-worker safety net still kicks in if the auditor times out.
     const auditPrimary = this.auditor ?? planner;
+    // #91 (2026-05-01): pass strict AUDITOR_VERDICT_JSON_SCHEMA so
+    // Ollama constrains output to the verdicts+optional-newCriteria
+    // shape. Eliminates the "auditor wrote markdown fences" repair path.
     const { response: firstResponse, agentUsed: auditAgent } = await this.promptPlannerSafely(
       auditPrimary,
       `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorUserPrompt(seed)}`,
+      "swarm-read",
+      AUDITOR_VERDICT_JSON_SCHEMA,
     );
     // Cap-trip final audit needs to keep going even though stopping=true —
     // that IS the whole reason it's running. In-loop audits short-circuit
@@ -2406,6 +2416,8 @@ export class BlackboardRunner implements SwarmRunner {
       const { response: repairResponse, agentUsed: repairAgent } = await this.promptPlannerSafely(
         auditAgent,
         `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorRepairPrompt(firstResponse, parsed.reason)}`,
+        "swarm-read",
+        AUDITOR_VERDICT_JSON_SCHEMA,
       );
       if (this.stopping && !opts.allowWhenStopping) return;
       this.appendAgent(repairAgent, repairResponse);
