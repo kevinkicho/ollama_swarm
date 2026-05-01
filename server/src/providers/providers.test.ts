@@ -51,6 +51,77 @@ test("readAnthropicStream — handles chunks split mid-event", async () => {
   assert.equal(result.text, "foobar");
 });
 
+// Regression for the 2026-05-01 streaming-truncation bug: when chunks
+// arrive with delays > the loop's TIMEOUT_TICK_MS (200ms), the previous
+// `Promise.race([reader.read(), timeout])` pattern abandoned in-flight
+// reads. The abandoned promise consumed subsequent chunks, dropping
+// every other chunk. This test gates each chunk behind a 250ms delay so
+// the bug — if reintroduced — surfaces as truncated text.
+test("readAnthropicStream — survives 250ms inter-chunk delays (no chunk-drop regression)", async () => {
+  const events = [
+    `event: message_start\ndata: {"type":"message_start","message":{"id":"m1","usage":{"input_tokens":1}}}\n\n`,
+    `event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"chunk1 "}}\n\n`,
+    `event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"chunk2 "}}\n\n`,
+    `event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"chunk3 "}}\n\n`,
+    `event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"chunk4"}}\n\n`,
+    `event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}\n\n`,
+    `event: message_stop\ndata: {"type":"message_stop"}\n\n`,
+  ];
+  // Each pull() resolves after 250ms — longer than the 200ms timeout
+  // tick, so the buggy version dropped chunks here.
+  let i = 0;
+  const enc = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (i >= events.length) {
+        controller.close();
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+      controller.enqueue(enc.encode(events[i++]));
+    },
+  });
+  const result = await readAnthropicStream(
+    stream,
+    { signal: noopSignal, idleTimeoutMs: 10_000, firstChunkTimeoutMs: 10_000 },
+    Date.now(),
+  );
+  assert.equal(result.finishReason, "done");
+  assert.equal(result.text, "chunk1 chunk2 chunk3 chunk4");
+  assert.deepEqual(result.usage, { promptTokens: 1, responseTokens: 4 });
+});
+
+test("readOpenAiStream — survives 250ms inter-chunk delays (no chunk-drop regression)", async () => {
+  // Same regression coverage for OpenAIProvider — same fix, same risk.
+  const events = [
+    `data: {"choices":[{"delta":{"content":"chunk1 "}}]}\n\n`,
+    `data: {"choices":[{"delta":{"content":"chunk2 "}}]}\n\n`,
+    `data: {"choices":[{"delta":{"content":"chunk3 "}}]}\n\n`,
+    `data: {"choices":[{"delta":{"content":"chunk4"}}]}\n\n`,
+    `data: {"usage":{"prompt_tokens":1,"completion_tokens":4}}\n\n`,
+    `data: [DONE]\n\n`,
+  ];
+  let i = 0;
+  const enc = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (i >= events.length) {
+        controller.close();
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+      controller.enqueue(enc.encode(events[i++]));
+    },
+  });
+  const result = await readOpenAiStream(
+    stream,
+    { signal: noopSignal, idleTimeoutMs: 10_000, firstChunkTimeoutMs: 10_000 },
+    Date.now(),
+  );
+  assert.equal(result.finishReason, "done");
+  assert.equal(result.text, "chunk1 chunk2 chunk3 chunk4");
+});
+
 test("readAnthropicStream — aborted signal halts cleanly", async () => {
   const ctrl = new AbortController();
   const stream = new ReadableStream<Uint8Array>({
