@@ -9,6 +9,7 @@ import { UsageWidget } from "./components/UsageWidget";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { BubbleGallery } from "./components/BubbleGallery";
 import { EventLogMirrorPanel } from "./components/EventLogMirrorPanel";
+import { TimeTravelReplayPanel } from "./components/TimeTravelReplayPanel";
 import type { RunSummary } from "./types";
 
 // Task #65 (2026-04-24): URL-based review mode. When the user opens a
@@ -42,11 +43,20 @@ function isEventLogMirrorMode(): boolean {
   return new URLSearchParams(window.location.search).has("eventLogMirror");
 }
 
+// #90 (2026-05-01): ?replay=<runId> routes to the time-travel replay
+// panel — scrub backwards/forwards through any past run's event-log
+// records via /api/v2/event-log/runs/:runId. Pure debug tool.
+function isReplayMode(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).has("replay");
+}
+
 export default function App() {
   // Short-circuits: rendered as siblings (not nested inside AppMain)
   // so the conditional doesn't violate rules-of-hooks.
   if (isGalleryMode()) return <BubbleGallery />;
   if (isEventLogMirrorMode()) return <EventLogMirrorPanel />;
+  if (isReplayMode()) return <TimeTravelReplayPanel />;
   return <AppMain />;
 }
 
