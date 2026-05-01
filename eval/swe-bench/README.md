@@ -97,12 +97,54 @@ node eval/run-eval.mjs \
 
 ## What's NOT in this slice (queued)
 
-- **Docker-based test execution** — the load-bearing piece for actually running SWE-Bench. Without dry-run, the harness exits with a clear error pointing here. The execution path needs:
-  1. `docker pull` the per-task image (or `docker build` from the official Dockerfile)
-  2. Mount the staged repo into the container at `/workspace`
-  3. Run the task's test command (typically `pytest <test_file>::test_function`) inside the container
-  4. Capture the exit code as pass/fail
-  5. Cleanup containers/volumes between attempts
-  6. Surface env-setup failures distinctly from test failures so the score table doesn't conflate "swarm produced wrong patch" with "Docker image had a bad pip install"
-  Total effort: ~1 day focused work. Not in this slice because Docker integration touches enough surface (container lifecycle, volume mounting on Windows, image caching) to deserve its own session.
 - **Aggregate report comparing our pass-rate to the published per-model baselines table** — adds an `eval/swe-bench/RESULTS.md` builder that reads our results.json + a hand-curated table of "GPT-4 = 33%, Sonnet = 49%, Devin = 13%" etc. and renders side-by-side. ~2h after Docker is wired.
+- **Image pre-pulling orchestration** — `docker pull` for each task's image takes minutes and gigabytes. A pre-pull script that runs before the sweep would parallelize the downloads.
+
+## Docker test execution (#100, 2026-05-01)
+
+Docker-based test execution is now available via `eval/swe-bench/dockerExecutor.mjs`:
+
+```bash
+# Per-task verify, mocked (no Docker actually invoked):
+node --test eval/swe-bench/dockerExecutor.test.mjs
+```
+
+The executor:
+- Bind-mounts the staged repo at `/workspace` inside the container
+- Runs `--network none` so tests can't accidentally exfiltrate
+- Applies the SWE-Bench `test_patch` via `git apply` then runs the test command
+- Distinguishes 4 outcome reasons in `runSweBenchVerify`: `tests-passed` / `tests-failed` / `patch-conflict` / `docker-unavailable` / `timeout`
+- Default 10-min timeout per task; configurable via `timeoutMs`
+- Dependency-injected `dockerSpawn` for testability — production uses `node:child_process.spawn("docker", ...)`, tests inject mocks
+
+**Real-Docker validation (Kevin's laptop-side step):** the executor's
+behavior against actual Docker images cannot be CI-validated here
+since SWE-Bench images aren't available in CI. To smoke-test:
+
+```bash
+# 1. Make sure docker is running + you've pulled an SWE-Bench image
+docker pull swebench/sweb.eval.x86_64.astropy_1776:latest
+
+# 2. Stage a repo at the right base_commit (the eval harness does this normally)
+git clone https://github.com/astropy/astropy /tmp/astropy
+cd /tmp/astropy && git checkout <base_commit>
+
+# 3. Run a smoke test using the executor directly:
+node -e "
+import('/c/Users/kevin/Desktop/ollama_swarm/eval/swe-bench/dockerExecutor.mjs')
+  .then(async ({ executeInContainer }) => {
+    const r = await executeInContainer({
+      image: 'swebench/sweb.eval.x86_64.astropy_1776:latest',
+      repoPath: '/tmp/astropy',
+      command: 'echo hello from inside container',
+      timeoutMs: 30000,
+    });
+    console.log(r);
+  });
+"
+```
+
+Wiring `executeInContainer` into the eval harness's verify step is the
+last mile — the executor is ready, the harness just needs to call it
+when a task is env-incompatible-but-Docker-available. That's a follow-
+up: ~1h once Kevin confirms the executor works against real images.
