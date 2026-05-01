@@ -285,6 +285,12 @@ export class BlackboardRunner implements SwarmRunner {
   // instead of reusing the planner. Undefined otherwise (default
   // behavior — planner wears the auditor hat).
   private auditor?: Agent;
+  // #97 (2026-05-01): full worker pool — all spawned workers — so the
+  // self-consistency K-fan-out can route across DIFFERENT agents instead
+  // of running K sequential calls on the SAME agent. Borrowed workers
+  // skip one poll cycle (~3s) of their own work; given the cooperative
+  // board, this is safe.
+  private workerPool: Agent[] = [];
   // Unit 59 (59a): per-worker role guidance (correctness / simplicity
   // / consistency). Populated at spawn time when
   // cfg.specializedWorkers === true; looked up by agent id when
@@ -1971,6 +1977,11 @@ export class BlackboardRunner implements SwarmRunner {
   // ---------------------------------------------------------------------
 
   private async runAuditedExecution(planner: Agent, workers: Agent[]): Promise<void> {
+    // #97 (2026-05-01): expose the full worker pool so executeWorkerTodo's
+    // self-consistency fan-out can borrow other workers for the K-1
+    // additional prompts. Single-worker setups (workers.length === 1) just
+    // see the same agent K times — same as pre-#97 behavior.
+    this.workerPool = workers;
     while (!this.stopping) {
       // Task #116: cap-check before each audit cycle. Worker loop
       // checks per-iteration too, but if workers are stuck in long
@@ -2912,21 +2923,36 @@ export class BlackboardRunner implements SwarmRunner {
     let hunksToCommit: readonly Hunk[] = parsed.hunks;
     if (k > 1) {
       const initialVotes: HunkVote[] = [{ workerId: `${agent.id}#1`, hunks: parsed.hunks }];
-      // Parallel fan-out: K-1 additional prompts on the SAME agent. The
-      // provider stack handles concurrent in-flight calls fine (raw
-      // fetch, separate AbortControllers per call). UI status will
-      // flicker between "thinking" and "ready" K times, which is
-      // acceptable for an opt-in feature.
+      // #97 (2026-05-01): route the K-1 additional prompts across DIFFERENT
+      // workers in the pool when more than one worker exists. Cross-agent
+      // diversity tests "different prompt context" not just "sampling
+      // noise from the same agent" (which is all the K=K-on-same-agent
+      // path tested). Falls back to same-agent rotation when only one
+      // worker exists (single-worker setups, agentCount=1, etc.). The
+      // borrowed worker skips one poll cycle (~3s) of its own loop,
+      // which is fine on a cooperative board.
+      const otherWorkers = this.workerPool.filter((w) => w.id !== agent.id);
+      const fanoutAgents: Agent[] = Array.from({ length: k - 1 }, (_, idx) => {
+        if (otherWorkers.length === 0) return agent; // fall back to same agent
+        return otherWorkers[idx % otherWorkers.length]; // round-robin
+      });
+      this.appendSystem(
+        `[${agent.id}] [v2] self-consistency K=${k} fan-out across ${
+          otherWorkers.length > 0
+            ? `${new Set(fanoutAgents.map((a) => a.id)).size + 1} agents (${[agent.id, ...new Set(fanoutAgents.map((a) => a.id))].join(", ")})`
+            : "1 agent (single-worker setup)"
+        }`,
+      );
       const extraPromises = Array.from({ length: k - 1 }, (_, idx) =>
         this.promptAgent(
-          agent,
+          fanoutAgents[idx],
           `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`,
           "swarm",
           "json",
           WORKER_HUNKS_JSON_SCHEMA,
         )
-          .then((response) => ({ ok: true as const, idx: idx + 2, response }))
-          .catch((err) => ({ ok: false as const, idx: idx + 2, err })),
+          .then((response) => ({ ok: true as const, idx: idx + 2, response, workerId: fanoutAgents[idx].id }))
+          .catch((err) => ({ ok: false as const, idx: idx + 2, err, workerId: fanoutAgents[idx].id })),
       );
       const settled = await Promise.allSettled(extraPromises);
       if (this.stopping) return "aborted";
@@ -2935,27 +2961,35 @@ export class BlackboardRunner implements SwarmRunner {
         const r = s.value;
         if (!r.ok) {
           this.appendSystem(
-            `[${agent.id}] [v2] self-consistency attempt ${r.idx}/${k} prompt failed: ${
+            `[${r.workerId}] [v2] self-consistency attempt ${r.idx}/${k} prompt failed: ${
               r.err instanceof Error ? r.err.message : String(r.err)
             } — excluded from vote`,
           );
           continue;
         }
-        this.appendAgent(agent, r.response);
+        // #97: attribute the transcript entry to the actual worker that
+        // produced it (may be a different agent from the claiming worker
+        // when cross-agent fan-out is active).
+        const sourceAgent =
+          this.workerPool.find((w) => w.id === r.workerId) ?? agent;
+        this.appendAgent(sourceAgent, r.response);
         const extraParsed = parseWorkerResponse(r.response, todo.expectedFiles);
         if (!extraParsed.ok) {
           this.appendSystem(
-            `[${agent.id}] [v2] self-consistency attempt ${r.idx}/${k} parse failed: ${extraParsed.reason} — excluded from vote`,
+            `[${r.workerId}] [v2] self-consistency attempt ${r.idx}/${k} parse failed: ${extraParsed.reason} — excluded from vote`,
           );
           continue;
         }
         if (extraParsed.skip || extraParsed.hunks.length === 0) {
           this.appendSystem(
-            `[${agent.id}] [v2] self-consistency attempt ${r.idx}/${k} declined or empty — excluded from vote`,
+            `[${r.workerId}] [v2] self-consistency attempt ${r.idx}/${k} declined or empty — excluded from vote`,
           );
           continue;
         }
-        initialVotes.push({ workerId: `${agent.id}#${r.idx}`, hunks: extraParsed.hunks });
+        // #97: vote workerId now uses the actual fan-out agent, so
+        // hunkVoting's diagnostics show "agent-2#3 voted for X" not
+        // "agent-1#3 voted for X" when the prompt actually ran on agent-2.
+        initialVotes.push({ workerId: `${r.workerId}#${r.idx}`, hunks: extraParsed.hunks });
       }
 
       // Build LLM-as-judge: only consulted when there's no strict
