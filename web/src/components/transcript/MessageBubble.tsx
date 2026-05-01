@@ -23,7 +23,6 @@ import {
   AgentJsonBubble,
   CollapsibleBlock,
   JsonPrettyBubble,
-  MAX_BUBBLE_HEIGHT_PX,
   tryPrettyJson,
 } from "./JsonBubbles";
 import { WorkerHunksBubble, tryParseWorkerHunks } from "./WorkerHunksBubble";
@@ -533,25 +532,20 @@ function AgentClientFallback({
     );
   }
   // 2026-04-26: prose response with preserved segment split points from
-  // streaming. Renders the same segment view the user saw live: previous
-  // segments collapsed, last segment shown expanded.
+  // streaming. 2026-05-01 fix: collapse ALL segments uniformly. Pre-fix
+  // showed segments 1..N-1 collapsed + segment N raw expanded — that
+  // worked for live streaming (latest segment visible as it grew) but
+  // looked broken on finalized bubbles where the last segment "escaped"
+  // the collapsible bracket and appeared as raw text below it.
   if (entry.segmentSplitPoints && entry.segmentSplitPoints.length > 0) {
     const segments = segmentsFromSplitPoints(entry.text, entry.segmentSplitPoints);
     return (
       <div className={className} style={style}>
         {header}
         <div className="space-y-1.5 mt-1">
-          {segments.slice(0, -1).map((seg, i) => (
+          {segments.map((seg, i) => (
             <CollapsedSegment key={i} index={i} text={seg} hue={hue} />
           ))}
-          {segments.length > 0 ? (
-            <div
-              className="whitespace-pre-wrap opacity-90 overflow-y-auto"
-              style={{ maxHeight: `${MAX_BUBBLE_HEIGHT_PX}px` }}
-            >
-              {segments[segments.length - 1] || " "}
-            </div>
-          ) : null}
         </div>
       </div>
     );
