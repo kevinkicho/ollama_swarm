@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-04-29
+**Last updated:** 2026-05-01
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -69,16 +69,20 @@ The V1 SDK loop (per-agent opencode subprocess + SSE chunked streaming) was reti
 | Event log reader | `server/src/swarm/blackboard/EventLogReaderV2.ts` | primary; backs `/api/v2/event-log/runs` |
 | `formatServerSummary` | `shared/src/formatServerSummary.ts` | shared between server + web |
 
-**Test totals:** 1100+ server tests passing (was 972 at V2 cutover; +130 from this session's observability + RCA + lifecycle work).
+**Test totals:** 1209 server tests passing as of 2026-04-29; 2026-05-01 added 7 (5 v2 route + 2 streaming-regression). Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
 
 ---
 
 ## Recent fixes worth knowing about
 
+- **`eff8c4f` (2026-05-01)** — provider streaming chunk-drop bug in `AnthropicProvider` + `OpenAIProvider`. `Promise.race([reader.read(), timeout])` was abandoning in-flight reads on every 200ms tick; abandoned reads silently consumed subsequent chunks, truncating responses to whatever fit in the first SSE batch. Pre-fix: Claude Sonnet returned `"Here"` for `"Count from 1 to 10"` (28 tokens generated, 4 captured). Fix keeps one in-flight read across iterations. Regression test in `5c13b10` uses 250ms-delay async streams to surface the bug if reintroduced.
+- **`4190afe` (2026-05-01)** — latent dotenv path bug. `server/src/config.ts` did `import "dotenv/config"` which resolved relative to `process.cwd()`. `dev.mjs` runs the server with `cwd=server/`, so the canonical repo-root `.env` was silently ignored. Paid keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) would never load. Replaced with explicit `dotenv.config({ path: <repoRoot>/.env })`.
+- **`f3d0aeb` (2026-05-01)** — V2 Step 6c first thin slice: `GET /api/v2/event-log/runs/:runId` per-run record replay endpoint + 5 tests. Pure backend addition; unblocks every UI cutover step that follows. Full remaining cutover scoped in `docs/V2-STEP-6C.md`.
 - **`bb0c509`** — proxy always terminates rewritten `OLLAMA_BASE_URL` with `/v1`. Pre-fix, env var without `/v1` silently broke every opencode prompt with empty responses (404 on `/chat/completions`).
-- **`18a7749`** — `streamPrompt` filters stale `session.idle` from prior prompt's tail. Pre-fix, the next prompt's stream resolved with empty text when warmup's idle event arrived <100ms later.
 - **`189ca05`** — wall-clock 4-min "absolute turn cap" replaced with SSE-aware liveness watchdog (`sseAwareTurnWatchdog.ts`). Aborts on 90s SSE silence OR 30-min hard ceiling. Long-tail latency that's still producing tokens isn't killed.
 - **`cfee38d`** — `agents_ready` structured summary; expandable per-agent grid in UI showing port, role, model, sessionId, warmup elapsed.
+
+> **Strategic note (2026-05-01):** the project's value prop is **open-weights multi-agent parallelism** (N Ollama-served models in parallel against one repo, each playing a different role). Multi-provider abstractions stay — bug-fixes that improve paid paths still ship — but don't expand multi-provider feature work for its own sake. Future scoreboard work should compare Ollama models against each other across presets, not Claude vs baseline. See `project_value_prop_open_weights_first.md` in memory.
 
 ---
 
@@ -118,12 +122,11 @@ server/src/
     agentsReadySummary.ts                    helper for the agents_ready summary kind
     {RoundRobin,Council,RoleDiff,...}Runner.ts   one runner per preset
     blackboard/
-      BlackboardRunner.ts                    blackboard preset orchestration (~3,400 LOC)
-      Board.ts                               V1 todo board (claim/CAS/lock); V2 mirrors via TodoQueueV2
-      TodoQueueV2.ts                         V2 FIFO substrate
-      WorkerPipelineV2.ts                    V2 apply-and-commit pipeline
-      v2Adapters.ts                          real fs+git adapters for V2
-      RunStateObserver.ts                    parallel-track V2 observer
+      BlackboardRunner.ts                    blackboard preset orchestration (~4,200 LOC)
+      TodoQueue.ts                           FIFO substrate (renamed from TodoQueueV2; Board.ts deleted 2026-04-28)
+      WorkerPipeline.ts                      apply-and-commit pipeline (renamed from WorkerPipelineV2)
+      v2Adapters.ts                          real fs+git adapters
+      RunStateObserver.ts                    state-machine observer
       EventLogReaderV2.ts                    JSONL event log parser
       summary.ts                             RunSummary type + buildSummary
       ARCHITECTURE.md                        code-near design doc — read before editing this dir
@@ -151,7 +154,7 @@ web/src/
 - **Don't rotate the planner role.** Single-session context continuity matters — see `feedback_blackboard_planner_design.md` in memory.
 - **Workers return JSON envelopes only** (no tool grants). Planner/auditor get the in-process `ToolDispatcher` (read/grep/glob/list/bash) — not the legacy opencode permission system.
 - **Discussion presets are read-only.** Only blackboard's workers commit to the clone.
-- **Test command requires `OPENCODE_SERVER_PASSWORD=test-only` prefix** — config.ts still validates the env var even though no subprocess uses it. Without the prefix, tests fail at module load.
+- **`npm test` works from any shell, any cwd** as of `c27f857` (2026-05-01). The runner shim (`server/scripts/run-tests.mjs`) sets `OPENCODE_SERVER_PASSWORD=test-only` if not already set; `config.ts` still validates the env var even though no subprocess uses it.
 - **`/mnt/c` is the project root** (WSL → Windows). npm install hazards from WSL — see `feedback_wsl_windows_esbuild` in memory.
 
 ---
@@ -160,7 +163,7 @@ web/src/
 
 - **Day-1 essentials for an agent picking up this repo:** `docs/AGENT-GUIDE.md`
 - **Persistent TODO list across sessions:** `docs/active-work.md` (queued / in-flight / recently shipped)
-- **Architecture decisions ("why this and not that"):** `docs/decisions/` (5 ADRs covering per-agent subprocess, hunk format, write-capable preset boundary, V2 parallel-track rollout, keeping opencode)
+- **Architecture decisions ("why this and not that"):** `docs/decisions/` (4 active ADRs: per-agent subprocess [historical], hunk format, write-capable preset boundary, V2 parallel-track rollout. ADR 005 [keep opencode] superseded 2026-04-29 by E3 Phases 1–5.)
 - **Code-near architecture for blackboard:** `server/src/swarm/blackboard/ARCHITECTURE.md`
 - **V2 rewrite roadmap + status:** `docs/ARCHITECTURE-V2.md`
 - **Per-preset design notes:** `docs/swarm-patterns.md`

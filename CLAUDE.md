@@ -7,7 +7,7 @@ This file is auto-loaded into every session. Keep it short; link out for depth.
 1. **`docs/STATUS.md`** — what ships today; current V2 substrate status; recent fixes worth knowing about. If this disagrees with code, code wins.
 2. **`docs/AGENT-GUIDE.md`** — day-1 essentials: common commands, commit conventions, where new code goes, don'ts, operational hazards.
 3. **`docs/active-work.md`** — persistent TODO list across sessions. Per-session task lists die at session end; this is the durable equivalent.
-4. **`docs/decisions/`** — 5 short ADRs explaining non-obvious "why this and not that" choices (per-agent subprocess, hunk format, blackboard-only writes, V2 parallel-track rollout, keep opencode).
+4. **`docs/decisions/`** — 4 active ADRs covering non-obvious "why this and not that" choices (per-agent subprocess history, hunk format, blackboard-only writes, V2 parallel-track rollout). ADR 005 (keep opencode) was superseded 2026-04-29 by E3 Phase 5; the file remains as historical record.
 
 ## Two reference docs to know about (don't read cold; reach for when needed)
 

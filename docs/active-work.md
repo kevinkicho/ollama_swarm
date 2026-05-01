@@ -4,7 +4,7 @@
 > `TaskCreate` items die when the session ends; this file is the durable
 > equivalent. **Update it when you finish or queue work.**
 >
-> Last refreshed: 2026-04-29 (E3 Phase 5 cleanup pt 5: cosmetic surgery on Agent.client + recovery shims)
+> Last refreshed: 2026-05-01 (streaming bug fix + dotenv path fix + V2 6c first slice + #231 closed + value-prop reframe + doc rot pass)
 
 ---
 

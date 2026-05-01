@@ -4,12 +4,7 @@ Deliberate trade-offs in the current build. Each entry names the choice, why
 we made it, and what would force us to revisit. Anything that becomes a
 *real* problem in practice should graduate out of here into a plan item.
 
-> **2026-04-27 update:** the V2 substrate (state machine, TodoQueueV2,
-> WorkerPipelineV2, OllamaClient, EventLogReaderV2) has shipped + tested
-> + parallel-track instrumentation; see `docs/ARCHITECTURE-V2.md` Status
-> table for what's done vs pending. Several limitations below are
-> on-track for V2 to architecturally remove (rather than fix one bug at
-> a time). Look for the **"V2 makes this irrelevant"** marker.
+> **2026-05-01 update:** the V2 substrate (state machine, `TodoQueue`, `WorkerPipeline`, `OllamaClient`, `EventLogReaderV2`) has shipped + been promoted to primary; the V2-suffixed names were renamed once V1 was removed. E3 Phase 5 (2026-04-29) additionally removed the per-agent opencode subprocess entirely — three limitations below are now marked resolved. The V2 6c UI cutover (event-log-derived state) is partially shipped; see `docs/V2-STEP-6C.md`.
 
 ---
 
@@ -50,9 +45,13 @@ suspect are relevant, then propose criteria"). Workers stay on `swarm`.
 
 ---
 
-## Agent-lifecycle control is unreliable (orphan accumulation across restarts)
+## ~~Agent-lifecycle control is unreliable (orphan accumulation across restarts)~~ (resolved 2026-04-29 by E3 Phase 5)
 
-**Choice:** `AgentManager.killAll()` calls `session.abort` then
+**Status:** structurally moot. Agents are now in-process records, not subprocesses. There's nothing to orphan — when the dev server exits, every agent goes with it. `AgentManager.killAll()` is a no-op cleanup of in-memory state. Original analysis kept below for narrative archaeology only.
+
+---
+
+**Original choice:** `AgentManager.killAll()` calls `session.abort` then
 `treeKill(agent.child)` per agent. `treeKill` on Windows shells out to
 `taskkill /F /T /PID <pid>`. This is best-effort with no verification — if
 the kill misses (nested child processes, stale PID reference, Windows
@@ -93,9 +92,13 @@ be the ideal fix but require a native addon or FFI.
 
 ---
 
-## Per-agent opencode subprocess amplifies cloud-variance tails
+## ~~Per-agent opencode subprocess amplifies cloud-variance tails~~ (resolved 2026-04-29 by E3 Phase 5)
 
-**Choice:** `AgentManager.spawnAgent` spawns one separate `opencode serve
+**Status:** the entire opencode-subprocess class of failure is gone. No subprocesses spawn; every prompt routes through `pickProvider` → in-process `chatOnce` → direct HTTP to the provider. The "N parallel cold-start contention" pattern doesn't exist anymore. Original analysis kept below for narrative archaeology only.
+
+---
+
+**Original choice:** `AgentManager.spawnAgent` spawns one separate `opencode serve
 --port <random>` subprocess per agent (3 agents = 3 subprocesses on 3
 ports). Each subprocess hosts exactly one session (`session.create` called
 once). This is intentional isolation — confirmed preference 2026-04-23:
@@ -208,9 +211,13 @@ remain compile-time constants in `caps.ts`.
 
 ---
 
-## OpenCode subprocess remains a runtime dependency (V2 hasn't dropped it yet)
+## ~~OpenCode subprocess remains a runtime dependency (V2 hasn't dropped it yet)~~ (resolved 2026-04-29 by E3 Phase 5)
 
-**Choice:** even after the V2 substrate work shipped, every fresh clone
+**Status:** opencode is gone. No CLI dependency, no `OPENCODE_BIN`, no `@opencode-ai/sdk` in `package.json`, no per-agent subprocess. `OPENCODE_SERVER_PASSWORD` is still required at config-load time (`config.ts` zod) so existing setups don't break, but no code reads its value. Original write-up kept below for narrative archaeology.
+
+---
+
+**Original choice:** even after the V2 substrate work shipped, every fresh clone
 still requires:
 - `opencode` CLI on `PATH` as `OPENCODE_BIN` (`.cmd` wrapper on Windows)
 - `OPENCODE_SERVER_PASSWORD` set in `.env` (any string — shared secret

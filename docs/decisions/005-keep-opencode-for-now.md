@@ -1,6 +1,12 @@
 # ADR 005 — Keep opencode (for now); don't bypass for non-blackboard runners yet
 
-**Status:** accepted
+**Status:** SUPERSEDED 2026-04-29 by E3 Phases 1–5 (`8dcf0b5` … `85e8980` + `c5ea7b1` + `e7b648f`). The "drop opencode entirely" decision was taken sooner than this ADR's "When to revisit" criteria predicted, after the V2 direct path proved stable enough to extend across all 9 runners in one focused effort. The opencode SDK is uninstalled; `AgentManager.spawnAgent` no longer spawns subprocesses; every prompt routes through `pickProvider` → `chatOnce` and tool-using turns through an in-process `ToolDispatcher`. See `docs/active-work.md` "Done recently → 2026-04-29 cleanup pt 1–5" for the commit-by-commit record.
+
+The original ADR text is retained below for narrative archaeology — DON'T treat any of it as current state. If you need today's architecture, read `docs/STATUS.md` + `server/src/providers/`.
+
+---
+
+**Status (historical):** accepted
 **Decided:** 2026-04-27 (after the "do we still need opencode?" thread)
 **Last verified:** 2026-04-27
 

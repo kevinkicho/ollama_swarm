@@ -25,16 +25,19 @@ Memory (`~/.claude/projects/-mnt-c-Users-kevin-Desktop-ollama-swarm/memory/MEMOR
 ### Run tests
 
 ```bash
-cd server && npm test
+npm test
 ```
 
-The script in `server/package.json` is prefixed with
-`OPENCODE_SERVER_PASSWORD=test-only`. If you run a test file directly,
-include that prefix or the import-time zod validation in `config.ts`
-will fail before any test runs. See
-`reference_test_command_password` memory.
+Works from the repo root, any shell. The runner shim
+(`server/scripts/run-tests.mjs`) sets `OPENCODE_SERVER_PASSWORD=test-only`
+on the spawned process if not already set, so you don't need a bash-only
+env-prefix anymore (was needed until commit `0b3cda6`, 2026-04-27).
 
-Currently 972/972 passing.
+Currently 1209+ tests passing (1209 at 2026-04-29; +7 added 2026-05-01
+for V2 6c route + provider streaming regression). If you run a test file
+directly via `node --import tsx --test <file>`, the env var still gets
+inherited from your shell — set it manually if running a one-off file
+in a fresh terminal.
 
 ### Type-check (no emit)
 
@@ -181,10 +184,13 @@ EOF
 
 ### Background process management
 
-- Each swarm spawns N opencode subprocesses on random ports.
-- `AgentManager.killAll()` does verified-kill (poll `tasklist /PID` after `taskkill /F /T`).
-- On dev-server startup, `reclaimOrphans` reads `logs/agent-pids.log` and kills any leftover PIDs from a prior crashed server.
-- If you suspect zombies: `ps -ef | grep -E "tsx watch|npm run dev|opencode serve" | grep -v grep` then `pkill -9 -f "..."` (note: this strands bash wrappers; cleaner to `TaskStop` background tasks).
+**E3 Phase 5 (2026-04-29) removed per-agent opencode subprocesses entirely.** What remains:
+
+- Each agent is now an **in-process record** (`Agent` interface in `AgentManager.ts`) — no port, no subprocess, no PID.
+- `AgentManager.killAll()` is now a no-op cleanup of in-memory state. There are no child processes to terminate.
+- The only OS-level processes are the ones `npm run dev` spawns: `node scripts/dev.mjs` (parent) → `tsx watch ...` (server) + `vite` (web). No grandchildren.
+- If a dev server zombie persists (port still bound after Ctrl-C), find by port: `Get-NetTCPConnection -LocalPort 8243,8244,11533 -State Listen` in PowerShell, then `Stop-Process -Id <pid> -Force`. Do NOT `pkill -f "node"` — it will kill unrelated VS Code servers, Claude Code workers, etc.
+- Historical `reclaimOrphans` and `logs/agent-pids.log` paths exist in code but are no-ops post-E3.
 
 ---
 
