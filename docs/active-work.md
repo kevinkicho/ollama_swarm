@@ -20,7 +20,7 @@
 
 - ✅ **V2 Step 5c.3 — delete Board.ts.** SHIPPED 2026-04-28 during V2 cutover Phase 2c. Confirmed 2026-04-29 audit: `Board.ts` no longer exists; only stale comments in BlackboardRunner / TodoQueue reference its prior existence. (active-work.md note was stale.)
 
-- **V2 Step 6c — UI cuts over to event-log-derived state.** Foundation slice (`useEventLogStream` hook + `EventLogMirrorPanel` + `?useEventLogRunId=1` field cutover) shipped 2026-04-29. Full cutover (every WS dispatch path replaced with event-log derivation) genuinely pending. ~1-2 days. **Trigger**: more user appetite for the V2 vision; could parallel-track first.
+- **V2 Step 6c — UI cuts over to event-log-derived state.** Foundation shipped 2026-04-29; first thin slice shipped 2026-05-01 (`GET /api/v2/event-log/runs/:runId` per-run replay endpoint — backend-only, zero UI risk). Remaining ~1-2 days of UI-side work scoped in `docs/V2-STEP-6C.md`. **Trigger**: focused refactor session — order of attack documented in the scoping doc.
 
 - ✅ **E3 — Drop opencode subprocess dependency.** SHIPPED 2026-04-29 across multiple commits. Phases 1-5 complete:
   - Phase 1 (`8dcf0b5`): SessionProvider abstraction + 3 raw-HTTP impls (Ollama / Anthropic / OpenAI)
@@ -172,6 +172,12 @@ plus the actual run output at `C:\mnt\c\Users\kevin\Desktop\ollama_swarm\runs\de
 - ✅ **Streaming chunk-drop bug fixed** in `AnthropicProvider` + `OpenAIProvider` (commit `eff8c4f`). The `Promise.race([reader.read(), timeout(200ms)])` pattern abandoned in-flight reads on timeout; abandoned reads silently consumed subsequent chunks, truncating responses to whatever fit in the first SSE batch. Discovered while empirically validating #231 — Claude was returning "Here" for "Count from 1 to 10" (28 tokens generated, 4 captured). Regression test added (commit `5c13b10`) using a 250ms-delay async stream.
 
 - ✅ **#231 EMPIRICALLY CLOSED** — Claude on native Anthropic provider produced 1,975 chars of planner output across 3 contract envelopes with **zero XML pseudo-tool-call markers**. Hypothesis confirmed; the OpenAI-bridge mismatch theory was correct. Action: docs note for "use paid providers when tool-call quality matters."
+
+- ✅ **V2 Step 6c first thin slice** (commit `f3d0aeb`): `GET /api/v2/event-log/runs/:runId` per-run replay endpoint + 5 tests. Pure backend addition; unblocks every UI cutover step that follows without touching any WS dispatch code. Full remaining cutover (~1-2 days) scoped in `docs/V2-STEP-6C.md` — order of attack, risks, when-not-to-do.
+
+- ✅ **Eval harness Windows + multi-attempt fixes** (commit `f3d0aeb`): Two latent bugs surfaced when kicking the paid sweep — (1) cross-platform CLI guard so `node eval/run-eval.mjs` actually runs `main()` on Windows (`import.meta.url` vs Windows backslashes), (2) `fireStart` no longer treats leftover `phase=completed` from a prior attempt as "new run started" (would have scored sweep attempts 2-N as instant verify=FAIL). Plus new `--model` + `--maxCostUsd` flags so paid sweeps don't need .env edits.
+
+- ✅ **Catalog wiring** (commit `f3d0aeb`): added catalog entries for `fixture-add-null-guard` + `fixture-extract-pure-helper` (fixture dirs were on disk since `b255630` but never wired into the catalog).
 
 ### 2026-04-29 — multi-provider + scoreboard (#313–#320)
 
