@@ -257,6 +257,17 @@ export interface RunConfig {
    */
   criticEnsemble?: boolean;
   /**
+   * #87 (2026-05-01): self-consistency on worker hunks. When > 1, each
+   * worker turn runs the SAME prompt K times (sequentially on the same
+   * agent) and the runner picks the hunks-envelope that K-1 or more
+   * other attempts agreed on (majority vote on normalized envelope
+   * shape). Improves quality on tasks with > 1 plausible patch at the
+   * cost of K× tokens per todo. Capped at 5 to bound cost. Default 1
+   * (current single-worker behavior). Blackboard-only — discussion
+   * presets ignore this.
+   */
+  selfConsistencyK?: number;
+  /**
    * Task #102: opt-in post-verdict "build" round for debate-judge.
    * After the JUDGE returns a verdict with confidence ≥ medium and a
    * non-tie winner, the same 3 agents pivot to: PRO=implementer

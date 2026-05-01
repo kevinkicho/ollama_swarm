@@ -108,6 +108,10 @@ const StartBody = z.object({
   // with majority vote. Blackboard-only; only meaningful when critic
   // is enabled.
   criticEnsemble: z.boolean().optional(),
+  // #87 (2026-05-01): self-consistency K for worker hunks. K > 1 runs
+  // the worker prompt K times per todo + applies the majority-voted
+  // hunks envelope. Capped at 5 to bound token cost. Blackboard-only.
+  selfConsistencyK: z.number().int().min(1).max(5).optional(),
   // Task #102 (2026-04-25): opt-in post-verdict "build" round for
   // debate-judge — PRO becomes implementer, CON reviewer, JUDGE
   // signoff. Default off; debate-judge-only.
@@ -423,6 +427,7 @@ export function swarmRouter(orch: Orchestrator): Router {
             : undefined),
         specializedWorkers: parsed.data.specializedWorkers,
         criticEnsemble: parsed.data.criticEnsemble,
+        selfConsistencyK: parsed.data.selfConsistencyK,
         executeNextAction: parsed.data.executeNextAction,
         tokenBudget: parsed.data.tokenBudget,
         maxCostUsd: parsed.data.maxCostUsd,

@@ -36,6 +36,8 @@ import {
   type QueuedTodo,
 } from "./TodoQueue.js";
 import { applyAndCommit } from "./WorkerPipeline.js";
+import type { Hunk } from "./applyHunks.js";
+import { voteOnHunks, type HunkVote } from "./hunkVoting.js";
 import { realFilesystemAdapter, realGitAdapter, realVerifyAdapter } from "./v2Adapters.js";
 import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaster.js";
 import {
@@ -2868,6 +2870,67 @@ export class BlackboardRunner implements SwarmRunner {
       return "stale";
     }
 
+    // #87 (2026-05-01): self-consistency voting. When cfg.selfConsistencyK > 1,
+    // run K-1 additional worker prompts (same agent, same seed), then vote on
+    // the majority-agreed hunks-envelope. Cheap fan-out — sequential not
+    // parallel because the agent's status field, token tracking, and abort
+    // controllers all assume one-call-in-flight; serialization keeps the
+    // change small and avoids those invariants. Cost: K× tokens per
+    // committable todo. Quality lift: measurable on tasks with > 1 plausible
+    // patch (search-not-unique → unique-after-grounding, etc.).
+    const k = Math.max(1, Math.min(5, this.active?.selfConsistencyK ?? 1));
+    let hunksToCommit: readonly Hunk[] = parsed.hunks;
+    if (k > 1) {
+      const votes: HunkVote[] = [{ workerId: `${agent.id}#1`, hunks: parsed.hunks }];
+      for (let i = 2; i <= k; i++) {
+        if (this.stopping) return "aborted";
+        let extraResponse: string;
+        try {
+          extraResponse = await this.promptAgent(
+            agent,
+            `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`,
+          );
+        } catch (err) {
+          if (this.stopping) return "aborted";
+          // Don't fail the whole todo — this is one of K attempts. The
+          // already-collected votes might still produce a valid winner.
+          this.appendSystem(
+            `[${agent.id}] [v2] self-consistency attempt ${i}/${k} prompt failed: ${
+              err instanceof Error ? err.message : String(err)
+            } — continuing with prior votes`,
+          );
+          continue;
+        }
+        this.appendAgent(agent, extraResponse);
+        const extraParsed = parseWorkerResponse(extraResponse, todo.expectedFiles);
+        if (!extraParsed.ok) {
+          this.appendSystem(
+            `[${agent.id}] [v2] self-consistency attempt ${i}/${k} parse failed: ${extraParsed.reason} — excluded from vote`,
+          );
+          continue;
+        }
+        if (extraParsed.skip || extraParsed.hunks.length === 0) {
+          this.appendSystem(
+            `[${agent.id}] [v2] self-consistency attempt ${i}/${k} declined or empty — excluded from vote`,
+          );
+          continue;
+        }
+        votes.push({ workerId: `${agent.id}#${i}`, hunks: extraParsed.hunks });
+      }
+      const verdict = voteOnHunks(votes);
+      this.appendSystem(
+        `[${agent.id}] [v2] self-consistency vote: ${verdict.agreementCount}/${verdict.totalConsidered} agreed` +
+          ` · ${verdict.distinctShapes} distinct shape(s)` +
+          ` · ${verdict.unanimous ? "unanimous" : verdict.hasMajority ? "majority" : `tiebreak=${verdict.tiebreak}`}`,
+      );
+      if (!verdict.winner) {
+        this.wrappers.failTodoQ(todo.id, "[v2] self-consistency: zero eligible votes after K attempts");
+        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
+        return "stale";
+      }
+      hunksToCommit = verdict.winner;
+    }
+
     // V2 path: apply + git commit via the substrate. No CAS hash check —
     // applyHunks anchor failure catches sibling-worker conflicts.
     const fsAdapter = realFilesystemAdapter(this.active!.localPath);
@@ -2885,7 +2948,7 @@ export class BlackboardRunner implements SwarmRunner {
       todoId: todo.id,
       workerId: agent.id,
       expectedFiles: todo.expectedFiles,
-      hunks: parsed.hunks,
+      hunks: hunksToCommit,
       fs: fsAdapter,
       git: gitAdapter,
       ...(verifyAdapter ? { verify: verifyAdapter } : {}),
