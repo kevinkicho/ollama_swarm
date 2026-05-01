@@ -202,6 +202,15 @@ export async function promptWithRetry(
           },
           ...(tools.length > 0 ? { tools } : {}),
           ...(dispatcher ? { dispatcher } : {}),
+          // E3 Phase 5 cleanup pt 4 left a gap: every callsite passing
+          // ollamaFormat (planner contract, tier-up, etc.) was silently
+          // dropping the constraint because the SDK + ollamaDirect
+          // branches that consumed it got deleted but the new provider
+          // path never added it. Closing the gap 2026-05-01 (#86): the
+          // pickProvider path forwards format down to OllamaProvider →
+          // OllamaClient.chat which has supported it since #233. Other
+          // providers ignore the field gracefully.
+          ...(opts.ollamaFormat !== undefined ? { format: opts.ollamaFormat } : {}),
         });
         // Record token usage into tokenTracker so the cost cap +
         // /api/usage widget keep working unchanged. Provider returns

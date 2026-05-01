@@ -277,3 +277,61 @@ test("pickProvider — singleton reuse: same call twice returns same provider in
   const b = pickProvider("anthropic/claude-haiku-4-5-20251001").provider;
   assert.equal(a, b, "expected the same AnthropicProvider singleton across calls");
 });
+
+// #86 (2026-05-01): OllamaProvider must forward `format` to the
+// underlying ollamaChat call. Without this, the constrained-decoding
+// pipeline goes through promptWithRetry → OllamaProvider → ollamaChat
+// and silently drops the format halfway. Mock ollamaChat at the
+// module level via a manual stub injected into a fresh provider.
+test("OllamaProvider — forwards format to ollamaChat", async () => {
+  // Use a fake fetch shim: replace global fetch for this test only,
+  // capture the request body, and assert format made it through.
+  const realFetch = globalThis.fetch;
+  let observedBody: any = null;
+  globalThis.fetch = (async (_url: string, init: any) => {
+    observedBody = init?.body ? JSON.parse(init.body) : null;
+    // Minimal valid Ollama JSONL response: one chunk + done
+    const lines = [
+      JSON.stringify({ message: { role: "assistant", content: "ok" } }),
+      JSON.stringify({ done: true, prompt_eval_count: 1, eval_count: 1 }),
+    ].join("\n") + "\n";
+    return new Response(lines, { status: 200, headers: { "Content-Type": "application/x-ndjson" } });
+  }) as unknown as typeof fetch;
+  try {
+    const provider = new (await import("./OllamaProvider.js")).OllamaProvider("http://localhost:11434");
+    const schema = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] };
+    await provider.chat({
+      model: "test-model",
+      messages: [{ role: "user", content: "hi" }],
+      signal: new AbortController().signal,
+      format: schema,
+    });
+    assert.deepEqual(observedBody.format, schema, "format field must reach Ollama");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("OllamaProvider — omits format when caller doesn't pass it", async () => {
+  const realFetch = globalThis.fetch;
+  let observedBody: any = null;
+  globalThis.fetch = (async (_url: string, init: any) => {
+    observedBody = init?.body ? JSON.parse(init.body) : null;
+    const lines = [
+      JSON.stringify({ message: { role: "assistant", content: "ok" } }),
+      JSON.stringify({ done: true }),
+    ].join("\n") + "\n";
+    return new Response(lines, { status: 200 });
+  }) as unknown as typeof fetch;
+  try {
+    const provider = new (await import("./OllamaProvider.js")).OllamaProvider("http://localhost:11434");
+    await provider.chat({
+      model: "test-model",
+      messages: [{ role: "user", content: "hi" }],
+      signal: new AbortController().signal,
+    });
+    assert.equal("format" in observedBody, false, "format must be absent when caller omits it");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

@@ -32,6 +32,14 @@ export interface ChatOpts {
   firstChunkTimeoutMs?: number;
   /** Optional per-call temperature etc. */
   options?: { temperature?: number; top_p?: number; [k: string]: unknown };
+  /** Constrained-decoding schema. When set, the provider asks the model
+   *  to emit output matching this JSON Schema (Ollama's `format` parameter,
+   *  Anthropic's tool_use → input_schema, OpenAI's response_format
+   *  json_schema). Today only OllamaProvider honors this — other
+   *  providers ignore it gracefully (their structured-output stories
+   *  exist but require different plumbing). Pass `"json"` for free-form
+   *  JSON, pass a JSON Schema object for strict shape enforcement. */
+  format?: "json" | Record<string, unknown>;
   /** Diagnostic logger — fires on call start + finish. */
   logDiag?: (record: unknown) => void;
   /** Optional correlation id for diag entries. */

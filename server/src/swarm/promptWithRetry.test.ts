@@ -230,3 +230,84 @@ describe("promptWithRetry — describeError customization", () => {
     assert.equal(captured, "my-custom-summary");
   });
 });
+
+// #86 (2026-05-01): regression cover for the constrained-decoding
+// pass-through. Pre-fix, callers passed ollamaFormat (planner contract,
+// tier-up, etc.) but the post-E3 provider.chat({...}) call dropped it
+// silently, so Ollama's grammar constraint was never applied. The XML
+// pseudo-tool-call leak (#231) on Ollama models was the visible
+// symptom.
+describe("promptWithRetry — ollamaFormat passthrough", () => {
+  it("forwards ollamaFormat as the provider's `format` field", async () => {
+    let observedFormat: unknown = undefined;
+    const provider: SessionProvider = {
+      id: "ollama",
+      async chat(opts) {
+        observedFormat = (opts as { format?: unknown }).format;
+        return { text: '{"ok":true}', elapsedMs: 0, finishReason: "done" };
+      },
+    };
+    __setTestProviderOverride(provider);
+    const agent = {
+      id: "agent-1",
+      index: 1,
+      port: 0,
+      sessionId: "s",
+      model: "test-model",
+      cwd: "",
+    } as unknown as Agent;
+
+    const ctrl = new AbortController();
+    const schema = {
+      type: "object",
+      properties: { ok: { type: "boolean" } },
+      required: ["ok"],
+    };
+    await promptWithRetry(agent, "hi", {
+      signal: ctrl.signal,
+      sleep: fastSleep,
+      ollamaFormat: schema,
+    });
+    assert.deepEqual(observedFormat, schema);
+  });
+
+  it("omits format entirely when ollamaFormat is undefined", async () => {
+    let formatKeyPresent = false;
+    const provider: SessionProvider = {
+      id: "ollama",
+      async chat(opts) {
+        formatKeyPresent = "format" in (opts as object);
+        return { text: "ok", elapsedMs: 0, finishReason: "done" };
+      },
+    };
+    __setTestProviderOverride(provider);
+    const agent = {
+      id: "agent-1", index: 1, port: 0, sessionId: "s", model: "m", cwd: "",
+    } as unknown as Agent;
+    const ctrl = new AbortController();
+    await promptWithRetry(agent, "hi", { signal: ctrl.signal, sleep: fastSleep });
+    assert.equal(formatKeyPresent, false);
+  });
+
+  it("forwards the literal 'json' string for free-form JSON mode", async () => {
+    let observedFormat: unknown = undefined;
+    const provider: SessionProvider = {
+      id: "ollama",
+      async chat(opts) {
+        observedFormat = (opts as { format?: unknown }).format;
+        return { text: "{}", elapsedMs: 0, finishReason: "done" };
+      },
+    };
+    __setTestProviderOverride(provider);
+    const agent = {
+      id: "agent-1", index: 1, port: 0, sessionId: "s", model: "m", cwd: "",
+    } as unknown as Agent;
+    const ctrl = new AbortController();
+    await promptWithRetry(agent, "hi", {
+      signal: ctrl.signal,
+      sleep: fastSleep,
+      ollamaFormat: "json",
+    });
+    assert.equal(observedFormat, "json");
+  });
+});

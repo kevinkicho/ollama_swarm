@@ -39,6 +39,10 @@ export class OllamaProvider implements SessionProvider {
         usageResponse = counts.responseTokens;
       },
       ...(opts.onChunk ? { onChunk: opts.onChunk } : {}),
+      // Constrained-decoding pass-through. Ollama's /api/chat honors
+      // `format: "json"` or `format: <jsonSchema>` natively — when set,
+      // the model literally cannot emit text outside the schema.
+      ...(opts.format !== undefined ? { format: opts.format } : {}),
     });
 
     return {

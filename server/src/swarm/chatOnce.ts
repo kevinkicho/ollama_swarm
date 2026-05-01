@@ -35,6 +35,13 @@ export interface ChatOnceOpts {
   clonePath?: string;
   /** Tool-call notification callback — fires per dispatch with name + ok + preview. */
   onTool?: (info: { tool: string; ok: boolean; preview: string }) => void;
+  /** Constrained-decoding schema — passed straight to provider.chat().
+   *  Today only OllamaProvider honors this (via Ollama's `format` param).
+   *  When set, the model is constrained to emit output matching this
+   *  JSON Schema — no XML pseudo-tool-call markers, no prose preambles,
+   *  no JSON repair retries. Pass `"json"` for free-form JSON, pass a
+   *  JSON Schema object for strict shape enforcement. */
+  format?: "json" | Record<string, unknown>;
 }
 
 // Mirrors what `agent.client.session.prompt` returns so callers don't
@@ -81,6 +88,7 @@ export async function chatOnce(
       ...(tools.length > 0 ? { tools } : {}),
       ...(dispatcher ? { dispatcher } : {}),
       ...(opts.onTool ? { onTool: opts.onTool } : {}),
+      ...(opts.format !== undefined ? { format: opts.format } : {}),
     });
     if (result.usage) {
       tokenTracker.add({

@@ -81,6 +81,7 @@ import {
   parseFirstPassContractResponse,
   type ParsedContract,
 } from "./prompts/firstPassContract.js";
+import { CONTRACT_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
 import {
   AUDITOR_SYSTEM_PROMPT,
   buildAuditorRepairPrompt,
@@ -1412,14 +1413,16 @@ export class BlackboardRunner implements SwarmRunner {
     // Unit 24: planner fallback. If primary planner exhausts retries,
     // fall through to each worker in turn so the run survives a
     // single-shard cloud cold-start failure.
-    // #233: pass ollamaFormat="json" so Ollama's decoder constrains
-    // output to valid JSON. Closes the XML marker leak (#231) at the
-    // source for the contract pass.
+    // #86 (2026-05-01): pass the strict CONTRACT_JSON_SCHEMA instead
+    // of bare "json" so Ollama's decoder constrains output to the
+    // mission+criteria SHAPE, not just any JSON. The repair prompt
+    // path becomes effectively dead code on the Ollama path — kept
+    // for paid providers (Anthropic / OpenAI) which ignore `format`.
     const { response: firstResponse, agentUsed: contractAgent } = await this.promptPlannerSafely(
       agent,
       `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed)}`,
       "swarm",
-      "json",
+      CONTRACT_JSON_SCHEMA,
     );
     if (this.stopping) return;
     this.appendAgent(contractAgent, firstResponse);
@@ -1436,7 +1439,7 @@ export class BlackboardRunner implements SwarmRunner {
           parsed.reason,
         )}`,
         "swarm",
-        "json",
+        CONTRACT_JSON_SCHEMA,
       );
       if (this.stopping) return;
       this.appendAgent(repairAgent, repairResponse);
