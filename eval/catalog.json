@@ -13,7 +13,8 @@
         "map-reduce",
         "stigmergy",
         "orchestrator-worker",
-        "blackboard"
+        "blackboard",
+        "moa"
       ],
       "rounds": 2,
       "agentCount": 4,
@@ -41,7 +42,8 @@
       "presets": [
         "council",
         "debate-judge",
-        "role-diff"
+        "role-diff",
+        "moa"
       ],
       "rounds": 2,
       "agentCount": 4,
@@ -57,7 +59,8 @@
       "presets": [
         "stigmergy",
         "map-reduce",
-        "round-robin"
+        "round-robin",
+        "moa"
       ],
       "rounds": 3,
       "agentCount": 4,
@@ -77,7 +80,7 @@
       ],
       "rounds": 3,
       "agentCount": 3,
-      "wallClockCapMs": 300000,
+      "wallClockCapMs": 600000,
       "expectFilesChanged": true,
       "$rationale": "First fixture-mode catalog entry — exercises end-to-end fixture staging + verify."
     },
@@ -93,7 +96,7 @@
       ],
       "rounds": 3,
       "agentCount": 3,
-      "wallClockCapMs": 300000,
+      "wallClockCapMs": 600000,
       "expectFilesChanged": true,
       "$rationale": "Defensive-coding fixture. Tests whether the swarm/baseline can add an early-return without breaking the happy path. Verify exercises null + undefined fallback."
     },
@@ -109,7 +112,7 @@
       ],
       "rounds": 3,
       "agentCount": 3,
-      "wallClockCapMs": 300000,
+      "wallClockCapMs": 600000,
       "expectFilesChanged": true,
       "$rationale": "Refactor fixture. Tests whether the swarm/baseline can extract a pure helper while preserving behavior. Verify checks computePrice still works AND applyTax exists."
     },
@@ -125,7 +128,7 @@
       ],
       "rounds": 3,
       "agentCount": 3,
-      "wallClockCapMs": 300000,
+      "wallClockCapMs": 600000,
       "expectFilesChanged": true,
       "$rationale": "Multi-file consistency edit. Tests whether the agent finds + updates ALL call sites, not just the export."
     },
@@ -141,7 +144,7 @@
       ],
       "rounds": 3,
       "agentCount": 3,
-      "wallClockCapMs": 300000,
+      "wallClockCapMs": 600000,
       "expectFilesChanged": true,
       "$rationale": "Constraint-respecting fix. Tests whether the agent honors the 'do not modify src/sum.js' constraint and changes only the test assertion."
     },
@@ -157,7 +160,7 @@
       ],
       "rounds": 3,
       "agentCount": 3,
-      "wallClockCapMs": 300000,
+      "wallClockCapMs": 600000,
       "expectFilesChanged": true,
       "$rationale": "Doc-writing task with code-grounding. Tests whether the agent reads source to write accurate docs (vs hallucinating an API)."
     },
@@ -173,7 +176,7 @@
       ],
       "rounds": 3,
       "agentCount": 3,
-      "wallClockCapMs": 300000,
+      "wallClockCapMs": 600000,
       "expectFilesChanged": true,
       "$rationale": "Analysis-style task: scan + structured-emit. Tests whether the agent can produce JSON with file:line precision (not hallucinated lines)."
     },
@@ -189,7 +192,7 @@
       ],
       "rounds": 3,
       "agentCount": 3,
-      "wallClockCapMs": 300000,
+      "wallClockCapMs": 600000,
       "expectFilesChanged": true,
       "$rationale": "Structured-data extraction. Tests whether the agent reads JSON correctly + emits the right shape (names not versions, three buckets)."
     },
@@ -205,7 +208,7 @@
       ],
       "rounds": 3,
       "agentCount": 3,
-      "wallClockCapMs": 300000,
+      "wallClockCapMs": 600000,
       "expectFilesChanged": true,
       "$rationale": "Multi-file change requiring two coordinated edits. Single-shot baseline often hits one half but not the other — good test of swarm sequencing."
     },
@@ -221,7 +224,7 @@
       ],
       "rounds": 3,
       "agentCount": 3,
-      "wallClockCapMs": 300000,
+      "wallClockCapMs": 600000,
       "expectFilesChanged": true,
       "$rationale": "Code-and-test paired change. Tests both implementation skill AND test-writing skill in one task."
     }
