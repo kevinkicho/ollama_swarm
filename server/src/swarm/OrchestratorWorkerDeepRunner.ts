@@ -547,6 +547,23 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
       ),
     );
     if (this.stopping) return;
+    // T192 (2026-05-04): tier-skip honor. T183 added the prompt schema
+    // (`tierSkip: true` + `selfReport`); this wires the runner to
+    // honor it. When mid-lead opts to handle the coarse subtask
+    // itself, post the selfReport as the upward synthesis and skip
+    // workers entirely. Cuts a round-trip when the orchestrator
+    // over-decomposed a trivial subtask.
+    const tierSkip = parseMidLeadTierSkip(midPlanText);
+    if (tierSkip.tierSkip && tierSkip.selfReport) {
+      this.appendSystem(
+        `[mid-lead ${midLead.index}] tier-skip: handling coarse subtask "${truncate(coarseAssignment.subtask)}" directly without dispatching workers (saves ${workers.length} worker turn${workers.length === 1 ? "" : "s"}).`,
+      );
+      // Post the selfReport as the mid-lead's synthesis upward.
+      this.appendSystem(
+        `[mid-lead ${midLead.index}] tier-skip self-report:\n\n${tierSkip.selfReport.trim()}`,
+      );
+      return;
+    }
     const midPlan = parsePlan(midPlanText, workers.map((w) => w.index));
     if (midPlan.assignments.length === 0) {
       this.appendSystem(
@@ -990,4 +1007,38 @@ export function buildTopSynthesisPrompt(
 
 function truncate(s: string, max: number = 80): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+// T192 (2026-05-04): parse the mid-lead's tier-skip request from raw
+// plan output. Returns `{tierSkip, selfReport?}`. Tolerant of fenced
+// JSON + bare braces; same parser pattern as parsePlan in flat OW.
+// Both fields optional in the JSON; an absent / falsy `tierSkip`
+// returns `{tierSkip: false}` so the runner-side check is simple.
+export function parseMidLeadTierSkip(raw: string): {
+  tierSkip: boolean;
+  selfReport?: string;
+} {
+  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  const candidate = fenceMatch ? fenceMatch[1] : raw;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(candidate);
+  } catch {
+    const braceMatch = candidate.match(/\{[\s\S]*\}/);
+    if (!braceMatch) return { tierSkip: false };
+    try {
+      parsed = JSON.parse(braceMatch[0]);
+    } catch {
+      return { tierSkip: false };
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return { tierSkip: false };
+  const o = parsed as Record<string, unknown>;
+  const tierSkip = o.tierSkip === true;
+  if (!tierSkip) return { tierSkip: false };
+  const selfReport =
+    typeof o.selfReport === "string" && o.selfReport.trim().length > 0
+      ? o.selfReport.trim()
+      : undefined;
+  return { tierSkip: true, ...(selfReport ? { selfReport } : {}) };
 }

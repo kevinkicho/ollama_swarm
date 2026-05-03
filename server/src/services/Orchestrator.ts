@@ -505,6 +505,15 @@ export class Orchestrator {
     }
     try {
       await runner.start(cfg);
+      // T192 (2026-05-04): forward chain. When cfg.chainTo is set,
+      // schedule a follow-up run that fires after this run truly
+      // completes. Runners use void this.loop() (fire-and-forget),
+      // so we can't await completion here — instead, poll isRunning()
+      // in a background task. Recursion guard: chainTo cleared on
+      // the chained run.
+      if (cfg.chainTo) {
+        void this.scheduleForwardChain(cfg, runId, cfg.chainTo);
+      }
     } catch (err) {
       // Runner's start threw partway through (e.g. clone failed, spawn timed out).
       // Clean up anything it managed to create and drop the reference — otherwise
@@ -580,6 +589,90 @@ export class Orchestrator {
       // could be trapped behind the timer.
       this.runStatePersister?.stop();
       this.runStatePersister = undefined;
+    }
+  }
+
+  // T192 (2026-05-04): forward chain to a follow-up preset. Polls the
+  // active runner until it stops; reads the top extracted next-action
+  // from this run's next-actions.json sibling; fires a new run with
+  // cfg.chainTo as the preset and the action as the directive. Soft
+  // failures (file missing, no actions, parse error, race with user
+  // starting another run) are logged + swallowed.
+  private async scheduleForwardChain(
+    originalCfg: RunConfig,
+    originalRunId: string,
+    chainPreset: "blackboard" | "baseline",
+  ): Promise<void> {
+    // Poll until the original runner truly stops (terminal phase).
+    // Cap at 4h so a wedged runner doesn't keep this task alive
+    // forever; the caller (orchestrator.start) returned long ago.
+    const POLL_MS = 5_000;
+    const MAX_WAIT_MS = 4 * 60 * 60_000;
+    const startedAt = Date.now();
+    while (
+      this.runner &&
+      this.runId === originalRunId &&
+      this.runner.isRunning() &&
+      Date.now() - startedAt < MAX_WAIT_MS
+    ) {
+      await new Promise((r) => setTimeout(r, POLL_MS));
+    }
+    // If the user kicked another run while we were waiting, our
+    // originalRunId no longer matches — abandon the chain silently.
+    if (this.runId !== originalRunId) return;
+    // Read the top action from the next-actions JSON sibling. We
+    // dynamically import the helper to keep the orchestrator's
+    // import surface lean.
+    let topAction: string | null = null;
+    try {
+      const { readTopNextAction } = await import("../swarm/wrapUpApplyPhase.js");
+      topAction = await readTopNextAction({
+        clonePath: originalCfg.localPath,
+        runId: originalRunId,
+        // The presetName field selects which JSON file to read —
+        // pass the ORIGINAL preset (e.g. "stigmergy"), not the chain
+        // target. The original run wrote next-actions-stigmergy-*.json.
+        presetName: originalCfg.preset,
+      });
+    } catch (err) {
+      this.opts.emit({
+        type: "error",
+        message: `forward-chain: failed to read next-actions JSON — ${err instanceof Error ? err.message : String(err)}`,
+      });
+      return;
+    }
+    if (!topAction) {
+      this.opts.emit({
+        type: "error",
+        message: `forward-chain: no extractable next-action in deliverable; nothing to chain to ${chainPreset}.`,
+      });
+      return;
+    }
+    // Stop the prior run cleanly so we get a fresh slate, then fire
+    // the chained run. Recursion guard: chainTo cleared.
+    try {
+      await this.stop();
+    } catch {
+      // best-effort
+    }
+    const chainedCfg: RunConfig = {
+      ...originalCfg,
+      preset: chainPreset,
+      userDirective: topAction,
+      chainTo: undefined, // recursion guard
+      // Keep agentCount; bump to blackboard's min if needed.
+      agentCount:
+        chainPreset === "blackboard" && originalCfg.agentCount < 3
+          ? 3
+          : originalCfg.agentCount,
+    };
+    try {
+      await this.start(chainedCfg);
+    } catch (err) {
+      this.opts.emit({
+        type: "error",
+        message: `forward-chain: chained ${chainPreset} run failed to start — ${err instanceof Error ? err.message : String(err)}`,
+      });
     }
   }
 

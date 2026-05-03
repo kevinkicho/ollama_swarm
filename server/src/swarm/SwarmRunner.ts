@@ -318,6 +318,31 @@ export interface RunConfig {
   moaProposerModel?: string;
   moaAggregatorModel?: string;
   /**
+   * T192 (2026-05-04): opt-in forward chain — when this run completes,
+   * automatically fire a follow-up run with the given preset using the
+   * top extracted next-action (from this run's next-actions.json) as
+   * the directive. Enables stigmergy → blackboard, council → blackboard,
+   * etc. Default OFF (T2.3 only ships a chain HINT in the transcript).
+   *
+   * Recursion guard: the chained run has chainTo cleared so it can't
+   * re-trigger. Chained run inherits cfg.repoUrl, localPath, model,
+   * and all paid-provider settings; preset + userDirective are
+   * replaced.
+   */
+  chainTo?: "blackboard" | "baseline";
+  /**
+   * T192 (2026-05-04): opt-in self-critique pass for the baseline preset.
+   * After the baseline produces hunks, fire a second prompt that shows
+   * the model its OWN hunks + asks it to APPROVE or REVISE before
+   * commit. ~2× the cost; often catches obvious mistakes (search-text
+   * not actually in file, missed caller updates, no-op replacements).
+   *
+   * Default off — preserves baseline's "thinnest honest comparison"
+   * role for the eval scoreboard. Opt-in on a per-run basis when you
+   * want the quality bump.
+   */
+  baselineSelfCritique?: boolean;
+  /**
    * Task #102 + T2.2 (2026-05-04): opt-in wrap-up apply phase.
    *
    * **Debate-judge** (Task #102 original use): post-verdict "build"

@@ -67,6 +67,11 @@ export class MapReduceRunner implements SwarmRunner {
   // Phase 2d: mapper slice assignments, keyed by agentId. Empty map
   // pre-run or if slicing hasn't happened yet.
   private mapperSlices: Record<string, string[]> = {};
+  // T192 (2026-05-04): per-mapper-index reframing instructions extracted
+  // from the previous reducer turn's RE-TASK lines. Cleared at start
+  // of each cycle, populated after reducer turn, threaded into next
+  // cycle's mapper prompts. Keyed by mapper agentIndex (NOT id).
+  private nextCycleReframings: Map<number, string> = new Map();
   // Phase B (Task #97): set of mapper agent IDs that have flagged
   // their slice complete. When this matches the live mapper set, the
   // run can stop early — no point reducing the same content again.
@@ -284,9 +289,16 @@ export class MapReduceRunner implements SwarmRunner {
         // Pattern 3 cold-start queue race confirmed in 2026-04-24 logs.
         const seedSnapshot = this.transcript.filter((e) => e.role === "system");
         const transcriptLenBefore = this.transcript.length;
+        // T192 (2026-05-04): pull this cycle's reframings (set by the
+        // PREVIOUS cycle's reducer turn). Empty on cycle 1 always.
+        // Cleared after we read them so cycle r+2 doesn't get stale
+        // framings from cycle r.
+        const reframingsThisCycle = this.nextCycleReframings;
+        this.nextCycleReframings = new Map();
         await staggerStart(mappers, (m, i) => {
           const mySlice = slices[i] ?? [];
-          return this.runMapperTurn(m, r, cfg.rounds, mySlice, seedSnapshot, cfg.userDirective);
+          const reframing = reframingsThisCycle.get(m.index);
+          return this.runMapperTurn(m, r, cfg.rounds, mySlice, seedSnapshot, cfg.userDirective, reframing);
         });
         if (this.stopping) break;
         // Task #146: dead-loop guard. If every mapper produced empty/junk
@@ -318,6 +330,28 @@ export class MapReduceRunner implements SwarmRunner {
         // reports from this cycle) and produces a synthesis.
         this.appendSystem(`Cycle ${r}/${cfg.rounds}: REDUCE phase — reducer synthesizing.`);
         await this.runReducerTurn(reducer, r, cfg.rounds, isEarlyStop || undefined, cfg.userDirective);
+
+        // T192 (2026-05-04): honor RE-TASK lines from reducer output.
+        // Extract them + stash in nextCycleReframings so the next
+        // cycle's mappers see the new framing prepended to their
+        // prompt. Skipped on the final cycle (no next cycle to honor).
+        if (!isEarlyStop && r < cfg.rounds) {
+          const lastReducerEntry = [...this.transcript]
+            .reverse()
+            .find((e) => e.role === "agent" && e.agentIndex === 1);
+          if (lastReducerEntry?.text) {
+            const reframings = parseReducerReTaskLines(lastReducerEntry.text);
+            this.nextCycleReframings = reframings;
+            if (reframings.size > 0) {
+              const summary = [...reframings.entries()]
+                .map(([idx, frame]) => `Mapper ${idx}: ${frame.slice(0, 60)}…`)
+                .join("; ");
+              this.appendSystem(
+                `[T192 reducer re-task] ${reframings.size} mapper(s) reframed for cycle ${r + 1}: ${summary}`,
+              );
+            }
+          }
+        }
 
         if (isEarlyStop) {
           this.earlyStopDetail =
@@ -460,12 +494,13 @@ export class MapReduceRunner implements SwarmRunner {
     slice: readonly string[],
     seedSnapshot: readonly TranscriptEntry[],
     userDirective?: string,
+    reframing?: string,
   ): Promise<void> {
     // 2026-05-02 (chat lever #3): per-agent @mention filter on the seed
     // snapshot so user entries targeted elsewhere don't leak into this
     // mapper's prompt.
     const visibleSeed = seedSnapshot.filter((e) => userEntryVisibleTo(e, agent.id));
-    const prompt = buildMapperPrompt(agent.index, round, totalRounds, slice, visibleSeed, userDirective);
+    const prompt = buildMapperPrompt(agent.index, round, totalRounds, slice, visibleSeed, userDirective, reframing);
     // Phase B (Task #97): scan the mapper's last few lines for a
     // COMPLETE: true|false declaration. Tracking is sticky — once a
     // mapper says complete, it stays complete; later cycles can't
@@ -819,6 +854,10 @@ export function buildMapperPrompt(
   slice: readonly string[],
   seedSnapshot: readonly TranscriptEntry[],
   userDirective?: string,
+  // T192 (2026-05-04): optional reframing from the previous reducer
+  // turn's RE-TASK line. Surfaced as a high-priority directive ABOVE
+  // the lens block so the mapper applies the new framing this cycle.
+  reframing?: string,
 ): string {
   const seedText = seedSnapshot.map((e) => `[SYSTEM] ${e.text}`).join("\n\n");
   const sliceList = slice.length === 0 ? "(empty slice)" : slice.join(", ");
@@ -863,6 +902,19 @@ export function buildMapperPrompt(
     "Inspect ONLY the entries in your slice. Do not read or reference files outside your slice.",
     "Your working directory IS the project clone — use file-read, grep, and find-files tools to actually read the assigned entries.",
     "",
+    // T192 (2026-05-04): reducer reframing — when set, prepended above
+    // the lens block as a high-priority cycle-specific instruction.
+    // Tells the mapper "the previous reducer noticed X — this cycle,
+    // re-examine your slice through that frame."
+    ...(reframing && reframing.trim().length > 0
+      ? [
+          `### REDUCER RE-TASK FOR YOUR SLICE THIS CYCLE`,
+          `The previous reducer flagged you for re-examination with new framing:`,
+          `> ${reframing.trim()}`,
+          `Apply this framing IN ADDITION TO your standard lens (below). Both signals should shape your findings.`,
+          "",
+        ]
+      : []),
     // 2026-05-04 (idea T174): per-mapper lens. Each mapper biases its
     // reading toward a different dimension so the swarm covers more
     // ground per cycle without re-reading the same files from the
@@ -993,5 +1045,28 @@ export function buildReducerPrompt(
     "",
     "Now write your synthesis.",
   ].join("\n");
+}
+
+// T192 (2026-05-04): parse RE-TASK lines from a reducer's output.
+// Format: `RE-TASK: Mapper <N> | new-framing: <one short sentence>`
+// (case-insensitive on the keywords; tolerant of leading whitespace +
+// optional bullet markers). Returns a Map<mapperIndex, framing>.
+// Multiple RE-TASK lines for the same Mapper N → last one wins
+// (assumption: reducer wouldn't naturally double-assign; if it did
+// the last instruction is the latest thinking).
+export function parseReducerReTaskLines(text: string): Map<number, string> {
+  const out = new Map<number, string>();
+  if (!text) return out;
+  // Per-line scan — allow leading whitespace, optional bullet/quote
+  // markers, then RE-TASK keyword.
+  const re = /^[\s>*-]*RE[- ]TASK\s*:\s*Mapper\s+(\d+)\s*\|\s*new[- ]framing\s*:\s*(.+?)$/gim;
+  for (const m of text.matchAll(re)) {
+    const idx = Number.parseInt(m[1]!, 10);
+    const framing = m[2]!.trim();
+    if (Number.isFinite(idx) && idx >= 1 && framing.length > 0) {
+      out.set(idx, framing);
+    }
+  }
+  return out;
 }
 

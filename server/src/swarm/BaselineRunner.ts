@@ -34,6 +34,10 @@ import { formatChatReceipt } from "./chatReceipt.js";
 import { applyHunks, type Hunk } from "./blackboard/applyHunks.js";
 import { parseWorkerResponse } from "./blackboard/prompts/worker.js";
 import { realFilesystemAdapter, realGitAdapter } from "./blackboard/v2Adapters.js";
+import simpleGit from "simple-git";
+// T192: import the self-critique helpers shipped in T179.
+// Note: forward-references (the helpers are defined below the class
+// in the same file) — TypeScript hoists exports so this works.
 import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
 import { pickProvider } from "../providers/pickProvider.js";
 import { tokenTracker } from "../services/ollamaProxy.js";
@@ -150,7 +154,12 @@ export class BaselineRunner implements SwarmRunner {
 
     const repoFiles = await this.opts.repos.listRepoFiles(destPath, { maxFiles: 50 });
     const readme = await this.opts.repos.readReadme(destPath);
-    const prompt = buildBaselinePrompt({ directive, repoFiles, readme });
+    // T192 (2026-05-04): T179 added recentCommits to the prompt schema
+    // but never populated it. Fix: read top-10 short-form commits via
+    // simpleGit so baseline sees recent project activity. Best-effort —
+    // empty/failed reads land an empty array (back-compat).
+    const recentCommits = await this.collectRecentCommits(destPath);
+    const prompt = buildBaselinePrompt({ directive, repoFiles, readme, recentCommits });
 
     this.appendSystem("Baseline prompt sent.");
     let raw: string;
@@ -209,23 +218,83 @@ export class BaselineRunner implements SwarmRunner {
       return;
     }
 
+    // T192 (2026-05-04): self-critique pass. T179 added the prompt
+    // builder + parser; this wires the runner-side fire when
+    // cfg.baselineSelfCritique is true. Pattern: take the just-parsed
+    // hunks, JSON-stringify them, send them BACK to the same agent
+    // with the critique prompt, parse APPROVE | REVISE, on REVISE
+    // replace hunks before apply. Best-effort: critique-call failure
+    // falls through to the original hunks.
+    let finalHunks: readonly Hunk[] = parsed.hunks;
+    if (cfg.baselineSelfCritique) {
+      try {
+        const critiquePrompt = buildBaselineSelfCritiquePrompt({
+          directive,
+          proposedHunksJson: JSON.stringify({ hunks: parsed.hunks }, null, 2),
+        });
+        this.appendSystem("[T192 self-critique] Asking baseline to review its own hunks before commit.");
+        const { provider: cprov, modelId: cmodel } = pickProvider(cfg.model);
+        const ct0 = Date.now();
+        const cresult = await cprov.chat({
+          model: cmodel,
+          messages: [{ role: "user", content: critiquePrompt }],
+          signal: abortController.signal,
+          agentId: agent.id,
+        });
+        if (cresult.usage) {
+          tokenTracker.add({
+            ts: Date.now(),
+            promptTokens: cresult.usage.promptTokens,
+            responseTokens: cresult.usage.responseTokens,
+            durationMs: Date.now() - ct0,
+            model: cfg.model,
+            path: `/baseline-self-critique (${cprov.id})`,
+          });
+        }
+        if (cresult.finishReason === "error" || cresult.finishReason === "aborted") {
+          this.appendSystem(`[T192 self-critique] critique call ${cresult.finishReason} — proceeding with original hunks.`);
+        } else {
+          const ctext = extractText(cresult.text) ?? cresult.text;
+          const verdict = parseBaselineSelfCritique(ctext, expectedFiles);
+          if (!verdict) {
+            this.appendSystem("[T192 self-critique] could not parse verdict — proceeding with original hunks.");
+          } else if (verdict.verdict === "APPROVE") {
+            this.appendSystem(`[T192 self-critique] APPROVE — ${verdict.reason}`);
+          } else {
+            // REVISE — replace hunks with the corrected set
+            const revised = verdict.hunks ?? [];
+            this.appendSystem(`[T192 self-critique] REVISE — ${verdict.reason}. Hunks replaced (${parsed.hunks.length} → ${revised.length}).`);
+            if (revised.length === 0) {
+              this.appendSystem("[T192 self-critique] revised hunks empty → critique recommended NO commit; ending baseline.");
+              this.setPhase("completed");
+              return;
+            }
+            finalHunks = revised;
+          }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.appendSystem(`[T192 self-critique] failed: ${msg} — proceeding with original hunks.`);
+      }
+    }
+
     const fsAdapter = realFilesystemAdapter(destPath);
     const gitAdapter = realGitAdapter(destPath);
     try {
       const result = await applyBaselineHunks({
-        hunks: parsed.hunks,
+        hunks: finalHunks,
         fs: fsAdapter,
       });
       if (result.applied === 0) {
         this.appendSystem(
-          `Baseline produced ${parsed.hunks.length} hunk(s) but 0 applied: ${result.reasons.join("; ")}`,
+          `Baseline produced ${finalHunks.length} hunk(s) but 0 applied: ${result.reasons.join("; ")}`,
         );
         this.setPhase("completed");
         return;
       }
       await gitAdapter.commitAll(`baseline: ${directive.slice(0, 60)}`, "baseline-agent");
       this.appendSystem(
-        `Baseline applied ${result.applied}/${parsed.hunks.length} hunk(s) and committed.`,
+        `Baseline applied ${result.applied}/${finalHunks.length} hunk(s) and committed.`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -239,6 +308,23 @@ export class BaselineRunner implements SwarmRunner {
   private setPhase(p: SwarmPhase): void {
     this.phase = p;
     this.opts.emit({ type: "swarm_state", phase: p, round: 0 });
+  }
+
+  // T192 (2026-05-04): collect top-N short-form commits for the
+  // baseline prompt's recentCommits field. Best-effort — empty
+  // result on parse failure / empty repo / git error. Each entry
+  // is "<short-sha> <subject>".
+  private async collectRecentCommits(
+    clonePath: string,
+    n: number = 10,
+  ): Promise<string[]> {
+    try {
+      const git = simpleGit(clonePath);
+      const log = await git.log({ maxCount: n });
+      return log.all.map((c) => `${c.hash.slice(0, 7)} ${c.message}`);
+    } catch {
+      return [];
+    }
   }
 
   private appendSystem(text: string, summary?: SwarmEvent extends { summary: infer S } ? S : never): void {

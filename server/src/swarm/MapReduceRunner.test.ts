@@ -220,16 +220,19 @@ describe("MapReduceRunner — directive plumbing (structural, post Phase A)", ()
     assert.match(MR_SRC, /buildDirectiveBlock\(/);
   });
 
-  it("(#1) runMapperTurn forwards cfg.userDirective into buildMapperPrompt", () => {
+  it("(#1) runMapperTurn forwards cfg.userDirective + reframing into buildMapperPrompt", () => {
+    // T192 (2026-05-04): runMapperTurn now also accepts a `reframing`
+    // arg from the previous reducer's RE-TASK lines. Both directive
+    // AND reframing must be threaded through.
     assert.match(
       MR_SRC,
-      /this\.runMapperTurn\([\s\S]{0,200}cfg\.userDirective\)/,
-      "loop must thread cfg.userDirective into runMapperTurn",
+      /this\.runMapperTurn\([\s\S]{0,300}cfg\.userDirective[\s\S]{0,200}reframing/,
+      "loop must thread cfg.userDirective + reframing into runMapperTurn",
     );
     assert.match(
       MR_SRC,
-      /buildMapperPrompt\(agent\.index, round, totalRounds, slice, visibleSeed, userDirective\)/,
-      "runMapperTurn must thread userDirective into buildMapperPrompt",
+      /buildMapperPrompt\(\s*agent\.index,\s*round,\s*totalRounds,\s*slice,\s*visibleSeed,\s*userDirective,\s*reframing,?\s*\)/,
+      "runMapperTurn must thread userDirective + reframing into buildMapperPrompt",
     );
   });
 
