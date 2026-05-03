@@ -40,6 +40,10 @@ import {
   formatNextActionsMarkdown,
   type NextAction,
 } from "./qualityPasses.js";
+import {
+  appendMemoryEntry,
+  MEMORY_MAX_LESSONS_PER_ENTRY,
+} from "./blackboard/memoryStore.js";
 
 export interface DeliverableSection {
   /** Rendered as ## H2 in the markdown file. Keep short — section
@@ -205,7 +209,15 @@ export async function runQualityPasses(input: {
  *  carries the metadata the UI uses to render a "Saved to X" bubble.
  *
  *  Returns the underlying writeDeliverable result so the caller can
- *  branch on success/failure. */
+ *  branch on success/failure.
+ *
+ *  T2.3 (2026-05-04): when the next-actions JSON has at least one
+ *  extracted action, ALSO post a "chain hint" system message
+ *  recommending the user fire a follow-up blackboard run with the
+ *  top action as directive. Deliberately a hint, not an auto-launch
+ *  — auto-firing risks recursion + races + cloud-quota burn without
+ *  user opt-in. The hint is plain text the UI renders as a system
+ *  bubble; future work could add a "Continue as blackboard" button. */
 export function writeDeliverableAndEmit(
   input: DeliverableInput,
   ctx: {
@@ -237,6 +249,34 @@ export function writeDeliverableAndEmit(
   };
   ctx.transcript.push(entry);
   ctx.emit({ type: "transcript_append", entry });
+
+  // T2.3 chain hint — post-deliverable, opportunistic. Skip when
+  // (a) deliverable failed (no actions to chain on), (b) preset is
+  // already blackboard (don't recommend chaining to itself), or
+  // (c) no actions extractable (nextActionsCount falsy/0).
+  if (
+    result.ok &&
+    input.preset !== "blackboard" &&
+    input.preset !== "baseline" &&
+    typeof result.nextActionsCount === "number" &&
+    result.nextActionsCount > 0
+  ) {
+    const topAction = extractNextActions(buildDeliverableMarkdown(input))[0];
+    if (topAction) {
+      const truncated =
+        topAction.text.length > 200 ? topAction.text.slice(0, 197) + "..." : topAction.text;
+      const hintText = `Next: continue this run with preset=blackboard, directive="${truncated}" — see ${result.nextActionsFile ?? "next-actions JSON"} for the full ranked list.`;
+      const hintEntry: TranscriptEntry = {
+        id: randomUUID(),
+        role: "system",
+        text: hintText,
+        ts: Date.now(),
+      };
+      ctx.transcript.push(hintEntry);
+      ctx.emit({ type: "transcript_append", entry: hintEntry });
+    }
+  }
+
   return result;
 }
 
@@ -279,6 +319,18 @@ export function writeDeliverable(input: DeliverableInput): DeliverableResult {
     clonePath: input.clonePath,
     deliverableMarkdown: md,
   });
+  // T3.1 (2026-05-04): also contribute to .swarm-memory.jsonl so
+  // SUBSEQUENT runs on the same clone see the prior synthesis. Lessons
+  // = top N extracted next-actions (already computed by writeNextActionsJson;
+  // re-run extractor for the slim integration). Fire-and-forget — memory
+  // write is async and the deliverable signature stays sync. Failures
+  // are swallowed; the deliverable already landed.
+  appendDiscussionMemoryFireAndForget({
+    preset: input.preset,
+    runId: input.runId,
+    clonePath: input.clonePath,
+    deliverableMarkdown: md,
+  });
   return {
     ok: true,
     filename,
@@ -288,6 +340,50 @@ export function writeDeliverable(input: DeliverableInput): DeliverableResult {
       ? { nextActionsFile: jsonResult.filename, nextActionsCount: jsonResult.count }
       : {}),
   };
+}
+
+/** T3.1 (2026-05-04): write a memory entry derived from this run's
+ *  next-actions so subsequent runs on the same clone see what prior
+ *  swarms already proposed. Async-fire-and-forget so writeDeliverable
+ *  can stay sync. Best-effort: failures (memory file unwritable, no
+ *  actions extracted, etc.) are swallowed.
+ *
+ *  Schema mapping (memoryStore.ts MemoryEntry):
+ *    tier: 0 — discussion presets don't ladder ambition
+ *    commits: 0 — no code-modify, no commits to count
+ *    lessons: top N action texts (capped at MEMORY_MAX_LESSONS_PER_ENTRY)
+ */
+function appendDiscussionMemoryFireAndForget(input: {
+  preset: string;
+  runId: string;
+  clonePath: string;
+  deliverableMarkdown: string;
+}): void {
+  void (async () => {
+    try {
+      const actions = extractNextActions(input.deliverableMarkdown);
+      if (actions.length === 0) return; // nothing actionable, no memory point
+      // Priority order then truncate to schema cap. Each lesson prefixed
+      // with the preset so future planners can tell which kind of run
+      // produced it.
+      const order = { high: 3, medium: 2, low: 1 } as const;
+      const sorted = [...actions].sort(
+        (a, b) => (order[b.priority] ?? 0) - (order[a.priority] ?? 0),
+      );
+      const lessons = sorted
+        .slice(0, MEMORY_MAX_LESSONS_PER_ENTRY)
+        .map((a) => `[${input.preset}] ${a.text}`);
+      await appendMemoryEntry(input.clonePath, {
+        ts: Date.now(),
+        runId: input.runId,
+        tier: 0,
+        commits: 0,
+        lessons,
+      });
+    } catch {
+      // Swallowed — deliverable.ok already returned true; memory is bonus.
+    }
+  })();
 }
 
 /** T1.3: structured next-actions JSON written alongside every deliverable.

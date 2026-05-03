@@ -165,6 +165,61 @@ describe("writeDeliverable — on-disk roundtrip", () => {
     assert.ok(typeof result.reason === "string" && result.reason.length > 0);
   });
 
+  it("(T3.1) appends a memory entry to .swarm-memory.jsonl with extracted actions as lessons", async () => {
+    const result = writeDeliverable({
+      preset: "council",
+      runId: "12345678-mem-test",
+      clonePath: workdir,
+      title: "Council deliverable",
+      sections: [
+        { title: "Answer to directive", body: "Team converged on X." },
+        {
+          title: "Next actions",
+          body: "**HIGH priority:**\n- Add coverage for src/api/users.ts\n- Fix race in worker pool",
+        },
+      ],
+    });
+    assert.equal(result.ok, true);
+    // appendMemoryEntry is fire-and-forget (async). Give it a tick to land.
+    await new Promise((r) => setTimeout(r, 100));
+    const memPath = join(workdir, ".swarm-memory.jsonl");
+    assert.ok(existsSync(memPath), ".swarm-memory.jsonl must be created");
+    const lines = readFileSync(memPath, "utf8").trim().split("\n");
+    assert.ok(lines.length >= 1);
+    const entry = JSON.parse(lines[lines.length - 1]!);
+    assert.equal(entry.runId, "12345678-mem-test");
+    assert.equal(entry.tier, 0);
+    assert.equal(entry.commits, 0);
+    assert.ok(Array.isArray(entry.lessons));
+    assert.ok(entry.lessons.length >= 2);
+    // Each lesson is preset-tagged so subsequent planner seeds know
+    // which kind of run produced them.
+    assert.ok(entry.lessons.every((l: string) => l.startsWith("[council]")));
+  });
+
+  it("(T3.1) skips memory append when no next-actions extractable (degenerate run)", async () => {
+    const result = writeDeliverable({
+      preset: "moa",
+      runId: "no-actions-runId",
+      clonePath: workdir,
+      title: "Empty run",
+      sections: [{ title: "Body", body: "no recognizable actions here" }],
+    });
+    assert.equal(result.ok, true);
+    await new Promise((r) => setTimeout(r, 100));
+    const memPath = join(workdir, ".swarm-memory.jsonl");
+    // The earlier T3.1 test in this describe block may have created the
+    // file; check that THIS specific runId didn't add an entry.
+    if (existsSync(memPath)) {
+      const lines = readFileSync(memPath, "utf8").trim().split("\n").filter((l) => l.length > 0);
+      const entries = lines.map((l) => JSON.parse(l));
+      assert.ok(
+        !entries.some((e) => e.runId === "no-actions-runId"),
+        "no entry should be written for the no-actions runId",
+      );
+    }
+  });
+
   it("(T1.3) writes sibling next-actions-<preset>-<runIdPrefix>-<iso>.json with extracted actions", () => {
     const result = writeDeliverable({
       preset: "council",
@@ -238,6 +293,70 @@ describe("writeDeliverableAndEmit — transcript + WS integration", () => {
     }
     assert.equal(events.length, 1);
     assert.equal(events[0].type, "transcript_append");
+  });
+
+  it("(T2.3) when actions extractable: also posts a chain-hint system entry recommending blackboard follow-up", () => {
+    const transcript: TranscriptEntry[] = [];
+    const events: SwarmEvent[] = [];
+    const result = writeDeliverableAndEmit(
+      {
+        preset: "council",
+        runId: "chain-test",
+        clonePath: workdir,
+        title: "Council deliverable",
+        sections: [
+          { title: "Answer", body: "Team converged on X." },
+          {
+            title: "Next actions",
+            body: "**HIGH priority:**\n- Add coverage for src/api/users.ts\n- Fix the race in worker pool",
+          },
+        ],
+      },
+      { transcript, emit: (e) => events.push(e) },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(transcript.length, 2, "deliverable bubble + chain hint");
+    assert.match(transcript[0].text, /Deliverable saved →/);
+    assert.match(transcript[1].text, /Next: continue this run with preset=blackboard/);
+    assert.match(transcript[1].text, /Add coverage for src\/api\/users\.ts/);
+    assert.equal(events.length, 2);
+  });
+
+  it("(T2.3) blackboard preset itself does NOT get a chain hint (would loop)", () => {
+    const transcript: TranscriptEntry[] = [];
+    const events: SwarmEvent[] = [];
+    writeDeliverableAndEmit(
+      {
+        preset: "blackboard",
+        runId: "bb-test",
+        clonePath: workdir,
+        title: "Blackboard deliverable",
+        sections: [
+          {
+            title: "Next actions",
+            body: "**HIGH priority:**\n- Add coverage for src/api/users.ts",
+          },
+        ],
+      },
+      { transcript, emit: (e) => events.push(e) },
+    );
+    assert.equal(transcript.length, 1, "no chain hint for blackboard");
+  });
+
+  it("(T2.3) deliverable with no extractable actions: no chain hint", () => {
+    const transcript: TranscriptEntry[] = [];
+    const events: SwarmEvent[] = [];
+    writeDeliverableAndEmit(
+      {
+        preset: "moa",
+        runId: "no-act",
+        clonePath: workdir,
+        title: "Empty",
+        sections: [{ title: "Body", body: "narrative prose with no actionable bullets" }],
+      },
+      { transcript, emit: (e) => events.push(e) },
+    );
+    assert.equal(transcript.length, 1, "no chain hint when actions=0");
   });
 
   it("on failure: pushes a system entry WITHOUT the summary kind", () => {
