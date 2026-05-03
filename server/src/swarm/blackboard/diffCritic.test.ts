@@ -117,7 +117,7 @@ describe("detectAntiPatterns", () => {
 --- a/cfg.ts
 +++ b/cfg.ts
 @@ -1 +1,2 @@
-+const API_KEY = "sk-abc123def456ghi789jkl";
++const API_KEY = "PLACEHOLDER_FAKE_VALUE_FOR_TEST_ONLY";
  done`;
     const findings = detectAntiPatterns(diff);
     const f = findings.find((f) => f.pattern === "hardcoded-secret");
