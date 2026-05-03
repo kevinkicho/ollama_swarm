@@ -13,6 +13,14 @@ export interface SwarmRole {
   // "concrete contribution to the directive". Optional so existing
   // role catalogs (DEFAULT_ROLES) work unchanged.
   deliverableHint?: string;
+  // T194 (2026-05-04): per-role tool grants. Selects which
+  // ToolDispatcher profile this role gets at turn time:
+  //   "swarm-read"    — read/grep/glob/list (default for most roles)
+  //   "swarm-builder" — adds bash (Tester runs tests, Security checks deps)
+  //   "swarm"         — denies everything (deliberate prose-only roles)
+  // Optional — defaults to "swarm-read" when absent (preserves
+  // pre-T194 behavior). Routed via promptWithRetry's agentName.
+  profile?: "swarm-read" | "swarm-builder" | "swarm";
 }
 
 export const DEFAULT_ROLES: readonly SwarmRole[] = [
@@ -25,11 +33,17 @@ export const DEFAULT_ROLES: readonly SwarmRole[] = [
     name: "Tester",
     guidance:
       "Think about what could break. Name the edge cases, missing coverage, flaky surfaces, and hard-to-reproduce conditions. When you propose a test, say what it asserts, not just 'add a test'.",
+    // T194: Tester gets bash so it can actually run the test suite
+    // before recommending more tests — grounds claims in real signal.
+    profile: "swarm-builder",
   },
   {
     name: "Security reviewer",
     guidance:
       "Look for injection, auth gaps, exposed secrets, supply-chain risk, and unsafe defaults. Cite the specific line or dependency. If you see nothing to flag, say so — don't invent threats.",
+    // T194: Security gets bash for dep-graph / lockfile / npm audit
+    // queries. Without it the reviewer guesses at supply-chain risk.
+    profile: "swarm-builder",
   },
   {
     name: "Performance critic",
@@ -45,6 +59,9 @@ export const DEFAULT_ROLES: readonly SwarmRole[] = [
     name: "Dependency auditor",
     guidance:
       "Inspect package.json and lockfiles. Pinned vs floating, bloat, abandoned packages, duplicated transitive graphs. Flag anything shipping non-standard minified code or installing post-install scripts.",
+    // T194: Dep auditor gets bash for `npm ls` / `npm outdated` /
+    // `cargo tree` style queries.
+    profile: "swarm-builder",
   },
   {
     name: "Devil's advocate",

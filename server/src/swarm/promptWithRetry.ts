@@ -123,6 +123,13 @@ export interface PromptWithRetryOptions {
     top_p?: number;
     [key: string]: unknown;
   };
+  // T193 (2026-05-04): per-call model override. When set, replaces
+  // agent.model for THIS prompt only. Used by round-robin's
+  // disposition-tuned models lever (Critic/Gap-finder routed to
+  // reasoning-tier; Builder/Synthesizer routed to coding-tier).
+  // The agent's spawn-time model stays as the default; this is an
+  // override scope of one call.
+  modelOverride?: string;
 }
 
 export interface RetryInfo {
@@ -173,7 +180,10 @@ export async function promptWithRetry(
         const effectivePromptText = addendum.length > 0
           ? `[Per-agent specialization for this swarm member]\n${addendum}\n[End specialization. Original prompt follows.]\n\n${promptText}`
           : promptText;
-        const { provider, modelId } = pickProvider(agent.model);
+        // T193: prefer modelOverride when set (used by round-robin
+        // disposition-tuned routing). Falls back to agent.model.
+        const effectiveModel = opts.modelOverride ?? agent.model;
+        const { provider, modelId } = pickProvider(effectiveModel);
         // E3 Phase 4 part 2: bind tools to a dispatcher when the agent
         // has a clone-rooted cwd AND the profile (from agentName) grants
         // any tools. Workers ("swarm") get nothing; planner/auditor

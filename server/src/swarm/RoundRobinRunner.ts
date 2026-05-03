@@ -487,6 +487,25 @@ export class RoundRobinRunner implements SwarmRunner {
     this.stats.countTurn(agent.id);
 
     const prompt = this.buildPrompt(agent, round, totalRounds);
+    // T193 (2026-05-04): per-disposition model routing. When
+    // cfg.dispositionModels[<disposition>] is set, override the
+    // agent's spawn-time model for THIS turn. Skipped when role-diff
+    // is active (roles ARE the specialization). Skipped on first
+    // call (turnsTaken not yet incremented past 0).
+    let modelOverride: string | undefined;
+    if (!this.roles && this.active?.dispositionModels) {
+      const turnNumber = this.turnsTaken;
+      const disp = pickNextDisposition(this.transcript, turnNumber);
+      const key = disp.name.toLowerCase().replace(/[ -]/g, "-") as
+        | "critic"
+        | "synthesizer"
+        | "gap-finder"
+        | "builder";
+      const mapped = this.active.dispositionModels[key];
+      if (mapped && mapped.trim().length > 0) {
+        modelOverride = mapped.trim();
+      }
+    }
     // 2026-04-27: SSE-aware watchdog. Replaces the wall-clock 4-min cap
     // that killed prompts the model was actively producing. The old
     // comment claimed "OpenCode's SSE stays completely silent" — that
@@ -505,16 +524,25 @@ export class RoundRobinRunner implements SwarmRunner {
       // Unit 16: shared retry wrapper. Same retry semantics as
       // BlackboardRunner — UND_ERR_HEADERS_TIMEOUT and friends get up
       // to 3 attempts with [4s, 16s] backoff before giving up.
+      // T194 (2026-05-04): per-role tool grants. When the active
+      // role declares a profile (Tester=swarm-builder for bash;
+      // Security=swarm-builder for dep queries), use it; else
+      // default to "swarm-read". Skipped for plain round-robin
+      // (no role) which uses swarm-read unconditionally.
+      const role = this.roles ? roleForAgent(agent.index, this.roles) : null;
+      const roleProfile: "swarm-read" | "swarm-builder" | "swarm" =
+        role?.profile ?? "swarm-read";
       const res = await promptWithRetry(agent, prompt, {
         signal: controller.signal,
         manager: this.opts.manager,
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
-        // Unit 20: read-only tools (file-read / grep / glob / list).
-        // Discussion-only presets — never edits.
-        agentName: "swarm-read",
+        // T194: per-role profile (defaults to swarm-read).
+        agentName: roleProfile,
         // Phase 5b of #243: per-agent addendum from the topology row.
         promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         describeError: (e) => describeSdkError(e),
+        // T193 (2026-05-04): per-disposition model override.
+        ...(modelOverride ? { modelOverride } : {}),
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(agent.id, success, elapsedMs);
           this.opts.logDiag?.({

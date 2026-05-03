@@ -318,6 +318,28 @@ export interface RunConfig {
   moaProposerModel?: string;
   moaAggregatorModel?: string;
   /**
+   * T193 (2026-05-04): per-disposition model routing for round-robin
+   * (no-roles variant). Maps each disposition to a model id; the
+   * runner uses promptWithRetry's modelOverride to call that model
+   * for the disposition's turns. Plays to the open-weights-
+   * parallelism value prop — Critic/Gap-finder benefit from a
+   * reasoning-tier model while Builder/Synthesizer benefit from a
+   * coding-tier (faster, cheaper). Default off (every disposition
+   * uses cfg.model). Round-robin only.
+   *
+   * Example:
+   *   { critic: "nemotron-3-super:cloud",
+   *     "gap-finder": "nemotron-3-super:cloud",
+   *     synthesizer: "glm-5.1:cloud",
+   *     builder: "gemma4:31b-cloud" }
+   */
+  dispositionModels?: {
+    critic?: string;
+    synthesizer?: string;
+    "gap-finder"?: string;
+    builder?: string;
+  };
+  /**
    * T192 (2026-05-04): opt-in forward chain — when this run completes,
    * automatically fire a follow-up run with the given preset using the
    * top extracted next-action (from this run's next-actions.json) as
