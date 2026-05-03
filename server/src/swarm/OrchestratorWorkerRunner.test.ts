@@ -270,7 +270,7 @@ describe("OrchestratorWorkerRunner — directive plumbing (structural, post Phas
     );
     assert.match(
       OW_SRC,
-      /this\.runWorkerTurn\(w, r, cfg\.rounds, a\.subtask, seedSnapshot, cfg\.userDirective\)/,
+      /this\.runWorkerTurn\(\s*w,\s*r,\s*cfg\.rounds,\s*a\.subtask,\s*seedSnapshot,\s*cfg\.userDirective,\s*a\.successCriteria,?\s*\)/,
     );
     assert.match(
       OW_SRC,
@@ -278,10 +278,46 @@ describe("OrchestratorWorkerRunner — directive plumbing (structural, post Phas
     );
   });
 
-  it("runWorkerTurn threads userDirective into buildWorkerPrompt", () => {
+  it("runWorkerTurn threads userDirective + successCriteria into buildWorkerPrompt", () => {
+    // T175 (2026-05-04): buildWorkerPrompt now takes a 7th arg
+    // (successCriteria) that the lead's plan can populate. The
+    // wire-through must also pass it from runWorkerTurn's signature.
     assert.match(
       OW_SRC,
-      /buildWorkerPrompt\(agent\.index, round, totalRounds, subtask, visibleSeed, userDirective\)/,
+      /buildWorkerPrompt\(\s*agent\.index,\s*round,\s*totalRounds,\s*subtask,\s*visibleSeed,\s*userDirective,\s*successCriteria,?\s*\)/,
+    );
+  });
+
+  it("(T175) Plan.assignments support optional successCriteria field", () => {
+    // The lead's plan JSON can include successCriteria per assignment;
+    // parsePlan extracts it; the runner threads it to buildWorkerPrompt.
+    assert.match(
+      OW_SRC,
+      /successCriteria\?:\s*string/,
+      "Assignment interface must declare optional successCriteria",
+    );
+    assert.match(
+      OW_SRC,
+      /successCriteria\s*\}\s*:\s*\{\s*\}/,
+      "parsePlan must conditionally include successCriteria in assignments",
+    );
+  });
+
+  it("(T175) buildLeadPlanPrompt instructs the lead to emit successCriteria", () => {
+    assert.match(
+      OW_SRC,
+      /successCriteria/,
+      "lead's plan prompt must reference successCriteria",
+    );
+    assert.match(
+      OW_SRC,
+      /SUCCESS CRITERIA/,
+      "worker prompt must surface the success criteria block",
+    );
+    assert.match(
+      OW_SRC,
+      /SELF-EVAL: PASS/,
+      "worker prompt must require a self-eval line under the rubric",
     );
   });
 

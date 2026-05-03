@@ -1107,15 +1107,17 @@ export function buildStructuredSynthesisPrompt(
         "1. **Answer to directive** — direct response to the user's question / request. State what the team concluded, not how it deliberated.",
         "2. **Consensus** — what every agent agreed on while resolving the directive.",
         "3. **Disagreements** — where agents still hold different positions on the directive. Name the agents and their stances.",
-        "4. **Recommended next step** — ONE concrete next action toward the directive. Cite files / decisions / experiments. Build on the Builder-disposition turns.",
-        "5. **Open questions** — anything the Gap-finder turns surfaced about the directive that the team didn't resolve.",
+        "4. **Cross-round flips** — positions that CHANGED between rounds (signal of weak ground; likely needs more evidence). Name the agent + the prior position + the new position. If no notable flips, say so explicitly.",
+        "5. **Recommended next step** — ONE concrete next action toward the directive. Cite files / decisions / experiments. Build on the Builder-disposition turns.",
+        "6. **Open questions** — anything the Gap-finder turns surfaced about the directive that the team didn't resolve.",
       ]
     : [
         "STRUCTURE your response as:",
         "1. **Consensus** — what every agent (including you) converged on. State as a direct claim, not a meta-observation.",
         "2. **Disagreements** — where agents still hold different positions. Name the agents and their stances.",
-        "3. **Recommended next step** — ONE concrete next action. Cite files / decisions / experiments. Build on the Builder-disposition turns from the discussion.",
-        "4. **Open questions** — anything the Gap-finder turns surfaced that the team didn't resolve.",
+        "3. **Cross-round flips** — positions that CHANGED between rounds (signal of weak ground; likely needs more evidence). Name the agent + prior position + new position. If no notable flips, say so explicitly.",
+        "4. **Recommended next step** — ONE concrete next action. Cite files / decisions / experiments. Build on the Builder-disposition turns from the discussion.",
+        "5. **Open questions** — anything the Gap-finder turns surfaced that the team didn't resolve.",
       ];
   return [
     `You are Agent 1, the deliberation synthesis lead. The team just finished ${totalRounds} round${totalRounds === 1 ? "" : "s"} of structured deliberation across rotating dispositions (Critic / Synthesizer / Gap-finder / Builder).`,

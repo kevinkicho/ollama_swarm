@@ -113,7 +113,12 @@ export interface RunConfig {
    *
    * Examples: "npm test", "bun test", "tsc --noEmit", "npm run lint".
    * Bounded to 60s wall-clock; longer commands get killed and treated
-   * as failure. Blackboard-only; other presets don't write code.
+   * as failure.
+   *
+   * T171 (2026-05-04): also honored by the wrap-up apply phase
+   * (executeNextAction-driven) for non-blackboard presets. Same
+   * semantics — apply hunks, run command, revert + mark wrap-up
+   * failed on non-zero exit, otherwise commit.
    */
   verifyCommand?: string;
   /**

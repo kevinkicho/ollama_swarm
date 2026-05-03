@@ -882,21 +882,27 @@ export function buildCouncilSynthesisPrompt(
     labelSuffix: "(the question this council was answering)",
   });
 
+  // 2026-05-04 (idea T173): per-position confidence weighting. Each
+  // agent tags MY POSITION with CONFIDENCE: high|medium|low. Synthesis
+  // weights consensus by confidence — low-confidence positions don't
+  // count toward "convergence" the same as high-confidence ones, and
+  // a single high-confidence dissent matters more than three low-
+  // confidence agreements.
   const structure = dirCtx.hasDirective
     ? [
         "STRUCTURE your response as:",
         "1. **Answer to directive** — direct response to the user's question. State what the council concluded, not how it deliberated.",
-        "2. **Consensus** — what every agent (including you) converged on while resolving the directive. State as a direct claim.",
-        "3. **Disagreements** — where agents still hold different positions on the directive. Name the agents and their stances.",
-        "4. **Minority report** — when at least one agent's `### MY POSITION` diverges from the consensus, name them and state their strongest argument **verbatim** from their last position. If the council genuinely converged with no dissent, write `_consensus reached — no minority position_`. Do NOT invent dissent for show.",
+        "2. **Consensus** — what every agent (including you) converged on while resolving the directive. State as a direct claim. **Weigh each agent's contribution by their CONFIDENCE tag** (high > medium > low) — don't treat 3 low-confidence agreements as equivalent to 1 high-confidence agreement.",
+        "3. **Disagreements** — where agents still hold different positions on the directive. Name the agents, their stances, AND their confidence tags.",
+        "4. **Minority report** — when at least one agent's `### MY POSITION` diverges from the consensus, name them and state their strongest argument **verbatim** from their last position. **A high-confidence minority dissent should be weighed seriously even when numerically outvoted.** If the council genuinely converged with no dissent, write `_consensus reached — no minority position_`. Do NOT invent dissent for show.",
         "5. **Next action** — ONE concrete next step toward the directive. Cite files / decisions / experiments. If no action is needed, say so.",
         "",
       ]
     : [
         "STRUCTURE your response as:",
-        "1. **Consensus** — what every agent (including you) converged on. State it as a direct claim, not a meta-observation.",
-        "2. **Disagreements** — where agents still hold different positions. Name the agents and their stances.",
-        "3. **Minority report** — when at least one agent's `### MY POSITION` diverges from the consensus, name them and state their strongest argument **verbatim** from their last position. If the council genuinely converged with no dissent, write `_consensus reached — no minority position_`. Do NOT invent dissent for show.",
+        "1. **Consensus** — what every agent (including you) converged on. State it as a direct claim, not a meta-observation. **Weigh each agent's contribution by their CONFIDENCE tag** — don't treat 3 low-confidence agreements as equivalent to 1 high-confidence agreement.",
+        "2. **Disagreements** — where agents still hold different positions. Name the agents, their stances, AND their confidence tags.",
+        "3. **Minority report** — when at least one agent's `### MY POSITION` diverges from the consensus, name them and state their strongest argument **verbatim** from their last position. **A high-confidence minority dissent should be weighed seriously even when numerically outvoted.** If the council genuinely converged with no dissent, write `_consensus reached — no minority position_`. Do NOT invent dissent for show.",
         "4. **Next action** — ONE concrete next step the swarm or user should take, given the council's findings. If no action is needed, say so.",
         "",
       ];
@@ -999,13 +1005,27 @@ export function buildCouncilPrompt(
           "**POSITION CONTRACT (every turn):** End your response with:",
           "    ### MY POSITION",
           "    <one short sentence — ≤300 chars — your direct answer to the directive (or to 'what should this project do' when no directive). This is your anchor against drift in later rounds.>",
+          "    CONFIDENCE: high|medium|low — <one-line why you trust this position at this strength>",
           "",
         ]
       : [
+          // 2026-05-04 (idea T173): forced steelmanning before MY POSITION.
+          // R2+ requires the agent to first state the strongest peer
+          // position they DON'T currently agree with, in its most
+          // charitable form. Counters the failure mode of "everyone
+          // converges politely without engaging the actual disagreement."
+          // After steelmanning, the agent must explicitly KEEP / CHANGE
+          // their own position with confidence — knowing they've truly
+          // engaged the alternative.
+          "**STEELMAN STEP (R2+ only):** BEFORE your `### MY POSITION` block, write:",
+          "    ### STEELMAN OF PEER POSITION",
+          "    <Pick the peer position you most disagree with. State it in its strongest, most well-grounded form — better than the peer themselves did. ~1-2 sentences. Cite which agent + roughly which round.>",
+          "",
           "**POSITION CONTRACT (every turn):** End your response with:",
           "    ### MY POSITION",
           "    KEEP: <restate your prior position verbatim>   — OR —   CHANGE: <new one-sentence position>",
-          "    WHY: <one line — what specifically convinced you to keep or change. Cite the agent + their argument when CHANGE.>",
+          "    WHY: <one line — what specifically convinced you to keep or change. Cite the agent + their argument when CHANGE. After steelmanning, mention what the steelman did NOT change about your position.>",
+          "    CONFIDENCE: high|medium|low — <one-line why you trust this position at this strength after the steelman exercise>",
           "",
           "Drift without an explicit CHANGE is the failure mode this contract exists to prevent. If you find yourself softening your prior position without naming who convinced you and how, KEEP it.",
           "",

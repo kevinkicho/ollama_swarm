@@ -37,6 +37,7 @@ import { parseWorkerResponse } from "./blackboard/prompts/worker.js";
 import {
   realFilesystemAdapter,
   realGitAdapter,
+  realVerifyAdapter,
 } from "./blackboard/v2Adapters.js";
 import {
   applyBaselineHunks,
@@ -71,6 +72,11 @@ export interface WrapUpApplyInput {
   /** Preset name used in commit message + author attribution
    *  ("council", "moa", etc.). */
   presetName: string;
+  /** T171 (2026-05-04): when set, runs as a pre-commit verification
+   *  gate. Same semantics as blackboard's WorkerPipeline verify gate
+   *  — apply hunks, run command, on non-zero exit revert the writes
+   *  and return ok:false with verifyFailed:true. Bounded to 60s. */
+  verifyCommand?: string;
 }
 
 export interface WrapUpApplyResult {
@@ -82,8 +88,12 @@ export interface WrapUpApplyResult {
   /** How many hunks actually landed on disk. */
   hunksApplied: number;
   /** Empty when nothing committed (e.g. 0 hunks proposed, or all
-   *  hunks failed to apply). */
+   *  hunks failed to apply, or verify gate reverted). */
   commitSha?: string;
+  /** T171: true when the verify command exited non-zero and the
+   *  writes were reverted. Distinguishes "hunks were bad" from
+   *  "verify caught regression." */
+  verifyFailed?: boolean;
 }
 
 export async function runWrapUpApplyPhase(
@@ -182,9 +192,23 @@ export async function runWrapUpApplyPhase(
     };
   }
 
-  // Apply + commit
+  // Apply + (optional verify) + commit
   const fsAdapter = realFilesystemAdapter(input.clonePath);
   const gitAdapter = realGitAdapter(input.clonePath);
+  // T171: snapshot pre-hunk content of touched files BEFORE applying.
+  // Required for the verify-failure revert path. Skipped when no
+  // verify command is configured (don't pay the read cost).
+  const touchedFiles = Array.from(new Set(parsed.hunks.map((h) => h.file)));
+  const preHunkContents: Record<string, string | null> = {};
+  if (input.verifyCommand) {
+    for (const f of touchedFiles) {
+      try {
+        preHunkContents[f] = await fsAdapter.read(f);
+      } catch {
+        preHunkContents[f] = null; // treat as "didn't exist before"
+      }
+    }
+  }
   try {
     const apply = await applyBaselineHunks({
       hunks: parsed.hunks,
@@ -200,6 +224,36 @@ export async function runWrapUpApplyPhase(
         hunksAttempted: parsed.hunks.length,
         hunksApplied: 0,
       };
+    }
+    // T171: pre-commit verify gate. Mirrors WorkerPipeline.applyAndCommit.
+    if (input.verifyCommand) {
+      const verify = realVerifyAdapter(input.clonePath, input.verifyCommand);
+      const v = await verify.run();
+      if (!v.ok) {
+        // Revert touched files to pre-hunk content. Files that didn't
+        // exist before (preHunkContents[f] === null) get left in place
+        // — we don't have an explicit delete adapter and the next
+        // commit (if any) will see a dirty working tree to clean up.
+        for (const f of touchedFiles) {
+          const before = preHunkContents[f];
+          if (before === null) continue;
+          try {
+            await fsAdapter.write(f, before);
+          } catch {
+            // best-effort; revert failure is logged but doesn't stop us
+          }
+        }
+        input.appendSystem(
+          `Wrap-up apply: ${apply.applied} hunk(s) applied but verify gate failed — reverted. ${v.reason.slice(0, 400)}`,
+        );
+        return {
+          ok: false,
+          reason: `verify failed: ${v.reason.slice(0, 400)}`,
+          hunksAttempted: parsed.hunks.length,
+          hunksApplied: apply.applied,
+          verifyFailed: true,
+        };
+      }
     }
     const commitMsg = `${input.presetName} wrap-up: ${directive.slice(0, 60)}`;
     const commitResult = await gitAdapter.commitAll(
@@ -217,8 +271,9 @@ export async function runWrapUpApplyPhase(
         hunksApplied: apply.applied,
       };
     }
+    const verifyTag = input.verifyCommand ? " (verify ✓)" : "";
     input.appendSystem(
-      `Wrap-up apply: ${apply.applied}/${parsed.hunks.length} hunk(s) applied → committed (${commitResult.sha.slice(0, 7)}).`,
+      `Wrap-up apply: ${apply.applied}/${parsed.hunks.length} hunk(s) applied → committed${verifyTag} (${commitResult.sha.slice(0, 7)}).`,
     );
     return {
       ok: true,
@@ -255,6 +310,9 @@ export interface MaybeRunWrapUpApplyInput {
     workerModel?: string;
     model: string;
     userDirective?: string;
+    /** T171: when set, runs as a pre-commit verification gate. Same
+     *  semantics as blackboard's WorkerPipeline verify gate. */
+    verifyCommand?: string;
   };
   presetName: string;
   agent: import("../services/AgentManager.js").Agent;
@@ -300,6 +358,7 @@ export async function maybeRunWrapUpApply(
     emit: input.emit,
     appendSystem: input.appendSystem,
     presetName: input.presetName,
+    verifyCommand: input.cfg.verifyCommand,
   });
 }
 

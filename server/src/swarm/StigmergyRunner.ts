@@ -966,11 +966,31 @@ export function rankingScore(
   return baseScore * Math.pow(PHEROMONE_DECAY_PER_ROUND, roundsSince);
 }
 
+// T177 (2026-05-04): typed pheromones. Beyond the numeric interest +
+// confidence, agents now tag annotations with a semantic kind so peer
+// explorers + the final synthesis can read the pheromone trail with
+// more nuance. Old annotations (no kind) still parse cleanly — kind
+// is optional.
+//
+//   relevant       — file directly bears on the directive / project goal
+//   dead-end       — file looks promising but doesn't help; don't burn turns here
+//   needs-more-eyes — interesting but the agent's confidence is low; another agent should re-read
+//   contradicts    — finding here disagrees with what another file/finding suggests
+export type PheromoneKind = "relevant" | "dead-end" | "needs-more-eyes" | "contradicts";
+export const PHEROMONE_KINDS: readonly PheromoneKind[] = [
+  "relevant",
+  "dead-end",
+  "needs-more-eyes",
+  "contradicts",
+];
+
 export interface ParsedAnnotation {
   file: string;
   interest: number;
   confidence: number;
   note: string;
+  /** T177: optional semantic tag. Defaults to undefined for back-compat. */
+  kind?: PheromoneKind;
 }
 
 // Exported for testability. Accepts JSON {file, interest, confidence, note}
@@ -1038,7 +1058,19 @@ function coerceAnnotation(parsed: unknown): ParsedAnnotation | null {
   // Clamp [0, 10] so a model that emits 100 or -5 can't poison the table.
   const interest = Math.max(0, Math.min(10, interestRaw));
   const confidence = Math.max(0, Math.min(10, confidenceRaw));
-  return { file, interest, confidence, note };
+  // T177: optional kind. Whitelist against the catalog so a model
+  // emitting "kinda-relevant" or "?" doesn't get accepted.
+  const kindRaw = typeof o.kind === "string" ? o.kind.trim().toLowerCase() : "";
+  const kind = (PHEROMONE_KINDS as readonly string[]).includes(kindRaw)
+    ? (kindRaw as PheromoneKind)
+    : undefined;
+  return {
+    file,
+    interest,
+    confidence,
+    note,
+    ...(kind ? { kind } : {}),
+  };
 }
 
 interface BuildExplorerPromptArgs {
@@ -1076,12 +1108,17 @@ export function buildExplorerPrompt(args: BuildExplorerPromptArgs): string {
     "3. Output BOTH a short prose report (under 200 words) AND a final JSON annotation block on the last line.",
     "",
     "Annotation JSON shape (last line of your response, no markdown fences):",
-    '{"file": "src/foo.ts", "interest": 0-10, "confidence": 0-10, "note": "one-line summary"}',
+    '{"file": "src/foo.ts", "interest": 0-10, "confidence": 0-10, "note": "one-line summary", "kind": "relevant"}',
     "",
     "Where:",
     "- `interest` = how much further investigation this file warrants (10 = very interesting / load-bearing / surprising; 0 = boring / trivial).",
     "- `confidence` = how well YOU understand it after this read (10 = fully understood; 0 = barely scratched the surface).",
     "- `note` = one-line summary that future agents can use as a pheromone signal.",
+    // T177 (2026-05-04): typed pheromones. Optional — omit kind if
+    // none clearly fits. Future explorers + the synthesis read kind
+    // to make smarter next-file decisions instead of relying solely
+    // on the numeric interest/confidence scores.
+    '- `kind` (optional) = one of: "relevant" (directly bears on the directive), "dead-end" (looks promising but doesn\'t help — don\'t burn turns here), "needs-more-eyes" (interesting but your confidence is low; another agent should re-read), "contradicts" (your finding disagrees with another file\'s implication).',
     "",
     `Top-level candidates: ${candidateText}`,
   ];

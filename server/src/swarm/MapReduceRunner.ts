@@ -730,6 +730,88 @@ export function sliceRoundRobin<T>(entries: readonly T[], k: number): T[][] {
   return slices;
 }
 
+// 2026-05-04 (idea T174): per-mapper lens specialization. Each mapper
+// gets a different reading lens (security/performance/correctness/UX/
+// architecture/testability) so 4-6 mappers cover 4-6 dimensions
+// instead of all reading the same way against different files. The
+// reducer then synthesizes across dimensions, not just across slices.
+//
+// Lens cycles by mapperIndex modulo catalog length. mapperIndex starts
+// at 2 (agent-1 is reducer) so we offset by -2 to start lens cycle at
+// MAPPER_LENSES[0].
+export interface MapperLens {
+  /** Short id used in report sections + reducer aggregation. */
+  id: string;
+  /** Title shown to the mapper at top of its prompt. */
+  title: string;
+  /** What the mapper looks for under this lens. ~3 short bullets. */
+  guidance: readonly string[];
+}
+export const MAPPER_LENSES: readonly MapperLens[] = [
+  {
+    id: "correctness",
+    title: "Correctness lens",
+    guidance: [
+      "Look for bugs: off-by-one, null deref, unhandled error paths, race conditions, edge cases not tested.",
+      "Watch for assumptions that aren't validated: \"this can never be empty\", \"the API always returns X\".",
+      "Surface code paths that look right but lack a test that would catch a regression.",
+    ],
+  },
+  {
+    id: "security",
+    title: "Security lens",
+    guidance: [
+      "Look for: input not validated, secrets in source, sql/cmd injection vectors, auth/authz holes, unsafe deps.",
+      "Watch for default-allow patterns where default-deny is safer.",
+      "Surface trust boundaries crossed without explicit checks.",
+    ],
+  },
+  {
+    id: "performance",
+    title: "Performance lens",
+    guidance: [
+      "Look for: N+1 queries, sync I/O on hot paths, unbounded allocations, accidental quadratics, repeated parsing.",
+      "Watch for blocking ops in async contexts and unbounded retry loops.",
+      "Surface where caching or batching would change the order of magnitude.",
+    ],
+  },
+  {
+    id: "architecture",
+    title: "Architecture lens",
+    guidance: [
+      "Look for: layering violations, circular deps, modules that know too much about each other, leaky abstractions.",
+      "Watch for premature abstraction (helpers used once) and missing abstraction (3+ near-duplicates).",
+      "Surface decisions that lock the project into a path that'll be expensive to reverse.",
+    ],
+  },
+  {
+    id: "testability",
+    title: "Testability lens",
+    guidance: [
+      "Look for: untested critical paths, code that's hard to test (heavy I/O coupling, hidden dependencies, mocked-database gaps).",
+      "Watch for tests that pass because they mock too much, not because the code works.",
+      "Surface integration points that lack any end-to-end coverage.",
+    ],
+  },
+  {
+    id: "ux-and-docs",
+    title: "UX / documentation lens",
+    guidance: [
+      "Look for: error messages that won't help a user, accessibility gaps in frontend, default values that surprise.",
+      "Watch for docs that disagree with the code (README claims a feature that the code doesn't implement).",
+      "Surface places where a one-paragraph explanation would save the next reader 30 minutes.",
+    ],
+  },
+];
+
+/** Pick the lens for a given mapper. mapperIndex starts at 2
+ *  (agent-1 is reducer). Cycles through MAPPER_LENSES so a swarm
+ *  with > 6 mappers wraps. */
+export function lensForMapper(mapperIndex: number): MapperLens {
+  const offset = Math.max(0, mapperIndex - 2);
+  return MAPPER_LENSES[offset % MAPPER_LENSES.length]!;
+}
+
 export function buildMapperPrompt(
   mapperIndex: number,
   round: number,
@@ -740,6 +822,8 @@ export function buildMapperPrompt(
 ): string {
   const seedText = seedSnapshot.map((e) => `[SYSTEM] ${e.text}`).join("\n\n");
   const sliceList = slice.length === 0 ? "(empty slice)" : slice.join(", ");
+  // 2026-05-04 (idea T174): per-mapper lens.
+  const lens = lensForMapper(mapperIndex);
 
   // 2026-05-02 (map-reduce improvement #1): when a directive is set,
   // mapper's job changes from "tell me everything about your slice" to
@@ -778,6 +862,15 @@ export function buildMapperPrompt(
     `Your slice of the repo: ${sliceList}`,
     "Inspect ONLY the entries in your slice. Do not read or reference files outside your slice.",
     "Your working directory IS the project clone — use file-read, grep, and find-files tools to actually read the assigned entries.",
+    "",
+    // 2026-05-04 (idea T174): per-mapper lens. Each mapper biases its
+    // reading toward a different dimension so the swarm covers more
+    // ground per cycle without re-reading the same files from the
+    // same angle.
+    `### YOUR LENS THIS CYCLE: ${lens.title} (id: ${lens.id})`,
+    `**Read your slice through this lens specifically.** Other mappers cover other lenses; the reducer aggregates across them.`,
+    ...lens.guidance.map((g) => `- ${g}`),
+    `Tag your findings with their lens: prefix each finding line with \`[${lens.id}]\` so the reducer can group across mappers.`,
     "",
     ...reportInstructions,
     "",
@@ -836,6 +929,7 @@ export function buildReducerPrompt(
       }),
       "Your job is to SYNTHESIZE the mappers' findings into an answer to the directive. Do NOT summarize each mapper individually. Look for the things only visible from the reducer's vantage:",
       "  - DIRECT EVIDENCE: mapper findings that directly bear on the directive — list them with file paths.",
+      "  - **CROSS-LENS PATTERNS:** mappers report findings tagged with their lens (e.g. `[security]`, `[performance]`, `[correctness]`). Group findings by lens AND by file — when the SAME file gets flagged across multiple lenses, that's a hot spot worth surfacing.",
       "  - SURPRISES: cross-slice findings that change the answer (e.g. Mapper 2's finding recontextualizes Mapper 4's).",
       "  - CONTRADICTIONS: mappers disagreeing about something the directive depends on. Name the mappers and the tension.",
       "  - SLICE GAPS: which mapper's slice contained no relevant findings (`COMPLETE: true` with `no findings relevant`) and whether that's a real gap or just an off-topic slice.",

@@ -957,7 +957,29 @@ export function pickSelfCritiqueAgent(input: {
 // Pure prompt builders — exported for tests.
 // ---------------------------------------------------------------------------
 
-export type ProposerVariant = "default" | "challenger";
+export type ProposerVariant =
+  | "default"
+  | "challenger"
+  // T178 (2026-05-04): added 3 more biases — creative (lateral
+  // thinking), empirical (evidence-grounded only), conservative
+  // (proven patterns + risk-aware). Pre-T178 only default/challenger.
+  | "creative"
+  | "empirical"
+  | "conservative";
+
+/** T178 (2026-05-04): rotation order when N proposers run with mixed
+ *  variants. The runner cycles through this list (skipping default)
+ *  to assign biases. Pre-T178 the runner only flipped one to
+ *  "challenger" via the `isChallenger` boolean — that mechanism is
+ *  preserved as the default; future MoA work can switch to full
+ *  rotation across all 4 non-default variants. */
+export const PROPOSER_VARIANTS: readonly ProposerVariant[] = [
+  "default",
+  "challenger",
+  "creative",
+  "empirical",
+  "conservative",
+];
 
 export interface ProposerPromptInput {
   seed: string;
@@ -1000,17 +1022,36 @@ export interface ProposerPromptInput {
 export function buildProposerPrompt(input: ProposerPromptInput): string {
   const parts: string[] = [];
   const variant = input.variant ?? "default";
+  // T178 (2026-05-04): proposer specialization via system-prompt biases.
+  // Pre-T178: only "default" + "challenger" variants. Now adds
+  // "creative" (generative, expansive — willing to suggest non-obvious
+  // angles), "empirical" (evidence-grounded — every claim cites a
+  // file or test), and "conservative" (risk-averse — prefers proven
+  // patterns, calls out untested speculation). All run with the SAME
+  // model — the bias is purely in the system prompt. K diverse drafts
+  // > K identical drafts when the aggregator synthesizes.
   if (variant === "challenger") {
-    // 2026-05-02 (matrix row #2): adversarial framing. Same input as
-    // the default proposers but explicitly asked to dissent. The
-    // aggregator weighs this against the consensus-friendly drafts
-    // and produces a synthesis that names tradeoffs rather than
-    // flattening to "everyone agreed on X."
+    // 2026-05-02 (matrix row #2): adversarial framing.
     parts.push(
       "You are the CHALLENGER on a Mixture-of-Agents team. Your peers are producing standard analyses; your job is to find what they will MISS. Look for: (a) counter-evidence to the likely consensus, (b) tradeoffs being glossed, (c) failure modes or risks not yet named, (d) cases where the directive's framing itself is wrong.",
     );
     parts.push("If after honest review you find no substantive challenge, say so explicitly — don't manufacture disagreement. Otherwise, push back.");
     parts.push("Your response will be aggregated with the other proposers; the aggregator considers your dissent on technical merit, not in bulk.");
+  } else if (variant === "creative") {
+    parts.push(
+      "You are the CREATIVE on a Mixture-of-Agents team. Your peers will produce safe, conventional analyses; your job is to surface non-obvious angles, unconventional framings, or possibilities your peers will overlook. Lateral thinking welcomed; don't just restate what's in the README.",
+    );
+    parts.push("Be willing to propose ideas that feel weird or speculative — flag them as such, but don't suppress them. The aggregator can reject; you shouldn't pre-reject.");
+  } else if (variant === "empirical") {
+    parts.push(
+      "You are the EMPIRICIST on a Mixture-of-Agents team. Every claim you make MUST cite a specific file, test, log line, or measurement from the repo. No claim without an evidence anchor. If you can't find evidence for a position, you don't take it.",
+    );
+    parts.push("Use file-read / grep tools liberally. The aggregator will weight your contribution by how well-grounded it is — vague assertions with no anchor will be deprioritized.");
+  } else if (variant === "conservative") {
+    parts.push(
+      "You are the CONSERVATIVE on a Mixture-of-Agents team. Your peers may suggest bold or experimental approaches; your job is to favor proven patterns and explicitly call out where speculation is being treated as established knowledge.",
+    );
+    parts.push("Prefer reversible decisions over irreversible ones. Flag any claim that depends on unverified assumptions about future behavior. The aggregator considers your perspective alongside more aggressive ones.");
   } else {
     parts.push(
       "You are one of N independent agents on a Mixture-of-Agents team. Respond to the seed below with your own analysis. You CANNOT see what other agents on this round wrote — that's intentional. Do your own thinking.",
@@ -1138,5 +1179,33 @@ export function buildAggregatorPrompt(input: AggregatorPromptInput): string {
   }
   parts.push("");
   parts.push("Your synthesized answer (under 600 words, plain prose):");
+  parts.push("");
+  // T178 (2026-05-04): aggregator self-confidence tag. On the FINAL
+  // line of your response, output a one-line confidence rating. Lets
+  // the runner detect "low-confidence syntheses" — a future round
+  // (or another aggregator with a different bias) might be needed
+  // when the proposers' inputs were too thin or contradictory to
+  // produce a high-confidence synthesis.
+  parts.push("On the FINAL line of your response (no markdown, nothing after it), output exactly one of:");
+  parts.push("  CONFIDENCE: high   — proposers converged on substantive points; you're confident this synthesis represents the best of their thinking.");
+  parts.push("  CONFIDENCE: medium — partial convergence with some tradeoffs; another round (or a differently-biased aggregator) might surface stronger answers.");
+  parts.push("  CONFIDENCE: low    — proposers were thin / contradictory / off-topic; this synthesis is the best you can do with what they produced, but it's weakly grounded.");
   return parts.join("\n");
+}
+
+// T178 (2026-05-04): parse the aggregator's CONFIDENCE: tag (last line
+// of its response). Returns null when no tag is present (treats as
+// neutral — no behavioral signal). Trims trailing whitespace and is
+// case-insensitive on the value.
+export function parseAggregatorConfidence(text: string): "high" | "medium" | "low" | null {
+  const lines = text.trim().split(/\r?\n/);
+  // Walk backward — accept any of the last 3 non-empty lines so the
+  // model is allowed a one-line trailing comment after the tag.
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 3); i--) {
+    const line = lines[i]!.trim();
+    if (line.length === 0) continue;
+    const m = line.match(/^CONFIDENCE:\s*(high|medium|low)\b/i);
+    if (m) return m[1]!.toLowerCase() as "high" | "medium" | "low";
+  }
+  return null;
 }

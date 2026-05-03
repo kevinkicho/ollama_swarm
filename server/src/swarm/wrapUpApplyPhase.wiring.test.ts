@@ -3,14 +3,18 @@
 // against the source text — keeps the wiring presence checked without
 // needing a full runner integration harness.
 //
-// SCOPE — these 6 runners must wire it (per the brainstorm):
+// SCOPE — these 7 runners must wire it (per the brainstorm + T176):
 //   council, moa, map-reduce, ow (flat), ow-deep, round-robin
-//   (both variants — plain + role-diff branches)
+//   (both variants — plain + role-diff branches), debate-judge
+//
+// 2026-05-04 (T176): debate-judge added. Its legacy implementer/
+// reviewer/signoff phase runs under `swarm` profile (denies all
+// tools — prose only); the canonical wrap-up apply phase actually
+// commits + supports verifyCommand gating.
 //
 // EXPLICITLY OUT OF SCOPE (must NOT have the wiring):
 //   blackboard (already write-capable natively), baseline (already
-//   does single-shot apply natively), debate-judge (has its own
-//   implementer/reviewer/signoff phase), stigmergy (exploration is
+//   does single-shot apply natively), stigmergy (exploration is
 //   repo-driven, not action-driven).
 
 import { describe, test } from "node:test";
@@ -38,12 +42,14 @@ const OPT_IN_RUNNERS: ReadonlyArray<{ file: string; presetName: string; minWirin
   // RoundRobinRunner has TWO wiring sites — plain round-robin + role-diff.
   { file: "RoundRobinRunner.ts", presetName: "round-robin", minWiringSites: 1 },
   { file: "RoundRobinRunner.ts", presetName: "role-diff", minWiringSites: 1 },
+  // T176: debate-judge added 2026-05-04 alongside its legacy
+  // implementer/reviewer/signoff phase (which is prose-only).
+  { file: "DebateJudgeRunner.ts", presetName: "debate-judge", minWiringSites: 1 },
 ];
 
 const OUT_OF_SCOPE_RUNNERS: ReadonlyArray<string> = [
   "blackboard/BlackboardRunner.ts",
   "BaselineRunner.ts",
-  "DebateJudgeRunner.ts",
   "StigmergyRunner.ts",
 ];
 

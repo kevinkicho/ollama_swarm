@@ -14,6 +14,7 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { formatChatReceipt } from "./chatReceipt.js";
 import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
+import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildSeedSummary } from "./runSummary.js";
 import { discussionWriteSummary } from "./discussionWriteSummary.js";
@@ -456,6 +457,26 @@ export class DebateJudgeRunner implements SwarmRunner {
             `- Next action: ${verdict.nextAction}`
           : "_(no verdict captured)_",
       },
+    );
+    // T176 (2026-05-04): loser-perspective preservation. When PRO or
+    // CON wins decisively, the loser's strongest argument shouldn't
+    // just disappear — it's a real risk the implementer should know
+    // about going in. Surface it as "Known risks" so the next-action
+    // is implemented WITH eyes open, not despite the dissent.
+    if (verdict && verdict.winner !== "tie") {
+      const loserSide = verdict.winner === "pro" ? "CON" : "PRO";
+      const loserStrongest =
+        verdict.winner === "pro" ? verdict.conStrongest : verdict.proStrongest;
+      const trimmed = loserStrongest?.trim() ?? "";
+      sections.push({
+        title: "Known risks (preserved from the losing side)",
+        body:
+          trimmed.length > 0
+            ? `Even though ${verdict.winner.toUpperCase()} won, ${loserSide}'s strongest argument identified a real concern that the implementer should keep in mind:\n\n> ${trimmed}\n\nIf you act on the verdict's nextAction, do so with this objection consciously addressed — not dismissed.`
+            : `_(${loserSide}'s strongest argument was empty; no preserved risk to surface.)_`,
+      });
+    }
+    sections.push(
       {
         title: `PRO arguments (${proTurns.length} round${proTurns.length === 1 ? "" : "s"})`,
         body: proTurns.length > 0
@@ -493,6 +514,28 @@ export class DebateJudgeRunner implements SwarmRunner {
       },
       { transcript: this.transcript, emit: this.opts.emit },
     );
+
+    // T176 (2026-05-04): verifiable nextAction. Debate-judge has had a
+    // legacy "build phase" (Task #102 implementer/reviewer/signoff)
+    // that runs under the `swarm` profile (which denies all tools), so
+    // its "implementation" is prose-only — no actual file edits land.
+    // Wire the canonical wrap-up apply phase from T2.x alongside, so
+    // when cfg.executeNextAction is set the verdict's nextAction
+    // ACTUALLY becomes a commit (with cfg.verifyCommand gating it).
+    // The legacy phase still runs first; the apply phase runs after
+    // the deliverable lands and uses the verdict's nextAction (or top
+    // extracted action from next-actions.json) as the directive.
+    if (judge) {
+      await maybeRunWrapUpApply({
+        cfg,
+        presetName: "debate-judge",
+        agent: judge,
+        manager: this.opts.manager,
+        repos: this.opts.repos,
+        emit: this.opts.emit,
+        appendSystem: (text) => this.appendSystem(text),
+      });
+    }
   }
 
   // Unit 33: shared summary writer pattern — see RoundRobinRunner.

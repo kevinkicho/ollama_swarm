@@ -292,7 +292,15 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
         await staggerStart(plan.assignments, (a) => {
           const w = workers.find((x) => x.index === a.agentIndex);
           if (!w) return Promise.resolve();
-          return this.runWorkerTurn(w, r, cfg.rounds, a.subtask, seedSnapshot, cfg.userDirective);
+          return this.runWorkerTurn(
+            w,
+            r,
+            cfg.rounds,
+            a.subtask,
+            seedSnapshot,
+            cfg.userDirective,
+            a.successCriteria,
+          );
         });
         if (this.stopping) break;
 
@@ -447,10 +455,19 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
     subtask: string,
     seedSnapshot: readonly TranscriptEntry[],
     userDirective?: string,
+    successCriteria?: string,
   ): Promise<void> {
     // 2026-05-02 (chat lever #3): per-worker @mention filter.
     const visibleSeed = seedSnapshot.filter((e) => userEntryVisibleTo(e, agent.id));
-    const prompt = buildWorkerPrompt(agent.index, round, totalRounds, subtask, visibleSeed, userDirective);
+    const prompt = buildWorkerPrompt(
+      agent.index,
+      round,
+      totalRounds,
+      subtask,
+      visibleSeed,
+      userDirective,
+      successCriteria,
+    );
     await this.runAgent(agent, round, totalRounds, prompt, "worker");
   }
 
@@ -629,6 +646,12 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
 export interface Assignment {
   agentIndex: number;
   subtask: string;
+  /** T175 (2026-05-04): per-subtask "how I'll know this worker
+   *  succeeded" rubric. The lead writes one short sentence describing
+   *  the shape of a successful report; the worker self-evaluates
+   *  against it before reporting. Optional for backward-compat — old
+   *  plan responses without successCriteria still parse cleanly. */
+  successCriteria?: string;
 }
 
 export interface Plan {
@@ -674,11 +697,22 @@ export function parsePlan(raw: string, allowedWorkerIndices: readonly number[]):
     if (!a || typeof a !== "object") continue;
     const idx = (a as { agentIndex?: unknown }).agentIndex;
     const subtask = (a as { subtask?: unknown }).subtask;
+    const successCriteriaRaw = (a as { successCriteria?: unknown }).successCriteria;
     if (typeof idx !== "number" || !allowed.has(idx)) continue;
     if (typeof subtask !== "string" || subtask.trim().length === 0) continue;
     if (seenAgents.has(idx)) continue; // one subtask per worker per cycle
     seenAgents.add(idx);
-    assignments.push({ agentIndex: idx, subtask: subtask.trim() });
+    // T175: extract optional successCriteria. Empty/missing → undefined,
+    // worker prompt skips the rubric block. String values get trimmed.
+    const successCriteria =
+      typeof successCriteriaRaw === "string" && successCriteriaRaw.trim().length > 0
+        ? successCriteriaRaw.trim()
+        : undefined;
+    assignments.push({
+      agentIndex: idx,
+      subtask: subtask.trim(),
+      ...(successCriteria ? { successCriteria } : {}),
+    });
   }
   return { assignments, done };
 }
@@ -734,7 +768,18 @@ export function buildLeadPlanPrompt(
     "  - Cheapest verification: read README.md + a top-level `list` first. Then assign workers to paths that appeared in those listings.",
     "",
     "Output ONLY a JSON object with this shape (no prose, no markdown fences):",
-    '{"done": false, "assignments": [{"agentIndex": 2, "subtask": "…"}, {"agentIndex": 3, "subtask": "…"}, …]}',
+    '{"done": false, "assignments": [{"agentIndex": 2, "subtask": "…", "successCriteria": "…"}, {"agentIndex": 3, "subtask": "…", "successCriteria": "…"}, …]}',
+    "",
+    // T175 (2026-05-04): per-subtask successCriteria. Sets a clear bar
+    // the worker self-evaluates against before reporting. Failing
+    // workers (their report doesn't satisfy the criteria) still emit,
+    // but the criteria miss is surfaced to the synthesis.
+    "**successCriteria** is a one-sentence rubric for what a SUCCESSFUL worker report looks like.",
+    "  Examples:",
+    "    \"Report names every call site of X.foo() with file:line citations.\"",
+    "    \"Report identifies whether the auth flow uses JWT or sessions, with file evidence.\"",
+    "    \"Report concludes with a clear PROPOSE: <new shape> line backed by current code.\"",
+    "  Skip the field (or empty string) for genuinely open-ended subtasks. Most subtasks should have one.",
     "",
     // Phase B (Task #101): early-stop signal. The lead can short-
     // circuit the loop when there is genuinely nothing useful left
@@ -773,6 +818,7 @@ export function buildWorkerPrompt(
   subtask: string,
   seedSnapshot: readonly TranscriptEntry[],
   userDirective?: string,
+  successCriteria?: string,
 ): string {
   const seedText = seedSnapshot
     .map((e) => `[SYSTEM] ${e.text}`)
@@ -793,6 +839,25 @@ export function buildWorkerPrompt(
     ],
   });
 
+  // T175 (2026-05-04): per-subtask success criteria block. When the
+  // lead set a rubric for this subtask, surface it to the worker AND
+  // require a self-evaluation line before the report. The lead's
+  // synthesis can use the self-eval to weight reports.
+  const rubricBlock = successCriteria
+    ? [
+        "",
+        "**SUCCESS CRITERIA (rubric set by the lead):**",
+        successCriteria,
+        "",
+        "BEFORE your report, write a one-line self-evaluation:",
+        "    SELF-EVAL: PASS — <why your report meets the criteria>",
+        "    SELF-EVAL: PARTIAL — <which part is met, which isn't, why>",
+        "    SELF-EVAL: MISS — <why you couldn't meet it; what's blocking>",
+        "Be honest — a clear PARTIAL/MISS is more useful to the lead than a falsely-claimed PASS.",
+        "",
+      ]
+    : [];
+
   return [
     `You are Worker Agent ${workerIndex} in an orchestrator–worker swarm.`,
     `This is cycle ${round}/${totalRounds}. You cannot see the lead's full plan or any peer worker's output — that is deliberate, so your report is independent.`,
@@ -801,7 +866,7 @@ export function buildWorkerPrompt(
     "Your working directory IS the project clone — use file-read, grep, and find-files tools to inspect it.",
     "Respond with a CONCRETE report (under ~300 words) of what you found, citing file paths (e.g. `src/foo.ts:42`) where relevant.",
     "Do NOT try to coordinate with other workers or ask for more scope — just execute your subtask and report.",
-    "",
+    ...rubricBlock,
     "=== SEED ===",
     seedText || "(empty seed)",
     "=== END SEED ===",

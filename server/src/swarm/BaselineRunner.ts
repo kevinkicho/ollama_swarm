@@ -257,6 +257,10 @@ export interface BaselinePromptInput {
   directive: string;
   repoFiles: readonly string[];
   readme: string | null;
+  /** T179 (2026-05-04): optional recent commit log for context.
+   *  Helps the baseline avoid duplicating recent work or breaking
+   *  patterns just landed. Each entry: short SHA + subject. */
+  recentCommits?: readonly string[];
 }
 
 export function buildBaselinePrompt(input: BaselinePromptInput): string {
@@ -282,9 +286,99 @@ export function buildBaselinePrompt(input: BaselinePromptInput): string {
     parts.push("README (truncated to 2000 chars):");
     parts.push(input.readme.slice(0, 2000));
   }
+  // T179 (2026-05-04): recent commit context — lets the baseline see
+  // what the project just did. Reduces "the baseline duplicates work
+  // already in the last 3 commits" failure mode + helps follow style.
+  if (input.recentCommits && input.recentCommits.length > 0) {
+    parts.push("");
+    parts.push("Recent commits (newest first — consider patterns + avoid duplicating):");
+    for (const c of input.recentCommits.slice(0, 10)) parts.push(`  - ${c}`);
+  }
   parts.push("");
   parts.push("Output your JSON now.");
   return parts.join("\n");
+}
+
+// T179 (2026-05-04): self-critique pass. After the baseline produces
+// hunks, fire a second prompt that shows the model its OWN hunks +
+// asks it to critique them. The output is structured: APPROVE means
+// proceed, REVISE means re-emit corrected hunks. Used by BaselineRunner
+// when cfg.baselineSelfCritique is true (default OFF — opt-in).
+export interface SelfCritiqueInput {
+  directive: string;
+  proposedHunksJson: string;
+}
+
+export function buildBaselineSelfCritiquePrompt(input: SelfCritiqueInput): string {
+  return [
+    "You are critiquing your OWN previous proposed changes for the directive below. Be honest — find what you would have flagged if a peer wrote this.",
+    "",
+    "Things to check:",
+    "  - Does each hunk's `search` text actually exist in the file (not invented)?",
+    "  - Does the resulting file compile / parse / look syntactically correct?",
+    "  - Did you miss obvious side-effects (e.g. caller updates needed when changing a signature)?",
+    "  - Does the change actually satisfy the directive, or just touch related files?",
+    "  - Are any hunks no-ops (search == replace) or duplicates?",
+    "",
+    `DIRECTIVE: ${input.directive}`,
+    "",
+    "Your previously proposed hunks (the JSON you emitted last turn):",
+    input.proposedHunksJson,
+    "",
+    "Output ONLY one of:",
+    '  {"verdict": "APPROVE", "reason": "<one line — why these hunks are good as-is>"}',
+    '  {"verdict": "REVISE", "reason": "<one line — what\'s wrong>", "hunks": [ ...corrected hunks following the same schema as before ]}',
+    "",
+    "On REVISE, the corrected hunks fully replace the prior proposal — emit the FINAL set, not a diff against the prior.",
+    "JSON only, no prose, no markdown fences.",
+  ].join("\n");
+}
+
+export interface ParsedSelfCritique {
+  verdict: "APPROVE" | "REVISE";
+  reason: string;
+  hunks?: readonly Hunk[];
+}
+
+export function parseBaselineSelfCritique(raw: string, expectedFiles: readonly string[]): ParsedSelfCritique | null {
+  // Lift the JSON out of optional markdown fence + tolerate trailing prose.
+  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  const candidate = fenceMatch ? fenceMatch[1] : raw;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(candidate);
+  } catch {
+    const braceMatch = candidate.match(/\{[\s\S]*\}/);
+    if (!braceMatch) return null;
+    try {
+      parsed = JSON.parse(braceMatch[0]);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const o = parsed as Record<string, unknown>;
+  const verdictRaw = typeof o.verdict === "string" ? o.verdict.toUpperCase() : "";
+  const reason = typeof o.reason === "string" ? o.reason.trim() : "";
+  if (verdictRaw !== "APPROVE" && verdictRaw !== "REVISE") return null;
+  if (verdictRaw === "APPROVE") {
+    return { verdict: "APPROVE", reason };
+  }
+  // REVISE — extract corrected hunks via the same parseWorkerResponse
+  // shape. Build a synthetic JSON envelope around the hunks so the
+  // shared parser does the heavy lifting.
+  const hunksRaw = o.hunks;
+  if (!Array.isArray(hunksRaw)) return null;
+  const synth = JSON.stringify({ hunks: hunksRaw });
+  // parseWorkerResponse takes a mutable string[] for legacy reasons —
+  // copy our readonly to satisfy the type.
+  const reparsed = parseWorkerResponse(synth, [...expectedFiles]);
+  if (!reparsed.ok) return null;
+  return {
+    verdict: "REVISE",
+    reason,
+    hunks: reparsed.hunks,
+  };
 }
 
 interface ApplyOutcome {
