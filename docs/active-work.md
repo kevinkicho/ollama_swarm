@@ -287,3 +287,20 @@ Full report at `runs_overnight/_OVERNIGHT-FINAL-REPORT.md`. 10 preset runs (8 + 
 - **Move to "Done recently" with a commit hash when shipped.** Items older than ~30 days can fall off (commit hash + git log is the durable record).
 - **Trigger field is required for "Queued."** Forces clarity about what unblocks the work.
 - **Don't list work that doesn't exist yet** ("we should add X" without a concrete reason). This is a TODO, not a wish list.
+
+### 2026-05-01 PM — bug: user chat doesn't reach blackboard/moa agents
+
+Kevin reported the SwarmView chat input goes to the transcript but agents don't see it for blackboard or MoA presets. Investigated:
+
+- `/api/swarm/say` (the only path the UI calls) pushes a `{role:"user"}` entry to `runner.transcript`.
+- 7 of 10 runners (council, debate-judge, mapreduce, ow, ow-deep, round-robin, stigmergy) consume these entries via `transcript.filter(...).map(e => e.role === "user" ? "[HUMAN] " + e.text : ...)` when building the next agent prompt — they DO surface chat to agents.
+- **MoaRunner** (`MoaRunner.ts:66`) pushes the entry but `buildProposerPrompt` / `buildAggregatorPrompt` never read role:"user" entries. Display-only.
+- **BlackboardRunner** (`BlackboardRunner.ts:572`) pushes the entry but the planner reads from `directiveWithAmendments()` which consults a SEPARATE buffer (`AmendmentsBuffer`, populated only by `/api/swarm/amend` which has no UI). Display-only.
+- **BaselineRunner** — single-shot, irrelevant.
+
+**Fix shape (~30 LOC + 2 tests):**
+- `Orchestrator.injectUser`: ALSO call `addAmendment(runId, text)` so blackboard's existing amendment infrastructure picks up chat input as a nudge.
+- `MoaRunner.buildProposerPrompt` + `buildAggregatorPrompt`: thread a `userMessages: string[]` param, populated from `transcript.filter(e => e.role === "user")` since last round; render as `## Recent user input:\n${userMessages.join("\n")}` block.
+- Tests: extend `MoaRunner.test.ts` with "user injection visible to next proposer round"; add Orchestrator integration test for the say→amend dual-write.
+
+**Trigger**: after sweeps finish (no tsx-watch reload mid-run).

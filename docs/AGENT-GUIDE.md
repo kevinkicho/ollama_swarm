@@ -33,11 +33,14 @@ Works from the repo root, any shell. The runner shim
 on the spawned process if not already set, so you don't need a bash-only
 env-prefix anymore (was needed until commit `0b3cda6`, 2026-04-27).
 
-Currently 1209+ tests passing (1209 at 2026-04-29; +7 added 2026-05-01
-for V2 6c route + provider streaming regression). If you run a test file
-directly via `node --import tsx --test <file>`, the env var still gets
-inherited from your shell — set it manually if running a one-off file
-in a fresh terminal.
+Currently 1592 tests passing as of 2026-05-03 (3 skipped, 0 failing).
+Growth since 2026-04-29 covers MoA preset (5 features × 3 layers each,
+2026-05-01), constrained decoding, time-travel replay, SWE-Bench Lite
+adapter, multi-provider live model discovery, and Ollama Cloud as a
+4th provider (2026-05-03). If you run a test file directly via
+`node --import tsx --test <file>`, the env var still gets inherited
+from your shell — set it manually if running a one-off file in a
+fresh terminal.
 
 ### Type-check (no emit)
 

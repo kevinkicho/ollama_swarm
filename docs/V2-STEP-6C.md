@@ -64,7 +64,7 @@ Replace every WebSocket-driven UI state path with derivation from `logs/current.
 2. **SSE endpoint + `useRunEventStream` hook** (~7h together). Lands behind `?useRunEventStream=1`. EventLogMirrorPanel extends to compare WS-store vs the new hook for the LIVE run.
 3. **Run a 5-min blackboard tour with both panels open** — should show zero drift across all 8 fields. If drift, fix before continuing.
 4. **Slice cutovers** (~10h, 5 slices). One PR per slice. Each PR keeps both paths alive behind `?useEventLogStream=1` flag.
-5. **Tour all 9 presets with flag default-on** — overnight or in a focused 3-hour session. Any drift = file-and-fix before next slice.
+5. **Tour all 10 presets with flag default-on** — overnight or in a focused 3-hour session. Any drift = file-and-fix before next slice.
 6. **Delete WS state-dispatch code** (~2h). Keep the WS for kick-signal only.
 
 ---

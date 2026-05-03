@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-05-01 (afternoon — 31 commits today)
+**Last updated:** 2026-05-03 (Ollama Cloud as 4th provider + setup-form UX wins)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -16,21 +16,23 @@
 
 ## What ships today
 
-**9 swarm presets** (one write-capable, eight discussion):
+**10 swarm presets** (one write-capable, nine discussion) + 1 baseline. Every preset honors the user directive except `stigmergy` (exploration is repo-driven):
 
-| Preset | Write-capable? | Notes |
-|---|---|---|
-| `blackboard` | ✅ | planner + workers + auditor; tier ratchet; Aider-style hunks; pre-commit verify gate (`verifyCommand`) |
-| `round-robin` | ❌ | shared transcript, no role differentiation |
-| `role-diff` | ❌ | per-agent role bias (Architect / Tester / etc.) |
-| `council` | ❌ | private draft → reveal → converge; early-stop on convergence |
-| `orchestrator-worker` (flat) | ❌ | lead dispatches subtasks |
-| `orchestrator-worker-deep` | ❌ | flat + mid-tier lead (≥4 agents) |
-| `debate-judge` | ❌ (default) | exactly 3 agents Pro/Con/Judge; `executeNextAction: true` opts into a write phase |
-| `map-reduce` | ❌ | reducer + N mappers; convergence on consecutive empty cycles |
-| `stigmergy` | ❌ | pheromone-table + per-file annotations; structured-card bubbles (#303) |
+| Preset | Write-capable? | Honors directive? | Notes |
+|---|---|---|---|
+| `blackboard` | ✅ | ✅ | planner + workers + auditor; tier ratchet; Aider-style hunks; pre-commit verify gate (`verifyCommand`) |
+| `round-robin` | ❌ | ✅ | structured deliberation — turns rotate Critic/Synthesizer/Gap-finder/Builder dispositions; lead synthesizes a directive answer |
+| `role-diff` | ❌ | ✅ | with directive: Researcher/Designer/Implementer/Tester/Reviewer/Documenter/Devil's-advocate → `deliverable.md`. Without: 7-lens audit |
+| `council` | ❌ | ✅ | drafters commit to `### MY POSITION` per round, must KEEP/CHANGE in R2+; synthesis preserves dissent via Minority report |
+| `orchestrator-worker` (flat) | ❌ | ✅ | lead decomposes directive; workers report directive-relevant findings |
+| `orchestrator-worker-deep` | ❌ | ✅ | 3-tier (orchestrator → mid-leads → workers) for ≥4 agents |
+| `debate-judge` | ❌ (default) | ✅ | exactly 3 agents Pro/Con/Judge; judge auto-derives proposition from directive; `executeNextAction: true` opts into a write phase |
+| `map-reduce` | ❌ | ✅ | reducer + N mappers; with directive, mappers find directive-relevant evidence in their slice |
+| `stigmergy` | ❌ | ❌ | pheromone-table + per-file annotations; structured-card bubbles (#303) |
+| `moa` | ❌ | ✅ | Mixture of Agents — N proposers (peer-hidden, parallel) + aggregator synthesizes; heterogeneous models via `moaProposerModel` / `moaAggregatorModel` |
+| `baseline` | ✅ | ✅ | single agent / single prompt / single apply step — eval-harness path, not in the form's normal preset list |
 
-Validation: tour v2 (2026-04-28) ran all 9 sequentially. 8/9 self-terminated cleanly; blackboard hit safety net at 20m due to two pre-fix bugs (#304 git committer identity + #305 cap watchdog overshoot). Both blockers patched + tested; fresh blackboard validation pending in #306.
+Validation: tour v2 (2026-04-28) ran 9 sequentially with 8/9 self-terminating cleanly. MoA shipped 2026-05-01 with three layers of depth (initial → convergence detection → heterogeneous models per layer). Blackboard caps tightened by #304 (git committer identity) + #305 (cap watchdog 5s tick).
 
 ---
 
@@ -72,6 +74,13 @@ The V1 SDK loop (per-agent opencode subprocess + SSE chunked streaming) was reti
 **Test totals:** 1209 server tests passing as of 2026-04-29; 2026-05-01 added 7 (5 v2 route + 2 streaming-regression). Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
 
 ---
+
+## What landed 2026-05-03
+
+- **Ollama Cloud as a 4th distinct provider.** `shared/src/providers.ts` adds `"ollama-cloud"` to the Provider union with a `(?::|-)cloud$` regex detector that catches both `glm-5.1:cloud` and `gemma4:31b-cloud` shapes. The Provider Tab control renders four side-by-side tabs; selecting Ollama Cloud filters the model dropdown to a 21-entry catalog sourced from `ollama.com/search?c=cloud`. Runtime routing collapses `ollama-cloud` → `ollama` in `toOpenCodeModelRef` and `pickProvider` (the local install proxies `:cloud` models to ollama.com transparently). New `OLLAMA_API_KEY` env var is informational — Ollama Cloud is always usable when the local install has an account configured.
+- **Setup form UX overhaul.** Sticky Start CTA at the bottom (no scroll-to-find), first-time starter chips with a "Don't show again" dismiss, collapsed-by-default Topology grid with "Edit per-agent" reveal, inline DirectiveBadge (only renders for non-honored presets), auto-resize User directive textarea, recently-used runs chip row with localStorage persistence, inline preflight that detects existing clones and offers "Resume run." See `scripts/verify-setup-ux.mjs` for the Playwright probe that captures all 9 states.
+- **All 9 active discussion presets now honor user directives.** Round-robin rotates Critic/Synthesizer/Gap-finder/Builder dispositions framed around the directive; role-diff with a directive flips into a build team producing `deliverable.md`; map-reduce mappers find directive-relevant evidence; council's `MY POSITION` blocks anchor on the directive; OW/OW-Deep decompose the directive into worker subtasks; debate-judge auto-derives a debatable proposition from it. Only `stigmergy` ignores it (exploration is repo-driven).
+- **Multi-provider live model discovery.** `/api/models?provider=anthropic|openai` hits `/v1/models` directly with the API key, server-side cached for 24h. Ollama Cloud falls back to the curated catalog. The `ModelSelect` dropdown surfaces source provenance ("9 live models from Anthropic API" vs "21 models from the Ollama Cloud catalog").
 
 ## What landed 2026-05-01 (31 commits)
 

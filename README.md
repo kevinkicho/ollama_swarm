@@ -2,9 +2,16 @@
 
 > **For agents picking up this codebase**: read [`docs/STATUS.md`](docs/STATUS.md) first — it's the single "what's true right now" pointer + map. This README is the user-facing intro.
 
-A local web app that runs **N open-weights coding agents in parallel** against a single GitHub repo — they collaborate in one shared transcript, each potentially a different [Ollama](https://ollama.com)-served model (e.g. planner=`glm-5.1:cloud`, worker=`gemma4:31b-cloud`, auditor=`nemotron-3-super:cloud`). The design point is **multi-model parallelism on your own hardware** — Claude Code does single-agent-Claude beautifully, but it can't run five different open-weights models reviewing the same code at the same time. That's what this is for.
+A local web app that runs **N open-weights coding agents in parallel** against a single GitHub repo — they collaborate in one shared transcript, each potentially a different model (e.g. planner=`glm-5.1:cloud`, worker=`gemma4:31b-cloud`, auditor=`nemotron-3-super:cloud`). The design point is **multi-model parallelism on your own hardware** — Claude Code does single-agent-Claude beautifully, but it can't run five different open-weights models reviewing the same code at the same time. That's what this is for.
 
-Paid providers ([Anthropic Claude](https://www.anthropic.com), [OpenAI](https://openai.com)) are wired in for users who want them — pick in the form, set the API key in `.env`. Ollama is the default and runs free on your GPU.
+Four providers are wired in, surfaced as side-by-side tabs in the setup form:
+
+- **Ollama (local)** — models served by your local [Ollama](https://ollama.com) install (`llama3:8b`, `qwen2.5-coder:7b`, etc.). Free, GPU-bound, no key.
+- **Ollama Cloud** — `:cloud` / `-cloud` models hosted on [ollama.com](https://docs.ollama.com/cloud) (`glm-5.1:cloud`, `gemma4:31b-cloud`, `nemotron-3-super:cloud`, etc.). Routes through your local Ollama install transparently when you have an account configured; set `OLLAMA_API_KEY` in `.env` for direct calls.
+- **[Anthropic Claude](https://www.anthropic.com)** — set `ANTHROPIC_API_KEY` to enable; live model discovery via `/v1/models`.
+- **[OpenAI](https://openai.com)** — set `OPENAI_API_KEY` to enable; live model discovery via `/v1/models`.
+
+Ollama Cloud is the default — `glm-5.1:cloud` ships pre-selected.
 
 > **2026-04-29 — opencode subprocess fully removed (E3 Phases 1–5).** Earlier
 > versions spawned an `opencode serve` HTTP subprocess per agent. That whole
@@ -27,8 +34,10 @@ npm install
 # 2. Configure secrets
 cp .env.example .env
 # Edit .env — set OPENCODE_SERVER_PASSWORD to any non-empty string (still
-# required at config-load time post-E3, otherwise unused). Set
-# ANTHROPIC_API_KEY / OPENAI_API_KEY only if you plan to use those providers.
+# required at config-load time post-E3, otherwise unused). Optional keys:
+# ANTHROPIC_API_KEY / OPENAI_API_KEY for paid providers; OLLAMA_API_KEY
+# for direct Ollama Cloud calls (otherwise the local install proxies
+# :cloud models when you have an ollama.com account configured locally).
 
 # 3. Pull the default Ollama model (skip if you'll only use paid providers)
 ollama pull glm-5.1:cloud
@@ -45,7 +54,7 @@ Then open **http://localhost:8244/** (or the WSL guest IP if you're hitting it f
 
 ## Tour
 
-**1. Setup form.** Pick a repo, a parent folder to clone into, an agent count, and one of the **ten patterns** (nine swarm presets + a single-agent baseline). Optional User Directive seeds the conformance gauge and feeds presets that consume directives.
+**1. Setup form.** Pick a repo, a parent folder to clone into, an agent count, and one of the **eleven patterns** (ten swarm presets + a single-agent baseline). The optional User Directive seeds the conformance gauge and is honored by every preset except `stigmergy`. The AI Provider section is a 4-tab segmented control (Ollama / Ollama Cloud / Anthropic / OpenAI) with a model dropdown that filters per-provider — Anthropic and OpenAI lists come from live `/v1/models` discovery, Ollama from your local `/api/tags`, Ollama Cloud from the curated catalog at `ollama.com/search?c=cloud`.
 
 ![Setup form — GitHub URL, parent folder, pattern picker, agents/rounds/model fields](docs/images/setup-form.png)
 
@@ -59,17 +68,18 @@ Then open **http://localhost:8244/** (or the WSL guest IP if you're hitting it f
 
 ## What it does
 
-You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. The agents spawn, clone the repo, and start collaborating — each running an open-weights model on your local Ollama (or, optionally, a paid provider). **Ten patterns** ship today (one write-capable, eight discussion, plus a single-agent baseline for evaluation):
+You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. The agents spawn, clone the repo, and start collaborating — each running an open-weights model on your local Ollama (or, optionally, Ollama Cloud / Anthropic / OpenAI). **Eleven patterns** ship today (one write-capable, nine discussion, plus a single-agent baseline for evaluation):
 
-- **Round-robin transcript** — N identical agents take turns on a shared transcript; every agent sees every other agent's reply and responds. Discussion-only.
+- **Round-robin transcript** — N agents take turns on a shared transcript; each turn rotates through Critic / Synthesizer / Gap-finder / Builder dispositions, with the lead synthesizing a directive answer at the end. Discussion-only.
 - **Blackboard (optimistic + small units)** — planner posts atomic todos to a shared board; workers claim and commit in parallel, with CAS on file hashes catching stale plans. **The only write-capable preset** — workers actually modify the clone.
-- **Role differentiation** — round-robin loop with each agent given a distinct role (Architect, Tester, Security reviewer, etc.). Discussion-only.
-- **Council** — N drafters write in private round 1, then read peers' drafts in subsequent rounds and converge. Has early-stop convergence detection. Discussion-only.
-- **Orchestrator-worker** — agent-1 is the lead and dispatches subtasks; agents 2..N execute in parallel. Discussion-only.
-- **Orchestrator-worker (deep)** — 3-tier variant for ≥4 agents: orchestrator → mid-leads → workers. Discussion-only.
-- **Debate-judge** — Pro / Con / Judge (exactly 3 agents). Multi-round structured debate ending in a JSON verdict. Optional post-verdict "build phase" turns Pro into implementer. Discussion-by-default; `executeNextAction: true` enables file edits.
-- **Map-reduce** — agent-1 is reducer, agents 2..N are mappers slicing the repo and summarizing in parallel. Convergence detector stops on consecutive empty cycles. Discussion-only.
-- **Stigmergy** — pheromone-table + per-file ranking pattern. Self-organizing exploration; agents pick the next file based on a shared annotation table. Discussion-only.
+- **Role differentiation** — with a directive, becomes a build team (Researcher / Designer / Implementer / Tester / Reviewer / Documenter / Devil's-advocate) producing `deliverable.md`. Without one, falls back to a 7-lens repo audit. Discussion-only.
+- **Map-reduce** — reducer + N mappers slicing the repo in parallel. With a directive, mappers find directive-relevant evidence in their slice and reducer synthesizes the answer. Convergence detector stops on consecutive empty cycles. Discussion-only.
+- **Council** — N drafters write in private round 1, then commit to a `### MY POSITION` per round and explicitly KEEP/CHANGE in subsequent rounds. Synthesis preserves dissent via a Minority report. Early-stop on convergence. Discussion-only.
+- **Orchestrator–worker** — lead decomposes the directive into worker subtasks; workers report directive-relevant findings; lead synthesizes. Discussion-only.
+- **Orchestrator–worker (deep)** — 3-tier variant for ≥4 agents: orchestrator → mid-leads → workers. Synthesis flows back upward. Discussion-only.
+- **Debate-judge** — Pro / Con / Judge (exactly 3 agents). Judge auto-derives a debatable proposition from your directive. Optional post-verdict build phase turns Pro into implementer. Discussion-by-default; `executeNextAction: true` enables file edits.
+- **Stigmergy** — pheromone-table + per-file ranking pattern. Self-organizing exploration; agents pick the next file based on a shared annotation table. Discussion-only. (Doesn't honor the user directive — exploration is repo-driven.)
+- **Mixture of Agents (MoA)** — N proposers each draft independently (peer-hidden, parallel); one aggregator synthesizes their drafts. Reproducibly beats single-large-model on reasoning benchmarks using only small open-weights models. Discussion-only.
 - **Baseline** — single agent, single prompt, single apply step. The "thinnest honest comparison" the eval scoreboard uses to anchor "did the swarm beat doing it alone?" Code-modify capable; not surfaced in the form's normal preset list (eval-harness path).
 
 A live transcript streams into the browser as it's generated — you see each agent type token-by-token, can inject your own message into the conversation at any time, and stop the whole thing with one click. The blackboard preset adds a **Board** tab showing todos in five columns (Open / Claimed / Committed / Stale / Skipped), plus a run summary card when the run terminates.
@@ -165,7 +175,8 @@ Hit the **+ nudge** button next to the conformance gauge to submit a mid-run dir
 | --- | --- | --- |
 | `OPENCODE_SERVER_PASSWORD` | **yes (at config-load time)** | Historical opencode HTTP-basic-auth secret. The opencode subprocess is gone (E3 Phase 5) but the env var is still validated by `config.ts` so existing `npm test` / `npm run dev` setups don't break. Set to any non-empty string. Production runs ignore it. |
 | `OLLAMA_BASE_URL` | no (defaults to `http://localhost:11434/v1`) | Ollama base URL. The provider stack normalizes a trailing `/v1` defensively (so legacy values still work). |
-| `ANTHROPIC_API_KEY` | no (only when using Anthropic provider) | Read by the in-process `AnthropicProvider` via `process.env`. The setup form's provider dropdown greys out Anthropic when unset. |
+| `OLLAMA_API_KEY` | no (Ollama Cloud is always usable; key is informational) | Per [docs.ollama.com/cloud](https://docs.ollama.com/cloud). The Ollama Cloud tab is always selectable — the local Ollama install proxies `:cloud` models to ollama.com when an account is configured locally. Setting this key surfaces a "live key configured" hint in the tab tooltip. |
+| `ANTHROPIC_API_KEY` | no (only when using Anthropic provider) | Read by the in-process `AnthropicProvider` via `process.env`. The setup form's Anthropic tab is disabled when unset. |
 | `OPENAI_API_KEY` | no (only when using OpenAI provider) | Same pattern as `ANTHROPIC_API_KEY`. |
 | `DEFAULT_MODEL` | no (defaults to `glm-5.1:cloud`) | Model each agent uses when the form's model field is left blank. For paid providers use the prefixed form: `anthropic/claude-opus-4-7`, `openai/gpt-5`, etc. |
 | `SERVER_PORT` | no (defaults to `8243`) | Override the backend HTTP+WS port |
