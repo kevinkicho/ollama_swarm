@@ -318,6 +318,41 @@ export interface RunConfig {
   moaProposerModel?: string;
   moaAggregatorModel?: string;
   /**
+   * T196 (2026-05-04): heterogeneous proposers UI substrate. When set,
+   * each proposer N uses moaProposerModels[N % length] instead of the
+   * single moaProposerModel. The whole point of MoA is N DIFFERENT
+   * small models proposing — beats N copies of the same model. The
+   * UI surface is deferred (per-proposer dropdown form work); use
+   * via API for now.
+   *
+   * Examples (per the original Together AI paper):
+   *   ["gemma4:31b-cloud", "qwen3-coder-next:cloud", "deepseek-v4-flash:cloud"]
+   *   ["llama3:8b", "mistral-large-3:7b", "qwen2.5-coder:7b"]
+   *
+   * Falls back to moaProposerModel → cfg.model when absent.
+   * MoA-only.
+   */
+  moaProposerModels?: readonly string[];
+  /**
+   * T196 (2026-05-04): per-tier model routing for OW-Deep. Each tier
+   * uses a different model: orchestrator (strategy / reasoning),
+   * mid-leads (tactics / reasoning), workers (implementation /
+   * coding-tier). Same value-prop as MoA's heterogeneous proposers
+   * but at the OW-Deep tier boundary. Existing cfg.workerModel
+   * already exists (also used by blackboard); this adds the orch +
+   * mid-lead tiers.
+   *
+   * Example:
+   *   orchestratorModel: "nemotron-3-super:cloud"  // strategy
+   *   midLeadModel: "glm-5.1:cloud"                // tactics
+   *   workerModel: "gemma4:31b-cloud"              // implementation
+   *
+   * Each falls back to cfg.model when absent. OW-Deep only.
+   * The UI surface is deferred (per-tier dropdown form work).
+   */
+  orchestratorModel?: string;
+  midLeadModel?: string;
+  /**
    * T193 (2026-05-04): per-disposition model routing for round-robin
    * (no-roles variant). Maps each disposition to a model id; the
    * runner uses promptWithRetry's modelOverride to call that model

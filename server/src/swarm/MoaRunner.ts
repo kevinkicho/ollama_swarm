@@ -222,12 +222,23 @@ export class MoaRunner implements SwarmRunner {
     const proposerCount = cfg.agentCount;
     const aggregatorCount = Math.max(1, Math.min(3, cfg.moaAggregatorCount ?? 1));
     const totalAgents = proposerCount + aggregatorCount;
-    const proposerModel = cfg.moaProposerModel ?? cfg.model;
+    // T196 (2026-05-04): heterogeneous proposer cycling. When
+    // cfg.moaProposerModels is set (array), each proposer N uses
+    // moaProposerModels[(N-1) % length]. Falls back to single
+    // moaProposerModel → cfg.model. Plays to MoA's actual value
+    // prop: N DIFFERENT small models > N copies of one model.
+    const proposerModels: readonly string[] =
+      cfg.moaProposerModels && cfg.moaProposerModels.length > 0
+        ? cfg.moaProposerModels
+        : [cfg.moaProposerModel ?? cfg.model];
+    const proposerModel = proposerModels[0]!; // for the heterogeneous flag below
     const aggregatorModel = cfg.moaAggregatorModel ?? cfg.model;
     const agents: Agent[] = [];
     for (let i = 1; i <= totalAgents; i++) {
       const isAggregator = i > proposerCount;
-      const model = isAggregator ? aggregatorModel : proposerModel;
+      const model = isAggregator
+        ? aggregatorModel
+        : proposerModels[(i - 1) % proposerModels.length]!;
       const agent = await this.opts.manager.spawnAgentNoOpencode({
         cwd: destPath,
         index: i,

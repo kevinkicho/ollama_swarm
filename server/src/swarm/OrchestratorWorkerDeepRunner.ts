@@ -623,6 +623,25 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
     });
   }
 
+  // T196 (2026-05-04): pick the right per-tier model for this agent.
+  // Orchestrator (index 1) → cfg.orchestratorModel; mid-leads (index
+  // in topology.midLeadIndices) → cfg.midLeadModel; workers → existing
+  // cfg.workerModel. Each falls back to undefined when not set so
+  // promptWithRetry uses the agent's spawn-time model.
+  private pickTierModel(agentIndex: number): string | undefined {
+    if (!this.active) return undefined;
+    if (agentIndex === 1) {
+      return this.active.orchestratorModel;
+    }
+    // Mid-leads — look up topology.
+    const topo = computeDeepTopology(this.active.agentCount);
+    if (topo.midLeadIndices.includes(agentIndex)) {
+      return this.active.midLeadModel;
+    }
+    // Default: worker tier.
+    return this.active.workerModel;
+  }
+
   // The runAgent shape matches OrchestratorWorkerRunner's — same retry,
   // same junk handling, same per-agent stats hooks. Inlined rather than
   // pulled into a shared helper because every preset has subtle drift in
@@ -638,6 +657,11 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
       thinkingSince: Date.now(),
     });
     this.stats.countTurn(agent.id);
+    // T196 (2026-05-04): per-tier model routing. Pick model based on
+    // agent's tier in the topology — orchestrator (idx=1) /
+    // mid-leads / workers. Each tier falls back to cfg.model when
+    // its specific override isn't set.
+    const tierModel = this.pickTierModel(agent.index);
     // 2026-04-27: SSE-aware watchdog (see startSseAwareTurnWatchdog).
     const controller = new AbortController();
     const watchdog = startSseAwareTurnWatchdog({
@@ -655,6 +679,8 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
         // Phase 5b of #243: per-agent addendum from the topology row.
         promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         describeError: describeSdkError,
+        // T196: per-tier model override.
+        ...(tierModel ? { modelOverride: tierModel } : {}),
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(agent.id, success, elapsedMs);
           this.opts.logDiag?.({

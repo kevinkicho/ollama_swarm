@@ -326,6 +326,17 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
         });
         if (this.stopping) break;
 
+        // T195 (2026-05-04): cross-worker handoffs. Scan worker reports
+        // from THIS cycle for HANDOFF lines + dispatch a mini-wave to
+        // the named workers BEFORE synthesis. Best-effort: handoff
+        // failure doesn't block synthesis. Only one mini-wave per
+        // cycle (handoffs from the mini-wave itself are deferred to
+        // the next cycle to bound runaway re-dispatch).
+        if (!this.stopping) {
+          await this.dispatchHandoffWave(workers, r, cfg.rounds, seedSnapshot, cfg.userDirective);
+        }
+        if (this.stopping) break;
+
         // SYNTHESIZE — lead sees the full transcript again (now including
         // all worker reports from this cycle) and produces a consolidated
         // answer for the cycle.
@@ -491,6 +502,61 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
       successCriteria,
     );
     await this.runAgent(agent, round, totalRounds, prompt, "worker");
+  }
+
+  // T195 (2026-05-04): scan THIS cycle's worker reports for HANDOFF
+  // lines + dispatch a mini-wave to the named workers before
+  // synthesis. Cap mini-wave at 3 handoffs to bound the cycle.
+  // Track handoffs already dispatched to avoid duplicates within
+  // the same cycle.
+  private async dispatchHandoffWave(
+    workers: Agent[],
+    round: number,
+    totalRounds: number,
+    seedSnapshot: readonly TranscriptEntry[],
+    userDirective?: string,
+  ): Promise<void> {
+    const HANDOFF_CAP = 3;
+    // Look at agent entries from this cycle (newest-first scan, stop
+    // at the most recent system "Cycle r/" announcement).
+    const cycleStart = this.transcript.findIndex(
+      (e) =>
+        e.role === "system" &&
+        e.text.includes(`Cycle ${round}/${totalRounds}`),
+    );
+    const cycleEntries =
+      cycleStart >= 0 ? this.transcript.slice(cycleStart) : this.transcript;
+    const allHandoffs: HandoffRequest[] = [];
+    for (const e of cycleEntries) {
+      if (e.role !== "agent" || e.agentIndex === undefined) continue;
+      const handoffs = parseHandoffLines(e.text, e.agentIndex);
+      allHandoffs.push(...handoffs);
+      if (allHandoffs.length >= HANDOFF_CAP) break;
+    }
+    if (allHandoffs.length === 0) return;
+    const capped = allHandoffs.slice(0, HANDOFF_CAP);
+    this.appendSystem(
+      `[T195 cross-worker handoff] ${capped.length} handoff(s) detected; dispatching mini-wave: ${capped.map((h) => `Worker ${h.fromIndex}→${h.targetIndex}`).join(", ")}.`,
+    );
+    await staggerStart(capped, (h) => {
+      const target = workers.find((w) => w.index === h.targetIndex);
+      if (!target) {
+        this.appendSystem(
+          `[T195] Worker ${h.fromIndex} requested handoff to Worker ${h.targetIndex} but that index isn't in this run's pool — skipped.`,
+        );
+        return Promise.resolve();
+      }
+      return this.runWorkerTurn(
+        target,
+        round,
+        totalRounds,
+        `[HANDOFF from Worker ${h.fromIndex}] ${h.request}`,
+        seedSnapshot,
+        userDirective,
+        // Skip successCriteria for handoff turns — the request is
+        // its own success bar.
+      );
+    });
   }
 
   // T182 (2026-05-04): peer review of the lead's decomposition. Fires
@@ -932,6 +998,16 @@ export function buildWorkerPrompt(
     "Your working directory IS the project clone — use file-read, grep, and find-files tools to inspect it.",
     "Respond with a CONCRETE report (under ~300 words) of what you found, citing file paths (e.g. `src/foo.ts:42`) where relevant.",
     "Do NOT try to coordinate with other workers or ask for more scope — just execute your subtask and report.",
+    // T195 (2026-05-04): cross-worker handoffs. Workers can flag
+    // findings that another worker should investigate. After the
+    // parallel batch, the lead sees these and dispatches a follow-up
+    // mini-wave to the named workers. Format on the LAST line(s):
+    //   HANDOFF: Worker N | <one-line investigation request>
+    // Skip the line entirely when no handoff is appropriate.
+    "**HANDOFF (optional):** If your investigation surfaced something that a SPECIFIC peer worker should look into (and you can name the worker), end your report with:",
+    "    HANDOFF: Worker <N> | <one-line concrete investigation request>",
+    "    HANDOFF: Worker 4 | check whether the singleton pattern in src/db/Singleton.ts has thread-safety guards.",
+    "  Use sparingly. Most reports won't need handoffs. The lead picks these up + may dispatch a follow-up mini-wave to those workers BEFORE synthesis.",
     ...rubricBlock,
     "=== SEED ===",
     seedText || "(empty seed)",
@@ -1052,6 +1128,38 @@ function parseAssignmentsSummary(text: string): TranscriptEntrySummary | undefin
     subtaskCount: assignments.length,
     assignments,
   };
+}
+
+// T195 (2026-05-04): parse HANDOFF lines from a worker report.
+// Format: `HANDOFF: Worker <N> | <one-line request>`. Returns
+// list of {targetIndex, request}. Workers flag handoffs at the end
+// of their report; the lead picks them up after the parallel batch
+// and may dispatch a mini-wave to the named workers before synthesis.
+export interface HandoffRequest {
+  targetIndex: number;
+  request: string;
+  fromIndex: number;
+}
+export function parseHandoffLines(
+  text: string,
+  fromIndex: number,
+): HandoffRequest[] {
+  const out: HandoffRequest[] = [];
+  if (!text) return out;
+  const re = /^[\s>*-]*HANDOFF\s*:\s*Worker\s+(\d+)\s*\|\s*(.+?)$/gim;
+  for (const m of text.matchAll(re)) {
+    const targetIndex = Number.parseInt(m[1]!, 10);
+    const request = m[2]!.trim();
+    if (
+      Number.isFinite(targetIndex) &&
+      targetIndex >= 1 &&
+      targetIndex !== fromIndex && // workers can't hand off to themselves
+      request.length > 0
+    ) {
+      out.push({ targetIndex, request, fromIndex });
+    }
+  }
+  return out;
 }
 
 // T182 (2026-05-04): summarize the effort distribution of a plan as
