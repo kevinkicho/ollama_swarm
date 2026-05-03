@@ -2,9 +2,18 @@
 // the provider in their prefix. Unprefixed → ollama (the historical
 // default, so every existing call site stays correct).
 //
-//   "glm-5.1:cloud"               → ollama / glm-5.1:cloud
+//   "glm-5.1:cloud"               → ollama-cloud / glm-5.1:cloud
+//   "llama3:8b"                   → ollama / llama3:8b   (no :cloud suffix)
 //   "anthropic/claude-opus-4-7"   → anthropic / claude-opus-4-7
 //   "openai/gpt-5"                → openai / gpt-5
+//
+// 2026-05-03: added "ollama-cloud" as a UI-distinct provider. Server
+// routing still goes through the local Ollama install (which proxies
+// `:cloud`-suffixed models to ollama.com when OLLAMA_API_KEY is set
+// per https://docs.ollama.com/cloud) — so toOpenCodeModelRef + the
+// SDK call sites use providerID="ollama" for cloud models too. The
+// distinction is purely for the form's selection UX so users can pick
+// from the curated cloud catalog vs their locally-pulled tags.
 //
 // Two surfaces consume these helpers:
 //   1. RepoService.writeOpencodeConfig — groups models by provider and
@@ -14,11 +23,12 @@
 //      that need to pass `model: { providerID, modelID }` — they call
 //      toOpenCodeModelRef(model) instead of hardcoding providerID.
 
-export const PROVIDERS = ["ollama", "anthropic", "openai"] as const;
+export const PROVIDERS = ["ollama", "ollama-cloud", "anthropic", "openai"] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 const PROVIDER_PREFIX: Record<Provider, string> = {
   ollama: "",
+  "ollama-cloud": "",
   anthropic: "anthropic/",
   openai: "openai/",
 };
@@ -26,6 +36,13 @@ const PROVIDER_PREFIX: Record<Provider, string> = {
 export function detectProvider(model: string): Provider {
   if (model.startsWith("anthropic/")) return "anthropic";
   if (model.startsWith("openai/")) return "openai";
+  // 2026-05-03: cloud-tag suffix → Ollama Cloud. Two shapes are in
+  // use on ollama.com: bare ":cloud" (e.g. glm-5.1:cloud) and
+  // size-tagged "...b-cloud" or "...m-cloud" (e.g. gemma4:31b-cloud,
+  // gemma4:26b-cloud, ministral-3:7m-cloud). Match both — they
+  // always sit at the end and the local-tag namespace ("llama3:8b")
+  // never ends in -cloud so this stays unambiguous.
+  if (/(?::|-)cloud$/.test(model)) return "ollama-cloud";
   return "ollama";
 }
 
@@ -46,8 +63,16 @@ export interface OpenCodeModelRef {
 }
 
 export function toOpenCodeModelRef(model: string): OpenCodeModelRef {
+  // 2026-05-03: collapse "ollama-cloud" → "ollama" for the SDK ref.
+  // ollama-cloud is a UI-only distinction — at runtime the local
+  // Ollama install handles both local tags and `:cloud` models (it
+  // proxies the latter to ollama.com transparently). Only the form
+  // catalog needs to differentiate; provider IDs registered with the
+  // SDK / OllamaProvider use the singular "ollama" id.
+  const detected = detectProvider(model);
+  const providerID = detected === "ollama-cloud" ? "ollama" : detected;
   return {
-    providerID: detectProvider(model),
+    providerID,
     modelID: stripProviderPrefix(model),
   };
 }
@@ -67,14 +92,47 @@ export const OPENAI_MODELS = [
   "openai/gpt-5-nano",
 ] as const;
 
+// 2026-05-03: Ollama Cloud catalog from ollama.com/search?c=cloud.
+// All entries carry the ":cloud" suffix so detectProvider routes them
+// to the ollama-cloud branch. Reasoning-tier models (kimi, glm,
+// deepseek, nemotron-super, minimax, gemini-flash) at the top — they
+// dominate the actual usage on this app. Coding/utility tier
+// (gemma4, qwen-coder, devstral, ministral) below. Updated as new
+// models land in the cloud catalog.
+export const OLLAMA_CLOUD_MODELS = [
+  "glm-5.1:cloud",
+  "deepseek-v4-pro:cloud",
+  "deepseek-v4-flash:cloud",
+  "nemotron-3-super:cloud",
+  "nemotron-3-nano:cloud",
+  "kimi-k2.6:cloud",
+  "kimi-k2.5:cloud",
+  "minimax-m2.7:cloud",
+  "minimax-m2.5:cloud",
+  "glm-5:cloud",
+  "gemini-3-flash-preview:cloud",
+  "qwen3-next:cloud",
+  "qwen3.5:cloud",
+  "qwen3-coder-next:cloud",
+  "gemma4:31b-cloud",
+  "gemma4:26b-cloud",
+  "devstral-2:cloud",
+  "devstral-small-2:cloud",
+  "ministral-3:cloud",
+  "cogito-2.1:cloud",
+  "rnj-1:cloud",
+] as const;
+
 export function modelsForProvider(provider: Provider): readonly string[] {
   switch (provider) {
     case "anthropic":
       return ANTHROPIC_MODELS;
     case "openai":
       return OPENAI_MODELS;
+    case "ollama-cloud":
+      return OLLAMA_CLOUD_MODELS;
     case "ollama":
-      // Ollama models come from /api/tags at runtime; nothing to hardcode.
+      // Local Ollama models come from /api/tags at runtime; nothing to hardcode.
       return [];
   }
 }

@@ -75,6 +75,14 @@ const Schema = z.object({
   // the browser, never persisted to localStorage.
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
+  // 2026-05-03: Ollama Cloud API key per https://docs.ollama.com/cloud.
+  // Created at ollama.com/settings/keys. Optional — when unset, the
+  // local Ollama install can still proxy `:cloud` models to ollama.com
+  // automatically (Ollama handles the auth itself when an account is
+  // configured locally), so the form always shows the ollama-cloud
+  // catalog. The key is informational here for the providers endpoint
+  // so the UI can show "live discovery vs catalog fallback" hints.
+  OLLAMA_API_KEY: z.string().optional(),
   // E3 Phase 5 cleanup pt 4 (2026-04-29): USE_SESSION_PROVIDER +
   // USE_SESSION_NO_OPENCODE env flags REMOVED. The provider path is
   // now the only path; the opencode subprocess fallback no longer

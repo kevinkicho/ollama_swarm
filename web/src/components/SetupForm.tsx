@@ -1,13 +1,26 @@
 import { useState } from "react";
 import { useSwarm } from "../state/store";
 import { PreflightPreview } from "./PreflightPreview";
-import { StartConfirmModal } from "./StartConfirmModal";
-import type { PreflightState } from "../types";
+// 2026-05-03 (UX win #8): StartConfirmModal removed from the flow.
+// The inline PreflightPreview already shows the same info, and the
+// Start button label flips to "Resume run" when alreadyPresent — so
+// the modal's confirmation step became redundant. Keeping the file
+// in the repo for now so re-introduction (if needed) is one import
+// away. import { StartConfirmModal } from "./StartConfirmModal";
+import { usePreflight } from "../hooks/usePreflight";
 import { Field } from "./setup/SharedFields";
+import { STARTER_DIRECTIVES } from "./setup/StarterDirectives";
+import { ModelAvailabilityBanner } from "./setup/ModelAvailabilityBanner";
 import { ModelInput, MissingModelsHint } from "./setup/ModelInput";
+import { ModelSelect } from "./setup/ModelSelect";
+import { ProviderTabs } from "./setup/ProviderTabs";
 import { useProviders } from "../hooks/useProviders";
 import { detectProvider, type Provider } from "../../../shared/src/providers";
-import { WallClockEstimate } from "./setup/WallClockEstimate";
+import {
+  WallClockEstimate,
+  estimateWallClockSeconds,
+  formatDurationSeconds,
+} from "./setup/WallClockEstimate";
 import {
   BlackboardHelp,
   BLACKBOARD_DEFAULT_PLANNER_MODEL,
@@ -24,6 +37,12 @@ import {
 } from "./setup/PresetExtras";
 import { TopologyGrid, topologyForPreset } from "./setup/TopologyGrid";
 import { PresetTooltip } from "./setup/PresetTooltip";
+import {
+  loadRecentRuns,
+  saveRecentRun,
+  shortRepoLabel,
+  type RecentRun,
+} from "./setup/RecentRuns";
 import type { Topology } from "../../../shared/src/topology";
 
 // Two-tier model framework — see docs/autonomous-productivity.md
@@ -66,13 +85,16 @@ const PRESETS: readonly SwarmPreset[] = [
   {
     id: "round-robin",
     label: "Round-robin transcript",
-    summary: "N identical agents take turns; each sees the full transcript.",
+    // 2026-05-02 (improvement #5): no longer "neutral baseline" — every
+    // turn rotates through Critic/Synthesizer/Gap-finder/Builder, the
+    // user directive shapes seed + each turn + final synthesis.
+    summary: "Structured deliberation. N agents take turns, each turn a different disposition (Critic/Synthesizer/Gap-finder/Builder). Lead synthesizes a directive answer at the end.",
     min: 2,
     max: 8,
     recommended: 3,
     recommendedModel: MODEL_REASONING,
     status: "active",
-    directive: "ignored",
+    directive: "honored",
   },
   {
     id: "blackboard",
@@ -90,18 +112,27 @@ const PRESETS: readonly SwarmPreset[] = [
   {
     id: "role-diff",
     label: "Role differentiation",
-    summary: "Architect, tester, critic, etc. — same weights, different system prompts.",
+    // 2026-05-02 (improvement #2+#4): with a directive, becomes a
+    // BUILD team (Researcher/Designer/Implementer/Tester/Reviewer/
+    // Documenter/Devil's-advocate) that produces a portable
+    // deliverable.md. Without one, falls back to the original audit
+    // catalog (Architect/Tester/Security/Perf/...).
+    summary: "Specialist team. With a directive, agents become Researcher/Designer/Implementer/Tester/Reviewer/Documenter/Devil's-advocate and produce a deliverable.md. Without one, falls back to a 7-lens repo audit.",
     min: 3,
     max: 8,
     recommended: 5,
     recommendedModel: MODEL_REASONING,
     status: "active",
-    directive: "ignored",
+    directive: "honored",
   },
   {
     id: "map-reduce",
     label: "Map-reduce over repo",
-    summary: "Mappers inspect a round-robin slice of top-level entries in isolation; reducer synthesizes.",
+    // 2026-05-02 (improvement #1+#2): with a directive becomes a
+    // parallel-coverage answerer ("find everything in this repo that
+    // bears on X, in parallel"). Without one, falls back to the
+    // original "tell me about this repo" sweep.
+    summary: "Parallel coverage. With a directive, mappers search their slice for findings relevant to it (off-topic slices report 'no relevant findings'); reducer answers the directive. Without one, mappers describe their slice and reducer synthesizes a project picture.",
     // Task #109: floored at 4 (1 reducer + 3 mappers). Smaller setups
     // leave one mapper with a trivially-small slice and the model
     // collapses on it (run 2bcf662f). The route-layer Zod schema also
@@ -114,12 +145,18 @@ const PRESETS: readonly SwarmPreset[] = [
     // (Unit 65 candidate), swap mappers to MODEL_CODING.
     recommendedModel: MODEL_REASONING,
     status: "active",
-    directive: "ignored",
+    directive: "honored",
   },
   {
     id: "council",
     label: "Council (parallel drafts + reconcile)",
-    summary: "Round 1 independent drafts (peers hidden); Round 2+ reveal and revise.",
+    // 2026-05-02 (improvement #1+#2+#3+#4): each agent ends every turn
+    // with a `### MY POSITION` block; Round-2+ requires explicit
+    // KEEP/CHANGE ownership against prior position; synthesis includes
+    // a Minority report; deliverable surfaces per-agent positions
+    // side-by-side. Honors directive (drafters answer it; rubric +
+    // synthesis frame around it).
+    summary: "Independent parallel drafts + reveal/revise. Each agent commits to a `### MY POSITION` per round; Round-2+ must explicitly KEEP or CHANGE prior position. Synthesis preserves dissent via a Minority report. Honors directive.",
     min: 3,
     max: 8,
     recommended: 4,
@@ -127,12 +164,17 @@ const PRESETS: readonly SwarmPreset[] = [
     // near-identical drafts → no diversity gain.
     recommendedModel: MODEL_REASONING,
     status: "active",
-    directive: "ignored",
+    directive: "honored",
   },
   {
     id: "orchestrator-worker",
     label: "Orchestrator–worker hierarchy",
-    summary: "Agent 1 plans subtasks, workers execute in parallel (isolated), lead synthesizes.",
+    // 2026-05-02 (OW directive lever): with directive set, lead
+    // decomposes the directive into worker subtasks; workers report
+    // findings RELEVANT to the directive (with off-topic valve);
+    // synthesis answers the directive. Without a directive, falls
+    // back to "tell me about this repo" via N lenses.
+    summary: "Lead decomposes work for parallel workers, then synthesizes. With a directive, lead decomposes IT into worker subtasks; workers find directive-relevant evidence; synthesis answers the directive. Without one, falls back to a generic repo audit.",
     min: 2,
     max: 8,
     recommended: 4,
@@ -140,12 +182,17 @@ const PRESETS: readonly SwarmPreset[] = [
     // Unit 65 candidate as map-reduce.
     recommendedModel: MODEL_REASONING,
     status: "active",
-    directive: "ignored",
+    directive: "honored",
   },
   {
     id: "orchestrator-worker-deep",
     label: "Orchestrator–worker hierarchy (3-tier)",
-    summary: "3-tier OW for high agent counts. Agent 1 = orchestrator; ~K mid-leads; remaining are workers (~5 per mid-lead). Per cycle: top-plan → mid-plan → workers → mid-synth → top-synth.",
+    // 2026-05-02 (OW-Deep directive lever): top orchestrator
+    // decomposes the directive into one coarse sub-question per
+    // mid-lead; mid-leads decompose those into worker subtasks;
+    // workers execute toward the directive; everything synthesizes
+    // upward to a directive answer.
+    summary: "3-tier OW for high agent counts. With a directive, orchestrator decomposes it across mid-leads; mid-leads dispatch directive-relevant subtasks to their workers; everything synthesizes upward to a directive answer. Without one, falls back to a tiered repo sweep.",
     // Floor at 4 (1 orchestrator + 1 mid-lead + 2 workers). Cap at 30
     // because past that the orchestrator's mid-lead pool exceeds 8 again
     // and the design rationale (no tier sees > ~8 reports) breaks.
@@ -154,12 +201,17 @@ const PRESETS: readonly SwarmPreset[] = [
     recommended: 8,
     recommendedModel: MODEL_REASONING,
     status: "active",
-    directive: "ignored",
+    directive: "honored",
   },
   {
     id: "debate-judge",
     label: "Debate + judge",
-    summary: "PRO vs CON exchange arguments each round; JUDGE scores on the final round. Fixed 3 agents.",
+    // 2026-05-03 (debate-judge directive lever): with directive set,
+    // judge auto-derives a sharp PRO/CON proposition; debaters argue
+    // it with directive as broader context; implementer's nextAction
+    // file edits target the directive. Proposition input still works
+    // for power users who want to control the debate framing directly.
+    summary: "PRO vs CON debate (3 agents fixed). Judge auto-derives a debatable proposition from your directive; implementer's nextAction file edits target the directive. Optional Proposition (Advanced) lets you set the debate framing directly.",
     min: 3,
     max: 3,
     recommended: 3,
@@ -168,7 +220,7 @@ const PRESETS: readonly SwarmPreset[] = [
     // candidate — bias mitigation gain isn't huge.
     recommendedModel: MODEL_REASONING,
     status: "active",
-    directive: "uses-proposition",
+    directive: "honored",
   },
   {
     id: "stigmergy",
@@ -215,6 +267,13 @@ function providerHint(
   status: ReturnType<typeof useProviders>,
 ): string {
   if (provider === "ollama") return "Local LLM via your Ollama install. No API key needed.";
+  if (provider === "ollama-cloud") {
+    if (status.loading) return "Checking key status…";
+    const hasKey = status.providers?.["ollama-cloud"]?.hasKey;
+    return hasKey
+      ? "Ollama Cloud. Models hosted on ollama.com; reads OLLAMA_API_KEY from server env."
+      : "Ollama Cloud. Local install proxies :cloud models to ollama.com — set OLLAMA_API_KEY for direct calls.";
+  }
   if (status.loading) return "Checking key status…";
   const ps = status.providers?.[provider];
   if (!ps?.hasKey) {
@@ -229,6 +288,7 @@ function providerHint(
 
 function modelHint(provider: Provider): string {
   if (provider === "ollama") return "Type any Ollama model id, or pick from your installed list.";
+  if (provider === "ollama-cloud") return "Pick from the Ollama Cloud catalog. Reasoning tier (glm/deepseek/nemotron/kimi) at the top.";
   if (provider === "anthropic") return "Pick a Claude model. Cost varies wildly — opus ≫ sonnet ≫ haiku.";
   return "Pick a GPT-5 family model. Cost: gpt-5 > mini > nano.";
 }
@@ -328,10 +388,54 @@ export function SetupForm() {
   const [busy, setBusy] = useState(false);
   const setError = useSwarm((s) => s.setError);
   const reset = useSwarm((s) => s.reset);
-  // Set by onSubmit when preflight finds an existing clone or a
-  // not-git-repo blocker; cleared by either Resume (after start
-  // fires) or Cancel. Only one modal instance at a time.
-  const [confirmModal, setConfirmModal] = useState<PreflightState | null>(null);
+  // 2026-05-03 (UX win #8): preflight state lifted from PreflightPreview.
+  // Drives the inline preview AND the sticky Start button's label
+  // ("Resume run" when alreadyPresent) + disabled-ness (when blocker).
+  // The previous focus-grabbing StartConfirmModal is gone — the
+  // inline preview + button-label change ARE the confirmation gate.
+  const preflight = usePreflight(repoUrl, parentPath);
+  const preflightBlocked = preflight.state?.blocker === "not-git-repo";
+  const isResume = preflight.state?.alreadyPresent === true && !preflightBlocked;
+
+  // 2026-05-03 (UX win #2): hide First-time starters by default for
+  // returning users. localStorage flag set on first form submit so
+  // first-paint always shows starters, but subsequent visits hide
+  // them behind a one-line "Show starters" affordance.
+  const [showStarters, setShowStarters] = useState(() => {
+    try {
+      return window.localStorage.getItem("ollama-swarm:starters-dismissed") !== "true";
+    } catch {
+      return true;
+    }
+  });
+  const dismissStarters = () => {
+    setShowStarters(false);
+    try {
+      window.localStorage.setItem("ollama-swarm:starters-dismissed", "true");
+    } catch {
+      // localStorage unavailable (private mode) — non-fatal, just won't persist.
+    }
+  };
+  // 2026-05-03 (UX win #3): Topology grid collapsed by default. Most
+  // users want preset defaults; an 8-row grid for a knob 90% don't
+  // touch is the largest section on screen. Collapsed state shows
+  // a one-line summary chip ("3 agents · all on glm-5.1") + Edit btn.
+  const [topologyOpen, setTopologyOpen] = useState(false);
+  // 2026-05-03 (UX win #7): recently-used run configurations from
+  // localStorage. Updated on successful submit. Click a chip to
+  // re-fill (repoUrl + parentPath + preset + directive).
+  const [recentRuns, setRecentRuns] = useState<RecentRun[]>(() => loadRecentRuns());
+  const refillFromRecent = (r: RecentRun) => {
+    setRepoUrl(r.repoUrl);
+    setParentPath(r.parentPath);
+    setUserDirective(r.directive);
+    // Use the same onPresetChange machinery as the starter chips so
+    // topology + model pick up the preset's defaults consistently.
+    const fakeEvent = {
+      target: { value: r.presetId },
+    } as unknown as React.ChangeEvent<HTMLSelectElement>;
+    onPresetChange(fakeEvent);
+  };
 
   const preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0];
   const isActive = preset.status === "active";
@@ -534,6 +638,16 @@ export function SetupForm() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error?.formErrors?.[0] ?? body.error ?? `HTTP ${res.status}`);
       }
+      // 2026-05-03 (UX win #7): persist for the recently-used row.
+      // Only fires on a successful POST (HTTP 200) so cancelled / failed
+      // starts don't pollute the list. Capped at 3 entries inside
+      // saveRecentRun + deduped by (repoUrl + presetId).
+      setRecentRuns(saveRecentRun({
+        repoUrl,
+        parentPath,
+        presetId: preset.id,
+        directive: userDirective,
+      }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -541,41 +655,28 @@ export function SetupForm() {
     }
   };
 
-  // Preflight gate: fire GET /api/swarm/preflight before POSTing.
-  // If it detects an existing clone (alreadyPresent) or a not-git-
-  // repo blocker, show the signup-style confirmation modal instead
-  // of silently starting. Network errors on preflight fall through
-  // — /start itself is still the source of truth for blockers.
+  // 2026-05-03 (UX win #8): Preflight is now passive — it runs
+  // continuously via usePreflight as the user types and renders
+  // inline (PreflightPreview) + drives the Start button label
+  // ("Resume run") + disabled-ness (when blocker). onSubmit just
+  // fires performStart; the inline preview + matching button label
+  // ARE the deliberate-confirmation gate that the modal used to
+  // provide. The button is disabled when blocker so the click can't
+  // even fire — server-side /start is still the safety net.
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isActive) return;
-
-    setBusy(true);
-    try {
-      const params = new URLSearchParams({
-        repoUrl: repoUrl.trim(),
-        parentPath: parentPath.trim(),
-      });
-      const res = await fetch(`/api/swarm/preflight?${params.toString()}`);
-      if (res.ok) {
-        const state = (await res.json()) as PreflightState;
-        if (state.alreadyPresent || state.blocker) {
-          setConfirmModal(state);
-          setBusy(false);
-          return;
-        }
-      }
-    } catch {
-      // Silent — fall through to the POST and let /start surface
-      // any real error.
-    }
-    setBusy(false);
-
+    if (!isActive || preflightBlocked) return;
     await performStart();
   };
 
   return (
     <>
+    {/* 2026-05-03 (UX win #1 fix): keep parent at pb-12 so the
+        scroller's content-box bottom = viewport bottom, which is
+        where `position: sticky; bottom: 0` calculates against. The
+        bottom spacer needed for the sticky CTA goes INSIDE the form
+        (after the sticky div) so visual gap is preserved without
+        shifting the sticky reference point. */}
     <div className="h-full overflow-auto flex justify-center items-start px-6 pt-6 pb-12">
       <form
         onSubmit={onSubmit}
@@ -589,6 +690,111 @@ export function SetupForm() {
             they collaborate.
           </p>
         </div>
+
+        {/* 2026-05-02 (onboarding lever #3): warn early when the
+            selected model isn't pulled, with one-click swap to a
+            model that IS available. Closes the silent-404 trap a
+            first-time user hits when DEFAULT_MODEL=glm-5.1:cloud
+            but their local Ollama only has e.g. llama3 pulled. */}
+        <ModelAvailabilityBanner
+          selectedModel={model}
+          provider={provider}
+          onSwap={setModel}
+        />
+
+        {/* 2026-05-02 (onboarding lever #3): click-to-fill starter
+            directives. First-time user sees concrete examples before
+            the form, can pick one to skip the "what should I type?"
+            paralysis. Each starter pre-fills repoUrl + preset +
+            directive — user can still edit before submitting.
+            2026-05-03 (UX win #2): hidden by default for returning
+            users via localStorage; one-line "Show starters" affordance
+            keeps it discoverable. */}
+        {showStarters ? (
+          <Section
+            title="First time?"
+            subtitle="Pick a starter to skip the blank-form paralysis (you can edit anything before submitting)"
+          >
+            <div className="grid sm:grid-cols-2 gap-3">
+              {STARTER_DIRECTIVES.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => {
+                    setRepoUrl(s.repoUrl);
+                    setUserDirective(s.directive);
+                    // Use the existing onPresetChange machinery so the
+                    // preset switch fires its full topology + model side-
+                    // effects (otherwise the form gets into a weird mid-
+                    // state where presetId says "blackboard" but topology
+                    // still reflects the prior preset).
+                    const fakeEvent = {
+                      target: { value: s.presetId },
+                    } as unknown as React.ChangeEvent<HTMLSelectElement>;
+                    onPresetChange(fakeEvent);
+                  }}
+                  className="text-left bg-ink-900 hover:bg-ink-700 border border-ink-700 rounded-lg p-3 transition-colors"
+                  title={s.whyTry}
+                >
+                  <div className="text-sm font-semibold text-emerald-400">{s.label}</div>
+                  <div className="text-xs text-ink-400 mt-1">{s.summary}</div>
+                  <div className="text-[11px] text-ink-500 mt-1 truncate">
+                    → {s.repoUrl.replace("https://github.com/", "")}
+                  </div>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={dismissStarters}
+              className="text-xs text-ink-500 hover:text-ink-300 transition-colors"
+              title="Hide this section on future visits (re-shown via Show starters link below the header)"
+            >
+              Don't show again
+            </button>
+          </Section>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowStarters(true)}
+            className="text-xs text-ink-500 hover:text-ink-300 transition-colors self-start"
+          >
+            + Show starter directives
+          </button>
+        )}
+
+        {/* 2026-05-03 (UX win #7): recently-used row. Hidden on first
+            paint (empty list); appears once a user has run the form
+            at least once. Click a chip to re-fill repoUrl + parentPath
+            + preset + directive. Most users iterate on the same
+            project — saves retyping the same repo URL + directive. */}
+        {recentRuns.length > 0 ? (
+          <Section
+            title="Recent runs"
+            subtitle="Click to re-fill the form (you can edit anything before submitting)"
+          >
+            <div className="flex flex-wrap gap-2">
+              {recentRuns.map((r) => {
+                const presetLabel = PRESETS.find((p) => p.id === r.presetId)?.label ?? r.presetId;
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => refillFromRecent(r)}
+                    className="text-left bg-ink-900 hover:bg-ink-700 border border-ink-700 rounded p-2 max-w-[280px] transition-colors"
+                    title={`Re-fill: ${r.repoUrl} · ${presetLabel}${r.directiveSnippet ? ` · "${r.directiveSnippet}"` : ""}`}
+                  >
+                    <div className="text-xs text-ink-100 truncate font-mono">{shortRepoLabel(r.repoUrl)}</div>
+                    <div className="text-[11px] text-ink-400 truncate">{presetLabel}</div>
+                    {r.directiveSnippet ? (
+                      <div className="text-[11px] text-emerald-300 truncate mt-0.5">"{r.directiveSnippet}"</div>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          </Section>
+        ) : null}
 
         <Section title="Repository" subtitle="Where the swarm reads from + clones into">
           <div className="grid lg:grid-cols-2 gap-4">
@@ -618,7 +824,9 @@ export function SetupForm() {
               />
             </Field>
           </div>
-          <PreflightPreview repoUrl={repoUrl} parentPath={parentPath} />
+          {/* 2026-05-03 (UX win #8): preflight state lifted to usePreflight
+              hook above; passed down here as props. Same visual output. */}
+          <PreflightPreview state={preflight.state} error={preflight.error} />
         </Section>
 
         <Section title="Pattern" subtitle="How the agents collaborate">
@@ -653,18 +861,45 @@ export function SetupForm() {
 
           {preset.id === "blackboard" ? <BlackboardHelp /> : null}
 
+          {/* 2026-05-03: DirectiveBadge sits inline with the User
+              directive label — speaks directly to the field it
+              modifies (badge state changes whether typing in the
+              textarea has any effect). Earlier iteration parked it
+              on the Preset selector header which was visually
+              cleaner but semantically misplaced.
+              2026-05-03 (later same day): all 9 active presets now
+              honor directive, so the badge would always render the
+              same "✓ honored" stamp. Hide it when honored to remove
+              visual noise; surfaces automatically again if a future
+              preset adds an "ignored" / "uses-proposition" mode.
+              The directive hint (directiveHintFor) below the
+              textarea still tells the user HOW each preset uses the
+              directive — that's the load-bearing copy. */}
           <Field
             label="User directive (optional)"
             hint={directiveHintFor(preset)}
+            labelAccessory={
+              preset.directive !== "honored" ? <DirectiveBadge preset={preset} /> : undefined
+            }
           >
-            <DirectiveBadge preset={preset} />
+            {/* 2026-05-03 (UX win #9): auto-resize as the user types.
+                onInput resets height to "auto" then grows it to match
+                scrollHeight, capped at ~280px so very long directives
+                stay scrollable instead of pushing the rest of the form
+                off-screen. Manual resize handle (resize: vertical) still
+                works for users who want a fixed size. */}
             <textarea
               value={userDirective}
               onChange={(e) => setUserDirective(e.target.value.slice(0, 4000))}
+              onInput={(e) => {
+                const el = e.currentTarget;
+                el.style.height = "auto";
+                el.style.height = `${Math.min(280, el.scrollHeight)}px`;
+              }}
               placeholder="e.g., Make this project actually deliver every feature the README claims to support."
               rows={3}
               className="input"
-              style={{ fontFamily: "inherit", resize: "vertical", minHeight: 60 }}
+              style={{ fontFamily: "inherit", resize: "vertical", minHeight: 60, maxHeight: 280, overflow: "auto" }}
             />
             <button
               type="button"
@@ -708,64 +943,41 @@ export function SetupForm() {
           />
         </Section>
 
-        <Section title="Topology" subtitle="Per-agent role + model overrides">
-          {/* Phase 1 (#243): topology grid is the count knob — owns +/−,
-              per-row Role + Model. agentCount stays mirrored from
-              topology.agents.length so WallClockEstimate keeps working. */}
-          <TopologyGrid
-            preset={{ id: preset.id, min: preset.min, max: preset.max }}
-            topology={topology}
-            setTopology={onTopologyChange}
-            defaultModel={model}
-          />
-        </Section>
-
-        <Section title="Run" subtitle="Rounds, default model, time budget">
+        {/* 2026-05-03: dedicated AI Provider section sitting between
+            Pattern and Topology. Provider+Model used to live as a
+            corner of the Run row, which read as "two equal knobs";
+            lifting them into their own section makes the
+            provider-then-model flow explicit. Placed BEFORE Topology
+            so the per-agent grid's defaultModel reflects the user's
+            chosen model. ProviderTabs (segmented control) shows
+            availability per-tab inline; ModelSelect renders a real
+            <select> dropdown with discovery-source hint + "Custom..."
+            escape hatch for free-text. */}
+        <Section title="AI Provider" subtitle="Pick a provider first; the model dropdown filters to what your account can run">
+          <Field label="Provider" hint={providerHint(provider, providersStatus)}>
+            <ProviderTabs
+              value={provider}
+              status={providersStatus}
+              onChange={(next) => {
+                setProvider(next);
+                // Reset model so the user picks a valid one for the new
+                // provider (carrying glm-5.1:cloud into a Claude run
+                // would 404 on session.create). ModelSelect will
+                // auto-pick the first model for the new provider once
+                // discovery finishes.
+                setModel("");
+              }}
+            />
+          </Field>
+          <Field label="Model" hint={modelHint(provider)}>
+            <ModelSelect
+              value={model}
+              onChange={setModel}
+              provider={provider}
+              ariaLabel="Default model"
+            />
+          </Field>
           <MissingModelsHint recommendedModel={preset.recommendedModel} provider={provider} />
-          <div className="grid grid-cols-3 gap-4">
-            <Field label="Rounds">
-              <input
-                type="number"
-                min={1}
-                max={100}
-                value={rounds}
-                onChange={(e) => setRounds(Number(e.target.value))}
-                className="input"
-              />
-            </Field>
-            <Field label="Provider" hint={providerHint(provider, providersStatus)}>
-              <select
-                className="input"
-                value={provider}
-                onChange={(e) => {
-                  const next = e.target.value as Provider;
-                  setProvider(next);
-                  // Reset model so the user picks a valid one for the
-                  // new provider (carrying glm-5.1:cloud into a Claude
-                  // run would 404 on session.create).
-                  setModel("");
-                }}
-                aria-label="Provider"
-              >
-                <option value="ollama">Ollama (local)</option>
-                <option
-                  value="anthropic"
-                  disabled={providersStatus.providers ? !providersStatus.providers.anthropic.available : false}
-                >
-                  Anthropic{providersStatus.providers && !providersStatus.providers.anthropic.available ? " — no key" : ""}
-                </option>
-                <option
-                  value="openai"
-                  disabled={providersStatus.providers ? !providersStatus.providers.openai.available : false}
-                >
-                  OpenAI{providersStatus.providers && !providersStatus.providers.openai.available ? " — no key" : ""}
-                </option>
-              </select>
-            </Field>
-            <Field label="Model" hint={modelHint(provider)}>
-              <ModelInput value={model} onChange={setModel} ariaLabel="Default model" provider={provider} />
-            </Field>
-          </div>
           {provider !== "ollama" ? (
             <Field label="Max cost ($USD)" hint="Per-run cap for paid providers. Stops the run with cap:cost when reached. Ollama-only runs ignore this.">
               <input
@@ -779,23 +991,116 @@ export function SetupForm() {
               />
             </Field>
           ) : null}
-
-          <WallClockEstimate
-            presetId={preset.id}
-            agentCount={agentCount}
-            rounds={rounds}
-            mainModel={model}
-            wallClockCapMin={wallClockCapMin}
-          />
         </Section>
 
-        <button
-          type="submit"
-          disabled={busy || !isActive}
-          className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-ink-600 disabled:cursor-not-allowed text-white font-medium rounded px-4 py-3 text-base transition shadow-lg"
-        >
-          {busy ? "Starting…" : isActive ? "Start swarm" : "Coming soon"}
-        </button>
+        {/* 2026-05-03 (UX win #3): Topology collapsed by default. Most
+            users want preset defaults; an 8-row grid for a knob 90%
+            don't touch was the largest section on screen. Collapsed
+            renders a one-line summary chip with the agent count + a
+            "uniform/mixed model" indicator. Click "Edit per-agent" to
+            expand. */}
+        <Section title="Topology" subtitle="Per-agent role + model overrides">
+          {topologyOpen ? (
+            <>
+              <TopologyGrid
+                preset={{ id: preset.id, min: preset.min, max: preset.max }}
+                topology={topology}
+                setTopology={onTopologyChange}
+                defaultModel={model}
+              />
+              <button
+                type="button"
+                onClick={() => setTopologyOpen(false)}
+                className="text-xs text-ink-500 hover:text-ink-300 transition-colors"
+              >
+                ▾ Collapse to summary
+              </button>
+            </>
+          ) : (
+            <TopologySummaryChip
+              topology={topology}
+              defaultModel={model}
+              onEdit={() => setTopologyOpen(true)}
+            />
+          )}
+        </Section>
+
+        <Section title="Run" subtitle="Rounds + time budget">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Rounds">
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={rounds}
+                onChange={(e) => setRounds(Number(e.target.value))}
+                className="input"
+              />
+            </Field>
+            <div className="flex items-end">
+              <WallClockEstimate
+                presetId={preset.id}
+                agentCount={agentCount}
+                rounds={rounds}
+                mainModel={model}
+                wallClockCapMin={wallClockCapMin}
+              />
+            </div>
+          </div>
+        </Section>
+
+        {/* 2026-05-03 (UX win #1): sticky Start bar at the bottom of
+            the viewport. Pre-fix the user had to scroll past 5 cards
+            to reach Submit AND scroll back to the Run section to see
+            the wall-clock estimate. Sticky bar = always-visible
+            decision + always-visible cost preview.
+            Two-zone styling: a tall transparent-to-solid gradient
+            FADES content into the bar from above, then a SOLID
+            bg-ink-900 strip under the button row guarantees the
+            content scrolling underneath doesn't bleed through and
+            confuse the user. */}
+        <div className="sticky bottom-0 -mx-1 z-10">
+          <div className="h-6 bg-gradient-to-t from-ink-900 to-transparent pointer-events-none" />
+          <div className="bg-ink-900 px-1 pb-3 pt-1 border-t border-ink-700/50">
+            <div className="flex items-center gap-3">
+              <div className="flex-1 text-xs text-ink-400 min-w-0 truncate" title="Pre-flight estimate based on preset shape × agentCount × rounds × per-model turn time">
+                <CompactWallClockHint
+                  presetId={preset.id}
+                  agentCount={agentCount}
+                  rounds={rounds}
+                  mainModel={model}
+                  wallClockCapMin={wallClockCapMin}
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={busy || !isActive || preflightBlocked}
+                className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-ink-600 disabled:cursor-not-allowed text-white font-medium rounded px-6 py-3 text-base transition shadow-lg whitespace-nowrap"
+                title={
+                  preflightBlocked
+                    ? "Disabled: target path exists but is not a git repo. Edit Parent folder or delete the existing directory."
+                    : isResume
+                      ? "Resume the existing clone — no re-clone, no destructive operation. The inline notice in Repository above shows what state the clone is in."
+                      : undefined
+                }
+              >
+                {/* 2026-05-03 (UX win #8): label flips when preflight finds
+                    an existing clone — "Resume run" makes the deliberate
+                    choice explicit at click time. Replaces the prior
+                    StartConfirmModal as the confirmation gate. */}
+                {busy
+                  ? "Starting…"
+                  : !isActive
+                    ? "Coming soon"
+                    : preflightBlocked
+                      ? "Blocked — fix path"
+                      : isResume
+                        ? "Resume run"
+                        : "Start swarm"}
+              </button>
+            </div>
+          </div>
+        </div>
 
         <style>{`
           .input {
@@ -812,16 +1117,10 @@ export function SetupForm() {
         `}</style>
       </form>
     </div>
-    {confirmModal ? (
-      <StartConfirmModal
-        state={confirmModal}
-        onResume={() => {
-          setConfirmModal(null);
-          void performStart();
-        }}
-        onCancel={() => setConfirmModal(null)}
-      />
-    ) : null}
+    {/* 2026-05-03 (UX win #8): StartConfirmModal removed — see usePreflight
+        wiring above. The inline PreflightPreview + Start button label
+        ("Resume run" when alreadyPresent, "Blocked — fix path" when
+        blocker) replace the modal's confirmation step. */}
     </>
   );
 }
@@ -846,5 +1145,113 @@ function Section({
       </header>
       {children}
     </section>
+  );
+}
+
+// 2026-05-03 (UX win #3): collapsed Topology summary chip. Shows the
+// agent count + a "all on <model>" or "mixed models" indicator, with
+// an Edit affordance to expand the full grid. Renders zero-height
+// nothing when topology is empty (defensive).
+function TopologySummaryChip({
+  topology,
+  defaultModel,
+  onEdit,
+}: {
+  topology: Topology;
+  defaultModel: string;
+  onEdit: () => void;
+}) {
+  const agents = topology.agents;
+  if (agents.length === 0) return null;
+  // Determine if all agents use the same model (or fall through to
+  // defaultModel). "Mixed" when any per-agent model differs from the
+  // others — helps the user spot when their per-agent overrides
+  // diverge from a uniform setup.
+  const effectiveModels = agents.map((a) => (a.model && a.model.trim().length > 0 ? a.model.trim() : defaultModel));
+  const uniqueModels = new Set(effectiveModels);
+  const modelLabel =
+    uniqueModels.size === 1
+      ? `all on ${effectiveModels[0] || "(default model)"}`
+      : `mixed models (${uniqueModels.size} distinct)`;
+  // Distinct roles for the role-mix hint when more than one role
+  // exists (role-diff, OW, OW-Deep, debate-judge, etc.).
+  const roleSet = new Set(agents.map((a) => a.role));
+  const roleHint =
+    roleSet.size > 1
+      ? ` · ${roleSet.size} roles (${Array.from(roleSet).slice(0, 4).join(", ")}${roleSet.size > 4 ? "…" : ""})`
+      : "";
+  return (
+    <div className="flex items-center justify-between gap-3 bg-ink-900 border border-ink-700 rounded p-3">
+      <div className="text-sm text-ink-300 min-w-0 truncate">
+        <span className="font-mono text-ink-100">{agents.length} agent{agents.length === 1 ? "" : "s"}</span>
+        {" · "}
+        <span className="text-ink-400">{modelLabel}</span>
+        <span className="text-ink-500">{roleHint}</span>
+      </div>
+      <button
+        type="button"
+        onClick={onEdit}
+        className="text-xs px-3 py-1 rounded border border-ink-600 text-ink-300 hover:text-ink-100 hover:border-ink-400 transition-colors whitespace-nowrap"
+        title="Expand to edit per-agent role + model overrides"
+      >
+        Edit per-agent ▸
+      </button>
+    </div>
+  );
+}
+
+// 2026-05-03 (UX win #1): compact wall-clock hint shown next to the
+// sticky Start button. Pulls the same estimator the full
+// WallClockEstimate component uses but renders a one-line "~5m" /
+// "~25m, may exceed 10m cap" output instead of the full breakdown.
+// Blackboard runs (no rounds) show "~uses cap or 8h default".
+function CompactWallClockHint({
+  presetId,
+  agentCount,
+  rounds,
+  mainModel,
+  wallClockCapMin,
+}: {
+  presetId: string;
+  agentCount: number;
+  rounds: number;
+  mainModel: string;
+  wallClockCapMin: string;
+}) {
+  if (presetId === "blackboard") {
+    const cap = wallClockCapMin.trim();
+    const capParsed = Number(cap);
+    const capValid = cap.length > 0 && Number.isFinite(capParsed) && capParsed >= 1;
+    return (
+      <span className="text-ink-400">
+        ~ blackboard cap: {capValid ? `${capParsed} min` : "8 h default"}
+      </span>
+    );
+  }
+  const seconds = estimateWallClockSeconds(presetId, agentCount, rounds, mainModel);
+  if (seconds === null) {
+    return <span className="text-ink-500">~ pre-flight estimate unavailable</span>;
+  }
+  const cap = wallClockCapMin.trim();
+  const capMinParsed = Number(cap);
+  const capValid = cap.length > 0 && Number.isFinite(capMinParsed) && capMinParsed >= 1;
+  const capSec = capValid ? Math.round(capMinParsed * 60) : null;
+  let color = "text-ink-300";
+  let warn = "";
+  if (capSec !== null) {
+    const ratio = seconds / capSec;
+    if (ratio > 1.2) {
+      color = "text-rose-300";
+      warn = ` · likely > ${formatDurationSeconds(capSec)} cap`;
+    } else if (ratio > 0.8) {
+      color = "text-amber-300";
+      warn = ` · close to ${formatDurationSeconds(capSec)} cap`;
+    }
+  }
+  return (
+    <span className={color}>
+      ~ {formatDurationSeconds(seconds)} estimated
+      {warn}
+    </span>
   );
 }

@@ -33,6 +33,11 @@ export function pickProvider(modelString: string): PickedProvider {
   const which = detectProvider(modelString);
   switch (which) {
     case "ollama":
+    // ollama-cloud is a UI-only catalog distinction — `:cloud` /
+    // `-cloud` models route through the same local OllamaProvider,
+    // which forwards to ollama.com via the user's locally-configured
+    // account. Same singleton, same chat path.
+    case "ollama-cloud":
       ollamaSingleton ??= new OllamaProvider();
       return { provider: ollamaSingleton, modelId };
     case "anthropic":

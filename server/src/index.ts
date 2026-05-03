@@ -22,6 +22,13 @@ import { createEventLogger } from "./ws/eventLogger.js";
 import { swarmRouter } from "./routes/swarm.js";
 import { devRouter } from "./routes/dev.js";
 import { v2Router } from "./routes/v2.js";
+import { discoverAnthropicModels } from "./providers/discoverAnthropicModels.js";
+import { discoverOpenAIModels } from "./providers/discoverOpenAIModels.js";
+import {
+  ANTHROPIC_MODELS as FALLBACK_ANTHROPIC,
+  OPENAI_MODELS as FALLBACK_OPENAI,
+  OLLAMA_CLOUD_MODELS,
+} from "../../shared/src/providers.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // server/src/index.ts (dev) or server/dist/index.js (built) -> up two to root.
@@ -89,17 +96,84 @@ app.get("/api/health", (_req, res) => {
 // no point measuring tokens). Returns a sorted-by-recency string list
 // so the most-recently-pulled model surfaces first in the dropdown.
 //
-// On Ollama unreachable: 200 with { models: [], error: "..." } rather
-// than 5xx, so the form falls back gracefully to free-text without a
-// noisy console.error in the user's browser.
-app.get("/api/models", async (_req, res) => {
+// 2026-05-03: extended to dispatch on `?provider=` query param.
+//   - default / "ollama": existing /api/tags discovery
+//   - "anthropic": discoverAnthropicModels(env ANTHROPIC_API_KEY)
+//   - "openai": discoverOpenAIModels(env OPENAI_API_KEY)
+// Each paid-provider response is cached server-side for 24h to avoid
+// thrashing /v1/models on every form load. On any failure (no key,
+// non-OK HTTP, network error), the response falls back to the
+// shared/providers.ts hardcoded list with `{ source: "fallback" }`.
+//
+// On any failure: 200 with { models, source, error? } rather than 5xx,
+// so the form falls back gracefully to free-text without a noisy
+// console.error in the user's browser.
+
+const DISCOVERY_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+interface ModelCacheEntry {
+  models: readonly string[];
+  fetchedAt: number;
+  /** When models came from live discovery vs. fallback constants. */
+  source: "discovery" | "fallback";
+}
+const modelCache = new Map<"anthropic" | "openai", ModelCacheEntry>();
+
+async function getProviderModels(
+  provider: "anthropic" | "openai",
+): Promise<{ models: readonly string[]; source: "discovery" | "fallback" }> {
+  const cached = modelCache.get(provider);
+  if (cached && Date.now() - cached.fetchedAt < DISCOVERY_TTL_MS) {
+    return { models: cached.models, source: cached.source };
+  }
+  const discovered =
+    provider === "anthropic"
+      ? await discoverAnthropicModels()
+      : await discoverOpenAIModels();
+  if (discovered && discovered.length > 0) {
+    const entry: ModelCacheEntry = {
+      models: discovered,
+      fetchedAt: Date.now(),
+      source: "discovery",
+    };
+    modelCache.set(provider, entry);
+    return { models: entry.models, source: "discovery" };
+  }
+  // Fallback: hardcoded list. Cache the negative result for the same
+  // TTL so a missing API key doesn't trigger discovery on every poll.
+  const fallback = provider === "anthropic" ? FALLBACK_ANTHROPIC : FALLBACK_OPENAI;
+  const entry: ModelCacheEntry = {
+    models: fallback,
+    fetchedAt: Date.now(),
+    source: "fallback",
+  };
+  modelCache.set(provider, entry);
+  return { models: entry.models, source: "fallback" };
+}
+
+app.get("/api/models", async (req, res) => {
+  const provider = String(req.query.provider ?? "ollama").toLowerCase();
+  if (provider === "anthropic" || provider === "openai") {
+    const { models, source } = await getProviderModels(provider);
+    res.json({ models, source });
+    return;
+  }
+  // 2026-05-03: ollama-cloud returns the hardcoded catalog from
+  // shared/providers.ts (sourced from ollama.com/search?c=cloud). No
+  // live-discovery endpoint exists — the catalog is global and curated
+  // by Ollama, not per-user. Source label is "fallback" so the UI
+  // hint accurately says "catalog" rather than "live discovery".
+  if (provider === "ollama-cloud") {
+    res.json({ models: OLLAMA_CLOUD_MODELS, source: "fallback" });
+    return;
+  }
+  // Default / explicit "ollama" — existing behavior unchanged.
   const upstreamRoot = config.OLLAMA_BASE_URL.replace(/\/v1\/?$/, "");
   try {
     const r = await fetch(`${upstreamRoot}/api/tags`, {
       signal: AbortSignal.timeout(3000),
     });
     if (!r.ok) {
-      res.json({ models: [], error: `Ollama /api/tags returned HTTP ${r.status}` });
+      res.json({ models: [], source: "ollama-tags", error: `Ollama /api/tags returned HTTP ${r.status}` });
       return;
     }
     const body = (await r.json()) as { models?: Array<{ name: string; modified_at?: string }> };
@@ -108,10 +182,11 @@ app.get("/api/models", async (_req, res) => {
       .sort((a, b) => (b.modified_at ?? "").localeCompare(a.modified_at ?? ""))
       .map((m) => m.name)
       .filter((n) => typeof n === "string" && n.length > 0);
-    res.json({ models: sorted });
+    res.json({ models: sorted, source: "ollama-tags" });
   } catch (err) {
     res.json({
       models: [],
+      source: "ollama-tags",
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -171,9 +246,18 @@ app.post("/api/usage/clear-quota", (_req, res) => {
 // reachability — this just reports whether the API key is wired);
 // anthropic/openai are "available" only when the matching env var is
 // set. Keys are NEVER echoed back; just a boolean per provider.
+//
+// 2026-05-03: ollama-cloud added per https://docs.ollama.com/cloud.
+// Always available because the local Ollama install can proxy
+// `:cloud` models to ollama.com when the user has an account
+// configured locally (Ollama handles the auth itself). hasKey
+// reflects whether OLLAMA_API_KEY env was set — informational only;
+// the "available" flag stays true regardless so users with local
+// auth-via-config can still pick the cloud tab.
 app.get("/api/providers", (_req, res) => {
   res.json({
     ollama: { available: true, hasKey: true },
+    "ollama-cloud": { available: true, hasKey: !!config.OLLAMA_API_KEY },
     anthropic: {
       available: !!config.ANTHROPIC_API_KEY,
       hasKey: !!config.ANTHROPIC_API_KEY,

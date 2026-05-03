@@ -8,12 +8,18 @@ import {
   modelsForProvider,
   ANTHROPIC_MODELS,
   OPENAI_MODELS,
+  OLLAMA_CLOUD_MODELS,
 } from "./providers.js";
 
-test("detectProvider — bare model defaults to ollama", () => {
-  assert.equal(detectProvider("glm-5.1:cloud"), "ollama");
-  assert.equal(detectProvider("gemma4:31b-cloud"), "ollama");
-  assert.equal(detectProvider("nemotron-3-super:cloud"), "ollama");
+test("detectProvider — bare local model defaults to ollama", () => {
+  assert.equal(detectProvider("llama3:8b"), "ollama");
+  assert.equal(detectProvider("qwen2.5-coder:7b"), "ollama");
+});
+
+test("detectProvider — :cloud suffix → ollama-cloud", () => {
+  assert.equal(detectProvider("glm-5.1:cloud"), "ollama-cloud");
+  assert.equal(detectProvider("gemma4:31b-cloud"), "ollama-cloud");
+  assert.equal(detectProvider("nemotron-3-super:cloud"), "ollama-cloud");
 });
 
 test("detectProvider — anthropic prefix", () => {
@@ -36,8 +42,11 @@ test("stripProviderPrefix — strips anthropic/ and openai/", () => {
 });
 
 test("withProviderPrefix — round-trips through stripProviderPrefix", () => {
-  const cases: Array<{ provider: "ollama" | "anthropic" | "openai"; model: string }> = [
-    { provider: "ollama", model: "glm-5.1:cloud" },
+  // ollama and ollama-cloud both use empty prefix — round-trip relies on
+  // detectProvider seeing the right marker (`:cloud` suffix vs no marker).
+  const cases: Array<{ provider: "ollama" | "ollama-cloud" | "anthropic" | "openai"; model: string }> = [
+    { provider: "ollama", model: "llama3:8b" },
+    { provider: "ollama-cloud", model: "glm-5.1:cloud" },
     { provider: "anthropic", model: "claude-opus-4-7" },
     { provider: "openai", model: "gpt-5" },
   ];
@@ -49,9 +58,15 @@ test("withProviderPrefix — round-trips through stripProviderPrefix", () => {
 });
 
 test("toOpenCodeModelRef — produces SDK-shaped { providerID, modelID }", () => {
+  // ollama-cloud collapses to providerID="ollama" because the local
+  // Ollama install handles routing for both local and :cloud models.
   assert.deepEqual(toOpenCodeModelRef("glm-5.1:cloud"), {
     providerID: "ollama",
     modelID: "glm-5.1:cloud",
+  });
+  assert.deepEqual(toOpenCodeModelRef("llama3:8b"), {
+    providerID: "ollama",
+    modelID: "llama3:8b",
   });
   assert.deepEqual(toOpenCodeModelRef("anthropic/claude-opus-4-7"), {
     providerID: "anthropic",
@@ -63,10 +78,18 @@ test("toOpenCodeModelRef — produces SDK-shaped { providerID, modelID }", () =>
   });
 });
 
-test("modelsForProvider — anthropic and openai return their hardcoded lists; ollama returns empty", () => {
+test("modelsForProvider — paid providers return hardcoded lists; ollama-cloud returns its catalog; ollama returns empty", () => {
   assert.deepEqual(modelsForProvider("anthropic"), ANTHROPIC_MODELS);
   assert.deepEqual(modelsForProvider("openai"), OPENAI_MODELS);
+  assert.deepEqual(modelsForProvider("ollama-cloud"), OLLAMA_CLOUD_MODELS);
   assert.deepEqual(modelsForProvider("ollama"), []);
+});
+
+test("OLLAMA_CLOUD_MODELS — every entry routes via ollama-cloud (matches :cloud or -cloud suffix)", () => {
+  for (const m of OLLAMA_CLOUD_MODELS) {
+    assert.ok(/(?::|-)cloud$/.test(m), `${m} must end with :cloud or -cloud`);
+    assert.equal(detectProvider(m), "ollama-cloud");
+  }
 });
 
 test("ANTHROPIC_MODELS and OPENAI_MODELS — every entry is provider-prefixed", () => {

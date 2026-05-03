@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import type { PreflightState } from "../types";
 
 // Preflight (2026-04-24): inline preview below the SetupForm's
@@ -7,69 +6,19 @@ import type { PreflightState } from "../types";
 //   - resume on existing clone → blue, with prior-state counts
 //   - be blocked because dest exists but isn't a git repo → amber
 //
-// Debounced at 400ms so typing doesn't thrash the backend. Silent
-// on network error — keeps the form usable even if the dev server
-// is momentarily unreachable (task #45/#47 style soft fallback).
+// 2026-05-03 (UX win #8): refactored to a presentational component.
+// State + fetch logic moved to `usePreflight` hook; SetupForm owns
+// the hook + passes results down so it can also use the state to
+// drive the Start button label/disabled-ness without firing a
+// duplicate fetch.
 
 export function PreflightPreview({
-  repoUrl,
-  parentPath,
+  state,
+  error,
 }: {
-  repoUrl: string;
-  parentPath: string;
+  state: PreflightState | null;
+  error: string | null;
 }) {
-  const [state, setState] = useState<PreflightState | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!repoUrl.trim() || !parentPath.trim()) {
-      setState(null);
-      setError(null);
-      return;
-    }
-    // Debounce so we don't fire on every keystroke while the user
-    // types out a URL.
-    const t = setTimeout(() => {
-      const params = new URLSearchParams({
-        repoUrl: repoUrl.trim(),
-        parentPath: parentPath.trim(),
-      });
-      // One retry on network error — same pattern as task #45/#47 for
-      // tsx-watch restart windows. Keeps the preview responsive even
-      // when the backend is briefly unreachable.
-      (async () => {
-        let lastErr: unknown;
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            const res = await fetch(`/api/swarm/preflight?${params.toString()}`);
-            if (!res.ok) {
-              const body = await res.json().catch(() => ({}));
-              setError(typeof body.error === "string" ? body.error : `HTTP ${res.status}`);
-              setState(null);
-              return;
-            }
-            const body = (await res.json()) as PreflightState;
-            setState(body);
-            setError(null);
-            return;
-          } catch (err) {
-            lastErr = err;
-            if (err instanceof TypeError && attempt === 0) {
-              await new Promise((r) => setTimeout(r, 400));
-              continue;
-            }
-            break;
-          }
-        }
-        // Silent on persistent network error — preview is best-effort.
-        console.warn("preflight preview failed:", lastErr);
-        setState(null);
-        setError(null);
-      })();
-    }, 400);
-    return () => clearTimeout(t);
-  }, [repoUrl, parentPath]);
-
   if (error) {
     return (
       <div className="rounded border border-rose-700/50 bg-rose-950/30 text-xs text-rose-200 p-3">
@@ -120,7 +69,10 @@ export function PreflightPreview({
       <div className="rounded border border-sky-700/50 bg-sky-950/30 text-xs text-sky-100 p-3 space-y-1">
         <div>
           <span className="text-sky-300 font-semibold uppercase tracking-wider text-[10px]">↻ resume</span>{" "}
-          Found existing clone — will NOT re-clone.
+          Found existing clone — will NOT re-clone.{" "}
+          <span className="text-sky-200/70">
+            (Start button below will say <strong className="text-sky-100">Resume run</strong> — clicking it confirms.)
+          </span>
         </div>
         <div className="font-mono text-sky-200/80 text-[11px] break-all">{state.destPath}</div>
         <div className="text-sky-200/90">{detail}</div>

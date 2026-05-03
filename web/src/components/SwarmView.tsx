@@ -32,6 +32,11 @@ export function SwarmView() {
   const phase = useSwarm((s) => s.phase);
   const setError = useSwarm((s) => s.setError);
   const [sayText, setSayText] = useState("");
+  // 2026-05-02 (chat lever #2): tagged intent on chat submit. Default
+  // "steer" preserves pre-existing send-button behavior. "suggest" =
+  // low-pressure consideration; "ask" = inline answer + no direction
+  // change. The server's /api/swarm/say schema validates these.
+  const [sayIntent, setSayIntent] = useState<"suggest" | "steer" | "ask">("steer");
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<Tab>("transcript");
 
@@ -111,14 +116,30 @@ export function SwarmView() {
     reset();
   };
 
+  // 2026-05-02: parse @mention prefix to honor lever #3's per-agent
+  // routing on the server. Pattern: leading "@<token>" where <token>
+  // is letters/digits/dashes (matches "agent-2", "planner", "agent-12").
+  // Returns the rest of the text (with the @mention stripped) plus
+  // the targetAgent id; null target means broadcast.
+  const parseMention = (raw: string): { text: string; targetAgent: string | null } => {
+    const m = /^\s*@([a-z][a-z0-9-]*)\s+(.+)$/i.exec(raw);
+    if (!m) return { text: raw, targetAgent: null };
+    return { text: m[2], targetAgent: m[1] };
+  };
+
   const onSay = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!sayText.trim()) return;
+    const { text, targetAgent } = parseMention(sayText);
     try {
       await fetch("/api/swarm/say", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: sayText }),
+        body: JSON.stringify({
+          text,
+          intent: sayIntent,
+          ...(targetAgent ? { targetAgent } : {}),
+        }),
       });
       setSayText("");
     } catch (err) {
@@ -353,19 +374,58 @@ export function SwarmView() {
             <Transcript />
           )}
         </div>
-        <form onSubmit={onSay} className="border-t border-ink-700 p-3 bg-ink-800 flex gap-2">
-          <input
-            value={sayText}
-            onChange={(e) => setSayText(e.target.value)}
-            placeholder="Inject a message into the discussion (as orchestrator)…"
-            className="flex-1 bg-ink-900 border border-ink-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
-          />
-          <button
-            type="submit"
-            className="px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-sm"
-          >
-            Send
-          </button>
+        <form onSubmit={onSay} className="border-t border-ink-700 p-3 bg-ink-800 flex flex-col gap-2">
+          {/* 2026-05-02 (chat lever #2): intent buttons. Defaults to
+              steer = current "actively reshape next turn" semantics.
+              Suggest = low-pressure consideration; Ask = inline answer
+              + no direction change. The server's /say route validates. */}
+          <div className="flex items-center gap-1 text-xs">
+            <span className="text-ink-400 mr-1">Intent:</span>
+            {(["suggest", "steer", "ask"] as const).map((it) => (
+              <button
+                key={it}
+                type="button"
+                onClick={() => setSayIntent(it)}
+                className={`px-2 py-1 rounded ${
+                  sayIntent === it
+                    ? "bg-emerald-700 text-white"
+                    : "bg-ink-700 text-ink-300 hover:bg-ink-600"
+                }`}
+                title={
+                  it === "suggest"
+                    ? "Low-pressure suggestion — agents see it but won't change direction unless they choose to."
+                    : it === "steer"
+                    ? "Steering nudge — planner-tier prompts treat this as an addition to the directive."
+                    : "Question — next agent turn answers inline; direction unchanged."
+                }
+              >
+                {it === "suggest" ? "Suggest" : it === "steer" ? "Steer" : "Ask"}
+              </button>
+            ))}
+            <span className="ml-auto text-ink-500">
+              Tip: prefix with <code className="bg-ink-900 px-1 rounded">@agent-2</code> to target one agent.
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <input
+              value={sayText}
+              onChange={(e) => setSayText(e.target.value)}
+              placeholder={
+                sayIntent === "ask"
+                  ? "Ask a question (e.g. @agent-1 what's your take on the auth refactor?)"
+                  : sayIntent === "suggest"
+                  ? "Suggest something to consider (low pressure)…"
+                  : "Steer the discussion (active reshape on next turn)…"
+              }
+              className="flex-1 bg-ink-900 border border-ink-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
+            />
+            <button
+              type="submit"
+              className="px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-sm"
+            >
+              Send
+            </button>
+          </div>
         </form>
       </section>
       </div>

@@ -29,6 +29,10 @@ interface Price {
 // over-estimates conservatively, which is the safe direction).
 const PRICES: Record<Provider, Record<string, Price>> = {
   ollama: {},
+  // ollama-cloud entries stay empty — costForUsage early-returns $0
+  // for both ollama and ollama-cloud (cloud usage is metered against
+  // the user's ollama.com plan, outside this app's accounting).
+  "ollama-cloud": {},
   anthropic: {
     "claude-opus-4-7": { inputPerMtok: 15.0, outputPerMtok: 75.0 },
     "claude-sonnet-4-6": { inputPerMtok: 3.0, outputPerMtok: 15.0 },
@@ -53,14 +57,19 @@ export interface UsageForCost {
   responseTokens: number;
 }
 
-// Returns the dollar cost of one usage record. Ollama → 0. Unknown
-// paid model → fallback pricing. The math is deliberately simple
-// (no caching discounts, no per-request overhead) — the cap exists
-// to prevent runaway spend, not to reproduce the bill exactly.
+// Returns the dollar cost of one usage record. Ollama (local + cloud)
+// → 0. Unknown paid model → fallback pricing. The math is deliberately
+// simple (no caching discounts, no per-request overhead) — the cap
+// exists to prevent runaway spend, not to reproduce the bill exactly.
+//
+// 2026-05-03: ollama-cloud collapses to $0 alongside ollama. Cloud
+// usage is metered against the user's ollama.com plan (separate from
+// our cap watchdog) and the local Ollama install handles auth — no
+// per-token cost falls inside this app's accounting.
 export function costForUsage(rec: UsageForCost): number {
   if (!rec.model) return 0;
   const provider = detectProvider(rec.model);
-  if (provider === "ollama") return 0;
+  if (provider === "ollama" || provider === "ollama-cloud") return 0;
   const id = stripProviderPrefix(rec.model);
   const price = PRICES[provider][id] ?? PRICE_FALLBACK;
   const inputDollars = (rec.promptTokens / 1_000_000) * price.inputPerMtok;

@@ -59,11 +59,37 @@ const MULTI_HOUR_TIERS = 5;
 export function directiveHintFor(preset: SwarmPreset): string {
   switch (preset.directive) {
     case "honored":
-      return "This preset will use the directive. Blackboard shapes its auto-generated contract from turn 1 around what you write here. Leave empty for the planner's own read of repo gaps. Max 4000 chars.";
+      // 2026-05-02 (round-robin improvement #5): per-preset copy now
+      // that round-robin also honors the directive. Blackboard uses it
+      // for its planner contract; round-robin frames every disposition
+      // turn + final synthesis around it; MoA seeds the proposers with
+      // it. All three accept empty for "preset's default behavior".
+      switch (preset.id) {
+        case "blackboard":
+          return "This preset will use the directive. Blackboard shapes its auto-generated contract from turn 1 around what you write here. Leave empty for the planner's own read of repo gaps. Max 4000 chars.";
+        case "round-robin":
+          return "This preset will use the directive. Every disposition turn and the final synthesis are framed around it. Leave empty for open-ended discussion of the repo. Max 4000 chars.";
+        case "role-diff":
+          return "This preset will use the directive. Setting it auto-selects a BUILD role catalog (Researcher/Designer/Implementer/Tester/Reviewer/Documenter/Devil's-advocate); each role writes a `### MY DELIVERABLE` block which is composed into a deliverable.md. Leaving empty falls back to the audit catalog (Architect/Tester/Security/Perf/Docs/Deps/Devil's-advocate). Max 4000 chars.";
+        case "map-reduce":
+          return "This preset will use the directive. Mappers search their isolated slice for findings relevant to the directive (off-topic slices may report 'no relevant findings — that's fine'); reducer answers the directive across all mapper findings. Leave empty for an open repo sweep. Max 4000 chars.";
+        case "council":
+          return "This preset will use the directive. Each agent drafts independently in Round 1 (peers hidden), then reveals + revises with explicit KEEP/CHANGE ownership of their `### MY POSITION` against drift. Synthesis preserves dissent via a Minority report. Leave empty for open-ended council on the repo. Max 4000 chars.";
+        case "orchestrator-worker":
+          return "This preset will use the directive. Lead decomposes the directive into worker subtasks; workers report findings relevant to the directive (off-topic subtasks may report 'no relevant findings'); lead's synthesis answers the directive. Leave empty for a generic repo audit. Max 4000 chars.";
+        case "orchestrator-worker-deep":
+          return "This preset will use the directive. Top orchestrator decomposes the directive into one coarse sub-question per mid-lead; mid-leads decompose into worker subtasks; everything synthesizes upward into a directive answer. Leave empty for a tiered repo sweep. Max 4000 chars.";
+        case "moa":
+          return "This preset will use the directive. Each proposer drafts an independent answer to it; the aggregator synthesizes them. Leave empty for the proposers' own read of the repo. Max 4000 chars.";
+        case "debate-judge":
+          return "This preset will use the directive. If you leave the Proposition (Advanced) field empty, the judge auto-derives a sharp PRO/CON proposition from your directive at run start. Debaters see directive as broader context; implementer's nextAction file edits target the directive. Set both for full control. Max 4000 chars.";
+        default:
+          return "This preset will use the directive to shape the run. Leave empty for the preset's default behavior. Max 4000 chars.";
+      }
     case "uses-proposition":
       return "This preset ignores the directive — but it has a separate Proposition field below that plays the same role. Type your debate prompt there.";
     case "ignored":
-      return "This preset analyzes the repo as-is and ignores the directive. Pick Blackboard if you want the swarm to drive specific changes; or use Debate-judge with a Proposition.";
+      return "This preset analyzes the repo as-is and ignores the directive. Pick Blackboard, Round-robin, Role-diff, Map-reduce, Council, OW, OW-Deep, MoA, or Debate-judge if you want the swarm to drive toward what you type.";
   }
 }
 

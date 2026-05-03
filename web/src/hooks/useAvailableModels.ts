@@ -3,44 +3,63 @@
 // the SetupForm to autocomplete model-override fields so first-time
 // users don't have to memorize valid model strings.
 //
-// Module-level cache: the model list rarely changes during a single
-// SetupForm session, so we fetch once and share across every consumer.
-// A page reload re-fetches.
+// 2026-05-03: extended to accept a `provider` arg. The server's
+// /api/models route dispatches:
+//   - default / "ollama":  /api/tags discovery
+//   - "anthropic":         /v1/models discovery (Anthropic key required)
+//   - "openai":            /v1/models discovery (OpenAI key required)
+// Each paid-provider response is server-side cached for 24h. On
+// missing key / network error the server falls back to the hardcoded
+// list in shared/providers.ts and reports `source: "fallback"`.
+//
+// Module-level cache keyed by provider so the hook can be called
+// from many components without each refetching. A page reload
+// re-fetches.
 
 import { useEffect, useState } from "react";
+import type { Provider } from "../../../shared/src/providers";
 
 interface ModelsState {
   models: readonly string[];
   loading: boolean;
   error: string | null;
+  /** Where the list came from. "ollama-tags" for local Ollama discovery,
+   *  "discovery" for live paid-provider /v1/models, "fallback" for the
+   *  hardcoded shared/providers.ts list. Lets the UI render an inline
+   *  hint ("using cached/fallback list") if needed. */
+  source: "ollama-tags" | "discovery" | "fallback" | null;
 }
 
 interface ModelsResponse {
   models?: string[];
+  source?: "ollama-tags" | "discovery" | "fallback";
   error?: string;
 }
 
-let cache: ModelsState | null = null;
-let inflight: Promise<ModelsState> | null = null;
-const subscribers = new Set<(s: ModelsState) => void>();
+const cache = new Map<Provider, ModelsState>();
+const inflight = new Map<Provider, Promise<ModelsState>>();
+const subscribers = new Map<Provider, Set<(s: ModelsState) => void>>();
 
-function notify(state: ModelsState): void {
-  cache = state;
-  for (const fn of subscribers) fn(state);
+function notify(provider: Provider, state: ModelsState): void {
+  cache.set(provider, state);
+  const subs = subscribers.get(provider);
+  if (subs) for (const fn of subs) fn(state);
 }
 
-async function fetchModels(): Promise<ModelsState> {
-  if (inflight) return inflight;
-  inflight = (async () => {
+async function fetchModels(provider: Provider): Promise<ModelsState> {
+  const existing = inflight.get(provider);
+  if (existing) return existing;
+  const promise = (async () => {
     try {
-      const r = await fetch("/api/models");
+      const r = await fetch(`/api/models?provider=${encodeURIComponent(provider)}`);
       if (!r.ok) {
         const next: ModelsState = {
           models: [],
           loading: false,
           error: `HTTP ${r.status}`,
+          source: null,
         };
-        notify(next);
+        notify(provider, next);
         return next;
       }
       const body = (await r.json()) as ModelsResponse;
@@ -48,34 +67,49 @@ async function fetchModels(): Promise<ModelsState> {
         models: body.models ?? [],
         loading: false,
         error: body.error ?? null,
+        source: body.source ?? null,
       };
-      notify(next);
+      notify(provider, next);
       return next;
     } catch (err) {
       const next: ModelsState = {
         models: [],
         loading: false,
         error: err instanceof Error ? err.message : String(err),
+        source: null,
       };
-      notify(next);
+      notify(provider, next);
       return next;
     } finally {
-      inflight = null;
+      inflight.delete(provider);
     }
   })();
-  return inflight;
+  inflight.set(provider, promise);
+  return promise;
 }
 
-export function useAvailableModels(): ModelsState {
+export function useAvailableModels(provider: Provider = "ollama"): ModelsState {
   const [state, setState] = useState<ModelsState>(
-    () => cache ?? { models: [], loading: true, error: null },
+    () => cache.get(provider) ?? { models: [], loading: true, error: null, source: null },
   );
   useEffect(() => {
-    subscribers.add(setState);
-    if (!cache) void fetchModels();
+    let subs = subscribers.get(provider);
+    if (!subs) {
+      subs = new Set();
+      subscribers.set(provider, subs);
+    }
+    subs.add(setState);
+    // Initial sync to current cache state when switching providers.
+    const cached = cache.get(provider);
+    if (cached) {
+      setState(cached);
+    } else {
+      setState({ models: [], loading: true, error: null, source: null });
+      void fetchModels(provider);
+    }
     return () => {
-      subscribers.delete(setState);
+      subs?.delete(setState);
     };
-  }, []);
+  }, [provider]);
   return state;
 }

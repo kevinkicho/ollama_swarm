@@ -8,6 +8,11 @@ build/
 .DS_Store
 runs/
 logs/
+# 2026-05-02: per-clone operational state from RunStatePersister.
+# Lives next to the swarm's clone path so a server restart could
+# resume mid-run (recovery deferred — write side only for now).
+**/run-state.json
+**/run-state.json.tmp
 # Personal browser screenshots — embed copies under docs/images/ if they
 # need to live in the README. The screenshots/ folder itself is local-only.
 screenshots/

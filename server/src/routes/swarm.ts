@@ -185,7 +185,17 @@ const StartBody = z.object({
   topology: TopologySchema.optional(),
 });
 
-const SayBody = z.object({ text: z.string().min(1) });
+// 2026-05-02: extended /say body with optional intent tag + targetAgent.
+//   intent="suggest" → low-pressure, considered if relevant
+//   intent="steer"   → reshape next planner turn (current behavior, default)
+//   intent="ask"     → answer inline; do NOT change direction
+//   targetAgent      → @mention routing; only this agent's prompt sees the input
+// Default intent is "steer" so existing /say callers keep current semantics.
+const SayBody = z.object({
+  text: z.string().min(1),
+  intent: z.enum(["suggest", "steer", "ask"]).optional(),
+  targetAgent: z.string().min(1).max(64).optional(),
+});
 
 // Unit 52c: open-clone request body. Path is the absolute path of the
 // directory the user wants to open in the OS file manager. Validated
@@ -530,7 +540,10 @@ export function swarmRouter(orch: Orchestrator): Router {
       res.status(400).json({ error: parsed.error.flatten() });
       return;
     }
-    orch.injectUser(parsed.data.text);
+    orch.injectUser(parsed.data.text, {
+      intent: parsed.data.intent ?? "steer",
+      ...(parsed.data.targetAgent ? { targetAgent: parsed.data.targetAgent } : {}),
+    });
     res.json({ ok: true });
   });
 

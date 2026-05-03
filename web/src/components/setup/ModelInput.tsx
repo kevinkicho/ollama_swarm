@@ -4,14 +4,20 @@
 // per-role overrides, TopologyGrid per-row overrides).
 //
 // Phase 4 of #314: optional `provider` prop. When provider="anthropic"
-// or provider="openai", the autocomplete switches to the hardcoded
-// model list from shared/src/providers.ts (no /api/tags equivalent
-// for paid providers). When omitted or "ollama", behavior is the
-// historical Ollama-tags datalist.
+// or provider="openai", the autocomplete uses the per-provider model
+// list. When omitted or "ollama", behavior is the historical
+// Ollama-tags datalist.
+//
+// 2026-05-03: pulls live model lists for ALL providers via
+// useAvailableModels(provider). Server-side discovery hits Anthropic's
+// + OpenAI's /v1/models endpoints (when API key present, cached 24h);
+// falls back to shared/providers.ts hardcoded list when no key. So the
+// dropdown stays current with provider releases without a redeploy.
 //
 // Behavior:
 //   - Free text always works; user can type any model id.
-//   - Datalist surfaces the right per-provider candidates.
+//   - Datalist surfaces the right per-provider candidates (live list
+//     when discovery succeeded, hardcoded fallback otherwise).
 //   - When Ollama returns 0 models AND provider is ollama, the
 //     MissingModelsHint renders a single line with `ollama pull`
 //     instructions. Hidden for paid providers (no equivalent action).
@@ -20,11 +26,7 @@
 
 import { useId } from "react";
 import { useAvailableModels } from "../../hooks/useAvailableModels";
-import {
-  ANTHROPIC_MODELS,
-  OPENAI_MODELS,
-  type Provider,
-} from "../../../../shared/src/providers";
+import type { Provider } from "../../../../shared/src/providers";
 
 export function ModelInput({
   value,
@@ -41,14 +43,8 @@ export function ModelInput({
   ariaLabel?: string;
   provider?: Provider;
 }) {
-  const ollamaModels = useAvailableModels().models;
+  const candidates = useAvailableModels(provider).models;
   const listId = useId();
-  const candidates =
-    provider === "anthropic"
-      ? ANTHROPIC_MODELS
-      : provider === "openai"
-        ? OPENAI_MODELS
-        : ollamaModels;
   return (
     <>
       <input

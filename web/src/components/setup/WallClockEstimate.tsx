@@ -34,7 +34,10 @@ function turnSecondsForModel(model: string): number {
 //   - BLACKBOARD: not rounds-based; estimator returns null and the
 //     UI shows "uses wall-clock cap" instead.
 // Includes a 1.2× safety margin baked in (cloud variance).
-function estimateWallClockSeconds(
+/** 2026-05-03 (UX win #1): exported so the sticky Start CTA can show
+ *  a compact "~Xm" estimate next to the button without re-rendering
+ *  the full WallClockEstimate component. */
+export function estimateWallClockSeconds(
   presetId: string,
   agentCount: number,
   rounds: number,
@@ -71,7 +74,8 @@ function estimateWallClockSeconds(
   }
 }
 
-function formatDurationSeconds(seconds: number): string {
+/** Exported with estimateWallClockSeconds for the sticky Start CTA. */
+export function formatDurationSeconds(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
