@@ -164,6 +164,38 @@ describe("writeDeliverable — on-disk roundtrip", () => {
     assert.equal(result.ok, false);
     assert.ok(typeof result.reason === "string" && result.reason.length > 0);
   });
+
+  it("(T1.3) writes sibling next-actions-<preset>-<runIdPrefix>-<iso>.json with extracted actions", () => {
+    const result = writeDeliverable({
+      preset: "council",
+      runId: "12345678-abcd-efgh-ijkl",
+      clonePath: workdir,
+      title: "Council deliverable",
+      sections: [
+        { title: "Answer to directive", body: "The team converged on X." },
+        {
+          title: "Next actions",
+          body: "**HIGH priority:**\n- Add null-check to src/auth.ts\n- Fix the race in worker pool",
+        },
+      ],
+    });
+    assert.equal(result.ok, true);
+    assert.ok(result.nextActionsFile, "result must include nextActionsFile basename");
+    assert.match(result.nextActionsFile!, /^next-actions-council-12345678-/);
+    assert.ok(result.nextActionsFile!.endsWith(".json"));
+    assert.equal(typeof result.nextActionsCount, "number");
+    assert.ok(result.nextActionsCount! >= 2, "should extract the 2 high-priority actions");
+
+    const jsonPath = join(workdir, result.nextActionsFile!);
+    assert.ok(existsSync(jsonPath));
+    const parsed = JSON.parse(readFileSync(jsonPath, "utf8"));
+    assert.equal(parsed.preset, "council");
+    assert.equal(parsed.runId, "12345678-abcd-efgh-ijkl");
+    assert.equal(parsed.schemaVersion, 1);
+    assert.ok(Array.isArray(parsed.actions));
+    assert.ok(parsed.actions.length >= 2);
+    assert.ok(parsed.actions.some((a: { text: string }) => /null-check/.test(a.text)));
+  });
 });
 
 describe("writeDeliverableAndEmit — transcript + WS integration", () => {

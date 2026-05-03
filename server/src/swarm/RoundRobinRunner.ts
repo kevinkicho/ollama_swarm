@@ -36,7 +36,13 @@ import {
   buildDirectiveBlock,
   pickDeliverableTitle,
   pickDeliverableSubtitle,
+  pickAnswerSectionTitle,
+  maybeDirectiveSection,
 } from "./directivePromptHelpers.js";
+import {
+  extractNextActions,
+  formatNextActionsMarkdown,
+} from "./qualityPasses.js";
 import {
   parseConvergenceSignal,
   parseConvergenceSignalLoose,
@@ -311,6 +317,42 @@ export class RoundRobinRunner implements SwarmRunner {
       // role-diff already ran or convergence cap broke us out.
       if (!this.roles && !this.stopping && cfg.rounds > 0 && !this.earlyStopDetail) {
         await this.runStructuredSynthesisPass(cfg);
+      }
+
+      // 2026-05-04 (T1.1 universal deliverable): plain round-robin gets
+      // a portable deliverable.md too. Role-diff has its own block
+      // below; this fires for the no-roles structured-deliberation
+      // case (post-runStructuredSynthesisPass). Best-effort — failure
+      // posts a system message but doesn't block the rest of the
+      // close-out. Mirrors the role-diff block 25 lines down.
+      if (!this.roles && !this.stopping && cfg.runId) {
+        try {
+          const sections = buildRoundRobinDeliverableSections({
+            cfg,
+            transcript: this.transcript,
+            actualRounds: this.round,
+          });
+          const dirCtx = readDirective(cfg);
+          const subtitleBase = `${cfg.agentCount} agent${cfg.agentCount === 1 ? "" : "s"} across ${this.round}/${cfg.rounds} round${cfg.rounds === 1 ? "" : "s"} (rotating dispositions)${this.earlyStopDetail ? " · early-stop" : ""}`;
+          writeDeliverableAndEmit(
+            {
+              preset: "round-robin",
+              runId: cfg.runId,
+              clonePath: cfg.localPath,
+              title: pickDeliverableTitle(dirCtx, {
+                withDirective: "Round-robin: directive answer",
+                withoutDirective: "Round-robin deliberation",
+              }),
+              subtitle: pickDeliverableSubtitle(dirCtx, subtitleBase),
+              sections,
+            },
+            { transcript: this.transcript, emit: this.opts.emit },
+          );
+        } catch (err) {
+          this.appendSystem(
+            `[T1.1] Round-robin deliverable write failed (${err instanceof Error ? err.message : String(err)}); transcript still has the synthesis bubble.`,
+          );
+        }
       }
 
       // 2026-05-02 (role-diff improvement #4): portable deliverable for
@@ -1120,3 +1162,81 @@ export function buildRoleDiffSynthesisPrompt(
 // `convergenceSignal.ts` module. This re-export preserves the legacy
 // public name for external callers.
 export { parseConvergenceSignal as parseRoleDiffConvergence } from "./convergenceSignal.js";
+
+// 2026-05-04 (T1.1 universal deliverable): build deliverable sections
+// for plain round-robin (no roles). Mirrors CouncilRunner's section
+// shape: directive (if set), final synthesis, last-round per-agent
+// turns. Quality augmentation (rubric/critic) is skipped — round-robin
+// doesn't carry a derivedRubric — but next-actions extraction is
+// always free (pure parser) so it still runs.
+export function buildRoundRobinDeliverableSections(input: {
+  cfg: { userDirective?: string; agentCount: number; rounds: number };
+  transcript: readonly TranscriptEntry[];
+  actualRounds: number;
+}): Array<{ title: string; body: string }> {
+  const dirCtx = readDirective(input.cfg);
+  const sections: Array<{ title: string; body: string }> = [];
+
+  // Directive section first when set, so the deliverable opens with
+  // the question being answered.
+  const directiveSection = maybeDirectiveSection(dirCtx);
+  if (directiveSection) sections.push(directiveSection);
+
+  // Final synthesis — written by runStructuredSynthesisPass right
+  // before this helper runs. Tagged with summary.kind="role_diff_synthesis"
+  // (the structured-deliberation case reuses that envelope).
+  const synthesisEntry = [...input.transcript]
+    .reverse()
+    .find(
+      (e) =>
+        e.role === "agent" &&
+        e.summary?.kind === "role_diff_synthesis" &&
+        e.summary.roles === 0,
+    );
+  const synthesisText = synthesisEntry?.text.trim() ?? "";
+  sections.push({
+    title: pickAnswerSectionTitle(dirCtx, {
+      withDirective: "Answer to directive",
+      withoutDirective: "Final synthesis",
+    }),
+    body:
+      synthesisText.length > 0
+        ? synthesisText
+        : "_(synthesis pass returned empty; transcript may have partial discussion)_",
+  });
+
+  // Per-agent last-round turns so the reader sees the disposition
+  // rotation that produced the synthesis. Filter to the final round
+  // only — full transcript would dwarf the synthesis.
+  const finalRoundTurns: Array<{ agentIndex?: number; text: string }> = [];
+  // The transcript has agent entries tagged by round via summary.kind=
+  // "agent_turn"; without that, fall back to the last cfg.agentCount
+  // agent entries (one per agent in the final round under round-robin).
+  const agentEntries = input.transcript.filter((e) => e.role === "agent");
+  const tail = agentEntries.slice(-input.cfg.agentCount);
+  for (const e of tail) {
+    finalRoundTurns.push({ agentIndex: e.agentIndex, text: e.text.trim() });
+  }
+  sections.push({
+    title: `Round ${input.actualRounds} — final-round turns (rotating dispositions)`,
+    body:
+      finalRoundTurns.length > 0
+        ? finalRoundTurns
+            .map((t) => `### Agent ${t.agentIndex ?? "?"}\n\n${t.text}`)
+            .join("\n\n")
+        : "_(no final-round turns captured)_",
+  });
+
+  // Always-free next-actions extraction (pure parser) so the
+  // deliverable lands with concrete recommendations the user can chase.
+  const baseText = sections
+    .map((s) => `## ${s.title}\n\n${s.body}`)
+    .join("\n\n");
+  const actions = extractNextActions(baseText);
+  sections.push({
+    title: "Next actions",
+    body: formatNextActionsMarkdown(actions),
+  });
+
+  return sections;
+}

@@ -38,6 +38,7 @@ import {
   formatCriticMarkdown,
   extractNextActions,
   formatNextActionsMarkdown,
+  type NextAction,
 } from "./qualityPasses.js";
 
 export interface DeliverableSection {
@@ -80,6 +81,13 @@ export interface DeliverableResult {
   bytes: number;
   /** Set when ok === false. */
   reason?: string;
+  /** T1.3 (2026-05-04): basename of the sibling next-actions.json
+   *  written alongside this deliverable. Absent when the JSON write
+   *  failed (deliverable still ok). */
+  nextActionsFile?: string;
+  /** Number of action items extracted from the deliverable. 0 when
+   *  the deliverable contained no recognizable action prose. */
+  nextActionsCount?: number;
 }
 
 /** Pure markdown builder — exported separately for tests so the
@@ -233,10 +241,18 @@ export function writeDeliverableAndEmit(
 }
 
 /** Write the deliverable to disk via tmp + rename (atomic). Returns
- *  ok:false on filesystem failure; never throws. */
+ *  ok:false on filesystem failure; never throws.
+ *
+ *  T1.3 (2026-05-04): also writes a sibling `next-actions-<preset>-
+ *  <runId>-<iso>.json` containing the structured action list extracted
+ *  from the deliverable. Same atomic-write pattern; failure to write
+ *  the sibling is non-fatal (the deliverable already landed). The
+ *  JSON is what downstream tooling (forward-chain blackboard runs,
+ *  GitHub Actions) consumes — markdown for humans, JSON for machines. */
 export function writeDeliverable(input: DeliverableInput): DeliverableResult {
   const isoSafe = new Date().toISOString().replace(/[:.]/g, "-");
-  const filename = `deliverable-${input.preset}-${input.runId.slice(0, 8)}-${isoSafe}.md`;
+  const runIdShort = input.runId.slice(0, 8);
+  const filename = `deliverable-${input.preset}-${runIdShort}-${isoSafe}.md`;
   const fullPath = path.join(input.clonePath, filename);
   const tmpPath = `${fullPath}.tmp`;
   const md = buildDeliverableMarkdown(input);
@@ -244,13 +260,85 @@ export function writeDeliverable(input: DeliverableInput): DeliverableResult {
     mkdirSync(input.clonePath, { recursive: true });
     writeFileSync(tmpPath, md, "utf8");
     renameSync(tmpPath, fullPath);
-    return { ok: true, filename, fullPath, bytes: md.length };
   } catch (err) {
     return {
       ok: false,
       filename,
       fullPath,
       bytes: 0,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+  // Sibling JSON write — best-effort; deliverable.ok stays true even if
+  // JSON write fails. Surfaced via nextActionsFile when present.
+  const jsonResult = writeNextActionsJson({
+    preset: input.preset,
+    runId: input.runId,
+    runIdShort,
+    isoSafe,
+    clonePath: input.clonePath,
+    deliverableMarkdown: md,
+  });
+  return {
+    ok: true,
+    filename,
+    fullPath,
+    bytes: md.length,
+    ...(jsonResult.ok
+      ? { nextActionsFile: jsonResult.filename, nextActionsCount: jsonResult.count }
+      : {}),
+  };
+}
+
+/** T1.3: structured next-actions JSON written alongside every deliverable.
+ *  Pure JSON file at <clonePath>/next-actions-<preset>-<runId>-<iso>.json
+ *  containing the extractNextActions output + run metadata. Downstream
+ *  tooling (the forward-chain `chainTo:"blackboard"` flag, CI scripts,
+ *  the eval harness) consumes this without re-parsing the markdown. */
+export interface NextActionsJsonInput {
+  preset: string;
+  runId: string;
+  runIdShort: string;
+  isoSafe: string;
+  clonePath: string;
+  /** The full deliverable markdown — extractNextActions reads this. */
+  deliverableMarkdown: string;
+}
+
+export interface NextActionsJsonResult {
+  ok: boolean;
+  filename: string;
+  fullPath: string;
+  count: number;
+  reason?: string;
+}
+
+export function writeNextActionsJson(input: NextActionsJsonInput): NextActionsJsonResult {
+  const filename = `next-actions-${input.preset}-${input.runIdShort}-${input.isoSafe}.json`;
+  const fullPath = path.join(input.clonePath, filename);
+  const tmpPath = `${fullPath}.tmp`;
+  const actions = extractNextActions(input.deliverableMarkdown);
+  const payload = {
+    preset: input.preset,
+    runId: input.runId,
+    generatedAt: new Date().toISOString(),
+    schemaVersion: 1,
+    actions: actions.map((a: NextAction) => ({
+      priority: a.priority,
+      text: a.text,
+      ...(a.source ? { source: a.source } : {}),
+    })),
+  };
+  try {
+    writeFileSync(tmpPath, JSON.stringify(payload, null, 2), "utf8");
+    renameSync(tmpPath, fullPath);
+    return { ok: true, filename, fullPath, count: actions.length };
+  } catch (err) {
+    return {
+      ok: false,
+      filename,
+      fullPath,
+      count: 0,
       reason: err instanceof Error ? err.message : String(err),
     };
   }
