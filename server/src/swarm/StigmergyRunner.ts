@@ -11,13 +11,20 @@ import type {
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { formatChatReceipt } from "./chatReceipt.js";
+import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
+import { detectExplorationGaps, formatExplorationGapsMarkdown } from "./stigmergyExplorationGap.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
-import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
+import { buildSeedSummary } from "./runSummary.js";
+import { discussionWriteSummary } from "./discussionWriteSummary.js";
+import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
-import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../services/ollamaProxy.js";
+import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
+import { checkBudgetGuards } from "./loopGuards.js";
+import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
-import { runEndReflection } from "./runEndReflection.js";
+// runEndReflection moved into runFinallyHooks (Phase D).
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import { getAgentAddendum } from "../../../shared/src/topology.js";
 
@@ -47,6 +54,11 @@ export class StigmergyRunner implements SwarmRunner {
   // The annotation table — the shared "pheromone" state. File path →
   // aggregated annotation. Updated after each agent's turn.
   private annotations = new Map<string, AnnotationState>();
+  // 2026-05-02 (improvement #2): per-explorer territory assignment from
+  // the lead's pre-round-1 plan. Map agentIndex → territory description.
+  // Empty when the lead's plan failed; explorers wander unguided in
+  // that case (back-compat).
+  private territoryAssignments = new Map<number, string>();
   // Phase B (Task #98): rolling window of the last N rounds' top-10
   // file-name signatures. Detects "the swarm is no longer learning
   // anything new" — once the visit-graph stabilizes, more rounds just
@@ -83,15 +95,22 @@ export class StigmergyRunner implements SwarmRunner {
     };
   }
 
-  injectUser(text: string): void {
+  injectUser(
+    text: string,
+    opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
+  ): void {
+    const intent = opts?.intent ?? "steer";
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "user",
       text,
       ts: Date.now(),
+      intent,
+      ...(opts?.targetAgent ? { targetAgent: opts.targetAgent } : {}),
     };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
+    this.appendSystem(formatChatReceipt(intent, opts?.targetAgent));
   }
 
   isRunning(): boolean {
@@ -196,25 +215,39 @@ export class StigmergyRunner implements SwarmRunner {
       const STABILITY_WINDOW = 3;
       const MIN_ROUND_FOR_CHECK = STABILITY_WINDOW + 2;
 
-      // Task #124: snapshot lifetime tokens for budget delta.
+      // 2026-05-03 (Phase B): budget + dead-loop guards extracted to shared helpers.
       const tokenBaseline = snapshotLifetimeTokens();
-      // Task #146: dead-loop guard (mirrors #144).
-      let consecutiveEmptyRounds = 0;
-      const EMPTY_ROUND_BREAK_THRESHOLD = 2;
+      const deadLoopGuard = new OutputEmptyDeadLoopGuard({
+        roleLabel: "explorers",
+        unit: "round",
+      });
+
+      // 2026-05-02 (improvement #2): pre-round-1 territory-plan pass.
+      // Lead agent (index 1) issues per-explorer territory assignments
+      // based on directive + repo top-level structure. Best-effort —
+      // failure leaves territoryAssignments empty so explorers wander
+      // unguided (back-compat).
+      if (!this.stopping && cfg.userDirective && agents.length >= 2) {
+        try {
+          await this.runTerritoryPlanPass(cfg, agents, candidatePaths);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.appendSystem(`[improvement #2] Territory plan pass failed (${msg}); explorers will work without assignments.`);
+        }
+      }
 
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
-        // Task #124: token-budget cap check.
-        if (tokenBudgetExceeded(tokenBaseline, cfg.tokenBudget)) {
-          this.earlyStopDetail = `token-budget reached (${cfg.tokenBudget?.toLocaleString()} tokens)`;
-          this.appendSystem(`Token budget of ${cfg.tokenBudget?.toLocaleString()} tokens reached at round ${r - 1}/${cfg.rounds} — ending run early.`);
-          break;
-        }
-        // Task #137: quota-wall cap check.
-        if (shouldHaltOnQuota()) {
-          const q = tokenTracker.getQuotaState();
-          this.earlyStopDetail = `ollama-quota-exhausted (${q?.statusCode}: ${q?.reason.slice(0, 100)})`;
-          this.appendSystem(`Ollama quota wall hit at round ${r - 1}/${cfg.rounds} (${q?.statusCode}) — ending run early.`);
+        const guard = checkBudgetGuards({
+          tokenBaseline,
+          tokenBudget: cfg.tokenBudget,
+          round: r,
+          totalRounds: cfg.rounds,
+          unit: "round",
+        });
+        if (guard.halt) {
+          this.earlyStopDetail = guard.earlyStopDetail;
+          this.appendSystem(guard.message ?? "");
           break;
         }
         this.round = r;
@@ -227,23 +260,18 @@ export class StigmergyRunner implements SwarmRunner {
         }
         // Task #146: dead-loop guard. If every explorer this round produced
         // empty/junk output, count toward break threshold.
+        // 2026-05-03 (Phase B): logic extracted to OutputEmptyDeadLoopGuard.
         if (!this.stopping) {
           const newEntries = this.transcript
             .slice(transcriptLenBefore)
             .filter((e) => e.role === "agent");
-          const allEmpty = newEntries.length > 0 &&
-            newEntries.every((e) => (e.text || "") === "(empty response)" || looksLikeJunk(e.text || ""));
-          if (allEmpty) {
-            consecutiveEmptyRounds++;
-            if (consecutiveEmptyRounds >= EMPTY_ROUND_BREAK_THRESHOLD) {
-              this.earlyStopDetail = `explorers-silenced (${consecutiveEmptyRounds} consecutive empty rounds)`;
-              this.appendSystem(
-                `All explorers produced empty/junk output for ${consecutiveEmptyRounds} consecutive rounds — ending stigmergy early.`,
-              );
-              break;
-            }
-          } else {
-            consecutiveEmptyRounds = 0;
+          const dlHit = deadLoopGuard.recordIteration(newEntries);
+          if (dlHit.tripped) {
+            this.earlyStopDetail = dlHit.earlyStopDetail;
+            this.appendSystem(
+              `All explorers produced empty/junk output for ${dlHit.consecutive} consecutive rounds — ending stigmergy early.`,
+            );
+            break;
           }
         }
 
@@ -251,7 +279,7 @@ export class StigmergyRunner implements SwarmRunner {
         // stability. Run only when annotations exist (else the empty
         // signature trivially matches itself).
         if (!this.stopping && this.annotations.size > 0 && r < cfg.rounds) {
-          const sig = computeRankingSignature(this.annotations);
+          const sig = computeRankingSignature(this.annotations, this.round);
           this.rankingHistory.push(sig);
           if (this.rankingHistory.length > STABILITY_WINDOW) {
             this.rankingHistory.shift();
@@ -284,73 +312,121 @@ export class StigmergyRunner implements SwarmRunner {
       crashMessage = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: crashMessage });
     } finally {
-      // Task #150: end-of-run reflection (lead explorer does it).
-      if (!crashMessage && !this.stopping && cfg.runId) {
-        const lead = this.opts.manager.list().find((a) => a.index === 1);
-        if (lead) {
-          const ctxSummary = `Stigmergy preset · ${cfg.agentCount} explorers · ran ${this.round}/${cfg.rounds} rounds${this.earlyStopDetail ? ` · early-stop: ${this.earlyStopDetail}` : ""}`;
-          await runEndReflection({
-            agent: lead, preset: cfg.preset, runId: cfg.runId, clonePath: cfg.localPath,
-            contextSummary: ctxSummary, log: (msg) => this.appendSystem(msg),
-          }).catch(() => {});
-        }
-      }
-      await this.writeSummary(cfg, crashMessage);
-      // Unit 55: auto-killAll on natural completion (see RoundRobinRunner).
-      if (!this.stopping) {
-        const killResult = await this.opts.manager.killAll();
-        this.appendSystem(formatPortReleaseLine(killResult));
-        this.setPhase("completed");
-      }
+      // 2026-05-02 (deliverables initiative): structured markdown.
+      if (!this.stopping && cfg.runId) await this.writeStigmergyDeliverable(cfg);
+      // 2026-05-03 (Phase D): finally close-out extracted to shared helper.
+      await runDiscussionCloseOut({
+        cfg,
+        crashMessage,
+        stopping: this.stopping,
+        earlyStopDetail: this.earlyStopDetail,
+        round: this.round,
+        currentPhase: this.phase,
+        manager: this.opts.manager,
+        appendSystem: (text) => this.appendSystem(text),
+        setPhase: (p) => this.setPhase(p),
+        writeSummary: () => this.writeSummary(cfg, crashMessage),
+        hooks: {
+          pickReflectionAgent: (m) => m.list().find((a) => a.index === 1) ?? null,
+          buildReflectionContext: (s) =>
+            `Stigmergy preset · ${cfg.agentCount} explorers · ran ${s.round}/${cfg.rounds} rounds${s.earlyStopDetail ? ` · early-stop: ${s.earlyStopDetail}` : ""}`,
+        },
+      });
     }
   }
 
+  // 2026-05-02 (deliverables initiative): stigmergy structured
+  // artifact. Sections: top findings (last agent entry tagged
+  // stigmergy_report) / pheromone trail (annotation envelopes per
+  // explorer turn) / annotation table.
+  private async writeStigmergyDeliverable(cfg: RunConfig): Promise<void> {
+    if (!cfg.runId) return;
+    const reportEntry = [...this.transcript]
+      .reverse()
+      .find((e) => e.summary?.kind === "stigmergy_report");
+    const annotationEntries = this.transcript.filter(
+      (e) => e.summary?.kind === "stigmergy_annotation",
+    );
+    const sections = [
+      {
+        title: "Top findings (lead report-out)",
+        body: reportEntry?.text?.trim() || "_(no report captured)_",
+      },
+      {
+        title: `Pheromone trail (${annotationEntries.length} annotation${annotationEntries.length === 1 ? "" : "s"})`,
+        body: annotationEntries.length > 0
+          ? annotationEntries
+              .map((e) => {
+                const s = e.summary;
+                if (s?.kind !== "stigmergy_annotation") return e.text.trim();
+                return `### ${s.file} (interest ${s.interest}/10, confidence ${s.confidence}/10)\n\n${s.note}`;
+              })
+              .join("\n\n")
+          : "_(no annotations captured)_",
+      },
+      {
+        title: `Annotation table (${this.annotations.size} files visited)`,
+        body: "```\n" + formatAnnotations(this.annotations) + "\n```",
+      },
+    ];
+    // 2026-05-02 (stigmergy improvement #3): top-down exploration gap
+    // check. Compares directive's path-mentions + repo's top-level dirs
+    // against actually-annotated files. Surfaces "you missed this".
+    let repoFiles: string[] = [];
+    try {
+      repoFiles = await this.opts.repos.listRepoFiles(cfg.localPath, { maxFiles: 500 });
+    } catch {
+      repoFiles = [];
+    }
+    const gaps = detectExplorationGaps({
+      directive: cfg.userDirective ?? "",
+      annotatedFiles: [...this.annotations.keys()],
+      repoFiles,
+    });
+    sections.push({
+      title: "Exploration gaps (top-down directive check)",
+      body: formatExplorationGapsMarkdown(gaps),
+    });
+    // 2026-05-02 (quality levers #1+#3): augment with critic + next-actions.
+    const lead = this.opts.manager.list().find((a) => a.index === 1) ?? null;
+    const augmented = await runQualityPasses({
+      baseSections: sections,
+      rubric: null,
+      criticAgent: lead,
+      manager: this.opts.manager,
+    });
+    writeDeliverableAndEmit(
+      {
+        preset: "stigmergy",
+        runId: cfg.runId,
+        clonePath: cfg.localPath,
+        title: "Stigmergy coverage report",
+        subtitle: `${cfg.agentCount} explorer${cfg.agentCount === 1 ? "" : "s"} across ${this.round}/${cfg.rounds} round${cfg.rounds === 1 ? "" : "s"}${this.earlyStopDetail ? " · early-stop" : ""}`,
+        sections: augmented,
+      },
+      { transcript: this.transcript, emit: this.opts.emit },
+    );
+  }
+
   // Unit 33: shared summary writer pattern — see RoundRobinRunner.
+  // 2026-05-03 (Phase C): writeSummary body extracted to shared helper.
   private async writeSummary(cfg: RunConfig, crashMessage?: string): Promise<void> {
     if (this.summaryWritten) return;
     this.summaryWritten = true;
     if (this.startedAt === undefined) return;
-    let gitStatus = { porcelain: "", changedFiles: 0 };
-    try {
-      gitStatus = await this.opts.repos.gitStatus(cfg.localPath);
-    } catch {
-      // best-effort
-    }
-    const summary = buildDiscussionSummary({
-      config: {
-        repoUrl: cfg.repoUrl,
-        localPath: cfg.localPath,
-        preset: cfg.preset,
-        model: cfg.model,
-        runId: cfg.runId,
-      },
-      agentCount: cfg.agentCount,
-      rounds: cfg.rounds,
-      startedAt: this.startedAt,
-      endedAt: Date.now(),
+    await discussionWriteSummary({
+      cfg,
       crashMessage,
       stopping: this.stopping,
+      startedAt: this.startedAt,
       earlyStopDetail: this.earlyStopDetail,
-      filesChanged: gitStatus.changedFiles,
-      finalGitStatus: gitStatus.porcelain,
+      agentCount: cfg.agentCount,
       agents: this.stats.buildPerAgentStats(),
       transcript: this.transcript,
-      // Phase 4a of #243: topology passthrough.
       topology: cfg.topology,
+      repos: this.opts.repos,
+      appendSystem: (text, summary) => this.appendSystem(text, summary),
     });
-    try {
-      await writeRunSummary(cfg.localPath, summary);
-      this.appendSystem(
-        formatRunFinishedBanner(summary),
-        buildRunFinishedSummary(summary),
-      );
-      this.appendSystem(
-        `Wrote run summary (stopReason=${summary.stopReason}, wallClockMs=${summary.wallClockMs}, files=${summary.filesChanged}).`,
-      );
-    } catch (writeErr) {
-      const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
-      this.appendSystem(`Failed to write run summary (${msg})`);
-    }
   }
 
   // Task #80: report-out pass at end of run. Routes through agent-1
@@ -358,6 +434,58 @@ export class StigmergyRunner implements SwarmRunner {
   // Tagged with summary kind "stigmergy_report" so the modal renders
   // distinctively. Failure is non-fatal — the raw annotation table
   // already landed in transcript above.
+  // 2026-05-02 (improvement #2): pre-round-1 territory planning. Lead
+  // agent (index 1) receives the directive + repo top-level structure +
+  // explorer count, returns per-explorer territory assignments. Stored
+  // in territoryAssignments; threaded into per-explorer prompts in
+  // runExplorerTurn. Best-effort — failure leaves the map empty so
+  // explorers wander unguided (back-compat with pure-stigmergy
+  // behavior).
+  private async runTerritoryPlanPass(
+    cfg: RunConfig,
+    agents: readonly Agent[],
+    candidatePaths: readonly string[],
+  ): Promise<void> {
+    const lead = agents.find((a) => a.index === 1);
+    if (!lead) return;
+    if (this.stopping) return;
+    const prompt = buildTerritoryPlanPrompt({
+      directive: cfg.userDirective ?? "",
+      candidatePaths,
+      explorerCount: agents.length,
+    });
+    this.appendSystem(`[improvement #2] Lead agent (${lead.id}) drafting per-explorer territory assignments…`);
+    const controller = new AbortController();
+    let raw = "";
+    try {
+      const res = (await promptWithRetry(lead, prompt, {
+        signal: controller.signal,
+        manager: this.opts.manager,
+        agentName: "swarm-read",
+        promptAddendum: getAgentAddendum(this.active?.topology, lead.index),
+        describeError: describeSdkError,
+      })) as { data: { parts: Array<{ type: "text"; text: string }> } };
+      raw = (res?.data?.parts?.find((p) => p.type === "text")?.text ?? "").trim();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(`[improvement #2] Lead's territory-plan prompt failed (${msg}); explorers will wander.`);
+      return;
+    }
+    const parsed = parseTerritoryPlan(raw);
+    if (!parsed) {
+      this.appendSystem(`[improvement #2] Could not parse lead's territory plan; explorers will wander. Raw: ${raw.slice(0, 200)}`);
+      return;
+    }
+    let assignedCount = 0;
+    for (const [agentIndex, territory] of parsed.entries()) {
+      if (territory && territory.trim().length > 0) {
+        this.territoryAssignments.set(agentIndex, territory.trim());
+        assignedCount += 1;
+      }
+    }
+    this.appendSystem(`[improvement #2] Territory plan accepted: ${assignedCount}/${agents.length} explorers assigned a starting territory.`);
+  }
+
   private async runReportOutPass(): Promise<void> {
     const agents = this.opts.manager.list();
     const lead = agents.find((a) => a.index === 1);
@@ -374,15 +502,17 @@ export class StigmergyRunner implements SwarmRunner {
     this.stats.countTurn(lead.id);
     this.appendSystem(`Synthesizing stigmergy findings (agent-${lead.index})…`);
 
-    // Server-side ranking — annotations sorted by visits × avgInterest.
-    // Top 10 surfaces the highest-signal files; cap prevents prompt
-    // bloat on big repos.
+    // Server-side ranking — annotations sorted by rankingScore (visits ×
+    // avgInterest × confidence × decay). Pre-2026-05-02 the formula
+    // was just visits × avgInterest, which ignored confidence + treated
+    // stale annotations as fresh. Top 10 surfaces the highest-signal
+    // files; cap prevents prompt bloat on big repos.
     const ranked = [...this.annotations.entries()]
-      .map(([file, a]) => ({ file, ...a, score: a.visits * a.avgInterest }))
+      .map(([file, a]) => ({ file, ...a, score: rankingScore(a, this.round) }))
       .sort((a, b) => b.score - a.score)
       .slice(0, 10);
     const tableText = ranked
-      .map((r, i) => `${i + 1}. ${r.file} — visits=${r.visits}, interest=${r.avgInterest.toFixed(1)}, confidence=${r.avgConfidence.toFixed(1)}, note="${r.latestNote}"`)
+      .map((r, i) => `${i + 1}. ${r.file} — visits=${r.visits}, interest=${r.avgInterest.toFixed(1)}, confidence=${r.avgConfidence.toFixed(1)}, score=${r.score.toFixed(1)}, note="${r.latestNote}"`)
       .join("\n");
     const prompt = [
       "You are Agent 1, the stigmergy synthesis lead. The swarm just finished exploring a repo with self-organizing file picks driven by a shared annotation table.",
@@ -505,12 +635,40 @@ export class StigmergyRunner implements SwarmRunner {
     totalRounds: number,
     candidatePaths: readonly string[],
   ): Promise<void> {
+    // 2026-05-02 (improvement #1): compute recently-active files from
+    // the last 1-2 rounds for the per-agent prompt. Surfaces the
+    // dynamic peer-activity signal above the cumulative table.
+    const recentlyActive: { file: string; round: number; note: string }[] = [];
+    if (round > 1) {
+      for (const [file, state] of this.annotations) {
+        if (state.lastVisitedRound !== undefined && state.lastVisitedRound >= round - 2 && state.lastVisitedRound < round) {
+          recentlyActive.push({
+            file,
+            round: state.lastVisitedRound,
+            note: state.latestNote,
+          });
+        }
+      }
+      // Cap at top 5 by visits to keep the prompt focused
+      recentlyActive.sort((a, b) => {
+        const stateA = this.annotations.get(a.file);
+        const stateB = this.annotations.get(b.file);
+        return (stateB?.visits ?? 0) - (stateA?.visits ?? 0);
+      });
+      recentlyActive.length = Math.min(recentlyActive.length, 5);
+    }
     const prompt = buildExplorerPrompt({
       agentIndex: agent.index,
       round,
       totalRounds,
       candidatePaths,
       annotations: this.annotations,
+      // 2026-05-02 (improvement #2): thread territory assignment from
+      // the lead's pre-round-1 plan. Empty when plan failed.
+      ...(this.territoryAssignments.has(agent.index)
+        ? { territory: this.territoryAssignments.get(agent.index) }
+        : {}),
+      ...(recentlyActive.length > 0 ? { recentlyActive } : {}),
     });
     // #303: parse the annotation INSIDE the runAgent transform so
     // the JSON envelope gets stripped from visible bubble text + the
@@ -558,6 +716,8 @@ export class StigmergyRunner implements SwarmRunner {
         avgInterest: ann.interest,
         avgConfidence: ann.confidence,
         latestNote: ann.note,
+        // 2026-05-02 (improvement #5): track round for decay scoring.
+        lastVisitedRound: this.round,
       };
     } else {
       // Running average — equal weight per visit. Cheap, good enough for v1.
@@ -567,6 +727,8 @@ export class StigmergyRunner implements SwarmRunner {
         avgInterest: (existing.avgInterest * existing.visits + ann.interest) / n,
         avgConfidence: (existing.avgConfidence * existing.visits + ann.confidence) / n,
         latestNote: ann.note,
+        // 2026-05-02 (improvement #5): bump last-visited to current round.
+        lastVisitedRound: this.round,
       };
     }
     this.annotations.set(ann.file, next);
@@ -770,6 +932,38 @@ export interface AnnotationState {
   avgInterest: number;
   avgConfidence: number;
   latestNote: string;
+  // 2026-05-02 (stigmergy improvement #5): round of last visit. Lets
+  // the ranking formula apply pheromone decay — annotations from
+  // earlier rounds with no follow-up fade vs files multiple explorers
+  // revisited recently. Defaults to 1 for back-compat with pre-fix
+  // states (e.g. recovered serialized annotations).
+  lastVisitedRound?: number;
+}
+
+// 2026-05-02 (stigmergy improvement #5): per-round decay factor.
+// Each unvisited round multiplies the score by this factor — after
+// 3 rounds untouched, score drops to ~34%. Tuned conservatively;
+// dramatic decay would surprise users. Pure constant — exported for
+// tests so the calibration is locked.
+export const PHEROMONE_DECAY_PER_ROUND = 0.7;
+
+// 2026-05-02 (stigmergy improvement #4): confidence weighting in the
+// ranking score. Pre-fix the formula was (visits × avgInterest);
+// confidence was captured but ignored. New formula:
+//   score = visits × avgInterest × (avgConfidence / 10) × decay
+// Confidence scaled to [0, 1] so a high-interest-low-confidence file
+// (interest=10, confidence=2) ranks below a slightly-less-interesting-
+// but-solid one (interest=8, confidence=9). Pure — exported for tests.
+export function rankingScore(
+  state: AnnotationState,
+  currentRound?: number,
+): number {
+  const baseScore = state.visits * state.avgInterest * (state.avgConfidence / 10);
+  if (currentRound === undefined || state.lastVisitedRound === undefined) {
+    return baseScore;
+  }
+  const roundsSince = Math.max(0, currentRound - state.lastVisitedRound);
+  return baseScore * Math.pow(PHEROMONE_DECAY_PER_ROUND, roundsSince);
 }
 
 export interface ParsedAnnotation {
@@ -853,16 +1047,28 @@ interface BuildExplorerPromptArgs {
   totalRounds: number;
   candidatePaths: readonly string[];
   annotations: ReadonlyMap<string, AnnotationState>;
+  // 2026-05-02 (improvement #2): per-explorer territory assignment from
+  // the lead's pre-round-1 plan. Soft suggestion — the explorer can
+  // still wander based on the pheromone trail. Empty/absent for
+  // round 1 plan-failure cases or pre-fix runs.
+  territory?: string;
+  // 2026-05-02 (improvement #1): files annotated in the LAST 2 rounds
+  // by other explorers. Surfaced as a separate "RECENTLY ACTIVE"
+  // section so the dynamic peer-activity signal is visible above the
+  // static cumulative table. Pre-fix the table mixed all rounds —
+  // hard for the agent to tell what just changed. Empty/absent for
+  // round 1 (no prior rounds yet).
+  recentlyActive?: readonly { file: string; round: number; note: string }[];
 }
 
 export function buildExplorerPrompt(args: BuildExplorerPromptArgs): string {
-  const { agentIndex, round, totalRounds, candidatePaths, annotations } = args;
+  const { agentIndex, round, totalRounds, candidatePaths, annotations, territory, recentlyActive } = args;
   const tableText = formatAnnotations(annotations);
   const candidateText = candidatePaths.length > 0 ? candidatePaths.join(", ") : "(none — repo seems empty)";
 
-  return [
+  const parts: string[] = [
     `You are Agent ${agentIndex}, an explorer in a stigmergy swarm reviewing a cloned GitHub project.`,
-    `This is round ${round}/${totalRounds}. There is no planner and no role assignment — every agent picks its own next file based on the shared annotation table below.`,
+    `This is round ${round}/${totalRounds}. The lead may have suggested a starting territory for you (see below); the pheromone trail is shared so every agent's exploration informs the next.`,
     "",
     "Your turn:",
     "1. Look at the annotation table. Untouched files are most attractive. Among visited files, prefer high INTEREST + low CONFIDENCE — those are interesting and not yet understood. Avoid files that are well-covered (multiple visits, high confidence).",
@@ -878,24 +1084,113 @@ export function buildExplorerPrompt(args: BuildExplorerPromptArgs): string {
     "- `note` = one-line summary that future agents can use as a pheromone signal.",
     "",
     `Top-level candidates: ${candidateText}`,
+  ];
+  // 2026-05-02 (improvement #2): territory assignment from lead's plan.
+  if (territory && territory.trim().length > 0) {
+    parts.push("");
+    parts.push(`=== YOUR ASSIGNED TERRITORY (lead's pre-round plan) ===`);
+    parts.push(territory.trim());
+    parts.push(`=== END TERRITORY ===`);
+    parts.push(`This is a SUGGESTION — start here, but follow the pheromone trail if peers' annotations make a different file more interesting.`);
+  }
+  // 2026-05-02 (improvement #1): recent-activity highlight (round 2+).
+  if (recentlyActive && recentlyActive.length > 0) {
+    parts.push("");
+    parts.push(`=== RECENTLY ACTIVE (peers' annotations from the last 1-2 rounds) ===`);
+    for (const r of recentlyActive) {
+      parts.push(`- ${r.file} (round ${r.round}): ${r.note}`);
+    }
+    parts.push(`=== END RECENT ===`);
+    parts.push(`These files just got peer attention. Either VALIDATE/REFUTE the recent annotations OR seek UNEXPLORED ground — don't redundantly re-walk what was just covered.`);
+  }
+  parts.push("");
+  parts.push("=== ANNOTATION TABLE (current, cumulative across all rounds) ===");
+  parts.push(tableText);
+  parts.push("=== END TABLE ===");
+  parts.push("");
+  parts.push(`Now respond as Agent ${agentIndex}. Remember: prose report THEN annotation JSON on the last line.`);
+  return parts.join("\n");
+}
+
+// 2026-05-02 (improvement #2): pure prompt builder for the lead's
+// pre-round-1 territory plan. Asks the lead to assign each explorer a
+// starting territory based on the directive + repo top-level structure.
+// Output is strict JSON: {"<agentIndex>": "<territory description>"}.
+// Pure — exported for tests.
+export function buildTerritoryPlanPrompt(input: {
+  directive: string;
+  candidatePaths: readonly string[];
+  explorerCount: number;
+}): string {
+  const indices = Array.from({ length: input.explorerCount }, (_, i) => i + 1);
+  return [
+    "You are Agent 1, the lead explorer in a stigmergy swarm. Before round 1 starts, you're issuing per-explorer TERRITORY ASSIGNMENTS — a starting hint for each explorer based on the user's directive + the repo's top-level structure.",
     "",
-    "=== ANNOTATION TABLE (current) ===",
-    tableText,
-    "=== END TABLE ===",
+    "GOAL: prevent accidental overlap. Without territory assignments, multiple explorers may walk the same area in parallel — wasted work. Your assignments give each explorer a focal point so they spread out naturally on round 1.",
     "",
-    `Now respond as Agent ${agentIndex}. Remember: prose report THEN annotation JSON on the last line.`,
+    "Your assignment is a SUGGESTION. Explorers can wander based on the pheromone trail; you're seeding their starting point, not constraining them.",
+    "",
+    `USER DIRECTIVE: ${input.directive.trim() || "(no directive)"}`,
+    `REPO TOP-LEVEL CANDIDATES: ${input.candidatePaths.length > 0 ? input.candidatePaths.join(", ") : "(empty)"}`,
+    `EXPLORER COUNT: ${input.explorerCount} (you yourself are agent 1; assign all of them including yourself).`,
+    "",
+    "Output STRICT JSON only (no prose, no markdown fences). Shape:",
+    `  {${indices.map((i) => `"${i}": "<short territory description for agent ${i}>"`).join(", ")}}`,
+    "",
+    "Rules:",
+    "- One key per explorer index, all keys MUST be present.",
+    "- Each value is 5-30 words: name a directory, file pattern, or theme.",
+    "- Distribute coverage broadly — avoid sending two explorers to the same dir.",
+    "- Anchor in the directive when relevant (e.g. directive about auth → assign someone to auth/).",
+    "- For repos smaller than the explorer count, allow overlap with different angles (e.g. 'src/ — focus on tests' vs 'src/ — focus on entry points').",
+    "",
+    "Output JSON now:",
   ].join("\n");
 }
 
+/** Pure parser for the lead's territory plan response. Returns
+ *  Map<agentIndex, territory> on success, null on parse failure.
+ *  Best-effort — strips ```json fences, finds the first {} block.
+ *  Exported for tests. */
+export function parseTerritoryPlan(raw: string): Map<number, string> | null {
+  if (!raw || typeof raw !== "string") return null;
+  let cleaned = raw.trim();
+  const fenceMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  if (fenceMatch) cleaned = fenceMatch[1].trim();
+  const objMatch = cleaned.match(/\{[\s\S]*\}/);
+  if (!objMatch) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(objMatch[0]);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const out = new Map<number, string>();
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    const idx = Number.parseInt(key, 10);
+    if (!Number.isFinite(idx) || idx < 1) continue;
+    if (typeof value !== "string" || value.trim().length === 0) continue;
+    out.set(idx, value.trim());
+  }
+  if (out.size === 0) return null;
+  return out;
+}
+
 // Phase B (Task #98): produce a stable signature of the current top-10
-// ranking by (visits × avgInterest). Uses file names only — small score
-// jitter shouldn't reset the stability window. A delimiter that can't
-// appear in a path keeps the signature unambiguous.
+// ranking. Uses file names only — small score jitter shouldn't reset the
+// stability window. A delimiter that can't appear in a path keeps the
+// signature unambiguous.
+//
+// 2026-05-02 (improvements #4 + #5): now uses confidence-weighted +
+// decay-aware rankingScore. currentRound is optional for back-compat
+// with callers that don't have round context.
 export function computeRankingSignature(
   annotations: ReadonlyMap<string, AnnotationState>,
+  currentRound?: number,
 ): string {
   const ranked = [...annotations.entries()]
-    .map(([file, a]) => ({ file, score: a.visits * a.avgInterest }))
+    .map(([file, a]) => ({ file, score: rankingScore(a, currentRound) }))
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
       return a.file.localeCompare(b.file);

@@ -248,4 +248,23 @@ export type TranscriptEntrySummary =
          *  spawned with skipWarmup OR the warmup result wasn't recorded. */
         warmupMs?: number;
       }>;
+    }
+  // 2026-05-02 (deliverables initiative): per-preset structured output
+  // written to the clone as a markdown file. Every discussion preset
+  // (council, moa, mapreduce, ow, ow-deep, stigmergy, debate-judge)
+  // produces one at end-of-run via shared writeDeliverable. UI renders
+  // the system entry as a "Saved to <filename>" link bubble so the
+  // user can grab a portable artifact (paste into PR, issue, design
+  // doc) instead of scraping the transcript.
+  | {
+      kind: "deliverable";
+      preset: string;
+      /** Basename of the file (no path). UI uses this as the link text. */
+      filename: string;
+      /** Absolute path on disk. Lets the UI offer "open folder" if it wants. */
+      fullPath: string;
+      /** Total bytes — informational, shown as tooltip. */
+      bytes: number;
+      /** Section titles in order, for the bubble's collapsed preview. */
+      sectionTitles: readonly string[];
     };

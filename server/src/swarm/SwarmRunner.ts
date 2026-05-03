@@ -163,6 +163,16 @@ export interface RunConfig {
    */
   autoStretchReflection?: boolean;
   /**
+   * 2026-05-02 (auto-rollback decision #5): opt-in auto-rollback of
+   * commits attributed to criteria that ended at status="unmet" at
+   * end-of-run. When false (default), nothing is rolled back — the
+   * deliverable still surfaces "rollback suggestions" the user can
+   * apply manually. When true, the runner runs `git reset --hard` to
+   * unwind unmet-criterion commits, refusing if there's collateral
+   * (commits from other criteria interleaved). Blackboard-only.
+   */
+  autoRollback?: boolean;
+  /**
    * Task #128: per-commit independent verifier. When true, between
    * critic-accept and disk-write a verifier agent reads the todo +
    * the proposed diff and issues a verdict (verified / partial /
@@ -392,6 +402,12 @@ export interface SwarmRunner {
   // mid-round) so they leave it undefined and get hard-stop.
   drain?(): Promise<void>;
   status(): SwarmStatus;
-  injectUser(text: string): void;
+  // 2026-05-02: opts param threads /api/swarm/say's intent + targetAgent
+  // tags. Optional + back-compat — runners that haven't been updated
+  // ignore opts and treat every injection as the default broadcast steer.
+  injectUser(
+    text: string,
+    opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
+  ): void;
   isRunning(): boolean;
 }

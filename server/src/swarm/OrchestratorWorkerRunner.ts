@@ -12,17 +12,31 @@ import type {
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
+import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
-import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
+import { buildSeedSummary } from "./runSummary.js";
+import { discussionWriteSummary } from "./discussionWriteSummary.js";
+import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
-import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../services/ollamaProxy.js";
+import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
+import { checkBudgetGuards } from "./loopGuards.js";
+import { PlanEmptyDeadLoopGuard } from "./deadLoopGuard.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
-import { runEndReflection } from "./runEndReflection.js";
+// runEndReflection moved into runFinallyHooks (Phase D).
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import { getAgentAddendum } from "../../../shared/src/topology.js";
 import { describeSdkError } from "./sdkError.js";
+import {
+  readDirective,
+  buildDirectiveBlock,
+  pickDeliverableTitle,
+  pickAnswerSectionTitle,
+  pickDeliverableSubtitle,
+  maybeDirectiveSection,
+} from "./directivePromptHelpers.js";
 
 // Orchestrator–worker hierarchy.
 // Agent 1 is the LEAD: it reads the repo, produces a plan assigning one
@@ -69,15 +83,22 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
     };
   }
 
-  injectUser(text: string): void {
+  injectUser(
+    text: string,
+    opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
+  ): void {
+    const intent = opts?.intent ?? "steer";
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "user",
       text,
       ts: Date.now(),
+      intent,
+      ...(opts?.targetAgent ? { targetAgent: opts.targetAgent } : {}),
     };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
+    this.appendSystem(formatChatReceipt(intent, opts?.targetAgent));
   }
 
   isRunning(): boolean {
@@ -161,15 +182,27 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
 
   private async seed(clonePath: string, cfg: RunConfig): Promise<void> {
     const tree = (await this.opts.repos.listTopLevel(clonePath)).slice(0, 200);
-    const seed = [
+    // 2026-05-02 (OW directive lever): the lead's plan becomes
+    // "decompose the directive into worker subtasks" instead of
+    // "tell me about this repo via N lenses". Workers get the
+    // directive as context so off-topic findings can be filtered
+    // honestly (same valve as map-reduce #1).
+    // 2026-05-03 (Phase A): directive block extracted to shared helper.
+    const dirCtx = readDirective(cfg);
+    const lines = [
       `Project clone: ${clonePath}`,
       `Repo: ${cfg.repoUrl}`,
       `Top-level entries: ${tree.join(", ") || "(empty)"}`,
       "",
+      ...buildDirectiveBlock(dirCtx, {
+        framingLines: [
+          "The lead decomposes the directive into worker subtasks; workers execute in parallel toward the directive; lead synthesizes a directive answer at the end.",
+        ],
+      }),
       "Pattern: Orchestrator–worker. Agent 1 is the LEAD; other agents are WORKERS.",
       "Lead will produce a plan (one subtask per worker), workers will execute in parallel with no visibility of peers, then lead will synthesize.",
-    ].join("\n");
-    this.appendSystem(seed, buildSeedSummary(cfg.repoUrl, clonePath, tree));
+    ];
+    this.appendSystem(lines.join("\n"), buildSeedSummary(cfg.repoUrl, clonePath, tree));
   }
 
   private async loop(cfg: RunConfig): Promise<void> {
@@ -181,29 +214,24 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
       if (!lead) throw new Error("lead agent (index 1) did not spawn");
       if (workers.length === 0) throw new Error("no workers spawned");
 
-      // Task #124: snapshot lifetime tokens for budget delta.
+      // 2026-05-03 (Phase B): budget + dead-loop guards extracted to shared helpers.
       const tokenBaseline = snapshotLifetimeTokens();
-      // Task #144: track consecutive empty-plan cycles. Past a small
-      // threshold the lead's prompt context has bloated to the point
-      // the model returns "(empty response)" placeholder for every
-      // plan; further cycles burn wall-clock for no work. Break the
-      // loop instead of grinding through to cfg.rounds.
-      let consecutiveEmptyPlans = 0;
-      const EMPTY_PLAN_BREAK_THRESHOLD = 2;
+      const planEmptyGuard = new PlanEmptyDeadLoopGuard({
+        roleLabel: "lead",
+      });
 
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
-        // Task #124: token-budget cap check.
-        if (tokenBudgetExceeded(tokenBaseline, cfg.tokenBudget)) {
-          this.earlyStopDetail = `token-budget reached (${cfg.tokenBudget?.toLocaleString()} tokens)`;
-          this.appendSystem(`Token budget of ${cfg.tokenBudget?.toLocaleString()} tokens reached at cycle ${r - 1}/${cfg.rounds} — ending run early.`);
-          break;
-        }
-        // Task #137: quota-wall cap check.
-        if (shouldHaltOnQuota()) {
-          const q = tokenTracker.getQuotaState();
-          this.earlyStopDetail = `ollama-quota-exhausted (${q?.statusCode}: ${q?.reason.slice(0, 100)})`;
-          this.appendSystem(`Ollama quota wall hit at cycle ${r - 1}/${cfg.rounds} (${q?.statusCode}) — ending run early.`);
+        const guard = checkBudgetGuards({
+          tokenBaseline,
+          tokenBudget: cfg.tokenBudget,
+          round: r,
+          totalRounds: cfg.rounds,
+          unit: "cycle",
+        });
+        if (guard.halt) {
+          this.earlyStopDetail = guard.earlyStopDetail;
+          this.appendSystem(guard.message ?? "");
           break;
         }
         this.round = r;
@@ -216,7 +244,7 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
           lead,
           r,
           cfg.rounds,
-          buildLeadPlanPrompt(r, cfg.rounds, workers.map((w) => w.index), [...this.transcript]),
+          buildLeadPlanPrompt(r, cfg.rounds, workers.map((w) => w.index), [...this.transcript], cfg.userDirective),
           "plan",
         );
         if (this.stopping) break;
@@ -234,28 +262,22 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
           );
           break;
         }
+        // 2026-05-03 (Phase B): plan-empty guard extracted to shared class.
+        const planHit = planEmptyGuard.recordCycle(plan.assignments);
         if (plan.assignments.length === 0) {
-          consecutiveEmptyPlans++;
           this.appendSystem(
-            `Cycle ${r}: lead produced no parseable assignments — skipping execute phase this cycle. Raw lead output preserved in transcript. (consecutive=${consecutiveEmptyPlans})`,
+            `Cycle ${r}: lead produced no parseable assignments — skipping execute phase this cycle. Raw lead output preserved in transcript. (consecutive=${planHit.consecutive})`,
           );
-          // Task #144: break out of the loop if the lead has gone silent
-          // N cycles in a row. Diagnosed pattern (run b242f7f1 on 2026-04-25):
-          // by cycle 8 nemotron returns "(empty response)" for every plan
-          // due to context bloat from prior cycles' transcript; retry also
-          // returns empty; loop runs to cfg.rounds wasting wall-clock.
-          if (consecutiveEmptyPlans >= EMPTY_PLAN_BREAK_THRESHOLD) {
-            this.earlyStopDetail = `lead-silenced (${consecutiveEmptyPlans} consecutive empty plans)`;
+          if (planHit.tripped) {
+            this.earlyStopDetail = planHit.earlyStopDetail;
             this.appendSystem(
-              `Lead has produced empty plans for ${consecutiveEmptyPlans} consecutive cycles — ending OW early to avoid burning wall-clock on dead loops.`,
+              `Lead has produced empty plans for ${planHit.consecutive} consecutive cycles — ending OW early to avoid burning wall-clock on dead loops.`,
             );
             break;
           }
           continue;
         }
-        // Reset counter on a successful plan — prior empties don't count
-        // against future stalls.
-        consecutiveEmptyPlans = 0;
+        // Counter resets automatically inside recordCycle when assignments.length > 0.
 
         // EXECUTE — workers fire in parallel. Each sees ONLY its assigned
         // subtask + the seed, not the full transcript or peer reports.
@@ -269,7 +291,7 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
         await staggerStart(plan.assignments, (a) => {
           const w = workers.find((x) => x.index === a.agentIndex);
           if (!w) return Promise.resolve();
-          return this.runWorkerTurn(w, r, cfg.rounds, a.subtask, seedSnapshot);
+          return this.runWorkerTurn(w, r, cfg.rounds, a.subtask, seedSnapshot, cfg.userDirective);
         });
         if (this.stopping) break;
 
@@ -281,7 +303,7 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
           lead,
           r,
           cfg.rounds,
-          buildLeadSynthesisPrompt(r, cfg.rounds, [...this.transcript]),
+          buildLeadSynthesisPrompt(r, cfg.rounds, [...this.transcript], cfg.userDirective),
           "synthesis",
         );
       }
@@ -290,26 +312,87 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
       crashMessage = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: crashMessage });
     } finally {
-      // Task #150: end-of-run reflection (lead does it).
-      if (!crashMessage && !this.stopping && cfg.runId) {
-        const lead = this.opts.manager.list().find((a) => a.index === 1);
-        if (lead) {
-          const ctxSummary = `Orchestrator-worker preset · ${cfg.agentCount} agents (1 lead + workers) · ran ${this.round}/${cfg.rounds} cycles${this.earlyStopDetail ? ` · early-stop: ${this.earlyStopDetail}` : ""}`;
-          await runEndReflection({
-            agent: lead, preset: cfg.preset, runId: cfg.runId, clonePath: cfg.localPath,
-            contextSummary: ctxSummary, log: (msg) => this.appendSystem(msg),
-          }).catch(() => {});
-        }
-      }
-      await this.writeSummary(cfg, crashMessage);
-      // Unit 55: auto-killAll on natural completion. Task #68: surface
-      // the kill result in the transcript.
-      if (!this.stopping) {
-        const killResult = await this.opts.manager.killAll();
-        this.appendSystem(formatPortReleaseLine(killResult));
-        this.setPhase("completed");
-      }
+      // 2026-05-02 (deliverables initiative): structured markdown.
+      if (!this.stopping && cfg.runId) await this.writeOwDeliverable(cfg);
+      // 2026-05-03 (Phase D): finally close-out extracted to shared helper.
+      await runDiscussionCloseOut({
+        cfg,
+        crashMessage,
+        stopping: this.stopping,
+        earlyStopDetail: this.earlyStopDetail,
+        round: this.round,
+        currentPhase: this.phase,
+        manager: this.opts.manager,
+        appendSystem: (text) => this.appendSystem(text),
+        setPhase: (p) => this.setPhase(p),
+        writeSummary: () => this.writeSummary(cfg, crashMessage),
+        hooks: {
+          pickReflectionAgent: (m) => m.list().find((a) => a.index === 1) ?? null,
+          buildReflectionContext: (s) =>
+            `Orchestrator-worker preset · ${cfg.agentCount} agents (1 lead + workers) · ran ${s.round}/${cfg.rounds} cycles${s.earlyStopDetail ? ` · early-stop: ${s.earlyStopDetail}` : ""}`,
+        },
+      });
     }
+  }
+
+  // 2026-05-02 (deliverables initiative): orchestrator-worker
+  // structured artifact. Sections: lead's plan / per-worker findings /
+  // lead's synthesis. Lead is index 1; workers are 2..N.
+  private async writeOwDeliverable(cfg: RunConfig): Promise<void> {
+    if (!cfg.runId) return;
+    // 2026-05-03 (Phase A): directive helpers extracted to shared module.
+    const dirCtx = readDirective(cfg);
+    const leadEntries = this.transcript.filter(
+      (e) => e.role === "agent" && e.agentIndex === 1,
+    );
+    const workerEntries = this.transcript.filter(
+      (e) => e.role === "agent" && e.agentIndex !== undefined && e.agentIndex !== 1,
+    );
+    // First lead entry = the plan; last lead entry = the synthesis.
+    const planEntry = leadEntries[0]?.text?.trim() || "_(no plan captured)_";
+    const synthesisEntry = leadEntries[leadEntries.length - 1]?.text?.trim() || "_(no synthesis captured)_";
+    const sections: Array<{ title: string; body: string }> = [];
+    const directiveSection = maybeDirectiveSection(dirCtx);
+    if (directiveSection) sections.push(directiveSection);
+    sections.push(
+      {
+        title: pickAnswerSectionTitle(dirCtx, {
+          withDirective: "Answer to directive",
+          withoutDirective: "Final synthesis (lead)",
+        }),
+        body: synthesisEntry,
+      },
+      { title: "Initial plan (lead)", body: planEntry },
+      {
+        title: `Per-worker findings (${workerEntries.length} entries)`,
+        body: workerEntries.length > 0
+          ? workerEntries.map((e) => `### Worker ${e.agentIndex}\n\n${e.text.trim()}`).join("\n\n")
+          : "_(no worker findings)_",
+      },
+    );
+    // 2026-05-02 (quality levers #1+#3): augment with critic + next-actions.
+    const lead = this.opts.manager.list().find((a) => a.index === 1) ?? null;
+    const augmented = await runQualityPasses({
+      baseSections: sections,
+      rubric: null,
+      criticAgent: lead,
+      manager: this.opts.manager,
+    });
+    const subtitleBase = `1 lead + ${cfg.agentCount - 1} worker${cfg.agentCount - 1 === 1 ? "" : "s"} across ${this.round}/${cfg.rounds} cycle${cfg.rounds === 1 ? "" : "s"}${this.earlyStopDetail ? " · early-stop" : ""}`;
+    writeDeliverableAndEmit(
+      {
+        preset: "orchestrator-worker",
+        runId: cfg.runId,
+        clonePath: cfg.localPath,
+        title: pickDeliverableTitle(dirCtx, {
+          withDirective: "Orchestrator–worker: directive answer",
+          withoutDirective: "Orchestrator–worker report",
+        }),
+        subtitle: pickDeliverableSubtitle(dirCtx, subtitleBase),
+        sections: augmented,
+      },
+      { transcript: this.transcript, emit: this.opts.emit },
+    );
   }
 
   // Unit 33: shared summary writer pattern — see RoundRobinRunner.
@@ -317,47 +400,20 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
     if (this.summaryWritten) return;
     this.summaryWritten = true;
     if (this.startedAt === undefined) return;
-    let gitStatus = { porcelain: "", changedFiles: 0 };
-    try {
-      gitStatus = await this.opts.repos.gitStatus(cfg.localPath);
-    } catch {
-      // best-effort
-    }
-    const summary = buildDiscussionSummary({
-      config: {
-        repoUrl: cfg.repoUrl,
-        localPath: cfg.localPath,
-        preset: cfg.preset,
-        model: cfg.model,
-        runId: cfg.runId,
-      },
-      agentCount: cfg.agentCount,
-      rounds: cfg.rounds,
-      startedAt: this.startedAt,
-      endedAt: Date.now(),
+    // 2026-05-03 (Phase C): writeSummary body extracted to shared helper.
+    await discussionWriteSummary({
+      cfg,
       crashMessage,
       stopping: this.stopping,
+      startedAt: this.startedAt,
       earlyStopDetail: this.earlyStopDetail,
-      filesChanged: gitStatus.changedFiles,
-      finalGitStatus: gitStatus.porcelain,
+      agentCount: cfg.agentCount,
       agents: this.stats.buildPerAgentStats(),
       transcript: this.transcript,
-      // Phase 4a of #243: topology passthrough.
       topology: cfg.topology,
+      repos: this.opts.repos,
+      appendSystem: (text, summary) => this.appendSystem(text, summary),
     });
-    try {
-      await writeRunSummary(cfg.localPath, summary);
-      this.appendSystem(
-        formatRunFinishedBanner(summary),
-        buildRunFinishedSummary(summary),
-      );
-      this.appendSystem(
-        `Wrote run summary (stopReason=${summary.stopReason}, wallClockMs=${summary.wallClockMs}, files=${summary.filesChanged}).`,
-      );
-    } catch (writeErr) {
-      const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
-      this.appendSystem(`Failed to write run summary (${msg})`);
-    }
   }
 
   private async runLeadTurn(
@@ -376,8 +432,11 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
     totalRounds: number,
     subtask: string,
     seedSnapshot: readonly TranscriptEntry[],
+    userDirective?: string,
   ): Promise<void> {
-    const prompt = buildWorkerPrompt(agent.index, round, totalRounds, subtask, seedSnapshot);
+    // 2026-05-02 (chat lever #3): per-worker @mention filter.
+    const visibleSeed = seedSnapshot.filter((e) => userEntryVisibleTo(e, agent.id));
+    const prompt = buildWorkerPrompt(agent.index, round, totalRounds, subtask, visibleSeed, userDirective);
     await this.runAgent(agent, round, totalRounds, prompt, "worker");
   }
 
@@ -615,6 +674,7 @@ export function buildLeadPlanPrompt(
   totalRounds: number,
   workerIndices: readonly number[],
   transcript: readonly TranscriptEntry[],
+  userDirective?: string,
 ): string {
   const transcriptText = transcript
     .map((e) => {
@@ -626,11 +686,28 @@ export function buildLeadPlanPrompt(
 
   const workerList = workerIndices.map((i) => `Agent ${i}`).join(", ");
 
+  // 2026-05-02 (OW directive lever): when a directive is set the
+  // plan must DECOMPOSE the directive into worker subtasks. Each
+  // subtask should advance the directive, not just describe a slice
+  // of the repo. The "rules for good subtasks" guidance is augmented
+  // accordingly.
+  // 2026-05-03 (Phase A): directive helpers extracted to shared module.
+  const dirCtx = readDirective({ userDirective });
+  const directiveBlock = buildDirectiveBlock(dirCtx, {
+    labelSuffix: "(the question this OW swarm is answering)",
+    framingLines: [
+      "Your job is to DECOMPOSE the directive into worker subtasks. Each subtask should produce a piece of the answer (a finding, a proposal, an investigation). Do NOT dispatch generic 'inspect this dir' subtasks unless that inspection directly bears on the directive.",
+    ],
+  });
+  // Local alias for branches further down.
+  const directive = dirCtx.directive;
+
   return [
     `You are the LEAD agent in an orchestrator–worker swarm inspecting a cloned GitHub project.`,
     `This is planning phase of cycle ${round}/${totalRounds}.`,
     `Your workers are: ${workerList}. Assign ONE subtask to each — workers execute in parallel with no visibility of each other.`,
     "",
+    ...directiveBlock,
     // Task #83 (2026-04-25): repo-grounding for subtask quality.
     // Mirror of the planner-grounding rule from #69 (blackboard).
     // Lead frequently dispatches workers to inspect things that
@@ -658,12 +735,16 @@ export function buildLeadPlanPrompt(
     "",
     "Rules for good subtasks:",
     "- Each subtask is self-contained (the worker sees only its subtask + the seed; no peer context, no your planning text).",
-    "- Subtasks should DIVIDE LABOR: e.g. \"inspect src/foo/\", \"read README and package.json\", \"inspect src/__tests__/ and note coverage\", \"audit dependencies in package.json\". Avoid duplicate assignments. Reference REAL paths you verified above.",
+    directive.length > 0
+      ? "- Subtasks DECOMPOSE THE DIRECTIVE: each one investigates / proposes / verifies a different piece of the answer. Cite the real paths you verified above. Examples (for a 'refactor X' directive): \"map every call site of X.foo() and report file:line list\", \"propose the new API shape for X based on src/x.ts\", \"identify tests that cover X today and gaps that need new ones\"."
+      : "- Subtasks should DIVIDE LABOR: e.g. \"inspect src/foo/\", \"read README and package.json\", \"inspect src/__tests__/ and note coverage\", \"audit dependencies in package.json\". Avoid duplicate assignments. Reference REAL paths you verified above.",
     "- Keep subtask text under ~200 chars. Be specific about what to report back.",
     "- One assignment per worker. Do NOT assign more than one subtask to the same agent.",
     round > 1
       ? "- This is a later cycle: you have prior cycle syntheses in the transcript. Use them to refine — dispatch workers to fill gaps the prior synthesis surfaced."
-      : "- This is cycle 1: start with broad coverage of the repo. Verify the top-level structure with `list .` first so your dispatched paths are real.",
+      : directive.length > 0
+        ? "- This is cycle 1: dispatch workers to gather the FOUNDATIONAL evidence the directive needs answered. Verify the top-level structure with `list .` first so your dispatched paths are real."
+        : "- This is cycle 1: start with broad coverage of the repo. Verify the top-level structure with `list .` first so your dispatched paths are real.",
     "",
     "=== TRANSCRIPT SO FAR ===",
     transcriptText || "(empty — this is the first planning step)",
@@ -677,15 +758,32 @@ export function buildWorkerPrompt(
   totalRounds: number,
   subtask: string,
   seedSnapshot: readonly TranscriptEntry[],
+  userDirective?: string,
 ): string {
   const seedText = seedSnapshot
     .map((e) => `[SYSTEM] ${e.text}`)
     .join("\n\n");
 
+  // 2026-05-02 (OW directive lever): worker sees the directive as
+  // context for WHY their subtask matters. Same anti-hallucination
+  // valve as map-reduce: if the worker concludes the subtask doesn't
+  // bear on the directive after investigation, that's a valid honest
+  // answer — better than inventing relevance to seem useful.
+  // 2026-05-03 (Phase A): directive helpers extracted to shared module.
+  const dirCtx = readDirective({ userDirective });
+  const directiveBlock = buildDirectiveBlock(dirCtx, {
+    labelSuffix: "(the question this OW swarm is answering)",
+    framingLines: [
+      "Your subtask below is the lead's decomposition of one piece of the directive. Execute it, then report findings RELEVANT TO THE DIRECTIVE.",
+      "**\"NO RELEVANT FINDINGS\" IS A VALID ANSWER.** If your subtask turns out to have no bearing on the directive (the lead may have over-decomposed), say so honestly: `My subtask <X> turned up no findings relevant to the directive: <one-line why>`. Do NOT invent relevance to seem useful.",
+    ],
+  });
+
   return [
     `You are Worker Agent ${workerIndex} in an orchestrator–worker swarm.`,
     `This is cycle ${round}/${totalRounds}. You cannot see the lead's full plan or any peer worker's output — that is deliberate, so your report is independent.`,
     "",
+    ...directiveBlock,
     "Your working directory IS the project clone — use file-read, grep, and find-files tools to inspect it.",
     "Respond with a CONCRETE report (under ~300 words) of what you found, citing file paths (e.g. `src/foo.ts:42`) where relevant.",
     "Do NOT try to coordinate with other workers or ask for more scope — just execute your subtask and report.",
@@ -705,6 +803,7 @@ export function buildLeadSynthesisPrompt(
   round: number,
   totalRounds: number,
   transcript: readonly TranscriptEntry[],
+  userDirective?: string,
 ): string {
   const transcriptText = transcript
     .map((e) => {
@@ -714,6 +813,41 @@ export function buildLeadSynthesisPrompt(
     })
     .join("\n\n");
 
+  // 2026-05-03 (Phase A): directive helpers extracted to shared module.
+  const dirCtx = readDirective({ userDirective });
+  const isFinal = round === totalRounds;
+
+  // 2026-05-02 (OW directive lever): when a directive is set the
+  // synthesis answers the directive directly using worker findings as
+  // evidence, instead of producing the generic "what is this project"
+  // recap.
+  if (dirCtx.hasDirective) {
+    const closing = isFinal
+      ? "4. **Final recommendation** — your one concrete next step toward the directive. Cite worker findings + file paths."
+      : "4. **Coverage gap toward the directive** — name one piece the workers couldn't answer that next cycle's plan should target.";
+    return [
+      `You are the LEAD agent in an orchestrator–worker swarm.`,
+      `This is the synthesis phase of cycle ${round}/${totalRounds}. Your workers have just reported back on the subtasks you assigned.`,
+      "",
+      ...buildDirectiveBlock(dirCtx, {
+        labelSuffix: "(the question this OW swarm is answering)",
+      }),
+      "Read every worker report in the transcript below. Produce a synthesis (under ~500 words) structured as:",
+      "1. **Answer to directive** — direct response built from worker findings. Cite the workers + file paths that ground each claim.",
+      "2. **Supporting evidence** — list the specific worker findings that make the answer hold up.",
+      "3. **Tensions / open questions** — places where worker reports disagreed or couldn't answer. Be honest about confidence.",
+      closing,
+      "",
+      "Cite workers by index (e.g. \"Agent 3 noted…\") when referencing their findings. Do NOT invent evidence not in a worker report — if the directive can't be answered from what workers gathered, say so explicitly.",
+      "",
+      "=== TRANSCRIPT ===",
+      transcriptText,
+      "=== END TRANSCRIPT ===",
+      "",
+      "Now write your synthesis.",
+    ].join("\n");
+  }
+
   return [
     `You are the LEAD agent in an orchestrator–worker swarm.`,
     `This is the synthesis phase of cycle ${round}/${totalRounds}. Your workers have just reported back on the subtasks you assigned.`,
@@ -722,9 +856,9 @@ export function buildLeadSynthesisPrompt(
     "1. Names what the project is and who it seems to be for.",
     "2. Summarizes what's working and what's missing, drawing from worker reports.",
     "3. Proposes one concrete next action the swarm should take, with a rationale citing worker findings.",
-    round < totalRounds
-      ? "4. Notes one gap or inconsistency across worker reports that a future cycle should investigate."
-      : "4. Closes with a final recommendation now that this is the last cycle.",
+    isFinal
+      ? "4. Closes with a final recommendation now that this is the last cycle."
+      : "4. Notes one gap or inconsistency across worker reports that a future cycle should investigate.",
     "",
     "Cite workers by index (e.g. \"Agent 3 noted…\") when referencing their findings. Do not re-invent evidence not in a worker report.",
     "",

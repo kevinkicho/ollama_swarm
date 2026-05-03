@@ -4,6 +4,8 @@ import {
   parseAnnotation,
   buildExplorerPrompt,
   formatAnnotations,
+  rankingScore,
+  PHEROMONE_DECAY_PER_ROUND,
   type AnnotationState,
 } from "./StigmergyRunner.js";
 
@@ -161,5 +163,214 @@ describe("buildExplorerPrompt — pheromone visibility", () => {
     });
     assert.ok(prompt.includes("You are Agent 5"));
     assert.ok(prompt.includes("Now respond as Agent 5."));
+  });
+});
+
+describe("rankingScore — confidence-weighted + decay-aware (improvements #4 + #5)", () => {
+  function annotation(overrides: Partial<AnnotationState>): AnnotationState {
+    return {
+      visits: 1,
+      avgInterest: 5,
+      avgConfidence: 5,
+      latestNote: "x",
+      ...overrides,
+    };
+  }
+
+  it("base formula = visits × interest × (confidence/10) — no decay when round absent", () => {
+    const a = annotation({ visits: 2, avgInterest: 10, avgConfidence: 10 });
+    // 2 × 10 × 1 = 20
+    assert.equal(rankingScore(a), 20);
+  });
+
+  it("low-confidence high-interest ranks BELOW high-confidence lower-interest", () => {
+    const lowConf = annotation({ visits: 1, avgInterest: 10, avgConfidence: 2 });
+    const highConf = annotation({ visits: 1, avgInterest: 8, avgConfidence: 9 });
+    // lowConf:  1 × 10 × 0.2 = 2.0
+    // highConf: 1 ×  8 × 0.9 = 7.2
+    assert.ok(rankingScore(highConf) > rankingScore(lowConf));
+  });
+
+  it("decay applies when currentRound > lastVisitedRound", () => {
+    const stale = annotation({ visits: 1, avgInterest: 10, avgConfidence: 10, lastVisitedRound: 1 });
+    const fresh = annotation({ visits: 1, avgInterest: 10, avgConfidence: 10, lastVisitedRound: 3 });
+    const currentRound = 3;
+    // stale: 10 × decay^2 = 10 × 0.49 = 4.9
+    // fresh: 10 × decay^0 = 10
+    assert.ok(rankingScore(fresh, currentRound) > rankingScore(stale, currentRound));
+    assert.equal(rankingScore(stale, currentRound), 10 * PHEROMONE_DECAY_PER_ROUND ** 2);
+  });
+
+  it("no decay when currentRound === lastVisitedRound (just-visited)", () => {
+    const a = annotation({ visits: 1, avgInterest: 10, avgConfidence: 10, lastVisitedRound: 3 });
+    assert.equal(rankingScore(a, 3), 10);
+  });
+
+  it("no decay when lastVisitedRound is missing (back-compat)", () => {
+    const a = annotation({ visits: 1, avgInterest: 10, avgConfidence: 10 });
+    // Should NOT decay even with currentRound set, because lastVisitedRound is undefined
+    assert.equal(rankingScore(a, 5), 10);
+  });
+
+  it("multiple visits compound in score (visits multiplier)", () => {
+    const single = annotation({ visits: 1, avgInterest: 5, avgConfidence: 5 });
+    const triple = annotation({ visits: 3, avgInterest: 5, avgConfidence: 5 });
+    assert.equal(rankingScore(triple), 3 * rankingScore(single));
+  });
+});
+
+// 2026-05-02 (improvement #2): territory-plan prompt + parser tests.
+import { buildTerritoryPlanPrompt, parseTerritoryPlan } from "./StigmergyRunner.js";
+
+describe("buildTerritoryPlanPrompt", () => {
+  it("includes directive, candidate paths, and explorer count", () => {
+    const p = buildTerritoryPlanPrompt({
+      directive: "audit auth flow",
+      candidatePaths: ["src/", "tests/"],
+      explorerCount: 3,
+    });
+    assert.match(p, /audit auth flow/);
+    assert.match(p, /src\/, tests\//);
+    assert.match(p, /EXPLORER COUNT: 3/);
+  });
+
+  it("requires JSON output with one key per explorer index", () => {
+    const p = buildTerritoryPlanPrompt({
+      directive: "x",
+      candidatePaths: [],
+      explorerCount: 2,
+    });
+    assert.match(p, /STRICT JSON/);
+    assert.match(p, /"1":/);
+    assert.match(p, /"2":/);
+  });
+
+  it("frames assignment as a SUGGESTION, not a constraint", () => {
+    const p = buildTerritoryPlanPrompt({
+      directive: "x",
+      candidatePaths: [],
+      explorerCount: 2,
+    });
+    assert.match(p, /SUGGESTION/);
+    assert.match(p, /can wander/);
+  });
+
+  it("instructs to distribute coverage broadly", () => {
+    const p = buildTerritoryPlanPrompt({
+      directive: "x",
+      candidatePaths: [],
+      explorerCount: 3,
+    });
+    assert.match(p, /distribute coverage broadly/i);
+    assert.match(p, /avoid sending two explorers to the same dir/i);
+  });
+});
+
+describe("parseTerritoryPlan", () => {
+  it("parses a clean JSON response", () => {
+    const r = parseTerritoryPlan('{"1":"src/auth/","2":"src/api/","3":"tests/"}');
+    assert.ok(r);
+    assert.equal(r!.size, 3);
+    assert.equal(r!.get(1), "src/auth/");
+    assert.equal(r!.get(2), "src/api/");
+    assert.equal(r!.get(3), "tests/");
+  });
+
+  it("strips ```json fences", () => {
+    const r = parseTerritoryPlan('```json\n{"1":"x","2":"y"}\n```');
+    assert.ok(r);
+    assert.equal(r!.size, 2);
+  });
+
+  it("extracts JSON from surrounding prose", () => {
+    const r = parseTerritoryPlan('Here is my plan:\n{"1":"a","2":"b"}\nLet me know!');
+    assert.ok(r);
+    assert.equal(r!.size, 2);
+  });
+
+  it("ignores non-numeric keys", () => {
+    const r = parseTerritoryPlan('{"1":"a","x":"b","2":"c"}');
+    assert.ok(r);
+    assert.equal(r!.size, 2);
+    assert.equal(r!.get(1), "a");
+    assert.equal(r!.get(2), "c");
+  });
+
+  it("ignores empty/whitespace values", () => {
+    const r = parseTerritoryPlan('{"1":"x","2":"","3":"   "}');
+    assert.ok(r);
+    assert.equal(r!.size, 1);
+  });
+
+  it("returns null on malformed JSON", () => {
+    assert.equal(parseTerritoryPlan("not json"), null);
+    assert.equal(parseTerritoryPlan(""), null);
+    assert.equal(parseTerritoryPlan("{not valid"), null);
+  });
+
+  it("returns null on JSON array (not an object)", () => {
+    assert.equal(parseTerritoryPlan('["a","b"]'), null);
+  });
+
+  it("returns null when no valid entries present", () => {
+    assert.equal(parseTerritoryPlan('{"foo":"bar"}'), null);
+    assert.equal(parseTerritoryPlan('{"1":""}'), null);
+  });
+});
+
+// 2026-05-02 (improvement #1): explorer prompt rendering with new fields.
+describe("buildExplorerPrompt — territory + recently-active (improvements #1 + #2)", () => {
+  it("renders the YOUR ASSIGNED TERRITORY block when territory is set", () => {
+    const prompt = buildExplorerPrompt({
+      agentIndex: 2,
+      round: 1,
+      totalRounds: 3,
+      candidatePaths: [],
+      annotations: new Map(),
+      territory: "src/auth/ — focus on the login flow",
+    });
+    assert.match(prompt, /YOUR ASSIGNED TERRITORY/);
+    assert.match(prompt, /focus on the login flow/);
+    assert.match(prompt, /SUGGESTION/);
+  });
+
+  it("OMITS the territory block when not set", () => {
+    const prompt = buildExplorerPrompt({
+      agentIndex: 1,
+      round: 1,
+      totalRounds: 1,
+      candidatePaths: [],
+      annotations: new Map(),
+    });
+    assert.doesNotMatch(prompt, /YOUR ASSIGNED TERRITORY/);
+  });
+
+  it("renders the RECENTLY ACTIVE block when peer activity exists", () => {
+    const prompt = buildExplorerPrompt({
+      agentIndex: 2,
+      round: 2,
+      totalRounds: 3,
+      candidatePaths: [],
+      annotations: new Map(),
+      recentlyActive: [
+        { file: "src/auth.ts", round: 1, note: "complex retry logic" },
+        { file: "src/log.ts", round: 1, note: "trivial wrapper" },
+      ],
+    });
+    assert.match(prompt, /RECENTLY ACTIVE/);
+    assert.match(prompt, /src\/auth\.ts \(round 1\): complex retry logic/);
+    assert.match(prompt, /src\/log\.ts \(round 1\): trivial wrapper/);
+    assert.match(prompt, /VALIDATE\/REFUTE the recent annotations OR seek UNEXPLORED ground/);
+  });
+
+  it("OMITS the RECENTLY ACTIVE block when no peer activity (round 1)", () => {
+    const prompt = buildExplorerPrompt({
+      agentIndex: 1,
+      round: 1,
+      totalRounds: 3,
+      candidatePaths: [],
+      annotations: new Map(),
+    });
+    assert.doesNotMatch(prompt, /RECENTLY ACTIVE/);
   });
 });

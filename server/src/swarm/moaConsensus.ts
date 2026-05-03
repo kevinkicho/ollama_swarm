@@ -36,6 +36,34 @@ export interface ConvergenceVerdict {
   threshold: number;
 }
 
+/** 2026-05-02 (matrix row #5): per-task-class default thresholds.
+ *  Different task shapes warrant different convergence thresholds —
+ *  analysis tasks SHOULD converge fast (proposers reading the same
+ *  README will land on similar audits); debate tasks SHOULD resist
+ *  convergence (the whole point is to surface tradeoffs, not collapse
+ *  to one view). The runner picks a default based on the rubric's
+ *  deliverableShape; user-supplied moaConvergenceThreshold always wins. */
+const TASK_CLASS_THRESHOLDS: Record<string, number> = {
+  analysis: 0.7,    // README audits, code reviews — fast convergence is OK
+  decision: 0.4,    // Express vs Fastify — should NOT collapse early
+  debate: 0.4,      // adversarial framing — keep tension alive
+  report: 0.7,      // coverage maps, walkthroughs — converge naturally
+  walkthrough: 0.7,
+  exploration: 0.5, // novel ideas — middle ground
+};
+
+/** Pick a convergence threshold from the deliverable shape descriptor.
+ *  Falls back to 0.7 (the historical default) when no class matches.
+ *  Pure — exported for tests. */
+export function thresholdForDeliverableShape(shape: string | undefined): number {
+  if (!shape) return 0.7;
+  const lower = shape.toLowerCase();
+  for (const [taskClass, threshold] of Object.entries(TASK_CLASS_THRESHOLDS)) {
+    if (lower.includes(taskClass)) return threshold;
+  }
+  return 0.7;
+}
+
 /** Decide whether round N synthesis converges with round N-1. Default
  *  threshold 0.7 — empirically MoA rounds 2+ usually settle here when
  *  the proposers and aggregator agree. */
@@ -64,6 +92,80 @@ export interface CentralVerdict {
   meanSimilarity: number;
   /** Per-candidate mean similarity, useful for diagnostics. */
   perCandidateMean: number[];
+}
+
+// 2026-05-02 (issue #1 fix): challenger substantiveness scoring.
+// The challenger proposer (matrix row #2) is auto-designated as the
+// last proposer in the round. Without this metric we can't tell
+// whether the challenger added meaningful dissent OR just manufactured
+// disagreement to comply with the red-team prompt.
+//
+// Heuristic: count tokens in the challenger's draft that don't appear
+// in any other proposer's draft (the challenger's UNIQUE contribution),
+// then check how many of those made it into the synthesis (the
+// aggregator's WEIGHTING of that contribution).
+//
+//   substantiveness = |challengerUnique ∩ synthesisTokens| / |challengerUnique|
+//
+// Range [0, 1]. Higher = more challenger contribution survived the
+// aggregation. Pure — exported for tests.
+//
+// Calibration:
+//   ≥ 0.30 — substantive (challenger raised real points the synthesis kept)
+//   0.10–0.30 — marginal (some points kept, mostly discarded)
+//   < 0.10 — noise (challenger contributed nothing the aggregator weighted)
+//
+// Returns null when |challengerUnique| === 0 (challenger said the same
+// things as peers — neither substantive nor noise, just redundant).
+export interface ChallengerSubstantiveness {
+  /** [0, 1] ratio; null when no unique contribution exists. */
+  ratio: number | null;
+  /** Bucket for at-a-glance reading. */
+  bucket: "substantive" | "marginal" | "noise" | "redundant";
+  /** Diagnostics. */
+  uniqueTokenCount: number;
+  incorporatedTokenCount: number;
+}
+
+export function scoreChallengerSubstantiveness(input: {
+  challengerDraft: string;
+  otherDrafts: readonly string[];
+  synthesis: string;
+}): ChallengerSubstantiveness {
+  const challengerTokens = tokenize(input.challengerDraft);
+  if (challengerTokens.size === 0) {
+    return { ratio: null, bucket: "redundant", uniqueTokenCount: 0, incorporatedTokenCount: 0 };
+  }
+  // Union of all OTHER proposers' tokens.
+  const otherTokens = new Set<string>();
+  for (const draft of input.otherDrafts) {
+    for (const t of tokenize(draft)) otherTokens.add(t);
+  }
+  // Tokens unique to the challenger (in challenger but not in any other).
+  const uniqueToChallenger = new Set<string>();
+  for (const t of challengerTokens) {
+    if (!otherTokens.has(t)) uniqueToChallenger.add(t);
+  }
+  if (uniqueToChallenger.size === 0) {
+    return { ratio: null, bucket: "redundant", uniqueTokenCount: 0, incorporatedTokenCount: 0 };
+  }
+  // Of those unique tokens, how many made it into the synthesis?
+  const synthesisTokens = tokenize(input.synthesis);
+  let incorporated = 0;
+  for (const t of uniqueToChallenger) {
+    if (synthesisTokens.has(t)) incorporated += 1;
+  }
+  const ratio = incorporated / uniqueToChallenger.size;
+  let bucket: ChallengerSubstantiveness["bucket"];
+  if (ratio >= 0.3) bucket = "substantive";
+  else if (ratio >= 0.1) bucket = "marginal";
+  else bucket = "noise";
+  return {
+    ratio,
+    bucket,
+    uniqueTokenCount: uniqueToChallenger.size,
+    incorporatedTokenCount: incorporated,
+  };
 }
 
 export function pickMostCentralAggregator(candidates: readonly string[]): CentralVerdict {

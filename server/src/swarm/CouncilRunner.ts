@@ -13,16 +13,36 @@ import type {
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
-import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
+import { buildSeedSummary } from "./runSummary.js";
+import { discussionWriteSummary } from "./discussionWriteSummary.js";
+import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
-import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../services/ollamaProxy.js";
+import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
+import { checkBudgetGuards } from "./loopGuards.js";
+import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { staggerStart } from "./staggerStart.js";
-import { runEndReflection } from "./runEndReflection.js";
+// runEndReflection moved into runFinallyHooks (Phase D).
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import { getAgentAddendum } from "../../../shared/src/topology.js";
 import { describeSdkError } from "./sdkError.js";
+import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
+import { writeDeliverable, runQualityPasses } from "./deliverable.js";
+import { deriveRubric, type DerivedRubric } from "./rubricPrePass.js";
+import {
+  buildCouncilPositionsSection,
+  getLastPositionForAgent,
+} from "./councilPosition.js";
+import {
+  readDirective,
+  buildDirectiveBlock,
+  pickDeliverableTitle,
+  pickAnswerSectionTitle,
+  pickDeliverableSubtitle,
+  maybeDirectiveSection,
+} from "./directivePromptHelpers.js";
+import { parseConvergenceSignal } from "./convergenceSignal.js";
 
 // Council / parallel drafts + reconcile.
 // Round 1: every agent drafts independently. Each agent's prompt contains
@@ -49,6 +69,10 @@ export class CouncilRunner implements SwarmRunner {
   // Phase B (Task #99): set when the midpoint convergence check
   // returns "high"; promoted to stopReason="early-stop" by writeSummary.
   private earlyStopDetail?: string;
+  // 2026-05-02 (quality lever #2): rubric derived at run-start via
+  // deriveRubric. Stored so writeCouncilDeliverable can bake it into
+  // the deliverable AND pass it to the critic pass.
+  private derivedRubric: DerivedRubric | null = null;
 
   constructor(private readonly opts: RunnerOpts) {}
 
@@ -66,15 +90,22 @@ export class CouncilRunner implements SwarmRunner {
     };
   }
 
-  injectUser(text: string): void {
+  injectUser(
+    text: string,
+    opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
+  ): void {
+    const intent = opts?.intent ?? "steer";
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "user",
       text,
       ts: Date.now(),
+      intent,
+      ...(opts?.targetAgent ? { targetAgent: opts.targetAgent } : {}),
     };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
+    this.appendSystem(formatChatReceipt(intent, opts?.targetAgent));
   }
 
   isRunning(): boolean {
@@ -143,6 +174,24 @@ export class CouncilRunner implements SwarmRunner {
     this.setPhase("seeding");
     await this.seed(destPath, cfg);
 
+    // 2026-05-02 (quality lever #2): derive a per-run rubric from the
+    // user directive BEFORE the main loop. Lead agent (index 1) does
+    // the derivation; result is stored for the deliverable + critic
+    // pass at run-end. Best-effort — failure falls back to DEFAULT_RUBRIC
+    // so the loop always proceeds.
+    const lead = ready[0];
+    if (lead && cfg.userDirective) {
+      this.appendSystem(`Deriving success rubric from directive (lever #2)…`);
+      this.derivedRubric = await deriveRubric({
+        agent: lead,
+        manager: this.opts.manager,
+        directive: cfg.userDirective,
+      });
+      this.appendSystem(
+        `Rubric derived: ${this.derivedRubric.criteria.length} criteria, shape "${this.derivedRubric.deliverableShape}".`,
+      );
+    }
+
     this.setPhase("discussing");
     this.startedAt = Date.now();
     void this.loop(cfg);
@@ -157,17 +206,29 @@ export class CouncilRunner implements SwarmRunner {
 
   private async seed(clonePath: string, cfg: RunConfig): Promise<void> {
     const tree = (await this.opts.repos.listTopLevel(clonePath)).slice(0, 200);
-    const seed = [
+    // 2026-05-02 (council improvement #1): user directive surfaces
+    // at the TOP of the seed when set. Council was already deriving
+    // a rubric from cfg.userDirective at run-start (lever #2 of the
+    // deliverables initiative) but the agents themselves were
+    // directive-blind in their drafts. Now every drafter sees it.
+    // 2026-05-03 (Phase A): directive block extracted to shared helper.
+    const dirCtx = readDirective(cfg);
+    const lines = [
       `Project clone: ${clonePath}`,
       `Repo: ${cfg.repoUrl}`,
       `Top-level entries: ${tree.join(", ") || "(empty)"}`,
       "",
+      ...buildDirectiveBlock(dirCtx, {
+        framingLines: [
+          "Every drafter answers the directive above. Round 1 = independent drafts (peers hidden); Round 2+ = reveal and revise. Synthesis at the end consolidates into a single answer with a minority report when dissent persists.",
+        ],
+      }),
       "Use your file-read / grep / find tools to actually inspect this repo — start with README.md if present.",
-    ].join("\n");
+    ];
     // Task #72: structured payload so the web renders the seed
     // announce as a grid (definition list + collapsible top-level
     // file list) instead of the wall-of-text comma-separated line.
-    this.appendSystem(seed, buildSeedSummary(cfg.repoUrl, clonePath, tree));
+    this.appendSystem(lines.join("\n"), buildSeedSummary(cfg.repoUrl, clonePath, tree));
   }
 
   private async loop(cfg: RunConfig): Promise<void> {
@@ -179,30 +240,29 @@ export class CouncilRunner implements SwarmRunner {
       // a midpoint check IS the loop end.
       const earlyCheckRound = cfg.rounds >= 4 ? Math.ceil(cfg.rounds / 2) : 0;
       // Task #146: dead-loop guard (mirrors #144).
-      let consecutiveEmptyRounds = 0;
-      const EMPTY_ROUND_BREAK_THRESHOLD = 2;
+      // 2026-05-03 (Phase B): dead-loop guard extracted to shared class.
+      const deadLoopGuard = new OutputEmptyDeadLoopGuard({
+        roleLabel: "drafters",
+        unit: "round",
+      });
 
       // Task #124: snapshot lifetime tokens at run start; budget
       // checks compare delta vs cfg.tokenBudget.
+      // 2026-05-03 (Phase B): budget + quota guards extracted to shared helper.
       const tokenBaseline = snapshotLifetimeTokens();
 
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
-        // Task #124: token-budget check before each round. Halts the
-        // run with stopReason="early-stop" + a clear cap message
-        // when consumption exceeds the user-supplied budget.
-        if (tokenBudgetExceeded(tokenBaseline, cfg.tokenBudget)) {
-          this.earlyStopDetail = `token-budget reached (${cfg.tokenBudget?.toLocaleString()} tokens)`;
-          this.appendSystem(`Token budget of ${cfg.tokenBudget?.toLocaleString()} tokens reached at round ${r - 1}/${cfg.rounds} — ending run early.`);
-          break;
-        }
-        // Task #137: quota-wall cap check. Independent of #124's token-
-        // budget — this fires when UPSTREAM Ollama returns a quota /
-        // 429 response, regardless of where our local budget stands.
-        if (shouldHaltOnQuota()) {
-          const q = tokenTracker.getQuotaState();
-          this.earlyStopDetail = `ollama-quota-exhausted (${q?.statusCode}: ${q?.reason.slice(0, 100)})`;
-          this.appendSystem(`Ollama quota wall hit at round ${r - 1}/${cfg.rounds} (${q?.statusCode}) — ending run early.`);
+        const guard = checkBudgetGuards({
+          tokenBaseline,
+          tokenBudget: cfg.tokenBudget,
+          round: r,
+          totalRounds: cfg.rounds,
+          unit: "round",
+        });
+        if (guard.halt) {
+          this.earlyStopDetail = guard.earlyStopDetail;
+          this.appendSystem(guard.message ?? "");
           break;
         }
         this.round = r;
@@ -232,27 +292,22 @@ export class CouncilRunner implements SwarmRunner {
         // loses the queue race when all agents fire simultaneously.
         const transcriptLenBefore = this.transcript.length;
         await staggerStart(agents, (agent) =>
-          this.runTurn(agent, r, cfg.rounds, snapshot),
+          this.runTurn(agent, r, cfg.rounds, snapshot, cfg.userDirective),
         );
         // Task #146: dead-loop guard. After each council round, if EVERY
         // drafter's new entry is empty/junk, count consecutive bad rounds
         // and break at threshold. Same context-bloat root cause as #144.
+        // 2026-05-03 (Phase B): logic extracted to OutputEmptyDeadLoopGuard.
         const newEntries = this.transcript
           .slice(transcriptLenBefore)
           .filter((e) => e.role === "agent");
-        const allEmpty = newEntries.length > 0 &&
-          newEntries.every((e) => (e.text || "") === "(empty response)" || looksLikeJunk(e.text || ""));
-        if (allEmpty) {
-          consecutiveEmptyRounds++;
-          if (consecutiveEmptyRounds >= EMPTY_ROUND_BREAK_THRESHOLD) {
-            this.earlyStopDetail = `drafters-silenced (${consecutiveEmptyRounds} consecutive empty rounds)`;
-            this.appendSystem(
-              `All council drafters produced empty/junk output for ${consecutiveEmptyRounds} consecutive rounds — ending council early.`,
-            );
-            break;
-          }
-        } else {
-          consecutiveEmptyRounds = 0;
+        const dlHit = deadLoopGuard.recordIteration(newEntries);
+        if (dlHit.tripped) {
+          this.earlyStopDetail = dlHit.earlyStopDetail;
+          this.appendSystem(
+            `All council drafters produced empty/junk output for ${dlHit.consecutive} consecutive rounds — ending council early.`,
+          );
+          break;
         }
 
         // Phase B (Task #99): midpoint synthesis check. If the
@@ -287,38 +342,35 @@ export class CouncilRunner implements SwarmRunner {
       if (!this.stopping && cfg.rounds > 0 && !this.earlyStopDetail) {
         await this.runSynthesisPass(cfg);
       }
+      // 2026-05-02 (deliverables initiative + quality levers): structured
+      // markdown artifact + rubric + critic + next-actions. Best-effort —
+      // never blocks run-end if it fails.
+      if (!this.stopping && cfg.runId) {
+        await this.writeCouncilDeliverable(cfg);
+      }
       if (!this.stopping) this.appendSystem("Council complete.");
     } catch (err) {
       crashMessage = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: crashMessage });
     } finally {
-      // Task #150: end-of-run reflection. Fires before writeSummary so
-      // the lesson set is appended to .swarm-memory.jsonl before the
-      // run finalizes. Gated on natural completion (no crash, no user
-      // stop) so a half-broken run doesn't write misleading lessons.
-      if (!crashMessage && !this.stopping && cfg.runId) {
-        const lead = this.opts.manager.list().find((a) => a.index === 1);
-        if (lead) {
-          const ctxSummary = `Council preset · ${cfg.agentCount} drafters · ran ${this.round}/${cfg.rounds} rounds${this.earlyStopDetail ? ` · early-stop: ${this.earlyStopDetail}` : ""}`;
-          await runEndReflection({
-            agent: lead,
-            preset: cfg.preset,
-            runId: cfg.runId,
-            clonePath: cfg.localPath,
-            contextSummary: ctxSummary,
-            log: (msg) => this.appendSystem(msg),
-          }).catch(() => {});
-        }
-      }
-      await this.writeSummary(cfg, crashMessage);
-      // Unit 55: auto-killAll on natural completion (see RoundRobinRunner).
-      // Task #68: surface the kill result in the transcript so the user
-      // sees explicit confirmation that all agent ports were released.
-      if (!this.stopping) {
-        const killResult = await this.opts.manager.killAll();
-        this.appendSystem(formatPortReleaseLine(killResult));
-        this.setPhase("completed");
-      }
+      // 2026-05-03 (Phase D): finally close-out extracted to shared helper.
+      await runDiscussionCloseOut({
+        cfg,
+        crashMessage,
+        stopping: this.stopping,
+        earlyStopDetail: this.earlyStopDetail,
+        round: this.round,
+        currentPhase: this.phase,
+        manager: this.opts.manager,
+        appendSystem: (text) => this.appendSystem(text),
+        setPhase: (p) => this.setPhase(p),
+        writeSummary: () => this.writeSummary(cfg, crashMessage),
+        hooks: {
+          pickReflectionAgent: (m) => m.list().find((a) => a.index === 1) ?? null,
+          buildReflectionContext: (s) =>
+            `Council preset · ${cfg.agentCount} drafters · ran ${s.round}/${cfg.rounds} rounds${s.earlyStopDetail ? ` · early-stop: ${s.earlyStopDetail}` : ""}`,
+        },
+      });
     }
   }
 
@@ -327,49 +379,126 @@ export class CouncilRunner implements SwarmRunner {
     if (this.summaryWritten) return;
     this.summaryWritten = true;
     if (this.startedAt === undefined) return;
-    let gitStatus = { porcelain: "", changedFiles: 0 };
-    try {
-      gitStatus = await this.opts.repos.gitStatus(cfg.localPath);
-    } catch {
-      // best-effort
-    }
-    const summary = buildDiscussionSummary({
-      config: {
-        repoUrl: cfg.repoUrl,
-        localPath: cfg.localPath,
-        preset: cfg.preset,
-        model: cfg.model,
-        runId: cfg.runId,
-      },
-      agentCount: cfg.agentCount,
-      rounds: cfg.rounds,
-      startedAt: this.startedAt,
-      endedAt: Date.now(),
+    // 2026-05-03 (Phase C): writeSummary body extracted to shared helper.
+    await discussionWriteSummary({
+      cfg,
       crashMessage,
       stopping: this.stopping,
+      startedAt: this.startedAt,
       earlyStopDetail: this.earlyStopDetail,
-      filesChanged: gitStatus.changedFiles,
-      finalGitStatus: gitStatus.porcelain,
+      agentCount: cfg.agentCount,
       agents: this.stats.buildPerAgentStats(),
-      // Task #65: persist transcript so the history modal can replay.
       transcript: this.transcript,
-      // Phase 4a of #243: topology passthrough so summary.json carries
-      // the exact agent specs (history dropdown chip + review-mode rehydrate).
       topology: cfg.topology,
+      repos: this.opts.repos,
+      appendSystem: (text, summary) => this.appendSystem(text, summary),
     });
-    try {
-      await writeRunSummary(cfg.localPath, summary);
-      // Task #68: rich end-of-run banner with per-agent rollup. Posted
-      // BEFORE the terse file-write line so the most informative
-      // content is the last thing the user reads. Task #72: also
-      // attach the structured summary so the web renders a grid.
-      this.appendSystem(formatRunFinishedBanner(summary), buildRunFinishedSummary(summary));
-      this.appendSystem(
-        `Wrote run summary (stopReason=${summary.stopReason}, wallClockMs=${summary.wallClockMs}, files=${summary.filesChanged}).`,
-      );
-    } catch (writeErr) {
-      const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
-      this.appendSystem(`Failed to write run summary (${msg})`);
+  }
+
+  // 2026-05-02 (deliverables initiative + quality levers #1-#3):
+  // per-preset structured markdown artifact. Pulls the synthesis bubble
+  // from the transcript (latest entry tagged council_synthesis) + the
+  // per-round drafts and renders them as a portable report. Augmented
+  // by runQualityPasses with a rubric (top), critic notes (bottom),
+  // and extracted next-actions (bottom). Best-effort — failure posts
+  // a system message but doesn't break run-end.
+  private async writeCouncilDeliverable(cfg: RunConfig): Promise<void> {
+    if (!cfg.runId) return;
+    // 2026-05-03 (Phase A): directive helpers extracted to shared module.
+    const dirCtx = readDirective(cfg);
+    // Latest synthesis bubble (lead's consolidated answer).
+    const synthesisEntry = [...this.transcript]
+      .reverse()
+      .find((e) => e.summary?.kind === "council_synthesis");
+    const synthesisText = synthesisEntry?.text ?? "_(synthesis missing)_";
+    // Round 1 = independent drafts (peer-hidden). Group by agentIndex.
+    const round1Drafts = this.transcript.filter(
+      (e) =>
+        e.summary?.kind === "council_draft" &&
+        e.summary.round === 1 &&
+        e.role === "agent",
+    );
+    // Final round = revised drafts. Last round number we actually ran.
+    const finalRound = this.round;
+    const finalDrafts = this.transcript.filter(
+      (e) =>
+        e.summary?.kind === "council_draft" &&
+        e.summary.round === finalRound &&
+        e.role === "agent",
+    );
+    // 2026-05-02 (council improvement #4): per-agent latest position
+    // section, extracted from `### MY POSITION` blocks. Surfaces each
+    // agent's final answer side-by-side with the synthesis — counters
+    // synthesis-collapse by giving the reader the raw distinct
+    // positions, not just the consolidated view.
+    const positionsSection = buildCouncilPositionsSection(
+      this.transcript,
+      cfg.agentCount,
+    );
+    const baseSections: Array<{ title: string; body: string }> = [];
+    const directiveSection = maybeDirectiveSection(dirCtx);
+    if (directiveSection) baseSections.push(directiveSection);
+    baseSections.push(
+      {
+        title: pickAnswerSectionTitle(dirCtx, {
+          withDirective: "Answer to directive",
+          withoutDirective: "Final synthesis",
+        }),
+        body: synthesisText,
+      },
+      positionsSection,
+      {
+        title: `Round ${finalRound} — final drafts (full text)`,
+        body:
+          finalDrafts.length > 0
+            ? finalDrafts
+                .map((e) => `### Agent ${e.agentIndex ?? "?"}\n\n${e.text.trim()}`)
+                .join("\n\n")
+            : "_(no final-round drafts captured)_",
+      },
+      {
+        title: "Round 1 — independent first drafts (peer-hidden)",
+        body:
+          round1Drafts.length > 0
+            ? round1Drafts
+                .map((e) => `### Agent ${e.agentIndex ?? "?"}\n\n${e.text.trim()}`)
+                .join("\n\n")
+            : "_(no round 1 drafts captured)_",
+      },
+    );
+    // 2026-05-02 (quality levers #1-#3): augment with rubric +
+    // critic notes + extracted next-actions. The lead agent (index 1)
+    // doubles as critic so we don't burn a separate agent slot.
+    const lead = this.opts.manager.list().find((a) => a.index === 1) ?? null;
+    const sections = await runQualityPasses({
+      baseSections,
+      rubric: this.derivedRubric,
+      criticAgent: lead,
+      manager: this.opts.manager,
+    });
+    const subtitleBase = `${cfg.agentCount} drafter${cfg.agentCount === 1 ? "" : "s"} across ${finalRound}/${cfg.rounds} round${cfg.rounds === 1 ? "" : "s"}${this.earlyStopDetail ? " · early-stop" : ""}`;
+    const result = writeDeliverable({
+      preset: "council",
+      runId: cfg.runId,
+      clonePath: cfg.localPath,
+      title: pickDeliverableTitle(dirCtx, {
+        withDirective: "Council: directive answer",
+        withoutDirective: "Council synthesis",
+      }),
+      subtitle: pickDeliverableSubtitle(dirCtx, subtitleBase),
+      sections,
+    });
+    if (result.ok) {
+      this.appendSystem(`Deliverable saved → ${result.filename}`, {
+        kind: "deliverable",
+        preset: "council",
+        filename: result.filename,
+        fullPath: result.fullPath,
+        bytes: result.bytes,
+        sectionTitles: sections.map((s) => s.title),
+      });
+    } else {
+      this.appendSystem(`Failed to write deliverable (${result.reason})`);
     }
   }
 
@@ -396,7 +525,7 @@ export class CouncilRunner implements SwarmRunner {
     this.stats.countTurn(lead.id);
     this.appendSystem(`Synthesizing council consensus (agent-${lead.index})…`);
 
-    const prompt = buildCouncilSynthesisPrompt(cfg.rounds, this.transcript);
+    const prompt = buildCouncilSynthesisPrompt(cfg.rounds, this.transcript, cfg.userDirective);
     // 2026-04-27: SSE-aware watchdog (see startSseAwareTurnWatchdog).
     const controller = new AbortController();
     const watchdog = startSseAwareTurnWatchdog({
@@ -483,7 +612,7 @@ export class CouncilRunner implements SwarmRunner {
       }
       // Phase B (Task #99): parse the convergence signal so the loop
       // can act on it.
-      return parseCouncilConvergence(text);
+      return parseConvergenceSignal(text);
     } catch (err) {
       // Synthesis failure is non-fatal — log and continue. The council
       // still produced N final drafts that the user can read.
@@ -510,6 +639,7 @@ export class CouncilRunner implements SwarmRunner {
     round: number,
     totalRounds: number,
     snapshot: readonly TranscriptEntry[],
+    userDirective?: string,
   ): Promise<void> {
     this.opts.manager.markStatus(agent.id, "thinking");
     this.emitAgentState({
@@ -522,7 +652,10 @@ export class CouncilRunner implements SwarmRunner {
     });
     this.stats.countTurn(agent.id);
 
-    const prompt = buildCouncilPrompt(agent.index, round, totalRounds, snapshot);
+    // 2026-05-02 (chat lever #3): drop user entries @mentioned at OTHER
+    // agents so this agent's prompt only sees broadcast + targeted-at-me.
+    const visible = snapshot.filter((e) => userEntryVisibleTo(e, agent.id));
+    const prompt = buildCouncilPrompt(agent.index, round, totalRounds, visible, userDirective);
     // 2026-04-27: replaced wall-clock 4-min cap with SSE-aware watchdog.
     // Pre-fix the cap killed prompts the model was actively producing
     // (cloud streaming has long-tail latency for big prompts but SSE
@@ -697,28 +830,16 @@ export class CouncilRunner implements SwarmRunner {
 // output expectation explicitly: one consolidated answer, what
 // converged, what's still contested, one concrete next action.
 // Phase B (Task #99): scan a synthesis response for the
-// "CONVERGENCE: high|medium|low" line. Looks at the LAST 3 non-blank
-// lines to be tolerant of trailing fences/whitespace, but doesn't
-// scan the whole response — a passing mention of "convergence" mid-
-// prose shouldn't count.
-export function parseCouncilConvergence(
-  text: string,
-): "high" | "medium" | "low" | null {
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-  const tail = lines.slice(-3);
-  for (const line of tail) {
-    const m = /^convergence\s*:\s*(high|medium|low)\b/i.exec(line);
-    if (m) return m[1].toLowerCase() as "high" | "medium" | "low";
-  }
-  return null;
-}
+// "CONVERGENCE: high|medium|low" line.
+// 2026-05-03 (Phase A): the parser implementation moved to the shared
+// `convergenceSignal.ts` module (also used by RoundRobinRunner). This
+// re-export preserves the legacy public name for any external caller.
+export { parseConvergenceSignal as parseCouncilConvergence } from "./convergenceSignal.js";
 
 export function buildCouncilSynthesisPrompt(
   totalRounds: number,
   transcript: readonly TranscriptEntry[],
+  userDirective?: string,
 ): string {
   const transcriptText = transcript
     .map((e) => {
@@ -727,16 +848,46 @@ export function buildCouncilSynthesisPrompt(
       return `[Agent ${e.agentIndex}] ${e.text}`;
     })
     .join("\n\n");
+
+  // 2026-05-02 (council improvement #1 + #3): directive-aware synthesis
+  // with a required Minority report section. The minority report is the
+  // counter to "synthesis collapse" — when 5 drafts get squeezed into
+  // 1 consensus answer, the dissenting view (often the right one) is
+  // lost. Forcing the synthesis to NAME the strongest dissent + who
+  // held it preserves it; "_consensus reached_" is a valid value when
+  // there genuinely was no dissent.
+  // 2026-05-03 (Phase A): directive block extracted to shared helper.
+  const dirCtx = readDirective({ userDirective });
+  const directiveBlock = buildDirectiveBlock(dirCtx, {
+    labelSuffix: "(the question this council was answering)",
+  });
+
+  const structure = dirCtx.hasDirective
+    ? [
+        "STRUCTURE your response as:",
+        "1. **Answer to directive** — direct response to the user's question. State what the council concluded, not how it deliberated.",
+        "2. **Consensus** — what every agent (including you) converged on while resolving the directive. State as a direct claim.",
+        "3. **Disagreements** — where agents still hold different positions on the directive. Name the agents and their stances.",
+        "4. **Minority report** — when at least one agent's `### MY POSITION` diverges from the consensus, name them and state their strongest argument **verbatim** from their last position. If the council genuinely converged with no dissent, write `_consensus reached — no minority position_`. Do NOT invent dissent for show.",
+        "5. **Next action** — ONE concrete next step toward the directive. Cite files / decisions / experiments. If no action is needed, say so.",
+        "",
+      ]
+    : [
+        "STRUCTURE your response as:",
+        "1. **Consensus** — what every agent (including you) converged on. State it as a direct claim, not a meta-observation.",
+        "2. **Disagreements** — where agents still hold different positions. Name the agents and their stances.",
+        "3. **Minority report** — when at least one agent's `### MY POSITION` diverges from the consensus, name them and state their strongest argument **verbatim** from their last position. If the council genuinely converged with no dissent, write `_consensus reached — no minority position_`. Do NOT invent dissent for show.",
+        "4. **Next action** — ONE concrete next step the swarm or user should take, given the council's findings. If no action is needed, say so.",
+        "",
+      ];
+
   return [
     `You are Agent 1, the council's synthesis lead. The council just finished ${totalRounds} round${totalRounds === 1 ? "" : "s"} of independent drafts + reveal/revise.`,
     "Your job NOW is to produce a SINGLE consolidated answer that integrates every agent's final position.",
     "",
-    "STRUCTURE your response as:",
-    "1. **Consensus** — what every agent (including you) converged on. State it as a direct claim, not a meta-observation.",
-    "2. **Disagreements** — where agents still hold different positions. Name the agents and their stances.",
-    "3. **Next action** — ONE concrete next step the swarm or user should take, given the council's findings. If no action is needed, say so.",
-    "",
-    "Keep it under ~400 words. Be specific. Cite file paths or peer claims when relevant. Do not just summarize the drafts — synthesize them.",
+    ...directiveBlock,
+    ...structure,
+    "Keep it under ~500 words. Be specific. Cite file paths or peer claims when relevant. Do not just summarize the drafts — synthesize them.",
     "",
     // Phase B (Task #99): convergence signal on the FINAL line. Lets
     // the runner end mid-loop when the council has clearly settled.
@@ -763,6 +914,7 @@ export function buildCouncilPrompt(
   round: number,
   totalRounds: number,
   snapshot: readonly TranscriptEntry[],
+  userDirective?: string,
 ): string {
   // Round 1 is the draft round: strip peer-agent entries so an agent writing
   // its first-pass answer cannot anchor on what anyone else has said. Round
@@ -789,6 +941,72 @@ export function buildCouncilPrompt(
       ? "=== SEED + ANY HUMAN INPUT (peer drafts hidden this round) ==="
       : "=== COUNCIL TRANSCRIPT SO FAR ===";
 
+  // 2026-05-02 (council improvement #1): user directive injected into
+  // every drafter's prompt. Without this, agents draft answers to "what
+  // is this project" while the rubric (derived from the directive) is
+  // only used by the deliverable critic — load-bearing miss.
+  // 2026-05-03 (Phase A): directive block extracted to shared helper.
+  const dirCtx = readDirective({ userDirective });
+  const directiveBlock = buildDirectiveBlock(dirCtx, {
+    labelSuffix: "(the question this council is answering)",
+  });
+  // Local boolean for the existing flow control further down (KEEP / Goals branches).
+  const directive = dirCtx.directive;
+
+  // 2026-05-02 (council improvement #2): position pre-registration to
+  // counter Round-3 conformity drift. Each turn ends with a
+  // `### MY POSITION` block — one short statement of the agent's
+  // current best answer. Round 2+ is given its OWN prior position back
+  // and required to explicitly own KEEP / CHANGE with a one-line WHY.
+  // Anchors the agent against unconscious drift toward the loudest
+  // voice — they have to actively renounce their prior position to
+  // converge, not just quietly stop defending it.
+  const priorPosition =
+    round > 1 ? getLastPositionForAgent(snapshot, agentIndex) : null;
+  const priorPositionBlock =
+    round > 1
+      ? [
+          "=== YOUR PRIOR POSITION (from last round) ===",
+          priorPosition ?? "_(you did not produce a `### MY POSITION` block last round — start fresh this round)_",
+          "=== END PRIOR POSITION ===",
+          "",
+        ]
+      : [];
+
+  const positionContract =
+    round === 1
+      ? [
+          "**POSITION CONTRACT (every turn):** End your response with:",
+          "    ### MY POSITION",
+          "    <one short sentence — ≤300 chars — your direct answer to the directive (or to 'what should this project do' when no directive). This is your anchor against drift in later rounds.>",
+          "",
+        ]
+      : [
+          "**POSITION CONTRACT (every turn):** End your response with:",
+          "    ### MY POSITION",
+          "    KEEP: <restate your prior position verbatim>   — OR —   CHANGE: <new one-sentence position>",
+          "    WHY: <one line — what specifically convinced you to keep or change. Cite the agent + their argument when CHANGE.>",
+          "",
+          "Drift without an explicit CHANGE is the failure mode this contract exists to prevent. If you find yourself softening your prior position without naming who convinced you and how, KEEP it.",
+          "",
+        ];
+
+  const goals = directive.length > 0
+    ? [
+        "Goals of this council:",
+        "1. Read the repo just enough to ground your answer to the directive in real code (not filename guesses).",
+        "2. Round 1: produce YOUR independent answer to the directive. Don't anchor on peers — you cannot see them.",
+        "3. Round 2+: revise vs. prior round. Keep what still holds, change what a peer's draft genuinely convinced you of, explicitly disagree where you think they're wrong.",
+        "",
+      ]
+    : [
+        "Goals of this discussion:",
+        "1. Figure out what this project is and who it is for.",
+        "2. Identify what is working and what is missing.",
+        "3. Propose one concrete next action the swarm should take.",
+        "",
+      ];
+
   return [
     header,
     roundIntent,
@@ -796,16 +1014,15 @@ export function buildCouncilPrompt(
     "Round 1: skim README.md and the top-level tree before opining. Later rounds: re-read files when a peer's claim needs checking.",
     "Keep responses under ~250 words. Be specific. Cite file paths (e.g. `src/foo.ts:42`) when you reference code.",
     "",
-    "Goals of this discussion:",
-    "1. Figure out what this project is and who it is for.",
-    "2. Identify what is working and what is missing.",
-    "3. Propose one concrete next action the swarm should take.",
-    "",
+    ...directiveBlock,
+    ...priorPositionBlock,
+    ...positionContract,
+    ...goals,
     transcriptLabel,
     transcriptText || "(empty — you are writing the first entry)",
     "=== END TRANSCRIPT ===",
     "",
-    `Now respond as Agent ${agentIndex}.`,
+    `Now respond as Agent ${agentIndex}. End with your \`### MY POSITION\` block.`,
   ].join("\n");
 }
 

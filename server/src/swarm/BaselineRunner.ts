@@ -30,6 +30,7 @@ import type {
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { extractText } from "./extractText.js";
+import { formatChatReceipt } from "./chatReceipt.js";
 import { applyHunks, type Hunk } from "./blackboard/applyHunks.js";
 import { parseWorkerResponse } from "./blackboard/prompts/worker.js";
 import { realFilesystemAdapter, realGitAdapter } from "./blackboard/v2Adapters.js";
@@ -59,10 +60,22 @@ export class BaselineRunner implements SwarmRunner {
     };
   }
 
-  injectUser(text: string): void {
-    const entry: TranscriptEntry = { id: randomUUID(), role: "user", text, ts: Date.now() };
+  injectUser(
+    text: string,
+    opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
+  ): void {
+    const intent = opts?.intent ?? "steer";
+    const entry: TranscriptEntry = {
+      id: randomUUID(),
+      role: "user",
+      text,
+      ts: Date.now(),
+      intent,
+      ...(opts?.targetAgent ? { targetAgent: opts.targetAgent } : {}),
+    };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
+    this.appendSystem(formatChatReceipt(intent, opts?.targetAgent));
   }
 
   isRunning(): boolean {

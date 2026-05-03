@@ -121,8 +121,13 @@ export function extractToolCallMarkers(text: string): {
   // max in a row keeps paragraph structure intact.
   const finalText = stripped.replace(/\n{3,}/g, "\n\n").trim();
 
-  return {
-    toolCalls,
-    finalText: finalText.length > 0 ? finalText : text,
-  };
+  // 2026-05-01 fix: previously fell back to returning the original text
+  // when stripping emptied everything, mirroring extractThinkTags. That
+  // mirror was wrong for tool-call markers — the extracted toolCalls
+  // already render in a collapsed ToolCallsBlock; defaulting finalText
+  // back to the raw markers re-leaks the same XML the strip aimed to
+  // remove. When the entire response WAS markers, return "" so
+  // appendAgent's `text: finalText || "(empty response)"` shield kicks
+  // in and the bubble shows a clean placeholder.
+  return { toolCalls, finalText };
 }

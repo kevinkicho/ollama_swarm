@@ -12,16 +12,32 @@ import type {
 } from "./../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { formatChatReceipt } from "./chatReceipt.js";
+import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
-import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
+import { buildSeedSummary } from "./runSummary.js";
+import { discussionWriteSummary } from "./discussionWriteSummary.js";
+import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
-import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../services/ollamaProxy.js";
+import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
+import { checkBudgetGuards } from "./loopGuards.js";
+import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
-import { runEndReflection } from "./runEndReflection.js";
+// runEndReflection moved into runFinallyHooks (Phase D).
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import { getAgentAddendum } from "../../../shared/src/topology.js";
 import { describeSdkError } from "./sdkError.js";
+import { deriveProposition, type DerivedProposition } from "./propositionDerive.js";
+import {
+  readDirective,
+  buildDirectiveBlock,
+  buildInlineDirectiveBlock,
+  pickDeliverableTitle,
+  pickAnswerSectionTitle,
+  pickDeliverableSubtitle,
+  maybeDirectiveSection,
+} from "./directivePromptHelpers.js";
 
 // Debate + judge.
 // Agent 1 = PRO (argues FOR the proposition).
@@ -51,6 +67,11 @@ export class DebateJudgeRunner implements SwarmRunner {
   // Only the most recent pre-start injection counts as the proposition;
   // mid-run injections are treated as regular transcript commentary.
   private proposition?: string;
+  // 2026-05-03 (debate-judge improvement #1): when the user gives a
+  // directive but no proposition, the judge agent auto-derives a sharp
+  // PRO/CON proposition at run start. Stored so the seed can label
+  // whether the proposition was derived vs. user-supplied vs. fallback.
+  private derivedPropositionMeta: DerivedProposition | null = null;
   // Phase B (Task #94): natural-stop detail when the judge reaches
   // confidence:high mid-loop. Promoted to stopReason="early-stop" by
   // writeSummary. Stays undefined on natural rounds-exhaustion ends.
@@ -72,12 +93,18 @@ export class DebateJudgeRunner implements SwarmRunner {
     };
   }
 
-  injectUser(text: string): void {
+  injectUser(
+    text: string,
+    opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
+  ): void {
+    const intent = opts?.intent ?? "steer";
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "user",
       text,
       ts: Date.now(),
+      intent,
+      ...(opts?.targetAgent ? { targetAgent: opts.targetAgent } : {}),
     };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
@@ -87,6 +114,7 @@ export class DebateJudgeRunner implements SwarmRunner {
     if (this.phase === "idle" && text.trim().length > 0) {
       this.proposition = text.trim();
     }
+    this.appendSystem(formatChatReceipt(intent, opts?.targetAgent));
   }
 
   isRunning(): boolean {
@@ -166,6 +194,40 @@ export class DebateJudgeRunner implements SwarmRunner {
     );
     this.stats.registerAgents(ready);
 
+    // 2026-05-03 (debate-judge improvement #1): auto-derive proposition
+    // from cfg.userDirective when no Proposition was supplied. Judge
+    // agent (index 3) does the derivation — they're idle during the
+    // debate rounds anyway, so reusing them here costs no critical-path
+    // wall-clock. Best-effort: any failure falls back to a pass-through
+    // proposition; the debate always proceeds.
+    const directiveTrimmed = (cfg.userDirective ?? "").trim();
+    if (
+      (this.proposition === undefined || this.proposition.length === 0) &&
+      directiveTrimmed.length > 0
+    ) {
+      const judge = ready.find((a) => a.index === 3);
+      if (judge) {
+        this.appendSystem(
+          `Auto-deriving debate proposition from directive (improvement #1)…`,
+        );
+        const derived = await deriveProposition({
+          agent: judge,
+          manager: this.opts.manager,
+          directive: directiveTrimmed,
+        });
+        if (derived) {
+          this.derivedPropositionMeta = derived;
+          this.proposition = derived.proposition;
+          const sourceLabel = derived.derived
+            ? "auto-derived from directive"
+            : "fallback (auto-derive failed)";
+          this.appendSystem(
+            `Proposition (${sourceLabel}): "${derived.proposition}"${derived.rationale ? ` — ${derived.rationale}` : ""}`,
+          );
+        }
+      }
+    }
+
     this.setPhase("seeding");
     await this.seed(destPath, cfg);
 
@@ -184,17 +246,38 @@ export class DebateJudgeRunner implements SwarmRunner {
   private async seed(clonePath: string, cfg: RunConfig): Promise<void> {
     const tree = (await this.opts.repos.listTopLevel(clonePath)).slice(0, 200);
     const prop = this.proposition ?? DEFAULT_PROPOSITION;
-    const seed = [
+    // 2026-05-03 (debate-judge improvement #2): surface the directive
+    // alongside the proposition when both are present. The proposition
+    // is what PRO/CON debate; the directive is the broader work this
+    // decision informs (the implementer's nextAction targets it).
+    // 2026-05-03 (Phase A): directive block extracted to shared helper.
+    const dirCtx = readDirective(cfg);
+    // Compose proposition-source annotation lines (only when auto-derived,
+    // and only when directive is set so it appears next to the directive).
+    const propositionSourceLines: string[] = [];
+    if (dirCtx.hasDirective && this.derivedPropositionMeta) {
+      const sourceLabel = this.derivedPropositionMeta.derived
+        ? "auto-derived from directive"
+        : "fallback (auto-derive failed)";
+      propositionSourceLines.push(
+        `_Proposition source: ${sourceLabel}._${this.derivedPropositionMeta.rationale ? ` ${this.derivedPropositionMeta.rationale}` : ""}`,
+      );
+    }
+    const lines = [
       `Project clone: ${clonePath}`,
       `Repo: ${cfg.repoUrl}`,
       `Top-level entries: ${tree.join(", ") || "(empty)"}`,
       "",
+      ...buildDirectiveBlock(dirCtx, {
+        labelSuffix: "(the broader work this debate informs)",
+        framingLines: propositionSourceLines,
+      }),
       `Proposition under debate: "${prop}"`,
       "Agent 1 (PRO) argues FOR the proposition.",
       "Agent 2 (CON) argues AGAINST.",
       "Agent 3 (JUDGE) stays silent until the final round, then reads the full debate and scores.",
-    ].join("\n");
-    this.appendSystem(seed, buildSeedSummary(cfg.repoUrl, clonePath, tree));
+    ];
+    this.appendSystem(lines.join("\n"), buildSeedSummary(cfg.repoUrl, clonePath, tree));
   }
 
   private async loop(cfg: RunConfig): Promise<void> {
@@ -218,29 +301,25 @@ export class DebateJudgeRunner implements SwarmRunner {
       // round can act on it.
       let finalVerdict: ParsedDebateVerdict | null = null;
 
-      // Task #124: snapshot lifetime tokens for budget delta.
+      // 2026-05-03 (Phase B): budget + dead-loop guards extracted to shared helpers.
       const tokenBaseline = snapshotLifetimeTokens();
-      // Task #146: same dead-loop guard as #144 in OW. By round ~15 of a
-      // long debate, the transcript passed to PRO/CON has bloated and the
-      // model can return "(empty response)" placeholder for every turn.
-      // Track consecutive rounds where all new agent entries are empty/junk;
-      // break when threshold hit.
-      let consecutiveEmptyRounds = 0;
-      const EMPTY_ROUND_BREAK_THRESHOLD = 2;
+      const deadLoopGuard = new OutputEmptyDeadLoopGuard({
+        roleLabel: "agents",
+        unit: "round",
+      });
 
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
-        // Task #124: token-budget cap check.
-        if (tokenBudgetExceeded(tokenBaseline, cfg.tokenBudget)) {
-          this.earlyStopDetail = `token-budget reached (${cfg.tokenBudget?.toLocaleString()} tokens)`;
-          this.appendSystem(`Token budget of ${cfg.tokenBudget?.toLocaleString()} tokens reached at round ${r - 1}/${cfg.rounds} — ending run early.`);
-          break;
-        }
-        // Task #137: quota-wall cap check.
-        if (shouldHaltOnQuota()) {
-          const q = tokenTracker.getQuotaState();
-          this.earlyStopDetail = `ollama-quota-exhausted (${q?.statusCode}: ${q?.reason.slice(0, 100)})`;
-          this.appendSystem(`Ollama quota wall hit at round ${r - 1}/${cfg.rounds} (${q?.statusCode}) — ending run early.`);
+        const guard = checkBudgetGuards({
+          tokenBaseline,
+          tokenBudget: cfg.tokenBudget,
+          round: r,
+          totalRounds: cfg.rounds,
+          unit: "round",
+        });
+        if (guard.halt) {
+          this.earlyStopDetail = guard.earlyStopDetail;
+          this.appendSystem(guard.message ?? "");
           break;
         }
         this.round = r;
@@ -249,36 +328,31 @@ export class DebateJudgeRunner implements SwarmRunner {
         const isFinalRound = r === cfg.rounds;
         const transcriptLenBefore = this.transcript.length;
         // PRO turn
-        await this.runDebaterTurn(pro, "pro", r, cfg.rounds, prop, isFinalRound);
+        await this.runDebaterTurn(pro, "pro", r, cfg.rounds, prop, isFinalRound, cfg.userDirective);
         if (this.stopping) break;
         // CON turn
-        await this.runDebaterTurn(con, "con", r, cfg.rounds, prop, isFinalRound);
+        await this.runDebaterTurn(con, "con", r, cfg.rounds, prop, isFinalRound, cfg.userDirective);
         if (this.stopping) break;
         // Task #146: dead-loop guard. If both PRO and CON produced empty/junk
         // output this round, count it. After N consecutive empty rounds, break.
+        // 2026-05-03 (Phase B): logic extracted to OutputEmptyDeadLoopGuard.
         const newEntries = this.transcript
           .slice(transcriptLenBefore)
           .filter((e) => e.role === "agent");
-        const allEmpty = newEntries.length > 0 &&
-          newEntries.every((e) => (e.text || "") === "(empty response)" || looksLikeJunk(e.text || ""));
-        if (allEmpty) {
-          consecutiveEmptyRounds++;
-          if (consecutiveEmptyRounds >= EMPTY_ROUND_BREAK_THRESHOLD) {
-            this.earlyStopDetail = `agents-silenced (${consecutiveEmptyRounds} consecutive empty rounds)`;
-            this.appendSystem(
-              `Both debaters produced empty/junk output for ${consecutiveEmptyRounds} consecutive rounds — ending debate early.`,
-            );
-            break;
-          }
-        } else {
-          consecutiveEmptyRounds = 0;
+        const dlHit = deadLoopGuard.recordIteration(newEntries);
+        if (dlHit.tripped) {
+          this.earlyStopDetail = dlHit.earlyStopDetail;
+          this.appendSystem(
+            `Both debaters produced empty/junk output for ${dlHit.consecutive} consecutive rounds — ending debate early.`,
+          );
+          break;
         }
         // JUDGE turn (only on the final round, OR mid-loop when we
         // hit the early-check checkpoint).
         if (isFinalRound) {
-          finalVerdict = await this.runJudgeTurn(judge, prop, r);
+          finalVerdict = await this.runJudgeTurn(judge, prop, r, cfg.userDirective);
         } else if (r === earlyCheckRound) {
-          finalVerdict = await this.runJudgeTurn(judge, prop, r);
+          finalVerdict = await this.runJudgeTurn(judge, prop, r, cfg.userDirective);
           if (finalVerdict?.confidence === "high") {
             this.earlyStopDetail =
               `judge-confidence-high after round ${r}/${cfg.rounds}`;
@@ -305,33 +379,120 @@ export class DebateJudgeRunner implements SwarmRunner {
         finalVerdict.confidence !== "low" &&
         finalVerdict.nextAction.trim().length > 0
       ) {
-        await this.runNextActionPhase(pro, con, judge, prop, finalVerdict);
+        await this.runNextActionPhase(pro, con, judge, prop, finalVerdict, cfg.userDirective);
       }
     } catch (err) {
       crashMessage = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: crashMessage });
     } finally {
-      // Task #150: end-of-run reflection. Use the JUDGE (agent-3) — they
-      // see the full debate plus the verdict, so the lessons capture both.
-      if (!crashMessage && !this.stopping && cfg.runId) {
-        const lead = this.opts.manager.list().find((a) => a.index === 3)
-          ?? this.opts.manager.list().find((a) => a.index === 1);
-        if (lead) {
-          const ctxSummary = `Debate-judge preset · 3 agents · ran ${this.round}/${cfg.rounds} rounds${this.earlyStopDetail ? ` · early-stop: ${this.earlyStopDetail}` : ""}`;
-          await runEndReflection({
-            agent: lead, preset: cfg.preset, runId: cfg.runId, clonePath: cfg.localPath,
-            contextSummary: ctxSummary, log: (msg) => this.appendSystem(msg),
-          }).catch(() => {});
-        }
-      }
-      await this.writeSummary(cfg, crashMessage);
-      // Unit 55: auto-killAll on natural completion (see RoundRobinRunner).
-      if (!this.stopping) {
-        const killResult = await this.opts.manager.killAll();
-        this.appendSystem(formatPortReleaseLine(killResult));
-        this.setPhase("completed");
-      }
+      // 2026-05-02 (deliverables initiative): structured markdown
+      // before writeSummary. Best-effort.
+      if (!this.stopping && cfg.runId) await this.writeDebateDeliverable(cfg);
+      // 2026-05-03 (Phase D): finally close-out extracted to shared helper.
+      // Reflection picks the JUDGE (agent-3) — they see the full debate
+      // plus the verdict, so the lessons capture both. Falls back to
+      // index-1 if the judge somehow isn't in the live list.
+      await runDiscussionCloseOut({
+        cfg,
+        crashMessage,
+        stopping: this.stopping,
+        earlyStopDetail: this.earlyStopDetail,
+        round: this.round,
+        currentPhase: this.phase,
+        manager: this.opts.manager,
+        appendSystem: (text) => this.appendSystem(text),
+        setPhase: (p) => this.setPhase(p),
+        writeSummary: () => this.writeSummary(cfg, crashMessage),
+        hooks: {
+          pickReflectionAgent: (m) =>
+            m.list().find((a) => a.index === 3) ?? m.list().find((a) => a.index === 1) ?? null,
+          buildReflectionContext: (s) =>
+            `Debate-judge preset · 3 agents · ran ${s.round}/${cfg.rounds} rounds${s.earlyStopDetail ? ` · early-stop: ${s.earlyStopDetail}` : ""}`,
+        },
+      });
     }
+  }
+
+  // 2026-05-02 (deliverables initiative): debate-judge structured
+  // artifact. Pulls verdict + per-side arguments from the transcript
+  // (kind: "debate_verdict" + "debate_turn"). Best-effort.
+  private async writeDebateDeliverable(cfg: RunConfig): Promise<void> {
+    if (!cfg.runId) return;
+    // 2026-05-03 (Phase A): directive helpers extracted to shared module.
+    const dirCtx = readDirective(cfg);
+    const proTurns = this.transcript.filter(
+      (e) => e.summary?.kind === "debate_turn" && e.summary.role === "pro",
+    );
+    const conTurns = this.transcript.filter(
+      (e) => e.summary?.kind === "debate_turn" && e.summary.role === "con",
+    );
+    const verdictEntry = [...this.transcript]
+      .reverse()
+      .find((e) => e.summary?.kind === "debate_verdict");
+    const verdict = verdictEntry?.summary?.kind === "debate_verdict" ? verdictEntry.summary : null;
+    // 2026-05-03 (debate-judge improvement #3): Directive section above
+    // Proposition when set; proposition section labels source (user-set,
+    // auto-derived, or fallback) so the reader knows where it came from.
+    const sections: Array<{ title: string; body: string }> = [];
+    const directiveSection = maybeDirectiveSection(dirCtx);
+    if (directiveSection) sections.push(directiveSection);
+    const propositionLabel = this.derivedPropositionMeta
+      ? this.derivedPropositionMeta.derived
+        ? "Proposition (auto-derived from directive)"
+        : "Proposition (fallback — auto-derive failed)"
+      : "Proposition";
+    sections.push(
+      {
+        title: propositionLabel,
+        body: this.proposition?.trim() || dirCtx.directive || "_(no proposition)_",
+      },
+      {
+        title: "Judge verdict",
+        body: verdict
+          ? `**Winner: ${verdict.winner.toUpperCase()}** · confidence ${verdict.confidence}\n\n` +
+            `- PRO strongest: ${verdict.proStrongest}\n` +
+            `- CON strongest: ${verdict.conStrongest}\n` +
+            `- Decisive: ${verdict.decisive}\n` +
+            `- Next action: ${verdict.nextAction}`
+          : "_(no verdict captured)_",
+      },
+      {
+        title: `PRO arguments (${proTurns.length} round${proTurns.length === 1 ? "" : "s"})`,
+        body: proTurns.length > 0
+          ? proTurns.map((e, i) => `### Round ${i + 1}\n\n${e.text.trim()}`).join("\n\n")
+          : "_(no PRO turns)_",
+      },
+      {
+        title: `CON arguments (${conTurns.length} round${conTurns.length === 1 ? "" : "s"})`,
+        body: conTurns.length > 0
+          ? conTurns.map((e, i) => `### Round ${i + 1}\n\n${e.text.trim()}`).join("\n\n")
+          : "_(no CON turns)_",
+      },
+    );
+    // 2026-05-02 (quality levers #1+#3): augment with critic +
+    // next-actions. Judge agent (last, index 3) doubles as critic.
+    const judge = this.opts.manager.list().find((a) => a.index === 3) ?? null;
+    const augmented = await runQualityPasses({
+      baseSections: sections,
+      rubric: null,
+      criticAgent: judge,
+      manager: this.opts.manager,
+    });
+    const subtitleBase = `${proTurns.length} PRO + ${conTurns.length} CON rounds${this.earlyStopDetail ? " · early-stop" : ""}`;
+    writeDeliverableAndEmit(
+      {
+        preset: "debate-judge",
+        runId: cfg.runId,
+        clonePath: cfg.localPath,
+        title: pickDeliverableTitle(dirCtx, {
+          withDirective: "Debate-judge: directive decision",
+          withoutDirective: "Debate verdict",
+        }),
+        subtitle: pickDeliverableSubtitle(dirCtx, subtitleBase),
+        sections: augmented,
+      },
+      { transcript: this.transcript, emit: this.opts.emit },
+    );
   }
 
   // Unit 33: shared summary writer pattern — see RoundRobinRunner.
@@ -339,47 +500,20 @@ export class DebateJudgeRunner implements SwarmRunner {
     if (this.summaryWritten) return;
     this.summaryWritten = true;
     if (this.startedAt === undefined) return;
-    let gitStatus = { porcelain: "", changedFiles: 0 };
-    try {
-      gitStatus = await this.opts.repos.gitStatus(cfg.localPath);
-    } catch {
-      // best-effort
-    }
-    const summary = buildDiscussionSummary({
-      config: {
-        repoUrl: cfg.repoUrl,
-        localPath: cfg.localPath,
-        preset: cfg.preset,
-        model: cfg.model,
-        runId: cfg.runId,
-      },
-      agentCount: cfg.agentCount,
-      rounds: cfg.rounds,
-      startedAt: this.startedAt,
-      endedAt: Date.now(),
+    // 2026-05-03 (Phase C): writeSummary body extracted to shared helper.
+    await discussionWriteSummary({
+      cfg,
       crashMessage,
       stopping: this.stopping,
+      startedAt: this.startedAt,
       earlyStopDetail: this.earlyStopDetail,
-      filesChanged: gitStatus.changedFiles,
-      finalGitStatus: gitStatus.porcelain,
+      agentCount: cfg.agentCount,
       agents: this.stats.buildPerAgentStats(),
       transcript: this.transcript,
-      // Phase 4a of #243: topology passthrough.
       topology: cfg.topology,
+      repos: this.opts.repos,
+      appendSystem: (text, summary) => this.appendSystem(text, summary),
     });
-    try {
-      await writeRunSummary(cfg.localPath, summary);
-      this.appendSystem(
-        formatRunFinishedBanner(summary),
-        buildRunFinishedSummary(summary),
-      );
-      this.appendSystem(
-        `Wrote run summary (stopReason=${summary.stopReason}, wallClockMs=${summary.wallClockMs}, files=${summary.filesChanged}).`,
-      );
-    } catch (writeErr) {
-      const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
-      this.appendSystem(`Failed to write run summary (${msg})`);
-    }
   }
 
   private async runDebaterTurn(
@@ -389,6 +523,7 @@ export class DebateJudgeRunner implements SwarmRunner {
     totalRounds: number,
     proposition: string,
     isFinalRound: boolean,
+    userDirective?: string,
   ): Promise<void> {
     const prompt = buildDebaterPrompt({
       side,
@@ -397,6 +532,7 @@ export class DebateJudgeRunner implements SwarmRunner {
       proposition,
       isFinalRound,
       transcript: [...this.transcript],
+      userDirective,
     });
     // Phase 2c: tag so VerdictPanel can group PRO/CON pairs by round.
     await this.runAgent(agent, prompt, { role: side, round });
@@ -414,6 +550,7 @@ export class DebateJudgeRunner implements SwarmRunner {
     judge: Agent,
     proposition: string,
     verdict: ParsedDebateVerdict,
+    userDirective?: string,
   ): Promise<void> {
     this.appendSystem(
       `Build phase: PRO will implement the next-action recommendation; CON reviews; JUDGE signs off.`,
@@ -422,7 +559,7 @@ export class DebateJudgeRunner implements SwarmRunner {
 
     // Implementer (PRO with write tools)
     if (this.stopping) return;
-    const implPrompt = buildImplementerPrompt(proposition, verdict);
+    const implPrompt = buildImplementerPrompt(proposition, verdict, userDirective);
     await this.runAgent(
       pro,
       implPrompt,
@@ -457,7 +594,7 @@ export class DebateJudgeRunner implements SwarmRunner {
 
     // Reviewer (CON, read-only)
     if (this.stopping) return;
-    const reviewerPrompt = buildReviewerPrompt(proposition, verdict, [...this.transcript]);
+    const reviewerPrompt = buildReviewerPrompt(proposition, verdict, [...this.transcript], userDirective);
     await this.runAgent(
       con,
       reviewerPrompt,
@@ -467,7 +604,7 @@ export class DebateJudgeRunner implements SwarmRunner {
 
     // Signoff (JUDGE, read-only)
     if (this.stopping) return;
-    const signoffPrompt = buildSignoffPrompt(proposition, verdict, [...this.transcript]);
+    const signoffPrompt = buildSignoffPrompt(proposition, verdict, [...this.transcript], userDirective);
     await this.runAgent(
       judge,
       signoffPrompt,
@@ -480,8 +617,9 @@ export class DebateJudgeRunner implements SwarmRunner {
     judge: Agent,
     proposition: string,
     round: number,
+    userDirective?: string,
   ): Promise<ParsedDebateVerdict | null> {
-    const prompt = buildJudgePrompt({ proposition, transcript: [...this.transcript] });
+    const prompt = buildJudgePrompt({ proposition, transcript: [...this.transcript], userDirective });
     // Task #81: try to parse the JUDGE response as a structured
     // verdict and upgrade the summary tag. Falls back to plain
     // debate_turn if JSON parse fails — the freeform text still
@@ -690,10 +828,11 @@ interface BuildDebaterPromptArgs {
   proposition: string;
   isFinalRound: boolean;
   transcript: readonly TranscriptEntry[];
+  userDirective?: string;
 }
 
 export function buildDebaterPrompt(args: BuildDebaterPromptArgs): string {
-  const { side, round, totalRounds, proposition, isFinalRound, transcript } = args;
+  const { side, round, totalRounds, proposition, isFinalRound, transcript, userDirective } = args;
   const role = side === "pro" ? "PRO (arguing FOR)" : "CON (arguing AGAINST)";
   const stance = side === "pro" ? "FOR" : "AGAINST";
   const agentIndex = side === "pro" ? 1 : 2;
@@ -712,10 +851,25 @@ export function buildDebaterPrompt(args: BuildDebaterPromptArgs): string {
     ? "This is the FINAL round — make your closing statement. Summarize your strongest points, directly address your opponent's strongest points, and make clear WHY the judge should decide in your favor."
     : `This is round ${round} of ${totalRounds}. Make your strongest case this round. Rebut your opponent's prior argument specifically (quote or paraphrase a line they made) rather than talking past them.`;
 
+  // 2026-05-03 (debate-judge improvement #2): broader directive context.
+  // The proposition is what PRO/CON debate; the directive is the
+  // broader work. Knowing the directive helps debaters frame arguments
+  // around real consequences ("if we go the bcrypt-big-PR route,
+  // <directive> will / won't be unblocked because…") rather than
+  // arguing the proposition in a vacuum.
+  // 2026-05-03 (post-Phase-D follow-up): inline directive block extracted to shared helper.
+  const directiveBlock = buildInlineDirectiveBlock(readDirective({ userDirective }), {
+    contextLabel: "the work this debate informs",
+    followUpLines: [
+      "Your arguments should consider how the proposition affects the broader directive — but stay focused on debating THE PROPOSITION specifically.",
+    ],
+  });
+
   return [
     `You are Agent ${agentIndex}, the ${role} debater in a structured debate.`,
     `Proposition: "${proposition}"`,
     `Your job: argue ${stance} the proposition.`,
+    ...directiveBlock,
     roundBrief,
     "",
     "Your working directory IS the project clone — you may use file-read, grep, and find-files tools to gather evidence for your position.",
@@ -733,10 +887,11 @@ export function buildDebaterPrompt(args: BuildDebaterPromptArgs): string {
 interface BuildJudgePromptArgs {
   proposition: string;
   transcript: readonly TranscriptEntry[];
+  userDirective?: string;
 }
 
 export function buildJudgePrompt(args: BuildJudgePromptArgs): string {
-  const { proposition, transcript } = args;
+  const { proposition, transcript, userDirective } = args;
   const transcriptText = transcript
     .map((e) => {
       if (e.role === "system") return `[SYSTEM] ${e.text}`;
@@ -747,6 +902,18 @@ export function buildJudgePrompt(args: BuildJudgePromptArgs): string {
     })
     .join("\n\n");
 
+  // 2026-05-03 (debate-judge improvement #2): directive context for
+  // the judge. The verdict's nextAction should advance the broader
+  // directive when set — not just a generic "next thing to do" given
+  // the proposition. Implementer's write-tools turn will action it.
+  // 2026-05-03 (post-Phase-D follow-up): inline directive block extracted to shared helper.
+  const directiveBlock = buildInlineDirectiveBlock(readDirective({ userDirective }), {
+    contextLabel: "what the implementer's nextAction should target",
+    followUpLines: [
+      "When you fill in `nextAction`, frame it as the concrete next step toward the directive informed by the debate's verdict — not a generic 'consider X' suggestion.",
+    ],
+  });
+
   // Task #81 (2026-04-25): structured verdict. Previously freeform
   // text; now JSON envelope so the modal renders a scorecard.
   // Parser is lenient — falls back to freeform-as-rationale if model
@@ -754,7 +921,7 @@ export function buildJudgePrompt(args: BuildJudgePromptArgs): string {
   return [
     "You are Agent 3, the JUDGE of a structured debate.",
     `Proposition: "${proposition}"`,
-    "",
+    ...directiveBlock,
     "Your job: score the debate on the MERITS of the arguments presented, not on your prior opinion of the proposition. Score independently — a weaker argument for the 'correct' side should lose to a stronger argument for the 'wrong' side.",
     "",
     "Output ONLY a JSON object matching this shape (no prose, no fences, no commentary):",
@@ -816,12 +983,20 @@ export function scanImplementerForNoOp(text: string): {
 export function buildImplementerPrompt(
   proposition: string,
   verdict: ParsedDebateVerdict,
+  userDirective?: string,
 ): string {
+  // 2026-05-03 (post-Phase-D follow-up): inline directive block extracted to shared helper.
+  const directiveBlock = buildInlineDirectiveBlock(readDirective({ userDirective }), {
+    contextLabel: "the work this next-action targets",
+    followUpLines: [
+      "Your file edits should be a concrete step toward the directive, informed by the debate's verdict.",
+    ],
+  });
   return [
     `You are now the IMPLEMENTER (formerly PRO debater). The debate concluded with the JUDGE recommending a concrete next action — your job is to action it on the codebase.`,
     `Original proposition: "${proposition}"`,
     `Verdict winner: ${verdict.winner.toUpperCase()} · confidence: ${verdict.confidence}`,
-    "",
+    ...directiveBlock,
     `=== NEXT ACTION TO IMPLEMENT ===`,
     verdict.nextAction,
     `=== END ===`,
@@ -851,6 +1026,7 @@ export function buildReviewerPrompt(
   proposition: string,
   verdict: ParsedDebateVerdict,
   transcript: readonly TranscriptEntry[],
+  userDirective?: string,
 ): string {
   // Only show the implementer's report (the most recent agent entry)
   // — reviewer doesn't need the full debate history again, just the
@@ -865,11 +1041,18 @@ export function buildReviewerPrompt(
         (e.summary as { role?: string }).role === "implementer",
     );
   const implReport = lastImpl?.text ?? "(no implementer report found)";
+  // 2026-05-03 (post-Phase-D follow-up): inline directive block extracted to shared helper.
+  const directiveBlock = buildInlineDirectiveBlock(readDirective({ userDirective }), {
+    contextLabel: "the work the implementer's edits should advance",
+    followUpLines: [
+      "Verify not just that the implementer's changes match the next-action, but that they meaningfully advance the directive — flag if the changes only superficially address it.",
+    ],
+  });
   return [
     `You are now the REVIEWER (formerly CON debater). The IMPLEMENTER just made changes to the codebase to action the JUDGE's next-action recommendation.`,
     `Original proposition: "${proposition}"`,
     `Verdict next-action: ${verdict.nextAction}`,
-    "",
+    ...directiveBlock,
     "=== IMPLEMENTER'S REPORT ===",
     implReport,
     "=== END REPORT ===",
@@ -890,6 +1073,7 @@ export function buildSignoffPrompt(
   proposition: string,
   verdict: ParsedDebateVerdict,
   transcript: readonly TranscriptEntry[],
+  userDirective?: string,
 ): string {
   // Show implementer + reviewer entries; judge needs both to sign off.
   const phaseEntries = transcript.filter(
@@ -904,11 +1088,18 @@ export function buildSignoffPrompt(
       return `[${role.toUpperCase()}] ${e.text}`;
     })
     .join("\n\n");
+  // 2026-05-03 (post-Phase-D follow-up): inline directive block extracted to shared helper.
+  const directiveBlock = buildInlineDirectiveBlock(readDirective({ userDirective }), {
+    contextLabel: "the work the implementation should advance",
+    followUpLines: [
+      "When deciding ACCEPTED / PARTIAL / REJECTED, factor in whether the implementation meaningfully advances the directive — not just whether it actions the verdict's next-action in isolation.",
+    ],
+  });
   return [
     `You are still the JUDGE. The IMPLEMENTER actioned your next-action recommendation; the REVIEWER inspected the changes. Now you sign off.`,
     `Original proposition: "${proposition}"`,
     `Verdict next-action: ${verdict.nextAction}`,
-    "",
+    ...directiveBlock,
     "=== BUILD-PHASE TRANSCRIPT ===",
     phaseText,
     "=== END ===",

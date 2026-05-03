@@ -176,3 +176,139 @@ describe("buildTopSynthesisPrompt", () => {
     assert.match(out, /a future cycle should investigate/);
   });
 });
+
+// 2026-05-02 (OW-Deep directive lever): directive-aware paths.
+
+describe("buildTopPlanPrompt — directive injection", () => {
+  it("injects directive block + decompose-into-orthogonal-sub-questions framing", () => {
+    const out = buildTopPlanPrompt(1, 5, [2, 3], [], "Refactor auth.");
+    assert.match(out, /USER DIRECTIVE/);
+    assert.match(out, /Refactor auth\./);
+    assert.match(out, /Decompose the directive into ONE coarse sub-question per mid-lead/);
+  });
+
+  it("falls back to generic broad-coverage hint when directive absent", () => {
+    const out = buildTopPlanPrompt(1, 5, [2, 3], []);
+    assert.ok(!/USER DIRECTIVE/.test(out));
+    assert.match(out, /broad coverage of the repo/);
+  });
+});
+
+describe("buildMidLeadPlanPrompt — directive injection", () => {
+  it("includes directive context so mid-lead decomposes IN SERVICE of directive", () => {
+    const out = buildMidLeadPlanPrompt(3, 1, 5, "audit src/", [4, 5], [], "x");
+    assert.match(out, /USER DIRECTIVE/);
+    assert.match(out, /Decompose IT further so each worker subtask produces evidence/);
+  });
+
+  it("preserves the original copy when directive absent", () => {
+    const out = buildMidLeadPlanPrompt(3, 1, 5, "audit src/", [4, 5], []);
+    assert.ok(!/USER DIRECTIVE/.test(out));
+  });
+});
+
+describe("buildMidLeadSynthesisPrompt — directive injection", () => {
+  it("when directive set, frames coarse subtask answer 'IN SERVICE of the directive'", () => {
+    const out = buildMidLeadSynthesisPrompt(2, 1, 5, "x", [], "Refactor.");
+    assert.match(out, /USER DIRECTIVE/);
+    assert.match(out, /IN SERVICE of the directive/);
+  });
+});
+
+describe("buildTopSynthesisPrompt — directive injection", () => {
+  it("when directive set, leads with USER DIRECTIVE + Answer-to-directive structure", () => {
+    const out = buildTopSynthesisPrompt(1, 5, [], "Refactor auth.");
+    assert.match(out, /USER DIRECTIVE/);
+    assert.match(out, /\*\*Answer to directive\*\*/);
+  });
+
+  it("final-cycle directive path asks for the final recommendation toward the directive", () => {
+    const out = buildTopSynthesisPrompt(5, 5, [], "x");
+    assert.match(out, /\*\*Final recommendation\*\*/);
+    assert.match(out, /toward the directive/);
+  });
+
+  it("mid-cycle directive path asks for a coverage gap toward the directive", () => {
+    const out = buildTopSynthesisPrompt(2, 5, [], "x");
+    assert.match(out, /Coverage gap toward the directive/);
+  });
+});
+
+// Structural: confirm runner threading + form spec.
+
+import { readFileSync as _read } from "node:fs";
+import { join as _join, dirname as _dirname } from "node:path";
+import { fileURLToPath as _fileURLToPath } from "node:url";
+
+const _here = _dirname(_fileURLToPath(import.meta.url));
+const DEEP_SRC = _read(_join(_here, "OrchestratorWorkerDeepRunner.ts"), "utf8");
+
+describe("OrchestratorWorkerDeepRunner — directive plumbing (structural, post Phase A)", () => {
+  it("seed uses readDirective + buildDirectiveBlock helpers", () => {
+    assert.match(DEEP_SRC, /readDirective\(cfg\)/);
+    assert.match(DEEP_SRC, /buildDirectiveBlock\(/);
+  });
+
+  it("loop threads cfg.userDirective into top plan/synthesis + mid-lead subtree", () => {
+    assert.match(
+      DEEP_SRC,
+      /buildTopPlanPrompt\(r, cfg\.rounds, liveMidLeads\.map\(\(m\) => m\.index\), \[\.\.\.this\.transcript\], cfg\.userDirective\)/,
+    );
+    assert.match(
+      DEEP_SRC,
+      /this\.runMidLeadSubtree\(midLead, pool, a, r, cfg\.rounds, seedSnapshot, cfg\.userDirective\)/,
+    );
+    assert.match(
+      DEEP_SRC,
+      /buildTopSynthesisPrompt\(r, cfg\.rounds, \[\.\.\.this\.transcript\], cfg\.userDirective\)/,
+    );
+  });
+
+  it("runMidLeadSubtree threads userDirective to mid-lead plan + worker + mid-lead synth", () => {
+    assert.match(
+      DEEP_SRC,
+      /buildMidLeadPlanPrompt\([\s\S]{0,300}?userDirective,?\s*\)/,
+    );
+    assert.match(
+      DEEP_SRC,
+      /this\.runWorkerForMidLead\(w, midLead\.index, round, totalRounds, a\.subtask, seedSnapshot, userDirective\)/,
+    );
+    assert.match(
+      DEEP_SRC,
+      /buildMidLeadSynthesisPrompt\(midLead\.index, round, totalRounds, coarseAssignment\.subtask, \[\.\.\.this\.transcript\], userDirective\)/,
+    );
+  });
+
+  it("runWorkerForMidLead threads userDirective into buildWorkerPrompt", () => {
+    assert.match(
+      DEEP_SRC,
+      /buildWorkerPrompt\(worker\.index, round, totalRounds, subtask, visibleSeed, userDirective\)/,
+    );
+  });
+
+  it("deliverable uses pickDeliverableTitle + maybeDirectiveSection helpers", () => {
+    assert.match(
+      DEEP_SRC,
+      /pickDeliverableTitle\(dirCtx,\s*\{[\s\S]{0,200}?withDirective:\s*"Orchestrator-worker-deep: directive answer"/,
+      "deliverable title must use pickDeliverableTitle helper",
+    );
+    assert.match(
+      DEEP_SRC,
+      /pickAnswerSectionTitle\(dirCtx,\s*\{[\s\S]{0,200}?withDirective:\s*"Answer to directive"/,
+      "synthesis section title must use pickAnswerSectionTitle helper",
+    );
+    assert.match(DEEP_SRC, /maybeDirectiveSection\(dirCtx\)/);
+  });
+});
+
+describe("OW-Deep form spec", () => {
+  it("orchestrator-worker-deep is now directive: 'honored'", () => {
+    const setup = _read(
+      _join(_here, "../../../web/src/components/SetupForm.tsx"),
+      "utf8",
+    );
+    const block = setup.match(/id:\s*"orchestrator-worker-deep"[\s\S]{0,1500}?\},/);
+    assert.ok(block, "orchestrator-worker-deep preset block must exist");
+    assert.match(block![0], /directive:\s*"honored"/);
+  });
+});

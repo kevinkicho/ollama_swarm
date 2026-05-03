@@ -13,16 +13,34 @@ import type {
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { roleForAgent, type SwarmRole } from "./roles.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { formatChatReceipt } from "./chatReceipt.js";
+import { detectSemanticConvergence } from "./semanticConvergence.js";
+import { detectConvergence as detectJaccardConvergence } from "./moaConsensus.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
-import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
+import { buildSeedSummary } from "./runSummary.js";
+import { discussionWriteSummary } from "./discussionWriteSummary.js";
+import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import { extractResponseBreakdown, extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
-import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../services/ollamaProxy.js";
-import { runEndReflection } from "./runEndReflection.js";
+import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
+import { checkBudgetGuards } from "./loopGuards.js";
+// runEndReflection moved into runFinallyHooks (Phase D).
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import { getAgentAddendum } from "../../../shared/src/topology.js";
 import { describeSdkError } from "./sdkError.js";
+import { writeDeliverableAndEmit } from "./deliverable.js";
+import { buildRoleDiffDeliverableSections } from "./roleDiffDeliverable.js";
+import {
+  readDirective,
+  buildDirectiveBlock,
+  pickDeliverableTitle,
+  pickDeliverableSubtitle,
+} from "./directivePromptHelpers.js";
+import {
+  parseConvergenceSignal,
+  parseConvergenceSignalLoose,
+} from "./convergenceSignal.js";
 
 export interface RoundRobinOptions {
   // Unit 8: when set, every agent gets a per-index role prepended to its
@@ -51,8 +69,14 @@ export class RoundRobinRunner implements SwarmRunner {
   private summaryWritten = false;
   // Phase B (Task #100): set when the role-diff midpoint synthesis
   // returns CONVERGENCE: high. Promoted to stopReason="early-stop"
-  // by writeSummary. Plain round-robin (no roles) never sets this.
+  // by writeSummary. 2026-05-02: also set when plain round-robin's
+  // structured-deliberation convergence check (improvement #3) detects
+  // the discussion has settled.
   private earlyStopDetail?: string;
+  // 2026-05-02 (round-robin improvement #1): cumulative turn counter
+  // across all agents + rounds. Drives disposition rotation in
+  // buildPrompt. Pre-incremented by runTurn before each prompt build.
+  private turnsTaken = 0;
 
   constructor(private readonly opts: RunnerOpts, options?: RoundRobinOptions) {
     this.roles = options?.roles && options.roles.length > 0 ? options.roles : undefined;
@@ -72,15 +96,22 @@ export class RoundRobinRunner implements SwarmRunner {
     };
   }
 
-  injectUser(text: string): void {
+  injectUser(
+    text: string,
+    opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
+  ): void {
+    const intent = opts?.intent ?? "steer";
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "user",
       text,
       ts: Date.now(),
+      intent,
+      ...(opts?.targetAgent ? { targetAgent: opts.targetAgent } : {}),
     };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
+    this.appendSystem(formatChatReceipt(intent, opts?.targetAgent));
   }
 
   isRunning(): boolean {
@@ -166,14 +197,26 @@ export class RoundRobinRunner implements SwarmRunner {
 
   private async seed(clonePath: string, cfg: RunConfig): Promise<void> {
     const tree = (await this.opts.repos.listTopLevel(clonePath)).slice(0, 200);
-    const seed = [
+    // 2026-05-02 (improvement #5): user directive is now honored. When
+    // present, surfaced at the TOP of the seed so every agent sees it
+    // before any tool call. Round-robin moves out of "analysis-only"
+    // status — the deliberation now drives toward a stated objective,
+    // not just open-ended commentary on the repo.
+    // 2026-05-03 (Phase A): directive block extracted to shared helper.
+    const dirCtx = readDirective(cfg);
+    const lines = [
       `Project clone: ${clonePath}`,
       `Repo: ${cfg.repoUrl}`,
       `Top-level entries: ${tree.join(", ") || "(empty)"}`,
       "",
+      ...buildDirectiveBlock(dirCtx, {
+        framingLines: [
+          "The deliberation should converge on a concrete plan / answer for the directive above. Treat it as the question every disposition is helping resolve.",
+        ],
+      }),
       "Use your file-read / grep / find tools to actually inspect this repo — start with README.md if present.",
-    ].join("\n");
-    this.appendSystem(seed, buildSeedSummary(cfg.repoUrl, clonePath, tree));
+    ];
+    this.appendSystem(lines.join("\n"), buildSeedSummary(cfg.repoUrl, clonePath, tree));
   }
 
   private async loop(cfg: RunConfig): Promise<void> {
@@ -186,22 +229,21 @@ export class RoundRobinRunner implements SwarmRunner {
       const earlyCheckRound =
         this.roles && cfg.rounds >= 4 ? Math.ceil(cfg.rounds / 2) : 0;
 
-      // Task #124: snapshot lifetime tokens at run start for budget delta.
+      // 2026-05-03 (Phase B): budget + quota guards extracted to shared helper.
       const tokenBaseline = snapshotLifetimeTokens();
 
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
-        // Task #124: token-budget cap check before each round.
-        if (tokenBudgetExceeded(tokenBaseline, cfg.tokenBudget)) {
-          this.earlyStopDetail = `token-budget reached (${cfg.tokenBudget?.toLocaleString()} tokens)`;
-          this.appendSystem(`Token budget of ${cfg.tokenBudget?.toLocaleString()} tokens reached at round ${r - 1}/${cfg.rounds} — ending run early.`);
-          break;
-        }
-        // Task #137: quota-wall cap check.
-        if (shouldHaltOnQuota()) {
-          const q = tokenTracker.getQuotaState();
-          this.earlyStopDetail = `ollama-quota-exhausted (${q?.statusCode}: ${q?.reason.slice(0, 100)})`;
-          this.appendSystem(`Ollama quota wall hit at round ${r - 1}/${cfg.rounds} (${q?.statusCode}) — ending run early.`);
+        const guard = checkBudgetGuards({
+          tokenBaseline,
+          tokenBudget: cfg.tokenBudget,
+          round: r,
+          totalRounds: cfg.rounds,
+          unit: "round",
+        });
+        if (guard.halt) {
+          this.earlyStopDetail = guard.earlyStopDetail;
+          this.appendSystem(guard.message ?? "");
           break;
         }
         this.round = r;
@@ -232,6 +274,28 @@ export class RoundRobinRunner implements SwarmRunner {
             break;
           }
         }
+        // 2026-05-02 (round-robin improvement #3): semantic convergence
+        // check for the no-roles structured-deliberation case. After
+        // round 2+, if the LAST agent's turn this round is >0.85
+        // cosine-similar to the same agent's turn LAST round, the
+        // discussion has settled — stop early. Falls back to Jaccard
+        // when embedding model unavailable. Saves the wasted "everyone
+        // agreed already" tail.
+        if (
+          !this.roles &&
+          !this.stopping &&
+          r >= 2 &&
+          r < cfg.rounds
+        ) {
+          const converged = await this.checkStructuredConvergence();
+          if (converged) {
+            this.earlyStopDetail = `structured-deliberation-converged after round ${r}/${cfg.rounds}`;
+            this.appendSystem(
+              `[improvement #3] Structured deliberation converged at round ${r}/${cfg.rounds} — last agent's turn echoes their prior round. Ending early.`,
+            );
+            break;
+          }
+        }
       }
 
       // Phase B (Task #100): final synthesis pass (role-diff only).
@@ -241,36 +305,81 @@ export class RoundRobinRunner implements SwarmRunner {
       if (this.roles && !this.stopping && cfg.rounds > 0 && !this.earlyStopDetail) {
         await this.runRoleDiffSynthesisPass(cfg);
       }
+      // 2026-05-02 (round-robin improvement #4): final synthesis pass
+      // for the no-roles structured-deliberation case. Lead distills
+      // Consensus / Disagreements / Recommended next step. Skip when
+      // role-diff already ran or convergence cap broke us out.
+      if (!this.roles && !this.stopping && cfg.rounds > 0 && !this.earlyStopDetail) {
+        await this.runStructuredSynthesisPass(cfg);
+      }
+
+      // 2026-05-02 (role-diff improvement #4): portable deliverable for
+      // role-diff. Pulls each role's latest `### MY DELIVERABLE` block
+      // + the synthesis text into a PR-shaped markdown file. Fires for
+      // every role-diff run that wasn't user-stopped or crashed,
+      // including early-stop convergence runs (the synthesis already
+      // wrote — we just compose around it). Best-effort; failure
+      // doesn't block the rest of the close-out.
+      if (this.roles && !this.stopping && cfg.runId) {
+        try {
+          const sections = buildRoleDiffDeliverableSections({
+            userDirective: cfg.userDirective,
+            roles: this.roles,
+            agentCount: cfg.agentCount,
+            transcript: this.transcript,
+          });
+          // 2026-05-03 (Phase A): directive helpers extracted to shared module.
+          const dirCtx = readDirective(cfg);
+          const subtitleBase = dirCtx.hasDirective
+            ? `${cfg.agentCount} specialists across ${this.round}/${cfg.rounds} rounds`
+            : `${cfg.agentCount} reviewers across ${this.round}/${cfg.rounds} rounds — open repo analysis`;
+          writeDeliverableAndEmit(
+            {
+              preset: "role-diff",
+              runId: cfg.runId,
+              clonePath: cfg.localPath,
+              title: pickDeliverableTitle(dirCtx, {
+                withDirective: "Role-diff specialist deliverable",
+                withoutDirective: "Role-diff repo audit",
+              }),
+              subtitle: pickDeliverableSubtitle(dirCtx, subtitleBase),
+              sections,
+            },
+            { transcript: this.transcript, emit: this.opts.emit },
+          );
+        } catch (err) {
+          this.appendSystem(
+            `[role-diff #4] Deliverable write failed (${err instanceof Error ? err.message : String(err)}); transcript still has the synthesis bubble.`,
+          );
+        }
+      }
 
       if (!this.stopping) this.appendSystem("Discussion complete.");
     } catch (err) {
       crashMessage = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: crashMessage });
     } finally {
-      // Task #150: end-of-run reflection (cross-preset memory write).
-      if (!crashMessage && !this.stopping && cfg.runId) {
-        const lead = this.opts.manager.list().find((a) => a.index === 1);
-        if (lead) {
-          const ctxSummary = `${cfg.preset} preset · ${cfg.agentCount} agents · ran ${this.round}/${cfg.rounds} rounds${this.earlyStopDetail ? ` · early-stop: ${this.earlyStopDetail}` : ""}`;
-          await runEndReflection({
-            agent: lead, preset: cfg.preset, runId: cfg.runId, clonePath: cfg.localPath,
-            contextSummary: ctxSummary, log: (msg) => this.appendSystem(msg),
-          }).catch(() => {});
-        }
-      }
-      // Unit 33: write summary.json at termination so any preset run
-      // can be compared via scripts/compare-runs.mjs. Write BEFORE the
-      // terminal setPhase so a UI observer reacting to "completed" can
-      // trust the file is already on disk.
-      await this.writeSummary(cfg, crashMessage);
-      // Unit 55: auto-killAll on natural completion. Without this,
-      // a finished run leaves agents holding ports + cloud sessions.
-      // Skip when this.stopping=true — stop() already did the kill.
-      if (!this.stopping) {
-        const killResult = await this.opts.manager.killAll();
-        this.appendSystem(formatPortReleaseLine(killResult));
-        this.setPhase("completed");
-      }
+      // 2026-05-03 (Phase D): finally close-out extracted to shared helper.
+      // RoundRobin's role-diff path's deliverable was already written
+      // earlier in the try-block (gated on this.roles + runId), so the
+      // helper here just handles reflection + summary + killAll + setPhase.
+      await runDiscussionCloseOut({
+        cfg,
+        crashMessage,
+        stopping: this.stopping,
+        earlyStopDetail: this.earlyStopDetail,
+        round: this.round,
+        currentPhase: this.phase,
+        manager: this.opts.manager,
+        appendSystem: (text) => this.appendSystem(text),
+        setPhase: (p) => this.setPhase(p),
+        writeSummary: () => this.writeSummary(cfg, crashMessage),
+        hooks: {
+          pickReflectionAgent: (m) => m.list().find((a) => a.index === 1) ?? null,
+          buildReflectionContext: (s) =>
+            `${cfg.preset} preset · ${cfg.agentCount} agents · ran ${s.round}/${cfg.rounds} rounds${s.earlyStopDetail ? ` · early-stop: ${s.earlyStopDetail}` : ""}`,
+        },
+      });
     }
   }
 
@@ -282,50 +391,24 @@ export class RoundRobinRunner implements SwarmRunner {
     if (this.summaryWritten) return;
     this.summaryWritten = true;
     if (this.startedAt === undefined) return; // never reached discussing
-    let gitStatus = { porcelain: "", changedFiles: 0 };
-    try {
-      gitStatus = await this.opts.repos.gitStatus(cfg.localPath);
-    } catch {
-      // gitStatus already swallows; extra belt.
-    }
-    const summary = buildDiscussionSummary({
-      config: {
-        repoUrl: cfg.repoUrl,
-        localPath: cfg.localPath,
-        preset: cfg.preset,
-        model: cfg.model,
-        runId: cfg.runId,
-      },
-      agentCount: cfg.agentCount,
-      rounds: cfg.rounds,
-      startedAt: this.startedAt,
-      endedAt: Date.now(),
+    // 2026-05-03 (Phase C): writeSummary body extracted to shared helper.
+    await discussionWriteSummary({
+      cfg,
       crashMessage,
       stopping: this.stopping,
+      startedAt: this.startedAt,
       earlyStopDetail: this.earlyStopDetail,
-      filesChanged: gitStatus.changedFiles,
-      finalGitStatus: gitStatus.porcelain,
+      agentCount: cfg.agentCount,
       agents: this.stats.buildPerAgentStats(),
       transcript: this.transcript,
-      // Phase 4a of #243: topology passthrough.
       topology: cfg.topology,
+      repos: this.opts.repos,
+      appendSystem: (text, summary) => this.appendSystem(text, summary),
     });
-    try {
-      await writeRunSummary(cfg.localPath, summary);
-      this.appendSystem(
-        formatRunFinishedBanner(summary),
-        buildRunFinishedSummary(summary),
-      );
-      this.appendSystem(
-        `Wrote run summary (stopReason=${summary.stopReason}, wallClockMs=${summary.wallClockMs}, files=${summary.filesChanged}).`,
-      );
-    } catch (writeErr) {
-      const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
-      this.appendSystem(`Failed to write run summary (${msg})`);
-    }
   }
 
   private async runTurn(agent: Agent, round: number, totalRounds: number): Promise<void> {
+    this.turnsTaken += 1; // 2026-05-02 (improvement #1): drive disposition rotation
     this.opts.manager.markStatus(agent.id, "thinking");
     this.emitAgentState({ id: agent.id, index: agent.index, port: agent.port, sessionId: agent.sessionId, status: "thinking", thinkingSince: Date.now() });
     // Unit 33: one turn = one call to runTurn (retries inside
@@ -477,6 +560,134 @@ export class RoundRobinRunner implements SwarmRunner {
   // council #79 pattern — agent-1 takes every role's findings and
   // produces a cross-role consolidation. Same prompt also asks for
   // a CONVERGENCE: high|medium|low signal (parsed for the early-stop
+  // 2026-05-02 (round-robin improvement #3): semantic convergence
+  // check. Compares the LAST agent's turn this round to the SAME
+  // agent's turn last round. When >0.85 cosine similar (or 0.7 Jaccard
+  // when embedding unavailable), the discussion has settled. Pure
+  // server-side check — no LLM call required (just an embed call when
+  // semantic path fires). Best-effort: returns false on any failure
+  // so the loop continues.
+  private async checkStructuredConvergence(): Promise<boolean> {
+    const agents = this.opts.manager.list();
+    if (agents.length === 0) return false;
+    // The last agent's turn this round vs last round.
+    const agentEntries = this.transcript.filter(
+      (e) => e.role === "agent" && e.agentIndex === agents[agents.length - 1].index,
+    );
+    if (agentEntries.length < 2) return false;
+    const current = agentEntries[agentEntries.length - 1].text;
+    const prior = agentEntries[agentEntries.length - 2].text;
+    if (!current || !prior) return false;
+    const ollamaBaseUrl = this.opts.ollamaBaseUrl;
+    if (ollamaBaseUrl) {
+      const semantic = await detectSemanticConvergence({
+        prior,
+        current,
+        ollamaBaseUrl,
+        threshold: 0.85,
+      });
+      if (semantic !== null) {
+        this.appendSystem(
+          `[improvement #3] Convergence check: embedding cosine=${semantic.similarity.toFixed(3)} (threshold ${semantic.threshold.toFixed(3)})`,
+        );
+        return semantic.converged;
+      }
+    }
+    // Fallback: Jaccard when embedding model unavailable
+    const verdict = detectJaccardConvergence(prior, current, 0.7);
+    this.appendSystem(
+      `[improvement #3] Convergence check (Jaccard fallback): jaccard=${verdict.similarity.toFixed(3)} (threshold ${verdict.threshold})`,
+    );
+    return verdict.converged;
+  }
+
+  // 2026-05-02 (round-robin improvement #4): final synthesis pass for
+  // the no-roles structured-deliberation case. Mirrors the role-diff
+  // version but uses buildStructuredSynthesisPrompt + tags as
+  // role_diff_synthesis (existing summary kind — UI rendering applies
+  // identically; could add a dedicated kind in a follow-up).
+  private async runStructuredSynthesisPass(
+    cfg: RunConfig,
+  ): Promise<"high" | "medium" | "low" | null> {
+    const agents = this.opts.manager.list();
+    const lead = agents.find((a) => a.index === 1);
+    if (!lead) return null;
+    if (this.stopping) return null;
+    this.opts.manager.markStatus(lead.id, "thinking");
+    this.emitAgentState({
+      id: lead.id,
+      index: lead.index,
+      port: lead.port,
+      sessionId: lead.sessionId,
+      status: "thinking",
+      thinkingSince: Date.now(),
+    });
+    this.stats.countTurn(lead.id);
+    this.appendSystem(`[improvement #4] Synthesizing structured deliberation (agent-${lead.index})…`);
+    const prompt = buildStructuredSynthesisPrompt(cfg.rounds, this.transcript, cfg.userDirective);
+    const controller = new AbortController();
+    const watchdog = startSseAwareTurnWatchdog({
+      manager: this.opts.manager,
+      sessionId: lead.sessionId,
+      controller,
+      abortSession: async () => {},
+    });
+    try {
+      const res = (await promptWithRetry(lead, prompt, {
+        signal: controller.signal,
+        manager: this.opts.manager,
+        onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens),
+        agentName: "swarm-read",
+        promptAddendum: getAgentAddendum(this.active?.topology, lead.index),
+        describeError: (e) => describeSdkError(e),
+      })) as { data: { parts: Array<{ type: "text"; text: string }> } };
+      const text = (res?.data?.parts?.find((p) => p.type === "text")?.text ?? "").trim();
+      if (text.length === 0) {
+        this.appendSystem(`[improvement #4] Synthesis returned empty response; skipping.`);
+        return null;
+      }
+      const stripped = stripAgentText(text);
+      const entry: TranscriptEntry = {
+        id: randomUUID(),
+        role: "agent",
+        agentId: lead.id,
+        agentIndex: lead.index,
+        text: stripped.finalText || "(empty response)",
+        ts: Date.now(),
+        // Tag with the existing role_diff_synthesis kind so the UI
+        // renders distinctively. role_diff_synthesis was the natural
+        // home; the disposition rotation is the structured-deliberation
+        // analog of role-diff's specialized roles. Could add a
+        // dedicated kind later.
+        summary: { kind: "role_diff_synthesis", rounds: cfg.rounds, roles: 0 },
+        ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
+        ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
+      };
+      this.transcript.push(entry);
+      this.opts.emit({ type: "transcript_append", entry });
+      // 2026-05-03 (Phase A): convergence parser unified to shared module.
+      // The synthesis-pass path historically used a looser scanner (anywhere
+      // in text, not just trailing lines) so we keep that behavior here via
+      // parseConvergenceSignalLoose. The role-diff path below uses the strict
+      // trailing-3-lines parser via parseConvergenceSignal.
+      return parseConvergenceSignalLoose(text);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(`[improvement #4] Synthesis prompt failed (${msg})`);
+      return null;
+    } finally {
+      watchdog.cancel();
+      this.opts.manager.markStatus(lead.id, "ready");
+      this.emitAgentState({
+        id: lead.id,
+        index: lead.index,
+        port: lead.port,
+        sessionId: lead.sessionId,
+        status: "ready",
+      });
+    }
+  }
+
   // detector). Tagged "role_diff_synthesis" so the modal can render
   // it distinctively.
   private async runRoleDiffSynthesisPass(
@@ -579,7 +790,7 @@ export class RoundRobinRunner implements SwarmRunner {
         );
         return null;
       }
-      return parseRoleDiffConvergence(text);
+      return parseConvergenceSignal(text);
     } catch (err) {
       this.appendSystem(
         `[${lead.id}] role-diff synthesis failed (${err instanceof Error ? err.message : String(err)}); skipping consolidation.`,
@@ -600,6 +811,14 @@ export class RoundRobinRunner implements SwarmRunner {
   }
 
   private buildPrompt(agent: Agent, round: number, totalRounds: number): string {
+    // 2026-05-02 (round-robin improvement #1): rotating dispositions
+    // when NO roles configured. Lifts plain round-robin out of "neutral
+    // baseline" by assigning each turn a deliberate LENS — critic /
+    // synthesizer / gap-finder / builder. Forces value-add per turn:
+    // no two consecutive turns can be the same character. Skipped when
+    // role-diff is active (roles ARE the specialization).
+    const turnNumber = this.turnsTaken; // pre-increment in caller
+    const disposition = !this.roles ? getDispositionForTurn(turnNumber) : null;
     const transcriptText = this.transcript
       .map((e) => {
         if (e.role === "system") return `[SYSTEM] ${e.text}`;
@@ -614,13 +833,58 @@ export class RoundRobinRunner implements SwarmRunner {
     const role = this.roles ? roleForAgent(agent.index, this.roles) : null;
     const header = role
       ? `You are Agent ${agent.index} in a swarm of collaborating AI engineers reviewing a cloned GitHub project. Your role is "${role.name}".`
-      : `You are Agent ${agent.index} in a swarm of collaborating AI engineers reviewing a cloned GitHub project.`;
+      : disposition
+        ? `You are Agent ${agent.index} in a structured deliberation. This turn, you take the **${disposition.name}** disposition.`
+        : `You are Agent ${agent.index} in a swarm of collaborating AI engineers reviewing a cloned GitHub project.`;
     const roleGuidance = role ? [`As the ${role.name}: ${role.guidance}`, ""] : [];
+    // 2026-05-02 (improvement #5): user directive injected into every
+    // turn. Placed BEFORE the disposition block so each disposition
+    // is explicitly applied to the directive (Critic critiques peers'
+    // take on it, Builder proposes a next step toward it, etc.).
+    // 2026-05-03 (Phase A): directive helpers extracted to shared module.
+    const dirCtx = readDirective({ userDirective: this.active?.userDirective });
+    const directiveBlock = buildDirectiveBlock(dirCtx, {
+      labelSuffix: "(the question this deliberation must resolve)",
+    });
+    const directive = dirCtx.directive;
+    // 2026-05-02 (improvement #1 + #2): disposition framing + active-
+    // disagreement backbone. Both omitted when role-diff is active
+    // (roles ARE the specialization).
+    const dispositionBlock = disposition
+      ? [
+          `**${disposition.name.toUpperCase()} disposition this turn:** ${disposition.framing}`,
+          "",
+          "**ACTIVE-DISAGREEMENT RULE (every turn):** You MUST do at least ONE of: (a) challenge a specific prior point with reasoning, (b) add a NEW dimension peers haven't named, or (c) call out a real tradeoff being glossed. Never just agree or restate. If you have nothing to push on, say so explicitly + name what's still unclear.",
+          "",
+        ]
+      : [];
+
+    // 2026-05-02 (role-diff improvement #3): per-role concrete-deliverable
+    // contract. Every role MUST end its turn with a `### MY DELIVERABLE`
+    // block — not commentary, but the role's piece of the actual answer.
+    // Implementer lists file changes; Tester lists assertions; etc.
+    // The deliverable artifact (#4) extracts these blocks per-role to
+    // assemble a portable PR-shaped doc. Without this contract role-diff
+    // produces 7 commentaries; with it, 7 specialists each own one piece
+    // of one answer.
+    const deliverableBlock = role
+      ? [
+          "**MY DELIVERABLE CONTRACT (every turn, role-diff):** End your prose with a `### MY DELIVERABLE` heading followed by your role's concrete contribution.",
+          role.deliverableHint
+            ? `For your role (${role.name}): ${role.deliverableHint}`
+            : `For your role (${role.name}): a concrete contribution toward the directive — not commentary on it.`,
+          "Even if your role's piece doesn't change this round, write what your CURRENT best answer is — peers and the synthesis lead read this block, not your prose.",
+          "",
+        ]
+      : [];
 
     return [
       header,
-      `This is discussion round ${round} of ${totalRounds}.`,
+      `This is discussion round ${round} of ${totalRounds}. (Total turns so far: ${turnNumber}.)`,
       ...roleGuidance,
+      ...directiveBlock,
+      ...dispositionBlock,
+      ...deliverableBlock,
       "Your working directory IS the project clone — use file-read, grep, and find-files tools to inspect it.",
       // Task #118: hard tool-use requirement. Run daf5c92e showed
       // role-diff agents NEVER invoked file-read tools (0 tool calls
@@ -638,17 +902,35 @@ export class RoundRobinRunner implements SwarmRunner {
       "Keep responses under ~250 words. Be specific. Cite file paths (e.g. `src/foo.ts:42`) when you reference code.",
       "You may @mention another agent (e.g. @Agent2) to address them directly.",
       "",
-      "Goals of this discussion:",
-      "1. Figure out what this project is and who it is for.",
-      "2. Identify what is working and what is missing.",
-      "3. Propose one concrete next action the swarm should take.",
-      "",
+      ...(directive.length > 0
+        ? role
+          ? [
+              "Goals of this deliberation:",
+              "1. Read the repo just enough to ground your role's deliverable in real code (not filename guesses).",
+              `2. Through your role (${role.name}), produce YOUR specialist piece of the directive's answer. Other roles handle the other pieces — focus on yours.`,
+              "3. By the final round the team should have converged on a coherent answer to the directive built from each role's deliverable, with the synthesis lead consolidating.",
+              "",
+            ]
+          : [
+              "Goals of this deliberation:",
+              "1. Read the repo just enough to ground your take on the directive in real code (not filename guesses).",
+              "2. Through your assigned disposition, advance the team's answer to the directive — challenge a peer's framing of it, surface what they're missing about it, or propose a concrete step toward it.",
+              "3. By the final round the team should have converged on: a clear plan for the directive, what's risky about it, and what the next concrete step is.",
+              "",
+            ]
+        : [
+            "Goals of this discussion:",
+            "1. Figure out what this project is and who it is for.",
+            "2. Identify what is working and what is missing.",
+            "3. Propose one concrete next action the swarm should take.",
+            "",
+          ]),
       "=== SHARED TRANSCRIPT ===",
       transcriptText || "(empty — you are first to speak)",
       "=== END TRANSCRIPT ===",
       "",
       role
-        ? `Now respond as Agent ${agent.index} (${role.name}), through the lens of your role. Tool-call first, then prose.`
+        ? `Now respond as Agent ${agent.index} (${role.name}), through the lens of your role. Tool-call first, then prose, then your \`### MY DELIVERABLE\` block.`
         : `Now respond as Agent ${agent.index}. Tool-call first, then prose.`,
     ].join("\n");
   }
@@ -678,6 +960,114 @@ export class RoundRobinRunner implements SwarmRunner {
 // the council synthesis (#79) — labeled cross-role table, not a
 // re-summary of each agent's draft. The CONVERGENCE: line at the
 // end is the early-stop signal (same parser pattern as council #99).
+// 2026-05-02 (round-robin improvement #1): rotating dispositions for
+// the structured deliberation framework. When NO roles are configured,
+// each turn cycles through these four lenses — every turn deliberately
+// adds a distinct kind of value, no two consecutive turns can be the
+// same character.
+//
+// Calibrated to a small fixed set: 4 dispositions covers the most
+// useful axes of deliberation (push back / consolidate / surface gaps /
+// move forward). More dispositions would dilute; fewer wouldn't cycle
+// before agents repeat themselves.
+export interface RoundRobinDisposition {
+  name: string;
+  framing: string;
+}
+
+export const DISPOSITIONS: readonly RoundRobinDisposition[] = [
+  {
+    name: "Critic",
+    framing:
+      "Find weaknesses in what's been said. Cite the specific claim you're challenging + your reason. Don't be contrary for its own sake — name the gap or unfounded assumption.",
+  },
+  {
+    name: "Synthesizer",
+    framing:
+      "Distill what peers AGREED on (consensus) and what they DISAGREED on (open tradeoffs). Cite who said what. Surface 1-2 sentences that capture the current state of the discussion.",
+  },
+  {
+    name: "Gap-finder",
+    framing:
+      "Name what HASN'T been addressed yet. What did the directive ask for that no peer has touched? What perspective (security, performance, ergonomics, cost) is missing? Cite specifics, not generalities.",
+  },
+  {
+    name: "Builder",
+    framing:
+      "Propose ONE concrete next action the team should take. Name files to touch, decisions to make, or experiments to run. Be specific enough that a peer could execute on it. Build on what's been said; don't restart.",
+  },
+];
+
+/** Pure helper — get the disposition for a 1-indexed turn number.
+ *  Cycles through DISPOSITIONS in order. Pure — exported for tests. */
+export function getDispositionForTurn(turnNumber: number): RoundRobinDisposition {
+  const idx = ((turnNumber - 1) % DISPOSITIONS.length + DISPOSITIONS.length) % DISPOSITIONS.length;
+  return DISPOSITIONS[idx];
+}
+
+// 2026-05-02 (round-robin improvement #4): structured-deliberation
+// final synthesis. Mirrors buildRoleDiffSynthesisPrompt but for the
+// no-roles structured-deliberation case. Lead distills the whole
+// transcript into Consensus / Disagreements / Recommended next step.
+export function buildStructuredSynthesisPrompt(
+  totalRounds: number,
+  transcript: readonly TranscriptEntry[],
+  userDirective?: string,
+): string {
+  const transcriptText = transcript
+    .map((e) => {
+      if (e.role === "system") return `[SYSTEM] ${e.text}`;
+      if (e.role === "user") return `[HUMAN] ${e.text}`;
+      return `[Agent ${e.agentIndex}] ${e.text}`;
+    })
+    .join("\n\n");
+  // 2026-05-02 (improvement #5): directive-aware synthesis. When a
+  // directive is set the synthesis MUST answer it directly — adds a
+  // dedicated "Answer to directive" section and reframes
+  // "Recommended next step" as the next action toward the directive.
+  // 2026-05-03 (Phase A): directive helpers extracted to shared module.
+  const dirCtx = readDirective({ userDirective });
+  const directiveBlock = buildDirectiveBlock(dirCtx, {
+    labelSuffix: "(the question the team was deliberating)",
+  });
+  const structure = dirCtx.hasDirective
+    ? [
+        "STRUCTURE your response as:",
+        "1. **Answer to directive** — direct response to the user's question / request. State what the team concluded, not how it deliberated.",
+        "2. **Consensus** — what every agent agreed on while resolving the directive.",
+        "3. **Disagreements** — where agents still hold different positions on the directive. Name the agents and their stances.",
+        "4. **Recommended next step** — ONE concrete next action toward the directive. Cite files / decisions / experiments. Build on the Builder-disposition turns.",
+        "5. **Open questions** — anything the Gap-finder turns surfaced about the directive that the team didn't resolve.",
+      ]
+    : [
+        "STRUCTURE your response as:",
+        "1. **Consensus** — what every agent (including you) converged on. State as a direct claim, not a meta-observation.",
+        "2. **Disagreements** — where agents still hold different positions. Name the agents and their stances.",
+        "3. **Recommended next step** — ONE concrete next action. Cite files / decisions / experiments. Build on the Builder-disposition turns from the discussion.",
+        "4. **Open questions** — anything the Gap-finder turns surfaced that the team didn't resolve.",
+      ];
+  return [
+    `You are Agent 1, the deliberation synthesis lead. The team just finished ${totalRounds} round${totalRounds === 1 ? "" : "s"} of structured deliberation across rotating dispositions (Critic / Synthesizer / Gap-finder / Builder).`,
+    "Your job NOW is to produce a SINGLE consolidated answer that integrates the whole discussion.",
+    "",
+    ...directiveBlock,
+    ...structure,
+    "",
+    "Keep under ~500 words. Be specific. Cite file paths when relevant.",
+    "",
+    "On the FINAL line of your response (no markdown, nothing after it), output exactly one of:",
+    "  CONVERGENCE: high   — agents largely agree; further rounds would only restate consensus.",
+    "  CONVERGENCE: medium — partial consensus with real open questions still in play.",
+    "  CONVERGENCE: low    — significant unresolved disagreement; more rounds would help.",
+    "",
+    "=== FULL TRANSCRIPT ===",
+    transcriptText,
+    "=== END TRANSCRIPT ===",
+    "",
+    "Produce your synthesis now.",
+  ].join("\n");
+}
+
 export function buildRoleDiffSynthesisPrompt(
   roles: readonly SwarmRole[],
   transcript: readonly TranscriptEntry[],
@@ -726,17 +1116,7 @@ export function buildRoleDiffSynthesisPrompt(
 // Phase B (Task #100): scan a synthesis response for the
 // "CONVERGENCE: high|medium|low" line. Mirrors parseCouncilConvergence
 // in CouncilRunner.ts.
-export function parseRoleDiffConvergence(
-  text: string,
-): "high" | "medium" | "low" | null {
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-  const tail = lines.slice(-3);
-  for (const line of tail) {
-    const m = /^convergence\s*:\s*(high|medium|low)\b/i.exec(line);
-    if (m) return m[1].toLowerCase() as "high" | "medium" | "low";
-  }
-  return null;
-}
+// 2026-05-03 (Phase A): both parsers consolidated into the shared
+// `convergenceSignal.ts` module. This re-export preserves the legacy
+// public name for external callers.
+export { parseConvergenceSignal as parseRoleDiffConvergence } from "./convergenceSignal.js";

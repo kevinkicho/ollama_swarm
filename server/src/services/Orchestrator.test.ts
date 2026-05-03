@@ -3,12 +3,16 @@
 // missing or truncated) can be verified without spinning up a full
 // orchestrator + agent manager + repos chain.
 
-import { describe, it } from "node:test";
+import { describe, it, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { mergeKnownParents, scanForRunParents } from "./Orchestrator.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ORCHESTRATOR_SRC = readFileSync(join(__dirname, "Orchestrator.ts"), "utf8");
 
 describe("mergeKnownParents", () => {
   it("dedupes entries, preserving persisted order", () => {
@@ -137,4 +141,35 @@ describe("scanForRunParents — discovers runs/* + runs_overnight*/* roots", () 
       cleanup();
     }
   });
+});
+
+// 2026-05-01 (#119): structural — Orchestrator.injectUser must dual-write
+// to BOTH the runner's transcript AND the AmendmentsBuffer so blackboard's
+// directiveWithAmendments() picks up chat as a mid-run nudge. Pre-fix:
+// only the runner.injectUser was called; chat went to display only for
+// blackboard (which doesn't surface user-role transcript entries in
+// prompts) and MoA (same gap). The 7 other discussion runners use the
+// [HUMAN] formatter on the transcript path so they were unaffected.
+
+test("Orchestrator.injectUser — dual-writes to runner.transcript AND amendments buffer", () => {
+  // 2026-05-02 (chat lever #2): signature now accepts an optional opts
+  // param with intent + targetAgent. Default intent === "steer" preserves
+  // the pre-tagged amendments-dual-write behavior.
+  assert.match(
+    ORCHESTRATOR_SRC,
+    /injectUser\(\s*text: string,\s*opts\?:[\s\S]*?this\.runner\?\.injectUser\(text, opts\)/,
+    "must still call runner.injectUser with opts so per-runner code sees the tag",
+  );
+  // The amendments-side dual-write now ALSO gates on intent==="steer"
+  // so suggest/ask don't burn a planner reshape unnecessarily.
+  assert.match(
+    ORCHESTRATOR_SRC,
+    /this\.amendments\.add\(this\.runId, text\)/,
+    "must ALSO call amendments.add so blackboard sees chat as a planner nudge",
+  );
+  assert.match(
+    ORCHESTRATOR_SRC,
+    /if \(this\.runId && text\.trim\(\)\.length > 0 && intent === "steer"\)/,
+    "amendments dual-write must be gated on (runId AND non-empty text AND intent==='steer')",
+  );
 });

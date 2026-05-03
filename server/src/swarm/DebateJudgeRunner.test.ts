@@ -1,12 +1,32 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   buildDebaterPrompt,
   buildJudgePrompt,
+  buildImplementerPrompt,
+  buildReviewerPrompt,
+  buildSignoffPrompt,
   DEFAULT_PROPOSITION,
   scanImplementerForNoOp,
 } from "./DebateJudgeRunner.js";
 import type { TranscriptEntry } from "../types.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const DJ_SRC = readFileSync(join(__dirname, "DebateJudgeRunner.ts"), "utf8");
+
+const STUB_VERDICT = {
+  winner: "pro" as const,
+  confidence: "high" as const,
+  proStrongest: "x",
+  conStrongest: "y",
+  proWeakest: "p",
+  conWeakest: "q",
+  decisive: "PRO had stronger evidence.",
+  nextAction: "Land the bcrypt migration in a single PR.",
+};
 
 const system = (text: string): TranscriptEntry => ({
   id: crypto.randomUUID(),
@@ -204,5 +224,195 @@ describe("scanImplementerForNoOp (Task #135)", () => {
     const text = "See https://example.com/docs/foo.html:1 for details. Nothing else.";
     const r = scanImplementerForNoOp(text);
     assert.equal(r.likelyNoOp, true);
+  });
+});
+
+// 2026-05-03 (debate-judge directive lever): directive plumbing tests.
+
+describe("buildDebaterPrompt — directive injection (improvement #2)", () => {
+  it("injects 'broader directive' context when set", () => {
+    const prompt = buildDebaterPrompt({
+      side: "pro",
+      round: 1,
+      totalRounds: 3,
+      proposition: "We should ship X as a single PR.",
+      isFinalRound: false,
+      transcript: [],
+      userDirective: "Refactor auth to bcrypt.",
+    });
+    assert.match(prompt, /Broader directive.*Refactor auth to bcrypt\./);
+    assert.match(prompt, /how the proposition affects the broader directive/);
+  });
+
+  it("falls back to original framing when directive absent", () => {
+    const prompt = buildDebaterPrompt({
+      side: "pro",
+      round: 1,
+      totalRounds: 3,
+      proposition: "P",
+      isFinalRound: false,
+      transcript: [],
+    });
+    assert.ok(!/Broader directive/.test(prompt));
+  });
+
+  it("treats whitespace-only directive as absent", () => {
+    const prompt = buildDebaterPrompt({
+      side: "pro",
+      round: 1,
+      totalRounds: 3,
+      proposition: "P",
+      isFinalRound: false,
+      transcript: [],
+      userDirective: "   \n\n   ",
+    });
+    assert.ok(!/Broader directive/.test(prompt));
+  });
+});
+
+describe("buildJudgePrompt — directive injection (improvement #2)", () => {
+  it("when directive set, frames nextAction as concrete step toward the directive", () => {
+    const prompt = buildJudgePrompt({
+      proposition: "P",
+      transcript: [],
+      userDirective: "Refactor auth.",
+    });
+    assert.match(prompt, /Broader directive.*Refactor auth\./);
+    assert.match(prompt, /frame it as the concrete next step toward the directive/);
+  });
+
+  it("falls back to original framing when directive absent", () => {
+    const prompt = buildJudgePrompt({ proposition: "P", transcript: [] });
+    assert.ok(!/Broader directive/.test(prompt));
+  });
+});
+
+describe("buildImplementerPrompt — directive injection", () => {
+  it("instructs file edits to advance the directive when set", () => {
+    const prompt = buildImplementerPrompt("P", STUB_VERDICT, "Refactor auth.");
+    assert.match(prompt, /Broader directive.*Refactor auth\./);
+    assert.match(prompt, /file edits should be a concrete step toward the directive/);
+  });
+
+  it("preserves the CHANGED:/RATIONALE:/OUT OF SCOPE: report contract in both paths", () => {
+    for (const p of [
+      buildImplementerPrompt("P", STUB_VERDICT),
+      buildImplementerPrompt("P", STUB_VERDICT, "x"),
+    ]) {
+      assert.match(p, /Required report format/);
+      assert.match(p, /CHANGED:/);
+      assert.match(p, /RATIONALE:/);
+      assert.match(p, /OUT OF SCOPE:/);
+    }
+  });
+});
+
+describe("buildReviewerPrompt — directive injection", () => {
+  it("when directive set, asks reviewer to flag superficial fixes that don't advance the directive", () => {
+    const prompt = buildReviewerPrompt("P", STUB_VERDICT, [], "Refactor auth.");
+    assert.match(prompt, /Broader directive.*Refactor auth\./);
+    assert.match(prompt, /flag if the changes only superficially address it/);
+  });
+});
+
+describe("buildSignoffPrompt — directive injection", () => {
+  it("when directive set, asks judge to factor directive-advancement into ACCEPTED/PARTIAL/REJECTED", () => {
+    const prompt = buildSignoffPrompt("P", STUB_VERDICT, [], "Refactor auth.");
+    assert.match(prompt, /Broader directive.*Refactor auth\./);
+    assert.match(prompt, /factor in whether the implementation meaningfully advances the directive/);
+  });
+
+  it("preserves ACCEPTED/PARTIAL/REJECTED contract in both paths", () => {
+    for (const p of [
+      buildSignoffPrompt("P", STUB_VERDICT, []),
+      buildSignoffPrompt("P", STUB_VERDICT, [], "x"),
+    ]) {
+      assert.match(p, /ACCEPTED/);
+      assert.match(p, /PARTIAL/);
+      assert.match(p, /REJECTED/);
+    }
+  });
+});
+
+// Structural runner wiring + form spec.
+
+describe("DebateJudgeRunner — directive plumbing (structural)", () => {
+  it("(#1) start() auto-derives proposition when Proposition empty + directive set", () => {
+    assert.match(
+      DJ_SRC,
+      /this\.proposition === undefined \|\| this\.proposition\.length === 0/,
+      "auto-derive must gate on empty proposition",
+    );
+    assert.match(
+      DJ_SRC,
+      /deriveProposition\(\{[\s\S]{0,200}?directive: directiveTrimmed/,
+      "auto-derive must call deriveProposition with the trimmed directive",
+    );
+  });
+
+  it("(#2) loop threads cfg.userDirective into runDebaterTurn + runJudgeTurn + runNextActionPhase", () => {
+    assert.match(
+      DJ_SRC,
+      /this\.runDebaterTurn\(pro, "pro", r, cfg\.rounds, prop, isFinalRound, cfg\.userDirective\)/,
+    );
+    assert.match(
+      DJ_SRC,
+      /this\.runDebaterTurn\(con, "con", r, cfg\.rounds, prop, isFinalRound, cfg\.userDirective\)/,
+    );
+    assert.match(
+      DJ_SRC,
+      /this\.runJudgeTurn\(judge, prop, r, cfg\.userDirective\)/,
+    );
+    assert.match(
+      DJ_SRC,
+      /this\.runNextActionPhase\(pro, con, judge, prop, finalVerdict, cfg\.userDirective\)/,
+    );
+  });
+
+  it("(#2) build phase callees thread userDirective into all three prompts", () => {
+    assert.match(
+      DJ_SRC,
+      /buildImplementerPrompt\(proposition, verdict, userDirective\)/,
+    );
+    assert.match(
+      DJ_SRC,
+      /buildReviewerPrompt\(proposition, verdict, \[\.\.\.this\.transcript\], userDirective\)/,
+    );
+    assert.match(
+      DJ_SRC,
+      /buildSignoffPrompt\(proposition, verdict, \[\.\.\.this\.transcript\], userDirective\)/,
+    );
+  });
+
+  it("(#3 + Phase A) deliverable uses maybeDirectiveSection + pickDeliverableTitle helpers", () => {
+    assert.match(DJ_SRC, /maybeDirectiveSection\(dirCtx\)/);
+    assert.match(
+      DJ_SRC,
+      /pickDeliverableTitle\(dirCtx,\s*\{[\s\S]{0,200}?withDirective:\s*"Debate-judge: directive decision"/,
+      "deliverable title must use pickDeliverableTitle helper",
+    );
+  });
+
+  it("(#3) deliverable labels proposition source (auto-derived / fallback / user-set)", () => {
+    assert.match(
+      DJ_SRC,
+      /Proposition \(auto-derived from directive\)/,
+    );
+    assert.match(
+      DJ_SRC,
+      /Proposition \(fallback — auto-derive failed\)/,
+    );
+  });
+});
+
+describe("Debate-judge form spec", () => {
+  it("debate-judge is now directive: 'honored'", () => {
+    const setup = readFileSync(
+      join(__dirname, "../../../web/src/components/SetupForm.tsx"),
+      "utf8",
+    );
+    const block = setup.match(/id:\s*"debate-judge"[\s\S]{0,1500}?\},/);
+    assert.ok(block, "debate-judge preset block must exist");
+    assert.match(block![0], /directive:\s*"honored"/);
   });
 });

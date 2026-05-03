@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_ROLES, roleForAgent } from "./roles.js";
+import { BUILD_ROLES, DEFAULT_ROLES, roleForAgent, selectRoleCatalog } from "./roles.js";
 
 describe("DEFAULT_ROLES catalog", () => {
   it("covers the seven roles listed in docs/swarm-patterns.md", () => {
@@ -64,5 +64,68 @@ describe("roleForAgent", () => {
     assert.equal(roleForAgent(2, custom).name, "B");
     assert.equal(roleForAgent(3, custom).name, "C");
     assert.equal(roleForAgent(4, custom).name, "A");
+  });
+});
+
+// 2026-05-02 (role-diff improvement #2): task-shaped catalog used when
+// a directive is set. Same 7-slot shape as DEFAULT_ROLES so the modulo
+// wrap behavior is unchanged for agent counts up to 8.
+describe("BUILD_ROLES catalog (improvement #2)", () => {
+  it("ships exactly 7 task-shaped roles", () => {
+    assert.equal(BUILD_ROLES.length, 7);
+    const names = BUILD_ROLES.map((r) => r.name);
+    assert.deepEqual(names, [
+      "Researcher",
+      "Designer",
+      "Implementer",
+      "Tester",
+      "Reviewer",
+      "Documenter",
+      "Devil's advocate",
+    ]);
+  });
+
+  it("every role has guidance + a deliverableHint (improvement #3 contract)", () => {
+    for (const role of BUILD_ROLES) {
+      assert.ok(role.guidance.length > 20, `${role.name} guidance too short`);
+      assert.ok(
+        role.deliverableHint && role.deliverableHint.length > 20,
+        `${role.name} missing/empty deliverableHint`,
+      );
+    }
+  });
+});
+
+describe("selectRoleCatalog (improvement #2)", () => {
+  it("returns BUILD_ROLES when a directive is set + no custom roles", () => {
+    const out = selectRoleCatalog({ userDirective: "Refactor auth" });
+    assert.equal(out, BUILD_ROLES);
+  });
+
+  it("returns DEFAULT_ROLES when no directive is set", () => {
+    const out = selectRoleCatalog({});
+    assert.equal(out, DEFAULT_ROLES);
+  });
+
+  it("treats whitespace-only directive as absent", () => {
+    const out = selectRoleCatalog({ userDirective: "   \n\n   " });
+    assert.equal(out, DEFAULT_ROLES);
+  });
+
+  it("custom roles always win over both default catalogs", () => {
+    const custom = [{ name: "Custom", guidance: "custom role guidance text" }];
+    assert.equal(
+      selectRoleCatalog({ customRoles: custom, userDirective: "anything" }),
+      custom,
+    );
+    assert.equal(selectRoleCatalog({ customRoles: custom }), custom);
+  });
+
+  it("ignores empty customRoles array — falls through to directive logic", () => {
+    assert.equal(
+      selectRoleCatalog({ customRoles: [], userDirective: "go" }),
+      BUILD_ROLES,
+    );
+    assert.equal(selectRoleCatalog({ customRoles: [] }), DEFAULT_ROLES);
   });
 });

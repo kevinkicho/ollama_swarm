@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { jaccardSimilarity, detectConvergence, pickMostCentralAggregator } from "./moaConsensus.js";
+import { jaccardSimilarity, detectConvergence, pickMostCentralAggregator, thresholdForDeliverableShape } from "./moaConsensus.js";
 
 test("jaccardSimilarity — identical strings = 1", () => {
   assert.equal(jaccardSimilarity("the quick brown fox", "the quick brown fox"), 1);
@@ -101,4 +101,85 @@ test("pickMostCentralAggregator — empty array throws", () => {
 test("pickMostCentralAggregator — perCandidateMean has one entry per candidate", () => {
   const r = pickMostCentralAggregator(["a b c", "a b d", "a b e"]);
   assert.equal(r.perCandidateMean.length, 3);
+});
+
+// 2026-05-02 (matrix row #5): per-task-class convergence thresholds.
+test("thresholdForDeliverableShape — analysis tasks default to 0.7", () => {
+  assert.equal(thresholdForDeliverableShape("audit list"), 0.7);
+  assert.equal(thresholdForDeliverableShape("README analysis"), 0.7);
+  assert.equal(thresholdForDeliverableShape("static analysis report"), 0.7);
+});
+
+test("thresholdForDeliverableShape — decision/debate tasks default to 0.4 (resist convergence)", () => {
+  assert.equal(thresholdForDeliverableShape("architectural decision memo"), 0.4);
+  assert.equal(thresholdForDeliverableShape("debate verdict"), 0.4);
+});
+
+test("thresholdForDeliverableShape — exploration sits in the middle (0.5)", () => {
+  assert.equal(thresholdForDeliverableShape("novel exploration of options"), 0.5);
+});
+
+test("thresholdForDeliverableShape — falls back to 0.7 for unknown shapes", () => {
+  assert.equal(thresholdForDeliverableShape("unrecognized shape"), 0.7);
+  assert.equal(thresholdForDeliverableShape(undefined), 0.7);
+  assert.equal(thresholdForDeliverableShape(""), 0.7);
+});
+
+test("thresholdForDeliverableShape — case-insensitive on the keyword match", () => {
+  assert.equal(thresholdForDeliverableShape("DEBATE on the merits"), 0.4);
+  assert.equal(thresholdForDeliverableShape("Decision Document"), 0.4);
+});
+
+// 2026-05-02 (issue #1 fix): challenger substantiveness scoring.
+import { scoreChallengerSubstantiveness } from "./moaConsensus.js";
+
+test("scoreChallengerSubstantiveness — substantive when challenger raises unique points kept by synthesis", () => {
+  const r = scoreChallengerSubstantiveness({
+    challengerDraft: "the auth flow has a race condition between token refresh and request retry",
+    otherDrafts: [
+      "the auth flow needs caching for performance",
+      "the auth flow validates tokens correctly",
+    ],
+    synthesis: "the auth flow needs caching but also has a race condition between token refresh and request retry",
+  });
+  assert.ok(r.ratio !== null);
+  assert.ok(r.ratio >= 0.3, `expected substantive ratio, got ${r.ratio}`);
+  assert.equal(r.bucket, "substantive");
+});
+
+test("scoreChallengerSubstantiveness — noise when challenger's unique tokens never reach synthesis", () => {
+  const r = scoreChallengerSubstantiveness({
+    challengerDraft: "kubernetes manifests helm charts deployment pipeline argocd terraform vault consul nomad packer",
+    otherDrafts: [
+      "the auth module needs validation rules and clear error responses",
+      "the auth module needs caching with proper invalidation strategies",
+    ],
+    synthesis: "the auth module needs validation rules with clear error responses and caching with proper invalidation",
+  });
+  assert.ok(r.ratio !== null);
+  assert.ok(r.ratio < 0.1, `expected noise ratio (<0.1), got ${r.ratio}`);
+  assert.equal(r.bucket, "noise");
+});
+
+test("scoreChallengerSubstantiveness — REDUNDANT when challenger says nothing unique", () => {
+  const r = scoreChallengerSubstantiveness({
+    challengerDraft: "the auth module needs validation",
+    otherDrafts: [
+      "the auth module needs validation",
+      "the auth module needs caching",
+    ],
+    synthesis: "the auth module needs validation and caching",
+  });
+  assert.equal(r.ratio, null);
+  assert.equal(r.bucket, "redundant");
+});
+
+test("scoreChallengerSubstantiveness — empty challenger draft → REDUNDANT", () => {
+  const r = scoreChallengerSubstantiveness({
+    challengerDraft: "",
+    otherDrafts: ["something"],
+    synthesis: "synthesis here",
+  });
+  assert.equal(r.ratio, null);
+  assert.equal(r.bucket, "redundant");
 });

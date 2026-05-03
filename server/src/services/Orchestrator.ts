@@ -17,10 +17,11 @@ import { MapReduceRunner } from "../swarm/MapReduceRunner.js";
 import { MoaRunner } from "../swarm/MoaRunner.js";
 import { StigmergyRunner } from "../swarm/StigmergyRunner.js";
 import { BaselineRunner } from "../swarm/BaselineRunner.js";
-import { DEFAULT_ROLES, roleForAgent } from "../swarm/roles.js";
+import { roleForAgent, selectRoleCatalog } from "../swarm/roles.js";
 import { ConformanceMonitor } from "./ConformanceMonitor.js";
 import { EmbeddingDriftMonitor } from "./EmbeddingDriftMonitor.js";
 import { AmendmentsBuffer, type Amendment } from "./AmendmentsBuffer.js";
+import { RunStatePersister } from "./RunStatePersister.js";
 
 export interface OrchestratorOpts extends RunnerOpts {
   manager: AgentManager;
@@ -227,6 +228,12 @@ export class Orchestrator {
   // #302: independent second signal (embedding-similarity drift).
   // No-ops gracefully when the embedding model isn't pulled.
   private embeddingDriftMonitor?: EmbeddingDriftMonitor;
+  // 2026-05-02 (persistence lever #2 first-cut): write transcript +
+  // amendments + phase to <clonePath>/run-state.json on every event
+  // so a server restart doesn't lose chat history mid-run. Recovery
+  // (resuming on startup) is deferred to its own session — see
+  // RunStatePersister for scope notes.
+  private runStatePersister?: RunStatePersister;
 
   constructor(private readonly opts: OrchestratorOpts) {
     // Persist the merged list back so the next read is consistent
@@ -306,8 +313,30 @@ export class Orchestrator {
     return [...this.knownParentPaths];
   }
 
-  injectUser(text: string): void {
-    this.runner?.injectUser(text);
+  injectUser(
+    text: string,
+    opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
+  ): void {
+    const intent = opts?.intent ?? "steer";
+    this.runner?.injectUser(text, opts);
+    // #119 (2026-05-01): also feed the AmendmentsBuffer so blackboard's
+    // planner picks up the chat as a mid-run nudge on its next turn.
+    // Pre-fix: /api/swarm/say only landed in runner.transcript (display
+    // only); only /api/swarm/amend reached the amendments buffer; the
+    // UI never called /amend. Effect was that 7/10 runners surfaced
+    // chat as `[HUMAN]` lines (council, debate-judge, mapreduce, ow,
+    // ow-deep, round-robin, stigmergy) but blackboard + moa silently
+    // dropped it. Dual-write here lets blackboard's
+    // directiveWithAmendments() see chat without changing the UI.
+    //
+    // 2026-05-02: skip the amendments dual-write for intent="ask" and
+    // intent="suggest". "ask" is a question to be answered inline (NOT
+    // a directive change); "suggest" is low-pressure consideration that
+    // should NOT force the planner to reshape its contract. Only "steer"
+    // (the default) carries the original mid-run-nudge force.
+    if (this.runId && text.trim().length > 0 && intent === "steer") {
+      this.amendments.add(this.runId, text);
+    }
   }
 
   async start(cfg: RunConfig): Promise<void> {
@@ -327,6 +356,12 @@ export class Orchestrator {
         // via the next status() rather than blocking the new start.
       }
     }
+    // 2026-05-02 (persistence lever #2): construct the persister BEFORE
+    // buildRunner so the wrapped emit (created inside buildRunner) can
+    // close over a non-null reference. Idempotent if a previous run's
+    // persister leaked through.
+    this.runStatePersister?.stop();
+    this.runStatePersister = new RunStatePersister(cfg.localPath);
     const runner = this.buildRunner(cfg.preset, cfg);
     // Assign up-front so status()/isRunning() reflect the in-progress run for
     // new WS clients and the POST /status endpoint while start() is still awaiting.
@@ -362,7 +397,13 @@ export class Orchestrator {
     // in RoundRobinRunner so the UI matches what actually ran.
     let rolesForRunStarted: string[] | undefined;
     if (cfg.preset === "role-diff") {
-      const catalog = cfg.roles && cfg.roles.length > 0 ? cfg.roles : DEFAULT_ROLES;
+      // 2026-05-02 (improvement #2): selectRoleCatalog auto-picks
+      // BUILD_ROLES vs DEFAULT_ROLES based on whether a userDirective
+      // is set. User-supplied custom roles still win.
+      const catalog = selectRoleCatalog({
+        customRoles: cfg.roles,
+        userDirective: cfg.userDirective,
+      });
       rolesForRunStarted = [];
       for (let i = 1; i <= cfg.agentCount; i++) {
         rolesForRunStarted.push(roleForAgent(i, catalog).name);
@@ -533,6 +574,12 @@ export class Orchestrator {
       this.runId = undefined;
       this.runConfig = undefined;
       this.runStartedAt = undefined;
+      // 2026-05-02 (persistence lever #2): flush any pending snapshot
+      // so terminal phase is on disk before we drop the persister.
+      // Without the explicit stop, the last 0-DEBOUNCE_MS of events
+      // could be trapped behind the timer.
+      this.runStatePersister?.stop();
+      this.runStatePersister = undefined;
     }
   }
 
@@ -543,8 +590,29 @@ export class Orchestrator {
     // (pre-bound to the active runId) so the runner doesn't need a
     // direct reference to AmendmentsBuffer or the runId. Returns []
     // safely when called before runId is minted (start-time race).
+    // 2026-05-02 (persistence lever #2): wrap opts.emit so every
+    // SwarmEvent ALSO triggers a debounced snapshot. The persister
+    // collapses chunks within DEBOUNCE_MS into one fsync.
+    const baseEmit = this.opts.emit;
+    const wrappedEmit = (e: SwarmEvent) => {
+      baseEmit(e);
+      // Best-effort snapshot. Persister never throws; a write failure
+      // is logged once + silenced for the run.
+      const persister = this.runStatePersister;
+      if (!persister || !this.runId || !this.runStartedAt) return;
+      const status = this.runner?.status();
+      persister.schedule({
+        runId: this.runId,
+        preset: cfg.preset,
+        phase: status?.phase ?? "unknown",
+        startedAt: this.runStartedAt,
+        transcript: status?.transcript ?? [],
+        amendments: this.amendments.list(this.runId),
+      });
+    };
     const opts = {
       ...this.opts,
+      emit: wrappedEmit,
       getAmendments: () =>
         this.runId ? this.amendments.list(this.runId) : [],
     };
@@ -555,12 +623,14 @@ export class Orchestrator {
         // Unit 32: optional user-supplied roles take precedence over the
         // default catalog. The route validates shape (name + guidance,
         // bounded counts) so we just need to pick which list to pass.
-        // An empty `roles` array is treated as "user wants defaults",
-        // same as omitting the field entirely — saves callers a UI bug
-        // where clearing all roles would otherwise crash the runner
-        // (roleForAgent throws on an empty array).
-        const roles =
-          cfg.roles && cfg.roles.length > 0 ? cfg.roles : DEFAULT_ROLES;
+        // 2026-05-02 (improvement #2): selectRoleCatalog auto-picks
+        // BUILD_ROLES (task-shaped) when a directive is set; otherwise
+        // DEFAULT_ROLES (audit catalog). User-supplied custom roles
+        // still win when present.
+        const roles = selectRoleCatalog({
+          customRoles: cfg.roles,
+          userDirective: cfg.userDirective,
+        });
         return new RoundRobinRunner(opts, { roles });
       }
       case "blackboard":

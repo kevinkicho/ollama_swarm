@@ -88,6 +88,14 @@ export function formatServerSummary(s: TranscriptEntrySummary): string {
   if (s.kind === "stigmergy_annotation") {
     return `Annotated ${s.file} — interest ${s.interest}/10, confidence ${s.confidence}/10`;
   }
+  // 2026-05-02 (deliverables initiative): structured-markdown artifact
+  // saved at end-of-run for the discussion presets. The formatter line
+  // is what an event-log consumer sees; the UI bubble (when added)
+  // renders richer.
+  if (s.kind === "deliverable") {
+    const sectionsLabel = s.sectionTitles.length === 1 ? "1 section" : `${s.sectionTitles.length} sections`;
+    return `Saved deliverable → ${s.filename} (${sectionsLabel}, ${s.bytes.toLocaleString()} bytes)`;
+  }
   // worker_hunks (only kind remaining after all the if-returns above)
   const opParts: string[] = [];
   if (s.ops.replace > 0) opParts.push(`${s.ops.replace} replace`);

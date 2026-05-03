@@ -74,6 +74,17 @@ export interface TranscriptEntry {
   // ToolCallsBlock above the main bubble. Each entry is the raw
   // marker text (e.g., `<read path='src/foo.ts' />`).
   toolCalls?: string[];
+  // 2026-05-02: user-message intent tag from /api/swarm/say. Only set
+  // on role:"user" entries. Lets runners weight the input differently
+  // (suggest = low priority, steer = reshape next turn, ask = answer
+  // inline + don't change direction). Absent = legacy "steer" semantics
+  // for back-compat with pre-tagged callers.
+  intent?: "suggest" | "steer" | "ask";
+  // 2026-05-02: @mention routing. When set, only the targeted agent's
+  // prompt sees this user entry; broadcast runners filter it out for
+  // every other agent. Targets the agent's id (e.g. "agent-2") not the
+  // role-name. Absent = broadcast to all agents (current default).
+  targetAgent?: string;
 }
 
 export interface BoardCountsDTO {

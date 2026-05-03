@@ -83,13 +83,33 @@ describe("extractToolCallMarkers — edge cases + safety", () => {
     assert.equal(r.finalText, "<think>x</think>response");
   });
 
-  it("preserves the ORIGINAL text when extraction empties everything", () => {
-    // All content was tool calls → finalText would be "" but we fall
-    // back to the original so the bubble renders SOMETHING.
+  it("returns empty finalText when extraction empties everything (#120 fix)", () => {
+    // 2026-05-01: previous behavior fell back to returning the ORIGINAL
+    // text so the bubble would render SOMETHING — but that re-leaks the
+    // markers we just extracted. The toolCalls array is the canonical
+    // home for this content (rendered via collapsed ToolCallsBlock).
+    // Returning "" here lets appendAgent's `text: finalText || "(empty
+    // response)"` shield show a clean placeholder.
     const original = "<read path='a' /><list>b</list>";
     const r = extractToolCallMarkers(original);
     assert.equal(r.toolCalls.length, 2);
-    assert.equal(r.finalText, original);
+    assert.equal(r.finalText, "", "must NOT re-leak the raw markers");
+  });
+
+  it("returns empty finalText for the live-observed Windows-path cluster (#120 RCA)", () => {
+    // Live capture from audit-console-logs blackboard run, 2026-05-01 PM.
+    // Three paired <read> markers with double-quoted absolute Windows
+    // paths (backslashes) — these correctly match PAIRED_TAG_RE but the
+    // pre-fix fallback re-leaked the entire raw block into the bubble.
+    const original =
+      String.raw`<read path="C:\Users\kevin\Desktop\src\main.js"></read>` +
+      "\n\n" +
+      String.raw`<read path="C:\Users\kevin\Desktop\verify.mjs"></read>` +
+      "\n\n" +
+      String.raw`<read path="C:\Users\kevin\Desktop\package.json"></read>`;
+    const r = extractToolCallMarkers(original);
+    assert.equal(r.toolCalls.length, 3, "all 3 markers extracted");
+    assert.equal(r.finalText, "", "bubble text must collapse to empty when response is purely markers");
   });
 
   it("extracts case-insensitively", () => {

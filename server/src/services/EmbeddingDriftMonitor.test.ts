@@ -108,7 +108,14 @@ describe("embedText", () => {
 });
 
 describe("EmbeddingDriftMonitor — lifecycle", () => {
-  it("enters no-op mode when initial embed fails (model not pulled)", async () => {
+  // 2026-05-02: every test below MUST register `t.after(() => m.stop())`
+  // because EmbeddingDriftMonitor.start() schedules a setInterval that
+  // keeps the Node event loop alive. Without stop(), the test PROCESS
+  // never exits even after assertions complete — wedging the test runner
+  // for the file's duration. Found while running the full suite during
+  // post-fix verification (~75s timeout per attempt; 18 individual tests
+  // pass but the file as a whole "fails" because it never terminates).
+  it("enters no-op mode when initial embed fails (model not pulled)", async (t) => {
     const events: SwarmEvent[] = [];
     const m = new EmbeddingDriftMonitor({
       runId: "r1",
@@ -118,12 +125,13 @@ describe("EmbeddingDriftMonitor — lifecycle", () => {
       emit: (e) => events.push(e),
       fetchImpl: (async () => ({ ok: false, status: 404 } as Response)) as typeof fetch,
     });
+    t.after(() => m.stop());
     await m.start();
     await m.pollOnce();
     assert.equal(events.length, 0);
   });
 
-  it("emits drift_sample on a successful poll", async () => {
+  it("emits drift_sample on a successful poll", async (t) => {
     const events: SwarmEvent[] = [];
     // Same vector for directive + transcript → similarity should be ~100
     const m = new EmbeddingDriftMonitor({
@@ -134,6 +142,7 @@ describe("EmbeddingDriftMonitor — lifecycle", () => {
       emit: (e) => events.push(e),
       fetchImpl: fakeEmbedFetch([0.5, 0.5, 0.5]),
     });
+    t.after(() => m.stop());
     await m.start();
     await m.pollOnce();
     assert.equal(events.length, 1);
@@ -145,7 +154,7 @@ describe("EmbeddingDriftMonitor — lifecycle", () => {
     assert.equal(ev.embeddingModel, "nomic-embed-text");
   });
 
-  it("smooths across the last 3 raw similarities", async () => {
+  it("smooths across the last 3 raw similarities", async (t) => {
     const events: SwarmEvent[] = [];
     let returnVec = [1, 0, 0];
     const m = new EmbeddingDriftMonitor({
@@ -159,6 +168,7 @@ describe("EmbeddingDriftMonitor — lifecycle", () => {
         json: async () => ({ embeddings: [returnVec] }),
       } as unknown as Response)) as typeof fetch,
     });
+    t.after(() => m.stop());
     await m.start();
     // After start, directiveVec is [1, 0, 0]. Each poll embeds the
     // transcript and gets returnVec, similarity = cosine(directiveVec, returnVec)
@@ -172,7 +182,7 @@ describe("EmbeddingDriftMonitor — lifecycle", () => {
     assert.equal(driftEvents[2].smoothedSimilarity, 50);
   });
 
-  it("self-stops when isActive returns false", async () => {
+  it("self-stops when isActive returns false", async (t) => {
     const events: SwarmEvent[] = [];
     let active = true;
     const m = new EmbeddingDriftMonitor({
@@ -182,6 +192,7 @@ describe("EmbeddingDriftMonitor — lifecycle", () => {
       isActive: () => active,
       fetchImpl: fakeEmbedFetch([1, 0, 0]),
     });
+    t.after(() => m.stop());
     await m.start();
     await m.pollOnce();
     assert.equal(events.length, 1);
@@ -190,7 +201,7 @@ describe("EmbeddingDriftMonitor — lifecycle", () => {
     assert.equal(events.length, 1, "no new event after isActive=false");
   });
 
-  it("skips poll when transcript is empty", async () => {
+  it("skips poll when transcript is empty", async (t) => {
     const events: SwarmEvent[] = [];
     const m = new EmbeddingDriftMonitor({
       runId: "r1", directive: "x", ollamaBaseUrl: "u",
@@ -198,12 +209,13 @@ describe("EmbeddingDriftMonitor — lifecycle", () => {
       emit: (e) => events.push(e),
       fetchImpl: fakeEmbedFetch([1, 0, 0]),
     });
+    t.after(() => m.stop());
     await m.start();
     await m.pollOnce();
     assert.equal(events.length, 0);
   });
 
-  it("does NOT throw on transcript-embed failure — silently skips", async () => {
+  it("does NOT throw on transcript-embed failure — silently skips", async (t) => {
     const events: SwarmEvent[] = [];
     let firstCall = true;
     const stub = (async () => {
@@ -222,6 +234,7 @@ describe("EmbeddingDriftMonitor — lifecycle", () => {
       emit: (e) => events.push(e),
       fetchImpl: stub,
     });
+    t.after(() => m.stop());
     await m.start();
     await m.pollOnce();
     assert.equal(events.length, 0);

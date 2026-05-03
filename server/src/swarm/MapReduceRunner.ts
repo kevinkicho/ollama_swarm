@@ -12,17 +12,31 @@ import type {
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
+import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
-import { buildDiscussionSummary, buildRunFinishedSummary, buildSeedSummary, formatPortReleaseLine, formatRunFinishedBanner, writeRunSummary } from "./runSummary.js";
+import { buildSeedSummary } from "./runSummary.js";
+import { discussionWriteSummary } from "./discussionWriteSummary.js";
+import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
-import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../services/ollamaProxy.js";
+import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
+import { checkBudgetGuards } from "./loopGuards.js";
+import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { formatCloneMessage } from "./cloneMessage.js";
-import { runEndReflection } from "./runEndReflection.js";
+// runEndReflection moved into runFinallyHooks (Phase D).
 import { staggerStart } from "./staggerStart.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import { getAgentAddendum } from "../../../shared/src/topology.js";
 import { describeSdkError } from "./sdkError.js";
+import {
+  readDirective,
+  buildDirectiveBlock,
+  pickDeliverableTitle,
+  pickAnswerSectionTitle,
+  pickDeliverableSubtitle,
+  maybeDirectiveSection,
+} from "./directivePromptHelpers.js";
 
 // Map-reduce over the repo.
 // Agent 1 = REDUCER (silent during the map phase, then synthesizes).
@@ -76,15 +90,22 @@ export class MapReduceRunner implements SwarmRunner {
     };
   }
 
-  injectUser(text: string): void {
+  injectUser(
+    text: string,
+    opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
+  ): void {
+    const intent = opts?.intent ?? "steer";
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "user",
       text,
       ts: Date.now(),
+      intent,
+      ...(opts?.targetAgent ? { targetAgent: opts.targetAgent } : {}),
     };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
+    this.appendSystem(formatChatReceipt(intent, opts?.targetAgent));
   }
 
   isRunning(): boolean {
@@ -172,15 +193,28 @@ export class MapReduceRunner implements SwarmRunner {
 
   private async seed(clonePath: string, cfg: RunConfig): Promise<void> {
     const tree = (await this.opts.repos.listTopLevel(clonePath)).slice(0, 200);
-    const seed = [
+    // 2026-05-02 (map-reduce improvement #1): user directive turns the
+    // preset from "tell me everything about this repo in parallel" into
+    // "find me everything in this repo that bears on this question, in
+    // parallel". Mappers + reducer both see the directive; mappers
+    // explicitly told that "no relevant findings in my slice" is a
+    // valid + welcome answer (anti-hallucination valve).
+    // 2026-05-03 (Phase A): directive block extracted to shared helper.
+    const dirCtx = readDirective(cfg);
+    const lines = [
       `Project clone: ${clonePath}`,
       `Repo: ${cfg.repoUrl}`,
       `Top-level entries: ${tree.join(", ") || "(empty)"}`,
       "",
+      ...buildDirectiveBlock(dirCtx, {
+        framingLines: [
+          "The map-reduce sweep should find everything in this repo that bears on the directive above. Mappers: report findings relevant to the directive within YOUR slice; if your slice has nothing relevant, say so explicitly — that's a valid + welcome answer. Reducer: synthesize across mappers to ANSWER the directive.",
+        ],
+      }),
       "Pattern: Map-reduce. Agent 1 is the REDUCER; others are MAPPERS.",
       "Each mapper inspects only its assigned slice of the repo (in isolation). The reducer consolidates all mapper reports at the end of each cycle.",
-    ].join("\n");
-    this.appendSystem(seed, buildSeedSummary(cfg.repoUrl, clonePath, tree));
+    ];
+    this.appendSystem(lines.join("\n"), buildSeedSummary(cfg.repoUrl, clonePath, tree));
   }
 
   private async loop(cfg: RunConfig, clonePath: string): Promise<void> {
@@ -208,25 +242,25 @@ export class MapReduceRunner implements SwarmRunner {
       this.mapperSlices = slicesById;
       this.opts.emit({ type: "mapper_slices", slices: slicesById });
 
-      // Task #124: snapshot lifetime tokens for budget delta.
+      // 2026-05-03 (Phase B): budget + dead-loop guards extracted to shared helpers.
       const tokenBaseline = snapshotLifetimeTokens();
-      // Task #146: dead-loop guard (mirrors #144).
-      let consecutiveEmptyRounds = 0;
-      const EMPTY_ROUND_BREAK_THRESHOLD = 2;
+      const deadLoopGuard = new OutputEmptyDeadLoopGuard({
+        roleLabel: "mappers",
+        unit: "cycle",
+      });
 
       for (let r = 1; r <= cfg.rounds; r++) {
         if (this.stopping) break;
-        // Task #124: token-budget cap check.
-        if (tokenBudgetExceeded(tokenBaseline, cfg.tokenBudget)) {
-          this.earlyStopDetail = `token-budget reached (${cfg.tokenBudget?.toLocaleString()} tokens)`;
-          this.appendSystem(`Token budget of ${cfg.tokenBudget?.toLocaleString()} tokens reached at cycle ${r - 1}/${cfg.rounds} — ending run early.`);
-          break;
-        }
-        // Task #137: quota-wall cap check.
-        if (shouldHaltOnQuota()) {
-          const q = tokenTracker.getQuotaState();
-          this.earlyStopDetail = `ollama-quota-exhausted (${q?.statusCode}: ${q?.reason.slice(0, 100)})`;
-          this.appendSystem(`Ollama quota wall hit at cycle ${r - 1}/${cfg.rounds} (${q?.statusCode}) — ending run early.`);
+        const guard = checkBudgetGuards({
+          tokenBaseline,
+          tokenBudget: cfg.tokenBudget,
+          round: r,
+          totalRounds: cfg.rounds,
+          unit: "cycle",
+        });
+        if (guard.halt) {
+          this.earlyStopDetail = guard.earlyStopDetail;
+          this.appendSystem(guard.message ?? "");
           break;
         }
         this.round = r;
@@ -251,27 +285,22 @@ export class MapReduceRunner implements SwarmRunner {
         const transcriptLenBefore = this.transcript.length;
         await staggerStart(mappers, (m, i) => {
           const mySlice = slices[i] ?? [];
-          return this.runMapperTurn(m, r, cfg.rounds, mySlice, seedSnapshot);
+          return this.runMapperTurn(m, r, cfg.rounds, mySlice, seedSnapshot, cfg.userDirective);
         });
         if (this.stopping) break;
         // Task #146: dead-loop guard. If every mapper produced empty/junk
         // output this cycle, count toward break threshold.
+        // 2026-05-03 (Phase B): logic extracted to OutputEmptyDeadLoopGuard.
         const newEntries = this.transcript
           .slice(transcriptLenBefore)
           .filter((e) => e.role === "agent");
-        const allEmpty = newEntries.length > 0 &&
-          newEntries.every((e) => (e.text || "") === "(empty response)" || looksLikeJunk(e.text || ""));
-        if (allEmpty) {
-          consecutiveEmptyRounds++;
-          if (consecutiveEmptyRounds >= EMPTY_ROUND_BREAK_THRESHOLD) {
-            this.earlyStopDetail = `mappers-silenced (${consecutiveEmptyRounds} consecutive empty cycles)`;
-            this.appendSystem(
-              `All mappers produced empty/junk output for ${consecutiveEmptyRounds} consecutive cycles — ending map-reduce early.`,
-            );
-            break;
-          }
-        } else {
-          consecutiveEmptyRounds = 0;
+        const dlHit = deadLoopGuard.recordIteration(newEntries);
+        if (dlHit.tripped) {
+          this.earlyStopDetail = dlHit.earlyStopDetail;
+          this.appendSystem(
+            `All mappers produced empty/junk output for ${dlHit.consecutive} consecutive cycles — ending map-reduce early.`,
+          );
+          break;
         }
 
         // Phase B (Task #97): if every mapper signalled COMPLETE in
@@ -287,7 +316,7 @@ export class MapReduceRunner implements SwarmRunner {
         // REDUCE — reducer sees full transcript (including all mapper
         // reports from this cycle) and produces a synthesis.
         this.appendSystem(`Cycle ${r}/${cfg.rounds}: REDUCE phase — reducer synthesizing.`);
-        await this.runReducerTurn(reducer, r, cfg.rounds, isEarlyStop || undefined);
+        await this.runReducerTurn(reducer, r, cfg.rounds, isEarlyStop || undefined, cfg.userDirective);
 
         if (isEarlyStop) {
           this.earlyStopDetail =
@@ -303,26 +332,89 @@ export class MapReduceRunner implements SwarmRunner {
       crashMessage = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: crashMessage });
     } finally {
-      // Task #150: end-of-run reflection (reducer does it).
-      if (!crashMessage && !this.stopping && cfg.runId) {
-        const reducer = this.opts.manager.list().find((a) => a.index === 1);
-        if (reducer) {
-          const ctxSummary = `Map-reduce preset · 1 reducer + ${cfg.agentCount - 1} mappers · ran ${this.round}/${cfg.rounds} cycles${this.earlyStopDetail ? ` · early-stop: ${this.earlyStopDetail}` : ""}`;
-          await runEndReflection({
-            agent: reducer, preset: cfg.preset, runId: cfg.runId, clonePath: cfg.localPath,
-            contextSummary: ctxSummary, log: (msg) => this.appendSystem(msg),
-          }).catch(() => {});
-        }
-      }
-      await this.writeSummary(cfg, crashMessage);
-      // Unit 55: auto-killAll on natural completion. Task #68: surface
-      // the kill result in the transcript.
-      if (!this.stopping) {
-        const killResult = await this.opts.manager.killAll();
-        this.appendSystem(formatPortReleaseLine(killResult));
-        this.setPhase("completed");
-      }
+      // 2026-05-02 (deliverables initiative): structured markdown.
+      if (!this.stopping && cfg.runId) await this.writeMapReduceDeliverable(cfg);
+      // 2026-05-03 (Phase D): finally close-out extracted to shared helper.
+      await runDiscussionCloseOut({
+        cfg,
+        crashMessage,
+        stopping: this.stopping,
+        earlyStopDetail: this.earlyStopDetail,
+        round: this.round,
+        currentPhase: this.phase,
+        manager: this.opts.manager,
+        appendSystem: (text) => this.appendSystem(text),
+        setPhase: (p) => this.setPhase(p),
+        writeSummary: () => this.writeSummary(cfg, crashMessage),
+        hooks: {
+          pickReflectionAgent: (m) => m.list().find((a) => a.index === 1) ?? null,
+          buildReflectionContext: (s) =>
+            `Map-reduce preset · 1 reducer + ${cfg.agentCount - 1} mappers · ran ${s.round}/${cfg.rounds} cycles${s.earlyStopDetail ? ` · early-stop: ${s.earlyStopDetail}` : ""}`,
+        },
+      });
     }
+  }
+
+  // 2026-05-02 (deliverables initiative): map-reduce structured
+  // artifact. Pulls the final reducer synthesis (kind: mapreduce_synthesis)
+  // + per-mapper findings from the transcript.
+  // 2026-05-02 (map-reduce improvement #2): directive-aware. When a
+  // directive is set, the deliverable opens with a Directive section
+  // and the title/subtitle reflect "answering <directive>" framing.
+  private async writeMapReduceDeliverable(cfg: RunConfig): Promise<void> {
+    if (!cfg.runId) return;
+    // 2026-05-03 (Phase A): directive helpers extracted to shared module.
+    const dirCtx = readDirective(cfg);
+    const reducerSynthesis = [...this.transcript]
+      .reverse()
+      .find((e) => e.summary?.kind === "mapreduce_synthesis");
+    const mapperEntries = this.transcript.filter(
+      (e) => e.role === "agent" && e.agentIndex !== 1,
+    );
+    const sections: Array<{ title: string; body: string }> = [];
+    const directiveSection = maybeDirectiveSection(dirCtx);
+    if (directiveSection) sections.push(directiveSection);
+    sections.push(
+      {
+        title: pickAnswerSectionTitle(dirCtx, {
+          withDirective: "Answer to directive",
+          withoutDirective: "Final reducer synthesis",
+        }),
+        body: reducerSynthesis?.text?.trim() || "_(no reducer synthesis captured)_",
+      },
+      {
+        title: `Per-mapper findings (${mapperEntries.length} entries)`,
+        body:
+          mapperEntries.length > 0
+            ? mapperEntries
+                .map((e) => `### Mapper ${e.agentIndex ?? "?"}\n\n${e.text.trim()}`)
+                .join("\n\n")
+            : "_(no mapper findings)_",
+      },
+    );
+    // 2026-05-02 (quality levers #1+#3): augment with critic + next-actions.
+    const reducer = this.opts.manager.list().find((a) => a.index === 1) ?? null;
+    const augmented = await runQualityPasses({
+      baseSections: sections,
+      rubric: null,
+      criticAgent: reducer,
+      manager: this.opts.manager,
+    });
+    const subtitleBase = `1 reducer + ${cfg.agentCount - 1} mappers across ${this.round}/${cfg.rounds} cycle${cfg.rounds === 1 ? "" : "s"}${this.earlyStopDetail ? " · early-stop" : ""}`;
+    writeDeliverableAndEmit(
+      {
+        preset: "map-reduce",
+        runId: cfg.runId,
+        clonePath: cfg.localPath,
+        title: pickDeliverableTitle(dirCtx, {
+          withDirective: "Map-reduce: directive answer",
+          withoutDirective: "Map-reduce report",
+        }),
+        subtitle: pickDeliverableSubtitle(dirCtx, subtitleBase),
+        sections: augmented,
+      },
+      { transcript: this.transcript, emit: this.opts.emit },
+    );
   }
 
   // Unit 33: shared summary writer pattern — see RoundRobinRunner.
@@ -330,47 +422,20 @@ export class MapReduceRunner implements SwarmRunner {
     if (this.summaryWritten) return;
     this.summaryWritten = true;
     if (this.startedAt === undefined) return;
-    let gitStatus = { porcelain: "", changedFiles: 0 };
-    try {
-      gitStatus = await this.opts.repos.gitStatus(cfg.localPath);
-    } catch {
-      // best-effort
-    }
-    const summary = buildDiscussionSummary({
-      config: {
-        repoUrl: cfg.repoUrl,
-        localPath: cfg.localPath,
-        preset: cfg.preset,
-        model: cfg.model,
-        runId: cfg.runId,
-      },
-      agentCount: cfg.agentCount,
-      rounds: cfg.rounds,
-      startedAt: this.startedAt,
-      endedAt: Date.now(),
+    // 2026-05-03 (Phase C): writeSummary body extracted to shared helper.
+    await discussionWriteSummary({
+      cfg,
       crashMessage,
       stopping: this.stopping,
+      startedAt: this.startedAt,
       earlyStopDetail: this.earlyStopDetail,
-      filesChanged: gitStatus.changedFiles,
-      finalGitStatus: gitStatus.porcelain,
+      agentCount: cfg.agentCount,
       agents: this.stats.buildPerAgentStats(),
       transcript: this.transcript,
-      // Phase 4a of #243: topology passthrough.
       topology: cfg.topology,
+      repos: this.opts.repos,
+      appendSystem: (text, summary) => this.appendSystem(text, summary),
     });
-    try {
-      await writeRunSummary(cfg.localPath, summary);
-      this.appendSystem(
-        formatRunFinishedBanner(summary),
-        buildRunFinishedSummary(summary),
-      );
-      this.appendSystem(
-        `Wrote run summary (stopReason=${summary.stopReason}, wallClockMs=${summary.wallClockMs}, files=${summary.filesChanged}).`,
-      );
-    } catch (writeErr) {
-      const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
-      this.appendSystem(`Failed to write run summary (${msg})`);
-    }
   }
 
   private async runMapperTurn(
@@ -379,8 +444,13 @@ export class MapReduceRunner implements SwarmRunner {
     totalRounds: number,
     slice: readonly string[],
     seedSnapshot: readonly TranscriptEntry[],
+    userDirective?: string,
   ): Promise<void> {
-    const prompt = buildMapperPrompt(agent.index, round, totalRounds, slice, seedSnapshot);
+    // 2026-05-02 (chat lever #3): per-agent @mention filter on the seed
+    // snapshot so user entries targeted elsewhere don't leak into this
+    // mapper's prompt.
+    const visibleSeed = seedSnapshot.filter((e) => userEntryVisibleTo(e, agent.id));
+    const prompt = buildMapperPrompt(agent.index, round, totalRounds, slice, visibleSeed, userDirective);
     // Phase B (Task #97): scan the mapper's last few lines for a
     // COMPLETE: true|false declaration. Tracking is sticky — once a
     // mapper says complete, it stays complete; later cycles can't
@@ -398,8 +468,9 @@ export class MapReduceRunner implements SwarmRunner {
     round: number,
     totalRounds: number,
     isFinalOverride?: boolean,
+    userDirective?: string,
   ): Promise<void> {
-    const prompt = buildReducerPrompt(round, totalRounds, [...this.transcript]);
+    const prompt = buildReducerPrompt(round, totalRounds, [...this.transcript], userDirective);
     // Task #82: tag the FINAL cycle's reducer output as the run's
     // synthesis so the modal renders distinctively. Earlier cycles
     // are intermediate reductions; only the last one is the "answer".
@@ -650,22 +721,50 @@ export function buildMapperPrompt(
   totalRounds: number,
   slice: readonly string[],
   seedSnapshot: readonly TranscriptEntry[],
+  userDirective?: string,
 ): string {
   const seedText = seedSnapshot.map((e) => `[SYSTEM] ${e.text}`).join("\n\n");
   const sliceList = slice.length === 0 ? "(empty slice)" : slice.join(", ");
+
+  // 2026-05-02 (map-reduce improvement #1): when a directive is set,
+  // mapper's job changes from "tell me everything about your slice" to
+  // "find what in your slice bears on the directive". The "no relevant
+  // findings" valve is critical — without it mappers with off-topic
+  // slices will hallucinate relevance to seem useful.
+  // 2026-05-03 (Phase A): directive block extracted to shared helper.
+  const dirCtx = readDirective({ userDirective });
+  const directiveBlock = buildDirectiveBlock(dirCtx, {
+    labelSuffix: "(the question this map-reduce sweep is answering)",
+    framingLines: [
+      "**YOUR JOB UNDER THE DIRECTIVE:** Find what in YOUR slice bears on the directive. NOT what your slice is in general — only what's RELEVANT to the directive.",
+      "**\"NO RELEVANT FINDINGS\" IS A VALID ANSWER.** If your slice has nothing that bears on the directive, report that explicitly — `My slice (path/, path/) contains no findings relevant to the directive: <one-line why not>`. Do NOT invent relevance to seem useful.",
+    ],
+  });
+
+  const reportInstructions = dirCtx.hasDirective
+    ? [
+        "Produce a CONCRETE report (under ~300 words) covering:",
+        "- For each finding: which file, what's relevant to the directive, what to do about it.",
+        "- Cite file paths (e.g. `src/foo.ts:42`) for every claim. No claim without a file:line attribution.",
+        "- If your slice has NOTHING relevant: one short paragraph explaining what your slice IS and why it doesn't bear on the directive. That is the full report — don't pad.",
+      ]
+    : [
+        "Produce a CONCRETE report (under ~300 words) covering:",
+        "- What each entry in your slice is (purpose / role).",
+        "- Anything noteworthy: obvious defects, design choices, TODOs, test coverage gaps, interesting patterns.",
+        "- Cite file paths (e.g. `src/foo.ts:42`) for any claim you make.",
+      ];
 
   return [
     `You are Mapper Agent ${mapperIndex} in a map-reduce swarm.`,
     `This is cycle ${round}/${totalRounds}. You cannot see the reducer's output or any peer mapper's report — that is deliberate, so your report is independent.`,
     "",
+    ...directiveBlock,
     `Your slice of the repo: ${sliceList}`,
     "Inspect ONLY the entries in your slice. Do not read or reference files outside your slice.",
     "Your working directory IS the project clone — use file-read, grep, and find-files tools to actually read the assigned entries.",
     "",
-    "Produce a CONCRETE report (under ~300 words) covering:",
-    "- What each entry in your slice is (purpose / role).",
-    "- Anything noteworthy: obvious defects, design choices, TODOs, test coverage gaps, interesting patterns.",
-    "- Cite file paths (e.g. `src/foo.ts:42`) for any claim you make.",
+    ...reportInstructions,
     "",
     "Do NOT speculate about entries outside your slice.",
     "",
@@ -690,6 +789,7 @@ export function buildReducerPrompt(
   round: number,
   totalRounds: number,
   transcript: readonly TranscriptEntry[],
+  userDirective?: string,
 ): string {
   const transcriptText = transcript
     .map((e) => {
@@ -699,10 +799,52 @@ export function buildReducerPrompt(
     })
     .join("\n\n");
 
-  const closingInstruction =
-    round < totalRounds
-      ? "4. Name one GAP in coverage — an area no mapper covered well or where their reports disagree — that a future cycle should target."
-      : "4. Close with your final unified picture of the project: what it is, who it's for, and the single most important next step.";
+  // 2026-05-03 (Phase A): directive helpers extracted to shared module.
+  const dirCtx = readDirective({ userDirective });
+  const isFinal = round === totalRounds;
+
+  // 2026-05-02 (map-reduce improvement #1): directive-aware synthesis.
+  // When directive is set, the synthesis answers the directive directly
+  // — Project-picture framing is replaced with Answer-to-directive
+  // framing. Mid-cycle gap question becomes "which slice should be
+  // re-issued to dig deeper into the directive".
+  if (dirCtx.hasDirective) {
+    const directiveClosing = isFinal
+      ? "4. **Final answer to the directive** — your unified, evidence-backed answer with mapper + file citations. Name the single most important next step."
+      : "4. **Coverage gap toward the directive** — name one slice / area no mapper has dug into yet that's likely to bear on the directive. Future cycle should target it.";
+    return [
+      `You are the REDUCER (Agent 1) in a map-reduce swarm.`,
+      `This is the reduce step of cycle ${round}/${totalRounds}. Mapper agents just reported on their assigned slices of the repo.`,
+      "",
+      ...buildDirectiveBlock(dirCtx, {
+        labelSuffix: "(the question this map-reduce sweep is answering)",
+      }),
+      "Your job is to SYNTHESIZE the mappers' findings into an answer to the directive. Do NOT summarize each mapper individually. Look for the things only visible from the reducer's vantage:",
+      "  - DIRECT EVIDENCE: mapper findings that directly bear on the directive — list them with file paths.",
+      "  - SURPRISES: cross-slice findings that change the answer (e.g. Mapper 2's finding recontextualizes Mapper 4's).",
+      "  - CONTRADICTIONS: mappers disagreeing about something the directive depends on. Name the mappers and the tension.",
+      "  - SLICE GAPS: which mapper's slice contained no relevant findings (`COMPLETE: true` with `no findings relevant`) and whether that's a real gap or just an off-topic slice.",
+      "",
+      "Produce a synthesis (under ~600 words) structured as:",
+      "1. **Answer to directive** — direct response to the user's question, evidence-backed by mapper findings + file paths.",
+      "2. **Supporting evidence** — the specific mapper findings that ground your answer (cite Mapper N + file paths).",
+      "3. **Tensions / open questions** — contradictions or things mappers couldn't determine that affect the answer's confidence.",
+      directiveClosing,
+      "",
+      "Cite mappers by agent index (e.g. \"Mapper 3 noted…\") and the file paths they cited. Do NOT invent evidence beyond what mappers reported — if the directive can't be answered from the union of slices, say so explicitly.",
+      "",
+      "=== TRANSCRIPT ===",
+      transcriptText,
+      "=== END TRANSCRIPT ===",
+      "",
+      "Now write your synthesis.",
+    ].join("\n");
+  }
+
+  // No-directive path: original "tell me about this repo" framing.
+  const closingInstruction = isFinal
+    ? "4. Close with your final unified picture of the project: what it is, who it's for, and the single most important next step."
+    : "4. Name one GAP in coverage — an area no mapper covered well or where their reports disagree — that a future cycle should target.";
 
   return [
     `You are the REDUCER (Agent 1) in a map-reduce swarm.`,
