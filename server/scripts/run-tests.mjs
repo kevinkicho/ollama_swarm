@@ -79,6 +79,20 @@ const TEST_FILES = [
   "src/swarm/runStateMachine.test.ts",
   "src/swarm/agentStatsCollector.test.ts",
   "src/swarm/runSummary.test.ts",
+  // 2026-05-02–05-03: previously orphaned (added but never registered here).
+  "src/swarm/councilPosition.test.ts",
+  "src/swarm/propositionDerive.test.ts",
+  "src/swarm/roleDiffDeliverable.test.ts",
+  // 2026-05-03 (Phase A): shared-layer helpers.
+  "src/swarm/directivePromptHelpers.test.ts",
+  "src/swarm/convergenceSignal.test.ts",
+  // 2026-05-03 (Phase B): loop guard helpers.
+  "src/swarm/loopGuards.test.ts",
+  "src/swarm/deadLoopGuard.test.ts",
+  // 2026-05-03 (Phase C): writeSummary helper.
+  "src/swarm/discussionWriteSummary.test.ts",
+  // 2026-05-03 (Phase D): finally close-out helper.
+  "src/swarm/runFinallyHooks.test.ts",
 
   // routes/
   "src/routes/swarm.test.ts",
@@ -108,6 +122,7 @@ const TEST_FILES = [
   "src/services/CostTracker.test.ts",
   "src/services/AgentManager.usage.test.ts",
   "src/providers/providers.test.ts",
+  "src/providers/discoverModels.test.ts",
   "src/services/Session.test.ts",
   "src/tools/ToolDispatcher.test.ts",
 ];

@@ -1,0 +1,2334 @@
+{
+  "generated": "2026-05-02T04:33:23.604Z",
+  "sweepDir": "runs/_eval/sweep1-baseline + runs/_eval/sweep1-blackboard + runs/_eval/sweep1-blackboard-cont + runs/_eval/sweep2-analysis-v2",
+  "aggregates": {
+    "audit-readme-claims": {
+      "baseline": null,
+      "blackboard": {
+        "median": 0,
+        "p25": 0,
+        "p75": 0,
+        "passCount": 0,
+        "attemptCount": 3
+      },
+      "council": {
+        "median": 95,
+        "p25": 95,
+        "p75": 95,
+        "passCount": 3,
+        "attemptCount": 3
+      },
+      "moa": {
+        "median": 95,
+        "p25": 95,
+        "p75": 95,
+        "passCount": 3,
+        "attemptCount": 3
+      },
+      "round-robin": {
+        "median": 91,
+        "p25": 91,
+        "p75": 91,
+        "passCount": 3,
+        "attemptCount": 3
+      }
+    },
+    "council-architecture-decision": {
+      "baseline": null,
+      "blackboard": null,
+      "council": {
+        "median": 95,
+        "p25": 95,
+        "p75": 95,
+        "passCount": 3,
+        "attemptCount": 3
+      },
+      "moa": {
+        "median": 95,
+        "p25": 95,
+        "p75": 95,
+        "passCount": 3,
+        "attemptCount": 3
+      },
+      "round-robin": null
+    },
+    "fix-todos": {
+      "baseline": null,
+      "blackboard": {
+        "median": 0,
+        "p25": 0,
+        "p75": 0,
+        "passCount": 0,
+        "attemptCount": 3
+      },
+      "council": null,
+      "moa": null,
+      "round-robin": null
+    },
+    "fixture-add-null-guard": {
+      "baseline": {
+        "median": 50,
+        "p25": 50,
+        "p75": 50,
+        "passCount": 0,
+        "attemptCount": 3
+      },
+      "blackboard": {
+        "median": 115,
+        "p25": 115,
+        "p75": 121,
+        "passCount": 3,
+        "attemptCount": 3
+      },
+      "council": null,
+      "moa": null,
+      "round-robin": null
+    },
+    "fixture-add-readme-section": {
+      "baseline": {
+        "median": 50,
+        "p25": 50,
+        "p75": 50,
+        "passCount": 0,
+        "attemptCount": 3
+      },
+      "blackboard": {
+        "median": 127,
+        "p25": 72,
+        "p75": 127,
+        "passCount": 2,
+        "attemptCount": 3
+      },
+      "council": null,
+      "moa": null,
+      "round-robin": null
+    },
+    "fixture-audit-console-logs": {
+      "baseline": {
+        "median": 0,
+        "p25": 0,
+        "p75": 0,
+        "passCount": 0,
+        "attemptCount": 3
+      },
+      "blackboard": {
+        "median": 127,
+        "p25": 72,
+        "p75": 127,
+        "passCount": 2,
+        "attemptCount": 3
+      },
+      "council": null,
+      "moa": null,
+      "round-robin": null
+    },
+    "fixture-categorize-deps": {
+      "baseline": {
+        "median": 0,
+        "p25": 0,
+        "p75": 0,
+        "passCount": 0,
+        "attemptCount": 3
+      },
+      "blackboard": {
+        "median": 121,
+        "p25": 121,
+        "p75": 124,
+        "passCount": 3,
+        "attemptCount": 3
+      },
+      "council": null,
+      "moa": null,
+      "round-robin": null
+    },
+    "fixture-extract-pure-helper": {
+      "baseline": {
+        "median": 0,
+        "p25": 0,
+        "p75": 0,
+        "passCount": 0,
+        "attemptCount": 3
+      },
+      "blackboard": {
+        "median": 47,
+        "p25": 47,
+        "p75": 47,
+        "passCount": 0,
+        "attemptCount": 5
+      },
+      "council": null,
+      "moa": null,
+      "round-robin": null
+    },
+    "fixture-fix-failing-test": {
+      "baseline": {
+        "median": 0,
+        "p25": 0,
+        "p75": 0,
+        "passCount": 0,
+        "attemptCount": 3
+      },
+      "blackboard": {
+        "median": 127,
+        "p25": 127,
+        "p75": 127,
+        "passCount": 3,
+        "attemptCount": 3
+      },
+      "council": null,
+      "moa": null,
+      "round-robin": null
+    },
+    "fixture-fix-off-by-one": {
+      "baseline": {
+        "median": 0,
+        "p25": 0,
+        "p75": 0,
+        "passCount": 0,
+        "attemptCount": 3
+      },
+      "blackboard": {
+        "median": 127,
+        "p25": 127,
+        "p75": 127,
+        "passCount": 3,
+        "attemptCount": 3
+      },
+      "council": null,
+      "moa": null,
+      "round-robin": null
+    },
+    "fixture-multistep-add-script": {
+      "baseline": {
+        "median": 0,
+        "p25": 0,
+        "p75": 0,
+        "passCount": 0,
+        "attemptCount": 3
+      },
+      "blackboard": {
+        "median": 127,
+        "p25": 127,
+        "p75": 127,
+        "passCount": 3,
+        "attemptCount": 3
+      },
+      "council": null,
+      "moa": null,
+      "round-robin": null
+    },
+    "fixture-multistep-config-then-test": {
+      "baseline": {
+        "median": 0,
+        "p25": 0,
+        "p75": 0,
+        "passCount": 0,
+        "attemptCount": 3
+      },
+      "blackboard": {
+        "median": 47,
+        "p25": 29,
+        "p75": 87,
+        "passCount": 1,
+        "attemptCount": 3
+      },
+      "council": null,
+      "moa": null,
+      "round-robin": null
+    },
+    "fixture-rename-symbol": {
+      "baseline": {
+        "median": 0,
+        "p25": 0,
+        "p75": 0,
+        "passCount": 0,
+        "attemptCount": 3
+      },
+      "blackboard": {
+        "median": 47,
+        "p25": 47,
+        "p75": 87,
+        "passCount": 1,
+        "attemptCount": 3
+      },
+      "council": null,
+      "moa": null,
+      "round-robin": null
+    },
+    "stigmergy-coverage-map": {
+      "baseline": null,
+      "blackboard": null,
+      "council": null,
+      "moa": {
+        "median": 95,
+        "p25": 95,
+        "p75": 95,
+        "passCount": 3,
+        "attemptCount": 3
+      },
+      "round-robin": {
+        "median": 95,
+        "p25": 95,
+        "p75": 95,
+        "passCount": 3,
+        "attemptCount": 3
+      }
+    }
+  },
+  "raw": [
+    {
+      "taskId": "fixture-fix-off-by-one",
+      "preset": "baseline",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "189632bc-19a9-4cea-b3e5-b2a13afdc36b",
+      "wallS": 2,
+      "ts": 1777667053120,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: countDown(3) must include 1\n+ actual - expected\n\n  [\n    3,\n    2,\n-   1\n  ]\n\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\fix-off-by-one__baseline-1-1777667053120"
+    },
+    {
+      "taskId": "fixture-fix-off-by-one",
+      "preset": "baseline",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "a896fe9d-09aa-405b-b4ee-481d0824ef76",
+      "wallS": 2,
+      "ts": 1777667063410,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: countDown(3) must include 1\n+ actual - expected\n\n  [\n    3,\n    2,\n-   1\n  ]\n\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\fix-off-by-one__baseline-2-1777667063410"
+    },
+    {
+      "taskId": "fixture-fix-off-by-one",
+      "preset": "baseline",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "b871a318-1d8f-4001-b332-91eb24820264",
+      "wallS": 2,
+      "ts": 1777667073628,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: countDown(3) must include 1\n+ actual - expected\n\n  [\n    3,\n    2,\n-   1\n  ]\n\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\fix-off-by-one__baseline-3-1777667073628"
+    },
+    {
+      "taskId": "fixture-add-null-guard",
+      "preset": "baseline",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "794ab600-f414-4ea5-98f5-95262a53a36c",
+      "wallS": 17,
+      "ts": 1777667083839,
+      "score": {
+        "total": 50,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: add-null-guard\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\add-null-guard__baseline-1-1777667083839"
+    },
+    {
+      "taskId": "fixture-add-null-guard",
+      "preset": "baseline",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "e16fb033-e901-4713-a48e-843efb05d57b",
+      "wallS": 2,
+      "ts": 1777667109057,
+      "score": {
+        "total": 50,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: add-null-guard\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\add-null-guard__baseline-2-1777667109057"
+    },
+    {
+      "taskId": "fixture-add-null-guard",
+      "preset": "baseline",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "a750e056-4a49-43ec-bc67-6f3bbdeb0e54",
+      "wallS": 17,
+      "ts": 1777667119262,
+      "score": {
+        "total": 50,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: add-null-guard\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\add-null-guard__baseline-3-1777667119262"
+    },
+    {
+      "taskId": "fixture-extract-pure-helper",
+      "preset": "baseline",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "16d7f114-043e-4bd3-a505-cd304a313336",
+      "wallS": 17,
+      "ts": 1777667144479,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "file:///C:/Users/kevin/Desktop/ollama_swarm/runs/_eval-clones/extract-pure-helper__baseline-1-1777667144479/verify.mjs:4\r\nimport { computePrice } from \"./src/calc.js\";\r\n         ^^^^^^^^^^^^\r\nSyntaxError: The requested module './src/calc.js' does not provide an export named 'computePrice'\r\n    at #asyncInstantiate (node:internal/modules/esm/module_job:319:21)\r\n    at async ModuleJob.run (node:internal/modules/esm/module_job:422:5)\r\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)\r\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\r\n\r\nNode.js v24.13.1\r\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\extract-pure-helper__baseline-1-1777667144479"
+    },
+    {
+      "taskId": "fixture-extract-pure-helper",
+      "preset": "baseline",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "2689a770-2fb9-4e10-af8b-a166dc72db2b",
+      "wallS": 32,
+      "ts": 1777667169792,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: Expected values to be strictly equal:\n+ actual - expected\n\n+ 26.400000000000002\n- 26.4\n      ^\n\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\extract-pure-helper__baseline-2-1777667169792"
+    },
+    {
+      "taskId": "fixture-extract-pure-helper",
+      "preset": "baseline",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "62a06647-1512-4d1f-83b9-364eaadcc386",
+      "wallS": 17,
+      "ts": 1777667210021,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "file:///C:/Users/kevin/Desktop/ollama_swarm/runs/_eval-clones/extract-pure-helper__baseline-3-1777667210021/verify.mjs:4\r\nimport { computePrice } from \"./src/calc.js\";\r\n         ^^^^^^^^^^^^\r\nSyntaxError: The requested module './src/calc.js' does not provide an export named 'computePrice'\r\n    at #asyncInstantiate (node:internal/modules/esm/module_job:319:21)\r\n    at async ModuleJob.run (node:internal/modules/esm/module_job:422:5)\r\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)\r\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)\r\n\r\nNode.js v24.13.1\r\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\extract-pure-helper__baseline-3-1777667210021"
+    },
+    {
+      "taskId": "fixture-rename-symbol",
+      "preset": "baseline",
+      "seed": 1,
+      "ok": true,
+      "phase": "failed",
+      "runId": "a2eb3f79-1702-401c-94d2-32756626288b",
+      "wallS": 32,
+      "ts": 1777667235250,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: `oldSum` still referenced in: C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\rename-symbol__baseline-1-1777667235250\\src\\main.js, C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\rename-symbol__baseline-1-1777667235250\\src\\math.js\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\rename-symbol__baseline-1-1777667235250"
+    },
+    {
+      "taskId": "fixture-rename-symbol",
+      "preset": "baseline",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "5df6e815-3c19-46af-b19f-4867d6929cb2",
+      "wallS": 32,
+      "ts": 1777667275591,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: `oldSum` still referenced in: C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\rename-symbol__baseline-2-1777667275591\\src\\math.js\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\rename-symbol__baseline-2-1777667275591"
+    },
+    {
+      "taskId": "fixture-rename-symbol",
+      "preset": "baseline",
+      "seed": 3,
+      "ok": true,
+      "phase": "failed",
+      "runId": "444ea3f7-f8cc-4600-9950-63efb1add08e",
+      "wallS": 17,
+      "ts": 1777667315822,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: `oldSum` still referenced in: C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\rename-symbol__baseline-3-1777667315822\\src\\main.js, C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\rename-symbol__baseline-3-1777667315822\\src\\math.js\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\rename-symbol__baseline-3-1777667315822"
+    },
+    {
+      "taskId": "fixture-fix-failing-test",
+      "preset": "baseline",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "269febf7-163d-409b-97a2-6b35b26e45e7",
+      "wallS": 2,
+      "ts": 1777667341150,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "0\nℹ pass 2\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 75.2406\n\n✖ failing tests:\n\ntest at src\\sum.test.mjs:16:1\n✖ sum of 2 and 3 is 5 (0.6472ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  5 !== 6\n  \n      at TestContext.<anonymous> (file:///C:/Users/kevin/Desktop/ollama_swarm/runs/_eval-clones/fix-failing-test__baseline-1-1777667341150/src/sum.test.mjs:17:10)\n      at Test.runInAsyncScope (node:async_hooks:214:14)\n      at Test.run (node:internal/test_runner/test:1103:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:785:18)\n      at Test.postRun (node:internal/test_runner/test:1232:19)\n      at Test.run (node:internal/test_runner/test:1160:12)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:785:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 5,\n    expected: 6,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\nFAIL: src/sum.test.mjs still has a failing assertion\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\fix-failing-test__baseline-1-1777667341150"
+    },
+    {
+      "taskId": "fixture-fix-failing-test",
+      "preset": "baseline",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "93056c3f-de69-4d81-aadc-315f494c45c3",
+      "wallS": 2,
+      "ts": 1777667351508,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": " 0\nℹ pass 2\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 69.985\n\n✖ failing tests:\n\ntest at src\\sum.test.mjs:16:1\n✖ sum of 2 and 3 is 5 (0.7083ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  5 !== 6\n  \n      at TestContext.<anonymous> (file:///C:/Users/kevin/Desktop/ollama_swarm/runs/_eval-clones/fix-failing-test__baseline-2-1777667351508/src/sum.test.mjs:17:10)\n      at Test.runInAsyncScope (node:async_hooks:214:14)\n      at Test.run (node:internal/test_runner/test:1103:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:785:18)\n      at Test.postRun (node:internal/test_runner/test:1232:19)\n      at Test.run (node:internal/test_runner/test:1160:12)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:785:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 5,\n    expected: 6,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\nFAIL: src/sum.test.mjs still has a failing assertion\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\fix-failing-test__baseline-2-1777667351508"
+    },
+    {
+      "taskId": "fixture-fix-failing-test",
+      "preset": "baseline",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "ebb34de8-2980-4751-9add-69b498a72a4a",
+      "wallS": 17,
+      "ts": 1777667361874,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "0\nℹ pass 2\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 69.7786\n\n✖ failing tests:\n\ntest at src\\sum.test.mjs:16:1\n✖ sum of 2 and 3 is 5 (0.6315ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  5 !== 6\n  \n      at TestContext.<anonymous> (file:///C:/Users/kevin/Desktop/ollama_swarm/runs/_eval-clones/fix-failing-test__baseline-3-1777667361874/src/sum.test.mjs:17:10)\n      at Test.runInAsyncScope (node:async_hooks:214:14)\n      at Test.run (node:internal/test_runner/test:1103:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:785:18)\n      at Test.postRun (node:internal/test_runner/test:1232:19)\n      at Test.run (node:internal/test_runner/test:1160:12)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:785:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 5,\n    expected: 6,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\nFAIL: src/sum.test.mjs still has a failing assertion\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\fix-failing-test__baseline-3-1777667361874"
+    },
+    {
+      "taskId": "fixture-add-readme-section",
+      "preset": "baseline",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "380301b6-2c64-4f76-be71-7fe9c0a4bf48",
+      "wallS": 2,
+      "ts": 1777667387214,
+      "score": {
+        "total": 50,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: add-readme-section\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\add-readme-section__baseline-1-1777667387214"
+    },
+    {
+      "taskId": "fixture-add-readme-section",
+      "preset": "baseline",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "bfbbcdf6-74fd-421f-8053-424c6ce73117",
+      "wallS": 2,
+      "ts": 1777667397417,
+      "score": {
+        "total": 50,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: add-readme-section\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\add-readme-section__baseline-2-1777667397417"
+    },
+    {
+      "taskId": "fixture-add-readme-section",
+      "preset": "baseline",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "9401867b-8321-4599-93fc-9ef6e35ef5f6",
+      "wallS": 2,
+      "ts": 1777667407622,
+      "score": {
+        "total": 50,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: add-readme-section\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\add-readme-section__baseline-3-1777667407622"
+    },
+    {
+      "taskId": "fixture-audit-console-logs",
+      "preset": "baseline",
+      "seed": 1,
+      "ok": true,
+      "phase": "failed",
+      "runId": "758d59e2-04fe-496b-a039-ca389f824dbd",
+      "wallS": 47,
+      "ts": 1777667417843,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: report.json missing — swarm should have written it.\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\audit-console-logs__baseline-1-1777667417843"
+    },
+    {
+      "taskId": "fixture-audit-console-logs",
+      "preset": "baseline",
+      "seed": 2,
+      "ok": true,
+      "phase": "failed",
+      "runId": "6da06986-9d56-4d64-85ab-232ab3eaa61e",
+      "wallS": 32,
+      "ts": 1777667473057,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: report.json missing — swarm should have written it.\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\audit-console-logs__baseline-2-1777667473057"
+    },
+    {
+      "taskId": "fixture-audit-console-logs",
+      "preset": "baseline",
+      "seed": 3,
+      "ok": true,
+      "phase": "failed",
+      "runId": "62ece769-8220-4931-adea-be15888e36df",
+      "wallS": 47,
+      "ts": 1777667513277,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: report.json missing — swarm should have written it.\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\audit-console-logs__baseline-3-1777667513277"
+    },
+    {
+      "taskId": "fixture-categorize-deps",
+      "preset": "baseline",
+      "seed": 1,
+      "ok": true,
+      "phase": "failed",
+      "runId": "5ac5d31a-b0eb-4319-9c9a-2be00a9a5074",
+      "wallS": 2,
+      "ts": 1777667568513,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: categories.json missing.\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\categorize-deps__baseline-1-1777667568513"
+    },
+    {
+      "taskId": "fixture-categorize-deps",
+      "preset": "baseline",
+      "seed": 2,
+      "ok": true,
+      "phase": "failed",
+      "runId": "c4e0ae13-1472-4700-b1b5-e672767fa2da",
+      "wallS": 2,
+      "ts": 1777667578689,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: categories.json missing.\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\categorize-deps__baseline-2-1777667578689"
+    },
+    {
+      "taskId": "fixture-categorize-deps",
+      "preset": "baseline",
+      "seed": 3,
+      "ok": true,
+      "phase": "failed",
+      "runId": "1c60cefb-f944-4f13-9e47-5acf937fade0",
+      "wallS": 2,
+      "ts": 1777667588893,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: categories.json missing.\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\categorize-deps__baseline-3-1777667588893"
+    },
+    {
+      "taskId": "fixture-multistep-add-script",
+      "preset": "baseline",
+      "seed": 1,
+      "ok": true,
+      "phase": "failed",
+      "runId": "08ba2bf1-2dbf-45bb-b6cd-6b79c9416a8d",
+      "wallS": 17,
+      "ts": 1777667599078,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: package.json must declare a `greet` script.\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\multistep-add-script__baseline-1-1777667599078"
+    },
+    {
+      "taskId": "fixture-multistep-add-script",
+      "preset": "baseline",
+      "seed": 2,
+      "ok": true,
+      "phase": "failed",
+      "runId": "4c97e5ff-d6f0-4a98-a4a0-a00fa0e6d99b",
+      "wallS": 17,
+      "ts": 1777667624290,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: package.json must declare a `greet` script.\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\multistep-add-script__baseline-2-1777667624290"
+    },
+    {
+      "taskId": "fixture-multistep-add-script",
+      "preset": "baseline",
+      "seed": 3,
+      "ok": true,
+      "phase": "failed",
+      "runId": "a65ee1d3-35be-4d52-97d1-f3f4a9460712",
+      "wallS": 17,
+      "ts": 1777667649538,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: package.json must declare a `greet` script.\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\multistep-add-script__baseline-3-1777667649538"
+    },
+    {
+      "taskId": "fixture-multistep-config-then-test",
+      "preset": "baseline",
+      "seed": 1,
+      "ok": true,
+      "phase": "failed",
+      "runId": "d3d3b62a-f7fa-4aa3-8518-866467c05486",
+      "wallS": 17,
+      "ts": 1777667674833,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: formatLog with verbose=true must include \"[v]\"; got: \"INFO: hello\"\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\multistep-config-then-test__baseline-1-1777667674833"
+    },
+    {
+      "taskId": "fixture-multistep-config-then-test",
+      "preset": "baseline",
+      "seed": 2,
+      "ok": true,
+      "phase": "failed",
+      "runId": "6b8839a1-cdb5-476f-a950-81ba599ad984",
+      "wallS": 17,
+      "ts": 1777667700175,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: formatLog with verbose=true must include \"[v]\"; got: \"INFO: hello\"\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\multistep-config-then-test__baseline-2-1777667700175"
+    },
+    {
+      "taskId": "fixture-multistep-config-then-test",
+      "preset": "baseline",
+      "seed": 3,
+      "ok": true,
+      "phase": "failed",
+      "runId": "e32470a8-3903-46ac-91f9-3e2ba7b7ca4d",
+      "wallS": 17,
+      "ts": 1777667725413,
+      "score": {
+        "total": 0,
+        "components": {
+          "completion": 0,
+          "throughput": 0,
+          "efficiency": 0,
+          "conformance": 0
+        },
+        "notes": "no summary · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: formatLog with verbose=true must include \"[v]\"; got: \"INFO: hello\"\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\multistep-config-then-test__baseline-3-1777667725413"
+    },
+    {
+      "taskId": "audit-readme-claims",
+      "preset": "blackboard",
+      "seed": 1,
+      "ok": false,
+      "reason": "HTTP 400",
+      "score": {
+        "total": 0,
+        "components": {},
+        "notes": "start_failed"
+      },
+      "wallS": 0,
+      "ts": 1777667778370
+    },
+    {
+      "taskId": "audit-readme-claims",
+      "preset": "blackboard",
+      "seed": 2,
+      "ok": false,
+      "reason": "HTTP 400",
+      "score": {
+        "total": 0,
+        "components": {},
+        "notes": "start_failed"
+      },
+      "wallS": 0,
+      "ts": 1777667843717
+    },
+    {
+      "taskId": "audit-readme-claims",
+      "preset": "blackboard",
+      "seed": 3,
+      "ok": false,
+      "reason": "HTTP 400",
+      "score": {
+        "total": 0,
+        "components": {},
+        "notes": "start_failed"
+      },
+      "wallS": 0,
+      "ts": 1777667908962
+    },
+    {
+      "taskId": "fix-todos",
+      "preset": "blackboard",
+      "seed": 1,
+      "ok": false,
+      "reason": "HTTP 400",
+      "score": {
+        "total": 0,
+        "components": {},
+        "notes": "start_failed"
+      },
+      "wallS": 0,
+      "ts": 1777667974208
+    },
+    {
+      "taskId": "fix-todos",
+      "preset": "blackboard",
+      "seed": 2,
+      "ok": false,
+      "reason": "HTTP 400",
+      "score": {
+        "total": 0,
+        "components": {},
+        "notes": "start_failed"
+      },
+      "wallS": 0,
+      "ts": 1777668039479
+    },
+    {
+      "taskId": "fix-todos",
+      "preset": "blackboard",
+      "seed": 3,
+      "ok": false,
+      "reason": "HTTP 400",
+      "score": {
+        "total": 0,
+        "components": {},
+        "notes": "start_failed"
+      },
+      "wallS": 0,
+      "ts": 1777668104770
+    },
+    {
+      "taskId": "fixture-fix-off-by-one",
+      "preset": "blackboard",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "827813d9-50b9-463e-870d-16cc3b98e214",
+      "wallS": 122,
+      "ts": 1777668170092,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 112s · 13591 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: fix-off-by-one\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\fix-off-by-one__blackboard-1-1777668170092"
+    },
+    {
+      "taskId": "fixture-fix-off-by-one",
+      "preset": "blackboard",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "e5fd74a1-2758-4b1e-a3a2-b5574565a169",
+      "wallS": 152,
+      "ts": 1777668300411,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 139s · 14902 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: fix-off-by-one\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\fix-off-by-one__blackboard-2-1777668300411"
+    },
+    {
+      "taskId": "fixture-fix-off-by-one",
+      "preset": "blackboard",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "7c1df87b-cb35-4a05-ab56-722e0a58aefc",
+      "wallS": 122,
+      "ts": 1777668460850,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 121s · 18286 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: fix-off-by-one\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\fix-off-by-one__blackboard-3-1777668460850"
+    },
+    {
+      "taskId": "fixture-add-null-guard",
+      "preset": "blackboard",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "9e890030-9659-430b-bc9d-681ede449b7a",
+      "wallS": 197,
+      "ts": 1777668591167,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 190s · 17306 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: add-null-guard\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\add-null-guard__blackboard-1-1777668591167"
+    },
+    {
+      "taskId": "fixture-add-null-guard",
+      "preset": "blackboard",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "4ef9ddd2-8543-4c97-8a52-0a22e2f16505",
+      "wallS": 618,
+      "ts": 1777668796516,
+      "score": {
+        "total": 115,
+        "components": {
+          "completion": 40,
+          "throughput": 0,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 606s · 7538 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: add-null-guard\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\add-null-guard__blackboard-2-1777668796516"
+    },
+    {
+      "taskId": "fixture-add-null-guard",
+      "preset": "blackboard",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "8a1fdb98-ef53-4b37-8be5-4a977f4e5730",
+      "wallS": 633,
+      "ts": 1777669422200,
+      "score": {
+        "total": 115,
+        "components": {
+          "completion": 40,
+          "throughput": 0,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 618s · 7167 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: add-null-guard\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\add-null-guard__blackboard-3-1777669422200"
+    },
+    {
+      "taskId": "fixture-extract-pure-helper",
+      "preset": "blackboard",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "e56321fa-4a7a-4779-b067-23a8525f826e",
+      "wallS": 603,
+      "ts": 1777670062916,
+      "score": {
+        "total": 47,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 593s · 10334 tok/min · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: Expected values to be strictly equal:\n+ actual - expected\n\n+ 26.400000000000002\n- 26.4\n      ^\n\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\extract-pure-helper__blackboard-1-1777670062916"
+    },
+    {
+      "taskId": "fixture-extract-pure-helper",
+      "preset": "blackboard",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "c357797f-c4c2-4163-8493-bad44471bcae",
+      "wallS": 362,
+      "ts": 1777670673557,
+      "score": {
+        "total": 47,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 350s · 5046 tok/min · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: Expected values to be strictly equal:\n+ actual - expected\n\n+ 26.400000000000002\n- 26.4\n      ^\n\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\extract-pure-helper__blackboard-2-1777670673557"
+    },
+    {
+      "taskId": "fixture-extract-pure-helper",
+      "preset": "blackboard",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "110cfd96-b544-48ae-9e1d-9322e99421c5",
+      "wallS": 303,
+      "ts": 1777681839669,
+      "score": {
+        "total": 47,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 290s · 5927 tok/min · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: Expected values to be strictly equal:\n+ actual - expected\n\n+ 26.400000000000002\n- 26.4\n      ^\n\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\extract-pure-helper__blackboard-1-1777681839669"
+    },
+    {
+      "taskId": "fixture-extract-pure-helper",
+      "preset": "blackboard",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "26e0fe49-d3a5-45af-bc4b-c86ef167c68c",
+      "wallS": 407,
+      "ts": 1777682150321,
+      "score": {
+        "total": 47,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 402s · 11406 tok/min · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: Expected values to be strictly equal:\n+ actual - expected\n\n+ 26.400000000000002\n- 26.4\n      ^\n\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\extract-pure-helper__blackboard-2-1777682150321"
+    },
+    {
+      "taskId": "fixture-extract-pure-helper",
+      "preset": "blackboard",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "669a6ae4-f5bd-445c-b3c4-d1b4b47d9f80",
+      "wallS": 408,
+      "ts": 1777682565870,
+      "score": {
+        "total": 47,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 401s · 11396 tok/min · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: Expected values to be strictly equal:\n+ actual - expected\n\n+ 26.400000000000002\n- 26.4\n      ^\n\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\extract-pure-helper__blackboard-3-1777682565870"
+    },
+    {
+      "taskId": "fixture-rename-symbol",
+      "preset": "blackboard",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "6d1cbd1c-f25c-4f6a-939d-5b3e75fa7f56",
+      "wallS": 498,
+      "ts": 1777682981455,
+      "score": {
+        "total": 47,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 490s · 11078 tok/min · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: `oldSum` still referenced in: C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\rename-symbol__blackboard-1-1777682981455\\src\\math.js\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\rename-symbol__blackboard-1-1777682981455"
+    },
+    {
+      "taskId": "fixture-rename-symbol",
+      "preset": "blackboard",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "c7a4927c-379e-4272-ae7d-87e627d4e821",
+      "wallS": 287,
+      "ts": 1777683487142,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 276s · 8527 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: rename-symbol\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\rename-symbol__blackboard-2-1777683487142"
+    },
+    {
+      "taskId": "fixture-rename-symbol",
+      "preset": "blackboard",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "e65e466d-95cb-493f-8fe0-b4e910dc1c15",
+      "wallS": 212,
+      "ts": 1777683782596,
+      "score": {
+        "total": 47,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 209s · 19849 tok/min · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: `oldSum` still referenced in: C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\rename-symbol__blackboard-3-1777683782596\\src\\math.js\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\rename-symbol__blackboard-3-1777683782596"
+    },
+    {
+      "taskId": "fixture-fix-failing-test",
+      "preset": "blackboard",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "f9375f18-0c22-4c4c-9e76-94469336dc67",
+      "wallS": 227,
+      "ts": 1777684003041,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 217s · 23173 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "{\"passed\":true,\"testCount\":0,\"output\":\"✔ sum adds two numbers (0.7698ms)\\n✔ sum handles zero (0.1186ms)\\n✔ sum of 2 and 3 is 5 (0.0878ms)\\n✔ sum handles negative numbers (0.7742ms)\\n✔ sum handles zero and seven (0.1277ms)\\n✔ sum handles floats (0.0927ms)\\n✔ sum handles max safe integer (0.1031ms)\\nℹ tests 7\\nℹ suites 0\\nℹ pass 7\\nℹ fail 0\\nℹ cancelled 0\\nℹ skipped 0\\nℹ todo 0\\nℹ duration_ms 80.0492\\n\"}\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\fix-failing-test__blackboard-1-1777684003041"
+    },
+    {
+      "taskId": "fixture-fix-failing-test",
+      "preset": "blackboard",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "efea9f2f-9e0d-433a-9c9b-70400dfcf3dd",
+      "wallS": 137,
+      "ts": 1777684238739,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 134s · 14578 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "✔ sum adds two numbers (0.6848ms)\n✔ sum handles zero (0.1714ms)\n✔ sum of 2 and 3 is 5 (0.1121ms)\nℹ tests 3\nℹ suites 0\nℹ pass 3\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 74.6853\nPASS: fix-failing-test\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\fix-failing-test__blackboard-2-1777684238739"
+    },
+    {
+      "taskId": "fixture-fix-failing-test",
+      "preset": "blackboard",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "cf874d07-0b58-45c0-80d6-4991e94439bd",
+      "wallS": 362,
+      "ts": 1777684384255,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 351s · 13681 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "✔ sum adds two numbers (0.624ms)\n✔ sum handles zero (0.1174ms)\n✔ sum of 2 and 3 is 5 (0.0816ms)\n✔ sum handles negative numbers (0.0915ms)\n✔ sum handles floating point numbers (0.7193ms)\nℹ tests 5\nℹ suites 0\nℹ pass 5\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 81.4261\nPASS: fix-failing-test\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\fix-failing-test__blackboard-3-1777684384255"
+    },
+    {
+      "taskId": "fixture-add-readme-section",
+      "preset": "blackboard",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "83973c36-1506-406f-a4f8-bba96df524b4",
+      "wallS": 152,
+      "ts": 1777684754929,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 150s · 23728 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: add-readme-section\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\add-readme-section__blackboard-1-1777684754929"
+    },
+    {
+      "taskId": "fixture-add-readme-section",
+      "preset": "blackboard",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "42b2ce31-94b3-467c-b914-329017eb09d7",
+      "wallS": 107,
+      "ts": 1777684915303,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 95s · 19584 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: add-readme-section\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\add-readme-section__blackboard-2-1777684915303"
+    },
+    {
+      "taskId": "fixture-add-readme-section",
+      "preset": "blackboard",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "f6bad083-d4eb-4e67-ab2d-95d57424200c",
+      "wallS": 122,
+      "ts": 1777685030667,
+      "score": {
+        "total": 17,
+        "components": {
+          "completion": 10,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "no-progress · commits=2 · 108s · 16752 tok/min · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: README.md is missing a `## Usage` heading.\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\add-readme-section__blackboard-3-1777685030667"
+    },
+    {
+      "taskId": "fixture-audit-console-logs",
+      "preset": "blackboard",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "f86d14d3-1661-49a7-973b-efb39fc4ab67",
+      "wallS": 573,
+      "ts": 1777685161040,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 559s · 17336 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: audit-console-logs\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\audit-console-logs__blackboard-1-1777685161040"
+    },
+    {
+      "taskId": "fixture-audit-console-logs",
+      "preset": "blackboard",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "7c88ad65-cd22-4fab-9c34-0637b138ba8f",
+      "wallS": 317,
+      "ts": 1777685741753,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 310s · 14535 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: audit-console-logs\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\audit-console-logs__blackboard-2-1777685741753"
+    },
+    {
+      "taskId": "fixture-audit-console-logs",
+      "preset": "blackboard",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "94ea19f5-3b43-4dda-8053-4e23668f79a8",
+      "wallS": 47,
+      "ts": 1777686067335,
+      "score": {
+        "total": 17,
+        "components": {
+          "completion": 10,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "no-progress · commits=2 · 34s · 32517 tok/min · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: report.json missing — swarm should have written it.\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\audit-console-logs__blackboard-3-1777686067335"
+    },
+    {
+      "taskId": "fixture-categorize-deps",
+      "preset": "blackboard",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "610fe9a2-2afb-4f08-b4f7-7bb21de3b516",
+      "wallS": 378,
+      "ts": 1777686122690,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 372s · 17673 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: categorize-deps\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\categorize-deps__blackboard-1-1777686122690"
+    },
+    {
+      "taskId": "fixture-categorize-deps",
+      "preset": "blackboard",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "6089a8be-83cc-473e-a0c0-7df50b8f445a",
+      "wallS": 513,
+      "ts": 1777686508405,
+      "score": {
+        "total": 121,
+        "components": {
+          "completion": 40,
+          "throughput": 6,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=1 · 507s · 12224 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: categorize-deps\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\categorize-deps__blackboard-2-1777686508405"
+    },
+    {
+      "taskId": "fixture-categorize-deps",
+      "preset": "blackboard",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "1f38f996-67e6-4aa6-a1cc-9adce833ab79",
+      "wallS": 287,
+      "ts": 1777687029057,
+      "score": {
+        "total": 121,
+        "components": {
+          "completion": 40,
+          "throughput": 6,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=1 · 279s · 10952 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: categories.json matches package.json\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\categorize-deps__blackboard-3-1777687029057"
+    },
+    {
+      "taskId": "fixture-multistep-add-script",
+      "preset": "blackboard",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "d3a40a57-cd09-4044-96f7-86259de15512",
+      "wallS": 333,
+      "ts": 1777687324571,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 319s · 8415 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: multistep-add-script\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\multistep-add-script__blackboard-1-1777687324571"
+    },
+    {
+      "taskId": "fixture-multistep-add-script",
+      "preset": "blackboard",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "9df91c84-ba9d-4ac1-9037-f7776786f36a",
+      "wallS": 453,
+      "ts": 1777687665302,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 438s · 9978 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: multistep-add-script\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\multistep-add-script__blackboard-2-1777687665302"
+    },
+    {
+      "taskId": "fixture-multistep-add-script",
+      "preset": "blackboard",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "73b1b334-a606-47b9-b06c-1fae81c6f980",
+      "wallS": 498,
+      "ts": 1777688126084,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 487s · 10957 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "PASS: multistep-add-script\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\multistep-add-script__blackboard-3-1777688126084"
+    },
+    {
+      "taskId": "fixture-multistep-config-then-test",
+      "preset": "blackboard",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "28fdbef6-74fd-4905-bbb8-7d4b15a0ebe4",
+      "wallS": 483,
+      "ts": 1777688631998,
+      "score": {
+        "total": 47,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 476s · 14844 tok/min · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "nternal/modules/esm/resolve:992:11)\n    at #cachedDefaultResolve (node:internal/modules/esm/loader:719:20)\n    at #resolveAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:736:38)\n    at ModuleLoader.resolveSync (node:internal/modules/esm/loader:765:52)\n    at #resolve (node:internal/modules/esm/loader:701:17)\n    at ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:621:35)\n    at ModuleJob.syncLink (node:internal/modules/esm/module_job:160:33)\n    at ModuleJob.link (node:internal/modules/esm/module_job:245:17) {\n  code: 'ERR_MODULE_NOT_FOUND',\n  url: 'file:///C:/Users/kevin/Desktop/ollama_swarm/runs/_eval-clones/multistep-config-then-test__blackboard-1-1777688631998/src/log.mjs'\n}\n\nNode.js v24.13.1\n✖ src\\log.test.mjs (73.635ms)\nℹ tests 1\nℹ suites 0\nℹ pass 0\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 84.623\n\n✖ failing tests:\n\ntest at src\\log.test.mjs:1:1\n✖ src\\log.test.mjs (73.635ms)\n  'test failed'\nFAIL: src/log.test.mjs has failing tests.\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\multistep-config-then-test__blackboard-1-1777688631998"
+    },
+    {
+      "taskId": "fixture-multistep-config-then-test",
+      "preset": "blackboard",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "ce4f2833-7c37-49e8-80b8-bbed3855823f",
+      "wallS": 107,
+      "ts": 1777689122949,
+      "score": {
+        "total": 11,
+        "components": {
+          "completion": 10,
+          "throughput": 6,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "no-progress · commits=1 · 94s · 12127 tok/min · verify=FAIL"
+      },
+      "verify": {
+        "ok": false,
+        "output": "FAIL: formatLog with verbose=true must include \"[v]\"; got: \"INFO: hello\"\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\multistep-config-then-test__blackboard-2-1777689122949"
+    },
+    {
+      "taskId": "fixture-multistep-config-then-test",
+      "preset": "blackboard",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "f181878c-cb7a-40c7-ac10-1f1dea1f0512",
+      "wallS": 483,
+      "ts": 1777689238352,
+      "score": {
+        "total": 127,
+        "components": {
+          "completion": 40,
+          "throughput": 12,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=2 · 475s · 8416 tok/min · verify=PASS"
+      },
+      "verify": {
+        "ok": true,
+        "output": "✔ formatLog adds [v] marker when verbose is true (0.9308ms)\n✔ formatLog does not add [v] marker when verbose is false (0.1444ms)\n✔ formatLog does not add [v] marker when verbose is absent (0.1314ms)\nℹ tests 3\nℹ suites 0\nℹ pass 3\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 104.5061\nPASS: multistep-config-then-test\n"
+      },
+      "stagePath": "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\_eval-clones\\multistep-config-then-test__blackboard-3-1777689238352"
+    },
+    {
+      "taskId": "audit-readme-claims",
+      "preset": "round-robin",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "d9daf61e-9a42-457c-9dfe-2d9a0bd0f3de",
+      "wallS": 152,
+      "ts": 1777691677196,
+      "score": {
+        "total": 91,
+        "components": {
+          "completion": 40,
+          "throughput": 26,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 151s · 17340 tok/min"
+      }
+    },
+    {
+      "taskId": "audit-readme-claims",
+      "preset": "round-robin",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "604fe357-ab3a-41cf-94d5-ae97504b89fa",
+      "wallS": 167,
+      "ts": 1777691837401,
+      "score": {
+        "total": 91,
+        "components": {
+          "completion": 40,
+          "throughput": 26,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 158s · 19892 tok/min"
+      }
+    },
+    {
+      "taskId": "audit-readme-claims",
+      "preset": "round-robin",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "5189abd9-7dcf-4bf4-ae75-0c865b573568",
+      "wallS": 167,
+      "ts": 1777692012658,
+      "score": {
+        "total": 91,
+        "components": {
+          "completion": 40,
+          "throughput": 26,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 165s · 23025 tok/min"
+      }
+    },
+    {
+      "taskId": "audit-readme-claims",
+      "preset": "council",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "c74138cb-0e42-476f-88fb-8bc649959f3d",
+      "wallS": 107,
+      "ts": 1777692187894,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 106s · 25132 tok/min"
+      }
+    },
+    {
+      "taskId": "audit-readme-claims",
+      "preset": "council",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "61fbb4d2-ab08-4c16-bfbf-488407b4675c",
+      "wallS": 137,
+      "ts": 1777692303022,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 128s · 22210 tok/min"
+      }
+    },
+    {
+      "taskId": "audit-readme-claims",
+      "preset": "council",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "7fab62a0-ad09-4e8c-a280-783a3da10e8b",
+      "wallS": 167,
+      "ts": 1777692448187,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 154s · 28202 tok/min"
+      }
+    },
+    {
+      "taskId": "audit-readme-claims",
+      "preset": "moa",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "047db325-cf14-4275-b1a8-62d2419dfd7c",
+      "wallS": 197,
+      "ts": 1777692623362,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 182s · 16613 tok/min"
+      }
+    },
+    {
+      "taskId": "audit-readme-claims",
+      "preset": "moa",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "2c8cd3d5-c405-4a28-835e-9461927eabf3",
+      "wallS": 197,
+      "ts": 1777692828557,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 188s · 16294 tok/min"
+      }
+    },
+    {
+      "taskId": "audit-readme-claims",
+      "preset": "moa",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "ea1cf0f2-298f-49f9-8387-b71dacc6295c",
+      "wallS": 167,
+      "ts": 1777693033840,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 155s · 19641 tok/min"
+      }
+    },
+    {
+      "taskId": "council-architecture-decision",
+      "preset": "council",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "70e0c617-c26a-4cf7-addf-fcbe2a5a7211",
+      "wallS": 122,
+      "ts": 1777693209011,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 111s · 27359 tok/min"
+      }
+    },
+    {
+      "taskId": "council-architecture-decision",
+      "preset": "council",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "24869d14-0610-43ec-a493-f69e8b2286be",
+      "wallS": 92,
+      "ts": 1777693339148,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 83s · 32404 tok/min"
+      }
+    },
+    {
+      "taskId": "council-architecture-decision",
+      "preset": "council",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "24f8b7e9-5752-4875-ac4a-abee9a844091",
+      "wallS": 137,
+      "ts": 1777693439252,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 122s · 19323 tok/min"
+      }
+    },
+    {
+      "taskId": "council-architecture-decision",
+      "preset": "moa",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "b8d7f841-a999-4a83-b2d1-c85a842ea038",
+      "wallS": 167,
+      "ts": 1777693584377,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 158s · 20092 tok/min"
+      }
+    },
+    {
+      "taskId": "council-architecture-decision",
+      "preset": "moa",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "16c12b12-7624-4510-9a1b-e0ecc5708657",
+      "wallS": 122,
+      "ts": 1777693759540,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 109s · 26136 tok/min"
+      }
+    },
+    {
+      "taskId": "council-architecture-decision",
+      "preset": "moa",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "5c84850d-ab3e-476f-a9ef-ec1eed27edec",
+      "wallS": 287,
+      "ts": 1777693889658,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 278s · 11797 tok/min"
+      }
+    },
+    {
+      "taskId": "stigmergy-coverage-map",
+      "preset": "round-robin",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "e9ce3331-874d-44bf-9070-1c6ee722b774",
+      "wallS": 423,
+      "ts": 1777694184938,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 418s · 22214 tok/min"
+      }
+    },
+    {
+      "taskId": "stigmergy-coverage-map",
+      "preset": "round-robin",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "5f2bcb2f-8d95-40db-9141-1ba7b859e425",
+      "wallS": 572,
+      "ts": 1777694615599,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 557s · 13961 tok/min"
+      }
+    },
+    {
+      "taskId": "stigmergy-coverage-map",
+      "preset": "round-robin",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "f7a3c434-9913-40c6-b23c-6c50fb25f6a2",
+      "wallS": 407,
+      "ts": 1777695196097,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 404s · 19154 tok/min"
+      }
+    },
+    {
+      "taskId": "stigmergy-coverage-map",
+      "preset": "moa",
+      "seed": 1,
+      "ok": true,
+      "phase": "completed",
+      "runId": "f15347cf-815d-463c-bfe4-1aa029972cf8",
+      "wallS": 242,
+      "ts": 1777695611447,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 241s · 20166 tok/min"
+      }
+    },
+    {
+      "taskId": "stigmergy-coverage-map",
+      "preset": "moa",
+      "seed": 2,
+      "ok": true,
+      "phase": "completed",
+      "runId": "90f03f25-bd77-4514-94c7-13c78c2da2e8",
+      "wallS": 242,
+      "ts": 1777695861675,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 241s · 20030 tok/min"
+      }
+    },
+    {
+      "taskId": "stigmergy-coverage-map",
+      "preset": "moa",
+      "seed": 3,
+      "ok": true,
+      "phase": "completed",
+      "runId": "cee9e9e1-8ae9-4871-9e34-e8c35ffb42dd",
+      "wallS": 227,
+      "ts": 1777696111917,
+      "score": {
+        "total": 95,
+        "components": {
+          "completion": 40,
+          "throughput": 30,
+          "efficiency": 20,
+          "conformance": 5
+        },
+        "notes": "completed · commits=0 · 226s · 20816 tok/min"
+      }
+    }
+  ]
+}

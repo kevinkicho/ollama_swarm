@@ -20,6 +20,7 @@
       "agentCount": 4,
       "wallClockCapMs": 600000,
       "expectFilesChanged": false,
+      "qualityRubric": "(a) Names specific README claims (not generic). (b) Cites specific source files/symbols when verifying each claim. (c) Distinguishes 'claim with no implementation' from 'implementation with no docs' from 'aspirational vs current'. (d) Quantifies confidence (e.g. 'verified' vs 'partial' vs 'no evidence'). (e) Avoids hallucinating files or features that don't exist.",
       "$rationale": "Pure analysis task. Tests whether each preset can produce a coherent audit list. Blackboard included because its planner can extract auditable claims into todos."
     },
     {
@@ -50,6 +51,7 @@
       "wallClockCapMs": 600000,
       "expectFilesChanged": false,
       "proposition": "This project should migrate from Express to Fastify.",
+      "qualityRubric": "(a) Names 2+ specific architectural alternatives (not just 'pros vs cons of one'). (b) Lists concrete tradeoffs with numbers/specifics (latency, ecosystem size, migration LOC). (c) Makes a CLEAR recommendation — not 'it depends' alone. (d) Acknowledges conditions under which the recommendation flips. (e) References specific code in the target repo (not generic Express vs Fastify discussion).",
       "$rationale": "Decision task with two clear sides. Council parallel-drafts pros/cons; debate-judge formal PRO/CON; role-diff different angles. Tests preset suitability for architectural decisions."
     },
     {
@@ -66,6 +68,7 @@
       "agentCount": 4,
       "wallClockCapMs": 600000,
       "expectFilesChanged": false,
+      "qualityRubric": "(a) Names specific source files (not just 'utils.ts has tests'). (b) Reports approximate coverage levels — not just yes/no. (c) Identifies CONCRETE test gaps tied to specific functions or behaviors. (d) Prioritizes gaps by impact (which untested paths are user-facing vs internal). (e) Distinguishes unit tests from integration tests when relevant.",
       "$rationale": "Repo-walk task. Stigmergy's pheromone-trail design fits naturally; map-reduce's per-file slicing also works; round-robin baseline."
     },
     {

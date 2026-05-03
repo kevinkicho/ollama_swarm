@@ -30,6 +30,7 @@ import { readFileSync, writeFileSync, mkdirSync, cpSync, rmSync, existsSync } fr
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
+import { judgeAnalysisRun, multiJudgeAnalysisRun } from "./qualityJudge.mjs";
 
 // Module-level state set inside main() — kept local so the file can
 // be imported by the test without triggering the CLI run.
@@ -66,6 +67,19 @@ let MOA_AGGREGATOR_MODEL = "";
 // --moa-aggregator-count surfaces cfg.moaAggregatorCount (1..3, default
 // 1). Lets multi-aggregator-vote experiments run from the CLI too.
 let MOA_AGGREGATOR_COUNT = 0;
+// 2026-05-02 (lever #2): LLM-as-judge for analysis-task quality scoring.
+// --quality-judge-ollama-url defaults to http://127.0.0.1:11434 (the
+// local Ollama daemon — same one the swarm hits). --quality-judge-model
+// defaults to nemotron-3-super:cloud (strongest reasoning that ships
+// free); override for cheaper-faster (gemma4) or higher-quality (paid).
+let QUALITY_JUDGE_OLLAMA_URL = "http://127.0.0.1:11434";
+let QUALITY_JUDGE_MODEL = "";
+// 2026-05-02 (matrix row #7): comma-separated list of judge models for
+// multi-judge inter-rater agreement. When set (2+ models), each judge
+// scores the same deliverable + the eval reports agreement
+// (high/medium/low) on the per-attempt row. Lets us know whether a
+// "score 75" is robust across raters or judges wildly disagree.
+let QUALITY_JUDGE_MODELS = []; // string[]
 let logFile = "";
 
 function log(msg) {
@@ -257,15 +271,25 @@ export function scoreRun(summary, task) {
   else completion = 10;
 
   // Throughput (30): for code tasks, weight commits heavily; for
-  // analysis tasks weight transcript activity
+  // analysis tasks weight transcript activity OR judge-quality if a
+  // qualityScore was supplied (lever #2, 2026-05-02 — see qualityJudge.mjs).
   let throughput = 0;
   const commits = summary.filesChanged ?? 0;
   const transcriptCount = (summary.transcript?.length ?? summary.agents?.reduce?.((a, b) => a + (b.turns ?? 0), 0)) ?? 0;
   if (task.expectFilesChanged) {
     // scale: 1 file = 6, 5+ files = full 30
     throughput = Math.min(30, commits * 6);
+  } else if (typeof task.qualityScore === "number") {
+    // 2026-05-02 (lever #2): when a quality judge ran, replace the
+    // transcript-volume proxy with the judge's 0-100 score scaled to
+    // 0-30. This is the actual differentiator between discussion
+    // presets — pre-fix, every analysis run got ~30 free pts for
+    // emitting any transcript at all.
+    throughput = Math.round((task.qualityScore / 100) * 30);
   } else {
-    // analysis: scale on transcript volume up to 30
+    // analysis without judge (back-compat): scale on transcript
+    // volume up to 30. Will be deprecated once every analysis task
+    // has a qualityRubric.
     throughput = Math.min(30, Math.round(transcriptCount * 2));
   }
 
@@ -402,6 +426,16 @@ async function main() {
   MOA_AGGREGATOR_COUNT = Number.isFinite(aggCountRaw) && aggCountRaw >= 1 && aggCountRaw <= 3
     ? Math.floor(aggCountRaw)
     : 0;
+  // 2026-05-02 (lever #2): quality-judge config.
+  QUALITY_JUDGE_OLLAMA_URL =
+    args["quality-judge-ollama-url"] ?? args.qualityJudgeOllamaUrl ?? QUALITY_JUDGE_OLLAMA_URL;
+  QUALITY_JUDGE_MODEL =
+    args["quality-judge-model"] ?? args.qualityJudgeModel ?? "";
+  // 2026-05-02 (matrix row #7): multi-judge inter-rater config.
+  const judgesArg = args["quality-judge-models"] ?? args.qualityJudgeModels ?? "";
+  QUALITY_JUDGE_MODELS = typeof judgesArg === "string" && judgesArg.length > 0
+    ? judgesArg.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
   if (MODEL_OVERRIDE) console.log(`[eval] model override: ${MODEL_OVERRIDE}`);
   if (MAX_COST_USD > 0) console.log(`[eval] per-attempt cost cap: $${MAX_COST_USD}`);
   if (MOA_PROPOSER_MODEL) console.log(`[eval] MoA proposer model: ${MOA_PROPOSER_MODEL}`);
@@ -498,7 +532,56 @@ async function main() {
           derivedClone = path.join(PARENT_PATH, repoName);
         }
         const summary = await readSummary(derivedClone);
-        const score = scoreRun(summary, task);
+        // 2026-05-02 (lever #2 + matrix row #7): for non-fixture
+        // analysis tasks with a qualityRubric, run the LLM judge
+        // before scoring so scoreRun can use the judge's 0-100 score
+        // instead of the lazy transcript-volume proxy. When
+        // --quality-judge-models is set (2+ models), use multi-judge
+        // inter-rater for agreement scoring; otherwise single-judge.
+        // Failure is silent — null judgeResult falls back to the
+        // legacy throughput formula.
+        let judgeResult = null;
+        let multiJudgeResult = null;
+        if (!stage && task.qualityRubric && summary) {
+          try {
+            if (QUALITY_JUDGE_MODELS.length >= 2) {
+              multiJudgeResult = await multiJudgeAnalysisRun({
+                task,
+                summary,
+                ollamaBaseUrl: QUALITY_JUDGE_OLLAMA_URL,
+                models: QUALITY_JUDGE_MODELS,
+              });
+              if (multiJudgeResult) {
+                judgeResult = { score: multiJudgeResult.meanScore, rationale: `multi-judge mean (${multiJudgeResult.judgeCount} judges)` };
+                log(
+                  `    multi-judge: mean=${multiJudgeResult.meanScore} spread=${multiJudgeResult.spread} agreement=${multiJudgeResult.agreement} (${multiJudgeResult.perJudge.map((j) => `${j.model}:${j.score}`).join(", ")})`,
+                );
+              } else {
+                log(`    multi-judge: all judges failed`);
+              }
+            } else {
+              judgeResult = await judgeAnalysisRun({
+                task,
+                summary,
+                ollamaBaseUrl: QUALITY_JUDGE_OLLAMA_URL,
+                ...(QUALITY_JUDGE_MODEL ? { model: QUALITY_JUDGE_MODEL } : {}),
+              });
+              if (judgeResult) {
+                log(`    judge: score=${judgeResult.score} (${judgeResult.rationale})`);
+              } else {
+                log(`    judge: skipped (no parseable response)`);
+              }
+            }
+          } catch (err) {
+            log(`    judge: failed — ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        // Pass judge score into scoreRun via task.qualityScore (mutated
+        // for THIS attempt only; intentionally not on the catalog).
+        const taskWithJudge = judgeResult
+          ? { ...task, qualityScore: judgeResult.score }
+          : task;
+        const score = scoreRun(summary, taskWithJudge);
         // Phase 7+ (#314): if this was a fixture run, exec verify.mjs
         // and add a +50 bonus on pass (or zero out completion on fail).
         // Verify runs in the SWARM's clone path (where edits landed),
@@ -529,6 +612,8 @@ async function main() {
           taskId: task.id, preset, seed, ok: final.phase !== "timeout",
           phase: final.phase, runId: fired.runId, wallS, ts: startTs, score,
           ...(verify ? { verify: { ok: verify.ok, output: verify.output } } : {}),
+          ...(judgeResult ? { judge: judgeResult } : {}),
+          ...(multiJudgeResult ? { multiJudge: multiJudgeResult } : {}),
           ...(stage ? { stagePath: stage.stagePath } : {}),
         });
         // Persist results after every attempt so a partial run still has data

@@ -17,6 +17,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
 // Per-cell aggregates: median, p25, p75, passCount, attemptCount.
 function quantile(sortedAsc, q) {
@@ -38,19 +39,32 @@ export function aggregateCell(rows) {
   return { median, p25, p75, passCount, attemptCount };
 }
 
-function main(sweepDir) {
-  const resultsPath = path.join(sweepDir, "results.json");
-  let results;
-  try {
-    results = JSON.parse(readFileSync(resultsPath, "utf8"));
-  } catch (err) {
-    console.error(`Failed to read ${resultsPath}: ${err instanceof Error ? err.message : String(err)}`);
+function main(...sweepDirs) {
+  // 2026-05-01: accept multiple sweep dirs and merge their results.json
+  // arrays into one. Lets the launcher pass every relevant dir
+  // (sweep1-baseline + sweep1-blackboard + sweep1-blackboard-cont +
+  // sweep2-analysis-v2) for one unified scoreboard. Pre-fix: only
+  // argv[2] was read; everything else silently ignored.
+  if (sweepDirs.length === 0) {
+    console.error("Usage: node eval/aggregate.mjs <sweep-dir> [<sweep-dir> ...]");
+    process.exit(2);
+  }
+  const sweepDir = sweepDirs.length === 1 ? sweepDirs[0] : sweepDirs.join(" + ");
+  const allResults = [];
+  for (const dir of sweepDirs) {
+    const resultsPath = path.join(dir, "results.json");
+    try {
+      const arr = JSON.parse(readFileSync(resultsPath, "utf8"));
+      if (Array.isArray(arr)) allResults.push(...arr);
+    } catch (err) {
+      console.error(`Skipping ${resultsPath}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (allResults.length === 0) {
+    console.error("No valid results.json arrays across the passed dirs");
     process.exit(1);
   }
-  if (!Array.isArray(results) || results.length === 0) {
-    console.error("results.json is empty or not an array");
-    process.exit(1);
-  }
+  const results = allResults;
 
   // Group by (taskId, preset). Each group becomes one cell.
   const groups = new Map();
@@ -143,11 +157,13 @@ function main(sweepDir) {
 }
 
 // Only run main() when invoked as a CLI; importing for tests skips it.
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const sweepDir = process.argv[2];
-  if (!sweepDir) {
-    console.error("Usage: node eval/aggregate.mjs <sweep-dir>");
+// 2026-05-01: pathToFileURL guard to make CLI detection cross-platform
+// (Windows backslashes broke the bare `file://${argv[1]}` template).
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const sweepDirs = process.argv.slice(2);
+  if (sweepDirs.length === 0) {
+    console.error("Usage: node eval/aggregate.mjs <sweep-dir> [<sweep-dir> ...]");
     process.exit(2);
   }
-  main(sweepDir);
+  main(...sweepDirs);
 }
