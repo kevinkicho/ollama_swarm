@@ -63,6 +63,68 @@ export function getLastPositionForAgent(
   return null;
 }
 
+// 2026-05-04 (T181): convergence-too-fast detection. R2+ agents must
+// own KEEP / CHANGE explicitly; if every R2 agent says KEEP (zero
+// CHANGEs), the council converged before exposure to dissent and
+// we should fire a forced-contrarian round.
+
+/** Parse the verb at the top of a position body. Recognizes leading
+ *  "KEEP:" or "CHANGE:" (case-insensitive). Returns null when neither
+ *  is detected (typically R1 where the contract is just a bare
+ *  position with no KEEP/CHANGE prefix). */
+export function parsePositionVerb(body: string | null): "KEEP" | "CHANGE" | null {
+  if (!body) return null;
+  // Allow leading whitespace + first word + optional colon.
+  const m = body.match(/^[\s>]*?(KEEP|CHANGE)\b/i);
+  if (!m) return null;
+  return m[1]!.toUpperCase() as "KEEP" | "CHANGE";
+}
+
+/** Count how many agents flipped (CHANGE) vs held (KEEP) in their
+ *  most-recent position for the given round. Inputs:
+ *    - transcript: full run-so-far
+ *    - round: which round to count (1, 2, 3, ...)
+ *    - agentCount: total agents
+ *  An agent that didn't produce a position for that round, or whose
+ *  position lacked KEEP/CHANGE prefix, is counted in `unparsed`. */
+export interface PositionFlipCounts {
+  keeps: number;
+  changes: number;
+  unparsed: number;
+}
+export function countPositionFlips(
+  transcript: readonly TranscriptEntry[],
+  round: number,
+  agentCount: number,
+): PositionFlipCounts {
+  let keeps = 0;
+  let changes = 0;
+  let unparsed = 0;
+  for (let agentIndex = 1; agentIndex <= agentCount; agentIndex++) {
+    // Find this agent's position from the given round. Walk newest-
+    // first to pick the latest entry tagged with that round.
+    let body: string | null = null;
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      const e = transcript[i];
+      if (e.role !== "agent" || e.agentIndex !== agentIndex) continue;
+      // Position summaries carry the round in summary.kind === "council_draft"
+      const summary = e.summary;
+      if (
+        summary?.kind === "council_draft" &&
+        (summary as { round?: number }).round === round
+      ) {
+        body = extractPositionBlock(e.text);
+        break;
+      }
+    }
+    const verb = parsePositionVerb(body);
+    if (verb === "KEEP") keeps++;
+    else if (verb === "CHANGE") changes++;
+    else unparsed++;
+  }
+  return { keeps, changes, unparsed };
+}
+
 /** Collect each agent's most-recent position across the full
  *  transcript. Returns one entry per agentIndex in 1..agentCount —
  *  agents that never complied get `produced: false` + empty body so

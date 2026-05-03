@@ -387,6 +387,16 @@ export class StigmergyRunner implements SwarmRunner {
       title: "Exploration gaps (top-down directive check)",
       body: formatExplorationGapsMarkdown(gaps),
     });
+    // T187 (2026-05-04): hot-files section + explicit blackboard chain
+    // recommendation. The standard T2.3 chain hint extracts the top
+    // next-action from the deliverable text — when that text is
+    // structured as "Recommended blackboard chain target: hot files X,
+    // Y, Z," the hint points at file-level work the blackboard preset
+    // can actually act on.
+    sections.push({
+      title: "Hot files (top by pheromone score) — blackboard chain target",
+      body: buildHotFilesChainSection(this.annotations, this.round),
+    });
     // 2026-05-02 (quality levers #1+#3): augment with critic + next-actions.
     const lead = this.opts.manager.list().find((a) => a.index === 1) ?? null;
     const augmented = await runQualityPasses({
@@ -1235,6 +1245,50 @@ export function computeRankingSignature(
     .slice(0, 10)
     .map((r) => r.file);
   return ranked.join("␟");
+}
+
+// T187 (2026-05-04): build the hot-files section that the T2.3 chain
+// hint will extract a recommendation from. Picks top-K files by
+// rankingScore, formats them as a clear next-action prose block so
+// extractNextActions sees the structure. When pheromones are absent
+// (degenerate run) returns a placeholder explaining that no chain
+// target was identified.
+export function buildHotFilesChainSection(
+  annotations: ReadonlyMap<string, AnnotationState>,
+  currentRound: number,
+  topN: number = 3,
+): string {
+  if (annotations.size === 0) {
+    return "_(no annotations captured — no chain target identified; the run produced no actionable file-level signal)_";
+  }
+  const ranked = [...annotations.entries()]
+    .map(([file, a]) => ({ file, state: a, score: rankingScore(a, currentRound) }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.file.localeCompare(b.file);
+    })
+    .slice(0, topN);
+  if (ranked.length === 0) {
+    return "_(ranking returned empty — no chain target identified)_";
+  }
+  const lines: string[] = [];
+  lines.push(
+    "These files accumulated the most pheromone signal during exploration. Recommended next blackboard run: target these files specifically as the directive.",
+  );
+  lines.push("");
+  lines.push("**Top hot files (by pheromone score):**");
+  for (const r of ranked) {
+    lines.push(
+      `- \`${r.file}\` — visits=${r.state.visits}, interest=${r.state.avgInterest.toFixed(1)}/10, confidence=${r.state.avgConfidence.toFixed(1)}/10, score=${r.score.toFixed(1)}. Latest note: "${r.state.latestNote}"`,
+    );
+  }
+  lines.push("");
+  lines.push("**Recommended chain action:**");
+  const fileList = ranked.map((r) => r.file).join(", ");
+  lines.push(
+    `- Audit ${fileList} via blackboard preset; the stigmergy run flagged these as high-interest with mid-to-low confidence — they likely repay deeper investigation.`,
+  );
+  return lines.join("\n");
 }
 
 export function formatAnnotations(annotations: ReadonlyMap<string, AnnotationState>): string {

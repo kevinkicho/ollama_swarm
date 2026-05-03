@@ -589,6 +589,24 @@ export class MoaRunner implements SwarmRunner {
         this.appendSystem(
           `[convergence] round ${round} vs ${round - 1}: ${signal}=${similarity.toFixed(3)} threshold=${threshold.toFixed(3)} converged=${converged}`,
         );
+        // T189 (2026-05-04): aggregator confidence override. T178 added
+        // the parser; this wires it to behavior. When aggregator self-
+        // reports CONFIDENCE: low AND we still have rounds remaining,
+        // OVERRIDE convergence-stop and force another round. The text
+        // is similar to last round's, but the aggregator says it's not
+        // confident the synthesis is right — so similarity isn't
+        // signal of true convergence, just stalled iteration.
+        const aggConfidence = parseAggregatorConfidence(synthesis);
+        if (aggConfidence === "low" && converged && round < rounds) {
+          this.appendSystem(
+            `[T189 aggregator-confidence override] Aggregator self-reported CONFIDENCE: low; ignoring convergence signal and forcing another round (round ${round + 1}/${rounds}).`,
+          );
+          converged = false;
+        } else if (aggConfidence === "low") {
+          this.appendSystem(
+            `[T189 aggregator-confidence] CONFIDENCE: low this round but no more rounds available — synthesis lands as-is. Consider increasing rounds or providing more context.`,
+          );
+        }
         if (converged) {
           this.appendSystem(
             `MoA converged after round ${round} (${signal} similarity ${similarity.toFixed(3)} ≥ ${threshold.toFixed(3)}); stopping early.`,

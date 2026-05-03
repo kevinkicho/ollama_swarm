@@ -889,7 +889,13 @@ export class RoundRobinRunner implements SwarmRunner {
     // no two consecutive turns can be the same character. Skipped when
     // role-diff is active (roles ARE the specialization).
     const turnNumber = this.turnsTaken; // pre-increment in caller
-    const disposition = !this.roles ? getDispositionForTurn(turnNumber) : null;
+    // T185 (2026-05-04): voted-next disposition. Reads votes from the
+    // last 4 agent turns; falls back to mechanical rotation when
+    // votes are absent or tied. First turn (no prior votes) always
+    // mechanical.
+    const disposition = !this.roles
+      ? pickNextDisposition(this.transcript, turnNumber)
+      : null;
     const transcriptText = this.transcript
       .map((e) => {
         if (e.role === "system") return `[SYSTEM] ${e.text}`;
@@ -927,6 +933,17 @@ export class RoundRobinRunner implements SwarmRunner {
           "",
           "**ACTIVE-DISAGREEMENT RULE (every turn):** You MUST do at least ONE of: (a) challenge a specific prior point with reasoning, (b) add a NEW dimension peers haven't named, or (c) call out a real tradeoff being glossed. Never just agree or restate. If you have nothing to push on, say so explicitly + name what's still unclear.",
           "",
+          // T185 (2026-05-04): voted-next disposition. End your turn
+          // with a one-line vote on what disposition is needed NEXT.
+          // Runner aggregates votes from the last N turns to pick the
+          // next disposition; majority wins, tie/none → mechanical
+          // rotation falls back. Lets the discussion adapt to what
+          // it actually needs (more Critic when claims pile up; more
+          // Gap-finder when nobody's surfacing what's missing).
+          "**NEXT-DISPOSITION VOTE (every turn):** End your response with a one-line vote on what should come NEXT. Format:",
+          "    NEXT-DISPOSITION VOTE: critic|synthesizer|gap-finder|builder — <one-line why>",
+          "Vote based on what the discussion needs, not what's mechanically next. If everyone keeps voting the same lens, the runner will keep firing it until the need shifts.",
+          "",
         ]
       : [];
 
@@ -946,6 +963,21 @@ export class RoundRobinRunner implements SwarmRunner {
             : `For your role (${role.name}): a concrete contribution toward the directive — not commentary on it.`,
           "Even if your role's piece doesn't change this round, write what your CURRENT best answer is — peers and the synthesis lead read this block, not your prose.",
           "",
+          // T186 (2026-05-04): cross-role peer review (R2+ only — R1
+          // has no peer turns yet). Before writing your own output,
+          // pick ONE peer role's last deliverable and react to it
+          // (build / push back / refine). Surfaces blind spots within
+          // the run instead of waiting for synthesis to catch them.
+          ...(round >= 2
+            ? [
+                "**CROSS-ROLE PEER REVIEW (R2+):** BEFORE your `### MY DELIVERABLE` block, write:",
+                "    ### PEER REVIEW",
+                "    Reviewing: <Role X's deliverable from round R-1>",
+                "    Reaction: <BUILD ON: <one line>> | <PUSH BACK: <one line + grounding>> | <NEEDS WORK: <what's missing>>",
+                "Pick a peer whose stance you can engage substantively — not your own role. Be specific; ground reactions in file paths or peer's claims when possible.",
+                "",
+              ]
+            : []),
         ]
       : [];
 
@@ -1076,6 +1108,64 @@ export function getDispositionForTurn(turnNumber: number): RoundRobinDisposition
   return DISPOSITIONS[idx];
 }
 
+// T185 (2026-05-04): voted-next disposition. Each agent ends their
+// turn with `NEXT-DISPOSITION VOTE: <name> — <reason>`. Runner
+// aggregates the last few votes to pick the next disposition; falls
+// back to mechanical rotation when votes are absent or tied.
+
+/** Parse a NEXT-DISPOSITION VOTE line out of an agent's text. Returns
+ *  null when no recognizable vote is present. Tolerant to whitespace,
+ *  case, and the trailing reason. */
+export function extractDispositionVote(text: string | undefined): string | null {
+  if (!text) return null;
+  // Match "NEXT-DISPOSITION VOTE: <name>" with the name being one of
+  // the disposition names (case-insensitive). Allow "next disposition vote"
+  // too (model may drop the hyphen).
+  const m = text.match(
+    /NEXT[- ]DISPOSITION\s+VOTE\s*:\s*(critic|synthesizer|gap-?finder|builder)\b/i,
+  );
+  if (!m) return null;
+  // Normalize gap-finder vs gapfinder.
+  const raw = m[1]!.toLowerCase().replace(/-?finder/, "-finder");
+  return raw;
+}
+
+/** Pick the next disposition based on votes from the last `lookback`
+ *  agent turns. Returns the disposition that won the most votes;
+ *  falls back to the mechanical rotation when no votes / tied votes /
+ *  unrecognized vote names. Pure — exported for tests. */
+export function pickNextDisposition(
+  transcript: readonly TranscriptEntry[],
+  fallbackTurnNumber: number,
+  lookback: number = 4,
+): RoundRobinDisposition {
+  const recentAgentTurns = transcript
+    .filter((e) => e.role === "agent")
+    .slice(-lookback);
+  const tally: Record<string, number> = {};
+  for (const e of recentAgentTurns) {
+    const vote = extractDispositionVote(e.text);
+    if (!vote) continue;
+    // Match against DISPOSITIONS catalog (lowercased name).
+    const matchIdx = DISPOSITIONS.findIndex(
+      (d) => d.name.toLowerCase().replace(/[ -]/g, "-") === vote,
+    );
+    if (matchIdx === -1) continue;
+    const name = DISPOSITIONS[matchIdx]!.name;
+    tally[name] = (tally[name] ?? 0) + 1;
+  }
+  // Pick the highest-vote disposition. Ties + no-votes → mechanical fallback.
+  const entries = Object.entries(tally);
+  if (entries.length === 0) return getDispositionForTurn(fallbackTurnNumber);
+  entries.sort((a, b) => b[1] - a[1]);
+  // Tied between top-2? Fall back to rotation rather than picking arbitrarily.
+  if (entries.length >= 2 && entries[0]![1] === entries[1]![1]) {
+    return getDispositionForTurn(fallbackTurnNumber);
+  }
+  const winner = DISPOSITIONS.find((d) => d.name === entries[0]![0]);
+  return winner ?? getDispositionForTurn(fallbackTurnNumber);
+}
+
 // 2026-05-02 (round-robin improvement #4): structured-deliberation
 // final synthesis. Mirrors buildRoleDiffSynthesisPrompt but for the
 // no-roles structured-deliberation case. Lead distills the whole
@@ -1166,8 +1256,17 @@ export function buildRoleDiffSynthesisPrompt(
     "STRUCTURE your response as:",
     "1. **Cross-role agreement** — what every role independently flagged. State as direct claims, cite which role surfaced each (e.g. \"Architect + Tester both noted the absence of integration tests in src/api/\").",
     "2. **Role-specific findings** — one short bullet per role naming its single most important standalone observation that the others didn't make.",
-    "3. **Disagreements / tensions** — places where role perspectives pull in different directions (e.g. Performance wants caching; Security flags it as a stale-data risk).",
-    "4. **Next action** — ONE concrete next step grounded in the cross-role view.",
+    // T186 (2026-05-04): role-pair conflicts. Pre-T186 the synthesis
+    // surfaced general "disagreements" but never explicitly RESOLVED
+    // them. Now: name the specific role-pair, state both sides, then
+    // PICK A SIDE with reasoning (or explicitly say "this is a real
+    // ongoing tradeoff the user must decide"). Every conflict left
+    // unresolved is a deferred decision.
+    "3. **Role-pair conflicts (RESOLVE, don't just list)** — for each pair of roles pulling in opposite directions, render as:",
+    "    `<Role A> vs <Role B>: <one-line claim from A> ↔ <one-line counter from B>`",
+    "    `Resolution: <which side wins for this directive AND why> — OR — \"Real tradeoff: user decides\" with context for that decision.`",
+    "    Common pairs to watch: Performance ↔ Security (caching vs staleness); Architect ↔ Implementer (clean shape vs ship-now); Tester ↔ Performance (coverage vs hot-path overhead). If no pairs conflicted, write `_no role-pair conflicts surfaced this run_`.",
+    "4. **Next action** — ONE concrete next step grounded in the cross-role view AND the conflict resolutions above.",
     "",
     "Keep it under ~400 words. Cite file paths from the discussion. Do NOT just restate each role's draft — synthesize across them.",
     "",

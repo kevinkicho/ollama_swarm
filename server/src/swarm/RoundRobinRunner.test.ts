@@ -138,15 +138,88 @@ test("RoundRobinRunner — turnsTaken increments per runTurn (#1)", () => {
 });
 
 test("RoundRobinRunner.buildPrompt — disposition + active-disagreement injected when no roles (#1+#2)", () => {
+  // T185 (2026-05-04): disposition selection now goes through
+  // pickNextDisposition (which reads NEXT-DISPOSITION VOTE lines from
+  // the recent transcript and falls back to mechanical rotation when
+  // votes are absent or tied).
   assert.match(
     RUNNER_SRC,
-    /const disposition = !this\.roles \? getDispositionForTurn\(turnNumber\) : null/,
-    "disposition must be computed only when no roles configured",
+    /const disposition = !this\.roles[\s\S]{0,200}pickNextDisposition\(this\.transcript, turnNumber\)/,
+    "disposition must use pickNextDisposition (T185 voted-next) when no roles configured",
   );
   assert.match(
     RUNNER_SRC,
     /ACTIVE-DISAGREEMENT RULE/,
     "active-disagreement rule must be in the prompt body",
+  );
+});
+
+test("(T185) NEXT-DISPOSITION VOTE prompt + parser + runner override are wired", () => {
+  assert.match(
+    RUNNER_SRC,
+    /NEXT-DISPOSITION VOTE/,
+    "prompt body must request the vote",
+  );
+  assert.match(
+    RUNNER_SRC,
+    /export function extractDispositionVote/,
+    "parser must be exported",
+  );
+  assert.match(
+    RUNNER_SRC,
+    /export function pickNextDisposition/,
+    "picker must be exported",
+  );
+});
+
+test("(T185) extractDispositionVote — returns the disposition name when present", async () => {
+  const { extractDispositionVote } = await import("./RoundRobinRunner.js");
+  assert.equal(
+    extractDispositionVote("...prose...\nNEXT-DISPOSITION VOTE: critic — claims accumulating"),
+    "critic",
+  );
+  assert.equal(
+    extractDispositionVote("...\nNext-Disposition Vote: GAP-FINDER — coverage missing"),
+    "gap-finder",
+  );
+  assert.equal(
+    extractDispositionVote("no vote here"),
+    null,
+  );
+});
+
+test("(T185) pickNextDisposition — picks majority vote from recent agent turns", async () => {
+  const { pickNextDisposition } = await import("./RoundRobinRunner.js");
+  const transcript = [
+    { id: "1", role: "agent" as const, agentIndex: 1, text: "p1\nNEXT-DISPOSITION VOTE: critic — x", ts: 1 },
+    { id: "2", role: "agent" as const, agentIndex: 2, text: "p2\nNEXT-DISPOSITION VOTE: critic — y", ts: 2 },
+    { id: "3", role: "agent" as const, agentIndex: 3, text: "p3\nNEXT-DISPOSITION VOTE: builder — z", ts: 3 },
+  ];
+  // 2 critic vs 1 builder → critic wins
+  assert.equal(pickNextDisposition(transcript, 99).name, "Critic");
+});
+
+test("(T185) pickNextDisposition — tied votes fall back to mechanical rotation", async () => {
+  const { pickNextDisposition, getDispositionForTurn } = await import("./RoundRobinRunner.js");
+  const transcript = [
+    { id: "1", role: "agent" as const, agentIndex: 1, text: "p\nNEXT-DISPOSITION VOTE: critic — x", ts: 1 },
+    { id: "2", role: "agent" as const, agentIndex: 2, text: "p\nNEXT-DISPOSITION VOTE: builder — y", ts: 2 },
+  ];
+  // 1-1 tie → fallback to mechanical
+  assert.equal(
+    pickNextDisposition(transcript, 5).name,
+    getDispositionForTurn(5).name,
+  );
+});
+
+test("(T185) pickNextDisposition — no votes in transcript → mechanical rotation", async () => {
+  const { pickNextDisposition, getDispositionForTurn } = await import("./RoundRobinRunner.js");
+  const transcript = [
+    { id: "1", role: "agent" as const, agentIndex: 1, text: "no vote here at all", ts: 1 },
+  ];
+  assert.equal(
+    pickNextDisposition(transcript, 7).name,
+    getDispositionForTurn(7).name,
   );
 });
 

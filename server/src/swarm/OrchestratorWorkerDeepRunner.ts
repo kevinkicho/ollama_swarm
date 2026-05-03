@@ -850,12 +850,21 @@ export function buildMidLeadPlanPrompt(
     "Workers see only their fine subtask + the seed below; not your plan, not the orchestrator's plan, not peer worker reports. Subtasks must be self-contained.",
     "",
     "Output ONLY a JSON object (no prose, no fences):",
-    '{"assignments": [{"agentIndex": <worker-index>, "subtask": "…"}, …]}',
+    '{"assignments": [{"agentIndex": <worker-index>, "subtask": "…"}, …], "tierSkip": false}',
     "",
     "Rules:",
     "- One assignment per worker. Cover non-overlapping aspects.",
     "- Use file paths from the seed when relevant. Be concrete.",
     "- Subtask text under ~200 chars each. Workers should be able to act on them without further clarification.",
+    "",
+    // T183 (2026-05-04): tier-skipping. Mid-lead can opt to handle a
+    // genuinely-trivial coarse subtask itself without dispatching to
+    // workers. Cuts overhead when the orchestrator over-decomposed.
+    // Emit `\"tierSkip\": true` AND `\"selfReport\": \"<one paragraph>\"`
+    // alongside (or instead of) assignments. Today the runner logs
+    // the request + still dispatches workers; future work will honor
+    // it by skipping execute for this mid-lead's branch.
+    "**Tier-skipping (optional)** — set `\"tierSkip\": true` AND include `\"selfReport\": \"<one-paragraph answer to the coarse subtask>\"` if the coarse subtask is genuinely trivial enough that you can do it yourself in one paragraph (e.g. \"name the file that defines X\" or \"check whether dir Y exists\"). Cuts the round-trip through workers when over-decomposed. Otherwise leave it false / omit and dispatch normally.",
     "",
     "=== SEED ===",
     seedText || "(empty seed)",
@@ -893,6 +902,13 @@ export function buildMidLeadSynthesisPrompt(
     "=== END ===",
     "",
     "Read every worker report in the transcript below. Produce a TIGHT synthesis (under ~250 words) directed UPWARD to the orchestrator. The synthesis should:",
+    // T183 (2026-05-04): mid-lead clustering. Before summarizing,
+    // explicitly group worker findings into themes — same finding
+    // reported by 2+ workers is a stronger signal than a single
+    // worker's claim. Reduces orchestrator's cognitive load and
+    // prevents N nearly-identical findings from drowning out the
+    // single distinct one.
+    "- **Cluster findings into themes FIRST.** Group similar findings (e.g. \"3 workers flagged auth/ as untested\" rather than 3 separate auth-untested bullets). Distinct findings (only 1 worker raised) get their own bullet but tagged as such. Cross-worker convergence is the strongest signal — surface it.",
     "- Summarize what your workers found, attributed to specific workers (e.g. \"Agent 5 noted…\").",
     dirCtx.hasDirective
       ? "- Answer the coarse subtask the orchestrator gave you, IN SERVICE of the directive. Be honest about gaps your workers couldn't resolve."

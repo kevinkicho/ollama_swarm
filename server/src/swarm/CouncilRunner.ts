@@ -34,6 +34,7 @@ import { deriveRubric, type DerivedRubric } from "./rubricPrePass.js";
 import {
   buildCouncilPositionsSection,
   getLastPositionForAgent,
+  countPositionFlips,
 } from "./councilPosition.js";
 import {
   readDirective,
@@ -309,6 +310,22 @@ export class CouncilRunner implements SwarmRunner {
             `All council drafters produced empty/junk output for ${dlHit.consecutive} consecutive rounds — ending council early.`,
           );
           break;
+        }
+
+        // T181 (2026-05-04): convergence-too-fast detector. After R2,
+        // if EVERY drafter said KEEP (zero CHANGEs) the council
+        // converged before exposing positions to dissent — that's
+        // suspicious. Inject a system message that R3+ prompts will
+        // see, requiring at least ONE agent to produce CHANGE based
+        // on grounded re-examination. Soft signal — doesn't force
+        // anyone, just shifts the prompt's framing toward dissent.
+        if (r === 2 && r < cfg.rounds) {
+          const flips = countPositionFlips(this.transcript, 2, cfg.agentCount);
+          if (flips.changes === 0 && flips.keeps >= 2) {
+            this.appendSystem(
+              `[T181 contrarian round trigger] Round 2 had ${flips.keeps}× KEEP and 0× CHANGE — the council converged without anyone updating their position. Round ${r + 1}: at least ONE agent should produce a grounded CHANGE (cite evidence the team didn't engage with) OR explicitly justify why every position survived peer challenge unmodified. "Everyone politely converged" is the failure mode this guard exists to catch.`,
+            );
+          }
         }
 
         // Phase B (Task #99): midpoint synthesis check. If the
@@ -1006,6 +1023,11 @@ export function buildCouncilPrompt(
           "    ### MY POSITION",
           "    <one short sentence — ≤300 chars — your direct answer to the directive (or to 'what should this project do' when no directive). This is your anchor against drift in later rounds.>",
           "    CONFIDENCE: high|medium|low — <one-line why you trust this position at this strength>",
+          // 2026-05-04 (idea T181): external grounding requirement.
+          // Every MY POSITION must cite at least one file path / test
+          // name / measurement. Forces drafts onto the actual codebase
+          // instead of generic prose.
+          "    GROUNDING: <at least one citation — file path (e.g. src/foo.ts:42), test name (e.g. tests/auth.test.ts \"should reject expired tokens\"), command output (e.g. `git log` shows 3 recent commits to auth/), or README claim. NO grounding = re-prompted.>",
           "",
         ]
       : [
@@ -1026,6 +1048,8 @@ export function buildCouncilPrompt(
           "    KEEP: <restate your prior position verbatim>   — OR —   CHANGE: <new one-sentence position>",
           "    WHY: <one line — what specifically convinced you to keep or change. Cite the agent + their argument when CHANGE. After steelmanning, mention what the steelman did NOT change about your position.>",
           "    CONFIDENCE: high|medium|low — <one-line why you trust this position at this strength after the steelman exercise>",
+          // 2026-05-04 (idea T181): external grounding required in R2+ too.
+          "    GROUNDING: <at least one citation — file path / test name / command output / README claim. NO grounding = re-prompted.>",
           "",
           "Drift without an explicit CHANGE is the failure mode this contract exists to prevent. If you find yourself softening your prior position without naming who convinced you and how, KEEP it.",
           "",

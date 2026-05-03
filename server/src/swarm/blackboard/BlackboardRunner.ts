@@ -183,6 +183,8 @@ function computeWorkerTagCounts(
   return Array.from(counts.entries()).map(([tag, count]) => ({ tag, count }));
 }
 import { checkBuildCommand } from "./buildCommandAllowlist.js";
+// T188 (2026-05-04): code-context preloading via the MoA gather helper.
+import { gatherProposerContext } from "../moaContextGather.js";
 
 // Blackboard preset: planner posts TODOs, workers drain them in a
 // claim/execute loop. Workers produce full-file diffs as JSON; the runner
@@ -1380,6 +1382,28 @@ export class BlackboardRunner implements SwarmRunner {
     // AVAILABLE WORKER TAGS section so the planner can emit
     // `preferredTag` per TODO. Empty array → no tags rendered.
     const workerTags = computeWorkerTagCounts(cfg.topology);
+    // T188 (2026-05-04): code-context preloading. Pre-fetch head
+    // excerpts of files matching directive keywords + standard
+    // config files so the planner sees actual content not just
+    // names. Reuses gatherProposerContext (from MoA's lever #1).
+    // Best-effort: any failure leaves codeContextExcerpts undefined
+    // and the planner falls back to the file-list-only view.
+    let codeContextExcerpts: ReadonlyArray<{ path: string; excerpt: string }> | undefined;
+    try {
+      const directive = (cfg.userDirective ?? "").trim();
+      if (directive.length > 0 && repoFiles.length > 0) {
+        const excerpts = await gatherProposerContext({
+          clonePath,
+          seed: `User directive: ${directive}`,
+          repoFiles,
+        });
+        if (excerpts.length > 0) {
+          codeContextExcerpts = excerpts;
+        }
+      }
+    } catch {
+      // best-effort — gather failure shouldn't block the planner
+    }
     return {
       repoUrl: cfg.repoUrl,
       clonePath,
@@ -1394,6 +1418,7 @@ export class BlackboardRunner implements SwarmRunner {
       priorMemoryRendered,
       priorDesignMemoryRendered,
       workerTags,
+      ...(codeContextExcerpts ? { codeContextExcerpts } : {}),
     };
   }
 

@@ -280,6 +280,28 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
         }
         // Counter resets automatically inside recordCycle when assignments.length > 0.
 
+        // T182 (2026-05-04): surface effort distribution + run a peer
+        // review of the lead's decomposition. Both fire ONCE per cycle
+        // (right after planning, before execute) so workers see any
+        // peer-review concern in the system bubble — too late for
+        // round 1 (workers already have prompts queued by then) but
+        // valid for round 2+ when the lead can refine.
+        const efforts = summarizeEffortDistribution(plan.assignments);
+        if (efforts) this.appendSystem(`[T182 effort distribution] ${efforts}`);
+        // Peer review: pick the lowest-index worker (NOT the lead, NOT
+        // the worker assigned to the same subtask we're reviewing) and
+        // ask them to flag obvious issues with the plan. Best-effort:
+        // any failure is logged + ignored — workers still fire.
+        if (workers.length >= 2) {
+          await this.runDecompositionPeerReview(
+            workers[0]!,
+            r,
+            cfg.rounds,
+            plan,
+            cfg.userDirective,
+          );
+        }
+
         // EXECUTE — workers fire in parallel. Each sees ONLY its assigned
         // subtask + the seed, not the full transcript or peer reports.
         // Unit 18b (2026-04-22): pre-batch parallel warmup REMOVED. v4
@@ -471,6 +493,27 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
     await this.runAgent(agent, round, totalRounds, prompt, "worker");
   }
 
+  // T182 (2026-05-04): peer review of the lead's decomposition. Fires
+  // ONCE per cycle right after planning. Reviewer is a worker (not the
+  // lead, to surface blind spots). Their flagged concerns land in the
+  // transcript so subsequent agents can engage with them; we don't
+  // block the cycle on the review (best-effort discovery).
+  private async runDecompositionPeerReview(
+    reviewer: Agent,
+    round: number,
+    totalRounds: number,
+    plan: Plan,
+    userDirective?: string,
+  ): Promise<void> {
+    if (this.stopping) return;
+    const prompt = buildDecompositionReviewPrompt(plan, round, totalRounds, userDirective);
+    try {
+      await this.runAgent(reviewer, round, totalRounds, prompt, "decomposition-review");
+    } catch {
+      // best-effort — review failure shouldn't stop workers
+    }
+  }
+
   private async runAgent(
     agent: Agent,
     _round: number,
@@ -652,6 +695,11 @@ export interface Assignment {
    *  against it before reporting. Optional for backward-compat — old
    *  plan responses without successCriteria still parse cleanly. */
   successCriteria?: string;
+  /** T182 (2026-05-04): per-subtask effort estimate. The lead rates
+   *  difficulty as small | medium | large so the runner could load-
+   *  balance — today it just surfaces in the system bubble so the
+   *  reader can spot lopsided plans. Optional for backward-compat. */
+  effort?: "small" | "medium" | "large";
 }
 
 export interface Plan {
@@ -698,6 +746,7 @@ export function parsePlan(raw: string, allowedWorkerIndices: readonly number[]):
     const idx = (a as { agentIndex?: unknown }).agentIndex;
     const subtask = (a as { subtask?: unknown }).subtask;
     const successCriteriaRaw = (a as { successCriteria?: unknown }).successCriteria;
+    const effortRaw = (a as { effort?: unknown }).effort;
     if (typeof idx !== "number" || !allowed.has(idx)) continue;
     if (typeof subtask !== "string" || subtask.trim().length === 0) continue;
     if (seenAgents.has(idx)) continue; // one subtask per worker per cycle
@@ -708,10 +757,19 @@ export function parsePlan(raw: string, allowedWorkerIndices: readonly number[]):
       typeof successCriteriaRaw === "string" && successCriteriaRaw.trim().length > 0
         ? successCriteriaRaw.trim()
         : undefined;
+    // T182: extract optional effort. Whitelist against catalog so a
+    // model emitting "huge" or "tiny" doesn't poison the field.
+    const effortLower =
+      typeof effortRaw === "string" ? effortRaw.trim().toLowerCase() : "";
+    const effort =
+      effortLower === "small" || effortLower === "medium" || effortLower === "large"
+        ? (effortLower as "small" | "medium" | "large")
+        : undefined;
     assignments.push({
       agentIndex: idx,
       subtask: subtask.trim(),
       ...(successCriteria ? { successCriteria } : {}),
+      ...(effort ? { effort } : {}),
     });
   }
   return { assignments, done };
@@ -768,18 +826,26 @@ export function buildLeadPlanPrompt(
     "  - Cheapest verification: read README.md + a top-level `list` first. Then assign workers to paths that appeared in those listings.",
     "",
     "Output ONLY a JSON object with this shape (no prose, no markdown fences):",
-    '{"done": false, "assignments": [{"agentIndex": 2, "subtask": "…", "successCriteria": "…"}, {"agentIndex": 3, "subtask": "…", "successCriteria": "…"}, …]}',
+    '{"done": false, "assignments": [{"agentIndex": 2, "subtask": "…", "successCriteria": "…", "effort": "small|medium|large"}, …]}',
     "",
     // T175 (2026-05-04): per-subtask successCriteria. Sets a clear bar
-    // the worker self-evaluates against before reporting. Failing
-    // workers (their report doesn't satisfy the criteria) still emit,
-    // but the criteria miss is surfaced to the synthesis.
+    // the worker self-evaluates against before reporting.
     "**successCriteria** is a one-sentence rubric for what a SUCCESSFUL worker report looks like.",
     "  Examples:",
     "    \"Report names every call site of X.foo() with file:line citations.\"",
     "    \"Report identifies whether the auth flow uses JWT or sessions, with file evidence.\"",
     "    \"Report concludes with a clear PROPOSE: <new shape> line backed by current code.\"",
     "  Skip the field (or empty string) for genuinely open-ended subtasks. Most subtasks should have one.",
+    "",
+    // T182 (2026-05-04): per-subtask effort estimate. small|medium|large
+    // so the reader can spot lopsided plans (3 large + 1 small = the
+    // small worker will idle while the large ones grind). Future
+    // runner work can use this for actual load-balancing.
+    "**effort** is your difficulty estimate for the subtask:",
+    "    small  — tightly scoped, one file or one function (e.g. \"list every call site of X\")",
+    "    medium — multi-file investigation or multi-step reasoning (e.g. \"map auth flow end-to-end\")",
+    "    large  — open-ended exploration or many files (e.g. \"propose new module shape\")",
+    "  Skip the field for genuinely uncertain estimates.",
     "",
     // Phase B (Task #101): early-stop signal. The lead can short-
     // circuit the loop when there is genuinely nothing useful left
@@ -986,4 +1052,86 @@ function parseAssignmentsSummary(text: string): TranscriptEntrySummary | undefin
     subtaskCount: assignments.length,
     assignments,
   };
+}
+
+// T182 (2026-05-04): summarize the effort distribution of a plan as
+// one-line system bubble text. Returns null when no assignments
+// carry effort tags (back-compat: old plans don't have effort).
+export function summarizeEffortDistribution(
+  assignments: readonly Assignment[],
+): string | null {
+  let small = 0;
+  let medium = 0;
+  let large = 0;
+  let untagged = 0;
+  for (const a of assignments) {
+    if (a.effort === "small") small++;
+    else if (a.effort === "medium") medium++;
+    else if (a.effort === "large") large++;
+    else untagged++;
+  }
+  if (small + medium + large === 0) return null;
+  const parts: string[] = [];
+  if (small > 0) parts.push(`${small} small`);
+  if (medium > 0) parts.push(`${medium} medium`);
+  if (large > 0) parts.push(`${large} large`);
+  if (untagged > 0) parts.push(`${untagged} untagged`);
+  // Lopsided plans (every assignment is large or every is small) are
+  // worth flagging — workers will idle while the heavy ones grind.
+  const total = small + medium + large + untagged;
+  let lopsided = "";
+  if (large >= 2 && small + medium === 0) lopsided = " · LOPSIDED (all large — workers may idle if they finish at different speeds)";
+  else if (small >= 2 && medium + large === 0) lopsided = " · LOPSIDED (all small — possibly under-utilizing the cycle)";
+  return `${total} subtask${total === 1 ? "" : "s"}: ${parts.join(", ")}${lopsided}`;
+}
+
+// T182 (2026-05-04): build a peer-review prompt asking another agent
+// to flag obvious issues with the lead's decomposition BEFORE workers
+// fire. Reviewer reads the JSON plan as text + asserts whether each
+// subtask makes sense, has clear successCriteria, points at real
+// paths, etc. Output goes to the transcript so subsequent agents see
+// any flagged concerns; the runner doesn't act on them automatically
+// (lead can refine in next cycle).
+export function buildDecompositionReviewPrompt(
+  plan: Plan,
+  round: number,
+  totalRounds: number,
+  userDirective?: string,
+): string {
+  const directiveLine = userDirective?.trim()
+    ? `User directive: ${userDirective.trim()}\n`
+    : "";
+  const assignmentsRendered = plan.assignments
+    .map((a, i) => {
+      const lines: string[] = [
+        `**Subtask ${i + 1}** → Agent ${a.agentIndex}`,
+        `  task: ${a.subtask}`,
+      ];
+      if (a.successCriteria) lines.push(`  successCriteria: ${a.successCriteria}`);
+      if (a.effort) lines.push(`  effort: ${a.effort}`);
+      return lines.join("\n");
+    })
+    .join("\n\n");
+  return [
+    `You are a PEER REVIEWER on an orchestrator–worker swarm. The lead just produced a plan for cycle ${round}/${totalRounds}; before workers fire, you flag obvious issues.`,
+    "",
+    directiveLine,
+    "Plan to review:",
+    assignmentsRendered,
+    "",
+    "Your job — answer these explicitly (under 200 words total):",
+    "1. **Coverage** — does the plan cover the directive? What dimensions are missing?",
+    "2. **Subtask clarity** — are any subtasks too vague to execute? Name them.",
+    "3. **successCriteria** — are the rubrics tight enough that a worker could honestly self-evaluate? Flag fuzzy ones.",
+    "4. **Effort balance** — are the effort tags realistic? Will small workers sit idle while large ones grind?",
+    "5. **Real paths** — do the subtasks reference paths that actually exist (you can use file-read / list / glob tools to verify)?",
+    "",
+    "Be concrete. Cite subtask numbers when flagging. If the plan looks sound, say so directly — don't manufacture concerns.",
+    "End your review with one of:",
+    "  REVIEW VERDICT: PROCEED — plan is sound, workers should fire.",
+    "  REVIEW VERDICT: CAUTION — concerns flagged above; workers should still fire but the lead's next cycle should address them.",
+    "  REVIEW VERDICT: REJECT — plan has fundamental issues; recommend the lead re-plan before workers fire.",
+    "",
+    "(The runner currently surfaces your verdict to the transcript but doesn't act on REJECT — it's informational. Future work may auto-replan on REJECT.)",
+  ].join("\n");
 }

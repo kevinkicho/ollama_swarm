@@ -919,6 +919,18 @@ export function buildDebaterPrompt(args: BuildDebaterPromptArgs): string {
     "Keep responses under ~300 words. Cite file paths (e.g. `src/foo.ts:42`) where relevant — concrete evidence beats abstract argument.",
     "Do NOT flip sides. Do NOT concede the proposition — your role is adversarial. If the evidence genuinely contradicts your side, find a narrower framing that's still defensible.",
     "",
+    // T184 (2026-05-04): opposing-evidence requirement. Forces the
+    // debate onto real codebase facts rather than abstract argument.
+    // Each turn must include a "## Evidence" sub-block with at least
+    // ONE specific citation — file path / test name / commit SHA /
+    // measurement — that supports the side. Pure abstract debaters
+    // get re-prompted.
+    "**EVIDENCE BLOCK (required every turn):** Include a section labeled `## Evidence` with at least ONE concrete citation supporting your position this turn. Format:",
+    "    ## Evidence",
+    "    - <file path or test name or commit SHA>: <one-line why it supports your stance>",
+    "    - (optionally more)",
+    "Citations must be real (verified via tools) — fabricating evidence to seem grounded is worse than abstract argument. If after honest investigation you can't find any, write `## Evidence\\n_No specific evidence found this turn — argument rests on general principles X, Y._` and explain.",
+    "",
     "=== DEBATE TRANSCRIPT SO FAR ===",
     transcriptText || "(empty — you open the debate)",
     "=== END TRANSCRIPT ===",

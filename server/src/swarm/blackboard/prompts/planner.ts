@@ -322,6 +322,14 @@ export interface PlannerSeed {
   // recent decisions). Read at planner-seed time + updated by a
   // post-run reflection pass. Empty when no design memory yet.
   priorDesignMemoryRendered?: string;
+  // T188 (2026-05-04): code-context preloading. Pre-fetched head
+  // excerpts (up to ~1500 chars each) of files the runner picked as
+  // likely-target based on the directive's keywords + repo structure.
+  // The planner sees actual content, not just file names — cuts the
+  // "todo proposed against wrong file" failure mode where the
+  // planner guessed wrong because it had no signal beyond filename.
+  // Empty when gather failed / no directive / no matches found.
+  codeContextExcerpts?: ReadonlyArray<{ path: string; excerpt: string }>;
 }
 
 // Unit 50: slim, capped distillation of the previous run's summary.json
@@ -404,6 +412,26 @@ export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionSt
           "",
         ].join("\n")
       : "";
+  // T188 (2026-05-04): code-context preloading. When the runner pre-
+  // fetched head excerpts of likely-target files based on directive
+  // keywords, surface them so the planner sees actual content not
+  // just file names. Cuts the "todo proposed against wrong file"
+  // failure mode where the planner confidently dispatched against
+  // src/foo.ts because the name matched, when src/bar.ts was the
+  // actual relevant file. Empty/absent → no block rendered.
+  const codeContextBlock =
+    seed.codeContextExcerpts && seed.codeContextExcerpts.length > 0
+      ? [
+          "=== PRE-FETCHED FILE EXCERPTS (head only, picked from directive keywords + repo structure) ===",
+          ...seed.codeContextExcerpts.flatMap((f) => [
+            `--- ${f.path} ---`,
+            f.excerpt,
+            "",
+          ]),
+          "=== end PRE-FETCHED EXCERPTS ===",
+          "",
+        ].join("\n")
+      : "";
   return [
     designBlock + memoryBlock + directiveBlock + `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
@@ -419,6 +447,7 @@ export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionSt
     readme,
     "=== end README ===",
     "",
+    codeContextBlock,
     "Using the directive + contract + file list above, output your JSON array of TODOs now. Each TODO should be a concrete step toward making the contract criteria met.",
     "Remember: JSON array, no prose, <=2 files per TODO. Prefer paths that appear in the REPO FILE LIST; if creating a new file, its parent directory should appear there.",
   ].join("\n");

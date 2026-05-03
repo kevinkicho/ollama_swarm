@@ -942,6 +942,21 @@ export function buildReducerPrompt(
       "",
       "Cite mappers by agent index (e.g. \"Mapper 3 noted…\") and the file paths they cited. Do NOT invent evidence beyond what mappers reported — if the directive can't be answered from the union of slices, say so explicitly.",
       "",
+      // T190 (2026-05-04): reducer re-tasking. When a pattern emerges
+      // from one mapper that another mapper's slice would benefit from
+      // re-examining with fresh framing, the reducer can REQUEST a
+      // re-task. Today the runner doesn't act on this (mappers always
+      // get their original slice next cycle); the request lands in
+      // the transcript so a future runner-side change can honor it.
+      ...(isFinal
+        ? []
+        : [
+            "**REDUCER RE-TASK (optional, mid-run only):** If a pattern from one mapper suggests another mapper should re-examine their slice with new framing, end your synthesis with one or more `RE-TASK:` lines:",
+            "    RE-TASK: Mapper <N> | new-framing: <one short sentence>",
+            "    RE-TASK: Mapper 4 | new-framing: re-examine src/auth/ specifically for shared-state hazards now that Mapper 2 surfaced the singleton pattern in src/db/.",
+            "Use sparingly — re-tasking only pays off when the new framing is genuinely different. Today the runner logs these but doesn't auto-redispatch; future work will honor them.",
+            "",
+          ]),
       "=== TRANSCRIPT ===",
       transcriptText,
       "=== END TRANSCRIPT ===",
