@@ -104,6 +104,19 @@ export class BaselineRunner implements SwarmRunner {
     this.active = cfg;
     this.startedAt = undefined;
 
+    // T198g (2026-05-04): multi-attempt baseline. Substrate ships
+    // (cfg.baselineAttempts field) but the runner-side dispatch
+    // requires a parallel-runner harness that doesn't exist today
+    // (BaselineRunner is single-attempt single-shot end-to-end).
+    // First-cut: log the intent + run 1 attempt. Future work: clone
+    // K times to K subdirs, run K attempts in parallel, vote on
+    // applied-hunks count + commit the winner.
+    const attempts = Math.max(1, Math.min(5, cfg.baselineAttempts ?? 1));
+    if (attempts > 1) {
+      this.appendSystem(
+        `[T198g multi-attempt baseline] cfg.baselineAttempts=${attempts} requested; first-cut runs 1 attempt only (parallel-runner harness deferred). Future work: K parallel attempts in K subdirs + vote.`,
+      );
+    }
     void this.loop(cfg).catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
       this.appendSystem(`Baseline crashed: ${msg}`);

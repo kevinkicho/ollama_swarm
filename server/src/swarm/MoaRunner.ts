@@ -510,6 +510,51 @@ export class MoaRunner implements SwarmRunner {
         );
       }
 
+      // T198e (2026-05-04): two-stage aggregation. When opt-in +
+      // K >= 2 aggregators ran, fire ONE more "top" aggregator pass
+      // that synthesizes the K mid-syntheses (treating them as if
+      // they were proposer drafts). Matches the original Together AI
+      // MoA two-layer shape. First-cut: cfg.moaAggregatorModel is
+      // reused for the top aggregator (no separate field).
+      if (cfg.twoStageMoA && validSyntheses.length >= 2) {
+        try {
+          const topAggregator = winningAgg; // reuse winning aggregator's slot
+          const topPrompt = buildAggregatorPrompt({
+            seed,
+            // Treat the K syntheses as the "proposals" for the top layer.
+            proposals: validSyntheses.map((s, i) => ({
+              workerId: `mid-aggregator-${i + 1}`,
+              text: s.text,
+            })),
+            variantBias: "balanced",
+          });
+          const topController = new AbortController();
+          const topResult = (await promptWithRetry(topAggregator, topPrompt, {
+            signal: topController.signal,
+            manager: this.opts.manager,
+            agentName: "swarm-read",
+            describeError: (e) => describeSdkError(e),
+          })) as { data?: { parts?: Array<{ type: string; text: string }> } };
+          const topText = extractText(
+            topResult.data?.parts?.find((p) => p.type === "text")?.text ?? "",
+          );
+          if (topText && topText.trim().length > 0) {
+            this.appendSystem(
+              `[T198e two-stage MoA] top-aggregator synthesized across ${validSyntheses.length} mid-syntheses (replaces single-pick).`,
+            );
+            synthesis = topText;
+          } else {
+            this.appendSystem(
+              `[T198e two-stage MoA] top-aggregator returned empty — falling back to single-pick winner.`,
+            );
+          }
+        } catch (err) {
+          this.appendSystem(
+            `[T198e two-stage MoA] top-aggregator failed (${err instanceof Error ? err.message : String(err)}) — falling back to single-pick winner.`,
+          );
+        }
+      }
+
       // 2026-05-02 (issue #1 fix): challenger substantiveness telemetry.
       // When N≥2, the LAST proposer was designated challenger (matrix
       // row #2). Score how much of the challenger's UNIQUE contribution

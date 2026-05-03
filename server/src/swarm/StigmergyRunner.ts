@@ -13,6 +13,12 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { formatChatReceipt } from "./chatReceipt.js";
 import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
+// T197 (2026-05-04): cross-cluster discovery via import graph.
+import {
+  buildImportGraph,
+  relatedFilesViaImports,
+  type ImportGraph,
+} from "./importGraph.js";
 import { detectExplorationGaps, formatExplorationGapsMarkdown } from "./stigmergyExplorationGap.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildSeedSummary } from "./runSummary.js";
@@ -54,6 +60,11 @@ export class StigmergyRunner implements SwarmRunner {
   // The annotation table — the shared "pheromone" state. File path →
   // aggregated annotation. Updated after each agent's turn.
   private annotations = new Map<string, AnnotationState>();
+  // T197 (2026-05-04): import graph for cross-cluster discovery.
+  // Built lazily on first applyAnnotation call when cfg.crossClusterDiscovery
+  // is set. null = not yet built; empty Map = built but no edges
+  // (degenerate repo).
+  private importGraphCache: ImportGraph | null = null;
   // 2026-05-02 (improvement #2): per-explorer territory assignment from
   // the lead's pre-round-1 plan. Map agentIndex → territory description.
   // Empty when the lead's plan failed; explorers wander unguided in
@@ -751,6 +762,65 @@ export class StigmergyRunner implements SwarmRunner {
       file: ann.file,
       state: { ...next },
     });
+    // T197 (2026-05-04): cross-cluster discovery — spread pheromones
+    // to related files via import graph when this annotation has
+    // high interest (>= 7). Fire-and-forget so applyAnnotation stays
+    // sync; Promise rejection swallowed.
+    if (this.active?.crossClusterDiscovery && ann.interest >= 7) {
+      void this.spreadCrossClusterPheromones(ann.file, ann.interest);
+    }
+  }
+
+  // T197 (2026-05-04): plant soft pheromone bumps on files related to
+  // the seedFile via the import graph. Bump = synthetic visit with
+  // half the seed's interest + low confidence (signaling "peer found
+  // something interesting in a related file"). Lazy-loads the import
+  // graph on first call. Best-effort: build failure / no edges →
+  // no-op.
+  private async spreadCrossClusterPheromones(
+    seedFile: string,
+    seedInterest: number,
+  ): Promise<void> {
+    try {
+      if (this.importGraphCache === null) {
+        const clonePath = this.active?.localPath;
+        if (!clonePath) return;
+        const allFiles = await this.opts.repos.listRepoFiles(clonePath, {
+          maxFiles: 500,
+        });
+        const tsJsFiles = allFiles.filter((f) =>
+          /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(f),
+        );
+        if (tsJsFiles.length === 0) {
+          this.importGraphCache = new Map();
+          return;
+        }
+        this.importGraphCache = await buildImportGraph(clonePath, tsJsFiles);
+      }
+      const related = relatedFilesViaImports(seedFile, this.importGraphCache, 5);
+      if (related.length === 0) return;
+      // Plant soft bumps — half-interest + low confidence so the
+      // related file shows up as "worth a look" without overwhelming
+      // a real annotation from a peer agent.
+      const bumpInterest = Math.max(1, Math.round(seedInterest / 2));
+      const bumpConfidence = 2;
+      for (const relFile of related) {
+        // Only bump files NOT already annotated — don't overwrite
+        // peer annotations with synthetic bumps.
+        if (this.annotations.has(relFile)) continue;
+        this.applyAnnotation({
+          file: relFile,
+          interest: bumpInterest,
+          confidence: bumpConfidence,
+          note: `[cross-cluster bump from ${seedFile}] related via import graph`,
+        });
+      }
+      this.appendSystem(
+        `[T197 cross-cluster] seed ${seedFile} (interest=${seedInterest}) spread soft bumps to ${related.length} related file(s) via import graph.`,
+      );
+    } catch {
+      // best-effort — graph-build failure shouldn't block the run
+    }
   }
 
   /** #303: optional transform applied to the post-strip text BEFORE

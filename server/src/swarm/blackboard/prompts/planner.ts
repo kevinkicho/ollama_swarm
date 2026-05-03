@@ -330,6 +330,20 @@ export interface PlannerSeed {
   // planner guessed wrong because it had no signal beyond filename.
   // Empty when gather failed / no directive / no matches found.
   codeContextExcerpts?: ReadonlyArray<{ path: string; excerpt: string }>;
+  /** T198h (2026-05-04): test-driven todos. When true, planner
+   *  prompt requires a `verify` step per todo (e.g., run a specific
+   *  test file/command) so the worker's commit gets a measurable
+   *  pass/fail signal beyond "did the model emit JSON." First-cut:
+   *  pushes EXISTING tests; doesn't generate new failing tests.
+   *  Optional — absent → planner behaves as before. */
+  testDrivenTodos?: boolean;
+  /** T198i (2026-05-04): parallel-hypothesis instruction. When true,
+   *  the planner prompt asks for 2-3 ALTERNATIVE approaches to any
+   *  unmet criterion from the prior auditor verdict. First-cut:
+   *  sequential todos (next cycle picks whichever lands first by
+   *  examining commit landed). Optional — absent → planner behaves
+   *  as before. */
+  parallelHypothesis?: boolean;
 }
 
 // Unit 50: slim, capped distillation of the previous run's summary.json
@@ -448,6 +462,31 @@ export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionSt
     "=== end README ===",
     "",
     codeContextBlock,
+    // T198h (2026-05-04): test-driven todo expansion. When opt-in,
+    // the planner is asked to surface a verification step per todo
+    // so the worker's commit gets a measurable signal beyond
+    // "did the model emit JSON." Pushes EXISTING tests in the repo;
+    // doesn't generate new failing tests (the test-scaffolding
+    // generator is days of work — deferred).
+    seed.testDrivenTodos
+      ? [
+          "**TEST-DRIVEN TODO MODE (T198h):** For each TODO, include in the description a `verify:` clause naming a SPECIFIC test file or command that will pass if the TODO is correctly implemented. Examples:",
+          "  description: \"Add bcrypt hashing to src/auth/hash.ts (verify: `node --test test/auth-hash.test.ts` passes)\"",
+          "  description: \"Fix off-by-one in src/util/range.ts (verify: `npm test -- range` passes 5/5 cases)\"",
+          "If the repo has NO test infrastructure for the TODO's area, mark `verify: manual — describe what success looks like` instead of inventing a test that won't run.",
+          "",
+        ].join("\n")
+      : "",
+    // T198i (2026-05-04): parallel-hypothesis instruction. When the
+    // prior auditor verdict was "partial" + this flag is on, ask the
+    // planner to propose 2-3 ALTERNATIVE approaches for the unmet
+    // criterion (sequential todos; auditor picks the best after).
+    seed.parallelHypothesis
+      ? [
+          "**PARALLEL-HYPOTHESIS MODE (T198i):** When a criterion was last audited as `partial`, propose 2-3 ALTERNATIVE TODOs for it (different angles, file targets, or implementations). Tag each with `[hypothesis: A]`, `[hypothesis: B]`, `[hypothesis: C]` in the description. Workers run them sequentially; the auditor picks whichever lands the criterion. If no criterion is `partial`, ignore this rule and propose normal TODOs.",
+          "",
+        ].join("\n")
+      : "",
     "Using the directive + contract + file list above, output your JSON array of TODOs now. Each TODO should be a concrete step toward making the contract criteria met.",
     "Remember: JSON array, no prose, <=2 files per TODO. Prefer paths that appear in the REPO FILE LIST; if creating a new file, its parent directory should appear there.",
   ].join("\n");

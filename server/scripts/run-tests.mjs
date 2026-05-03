@@ -93,6 +93,11 @@ const TEST_FILES = [
   "src/swarm/discussionWriteSummary.test.ts",
   // 2026-05-03 (Phase D): finally close-out helper.
   "src/swarm/runFinallyHooks.test.ts",
+  // 2026-05-04 (T2.1): wrap-up apply phase + wiring assertions.
+  "src/swarm/wrapUpApplyPhase.test.ts",
+  "src/swarm/wrapUpApplyPhase.wiring.test.ts",
+  // 2026-05-04 (T197): import-graph helper for smart slicing + cross-cluster.
+  "src/swarm/importGraph.test.ts",
 
   // routes/
   "src/routes/swarm.test.ts",

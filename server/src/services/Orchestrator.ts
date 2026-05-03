@@ -403,6 +403,8 @@ export class Orchestrator {
       const catalog = selectRoleCatalog({
         customRoles: cfg.roles,
         userDirective: cfg.userDirective,
+        // T198b (2026-05-04): forward dynamicRoles flag.
+        dynamicRoles: cfg.dynamicRoles,
       });
       rolesForRunStarted = [];
       for (let i = 1; i <= cfg.agentCount; i++) {
@@ -723,6 +725,8 @@ export class Orchestrator {
         const roles = selectRoleCatalog({
           customRoles: cfg.roles,
           userDirective: cfg.userDirective,
+          // T198b (2026-05-04): forward dynamicRoles flag.
+          dynamicRoles: cfg.dynamicRoles,
         });
         return new RoundRobinRunner(opts, { roles });
       }

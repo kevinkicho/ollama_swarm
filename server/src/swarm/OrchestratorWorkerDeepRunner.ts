@@ -547,6 +547,17 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
       ),
     );
     if (this.stopping) return;
+    // T198f (2026-05-04): bi-directional refinement. Surface mid-lead
+    // pushback BEFORE the tier-skip / dispatch flow. First-cut:
+    // log-only — runner doesn't auto-replan. Future work: top
+    // orchestrator sees pushbacks in the next planning prompt + can
+    // revise its decomposition.
+    const pushback = parseMidLeadPushback(midPlanText);
+    if (pushback) {
+      this.appendSystem(
+        `[T198f mid-lead pushback] mid-lead ${midLead.index} flagged the coarse subtask: ${pushback}`,
+      );
+    }
     // T192 (2026-05-04): tier-skip honor. T183 added the prompt schema
     // (`tierSkip: true` + `selfReport`); this wires the runner to
     // honor it. When mid-lead opts to handle the coarse subtask
@@ -909,6 +920,13 @@ export function buildMidLeadPlanPrompt(
     // it by skipping execute for this mid-lead's branch.
     "**Tier-skipping (optional)** — set `\"tierSkip\": true` AND include `\"selfReport\": \"<one-paragraph answer to the coarse subtask>\"` if the coarse subtask is genuinely trivial enough that you can do it yourself in one paragraph (e.g. \"name the file that defines X\" or \"check whether dir Y exists\"). Cuts the round-trip through workers when over-decomposed. Otherwise leave it false / omit and dispatch normally.",
     "",
+    // T198f (2026-05-04): bi-directional refinement. Mid-leads can
+    // push back on the orchestrator's coarse subtask if it doesn't
+    // make sense. First-cut: pushback is informational; runner logs
+    // it but doesn't auto-replan the orchestrator. Future work: top
+    // orchestrator sees pushbacks + can revise its decomposition.
+    "**Pushback (optional, T198f)** — if the coarse subtask doesn't make sense (orchestrator over-decomposed, asked you to investigate something off-topic from the directive, or assumed a structure that doesn't exist in the repo), include `\"pushback\": \"<one-line concrete issue>\"` in your JSON. The runner logs it for the next orchestrator turn to see; you should still dispatch a best-effort plan if you can. Use sparingly — most coarse subtasks should be actionable as given.",
+    "",
     "=== SEED ===",
     seedText || "(empty seed)",
     "=== END SEED ===",
@@ -1033,6 +1051,32 @@ export function buildTopSynthesisPrompt(
 
 function truncate(s: string, max: number = 80): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+// T198f (2026-05-04): parse the mid-lead's optional pushback field
+// from raw plan output. Returns the pushback string or null. Same
+// JSON-tolerant parser pattern as parseMidLeadTierSkip.
+export function parseMidLeadPushback(raw: string): string | null {
+  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  const candidate = fenceMatch ? fenceMatch[1] : raw;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(candidate);
+  } catch {
+    const braceMatch = candidate.match(/\{[\s\S]*\}/);
+    if (!braceMatch) return null;
+    try {
+      parsed = JSON.parse(braceMatch[0]);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const o = parsed as Record<string, unknown>;
+  if (typeof o.pushback === "string" && o.pushback.trim().length > 0) {
+    return o.pushback.trim();
+  }
+  return null;
 }
 
 // T192 (2026-05-04): parse the mid-lead's tier-skip request from raw

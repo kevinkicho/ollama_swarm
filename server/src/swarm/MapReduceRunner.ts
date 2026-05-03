@@ -15,6 +15,8 @@ import { promptWithRetry } from "./promptWithRetry.js";
 import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
 import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
+// T197 (2026-05-04): smart slicing by import graph (opt-in via cfg.importGraphSlicing).
+import { buildImportGraph, clusterByImports } from "./importGraph.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildSeedSummary } from "./runSummary.js";
 import { discussionWriteSummary } from "./discussionWriteSummary.js";
@@ -232,11 +234,54 @@ export class MapReduceRunner implements SwarmRunner {
       if (!reducer) throw new Error("reducer agent (index 1) did not spawn");
       if (mappers.length < 2) throw new Error("need at least 2 mappers");
 
+      // T197 (2026-05-04): smart slicing by import graph. When opt-in
+      // via cfg.importGraphSlicing, build a TS/JS import graph + cluster
+      // files by connected component so each mapper sees a coherent
+      // subset of the codebase (a→b→c stays together). Falls back to
+      // round-robin slicing on graph-build failure or when the
+      // resulting clusters are too lopsided (one giant SCC > 70% of
+      // files).
+      let slices: string[][];
+      let slicingMode: "round-robin" | "import-graph" = "round-robin";
+      if (cfg.importGraphSlicing) {
+        try {
+          const allFiles = await this.opts.repos.listRepoFiles(clonePath, {
+            maxFiles: 500,
+          });
+          const tsJsFiles = allFiles.filter((f) =>
+            /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(f),
+          );
+          if (tsJsFiles.length >= mappers.length * 2) {
+            const graph = await buildImportGraph(clonePath, tsJsFiles);
+            const candidate = clusterByImports(tsJsFiles, graph, mappers.length);
+            // Reject if any single cluster holds > 70% of files
+            // (one giant SCC) — fall back to round-robin.
+            const maxSize = Math.max(...candidate.map((c) => c.length));
+            if (maxSize > tsJsFiles.length * 0.7) {
+              this.appendSystem(
+                `[T197 import-graph slicing] one cluster holds ${maxSize}/${tsJsFiles.length} files (> 70%) — falling back to round-robin slicing.`,
+              );
+            } else {
+              slices = candidate;
+              slicingMode = "import-graph";
+            }
+          } else {
+            this.appendSystem(
+              `[T197 import-graph slicing] only ${tsJsFiles.length} TS/JS files (< 2× mappers) — falling back to round-robin slicing.`,
+            );
+          }
+        } catch (err) {
+          this.appendSystem(
+            `[T197 import-graph slicing] failed (${err instanceof Error ? err.message : String(err)}) — falling back to round-robin.`,
+          );
+        }
+      }
       const topLevel = await this.opts.repos.listTopLevel(clonePath);
       const slicingSource = topLevel.filter((e) => !SKIP_ENTRIES.has(e));
-      const slices = sliceRoundRobin(slicingSource, mappers.length);
+      // eslint-disable-next-line prefer-const
+      slices = slices! ?? sliceRoundRobin(slicingSource, mappers.length);
       this.appendSystem(
-        `Repo slicing: round-robin over ${slicingSource.length} top-level entries across ${mappers.length} mappers.`,
+        `Repo slicing: ${slicingMode === "import-graph" ? "import-graph clusters" : `round-robin over ${slicingSource.length} top-level entries`} across ${mappers.length} mappers.`,
       );
       // Phase 2d: stash + emit slice assignments so CoveragePanel can
       // render the tree view. Keyed by agentId for consistency with
@@ -295,11 +340,44 @@ export class MapReduceRunner implements SwarmRunner {
         // framings from cycle r.
         const reframingsThisCycle = this.nextCycleReframings;
         this.nextCycleReframings = new Map();
-        await staggerStart(mappers, (m, i) => {
-          const mySlice = slices[i] ?? [];
-          const reframing = reframingsThisCycle.get(m.index);
-          return this.runMapperTurn(m, r, cfg.rounds, mySlice, seedSnapshot, cfg.userDirective, reframing);
-        });
+        // T198a (2026-05-04): streaming reducer. When opt-in, wrap
+        // the parallel mapper batch with a half-batch early-fire of
+        // the reducer (after ceil(N/2) mappers complete). First-cut:
+        // splits the wait into two synchronous batches rather than
+        // truly streaming chunk-by-chunk; cuts wall-clock when one
+        // mapper is slow. Two reducer turns per cycle when on.
+        if (cfg.streamingReducer && mappers.length >= 3) {
+          const half = Math.ceil(mappers.length / 2);
+          const firstHalf = mappers.slice(0, half);
+          const secondHalf = mappers.slice(half);
+          // First half: run + early reduce
+          await staggerStart(firstHalf, (m, i) => {
+            const mySlice = slices[i] ?? [];
+            const reframing = reframingsThisCycle.get(m.index);
+            return this.runMapperTurn(m, r, cfg.rounds, mySlice, seedSnapshot, cfg.userDirective, reframing);
+          });
+          if (!this.stopping) {
+            this.appendSystem(
+              `[T198a streaming reducer] firing early reduce after ${firstHalf.length}/${mappers.length} mappers (half-batch).`,
+            );
+            await this.runReducerTurn(reducer, r, cfg.rounds, undefined, cfg.userDirective);
+          }
+          // Second half: run only (the cycle's normal full-batch
+          // reducer fires after this).
+          if (!this.stopping) {
+            await staggerStart(secondHalf, (m, i) => {
+              const mySlice = slices[i + half] ?? [];
+              const reframing = reframingsThisCycle.get(m.index);
+              return this.runMapperTurn(m, r, cfg.rounds, mySlice, seedSnapshot, cfg.userDirective, reframing);
+            });
+          }
+        } else {
+          await staggerStart(mappers, (m, i) => {
+            const mySlice = slices[i] ?? [];
+            const reframing = reframingsThisCycle.get(m.index);
+            return this.runMapperTurn(m, r, cfg.rounds, mySlice, seedSnapshot, cfg.userDirective, reframing);
+          });
+        }
         if (this.stopping) break;
         // Task #146: dead-loop guard. If every mapper produced empty/junk
         // output this cycle, count toward break threshold.

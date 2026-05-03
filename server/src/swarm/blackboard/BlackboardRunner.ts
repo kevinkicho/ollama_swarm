@@ -940,6 +940,13 @@ export class BlackboardRunner implements SwarmRunner {
         this.tickAccumulator = createTickAccumulator(this.runStartedAt);
         this.setPhase("executing");
         this.startQueueReaper();
+        // T198c (2026-05-04): adaptive worker pool sizing — log-only
+        // first-cut. Polls todo queue depth + worker count every 30s
+        // and logs scale-up/scale-down recommendations. Real dynamic
+        // spawn/teardown deferred (AgentManager surgery, days of work).
+        if (this.active?.adaptiveWorkers) {
+          this.startAdaptiveWorkerWatchdog(this.active.adaptiveWorkers);
+        }
         this.startCapWatchdog();
         this.planner = planner;
         this.startReplanWatcher();
@@ -1419,6 +1426,10 @@ export class BlackboardRunner implements SwarmRunner {
       priorDesignMemoryRendered,
       workerTags,
       ...(codeContextExcerpts ? { codeContextExcerpts } : {}),
+      // T198h (2026-05-04): test-driven todo expansion flag.
+      ...(cfg.testDrivenTodos ? { testDrivenTodos: true } : {}),
+      // T198i (2026-05-04): parallel-hypothesis instruction flag.
+      ...(cfg.parallelHypothesis ? { parallelHypothesis: true } : {}),
     };
   }
 
@@ -4392,6 +4403,42 @@ export class BlackboardRunner implements SwarmRunner {
     this.capWatchdog.unref?.();
   }
 
+  // T198c (2026-05-04): adaptive worker pool sizing — log-only watchdog.
+  // Polls every 30s; logs scale-up/scale-down recommendations based
+  // on todo backlog vs current worker pool size. First-cut: LOGS
+  // ONLY (doesn't actually spawn or kill agents). Real dynamic
+  // pool sizing requires AgentManager spawn during a run + lifecycle
+  // accounting that doesn't exist today.
+  private adaptiveWatchdog: NodeJS.Timeout | undefined;
+  private startAdaptiveWorkerWatchdog(opts: { min: number; max: number }): void {
+    if (this.adaptiveWatchdog) return;
+    this.adaptiveWatchdog = setInterval(() => {
+      const counts = this.todoQueue.counts();
+      const openTodos = counts.pending;
+      const inProgress = counts.inProgress;
+      const totalLive = openTodos + inProgress;
+      const workers = this.opts.manager
+        .list()
+        .filter((a) => a.index !== 1).length; // exclude planner
+      // Rule of thumb: backlog > 2× workers → scale up;
+      // backlog === 0 + inProgress === 0 → scale down. Cap at min/max.
+      if (totalLive > workers * 2 && workers < opts.max) {
+        const recommendedAdd = Math.min(
+          opts.max - workers,
+          Math.ceil(totalLive / 2 - workers),
+        );
+        this.appendSystem(
+          `[T198c adaptive workers] backlog=${totalLive} (open=${openTodos}, in-progress=${inProgress}) vs ${workers} worker(s) — RECOMMEND +${recommendedAdd} more (cap=${opts.max}). LOG-ONLY first-cut; runner doesn't auto-spawn yet.`,
+        );
+      } else if (totalLive === 0 && workers > opts.min) {
+        this.appendSystem(
+          `[T198c adaptive workers] backlog drained, ${workers} worker(s) idle — RECOMMEND scale down to min=${opts.min}. LOG-ONLY first-cut; runner doesn't auto-kill yet.`,
+        );
+      }
+    }, 30_000);
+    this.adaptiveWatchdog.unref?.();
+  }
+
   private startQueueReaper(): void {
     if (this.reaperTimer) return;
     this.reaperTimer = setInterval(() => {
@@ -4423,6 +4470,9 @@ export class BlackboardRunner implements SwarmRunner {
   private stopQueueReaper(): void {
     if (this.reaperTimer) clearInterval(this.reaperTimer);
     this.reaperTimer = undefined;
+    // T198c: paired teardown for the adaptive watchdog.
+    if (this.adaptiveWatchdog) clearInterval(this.adaptiveWatchdog);
+    this.adaptiveWatchdog = undefined;
   }
 
   private stopCapWatchdog(): void {

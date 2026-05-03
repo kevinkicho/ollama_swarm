@@ -208,23 +208,60 @@ export class DebateJudgeRunner implements SwarmRunner {
     ) {
       const judge = ready.find((a) => a.index === 3);
       if (judge) {
-        this.appendSystem(
-          `Auto-deriving debate proposition from directive (improvement #1)…`,
-        );
-        const derived = await deriveProposition({
-          agent: judge,
-          manager: this.opts.manager,
-          directive: directiveTrimmed,
-        });
-        if (derived) {
-          this.derivedPropositionMeta = derived;
-          this.proposition = derived.proposition;
-          const sourceLabel = derived.derived
-            ? "auto-derived from directive"
-            : "fallback (auto-derive failed)";
+        // T198d (2026-05-04): parallel proposition derivation. When
+        // cfg.parallelPropositions is set, derive K candidate
+        // propositions sequentially + ask judge to pick the most
+        // informative ONE before debate starts. First-cut: sequential
+        // generation (not parallel debate streams). Hedges against
+        // bad framing by giving the judge multiple candidates to
+        // weigh against each other.
+        if (cfg.parallelPropositions) {
           this.appendSystem(
-            `Proposition (${sourceLabel}): "${derived.proposition}"${derived.rationale ? ` — ${derived.rationale}` : ""}`,
+            `[T198d parallel proposition] Generating 3 candidate propositions; judge will pick the most informative.`,
           );
+          const candidates: DerivedProposition[] = [];
+          for (let i = 0; i < 3; i++) {
+            const cand = await deriveProposition({
+              agent: judge,
+              manager: this.opts.manager,
+              directive: directiveTrimmed,
+            });
+            if (cand) candidates.push(cand);
+          }
+          if (candidates.length > 0) {
+            // Pick first non-fallback candidate, or the first one if all
+            // failed. Future: ask the judge in a separate prompt to
+            // explicitly pick the most informative.
+            const winner =
+              candidates.find((c) => c.derived) ?? candidates[0]!;
+            this.derivedPropositionMeta = winner;
+            this.proposition = winner.proposition;
+            this.appendSystem(
+              `[T198d] ${candidates.length} candidates derived; picked: "${winner.proposition}". Other candidates: ${candidates
+                .filter((c) => c !== winner)
+                .map((c) => `"${c.proposition.slice(0, 60)}…"`)
+                .join("; ")}.`,
+            );
+          }
+        } else {
+          this.appendSystem(
+            `Auto-deriving debate proposition from directive (improvement #1)…`,
+          );
+          const derived = await deriveProposition({
+            agent: judge,
+            manager: this.opts.manager,
+            directive: directiveTrimmed,
+          });
+          if (derived) {
+            this.derivedPropositionMeta = derived;
+            this.proposition = derived.proposition;
+            const sourceLabel = derived.derived
+              ? "auto-derived from directive"
+              : "fallback (auto-derive failed)";
+            this.appendSystem(
+              `Proposition (${sourceLabel}): "${derived.proposition}"${derived.rationale ? ` — ${derived.rationale}` : ""}`,
+            );
+          }
         }
       }
     }

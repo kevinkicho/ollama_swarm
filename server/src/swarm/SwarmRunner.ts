@@ -353,6 +353,102 @@ export interface RunConfig {
   orchestratorModel?: string;
   midLeadModel?: string;
   /**
+   * T197 (2026-05-04): map-reduce smart slicing by import graph.
+   * When true, the runner builds a TS/JS import graph + clusters
+   * files by connected component so each mapper sees coherent
+   * code (a→b→c stays together). Falls back to round-robin slicing
+   * when:
+   *   - import-graph build fails
+   *   - resulting clusters too lopsided (one cluster > 70% of files)
+   *   - too few TS/JS files (< 2× mapper count)
+   *
+   * First-cut: TS/JS only via regex extraction. Cross-language
+   * (Python/Rust/Go) deferred to future ts-morph or babel substrate.
+   * Default off; opt in for TS-heavy repos.
+   * Map-reduce only.
+   */
+  importGraphSlicing?: boolean;
+  /**
+   * T197 (2026-05-04): stigmergy cross-cluster discovery via import graph.
+   * When true, the stigmergy runner builds the import graph at run
+   * start. When an explorer surfaces a high-interest annotation
+   * (interest >= 7), the runner plants soft pheromone bumps on
+   * related files (1-hop importers + importees) so peer explorers
+   * naturally gravitate toward the affected code structure rather
+   * than wandering randomly.
+   *
+   * Same TS/JS-only first-cut as importGraphSlicing. Default off.
+   * Stigmergy only.
+   */
+  crossClusterDiscovery?: boolean;
+  /**
+   * T198 (2026-05-04) HEAVY FIRST-CUTS — opt-in flags for items that
+   * need substantial follow-up work for full production quality.
+   * Each shipped as a functional thin-cut + clear caveat in the
+   * relevant runner. Polish deferred to focused future sessions.
+   */
+  /** T198a: map-reduce streaming reducer. When true, the reducer
+   *  fires AT HALF-BATCH (after ceil(mapperCount/2) mappers return)
+   *  in addition to its normal full-batch turn. Cuts wall-clock when
+   *  one mapper is slow; produces 2 reducer turns per cycle.
+   *  First-cut: doesn't actually stream chunk-by-chunk; just splits
+   *  the wait into two synchronous batches. Map-reduce only. */
+  streamingReducer?: boolean;
+  /** T198b: role-diff dynamic role catalog. When true, the runner
+   *  scans the directive for keywords + augments the BUILD_ROLES
+   *  catalog with directive-specific specialist roles (auth →
+   *  +Auth, performance → +Profiling, security → +Crypto, etc.).
+   *  First-cut: keyword-table mapping, NOT LLM-driven role picking.
+   *  Deferred-real: planner emits role catalog as JSON. Role-diff only. */
+  dynamicRoles?: boolean;
+  /** T198c: blackboard adaptive worker pool sizing. When set
+   *  (with min/max), a background watchdog logs recommendations
+   *  ("could spawn 2 more workers" / "could scale down 1") based on
+   *  todo backlog vs current worker count. First-cut: LOGS ONLY,
+   *  doesn't actually spawn or kill agents (dynamic AgentManager
+   *  spawn is days of substrate work). Blackboard only. */
+  adaptiveWorkers?: { min: number; max: number };
+  /** T198d: debate-judge parallel proposition derivation. When true,
+   *  the judge generates 3 CANDIDATE propositions before debate
+   *  starts + picks the most informative ONE. Only one debate runs
+   *  (not 3 parallel). First-cut: sequential candidate generation
+   *  + judge pick; full parallel (3 debates) deferred. Debate-judge only. */
+  parallelPropositions?: boolean;
+  /** T198e: MoA two-stage aggregation. When true + moaAggregatorCount
+   *  >= 2, after the K parallel aggregators run, one MORE TOP
+   *  aggregator synthesizes the K mid-syntheses. Adds 1 round-trip
+   *  but matches the original Together AI MoA two-layer shape.
+   *  First-cut: cfg.moaAggregatorModel reused for the top aggregator
+   *  (no separate cfg.moaTopAggregatorModel field — could add later).
+   *  MoA only. */
+  twoStageMoA?: boolean;
+  /** T198f: OW-Deep bi-directional refinement. When true, mid-lead's
+   *  plan prompt allows them to emit `PUSHBACK: <issue>` instead of
+   *  normal assignments. Runner logs the pushback + still proceeds
+   *  with what was emitted (or skips dispatch if pushback only).
+   *  First-cut: pushback is informational; no auto-replan triggered
+   *  on the orchestrator. OW-Deep only. */
+  bidirectionalRefinement?: boolean;
+  /** T198g: baseline multi-attempt. Number of SEQUENTIAL attempts to
+   *  run; pick the one with the most hunks applied. Default 1.
+   *  First-cut: sequential, not parallel (parallel would need a
+   *  parallel-runner harness — deferred). Caps at 5. Baseline only. */
+  baselineAttempts?: number;
+  /** T198h: blackboard test-driven todos. When true, the planner
+   *  prompt is instructed to include a "verification step" per
+   *  todo (e.g., "run `npm test path/related.test.ts` after impl").
+   *  Auditor checks the verification ran. First-cut: pushes EXISTING
+   *  tests; doesn't generate new failing tests (test-scaffolding
+   *  generator is days of work). Blackboard only. */
+  testDrivenTodos?: boolean;
+  /** T198i: blackboard auditor parallel hypothesis. When true + last
+   *  auditor verdict was "partial", next planner cycle's prompt
+   *  instructs the planner to propose 2-3 ALTERNATIVE approaches to
+   *  the unmet criterion. First-cut: sequential todos (not parallel
+   *  in-flight); auditor picks whichever lands first by examining
+   *  next-cycle commits. Blackboard only. */
+  parallelHypothesis?: boolean;
+  /**
    * T193 (2026-05-04): per-disposition model routing for round-robin
    * (no-roles variant). Maps each disposition to a model id; the
    * runner uses promptWithRetry's modelOverride to call that model

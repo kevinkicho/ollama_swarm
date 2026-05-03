@@ -147,8 +147,123 @@ export const BUILD_ROLES: readonly SwarmRole[] = [
 export function selectRoleCatalog(input: {
   customRoles?: readonly SwarmRole[];
   userDirective?: string;
+  // T198b (2026-05-04): when true, augment the BUILD_ROLES catalog
+  // with directive-specific specialist roles via keyword mapping.
+  dynamicRoles?: boolean;
 }): readonly SwarmRole[] {
   if (input.customRoles && input.customRoles.length > 0) return input.customRoles;
-  const hasDirective = (input.userDirective ?? "").trim().length > 0;
-  return hasDirective ? BUILD_ROLES : DEFAULT_ROLES;
+  const directive = (input.userDirective ?? "").trim();
+  const hasDirective = directive.length > 0;
+  const baseCatalog = hasDirective ? BUILD_ROLES : DEFAULT_ROLES;
+  // T198b dynamic role catalog — first-cut keyword mapping (NOT
+  // LLM-driven role picking). When the directive contains specific
+  // domain keywords, prepend specialist roles to the base catalog.
+  // Real version (deferred) would have the planner emit the role
+  // catalog as JSON before the discussion starts.
+  if (!input.dynamicRoles || !hasDirective) return baseCatalog;
+  const specialists = pickSpecialistRolesFromDirective(directive);
+  if (specialists.length === 0) return baseCatalog;
+  // Prepend specialists; cap total at 12 so the modulo wrap stays
+  // sane for agent counts up to 8 (each agent still gets 1-2 roles).
+  return [...specialists, ...baseCatalog].slice(0, 12);
+}
+
+// T198b (2026-05-04): keyword → specialist role mapping. First-cut
+// catalog of common domain keywords + their specialist role. Pure +
+// exported for tests. When the directive contains a keyword from the
+// table, the matching specialist is prepended to the role catalog.
+// Multiple matches dedup by role name (case-insensitive).
+//
+// Adding more keywords here is the cheapest way to expand coverage
+// — the real fix (LLM-driven role picker) is days of work.
+const SPECIALIST_KEYWORDS: ReadonlyArray<{
+  pattern: RegExp;
+  role: SwarmRole;
+}> = [
+  {
+    pattern: /\bauth(entic\w*|orize)?\b|\blogin\b|\bsession\b|\bjwt\b|\boauth\b/i,
+    role: {
+      name: "Auth specialist",
+      guidance:
+        "Auth flows, session management, token handling, password hashing, OAuth integration. Read auth/login/session files first; cite the specific token/cookie/middleware in play.",
+      deliverableHint:
+        "The auth shape: which scheme (JWT/session/OAuth), where tokens are minted/verified, how expiry is handled, file:line citations.",
+    },
+  },
+  {
+    pattern: /\bsecur\w+|\binject\w+|\bxss\b|\bcsrf\b|\bsecret\w*|\bvulnerab/i,
+    role: {
+      name: "Crypto / Security specialist",
+      guidance:
+        "Cryptographic primitives in play (hashing, encryption, signing), input-validation gaps, secret-handling risks, supply-chain (dep audit), unsafe defaults. Cite the specific dep + version when flagging.",
+      deliverableHint:
+        "Specific risks with file:line + severity. If proposing a fix, name the standard pattern (e.g. \"use Argon2id with N=...\" not \"use a strong KDF\").",
+    },
+  },
+  {
+    pattern: /\bperformance\b|\bspeed\b|\boptim\w+|\bbenchmark|\bprofil\w+|\blat\w+/i,
+    role: {
+      name: "Performance / Profiling specialist",
+      guidance:
+        "Hot paths, N+1 queries, sync I/O on critical paths, accidental quadratics, missing batching/caching. Where would you measure first? Cite the function or call-site.",
+      deliverableHint:
+        "Profiling proposal: WHAT to instrument, WHERE in the code, WHICH metric matters. Cite file:line.",
+    },
+  },
+  {
+    pattern: /\bmigrat\w+|\bschema\b|\bdatabase|\bsql\b|\bmodel\b/i,
+    role: {
+      name: "Migration / Schema specialist",
+      guidance:
+        "DB schema changes, backfill plans, rollback paths, online vs offline migrations. Sequence operations safely (additive first, switch readers, drop old). Cite migration tool in use.",
+      deliverableHint:
+        "Step-by-step migration plan: schema diff + data backfill SQL + reader cutover + rollback. Each step a separate bullet.",
+    },
+  },
+  {
+    pattern: /\bcache|\bcaching|\bredis|\bmemcache|\bttl\b/i,
+    role: {
+      name: "Caching specialist",
+      guidance:
+        "Where caching belongs, invalidation strategy, key shape, TTL choice, stale-while-revalidate vs strict. Spot stale-data risks Performance might miss.",
+      deliverableHint:
+        "Cache spec: layer (in-process/Redis/CDN), key, TTL, invalidation triggers, fallback when cache cold.",
+    },
+  },
+  {
+    pattern: /\baccessibility|\ba11y|\baria\b|\bwcag/i,
+    role: {
+      name: "Accessibility specialist",
+      guidance:
+        "Keyboard nav, ARIA labels, color contrast, screen-reader experience, focus order. Test with the browser's accessibility tree where possible.",
+      deliverableHint:
+        "WCAG-tagged findings: which guideline (e.g. 2.1.1 Keyboard), what fails, file:line, suggested fix.",
+    },
+  },
+  {
+    pattern: /\bapi\b|\brest\b|\bgraphql|\bopenapi|\bswagger/i,
+    role: {
+      name: "API design specialist",
+      guidance:
+        "Endpoint shape, status codes, error envelopes, versioning, idempotency. Spot consistency drift across endpoints.",
+      deliverableHint:
+        "API spec: method + path + req shape + resp shape + status codes + error format. One bullet per endpoint touched.",
+    },
+  },
+];
+
+export function pickSpecialistRolesFromDirective(
+  directive: string,
+): SwarmRole[] {
+  const out: SwarmRole[] = [];
+  const seen = new Set<string>();
+  for (const entry of SPECIALIST_KEYWORDS) {
+    if (entry.pattern.test(directive)) {
+      const key = entry.role.name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(entry.role);
+    }
+  }
+  return out;
 }
