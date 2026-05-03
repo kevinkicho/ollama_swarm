@@ -52,6 +52,7 @@ import { checkBudgetGuards } from "./loopGuards.js";
 import { gatherProposerContext, type FileExcerpt } from "./moaContextGather.js";
 import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
 import { writeDeliverable, runQualityPasses } from "./deliverable.js";
+import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
 import { deriveRubric, recommendProposerCount, type DerivedRubric } from "./rubricPrePass.js";
 
 export class MoaRunner implements SwarmRunner {
@@ -700,6 +701,22 @@ export class MoaRunner implements SwarmRunner {
       });
     } else {
       this.appendSystem(`Failed to write deliverable (${result.reason})`);
+    }
+
+    // T2.2 (2026-05-04): opt-in wrap-up apply phase. The aggregator
+    // (the agent who synthesized) doubles as implementer; falls back
+    // to any available agent if the aggregator slot is empty.
+    const implementer = criticAgent ?? allAgents[0] ?? null;
+    if (implementer) {
+      await maybeRunWrapUpApply({
+        cfg,
+        presetName: "moa",
+        agent: implementer,
+        manager: this.opts.manager,
+        repos: this.opts.repos,
+        emit: this.opts.emit,
+        appendSystem: (text) => this.appendSystem(text),
+      });
     }
   }
 

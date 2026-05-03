@@ -29,6 +29,7 @@ import { getAgentAddendum } from "../../../shared/src/topology.js";
 import { describeSdkError } from "./sdkError.js";
 import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
 import { writeDeliverable, runQualityPasses } from "./deliverable.js";
+import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
 import { deriveRubric, type DerivedRubric } from "./rubricPrePass.js";
 import {
   buildCouncilPositionsSection,
@@ -499,6 +500,25 @@ export class CouncilRunner implements SwarmRunner {
       });
     } else {
       this.appendSystem(`Failed to write deliverable (${result.reason})`);
+    }
+
+    // T2.2 (2026-05-04): opt-in wrap-up apply phase. When
+    // cfg.executeNextAction is set, fire one worker prompt against the
+    // top extracted next-action and apply hunks via the baseline path.
+    // Council's lead (agent-1) doubles as the implementer here so we
+    // don't need to spawn a new agent. Best-effort; any failure is
+    // logged via appendSystem and doesn't block the rest of the
+    // close-out.
+    if (lead) {
+      await maybeRunWrapUpApply({
+        cfg,
+        presetName: "council",
+        agent: lead,
+        manager: this.opts.manager,
+        repos: this.opts.repos,
+        emit: this.opts.emit,
+        appendSystem: (text) => this.appendSystem(text),
+      });
     }
   }
 

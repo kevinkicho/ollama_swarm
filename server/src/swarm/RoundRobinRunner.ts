@@ -30,6 +30,7 @@ import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import { getAgentAddendum } from "../../../shared/src/topology.js";
 import { describeSdkError } from "./sdkError.js";
 import { writeDeliverableAndEmit } from "./deliverable.js";
+import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
 import { buildRoleDiffDeliverableSections } from "./roleDiffDeliverable.js";
 import {
   readDirective,
@@ -348,6 +349,20 @@ export class RoundRobinRunner implements SwarmRunner {
             },
             { transcript: this.transcript, emit: this.opts.emit },
           );
+          // T2.2 (2026-05-04): opt-in wrap-up apply phase for plain
+          // round-robin. Lead (agent-1) doubles as implementer.
+          const lead = this.opts.manager.list().find((a) => a.index === 1);
+          if (lead) {
+            await maybeRunWrapUpApply({
+              cfg,
+              presetName: "round-robin",
+              agent: lead,
+              manager: this.opts.manager,
+              repos: this.opts.repos,
+              emit: this.opts.emit,
+              appendSystem: (text) => this.appendSystem(text),
+            });
+          }
         } catch (err) {
           this.appendSystem(
             `[T1.1] Round-robin deliverable write failed (${err instanceof Error ? err.message : String(err)}); transcript still has the synthesis bubble.`,
@@ -389,6 +404,20 @@ export class RoundRobinRunner implements SwarmRunner {
             },
             { transcript: this.transcript, emit: this.opts.emit },
           );
+          // T2.2 (2026-05-04): opt-in wrap-up apply phase for role-diff.
+          // Synthesis lead (agent-1) doubles as implementer.
+          const lead = this.opts.manager.list().find((a) => a.index === 1);
+          if (lead) {
+            await maybeRunWrapUpApply({
+              cfg,
+              presetName: "role-diff",
+              agent: lead,
+              manager: this.opts.manager,
+              repos: this.opts.repos,
+              emit: this.opts.emit,
+              appendSystem: (text) => this.appendSystem(text),
+            });
+          }
         } catch (err) {
           this.appendSystem(
             `[role-diff #4] Deliverable write failed (${err instanceof Error ? err.message : String(err)}); transcript still has the synthesis bubble.`,

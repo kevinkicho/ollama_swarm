@@ -313,15 +313,27 @@ export interface RunConfig {
   moaProposerModel?: string;
   moaAggregatorModel?: string;
   /**
-   * Task #102: opt-in post-verdict "build" round for debate-judge.
-   * After the JUDGE returns a verdict with confidence ≥ medium and a
-   * non-tie winner, the same 3 agents pivot to: PRO=implementer
-   * (file-edits to action the verdict's nextAction), CON=reviewer
-   * (verifies + flags issues), JUDGE=signoff. Switches the per-turn
-   * agentName from "swarm-read" to "swarm" so file-edit tools become
-   * available. Default off — preserves the discussion-only character
-   * of debate-judge for users who don't want the swarm to write.
-   * Debate-judge-only; ignored by other presets.
+   * Task #102 + T2.2 (2026-05-04): opt-in wrap-up apply phase.
+   *
+   * **Debate-judge** (Task #102 original use): post-verdict "build"
+   * round. After JUDGE returns a verdict with confidence ≥ medium and
+   * a non-tie winner, the same 3 agents pivot to: PRO=implementer,
+   * CON=reviewer, JUDGE=signoff. Switches the per-turn agentName from
+   * "swarm-read" to "swarm".
+   *
+   * **All other discussion presets** (T2.2): after the deliverable +
+   * next-actions JSON land, the lead agent fires ONE single-shot
+   * worker prompt against the synthesized top action and applies the
+   * resulting hunks via the same baseline apply path
+   * (parseWorkerResponse → applyBaselineHunks → git commit). Best-
+   * effort: parse failure / 0-hunks / conflict surface as a system
+   * bubble + WrapUpApplyResult, the run stays in its terminal phase.
+   *
+   * Default OFF — preserves the discussion-only character of every
+   * preset for users who don't want the swarm to write. Stigmergy
+   * ignores the flag (exploration is repo-driven, not action-driven).
+   * Blackboard ignores it (already write-capable natively). Baseline
+   * ignores it (already does single-shot apply natively).
    */
   executeNextAction?: boolean;
   /**

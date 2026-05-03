@@ -50,6 +50,7 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
 import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
+import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
 import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import {
@@ -499,6 +500,20 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
       },
       { transcript: this.transcript, emit: this.opts.emit },
     );
+
+    // T2.2 (2026-05-04): opt-in wrap-up apply phase. Top orchestrator
+    // (agent-1) doubles as implementer.
+    if (orch) {
+      await maybeRunWrapUpApply({
+        cfg,
+        presetName: "orchestrator-worker-deep",
+        agent: orch,
+        manager: this.opts.manager,
+        repos: this.opts.repos,
+        emit: this.opts.emit,
+        appendSystem: (text) => this.appendSystem(text),
+      });
+    }
   }
 
   // Phases 2, 3, 4 for one mid-lead's subtree. Runs MID-PLAN to break

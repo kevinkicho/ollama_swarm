@@ -14,6 +14,7 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
 import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
+import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildSeedSummary } from "./runSummary.js";
 import { discussionWriteSummary } from "./discussionWriteSummary.js";
@@ -415,6 +416,20 @@ export class MapReduceRunner implements SwarmRunner {
       },
       { transcript: this.transcript, emit: this.opts.emit },
     );
+
+    // T2.2 (2026-05-04): opt-in wrap-up apply phase. Reducer (agent-1)
+    // doubles as implementer.
+    if (reducer) {
+      await maybeRunWrapUpApply({
+        cfg,
+        presetName: "map-reduce",
+        agent: reducer,
+        manager: this.opts.manager,
+        repos: this.opts.repos,
+        emit: this.opts.emit,
+        appendSystem: (text) => this.appendSystem(text),
+      });
+    }
   }
 
   // Unit 33: shared summary writer pattern — see RoundRobinRunner.

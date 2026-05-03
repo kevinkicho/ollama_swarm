@@ -340,7 +340,10 @@ export async function applyBaselineHunks(input: {
 // allow-set for parseWorkerResponse so a hallucinated /etc/passwd
 // doesn't sneak through. Mirrors RepoService.listRepoFiles but
 // without the maxFiles cap (the baseline can target any repo file).
-async function collectAllFiles(clonePath: string): Promise<string[]> {
+//
+// T2.1 (2026-05-04): exported so wrapUpApplyPhase.ts can reuse it
+// without duplicating the BFS logic.
+export async function collectAllFiles(clonePath: string): Promise<string[]> {
   const out: string[] = [];
   const queue: string[] = [""];
   while (queue.length > 0 && out.length < 5000) {
