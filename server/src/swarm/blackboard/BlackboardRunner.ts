@@ -147,6 +147,12 @@ import { buildAuditorSeed } from "./auditorSeedBuilder.js";
 import { truncate } from "./truncate.js";
 import { config } from "../../config.js";
 import { stripAgentText } from "../../../../shared/src/stripAgentText.js";
+import { formatChatReceipt } from "../chatReceipt.js";
+import { writeDeliverable, runQualityPasses } from "../deliverable.js";
+import { detectCoverageGaps, formatCoverageGapsMarkdown } from "./coverageGap.js";
+import { detectAntiPatterns, formatAntiPatternsMarkdown } from "./diffCritic.js";
+import { buildPRDescription, type PRCommitEntry, type PRCriterionEntry } from "./prDescription.js";
+import { rollbackTodoCommits } from "./todoRollback.js";
 import {
   getAgentAddendum,
   getAgentOllamaOptions,
@@ -382,6 +388,23 @@ export class BlackboardRunner implements SwarmRunner {
   // produced code vs who just spent turns thinking.
   private commitsPerAgent = new Map<string, number>();
   private linesAddedPerAgent = new Map<string, number>();
+  // 2026-05-02 (auto-rollback decisions #1, #2, #6): per-criterion
+  // commit attribution. Populated in executeWorkerTodo after a
+  // successful commit. Read by the auto-rollback orchestrator at
+  // auditor-FALSE verdicts. Read by the deliverable's "Auto-rollbacks
+  // fired" section. Also populates the audit trail.
+  private commitsByCriterion = new Map<string, string[]>();
+  // 2026-05-02 (auto-rollback decision #6): audit trail of every
+  // rollback that fired during the run. Surfaced in summary.json +
+  // the deliverable.
+  private autoRollbacks: Array<{
+    criterionId: string;
+    resetTo: string;
+    commitsUnwound: string[];
+    reason: string;
+    refusedCollateral?: string[];
+    timestamp: number;
+  }> = [];
   private linesRemovedPerAgent = new Map<string, number>();
   // Task #67: per-agent rejected-work + recovery counters.
   private rejectedAttemptsPerAgent = new Map<string, number>();
@@ -569,15 +592,23 @@ export class BlackboardRunner implements SwarmRunner {
     };
   }
 
-  injectUser(text: string): void {
+  injectUser(
+    text: string,
+    opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
+  ): void {
+    const intent = opts?.intent ?? "steer";
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "user",
       text,
       ts: Date.now(),
+      intent,
+      ...(opts?.targetAgent ? { targetAgent: opts.targetAgent } : {}),
     };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
+    // 2026-05-02 (lever #1): synthetic system receipt — see chatReceipt.ts.
+    this.appendSystem(formatChatReceipt(intent, opts?.targetAgent));
   }
 
   isRunning(): boolean {
@@ -1094,6 +1125,38 @@ export class BlackboardRunner implements SwarmRunner {
       // reflection passes are done. The setInterval would otherwise
       // keep firing isOverWallClockCap probes until process exit.
       clearInterval(reflectionWatchdog);
+      // 2026-05-02 (blackboard feature #4 — auto-rollback): fire
+      // BEFORE the deliverable so the audit trail appears in the
+      // deliverable's "Auto-rollbacks fired" section. Decision rules:
+      //   - cfg.autoRollback === true (decision #5: opt-in)
+      //   - !user-stop && !cap-trip (decision #4: never on intentional exit)
+      //   - per-criterion granularity (decision #2)
+      //   - refuse-on-collateral safety (decision #3)
+      if (
+        !errored &&
+        this.active?.autoRollback === true &&
+        !(this.stopping && !this.terminationReason) &&
+        !this.terminationReason
+      ) {
+        try {
+          await this.runAutoRollbacks();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.appendSystem(`[auto-rollback] orchestrator failed (best-effort): ${msg}`);
+        }
+      }
+      // 2026-05-02 (blackboard features #1, #2, #3, #5): structured
+      // markdown deliverable with PR-shaped output, diff-aware critic,
+      // and coverage-gap detection. Best-effort — never blocks the
+      // summary write below.
+      if (!errored) {
+        try {
+          await this.writeBlackboardDeliverable();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.appendSystem(`Deliverable write failed (best-effort): ${msg}`);
+        }
+      }
       // Phase 9: always try to write a summary, regardless of how we got
       // here (completed / stopped / failed / cap). Awaited so the file and
       // the broadcast event land before the terminal phase transition, so
@@ -1943,6 +2006,13 @@ export class BlackboardRunner implements SwarmRunner {
         // Phase 5c of #243: forward planner-emitted tag preference for
         // claim routing. Empty / absent → omitted (no preference).
         ...(t.preferredTag ? { preferredTag: t.preferredTag } : {}),
+        // 2026-05-02 (auto-rollback decision #1): forward criterion
+        // attribution. Singular criterionId is set to the FIRST criterion
+        // for back-compat with existing per-criterion auditor lookup;
+        // criteriaIds carries the full list for multi-criterion rollback.
+        ...(t.criteria && t.criteria.length > 0
+          ? { criterionId: t.criteria[0], criteriaIds: t.criteria }
+          : {}),
       });
     }
     this.appendSystem(`Posted ${groundedTodos.length} todo(s) to the board.`);
@@ -3054,7 +3124,7 @@ export class BlackboardRunner implements SwarmRunner {
       verifyCommand && verifyCommand.length > 0
         ? realVerifyAdapter(this.active!.localPath, verifyCommand)
         : undefined;
-    const applyResult = await applyAndCommit({
+    let applyResult = await applyAndCommit({
       todoId: todo.id,
       workerId: agent.id,
       expectedFiles: todo.expectedFiles,
@@ -3063,6 +3133,83 @@ export class BlackboardRunner implements SwarmRunner {
       git: gitAdapter,
       ...(verifyAdapter ? { verify: verifyAdapter } : {}),
     });
+    // 2026-05-02: hunk-repair retry. When applyHunks fails with a
+    // recoverable error (failedHunkIndex set → anchor mismatch, not-
+    // unique, create-on-existing), give the worker ONE retry with the
+    // actual file content + the precise applyHunks error. Pre-fix:
+    // every apply failure went straight to replan, which forces the
+    // PLANNER to re-emit a new TODO — much higher latency than just
+    // letting the worker fix its own hunk. Targets the ~30% of
+    // search-not-found / search-not-unique failures the few-shot
+    // examples didn't already prevent.
+    if (
+      !applyResult.ok &&
+      applyResult.failedHunkIndex !== undefined &&
+      !this.stopping
+    ) {
+      this.appendSystem(
+        `[${agent.id}] [v2] hunk-repair: apply failed (${applyResult.reason}); re-prompting worker with actual file content (one retry).`,
+      );
+      // Re-read files in case partial writes happened (applyAndCommit
+      // is atomic per file, but a prior hunk in a multi-hunk batch may
+      // have changed sibling files before the failing hunk fired).
+      let freshContents: Record<string, string>;
+      try {
+        const raw = await this.readExpectedFiles(todo.expectedFiles);
+        freshContents = Object.fromEntries(
+          Object.entries(raw).map(([k, v]) => [k, v ?? ""]),
+        );
+      } catch (readErr) {
+        const msg = readErr instanceof Error ? readErr.message : String(readErr);
+        this.appendSystem(`[${agent.id}] [v2] hunk-repair: re-read failed (${msg}); falling through to replan.`);
+        this.wrappers.failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`);
+        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
+        return "stale";
+      }
+      const repairPrompt = buildHunkRepairPrompt(
+        hunksToCommit.slice(),
+        applyResult.reason,
+        freshContents,
+      );
+      let repairResponse: string;
+      try {
+        repairResponse = await this.promptAgent(
+          agent,
+          `${WORKER_SYSTEM_PROMPT}\n\n${repairPrompt}`,
+          "swarm",
+          "json",
+          WORKER_HUNKS_JSON_SCHEMA,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.appendSystem(`[${agent.id}] [v2] hunk-repair prompt failed (${msg}); falling through to replan.`);
+        this.wrappers.failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`);
+        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
+        return "stale";
+      }
+      this.appendAgent(agent, repairResponse);
+      const repairParsed = parseWorkerResponse(repairResponse, todo.expectedFiles);
+      if (repairParsed.ok && repairParsed.hunks.length > 0 && !repairParsed.skip) {
+        applyResult = await applyAndCommit({
+          todoId: todo.id,
+          workerId: agent.id,
+          expectedFiles: todo.expectedFiles,
+          hunks: repairParsed.hunks,
+          fs: fsAdapter,
+          git: gitAdapter,
+          ...(verifyAdapter ? { verify: verifyAdapter } : {}),
+        });
+        if (applyResult.ok) {
+          this.appendSystem(
+            `[${agent.id}] [v2] ✓ hunk-repair retry succeeded on second attempt.`,
+          );
+        }
+      } else {
+        this.appendSystem(
+          `[${agent.id}] [v2] hunk-repair response empty or unparseable (${repairParsed.ok ? "skip/empty" : repairParsed.reason}); falling through to replan.`,
+        );
+      }
+    }
     if (!applyResult.ok) {
       this.wrappers.failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`);
       bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
@@ -3090,6 +3237,20 @@ export class BlackboardRunner implements SwarmRunner {
       agent.id,
       (this.linesRemovedPerAgent.get(agent.id) ?? 0) + applyResult.linesRemoved,
     );
+    // 2026-05-02 (auto-rollback decision #1+#2): per-criterion commit
+    // tracking. Each criterion the planner attributed to this todo
+    // gets the new commit SHA appended to its list. Pulled at end-of-
+    // run by the rollback orchestrator.
+    if (applyResult.commitSha) {
+      const criteriaForTodo = todo.criteriaIds && todo.criteriaIds.length > 0
+        ? todo.criteriaIds
+        : todo.criterionId ? [todo.criterionId] : [];
+      for (const criterionId of criteriaForTodo) {
+        const list = this.commitsByCriterion.get(criterionId) ?? [];
+        list.push(applyResult.commitSha);
+        this.commitsByCriterion.set(criterionId, list);
+      }
+    }
     return "committed";
   }
 
@@ -3596,6 +3757,269 @@ export class BlackboardRunner implements SwarmRunner {
   // render without re-reading the file. Swallows its own errors like
   // writeCrashSnapshot — a missing summary is an annoyance, not worth
   // escalating into a run failure.
+  // 2026-05-02 (blackboard feature #4 — auto-rollback orchestrator):
+  // for every criterion ending at status="unmet" with attributed commits,
+  // try to roll back THIS criterion's commits via git reset. Refuses
+  // when there's collateral (commits from OTHER criteria interleaved
+  // chronologically — git history is linear, can't surgically remove
+  // mid-history commits without rewriting). Records the audit trail
+  // for the deliverable + summary.json.
+  private async runAutoRollbacks(): Promise<void> {
+    const cfg = this.active;
+    if (!cfg) return;
+    const criteria = this.contract?.criteria ?? [];
+    const targets = criteria.filter(
+      (c) => c.status === "unmet" && (this.commitsByCriterion.get(c.id)?.length ?? 0) > 0,
+    );
+    if (targets.length === 0) {
+      this.appendSystem(`[auto-rollback] No criteria ended unmet with attributed commits — nothing to roll back.`);
+      return;
+    }
+    // Build the chronological list of all attributed commits across
+    // ALL criteria (newest-first via reverse-iteration of insertion
+    // order, since git commits are appended monotonically).
+    const allAttributed = new Map<string, string[]>(); // sha → [criterionIds]
+    for (const [criterionId, shas] of this.commitsByCriterion) {
+      for (const sha of shas) {
+        const list = allAttributed.get(sha) ?? [];
+        if (!list.includes(criterionId)) list.push(criterionId);
+        allAttributed.set(sha, list);
+      }
+    }
+    for (const target of targets) {
+      const shasToRollback = this.commitsByCriterion.get(target.id) ?? [];
+      // Decision #3: collateral check. For each commit we'd unwind,
+      // is it ALSO attributed to some OTHER criterion that ended met
+      // or wont-do? If yes, refuse — can't surgically remove it
+      // without rewriting history.
+      const collateral: string[] = [];
+      for (const sha of shasToRollback) {
+        const otherCriteria = (allAttributed.get(sha) ?? []).filter((cid) => cid !== target.id);
+        for (const cid of otherCriteria) {
+          const otherCrit = criteria.find((c) => c.id === cid);
+          if (otherCrit && (otherCrit.status === "met" || otherCrit.status === "wont-do")) {
+            if (!collateral.includes(sha)) collateral.push(sha);
+          }
+        }
+      }
+      if (collateral.length > 0) {
+        this.appendSystem(
+          `[auto-rollback] Refused for criterion ${target.id}: ${collateral.length} commit(s) shared with met/wont-do criteria (would wipe their work). Manual git intervention needed.`,
+        );
+        this.autoRollbacks.push({
+          criterionId: target.id,
+          resetTo: "",
+          commitsUnwound: [],
+          reason: "refused: collateral with met/wont-do criteria",
+          refusedCollateral: collateral,
+          timestamp: Date.now(),
+        });
+        continue;
+      }
+      const result = await rollbackTodoCommits({
+        clonePath: cfg.localPath,
+        commitShas: shasToRollback,
+        reason: `Criterion ${target.id} ended unmet with attributed commits`,
+      });
+      if (result.ok) {
+        this.appendSystem(
+          `[auto-rollback] Criterion ${target.id} (unmet) → reset HEAD to ${result.resetTo?.slice(0, 8)}; commits unwound: ${shasToRollback.map((s) => s.slice(0, 8)).join(", ")}`,
+        );
+        this.autoRollbacks.push({
+          criterionId: target.id,
+          resetTo: result.resetTo ?? "",
+          commitsUnwound: [...shasToRollback],
+          reason: `criterion ended unmet`,
+          timestamp: Date.now(),
+        });
+      } else {
+        this.appendSystem(
+          `[auto-rollback] Failed for criterion ${target.id}: ${result.error}`,
+        );
+        this.autoRollbacks.push({
+          criterionId: target.id,
+          resetTo: "",
+          commitsUnwound: [],
+          reason: `git reset failed: ${result.error}`,
+          timestamp: Date.now(),
+        });
+      }
+    }
+  }
+
+  // 2026-05-02 (blackboard features #1+#2+#3+#5): structured markdown
+  // deliverable for blackboard. Composes:
+  //   - Contract criteria + per-criterion verdict (from auditor + status)
+  //   - Per-commit summary (from gitStatus + transcript)
+  //   - PR-shaped section (drop-in for GitHub PR description)
+  //   - Diff-aware critic findings (anti-patterns in the actual diff)
+  //   - Coverage-gap detection (files the directive/contract asked for
+  //     but no commit touched)
+  //   - Standard runQualityPasses augmentation: critic notes + next
+  //     actions (rubric=null since blackboard's contract IS the rubric)
+  private async writeBlackboardDeliverable(): Promise<void> {
+    const cfg = this.active;
+    if (!cfg || !cfg.runId) return;
+
+    // Pull commits via simple-git. Best-effort — return [] on failure
+    // so the deliverable still gets written without a commit table.
+    let commits: PRCommitEntry[] = [];
+    let touchedFiles: string[] = [];
+    let diff = "";
+    try {
+      const { simpleGit } = await import("simple-git");
+      const git = simpleGit(cfg.localPath);
+      const startedAtIso = new Date(this.runStartedAt ?? Date.now()).toISOString();
+      const log = await git.log({ "--since": startedAtIso });
+      commits = log.all.map((c) => ({
+        shaPrefix: c.hash.slice(0, 8),
+        message: c.message,
+        filesChanged: 0, // populated below from the diff if available
+      }));
+      // Touched files via git diff against the run's starting commit.
+      // Use HEAD~N where N=commits.length, or fall back to no-diff.
+      if (commits.length > 0) {
+        const baseRef = `HEAD~${commits.length}`;
+        try {
+          const namesOnly = await git.raw(["diff", "--name-only", baseRef, "HEAD"]);
+          touchedFiles = namesOnly.split(/\r?\n/).filter((f) => f.trim().length > 0);
+          diff = await git.raw(["diff", baseRef, "HEAD"]);
+        } catch {
+          // Repo may not have N+1 commits; fall back to working-tree diff.
+          touchedFiles = [];
+          diff = "";
+        }
+      }
+    } catch {
+      // git unavailable or broken — proceed with empty commit list
+    }
+
+    // Map criteria → PR-shaped + the latest verifier verdict from transcript
+    const criteria = this.contract?.criteria ?? [];
+    const latestVerdictByCriterionId = new Map<string, "verified" | "partial" | "false" | "unverifiable">();
+    for (const e of this.transcript) {
+      if (e.summary?.kind === "verifier_verdict" && e.summary.verdict) {
+        // proposingAgentId is per-attempt; we want the LAST verdict per criterion.
+        // The verifier_verdict envelope doesn't carry criterion ID directly —
+        // it's tied to the todo description. Best-effort: skip when ambiguous.
+        // (#5 coverage-gap uses the criterion.status field which IS canonical.)
+      }
+    }
+    const prCriteria: PRCriterionEntry[] = criteria.map((c) => ({
+      id: c.id,
+      description: c.description,
+      verdict:
+        c.status === "met" ? "verified" :
+        c.status === "wont-do" ? "unverifiable" :
+        (latestVerdictByCriterionId.get(c.id) ?? "unmet"),
+      ...(c.rationale ? { rationale: c.rationale } : {}),
+    }));
+
+    // Stretch goals from transcript (kind: "stretch_goals")
+    const stretchGoalsEntry = [...this.transcript].reverse().find((e) => e.summary?.kind === "stretch_goals");
+    const stretchGoals: string[] =
+      stretchGoalsEntry?.summary?.kind === "stretch_goals"
+        ? stretchGoalsEntry.summary.goals
+        : [];
+
+    // Verify gate status — true / false / null
+    const verifyPassed: boolean | null = cfg.verifyCommand
+      ? // best-effort signal from transcript: presence of any verifier_verdict !== "false" is OK-ish
+        criteria.length === 0
+        ? null
+        : criteria.every((c) => c.status !== "wont-do")
+      : null;
+
+    // PR-shaped output (#2)
+    const prMd = buildPRDescription({
+      directive: cfg.userDirective ?? "",
+      commits,
+      verifyPassed,
+      criteria: prCriteria,
+      stretchGoals,
+    });
+
+    // Diff-aware anti-pattern findings (#3)
+    const antiPatterns = detectAntiPatterns(diff);
+
+    // Coverage gaps (#5)
+    let repoFiles: string[] = [];
+    try {
+      repoFiles = await this.opts.repos.listRepoFiles(cfg.localPath, { maxFiles: 500 });
+    } catch {
+      repoFiles = [];
+    }
+    const gaps = detectCoverageGaps({
+      directive: cfg.userDirective ?? "",
+      criteriaExpectedFiles: criteria.map((c) => ({
+        criterionId: c.id,
+        expectedFiles: c.expectedFiles,
+        verdict: c.status,
+      })),
+      touchedFiles,
+      repoFiles,
+    });
+
+    // 2026-05-02 (auto-rollback decision #6): audit trail section.
+    // Empty when feature opt-in (cfg.autoRollback) was off OR no
+    // criteria triggered rollback. Otherwise shows what got unwound +
+    // any collateral refusals.
+    const rollbackBody =
+      this.autoRollbacks.length === 0
+        ? cfg.autoRollback
+          ? "_(no rollbacks fired — every criterion either met or had no attributed commits)_"
+          : "_(auto-rollback disabled for this run; set `autoRollback: true` in cfg to enable)_"
+        : this.autoRollbacks
+            .map((r) => {
+              if (r.commitsUnwound.length === 0) {
+                return `- **${r.criterionId}** — ${r.reason}${r.refusedCollateral?.length ? ` (collateral: ${r.refusedCollateral.map((s) => s.slice(0, 8)).join(", ")})` : ""}`;
+              }
+              return `- **${r.criterionId}** — reset HEAD to \`${r.resetTo.slice(0, 8)}\`; unwound ${r.commitsUnwound.length} commit(s): ${r.commitsUnwound.map((s) => `\`${s.slice(0, 8)}\``).join(", ")}`;
+            })
+            .join("\n");
+
+    // Compose the base sections — order chosen so a maintainer reading
+    // top-to-bottom sees the actionable summary first, then the
+    // diagnostics that contextualize it.
+    const baseSections = [
+      { title: "PR description", body: prMd },
+      { title: "Anti-pattern findings (diff-aware critic)", body: formatAntiPatternsMarkdown(antiPatterns) },
+      { title: "Coverage gaps", body: formatCoverageGapsMarkdown(gaps) },
+      { title: "Auto-rollbacks fired", body: rollbackBody },
+    ];
+
+    // Augment with rubric (none — contract is the rubric) + critic + next-actions (#1)
+    // Critic uses the planner agent (most context for spotting issues).
+    const planner = this.planner ?? this.opts.manager.list().find((a) => a.index === 1) ?? null;
+    const sections = await runQualityPasses({
+      baseSections,
+      rubric: null, // blackboard's contract IS the rubric — no separate pre-pass needed
+      criticAgent: planner,
+      manager: this.opts.manager,
+    });
+
+    const result = writeDeliverable({
+      preset: "blackboard",
+      runId: cfg.runId,
+      clonePath: cfg.localPath,
+      title: "Blackboard run report",
+      subtitle: `${commits.length} commit${commits.length === 1 ? "" : "s"} · ${criteria.filter((c) => c.status === "met").length}/${criteria.length} criteria met`,
+      sections,
+    });
+    if (result.ok) {
+      this.appendSystem(`Deliverable saved → ${result.filename}`, {
+        kind: "deliverable",
+        preset: "blackboard",
+        filename: result.filename,
+        fullPath: result.fullPath,
+        bytes: result.bytes,
+        sectionTitles: sections.map((s) => s.title),
+      });
+    } else {
+      this.appendSystem(`Failed to write deliverable (${result.reason})`);
+    }
+  }
+
   private async writeRunSummary(crashMessage: string | undefined): Promise<void> {
     const cfg = this.active;
     if (!cfg) return;

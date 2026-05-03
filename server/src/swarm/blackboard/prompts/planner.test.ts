@@ -76,10 +76,42 @@ describe("parsePlannerResponse — rejections", () => {
     if (!r.ok) assert.match(r.reason, /JSON parse failed/);
   });
 
-  it("rejects a top-level object instead of array", () => {
-    const r = parsePlannerResponse('{"description":"a","expectedFiles":["x.ts"]}');
+  it("rejects a top-level object that doesn't look like a todo (#121)", () => {
+    // 2026-05-01 (#121): leniency only kicks in when the object has a
+    // "description" field. A bare { foo: 1 } is still rejected so we
+    // don't accept arbitrary garbage.
+    const r = parsePlannerResponse('{"foo":1,"bar":2}');
     assert.equal(r.ok, false);
     if (!r.ok) assert.match(r.reason, /top-level JSON array/);
+  });
+
+  it("auto-wraps a single todo-shaped object as [todo] (#121)", () => {
+    // Live observed 2026-05-01 PM: planner emitted a perfectly valid
+    // single todo, parser rejected with "expected top-level JSON array",
+    // repair prompt fired, repair returned [] → run no-progress'd. Fix:
+    // when the object has a "description" field, wrap it for the planner.
+    const r = parsePlannerResponse('{"description":"Read src/log.js","expectedFiles":["src/log.js"]}');
+    assert.equal(r.ok, true);
+    if (r.ok) {
+      assert.equal(r.todos.length, 1);
+      assert.equal(r.todos[0].description, "Read src/log.js");
+      assert.deepEqual(r.todos[0].expectedFiles, ["src/log.js"]);
+    }
+  });
+
+  it("auto-wrap still validates the object — bad single todos land in dropped (#121)", () => {
+    // Wrapping just gives the per-item walk a chance to validate. A
+    // single-item object missing required fields gets dropped (not
+    // accepted blindly).
+    const r = parsePlannerResponse('{"description":"missing expectedFiles"}');
+    // Per-item validator drops it for missing expectedFiles → 0 valid
+    // todos + 1 dropped entry. Result is technically `ok` (we parsed
+    // something), but no todos → planner-empty handling fires upstream.
+    assert.equal(r.ok, true);
+    if (r.ok) {
+      assert.equal(r.todos.length, 0);
+      assert.equal(r.dropped.length, 1);
+    }
   });
 
   it("rejects when there are more than 20 valid todos", () => {

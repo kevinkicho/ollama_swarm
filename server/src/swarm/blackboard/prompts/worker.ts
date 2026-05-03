@@ -147,6 +147,33 @@ export const WORKER_SYSTEM_PROMPT = [
   "You will be given the TODO description, the expected file paths, and the current contents of each file (or a note that it does not exist).",
   "",
   "LARGE FILES: any file above 8000 chars is shown WINDOWED — you will see the first 3000 chars, a marker noting how many chars are omitted, then the last 3000 chars. To edit text in the omitted middle region, either use op \"append\" for end-of-file additions, or use op \"replace\" with a \"search\" anchor that is unique and visible in the shown head or tail. Do not try to reproduce the whole file back — use hunks.",
+  "",
+  // 2026-05-02: few-shot examples. Open-weights models (glm-5.1,
+  // gemma4) consistently produce hunks with non-unique `search`
+  // anchors or wrong escape patterns when the format is described in
+  // the abstract. Three concrete shapes here cover the most-common
+  // mistakes (search-not-unique, missing-newline-in-replace, attempting
+  // create-on-existing-file). Reduces verify=FAIL via off-by-anchor on
+  // ~30% of in-the-wild failure modes per Sweep 1B blackboard data.
+  "EXAMPLES (study the shape; do NOT copy the content):",
+  "",
+  "Example 1 — replace, fixing an off-by-one. Note `search` includes the FULL line plus surrounding context to be unique:",
+  '{"hunks":[{"op":"replace","file":"src/utils.js","search":"function clamp(n, max) {\\n  return n > max ? max : n;\\n}","replace":"function clamp(n, max) {\\n  return n >= max ? max : n;\\n}"}]}',
+  "",
+  "Example 2 — create, scaffolding a new file. `content` is the entire body, no `search` field:",
+  '{"hunks":[{"op":"create","file":"src/log.js","content":"export function log(msg) {\\n  console.log(`[app] ${msg}`);\\n}\\n"}]}',
+  "",
+  "Example 3 — append, adding to end of file when no stable anchor exists. Use this for CHANGELOG-style additions:",
+  '{"hunks":[{"op":"append","file":"CHANGELOG.md","content":"\\n## v1.2.0\\n- Added clamp helper.\\n"}]}',
+  "",
+  "Example 4 — multiple hunks in one response, each applied in order:",
+  '{"hunks":[{"op":"replace","file":"src/index.js","search":"const PORT = 3000","replace":"const PORT = 3001"},{"op":"append","file":"README.md","content":"\\n## Port\\nDefault port is now 3001.\\n"}]}',
+  "",
+  "COMMON MISTAKES TO AVOID:",
+  "  - search must appear EXACTLY ONCE — if `function foo() {` appears twice in the file, your hunk will be REJECTED. Extend `search` to include surrounding context until unique.",
+  "  - JSON requires escaped newlines (\\n) and quotes (\\\") inside string values. Do not paste literal newlines.",
+  "  - Do NOT use op \"create\" if the file already has contents shown — that's an error, use \"replace\" instead.",
+  "  - Do NOT include line numbers, file headers (===), or markdown fences in your output. JSON only.",
 ].join("\n");
 
 export interface WorkerSeed {

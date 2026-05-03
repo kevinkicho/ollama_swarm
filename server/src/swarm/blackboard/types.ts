@@ -17,6 +17,13 @@ export interface Todo {
   // Unused in Phase 11a behavior — only plumbed through postTodo so later phases
   // can wire the auditor without another type migration.
   criterionId?: string;
+  // 2026-05-02 (auto-rollback decision #1): explicit MULTI-criterion
+  // attribution from the planner. A todo can serve multiple criteria;
+  // the singular `criterionId` above is the legacy single-link field
+  // that pre-dated multi-attribution. When both are set, criteriaIds
+  // is the source of truth + criterionId is its first element.
+  // Required for per-criterion auto-rollback (decision #2).
+  criteriaIds?: string[];
   // Unit 44b: optional anchor strings the planner expects to find in
   // expectedFiles. The runner pre-resolves them before each worker
   // claim and includes ±25 lines of context around each match in the

@@ -293,6 +293,44 @@ describe("WORKER_SYSTEM_PROMPT — teaches the windowed view", () => {
   });
 });
 
+// 2026-05-02: few-shot hunk examples added to lift open-weights worker
+// reliability on hunk-format edge cases (Sweep 1B blackboard data showed
+// ~30% of failures were search-not-unique or escaping mistakes).
+describe("WORKER_SYSTEM_PROMPT — few-shot examples", () => {
+  it("includes a labeled EXAMPLES section", () => {
+    assert.match(WORKER_SYSTEM_PROMPT, /EXAMPLES/);
+  });
+
+  it("shows a replace example with escaped newlines (\\n) inside the JSON value", () => {
+    // The most common worker mistake is pasting literal newlines into
+    // string values, which breaks JSON.parse. The replace example must
+    // demonstrate the proper \n escape so the model has a concrete
+    // pattern to copy.
+    assert.match(WORKER_SYSTEM_PROMPT, /"op":"replace"[^}]*\\n/);
+  });
+
+  it("shows a create example with content but no search field", () => {
+    assert.match(WORKER_SYSTEM_PROMPT, /"op":"create"[^}]*"content"/);
+  });
+
+  it("shows an append example", () => {
+    assert.match(WORKER_SYSTEM_PROMPT, /"op":"append"/);
+  });
+
+  it("shows a multi-hunk example so model knows hunks: [...] is an array", () => {
+    // The 4th example must include >1 hunk in the same hunks array
+    // (replace + append) so the model sees the array shape, not just N
+    // single-hunk shapes.
+    const multiHunkPattern = /"hunks":\[\{"op":"replace"[\s\S]*?\},\{"op":"append"/;
+    assert.match(WORKER_SYSTEM_PROMPT, multiHunkPattern);
+  });
+
+  it("calls out the search-not-unique mistake explicitly", () => {
+    assert.match(WORKER_SYSTEM_PROMPT, /COMMON MISTAKES/);
+    assert.match(WORKER_SYSTEM_PROMPT, /EXACTLY ONCE/);
+  });
+});
+
 // Unit 59 (59a): worker prompt accepts a roleGuidance preamble that
 // the runner injects when specializedWorkers is on.
 describe("buildWorkerUserPrompt — Unit 59 role guidance preamble", () => {

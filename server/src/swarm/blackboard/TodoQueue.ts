@@ -38,6 +38,11 @@ export interface QueuedTodo {
   reason?: string;
   /** Optional link back to a contract criterion. Mirrors Board.Todo.criterionId. */
   criterionId?: string;
+  /** 2026-05-02 (auto-rollback decision #1): full multi-criterion
+   *  attribution from the planner. When set, rollback eligibility +
+   *  per-criterion commit attribution use this list. The legacy
+   *  singular criterionId mirrors criteriaIds[0] for back-compat. */
+  criteriaIds?: readonly string[];
   /** Number of times this todo was retried after a failure. Capped per
    *  caller policy — the queue itself doesn't enforce a max. */
   retries: number;
@@ -80,6 +85,11 @@ export interface PostTodoInput {
   kind?: "hunks" | "build";
   command?: string;
   preferredTag?: string;
+  /** 2026-05-02 (auto-rollback decision #1): planner-declared multi-
+   *  criterion attribution. Stored on the queued todo so commit-time
+   *  bookkeeping can attribute the resulting commits to ALL declared
+   *  criteria (not just the first). */
+  criteriaIds?: readonly string[];
 }
 
 export class TodoQueue {
@@ -98,6 +108,9 @@ export class TodoQueue {
       status: "pending",
       criterionId: input.criterionId,
       retries: 0,
+      ...(input.criteriaIds && input.criteriaIds.length > 0
+        ? { criteriaIds: input.criteriaIds.slice() }
+        : {}),
       ...(input.expectedAnchors && input.expectedAnchors.length > 0
         ? { expectedAnchors: input.expectedAnchors.slice() }
         : {}),

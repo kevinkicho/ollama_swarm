@@ -46,6 +46,15 @@ const symbolEntry = z.string().trim().min(1).max(SYMBOL_MAX_CHARS);
 //     in the working tree. Use for TODOs that REQUIRE script execution
 //     (doc generators, codegen, formatters, type-checkers that emit
 //     fix files). Command is gated by buildCommandAllowlist.
+// 2026-05-02 (auto-rollback decision #1): explicit criterion attribution.
+// Each todo declares which contract criterion ID(s) it serves. Required
+// for per-criterion rollback (decision #2) — without this we'd have to
+// infer attribution post-hoc from expectedFiles intersection, which is
+// fragile when todos touch overlapping files. Capped at 5 because a
+// single todo serving more than that is a red flag for over-broad scope.
+const criterionIdEntry = z.string().trim().min(1).max(40);
+const CRITERIA_PER_TODO_MAX = 5;
+
 const PlannerTodoSchemaHunks = z.object({
   kind: z.literal("hunks").optional(),
   description: z.string().trim().min(1).max(500),
@@ -58,6 +67,10 @@ const PlannerTodoSchemaHunks = z.object({
   // the AgentSpec.tag schema. Runner enforces tag-routing preference;
   // schema just accepts the hint.
   preferredTag: z.string().trim().max(40).optional(),
+  // 2026-05-02: criterion attribution. Optional — back-compat for
+  // pre-tagged callers + analyses where the planner can't cleanly
+  // attribute (e.g. exploratory cleanup todos).
+  criteria: z.array(criterionIdEntry).max(CRITERIA_PER_TODO_MAX).optional(),
 });
 const PlannerTodoSchemaBuild = z.object({
   kind: z.literal("build"),
@@ -73,6 +86,8 @@ const PlannerTodoSchemaBuild = z.object({
   // Phase 5c of #243: same preferredTag hint for build TODOs (e.g.
   // a `bun run docs:api` TODO might prefer the `docs-expert` worker).
   preferredTag: z.string().trim().max(40).optional(),
+  // 2026-05-02: criterion attribution (see hunks variant above).
+  criteria: z.array(criterionIdEntry).max(CRITERIA_PER_TODO_MAX).optional(),
 });
 const PlannerTodoSchema = z.union([PlannerTodoSchemaHunks, PlannerTodoSchemaBuild]);
 
@@ -108,6 +123,14 @@ export interface PlannerTodoInput {
   // Phase 5c of #243: planner-emitted tag preference. The runner's
   // claim selector reads it; absent = no preference.
   preferredTag?: string;
+  // 2026-05-02 (auto-rollback decision #1): explicit criterion
+  // attribution. Each todo declares which contract criterion ID(s) it
+  // serves. Required for per-criterion rollback (decision #2) — without
+  // this we'd have to infer attribution post-hoc from expectedFiles
+  // intersection, which is fragile when todos touch overlapping files.
+  // Optional for back-compat; unset = no auto-rollback eligibility for
+  // this todo's commits.
+  criteria?: string[];
 }
 
 export type PlannerParseResult =
@@ -159,12 +182,31 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
       return { ok: false, reason: `JSON parse failed: ${msg}` };
     }
   }
-  if (!Array.isArray(parsed)) {
+  let items: unknown[];
+  if (Array.isArray(parsed)) {
+    items = parsed;
+  } else if (
+    // 2026-05-01 (#121): leniency — when the planner emits a single
+    // todo-shaped object (has "description" field) instead of wrapping
+    // it in [...], wrap it for them. The per-item walk below validates
+    // each entry against PlannerTodoSchema, so a malformed object just
+    // lands in `dropped` with a clean reason — no risk of accepting
+    // garbage. Avoids burning a repair turn for a model error that's
+    // clearly recoverable. Live observed: planner returned a valid
+    // one-todo object, parser rejected, repair prompt fired, repaired
+    // response was [] → run no-progress'd despite the original being
+    // usable.
+    parsed &&
+    typeof parsed === "object" &&
+    "description" in (parsed as Record<string, unknown>)
+  ) {
+    items = [parsed];
+  } else {
     return { ok: false, reason: `expected top-level JSON array, got ${typeof parsed}` };
   }
   const todos: PlannerTodoInput[] = [];
   const dropped: PlannerDropped[] = [];
-  for (const item of parsed) {
+  for (const item of items) {
     const v = PlannerTodoSchema.safeParse(item);
     if (v.success) {
       // #237: discriminated union — only one branch sets `command`.
@@ -178,6 +220,8 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
         expectedSymbols: v.data.expectedSymbols,
         // Phase 5c of #243: forward optional planner tag hint.
         ...(v.data.preferredTag ? { preferredTag: v.data.preferredTag } : {}),
+        // 2026-05-02 (auto-rollback decision #1): forward criterion attribution.
+        ...(v.data.criteria && v.data.criteria.length > 0 ? { criteria: v.data.criteria } : {}),
       });
     } else {
       const reason = v.error.issues
@@ -229,6 +273,7 @@ export const PLANNER_SYSTEM_PROMPT = [
   "11. (Task #70) For TODOs that operate on EXISTING symbols (a function, class, or named export the worker is supposed to modify or document), include `expectedSymbols`: an array of 1-4 symbol names (≤ 200 chars each) the runner will word-boundary-grep in each expectedFile BEFORE posting the todo. If any symbol is missing from every expectedFile, the runner drops the todo with a finding — saves a wasted worker round-trip. Examples: `[\"createOrchestrator\"]`, `[\"AgentManager\", \"spawnAgent\"]`. OMIT for create-new-file TODOs (file doesn't exist yet) and for whole-file rewrites. Include for: \"add JSDoc to X\", \"add null guard to Y\", \"rename Z\", \"replace inline string with constant W\". When in doubt, include — being wrong about a symbol's existence is the planner's #1 failure mode.",
   "12. (#237, 2026-04-28) BUILD-STYLE TODOS — for work that REQUIRES running a project script + committing the result (doc generators, codegen, formatters, linters with --fix, type-checkers that emit declaration files), use the build-style TODO shape: `{\"kind\": \"build\", \"description\": ...., \"expectedFiles\": [\"docs/api/index.md\"], \"command\": \"bun run docs:api\"}`. Constraints: `command` MUST start with one of {npm, npx, yarn, pnpm, bun, bunx, tsc, tsx, deno, eslint, prettier, biome, jest, vitest, mocha, make, task, just, typedoc, jsdoc, docusaurus} (the runner enforces an allowlist). NO shell metacharacters (`;`, `&&`, `||`, `|`, `>`, `<`, backticks, `$`) — chaining/piping is forbidden. expectedFiles describes paths the command WILL emit; the runner uses them for the auditor verification only. The default `kind` is `\"hunks\"` (or omitted entirely) — only mark `kind:\"build\"` when the work genuinely cannot be expressed as a search/replace patch.",
   "13. (#243, 2026-04-28) WORKER SPECIALIZATION — when the user's topology declares per-worker tags (e.g. agent #3 tagged `tests-expert`, agent #5 tagged `frontend`), the AVAILABLE WORKER TAGS section of the user message lists them. For each TODO, you MAY add an optional `preferredTag` field that names the tag of the worker who should ideally claim it (e.g. `\"preferredTag\": \"tests-expert\"` for a TODO that touches test files). Only set it when one of the listed tags clearly fits — do NOT invent tags or use a tag that no worker carries. Workers preferentially claim TODOs matching their tag; absent or no-match TODOs fall through to any available worker, so unset = no preference. When the topology has no tagged workers, this section is empty and you SHOULD NOT emit `preferredTag`.",
+  "14. (2026-05-02) CRITERION ATTRIBUTION — for each TODO that serves one or more EXIT CONTRACT criteria, include a `criteria` field listing the criterion id(s) it serves: `\"criteria\": [\"c1\", \"c3\"]`. Criterion ids appear in the EXIT CONTRACT section of the user message. Tag liberally (a TODO that contributes to a criterion even partially should list it) but honestly (don't tag criteria the TODO has no plausible relation to). Auto-rollback (when enabled by the user) uses this attribution to know which commits to unwind when a criterion comes back FALSE. Untagged TODOs have their commits preserved on rollback — explicit attribution is the contract for opt-in cleanup.",
   "",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",
 ].join("\n");
