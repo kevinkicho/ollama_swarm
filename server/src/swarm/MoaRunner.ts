@@ -982,11 +982,20 @@ export class MoaRunner implements SwarmRunner {
     this.opts.manager.markStatus(agent.id, "thinking");
     this.emitAgentState(agent, "thinking", startedAt);
     try {
+      // T-Item-MoaTools (2026-05-04): when cfg.moaProposerTools is set,
+      // promote the proposer's agentName to "swarm-read" so the
+      // provider's chat path binds read-only tools (read/grep/glob/list).
+      // Default "swarm" gives no tools — proposer relies on pre-fetched
+      // context only.
+      const proposerAgentName = this.active?.moaProposerTools
+        ? "swarm-read"
+        : "swarm";
       const res = (await promptWithRetry(agent, prompt, {
         signal: ctrl.signal,
         manager: this.opts.manager,
         formatExpect: "free",
         describeError: (e) => describeSdkError(e),
+        agentName: proposerAgentName,
       })) as { data: { parts: Array<{ type: "text"; text: string }> } };
       const raw = extractText(res) ?? "";
       const stripped = stripAgentText(raw);

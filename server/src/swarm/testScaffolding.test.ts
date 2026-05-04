@@ -172,3 +172,147 @@ describe("scaffoldTestForTopic — on-disk integration", () => {
     assert.match(out!.stubContent, /from "vitest"/);
   });
 });
+
+// T-Item-Lang (2026-05-04): Python/Rust/Go scaffolding
+describe("buildScaffold — Python/Rust/Go (T-Item-Lang)", () => {
+  it("pytest stub uses pytest.fail + module-style import", () => {
+    const out = buildScaffold("pytest", "add-bcrypt", "tests/test_add_bcrypt.py");
+    assert.match(out.stubContent, /import pytest/);
+    assert.match(out.stubContent, /def test_add_bcrypt_placeholder/);
+    assert.match(out.stubContent, /pytest\.fail/);
+    assert.equal(out.verifyCommand, "pytest -x tests/test_add_bcrypt.py");
+  });
+
+  it("unittest stub uses TestCase + self.fail", () => {
+    const out = buildScaffold("unittest", "fix-bug", "tests/test_fix_bug.py");
+    assert.match(out.stubContent, /import unittest/);
+    assert.match(out.stubContent, /class TestFixBug\(unittest\.TestCase\)/);
+    assert.match(out.stubContent, /self\.fail/);
+    assert.match(out.verifyCommand, /python -m unittest /);
+  });
+
+  it("cargo-test stub uses #[test] + panic!", () => {
+    const out = buildScaffold("cargo-test", "topic", "tests/topic_test.rs");
+    assert.match(out.stubContent, /#\[cfg\(test\)\]/);
+    assert.match(out.stubContent, /#\[test\]/);
+    assert.match(out.stubContent, /fn topic_placeholder\(\)/);
+    assert.match(out.stubContent, /panic!/);
+    assert.match(out.verifyCommand, /^cargo test --test topic_test /);
+  });
+
+  it("go-test stub uses *testing.T + t.Fatal", () => {
+    const out = buildScaffold("go-test", "fix-thing", "internal/foo/fix_thing_test.go");
+    assert.match(out.stubContent, /package foo_test/);
+    assert.match(out.stubContent, /import \(\n\t"testing"/);
+    assert.match(out.stubContent, /func TestFixThingPlaceholder/);
+    assert.match(out.stubContent, /t\.Fatal/);
+    assert.match(out.verifyCommand, /^go test -run "TestFixThingPlaceholder" \.\/internal\/foo$/);
+  });
+});
+
+describe("detectTestFramework — Python/Rust/Go (T-Item-Lang)", () => {
+  let workdir: string;
+  beforeEach(() => {
+    workdir = mkdtempSync(join(tmpdir(), "swarm-tsf-lang-"));
+  });
+  afterEach(() => rmSync(workdir, { recursive: true, force: true }));
+
+  it("pyproject.toml mentioning pytest → pytest", async () => {
+    writeFileSync(join(workdir, "pyproject.toml"), `[project]\nname = "x"\n[tool.pytest]`);
+    assert.equal(await detectTestFramework(workdir), "pytest");
+  });
+
+  it("pyproject.toml mentioning unittest → unittest", async () => {
+    writeFileSync(
+      join(workdir, "pyproject.toml"),
+      `[project]\nname = "x"\ndescription = "uses unittest"`,
+    );
+    assert.equal(await detectTestFramework(workdir), "unittest");
+  });
+
+  it("pyproject.toml with neither → defaults to pytest (modern convention)", async () => {
+    writeFileSync(join(workdir, "pyproject.toml"), `[project]\nname = "x"`);
+    assert.equal(await detectTestFramework(workdir), "pytest");
+  });
+
+  it("requirements.txt with pytest → pytest", async () => {
+    writeFileSync(join(workdir, "requirements.txt"), `pytest>=7\nrequests\n`);
+    assert.equal(await detectTestFramework(workdir), "pytest");
+  });
+
+  it("setup.py with pytest → pytest", async () => {
+    writeFileSync(join(workdir, "setup.py"), `from setuptools import setup\nsetup(tests_require=['pytest'])`);
+    assert.equal(await detectTestFramework(workdir), "pytest");
+  });
+
+  it("tests/ dir with .py files → pytest (probe-based)", async () => {
+    mkdirSync(join(workdir, "tests"));
+    writeFileSync(join(workdir, "tests", "test_x.py"), `def test_x(): pass`);
+    assert.equal(await detectTestFramework(workdir), "pytest");
+  });
+
+  it("Cargo.toml present → cargo-test", async () => {
+    writeFileSync(join(workdir, "Cargo.toml"), `[package]\nname = "x"\nversion = "0.1.0"`);
+    assert.equal(await detectTestFramework(workdir), "cargo-test");
+  });
+
+  it("go.mod present → go-test", async () => {
+    writeFileSync(join(workdir, "go.mod"), `module example.com/x\n\ngo 1.21\n`);
+    assert.equal(await detectTestFramework(workdir), "go-test");
+  });
+
+  it("JS package.json takes precedence over Python markers", async () => {
+    writeFileSync(
+      join(workdir, "package.json"),
+      JSON.stringify({ devDependencies: { vitest: "^1.0" } }),
+    );
+    writeFileSync(join(workdir, "pyproject.toml"), `[project]\nname = "x"`);
+    assert.equal(await detectTestFramework(workdir), "vitest");
+  });
+
+  it("returns 'unknown' on truly empty repo", async () => {
+    assert.equal(await detectTestFramework(workdir), "unknown");
+  });
+});
+
+describe("scaffoldTestForTopic — Python/Rust/Go path conventions (T-Item-Lang)", () => {
+  let workdir: string;
+  beforeEach(() => {
+    workdir = mkdtempSync(join(tmpdir(), "swarm-tsf-lang-int-"));
+  });
+  afterEach(() => rmSync(workdir, { recursive: true, force: true }));
+
+  it("pytest path → tests/test_<slug>.py", async () => {
+    mkdirSync(join(workdir, "tests"));
+    writeFileSync(join(workdir, "tests", "test_x.py"), "");
+    const out = await scaffoldTestForTopic({
+      clonePath: workdir,
+      topic: "Add Bcrypt",
+    });
+    assert.ok(out);
+    assert.equal(out!.framework, "pytest");
+    assert.match(out!.suggestedTestPath, /^tests\/test_Add-Bcrypt\.py$|^tests\/test_add-bcrypt\.py$/);
+  });
+
+  it("cargo-test path → tests/<slug>_test.rs", async () => {
+    writeFileSync(join(workdir, "Cargo.toml"), `[package]\nname = "x"\nversion = "0.1.0"`);
+    const out = await scaffoldTestForTopic({
+      clonePath: workdir,
+      topic: "fix-bug",
+    });
+    assert.ok(out);
+    assert.equal(out!.framework, "cargo-test");
+    assert.match(out!.suggestedTestPath, /^tests\/fix-bug_test\.rs$/);
+  });
+
+  it("go-test path → <slug>_test.go", async () => {
+    writeFileSync(join(workdir, "go.mod"), `module example.com/x`);
+    const out = await scaffoldTestForTopic({
+      clonePath: workdir,
+      topic: "fix-thing",
+    });
+    assert.ok(out);
+    assert.equal(out!.framework, "go-test");
+    assert.match(out!.suggestedTestPath, /_test\.go$/);
+  });
+});

@@ -18,7 +18,13 @@ export type AgentStatus =
   | "thinking"
   | "retrying"
   | "failed"
-  | "stopped";
+  | "stopped"
+  // T-Item-4 (2026-05-04): individual mid-run kill (vs whole-run stop).
+  // Emitted by AgentManager.killAgent (called by the adaptive worker
+  // pool when scaling down). UI store removes the panel on this event;
+  // distinguishing it from "stopped" lets the UI explain *why* the
+  // agent disappeared mid-run ("scaled down") vs end-of-run cleanup.
+  | "killed";
 
 export interface AgentState {
   id: string;
@@ -85,6 +91,12 @@ export interface TranscriptEntry {
   // every other agent. Targets the agent's id (e.g. "agent-2") not the
   // role-name. Absent = broadcast to all agents (current default).
   targetAgent?: string;
+  // T-Item-2 (2026-05-04): debate-judge K parallel debate streams.
+  // When set, this entry belongs to a specific stream (e.g. "stream-1").
+  // Lets the runner scope per-stream prompts (each stream sees only its
+  // own transcript) while keeping a single source-of-truth main
+  // transcript. Absent on entries from non-streamed runs.
+  streamId?: string;
 }
 
 export interface BoardCountsDTO {
@@ -96,7 +108,13 @@ export interface BoardCountsDTO {
   total: number;
 }
 
-export type SwarmEvent =
+// T-Item-MultiTenant Phase 1 (2026-05-04): every SwarmEvent carries an
+// optional `runId`. Stamped by Orchestrator.wrappedEmit at broadcast
+// time so the WS subscriber filter (Phase 2) can route per-run. The
+// intersection-with-base-fields pattern lets us add the field without
+// modifying every union variant — existing emit sites that don't set
+// runId still type-check + work; the orchestrator hydrates it.
+export type SwarmEventBody =
   | { type: "transcript_append"; entry: TranscriptEntry }
   | { type: "agent_state"; agent: AgentState }
   | { type: "swarm_state"; phase: SwarmPhase; round: number }
@@ -255,6 +273,15 @@ export type SwarmEvent =
       agentCount: number;
       rounds: number;
     };
+
+// T-Item-MultiTenant Phase 1 (2026-05-04): the public SwarmEvent type
+// intersects every variant with `{ runId?: string }` so consumers can
+// read `event.runId` regardless of variant + emitters can stamp it.
+// Variants that ALREADY carried a typed `runId` (run_started,
+// directive_amended, drift_sample, conformance_sample) keep the
+// stricter required field — the intersection only adds the optional
+// fallback for the others.
+export type SwarmEvent = SwarmEventBody & { runId?: string };
 
 export type SwarmPhase =
   | "idle"

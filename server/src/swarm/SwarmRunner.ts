@@ -414,6 +414,15 @@ export interface RunConfig {
    *  (not 3 parallel). First-cut: sequential candidate generation
    *  + judge pick; full parallel (3 debates) deferred. Debate-judge only. */
   parallelPropositions?: boolean;
+  /** T-Item-2 (2026-05-04): debate-judge K parallel debate streams.
+   *  When >1, K full debates run in parallel — each stream gets its
+   *  own proposition (derived in parallel via the same path that
+   *  T199 parallelPropositions uses) + scoped transcript. After all
+   *  streams settle, the JUDGE runs ONE cross-stream synthesis prompt
+   *  to pick the most informative verdict. PRO + CON agents are
+   *  REUSED across streams (each prompt is fully self-contained).
+   *  Caps at 3 (each stream is ~3× cost). Debate-judge only. */
+  parallelDebateStreams?: number;
   /** T198e: MoA two-stage aggregation. When true + moaAggregatorCount
    *  >= 2, after the K parallel aggregators run, one MORE TOP
    *  aggregator synthesizes the K mid-syntheses. Adds 1 round-trip
@@ -455,6 +464,172 @@ export interface RunConfig {
    *  tests; doesn't generate new failing tests (test-scaffolding
    *  generator is days of work). Blackboard only. */
   testDrivenTodos?: boolean;
+  /** Q4 (2026-05-04): best-of-N at the turn level. When set, the
+   *  runner fires K samples for high-stakes turns + a judge picks
+   *  (length heuristic when no judge available). Generalizes T199's
+   *  self-consistency-on-hunks pattern. K cap = 5 (matching the
+   *  existing self-consistency cap). Default 1 (no fan-out). Honored
+   *  by runners that adopt the shared `bestOfNTurn.ts` helpers. */
+  bestOfNTurn?: number;
+  /** Q6 (2026-05-04): dynamic role picker for round-robin / role-diff.
+   *  When set, the runner consults a planner-tier meta-prompt to pick
+   *  the next role based on what the conversation NEEDS (vs fixed
+   *  cycle). One extra prompt per turn. Default OFF — fixed-cycle
+   *  rotation preserves the legacy deterministic behavior. Honored
+   *  via the shared `dynamicRolePicker.ts` helpers. */
+  dynamicRolePicker?: boolean;
+  /** Q7 (2026-05-04): debate-judge swap-sides bias check. After the
+   *  judge's verdict, run a SECOND verdict pass with PRO/CON labels
+   *  swapped. If the same SIDE wins both times, the verdict was
+   *  driven by labeling (judge bias) — flag low confidence + skip
+   *  the post-verdict build phase. Default OFF — adds 1 judge call
+   *  per debate. Debate-judge only. */
+  swapSidesBiasCheck?: boolean;
+  /** Q5 (2026-05-04): dissent preservation in synthesis. When set,
+   *  council/MoA/round-robin synthesizer prompts emit THREE sections
+   *  (majority view + minority report + open questions) instead of
+   *  one consolidated answer. Stops "polite convergence" from
+   *  averaging away the most informative contrarian insight.
+   *  Default OFF — longer output. Honored via the shared
+   *  `dissentPreservation.ts` helpers. */
+  preserveDissent?: boolean;
+  /** Q8 (2026-05-04): stigmergy pheromone decay + saturation cap.
+   *  When set, StigmergyRunner's per-file picker applies multiplicative
+   *  decay to avgInterest per elapsed round + filters out files that
+   *  hit DEFAULT_MAX_REVISITS=8. Stops hot-spot loops. Default OFF —
+   *  preserves the legacy "all visits weighted equal forever"
+   *  behavior. Stigmergy only. */
+  pheromoneDecay?: boolean;
+  /** Q9 (2026-05-04): map-reduce mid-cycle finding broadcast. When set,
+   *  high-confidence findings (≥7/10) from completed mappers are
+   *  surfaced in the prompt of mappers that haven't started THIS round.
+   *  Stops "siloed mapper" failures where two mappers independently
+   *  miss the same insight. Cap at MAX_BROADCAST_PER_MAPPER=5.
+   *  Default OFF — preserves the legacy "all pooling at reduce time"
+   *  behavior. Map-reduce only. */
+  midCycleBroadcast?: boolean;
+  /** Q10 (2026-05-04): pre-flight verify dry-run for blackboard. When
+   *  set + cfg.verifyCommand is configured, workers stage their hunks
+   *  in a temp branch + run verifyCommand BEFORE committing. Failed
+   *  verify triggers a re-prompt with the verify error in context;
+   *  exhausted retries → todo skipped. Catches breakage at the worker
+   *  turn, not post-commit. Default OFF — 2× wall-clock per todo.
+   *  Blackboard only. */
+  preflightDryRun?: boolean;
+  /** Q11 (2026-05-04): hunk placement RAG. When set, the worker's
+   *  hunk-emit prompt includes top-3 most-similar past successful
+   *  (todo, hunk-response) pairs from `.swarm-memory.jsonl` as
+   *  few-shot examples. Specific to repos with prior runs.
+   *  Token-overlap (Jaccard) similarity; capped to keep prompts
+   *  bounded. Default OFF — biases the model toward historical
+   *  patterns; not always desirable in evolving repos. Blackboard only. */
+  hunkRag?: boolean;
+  /** Q12 (2026-05-04): best-preset auto-pick router. When set, the
+   *  /api/swarm/start route consults `presetRouter.ts` to pick the
+   *  best preset given the user directive (overriding the explicit
+   *  cfg.preset only when the heuristic OR LLM router disagrees with
+   *  high confidence). Wrong picks erode trust — keep cfg.preset
+   *  override authoritative; route is advisory. Default OFF.
+   *  Cross-cutting (orchestrator-level, not per-preset). */
+  presetRouter?: boolean;
+  /** Q13 (2026-05-04): per-preset rubric grading. When set, after the
+   *  run completes a judge model scores the run output against a
+   *  task-specific rubric (correctness / completeness / specificity /
+   *  actionability / format + per-preset extras). Surfaces "preset X
+   *  scored 7/10 on correctness but 3/10 on completeness" so users
+   *  know which dimension to retry. +1 judge call per run. Default
+   *  OFF. Honored via the shared `rubricGrading.ts` helpers. */
+  rubricGrading?: boolean;
+  /** Q3 (2026-05-04): inter-agent @-mention contracts. When set, the
+   *  runner extracts ```mention``` envelopes from agent output +
+   *  surfaces them in the targeted agent's next prompt as "Pending
+   *  contracts you have to address". Per-pair cooldown
+   *  (MENTION_COOLDOWN_TURNS=3) prevents A→B→A loops. Default OFF —
+   *  adds prompt-shape complexity. Honored by all multi-agent
+   *  presets via the shared `agentMentionContract.ts` helper. */
+  mentionContracts?: boolean;
+  /** Q2 (2026-05-04): failure-pattern memory at run start. When set,
+   *  the runner reads `.swarm-memory.jsonl` from the clone path and
+   *  surfaces the most-recent N "failure" + "success" entries to the
+   *  planner via the seed prompt. Lets a planner avoid re-trying
+   *  known dead ends + replicate known-working approaches. Default
+   *  OFF — adds prompt tokens to every planner seed. Currently
+   *  honored by: BlackboardRunner planner seed (other runners adopt
+   *  via `failurePatternSeed.ts` helper). */
+  failurePatternSeed?: boolean;
+  /** Q1 (2026-05-04): self-critique pass. When set, the runner sends
+   *  high-stakes turns BACK to the same agent with a critique prompt
+   *  before shipping. Verdict + refined output replace the original
+   *  when the model flags issues. Default OFF (doubles per-turn
+   *  latency). Currently honored by: DebateJudgeRunner judge verdict.
+   *  Other runners adopt incrementally via the shared
+   *  `selfCritique.ts` helpers. */
+  selfCritique?: boolean;
+  /** T-Item-StigBb (2026-05-04): blackboard worker dispatch with
+   *  stigmergy preference. When true, the worker dequeue picks among
+   *  pending TODOs by preferring those whose `expectedFiles` overlap
+   *  LEAST with already-committed files in this run. The intuition:
+   *  spread the swarm's edits across the repo rather than letting one
+   *  hot-spot dominate. Pure pheromone-style anti-attraction (avoid
+   *  recently-visited files, not seek them). Default OFF — strict
+   *  FIFO + tag-match preserves existing behavior. Blackboard only. */
+  stigmergyOnBlackboard?: boolean;
+  /** T-Item-CouncilRec (2026-05-04): council reconcile policy.
+   *  Picks how the council settles on a final answer:
+   *  - "revise" (default): existing behavior — agents see peer drafts
+   *    starting Round 2 and revise; lead synthesizes at end.
+   *  - "vote": after final round, each drafter casts ONE vote for the
+   *    BEST OTHER draft (no self-votes). Most-voted draft wins; tied
+   *    votes broken by lowest agent index. Cheap (N small prompts).
+   *  - "judge": after final round, an extra synthesis prompt explicitly
+   *    asks the lead agent to PICK ONE draft as canonical (vs.
+   *    "merge" which the existing synthesis already does).
+   *  Each policy is opt-in; default keeps the legacy revise+merge flow.
+   *  Council only. */
+  councilReconcile?: "revise" | "vote" | "judge";
+  /** T-Item-MapPart (2026-05-04): map-reduce partition strategy.
+   *  Selects how the runner splits work across mappers:
+   *  - "round-robin" (default): evenly distribute top-level entries
+   *    by mapperIndex % K.
+   *  - "size-balanced": weight top-level entries by their recursive
+   *    file count + greedily assign to the lightest-loaded mapper.
+   *    Avoids one mapper getting `node_modules` while another gets
+   *    a single README. Recommended for repos with one or two
+   *    dominant directories.
+   *  - "import-graph": already shipped via `cfg.importGraphSlicing`
+   *    (the new field is the unified replacement). When this field
+   *    is set to "import-graph", `cfg.importGraphSlicing` semantics
+   *    are used. Map-reduce only. */
+  mapReducePartition?: "round-robin" | "size-balanced" | "import-graph";
+  /** T-Item-AutoRoute (2026-05-04): runtime per-prompt model routing.
+   *  When true, runners that normally fan all agents through cfg.model
+   *  consult per-tier overrides on a per-prompt basis using the role
+   *  category (planner / worker / auditor / judge). Lets a user run
+   *  cfg.workerModel: "gemma4:31b-cloud" + cfg.plannerModel:
+   *  "glm-5.1:cloud" without having to set per-agent overrides.
+   *  Default OFF — preserves the legacy "one model for everything"
+   *  shape. Currently honored by: orchestrator-worker, map-reduce
+   *  (other runners adopt incrementally; the helper is shared). */
+  dynamicModelRoute?: boolean;
+  /** T-Item-MoaTools (2026-05-04): MoA proposer tool access. When true,
+   *  proposers (layer-1 agents) get read-only tool dispatch (read,
+   *  grep, glob, list) by promoting their agentName from "swarm" (no
+   *  tools) to "swarm-read" (file-introspection tools). Lets proposers
+   *  ground claims in actual file content instead of pre-fetched
+   *  context. Default OFF — adds round-trips per proposer call; users
+   *  opt in when they want the extra grounding. MoA only. */
+  moaProposerTools?: boolean;
+  /** T-Item-3 (2026-05-04): blackboard in-flight parallel hypothesis.
+   *  When true, alternatives emitted with `[hypothesis: A/B/C]` tags
+   *  are dispatched to workers in PARALLEL (rather than sequentially).
+   *  First alternative to commit wins; the others auto-skip with reason
+   *  "alternative <id> landed first". Conflict detection: alternatives
+   *  with overlapping expectedFiles serialize within their group.
+   *  Auditor sees the group outcome (winner + skipped) rather than
+   *  treating each as an independent todo.
+   *  Requires testDrivenTodos OR auditorParallelHypothesis to actually
+   *  emit hypothesis-tagged todos. Blackboard only. */
+  parallelHypothesisInFlight?: boolean;
   /** T198i: blackboard auditor parallel hypothesis. When true + last
    *  auditor verdict was "partial", next planner cycle's prompt
    *  instructs the planner to propose 2-3 ALTERNATIVE approaches to

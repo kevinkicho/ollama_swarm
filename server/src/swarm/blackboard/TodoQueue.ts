@@ -61,6 +61,16 @@ export interface QueuedTodo {
    *  routing. dequeue(workerId, preferTag) prefers todos whose tag
    *  matches the worker's tag. */
   preferredTag?: string;
+  /** T-Item-3 (2026-05-04): in-flight parallel hypothesis. When the
+   *  planner emits multiple alternatives (`[hypothesis: A/B/C]` tags)
+   *  for the same criterion, all alternatives in that group share the
+   *  same groupId. The runner uses this to:
+   *  - run alternatives in parallel
+   *  - when the FIRST commits, mark the rest as `skipped — alternative
+   *    landed`
+   *  - serialize within group when alternatives' expectedFiles overlap
+   *  Absent on regular (non-alternative) todos. */
+  groupId?: string;
 }
 
 export interface TodoQueueCounts {
@@ -90,6 +100,9 @@ export interface PostTodoInput {
    *  bookkeeping can attribute the resulting commits to ALL declared
    *  criteria (not just the first). */
   criteriaIds?: readonly string[];
+  /** T-Item-3 (2026-05-04): in-flight parallel hypothesis grouping.
+   *  See QueuedTodo.groupId for semantics. */
+  groupId?: string;
 }
 
 export class TodoQueue {
@@ -117,8 +130,55 @@ export class TodoQueue {
       ...(input.kind ? { kind: input.kind } : {}),
       ...(input.command ? { command: input.command } : {}),
       ...(input.preferredTag ? { preferredTag: input.preferredTag } : {}),
+      ...(input.groupId ? { groupId: input.groupId } : {}),
     });
     return id;
+  }
+
+  /** T-Item-3 (2026-05-04): list every todo in a hypothesis group.
+   *  Defensive copies. Empty array when no group with that id exists. */
+  listGroup(groupId: string): QueuedTodo[] {
+    return this.todos
+      .filter((t) => t.groupId === groupId)
+      .map((t) => this.copyTodo(t));
+  }
+
+  /** T-Item-3 (2026-05-04): a hypothesis group has settled — one
+   *  alternative successfully completed (the winner). Marks every
+   *  OTHER non-terminal alternative as skipped with reason
+   *  "alternative <winnerId> landed first". The winner itself is left
+   *  untouched (caller already moved it to completed via complete()).
+   *
+   *  Returns the list of skipped todo ids so the caller can log /
+   *  surface to the auditor. Idempotent: alternatives already in a
+   *  terminal state (completed/failed/skipped) are skipped silently. */
+  markGroupSettled(
+    groupId: string,
+    winnerId: string,
+    ts: number = Date.now(),
+  ): { skipped: string[] } {
+    const skipped: string[] = [];
+    for (const t of this.todos) {
+      if (t.groupId !== groupId) continue;
+      if (t.id === winnerId) continue;
+      if (
+        t.status === "completed" ||
+        t.status === "failed" ||
+        t.status === "skipped"
+      ) {
+        continue;
+      }
+      // Direct mutation rather than this.skip() because skip() throws
+      // on completed (correct guard for caller-driven skips, but we're
+      // settling a group and want idempotency).
+      t.status = "skipped";
+      t.endedAt = ts;
+      t.reason = `alternative ${winnerId} landed first`;
+      t.workerId = undefined;
+      t.startedAt = undefined;
+      skipped.push(t.id);
+    }
+    return { skipped };
   }
 
   /** Dequeue the next pending todo. Two-pass semantics when preferTag
@@ -149,6 +209,44 @@ export class TodoQueue {
     next.workerId = workerId;
     next.startedAt = ts;
     return this.copyTodo(next);
+  }
+
+  /** T-Item-StigBb (2026-05-04): dequeue by score function. Caller
+   *  supplies a score function that runs over each pending todo; the
+   *  HIGHEST-scoring todo is dequeued. Tie-break: lowest insertion
+   *  order (oldest pending) wins. Returns null when no pending todos
+   *  exist. Same in-progress stamping as plain dequeue.
+   *
+   *  Used by the stigmergy-on-blackboard lever to prefer pending todos
+   *  whose expectedFiles haven't been touched yet — spreads the swarm
+   *  across the repo rather than dogpiling one hot-spot.
+   *
+   *  When all pending todos score 0, behaves identically to FIFO
+   *  dequeue (oldest wins). */
+  dequeueByScore(
+    workerId: string,
+    scoreFn: (todo: QueuedTodo) => number,
+    ts: number = Date.now(),
+  ): QueuedTodo | null {
+    const pending = this.todos.filter((t) => t.status === "pending");
+    if (pending.length === 0) return null;
+    let best: QueuedTodo | undefined;
+    let bestScore = -Infinity;
+    for (const t of pending) {
+      const s = scoreFn(t);
+      if (s > bestScore) {
+        bestScore = s;
+        best = t;
+      }
+      // Tie-break: insertion order (oldest pending wins). Since we
+      // iterate in insertion order + only replace on strict >, the
+      // first-seen at the top score wins. No additional handling needed.
+    }
+    if (!best) return null;
+    best.status = "in-progress";
+    best.workerId = workerId;
+    best.startedAt = ts;
+    return this.copyTodo(best);
   }
 
   /** Phase 2 reaper: scan in-progress todos and transition any whose
@@ -314,7 +412,8 @@ export class TodoQueue {
 
   /** Defensive copy — clones expectedFiles + expectedAnchors arrays so
    *  callers can't mutate internal state through them. Other fields
-   *  are immutable scalars / strings. */
+   *  are immutable scalars / strings. groupId is a scalar so the
+   *  spread above already carries it. */
   private copyTodo(t: QueuedTodo): QueuedTodo {
     return {
       ...t,

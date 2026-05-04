@@ -9,9 +9,9 @@
 // stray closing tags when the bubble started mid-thought.
 //
 // This helper is the first slice of the UI coherent-fix package
-// (docs/plans/ui-coherent-fix-package.md, Phase 1). Pure shape-
-// transform: text in → { thoughts, finalText } out. No I/O, no
-// dependencies. Caller decides what to do with the thoughts string
+// (commit 6dfd470, 2026-04). Pure shape-transform:
+// text in → { thoughts, finalText } out. No I/O, no dependencies.
+// Caller decides what to do with the thoughts string
 // (server-side: stash on TranscriptEntry.thoughts; client-side:
 // render in a ThoughtsBlock).
 

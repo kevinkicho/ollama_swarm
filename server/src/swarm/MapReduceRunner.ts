@@ -12,6 +12,8 @@ import type {
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { selectModelForRole } from "./dynamicModelRoute.js";
+import { defaultRoleForIndex } from "../../../shared/src/topology.js";
 import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
 import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
@@ -242,8 +244,17 @@ export class MapReduceRunner implements SwarmRunner {
       // resulting clusters are too lopsided (one giant SCC > 70% of
       // files).
       let slices: string[][];
-      let slicingMode: "round-robin" | "import-graph" = "round-robin";
-      if (cfg.importGraphSlicing) {
+      // T-Item-MapPart (2026-05-04): "size-balanced" partition mode.
+      // Determined by cfg.mapReducePartition; back-compat with the
+      // legacy cfg.importGraphSlicing flag (when set, treat as
+      // mapReducePartition="import-graph"). When the resolved mode
+      // is "size-balanced", weight top-level entries by their
+      // recursive file count and use sliceSizeBalanced.
+      const partitionMode: "round-robin" | "size-balanced" | "import-graph" =
+        cfg.mapReducePartition ??
+        (cfg.importGraphSlicing ? "import-graph" : "round-robin");
+      let slicingMode: "round-robin" | "size-balanced" | "import-graph" = "round-robin";
+      if (partitionMode === "import-graph") {
         try {
           const allFiles = await this.opts.repos.listRepoFiles(clonePath, {
             maxFiles: 500,
@@ -278,10 +289,56 @@ export class MapReduceRunner implements SwarmRunner {
       }
       const topLevel = await this.opts.repos.listTopLevel(clonePath);
       const slicingSource = topLevel.filter((e) => !SKIP_ENTRIES.has(e));
+      // T-Item-MapPart (2026-05-04): size-balanced fork. Weight each
+      // top-level entry by listing its recursive file count via
+      // listRepoFiles + counting matches. Best-effort: a listRepoFiles
+      // failure for one entry treats it as weight=1 (it still gets
+      // sliced; just doesn't dominate). Falls through to round-robin
+      // when no entries (single-file repo).
+      if (
+        slices! === undefined &&
+        partitionMode === "size-balanced" &&
+        slicingSource.length > 0
+      ) {
+        try {
+          const allFiles = await this.opts.repos.listRepoFiles(clonePath, {
+            maxFiles: 5000,
+          });
+          // Count files per top-level entry. POSIX-style prefix match.
+          const weights = slicingSource.map((entry) => {
+            const prefix = entry.endsWith("/") ? entry : `${entry}/`;
+            // Files DIRECTLY at top level have entry as their FULL path
+            const exact = allFiles.includes(entry) ? 1 : 0;
+            // Files UNDER this entry have entry/ prefix
+            const sub = allFiles.filter((f) =>
+              f.startsWith(prefix),
+            ).length;
+            return Math.max(1, exact + sub);
+          });
+          slices = sliceSizeBalanced(
+            slicingSource.map((item, i) => ({ item, weight: weights[i] })),
+            mappers.length,
+          );
+          slicingMode = "size-balanced";
+          this.appendSystem(
+            `[T-Item-MapPart size-balanced] weights=${weights.join(",")}; LPT-greedy assignment.`,
+          );
+        } catch (err) {
+          this.appendSystem(
+            `[T-Item-MapPart size-balanced] failed (${err instanceof Error ? err.message : String(err)}) — falling back to round-robin.`,
+          );
+        }
+      }
       // eslint-disable-next-line prefer-const
       slices = slices! ?? sliceRoundRobin(slicingSource, mappers.length);
+      const slicingDesc =
+        slicingMode === "import-graph"
+          ? "import-graph clusters"
+          : slicingMode === "size-balanced"
+            ? `size-balanced (LPT) over ${slicingSource.length} top-level entries`
+            : `round-robin over ${slicingSource.length} top-level entries`;
       this.appendSystem(
-        `Repo slicing: ${slicingMode === "import-graph" ? "import-graph clusters" : `round-robin over ${slicingSource.length} top-level entries`} across ${mappers.length} mappers.`,
+        `Repo slicing: ${slicingDesc} across ${mappers.length} mappers.`,
       );
       // Phase 2d: stash + emit slice assignments so CoveragePanel can
       // render the tree view. Keyed by agentId for consistency with
@@ -769,6 +826,26 @@ export class MapReduceRunner implements SwarmRunner {
     });
 
     try {
+      // T-Item-AutoRoute (2026-05-04): when cfg.dynamicModelRoute is
+      // set, pick reducer/mapper-tier model. Reducer (agent 1) uses
+      // planner-tier model; mappers (agents 2..N) use worker-tier.
+      const totalAgents = this.active?.agentCount ?? 0;
+      const dynamicModelOverride =
+        this.active?.dynamicModelRoute && this.active?.model
+          ? selectModelForRole(
+              defaultRoleForIndex(
+                this.active.preset,
+                agent.index,
+                totalAgents,
+              ),
+              {
+                model: this.active.model,
+                workerModel: this.active.workerModel,
+                plannerModel: this.active.plannerModel,
+                auditorModel: this.active.auditorModel,
+              },
+            )
+          : undefined;
       // Unit 16: shared retry wrapper.
       const res = await promptWithRetry(agent, prompt, {
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
@@ -779,6 +856,9 @@ export class MapReduceRunner implements SwarmRunner {
         // Phase 5b of #243: per-agent addendum from the topology row.
         promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         describeError: describeSdkError,
+        ...(dynamicModelOverride && dynamicModelOverride !== agent.model
+          ? { modelOverride: dynamicModelOverride }
+          : {}),
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(agent.id, success, elapsedMs);
           this.opts.logDiag?.({
@@ -958,6 +1038,40 @@ export function sliceRoundRobin<T>(entries: readonly T[], k: number): T[][] {
   if (k <= 0) return [];
   const slices: T[][] = Array.from({ length: k }, () => []);
   entries.forEach((e, i) => slices[i % k].push(e));
+  return slices;
+}
+
+// T-Item-MapPart (2026-05-04): size-balanced slicing — greedy LPT
+// ("longest processing time first"). Each entry has a weight (e.g.,
+// recursive file count); sort entries descending by weight, then
+// assign each to the currently-lightest-loaded mapper. Bounds the
+// max-load-vs-min-load ratio better than round-robin when weights
+// are skewed (one giant `node_modules`-style dir + many tiny ones).
+//
+// Pure — exported for tests.
+export function sliceSizeBalanced<T>(
+  entries: readonly { item: T; weight: number }[],
+  k: number,
+): T[][] {
+  if (k <= 0) return [];
+  const slices: T[][] = Array.from({ length: k }, () => []);
+  const loads: number[] = Array.from({ length: k }, () => 0);
+  // Sort descending by weight so LPT places heavy items first.
+  const sorted = [...entries].sort((a, b) => b.weight - a.weight);
+  for (const { item, weight } of sorted) {
+    // Pick the slice with the smallest current load. Tie-break by
+    // lowest index for determinism.
+    let pickIdx = 0;
+    let minLoad = loads[0];
+    for (let i = 1; i < k; i++) {
+      if (loads[i] < minLoad) {
+        minLoad = loads[i];
+        pickIdx = i;
+      }
+    }
+    slices[pickIdx].push(item);
+    loads[pickIdx] += weight;
+  }
   return slices;
 }
 

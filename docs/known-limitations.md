@@ -4,7 +4,16 @@ Deliberate trade-offs in the current build. Each entry names the choice, why
 we made it, and what would force us to revisit. Anything that becomes a
 *real* problem in practice should graduate out of here into a plan item.
 
-> **2026-05-01 update:** the V2 substrate (state machine, `TodoQueue`, `WorkerPipeline`, `OllamaClient`, `EventLogReaderV2`) has shipped + been promoted to primary; the V2-suffixed names were renamed once V1 was removed. E3 Phase 5 (2026-04-29) additionally removed the per-agent opencode subprocess entirely — three limitations below are now marked resolved. The V2 6c UI cutover (event-log-derived state) is partially shipped; see `docs/V2-STEP-6C.md`.
+> **2026-05-04 update:** the doc has accumulated many "resolved" entries
+> over time. Currently-active limitations:
+> - Planner has no read-tools by default in the `swarm` profile (still true; lift would require auditor + planner profile flip).
+> - Planner does double duty as the replanner (still true; intentional, see entry).
+> - Multi-tenant cost attribution gap — `tokenTracker.setCurrentPreset` is process-global; concurrent runs from `SWARM_MAX_CONCURRENT_RUNS > 1` interleave at the bucket level. Acknowledged in `Orchestrator.stopRun`.
+>
+> Everything else in this file is RESOLVED + preserved for archaeology
+> (V2 substrate cutover, opencode subprocess removal, hard-caps env vars,
+> path-grounding, retries, agent-state mirroring, wall-clock monotonic
+> cap, etc.).
 
 ---
 
@@ -206,8 +215,15 @@ without solving a problem we have.
 
 **Update (Unit 43)**: `wallClockCapMs` IS now a per-run override on the
 `/api/swarm/start` route (range: 60s - 8h). `tokenBudget` is also
-per-run (`StartBody.tokenBudget`). Only `MAX_COMMITS` and `MAX_TODOS`
-remain compile-time constants in `caps.ts`.
+per-run (`StartBody.tokenBudget`).
+
+**Update (T-Item-Caps, 2026-05-04):** the remaining hard caps are now
+env-overridable too — `SWARM_WALL_CLOCK_CAP_MIN`, `SWARM_COMMITS_CAP`,
+`SWARM_TODOS_CAP` (defaults 480 / 200 / 300; bounded by sane floors +
+ceilings). `caps.ts` evaluates these at module load. Per-run
+`cfg.wallClockCapMs` still wins over the env-derived default. The
+"compile-time constants" framing is now obsolete — the limitation
+section above is preserved for narrative archaeology only.
 
 ---
 

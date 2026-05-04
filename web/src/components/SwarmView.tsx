@@ -42,6 +42,19 @@ export function SwarmView() {
 
   const reset = useSwarm((s) => s.reset);
   const cfg = useSwarm((s) => s.runConfig);
+  // T-Item-MultiTenant Phase 8 (2026-05-04): when the active runId is
+  // known, target the per-run REST routes so stop/say affect THIS run
+  // even when other runs are concurrently active. Falls back to the
+  // legacy aliases (which target most-recent-started) when runId is
+  // not yet set — happens during the brief window between
+  // /api/swarm/start returning and the first run_started event landing.
+  const activeRunId = useSwarm((s) => s.runId);
+  const stopUrl = activeRunId
+    ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/stop`
+    : "/api/swarm/stop";
+  const sayUrl = activeRunId
+    ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/say`
+    : "/api/swarm/say";
   const agentList = Object.values(agents).sort((a, b) => a.index - b.index);
   const isTerminal = phase === "completed" || phase === "stopped" || phase === "failed";
   // Board + Contract are blackboard-specific surfaces. Show the tabs
@@ -89,7 +102,7 @@ export function SwarmView() {
     if (!confirm("Stop the swarm IMMEDIATELY? All spawned opencode processes will be terminated and any worker mid-commit will lose its work.")) return;
     setBusy(true);
     try {
-      await fetch("/api/swarm/stop", { method: "POST" });
+      await fetch(stopUrl, { method: "POST" });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -132,7 +145,7 @@ export function SwarmView() {
     if (!sayText.trim()) return;
     const { text, targetAgent } = parseMention(sayText);
     try {
-      await fetch("/api/swarm/say", {
+      await fetch(sayUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

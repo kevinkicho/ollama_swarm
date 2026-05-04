@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   sliceRoundRobin,
+  sliceSizeBalanced,
   buildMapperPrompt,
   buildReducerPrompt,
 } from "./MapReduceRunner.js";
@@ -56,6 +57,88 @@ describe("sliceRoundRobin", () => {
   it("handles an empty input", () => {
     const result = sliceRoundRobin<string>([], 3);
     assert.deepEqual(result, [[], [], []]);
+  });
+});
+
+// T-Item-MapPart (2026-05-04): size-balanced LPT-greedy slicing tests
+describe("sliceSizeBalanced — LPT-greedy", () => {
+  it("returns [] when k=0", () => {
+    assert.deepEqual(sliceSizeBalanced([], 0), []);
+  });
+
+  it("k empty buckets when input is empty", () => {
+    assert.deepEqual(sliceSizeBalanced([], 3), [[], [], []]);
+  });
+
+  it("balances loads equally when weights are uniform", () => {
+    const items = [
+      { item: "a", weight: 1 },
+      { item: "b", weight: 1 },
+      { item: "c", weight: 1 },
+      { item: "d", weight: 1 },
+    ];
+    const slices = sliceSizeBalanced(items, 2);
+    assert.equal(slices[0].length, 2);
+    assert.equal(slices[1].length, 2);
+  });
+
+  it("places heaviest item in its own bucket when one weight dominates", () => {
+    const items = [
+      { item: "huge", weight: 100 },
+      { item: "small1", weight: 1 },
+      { item: "small2", weight: 1 },
+      { item: "small3", weight: 1 },
+    ];
+    const slices = sliceSizeBalanced(items, 2);
+    // huge should land in one bucket; the three smalls in the other.
+    const hugeBucket = slices.find((s) => s.includes("huge"))!;
+    const otherBucket = slices.find((s) => !s.includes("huge"))!;
+    assert.equal(hugeBucket.length, 1);
+    assert.equal(otherBucket.length, 3);
+  });
+
+  it("max-load is bounded better than round-robin on skewed input", () => {
+    // Adversarial: round-robin assigns by index. With weights [10, 1, 1, 10]
+    // and 2 buckets, RR puts both 10s in one bucket → load=20. LPT
+    // splits them → max load=11.
+    const items = [
+      { item: "a", weight: 10 },
+      { item: "b", weight: 1 },
+      { item: "c", weight: 1 },
+      { item: "d", weight: 10 },
+    ];
+    const slices = sliceSizeBalanced(items, 2);
+    const computeLoad = (slice: string[]): number =>
+      items
+        .filter((it) => slice.includes(it.item))
+        .reduce((s, it) => s + it.weight, 0);
+    const loads = slices.map(computeLoad);
+    const maxLoad = Math.max(...loads);
+    // LPT guarantees max <= 11 (10 + 1) for this input
+    assert.equal(maxLoad, 11);
+  });
+
+  it("is deterministic for ties (lowest-index slice wins)", () => {
+    const items = [
+      { item: "a", weight: 5 },
+      { item: "b", weight: 5 },
+      { item: "c", weight: 5 },
+    ];
+    const slices = sliceSizeBalanced(items, 3);
+    // With ties broken by lowest index, item a goes to slice 0, b to 1, c to 2
+    assert.deepEqual(slices[0], ["a"]);
+    assert.deepEqual(slices[1], ["b"]);
+    assert.deepEqual(slices[2], ["c"]);
+  });
+
+  it("does not mutate input array", () => {
+    const items = [
+      { item: "a", weight: 3 },
+      { item: "b", weight: 1 },
+    ];
+    const before = JSON.stringify(items);
+    sliceSizeBalanced(items, 2);
+    assert.equal(JSON.stringify(items), before);
   });
 });
 

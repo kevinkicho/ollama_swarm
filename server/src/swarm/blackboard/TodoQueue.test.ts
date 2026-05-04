@@ -538,3 +538,232 @@ describe("TodoQueue — reapStaleInProgress (Phase 2 reaper)", () => {
     );
   });
 });
+
+// T-Item-3 (2026-05-04): hypothesis groupId + listGroup + markGroupSettled
+describe("TodoQueue — hypothesis groupId (T-Item-3)", () => {
+  it("post stores groupId when supplied + dequeue surfaces it", () => {
+    const q = new TodoQueue();
+    const id = q.post({
+      description: "[hypothesis: A] try X",
+      expectedFiles: ["a.ts"],
+      createdBy: "planner",
+      groupId: "hyp-1234",
+    });
+    const t = q.dequeue("worker-2");
+    assert.equal(t?.id, id);
+    assert.equal(t?.groupId, "hyp-1234");
+  });
+
+  it("post omits groupId field when not supplied (back-compat)", () => {
+    const q = new TodoQueue();
+    q.post({ description: "regular", expectedFiles: [], createdBy: "p" });
+    const list = q.list();
+    assert.equal(list[0].groupId, undefined);
+  });
+
+  it("listGroup returns only todos with matching groupId", () => {
+    const q = new TodoQueue();
+    q.post({
+      description: "alt-A",
+      expectedFiles: [],
+      createdBy: "p",
+      groupId: "g1",
+    });
+    q.post({
+      description: "alt-B",
+      expectedFiles: [],
+      createdBy: "p",
+      groupId: "g1",
+    });
+    q.post({ description: "regular", expectedFiles: [], createdBy: "p" });
+    q.post({
+      description: "alt-other",
+      expectedFiles: [],
+      createdBy: "p",
+      groupId: "g2",
+    });
+    const g1 = q.listGroup("g1");
+    assert.equal(g1.length, 2);
+    assert.ok(g1.every((t) => t.groupId === "g1"));
+    const g2 = q.listGroup("g2");
+    assert.equal(g2.length, 1);
+  });
+
+  it("listGroup returns [] for unknown group id", () => {
+    const q = new TodoQueue();
+    q.post({ description: "x", expectedFiles: [], createdBy: "p" });
+    assert.deepEqual(q.listGroup("nonexistent"), []);
+  });
+
+  it("markGroupSettled skips losers + leaves winner intact", () => {
+    const q = new TodoQueue();
+    const winnerId = q.post({
+      description: "alt-A",
+      expectedFiles: [],
+      createdBy: "p",
+      groupId: "g1",
+    });
+    const loserId = q.post({
+      description: "alt-B",
+      expectedFiles: [],
+      createdBy: "p",
+      groupId: "g1",
+    });
+    // Winner is dequeued + completed
+    q.dequeue("worker-1");
+    q.complete(winnerId);
+    // Loser is dequeued (in-progress) when winner lands
+    q.dequeue("worker-2");
+    const result = q.markGroupSettled("g1", winnerId);
+    assert.deepEqual(result.skipped, [loserId]);
+    const all = q.list();
+    const winner = all.find((t) => t.id === winnerId);
+    const loser = all.find((t) => t.id === loserId);
+    assert.equal(winner?.status, "completed");
+    assert.equal(loser?.status, "skipped");
+    assert.match(loser?.reason ?? "", /alternative .* landed first/);
+  });
+
+  it("markGroupSettled is idempotent on already-terminal alternatives", () => {
+    const q = new TodoQueue();
+    const winnerId = q.post({
+      description: "alt-A",
+      expectedFiles: [],
+      createdBy: "p",
+      groupId: "g1",
+    });
+    const failedId = q.post({
+      description: "alt-B",
+      expectedFiles: [],
+      createdBy: "p",
+      groupId: "g1",
+    });
+    // Drive alt-B to failed BEFORE the winner completes, so when
+    // markGroupSettled runs it sees an already-terminal alternative
+    // and is required to leave it alone.
+    const t1 = q.dequeue("worker-1");
+    assert.equal(t1?.id, winnerId);
+    const t2 = q.dequeue("worker-2");
+    assert.equal(t2?.id, failedId);
+    q.fail(failedId, "ran out of patience");
+    q.complete(winnerId);
+    // markGroupSettled should NOT touch the already-failed alternative
+    const result = q.markGroupSettled("g1", winnerId);
+    assert.deepEqual(result.skipped, []);
+    const failed = q.list().find((t) => t.id === failedId);
+    assert.equal(failed?.status, "failed");
+  });
+
+  it("markGroupSettled skips pending alternatives (not just in-progress)", () => {
+    const q = new TodoQueue();
+    const winnerId = q.post({
+      description: "alt-A",
+      expectedFiles: [],
+      createdBy: "p",
+      groupId: "g1",
+    });
+    const pendingLoserId = q.post({
+      description: "alt-B",
+      expectedFiles: [],
+      createdBy: "p",
+      groupId: "g1",
+    });
+    q.dequeue("worker-1");
+    q.complete(winnerId);
+    // pendingLoserId never dequeued — still pending
+    const result = q.markGroupSettled("g1", winnerId);
+    assert.deepEqual(result.skipped, [pendingLoserId]);
+  });
+
+  // T-Item-StigBb (2026-05-04): dequeueByScore tests
+  it("dequeueByScore picks the highest-scoring pending todo", () => {
+    const q = new TodoQueue();
+    const a = q.post({
+      description: "a",
+      expectedFiles: ["src/x.ts"],
+      createdBy: "p",
+    });
+    const b = q.post({
+      description: "b",
+      expectedFiles: ["src/y.ts"],
+      createdBy: "p",
+    });
+    const c = q.post({
+      description: "c",
+      expectedFiles: ["src/z.ts"],
+      createdBy: "p",
+    });
+    // Score: each todo's first-file's character code
+    const got = q.dequeueByScore("worker-1", (t) =>
+      (t.expectedFiles[0] ?? "").charCodeAt(4),
+    );
+    // 'x'=120, 'y'=121, 'z'=122 → b at index 4 of "src/y.ts" = 121, c at "src/z.ts"[4] = 122 → c wins
+    assert.equal(got?.description, "c");
+    void a;
+    void b;
+  });
+
+  it("dequeueByScore tie-break: oldest-pending wins on score tie", () => {
+    const q = new TodoQueue();
+    const a = q.post({ description: "a", expectedFiles: [], createdBy: "p" });
+    q.post({ description: "b", expectedFiles: [], createdBy: "p" });
+    q.post({ description: "c", expectedFiles: [], createdBy: "p" });
+    // All score 0 — first-inserted wins
+    const got = q.dequeueByScore("worker-1", () => 0);
+    assert.equal(got?.id, a);
+  });
+
+  it("dequeueByScore returns null when no pending todos", () => {
+    const q = new TodoQueue();
+    assert.equal(
+      q.dequeueByScore("worker-1", () => 1),
+      null,
+    );
+  });
+
+  it("dequeueByScore stamps in-progress + workerId + startedAt", () => {
+    const q = new TodoQueue();
+    q.post({ description: "x", expectedFiles: [], createdBy: "p" });
+    const got = q.dequeueByScore("worker-9", () => 1, 999);
+    assert.equal(got?.status, "in-progress");
+    assert.equal(got?.workerId, "worker-9");
+    assert.equal(got?.startedAt, 999);
+  });
+
+  it("dequeueByScore: completed/failed/skipped todos are NOT scored", () => {
+    const q = new TodoQueue();
+    const completed = q.post({ description: "done", expectedFiles: [], createdBy: "p" });
+    q.dequeue("w1");
+    q.complete(completed);
+    const pending = q.post({ description: "pending", expectedFiles: [], createdBy: "p" });
+    // Score that would prefer the completed one, but it's not pending
+    let scored: string[] = [];
+    const got = q.dequeueByScore("w2", (t) => {
+      scored.push(t.id);
+      return 1;
+    });
+    assert.equal(got?.id, pending);
+    assert.deepEqual(scored, [pending]);
+  });
+
+  it("markGroupSettled does not affect todos in other groups", () => {
+    const q = new TodoQueue();
+    const winnerId = q.post({
+      description: "alt-A",
+      expectedFiles: [],
+      createdBy: "p",
+      groupId: "g1",
+    });
+    const otherGroupId = q.post({
+      description: "alt-X",
+      expectedFiles: [],
+      createdBy: "p",
+      groupId: "g2",
+    });
+    q.dequeue("w1");
+    q.complete(winnerId);
+    q.markGroupSettled("g1", winnerId);
+    const other = q.list().find((t) => t.id === otherGroupId);
+    assert.equal(other?.status, "pending");
+  });
+});

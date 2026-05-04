@@ -96,6 +96,84 @@ test("LIST_REPO_IGNORED_DIRS — covers the high-frequency offenders", () => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// T-Item-1 (2026-05-04): cloneToSubdir
+// ---------------------------------------------------------------------------
+
+test("cloneToSubdir — destPath shape: <parent>/<baseName>-attempt-<idx>", async () => {
+  // Stubs out the real clone() so we don't hit the network. Verifies
+  // ONLY the path computation + idempotent stale-subdir cleanup.
+  const calls: Array<{ url: string; destPath: string }> = [];
+  const svc = new RepoService();
+  // Replace clone() with a stub that records args + creates the dir
+  // (mimics what the real clone would do).
+  (svc as unknown as { clone: typeof svc.clone }).clone = async (input: {
+    url: string;
+    destPath: string;
+  }) => {
+    calls.push(input);
+    await fs.mkdir(input.destPath, { recursive: true });
+    return {
+      destPath: input.destPath,
+      newClone: true,
+      alreadyPresent: false,
+      priorCommits: 0,
+      priorChangedFiles: 0,
+      priorUntrackedFiles: 0,
+    };
+  };
+  const tmpParent = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-clonesub-"));
+  try {
+    const result = await svc.cloneToSubdir({
+      parent: tmpParent,
+      baseName: "myrepo",
+      attemptIdx: 3,
+      url: "https://example.com/owner/myrepo",
+    });
+    assert.equal(result.destPath, path.join(tmpParent, "myrepo-attempt-3"));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "https://example.com/owner/myrepo");
+  } finally {
+    await fs.rm(tmpParent, { recursive: true, force: true });
+  }
+});
+
+test("cloneToSubdir — wipes stale subdir before re-cloning (idempotent)", async () => {
+  const svc = new RepoService();
+  (svc as unknown as { clone: typeof svc.clone }).clone = async (input: {
+    url: string;
+    destPath: string;
+  }) => {
+    // The real clone would fail if destPath exists non-empty + force=false.
+    // Our stub asserts that cloneToSubdir cleared it first.
+    const entries = await fs.readdir(input.destPath).catch(() => []);
+    assert.equal(entries.length, 0, "expected destPath to be empty before clone()");
+    return {
+      destPath: input.destPath,
+      newClone: true,
+      alreadyPresent: false,
+      priorCommits: 0,
+      priorChangedFiles: 0,
+      priorUntrackedFiles: 0,
+    };
+  };
+  const tmpParent = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-clonesub-"));
+  try {
+    // Pre-populate the would-be subdir with stale state
+    const stale = path.join(tmpParent, "x-attempt-1");
+    await fs.mkdir(stale, { recursive: true });
+    await fs.writeFile(path.join(stale, "old.txt"), "stale", "utf8");
+    await svc.cloneToSubdir({
+      parent: tmpParent,
+      baseName: "x",
+      attemptIdx: 1,
+      url: "https://example.com/owner/x",
+    });
+  } finally {
+    await fs.rm(tmpParent, { recursive: true, force: true });
+  }
+});
+
 test("listRepoFiles — returns repo-relative paths with forward slashes", async () => {
   const root = await makeTmpRepo();
   try {

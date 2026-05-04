@@ -31,6 +31,7 @@ import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import { getAgentAddendum } from "../../../shared/src/topology.js";
 import { describeSdkError } from "./sdkError.js";
 import { deriveProposition, type DerivedProposition } from "./propositionDerive.js";
+import { DebateStream } from "./DebateStream.js";
 import {
   readDirective,
   buildDirectiveBlock,
@@ -366,78 +367,29 @@ export class DebateJudgeRunner implements SwarmRunner {
       if (!pro || !con || !judge) throw new Error("Pro/Con/Judge must all spawn (agents 1, 2, 3)");
       const prop = this.proposition ?? DEFAULT_PROPOSITION;
 
-      // Phase B (Task #94): one preliminary judge pass at the loop
-      // midpoint. If the judge says confidence:high we end early —
-      // continuing past a confident verdict just burns tokens. Pick a
-      // single fire-point (not every round) so the judge cost is at
-      // most one extra call beyond the canonical final-round verdict.
-      const earlyCheckRound = cfg.rounds >= 4 ? Math.ceil(cfg.rounds / 2) : 0;
-
       // Task #102: capture the parsed verdict so the post-loop build
       // round can act on it.
       let finalVerdict: ParsedDebateVerdict | null = null;
 
-      // 2026-05-03 (Phase B): budget + dead-loop guards extracted to shared helpers.
-      const tokenBaseline = snapshotLifetimeTokens();
-      const deadLoopGuard = new OutputEmptyDeadLoopGuard({
-        roleLabel: "agents",
-        unit: "round",
-      });
-
-      for (let r = 1; r <= cfg.rounds; r++) {
-        if (this.stopping) break;
-        const guard = checkBudgetGuards({
-          tokenBaseline,
-          tokenBudget: cfg.tokenBudget,
-          round: r,
-          totalRounds: cfg.rounds,
-          unit: "round",
-        });
-        if (guard.halt) {
-          this.earlyStopDetail = guard.earlyStopDetail;
-          this.appendSystem(guard.message ?? "");
-          break;
-        }
-        this.round = r;
-        this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
-
-        const isFinalRound = r === cfg.rounds;
-        const transcriptLenBefore = this.transcript.length;
-        // PRO turn
-        await this.runDebaterTurn(pro, "pro", r, cfg.rounds, prop, isFinalRound, cfg.userDirective);
-        if (this.stopping) break;
-        // CON turn
-        await this.runDebaterTurn(con, "con", r, cfg.rounds, prop, isFinalRound, cfg.userDirective);
-        if (this.stopping) break;
-        // Task #146: dead-loop guard. If both PRO and CON produced empty/junk
-        // output this round, count it. After N consecutive empty rounds, break.
-        // 2026-05-03 (Phase B): logic extracted to OutputEmptyDeadLoopGuard.
-        const newEntries = this.transcript
-          .slice(transcriptLenBefore)
-          .filter((e) => e.role === "agent");
-        const dlHit = deadLoopGuard.recordIteration(newEntries);
-        if (dlHit.tripped) {
-          this.earlyStopDetail = dlHit.earlyStopDetail;
-          this.appendSystem(
-            `Both debaters produced empty/junk output for ${dlHit.consecutive} consecutive rounds — ending debate early.`,
-          );
-          break;
-        }
-        // JUDGE turn (only on the final round, OR mid-loop when we
-        // hit the early-check checkpoint).
-        if (isFinalRound) {
-          finalVerdict = await this.runJudgeTurn(judge, prop, r, cfg.userDirective);
-        } else if (r === earlyCheckRound) {
-          finalVerdict = await this.runJudgeTurn(judge, prop, r, cfg.userDirective);
-          if (finalVerdict?.confidence === "high") {
-            this.earlyStopDetail =
-              `judge-confidence-high after round ${r}/${cfg.rounds}`;
-            this.appendSystem(
-              `Judge reached confidence:high at round ${r}/${cfg.rounds} — ending debate early.`,
-            );
-            break;
-          }
-        }
+      // T-Item-2 (2026-05-04): K parallel debate streams. When >1, run
+      // K full debates IN PARALLEL (each with a different proposition)
+      // + cross-stream judge synthesis to pick the canonical verdict.
+      // Caps at 3 (each stream is ~3× cost). PRO + CON agents are
+      // REUSED across streams (each prompt is fully self-contained;
+      // streams don't share state).
+      const K = Math.max(1, Math.min(3, cfg.parallelDebateStreams ?? 1));
+      if (K > 1) {
+        finalVerdict = await this.runMultiStreamDebate(
+          { pro, con, judge },
+          K,
+          cfg,
+        );
+      } else {
+        finalVerdict = await this.runSingleStreamDebate(
+          { pro, con, judge },
+          prop,
+          cfg,
+        );
       }
       if (!this.stopping) this.appendSystem("Debate concluded.");
 
@@ -634,6 +586,220 @@ export class DebateJudgeRunner implements SwarmRunner {
     });
   }
 
+  // T-Item-2 (2026-05-04): single-stream N-round debate. Extracted
+  // from the original `loop` body so the multi-stream path can reuse
+  // the same per-stream rounding logic. When `stream` is undefined,
+  // operates on this.transcript directly (legacy single-stream
+  // behavior). When set, operates on stream.transcript.
+  private async runSingleStreamDebate(
+    agents: { pro: Agent; con: Agent; judge: Agent },
+    proposition: string,
+    cfg: RunConfig,
+    stream?: DebateStream,
+  ): Promise<ParsedDebateVerdict | null> {
+    const { pro, con, judge } = agents;
+    // Phase B (Task #94): one preliminary judge pass at the loop
+    // midpoint. If the judge says confidence:high we end early —
+    // continuing past a confident verdict just burns tokens.
+    const earlyCheckRound = cfg.rounds >= 4 ? Math.ceil(cfg.rounds / 2) : 0;
+    let finalVerdict: ParsedDebateVerdict | null = null;
+    // 2026-05-03 (Phase B): budget + dead-loop guards extracted to shared helpers.
+    const tokenBaseline = snapshotLifetimeTokens();
+    const deadLoopGuard = new OutputEmptyDeadLoopGuard({
+      roleLabel: "agents",
+      unit: "round",
+    });
+    for (let r = 1; r <= cfg.rounds; r++) {
+      if (this.stopping) break;
+      const guard = checkBudgetGuards({
+        tokenBaseline,
+        tokenBudget: cfg.tokenBudget,
+        round: r,
+        totalRounds: cfg.rounds,
+        unit: "round",
+      });
+      if (guard.halt) {
+        this.earlyStopDetail = guard.earlyStopDetail;
+        this.appendSystem(guard.message ?? "");
+        break;
+      }
+      // In stream-mode, this.round becomes the max round any stream
+      // has reached so far — informational only (UI sparkline).
+      if (r > this.round) this.round = r;
+      this.opts.emit({ type: "swarm_state", phase: "discussing", round: this.round });
+
+      const isFinalRound = r === cfg.rounds;
+      // Track stream-local OR main-transcript additions for the
+      // dead-loop guard. Stream-mode reads stream.transcript; legacy
+      // single-stream reads this.transcript.
+      const transcriptLenBefore = stream
+        ? stream.transcript.length
+        : this.transcript.length;
+      // PRO turn
+      await this.runDebaterTurn(pro, "pro", r, cfg.rounds, proposition, isFinalRound, cfg.userDirective, stream);
+      if (this.stopping) break;
+      // CON turn
+      await this.runDebaterTurn(con, "con", r, cfg.rounds, proposition, isFinalRound, cfg.userDirective, stream);
+      if (this.stopping) break;
+      // Task #146: dead-loop guard. If both PRO and CON produced empty/junk
+      // output this round, count it. After N consecutive empty rounds, break.
+      const tail = stream
+        ? stream.transcript.slice(transcriptLenBefore)
+        : this.transcript.slice(transcriptLenBefore);
+      const newEntries = tail.filter((e) => e.role === "agent");
+      const dlHit = deadLoopGuard.recordIteration(newEntries);
+      if (dlHit.tripped) {
+        this.earlyStopDetail = dlHit.earlyStopDetail;
+        this.appendSystem(
+          `Both debaters produced empty/junk output for ${dlHit.consecutive} consecutive rounds — ending debate early${stream ? ` (${stream.id})` : ""}.`,
+        );
+        break;
+      }
+      // JUDGE turn (only on the final round, OR mid-loop when we
+      // hit the early-check checkpoint).
+      if (isFinalRound) {
+        finalVerdict = await this.runJudgeTurn(judge, proposition, r, cfg.userDirective, stream);
+      } else if (r === earlyCheckRound) {
+        finalVerdict = await this.runJudgeTurn(judge, proposition, r, cfg.userDirective, stream);
+        if (finalVerdict?.confidence === "high") {
+          // Multi-stream mode: each stream may early-stop independently.
+          // We DON'T set this.earlyStopDetail in that case (it would
+          // misleadingly imply the whole run early-stopped).
+          if (!stream) {
+            this.earlyStopDetail =
+              `judge-confidence-high after round ${r}/${cfg.rounds}`;
+          }
+          this.appendSystem(
+            `Judge reached confidence:high at round ${r}/${cfg.rounds}${stream ? ` (${stream.id})` : ""} — ending debate early.`,
+          );
+          break;
+        }
+      }
+    }
+    return finalVerdict;
+  }
+
+  // T-Item-2 (2026-05-04): K parallel debate streams. Derives K
+  // distinct propositions in parallel, creates K DebateStream
+  // instances (sharing PRO + CON agents), runs all K debates IN
+  // PARALLEL, then fires ONE cross-stream judge synthesis prompt to
+  // pick the canonical verdict.
+  //
+  // Returns the canonical verdict — picked from the winning stream.
+  // If cross-stream synthesis fails to parse, falls back to the
+  // first stream with a non-null verdict.
+  private async runMultiStreamDebate(
+    agents: { pro: Agent; con: Agent; judge: Agent },
+    K: number,
+    cfg: RunConfig,
+  ): Promise<ParsedDebateVerdict | null> {
+    const { pro, con, judge } = agents;
+    this.appendSystem(
+      `[T-Item-2 parallel debate streams] K=${K} debates running IN PARALLEL with different propositions; cross-stream judge will pick the canonical verdict.`,
+    );
+    // Derive K propositions in parallel. The directive is required —
+    // without it we have nothing to derive variants from. Falls back
+    // to repeating the canonical proposition across streams (rare
+    // edge case; multi-stream mostly meaningful with a directive).
+    const directiveTrimmed = (cfg.userDirective ?? "").trim();
+    const propositions: string[] = [];
+    if (directiveTrimmed.length > 0) {
+      const candidates: DerivedProposition[] = (
+        await Promise.all(
+          Array.from({ length: K }, () =>
+            deriveProposition({
+              agent: judge,
+              manager: this.opts.manager,
+              directive: directiveTrimmed,
+            }),
+          ),
+        )
+      ).filter((c): c is DerivedProposition => c !== null);
+      const seen = new Set<string>();
+      for (const c of candidates) {
+        const key = c.proposition.trim().toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        propositions.push(c.proposition);
+        if (propositions.length === K) break;
+      }
+    }
+    // Pad if we didn't get K unique candidates (or the directive was
+    // empty). Reuse the canonical proposition for the remaining slots.
+    const fallback = this.proposition ?? DEFAULT_PROPOSITION;
+    while (propositions.length < K) propositions.push(fallback);
+    this.appendSystem(
+      `[T-Item-2] generated ${propositions.length} stream propositions: ${propositions.map((p, i) => `\n  [stream-${i + 1}] "${p}"`).join("")}`,
+    );
+
+    const streams = propositions.map(
+      (p, i) => new DebateStream({ id: `stream-${i + 1}`, proposition: p, pro, con }),
+    );
+    // Run all K debates in parallel. Each call mutates its own stream.
+    await Promise.all(
+      streams.map((s) =>
+        this.runSingleStreamDebate(agents, s.proposition, cfg, s).catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.appendSystem(`[T-Item-2] ${s.id} failed: ${msg}`);
+          return null;
+        }),
+      ),
+    );
+    if (this.stopping) return null;
+
+    // Cross-stream synthesis: pick the most informative verdict.
+    const settled = streams.filter((s) => s.verdict !== null);
+    if (settled.length === 0) {
+      this.appendSystem(`[T-Item-2] all ${K} streams failed to produce a verdict.`);
+      return null;
+    }
+    if (settled.length === 1) {
+      this.appendSystem(
+        `[T-Item-2] only 1 stream produced a verdict (${settled[0]!.id}); using it as canonical.`,
+      );
+      return settled[0]!.verdict;
+    }
+    const pickedId = await this.runCrossStreamJudge(judge, streams, cfg);
+    const winner = streams.find((s) => s.id === pickedId) ?? settled[0]!;
+    this.appendSystem(
+      `[T-Item-2] cross-stream judge picked ${winner.id} (proposition: "${winner.proposition}") as canonical verdict.`,
+    );
+    return winner.verdict;
+  }
+
+  // T-Item-2 (2026-05-04): cross-stream judge. Returns the picked
+  // stream id or null on failure (caller falls back to first settled).
+  private async runCrossStreamJudge(
+    judge: Agent,
+    streams: readonly DebateStream[],
+    cfg: RunConfig,
+  ): Promise<string | null> {
+    const prompt = buildCrossStreamJudgePrompt({
+      streams: streams.map((s) => ({
+        id: s.id,
+        proposition: s.proposition,
+        verdict: s.verdict,
+      })),
+      userDirective: cfg.userDirective,
+    });
+    let raw: string | undefined;
+    try {
+      const res = await promptWithRetry(judge, prompt, {
+        signal: new AbortController().signal,
+        manager: this.opts.manager,
+        agentName: "swarm-read",
+        describeError: describeSdkError,
+      });
+      raw = extractText(res) ?? "";
+    } catch {
+      return null;
+    }
+    if (!raw) return null;
+    const validIds = streams.map((s) => s.id);
+    const pick = parseCrossStreamPick(raw, validIds);
+    return pick?.winnerStreamId ?? null;
+  }
+
   private async runDebaterTurn(
     agent: Agent,
     side: "pro" | "con",
@@ -642,18 +808,26 @@ export class DebateJudgeRunner implements SwarmRunner {
     proposition: string,
     isFinalRound: boolean,
     userDirective?: string,
+    stream?: DebateStream,
   ): Promise<void> {
+    // T-Item-2 (2026-05-04): when a stream is supplied, scope the
+    // prompt's transcript view to ONLY this stream's entries (each
+    // stream debates a different proposition; cross-feeding their
+    // transcripts would have PRO/CON arguing past each other).
+    const transcriptView = stream
+      ? [...stream.transcript]
+      : [...this.transcript];
     const prompt = buildDebaterPrompt({
       side,
       round,
       totalRounds,
       proposition,
       isFinalRound,
-      transcript: [...this.transcript],
+      transcript: transcriptView,
       userDirective,
     });
     // Phase 2c: tag so VerdictPanel can group PRO/CON pairs by round.
-    await this.runAgent(agent, prompt, { role: side, round });
+    await this.runAgent(agent, prompt, { role: side, round }, undefined, "swarm-read", stream);
   }
 
   // Task #102: post-verdict "build" round. Three turns total (one
@@ -804,8 +978,14 @@ export class DebateJudgeRunner implements SwarmRunner {
     proposition: string,
     round: number,
     userDirective?: string,
+    stream?: DebateStream,
   ): Promise<ParsedDebateVerdict | null> {
-    const prompt = buildJudgePrompt({ proposition, transcript: [...this.transcript], userDirective });
+    // T-Item-2 (2026-05-04): scope transcript view to this stream when
+    // running a stream-local judge turn.
+    const transcriptView = stream
+      ? [...stream.transcript]
+      : [...this.transcript];
+    const prompt = buildJudgePrompt({ proposition, transcript: transcriptView, userDirective });
     // Task #81: try to parse the JUDGE response as a structured
     // verdict and upgrade the summary tag. Falls back to plain
     // debate_turn if JSON parse fails — the freeform text still
@@ -813,11 +993,19 @@ export class DebateJudgeRunner implements SwarmRunner {
     // Task #94: capture the parsed verdict so the loop can use
     // confidence:high as an early-stop signal.
     let parsed: ParsedDebateVerdict | null = null;
-    await this.runAgent(judge, prompt, { role: "judge", round }, (text) => {
-      parsed = parseDebateVerdict(text);
-      if (!parsed) return undefined;
-      return { kind: "debate_verdict", round, ...parsed };
-    });
+    await this.runAgent(
+      judge,
+      prompt,
+      { role: "judge", round },
+      (text) => {
+        parsed = parseDebateVerdict(text);
+        if (!parsed) return undefined;
+        return { kind: "debate_verdict", round, ...parsed };
+      },
+      "swarm-read",
+      stream,
+    );
+    if (parsed && stream) stream.verdict = parsed;
     return parsed;
   }
 
@@ -836,6 +1024,7 @@ export class DebateJudgeRunner implements SwarmRunner {
     debateTag?: { role: "pro" | "con" | "judge"; round: number },
     enrichSummary?: (text: string) => TranscriptEntrySummary | undefined,
     agentName: "swarm" | "swarm-read" = "swarm-read",
+    stream?: DebateStream,
   ): Promise<void> {
     this.opts.manager.markStatus(agent.id, "thinking");
     this.emitAgentState({
@@ -956,8 +1145,20 @@ export class DebateJudgeRunner implements SwarmRunner {
         ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
         ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
       };
-      this.transcript.push(entry);
-      this.opts.emit({ type: "transcript_append", entry });
+      // T-Item-2 (2026-05-04): when running inside a parallel-debate
+      // stream, route the transcript push through stream.appendEntry so
+      // the entry gets the streamId tag AND lands in both the stream's
+      // local view (used by per-stream prompt scoping) and the runner's
+      // main transcript (used by replay/persistence).
+      if (stream) {
+        stream.appendEntry(entry, (e) => {
+          this.transcript.push(e);
+          this.opts.emit({ type: "transcript_append", entry: e });
+        });
+      } else {
+        this.transcript.push(entry);
+        this.opts.emit({ type: "transcript_append", entry });
+      }
       this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
       this.opts.manager.markStatus(agent.id, "ready", { lastMessageAt: entry.ts });
       this.emitAgentState({
@@ -1362,6 +1563,94 @@ function parseLooseJson(raw: string): unknown {
     try { return JSON.parse(s.slice(firstBrace, lastBrace + 1)); } catch { /* fall through */ }
   }
   return null;
+}
+
+// T-Item-2 (2026-05-04): cross-stream judge synthesis. After K parallel
+// debate streams settle (each with a per-stream verdict), the JUDGE
+// fires ONE prompt that compares all K verdicts and picks the most
+// informative one as the canonical run-level verdict.
+//
+// "Most informative" = strongest grounding, clearest decision-relevant
+// tradeoff, sharpest nextAction. Self-evaluation bias is acknowledged
+// (the judge wrote the per-stream verdicts AND picks among them) — same
+// pattern as T199's parallel-proposition rank step.
+
+export interface CrossStreamPick {
+  /** The stream id that won (e.g. "stream-2"). */
+  winnerStreamId: string;
+  /** One sentence on why this verdict is the most informative. */
+  rationale: string;
+}
+
+export interface CrossStreamJudgeStreamSummary {
+  id: string;
+  proposition: string;
+  verdict: ParsedDebateVerdict | null;
+}
+
+export function buildCrossStreamJudgePrompt(args: {
+  streams: readonly CrossStreamJudgeStreamSummary[];
+  userDirective?: string;
+}): string {
+  const { streams, userDirective } = args;
+  const directiveBlock = buildInlineDirectiveBlock(
+    readDirective({ userDirective }),
+    {
+      contextLabel: "the work the canonical verdict's nextAction should target",
+      followUpLines: [
+        "Pick the verdict whose nextAction most concretely advances the directive — not the one that's most rhetorically clever.",
+      ],
+    },
+  );
+  const streamBlocks = streams.map((s) => {
+    if (!s.verdict) {
+      return [
+        `=== STREAM ${s.id} ===`,
+        `Proposition: "${s.proposition}"`,
+        `Verdict: (none — stream did not settle)`,
+        "=== END ===",
+      ].join("\n");
+    }
+    const v = s.verdict;
+    return [
+      `=== STREAM ${s.id} ===`,
+      `Proposition: "${s.proposition}"`,
+      `Winner: ${v.winner.toUpperCase()} · confidence ${v.confidence}`,
+      `PRO strongest: ${v.proStrongest}`,
+      `CON strongest: ${v.conStrongest}`,
+      `Decisive: ${v.decisive}`,
+      `Next action: ${v.nextAction}`,
+      "=== END ===",
+    ].join("\n");
+  });
+  return [
+    "You are the JUDGE synthesizing across K PARALLEL debate streams.",
+    "Each stream debated a DIFFERENT proposition derived from the user directive. You issued a verdict for each.",
+    ...directiveBlock,
+    "Now pick the ONE stream whose verdict is the MOST INFORMATIVE — strongest grounding in concrete evidence, clearest decision-relevant tradeoff, sharpest actionable nextAction.",
+    "",
+    "Streams:",
+    ...streamBlocks,
+    "",
+    "Output STRICT JSON only — no prose, no markdown fences:",
+    '{"winnerStreamId": "<the id of the winning stream, e.g. stream-2>", "rationale": "<one sentence — why this verdict is most informative>"}',
+  ].join("\n");
+}
+
+export function parseCrossStreamPick(
+  raw: string,
+  validIds: readonly string[],
+): CrossStreamPick | null {
+  const obj = parseLooseJson(raw);
+  if (!obj || typeof obj !== "object") return null;
+  const o = obj as Record<string, unknown>;
+  const winnerStreamId =
+    typeof o.winnerStreamId === "string" ? o.winnerStreamId.trim() : null;
+  if (!winnerStreamId) return null;
+  if (validIds.length > 0 && !validIds.includes(winnerStreamId)) return null;
+  const rationale =
+    typeof o.rationale === "string" ? o.rationale.trim() : "";
+  return { winnerStreamId, rationale };
 }
 
 

@@ -252,6 +252,96 @@ export function swarmRouter(orch: Orchestrator): Router {
     res.json(orch.status());
   });
 
+  // T-Item-MultiTenant Phase 4 (2026-05-04): list all currently active
+  // runs (server-wide, not parent-dir-scoped). Distinct from
+  // /api/swarm/runs which lists historical run summaries from a
+  // parent directory. Multi-tenant aware UIs use this to show "all
+  // runs in flight" across the host.
+  r.get("/active-runs", (_req: Request, res: Response) => {
+    res.json({ runs: orch.listActiveRuns() });
+  });
+
+  // T-Item-Recovery (2026-05-04): runs the persister wrote a snapshot
+  // for that didn't reach a terminal phase. The user sees these on
+  // server startup so they can decide whether to manually inspect
+  // (today) or auto-resume (when that lands). Excludes runs the
+  // orchestrator already has active in memory.
+  r.get("/recoverable-runs", (_req: Request, res: Response) => {
+    res.json({ runs: orch.listRecoverableRuns() });
+  });
+
+  // T-Item-Recover (2026-05-04): kick a fresh run using the cfg saved
+  // in a recoverable snapshot. Returns 200 with the new runId + the
+  // prior transcript (so the UI can surface what happened before).
+  // 400 on schema-too-old; 404 on unknown runId; 5xx on start failure.
+  r.post("/recover/:runId", async (req: Request, res: Response) => {
+    const originalRunId = String(req.params.runId);
+    try {
+      const result = await orch.recoverRun(originalRunId);
+      res.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Heuristic status mapping: snapshot-not-found / schema-too-old
+      // → 4xx; everything else (start failure, etc.) → 500.
+      if (/no recoverable snapshot/i.test(msg)) {
+        res.status(404).json({ error: msg });
+      } else if (/predates schema v2|cannot auto-resume/i.test(msg)) {
+        res.status(400).json({ error: msg });
+      } else {
+        res.status(500).json({ error: msg });
+      }
+    }
+  });
+
+  // T-Item-MultiTenant Phase 5 (2026-05-04): per-run status snapshot.
+  // 404 when the runId isn't in the active map. Mirrors GET /status
+  // shape but scoped to one run.
+  r.get("/runs/:runId/status", (req: Request, res: Response) => {
+    const runId = String(req.params.runId);
+    const status = orch.statusForRun(runId);
+    if (!status) {
+      res.status(404).json({ error: "runId not active" });
+      return;
+    }
+    res.json(status);
+  });
+
+  // T-Item-MultiTenant Phase 5 (2026-05-04): per-run user inject.
+  r.post("/runs/:runId/say", (req: Request, res: Response) => {
+    const runId = String(req.params.runId);
+    const text = typeof req.body?.text === "string" ? req.body.text : "";
+    if (text.trim().length === 0) {
+      res.status(400).json({ error: "text is required" });
+      return;
+    }
+    const intent =
+      req.body?.intent === "suggest" || req.body?.intent === "ask"
+        ? req.body.intent
+        : "steer";
+    const targetAgent =
+      typeof req.body?.targetAgent === "string" ? req.body.targetAgent : undefined;
+    const ok = orch.injectUserForRun(runId, text, {
+      intent,
+      ...(targetAgent ? { targetAgent } : {}),
+    });
+    if (!ok) {
+      res.status(404).json({ error: "runId not active" });
+      return;
+    }
+    res.json({ ok: true });
+  });
+
+  // T-Item-MultiTenant Phase 5 (2026-05-04): per-run stop.
+  r.post("/runs/:runId/stop", async (req: Request, res: Response) => {
+    const runId = String(req.params.runId);
+    const ok = await orch.stopRun(runId);
+    if (!ok) {
+      res.status(404).json({ error: "runId not active" });
+      return;
+    }
+    res.json({ ok: true });
+  });
+
   // Preflight check (2026-04-24): lets the SetupForm preview whether a
   // Start will CLONE fresh or RESUME an existing clone BEFORE the user
   // commits. Keeps the decision visible instead of only surfacing

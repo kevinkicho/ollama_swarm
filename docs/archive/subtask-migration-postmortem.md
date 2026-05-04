@@ -1,9 +1,12 @@
-# SubtaskPartInput migration plan (#235)
+# SubtaskPartInput migration — post-mortem (ruled out, #235)
 
-> **2026-04-28 update — smoke test finding:** the naive SubtaskPartInput
-> approach doesn't give the structured output I'd assumed. **See "Smoke
-> test result" section at the bottom.** This plan should NOT be executed
-> as drafted; needs revision before any runner refactor.
+> **Status:** RULED OUT 2026-04-28 by the smoke test below. The naive
+> SubtaskPartInput approach didn't yield the structured output the
+> hypothesis assumed; the plan was never executed as drafted. This
+> doc is preserved as a "this avenue was explored + here's why it's
+> a dead end" reference so future contributors don't re-try the same
+> approach without revision. **See "Smoke test result" section at
+> the bottom for the finding that closed this off.**
 
 ## Why
 

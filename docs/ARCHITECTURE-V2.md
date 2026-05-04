@@ -1,10 +1,21 @@
 # ollama_swarm — Architecture V2
 
 > Written 2026-04-26 after a session of cascading fixes that exposed
-> systemic overfitting. This is a re-think from first principles by an
-> engineer who would rather rewrite than keep patching.
+> systemic overfitting. A re-think from first principles by an engineer
+> who would rather rewrite than keep patching.
+>
+> **2026-05-04 — V2 IS the current architecture.** The "V2" label was
+> meaningful during the V1↔V2 parallel-track period (ADR 004). V1 is
+> long gone: the V2 substrate (state machine, `TodoQueue`,
+> `WorkerPipeline`, `OllamaClient`, `EventLogReaderV2`) shipped + was
+> promoted to primary; V2-suffixed names were renamed when V1 was
+> removed. E3 Phase 5 (2026-04-29) additionally removed the per-agent
+> opencode subprocess. This doc remains for the design rationale + the
+> V1→V2 migration narrative; for the *as-shipped* architecture today,
+> see [`STATUS.md`](./STATUS.md) +
+> [`../server/src/swarm/blackboard/ARCHITECTURE.md`](../server/src/swarm/blackboard/ARCHITECTURE.md).
 
-## Status (last updated 2026-04-27)
+## Status (last updated 2026-04-27 — many "partial" / "substrate done" rows have since fully shipped; treat as historical)
 
 | Shift | Status | Notes |
 |---|---|---|

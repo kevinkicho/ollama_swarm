@@ -1,5 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./index.css";
 
@@ -21,6 +22,12 @@ if (import.meta.env.DEV) {
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    {/* T-Item-MultiTenant Phase 9 (2026-05-04): BrowserRouter wraps
+        the whole app so route-based navigation (/runs/:runId) works.
+        Routes themselves declared inside App.tsx so each branch can
+        access useSwarm + the existing zustand store. */}
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
   </React.StrictMode>,
 );

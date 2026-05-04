@@ -4,7 +4,7 @@
 > `TaskCreate` items die when the session ends; this file is the durable
 > equivalent. **Update it when you finish or queue work.**
 >
-> Last refreshed: 2026-05-01 PM (5 features × 3 layers each + 3 UI bug fixes + scoreboard publishing prep + 2 sweeps in flight)
+> Last refreshed: 2026-05-04 (every prior "deferred" item shipped + multi-tenant runs end-to-end + per-run zustand factory + scoreboard plan retired + doc cleanup pass)
 
 ---
 
@@ -162,6 +162,58 @@ plus the actual run output at `C:\mnt\c\Users\kevin\Desktop\ollama_swarm\runs\de
 
 ## Done recently (last 30 days; older lands in archive/blackboard-changelog.md)
 
+### 2026-05-04 — every "deferred" item shipped + multi-tenant + per-run zustand + doc cleanup
+
+A long session that closed every still-deferred item across the project. Net: 1209 → 1848 server tests (~+640).
+
+**4 originally-deferred heavy substrate items shipped:**
+- ✅ Parallel-clone-to-K-subdirs baseline — `BaselineSwarmHarness` runs K parallel `BaselineRunner` instances in per-attempt clone subdirs; scores by hunks_applied + 5×verify_passed; promotes winner via fs.rename.
+- ✅ Parallel debate streams — K full debates with different propositions via `DebateStream`; cross-stream judge synthesis picks the canonical verdict.
+- ✅ In-flight parallel hypothesis (blackboard) — TodoQueue `groupId` + `markGroupSettled` + per-group AbortController + per-criterion grouping + `evaluateConflictDispatch` with 5-min force-dispatch timeout, all wired into `runWorker` via `dequeueByScore`.
+- ✅ Real adaptive worker pool — `AgentManager.killAgent` + `isInFlight` + new `"killed"` AgentStatus + hysteresis-aware `scaleUpAdaptive`/`scaleDownAdaptive` (60s sustained signal).
+
+**7 secondary deferred items shipped:**
+- ✅ Multi-language import graph — Rust + Go added to TS/JS+Python pipeline.
+- ✅ Test-scaffolding generator — Python pytest/unittest, Rust cargo-test, Go go-test added; framework detection probes pyproject.toml/Cargo.toml/go.mod.
+- ✅ Blackboard auto-rollback verified already wired via `BlackboardRunner.runAutoRollbacks` (the design doc was stale; the integration had landed earlier).
+- ✅ MoA tool dispatch via `cfg.moaProposerTools` opt-in.
+- ✅ Map-reduce size-balanced LPT partition via `cfg.mapReducePartition`.
+- ✅ Council vote-reconcile policy via `cfg.councilReconcile: "vote" | "judge" | "revise"`.
+- ✅ Stigmergy-on-blackboard worker dispatch via `cfg.stigmergyOnBlackboard` + per-file commit count tracking.
+
+**5 follow-up items shipped:**
+- ✅ Recovery listing — `findRecoverableRuns` + `GET /api/swarm/recoverable-runs`.
+- ✅ Per-criterion hypothesis grouping (instead of per-cycle).
+- ✅ Conflict-detection deferral with 5-min timeout.
+- ✅ Env-tunable runtime caps — `SWARM_WALL_CLOCK_CAP_MIN` / `SWARM_COMMITS_CAP` / `SWARM_TODOS_CAP`.
+- ✅ Cost-breakdown auto-route recommendation helper.
+
+**4 final items shipped:**
+- ✅ Hypothesis conflict-detection wired into `BlackboardRunner.runWorker` via combined-score `dequeueByScore`.
+- ✅ Auto-resume of recovered runs — snapshot schema v1 → v2 with embedded `runConfig`; `Orchestrator.recoverRun` + `POST /api/swarm/recover/:runId`.
+- ✅ Per-prompt model auto-routing — `cfg.dynamicModelRoute` flag + `dynamicModelRoute.ts` (`categorizeRole` + `selectModelForRole`); wired into OW + MR runners.
+- ✅ React-router `/runs/:runId` deep-link routes — installed react-router-dom@^6.30; `RunRouteWrapper` + `SwarmStoreProvider`; `SetupForm` navigates on start; `ActiveRunsPanel` view-button deep-links.
+
+**Multi-tenant runs server-side:**
+- ✅ SwarmEvent intersected with `{ runId?: string }`; orchestrator's wrappedEmit stamps active runId.
+- ✅ WS broadcaster filters per-runId (`/ws?runId=X`); bare `/ws` keeps legacy "all events".
+- ✅ `Map<string, ActiveRun>` replaces singleton runner field; back-compat getters preserve all 30+ legacy call sites.
+- ✅ Concurrency cap via `SWARM_MAX_CONCURRENT_RUNS` env (default 4, bounded [1, 16]).
+- ✅ Per-run REST: `/api/swarm/runs/:id/{status,say,stop}` + `/api/swarm/active-runs` listing.
+
+**Per-run zustand factory (the genuinely-heavy 30-file refactor):**
+- ✅ `createSwarmStore()` factory + `SwarmStoreContext` + `SwarmStoreProvider`; context-aware `useSwarm(selector)` reads from per-run store when Provider mounted, falls back to singleton otherwise. **Zero changes to the 30+ component call sites.** Static API access (`useSwarm.getState/.setState/.subscribe`) still targets the singleton.
+- ✅ `applyEventToStore` extracted; `useSwarmSocket` no-ops under Provider; per-run Provider opens its own per-runId WS + REST hydration.
+
+**Doc cleanup pass:**
+- ✅ 8 fully-shipped design plans archived → deleted (their content was duplicated by code + git log).
+- ✅ `subtask-migration-plan.md` → `subtask-migration-postmortem.md` (the file was an explicitly-NOT-executed exploration; "plan" was misleading).
+- ✅ `ARCHITECTURE-V2.md` updated with "V2 IS the current architecture" preamble.
+- ✅ `V2-STEP-6C.md` flipped to PAUSED (foundation done, slice cutovers paused since 2026-05-01).
+- ✅ `SCOREBOARD-PUBLISHING-PLAN.md` retired (Kevin: laptop too slow + no Anthropic budget).
+- ✅ `eval/aggregate.mjs` now bakes methodology + caveats into every generated `RESULTS.md`; `eval/tour-smoke.mjs` smoke-tests all 5 configs against ONE fixture.
+- ✅ Doc tree: 29 → 20 .md files; STATUS.md / AGENT-GUIDE.md / known-limitations.md refreshed; cross-refs to deleted plans replaced with self-contained explanations.
+
 ### 2026-05-01 PM — 5 features × 3 layers + 3 UI bug fixes + scoreboard publishing prep
 
 Building on the morning's bug-fixes + #231 closure, the afternoon shipped 5 features at three layers of depth each (first-cut → deeper → deepest), 3 user-reported UI bug fixes, and the prep work for the open-weights MoA scoreboard publish. 18 commits.
@@ -176,7 +228,9 @@ Building on the morning's bug-fixes + #231 closure, the afternoon shipped 5 feat
 
 **Scoreboard publishing prep:**
 
-- ✅ `db28481` — `docs/SCOREBOARD-PUBLISHING-PLAN.md` — 5-config matrix, decision-gates, methodology, honest-limitations.
+> **2026-05-04 — plan RETIRED by Kevin.** The forward-looking 5-config × 10-fixture × 3-seed sweep won't run: Kevin's laptop hardware is too slow for meaningful Ollama-only token throughput, and there's no budget for the Anthropic baseline ($15–25). Existing scoreboard data from Sweep 1A/1B/2 lives in `eval/RESULTS.md` + the `runs/_eval/sweep*` dirs and isn't going anywhere; just no NEW comparative sweeps under this plan. `docs/SCOREBOARD-PUBLISHING-PLAN.md` deleted (commit during this session). The methodology + caveats preamble that was baked into `eval/aggregate.mjs` and the `eval/tour-smoke.mjs` smoke-test stay — both are general-purpose eval-harness improvements that benefit any future sweep.
+
+- ✅ `db28481` — `docs/SCOREBOARD-PUBLISHING-PLAN.md` (deleted 2026-05-04) — was: 5-config matrix, decision-gates, methodology, honest-limitations.
 - ✅ `96484e1` — `--moa-proposer-model` + `--moa-aggregator-model` + `--moa-aggregator-count` CLI flags. `scripts/scoreboard-tour.mjs` smoke-tests all 4 free configs against one fixture before kicking the 150-attempt sweep.
 - ✅ `fb41336` — Catalog reframe: bumped fixture `wallClockCapMs` 300s → 600s (so blackboard isn't unfairly cut off). Added `moa` to the analysis-style non-fixture tasks (audit-readme-claims, council-architecture-decision, stigmergy-coverage-map). The original scoreboard plan had MoA against code-modify fixtures; corrected because **MoA is discussion-only — never writes files**, so can't pass code-modify verifies. Now two scoreboards: code-modify (baseline + blackboard) and analysis (moa + council + round-robin). See `project_moa_discussion_only.md` in memory.
 - 🟡 **Sweep 1A baseline complete** — 6/30 verify=PASS (20%), 7.5min wall-clock, 0 console errors. Baseline handles `add-null-guard` + `add-readme-section` cleanly; fails on the other 8 fixtures (bug-fixes-with-context, refactors, multi-file, structured-emit, multi-step). Real floor.

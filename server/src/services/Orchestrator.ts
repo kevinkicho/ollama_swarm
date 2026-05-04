@@ -17,16 +17,22 @@ import { MapReduceRunner } from "../swarm/MapReduceRunner.js";
 import { MoaRunner } from "../swarm/MoaRunner.js";
 import { StigmergyRunner } from "../swarm/StigmergyRunner.js";
 import { BaselineRunner } from "../swarm/BaselineRunner.js";
+import { BaselineSwarmHarness } from "../swarm/BaselineSwarmHarness.js";
 import { roleForAgent, selectRoleCatalog } from "../swarm/roles.js";
 import { ConformanceMonitor } from "./ConformanceMonitor.js";
 import { EmbeddingDriftMonitor } from "./EmbeddingDriftMonitor.js";
 import { AmendmentsBuffer, type Amendment } from "./AmendmentsBuffer.js";
-import { RunStatePersister } from "./RunStatePersister.js";
+import { RunStatePersister, findRecoverableRuns, isRecoverablePhase, loadSnapshot, type RecoverableRun } from "./RunStatePersister.js";
 
 export interface OrchestratorOpts extends RunnerOpts {
   manager: AgentManager;
   repos: RepoService;
   emit: (e: SwarmEvent) => void;
+  /** T-Item-MultiTenant Phase 4 (2026-05-04): max concurrent runs.
+   *  Default 4 (when unset). When the orchestrator's run map size
+   *  hits this number, start() throws "cap reached". The route layer
+   *  reads config.SWARM_MAX_CONCURRENT_RUNS to set this. */
+  maxConcurrentRuns?: number;
 }
 
 // Re-exported so callers (routes/swarm.ts, index.ts) don't have to reach into
@@ -173,26 +179,42 @@ export function scanForRunParents(cwd: string): string[] {
   return [...found];
 }
 
-// Thin preset dispatcher. Holds one `SwarmRunner` per run and delegates the
-// public surface to it. The state of a run lives on the runner itself.
+// T-Item-MultiTenant Phase 3 (2026-05-04): per-active-run record.
+// Aggregates everything the orchestrator tracks PER run. Cross-run
+// state (lastParentPath, knownParentPaths, the amendments buffer)
+// stays at the orchestrator level.
+//
+// Phase 3 keeps the cap at 1 (start() rejects when the map is non-
+// empty). Phase 4 relaxes the cap to N concurrent runs.
+interface ActiveRun {
+  runner: SwarmRunner;
+  runId: string;
+  runConfig: SwarmStatusRunConfig;
+  startedAt: number;
+  /** The full RunConfig the runner was started with. Stashed so
+   *  scheduleForwardChain can derive the chained run's cfg. */
+  cfg: RunConfig;
+  /** The persister (constructed in start()) tied to this run's
+   *  clone path. Closed on stop/completion so a write failure
+   *  doesn't leak into the next run. */
+  persister: RunStatePersister;
+  /** Optional monitors — present only when cfg.userDirective is set
+   *  AND the relevant model is available. */
+  conformanceMonitor?: ConformanceMonitor;
+  embeddingDriftMonitor?: EmbeddingDriftMonitor;
+}
+
+// Thin preset dispatcher. Holds the active runs (Phase 3: max 1 by
+// design; Phase 4 will relax to N) and delegates the public surface
+// to whichever run the caller targets. State per run lives on the
+// runner + the ActiveRun record.
 export class Orchestrator {
-  private runner: SwarmRunner | null = null;
-  // Unit 62: stash the runId minted at run-start so the page-refresh
-  // catch-up snapshot can include it. The runner doesn't own this
-  // identifier (it's an orchestrator-level handle), so we merge it in
-  // here rather than threading it through the runner contract.
-  private runId?: string;
-  // Pattern 9 fix (2026-04-24): same trick for runConfig + runStartedAt.
-  // Discussion-preset runners (council/role-diff/etc.) don't include
-  // runConfig in their status() — only blackboard does. Without it, the
-  // web's AgentPanel role helper falls back to the blackboard-ish
-  // "planner / worker" default for every other preset, both during the
-  // run AND after completion when the WS run_started event has long
-  // since fired. Stashing here is the single-call equivalent of teaching
-  // 6 runners to populate runConfig — kept in sync with the run_started
-  // payload below so the REST snapshot and the WS event don't drift.
-  private runConfig?: SwarmStatusRunConfig;
-  private runStartedAt?: number;
+  // T-Item-MultiTenant Phase 3 (2026-05-04): runs keyed by runId.
+  // Insertion order is most-recent-LAST so legacy single-arg APIs
+  // (status() / stop() / injectUser without runId) can resolve to
+  // the most-recently-started run without an explicit "active"
+  // pointer. Capped at 1 in Phase 3; Phase 4 relaxes.
+  private runs = new Map<string, ActiveRun>();
   // 2026-04-24: parent dir of the last successfully-started run.
   // Survives stop() / completion (unlike runConfig + runId) so the
   // /api/swarm/runs route can keep showing historical runs from the
@@ -218,22 +240,39 @@ export class Orchestrator {
   );
   // #299: per-run buffer of user-submitted directive amendments.
   // Opened on run start; runner reads via getAmendments(); closed on
-  // run end (success OR failure).
+  // run end (success OR failure). Already runId-keyed so it survives
+  // the multi-tenant refactor unchanged.
   private readonly amendments = new AmendmentsBuffer();
-  // #295: live conformance monitor. Class field (vs local var) so
-  // its lifecycle survives runner.start()'s return — discussion
-  // runners use `void this.loop(cfg)` so runner.start returns long
-  // before the run actually ends.
-  private conformanceMonitor?: ConformanceMonitor;
-  // #302: independent second signal (embedding-similarity drift).
-  // No-ops gracefully when the embedding model isn't pulled.
-  private embeddingDriftMonitor?: EmbeddingDriftMonitor;
-  // 2026-05-02 (persistence lever #2 first-cut): write transcript +
-  // amendments + phase to <clonePath>/run-state.json on every event
-  // so a server restart doesn't lose chat history mid-run. Recovery
-  // (resuming on startup) is deferred to its own session — see
-  // RunStatePersister for scope notes.
-  private runStatePersister?: RunStatePersister;
+
+  /** T-Item-MultiTenant Phase 3 (2026-05-04): resolve "the active
+   *  run" for legacy single-arg APIs (status / stop / injectUser
+   *  without runId). Picks the MOST-RECENTLY-INSERTED entry, which
+   *  with insertion-order Maps is the last value. Returns null when
+   *  no runs are active. */
+  private get activeRun(): ActiveRun | null {
+    let last: ActiveRun | null = null;
+    for (const r of this.runs.values()) last = r;
+    return last;
+  }
+
+  // Backward-compat getters for the per-run fields the orchestrator
+  // body still references in many places. Each reads from activeRun.
+  // Phase 3 keeps cap=1 so "active run" is unambiguous; Phase 4 will
+  // still use these for legacy single-arg APIs but per-runId APIs
+  // (Phase 5) target a specific entry via runId.
+  private get runner(): SwarmRunner | null { return this.activeRun?.runner ?? null; }
+  private get runId(): string | undefined { return this.activeRun?.runId; }
+  private get runConfig(): SwarmStatusRunConfig | undefined { return this.activeRun?.runConfig; }
+  private get runStartedAt(): number | undefined { return this.activeRun?.startedAt; }
+  private get conformanceMonitor(): ConformanceMonitor | undefined {
+    return this.activeRun?.conformanceMonitor;
+  }
+  private get embeddingDriftMonitor(): EmbeddingDriftMonitor | undefined {
+    return this.activeRun?.embeddingDriftMonitor;
+  }
+  private get runStatePersister(): RunStatePersister | undefined {
+    return this.activeRun?.persister;
+  }
 
   constructor(private readonly opts: OrchestratorOpts) {
     // Persist the merged list back so the next read is consistent
@@ -304,6 +343,87 @@ export class Orchestrator {
     return this.lastParentPath;
   }
 
+  /** T-Item-MultiTenant Phase 4 (2026-05-04): list every currently
+   *  active run. Returned in insertion order (oldest-started first).
+   *  The legacy single-run REST routes call activeRun (most-recent);
+   *  multi-tenant aware UIs call this to list ALL active runs. */
+  listActiveRuns(): Array<{
+    runId: string;
+    runConfig: SwarmStatusRunConfig;
+    startedAt: number;
+    isRunning: boolean;
+  }> {
+    const out: Array<{
+      runId: string;
+      runConfig: SwarmStatusRunConfig;
+      startedAt: number;
+      isRunning: boolean;
+    }> = [];
+    for (const r of this.runs.values()) {
+      out.push({
+        runId: r.runId,
+        runConfig: r.runConfig,
+        startedAt: r.startedAt,
+        isRunning: r.runner.isRunning(),
+      });
+    }
+    return out;
+  }
+
+  /** T-Item-MultiTenant Phase 5 (2026-05-04): status snapshot for ONE
+   *  run (vs the single-run status() which targets activeRun).
+   *  Returns null when the runId isn't in the active map. */
+  statusForRun(runId: string): SwarmStatus | null {
+    const run = this.runs.get(runId);
+    if (!run) return null;
+    const status = run.runner.status();
+    return {
+      ...status,
+      runId,
+      runConfig: status.runConfig ?? run.runConfig,
+      runStartedAt: status.runStartedAt ?? run.startedAt,
+    };
+  }
+
+  /** T-Item-MultiTenant Phase 5 (2026-05-04): inject for ONE run.
+   *  Returns true on success, false when the runId isn't active. */
+  injectUserForRun(
+    runId: string,
+    text: string,
+    opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
+  ): boolean {
+    const run = this.runs.get(runId);
+    if (!run) return false;
+    const intent = opts?.intent ?? "steer";
+    run.runner.injectUser(text, opts);
+    if (text.trim().length > 0 && intent === "steer") {
+      this.amendments.add(runId, text);
+    }
+    return true;
+  }
+
+  /** T-Item-MultiTenant Phase 5 (2026-05-04): stop ONE run by id.
+   *  Returns true on success, false when runId isn't active. Mirrors
+   *  the legacy stop() cleanup but scoped to one entry. */
+  async stopRun(runId: string): Promise<boolean> {
+    const run = this.runs.get(runId);
+    if (!run) return false;
+    try {
+      await run.runner.stop();
+    } finally {
+      run.conformanceMonitor?.stop();
+      run.embeddingDriftMonitor?.stop();
+      // Clearing tokenTracker.setCurrentPreset is a no-op when other
+      // runs are still tagged; we accept the small attribution
+      // imprecision here — multi-tenant cost attribution is a known
+      // gap (the global tokenTracker can't bucket usage per active
+      // runId today; cross-cutting refactor needed for full fidelity).
+      run.persister.stop();
+      this.runs.delete(runId);
+    }
+    return true;
+  }
+
   // #238 + #240: union of every parent dir the user has ever started
   // a run from this session (or in prior sessions, persisted). Used
   // by /api/swarm/runs?includeOtherParents=true and /api/swarm/memory
@@ -311,6 +431,83 @@ export class Orchestrator {
   // parent is fresh. Most-recent first.
   getKnownParentPaths(): string[] {
     return [...this.knownParentPaths];
+  }
+
+  /** T-Item-Recovery (2026-05-04): scan known parent dirs for
+   *  run-state.json snapshots. Filters out terminal-phase snapshots
+   *  (those represent runs that finished cleanly; the snapshot just
+   *  hasn't been cleaned up). Returns mid-flight snapshots only.
+   *  Active runs in this orchestrator are EXCLUDED — no point
+   *  offering to "recover" a run that's currently running. */
+  listRecoverableRuns(): RecoverableRun[] {
+    const all = findRecoverableRuns(this.knownParentPaths);
+    const activeIds = new Set<string>();
+    for (const r of this.runs.values()) activeIds.add(r.runId);
+    return all.filter(
+      (r) => isRecoverablePhase(r.phase) && !activeIds.has(r.runId),
+    );
+  }
+
+  /** T-Item-Recover (2026-05-04): kick a fresh run using the cfg
+   *  saved in a recoverable snapshot. The new run gets a NEW runId
+   *  (it's a new run, not a restored runner) but uses the SAME cfg
+   *  the original was started with. The clone path is preserved on
+   *  disk so prior commits stay; the snapshot's transcript is
+   *  returned to the caller so the UI can surface "this is what
+   *  happened before".
+   *
+   *  Returns the new runId + the prior transcript on success.
+   *  Throws on:
+   *    - snapshot file unreadable / unparseable
+   *    - schemaVersion < 2 (no cfg embedded; can't reconstruct)
+   *    - the runner's start() failure (cap reached, etc.) */
+  async recoverRun(originalRunId: string): Promise<{
+    newRunId: string;
+    priorTranscript: unknown[];
+    priorAmendments: Array<{ ts: number; text: string }>;
+  }> {
+    const all = findRecoverableRuns(this.knownParentPaths);
+    const target = all.find((r) => r.runId === originalRunId);
+    if (!target) {
+      throw new Error(
+        `recover: no recoverable snapshot found for runId=${originalRunId}`,
+      );
+    }
+    const snap = loadSnapshot(target.stateFilePath);
+    if (!snap) {
+      throw new Error(
+        `recover: failed to load snapshot at ${target.stateFilePath}`,
+      );
+    }
+    if (snap.schemaVersion < 2 || !snap.runConfig) {
+      throw new Error(
+        `recover: snapshot at ${target.stateFilePath} predates schema v2 (no cfg embedded); cannot auto-resume. Use the SetupForm to start a new run on this clone.`,
+      );
+    }
+    // Reconstruct RunConfig from the persisted shape.
+    const persistedCfg = snap.runConfig;
+    const cfg: RunConfig = {
+      preset: persistedCfg.preset as PresetId,
+      repoUrl: persistedCfg.repoUrl,
+      localPath: persistedCfg.localPath,
+      agentCount: persistedCfg.agentCount,
+      rounds: persistedCfg.rounds,
+      model: persistedCfg.model,
+      ...(persistedCfg.extras ?? {}),
+    };
+    // Forward to start(); it mints a new runId + handles the cap +
+    // wires monitors. The persister for the NEW run will overwrite
+    // the snapshot file naturally as events fire.
+    await this.start(cfg);
+    const newRunId = this.runId;
+    if (!newRunId) {
+      throw new Error("recover: start() did not yield a runId");
+    }
+    return {
+      newRunId,
+      priorTranscript: snap.transcript,
+      priorAmendments: snap.amendments,
+    };
   }
 
   injectUser(
@@ -340,32 +537,46 @@ export class Orchestrator {
   }
 
   async start(cfg: RunConfig): Promise<void> {
-    if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
-    // Improvement #5 (post task #34): if a previous run is in a terminal
-    // phase, isRunning() returns false but the runner reference is still
-    // pinned (only stop() clears it — natural completion does not). Drop
-    // it here so the new run gets a clean slot and the next status() call
-    // doesn't surface stale state from the old runner. This is the
-    // single-call equivalent of the explicit /stop the sequencer used to
-    // need between every preset.
-    if (this.runner) {
-      try {
-        await this.stop();
-      } catch {
-        // best-effort — if cleanup of the prior runner errors, surface it
-        // via the next status() rather than blocking the new start.
+    // T-Item-MultiTenant Phase 4 (2026-05-04): cap on concurrent runs.
+    // Reads SWARM_MAX_CONCURRENT_RUNS (default 4); reject when at cap.
+    // Pre-Phase-4 behavior was cap=1 — to preserve, set the env var to 1.
+    // Cleanup pass: drop any ActiveRun whose runner has terminated
+    // naturally (isRunning false) — these stay pinned in the map
+    // until the user explicitly stops them OR a new run starts. With
+    // cap > 1 we'd otherwise leak terminal-phase runs into the cap.
+    for (const [id, run] of [...this.runs.entries()]) {
+      if (!run.runner.isRunning()) {
+        try {
+          await run.runner.stop();
+        } catch {
+          // best-effort cleanup
+        }
+        run.conformanceMonitor?.stop();
+        run.embeddingDriftMonitor?.stop();
+        run.persister.stop();
+        this.runs.delete(id);
       }
     }
-    // 2026-05-02 (persistence lever #2): construct the persister BEFORE
-    // buildRunner so the wrapped emit (created inside buildRunner) can
-    // close over a non-null reference. Idempotent if a previous run's
-    // persister leaked through.
-    this.runStatePersister?.stop();
-    this.runStatePersister = new RunStatePersister(cfg.localPath);
+    const cap = this.opts.maxConcurrentRuns ?? 4;
+    if (this.runs.size >= cap) {
+      throw new Error(
+        `Concurrent-run cap reached (${this.runs.size}/${cap}). Stop a run before starting another.`,
+      );
+    }
+    // T-Item-MultiTenant Phase 3: mint runId FIRST so we can build the
+    // ActiveRun atomically. 2026-05-02 (persistence lever #2): persister
+    // construction moved into ActiveRun build below.
+    const runId = randomUUID();
+    // Task #36: forward the minted runId into cfg so the runner can
+    // include it in buildSummary → summary.json. Otherwise the runId
+    // only lives in memory + the WS run_started event, never making
+    // it to disk where the history dropdown reads digests from.
+    cfg.runId = runId;
+    const persister = new RunStatePersister(cfg.localPath);
+    // buildRunner's wrappedEmit closure reads this.runStatePersister
+    // (= activeRun.persister via the getter) lazily, so it'll see the
+    // right persister once we insert the ActiveRun below.
     const runner = this.buildRunner(cfg.preset, cfg);
-    // Assign up-front so status()/isRunning() reflect the in-progress run for
-    // new WS clients and the POST /status endpoint while start() is still awaiting.
-    this.runner = runner;
     // Task #125: tag every Ollama call made during this run with its
     // preset, so the usage dashboard can break down "blackboard ate
     // 60% of today's tokens" etc. Cleared in stop().
@@ -378,18 +589,7 @@ export class Orchestrator {
     // Unit 52a + 52c + 52d: anchor for the UI's runtime ticker,
     // identity strip, and identifiers row. Single source of truth
     // across all 7 runners. Fires BEFORE runner.start so a slow clone
-    // or spawn counts toward user-visible runtime. Carries:
-    // - runId: Unit 52d — app-level handle, distinct from opencode
-    //   session ids. Useful for cross-referencing logs and future
-    //   persistent run history.
-    // - resolved config so the UI renders without a REST round-trip.
-    const runId = randomUUID();
-    this.runId = runId;
-    // Task #36: forward the minted runId into cfg so the runner can
-    // include it in buildSummary → summary.json. Otherwise the runId
-    // only lives in memory + the WS run_started event, never making
-    // it to disk where the history dropdown reads digests from.
-    cfg.runId = runId;
+    // or spawn counts toward user-visible runtime.
     // Task #42: resolve per-agent role names for role-diff so the UI
     // can render role labels in AgentPanel. Other presets leave this
     // undefined — runs with no role catalog get the generic worker
@@ -437,8 +637,19 @@ export class Orchestrator {
       // didn't post one).
       topology: cfg.topology,
     };
-    this.runConfig = runConfig;
-    this.runStartedAt = startedAt;
+    // T-Item-MultiTenant Phase 3: build + insert the ActiveRun. Any
+    // monitor wiring below mutates this entry's fields. Insertion-
+    // order Map → activeRun getter resolves to this for legacy
+    // single-arg APIs until the run terminates.
+    const activeRun: ActiveRun = {
+      runner,
+      runId,
+      runConfig,
+      startedAt,
+      cfg,
+      persister,
+    };
+    this.runs.set(runId, activeRun);
     // Cache parent dir so /api/swarm/runs can keep showing historical
     // runs in this folder even after this run terminates. Persisted
     // to /tmp so a dev-server restart doesn't lose it.
@@ -471,39 +682,36 @@ export class Orchestrator {
       process.env.CONFORMANCE_MONITOR !== "off" &&
       this.opts.ollamaBaseUrl
     ) {
-      // #295 fix: monitor lives as a class field so its lifecycle is
-      // decoupled from runner.start()'s return. Discussion runners
-      // fire-and-forget their loop (`void this.loop(cfg)`) so
-      // runner.start resolves in seconds even when the run will
-      // continue for minutes — putting monitor.stop() in finally{}
-      // killed the timer before any tick fired. Now: bind isActive
-      // so the monitor self-stops when the run actually ends.
-      this.conformanceMonitor?.stop(); // defensive: clear any stale
-      this.conformanceMonitor = new ConformanceMonitor({
+      // #295 fix: monitor lives on the ActiveRun record so its
+      // lifecycle is decoupled from runner.start()'s return.
+      // Discussion runners fire-and-forget their loop, so runner.start
+      // resolves quickly even for long runs.
+      const monitor = new ConformanceMonitor({
         runId,
         directive: trimmedDirective,
         ollamaBaseUrl: this.opts.ollamaBaseUrl,
         graderModel: cfg.model,
-        getTranscript: () => this.runner?.status().transcript ?? [],
+        getTranscript: () => activeRun.runner.status().transcript ?? [],
         emit: this.opts.emit,
-        isActive: () => this.runner !== null && (this.runner?.isRunning() ?? false),
+        isActive: () => activeRun.runner.isRunning(),
       });
-      this.conformanceMonitor.start();
+      activeRun.conformanceMonitor = monitor;
+      monitor.start();
 
       // #302 Phase B: independent embedding-similarity signal.
       // Async-start because it embeds the directive once before the
       // poll loop kicks off. No-ops silently when the embedding
       // model isn't pulled (typical fresh-Ollama install).
-      this.embeddingDriftMonitor?.stop();
-      this.embeddingDriftMonitor = new EmbeddingDriftMonitor({
+      const drift = new EmbeddingDriftMonitor({
         runId,
         directive: trimmedDirective,
         ollamaBaseUrl: this.opts.ollamaBaseUrl,
-        getTranscript: () => this.runner?.status().transcript ?? [],
+        getTranscript: () => activeRun.runner.status().transcript ?? [],
         emit: this.opts.emit,
-        isActive: () => this.runner !== null && (this.runner?.isRunning() ?? false),
+        isActive: () => activeRun.runner.isRunning(),
       });
-      void this.embeddingDriftMonitor.start();
+      activeRun.embeddingDriftMonitor = drift;
+      void drift.start();
     }
     try {
       await runner.start(cfg);
@@ -518,21 +726,20 @@ export class Orchestrator {
       }
     } catch (err) {
       // Runner's start threw partway through (e.g. clone failed, spawn timed out).
-      // Clean up anything it managed to create and drop the reference — otherwise
-      // the dispatcher stays pinned to a stuck runner and the next start call
-      // false-positives as "already running".
+      // Clean up anything it managed to create and remove the ActiveRun
+      // entry from the map — otherwise the dispatcher stays pinned to a
+      // stuck runner and the next start call false-positives as "already running".
       try {
         await runner.stop();
       } catch {
         // ignore cleanup errors; the original failure is what we want to surface
       }
-      if (this.runner === runner) {
-        this.runner = null;
-        // Unit 62: keep runId paired with runner — drop it on failed start.
-        this.runId = undefined;
-        this.runConfig = undefined;
-        this.runStartedAt = undefined;
-      }
+      // T-Item-MultiTenant Phase 3: cleanup the ActiveRun entry. Stop
+      // monitors + persister, then remove from the map.
+      activeRun.conformanceMonitor?.stop();
+      activeRun.embeddingDriftMonitor?.stop();
+      activeRun.persister.stop();
+      this.runs.delete(runId);
       throw err;
     } finally {
       // #295 fix: do NOT stop the conformance monitor here. Discussion
@@ -561,36 +768,31 @@ export class Orchestrator {
   }
 
   async stop(): Promise<void> {
-    if (!this.runner) return;
-    const runner = this.runner;
+    // T-Item-MultiTenant Phase 3: stop the active run (legacy single-
+    // arg API targets most-recent-started). Phase 5 will add an
+    // explicit stopRun(runId) for per-run targeting.
+    const active = this.activeRun;
+    if (!active) return;
     try {
-      await runner.stop();
+      await active.runner.stop();
     } finally {
       // #295 fix: backstop for the conformance monitor — covers the
       // explicit /api/swarm/stop path. Natural-completion path
       // self-stops via isActive() in the poll loop.
-      this.conformanceMonitor?.stop();
-      this.conformanceMonitor = undefined;
+      active.conformanceMonitor?.stop();
       // #302: same backstop for the embedding drift monitor.
-      this.embeddingDriftMonitor?.stop();
-      this.embeddingDriftMonitor = undefined;
+      active.embeddingDriftMonitor?.stop();
       // Task #125: clear preset tag — calls between runs (e.g. an
       // exploratory direct curl to the proxy) bucket as "(idle)".
       tokenTracker.setCurrentPreset(undefined);
-      // Once a run is fully stopped, drop the reference so the next start gets
-      // a fresh slate rather than inheriting the previous runner's terminal phase.
-      this.runner = null;
-      // Unit 62: clear the runId too so a status() after stop reports an
-      // idle slate instead of a stale handle from the previous run.
-      this.runId = undefined;
-      this.runConfig = undefined;
-      this.runStartedAt = undefined;
       // 2026-05-02 (persistence lever #2): flush any pending snapshot
       // so terminal phase is on disk before we drop the persister.
       // Without the explicit stop, the last 0-DEBOUNCE_MS of events
       // could be trapped behind the timer.
-      this.runStatePersister?.stop();
-      this.runStatePersister = undefined;
+      active.persister.stop();
+      // Drop the ActiveRun from the map. The next start gets a fresh
+      // slate rather than inheriting the previous runner's terminal phase.
+      this.runs.delete(active.runId);
     }
   }
 
@@ -690,12 +892,26 @@ export class Orchestrator {
     // collapses chunks within DEBOUNCE_MS into one fsync.
     const baseEmit = this.opts.emit;
     const wrappedEmit = (e: SwarmEvent) => {
-      baseEmit(e);
+      // T-Item-MultiTenant Phase 1 (2026-05-04): stamp the active
+      // runId onto every SwarmEvent before broadcast so the per-run
+      // WS subscriber filter (Phase 2) can route correctly. Variants
+      // that already carry a typed runId leave it untouched (it's
+      // already correct from the runner). Other variants pick up the
+      // orchestrator-level runId.
+      const stamped: SwarmEvent =
+        e.runId === undefined && this.runId ? { ...e, runId: this.runId } : e;
+      baseEmit(stamped);
       // Best-effort snapshot. Persister never throws; a write failure
       // is logged once + silenced for the run.
       const persister = this.runStatePersister;
       if (!persister || !this.runId || !this.runStartedAt) return;
       const status = this.runner?.status();
+      // T-Item-Recover (2026-05-04): include cfg in snapshots so the
+      // recover endpoint can reconstruct a runnable config without
+      // asking the user to re-fill the SetupForm. The `extras`
+      // catch-all carries non-core RunConfig fields verbatim so
+      // preset-specific knobs survive the round-trip.
+      const { preset, repoUrl, localPath, agentCount, rounds, model, ...extras } = cfg;
       persister.schedule({
         runId: this.runId,
         preset: cfg.preset,
@@ -703,6 +919,15 @@ export class Orchestrator {
         startedAt: this.runStartedAt,
         transcript: status?.transcript ?? [],
         amendments: this.amendments.list(this.runId),
+        runConfig: {
+          preset,
+          repoUrl,
+          localPath,
+          agentCount,
+          rounds,
+          model,
+          ...(Object.keys(extras).length > 0 ? { extras } : {}),
+        },
       });
     };
     const opts = {
@@ -766,6 +991,15 @@ export class Orchestrator {
         // agent, one prompt, one apply step, one commit. Used by the
         // scoreboard sweep to anchor "did the swarm beat doing it
         // alone?" comparisons.
+        //
+        // T-Item-1 (2026-05-04): when cfg.baselineAttempts > 1, swap
+        // in the parallel-clone harness — K subdirs, K parallel runners,
+        // pick the winner by (hunks_applied + 5*verify_passed). The
+        // harness implements the same SwarmRunner contract so this
+        // dispatcher swap is transparent to callers.
+        if ((cfg.baselineAttempts ?? 1) > 1) {
+          return new BaselineSwarmHarness(opts);
+        }
         return new BaselineRunner(opts);
       case "moa":
         // #88 (2026-05-01): Mixture of Agents. Layer 1 = N peer-hidden

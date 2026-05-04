@@ -20,3 +20,9 @@ screenshots/
 *.tsbuildinfo
 # SWE-Bench Lite dataset (~5MB, not licensed for redistribution)
 eval/swe-bench/dataset/
+# Lighthouse perf-test browser-profile dumps. Get accidentally created
+# under perf-reports/ when a Lighthouse run keeps Chrome's user-data-dir
+# alongside the report. The actual reports + perf-reports/README.md
+# stay tracked; the lighthouse.NNNNNNNN profile dirs are local-only.
+perf-reports/*lighthouse*/
+perf-reports/C*

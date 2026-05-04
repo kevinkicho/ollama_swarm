@@ -1,4 +1,4 @@
-// E3 Phase 1 (per docs/E3-drop-opencode-plan.md): one interface every
+// E3 Phase 1 (commits d189f0d → 4190afe, 2026-04-29): one interface every
 // LLM backend conforms to. Replaces the opencode-shaped
 // `client.session.prompt(...)` call site so that future code can talk
 // to Ollama / Anthropic / OpenAI without going through an opencode

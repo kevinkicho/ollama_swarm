@@ -1,5 +1,13 @@
 # Autonomous productivity — roadmap
 
+> **2026-05-04 status:** this doc captures the original Unit 34–57 roadmap
+> + a few hypothesized Unit 64+ candidates. Most listed Units have shipped
+> (see the per-row Status column below). For work that landed AFTER Unit
+> 57 — multi-tenant runs, per-run zustand factory, the deferred-item
+> sweep, etc. — see `docs/active-work.md`'s "Done recently" section. The
+> doc remains valuable for the *north star* + the rationale behind each
+> early Unit.
+
 ## North star
 
 Make this swarm framework drive **multi-hour, multi-tier autonomous improvement** of

@@ -13,8 +13,14 @@
 // 1-3 min). The hint nudges users toward per-role overrides they
 // already have configurable in BlackboardSettings + topology grid.
 //
-// Phase 2 (deferred): actual auto-routing once this data shows
-// real opportunity across multiple runs.
+// Phase 2 (T-Item-AutoRoute, 2026-05-04): structured recommendation
+// helper. computeAutoRouteRecommendation() takes a CostBreakdown and
+// returns a typed shape the SetupForm can use to pre-fill a model
+// override for the dominant agent's tier. Pure helper — actual
+// runtime auto-routing (per-prompt model switching) remains too
+// invasive a runner refactor for the value; this lever surfaces the
+// recommendation as a CONFIG suggestion the user applies on the
+// NEXT run.
 
 import type { RunSummary } from "../types";
 import { defaultRoleForIndex } from "../../../shared/src/topology";
@@ -122,4 +128,58 @@ export function computeCostBreakdown(summary: RunSummary): CostBreakdown {
     dominantAgent,
     savingHint,
   };
+}
+
+// T-Item-AutoRoute (2026-05-04): structured auto-routing recommendation.
+// Maps a CostBreakdown to a typed override suggestion the SetupForm
+// can pre-fill on the NEXT run. Two cases shipped today:
+//   - dominantAgent's role is in CODING_TIER_ROLES → recommend a
+//     coding-tier model (gemma4:31b-cloud) for the worker tier
+//   - dominantAgent's role is "auditor" → no model override
+//     (the savingHint already nudges the user to investigate
+//     auditor frequency, not swap models)
+//
+// Returns null when no recommendation applies. The targetField is
+// the RunConfig key the SetupForm should pre-fill (`workerModel`
+// for coding-tier; future enhancement: route per-tier).
+
+export interface AutoRouteRecommendation {
+  /** RunConfig field to set on the next run. */
+  targetField: "workerModel" | "plannerModel" | "auditorModel";
+  /** Suggested model id. */
+  suggestedModel: string;
+  /** One-sentence reason the user sees alongside the apply control. */
+  reason: string;
+  /** % of run tokens the dominant agent consumed (the trigger metric). */
+  dominantPct: number;
+  /** Source agent index, for attribution. */
+  dominantAgentIndex: number;
+}
+
+/** Default coding-tier model. Matches DEFAULT_WORKER_MODEL on the
+ *  server side so a "Apply" click yields the same default the env
+ *  var would provide. */
+const CODING_TIER_DEFAULT_MODEL = "gemma4:31b-cloud";
+
+export function computeAutoRouteRecommendation(
+  breakdown: CostBreakdown,
+): AutoRouteRecommendation | null {
+  const top = breakdown.dominantAgent;
+  if (!top) return null;
+  if (CODING_TIER_ROLES.has(top.role)) {
+    return {
+      targetField: "workerModel",
+      suggestedModel: CODING_TIER_DEFAULT_MODEL,
+      reason:
+        `Agent ${top.agentIndex} (${top.role}) used ${top.pctOfTotal}% of last run's tokens — ` +
+        `applying a coding-tier model to that tier should give similar quality at lower latency.`,
+      dominantPct: top.pctOfTotal,
+      dominantAgentIndex: top.agentIndex,
+    };
+  }
+  // No actionable model swap for non-coding-tier dominants (planner,
+  // auditor, judge, etc.) — they're judgment roles where downgrading
+  // the model risks worse output. The savingHint covers the
+  // investigative messaging.
+  return null;
 }

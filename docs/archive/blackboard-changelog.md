@@ -10,8 +10,10 @@
 ---
 
 Running log of what landed in each phase of the blackboard-preset build and
-how it was verified. Companion to [`../blackboard-plan.md`](../blackboard-plan.md)
-(the *what we plan to do*); this file is the *what we actually did*.
+how it was verified. (The original `blackboard-plan.md` companion was
+deleted 2026-05-04 — implementation is the truth + lives in
+`server/src/swarm/blackboard/ARCHITECTURE.md`; this file is the
+*what we actually did* commit-level journal.)
 
 Phases are kept here even after they ship, so later debugging can trace which
 phase introduced a particular file or behavior without digging through git.
@@ -289,8 +291,9 @@ JSON" toggle.
 
 ## Phase 7 — Stop conditions + safety valves  **[committed: `d2dcc85`, `0e9a990`, `c7e6934`]**
 
-Hard-cap a run so it always terminates, and capture final state on crash. See
-`blackboard-plan.md` §Phase 7 for the step breakdown.
+Hard-cap a run so it always terminates, and capture final state on crash.
+(Original §Phase 7 step breakdown lived in the deleted `blackboard-plan.md`;
+the steps below + the commits cited capture the same content.)
 
 ### Step A — Hard caps
 

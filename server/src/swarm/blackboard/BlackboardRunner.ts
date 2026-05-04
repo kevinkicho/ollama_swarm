@@ -36,6 +36,12 @@ import {
   type QueuedTodo,
 } from "./TodoQueue.js";
 import { applyAndCommit } from "./WorkerPipeline.js";
+import {
+  detectHypothesisTag,
+  evaluateConflictDispatch,
+  updateDeferralTimestamps,
+  type CandidateForConflict,
+} from "./hypothesisGrouping.js";
 import type { Hunk } from "./applyHunks.js";
 import { voteOnHunks, voteOnHunksWithJudge, type HunkVote, type JudgeFn } from "./hunkVoting.js";
 import { buildJudgePrompt } from "./hunkJudgePrompt.js";
@@ -490,6 +496,22 @@ export class BlackboardRunner implements SwarmRunner {
   // The swarm's todo store. Source of truth for all in-flight work
   // and per-status counts. Cleared on every start().
   private todoQueue = new TodoQueue();
+  // T-Item-3 (2026-05-04): per-hypothesis-group AbortController. When
+  // the FIRST alternative in a group commits successfully, abort()
+  // is called on the rest's controllers + the queue's other
+  // alternatives are marked skipped. Cleared on stop().
+  private hypothesisGroupAborts = new Map<string, AbortController>();
+  // T-Item-StigBb (2026-05-04): per-file commit count for stigmergy-
+  // style worker dispatch. Incremented on every successful commit's
+  // expectedFiles. Cleared on start(). Used only when
+  // cfg.stigmergyOnBlackboard is set.
+  private fileCommitCounts = new Map<string, number>();
+  // T-Item-HypTimeout (2026-05-04): per-todo first-deferred-at
+  // timestamps for conflict-detection deferral. Maps todoId →
+  // first-deferred-at (ms epoch). Updated by the dispatch logic
+  // when a candidate is deferred OR cleared when one dispatches.
+  // Cleared on start().
+  private hypothesisDeferralTimestamps = new Map<string, number>();
   private v2Observer = new RunStateObserver({
     getCtx: () => {
       const c = this.boardCounts();
@@ -720,6 +742,14 @@ export class BlackboardRunner implements SwarmRunner {
     // Reset the V2 todo-queue mirror so the run starts clean.
     this.todoQueue.clear();
     this.findings.clear();
+    // T-Item-3 (2026-05-04): clear any stale per-group AbortControllers
+    // from a prior run so a new run starts clean.
+    this.hypothesisGroupAborts.clear();
+    // T-Item-StigBb (2026-05-04): clear stigmergy commit counts for the
+    // new run.
+    this.fileCommitCounts.clear();
+    // T-Item-HypTimeout (2026-05-04): clear deferral timestamps.
+    this.hypothesisDeferralTimestamps.clear();
 
     this.setPhase("cloning");
     const cloneResult = await this.opts.repos.clone({
@@ -2024,7 +2054,73 @@ export class BlackboardRunner implements SwarmRunner {
     }
 
     const now = Date.now();
+    // T-Item-3 (2026-05-04): in-flight parallel hypothesis grouping.
+    // When cfg.parallelHypothesisInFlight is set + the planner emitted
+    // any `[hypothesis: X]`-tagged todos, the runner assigns shared
+    // groupIds so first-to-commit wins + others auto-skip.
+    //
+    // T-Item-HypGrp (2026-05-04): refined grouping. When the planner
+    // attributes each hypothesis-tagged todo to a criterion (via the
+    // criteria field), group BY CRITERION rather than by cycle —
+    // each criterion's alternatives form their own group. Falls back
+    // to per-cycle (single shared groupId) when criteria attribution
+    // is missing for ALL hypothesis-tagged todos.
+    //
+    // Why this matters: when the planner emits 3 alternatives for
+    // crypto-choice + 3 alternatives for db-choice in one cycle,
+    // per-cycle grouping would treat them all as competing
+    // alternatives (cross-cancel when any one lands) — wrong.
+    // Per-criterion correctly recognizes them as TWO independent
+    // groups.
+    const cycleHypothesisGroupIds = new Map<string, string>();
+    if (this.active?.parallelHypothesisInFlight) {
+      const hypothesisTodos = groundedTodos.filter(
+        (t) => detectHypothesisTag(t.description) !== null,
+      );
+      if (hypothesisTodos.length > 0) {
+        // Per-criterion path: when EVERY hypothesis-tagged todo has at
+        // least one criterion attribution, bucket by criterion.
+        const allHaveCriteria = hypothesisTodos.every(
+          (t) => Array.isArray(t.criteria) && t.criteria.length > 0,
+        );
+        if (allHaveCriteria) {
+          // First criterion is the canonical bucketing key (matches the
+          // singular criterionId fallback used elsewhere). Same key →
+          // same group; new key → new group.
+          const criterionToGroupId = new Map<string, string>();
+          for (const t of hypothesisTodos) {
+            const key = t.criteria![0];
+            let gid = criterionToGroupId.get(key);
+            if (!gid) {
+              gid = `hyp-${randomUUID().slice(0, 8)}`;
+              criterionToGroupId.set(key, gid);
+              this.hypothesisGroupAborts.set(gid, new AbortController());
+            }
+            // Use the todo's description as a stable key for the
+            // post-loop lookup (descriptions are unique per cycle from
+            // the planner's emit).
+            cycleHypothesisGroupIds.set(t.description, gid);
+          }
+          this.appendSystem(
+            `[T-Item-HypGrp per-criterion] ${hypothesisTodos.length} alternative(s) → ${criterionToGroupId.size} group(s) by criterion attribution.`,
+          );
+        } else {
+          // Legacy per-cycle path: all hypothesis-tagged todos share ONE
+          // group. Conservative fallback when criteria attribution is
+          // missing or partial.
+          const cycleGroupId = `hyp-${randomUUID().slice(0, 8)}`;
+          this.hypothesisGroupAborts.set(cycleGroupId, new AbortController());
+          for (const t of hypothesisTodos) {
+            cycleHypothesisGroupIds.set(t.description, cycleGroupId);
+          }
+          this.appendSystem(
+            `[T-Item-3 per-cycle hypothesis] detected ${hypothesisTodos.length} alternative(s) WITHOUT criteria attribution; falling back to one shared groupId=${cycleGroupId}.`,
+          );
+        }
+      }
+    }
     for (const t of groundedTodos) {
+      const groupId = cycleHypothesisGroupIds.get(t.description);
       this.wrappers.postTodoQ({
         description: t.description,
         expectedFiles: t.expectedFiles,
@@ -2049,6 +2145,9 @@ export class BlackboardRunner implements SwarmRunner {
         ...(t.criteria && t.criteria.length > 0
           ? { criterionId: t.criteria[0], criteriaIds: t.criteria }
           : {}),
+        // T-Item-3 / T-Item-HypGrp: per-criterion (preferred) or
+        // per-cycle (fallback) group assignment.
+        ...(groupId ? { groupId } : {}),
       });
     }
     this.appendSystem(`Posted ${groundedTodos.length} todo(s) to the board.`);
@@ -2794,7 +2893,112 @@ export class BlackboardRunner implements SwarmRunner {
       // findClaimableTodo+claimTodo two-step. The todo arrives already
       // in-progress; downstream executors no longer call claimTodo.
       const myTag = this.active?.topology?.agents.find((a) => a.index === agent.index)?.tag;
-      const queued = this.wrappers.dequeueTodoQ(agent.id, myTag);
+      // T-Item-StigBb (2026-05-04): when stigmergy-on-blackboard is set,
+      // pick the pending todo whose expectedFiles overlap LEAST with
+      // already-committed files (anti-attraction: spread the swarm).
+      // Score = -sum(commitCount[file]) so untouched-file todos win.
+      // Falls back to the standard tag-preferring dequeue when
+      // stigmergyOnBlackboard is off.
+      //
+      // T-Item-HypTimeout (2026-05-04): conflict-aware dispatch when
+      // parallelHypothesisInFlight is set. Score function combines:
+      //   - stigmergy bias (when also on)
+      //   - conflict verdict: defer (-Infinity), dispatch (0),
+      //     force-dispatch (+1, preempts normal candidates)
+      // The deferral-timestamp map is updated in lockstep so the
+      // 5-min timeout fires correctly across iterations.
+      let queued;
+      const useHypothesisCheck = this.active?.parallelHypothesisInFlight;
+      const useStigmergy = this.active?.stigmergyOnBlackboard;
+      if (useHypothesisCheck || useStigmergy) {
+        const stigmergyCounts = this.fileCommitCounts;
+        // Snapshot the full todo list ONCE so siblings checks see
+        // consistent state during this dequeue cycle.
+        const allTodos = this.todoQueue.list();
+        const candidates: CandidateForConflict[] = allTodos.map((t) => ({
+          id: t.id,
+          groupId: t.groupId ?? null,
+          expectedFiles: t.expectedFiles,
+          status: t.status === "in-progress" ? "in-progress" : t.status,
+        }));
+        const now = Date.now();
+        // Track verdicts per-candidate so we can update the timestamp
+        // map AFTER the dequeue picks one (winner gets cleared; losers
+        // stay deferred).
+        const verdictsByTodoId = new Map<
+          string,
+          "dispatch" | "defer" | "force-dispatch"
+        >();
+        queued = this.todoQueue.dequeueByScore(agent.id, (t) => {
+          // Stigmergy bias (always small magnitude so hypothesis verdicts dominate).
+          let stigmergyBias = 0;
+          if (useStigmergy) {
+            let touched = 0;
+            for (const f of t.expectedFiles) touched += stigmergyCounts.get(f) ?? 0;
+            stigmergyBias = -touched;
+          }
+          // Hypothesis check (when enabled).
+          if (useHypothesisCheck && t.groupId) {
+            const candidate = candidates.find((c) => c.id === t.id)!;
+            const groupSiblings = candidates.filter((c) => c.groupId === t.groupId);
+            const verdict = evaluateConflictDispatch({
+              candidate,
+              groupSiblings,
+              deferralTimestamps: this.hypothesisDeferralTimestamps,
+              now,
+            });
+            verdictsByTodoId.set(t.id, verdict);
+            // Defer → never picked unless every other candidate also
+            // defers. Force-dispatch → +1 base preempts normal dispatch.
+            if (verdict === "defer") return Number.NEGATIVE_INFINITY;
+            const baseScore = verdict === "force-dispatch" ? 1000 : 0;
+            return baseScore + stigmergyBias;
+          }
+          return stigmergyBias;
+        });
+        // Update the deferral-timestamp map. Winner (queued.id) is
+        // cleared; deferred candidates start/keep their first-deferred
+        // stamp. We only mutate when hypothesis-check is on.
+        if (useHypothesisCheck) {
+          for (const [todoId, verdict] of verdictsByTodoId.entries()) {
+            // The winner counts as "dispatch" regardless of its raw
+            // verdict — clearing the timestamp is correct either way.
+            const effectiveVerdict =
+              queued && queued.id === todoId ? "dispatch" : verdict;
+            this.hypothesisDeferralTimestamps = updateDeferralTimestamps({
+              candidateId: todoId,
+              verdict: effectiveVerdict,
+              current: this.hypothesisDeferralTimestamps,
+              now,
+            });
+          }
+          // Surface a one-time log when a force-dispatch fires — useful
+          // for debugging "why did alt-A run despite alt-B being in-flight".
+          if (
+            queued &&
+            verdictsByTodoId.get(queued.id) === "force-dispatch"
+          ) {
+            this.appendSystem(
+              `[T-Item-HypTimeout] force-dispatched ${queued.id.slice(0, 8)} after ${(5 * 60_000) / 1000}s deferral (group ${queued.groupId}); CAS may revert if sibling commits first.`,
+            );
+          }
+        }
+        // Mirror the broadcast side-effects that dequeueTodoQ would have
+        // fired. Best-effort; the wrapper normally fires todo_claimed +
+        // schedules a state write. We emit the same event payload here.
+        if (queued) {
+          const wire = v2QueueTodoToWireTodo(queued);
+          if (wire.claim) {
+            this.opts.emit({
+              type: "todo_claimed",
+              todoId: queued.id,
+              claim: wire.claim,
+            });
+          }
+        }
+      } else {
+        queued = this.wrappers.dequeueTodoQ(agent.id, myTag);
+      }
       if (!queued) continue;
       const todo = v2QueueTodoToWireTodo(queued);
 
@@ -2906,10 +3110,40 @@ export class BlackboardRunner implements SwarmRunner {
     // because there's no per-file hash baseline. Mark committed
     // directly so the board state stays consistent.
     this.wrappers.completeTodoQ(todo.id);
+    this.maybeSettleHypothesisGroup(todo.id);
     this.appendSystem(
       `[${agent.id}] ✓ build commit landed for todo ${todo.id.slice(0, 8)} (${dirty.changedFiles} file change(s))`,
     );
     return "committed";
+  }
+
+  // T-Item-3 (2026-05-04): when a todo in a hypothesis group commits
+  // successfully, this is called to:
+  //  1. mark every other non-terminal alternative in the same group
+  //     as `skipped` with reason "alternative <id> landed first"
+  //  2. abort() the group's AbortController so any in-flight worker
+  //     prompts on the losing alternatives bail cleanly
+  //  3. surface the settlement to the transcript for auditor visibility
+  // No-op when the todo isn't in any hypothesis group.
+  private maybeSettleHypothesisGroup(todoId: string): void {
+    const t = this.todoQueue.get(todoId);
+    if (!t || !t.groupId) return;
+    const groupId = t.groupId;
+    const settled = this.todoQueue.markGroupSettled(groupId, todoId);
+    const ctrl = this.hypothesisGroupAborts.get(groupId);
+    if (ctrl) {
+      ctrl.abort();
+      this.hypothesisGroupAborts.delete(groupId);
+    }
+    if (settled.skipped.length > 0) {
+      this.appendSystem(
+        `[T-Item-3] hypothesis group ${groupId} settled: winner=${todoId.slice(0, 8)}; cancelled ${settled.skipped.length} alternative(s) (${settled.skipped.map((id) => id.slice(0, 8)).join(", ")}).`,
+      );
+    } else {
+      this.appendSystem(
+        `[T-Item-3] hypothesis group ${groupId} settled: winner=${todoId.slice(0, 8)}; no other alternatives left to cancel.`,
+      );
+    }
   }
 
   // The hunks worker pipeline. After V2 cutover Phase 2c (2026-04-28)
@@ -3264,6 +3498,7 @@ export class BlackboardRunner implements SwarmRunner {
       this.appendSystem(`[${agent.id}] commit lost race (todo reaped): ${msg}`);
       return "lost-race";
     }
+    this.maybeSettleHypothesisGroup(todo.id);
     bumpAgentCounter(this.commitsPerAgent, agent.id);
     this.linesAddedPerAgent.set(
       agent.id,
@@ -3285,6 +3520,16 @@ export class BlackboardRunner implements SwarmRunner {
         const list = this.commitsByCriterion.get(criterionId) ?? [];
         list.push(applyResult.commitSha);
         this.commitsByCriterion.set(criterionId, list);
+      }
+    }
+    // T-Item-StigBb (2026-05-04): increment per-file commit count for
+    // the next dequeue-by-score pass to read. Tracks the FILES this
+    // todo touched (not the SHA) so dispatch can spread future todos
+    // across cold areas of the repo. Always tracks (cheap +
+    // future-proof); only consulted when cfg.stigmergyOnBlackboard.
+    if (applyResult.commitSha) {
+      for (const f of todo.expectedFiles) {
+        this.fileCommitCounts.set(f, (this.fileCommitCounts.get(f) ?? 0) + 1);
       }
     }
     return "committed";
@@ -4404,15 +4649,34 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   // T198c (2026-05-04): adaptive worker pool sizing — log-only watchdog.
-  // Polls every 30s; logs scale-up/scale-down recommendations based
-  // on todo backlog vs current worker pool size. First-cut: LOGS
-  // ONLY (doesn't actually spawn or kill agents). Real dynamic
-  // pool sizing requires AgentManager spawn during a run + lifecycle
-  // accounting that doesn't exist today.
+  // Polls every 30s; scales the worker pool up or down based on todo
+  // backlog vs current worker pool size.
+  //
+  // T198c (2026-05-04): originally LOG-ONLY first-cut.
+  // T-Item-4 (2026-05-04): promoted to REAL spawn/kill with hysteresis.
+  // Sustained-signal logic: scale-up/scale-down triggers only fire after
+  // N consecutive polls (default 2 = 60s sustained) — short backlog
+  // spikes don't oscillate the pool.
+  //
+  // Cost shape: spawn calls cost the next prompt window of tokens for
+  // each new agent. The existing maxCostUsd watchdog already enforces
+  // the upper cap — adaptive scale-up is bounded by opts.max AND by
+  // the cost cap (which fails the run when exceeded).
   private adaptiveWatchdog: NodeJS.Timeout | undefined;
+  // T-Item-4: hysteresis state. Counters bump per consecutive poll;
+  // reset to 0 when the signal flips OR when the steady-state band
+  // (between 1× and 2× workers backlog) is observed.
+  private adaptiveHysteresis = { upPolls: 0, downPolls: 0 };
+  private static readonly ADAPTIVE_SUSTAINED_POLLS = 2;
+  // T-Item-4: prevent overlapping scale operations. The watchdog tick
+  // fires every 30s but a scale-up's spawnAgentNoOpencode can take
+  // longer (cold-start). Skip the next tick if we're still scaling.
+  private adaptiveScaleInFlight = false;
   private startAdaptiveWorkerWatchdog(opts: { min: number; max: number }): void {
     if (this.adaptiveWatchdog) return;
     this.adaptiveWatchdog = setInterval(() => {
+      // Don't enqueue a second scale operation on top of an in-flight one.
+      if (this.adaptiveScaleInFlight) return;
       const counts = this.todoQueue.counts();
       const openTodos = counts.pending;
       const inProgress = counts.inProgress;
@@ -4420,23 +4684,138 @@ export class BlackboardRunner implements SwarmRunner {
       const workers = this.opts.manager
         .list()
         .filter((a) => a.index !== 1).length; // exclude planner
-      // Rule of thumb: backlog > 2× workers → scale up;
-      // backlog === 0 + inProgress === 0 → scale down. Cap at min/max.
+      const SUSTAINED = BlackboardRunner.ADAPTIVE_SUSTAINED_POLLS;
       if (totalLive > workers * 2 && workers < opts.max) {
-        const recommendedAdd = Math.min(
-          opts.max - workers,
-          Math.ceil(totalLive / 2 - workers),
-        );
-        this.appendSystem(
-          `[T198c adaptive workers] backlog=${totalLive} (open=${openTodos}, in-progress=${inProgress}) vs ${workers} worker(s) — RECOMMEND +${recommendedAdd} more (cap=${opts.max}). LOG-ONLY first-cut; runner doesn't auto-spawn yet.`,
-        );
+        // Backlog spike: bump up-counter, reset down-counter.
+        this.adaptiveHysteresis.upPolls += 1;
+        this.adaptiveHysteresis.downPolls = 0;
+        if (this.adaptiveHysteresis.upPolls >= SUSTAINED) {
+          this.adaptiveHysteresis.upPolls = 0;
+          this.adaptiveScaleInFlight = true;
+          void this.scaleUpAdaptive(opts, totalLive)
+            .catch((err) => {
+              this.appendSystem(
+                `[T-Item-4 adaptive workers] scale-up error: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            })
+            .finally(() => {
+              this.adaptiveScaleInFlight = false;
+            });
+        }
       } else if (totalLive === 0 && workers > opts.min) {
-        this.appendSystem(
-          `[T198c adaptive workers] backlog drained, ${workers} worker(s) idle — RECOMMEND scale down to min=${opts.min}. LOG-ONLY first-cut; runner doesn't auto-kill yet.`,
-        );
+        // Backlog drained: bump down-counter, reset up-counter.
+        this.adaptiveHysteresis.downPolls += 1;
+        this.adaptiveHysteresis.upPolls = 0;
+        if (this.adaptiveHysteresis.downPolls >= SUSTAINED) {
+          this.adaptiveHysteresis.downPolls = 0;
+          this.adaptiveScaleInFlight = true;
+          void this.scaleDownAdaptive(opts)
+            .catch((err) => {
+              this.appendSystem(
+                `[T-Item-4 adaptive workers] scale-down error: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            })
+            .finally(() => {
+              this.adaptiveScaleInFlight = false;
+            });
+        }
+      } else {
+        // Steady-state band (between 0 and 2× workers backlog): reset both.
+        this.adaptiveHysteresis.upPolls = 0;
+        this.adaptiveHysteresis.downPolls = 0;
       }
     }, 30_000);
     this.adaptiveWatchdog.unref?.();
+  }
+
+  // T-Item-4 (2026-05-04): real scale-up. Spawns recommended-add new
+  // workers via AgentManager.spawnAgentNoOpencode. New agent indexes
+  // pick up after the current worker tail (planner=1, workers=2..N+1).
+  // Stops on first failure to avoid runaway error loops; the next
+  // watchdog tick will retry if the backlog still warrants it.
+  private async scaleUpAdaptive(
+    opts: { min: number; max: number },
+    totalLive: number,
+  ): Promise<void> {
+    const cfg = this.active;
+    if (!cfg) return;
+    const currentWorkers = this.opts.manager
+      .list()
+      .filter((a) => a.index !== 1);
+    if (currentWorkers.length >= opts.max) return;
+    const recommendedAdd = Math.max(
+      1,
+      Math.min(
+        opts.max - currentWorkers.length,
+        Math.ceil(totalLive / 2 - currentWorkers.length),
+      ),
+    );
+    this.appendSystem(
+      `[T-Item-4 adaptive workers] sustained backlog ≥${BlackboardRunner.ADAPTIVE_SUSTAINED_POLLS} polls; scaling up by ${recommendedAdd} worker(s) (current=${currentWorkers.length}, max=${opts.max}).`,
+    );
+    const baseIdx = currentWorkers.length + 2; // existing workers occupy 2..N+1
+    for (let i = 0; i < recommendedAdd; i++) {
+      try {
+        const newAgent = await this.opts.manager.spawnAgentNoOpencode({
+          cwd: cfg.localPath,
+          index: baseIdx + i,
+          model: cfg.workerModel ?? cfg.model,
+        });
+        this.appendSystem(
+          `[T-Item-4 adaptive workers] spawned worker ${newAgent.index} (${newAgent.id.slice(0, 8)}).`,
+        );
+      } catch (err) {
+        this.appendSystem(
+          `[T-Item-4 adaptive workers] spawn failed at index ${baseIdx + i}: ${err instanceof Error ? err.message : String(err)}; will retry next poll.`,
+        );
+        break;
+      }
+    }
+  }
+
+  // T-Item-4 (2026-05-04): real scale-down. Kills idle workers via
+  // AgentManager.killAgent. Picks ONLY workers reporting status
+  // ready/spawning (NOT thinking/retrying — killing mid-prompt would
+  // orphan the in-flight commit attempt). Bounded by opts.min so the
+  // pool never drops below the user-set floor.
+  private async scaleDownAdaptive(opts: {
+    min: number;
+    max: number;
+  }): Promise<void> {
+    const currentWorkers = this.opts.manager
+      .list()
+      .filter((a) => a.index !== 1);
+    if (currentWorkers.length <= opts.min) return;
+    const recommendedKill = currentWorkers.length - opts.min;
+    // Only kill IDLE workers (isInFlight=false). Active workers stay.
+    const idleWorkers = currentWorkers.filter(
+      (w) => !this.opts.manager.isInFlight(w.id),
+    );
+    if (idleWorkers.length === 0) {
+      this.appendSystem(
+        `[T-Item-4 adaptive workers] backlog drained but all ${currentWorkers.length} workers in-flight; deferring scale-down.`,
+      );
+      return;
+    }
+    const toKill = idleWorkers.slice(
+      0,
+      Math.min(recommendedKill, idleWorkers.length),
+    );
+    this.appendSystem(
+      `[T-Item-4 adaptive workers] sustained drain ≥${BlackboardRunner.ADAPTIVE_SUSTAINED_POLLS} polls; killing ${toKill.length} idle worker(s) (min=${opts.min}).`,
+    );
+    for (const w of toKill) {
+      try {
+        await this.opts.manager.killAgent(w.id);
+        this.appendSystem(
+          `[T-Item-4 adaptive workers] killed worker ${w.index} (${w.id.slice(0, 8)}).`,
+        );
+      } catch (err) {
+        this.appendSystem(
+          `[T-Item-4 adaptive workers] kill failed for ${w.id.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   private startQueueReaper(): void {

@@ -33,14 +33,15 @@ Works from the repo root, any shell. The runner shim
 on the spawned process if not already set, so you don't need a bash-only
 env-prefix anymore (was needed until commit `0b3cda6`, 2026-04-27).
 
-Currently 1592 tests passing as of 2026-05-03 (3 skipped, 0 failing).
-Growth since 2026-04-29 covers MoA preset (5 features × 3 layers each,
-2026-05-01), constrained decoding, time-travel replay, SWE-Bench Lite
-adapter, multi-provider live model discovery, and Ollama Cloud as a
-4th provider (2026-05-03). If you run a test file directly via
-`node --import tsx --test <file>`, the env var still gets inherited
-from your shell — set it manually if running a one-off file in a
-fresh terminal.
+Currently **1848 tests passing as of 2026-05-04** (3 skipped, 0 failing).
+Web type-check clean. Growth since 2026-04-29 covers MoA preset
+(5 features × 3 layers, 2026-05-01), the open-weights-parallelism
+deferred lever sweep (4 heavy-substrate items + 7 secondary items
+shipped 2026-05-04), multi-tenant runs end-to-end (server + client),
+and the per-run zustand factory. If you run a test file directly
+via `node --import tsx --test <file>`, the env var still gets
+inherited from your shell — set it manually if running a one-off
+file in a fresh terminal.
 
 ### Type-check (no emit)
 
@@ -63,10 +64,10 @@ cd web && npx vite build
 If you need the dev server up from a WSL session, spawn it as a Windows process via `cmd.exe`:
 
 ```bash
-cmd.exe /c "cd /d C:\\Users\\kevin\\Desktop\\ollama_swarm && set USE_OLLAMA_DIRECT=1&& set USE_WORKER_PIPELINE_V2=1&& npm run dev"
+cmd.exe /c "cd /d C:\\Users\\kevin\\Desktop\\ollama_swarm && npm run dev"
 ```
 
-Or use the longer post-reboot recipe with explicit env-var inlining (`reference_dev_server_from_wsl` memory). Drop the `USE_*` env vars to run V1 paths.
+(Pre-2026-04-29 instructions had `USE_OLLAMA_DIRECT=1` + `USE_WORKER_PIPELINE_V2=1` env-var prefixes; both flags are gone — the V2 paths are unconditional now.) Or use the longer post-reboot recipe with explicit env-var inlining (`reference_dev_server_from_wsl` memory).
 
 For long validation runs where you want to avoid `/mnt/c` inotify SIGTERM flakes (the tsx watch occasionally killing the dev server after summary writes), append `--no-watch`:
 
@@ -145,17 +146,17 @@ EOF
 ### Where new code goes
 
 - **Logic shared between server and web** → `shared/src/` (single source of truth; no per-side mirroring)
-- **V2 substrate that should be opt-in** → `server/src/swarm/blackboard/` with a `V2` suffix on the filename (e.g., `TodoQueueV2.ts`, `WorkerPipelineV2.ts`)
-- **Tests** → next to the file under test as `X.test.ts`; add to `server/package.json`'s `test` script
+- **New blackboard substrate** → `server/src/swarm/blackboard/` (the `V2` suffix convention is dead — V1 was removed and V2-suffixed names were renamed back to plain when V1 went away)
+- **Tests** → next to the file under test as `X.test.ts`; add the path to the explicit list in `server/scripts/run-tests.mjs` (the test discovery is enumerated, not glob-based)
 - **Routes** → `server/src/routes/` named after the API surface (e.g., `v2.ts` for `/api/v2/*`)
 - **Per-runner specialization** → one runner class per preset under `server/src/swarm/`; share retry / watchdog logic via helpers (`promptWithRetry`, `sseAwareTurnWatchdog`)
 - **Docs** → `docs/` for cross-cutting concerns; co-locate code-near design notes as `ARCHITECTURE.md` next to the module
-- **Per-clone files** → written to the cloned repo at `runs/<name>/`. Includes `summary.json`, `summary-<iso>.json`, `opencode.json`, `.swarm-design/`, `.swarm-memory.jsonl`. Don't add new files to the repo root via this path without a good reason (the user's repo gets noise).
+- **Per-clone files** → written to the cloned repo at `runs/<name>/`. Includes `summary.json`, `summary-<iso>.json`, `run-state.json` (RunStatePersister snapshot for recovery), `.swarm-design/`, `.swarm-memory.jsonl`. (`opencode.json` is no longer written — opencode subprocess removed E3 Phase 5.) Don't add new files to the repo root via this path without a good reason.
 
 ### When making behavior changes
 
-- **Default OFF** for risky / experimental behavior. Add an env flag (e.g., `USE_OLLAMA_DIRECT`, `USE_WORKER_PIPELINE_V2`) that opts in.
-- **Parallel-track first.** Wire new substrate alongside existing code; run both in parallel; compare via divergence detection (see `RunStateObserver` for the pattern). Cut over only after stable validation.
+- **Default OFF** for risky / experimental behavior. Add an env flag or a `cfg.X?: boolean` opt-in (recent examples: `cfg.parallelHypothesisInFlight`, `cfg.dynamicModelRoute`, `cfg.stigmergyOnBlackboard`, `SWARM_MAX_CONCURRENT_RUNS`).
+- **Parallel-track first.** Wire new substrate alongside existing code; run both in parallel; compare via divergence detection (see `RunStateObserver` for the pattern). Cut over only after stable validation. (The V1↔V2 substrate rollout was a textbook example — see ADR 004.)
 - **Tests before integration.** Substrate gets unit tests + an integration test demonstrating composition; that lets the integration step be confident.
 - **Document RCA in the commit body.** For non-trivial bug fixes, include enough detail in the commit message that future-you can understand WHY the fix is correct without re-discovering the symptom.
 

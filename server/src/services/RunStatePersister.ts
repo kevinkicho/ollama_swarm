@@ -20,11 +20,40 @@
 //
 // .gitignored — these files are operational state, not source.
 
-import { writeFileSync, renameSync, mkdirSync } from "node:fs";
+import {
+  writeFileSync,
+  renameSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import path from "node:path";
 
 const DEBOUNCE_MS = 500;
-const SCHEMA_VERSION = 1;
+// T-Item-Recover (2026-05-04): bumped from 1 → 2. v2 adds the
+// optional `runConfig` field; v1 snapshots are still readable +
+// listable, just not resumable (the recover endpoint refuses
+// without cfg).
+const SCHEMA_VERSION = 2;
+
+/** Subset of the run's RunConfig persisted in the snapshot, just
+ *  enough to reconstruct a runnable cfg for /api/swarm/recover.
+ *  Per-run knobs the user might have set (e.g., parallel-debate
+ *  streams, custom roles) ride along verbatim so the resumed run
+ *  matches the original. */
+export interface PersistedRunConfig {
+  preset: string;
+  repoUrl: string;
+  localPath: string;
+  agentCount: number;
+  rounds: number;
+  model: string;
+  /** Catch-all for the rest of RunConfig — preserved verbatim so
+   *  preset-specific knobs survive the round-trip. The recover
+   *  endpoint feeds this back into /api/swarm/start. */
+  extras?: Record<string, unknown>;
+}
 
 export interface PersistedRunState {
   schemaVersion: number;
@@ -34,10 +63,15 @@ export interface PersistedRunState {
   startedAt: number;
   lastEventAt: number;
   /** Serialized transcript entries — exactly what the runner has in
-   *  memory. Recovery (deferred) restores this into a fresh runner. */
+   *  memory. Surfaced by the recover endpoint so the UI can show
+   *  the prior run's history; not auto-injected into the new
+   *  runner (runners reset transcript on start). */
   transcript: unknown[];
   /** Active amendments buffer for this run. */
   amendments: Array<{ ts: number; text: string }>;
+  /** T-Item-Recover (2026-05-04): cfg snapshot for resume. Optional
+   *  for back-compat with v1 snapshots; absent → not resumable. */
+  runConfig?: PersistedRunConfig;
 }
 
 export interface SnapshotInput {
@@ -47,6 +81,10 @@ export interface SnapshotInput {
   startedAt: number;
   transcript: unknown[];
   amendments: Array<{ ts: number; text: string }>;
+  /** T-Item-Recover (2026-05-04): include the cfg so the snapshot
+   *  is resumable. Optional — the orchestrator passes it; the
+   *  persister forwards it as-is. */
+  runConfig?: PersistedRunConfig;
 }
 
 /** RunStatePersister — one instance per active run. Owned by the
@@ -92,6 +130,7 @@ export class RunStatePersister {
       lastEventAt: Date.now(),
       transcript: snap.transcript,
       amendments: snap.amendments,
+      ...(snap.runConfig ? { runConfig: snap.runConfig } : {}),
     };
     try {
       // Atomic via tmp + rename. Atomic-rename keeps any concurrent
@@ -125,4 +164,155 @@ export class RunStatePersister {
   getWriteCount(): number {
     return this.writeCount;
   }
+}
+
+// T-Item-Recovery (2026-05-04): recovery-listing helpers. The full
+// auto-resume flow is still deferred (it needs new runner methods +
+// careful state-machine work to bring a runner up from a serialized
+// transcript). This shipping slice covers the LISTING half: scan
+// known parent dirs for run-state.json files, parse + validate,
+// surface to the user via /api/swarm/recoverable-runs so they can
+// see "you have N runs that didn't terminate cleanly" and decide
+// what to do (today: manual investigation; future: auto-resume).
+
+/** A recoverable run discovered on disk. */
+export interface RecoverableRun {
+  /** Full clone path that owns the run-state.json. */
+  clonePath: string;
+  /** Path to the run-state.json file itself. */
+  stateFilePath: string;
+  /** runId from the persisted state. */
+  runId: string;
+  /** Original preset (e.g. "blackboard"). */
+  preset: string;
+  /** Phase when last written — useful to distinguish "executing"
+   *  (genuinely interrupted) vs "completed"/"stopped" (terminal,
+   *  not really recoverable). */
+  phase: string;
+  /** Wall-clock when the run started. */
+  startedAt: number;
+  /** Wall-clock of the last persisted event. Approximate "how stale
+   *  is this snapshot". */
+  lastEventAt: number;
+  /** Transcript entry count — gives the user a sense of how much
+   *  work was done before the interruption. */
+  transcriptLength: number;
+  /** Number of pending amendments (user-injected directive nudges
+   *  that haven't been folded in yet). */
+  amendmentCount: number;
+}
+
+/** Scan one or more parent dirs for clone-dirs containing a
+ *  run-state.json. Returns a list sorted by lastEventAt descending
+ *  (most-recently-active first). Best-effort: any per-file parse or
+ *  read error is silently skipped (the file might be corrupt or
+ *  half-written; the user will notice in the response). */
+export function findRecoverableRuns(
+  parentPaths: readonly string[],
+): RecoverableRun[] {
+  const out: RecoverableRun[] = [];
+  for (const parent of parentPaths) {
+    let entries: string[];
+    try {
+      entries = readdirSync(parent);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      const cloneDir = path.join(parent, name);
+      let isDir: boolean;
+      try {
+        isDir = statSync(cloneDir).isDirectory();
+      } catch {
+        continue;
+      }
+      if (!isDir) continue;
+      const stateFile = path.join(cloneDir, "run-state.json");
+      let raw: string;
+      try {
+        raw = readFileSync(stateFile, "utf8");
+      } catch {
+        continue;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+      if (!parsed || typeof parsed !== "object") continue;
+      const obj = parsed as Record<string, unknown>;
+      if (
+        typeof obj.runId !== "string" ||
+        typeof obj.preset !== "string" ||
+        typeof obj.phase !== "string" ||
+        typeof obj.startedAt !== "number" ||
+        typeof obj.lastEventAt !== "number" ||
+        !Array.isArray(obj.transcript) ||
+        !Array.isArray(obj.amendments)
+      ) {
+        continue;
+      }
+      out.push({
+        clonePath: cloneDir,
+        stateFilePath: stateFile,
+        runId: obj.runId,
+        preset: obj.preset,
+        phase: obj.phase,
+        startedAt: obj.startedAt,
+        lastEventAt: obj.lastEventAt,
+        transcriptLength: obj.transcript.length,
+        amendmentCount: obj.amendments.length,
+      });
+    }
+  }
+  // Most-recently-active first
+  out.sort((a, b) => b.lastEventAt - a.lastEventAt);
+  return out;
+}
+
+/** Returns true when the persisted phase suggests the run was
+ *  genuinely interrupted (vs cleanly terminal). Used by the UI to
+ *  distinguish "you can probably resume this" from "this finished;
+ *  the file just hasn't been cleaned up yet". */
+export function isRecoverablePhase(phase: string): boolean {
+  // Terminal phases: completed, stopped, failed → NOT recoverable.
+  // Anything else (cloning/spawning/seeding/discussing/planning/
+  // executing/paused/stopping/idle) is mid-flight + worth surfacing.
+  return (
+    phase !== "completed" && phase !== "stopped" && phase !== "failed"
+  );
+}
+
+/** T-Item-Recover (2026-05-04): load + parse a snapshot from disk.
+ *  Returns the full PersistedRunState (or null on parse error /
+ *  missing file). The recover endpoint uses this to read the cfg +
+ *  prior transcript before kicking a fresh run. */
+export function loadSnapshot(stateFilePath: string): PersistedRunState | null {
+  let raw: string;
+  try {
+    raw = readFileSync(stateFilePath, "utf8");
+  } catch {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+  if (
+    typeof obj.runId !== "string" ||
+    typeof obj.preset !== "string" ||
+    typeof obj.phase !== "string" ||
+    typeof obj.startedAt !== "number" ||
+    typeof obj.lastEventAt !== "number" ||
+    !Array.isArray(obj.transcript) ||
+    !Array.isArray(obj.amendments)
+  ) {
+    return null;
+  }
+  return obj as unknown as PersistedRunState;
 }

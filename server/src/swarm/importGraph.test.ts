@@ -15,6 +15,8 @@ import { join } from "node:path";
 import {
   extractImportPaths,
   extractPythonImportPaths,
+  extractRustImportPaths,
+  extractGoImportPaths,
   buildBidirectionalGraph,
   buildImportGraph,
   clusterByImports,
@@ -280,5 +282,182 @@ describe("buildImportGraph — on-disk roundtrip", () => {
     // listed but not on disk — read fails
     const g = await buildImportGraph(workdir, ["src/missing.ts"]);
     assert.deepEqual([...g.get("src/missing.ts")!], []);
+  });
+});
+
+// T-Item-Lang (2026-05-04): Rust import extractor tests
+describe("extractRustImportPaths — pure", () => {
+  const knownFiles = new Set([
+    "src/lib.rs",
+    "src/foo.rs",
+    "src/bar/mod.rs",
+    "src/bar/baz.rs",
+    "src/util.rs",
+  ]);
+
+  it("captures `mod foo;` → src/foo.rs", () => {
+    const text = `mod foo;\nmod bar;`;
+    const got = extractRustImportPaths(text, "src/lib.rs", knownFiles);
+    assert.ok(got.includes("src/foo.rs"));
+    assert.ok(got.includes("src/bar/mod.rs"));
+  });
+
+  it("captures `use crate::foo;` → src/foo.rs", () => {
+    const text = `use crate::foo;`;
+    const got = extractRustImportPaths(text, "src/bar/mod.rs", knownFiles);
+    assert.ok(got.includes("src/foo.rs"));
+  });
+
+  it("captures `use super::util;` → resolves up one level", () => {
+    const text = `use super::util;`;
+    const got = extractRustImportPaths(text, "src/bar/mod.rs", knownFiles);
+    assert.ok(got.includes("src/util.rs"));
+  });
+
+  it("captures `use self::baz;` → relative within current dir", () => {
+    const text = `use self::baz;`;
+    const got = extractRustImportPaths(text, "src/bar/mod.rs", knownFiles);
+    assert.ok(got.includes("src/bar/baz.rs"));
+  });
+
+  it("skips `use std::*` (standard library)", () => {
+    const text = `use std::collections::HashMap;\nuse core::option::Option;`;
+    const got = extractRustImportPaths(text, "src/lib.rs", knownFiles);
+    assert.equal(got.length, 0);
+  });
+
+  it("skips external crates (unresolvable paths)", () => {
+    const text = `use serde::Deserialize;\nuse tokio::sync::Mutex;`;
+    const got = extractRustImportPaths(text, "src/lib.rs", knownFiles);
+    assert.equal(got.length, 0);
+  });
+
+  it("does not include self-imports", () => {
+    const text = `use crate::lib;`;
+    // crate::lib resolves to src/lib.rs which IS the file itself
+    const got = extractRustImportPaths(text, "src/lib.rs", knownFiles);
+    assert.ok(!got.includes("src/lib.rs"));
+  });
+
+  it("handles `pub use` and `pub mod` keywords", () => {
+    const text = `pub mod foo;\npub use crate::util;`;
+    const got = extractRustImportPaths(text, "src/lib.rs", knownFiles);
+    assert.ok(got.includes("src/foo.rs"));
+    assert.ok(got.includes("src/util.rs"));
+  });
+
+  it("dedupes when same target imported multiple times", () => {
+    const text = `use crate::foo;\nuse crate::foo::Bar;`;
+    const got = extractRustImportPaths(text, "src/lib.rs", knownFiles);
+    const fooCount = got.filter((p) => p === "src/foo.rs").length;
+    assert.equal(fooCount, 1);
+  });
+
+  it("returns empty list when input has no imports", () => {
+    const text = `fn main() { println!(\"hello\"); }`;
+    const got = extractRustImportPaths(text, "src/lib.rs", knownFiles);
+    assert.deepEqual(got, []);
+  });
+});
+
+// T-Item-Lang (2026-05-04): Go import extractor tests
+describe("extractGoImportPaths — pure", () => {
+  const knownFiles = new Set([
+    "main.go",
+    "internal/foo/foo.go",
+    "internal/foo/foo_test.go",
+    "internal/bar/bar.go",
+    "pkg/util/util.go",
+  ]);
+
+  it("captures single `import \"path\"` form", () => {
+    const text = `package main\n\nimport "internal/foo"`;
+    const got = extractGoImportPaths(text, "main.go", knownFiles);
+    assert.ok(got.includes("internal/foo/foo.go"));
+  });
+
+  it("captures grouped `import ( ... )` form", () => {
+    const text = [
+      `package main`,
+      ``,
+      `import (`,
+      `  "internal/foo"`,
+      `  "internal/bar"`,
+      `  "pkg/util"`,
+      `)`,
+    ].join("\n");
+    const got = extractGoImportPaths(text, "main.go", knownFiles);
+    assert.ok(got.includes("internal/foo/foo.go"));
+    assert.ok(got.includes("internal/bar/bar.go"));
+    assert.ok(got.includes("pkg/util/util.go"));
+  });
+
+  it("handles aliased imports (`alias \"path\"`)", () => {
+    const text = `package main\n\nimport f "internal/foo"`;
+    const got = extractGoImportPaths(text, "main.go", knownFiles);
+    assert.ok(got.includes("internal/foo/foo.go"));
+  });
+
+  it("strips module prefix heuristic (github.com/owner/repo/...)", () => {
+    const text = `package main\n\nimport "github.com/owner/repo/internal/foo"`;
+    const got = extractGoImportPaths(text, "main.go", knownFiles);
+    assert.ok(got.includes("internal/foo/foo.go"));
+  });
+
+  it("ignores commented-out imports", () => {
+    const text = [
+      `package main`,
+      `// import "internal/foo"`,
+      `/* import "internal/bar" */`,
+      `import "pkg/util"`,
+    ].join("\n");
+    const got = extractGoImportPaths(text, "main.go", knownFiles);
+    // Only the un-commented import should be captured
+    assert.ok(got.includes("pkg/util/util.go"));
+    assert.equal(got.includes("internal/foo/foo.go"), false);
+    assert.equal(got.includes("internal/bar/bar.go"), false);
+  });
+
+  it("picks the alphabetically-first .go file in a directory (deterministic)", () => {
+    const knownPair = new Set([
+      "main.go",
+      "internal/x/a.go",
+      "internal/x/b.go",
+    ]);
+    const text = `import "internal/x"`;
+    const got = extractGoImportPaths(text, "main.go", knownPair);
+    assert.ok(got.includes("internal/x/a.go"));
+    assert.equal(got.includes("internal/x/b.go"), false);
+  });
+
+  it("does not include self-imports", () => {
+    const text = `import "internal/foo"`;
+    const got = extractGoImportPaths(text, "internal/foo/foo.go", knownFiles);
+    // foo.go is in internal/foo dir; the import resolves to internal/foo/foo.go
+    // which IS the source file itself
+    assert.ok(!got.includes("internal/foo/foo.go"));
+  });
+
+  it("returns empty list when no imports", () => {
+    const text = `package main\n\nfunc main() {}`;
+    const got = extractGoImportPaths(text, "main.go", knownFiles);
+    assert.deepEqual(got, []);
+  });
+
+  it("dedupes when same import appears twice", () => {
+    const text = [
+      `package main`,
+      `import "internal/foo"`,
+      `import "internal/foo"`,
+    ].join("\n");
+    const got = extractGoImportPaths(text, "main.go", knownFiles);
+    assert.equal(got.filter((p) => p === "internal/foo/foo.go").length, 1);
+  });
+
+  it("skips bare standard-library imports (unresolvable)", () => {
+    const text = `import "fmt"\nimport "os"`;
+    const got = extractGoImportPaths(text, "main.go", knownFiles);
+    // fmt + os won't resolve to anything in knownFiles
+    assert.equal(got.length, 0);
   });
 });

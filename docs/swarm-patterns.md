@@ -137,12 +137,18 @@ just conformity. Good for yes/no or A-vs-B decisions.
 pattern. Fixed at exactly 3 agents (Pro/Con/Judge) — no other
 configuration makes sense.
 
-### 6. Evaluator / critic loops `[ ]`
+### 6. Evaluator / critic loops `[~]` ← **shipped as a layer, not a standalone preset**
 Worker produces → critic scores against a rubric → worker revises. Reflexion-style.
+
+**Shipped layers (orthogonal — they bolt on to any preset):**
+- `cfg.criticAtCommit` (Unit 35) — peer agent reviews each blackboard worker diff before commit; reject marks the todo stale.
+- `cfg.councilReconcile: "vote"` — drafters cast a per-round ballot for the best OTHER draft (council).
+- Debate-judge's verdict pass IS the evaluator step (built-in to the preset).
+- `cfg.dynamicModelRoute` lets a "judgement" tier (auditor/judge/planner) route to a stronger model so the critic IS literally a more-capable judge.
 
 **Wins:** polishes individual outputs to a quality bar.
 **Limits:** scales by adding **iterations**, not agents. Orthogonal to
-the "more agents" axis; probably layers on top of any other pattern.
+the "more agents" axis — and that's how it shipped: no standalone "critic" preset, just opt-in critic layers on the existing presets.
 
 ### 7. Blackboard architecture `[x]` ← **shipped (v1 preset)**
 Instead of a linear transcript, agents post `claim`, `question`, `todo`,
@@ -152,9 +158,10 @@ item. Async by design, no turn-taking.
 Shipped layers: optimistic CAS on file hashes + small atomic units (≤2
 files per commit) + planner/worker split + stale-replan on CAS rejection
 + hard caps (wall-clock / commits / todos) + `summary.json` run artifact.
-See [`blackboard-plan.md`](./blackboard-plan.md) for phase-by-phase notes
-and [`archive/blackboard-changelog.md`](./archive/blackboard-changelog.md)
-for what landed in each commit (archived; `git log` is the live source).
+See [`archive/blackboard-changelog.md`](./archive/blackboard-changelog.md)
+for what landed in each commit (archived; `git log` is the live source);
+[`../server/src/swarm/blackboard/ARCHITECTURE.md`](../server/src/swarm/blackboard/ARCHITECTURE.md)
+is the architecture-as-shipped reference.
 
 **Wins:** scales until the board gets too noisy to manage. No idle agents
 waiting their turn. Natural fit for 10+ agents.
@@ -170,10 +177,11 @@ the table before the next agent's turn.
 
 Shipped via `StigmergyRunner` (see
 `server/src/swarm/StigmergyRunner.ts`) as a **standalone preset** for
-repo exploration — not as a layer on top of blackboard. The
-blackboard-layer variant (workers consulting the annotation table when
-picking the next todo) is a larger surgery on `BlackboardRunner`'s
-claim logic and was deferred.
+repo exploration. The blackboard-layer variant **also shipped** 2026-05-04
+via `cfg.stigmergyOnBlackboard`: when set, blackboard's `runWorker`
+dispatch picks pending todos via `dequeueByScore` with a stigmergy bias
+(`-touched` count of expectedFiles) so the swarm spreads commits across
+the repo rather than dogpiling one hot-spot.
 
 The annotation table is in-memory in the runner (wiped on next start).
 Per round, agents go in index order; each sees the latest table, picks
@@ -190,6 +198,34 @@ they picked).
 survey/exploration phases, less so for directed work. No re-visit cap
 — an agent might re-read the same file if the table suggests it's
 still high-interest.
+
+### 9. Mixture of Agents (MoA) `[x]` ← **shipped as `moa` preset (2026-05-01, three layers)**
+Layer 1: N peer-hidden proposers (parallel) each draft an answer.
+Layer 2: 1 aggregator reads all N drafts + synthesizes ONE final answer.
+Crystal-clear "open-weights ensemble beats one big paid model" claim
+when models differ per layer (`cfg.moaProposerModel` + `cfg.moaAggregatorModel`).
+
+Shipped layers:
+- Multi-tier aggregation tree via `cfg.moaAggregationLevels` (K → ceil(K/2) → ... → 1).
+- Heterogeneous models per layer (small fast proposers + big synthesis aggregator).
+- T-Item-2 (2026-05-04): K parallel debate streams via the same
+  per-layer parallelism applied to debate-judge — different
+  propositions run concurrently, judge synthesizes across.
+- T-Item-MoaTools (2026-05-04): proposers can opt into read-only
+  tools via `cfg.moaProposerTools`.
+
+**Wins:** the project's headline claim — multiple small open-weights
+models in parallel ≈ one big paid model at a fraction of cost.
+**Limits:** discussion-only (proposers + aggregator return prose, not
+file edits). For code-modify tasks, the verdict is "use blackboard."
+
+### 10. Baseline `[x]` ← **shipped as `baseline` preset**
+Single agent, single prompt, single apply step. The "thinnest honest baseline"
+the eval harness compares every other preset against. T-Item-1 (2026-05-04)
+added `cfg.baselineAttempts > 1` parallel-clone-to-K-subdirs harness:
+K independent attempts in K clone subdirs; winner-pick by
+`hunks_applied + 5×verify_passed - 3×verify_failed`; promote the
+winner's clone to canonical path.
 
 ---
 
@@ -255,16 +291,19 @@ collapsible `<PresetAdvancedSettings>` panel. Status:
 
 - **Role differentiation → list of role slots.** SHIPPED (Unit 32).
   Edit / add / remove / reset to the server's `DEFAULT_ROLES` catalog.
-- **Map-reduce → tree-slicing strategy.** DEFERRED — the runner uses
-  a fixed round-robin partition; strategy alternatives don't exist
-  yet on the backend.
-- **Council → round count + reconcile policy.** PARTIAL — `rounds`
-  is a top-level form field. Reconcile policy (vote / merge /
-  judge) is DEFERRED — the runner has no policy notion; convergence
-  happens through revision.
-- **Orchestrator-worker → lead model override.** DEFERRED — the
-  runner uses one model across all agents via `cfg.model`. Surfacing
-  a per-role model would need the runner to track it.
+- **Map-reduce → tree-slicing strategy.** SHIPPED 2026-05-04
+  (T-Item-MapPart) via `cfg.mapReducePartition: "round-robin" |
+  "size-balanced" | "import-graph"`. Size-balanced uses LPT-greedy
+  weighting by recursive file count.
+- **Council → round count + reconcile policy.** SHIPPED 2026-05-04
+  (T-Item-CouncilRec). `rounds` field already there; reconcile
+  policy now `cfg.councilReconcile: "revise" | "vote" | "judge"`.
+  Default "revise" matches the legacy convergence-through-revision;
+  "vote" adds a per-drafter ranked-choice ballot after final round;
+  "judge" is the synthesis pass already shipping.
+- **Orchestrator-worker → lead model override.** SHIPPED via T199's
+  per-tier model UI form pickers (`cfg.workerModel`, `cfg.plannerModel`,
+  `cfg.auditorModel`). Each tier accepts an independent model override.
 - **Blackboard → per-run council-contract (Unit 30) override.**
   SHIPPED (Unit 32). Tri-state: inherit env flag / force on / force
   off. `max concurrent agents` and `stale-retry limit` remain

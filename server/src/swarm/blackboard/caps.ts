@@ -3,25 +3,17 @@
 // checkCaps() on every worker-loop iteration and, if it returns a non-null
 // reason, flags the run for cap-induced termination.
 //
-// Defaults are hard-coded for now — a runtime-configurable cap surface (per-
-// run overrides via RunConfig or env vars) is deferred to the next cap
-// iteration. Today's numbers are generous enough that no real run should
-// bump into them; the caps are a safety valve, not a production tuning knob.
-
-// Bumped 2026-04-22 (Unit 23) to support multi-hour overnight runs.
-// Original numbers (20 min / 20 commits / 30 todos) were sized for a
-// 20-minute "smoke" budget and tripped early on substantive runs — the
-// kyahoofinance032926 overnight test landed 20 commits in ~20 minutes
-// and got cut off mid-work. New numbers target an ~8-hour budget while
-// keeping all three caps as runaway-prevention backstops.
-//
-// Concretely: 8 h × 60 min = 480 min wall-clock; commits/todos bumped
-// 10× to 200 / 300 respectively, since they scale with productivity not
-// with time. A pathological planner-emits-infinite-todos failure mode
-// still terminates eventually under the 300-todo cap.
-export const WALL_CLOCK_CAP_MS = 480 * 60_000;
-export const COMMITS_CAP = 200;
-export const TODOS_CAP = 300;
+// T-Item-Caps (2026-05-04): the three caps are now env-overridable via
+// SWARM_WALL_CLOCK_CAP_MIN, SWARM_COMMITS_CAP, SWARM_TODOS_CAP (read
+// from config). The exports below are MUTABLE re-evaluations of those
+// env values, evaluated at module-import time. Per-run overrides via
+// RunConfig.wallClockCapMs still win over the env-derived default.
+// (Pre-T-Item-Caps the constants were baked-in at compile time —
+// users had to edit caps.ts + rebuild to change a cap.)
+import { config } from "../../config.js";
+export const WALL_CLOCK_CAP_MS = config.SWARM_WALL_CLOCK_CAP_MIN * 60_000;
+export const COMMITS_CAP = config.SWARM_COMMITS_CAP;
+export const TODOS_CAP = config.SWARM_TODOS_CAP;
 
 // Unit 27: host-sleep compensation. The wall-clock cap originally used
 // `Date.now() - runStartedAt`, which silently counts suspended-host time

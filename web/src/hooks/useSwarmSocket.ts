@@ -1,5 +1,6 @@
-import { useEffect } from "react";
-import { useSwarm } from "../state/store";
+import { useContext, useEffect } from "react";
+import { useSwarm, SwarmStoreContext } from "../state/store";
+import { applyEventToStore } from "../state/applyEvent";
 import type { SwarmEvent, SwarmStatusSnapshot } from "../types";
 
 // Singleton so React StrictMode's double-invoked effect doesn't
@@ -39,153 +40,11 @@ function dispatch(ev: SwarmEvent): void {
 }
 
 function applyEvent(ev: SwarmEvent): void {
-  const s = useSwarm.getState();
-  switch (ev.type) {
-    case "transcript_append":
-      s.appendEntry(ev.entry);
-      break;
-    case "agent_state":
-      s.upsertAgent(ev.agent);
-      break;
-    case "swarm_state":
-      s.setPhase(ev.phase, ev.round);
-      break;
-    case "agent_streaming":
-      s.setStreaming(ev.agentId, ev.text);
-      break;
-    case "agent_streaming_end":
-      // Task #176 Phase A: don't remove the bubble; mark it "done"
-      // so it stays visible (with ✓) until the matching transcript_append
-      // arrives and replaces it (or the 30s safety sweeper kicks in).
-      s.markStreamingEnded(ev.agentId);
-      break;
-    case "error":
-      s.setError(ev.message);
-      break;
-    case "todo_posted":
-      s.upsertTodo(ev.todo);
-      break;
-    case "todo_claimed":
-      s.applyClaim(ev.todoId, ev.claim);
-      break;
-    case "todo_committed":
-      s.markCommitted(ev.todoId);
-      break;
-    case "todo_failed":
-      s.markStale(ev.todoId, ev.reason, ev.replanCount);
-      break;
-    case "todo_skipped":
-      s.markSkipped(ev.todoId, ev.reason);
-      break;
-    case "todo_replanned":
-      s.applyReplan(
-        ev.todoId,
-        ev.description,
-        ev.expectedFiles,
-        ev.replanCount,
-        ev.expectedAnchors,
-      );
-      break;
-    case "finding_posted":
-      s.appendFinding(ev.finding);
-      break;
-    case "queue_state":
-      s.replaceBoard(ev.snapshot);
-      break;
-    case "contract_updated":
-      s.setContract(ev.contract);
-      break;
-    case "run_summary":
-      s.setSummary(ev.summary);
-      break;
-    case "agent_latency_sample":
-      s.pushLatencySample(ev.agentId, {
-        ts: ev.ts,
-        elapsedMs: ev.elapsedMs,
-        success: ev.success,
-        attempt: ev.attempt,
-      });
-      break;
-    case "conformance_sample":
-      s.pushConformanceSample({
-        ts: ev.ts,
-        score: ev.score,
-        smoothedScore: ev.smoothedScore,
-        ...(ev.reason ? { reason: ev.reason } : {}),
-        ...(ev.graderModel ? { graderModel: ev.graderModel } : {}),
-        ...(typeof ev.latencyMs === "number" ? { latencyMs: ev.latencyMs } : {}),
-        ...(typeof ev.excerptChars === "number" ? { excerptChars: ev.excerptChars } : {}),
-        ...(Array.isArray(ev.windowScores) ? { windowScores: ev.windowScores } : {}),
-      });
-      break;
-    case "directive_amended":
-      s.pushAmendment({ ts: ev.ts, text: ev.text });
-      break;
-    case "drift_sample":
-      s.pushDriftSample({
-        ts: ev.ts,
-        similarity: ev.similarity,
-        smoothedSimilarity: ev.smoothedSimilarity,
-        embeddingModel: ev.embeddingModel,
-        excerptChars: ev.excerptChars,
-        windowSimilarities: ev.windowSimilarities,
-      });
-      break;
-    case "clone_state":
-      s.setCloneState({
-        alreadyPresent: ev.alreadyPresent,
-        clonePath: ev.clonePath,
-        priorCommits: ev.priorCommits,
-        priorChangedFiles: ev.priorChangedFiles,
-        priorUntrackedFiles: ev.priorUntrackedFiles,
-      });
-      break;
-    case "pheromone_updated":
-      // Phase 2a: stigmergy pheromone table update. Live upsert per
-      // annotation commit. Full-table hydration happens via the REST
-      // catch-up path below.
-      s.upsertPheromone(ev.file, ev.state);
-      break;
-    case "mapper_slices":
-      // Phase 2d: map-reduce slice assignments. Emitted once at the
-      // top of the run after slicing. Client overwrites the map.
-      s.setMapperSlices(ev.slices);
-      break;
-    case "run_started":
-      // Task #37 (partial) + #46: a new run is starting. Drop agents/
-      // streaming/latency from any prior run in this session — the
-      // prior runner's roster is stale. Transcript + findings + board
-      // survive so the user can still scroll through what happened.
-      // Task #46 threads the incoming run's metadata into the divider
-      // so the Transcript renderer can show a rich block instead of
-      // a plain "— new run started —" line.
-      s.resetForNewRun({
-        runId: ev.runId,
-        preset: ev.preset,
-        plannerModel: ev.plannerModel,
-        workerModel: ev.workerModel,
-        agentCount: ev.agentCount,
-        repoUrl: ev.repoUrl,
-      });
-      s.setRunStartedAt(ev.startedAt);
-      s.setRunId(ev.runId);
-      s.setRunConfig({
-        preset: ev.preset,
-        plannerModel: ev.plannerModel,
-        workerModel: ev.workerModel,
-        auditorModel: ev.auditorModel,
-        dedicatedAuditor: ev.dedicatedAuditor,
-        roles: ev.roles,
-        repoUrl: ev.repoUrl,
-        clonePath: ev.clonePath,
-        agentCount: ev.agentCount,
-        rounds: ev.rounds,
-        // Phase 4b of #243: thread topology into the store so
-        // SwarmView's agentRole/agentModel helpers can use it.
-        topology: ev.topology,
-      });
-      break;
-  }
+  // T-Item-PerRunStore (2026-05-04): dispatch via shared helper so
+  // per-run Providers can reuse the same routing logic against
+  // their own store. Singleton path keeps targeting the singleton
+  // via useSwarm.getState().
+  applyEventToStore(ev, useSwarm.getState());
 }
 
 function connect(): void {
@@ -293,13 +152,21 @@ async function hydrateFromSnapshot(): Promise<void> {
 // Task #65: `enabled=false` keeps the hook a no-op so review-tabs
 // (?review=...) skip the live WebSocket + status snapshot fetch
 // — the review view hydrates the store from a saved summary instead.
+//
+// T-Item-PerRunStore (2026-05-04): also no-op when a SwarmStoreContext
+// Provider is active. The per-run Provider opens its OWN per-runId
+// WS subscription + REST hydration; the singleton socket would
+// duplicate events into the singleton store the per-run subtree
+// isn't reading from.
 export function useSwarmSocket(enabled = true): void {
+  const perRunStore = useContext(SwarmStoreContext);
+  const effectiveEnabled = enabled && perRunStore === null;
   useEffect(() => {
-    if (!enabled) return;
+    if (!effectiveEnabled) return;
     void hydrateFromSnapshot();
     connect();
     // No cleanup — the socket is a module-level singleton and is
     // reused across component remounts. The browser cleans it up
     // on page unload.
-  }, [enabled]);
+  }, [effectiveEnabled]);
 }

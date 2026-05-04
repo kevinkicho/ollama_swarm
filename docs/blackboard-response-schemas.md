@@ -7,15 +7,16 @@ and how we handle the inevitable "LLM produced something almost right" case.
 
 **Scope.** These schemas are specific to the **blackboard preset** — they
 exist because the blackboard's data model (`Todo`, `Diff`, replan action)
-needs a machine-parseable contract between LLM and runner. Other presets in
-`docs/swarm-patterns.md` use different contracts:
+needs a machine-parseable contract between LLM and runner. Other presets
+have different contracts (see `docs/swarm-patterns.md` for the full list):
 
-- **Round-robin** (current pre-preset mode in `RoundRobinRunner.ts`): no JSON,
-  agents speak free-form prose, the transcript is the only output.
-- **Future presets** (role-differentiation, map-reduce, etc. — see
-  `swarm-patterns.md`) will define their own contracts as needed. Nothing
-  about `diffs` / `revised` / `skip` is portable — each preset owns its own
-  shapes.
+- **Round-robin / role-diff / council / orchestrator-worker / map-reduce /
+  stigmergy / debate-judge / MoA / baseline:** discussion-focused; agents
+  speak prose with optional summary envelopes (debate verdict JSON, MoA
+  proposal text, etc.). Only `baseline` and `blackboard` actually write
+  files.
+- **Each runner owns its own contract.** Nothing about `diffs` /
+  `revised` / `skip` is portable — they're blackboard-specific.
 
 **Stack independence.** The schemas are defined by *our* prompts and parsers,
 not by any layer beneath us:

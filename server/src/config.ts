@@ -164,6 +164,52 @@ const Schema = z.object({
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // T-Item-MultiTenant Phase 4 (2026-05-04): max concurrent runs the
+  // orchestrator will accept. Default 4; set to 1 to preserve the
+  // pre-multi-tenant strict-single-run behavior. Capped at 16 as a
+  // safety valve against accidentally-spawned-loop-of-runs.
+  // Resource cost: each blackboard run pins ~4-5 Ollama agents; 4
+  // concurrent runs ≈ 16-20 agents × per-model GPU/RAM. The user
+  // is on the hook for sizing their host accordingly.
+  SWARM_MAX_CONCURRENT_RUNS: z
+    .string()
+    .default("4")
+    .transform((v) => {
+      const n = Number.parseInt(v, 10);
+      return Number.isInteger(n) && n >= 1 && n <= 16 ? n : 4;
+    }),
+  // T-Item-Caps (2026-05-04): runtime cap overrides for the three
+  // hard caps in blackboard/caps.ts. Defaults are the baked-in
+  // values (8h wall, 200 commits, 300 todos). Set to override
+  // without rebuilding. Per-run overrides via cfg.wallClockCapMs
+  // still win over the env-derived default.
+  // Wall-clock cap: minutes (env) → ms internally.
+  SWARM_WALL_CLOCK_CAP_MIN: z
+    .string()
+    .default("480")
+    .transform((v) => {
+      const n = Number.parseInt(v, 10);
+      // Bound: [1 minute, 7 days] — a 1-week run is the absolute
+      // upper-bound; longer should use cron / scheduled re-runs.
+      return Number.isInteger(n) && n >= 1 && n <= 7 * 24 * 60 ? n : 480;
+    }),
+  SWARM_COMMITS_CAP: z
+    .string()
+    .default("200")
+    .transform((v) => {
+      const n = Number.parseInt(v, 10);
+      // Bound: [1, 10000]. The runaway-prevention floor is 1; the
+      // ceiling is just "obvious accident detection" — runs landing
+      // 10K commits are testing infrastructure, not blackboard runs.
+      return Number.isInteger(n) && n >= 1 && n <= 10_000 ? n : 200;
+    }),
+  SWARM_TODOS_CAP: z
+    .string()
+    .default("300")
+    .transform((v) => {
+      const n = Number.parseInt(v, 10);
+      return Number.isInteger(n) && n >= 1 && n <= 10_000 ? n : 300;
+    }),
 });
 
 const parsed = Schema.parse(process.env);

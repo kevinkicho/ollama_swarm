@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useSwarm } from "../state/store";
 import { PreflightPreview } from "./PreflightPreview";
 // 2026-05-03 (UX win #8): StartConfirmModal removed from the flow.
@@ -316,6 +317,7 @@ function buildPreviewClonePath(repoUrl: string, parentPath: string): string {
 }
 
 export function SetupForm() {
+  const navigate = useNavigate();
   const [repoUrl, setRepoUrl] = useState("https://github.com/kevinkicho");
   const [parentPath, setParentPath] = useState("C:\\users\\you\\projects");
   const [presetId, setPresetId] = useState<string>("round-robin");
@@ -693,6 +695,22 @@ export function SetupForm() {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error?.formErrors?.[0] ?? body.error ?? `HTTP ${res.status}`);
+      }
+      // T-Item-MultiTenant Phase 9 (2026-05-04): navigate to the new
+      // run's deep-link URL on successful start. /api/swarm/start
+      // responds with `{ ok, status }` where status carries runId.
+      // Falls back to staying on the current page if the response
+      // shape doesn't include runId (e.g. immediate failure).
+      try {
+        const body = await res.json().catch(() => ({}));
+        const newRunId =
+          (body?.status?.runId as string | undefined) ??
+          (body?.runId as string | undefined);
+        if (newRunId && newRunId.length > 0) {
+          navigate(`/runs/${encodeURIComponent(newRunId)}`);
+        }
+      } catch {
+        // best-effort — staying on / is the safe fallback
       }
       // 2026-05-03 (UX win #7): persist for the recently-used row.
       // Only fires on a successful POST (HTTP 200) so cancelled / failed

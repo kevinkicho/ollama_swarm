@@ -147,6 +147,35 @@ export class RepoService {
     };
   }
 
+  // T-Item-1 (2026-05-04): clone the same URL into a per-attempt
+  // subdir for parallel-clone-to-K-subdirs baseline. Picks a path
+  // like `<parent>/<baseName>-attempt-<idx>` and clones into it via
+  // the existing clone() guts (same GITHUB_TOKEN injection / force
+  // handling). If the subdir already exists, deletes it first so we
+  // start clean (idempotent across runs).
+  async cloneToSubdir(input: {
+    parent: string;
+    baseName: string;
+    attemptIdx: number;
+    url: string;
+  }): Promise<{ destPath: string }> {
+    const destPath = path.join(
+      input.parent,
+      `${input.baseName}-attempt-${input.attemptIdx}`,
+    );
+    // Remove any stale subdir from a prior K-attempt run so we start
+    // clean. Force flag in clone() doesn't cover the "directory has a
+    // partial clone from a crashed prior run" case.
+    try {
+      await fs.rm(destPath, { recursive: true, force: true });
+    } catch {
+      // Best-effort — if we can't rm (file lock?) clone() will surface
+      // a meaningful error.
+    }
+    const result = await this.clone({ url: input.url, destPath });
+    return { destPath: result.destPath };
+  }
+
   // Unit 47: count commits + working-tree changes inside an existing
   // clone. Used by clone() so its CloneResult tells the runner (and
   // ultimately the UI) whether this is a fresh shallow clone or a

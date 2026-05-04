@@ -351,17 +351,22 @@ describe("DebateJudgeRunner — directive plumbing (structural)", () => {
   });
 
   it("(#2) loop threads cfg.userDirective into runDebaterTurn + runJudgeTurn + runNextActionPhase", () => {
+    // T-Item-2 (2026-05-04): the per-round calls moved out of `loop`
+    // into runSingleStreamDebate (which both single- and multi-stream
+    // paths share). The proposition parameter is now named
+    // `proposition` (was `prop` in the inline loop) + a trailing
+    // `stream` arg threads the optional DebateStream context.
     assert.match(
       DJ_SRC,
-      /this\.runDebaterTurn\(pro, "pro", r, cfg\.rounds, prop, isFinalRound, cfg\.userDirective\)/,
+      /this\.runDebaterTurn\(pro, "pro", r, cfg\.rounds, proposition, isFinalRound, cfg\.userDirective, stream\)/,
     );
     assert.match(
       DJ_SRC,
-      /this\.runDebaterTurn\(con, "con", r, cfg\.rounds, prop, isFinalRound, cfg\.userDirective\)/,
+      /this\.runDebaterTurn\(con, "con", r, cfg\.rounds, proposition, isFinalRound, cfg\.userDirective, stream\)/,
     );
     assert.match(
       DJ_SRC,
-      /this\.runJudgeTurn\(judge, prop, r, cfg\.userDirective\)/,
+      /this\.runJudgeTurn\(judge, proposition, r, cfg\.userDirective, stream\)/,
     );
     assert.match(
       DJ_SRC,

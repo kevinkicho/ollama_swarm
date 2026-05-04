@@ -67,6 +67,8 @@ const orchestrator = new Orchestrator({
   // V2 Step 1: Ollama base URL (proxy-aware) for the Ollama-direct
   // path. Strip /v1 suffix so OllamaClient can append /api/chat.
   ollamaBaseUrl: config.OLLAMA_BASE_URL.replace(/\/v1\/?$/, ""),
+  // T-Item-MultiTenant Phase 4 (2026-05-04): cap on concurrent runs.
+  maxConcurrentRuns: config.SWARM_MAX_CONCURRENT_RUNS,
 });
 
 broadcaster.attach(wss, (ws) => {

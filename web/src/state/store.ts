@@ -1,4 +1,6 @@
-import { create } from "zustand";
+import { create, useStore } from "zustand";
+import type { StoreApi, StateCreator } from "zustand";
+import { createContext, useContext } from "react";
 import type {
   AgentState,
   BoardSnapshot,
@@ -58,7 +60,9 @@ export interface DriftSample {
   windowSimilarities: number[];
 }
 
-interface SwarmStore {
+// T-Item-PerRunStore (2026-05-04): exported so the per-run
+// Provider + the shared event applier can type-narrow against it.
+export interface SwarmStore {
   phase: SwarmPhase;
   round: number;
   agents: Record<string, AgentState>;
@@ -194,7 +198,23 @@ export interface RunStartDividerInfo {
   repoUrl?: string;
 }
 
-export const useSwarm = create<SwarmStore>((set) => ({
+// T-Item-PerRunStore (2026-05-04): factory + Context for per-run
+// store scoping. The default singleton store backs the legacy "/" route
+// (and any component called outside a Provider). The /runs/:runId
+// route wraps its subtree in <SwarmStoreProvider store={createSwarmStore()}>
+// + opens a per-run WS subscription that dispatches into THAT store.
+//
+// Components keep calling `useSwarm((s) => s.field)` exactly as
+// before — the new `useSwarm` reads the per-run store from context
+// when present + falls back to the singleton when absent.
+//
+// Direct API access (`useSwarm.getState()` etc., used by useSwarmSocket
+// + MetricsPanel's type extraction) targets the singleton — that's
+// the legacy behavior, preserved verbatim.
+
+/** Initializer fn used by both the singleton and the per-run factory.
+ *  Single source of truth for the store shape + actions. */
+const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   phase: "idle",
   round: 0,
   agents: {},
@@ -583,4 +603,46 @@ export const useSwarm = create<SwarmStore>((set) => ({
         ],
       };
     }),
-}));
+});
+
+/** Factory: returns a fresh SwarmStore. Each /runs/:runId route
+ *  scope creates its own via SwarmStoreProvider. */
+export function createSwarmStore(): StoreApi<SwarmStore> {
+  return create<SwarmStore>()(swarmStoreInitializer);
+}
+
+/** Singleton store — backs the legacy "/" route + any caller without
+ *  a Provider. Constructed at module load. */
+const singletonStore: StoreApi<SwarmStore> = createSwarmStore();
+
+/** Context the per-run Provider populates with a scoped store. */
+export const SwarmStoreContext = createContext<StoreApi<SwarmStore> | null>(
+  null,
+);
+
+/** Read the active store: per-run from context if present, else singleton. */
+function useResolvedSwarmStore(): StoreApi<SwarmStore> {
+  const ctx = useContext(SwarmStoreContext);
+  return ctx ?? singletonStore;
+}
+
+/** Public hook: components keep the existing `useSwarm((s) => s.field)`
+ *  shape. Internally consults context-or-singleton. The bare-arg
+ *  `useSwarm()` overload returns the full state for back-compat with
+ *  EventLogMirrorPanel's "subscribe to everything" use case. */
+export function useSwarm(): SwarmStore;
+export function useSwarm<U>(selector: (s: SwarmStore) => U): U;
+export function useSwarm<U>(selector?: (s: SwarmStore) => U): U | SwarmStore {
+  const store = useResolvedSwarmStore();
+  if (selector) return useStore(store, selector);
+  return useStore(store);
+}
+
+// Direct API access — preserved for back-compat with callers that
+// reach into the singleton (e.g. useSwarmSocket dispatches; type
+// extraction via ReturnType<typeof useSwarm.getState>). These ALWAYS
+// target the singleton. Per-run dispatch is the per-run Provider's
+// responsibility (it owns the new store reference directly).
+useSwarm.getState = singletonStore.getState;
+useSwarm.setState = singletonStore.setState;
+useSwarm.subscribe = singletonStore.subscribe;

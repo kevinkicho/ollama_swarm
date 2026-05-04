@@ -4,7 +4,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { computeCostBreakdown } from "./costBreakdown.js";
+import { computeCostBreakdown, computeAutoRouteRecommendation } from "./costBreakdown.js";
 import type { RunSummary } from "../types";
 
 function fixture(partial: Partial<RunSummary>): RunSummary {
@@ -196,5 +196,75 @@ describe("computeCostBreakdown — dominance + hints", () => {
       assert.match(r.savingHint!, /Auditor consumed/);
       assert.match(r.savingHint!, /criterion checkpoints/);
     }
+  });
+});
+
+// T-Item-AutoRoute (2026-05-04): structured recommendation tests
+describe("computeAutoRouteRecommendation", () => {
+  it("returns null when no dominant agent", () => {
+    const breakdown = computeCostBreakdown(
+      fixture({
+        agents: [
+          { agentId: "a1", agentIndex: 1, turnsTaken: 1, tokensIn: 100, tokensOut: 0 },
+          { agentId: "a2", agentIndex: 2, turnsTaken: 1, tokensIn: 100, tokensOut: 0 },
+        ],
+      }),
+    );
+    assert.equal(computeAutoRouteRecommendation(breakdown), null);
+  });
+
+  it("recommends workerModel override when worker dominates (blackboard)", () => {
+    const breakdown = computeCostBreakdown(
+      fixture({
+        preset: "blackboard",
+        agents: [
+          // 3-agent blackboard: 1=planner, 2=worker, 3=auditor.
+          // Agent 2 (worker) dominates → rec.
+          { agentId: "a1", agentIndex: 1, turnsTaken: 1, tokensIn: 100, tokensOut: 0 },
+          { agentId: "a2", agentIndex: 2, turnsTaken: 1, tokensIn: 1000, tokensOut: 0 },
+          { agentId: "a3", agentIndex: 3, turnsTaken: 1, tokensIn: 100, tokensOut: 0 },
+        ],
+      }),
+    );
+    const rec = computeAutoRouteRecommendation(breakdown);
+    assert.ok(rec);
+    assert.equal(rec!.targetField, "workerModel");
+    assert.match(rec!.suggestedModel, /gemma4/);
+    assert.equal(rec!.dominantAgentIndex, 2);
+    assert.match(rec!.reason, /coding-tier/);
+  });
+
+  it("returns null when auditor dominates (no actionable model swap)", () => {
+    const breakdown = computeCostBreakdown(
+      fixture({
+        preset: "blackboard",
+        agents: [
+          { agentId: "a1", agentIndex: 1, turnsTaken: 1, tokensIn: 100, tokensOut: 0 },
+          { agentId: "a2", agentIndex: 2, turnsTaken: 1, tokensIn: 100, tokensOut: 0 },
+          { agentId: "a3", agentIndex: 3, turnsTaken: 1, tokensIn: 100, tokensOut: 0 },
+          { agentId: "a4", agentIndex: 4, turnsTaken: 1, tokensIn: 1000, tokensOut: 0 },
+        ],
+      }),
+    );
+    const rec = computeAutoRouteRecommendation(breakdown);
+    // Auditor dominance is investigative, not "swap models" — no rec.
+    assert.equal(rec, null);
+  });
+
+  it("includes the dominant pct in the recommendation", () => {
+    const breakdown = computeCostBreakdown(
+      fixture({
+        preset: "blackboard",
+        agents: [
+          // 3-agent blackboard: agent 2 = worker, dominates at 90%
+          { agentId: "a1", agentIndex: 1, turnsTaken: 1, tokensIn: 50, tokensOut: 0 },
+          { agentId: "a2", agentIndex: 2, turnsTaken: 1, tokensIn: 900, tokensOut: 0 },
+          { agentId: "a3", agentIndex: 3, turnsTaken: 1, tokensIn: 50, tokensOut: 0 },
+        ],
+      }),
+    );
+    const rec = computeAutoRouteRecommendation(breakdown);
+    assert.ok(rec);
+    assert.equal(rec!.dominantPct, 90);
   });
 });

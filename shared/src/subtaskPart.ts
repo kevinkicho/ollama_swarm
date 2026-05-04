@@ -19,7 +19,7 @@
 // migration was rejected as a regression — smoke test 749bb93 found
 // SubtaskPartInput dispatch is sequential, which is a 4× slowdown vs
 // our current parallel session.prompt model. See
-// docs/plans/subtask-migration-plan.md for the closed-out plan.
+// docs/archive/subtask-migration-postmortem.md for the closed-out exploration.
 
 export interface SubtaskPart {
   /** Discriminator. Matches opencode's SubtaskPartInput.type. */

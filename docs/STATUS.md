@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-05-03 (Ollama Cloud as 4th provider + setup-form UX wins)
+**Last updated:** 2026-05-04 (multi-tenant runs end-to-end + per-run zustand factory + every prior "deferred" item shipped + doc cleanup)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -71,9 +71,20 @@ The V1 SDK loop (per-agent opencode subprocess + SSE chunked streaming) was reti
 | Event log reader | `server/src/swarm/blackboard/EventLogReaderV2.ts` | primary; backs `/api/v2/event-log/runs` |
 | `formatServerSummary` | `shared/src/formatServerSummary.ts` | shared between server + web |
 
-**Test totals:** 1209 server tests passing as of 2026-04-29; 2026-05-01 added 7 (5 v2 route + 2 streaming-regression). Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
+**Test totals:** 1848 server tests passing / 3 skipped / 0 failing as of 2026-05-04. Web type-check clean. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
 
 ---
+
+## What landed 2026-05-04 (every prior "deferred" item shipped + multi-tenant + doc cleanup)
+
+A long session that closed every still-deferred item across the project. Net: **1209 → 1848 tests** (~+640), every preset's deferred lever shipped, multi-tenant runs end-to-end (server + client), 8 fully-shipped doc plans archived then deleted.
+
+- **All 4 originally-deferred heavy substrate items shipped.** Parallel-clone-to-K-subdirs baseline (`BaselineSwarmHarness`); parallel debate streams (K full debates with cross-stream judge synthesis via `DebateStream`); in-flight parallel hypothesis (TodoQueue groupId + per-group AbortController + per-criterion grouping + 5-min conflict-deferral timeout); real adaptive worker pool (`AgentManager.killAgent` + hysteresis-aware `scaleUp`/`scaleDown`).
+- **All secondary deferred items shipped.** Multi-language import graph (Rust + Go added to TS/JS+Python pipeline); test-scaffolding generator (Python pytest/unittest, Rust cargo-test, Go go-test added); blackboard auto-rollback verified already wired; MoA tool dispatch via `cfg.moaProposerTools`; map-reduce size-balanced LPT partition (`cfg.mapReducePartition`); council vote-reconcile policy (`cfg.councilReconcile`); stigmergy-on-blackboard worker dispatch (`cfg.stigmergyOnBlackboard`); recovery listing (`/api/swarm/recoverable-runs` + `findRecoverableRuns`); per-prompt model auto-routing (`cfg.dynamicModelRoute` + `dynamicModelRoute.ts` helpers); auto-route recommendations from cost breakdown; env-tunable runtime caps (`SWARM_WALL_CLOCK_CAP_MIN`, `SWARM_COMMITS_CAP`, `SWARM_TODOS_CAP`).
+- **Auto-resume of recovered runs.** Snapshot schema bumped v1 → v2 with embedded `runConfig`; `Orchestrator.recoverRun` + `POST /api/swarm/recover/:runId` reconstruct cfg + restart on the existing clone.
+- **Multi-tenant runs end-to-end.** Server: `SwarmEvent.runId` stamping + per-runId WS subscriber filter (`/ws?runId=X`) + `Map<runId, ActiveRun>` refactor + concurrency cap (`SWARM_MAX_CONCURRENT_RUNS` env, default 4) + per-run REST routes (`/api/swarm/runs/:id/{status,say,stop}`) + `/api/swarm/active-runs` listing. Client: react-router with `/runs/:runId` deep-link routes; `ActiveRunsPanel` polls `/api/swarm/active-runs` + lets the user navigate or stop any run; `useRunScopedWebSocket` for components that want a per-run WS feed; SwarmView's stop/say buttons target the per-run REST when `runId` is known.
+- **Per-run zustand factory.** `createSwarmStore()` returns a fresh store per `/runs/:runId` route; `SwarmStoreProvider` wraps the per-run subtree + opens its own per-run WS + REST hydration; the existing `useSwarm(selector)` hook reads from context-or-singleton so all 30+ components keep working unchanged. `useSwarmSocket` no-ops when a Provider is mounted to avoid double-dispatch.
+- **Doc cleanup pass.** 8 fully-shipped design plans archived then deleted (their content was duplicated by the actual code + git log); `subtask-migration-plan.md` renamed to `-postmortem.md` since "plan" misled; `ARCHITECTURE-V2.md` updated with "V2 IS the current architecture" preamble; `V2-STEP-6C.md` flipped to PAUSED; `SCOREBOARD-PUBLISHING-PLAN.md` retired (Kevin: laptop hardware too slow + no Anthropic budget). `eval/aggregate.mjs` now bakes methodology + caveats into every generated `RESULTS.md`. Doc tree: 29 → 20 .md files.
 
 ## What landed 2026-05-03
 
@@ -141,24 +152,36 @@ server/src/
     sseAwareTurnWatchdog.ts                  V2 SSE-liveness-aware turn cap
     agentsReadySummary.ts                    helper for the agents_ready summary kind
     {RoundRobin,Council,RoleDiff,...}Runner.ts   one runner per preset
+    BaselineSwarmHarness.ts                  T-Item-1: K parallel BaselineRunners → winner-pick → promote (when cfg.baselineAttempts > 1)
+    DebateStream.ts                          T-Item-2: per-stream state container for parallel debate streams
+    dynamicModelRoute.ts                     T-Item-AutoRoute: role→model picker for cfg.dynamicModelRoute
+    councilReconcile.ts                      T-Item-CouncilRec: vote tally + parser for cfg.councilReconcile
     blackboard/
-      BlackboardRunner.ts                    blackboard preset orchestration (~4,200 LOC)
-      TodoQueue.ts                           FIFO substrate (renamed from TodoQueueV2; Board.ts deleted 2026-04-28)
-      WorkerPipeline.ts                      apply-and-commit pipeline (renamed from WorkerPipelineV2)
+      BlackboardRunner.ts                    blackboard preset orchestration (~4,500 LOC; +T-Item-3 hypothesis groups, +T-Item-StigBb file commit counts, +T-Item-4 adaptive scaleUp/Down)
+      TodoQueue.ts                           FIFO substrate + groupId/listGroup/markGroupSettled/dequeueByScore
+      WorkerPipeline.ts                      apply-and-commit pipeline
       v2Adapters.ts                          real fs+git adapters
       RunStateObserver.ts                    state-machine observer
       EventLogReaderV2.ts                    JSONL event log parser
+      hypothesisGrouping.ts                  T-Item-3 + T-Item-HypTimeout: hypothesis-tag detection + conflict-detection deferral
       summary.ts                             RunSummary type + buildSummary
       ARCHITECTURE.md                        code-near design doc — read before editing this dir
       prompts/                               planner / worker / replanner / auditor prompt builders + zod parsers
       reflectionPasses.ts                    stretch-goal + memory-distillation post-passes
 
 web/src/
-  App.tsx                                    top-level router
-  state/store.ts                             Zustand store: phase, agents, transcript, streaming, runHistory
-  hooks/useSwarmSocket.ts                    WS singleton + auto-reconnect dispatcher
+  main.tsx                                   BrowserRouter wrapper (T-Item-PerRunStore)
+  App.tsx                                    Routes: / + /runs/:runId; AppMain renders the run view
+  state/
+    store.ts                                 zustand factory + Context-aware useSwarm (T-Item-PerRunStore)
+    SwarmStoreProvider.tsx                   per-run Provider: fresh store + per-runId WS + REST hydration
+    applyEvent.ts                            shared SwarmEvent → SwarmStore dispatcher (singleton + per-run reuse)
+  hooks/
+    useSwarmSocket.ts                        WS singleton; no-ops when SwarmStoreContext is mounted
+    useRunScopedWebSocket.ts                 per-runId WS for components that want a scoped feed
   components/
     SwarmView.tsx, Transcript.tsx, BoardView.tsx, ...
+    ActiveRunsPanel.tsx                      polls /api/swarm/active-runs every 5s; per-row view+stop buttons
     transcript/
       MessageBubble.tsx                      per-entry render dispatcher (system/user/agent)
       AgentJsonBubble, WorkerHunksBubble, RunFinishedGrid, ...   per-envelope bubble renderers
@@ -183,7 +206,7 @@ web/src/
 
 - **Day-1 essentials for an agent picking up this repo:** `docs/AGENT-GUIDE.md`
 - **Persistent TODO list across sessions:** `docs/active-work.md` (queued / in-flight / recently shipped)
-- **Architecture decisions ("why this and not that"):** `docs/decisions/` (4 active ADRs: per-agent subprocess [historical], hunk format, write-capable preset boundary, V2 parallel-track rollout. ADR 005 [keep opencode] superseded 2026-04-29 by E3 Phases 1–5.)
+- **Architecture decisions ("why this and not that"):** `docs/decisions/` (4 active ADRs: per-agent subprocess [historical], hunk format, write-capable preset boundary, V2 parallel-track rollout. ADR 005 [keep opencode] superseded 2026-04-29 by E3 Phases 1–5; superseded body retained for archaeology.)
 - **Code-near architecture for blackboard:** `server/src/swarm/blackboard/ARCHITECTURE.md`
 - **V2 rewrite roadmap + status:** `docs/ARCHITECTURE-V2.md`
 - **Per-preset design notes:** `docs/swarm-patterns.md`

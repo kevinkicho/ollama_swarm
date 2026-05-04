@@ -42,14 +42,40 @@ import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
 import { pickProvider } from "../providers/pickProvider.js";
 import { tokenTracker } from "../services/ollamaProxy.js";
 
+export interface BaselineResult {
+  /** How many hunks the worker proposed in the WINNING attempt. */
+  hunksAttempted: number;
+  /** How many hunks actually landed on disk + got committed. */
+  hunksApplied: number;
+  /** SHA of the commit that landed; null when nothing committed. */
+  commitSha: string | null;
+  /** Verify gate result: true=passed, false=failed, null=not configured. */
+  verifyPassed: boolean | null;
+}
+
 export class BaselineRunner implements SwarmRunner {
   private transcript: TranscriptEntry[] = [];
   private phase: SwarmPhase = "idle";
   private stopping = false;
   private active?: RunConfig;
   private startedAt?: number;
+  // T-Item-1 (2026-05-04): track per-attempt outcome so a parent
+  // harness (BaselineSwarmHarness) can score this runner without
+  // scraping the transcript.
+  private result: BaselineResult = {
+    hunksAttempted: 0,
+    hunksApplied: 0,
+    commitSha: null,
+    verifyPassed: null,
+  };
 
   constructor(private readonly opts: RunnerOpts) {}
+
+  // T-Item-1 (2026-05-04): expose the runner's per-attempt outcome.
+  // Caller is the harness composing K BaselineRunner instances.
+  getResult(): BaselineResult {
+    return { ...this.result };
+  }
 
   status(): SwarmStatus {
     return {
@@ -288,6 +314,11 @@ export class BaselineRunner implements SwarmRunner {
 
     const fsAdapter = realFilesystemAdapter(destPath);
     const gitAdapter = realGitAdapter(destPath);
+    // T-Item-1 (2026-05-04): track per-attempt result for the harness
+    // composing K runners. winner.critiquePassed is populated above
+    // when cfg.baselineSelfCritique is on; surface it here.
+    this.result.hunksAttempted = finalHunks.length;
+    this.result.verifyPassed = winner.critiquePassed;
     try {
       const result = await applyBaselineHunks({
         hunks: finalHunks,
@@ -300,7 +331,15 @@ export class BaselineRunner implements SwarmRunner {
         this.setPhase("completed");
         return;
       }
-      await gitAdapter.commitAll(`baseline: ${directive.slice(0, 60)}`, "baseline-agent");
+      const commitResult = await gitAdapter.commitAll(
+        `baseline: ${directive.slice(0, 60)}`,
+        "baseline-agent",
+      );
+      // T-Item-1: capture commit SHA for harness scoring.
+      this.result.hunksApplied = result.applied;
+      if (commitResult.ok) {
+        this.result.commitSha = commitResult.sha;
+      }
       this.appendSystem(
         `Baseline applied ${result.applied}/${finalHunks.length} hunk(s) and committed.`,
       );

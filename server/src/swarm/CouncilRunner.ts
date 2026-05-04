@@ -16,7 +16,7 @@ import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildSeedSummary } from "./runSummary.js";
 import { discussionWriteSummary } from "./discussionWriteSummary.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
-import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
+import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk, extractText } from "./extractText.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { checkBudgetGuards } from "./loopGuards.js";
 import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
@@ -27,6 +27,12 @@ import { staggerStart } from "./staggerStart.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import { getAgentAddendum } from "../../../shared/src/topology.js";
 import { describeSdkError } from "./sdkError.js";
+import {
+  tallyVotes,
+  buildVotePrompt,
+  parseVoteResponse,
+  type VoteRecord,
+} from "./councilReconcile.js";
 import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
 import { writeDeliverable, runQualityPasses } from "./deliverable.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
@@ -360,6 +366,19 @@ export class CouncilRunner implements SwarmRunner {
       if (!this.stopping && cfg.rounds > 0 && !this.earlyStopDetail) {
         await this.runSynthesisPass(cfg);
       }
+      // T-Item-CouncilRec (2026-05-04): post-synthesis vote pass when
+      // cfg.councilReconcile === "vote". Each drafter casts ONE vote
+      // for the BEST OTHER agent's final draft; tally announced as a
+      // system message. Doesn't replace the synthesis (which still
+      // produces a consolidated answer); the vote is an additional
+      // signal showing which drafter the council found most compelling.
+      if (
+        !this.stopping &&
+        cfg.councilReconcile === "vote" &&
+        cfg.rounds > 0
+      ) {
+        await this.runVoteReconcile(cfg);
+      }
       // 2026-05-02 (deliverables initiative + quality levers): structured
       // markdown artifact + rubric + critic + next-actions. Best-effort —
       // never blocks run-end if it fails.
@@ -669,6 +688,77 @@ export class CouncilRunner implements SwarmRunner {
         lastMessageAt: Date.now(),
       });
     }
+  }
+
+  // T-Item-CouncilRec (2026-05-04): vote reconcile pass. After the
+  // synthesis, fire ONE small prompt per drafter asking them to vote
+  // for the BEST OTHER agent's final draft. Tally + announce.
+  // Best-effort: any per-drafter failure counts as an abstention; the
+  // final tally still reports.
+  private async runVoteReconcile(cfg: RunConfig): Promise<void> {
+    const agents = this.opts.manager.list();
+    if (agents.length < 2) return;
+    // Collect each agent's FINAL-round draft (latest agent entry per
+    // agentIndex). The synthesis bubble is also a "final" entry but
+    // it's the lead's; for vote we only count the per-round drafts.
+    const finalDrafts = new Map<number, string>();
+    for (const e of this.transcript) {
+      if (e.role !== "agent") continue;
+      if (e.summary?.kind === "council_synthesis") continue;
+      if (typeof e.agentIndex === "number") {
+        finalDrafts.set(e.agentIndex, e.text);
+      }
+    }
+    const draftList = [...finalDrafts.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([agentIndex, text]) => ({ agentIndex, text }));
+    if (draftList.length < 2) return;
+    this.appendSystem(
+      `[T-Item-CouncilRec vote] reconcile phase: each drafter casts ONE vote for the best OTHER draft.`,
+    );
+    const validAgentIndexes = draftList.map((d) => d.agentIndex);
+    const votes: VoteRecord[] = [];
+    for (const agent of agents) {
+      if (!validAgentIndexes.includes(agent.index)) continue;
+      const prompt = buildVotePrompt({
+        voterIndex: agent.index,
+        drafts: draftList,
+        userDirective: cfg.userDirective,
+      });
+      const ctrl = new AbortController();
+      try {
+        const res = await promptWithRetry(agent, prompt, {
+          signal: ctrl.signal,
+          manager: this.opts.manager,
+          agentName: "swarm-read",
+          describeError: describeSdkError,
+        });
+        const raw = extractText(res) ?? "";
+        const parsed = parseVoteResponse(raw, agent.index);
+        votes.push({
+          voterIndex: agent.index,
+          votedForIndex: parsed.votedForIndex,
+          rationale: parsed.rationale,
+        });
+      } catch {
+        votes.push({
+          voterIndex: agent.index,
+          votedForIndex: null,
+          rationale: "",
+        });
+      }
+    }
+    const tally = tallyVotes(votes, validAgentIndexes);
+    const tallyLines = [...tally.countsByIndex.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+      .map(([idx, count]) => `  Agent ${idx}: ${count} vote(s)`);
+    const winnerLine =
+      tally.winnerIndex !== null
+        ? `Winner: Agent ${tally.winnerIndex} (${tally.countsByIndex.get(tally.winnerIndex)} vote(s)).`
+        : `No clear winner — all ${tally.abstentions} ballots abstained.`;
+    this.appendSystem(
+      `[T-Item-CouncilRec vote] tally:\n${tallyLines.join("\n")}\n${winnerLine}`,
+    );
   }
 
   private async runTurn(

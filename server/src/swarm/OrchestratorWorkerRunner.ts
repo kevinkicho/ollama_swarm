@@ -12,6 +12,8 @@ import type {
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { selectModelForRole } from "./dynamicModelRoute.js";
+import { defaultRoleForIndex } from "../../../shared/src/topology.js";
 import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
 import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
@@ -608,6 +610,28 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
     });
 
     try {
+      // T-Item-AutoRoute (2026-05-04): when cfg.dynamicModelRoute is
+      // set, swap the per-prompt model based on this agent's role
+      // category (orchestrator → planner-tier; worker → worker-tier).
+      // Falls back to agent.model when the cfg has no per-tier
+      // overrides — net no-op for users who haven't set them.
+      const totalAgents = this.active?.agentCount ?? 0;
+      const dynamicModelOverride =
+        this.active?.dynamicModelRoute && this.active?.model
+          ? selectModelForRole(
+              defaultRoleForIndex(
+                this.active.preset,
+                agent.index,
+                totalAgents,
+              ),
+              {
+                model: this.active.model,
+                workerModel: this.active.workerModel,
+                plannerModel: this.active.plannerModel,
+                auditorModel: this.active.auditorModel,
+              },
+            )
+          : undefined;
       // Unit 16: shared retry wrapper.
       const res = await promptWithRetry(agent, prompt, {
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
@@ -618,6 +642,9 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
         // Phase 5b of #243: per-agent addendum from the topology row.
         promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         describeError: describeSdkError,
+        ...(dynamicModelOverride && dynamicModelOverride !== agent.model
+          ? { modelOverride: dynamicModelOverride }
+          : {}),
         onTiming: ({ attempt, elapsedMs, success }) => {
           this.stats.onTiming(agent.id, success, elapsedMs);
           this.opts.logDiag?.({

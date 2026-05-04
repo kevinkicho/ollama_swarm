@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Routes, Route, useParams } from "react-router-dom";
 import { useSwarm } from "./state/store";
 import { useSwarmSocket } from "./hooks/useSwarmSocket";
 import { SetupForm } from "./components/SetupForm";
@@ -11,6 +12,8 @@ import { BubbleGallery } from "./components/BubbleGallery";
 import { EventLogMirrorPanel } from "./components/EventLogMirrorPanel";
 import { TimeTravelReplayPanel } from "./components/TimeTravelReplayPanel";
 import { RunCompareReplayPanel } from "./components/RunCompareReplayPanel";
+import { ActiveRunsPanel } from "./components/ActiveRunsPanel";
+import { SwarmStoreProvider } from "./state/SwarmStoreProvider";
 import type { RunSummary } from "./types";
 
 // Task #65 (2026-04-24): URL-based review mode. When the user opens a
@@ -67,7 +70,55 @@ export default function App() {
   if (isEventLogMirrorMode()) return <EventLogMirrorPanel />;
   if (isCompareMode()) return <RunCompareReplayPanel />;
   if (isReplayMode()) return <TimeTravelReplayPanel />;
-  return <AppMain />;
+  // T-Item-MultiTenant Phase 9 (2026-05-04): route-based per-run URLs.
+  // /runs/:runId is a deep-link to a specific run — currently both
+  // routes render the same AppMain (the singleton store still tracks
+  // "the active run"). Future deep refactor: per-run zustand factory
+  // so /runs/:runId can show a different run than what's active.
+  // For now the route URL is meaningful as a shareable link; the
+  // RunRouteHook below logs the runId so the UI can later use it for
+  // scoped subscriptions.
+  return (
+    <Routes>
+      <Route path="/" element={<AppMain />} />
+      <Route path="/runs/:runId" element={<RunRouteWrapper />} />
+    </Routes>
+  );
+}
+
+// T-Item-MultiTenant Phase 9 (2026-05-04): per-run route wrapper.
+// T-Item-PerRunStore (2026-05-04): now wraps the subtree in
+// SwarmStoreProvider so AppMain (and every component below it)
+// reads from a per-run scoped zustand store. The Provider opens
+// its OWN per-runId WS subscription + REST hydration; events
+// dispatch into the per-run store, NOT the singleton.
+//
+// The /runs/:runId route is now genuinely per-run: switching
+// runIds tears down + recreates the store; the legacy "/" route
+// keeps reading from the singleton store unchanged.
+function RunRouteWrapper() {
+  const { runId } = useParams<{ runId: string }>();
+  if (!runId) {
+    // Defensive: react-router's typing technically allows undefined.
+    return <AppMain />;
+  }
+  return (
+    <SwarmStoreProvider runId={runId}>
+      <div
+        style={{
+          padding: "4px 12px",
+          background: "#0e3b1f",
+          color: "#7eebb0",
+          fontSize: 12,
+          fontFamily: "monospace",
+        }}
+      >
+        Viewing run <strong>{runId}</strong> · per-run scoped store
+        + WS subscription
+      </div>
+      <AppMain />
+    </SwarmStoreProvider>
+  );
 }
 
 function AppMain() {
@@ -129,6 +180,11 @@ function AppMain() {
         </div>
       </header>
       {error ? <ErrorBanner error={error} /> : null}
+      {/* T-Item-MultiTenant Phase 7 (2026-05-04): server-wide active-
+          runs list. Renders nothing when ≤1 runs are active so single-
+          run users see no UI change. Doesn't depend on the SwarmView
+          (lives ABOVE main) so it shows on the SetupForm too. */}
+      {review === null && <ActiveRunsPanel />}
       <main className="flex-1 overflow-hidden">
         {showSetup ? <SetupForm /> : <SwarmView />}
       </main>

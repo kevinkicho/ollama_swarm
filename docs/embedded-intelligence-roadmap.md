@@ -1,7 +1,10 @@
 # Embedded intelligence roadmap
 
+> **Status:** vision doc, 0 items shipped (verified 2026-05-04).
 > Captured 2026-04-27 evening during overnight tour. Pivot from
 > hardcoded rules to AI-assisted logical decisions throughout the app.
+> Kept as an idea catalog for future sessions; nothing in it is on
+> any active queue today.
 
 ## Vision
 

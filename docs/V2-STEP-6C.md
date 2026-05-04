@@ -1,7 +1,12 @@
 # V2 Step 6c — UI cuts over to event-log-derived state
 
-**Status:** in progress (foundation + first thin slice shipped 2026-04-29 → 2026-05-01)
-**Owner:** unassigned (next session, ~1–2 days)
+**Status:** PAUSED 2026-05-04. Foundation + first thin slice shipped
+2026-04-29 → 2026-05-01; the slice cutovers (5 of them) haven't been
+picked up since. Not blocking any user-facing workflow — the WS-
+derived UI continues to work fine. Pick this up only when there's a
+concrete reason (e.g., wanting offline replay of past runs without
+the dev server).
+**Owner:** unassigned
 
 ---
 

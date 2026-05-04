@@ -4,10 +4,15 @@
 
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RunStatePersister } from "./RunStatePersister.js";
+import {
+  RunStatePersister,
+  findRecoverableRuns,
+  isRecoverablePhase,
+  loadSnapshot,
+} from "./RunStatePersister.js";
 
 describe("RunStatePersister — write side", () => {
   let workdir: string;
@@ -40,7 +45,8 @@ describe("RunStatePersister — write side", () => {
     persister.flush();
     const written = readFileSync(join(workdir, "run-state.json"), "utf8");
     const parsed = JSON.parse(written);
-    assert.equal(parsed.schemaVersion, 1);
+    // T-Item-Recover (2026-05-04): bumped to 2 with optional runConfig.
+    assert.equal(parsed.schemaVersion, 2);
     assert.equal(parsed.runId, "run-1");
     assert.equal(parsed.preset, "blackboard");
     assert.equal(parsed.phase, "discussing");
@@ -110,5 +116,221 @@ describe("RunStatePersister — write side", () => {
     bad.flush();
     // Test passes if we got here without throwing.
     assert.equal(bad.getWriteCount(), 0, "no successful writes against an invalid path");
+  });
+});
+
+// T-Item-Recovery (2026-05-04): findRecoverableRuns + isRecoverablePhase
+describe("findRecoverableRuns", () => {
+  let parent: string;
+
+  beforeEach(() => {
+    parent = mkdtempSync(join(tmpdir(), "recoverable-runs-"));
+  });
+
+  afterEach(() => {
+    rmSync(parent, { recursive: true, force: true });
+  });
+
+  function writeState(
+    cloneName: string,
+    state: Record<string, unknown>,
+  ): string {
+    const cloneDir = join(parent, cloneName);
+    mkdirSync(cloneDir, { recursive: true });
+    const file = join(cloneDir, "run-state.json");
+    writeFileSync(file, JSON.stringify(state), "utf8");
+    return cloneDir;
+  }
+
+  it("returns [] when no parent dirs match anything", () => {
+    assert.deepEqual(findRecoverableRuns([]), []);
+    assert.deepEqual(findRecoverableRuns(["/no/such/dir"]), []);
+  });
+
+  it("discovers a single valid run-state.json", () => {
+    const cloneDir = writeState("repo-a", {
+      schemaVersion: 1,
+      runId: "run-abc",
+      preset: "blackboard",
+      phase: "executing",
+      startedAt: 1000,
+      lastEventAt: 2000,
+      transcript: [{ id: "e1", role: "system", text: "hi", ts: 1500 }],
+      amendments: [{ ts: 1800, text: "amend it" }],
+    });
+    const got = findRecoverableRuns([parent]);
+    assert.equal(got.length, 1);
+    assert.equal(got[0].clonePath, cloneDir);
+    assert.equal(got[0].runId, "run-abc");
+    assert.equal(got[0].preset, "blackboard");
+    assert.equal(got[0].phase, "executing");
+    assert.equal(got[0].transcriptLength, 1);
+    assert.equal(got[0].amendmentCount, 1);
+  });
+
+  it("sorts results by lastEventAt descending (most-recent first)", () => {
+    writeState("older", {
+      schemaVersion: 1,
+      runId: "older",
+      preset: "blackboard",
+      phase: "executing",
+      startedAt: 1,
+      lastEventAt: 1000,
+      transcript: [],
+      amendments: [],
+    });
+    writeState("newer", {
+      schemaVersion: 1,
+      runId: "newer",
+      preset: "blackboard",
+      phase: "executing",
+      startedAt: 1,
+      lastEventAt: 5000,
+      transcript: [],
+      amendments: [],
+    });
+    const got = findRecoverableRuns([parent]);
+    assert.equal(got.length, 2);
+    assert.equal(got[0].runId, "newer");
+    assert.equal(got[1].runId, "older");
+  });
+
+  it("silently skips clones without run-state.json", () => {
+    mkdirSync(join(parent, "no-state-here"), { recursive: true });
+    writeState("has-state", {
+      schemaVersion: 1,
+      runId: "x",
+      preset: "blackboard",
+      phase: "executing",
+      startedAt: 1,
+      lastEventAt: 2,
+      transcript: [],
+      amendments: [],
+    });
+    const got = findRecoverableRuns([parent]);
+    assert.equal(got.length, 1);
+    assert.equal(got[0].runId, "x");
+  });
+
+  it("silently skips malformed JSON", () => {
+    const cloneDir = join(parent, "broken");
+    mkdirSync(cloneDir, { recursive: true });
+    writeFileSync(join(cloneDir, "run-state.json"), "not json {", "utf8");
+    assert.deepEqual(findRecoverableRuns([parent]), []);
+  });
+
+  it("silently skips JSON missing required fields", () => {
+    writeState("missing-fields", {
+      runId: "x",
+      // missing preset, phase, startedAt, etc.
+    });
+    assert.deepEqual(findRecoverableRuns([parent]), []);
+  });
+
+  it("returns nothing when given a non-directory parent", () => {
+    const filePath = join(parent, "not-a-dir.txt");
+    writeFileSync(filePath, "x", "utf8");
+    assert.deepEqual(findRecoverableRuns([filePath]), []);
+  });
+});
+
+describe("isRecoverablePhase", () => {
+  it("returns true for mid-flight phases", () => {
+    assert.equal(isRecoverablePhase("executing"), true);
+    assert.equal(isRecoverablePhase("discussing"), true);
+    assert.equal(isRecoverablePhase("planning"), true);
+    assert.equal(isRecoverablePhase("paused"), true);
+    assert.equal(isRecoverablePhase("cloning"), true);
+  });
+
+  it("returns false for terminal phases", () => {
+    assert.equal(isRecoverablePhase("completed"), false);
+    assert.equal(isRecoverablePhase("stopped"), false);
+    assert.equal(isRecoverablePhase("failed"), false);
+  });
+
+  it("returns true for unknown phases (fail-open: surface to user)", () => {
+    assert.equal(isRecoverablePhase("some-future-phase"), true);
+  });
+});
+
+// T-Item-Recover (2026-05-04): loadSnapshot tests
+describe("loadSnapshot", () => {
+  let workdir: string;
+  beforeEach(() => {
+    workdir = mkdtempSync(join(tmpdir(), "load-snap-"));
+  });
+  afterEach(() => rmSync(workdir, { recursive: true, force: true }));
+
+  it("returns null on missing file", () => {
+    assert.equal(loadSnapshot(join(workdir, "nope.json")), null);
+  });
+
+  it("returns null on malformed JSON", () => {
+    const file = join(workdir, "broken.json");
+    writeFileSync(file, "{{{ not json", "utf8");
+    assert.equal(loadSnapshot(file), null);
+  });
+
+  it("returns null on JSON missing required fields", () => {
+    const file = join(workdir, "incomplete.json");
+    writeFileSync(file, JSON.stringify({ runId: "x" }), "utf8");
+    assert.equal(loadSnapshot(file), null);
+  });
+
+  it("loads a valid v1 snapshot (no runConfig)", () => {
+    const file = join(workdir, "v1.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        runId: "r1",
+        preset: "blackboard",
+        phase: "executing",
+        startedAt: 100,
+        lastEventAt: 200,
+        transcript: [],
+        amendments: [],
+      }),
+      "utf8",
+    );
+    const snap = loadSnapshot(file);
+    assert.ok(snap);
+    assert.equal(snap!.runId, "r1");
+    assert.equal(snap!.runConfig, undefined);
+  });
+
+  it("loads a v2 snapshot with embedded runConfig", () => {
+    const file = join(workdir, "v2.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schemaVersion: 2,
+        runId: "r2",
+        preset: "blackboard",
+        phase: "executing",
+        startedAt: 100,
+        lastEventAt: 200,
+        transcript: [{ id: "e1" }],
+        amendments: [{ ts: 150, text: "amend" }],
+        runConfig: {
+          preset: "blackboard",
+          repoUrl: "https://example.com/r",
+          localPath: "/tmp/x",
+          agentCount: 4,
+          rounds: 10,
+          model: "glm-5.1:cloud",
+          extras: { dedicatedAuditor: true },
+        },
+      }),
+      "utf8",
+    );
+    const snap = loadSnapshot(file);
+    assert.ok(snap);
+    assert.equal(snap!.schemaVersion, 2);
+    assert.ok(snap!.runConfig);
+    assert.equal(snap!.runConfig!.preset, "blackboard");
+    assert.equal(snap!.runConfig!.agentCount, 4);
+    assert.equal(snap!.runConfig!.extras?.dedicatedAuditor, true);
   });
 });

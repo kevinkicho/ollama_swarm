@@ -501,6 +501,67 @@ export class AgentManager {
     });
   }
 
+  // T-Item-4 (2026-05-04): is the named agent currently mid-prompt?
+  // Returns true when the agent's mirrored status is "thinking" or
+  // "retrying". Used by the adaptive worker pool's scale-down logic
+  // to refuse to kill a worker that's actively working on a todo —
+  // killing mid-prompt would orphan the in-flight commit attempt.
+  isInFlight(id: string): boolean {
+    const s = this.agentStates.get(id);
+    if (!s) return false;
+    return s.status === "thinking" || s.status === "retrying";
+  }
+
+  // T-Item-4 (2026-05-04): kill ONE agent mid-run (vs whole-run kill).
+  // Used by the adaptive worker pool when scaling down. Steps:
+  //  1. Find agent (no-op if unknown id)
+  //  2. Abort any in-flight SSE event subscription
+  //  3. tree-kill the child process
+  //  4. Remove from agents map + agentStates mirror
+  //  5. Emit agent_state with status="killed" so the UI removes the panel
+  //  6. Cleanup pidTracker entry
+  // The graceful "wait for in-flight to settle" is the caller's
+  // responsibility — they should check isInFlight() first and skip if
+  // they want to wait for an idle worker. We hard-kill on demand here
+  // so the watchdog can stay simple (no async wait-loop).
+  async killAgent(id: string): Promise<void> {
+    const a = this.agents.get(id);
+    if (!a) return;
+    // Abort the SSE event subscription. Mirrors what killAll does.
+    const ctrl = this.eventAborts.get(id);
+    if (ctrl) {
+      ctrl.abort();
+      this.eventAborts.delete(id);
+    }
+    // Tree-kill the child process. Best-effort — same as killAll's
+    // first stage. We don't wait for confirmation here (the watchdog's
+    // poll interval will catch a stuck PID via the next cycle).
+    treeKill(a.child);
+    const pid = a.child?.pid;
+    if (pid !== undefined) {
+      try {
+        await this.pidTracker?.remove(pid);
+      } catch {
+        // ignore — remove() already swallows internally
+      }
+    }
+    // Remove from internal state
+    this.agents.delete(id);
+    this.agentStates.delete(id);
+    this.lastActivity.delete(a.sessionId);
+    this.partialStreams.delete(id);
+    this.firstPromptLogged.delete(id);
+    this.warmupElapsedByAgent.delete(id);
+    // Emit removal so the UI store drops the panel
+    this.setAgentState({
+      id: a.id,
+      index: a.index,
+      port: a.port,
+      sessionId: a.sessionId,
+      status: "killed",
+    });
+  }
+
   async killAll(): Promise<KillAllResult> {
     for (const ctrl of this.eventAborts.values()) ctrl.abort();
     this.eventAborts.clear();

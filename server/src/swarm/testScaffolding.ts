@@ -1,12 +1,12 @@
-// T199 (2026-05-04): test-scaffolding generator for blackboard's
-// test-driven todo expansion (T198h replaces the prompt-only thin-cut
-// with a real scaffolder).
+// T199 (2026-05-04) + T-Item-Lang (2026-05-04, this session):
+// test-scaffolding generator for blackboard's test-driven todo
+// expansion (T198h replaces the prompt-only thin-cut with a real
+// scaffolder).
 //
 // Detects the project's test framework + emits a stub failing test
 // file that the planner can reference in its `verify:` clause.
-// Languages: JS/TS only (vitest/jest/bun-test/node-test). Python /
-// Rust / Go deferred — each needs its own framework detection +
-// scaffold template.
+// Languages: JS/TS (vitest/jest/bun-test/node-test), Python (pytest +
+// unittest), Rust (cargo test), Go (go test).
 //
 // Pattern:
 //   1. Probe for known test runner config (vitest.config.*, jest.config.*,
@@ -30,6 +30,11 @@ export type DetectedFramework =
   | "jest"
   | "bun-test"
   | "node-test"
+  // T-Item-Lang (2026-05-04): Python / Rust / Go support
+  | "pytest"
+  | "unittest"
+  | "cargo-test"
+  | "go-test"
   | "unknown";
 
 export interface ScaffoldResult {
@@ -48,51 +53,116 @@ export interface ScaffoldResult {
 /** Detect the test framework in use by reading package.json + scanning
  *  for config files. Pure-ish — only reads from disk; no network.
  *  Returns "unknown" when nothing matches; caller decides whether to
- *  emit a generic node:test scaffold or skip. */
+ *  emit a generic node:test scaffold or skip.
+ *
+ *  T-Item-Lang (2026-05-04): probes Python/Rust/Go markers AFTER the
+ *  JS path. Detection order: JS frameworks first (cheap package.json
+ *  parse), then Python (pyproject.toml/setup.py/requirements*.txt),
+ *  then Rust (Cargo.toml), then Go (go.mod). First match wins; if
+ *  the repo has multiple language manifests, JS takes precedence
+ *  because most polyglot repos use JS for tooling and want the test
+ *  scaffold in the dominant language. */
 export async function detectTestFramework(
   clonePath: string,
 ): Promise<DetectedFramework> {
+  // Phase 1: JS/TS via package.json
   const pkgPath = path.join(clonePath, "package.json");
-  let pkgRaw: string;
+  let pkgRaw: string | null = null;
   try {
     pkgRaw = await fs.readFile(pkgPath, "utf8");
   } catch {
-    return "unknown";
+    pkgRaw = null;
   }
-  let pkg: { scripts?: Record<string, string>; devDependencies?: Record<string, string>; dependencies?: Record<string, string> };
+  if (pkgRaw !== null) {
+    let pkg: { scripts?: Record<string, string>; devDependencies?: Record<string, string>; dependencies?: Record<string, string> };
+    try {
+      pkg = JSON.parse(pkgRaw);
+    } catch {
+      pkg = {};
+    }
+    const allDeps = { ...(pkg.devDependencies ?? {}), ...(pkg.dependencies ?? {}) };
+    if (allDeps["vitest"]) return "vitest";
+    if (allDeps["jest"]) return "jest";
+    if (allDeps["@types/bun"] || allDeps["bun-types"]) return "bun-test";
+    const scripts = pkg.scripts ?? {};
+    for (const cmd of Object.values(scripts)) {
+      if (cmd.includes("--test") || cmd.includes("node:test")) return "node-test";
+      if (cmd.includes("vitest")) return "vitest";
+      if (cmd.includes("jest")) return "jest";
+      if (cmd.startsWith("bun test") || cmd.includes("bun test ")) return "bun-test";
+    }
+    for (const cfg of ["vitest.config.ts", "vitest.config.js", "vitest.config.mjs"]) {
+      try {
+        await fs.access(path.join(clonePath, cfg));
+        return "vitest";
+      } catch {
+        // fall through
+      }
+    }
+    for (const cfg of ["jest.config.ts", "jest.config.js", "jest.config.mjs", "jest.config.json"]) {
+      try {
+        await fs.access(path.join(clonePath, cfg));
+        return "jest";
+      } catch {
+        // fall through
+      }
+    }
+    // package.json present but no JS test framework → fall through to
+    // other languages rather than returning "unknown" (polyglot repo).
+  }
+  // Phase 2: Python — pyproject.toml or setup.py or requirements*.txt
+  const pyProjPath = path.join(clonePath, "pyproject.toml");
   try {
-    pkg = JSON.parse(pkgRaw);
+    const py = await fs.readFile(pyProjPath, "utf8");
+    if (/\bpytest\b/.test(py)) return "pytest";
+    if (/\b(unittest|nose|trial)\b/.test(py)) return "unittest";
+    // pyproject exists but no test framework declared → default to pytest
+    // (modern Python convention; unittest is fallback for legacy)
+    return "pytest";
   } catch {
-    return "unknown";
+    // fall through
   }
-  const allDeps = { ...(pkg.devDependencies ?? {}), ...(pkg.dependencies ?? {}) };
-  if (allDeps["vitest"]) return "vitest";
-  if (allDeps["jest"]) return "jest";
-  if (allDeps["@types/bun"] || allDeps["bun-types"]) return "bun-test";
-  // node:test detection — no dep, but maybe a script using `--test`
-  const scripts = pkg.scripts ?? {};
-  for (const cmd of Object.values(scripts)) {
-    if (cmd.includes("--test") || cmd.includes("node:test")) return "node-test";
-    if (cmd.includes("vitest")) return "vitest";
-    if (cmd.includes("jest")) return "jest";
-    if (cmd.startsWith("bun test") || cmd.includes("bun test ")) return "bun-test";
-  }
-  // Probe config files
-  for (const cfg of ["vitest.config.ts", "vitest.config.js", "vitest.config.mjs"]) {
+  for (const reqFile of ["requirements.txt", "requirements-dev.txt", "requirements/dev.txt", "test-requirements.txt"]) {
     try {
-      await fs.access(path.join(clonePath, cfg));
-      return "vitest";
+      const req = await fs.readFile(path.join(clonePath, reqFile), "utf8");
+      if (/^pytest\b/m.test(req) || /\bpytest[<>=!~]/.test(req)) return "pytest";
     } catch {
       // fall through
     }
   }
-  for (const cfg of ["jest.config.ts", "jest.config.js", "jest.config.mjs", "jest.config.json"]) {
-    try {
-      await fs.access(path.join(clonePath, cfg));
-      return "jest";
-    } catch {
-      // fall through
+  // setup.py or setup.cfg with explicit test_suite/extras_require
+  try {
+    const setup = await fs.readFile(path.join(clonePath, "setup.py"), "utf8");
+    if (/\bpytest\b/.test(setup)) return "pytest";
+    if (/\btest_suite\b/.test(setup)) return "unittest";
+  } catch {
+    // fall through
+  }
+  // Probe for tests/ or test/ dir + a single .py file inside (typical
+  // pytest layout). Pytest is the safer default for Python today.
+  try {
+    const testsDir = path.join(clonePath, "tests");
+    const stat = await fs.stat(testsDir);
+    if (stat.isDirectory()) {
+      const entries = await fs.readdir(testsDir);
+      if (entries.some((e) => e.endsWith(".py"))) return "pytest";
     }
+  } catch {
+    // fall through
+  }
+  // Phase 3: Rust — Cargo.toml present
+  try {
+    await fs.access(path.join(clonePath, "Cargo.toml"));
+    return "cargo-test";
+  } catch {
+    // fall through
+  }
+  // Phase 4: Go — go.mod present
+  try {
+    await fs.access(path.join(clonePath, "go.mod"));
+    return "go-test";
+  } catch {
+    // fall through
   }
   return "unknown";
 }
@@ -163,6 +233,112 @@ export function buildScaffold(
         verifyCommand: `bun test ${testPath}`,
       };
     case "node-test":
+      return {
+        stubContent: [
+          "// T199 test scaffold (auto-generated by test-driven todo expansion).",
+          "// This test SHOULD FAIL until the corresponding TODO is implemented.",
+          "",
+          'import { describe, it } from "node:test";',
+          'import assert from "node:assert/strict";',
+          "",
+          `describe("${topic}", () => {`,
+          `  it("${slug}__placeholder — replace with real assertions matching the TODO", () => {`,
+          '    assert.fail("scaffolded placeholder — implement the TODO + replace this assertion");',
+          "  });",
+          "});",
+        ].join("\n"),
+        verifyCommand: `node --import tsx --test ${testPath}`,
+      };
+    // T-Item-Lang (2026-05-04): Python pytest scaffold
+    case "pytest":
+      return {
+        stubContent: [
+          `"""T199 test scaffold (auto-generated by test-driven todo expansion).`,
+          ``,
+          `This test SHOULD FAIL until the corresponding TODO is implemented.`,
+          `The blackboard worker's verify gate uses it to confirm the work landed.`,
+          `"""`,
+          ``,
+          `import pytest`,
+          ``,
+          ``,
+          `def test_${slug}_placeholder():`,
+          `    """Replace with real assertions matching the TODO.`,
+          ``,
+          `    Until the TODO is implemented, this assertion intentionally fails`,
+          `    so the verify gate has a real signal.`,
+          `    """`,
+          `    pytest.fail(`,
+          `        "scaffolded placeholder — implement the TODO + replace this assertion"`,
+          `    )`,
+        ].join("\n"),
+        verifyCommand: `pytest -x ${testPath}`,
+      };
+    // T-Item-Lang (2026-05-04): Python unittest scaffold (legacy projects)
+    case "unittest":
+      return {
+        stubContent: [
+          `"""T199 test scaffold (auto-generated by test-driven todo expansion)."""`,
+          ``,
+          `import unittest`,
+          ``,
+          ``,
+          `class Test${slug.replace(/(^|_)([a-z])/g, (_, __, c: string) => c.toUpperCase())}(unittest.TestCase):`,
+          `    def test_${slug}_placeholder(self):`,
+          `        self.fail(`,
+          `            "scaffolded placeholder — implement the TODO + replace this assertion"`,
+          `        )`,
+          ``,
+          ``,
+          `if __name__ == "__main__":`,
+          `    unittest.main()`,
+        ].join("\n"),
+        verifyCommand: `python -m unittest ${testPath.replace(/[/\\]/g, ".").replace(/\.py$/, "")}`,
+      };
+    // T-Item-Lang (2026-05-04): Rust cargo-test scaffold
+    case "cargo-test":
+      return {
+        stubContent: [
+          "// T199 test scaffold (auto-generated by test-driven todo expansion).",
+          "// This test SHOULD FAIL until the corresponding TODO is implemented.",
+          "// The blackboard worker's verify gate uses it to confirm the work landed.",
+          "",
+          "#[cfg(test)]",
+          "mod tests {",
+          `    #[test]`,
+          `    fn ${slug}_placeholder() {`,
+          `        // TODO: replace this panic with assertions that PASS only when`,
+          `        // the TODO's expected behavior is implemented.`,
+          `        panic!("scaffolded placeholder — implement the TODO + replace this assertion");`,
+          `    }`,
+          "}",
+        ].join("\n"),
+        // Cargo runs ALL tests by default; --test <name> targets one
+        // file. The path-to-test-name mapping requires the file live
+        // under tests/ at the cargo project root.
+        verifyCommand: `cargo test --test ${path.posix
+          .basename(testPath)
+          .replace(/\.rs$/, "")} ${slug}_placeholder`,
+      };
+    // T-Item-Lang (2026-05-04): Go test scaffold
+    case "go-test":
+      return {
+        stubContent: [
+          `// T199 test scaffold (auto-generated by test-driven todo expansion).`,
+          `// This test SHOULD FAIL until the corresponding TODO is implemented.`,
+          ``,
+          `package ${path.posix.basename(path.posix.dirname(testPath)) || "main"}_test`,
+          ``,
+          `import (`,
+          `\t"testing"`,
+          `)`,
+          ``,
+          `func Test${slug.replace(/(^|_)([a-z])/g, (_, __, c: string) => c.toUpperCase())}Placeholder(t *testing.T) {`,
+          `\tt.Fatal("scaffolded placeholder — implement the TODO + replace this assertion")`,
+          `}`,
+        ].join("\n"),
+        verifyCommand: `go test -run "Test${slug.replace(/(^|_)([a-z])/g, (_, __, c: string) => c.toUpperCase())}Placeholder" ./${path.posix.dirname(testPath)}`,
+      };
     default:
       return {
         stubContent: [
@@ -218,11 +394,24 @@ export async function scaffoldTestForTopic(input: {
       // fall through
     }
   }
-  const ext =
-    framework === "vitest" || framework === "jest" || framework === "bun-test"
-      ? "test.ts"
-      : "test.ts";
-  const suggestedTestPath = path.posix.join(testDir, `${slug}.${ext}`);
+  // T-Item-Lang (2026-05-04): per-language test-file extension.
+  // - vitest/jest/bun-test/node-test → .test.ts
+  // - pytest/unittest               → test_<slug>.py (pytest convention)
+  // - cargo-test                    → tests/<slug>_test.rs
+  // - go-test                       → <slug>_test.go (Go convention)
+  let suggestedTestPath: string;
+  if (framework === "pytest" || framework === "unittest") {
+    suggestedTestPath = path.posix.join(testDir, `test_${slug}.py`);
+  } else if (framework === "cargo-test") {
+    // Rust integration tests live under tests/ at the crate root
+    suggestedTestPath = path.posix.join("tests", `${slug}_test.rs`);
+  } else if (framework === "go-test") {
+    // Go test files live alongside source in the package dir; default
+    // to project root when no testDir found
+    suggestedTestPath = `${slug}_test.go`;
+  } else {
+    suggestedTestPath = path.posix.join(testDir, `${slug}.test.ts`);
+  }
   const { stubContent, verifyCommand } = buildScaffold(
     framework,
     topic,
