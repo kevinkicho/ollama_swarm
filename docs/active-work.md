@@ -8,6 +8,31 @@
 
 ---
 
+## Queued (waiting on user nod or specific trigger)
+
+### Ambition for every swarm preset (2026-05-04)
+
+Today only blackboard has an ambition mechanism (`AMBITION_RATCHET_ENABLED=true`, max 5 tiers — planner produces an N+1 contract after current tier completes; the run climbs until a hard cap trips). Every other preset (round-robin, role-diff, council, OW, OW-Deep, debate-judge, map-reduce, stigmergy, MoA) does ONE pass against the directive and stops. They're as ambitious as the directive frames them — no built-in "now go further" lever.
+
+**Goal:** every swarm preset should have a tier-ratchet-equivalent so a long-budget run keeps producing increasingly ambitious work-output. Each preset's mechanism will look different (you can't apply blackboard's contract-tier idea to debate-judge), but the surface should be uniform: an opt-in flag (`SWARM_AMBITION_RATCHET=true` env or `cfg.ambitionRatchet=true` per-run), and after each "complete" cycle the runner re-prompts itself for a more ambitious next cycle.
+
+**Per-preset shape sketches:**
+
+| Preset | Ambition mechanism |
+|---|---|
+| round-robin | After a synthesis lands, planner re-frames the directive as "what's the NEXT important question," loop runs again. |
+| role-diff | After deliverable.md, devil's-advocate critiques it, team produces v2. |
+| council | After convergence, each agent proposes a stronger position. |
+| OW / OW-Deep | After workers report, lead decomposes the leftovers + dispatches a deeper round. |
+| debate-judge | After verdict, judge proposes a sharper proposition; new debate round. |
+| map-reduce | After reduce, reducer identifies un-mapped territory + re-partitions. |
+| stigmergy | After exploration plateau (no new annotations for K turns), explorer agents go meta — annotate annotations. |
+| MoA | After aggregator's synthesis, proposers re-draft using it as seed. |
+
+**Trigger:** explicit user "go implement preset-X ambition" (would design + ship one preset at a time; each is its own ~200 LOC + tests). Cross-cutting refactor would be: shared `runAmbitionLoop(runner, cfg)` helper + per-preset `nextAmbitionPrompt(prior)` callback.
+
+---
+
 ## Done recently — R1–R17 reliability layer (2026-05-04)
 
 Four commits landed the failure-mode resilience pass:

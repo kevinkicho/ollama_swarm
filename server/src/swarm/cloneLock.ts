@@ -118,25 +118,34 @@ export function defaultIsPidAlive(pid: number): boolean {
   }
 }
 
-/** Attempt to acquire the lock at clonePath/.lock. Atomic on POSIX +
- *  Windows: writeFileSync with `wx` flag fails if file exists. If a
- *  prior lock exists but is stale, we delete it and retry. */
+/** Attempt to acquire the lock at <clonePath>.lock (sibling file).
+ *  Atomic on POSIX + Windows: writeFileSync with `wx` flag fails if
+ *  file exists. If a prior lock exists but is stale, we delete it and
+ *  retry.
+ *
+ *  2026-05-04 fix: lock moved from <clonePath>/.lock to
+ *  <clonePath>.lock (sibling). The in-clone path made the directory
+ *  "non-empty" before RepoService.clone could run, which made the
+ *  clone preflight reject every fresh start. Sibling-file is invisible
+ *  to clone preflights + still bound to the same logical clonePath. */
 export function tryAcquireLock(input: {
   clonePath: string;
   runId: string;
   isPidAlive?: (pid: number) => boolean;
 }): AcquireResult {
   const { clonePath, runId, isPidAlive = defaultIsPidAlive } = input;
-  const lockPath = path.join(clonePath, LOCK_FILE_NAME);
+  const lockPath = `${clonePath}${LOCK_FILE_NAME.startsWith(".") ? "" : "."}${LOCK_FILE_NAME}`;
   const ourLock: LockInfo = {
     pid: process.pid,
     runId,
     startedAt: Date.now(),
     hostname: os.hostname(),
   };
-  // Make sure the directory exists.
+  // Make sure the PARENT directory exists (the lock lives next to the
+  // clone path, not inside it). Don't create clonePath itself —
+  // RepoService.clone needs to see it as missing-or-empty.
   try {
-    mkdirSync(clonePath, { recursive: true });
+    mkdirSync(path.dirname(clonePath), { recursive: true });
   } catch {
     /* the writeFile below will fail with a useful error */
   }
@@ -199,7 +208,8 @@ export function releaseLock(input: {
   runId: string;
 }): { released: boolean; reason: string } {
   const { clonePath, runId } = input;
-  const lockPath = path.join(clonePath, LOCK_FILE_NAME);
+  // 2026-05-04 fix: lock is now <clonePath>.lock (sibling), not inside.
+  const lockPath = `${clonePath}${LOCK_FILE_NAME.startsWith(".") ? "" : "."}${LOCK_FILE_NAME}`;
   if (!existsSync(lockPath)) {
     return { released: false, reason: "no lock file present" };
   }

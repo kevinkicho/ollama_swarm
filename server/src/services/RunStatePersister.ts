@@ -27,6 +27,7 @@ import {
   readFileSync,
   readdirSync,
   statSync,
+  existsSync,
 } from "node:fs";
 import path from "node:path";
 
@@ -100,7 +101,12 @@ export class RunStatePersister {
 
   constructor(clonePath: string) {
     this.clonePath = clonePath;
-    this.statePath = path.join(clonePath, "run-state.json");
+    // 2026-05-04 fix: write to <clonePath>.run-state.json (sibling),
+    // not <clonePath>/run-state.json (inside). The in-clone path made
+    // the dir "non-empty" before RepoService.clone could run, blocking
+    // every fresh start. Sibling-file is invisible to clone preflights;
+    // findRecoverableRuns has been updated to scan the new location.
+    this.statePath = `${clonePath}.run-state.json`;
     this.tmpPath = `${this.statePath}.tmp`;
   }
 
@@ -135,7 +141,12 @@ export class RunStatePersister {
     try {
       // Atomic via tmp + rename. Atomic-rename keeps any concurrent
       // reader from seeing a half-written file.
-      mkdirSync(this.clonePath, { recursive: true });
+      // 2026-05-04 fix: mkdir the PARENT of statePath (not clonePath
+      // itself). With the sibling-file move above, the parent is the
+      // user's parent dir + always exists once RepoService.clone has
+      // created the clone subdir. Pre-clone writes will land beside
+      // a still-missing clonePath, which is fine.
+      mkdirSync(path.dirname(this.statePath), { recursive: true });
       writeFileSync(this.tmpPath, JSON.stringify(state, null, 2), "utf8");
       renameSync(this.tmpPath, this.statePath);
       this.writeCount += 1;
@@ -218,7 +229,15 @@ export function findRecoverableRuns(
     } catch {
       continue;
     }
+    // 2026-05-04 fix: scan for sibling-file `<name>.run-state.json`
+    // entries (new layout) AND fall back to in-clone `run-state.json`
+    // for back-compat with snapshots written before the move. We
+    // iterate directory entries and skip the sibling .run-state.json
+    // files themselves (they're attached to a sibling dir of the
+    // same basename).
     for (const name of entries) {
+      // Skip the sibling state files when they appear as dir entries.
+      if (name.endsWith(".run-state.json") || name.endsWith(".run-state.json.tmp")) continue;
       const cloneDir = path.join(parent, name);
       let isDir: boolean;
       try {
@@ -226,8 +245,14 @@ export function findRecoverableRuns(
       } catch {
         continue;
       }
-      if (!isDir) continue;
-      const stateFile = path.join(cloneDir, "run-state.json");
+      const siblingStateFile = `${cloneDir}.run-state.json`;
+      const inCloneStateFile = path.join(cloneDir, "run-state.json");
+      const stateFile = existsSync(siblingStateFile)
+        ? siblingStateFile
+        : isDir && existsSync(inCloneStateFile)
+          ? inCloneStateFile
+          : null;
+      if (!stateFile) continue;
       let raw: string;
       try {
         raw = readFileSync(stateFile, "utf8");
