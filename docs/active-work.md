@@ -418,6 +418,42 @@ Kevin reported the SwarmView chat input goes to the transcript but agents don't 
 
 **Trigger**: after sweeps finish (no tsx-watch reload mid-run).
 
+### Planner JSON drift on context-heavy seeds (2026-05-04)
+
+Surfaced during the all-presets sweep on 2026-05-04 02:00. Even
+`nemotron-3-super:cloud` (which handled blackboard A's planner
+cleanly) drifted into XML pseudo-tool-calls on blackboard B's
+**pass 2** — the run that includes prior-run context in the seed
+(.swarm-memory + .swarm-design + git log + 13 commits + audit).
+
+Pattern:
+1. Contract envelope (single-shot) ✅ — parsed cleanly, 7 criteria for extending the audit.
+2. First todo-batch envelope (repeated structured call) ❌ — returned `<read path...>` XML pseudo-tool-call.
+3. Repair prompt ❌ — returned `[]\n[]` (two empty arrays back-to-back, parse fails on second).
+4. Runner gave up: `no-progress` after 2:18.
+
+Root cause class: same #231 finding — open-weights cloud models drift
+into trained-in tool-call formats under repeated structured-output
+pressure, EXACERBATED by larger seed context. glm-5.1 drifted on
+fresh seed; nemotron drifts when seed has prior-run context layered in.
+
+**Fix scope (the durable answer):**
+Enable Ollama's `format` constrained decoding for the todo-generation
+prompt path. The infrastructure is already wired (BlackboardRunner
+passes `ollamaFormat` through promptWithRetry → OllamaProvider →
+OllamaClient.chat → Ollama's `format` param). The todo-generation
+prompt currently doesn't pass it. Adding `ollamaFormat: <todo-batch
+schema>` should force the model to emit only valid JSON matching the
+schema — no XML, no prose preamble, no fence drift.
+
+Where: BlackboardRunner — find the planner.todo-batch prompt
+construction site, add `ollamaFormat: { type: "object", properties:
+{ todos: { type: "array", ... } } }`. Existing tests for the JSON
+schema are in `prompts/jsonSchemas.test.ts`.
+
+**Trigger:** explicit user "go fix planner JSON drift" — single-file
+patch + tests.
+
 ### Intra-stream loop detector (R9 extended) (2026-05-04)
 
 R9's semantic-loop detector fires at TURN boundaries — it can't catch a model spinning DURING a single streaming turn. The all-presets sweep on 2026-05-04 surfaced the failure mode: nemotron-3-super:cloud emitted the same fence-wrapped JSON tool-call envelope (`\`\`\`json {"tool":"read",...} \`\`\``) 132 times in ONE streaming turn before the SSE-idle 90s watchdog finally fired. 132 wasted segments between safety nets.
