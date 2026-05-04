@@ -104,19 +104,6 @@ export class BaselineRunner implements SwarmRunner {
     this.active = cfg;
     this.startedAt = undefined;
 
-    // T198g (2026-05-04): multi-attempt baseline. Substrate ships
-    // (cfg.baselineAttempts field) but the runner-side dispatch
-    // requires a parallel-runner harness that doesn't exist today
-    // (BaselineRunner is single-attempt single-shot end-to-end).
-    // First-cut: log the intent + run 1 attempt. Future work: clone
-    // K times to K subdirs, run K attempts in parallel, vote on
-    // applied-hunks count + commit the winner.
-    const attempts = Math.max(1, Math.min(5, cfg.baselineAttempts ?? 1));
-    if (attempts > 1) {
-      this.appendSystem(
-        `[T198g multi-attempt baseline] cfg.baselineAttempts=${attempts} requested; first-cut runs 1 attempt only (parallel-runner harness deferred). Future work: K parallel attempts in K subdirs + vote.`,
-      );
-    }
     void this.loop(cfg).catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
       this.appendSystem(`Baseline crashed: ${msg}`);
@@ -167,128 +154,136 @@ export class BaselineRunner implements SwarmRunner {
 
     const repoFiles = await this.opts.repos.listRepoFiles(destPath, { maxFiles: 50 });
     const readme = await this.opts.repos.readReadme(destPath);
-    // T192 (2026-05-04): T179 added recentCommits to the prompt schema
-    // but never populated it. Fix: read top-10 short-form commits via
-    // simpleGit so baseline sees recent project activity. Best-effort —
-    // empty/failed reads land an empty array (back-compat).
     const recentCommits = await this.collectRecentCommits(destPath);
     const prompt = buildBaselinePrompt({ directive, repoFiles, readme, recentCommits });
 
-    this.appendSystem("Baseline prompt sent.");
-    let raw: string;
-    const abortController = new AbortController();
-    try {
-      // E3 Phase 5: provider path is the only path. opencode streamPrompt gone.
-      const { provider, modelId } = pickProvider(cfg.model);
-      const t0 = Date.now();
-      const result = await provider.chat({
-        model: modelId,
-        messages: [{ role: "user", content: prompt }],
-        signal: abortController.signal,
-        agentId: agent.id,
-      });
-      if (result.usage) {
-        tokenTracker.add({
-          ts: Date.now(),
-          promptTokens: result.usage.promptTokens,
-          responseTokens: result.usage.responseTokens,
-          durationMs: Date.now() - t0,
-          model: cfg.model,
-          path: `/sdk-direct (${provider.id})`,
-        });
-      }
-      if (result.finishReason === "error") {
-        throw new Error(result.errorMessage ?? "session provider chat error");
-      }
-      if (result.finishReason === "aborted") {
-        throw new Error("aborted");
-      }
-      raw = result.text;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(`Baseline prompt failed: ${msg}`);
-      this.setPhase("failed");
-      return;
+    // T199 (2026-05-04): real K-attempt baseline. Run K attempts
+    // SEQUENTIALLY (each is a fresh prompt + parse + critique pass);
+    // score each by parsed.hunks.length × critique-passed flag; apply
+    // ONLY the winner. Cost = K × (prompt + critique tokens) + 1 apply.
+    // Parallel-clone-to-K-subdirs would be true parallel but needs
+    // disk + lifecycle isolation that's days more substrate; this
+    // sequential version captures the "vote on top" spirit at lower
+    // engineering cost.
+    const attempts = Math.max(1, Math.min(5, cfg.baselineAttempts ?? 1));
+    if (attempts > 1) {
+      this.appendSystem(
+        `[T199 multi-attempt baseline] running ${attempts} attempts sequentially; will apply only the winner by score.`,
+      );
     }
-    if (this.stopping) return;
-
-    const text = extractText(raw) ?? raw;
-    // Hunks may target ANY file in the repo — baseline doesn't gate by
-    // expectedFiles like the blackboard worker does. We pass the
-    // repo-wide file list as the allow set so the parser still
-    // catches obvious nonsense (e.g. /etc/passwd) but doesn't reject
-    // real edits to legitimate paths.
     const expectedFiles = await collectAllFiles(destPath);
-    const parsed = parseWorkerResponse(text, expectedFiles);
-    if (!parsed.ok) {
-      this.appendSystem(`Baseline parse failed: ${parsed.reason}`);
-      this.setPhase("failed");
-      return;
-    }
-    if (parsed.hunks.length === 0) {
-      this.appendSystem(`Baseline returned no hunks${parsed.skip ? `: ${parsed.skip}` : ""}`);
-      this.setPhase("completed");
-      return;
-    }
-
-    // T192 (2026-05-04): self-critique pass. T179 added the prompt
-    // builder + parser; this wires the runner-side fire when
-    // cfg.baselineSelfCritique is true. Pattern: take the just-parsed
-    // hunks, JSON-stringify them, send them BACK to the same agent
-    // with the critique prompt, parse APPROVE | REVISE, on REVISE
-    // replace hunks before apply. Best-effort: critique-call failure
-    // falls through to the original hunks.
-    let finalHunks: readonly Hunk[] = parsed.hunks;
-    if (cfg.baselineSelfCritique) {
+    const candidates: Array<{
+      attempt: number;
+      hunks: readonly Hunk[];
+      critiquePassed: boolean | null;
+      score: number;
+    }> = [];
+    const abortController = new AbortController();
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      if (this.stopping) return;
+      if (attempts > 1) {
+        this.appendSystem(`[T199 attempt ${attempt}/${attempts}] sending baseline prompt.`);
+      } else {
+        this.appendSystem("Baseline prompt sent.");
+      }
+      let raw: string;
       try {
-        const critiquePrompt = buildBaselineSelfCritiquePrompt({
-          directive,
-          proposedHunksJson: JSON.stringify({ hunks: parsed.hunks }, null, 2),
-        });
-        this.appendSystem("[T192 self-critique] Asking baseline to review its own hunks before commit.");
-        const { provider: cprov, modelId: cmodel } = pickProvider(cfg.model);
-        const ct0 = Date.now();
-        const cresult = await cprov.chat({
-          model: cmodel,
-          messages: [{ role: "user", content: critiquePrompt }],
+        const { provider, modelId } = pickProvider(cfg.model);
+        const t0 = Date.now();
+        const result = await provider.chat({
+          model: modelId,
+          messages: [{ role: "user", content: prompt }],
           signal: abortController.signal,
           agentId: agent.id,
         });
-        if (cresult.usage) {
+        if (result.usage) {
           tokenTracker.add({
             ts: Date.now(),
-            promptTokens: cresult.usage.promptTokens,
-            responseTokens: cresult.usage.responseTokens,
-            durationMs: Date.now() - ct0,
+            promptTokens: result.usage.promptTokens,
+            responseTokens: result.usage.responseTokens,
+            durationMs: Date.now() - t0,
             model: cfg.model,
-            path: `/baseline-self-critique (${cprov.id})`,
+            path: `/sdk-direct (${provider.id})${attempts > 1 ? ` attempt-${attempt}` : ""}`,
           });
         }
-        if (cresult.finishReason === "error" || cresult.finishReason === "aborted") {
-          this.appendSystem(`[T192 self-critique] critique call ${cresult.finishReason} — proceeding with original hunks.`);
-        } else {
-          const ctext = extractText(cresult.text) ?? cresult.text;
-          const verdict = parseBaselineSelfCritique(ctext, expectedFiles);
-          if (!verdict) {
-            this.appendSystem("[T192 self-critique] could not parse verdict — proceeding with original hunks.");
-          } else if (verdict.verdict === "APPROVE") {
-            this.appendSystem(`[T192 self-critique] APPROVE — ${verdict.reason}`);
-          } else {
-            // REVISE — replace hunks with the corrected set
-            const revised = verdict.hunks ?? [];
-            this.appendSystem(`[T192 self-critique] REVISE — ${verdict.reason}. Hunks replaced (${parsed.hunks.length} → ${revised.length}).`);
-            if (revised.length === 0) {
-              this.appendSystem("[T192 self-critique] revised hunks empty → critique recommended NO commit; ending baseline.");
-              this.setPhase("completed");
-              return;
-            }
-            finalHunks = revised;
-          }
+        if (result.finishReason === "error") {
+          throw new Error(result.errorMessage ?? "session provider chat error");
         }
+        if (result.finishReason === "aborted") {
+          throw new Error("aborted");
+        }
+        raw = result.text;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        this.appendSystem(`[T192 self-critique] failed: ${msg} — proceeding with original hunks.`);
+        this.appendSystem(`[T199 attempt ${attempt}/${attempts}] prompt failed: ${msg}; skipping this attempt.`);
+        continue;
       }
+      const text = extractText(raw) ?? raw;
+      const parsed = parseWorkerResponse(text, expectedFiles);
+      if (!parsed.ok) {
+        this.appendSystem(`[T199 attempt ${attempt}/${attempts}] parse failed: ${parsed.reason}; skipping.`);
+        continue;
+      }
+      if (parsed.hunks.length === 0) {
+        this.appendSystem(`[T199 attempt ${attempt}/${attempts}] returned 0 hunks${parsed.skip ? `: ${parsed.skip}` : ""}; recording as zero-score candidate.`);
+        candidates.push({ attempt, hunks: [], critiquePassed: null, score: 0 });
+        continue;
+      }
+      // Optional critique pass per attempt.
+      let critiquePassed: boolean | null = null;
+      let finalHunksForAttempt: readonly Hunk[] = parsed.hunks;
+      if (cfg.baselineSelfCritique) {
+        const critiqueRes = await this.runSelfCritique({
+          agent,
+          directive,
+          parsedHunks: parsed.hunks,
+          expectedFiles,
+          abortController,
+          model: cfg.model,
+        });
+        if (critiqueRes) {
+          critiquePassed = critiqueRes.verdict === "APPROVE";
+          if (critiqueRes.verdict === "REVISE" && critiqueRes.hunks) {
+            finalHunksForAttempt = critiqueRes.hunks;
+          }
+        }
+      }
+      // Score: hunks_count + bonus for critique-passed
+      const score =
+        finalHunksForAttempt.length + (critiquePassed === true ? 2 : 0);
+      candidates.push({
+        attempt,
+        hunks: finalHunksForAttempt,
+        critiquePassed,
+        score,
+      });
+      this.appendSystem(
+        `[T199 attempt ${attempt}/${attempts}] candidate scored: hunks=${finalHunksForAttempt.length}, critique=${critiquePassed === null ? "n/a" : critiquePassed ? "APPROVE" : "REVISE"}, score=${score}`,
+      );
+    }
+    if (candidates.length === 0) {
+      this.appendSystem(
+        `[T199 multi-attempt baseline] all ${attempts} attempts failed; nothing to apply.`,
+      );
+      this.setPhase("failed");
+      return;
+    }
+    // Pick winner: highest score; tie-break by lowest attempt number.
+    candidates.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.attempt - b.attempt;
+    });
+    const winner = candidates[0]!;
+    if (attempts > 1) {
+      this.appendSystem(
+        `[T199 multi-attempt baseline] winner = attempt ${winner.attempt}/${attempts} (score=${winner.score}). Applying winner's hunks.`,
+      );
+    }
+    const finalHunks: readonly Hunk[] = winner.hunks;
+    if (finalHunks.length === 0) {
+      this.appendSystem(`Baseline winner returned 0 hunks — nothing to commit.`);
+      this.setPhase("completed");
+      return;
     }
 
     const fsAdapter = realFilesystemAdapter(destPath);
@@ -321,6 +316,52 @@ export class BaselineRunner implements SwarmRunner {
   private setPhase(p: SwarmPhase): void {
     this.phase = p;
     this.opts.emit({ type: "swarm_state", phase: p, round: 0 });
+  }
+
+  // T199 (2026-05-04): extracted self-critique helper. Used per-attempt
+  // in the K-attempt loop. Returns null on any failure (caller treats
+  // as "no critique signal"). When verdict.verdict === "REVISE",
+  // verdict.hunks is the corrected set the caller should use instead
+  // of the original.
+  private async runSelfCritique(input: {
+    agent: import("../services/AgentManager.js").Agent;
+    directive: string;
+    parsedHunks: readonly Hunk[];
+    expectedFiles: readonly string[];
+    abortController: AbortController;
+    model: string;
+  }): Promise<{ verdict: "APPROVE" | "REVISE"; reason: string; hunks?: readonly Hunk[] } | null> {
+    try {
+      const critiquePrompt = buildBaselineSelfCritiquePrompt({
+        directive: input.directive,
+        proposedHunksJson: JSON.stringify({ hunks: input.parsedHunks }, null, 2),
+      });
+      const { provider, modelId } = pickProvider(input.model);
+      const t0 = Date.now();
+      const cresult = await provider.chat({
+        model: modelId,
+        messages: [{ role: "user", content: critiquePrompt }],
+        signal: input.abortController.signal,
+        agentId: input.agent.id,
+      });
+      if (cresult.usage) {
+        tokenTracker.add({
+          ts: Date.now(),
+          promptTokens: cresult.usage.promptTokens,
+          responseTokens: cresult.usage.responseTokens,
+          durationMs: Date.now() - t0,
+          model: input.model,
+          path: `/baseline-self-critique (${provider.id})`,
+        });
+      }
+      if (cresult.finishReason === "error" || cresult.finishReason === "aborted") {
+        return null;
+      }
+      const ctext = extractText(cresult.text) ?? cresult.text;
+      return parseBaselineSelfCritique(ctext, input.expectedFiles);
+    } catch {
+      return null;
+    }
   }
 
   // T192 (2026-05-04): collect top-N short-form commits for the

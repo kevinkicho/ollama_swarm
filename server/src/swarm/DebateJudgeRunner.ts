@@ -12,6 +12,7 @@ import type {
 } from "./../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { extractText } from "./extractText.js";
 import { formatChatReceipt } from "./chatReceipt.js";
 import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
@@ -216,31 +217,68 @@ export class DebateJudgeRunner implements SwarmRunner {
         // bad framing by giving the judge multiple candidates to
         // weigh against each other.
         if (cfg.parallelPropositions) {
+          // T199 (2026-05-04): real parallel proposition derivation.
+          // Promote T198d's sequential generation to: K candidates IN
+          // PARALLEL (Promise.all) + dedicated judge-rank step that
+          // picks the most informative based on debatable surface
+          // area + grounding + non-trivial framing. Falls back to
+          // first-non-fallback when the rank step fails to parse.
           this.appendSystem(
-            `[T198d parallel proposition] Generating 3 candidate propositions; judge will pick the most informative.`,
+            `[T199 parallel propositions] Generating 3 candidates IN PARALLEL; judge will rank + pick the most informative.`,
           );
-          const candidates: DerivedProposition[] = [];
-          for (let i = 0; i < 3; i++) {
-            const cand = await deriveProposition({
-              agent: judge,
-              manager: this.opts.manager,
-              directive: directiveTrimmed,
-            });
-            if (cand) candidates.push(cand);
-          }
+          const candidates: DerivedProposition[] = (
+            await Promise.all([
+              deriveProposition({
+                agent: judge,
+                manager: this.opts.manager,
+                directive: directiveTrimmed,
+              }),
+              deriveProposition({
+                agent: judge,
+                manager: this.opts.manager,
+                directive: directiveTrimmed,
+              }),
+              deriveProposition({
+                agent: judge,
+                manager: this.opts.manager,
+                directive: directiveTrimmed,
+              }),
+            ])
+          ).filter((c): c is DerivedProposition => c !== null);
           if (candidates.length > 0) {
-            // Pick first non-fallback candidate, or the first one if all
-            // failed. Future: ask the judge in a separate prompt to
-            // explicitly pick the most informative.
-            const winner =
-              candidates.find((c) => c.derived) ?? candidates[0]!;
+            // Dedup by proposition text (trim + lowercase) — N parallel
+            // calls often produce identical strings.
+            const seen = new Set<string>();
+            const unique = candidates.filter((c) => {
+              const k = c.proposition.trim().toLowerCase();
+              if (seen.has(k)) return false;
+              seen.add(k);
+              return true;
+            });
+            // Judge picks: when 1 unique → use it. When 2+ → fire one
+            // dedicated rank prompt asking the judge to pick by
+            // index. Fallback to first-non-fallback on parse failure.
+            let winner: DerivedProposition;
+            if (unique.length === 1) {
+              winner = unique[0]!;
+            } else {
+              const pickedIdx = await this.rankParallelPropositions(
+                judge,
+                directiveTrimmed,
+                unique.map((c) => c.proposition),
+              );
+              winner =
+                pickedIdx !== null && pickedIdx >= 0 && pickedIdx < unique.length
+                  ? unique[pickedIdx]!
+                  : unique.find((c) => c.derived) ?? unique[0]!;
+            }
             this.derivedPropositionMeta = winner;
             this.proposition = winner.proposition;
             this.appendSystem(
-              `[T198d] ${candidates.length} candidates derived; picked: "${winner.proposition}". Other candidates: ${candidates
+              `[T199] ${candidates.length} candidates generated, ${unique.length} unique; picked: "${winner.proposition}". Other unique candidates: ${unique
                 .filter((c) => c !== winner)
                 .map((c) => `"${c.proposition.slice(0, 60)}…"`)
-                .join("; ")}.`,
+                .join("; ") || "(none)"}.`,
             );
           }
         } else {
@@ -691,6 +729,74 @@ export class DebateJudgeRunner implements SwarmRunner {
       undefined,
       () => ({ kind: "next_action_phase", role: "signoff" }),
     );
+  }
+
+  // T199 (2026-05-04): rank N candidate propositions + return the
+  // winning index. Judge fires one dedicated prompt that lists the
+  // candidates + asks for the most informative pick + rationale.
+  // Returns null on any failure (caller falls back to first-non-fallback).
+  private async rankParallelPropositions(
+    judge: import("../services/AgentManager.js").Agent,
+    directive: string,
+    propositions: readonly string[],
+  ): Promise<number | null> {
+    if (propositions.length === 0) return null;
+    if (propositions.length === 1) return 0;
+    const prompt = [
+      "You are the JUDGE picking the most INFORMATIVE proposition to debate.",
+      "",
+      `User directive (the work this debate informs): ${directive}`,
+      "",
+      `Candidate propositions (${propositions.length}):`,
+      ...propositions.map((p, i) => `  [${i}] ${p}`),
+      "",
+      "Pick the ONE that maximizes:",
+      "1. Debatable surface area (genuinely two-sided, not a foregone conclusion)",
+      "2. Grounded in the directive's real concerns (not tangential)",
+      "3. Non-trivial framing (\"X is good\" with no qualifier is too vague; \"X is the right tradeoff under constraint Y\" is strong)",
+      "",
+      "Output STRICT JSON only — no prose, no markdown fences:",
+      '{"pickedIndex": <0-based integer>, "rationale": "<one-sentence why this is the most informative debate frame>"}',
+    ].join("\n");
+    let raw: string;
+    try {
+      const ctrl = new AbortController();
+      const result = (await import("./promptWithRetry.js")).promptWithRetry(
+        judge,
+        prompt,
+        {
+          signal: ctrl.signal,
+          manager: this.opts.manager,
+          agentName: "swarm-read",
+          describeError: (e) => describeSdkError(e),
+        },
+      );
+      const settled = (await result) as { data?: { parts?: Array<{ type: string; text: string }> } };
+      raw = settled.data?.parts?.find((p) => p.type === "text")?.text ?? "";
+    } catch {
+      return null;
+    }
+    if (!raw || raw.trim().length === 0) return null;
+    const text = (extractText(raw) ?? raw).trim();
+    const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    const candidate = fenceMatch ? fenceMatch[1] : text;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      const braceMatch = candidate.match(/\{[\s\S]*\}/);
+      if (!braceMatch) return null;
+      try {
+        parsed = JSON.parse(braceMatch[0]);
+      } catch {
+        return null;
+      }
+    }
+    if (!parsed || typeof parsed !== "object") return null;
+    const idx = (parsed as { pickedIndex?: unknown }).pickedIndex;
+    if (typeof idx !== "number" || !Number.isInteger(idx)) return null;
+    if (idx < 0 || idx >= propositions.length) return null;
+    return idx;
   }
 
   private async runJudgeTurn(

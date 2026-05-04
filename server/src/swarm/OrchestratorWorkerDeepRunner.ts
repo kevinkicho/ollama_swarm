@@ -69,6 +69,7 @@ import {
   parsePlan,
   buildWorkerPrompt,
   type Assignment,
+  type Plan,
 } from "./OrchestratorWorkerRunner.js";
 import {
   readDirective,
@@ -155,6 +156,12 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
   private summaryWritten = false;
   // Phase B: orchestrator can short-circuit by emitting done:true.
   private earlyStopDetail?: string;
+  // T199 (2026-05-04): per-cycle pushback tracker. Mid-leads append
+  // their pushback (when emitted) here; the runner's outer loop
+  // checks at end-of-cycle to decide whether to fire an orchestrator
+  // replan (cfg.bidirectionalRefinement). Cleared at start of each
+  // cycle.
+  private cyclePushbacks: Map<number, string> = new Map();
   private topology?: DeepTopology;
 
   constructor(private readonly opts: RunnerOpts) {}
@@ -385,6 +392,9 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
         // The seed snapshot all sub-prompts share is the system messages
         // captured BEFORE this cycle's per-mid-lead activity.
         const seedSnapshot = this.transcript.filter((e) => e.role === "system");
+        // T199 (2026-05-04): clear cycle's pushback tracker before the
+        // mid-lead subtrees populate it.
+        this.cyclePushbacks = new Map();
         await staggerStart(topPlan.assignments, async (a) => {
           const midLeadIdx = a.agentIndex;
           const midLeadPos = liveMidLeads.findIndex((m) => m.index === midLeadIdx);
@@ -393,6 +403,55 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
           const pool = liveWorkerPools[midLeadPos]!;
           await this.runMidLeadSubtree(midLead, pool, a, r, cfg.rounds, seedSnapshot, cfg.userDirective);
         });
+        if (this.stopping) break;
+
+        // T199 (2026-05-04): bidirectional refinement auto-replan.
+        // After mid-leads run, if cfg.bidirectionalRefinement is set
+        // AND any mid-lead pushed back, fire ONE orchestrator-level
+        // replan that sees the pushbacks + dispatches a corrected
+        // mini-cycle. Capped at 1 replan per cycle to bound runtime.
+        if (
+          cfg.bidirectionalRefinement &&
+          this.cyclePushbacks.size > 0 &&
+          !this.stopping
+        ) {
+          const pbSummary = [...this.cyclePushbacks.entries()]
+            .map(([idx, pb]) => `Mid-lead ${idx}: ${pb}`)
+            .join("\n  ");
+          this.appendSystem(
+            `[T199 bidirectional refinement] ${this.cyclePushbacks.size} mid-lead(s) pushed back; firing orchestrator REPLAN.\n  ${pbSummary}`,
+          );
+          const replanPrompt = buildOrchestratorReplanPrompt({
+            originalPlan: topPlan,
+            pushbacks: this.cyclePushbacks,
+            availableMidLeadIndices: liveMidLeads.map((m) => m.index),
+            round: r,
+            totalRounds: cfg.rounds,
+            userDirective: cfg.userDirective,
+          });
+          const replanText = await this.runAgent(orchestrator, replanPrompt);
+          if (!this.stopping) {
+            const replan = parsePlan(replanText, liveMidLeads.map((m) => m.index));
+            if (replan.assignments.length > 0) {
+              this.appendSystem(
+                `[T199 bidirectional refinement] orchestrator emitted ${replan.assignments.length} revised assignment(s); dispatching refinement wave.`,
+              );
+              this.cyclePushbacks = new Map(); // clear so the refinement wave doesn't re-trigger
+              await staggerStart(replan.assignments, async (a) => {
+                const midLeadIdx = a.agentIndex;
+                const midLeadPos = liveMidLeads.findIndex((m) => m.index === midLeadIdx);
+                if (midLeadPos < 0) return;
+                const midLead = liveMidLeads[midLeadPos]!;
+                const pool = liveWorkerPools[midLeadPos]!;
+                await this.runMidLeadSubtree(midLead, pool, a, r, cfg.rounds, seedSnapshot, cfg.userDirective);
+              });
+            } else {
+              this.appendSystem(
+                `[T199 bidirectional refinement] orchestrator's replan parsed empty — proceeding to synthesis with the original wave's outputs.`,
+              );
+            }
+          }
+        }
         if (this.stopping) break;
 
         // Phase 5 — TOP-SYNTH
@@ -547,16 +606,15 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
       ),
     );
     if (this.stopping) return;
-    // T198f (2026-05-04): bi-directional refinement. Surface mid-lead
-    // pushback BEFORE the tier-skip / dispatch flow. First-cut:
-    // log-only — runner doesn't auto-replan. Future work: top
-    // orchestrator sees pushbacks in the next planning prompt + can
-    // revise its decomposition.
+    // T199 (2026-05-04): bi-directional refinement (production).
+    // Track pushbacks per cycle so the outer loop can fire an
+    // orchestrator replan when cfg.bidirectionalRefinement is on.
     const pushback = parseMidLeadPushback(midPlanText);
     if (pushback) {
       this.appendSystem(
-        `[T198f mid-lead pushback] mid-lead ${midLead.index} flagged the coarse subtask: ${pushback}`,
+        `[T199 mid-lead pushback] mid-lead ${midLead.index} flagged the coarse subtask: ${pushback}`,
       );
+      this.cyclePushbacks.set(midLead.index, pushback);
     }
     // T192 (2026-05-04): tier-skip honor. T183 added the prompt schema
     // (`tierSkip: true` + `selfReport`); this wires the runner to
@@ -1051,6 +1109,57 @@ export function buildTopSynthesisPrompt(
 
 function truncate(s: string, max: number = 80): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+// T199 (2026-05-04): build the orchestrator REPLAN prompt for
+// bidirectional refinement. Shows the original plan + the pushbacks
+// + asks the orchestrator to revise the decomposition. Output uses
+// the same JSON shape as buildTopPlanPrompt so parsePlan handles it.
+export function buildOrchestratorReplanPrompt(input: {
+  originalPlan: Plan;
+  pushbacks: ReadonlyMap<number, string>;
+  availableMidLeadIndices: readonly number[];
+  round: number;
+  totalRounds: number;
+  userDirective?: string;
+}): string {
+  const directiveLine = input.userDirective?.trim()
+    ? `User directive: ${input.userDirective.trim()}\n`
+    : "";
+  const planRendered = input.originalPlan.assignments
+    .map(
+      (a) => `- Mid-lead ${a.agentIndex}: "${a.subtask.slice(0, 200)}"`,
+    )
+    .join("\n");
+  const pushbacksRendered = [...input.pushbacks.entries()]
+    .map(([idx, pb]) => `- Mid-lead ${idx}: ${pb}`)
+    .join("\n");
+  const midList = input.availableMidLeadIndices.map((i) => `Agent ${i}`).join(", ");
+  return [
+    `You are the ORCHESTRATOR re-planning cycle ${input.round}/${input.totalRounds} based on mid-lead pushback.`,
+    "",
+    directiveLine,
+    `Available mid-leads: ${midList}.`,
+    "",
+    "=== YOUR ORIGINAL DECOMPOSITION ===",
+    planRendered,
+    "=== END ORIGINAL ===",
+    "",
+    "=== MID-LEAD PUSHBACKS ===",
+    pushbacksRendered,
+    "=== END PUSHBACKS ===",
+    "",
+    "Decide: do you REVISE the decomposition based on the pushbacks, or do you stand by the original (mid-leads will execute as-is)?",
+    "",
+    "Output ONLY a JSON object (no prose, no fences):",
+    '{"assignments": [{"agentIndex": <mid-lead-index>, "subtask": "<revised coarse subtask>"}, ...]}',
+    "",
+    "Rules:",
+    "- One assignment per mid-lead you want to dispatch (skip mid-leads whose original subtask still stands).",
+    "- A REVISED subtask should explicitly address the pushback (cite what changed + why).",
+    "- An empty assignments array means \"original plan stands, no replan needed.\"",
+    "- subtask text under ~250 chars each. Concrete + actionable.",
+  ].join("\n");
 }
 
 // T198f (2026-05-04): parse the mid-lead's optional pushback field
