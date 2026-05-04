@@ -197,6 +197,54 @@ export const CRITIC_ENVELOPE_JSON_SCHEMA = {
   required: ["verdict", "rationale"],
 } as const;
 
+/** Mirrors `ReplannerResponseSchema` in `replanner.ts`. The replanner
+ *  must produce exactly one of two shapes:
+ *    { revised: { description, expectedFiles } } — revise the stale TODO
+ *    { skip: true, reason: "..." } — mark the TODO as no longer needed
+ *  Constrained decoding prevents the model from emitting XML tool-call
+ *  markers or prose instead of one of these two shapes. This is the #1
+ *  drift site on context-heavy replanner calls (the model sees prior-run
+ *  memory + git log + 13 commits and starts hallucinating <read path=...>
+ *  instead of valid JSON). */
+export const REPLANNER_JSON_SCHEMA = {
+  oneOf: [
+    {
+      type: "object",
+      properties: {
+        revised: {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["hunks", "build"] },
+            description: { type: "string", minLength: 1, maxLength: 500 },
+            expectedFiles: {
+              type: "array",
+              minItems: 1,
+              maxItems: 2,
+              items: { type: "string", minLength: 1 },
+            },
+            expectedAnchors: {
+              type: "array",
+              maxItems: 4,
+              items: { type: "string", minLength: 1 },
+            },
+            command: { type: "string", minLength: 1, maxLength: 500 },
+          },
+          required: ["description", "expectedFiles"],
+        },
+      },
+      required: ["revised"],
+    },
+    {
+      type: "object",
+      properties: {
+        skip: { type: "boolean", enum: [true] },
+        reason: { type: "string", minLength: 1, maxLength: 500 },
+      },
+      required: ["skip", "reason"],
+    },
+  ],
+} as const;
+
 /** Mirrors `WorkerResponseSchema` in `worker.ts` — the highest-frequency
  *  parse-failure path in the system because workers emit complex multi-
  *  line search/replace strings. Discriminated union via `oneOf` covers

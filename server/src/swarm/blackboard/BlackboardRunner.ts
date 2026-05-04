@@ -113,6 +113,7 @@ import {
   AUDITOR_VERDICT_JSON_SCHEMA,
   CRITIC_ENVELOPE_JSON_SCHEMA,
   WORKER_HUNKS_JSON_SCHEMA,
+  REPLANNER_JSON_SCHEMA,
 } from "./prompts/jsonSchemas.js";
 import {
   AUDITOR_SYSTEM_PROMPT,
@@ -1779,7 +1780,7 @@ export class BlackboardRunner implements SwarmRunner {
         // glm-5.1 / nemotron-3-super hallucinate <read>/<grep> markers
         // that prefix the JSON envelope and cause parse failures (RCA
         // run 6a256a18, 2026-04-27 evening).
-        const text = await this.promptAgent(a, draftPrompt, "swarm");
+        const text = await this.promptAgent(a, draftPrompt, "swarm", "json", CONTRACT_JSON_SCHEMA);
         return { agent: a, text };
       }),
     );
@@ -1826,7 +1827,7 @@ export class BlackboardRunner implements SwarmRunner {
     );
     const mergePrompt = buildCouncilContractMergePrompt(seed, drafts);
     const { response: mergeResponse, agentUsed: mergeAgent } =
-      await this.promptPlannerSafely(planner, mergePrompt);
+      await this.promptPlannerSafely(planner, mergePrompt, undefined, CONTRACT_JSON_SCHEMA);
     if (this.stopping) return null;
     this.appendAgent(mergeAgent, mergeResponse);
 
@@ -1842,6 +1843,8 @@ export class BlackboardRunner implements SwarmRunner {
             mergeResponse,
             mergeParsed.reason,
           )}`,
+          undefined,
+          CONTRACT_JSON_SCHEMA,
         );
       if (this.stopping) return null;
       this.appendAgent(repairAgent, repairResponse);
@@ -2551,6 +2554,8 @@ export class BlackboardRunner implements SwarmRunner {
     const { response, agentUsed } = await this.promptPlannerSafely(
       planner,
       prompt,
+      undefined,
+      CONTRACT_JSON_SCHEMA,
     );
     if (this.stopping) return false;
     this.appendAgent(agentUsed, response);
@@ -2567,6 +2572,8 @@ export class BlackboardRunner implements SwarmRunner {
             response,
             parsed.reason,
           )}`,
+          undefined,
+          CONTRACT_JSON_SCHEMA,
         );
       if (this.stopping) return false;
       this.appendAgent(repairAgent, repairResponse);
@@ -3726,6 +3733,8 @@ export class BlackboardRunner implements SwarmRunner {
       const r = await this.promptPlannerSafely(
         planner,
         `${REPLANNER_SYSTEM_PROMPT}\n\n${buildReplannerUserPrompt(seed)}`,
+        undefined,
+        REPLANNER_JSON_SCHEMA,
       );
       response = r.response;
       replanAgent = r.agentUsed;
@@ -3749,6 +3758,8 @@ export class BlackboardRunner implements SwarmRunner {
         const r = await this.promptPlannerSafely(
           replanAgent,
           `${REPLANNER_SYSTEM_PROMPT}\n\n${buildReplannerRepairPrompt(response, parsed.reason)}`,
+          undefined,
+          REPLANNER_JSON_SCHEMA,
         );
         repair = r.response;
         repairAgent = r.agentUsed;
@@ -5218,6 +5229,12 @@ export class BlackboardRunner implements SwarmRunner {
         // Task #196: early-format sniff aborts wrong-format responses
         // in ~10s instead of waiting for the absolute turn cap (1200s).
         formatExpect,
+        // R9 extended (2026-05-04): intra-stream loop detection. If
+        // the model starts emitting the same block repeatedly (observed:
+        // 132 identical JSON tool-call envelopes in one streaming turn),
+        // abort the prompt early instead of burning through the 90s SSE
+        // idle timeout. Saves ~80s of token budget per occurrence.
+        intraStreamLoop: true,
         // V2 Step 1: when USE_OLLAMA_DIRECT=1, route through OllamaClient
         // (bypasses OpenCode subprocess entirely). config import here is
         // safe — BlackboardRunner already depends on config. The flag

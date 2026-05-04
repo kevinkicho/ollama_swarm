@@ -19,12 +19,14 @@ import {
   AUDITOR_VERDICT_JSON_SCHEMA,
   CRITIC_ENVELOPE_JSON_SCHEMA,
   WORKER_HUNKS_JSON_SCHEMA,
+  REPLANNER_JSON_SCHEMA,
 } from "./jsonSchemas.js";
 import { parseFirstPassContractResponse } from "./firstPassContract.js";
 import { parsePlannerResponse } from "./planner.js";
 import { parseAuditorResponse } from "./auditor.js";
 import { parseCriticResponse } from "./critic.js";
 import { parseWorkerResponse } from "./worker.js";
+import { parseReplannerResponse } from "./replanner.js";
 
 // ---------------------------------------------------------------------------
 // Cross-check: a payload that the zod parser ACCEPTS should also have
@@ -196,4 +198,58 @@ test("WORKER_HUNKS_JSON_SCHEMA — three variants in oneOf", () => {
   assert.equal(variants.length, 3, "replace + create + append");
   const ops = variants.map((v) => ([...v.properties.op.enum] as string[])[0]);
   assert.deepEqual([...ops].sort(), ["append", "create", "replace"]);
+});
+
+test("REPLANNER_JSON_SCHEMA — revise variant parses + matches schema", () => {
+  const revisePayload = {
+    revised: {
+      description: "Fix the off-by-one in the counter",
+      expectedFiles: ["src/counter.ts"],
+    },
+  };
+  const parsed = parseReplannerResponse(JSON.stringify(revisePayload));
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.equal(parsed.action, "revised");
+  const variants = REPLANNER_JSON_SCHEMA.oneOf;
+  assert.equal(variants.length, 2, "revised + skip variants");
+  const revisedVariant = variants[0];
+  assert.deepEqual([...revisedVariant.required], ["revised"]);
+  assert.deepEqual([...revisedVariant.properties.revised.required].sort(), ["description", "expectedFiles"]);
+});
+
+test("REPLANNER_JSON_SCHEMA — skip variant parses + matches schema", () => {
+  const skipPayload = { skip: true, reason: "Already done by another agent" };
+  const parsed = parseReplannerResponse(JSON.stringify(skipPayload));
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.equal(parsed.action, "skip");
+  const skipVariant = REPLANNER_JSON_SCHEMA.oneOf[1];
+  assert.deepEqual([...skipVariant.required].sort(), ["reason", "skip"]);
+  assert.deepEqual([...skipVariant.properties.skip.enum], [true]);
+});
+
+test("REPLANNER_JSON_SCHEMA — build-style revision (kind: build)", () => {
+  const buildPayload = {
+    revised: {
+      kind: "build",
+      description: "Run lint fix",
+      expectedFiles: ["src/x.ts"],
+      command: "npm run lint --fix",
+    },
+  };
+  const parsed = parseReplannerResponse(JSON.stringify(buildPayload));
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.equal(parsed.action, "revised");
+  assert.equal(parsed.kind, "build");
+  assert.equal(parsed.command, "npm run lint --fix");
+});
+
+test("REPLANNER_JSON_SCHEMA — expectedAnchors is optional in revised branch", () => {
+  const revisedProps = REPLANNER_JSON_SCHEMA.oneOf[0].properties.revised;
+  const required = revisedProps.required as readonly string[];
+  assert.ok(!required.includes("expectedAnchors"), "expectedAnchors must be optional");
+  assert.ok(!required.includes("command"), "command must be optional (only required for kind:build)");
+  assert.ok(!required.includes("kind"), "kind must be optional (defaults to hunks)");
 });

@@ -8,6 +8,7 @@ import { tokenTracker } from "../services/ollamaProxy.js";
 import { pickProvider } from "../providers/pickProvider.js";
 import { config } from "../config.js";
 import { ToolDispatcher, defaultToolsForProfile, type ProfileName } from "../tools/ToolDispatcher.js";
+import { createIntraStreamLoopDetector, type IntraStreamLoopDetectorOpts } from "./intraStreamLoopDetector.js";
 // 2026-04-28: shared interruptible sleep used by both this module's
 // retry-backoff and BlackboardRunner. One source of truth.
 import { interruptibleSleep as defaultInterruptibleSleep } from "./interruptibleSleep.js";
@@ -130,6 +131,14 @@ export interface PromptWithRetryOptions {
   // The agent's spawn-time model stays as the default; this is an
   // override scope of one call.
   modelOverride?: string;
+  // R9 extended (2026-05-04): intra-stream loop detection. When set,
+  // monitors chunks for repetitive patterns (identical delta streaks,
+  // trailing substring repetition, zero-byte streaks). Aborts the prompt
+  // via the signal if a loop is detected, saving the turn budget that
+  // would otherwise burn until the SSE-idle watchdog fires (observed:
+  // 132 identical chunks before the 90s watchdog caught it). Default OFF;
+  // BlackboardRunner and discussion runners opt in.
+  intraStreamLoop?: IntraStreamLoopDetectorOpts | true;
 }
 
 export interface RetryInfo {
@@ -200,6 +209,9 @@ export async function promptWithRetry(
         const dispatcher = tools.length > 0 && profileForTools && agent.cwd
           ? new ToolDispatcher(profileForTools, agent.cwd)
           : undefined;
+        const loopDetector = opts.intraStreamLoop
+          ? createIntraStreamLoopDetector(opts.intraStreamLoop === true ? undefined : opts.intraStreamLoop)
+          : null;
         const result = await provider.chat({
           model: modelId,
           messages: [{ role: "user", content: effectivePromptText }],
@@ -209,6 +221,19 @@ export async function promptWithRetry(
           ...(opts.ollamaOptions !== undefined ? { options: opts.ollamaOptions } : {}),
           onChunk: (cumulativeText) => {
             opts.manager?.recordStreamingText(agent.id, agent.index, cumulativeText);
+            if (loopDetector) {
+              const loopResult = loopDetector.onChunk(cumulativeText);
+              if (loopResult.detected) {
+                // Throw from the onChunk callback. This propagates as an
+                // error inside provider.chat(), causing it to reject.
+                // The promptWithRetry catch path then checks
+                // opts.signal.aborted — so we don't retry a loop-caught
+                // abort (the same-model retry would just loop again).
+                throw new Error(
+                  `intra-stream loop detected: ${loopResult.reason}`,
+                );
+              }
+            }
           },
           ...(tools.length > 0 ? { tools } : {}),
           ...(dispatcher ? { dispatcher } : {}),
