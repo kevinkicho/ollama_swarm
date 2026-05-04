@@ -1128,6 +1128,7 @@ export function SetupForm() {
                 topology={topology}
                 setTopology={onTopologyChange}
                 defaultModel={model}
+                provider={provider}
               />
               <button
                 type="button"

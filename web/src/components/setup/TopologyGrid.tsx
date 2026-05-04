@@ -22,6 +22,7 @@ import {
   isRoleStructural,
   synthesizeTopology,
 } from "../../../../shared/src/topology";
+import type { Provider } from "../../../../shared/src/providers";
 import { ModelInput } from "./ModelInput";
 
 // Phase 2 of #243: tailwind color name → swatch CSS for the per-row
@@ -108,6 +109,12 @@ interface TopologyGridProps {
   // Top-level default model — used as placeholder for per-row Model
   // inputs so the user sees what each agent will fall back to.
   defaultModel: string;
+  // 2026-05-04 fix: forward the active provider so per-row ModelInput
+  // queries the right datalist (Ollama Cloud catalog vs local /api/tags
+  // vs Anthropic vs OpenAI). Without this, picking ollama-cloud at the
+  // top level still made the per-row override search local /api/tags
+  // (empty for users who only use cloud models).
+  provider: Provider;
 }
 
 // Roles that CAN be added incrementally (the user can add another one
@@ -194,7 +201,7 @@ function RoleChip({ role, structural }: { role: AgentRole; structural: boolean }
   );
 }
 
-export function TopologyGrid({ preset, topology, setTopology, defaultModel }: TopologyGridProps) {
+export function TopologyGrid({ preset, topology, setTopology, defaultModel, provider }: TopologyGridProps) {
   const total = topology.agents.length;
   const atMax = total >= preset.max;
   const atMin = total <= preset.min;
@@ -565,6 +572,7 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel }: To
                     placeholder={defaultModel || "(use default)"}
                     className="w-full bg-ink-950/60 border border-ink-700 rounded px-2 py-0.5 text-[11px] font-mono text-ink-200 placeholder:text-ink-600 focus:outline-none focus:border-ink-500"
                     ariaLabel={`Model override for agent ${a.index}`}
+                    provider={provider}
                   />
                 </td>
                 {showTemp ? (
