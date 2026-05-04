@@ -11,9 +11,11 @@
 // undefined, never throws.
 
 import type { TranscriptEntrySummary } from "../../types.js";
+import { repairAndParseJson } from "../repairJson.js";
 
 export function summarizeAgentResponse(raw: string): TranscriptEntrySummary | undefined {
-  const parsed = tryParseJson(raw);
+  const attempt = repairAndParseJson(raw);
+  const parsed = attempt?.value;
   if (parsed === undefined || typeof parsed !== "object" || parsed === null) {
     return undefined;
   }
@@ -76,41 +78,8 @@ export function summarizeAgentResponse(raw: string): TranscriptEntrySummary | un
   return undefined;
 }
 
-// Try strict parse first; fall back to fence stripping + inner-object
-// extraction (mirrors the lenient extraction worker.ts uses).
-function tryParseJson(raw: string): unknown {
-  const s = raw.trim();
-  if (s.length === 0) return undefined;
-  try {
-    return JSON.parse(s);
-  } catch {
-    /* fall through */
-  }
-  // ```json ... ``` fence
-  const fenceMatch = s.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
-  if (fenceMatch) {
-    try {
-      return JSON.parse(fenceMatch[1]!.trim());
-    } catch {
-      /* fall through */
-    }
-  }
-  // Prose-then-object OR object-then-trailing-garbage: slice between
-  // first `{` and last `}`. 2026-04-25 fix: `firstBrace > 0` was an
-  // off-by-one — when JSON starts at position 0 (the common worker
-  // response shape), this branch was never entered. The model
-  // occasionally appends a stray `]` after a valid envelope (e.g.
-  // `{"hunks":[{...}]}]`), and without this fallback the summary
-  // tagger silently dropped to undefined → web rendered raw JSON
-  // instead of the diff view. firstBrace >= 0 covers both.
-  const firstBrace = s.indexOf("{");
-  const lastBrace = s.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    try {
-      return JSON.parse(s.slice(firstBrace, lastBrace + 1));
-    } catch {
-      /* fall through */
-    }
-  }
-  return undefined;
-}
+// 2026-05-04 (R11 wiring): the local lenient parser was replaced by
+// repairAndParseJson, which subsumes its three strategies (strict,
+// fence-strip, inner-object) plus soft repairs (trailing comma, smart
+// quotes, missing braces). The tryParseJson helper has been deleted;
+// see swarm/repairJson.ts for the consolidated implementation.

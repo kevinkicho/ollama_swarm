@@ -21,6 +21,7 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { pruneMemoryEntries } from "../memoryStorePruner.js";
 
 export const MEMORY_FILENAME = ".swarm-memory.jsonl";
 export const MEMORY_FILE_BUDGET_BYTES = 1 * 1024 * 1024; // 1 MB
@@ -127,13 +128,29 @@ export async function appendMemoryEntry(
   }
   if (currentSize + line.length <= MEMORY_FILE_BUDGET_BYTES) {
     await fs.appendFile(file, line, "utf8");
-    return countEntries(file);
+    // 2026-05-04 (R14 wiring): post-append prune by age + count.
+    // The append-fast path stays fast in the common case; we only
+    // pay a full rewrite when entries actually need pruning. The
+    // byte budget above is the orthogonal hard ceiling — this fires
+    // for the soft policy (older than 90d, more than 200 entries).
+    return await prunePost(file, clonePath);
   }
 
-  // Over budget: read all, keep last half + new entry, rewrite atomically.
+  // Over budget: prune just the EXISTING entries (the new entry is
+  // always kept — it's the whole point of this call), then byte-cap
+  // by half-trim if R14 didn't free enough space.
   const all = await readMemory(clonePath);
-  const keep = all.slice(Math.floor(all.length / 2));
-  keep.push(entry);
+  let keptOld = pruneMemoryEntries({ entries: all, now: Date.now() }).kept;
+  const newEntryBytes = JSON.stringify(entry).length + 1;
+  const estimatedBytes =
+    keptOld.reduce((s, e) => s + JSON.stringify(e).length + 1, 0) + newEntryBytes;
+  if (estimatedBytes > MEMORY_FILE_BUDGET_BYTES) {
+    // R14 returns ts-descending; slice(0, half) keeps the newest half.
+    keptOld = keptOld.slice(0, Math.floor(keptOld.length / 2));
+  }
+  // Persist ts-ascending (oldest first), then append the new entry at
+  // EOF — preserves readMemory's insertion-order semantics.
+  const keep = [...[...keptOld].reverse(), entry];
   const body = keep.map((e) => JSON.stringify(e)).join("\n") + "\n";
   // Write to a temp file then rename — same atomic-write recipe used
   // elsewhere (see writeFileAtomic.ts) but inlined here to avoid an
@@ -142,6 +159,25 @@ export async function appendMemoryEntry(
   await fs.writeFile(tmp, body, "utf8");
   await fs.rename(tmp, file);
   return keep.length;
+}
+
+/** R14: read current file, run age + count prune, rewrite if anything
+ *  was dropped. Returns the post-prune entry count. */
+async function prunePost(file: string, clonePath: string): Promise<number> {
+  const all = await readMemory(clonePath);
+  const result = pruneMemoryEntries({ entries: all, now: Date.now() });
+  if (result.pruned.length === 0) {
+    // Fast path: nothing to drop, return the count we just read.
+    return all.length;
+  }
+  // Write back in ts-ascending order so newest sits at EOF (matches
+  // readMemory's insertion-order semantics).
+  const ascending = [...result.kept].reverse();
+  const body = ascending.map((e) => JSON.stringify(e)).join("\n") + (ascending.length > 0 ? "\n" : "");
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  await fs.writeFile(tmp, body, "utf8");
+  await fs.rename(tmp, file);
+  return ascending.length;
 }
 
 async function countEntries(file: string): Promise<number> {

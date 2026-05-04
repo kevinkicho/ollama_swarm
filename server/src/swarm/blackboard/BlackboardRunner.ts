@@ -6,6 +6,10 @@ import { AgentManager } from "../../services/AgentManager.js";
 import { toOpenCodeModelRef } from "../../../../shared/src/providers.js";
 import { chatOnce } from "../chatOnce.js";
 import { costCapExceeded } from "../../services/CostTracker.js";
+import {
+  nextQuotaProbeDelayMs,
+  formatProbeDelayLabel,
+} from "../quotaProbeBackoff.js";
 import type {
   AgentState,
   SwarmEvent,
@@ -227,12 +231,16 @@ const REPLAN_FALLBACK_TICK_MS = 20_000;
 const ABSOLUTE_MAX_MS = 20 * 60_000;
 // Task #165: pause-on-quota constants. When the proxy detects a
 // persistent Ollama-quota wall, the run pauses (workers idle, no
-// new prompts) and probes upstream every PAUSE_PROBE_INTERVAL_MS.
+// new prompts) and probes upstream on an exponential schedule
+// (1m, 2m, 4m, 8m, 16m, capped at 30m — see quotaProbeBackoff.ts).
 // Resume on first successful probe. Total pause time is capped so
 // a never-clearing wall (plan exhausted till next billing cycle)
 // eventually escalates to a real cap:quota halt rather than
 // pausing forever.
-const PAUSE_PROBE_INTERVAL_MS = 5 * 60_000;
+//
+// 2026-05-04 (R2 wiring): replaced the fixed 5-min PAUSE_PROBE_INTERVAL_MS
+// with nextQuotaProbeDelayMs(attempt). Brief blips clear in 1-2 min
+// without the full 5; long walls don't churn the transcript every 5.
 const MAX_PAUSE_TOTAL_MS = 2 * 60 * 60_000;
 // Task #167: soft-stop deadline. After drain() fires we wait up to
 // this long for in-flight worker claims to commit cleanly; if they
@@ -358,6 +366,10 @@ export class BlackboardRunner implements SwarmRunner {
   private pauseStartedAt?: number;
   private totalPausedMs = 0;
   private pauseProbeTimer?: NodeJS.Timeout;
+  // 2026-05-04 (R2 wiring): 0-indexed attempt counter for exponential
+  // probe back-off. Reset to 0 on exitPause so a fresh wall starts the
+  // back-off curve from 1 min again.
+  private pauseProbeAttempt = 0;
   // Task #167: soft-stop state. Set by drain(); workers see this in
   // their poll loop and exit after their current claim commits (no
   // new claims). drainWatcherTimer polls every 2s for "all in-flight
@@ -3905,7 +3917,7 @@ export class BlackboardRunner implements SwarmRunner {
       ? `${quotaState.statusCode}: ${quotaState.reason.slice(0, 120)}`
       : "(no quota detail)";
     this.appendSystem(
-      `Ollama quota wall hit (${detail}). Pausing run; will probe upstream every ${PAUSE_PROBE_INTERVAL_MS / 60_000} min and resume when it clears. Total pause cap: ${MAX_PAUSE_TOTAL_MS / 60_000} min.`,
+      `Ollama quota wall hit (${detail}). Pausing run; will probe upstream on exponential back-off (1m → 2m → 4m → 8m → 16m, capped at 30m) and resume when it clears. Total pause cap: ${MAX_PAUSE_TOTAL_MS / 60_000} min.`,
       { kind: "quota_paused", statusCode: quotaState?.statusCode, reason: quotaState?.reason },
     );
     // Abort in-flight prompts so they fail fast — they'd hit the wall
@@ -3922,6 +3934,8 @@ export class BlackboardRunner implements SwarmRunner {
 
   private schedulePauseProbe(): void {
     if (this.pauseProbeTimer) return;
+    const delayMs = nextQuotaProbeDelayMs(this.pauseProbeAttempt);
+    this.pauseProbeAttempt += 1;
     this.pauseProbeTimer = setTimeout(() => {
       this.pauseProbeTimer = undefined;
       // Task #199: if runPauseProbe throws (e.g., planner agent gone),
@@ -3932,7 +3946,7 @@ export class BlackboardRunner implements SwarmRunner {
         this.appendSystem(`Pause probe failed: ${msg}. Will retry.`);
         if (this.paused && !this.stopping) this.schedulePauseProbe();
       });
-    }, PAUSE_PROBE_INTERVAL_MS);
+    }, delayMs);
   }
 
   // Task #165: pings the planner with a tiny prompt to test whether
@@ -3982,7 +3996,8 @@ export class BlackboardRunner implements SwarmRunner {
       probeOk = true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(`[quota-probe] still walled (${msg.slice(0, 120)}). Next probe in ${PAUSE_PROBE_INTERVAL_MS / 60_000} min.`);
+      const nextDelayLabel = formatProbeDelayLabel(nextQuotaProbeDelayMs(this.pauseProbeAttempt));
+      this.appendSystem(`[quota-probe] still walled (${msg.slice(0, 120)}). Next probe in ${nextDelayLabel}.`);
     }
     if (!this.paused || this.stopping) return;
     if (probeOk && !shouldHaltOnQuota()) {
@@ -4006,6 +4021,9 @@ export class BlackboardRunner implements SwarmRunner {
     this.totalPausedMs += pauseDur;
     this.pauseStartedAt = undefined;
     this.paused = false;
+    // 2026-05-04 (R2 wiring): reset back-off so the next quota wall
+    // restarts the curve from 1 min.
+    this.pauseProbeAttempt = 0;
     if (this.pauseProbeTimer) {
       clearTimeout(this.pauseProbeTimer);
       this.pauseProbeTimer = undefined;

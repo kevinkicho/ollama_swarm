@@ -17,9 +17,15 @@ import {
   type MemoryEntry,
 } from "./memoryStore.js";
 
+// 2026-05-04 (R14 wiring): memoryStore now post-prunes by age. Tests
+// that relied on synthetic ts values (1_000_000, 10, 50, ...) tripped
+// the 90-day age cap and saw all their entries pruned. Anchor every
+// test entry to "now" by default; tests that explicitly want stale
+// entries can override ts via `over`.
+const TEST_NOW = Date.now();
 function entry(over: Partial<MemoryEntry> = {}): MemoryEntry {
   return {
-    ts: 1_000_000,
+    ts: TEST_NOW,
     runId: "abcdefab-1234",
     tier: 1,
     commits: 3,
@@ -78,8 +84,8 @@ describe("readMemory + appendMemoryEntry — file I/O", () => {
   it("appends entries one per line and reads them back in insertion order", async () => {
     const dir = await mkTmpClone("append");
     try {
-      const a = entry({ ts: 1, runId: "first", lessons: ["a"] });
-      const b = entry({ ts: 2, runId: "second", lessons: ["b"] });
+      const a = entry({ ts: TEST_NOW + 1, runId: "first", lessons: ["a"] });
+      const b = entry({ ts: TEST_NOW + 2, runId: "second", lessons: ["b"] });
       await appendMemoryEntry(dir, a);
       await appendMemoryEntry(dir, b);
       const out = await readMemory(dir);
@@ -139,14 +145,15 @@ describe("readMemory + appendMemoryEntry — file I/O", () => {
       const lines: string[] = [];
       for (let i = 0; i < 200; i++) {
         // 200 fat entries → ~1.2 MB, comfortably over the 1 MB budget.
-        lines.push(JSON.stringify(entry({ ts: 1_000 + i, runId: `r${i}`, lessons: fatLessons })));
+        // Anchor ts to TEST_NOW so R14's age-pruner doesn't drop them.
+        lines.push(JSON.stringify(entry({ ts: TEST_NOW + i, runId: `r${i}`, lessons: fatLessons })));
       }
       await fs.writeFile(file, lines.join("\n") + "\n", "utf8");
       const before = (await fs.stat(file)).size;
       assert.ok(before > MEMORY_FILE_BUDGET_BYTES, "fixture should exceed budget");
 
       // Trigger trim with a small new entry.
-      const newEntry = entry({ ts: 9_999, runId: "fresh", lessons: ["small"] });
+      const newEntry = entry({ ts: TEST_NOW + 9_999, runId: "fresh", lessons: ["small"] });
       await appendMemoryEntry(dir, newEntry);
 
       const after = (await fs.stat(file)).size;
@@ -164,13 +171,18 @@ describe("readRecentMemory — ordering + count", () => {
   it("returns most-recent-first, capped to count", async () => {
     const dir = await mkTmpClone("recent");
     try {
-      for (const ts of [10, 50, 30, 70, 20]) {
-        await appendMemoryEntry(dir, entry({ ts, runId: `r${ts}`, lessons: ["x"] }));
+      // Use offsets relative to TEST_NOW so the R14 age-pruner doesn't
+      // drop these entries as ancient.
+      for (const offset of [10, 50, 30, 70, 20]) {
+        await appendMemoryEntry(
+          dir,
+          entry({ ts: TEST_NOW + offset, runId: `r${offset}`, lessons: ["x"] }),
+        );
       }
       const out = await readRecentMemory(dir, 3);
       assert.deepEqual(
         out.map((e) => e.ts),
-        [70, 50, 30],
+        [TEST_NOW + 70, TEST_NOW + 50, TEST_NOW + 30],
       );
     } finally {
       await fs.rm(dir, { recursive: true, force: true });

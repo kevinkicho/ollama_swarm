@@ -25,6 +25,7 @@ import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { checkBudgetGuards } from "./loopGuards.js";
 import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
+import { repairAndParseJson } from "./repairJson.js";
 import { formatCloneMessage } from "./cloneMessage.js";
 // runEndReflection moved into runFinallyHooks (Phase D).
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
@@ -1514,10 +1515,10 @@ export function buildSignoffPrompt(
   ].join("\n");
 }
 
-// Task #81: lenient parser for the JUDGE's JSON verdict. Same three-
-// strategy approach as transcriptSummary.tryParseJson — strict, fence-
-// strip, slice-between-braces — so a model that wraps in ```json or
-// emits prose around the object still gets the structured tag.
+// Task #81: lenient parser for the JUDGE's JSON verdict. 2026-05-04
+// (R11 wiring): the local three-strategy parser was replaced by
+// repairAndParseJson, which adds soft repairs (trailing comma, smart
+// quotes, missing braces) on top of the strict / fence / slice paths.
 export interface ParsedDebateVerdict {
   winner: "pro" | "con" | "tie";
   confidence: "low" | "medium" | "high";
@@ -1529,7 +1530,7 @@ export interface ParsedDebateVerdict {
   nextAction: string;
 }
 export function parseDebateVerdict(raw: string): ParsedDebateVerdict | null {
-  const obj = parseLooseJson(raw);
+  const obj = repairAndParseJson(raw)?.value;
   if (!obj || typeof obj !== "object") return null;
   const o = obj as Record<string, unknown>;
   const winner = o.winner;
@@ -1549,21 +1550,7 @@ export function parseDebateVerdict(raw: string): ParsedDebateVerdict | null {
     nextAction: str("nextAction"),
   };
 }
-function parseLooseJson(raw: string): unknown {
-  const s = raw.trim();
-  if (!s) return null;
-  try { return JSON.parse(s); } catch { /* fall through */ }
-  const fence = /```(?:json)?\s*\n?([\s\S]*?)\n?```/m.exec(s);
-  if (fence) {
-    try { return JSON.parse(fence[1]!.trim()); } catch { /* fall through */ }
-  }
-  const firstBrace = s.indexOf("{");
-  const lastBrace = s.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    try { return JSON.parse(s.slice(firstBrace, lastBrace + 1)); } catch { /* fall through */ }
-  }
-  return null;
-}
+// 2026-05-04 (R11 wiring): parseLooseJson removed — see repairJson.ts.
 
 // T-Item-2 (2026-05-04): cross-stream judge synthesis. After K parallel
 // debate streams settle (each with a per-stream verdict), the JUDGE
@@ -1641,7 +1628,7 @@ export function parseCrossStreamPick(
   raw: string,
   validIds: readonly string[],
 ): CrossStreamPick | null {
-  const obj = parseLooseJson(raw);
+  const obj = repairAndParseJson(raw)?.value;
   if (!obj || typeof obj !== "object") return null;
   const o = obj as Record<string, unknown>;
   const winnerStreamId =

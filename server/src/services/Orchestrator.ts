@@ -23,6 +23,7 @@ import { ConformanceMonitor } from "./ConformanceMonitor.js";
 import { EmbeddingDriftMonitor } from "./EmbeddingDriftMonitor.js";
 import { AmendmentsBuffer, type Amendment } from "./AmendmentsBuffer.js";
 import { RunStatePersister, findRecoverableRuns, isRecoverablePhase, loadSnapshot, type RecoverableRun } from "./RunStatePersister.js";
+import { tryAcquireLock, releaseLock } from "../swarm/cloneLock.js";
 
 export interface OrchestratorOpts extends RunnerOpts {
   manager: AgentManager;
@@ -202,6 +203,11 @@ interface ActiveRun {
    *  AND the relevant model is available. */
   conformanceMonitor?: ConformanceMonitor;
   embeddingDriftMonitor?: EmbeddingDriftMonitor;
+  /** R8 wiring (2026-05-04): true when this run holds a .lock at the
+   *  clone path. stopRun + start (cleanup) call releaseLock() to
+   *  drop it. Best-effort: a missing lock just means the OS reaped
+   *  it (e.g. server crash); release becomes a no-op. */
+  holdsCloneLock: boolean;
 }
 
 // Thin preset dispatcher. Holds the active runs (Phase 3: max 1 by
@@ -419,6 +425,15 @@ export class Orchestrator {
       // gap (the global tokenTracker can't bucket usage per active
       // runId today; cross-cutting refactor needed for full fidelity).
       run.persister.stop();
+      // R8 wiring: release the clone lock so a follow-up run can
+      // immediately reuse the path.
+      if (run.holdsCloneLock) {
+        try {
+          releaseLock({ clonePath: run.cfg.localPath, runId: run.runId });
+        } catch {
+          /* best-effort */
+        }
+      }
       this.runs.delete(runId);
     }
     return true;
@@ -554,6 +569,13 @@ export class Orchestrator {
         run.conformanceMonitor?.stop();
         run.embeddingDriftMonitor?.stop();
         run.persister.stop();
+        if (run.holdsCloneLock) {
+          try {
+            releaseLock({ clonePath: run.cfg.localPath, runId: run.runId });
+          } catch {
+            /* best-effort */
+          }
+        }
         this.runs.delete(id);
       }
     }
@@ -572,6 +594,20 @@ export class Orchestrator {
     // only lives in memory + the WS run_started event, never making
     // it to disk where the history dropdown reads digests from.
     cfg.runId = runId;
+    // R8 wiring (2026-05-04): acquire the cross-process clone lock.
+    // If another server process (or another run on this server) is
+    // already operating on this clone path, fail fast — concurrent
+    // edits to the same clone would corrupt git state.
+    const lockResult = tryAcquireLock({ clonePath: cfg.localPath, runId });
+    if (!lockResult.acquired) {
+      const heldBy = lockResult.heldBy
+        ? ` (held by pid=${lockResult.heldBy.pid} runId=${lockResult.heldBy.runId} on ${lockResult.heldBy.hostname})`
+        : "";
+      throw new Error(
+        `Clone path is locked by another swarm process${heldBy}. ${lockResult.reason}`,
+      );
+    }
+    const holdsCloneLock = true;
     const persister = new RunStatePersister(cfg.localPath);
     // buildRunner's wrappedEmit closure reads this.runStatePersister
     // (= activeRun.persister via the getter) lazily, so it'll see the
@@ -648,6 +684,7 @@ export class Orchestrator {
       startedAt,
       cfg,
       persister,
+      holdsCloneLock,
     };
     this.runs.set(runId, activeRun);
     // Cache parent dir so /api/swarm/runs can keep showing historical
@@ -739,6 +776,13 @@ export class Orchestrator {
       activeRun.conformanceMonitor?.stop();
       activeRun.embeddingDriftMonitor?.stop();
       activeRun.persister.stop();
+      if (activeRun.holdsCloneLock) {
+        try {
+          releaseLock({ clonePath: activeRun.cfg.localPath, runId: activeRun.runId });
+        } catch {
+          /* best-effort */
+        }
+      }
       this.runs.delete(runId);
       throw err;
     } finally {
@@ -790,6 +834,14 @@ export class Orchestrator {
       // Without the explicit stop, the last 0-DEBOUNCE_MS of events
       // could be trapped behind the timer.
       active.persister.stop();
+      // R8 wiring: release the clone lock so the path is reusable.
+      if (active.holdsCloneLock) {
+        try {
+          releaseLock({ clonePath: active.cfg.localPath, runId: active.runId });
+        } catch {
+          /* best-effort */
+        }
+      }
       // Drop the ActiveRun from the map. The next start gets a fresh
       // slate rather than inheriting the previous runner's terminal phase.
       this.runs.delete(active.runId);

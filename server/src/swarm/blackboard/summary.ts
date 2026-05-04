@@ -22,6 +22,8 @@
 
 import type { ExitContract } from "./types.js";
 import { tokenTracker as tokenTrackerSingleton } from "../../services/ollamaProxy.js";
+import { generateRca } from "../autoRca.js";
+import { computeRunHealthScore } from "../runHealthScore.js";
 
 export const FINAL_GIT_STATUS_MAX = 4_000;
 // Task #65: transcript persistence cap. Typical discussion runs land
@@ -197,6 +199,12 @@ export interface RunSummary {
   // from preset+agentCount. Optional for back-compat with summaries
   // written pre-#243.
   topology?: import("../../../../shared/src/topology.js").Topology;
+  // R15 + R16 wiring (2026-05-04): structured RCA + 0-100 health
+  // score appended at run-end. RCA is empty string when the run was
+  // a clean success (no attention needed). Both optional for back-
+  // compat with summaries written before this lands.
+  rca?: import("../autoRca.js").RcaReport;
+  healthScore?: import("../runHealthScore.js").RunHealthScore;
 }
 
 export interface SummaryConfig {
@@ -320,7 +328,71 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     v2QueueState: input.v2QueueState,
     // Phase 4a of #243: topology passthrough.
     topology: input.topology,
+    // R15 + R16 wiring (2026-05-04): post-build RCA + health score.
+    // Computed from the same inputs we already have — no separate
+    // tracker required for this first cut. Future improvement: feed
+    // a ClassifiedError[] from a run-level error tracker so RCA can
+    // categorize failures (the helpers accept errors=[] cleanly).
+    rca: buildRca({ input, stopReason, wallClockMs }),
+    healthScore: buildHealthScore({ input, wallClockMs }),
   };
+}
+
+function buildRca(args: {
+  input: BuildSummaryInput;
+  stopReason: StopReason;
+  wallClockMs: number;
+}): import("../autoRca.js").RcaReport {
+  const { input, stopReason, wallClockMs } = args;
+  // Map StopReason → finalPhase for the RCA generator. Crashes /
+  // caps surface as "failed"; user stops as "stopped"; clean done
+  // as "completed".
+  let finalPhase: string;
+  if (stopReason === "completed") finalPhase = "completed";
+  else if (stopReason === "user") finalPhase = "stopped";
+  else if (stopReason === "crash") finalPhase = "failed";
+  else finalPhase = "failed";
+  return generateRca({
+    finalPhase,
+    terminationReason: input.terminationReason ?? input.crashMessage ?? null,
+    errors: [],
+    commitsLanded: input.board.committed,
+    tier: input.maxTierReached ?? 0,
+    durationMs: wallClockMs,
+  });
+}
+
+function buildHealthScore(args: {
+  input: BuildSummaryInput;
+  wallClockMs: number;
+}): import("../runHealthScore.js").RunHealthScore {
+  const { input, wallClockMs } = args;
+  const totalTurns = input.agents.reduce(
+    (s, a) => s + (a.turnsTaken ?? 0),
+    0,
+  );
+  const retryCount = input.agents.reduce(
+    (s, a) => s + (a.totalRetries ?? 0),
+    0,
+  );
+  // Empty-turn proxy: jsonRepairs + promptErrors per agent. Not
+  // exact (a JSON repair can succeed → not actually empty) but
+  // captures the same "model didn't engage" signal.
+  const emptyTurns = input.agents.reduce(
+    (s, a) => s + (a.jsonRepairs ?? 0) + (a.promptErrors ?? 0),
+    0,
+  );
+  return computeRunHealthScore({
+    commitsLanded: input.board.committed,
+    tier: input.maxTierReached ?? 0,
+    totalTurns,
+    emptyTurns,
+    retryCount,
+    durationMs: wallClockMs,
+    wallClockCapMs: 0,
+    commitsCap: 0,
+    errorCount: 0,
+  });
 }
 
 function cloneContract(c: ExitContract): ExitContract {

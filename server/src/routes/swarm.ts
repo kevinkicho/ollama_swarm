@@ -9,6 +9,8 @@ import { validateContinuousMode } from "./continuousMode.js";
 import type { Orchestrator } from "../services/Orchestrator.js";
 import { deriveCloneDir, RepoService } from "../services/RepoService.js";
 import { normalizeWslPath } from "../services/pathNormalize.js";
+import { preflightDiskCheck } from "../swarm/preflightDiskCheck.js";
+import { projectRunCost, exceedsBudget } from "../swarm/preflightCostProjector.js";
 
 // `parentPath` is the folder the user points at on the setup form; the repo
 // is cloned into `<parentPath>/<repo-name-from-URL>`. The older name
@@ -504,6 +506,18 @@ export function swarmRouter(orch: Orchestrator): Router {
       res.status(400).json({ error: msg });
       return;
     }
+    // R12 wiring (2026-05-04): pre-flight disk check at the parent
+    // dir (the clone dir may not exist yet). Refuse if < 2 GB free —
+    // a typical clone + run-state + summaries needs at least that
+    // much breathing room. statfs unavailable → graceful pass-through.
+    const diskParent = path.dirname(localPath);
+    const diskCheck = await preflightDiskCheck({ targetPath: diskParent });
+    if (!diskCheck.ok) {
+      res.status(507).json({
+        error: `Insufficient disk space at ${diskParent}: ${diskCheck.reason}`,
+      });
+      return;
+    }
     try {
       // Task #132: continuous mode replaces rounds with an effectively-
       // unbounded value (1M). The runners see this same cfg.rounds in
@@ -512,6 +526,33 @@ export function swarmRouter(orch: Orchestrator): Router {
       const effectiveRounds = parsed.data.continuous
         ? 1_000_000
         : (parsed.data.rounds ?? 3);
+      // R4 wiring (2026-05-04): pre-flight cost projector. When the
+      // user has set maxCostUsd AND the projected spend already
+      // exceeds it on Day 1, refuse rather than start a run that's
+      // guaranteed to halt mid-way on cap:cost. Skipped for continuous
+      // (effectiveRounds=1M) since the projection is meaningless
+      // there — the maxCostUsd cap is the actual stop signal.
+      if (
+        parsed.data.maxCostUsd &&
+        parsed.data.maxCostUsd > 0 &&
+        !parsed.data.continuous
+      ) {
+        const projection = projectRunCost({
+          model: parsed.data.model ?? config.DEFAULT_MODEL,
+          totalTurns: effectiveRounds * effAgentCount,
+        });
+        if (
+          exceedsBudget({
+            projectedCostUsd: projection.projectedCostUsd,
+            costCapUsd: parsed.data.maxCostUsd,
+          })
+        ) {
+          res.status(400).json({
+            error: `Projected run cost ($${projection.projectedCostUsd.toFixed(2)}) exceeds maxCostUsd ($${parsed.data.maxCostUsd.toFixed(2)}). Either raise maxCostUsd or shorten the run. ${projection.breakdown}`,
+          });
+          return;
+        }
+      }
       await orch.start({
         repoUrl: parsed.data.repoUrl,
         localPath,
