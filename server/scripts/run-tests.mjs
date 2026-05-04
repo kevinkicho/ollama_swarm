@@ -123,6 +123,40 @@ const TEST_FILES = [
   "src/swarm/dynamicRoleCatalog.test.ts",
   // 2026-05-04 (T199): test-scaffolding generator for blackboard.
   "src/swarm/testScaffolding.test.ts",
+  // 2026-05-04 (R17): structured error taxonomy.
+  "src/swarm/errorTaxonomy.test.ts",
+  // 2026-05-04 (R1): provider-failover decision helper.
+  "src/swarm/providerFailover.test.ts",
+  // 2026-05-04 (R2): exponential quota-probe back-off.
+  "src/swarm/quotaProbeBackoff.test.ts",
+  // 2026-05-04 (R3): cloud → local degradation fallback.
+  "src/swarm/degradationFallback.test.ts",
+  // 2026-05-04 (R4): pre-flight cost projector.
+  "src/swarm/preflightCostProjector.test.ts",
+  // 2026-05-04 (R5): auto-resume decision policy.
+  "src/swarm/autoResumeDecision.test.ts",
+  // 2026-05-04 (R6): drain-by-default stop policy.
+  "src/swarm/drainStopPolicy.test.ts",
+  // 2026-05-04 (R7): subscriber-driven pause policy.
+  "src/swarm/subscriberPausePolicy.test.ts",
+  // 2026-05-04 (R8): cross-process clone lock.
+  "src/swarm/cloneLock.test.ts",
+  // 2026-05-04 (R9): semantic-loop detector.
+  "src/swarm/semanticLoopDetector.test.ts",
+  // 2026-05-04 (R10): proactive model-health tracker.
+  "src/swarm/modelHealthTracker.test.ts",
+  // 2026-05-04 (R11): universal JSON repair.
+  "src/swarm/repairJson.test.ts",
+  // 2026-05-04 (R12): pre-flight disk-space check.
+  "src/swarm/preflightDiskCheck.test.ts",
+  // 2026-05-04 (R13): memory-pressure backpressure.
+  "src/swarm/memoryPressure.test.ts",
+  // 2026-05-04 (R14): bounded swarm-memory pruner.
+  "src/swarm/memoryStorePruner.test.ts",
+  // 2026-05-04 (R15): auto-RCA on non-clean stop.
+  "src/swarm/autoRca.test.ts",
+  // 2026-05-04 (R16): per-run health score.
+  "src/swarm/runHealthScore.test.ts",
 
   // routes/
   "src/routes/swarm.test.ts",
