@@ -100,6 +100,8 @@ const TEST_FILES = [
   "src/swarm/importGraph.test.ts",
   // 2026-05-04 (T199): LLM-driven dynamic role catalog.
   "src/swarm/dynamicRoleCatalog.test.ts",
+  // 2026-05-04 (T199): test-scaffolding generator for blackboard.
+  "src/swarm/testScaffolding.test.ts",
 
   // routes/
   "src/routes/swarm.test.ts",

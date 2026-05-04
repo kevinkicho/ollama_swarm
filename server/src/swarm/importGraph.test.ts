@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   extractImportPaths,
+  extractPythonImportPaths,
   buildBidirectionalGraph,
   buildImportGraph,
   clusterByImports,
@@ -105,6 +106,60 @@ describe("extractImportPaths — pure", () => {
     const text = `import { x } from "./does-not-exist";`;
     assert.deepEqual(
       extractImportPaths(text, "src/foo.ts", knownFiles),
+      [],
+    );
+  });
+});
+
+describe("extractPythonImportPaths — pure", () => {
+  const knownFiles = new Set([
+    "src/foo.py",
+    "src/bar.py",
+    "src/sub/__init__.py",
+    "src/sub/baz.py",
+    "tests/test_foo.py",
+  ]);
+
+  it("matches relative import (single dot)", () => {
+    const text = `from . import bar`;
+    assert.deepEqual(
+      extractPythonImportPaths(text, "src/foo.py", knownFiles),
+      ["src/bar.py"],
+    );
+  });
+
+  it("matches relative-from-package import", () => {
+    const text = `from .sub import baz`;
+    const out = extractPythonImportPaths(text, "src/foo.py", knownFiles);
+    // Should resolve to src/sub/__init__.py (the package init)
+    assert.ok(out.includes("src/sub/__init__.py") || out.includes("src/sub/baz.py"));
+  });
+
+  it("matches up-level relative import", () => {
+    const text = `from ..foo import x`;
+    assert.deepEqual(
+      extractPythonImportPaths(text, "src/sub/baz.py", knownFiles),
+      ["src/foo.py"],
+    );
+  });
+
+  it("skips standard library imports", () => {
+    const text = `import os\nfrom typing import List`;
+    assert.deepEqual(
+      extractPythonImportPaths(text, "src/foo.py", knownFiles),
+      [],
+    );
+  });
+
+  it("matches absolute intra-package import via path probing", () => {
+    const text = `from src.bar import x`;
+    const out = extractPythonImportPaths(text, "src/foo.py", knownFiles);
+    assert.ok(out.includes("src/bar.py"));
+  });
+
+  it("returns empty for file with no imports", () => {
+    assert.deepEqual(
+      extractPythonImportPaths("def hello(): pass", "src/foo.py", knownFiles),
       [],
     );
   });

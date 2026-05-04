@@ -1,34 +1,38 @@
-// T197 (2026-05-04): import-graph extraction helper.
+// T197 (2026-05-04) + T199 multi-language extension (2026-05-04):
+// import-graph extraction helper.
 //
-// FIRST-CUT IMPLEMENTATION — TypeScript/JavaScript only, regex-based.
-// Real production use should swap in ts-morph or babel for full
-// AST coverage; this is the "good enough for slicing + pheromone
-// spreading" version that ships in 1 file with no new deps.
+// Regex-based — ts-morph / tree-sitter would be more accurate but
+// would add a heavy dep. The regex version covers the common cases
+// for two languages today: TypeScript/JavaScript (T197) and Python
+// (T199). Rust/Go still skipped silently — they'd benefit from a
+// real AST parser.
 //
 // Two consumers:
-//   1. map-reduce smart slicing (T197 — MapReduceRunner.sliceByImportGraph)
-//      groups files that import each other into the same mapper slice
-//   2. stigmergy cross-cluster discovery (T197 — StigmergyRunner)
-//      when an explorer surfaces a finding, plants pheromones on
-//      related files (importers + importees)
+//   1. map-reduce smart slicing — groups files that import each
+//      other into the same mapper slice
+//   2. stigmergy cross-cluster discovery — when an explorer surfaces
+//      a finding, plants pheromones on related files
 //
 // EXPLICIT GAPS — call them out in PRs that touch this file:
-//   - Python/Rust/Go imports: skipped silently. Returns empty edges
-//     for non-TS/JS files. Real cross-language support is days of work.
-//   - Dynamic imports `import("./x")` are detected but not resolved
-//     when the path is a runtime expression.
-//   - Re-exports `export { x } from "./y"` are detected.
-//   - Bare specifiers `from "lodash"` are skipped (we only care about
-//     intra-repo edges).
-//   - Path aliases (`@/foo` from tsconfig.json) are skipped — caller
+//   - Rust/Go imports: skipped silently. Returns empty edges for
+//     non-TS/JS/Python files.
+//   - Dynamic imports `import("./x")` (TS) detected but unresolved
+//     when path is a runtime expression.
+//   - Re-exports `export { x } from "./y"` (TS) detected.
+//   - Bare specifiers (`from "lodash"`, `import os`) skipped — we
+//     only care about intra-repo edges.
+//   - Path aliases (`@/foo` from tsconfig.json) skipped — caller
 //     would need to inject the alias map.
-//   - Import errors (file unreadable, encoding issue) are swallowed;
-//     missing edges treated as "no relationship."
+//   - Python relative imports (`from . import x`, `from .foo import bar`)
+//     detected; absolute intra-package imports (`from myapp.sub import x`)
+//     attempted via path probing but may miss when package layout is
+//     non-standard.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
 const TS_JS_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
+const PYTHON_EXTS = new Set([".py", ".pyi"]);
 
 /** Repo-relative file path → list of repo-relative paths it imports.
  *  Bare specifiers (`lodash`, `node:fs`) are excluded. Self-imports
@@ -96,6 +100,123 @@ function toPosix(p: string): string {
   return p.replace(/\\/g, "/");
 }
 
+/** T199 (2026-05-04): Python import extractor. Handles relative
+ *  imports (`from . import x`, `from .foo import bar`, `from ..foo
+ *  import bar`) + absolute intra-package imports (`from myapp.sub
+ *  import x`) via best-effort path probing against the known-files
+ *  set. Returns repo-relative paths. Bare specifiers (`import os`,
+ *  `from typing import List`) silently dropped. Pure — exported
+ *  for tests. */
+export function extractPythonImportPaths(
+  fileText: string,
+  filePathRelToRepo: string,
+  knownFiles: ReadonlySet<string>,
+): string[] {
+  const filePosix = toPosix(filePathRelToRepo);
+  const fileDir = path.posix.dirname(filePosix);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  // Pattern 1: `from .foo import bar` or `from ..foo import bar`
+  // OR `from . import bar` (relative import where bar is a submodule
+  // of the current package). Captures the dot-prefix + optional
+  // module name + the post-import names list.
+  const relRe = /^[\s]*from\s+(\.+)([a-zA-Z_][\w.]*)?\s+import\s+([a-zA-Z_][\w,\s.]*)/gm;
+  // Pattern 2: `from foo.bar import x` (absolute). Captures the dotted module.
+  const absRe = /^[\s]*from\s+([a-zA-Z_][\w.]*)\s+import\s+/gm;
+  // Pattern 3: `import foo.bar` or `import foo` (rare for intra-repo
+  // since most code does `from x import y`).
+  const plainRe = /^[\s]*import\s+([a-zA-Z_][\w.]*)\s*$/gm;
+
+  // Helper: try to resolve a dotted module to a known file.
+  const tryResolve = (basePath: string): string | null => {
+    // Try basePath.py + basePath/__init__.py
+    const py = basePath + ".py";
+    if (knownFiles.has(py)) return py;
+    const pyi = basePath + ".pyi";
+    if (knownFiles.has(pyi)) return pyi;
+    const init = path.posix.join(basePath, "__init__.py");
+    if (knownFiles.has(init)) return init;
+    return null;
+  };
+  const consider = (resolved: string | null) => {
+    if (!resolved) return;
+    if (resolved === filePosix) return;
+    if (seen.has(resolved)) return;
+    seen.add(resolved);
+    out.push(resolved);
+  };
+  // Relative imports
+  for (const m of fileText.matchAll(relRe)) {
+    const dots = m[1]!;
+    const mod = m[2] ?? "";
+    const importedRaw = m[3] ?? "";
+    // dots count = N means "go up (N-1) levels then down"
+    const upLevels = dots.length - 1;
+    let baseDir = fileDir;
+    for (let i = 0; i < upLevels; i++) baseDir = path.posix.dirname(baseDir);
+    const modPath = mod ? mod.replace(/\./g, "/") : "";
+    const basePath = modPath ? path.posix.join(baseDir, modPath) : baseDir;
+    // First try to resolve `<basePath>.py` / `<basePath>/__init__.py`
+    // (the module/package being imported FROM).
+    const resolved = tryResolve(basePath);
+    if (resolved) {
+      consider(resolved);
+    }
+    // ALSO try each post-import name as a SUBMODULE of basePath. Handles
+    // `from . import bar` where bar is a sibling file. Names list may
+    // contain commas (`from . import a, b`) — split + try each.
+    const importedNames = importedRaw
+      .split(",")
+      .map((s) => s.trim().split(/\s+as\s+/)[0]!.trim())
+      .filter((s) => s.length > 0 && /^[a-zA-Z_][\w.]*$/.test(s));
+    for (const name of importedNames) {
+      const subPath = path.posix.join(basePath, name);
+      consider(tryResolve(subPath));
+    }
+  }
+  // Absolute imports — try interpreting the dotted module as a path
+  // relative to the repo root + walk up from the file's dir trying
+  // common Python source roots (package root inferred by presence of
+  // __init__.py; we just probe both repo-root and parent dirs).
+  for (const m of fileText.matchAll(absRe)) {
+    const mod = m[1]!;
+    const modPath = mod.replace(/\./g, "/");
+    // Try several roots: repo root, then each parent of file's dir.
+    const candidates: string[] = [modPath];
+    let cur = fileDir;
+    while (cur !== "" && cur !== ".") {
+      candidates.push(path.posix.join(cur, modPath));
+      cur = path.posix.dirname(cur);
+    }
+    for (const c of candidates) {
+      const resolved = tryResolve(c);
+      if (resolved) {
+        consider(resolved);
+        break; // first match wins to avoid duplicate edges
+      }
+    }
+  }
+  // Plain imports
+  for (const m of fileText.matchAll(plainRe)) {
+    const mod = m[1]!;
+    const modPath = mod.replace(/\./g, "/");
+    const candidates: string[] = [modPath];
+    let cur = fileDir;
+    while (cur !== "" && cur !== ".") {
+      candidates.push(path.posix.join(cur, modPath));
+      cur = path.posix.dirname(cur);
+    }
+    for (const c of candidates) {
+      const resolved = tryResolve(c);
+      if (resolved) {
+        consider(resolved);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 /** Walk repo files + build forward-import graph. Best-effort: any
  *  per-file read failure is swallowed (file gets an empty edge set).
  *  Non-TS/JS files included with empty edges so the caller can use
@@ -109,7 +230,12 @@ export async function buildImportGraph(
   for (const file of files) {
     const filePosix = toPosix(file);
     const ext = path.posix.extname(filePosix);
-    if (!TS_JS_EXTS.has(ext)) {
+    // T199: dispatch by extension. TS/JS gets the original
+    // extractImportPaths; Python gets extractPythonImportPaths.
+    // Other languages (Rust/Go) return empty edges silently.
+    const isTsJs = TS_JS_EXTS.has(ext);
+    const isPython = PYTHON_EXTS.has(ext);
+    if (!isTsJs && !isPython) {
       graph.set(filePosix, new Set());
       continue;
     }
@@ -120,7 +246,9 @@ export async function buildImportGraph(
       graph.set(filePosix, new Set());
       continue;
     }
-    const edges = extractImportPaths(text, filePosix, knownFiles);
+    const edges = isPython
+      ? extractPythonImportPaths(text, filePosix, knownFiles)
+      : extractImportPaths(text, filePosix, knownFiles);
     graph.set(filePosix, new Set(edges));
   }
   return graph;
