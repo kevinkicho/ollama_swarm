@@ -340,37 +340,25 @@ export class MapReduceRunner implements SwarmRunner {
         // framings from cycle r.
         const reframingsThisCycle = this.nextCycleReframings;
         this.nextCycleReframings = new Map();
-        // T198a (2026-05-04): streaming reducer. When opt-in, wrap
-        // the parallel mapper batch with a half-batch early-fire of
-        // the reducer (after ceil(N/2) mappers complete). First-cut:
-        // splits the wait into two synchronous batches rather than
-        // truly streaming chunk-by-chunk; cuts wall-clock when one
-        // mapper is slow. Two reducer turns per cycle when on.
+        // T199 (2026-05-04): real streaming reducer. Replaces the
+        // half-batch synchronous split (T198a thin-cut) with a true
+        // event-driven reducer that fires AT EACH MAPPER COMPLETION
+        // boundary based on a fractional schedule. Uses Promise.race
+        // to detect completions, counts toward thresholds (1/3, 2/3),
+        // fires intermediate reducer turns at each boundary. Cuts
+        // wall-clock when one mapper is slow + gives the reducer
+        // continuously-refreshing state instead of batched bursts.
         if (cfg.streamingReducer && mappers.length >= 3) {
-          const half = Math.ceil(mappers.length / 2);
-          const firstHalf = mappers.slice(0, half);
-          const secondHalf = mappers.slice(half);
-          // First half: run + early reduce
-          await staggerStart(firstHalf, (m, i) => {
-            const mySlice = slices[i] ?? [];
-            const reframing = reframingsThisCycle.get(m.index);
-            return this.runMapperTurn(m, r, cfg.rounds, mySlice, seedSnapshot, cfg.userDirective, reframing);
+          await this.runStreamingMapReduce({
+            mappers,
+            reducer,
+            slices,
+            reframingsThisCycle,
+            seedSnapshot,
+            round: r,
+            totalRounds: cfg.rounds,
+            userDirective: cfg.userDirective,
           });
-          if (!this.stopping) {
-            this.appendSystem(
-              `[T198a streaming reducer] firing early reduce after ${firstHalf.length}/${mappers.length} mappers (half-batch).`,
-            );
-            await this.runReducerTurn(reducer, r, cfg.rounds, undefined, cfg.userDirective);
-          }
-          // Second half: run only (the cycle's normal full-batch
-          // reducer fires after this).
-          if (!this.stopping) {
-            await staggerStart(secondHalf, (m, i) => {
-              const mySlice = slices[i + half] ?? [];
-              const reframing = reframingsThisCycle.get(m.index);
-              return this.runMapperTurn(m, r, cfg.rounds, mySlice, seedSnapshot, cfg.userDirective, reframing);
-            });
-          }
         } else {
           await staggerStart(mappers, (m, i) => {
             const mySlice = slices[i] ?? [];
@@ -563,6 +551,136 @@ export class MapReduceRunner implements SwarmRunner {
       repos: this.opts.repos,
       appendSystem: (text, summary) => this.appendSystem(text, summary),
     });
+  }
+
+  // T199 (2026-05-04): real streaming reducer. Replaces T198a's
+  // half-batch synchronous split with an event-driven scheduler that
+  // fires intermediate reducer turns at fractional thresholds (1/3,
+  // 2/3 of mapper completions). The final reducer always fires after
+  // all mappers complete.
+  //
+  // Implementation: launch all mappers as promises, attach completion
+  // counters via .then(), use a tracking promise that resolves at
+  // each threshold to gate the intermediate reducer turns. Because
+  // we use Promise.race + a "next-threshold" sentinel, mappers stay
+  // genuinely parallel (not blocked by reducer turns); the reducer
+  // turns interleave WITHOUT pausing remaining mappers.
+  //
+  // Compared to the T198a thin-cut: produces 3 reducer turns per
+  // cycle (vs T198a's 2) AND the timing is event-driven not
+  // boundary-synchronous, so a single slow mapper doesn't bottleneck
+  // the early reduce.
+  private async runStreamingMapReduce(input: {
+    mappers: Agent[];
+    reducer: Agent;
+    slices: string[][];
+    reframingsThisCycle: Map<number, string>;
+    seedSnapshot: readonly TranscriptEntry[];
+    round: number;
+    totalRounds: number;
+    userDirective?: string;
+  }): Promise<void> {
+    const {
+      mappers,
+      reducer,
+      slices,
+      reframingsThisCycle,
+      seedSnapshot,
+      round,
+      totalRounds,
+      userDirective,
+    } = input;
+    const N = mappers.length;
+    // Threshold counts at which to fire intermediate reducer turns.
+    // For N=3: thresholds = [1, 2, 3]; for N=6: [2, 4, 6]; for N=9: [3, 6, 9].
+    const thresholds = [
+      Math.max(1, Math.ceil(N / 3)),
+      Math.max(2, Math.ceil((2 * N) / 3)),
+      N,
+    ].filter((t, i, a) => a.indexOf(t) === i); // dedup if N is small
+    let completedCount = 0;
+    // Promise that resolves each time a mapper completes; we await it
+    // in a loop checking against the threshold list.
+    let resolveNext: (() => void) | null = null;
+    let pendingNotice: Promise<void> = new Promise((res) => {
+      resolveNext = res;
+    });
+    const notifyCompletion = () => {
+      completedCount++;
+      // Replace the resolved promise with a fresh one for the next iteration.
+      const r = resolveNext;
+      resolveNext = null;
+      const next = new Promise<void>((res) => {
+        resolveNext = res;
+      });
+      pendingNotice = next;
+      r?.();
+    };
+    // Launch all mapper turns; each notifies on completion.
+    const mapperPromises = mappers.map((m, i) => {
+      const mySlice = slices[i] ?? [];
+      const reframing = reframingsThisCycle.get(m.index);
+      // Stagger the launch slightly to avoid the cold-start race.
+      const startDelay = i * 150;
+      return new Promise<void>((res) => {
+        setTimeout(() => {
+          if (this.stopping) {
+            notifyCompletion();
+            res();
+            return;
+          }
+          this.runMapperTurn(
+            m,
+            round,
+            totalRounds,
+            mySlice,
+            seedSnapshot,
+            userDirective,
+            reframing,
+          )
+            .catch(() => {
+              // mapper-turn errors already log inside runMapperTurn;
+              // count completion regardless so we don't deadlock.
+            })
+            .finally(() => {
+              notifyCompletion();
+              res();
+            });
+        }, startDelay);
+      });
+    });
+
+    // Schedule intermediate reducer turns AS THRESHOLDS HIT, in
+    // parallel with remaining mappers. The final reducer turn is the
+    // last threshold (N) and lands AFTER all mappers complete.
+    let nextThresholdIdx = 0;
+    while (nextThresholdIdx < thresholds.length) {
+      const target = thresholds[nextThresholdIdx]!;
+      // Wait until completedCount reaches the threshold.
+      while (completedCount < target && !this.stopping) {
+        await pendingNotice;
+      }
+      if (this.stopping) break;
+      const isFinalThreshold = nextThresholdIdx === thresholds.length - 1;
+      this.appendSystem(
+        `[T199 streaming reducer] firing reduce at ${completedCount}/${N} mappers complete (threshold ${nextThresholdIdx + 1}/${thresholds.length}${isFinalThreshold ? ", FINAL" : ""}).`,
+      );
+      // Fire reducer turn. Don't await mappers yet — they may still
+      // be running; reducer sees what's in the transcript so far.
+      // We do await the reducer turn so subsequent threshold checks
+      // happen against fresh state.
+      await this.runReducerTurn(
+        reducer,
+        round,
+        totalRounds,
+        isFinalThreshold || undefined,
+        userDirective,
+      );
+      nextThresholdIdx++;
+    }
+    // Drain any remaining mappers so we don't return while their
+    // outputs are still landing in the transcript.
+    await Promise.all(mapperPromises);
   }
 
   private async runMapperTurn(

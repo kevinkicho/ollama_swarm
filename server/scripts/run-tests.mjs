@@ -98,6 +98,8 @@ const TEST_FILES = [
   "src/swarm/wrapUpApplyPhase.wiring.test.ts",
   // 2026-05-04 (T197): import-graph helper for smart slicing + cross-cluster.
   "src/swarm/importGraph.test.ts",
+  // 2026-05-04 (T199): LLM-driven dynamic role catalog.
+  "src/swarm/dynamicRoleCatalog.test.ts",
 
   // routes/
   "src/routes/swarm.test.ts",

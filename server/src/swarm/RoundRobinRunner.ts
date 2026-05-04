@@ -31,6 +31,8 @@ import { getAgentAddendum } from "../../../shared/src/topology.js";
 import { describeSdkError } from "./sdkError.js";
 import { writeDeliverableAndEmit } from "./deliverable.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
+// T199 (2026-05-04): LLM-driven dynamic role catalog.
+import { deriveDynamicRoleCatalog } from "./dynamicRoleCatalog.js";
 import { buildRoleDiffDeliverableSections } from "./roleDiffDeliverable.js";
 import {
   readDirective,
@@ -65,7 +67,11 @@ export class RoundRobinRunner implements SwarmRunner {
   private round = 0;
   private stopping = false;
   private active?: RunConfig;
-  private readonly roles?: readonly SwarmRole[];
+  // T199 (2026-05-04): no longer readonly — when cfg.dynamicRoles is
+  // set, the runner replaces this with an LLM-derived catalog before
+  // the discussion loop starts. Default still set in the constructor
+  // from options.roles for back-compat.
+  private roles?: readonly SwarmRole[];
   // Unit 33: cross-preset metrics. Collector aggregates per-agent
   // counters (turns, attempts, retries, latencies) via the same
   // onTiming/onRetry hooks promptWithRetry already surfaces. startedAt
@@ -189,6 +195,52 @@ export class RoundRobinRunner implements SwarmRunner {
 
     this.setPhase("seeding");
     await this.seed(destPath, cfg);
+
+    // T199 (2026-05-04): LLM-driven dynamic role catalog. When opt-in
+    // for role-diff with a directive, fire one planner pass to derive
+    // a directive-tailored role catalog. Replaces this.roles before
+    // the discussion loop. Falls back silently to the keyword/static
+    // catalog from selectRoleCatalog on any failure (parse, agent
+    // error, etc.). Adds ~5-15s to run-start latency when active.
+    if (
+      this.roles &&
+      cfg.dynamicRoles &&
+      (cfg.userDirective ?? "").trim().length > 0
+    ) {
+      try {
+        const planner = this.opts.manager.list().find((a) => a.index === 1);
+        if (planner) {
+          this.appendSystem(
+            `[T199 dynamic role catalog] Asking agent-1 to derive directive-tailored roles…`,
+          );
+          const topLevel = await this.opts.repos.listTopLevel(destPath);
+          const readme = (await this.opts.repos.readReadme(destPath)) ?? undefined;
+          const dynamic = await deriveDynamicRoleCatalog({
+            agent: planner,
+            manager: this.opts.manager,
+            directive: cfg.userDirective!.trim(),
+            topLevel: topLevel.slice(0, 40),
+            readmeExcerpt: readme,
+          });
+          if (dynamic && dynamic.length >= 3) {
+            const oldNames = this.roles.map((r) => r.name).join(", ");
+            const newNames = dynamic.map((r) => r.name).join(", ");
+            this.roles = dynamic;
+            this.appendSystem(
+              `[T199 dynamic role catalog] Refined roles: was [${oldNames}] → now [${newNames}].`,
+            );
+          } else {
+            this.appendSystem(
+              `[T199 dynamic role catalog] Derivation returned fewer than 3 valid roles — keeping static catalog.`,
+            );
+          }
+        }
+      } catch (err) {
+        this.appendSystem(
+          `[T199 dynamic role catalog] Derivation failed (${err instanceof Error ? err.message : String(err)}) — keeping static catalog.`,
+        );
+      }
+    }
 
     this.setPhase("discussing");
     this.startedAt = Date.now();

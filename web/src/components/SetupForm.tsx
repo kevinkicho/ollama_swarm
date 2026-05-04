@@ -385,6 +385,32 @@ export function SetupForm() {
   // #296: pre-commit verify command for blackboard worker pipeline.
   // Empty = legacy commit-without-verify behavior.
   const [verifyCommand, setVerifyCommand] = useState("");
+  // T199 (2026-05-04): per-tier model state for the open-weights-
+  // parallelism value prop. Three groups, one per opt-in preset:
+  //
+  // Round-robin disposition models (4 slots — Critic/Synthesizer/
+  // Gap-finder/Builder). Empty = falls back to top-level Model.
+  const [dispositionCriticModel, setDispositionCriticModel] = useState("");
+  const [dispositionSynthesizerModel, setDispositionSynthesizerModel] = useState("");
+  const [dispositionGapFinderModel, setDispositionGapFinderModel] = useState("");
+  const [dispositionBuilderModel, setDispositionBuilderModel] = useState("");
+  // OW-Deep per-tier models (3 slots — Orchestrator/Mid-leads/Workers).
+  // workerModel is reused across blackboard + OW-Deep + MoA but here
+  // it's the per-tier worker tier, so a separate state slot.
+  const [orchestratorModel, setOrchestratorModel] = useState("");
+  const [midLeadModel, setMidLeadModel] = useState("");
+  const [owDeepWorkerModel, setOwDeepWorkerModel] = useState("");
+  // MoA per-proposer model array (variable N — sized by agentCount).
+  // Empty entries fall back to moaProposerModel → cfg.model.
+  const [moaProposerModels, setMoaProposerModels] = useState<string[]>([]);
+  const setMoaProposerModelAt = (idx: number, value: string) => {
+    setMoaProposerModels((prev) => {
+      const out = [...prev];
+      while (out.length <= idx) out.push("");
+      out[idx] = value;
+      return out;
+    });
+  };
   const [busy, setBusy] = useState(false);
   const setError = useSwarm((s) => s.setError);
   const reset = useSwarm((s) => s.reset);
@@ -610,6 +636,36 @@ export function SetupForm() {
           if (Number.isFinite(cost) && cost > 0) {
             presetSpecific.maxCostUsd = cost;
           }
+        }
+      }
+      // T199 (2026-05-04): per-tier model state for the open-weights-
+      // parallelism value prop. Round-robin disposition models +
+      // OW-Deep tier models + MoA per-proposer models. OUTSIDE the
+      // blackboard branch so each preset's state is emitted in its
+      // own block. Each only emits if the matching preset is selected.
+      if (preset.id === "round-robin") {
+        const dm: Record<string, string> = {};
+        if (dispositionCriticModel.trim()) dm.critic = dispositionCriticModel.trim();
+        if (dispositionSynthesizerModel.trim()) dm.synthesizer = dispositionSynthesizerModel.trim();
+        if (dispositionGapFinderModel.trim()) dm["gap-finder"] = dispositionGapFinderModel.trim();
+        if (dispositionBuilderModel.trim()) dm.builder = dispositionBuilderModel.trim();
+        if (Object.keys(dm).length > 0) presetSpecific.dispositionModels = dm;
+      }
+      if (preset.id === "orchestrator-worker-deep") {
+        const om = orchestratorModel.trim();
+        const ml = midLeadModel.trim();
+        const wm = owDeepWorkerModel.trim();
+        if (om) presetSpecific.orchestratorModel = om;
+        if (ml) presetSpecific.midLeadModel = ml;
+        if (wm) presetSpecific.workerModel = wm;
+      }
+      if (preset.id === "moa") {
+        const cleaned = moaProposerModels
+          .slice(0, agentCount)
+          .map((m) => m.trim())
+          .filter((m, i, a) => i < a.length); // keep all slots, even empty
+        if (cleaned.some((m) => m.length > 0)) {
+          presetSpecific.moaProposerModels = cleaned;
         }
       }
 
@@ -940,6 +996,23 @@ export function SetupForm() {
             setUiUrl={setUiUrl}
             verifyCommand={verifyCommand}
             setVerifyCommand={setVerifyCommand}
+            agentCount={agentCount}
+            dispositionCriticModel={dispositionCriticModel}
+            setDispositionCriticModel={setDispositionCriticModel}
+            dispositionSynthesizerModel={dispositionSynthesizerModel}
+            setDispositionSynthesizerModel={setDispositionSynthesizerModel}
+            dispositionGapFinderModel={dispositionGapFinderModel}
+            setDispositionGapFinderModel={setDispositionGapFinderModel}
+            dispositionBuilderModel={dispositionBuilderModel}
+            setDispositionBuilderModel={setDispositionBuilderModel}
+            orchestratorModel={orchestratorModel}
+            setOrchestratorModel={setOrchestratorModel}
+            midLeadModel={midLeadModel}
+            setMidLeadModel={setMidLeadModel}
+            owDeepWorkerModel={owDeepWorkerModel}
+            setOwDeepWorkerModel={setOwDeepWorkerModel}
+            moaProposerModels={moaProposerModels}
+            setMoaProposerModelAt={setMoaProposerModelAt}
           />
         </Section>
 

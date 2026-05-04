@@ -122,6 +122,43 @@ const StartBody = z.object({
   // value prop "N small + 1 big > 1 big alone" cleanly. MoA-only.
   moaProposerModel: z.string().trim().min(1).max(200).optional(),
   moaAggregatorModel: z.string().trim().min(1).max(200).optional(),
+  // T196 + T199 (2026-05-04): per-tier model arrays + extras for the
+  // open-weights-parallelism value prop. Each is opt-in, falls back
+  // to cfg.model when absent.
+  moaProposerModels: z
+    .array(z.string().trim().min(0).max(200))
+    .max(20)
+    .optional(),
+  moaAggregationLevels: z.number().int().min(1).max(4).optional(),
+  orchestratorModel: z.string().trim().min(1).max(200).optional(),
+  midLeadModel: z.string().trim().min(1).max(200).optional(),
+  dispositionModels: z
+    .object({
+      critic: z.string().trim().min(1).max(200).optional(),
+      synthesizer: z.string().trim().min(1).max(200).optional(),
+      "gap-finder": z.string().trim().min(1).max(200).optional(),
+      builder: z.string().trim().min(1).max(200).optional(),
+    })
+    .optional(),
+  // T199 cluster of opt-in flags wired in earlier passes (T197/T198/T199).
+  importGraphSlicing: z.boolean().optional(),
+  crossClusterDiscovery: z.boolean().optional(),
+  streamingReducer: z.boolean().optional(),
+  dynamicRoles: z.boolean().optional(),
+  parallelPropositions: z.boolean().optional(),
+  twoStageMoA: z.boolean().optional(),
+  bidirectionalRefinement: z.boolean().optional(),
+  baselineSelfCritique: z.boolean().optional(),
+  baselineAttempts: z.number().int().min(1).max(5).optional(),
+  testDrivenTodos: z.boolean().optional(),
+  parallelHypothesis: z.boolean().optional(),
+  chainTo: z.enum(["blackboard", "baseline"]).optional(),
+  adaptiveWorkers: z
+    .object({
+      min: z.number().int().min(1).max(20),
+      max: z.number().int().min(1).max(20),
+    })
+    .optional(),
   // Task #102 (2026-04-25): opt-in post-verdict "build" round for
   // debate-judge — PRO becomes implementer, CON reviewer, JUDGE
   // signoff. Default off; debate-judge-only.
@@ -452,6 +489,26 @@ export function swarmRouter(orch: Orchestrator): Router {
         moaConvergenceThreshold: parsed.data.moaConvergenceThreshold,
         moaProposerModel: parsed.data.moaProposerModel,
         moaAggregatorModel: parsed.data.moaAggregatorModel,
+        // T196 + T199 (2026-05-04): per-tier model arrays + extras
+        // for the open-weights-parallelism value prop.
+        moaProposerModels: parsed.data.moaProposerModels,
+        moaAggregationLevels: parsed.data.moaAggregationLevels,
+        orchestratorModel: parsed.data.orchestratorModel,
+        midLeadModel: parsed.data.midLeadModel,
+        dispositionModels: parsed.data.dispositionModels,
+        importGraphSlicing: parsed.data.importGraphSlicing,
+        crossClusterDiscovery: parsed.data.crossClusterDiscovery,
+        streamingReducer: parsed.data.streamingReducer,
+        dynamicRoles: parsed.data.dynamicRoles,
+        parallelPropositions: parsed.data.parallelPropositions,
+        twoStageMoA: parsed.data.twoStageMoA,
+        bidirectionalRefinement: parsed.data.bidirectionalRefinement,
+        baselineSelfCritique: parsed.data.baselineSelfCritique,
+        baselineAttempts: parsed.data.baselineAttempts,
+        testDrivenTodos: parsed.data.testDrivenTodos,
+        parallelHypothesis: parsed.data.parallelHypothesis,
+        chainTo: parsed.data.chainTo,
+        adaptiveWorkers: parsed.data.adaptiveWorkers,
         executeNextAction: parsed.data.executeNextAction,
         tokenBudget: parsed.data.tokenBudget,
         maxCostUsd: parsed.data.maxCostUsd,

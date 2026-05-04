@@ -11,6 +11,12 @@ import {
 } from "./BlackboardSettings";
 import { RoleDiffAdvanced, type SwarmRoleWeb } from "./RoleDiffSettings";
 import { DebateJudgeAdvanced } from "./DebateJudgeSettings";
+// T199 (2026-05-04): per-tier model pickers for round-robin / OW-Deep / MoA.
+import {
+  RoundRobinDispositionModels,
+  OwDeepTierModels,
+  MoaProposerModels,
+} from "./PerTierModelPicker";
 
 export type PresetStatus = "active" | "planned";
 
@@ -174,6 +180,28 @@ export function PresetAdvancedSettings(props: {
   setUiUrl: (s: string) => void;
   verifyCommand: string;
   setVerifyCommand: (s: string) => void;
+  // T199 (2026-05-04): per-tier model state for the open-weights-
+  // parallelism value prop. Three groups, one per opt-in preset.
+  agentCount: number;
+  // Round-robin disposition models
+  dispositionCriticModel: string;
+  setDispositionCriticModel: (v: string) => void;
+  dispositionSynthesizerModel: string;
+  setDispositionSynthesizerModel: (v: string) => void;
+  dispositionGapFinderModel: string;
+  setDispositionGapFinderModel: (v: string) => void;
+  dispositionBuilderModel: string;
+  setDispositionBuilderModel: (v: string) => void;
+  // OW-Deep tier models
+  orchestratorModel: string;
+  setOrchestratorModel: (v: string) => void;
+  midLeadModel: string;
+  setMidLeadModel: (v: string) => void;
+  owDeepWorkerModel: string;
+  setOwDeepWorkerModel: (v: string) => void;
+  // MoA per-proposer models
+  moaProposerModels: readonly string[];
+  setMoaProposerModelAt: (idx: number, value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const {
@@ -205,12 +233,34 @@ export function PresetAdvancedSettings(props: {
     setUiUrl,
     verifyCommand,
     setVerifyCommand,
+    agentCount,
+    dispositionCriticModel,
+    setDispositionCriticModel,
+    dispositionSynthesizerModel,
+    setDispositionSynthesizerModel,
+    dispositionGapFinderModel,
+    setDispositionGapFinderModel,
+    dispositionBuilderModel,
+    setDispositionBuilderModel,
+    orchestratorModel,
+    setOrchestratorModel,
+    midLeadModel,
+    setMidLeadModel,
+    owDeepWorkerModel,
+    setOwDeepWorkerModel,
+    moaProposerModels,
+    setMoaProposerModelAt,
   } = props;
 
+  // T199 (2026-05-04): expanded the gate to include round-robin,
+  // OW-Deep, and MoA — each gets a per-tier model picker.
   const hasAdvanced =
     presetId === "role-diff" ||
     presetId === "blackboard" ||
-    presetId === "debate-judge";
+    presetId === "debate-judge" ||
+    presetId === "round-robin" ||
+    presetId === "orchestrator-worker-deep" ||
+    presetId === "moa";
   if (!hasAdvanced) return null;
 
   const label = (() => {
@@ -221,6 +271,14 @@ export function PresetAdvancedSettings(props: {
         return "Advanced settings — contract, models, caps, agent topology, live URL";
       case "debate-judge":
         return "Advanced settings — proposition";
+      // T199: per-tier model pickers for the open-weights-parallelism
+      // value prop. Each preset's section just shows the picker.
+      case "round-robin":
+        return "Advanced settings — disposition-tuned models (T193)";
+      case "orchestrator-worker-deep":
+        return "Advanced settings — per-tier models (T196)";
+      case "moa":
+        return "Advanced settings — per-proposer models (T196)";
       default:
         return "Advanced settings";
     }
@@ -289,6 +347,42 @@ export function PresetAdvancedSettings(props: {
             <DebateJudgeAdvanced
               proposition={proposition}
               setProposition={setProposition}
+            />
+          ) : null}
+          {/* T199 (2026-05-04): per-tier model pickers. Each renders
+            * the relevant variant of PerTierModelPicker. Substrate
+            * ships in T193 (round-robin disposition models) + T196
+            * (OW-Deep tier models + MoA per-proposer). */}
+          {presetId === "round-robin" ? (
+            <RoundRobinDispositionModels
+              fallbackModel={fallbackModel}
+              critic={dispositionCriticModel}
+              synthesizer={dispositionSynthesizerModel}
+              gapFinder={dispositionGapFinderModel}
+              builder={dispositionBuilderModel}
+              setCritic={setDispositionCriticModel}
+              setSynthesizer={setDispositionSynthesizerModel}
+              setGapFinder={setDispositionGapFinderModel}
+              setBuilder={setDispositionBuilderModel}
+            />
+          ) : null}
+          {presetId === "orchestrator-worker-deep" ? (
+            <OwDeepTierModels
+              fallbackModel={fallbackModel}
+              orchestratorModel={orchestratorModel}
+              midLeadModel={midLeadModel}
+              workerModel={owDeepWorkerModel}
+              setOrchestratorModel={setOrchestratorModel}
+              setMidLeadModel={setMidLeadModel}
+              setWorkerModel={setOwDeepWorkerModel}
+            />
+          ) : null}
+          {presetId === "moa" ? (
+            <MoaProposerModels
+              fallbackModel={fallbackModel}
+              proposerCount={agentCount}
+              proposerModels={moaProposerModels}
+              setProposerModel={setMoaProposerModelAt}
             />
           ) : null}
         </div>

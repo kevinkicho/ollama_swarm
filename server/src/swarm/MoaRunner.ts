@@ -510,47 +510,41 @@ export class MoaRunner implements SwarmRunner {
         );
       }
 
-      // T198e (2026-05-04): two-stage aggregation. When opt-in +
-      // K >= 2 aggregators ran, fire ONE more "top" aggregator pass
-      // that synthesizes the K mid-syntheses (treating them as if
-      // they were proposer drafts). Matches the original Together AI
-      // MoA two-layer shape. First-cut: cfg.moaAggregatorModel is
-      // reused for the top aggregator (no separate field).
-      if (cfg.twoStageMoA && validSyntheses.length >= 2) {
+      // T199 (2026-05-04): N-level MoA aggregation tree. Generalizes
+      // T198e's two-stage to arbitrary depth. Each level halves the
+      // input set (rounded up); top level always emits 1 synthesis.
+      // Capped at 4 levels for runtime sanity. cfg.moaAggregationLevels
+      // takes precedence over cfg.twoStageMoA (which is the L=2 case).
+      const requestedLevels =
+        cfg.moaAggregationLevels && cfg.moaAggregationLevels >= 2
+          ? Math.min(4, cfg.moaAggregationLevels)
+          : cfg.twoStageMoA
+            ? 2
+            : 1;
+      if (requestedLevels >= 2 && validSyntheses.length >= 2) {
         try {
-          const topAggregator = winningAgg; // reuse winning aggregator's slot
-          const topPrompt = buildAggregatorPrompt({
+          const treeResult = await this.runAggregationTree({
             seed,
-            // Treat the K syntheses as the "proposals" for the top layer.
-            proposals: validSyntheses.map((s, i) => ({
-              workerId: `mid-aggregator-${i + 1}`,
+            initialInputs: validSyntheses.map((s, i) => ({
+              workerId: `aggregator-${i + 1}`,
               text: s.text,
             })),
-            variantBias: "balanced",
+            levels: requestedLevels,
+            availableAggregators: aggregators,
           });
-          const topController = new AbortController();
-          const topResult = (await promptWithRetry(topAggregator, topPrompt, {
-            signal: topController.signal,
-            manager: this.opts.manager,
-            agentName: "swarm-read",
-            describeError: (e) => describeSdkError(e),
-          })) as { data?: { parts?: Array<{ type: string; text: string }> } };
-          const topText = extractText(
-            topResult.data?.parts?.find((p) => p.type === "text")?.text ?? "",
-          );
-          if (topText && topText.trim().length > 0) {
+          if (treeResult.text && treeResult.text.trim().length > 0) {
             this.appendSystem(
-              `[T198e two-stage MoA] top-aggregator synthesized across ${validSyntheses.length} mid-syntheses (replaces single-pick).`,
+              `[T199 multi-tier MoA] ${requestedLevels}-level aggregation tree completed (${validSyntheses.length} L0 → ${treeResult.layerSizes.slice(1).join(" → ")} → 1).`,
             );
-            synthesis = topText;
+            synthesis = treeResult.text;
           } else {
             this.appendSystem(
-              `[T198e two-stage MoA] top-aggregator returned empty — falling back to single-pick winner.`,
+              `[T199 multi-tier MoA] tree produced empty top synthesis — falling back to single-pick winner.`,
             );
           }
         } catch (err) {
           this.appendSystem(
-            `[T198e two-stage MoA] top-aggregator failed (${err instanceof Error ? err.message : String(err)}) — falling back to single-pick winner.`,
+            `[T199 multi-tier MoA] tree failed (${err instanceof Error ? err.message : String(err)}) — falling back to single-pick winner.`,
           );
         }
       }
@@ -835,6 +829,82 @@ export class MoaRunner implements SwarmRunner {
    *  showed agents at their initial spawn state ("ready") forever
    *  while they were actually thinking. */
   // 2026-05-02 (matrix row #3 + issue #2 fix): aggregator self-critique
+  // T199 (2026-05-04): N-level MoA aggregation tree. Recursively
+  // halves the input set across L levels, each level synthesizing
+  // ceil(n/2) outputs from n inputs (final level emits 1). Aggregator
+  // agents are reused round-robin; if not enough aggregators exist
+  // for a level, the runner cycles through the available pool.
+  // Bounded at 4 levels by the caller (cfg.moaAggregationLevels cap).
+  // Per-level failure logs + falls through to the previous level's
+  // input as the layer's output (graceful degradation).
+  private async runAggregationTree(input: {
+    seed: string;
+    initialInputs: ReadonlyArray<{ workerId: string; text: string }>;
+    levels: number;
+    availableAggregators: readonly Agent[];
+  }): Promise<{ text: string; layerSizes: number[] }> {
+    const { seed, initialInputs, levels, availableAggregators } = input;
+    if (availableAggregators.length === 0) {
+      throw new Error("runAggregationTree: no aggregators available");
+    }
+    let currentLayer: Array<{ workerId: string; text: string }> = [
+      ...initialInputs,
+    ];
+    const layerSizes: number[] = [currentLayer.length];
+    for (let level = 1; level <= levels; level++) {
+      const isTopLevel = level === levels;
+      // Top level always emits 1; intermediate levels halve.
+      const nextSize = isTopLevel ? 1 : Math.max(1, Math.ceil(currentLayer.length / 2));
+      // Partition current layer into nextSize chunks, ensuring each chunk has at least 1 item.
+      const chunks = chunkRoundRobin(currentLayer, nextSize);
+      const tasks = chunks.map(async (chunk, idx) => {
+        if (chunk.length === 0) return null;
+        // Pass-through optimization: chunk of 1 doesn't need an
+        // aggregator pass (no synthesis to do). Save the call.
+        if (chunk.length === 1) return chunk[0]!;
+        const agg = availableAggregators[idx % availableAggregators.length]!;
+        const prompt = buildAggregatorPrompt({
+          seed,
+          proposals: chunk,
+          variantBias: "balanced",
+        });
+        try {
+          const ctrl = new AbortController();
+          const result = (await promptWithRetry(agg, prompt, {
+            signal: ctrl.signal,
+            manager: this.opts.manager,
+            agentName: "swarm-read",
+            describeError: (e) => describeSdkError(e),
+          })) as { data?: { parts?: Array<{ type: string; text: string }> } };
+          const text = extractText(
+            result.data?.parts?.find((p) => p.type === "text")?.text ?? "",
+          );
+          if (!text || text.trim().length === 0) return null;
+          return { workerId: `L${level}-agg-${idx + 1}`, text };
+        } catch {
+          return null;
+        }
+      });
+      const settled = await Promise.all(tasks);
+      const valid = settled.filter(
+        (s): s is { workerId: string; text: string } => s !== null,
+      );
+      if (valid.length === 0) {
+        // All aggregators on this level failed — surface the previous
+        // level's first input as the fallback so we still return SOMETHING.
+        return {
+          text: currentLayer[0]?.text ?? "",
+          layerSizes,
+        };
+      }
+      currentLayer = valid;
+      layerSizes.push(currentLayer.length);
+      if (isTopLevel) break;
+    }
+    // Top level should be exactly 1; defensive pick if it's somehow >1.
+    return { text: currentLayer[0]!.text, layerSizes };
+  }
+
   // with a DIFFERENT-AGENT review. Pre-fix the winning aggregator
   // reviewed its OWN synthesis — anchoring bias kills detection. Now
   // the critic is picked by pickSelfCritiqueAgent (a loser aggregator
@@ -1282,4 +1352,21 @@ export function parseAggregatorConfidence(text: string): "high" | "medium" | "lo
     if (m) return m[1]!.toLowerCase() as "high" | "medium" | "low";
   }
   return null;
+}
+
+// T199 (2026-05-04): partition `items` into `chunkCount` chunks via
+// round-robin assignment (item i → chunk (i % chunkCount)). Each
+// chunk has either ⌈n/k⌉ or ⌊n/k⌋ items. Pure — exported for tests.
+// Used by runAggregationTree to split a layer's inputs across the
+// next layer's aggregators.
+export function chunkRoundRobin<T>(
+  items: readonly T[],
+  chunkCount: number,
+): T[][] {
+  if (chunkCount <= 0) return [];
+  const out: T[][] = Array.from({ length: chunkCount }, () => []);
+  for (let i = 0; i < items.length; i++) {
+    out[i % chunkCount]!.push(items[i]!);
+  }
+  return out;
 }

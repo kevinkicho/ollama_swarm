@@ -422,6 +422,20 @@ export interface RunConfig {
    *  (no separate cfg.moaTopAggregatorModel field — could add later).
    *  MoA only. */
   twoStageMoA?: boolean;
+  /**
+   * T199 (2026-05-04): N-level MoA aggregation tree. Generalizes
+   * twoStageMoA to multiple aggregator layers. Each level halves
+   * the input set (rounded up): K proposers → ceil(K/2) L1-aggs
+   * → ceil(K/4) L2-aggs → ... → 1 top-agg. Cap at 4 levels for
+   * runtime sanity.
+   *
+   * When set, supersedes twoStageMoA (always runs at least 2 levels).
+   * Default 1 = just K parallel aggregators + winner-pick (pre-T199).
+   * 2 = today's two-stage. 3+ = multi-tier tree.
+   *
+   * MoA only.
+   */
+  moaAggregationLevels?: number;
   /** T198f: OW-Deep bi-directional refinement. When true, mid-lead's
    *  plan prompt allows them to emit `PUSHBACK: <issue>` instead of
    *  normal assignments. Runner logs the pushback + still proceeds
