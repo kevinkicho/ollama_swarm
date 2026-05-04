@@ -33,6 +33,18 @@ export async function promptWithFailoverAuto(
   perRunChain?: readonly string[],
   onFailover?: Parameters<typeof promptWithFailover>[5],
 ): Promise<unknown> {
+  // 2026-05-04 fix (Bug #2): when SWARM_DISABLE_TOOLS_AUTO is on,
+  // override agentName so promptWithRetry's profile-detection picks
+  // up "no tools." Open-weights Ollama Cloud models drift into
+  // emitting tool-call envelopes as text-in-fence (instead of using
+  // the OpenAI-compat structured tool_calls), which causes 100+ segment
+  // streaming loops. Disabling tool grants for non-blackboard runners
+  // sidesteps this — agents work from seed context only. Blackboard's
+  // worker pipeline is unaffected (uses promptWithFailover directly,
+  // not the Auto wrapper).
+  if (process.env.SWARM_DISABLE_TOOLS_AUTO === "true") {
+    opts = { ...opts, agentName: "swarm-no-tools" };
+  }
   const cfg: FailoverConfig = {
     failoverChain:
       perRunChain && perRunChain.length > 0

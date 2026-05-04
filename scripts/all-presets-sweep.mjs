@@ -25,7 +25,7 @@ const POLL_MS = Number(process.env.SWEEP_POLL_MS ?? 30_000);
 const WALLCLOCK_CAP_MS = Number(process.env.SWEEP_WALL_MS ?? 20 * 60_000);
 const MODE = process.env.SWEEP_MODE ?? process.argv[2] ?? "all"; // A|B|C|all
 
-const SWARM_PRESETS = [
+const ALL_SWARM_PRESETS = [
   "blackboard",
   "round-robin",
   "role-diff",
@@ -38,16 +38,30 @@ const SWARM_PRESETS = [
   "moa",
 ];
 
-// 2026-05-04: per-preset Ollama Cloud model assignments. User has
-// Ollama Cloud credits only + wants load spread across multiple
-// models. Specific guidance: gemma4 is BETTER for worker activities
-// (faster, code-friendly); use glm-5.1 + nemotron for reasoning.
-//   PLANNER  glm-5.1:cloud           — strong planning + decomposition
+// SWEEP_ONLY_PRESETS=blackboard,council  → run just those two.
+// Useful for resuming after a known-bug fix without re-running every
+// preset that already succeeded.
+const onlyEnv = (process.env.SWEEP_ONLY_PRESETS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+const SWARM_PRESETS = onlyEnv.length > 0
+  ? ALL_SWARM_PRESETS.filter((p) => onlyEnv.includes(p))
+  : ALL_SWARM_PRESETS;
+
+// 2026-05-04: per-preset Ollama Cloud model assignments. All `:cloud`
+// suffix — local machine can't host models, everything routes via the
+// local Ollama desktop app to ollama.com on the user's subscription.
+//
+// Updated post-Bug#1 (2026-05-04 01:30): glm-5.1:cloud demoted from
+// PLANNER to a fallback. The blackboard A run (commit 6f950a48) showed
+// glm-5.1 emitting prose ("I need to ...") and XML pseudo-tool-calls
+// (`<list path...>`) when asked for the second JSON envelope (todo
+// batch). Same #231 finding from memory. Nemotron handles repeated
+// structured JSON cleanly.
+//
+//   PLANNER  nemotron-3-super:cloud  — JSON-stable structured output
 //   WORKER   gemma4:31b-cloud        — fast + code-edit-friendly
 //   SYNTH    nemotron-3-super:cloud  — cross-criterion synthesis
-// For non-blackboard presets the model is shared across all agents,
-// so we pick whichever role best fits the preset's dominant work.
-const PLANNER = "glm-5.1:cloud";
+//   FALLBACK glm-5.1:cloud           — used in failover chain only
+const PLANNER = "nemotron-3-super:cloud";
 const WORKER = "gemma4:31b-cloud";
 const SYNTH = "nemotron-3-super:cloud";
 const PER_PRESET_MODELS = {

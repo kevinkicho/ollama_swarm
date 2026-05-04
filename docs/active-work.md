@@ -10,6 +10,20 @@
 
 ## Queued (waiting on user nod or specific trigger)
 
+### Drop obsolete port:0 from agent UI + transcript (2026-05-04)
+
+After E3 Phase 5 (2026-04-29) removed the opencode subprocess, agents no longer have per-agent HTTP ports — the `port` field on AgentState is always `0`. But the legacy UI surfaces still display it: agent cards render `:0`, and the system transcript message at run-start says `"3/3 agents ready on ports 0, 0, 0"` which is misleading + noisy.
+
+**Fix scope:**
+- Remove the `port` field from `AgentState` (or at least mark it deprecated). Surveyed callers: `AgentManager.spawnAgentNoOpencode` sets it to 0; `AgentPanel.tsx` displays it; `agentsReadySummary.ts` puts it in the on-ready system message.
+- Update `agentsReadySummary` to drop "on ports X, Y, Z" — replace with model breakdown (e.g. "agents ready: planner=glm-5.1, workers=gemma4×3").
+- Update `AgentPanel.tsx` to drop the `:port` chip; replace with `sessionId`-prefix or model-tier badge.
+- Search for any other callers (history modal, event log).
+
+Smallest cut: just hide the port field from the UI when 0, leaving the data model untouched. Larger cut: delete the field. Either is fine — start with the smaller one.
+
+**Trigger:** explicit user "go drop the port displays" — straightforward visual cleanup.
+
 ### Ambition for every swarm preset (2026-05-04)
 
 Today only blackboard has an ambition mechanism (`AMBITION_RATCHET_ENABLED=true`, max 5 tiers — planner produces an N+1 contract after current tier completes; the run climbs until a hard cap trips). Every other preset (round-robin, role-diff, council, OW, OW-Deep, debate-judge, map-reduce, stigmergy, MoA) does ONE pass against the directive and stops. They're as ambitious as the directive frames them — no built-in "now go further" lever.
@@ -403,3 +417,15 @@ Kevin reported the SwarmView chat input goes to the transcript but agents don't 
 - Tests: extend `MoaRunner.test.ts` with "user injection visible to next proposer round"; add Orchestrator integration test for the say→amend dual-write.
 
 **Trigger**: after sweeps finish (no tsx-watch reload mid-run).
+
+### Intra-stream loop detector (R9 extended) (2026-05-04)
+
+R9's semantic-loop detector fires at TURN boundaries — it can't catch a model spinning DURING a single streaming turn. The all-presets sweep on 2026-05-04 surfaced the failure mode: nemotron-3-super:cloud emitted the same fence-wrapped JSON tool-call envelope (`\`\`\`json {"tool":"read",...} \`\`\``) 132 times in ONE streaming turn before the SSE-idle 90s watchdog finally fired. 132 wasted segments between safety nets.
+
+**Fix scope:**
+- Add a chunk-level repeat detector in AgentManager.streamPrompt (or sseAwareTurnWatchdog).
+- Track sliding window of last K chunks (K~10). When ≥80% are byte-identical, abort the turn with reason `intra-stream-loop`.
+- Cap is per-turn, separate from R9's per-run cap.
+
+**Trigger:** explicit user "go add intra-stream loop guard" — or just bundle with the next reliability pass.
+
