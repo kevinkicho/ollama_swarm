@@ -5,13 +5,14 @@
 
 import type { SessionProvider } from "./SessionProvider.js";
 import { OllamaProvider } from "./OllamaProvider.js";
+import { OllamaCloudProvider } from "./OllamaCloudProvider.js";
 import { AnthropicProvider } from "./AnthropicProvider.js";
 import { OpenAIProvider } from "./OpenAIProvider.js";
 import { detectProvider, stripProviderPrefix } from "../../../shared/src/providers.js";
+import { config } from "../config.js";
 
-// Module-level singletons. Cheap to construct (no network at ctor
-// time), but reusing avoids re-reading process.env on every call.
 let ollamaSingleton: OllamaProvider | null = null;
+let ollamaCloudSingleton: OllamaCloudProvider | null = null;
 let anthropicSingleton: AnthropicProvider | null = null;
 let openaiSingleton: OpenAIProvider | null = null;
 
@@ -33,11 +34,17 @@ export function pickProvider(modelString: string): PickedProvider {
   const which = detectProvider(modelString);
   switch (which) {
     case "ollama":
-    // ollama-cloud is a UI-only catalog distinction — `:cloud` /
-    // `-cloud` models route through the same local OllamaProvider,
-    // which forwards to ollama.com via the user's locally-configured
-    // account. Same singleton, same chat path.
+      ollamaSingleton ??= new OllamaProvider();
+      return { provider: ollamaSingleton, modelId };
     case "ollama-cloud":
+      // When OLLAMA_CLOUD_API_KEY (or OLLAMA_API_KEY) is set, talk
+      // directly to ollama.com — bypasses the local daemon. Otherwise
+      // fall through to the local Ollama install which proxies cloud
+      // models when the user has `ollama signin` configured.
+      if (config.OLLAMA_CLOUD_API_KEY || config.OLLAMA_API_KEY) {
+        ollamaCloudSingleton ??= new OllamaCloudProvider();
+        return { provider: ollamaCloudSingleton, modelId };
+      }
       ollamaSingleton ??= new OllamaProvider();
       return { provider: ollamaSingleton, modelId };
     case "anthropic":
@@ -60,6 +67,7 @@ export function __setTestProviderOverride(provider: SessionProvider | null): voi
 // to swap the API key the AnthropicProvider was constructed with).
 export function __resetProviderSingletons(): void {
   ollamaSingleton = null;
+  ollamaCloudSingleton = null;
   anthropicSingleton = null;
   openaiSingleton = null;
   testProviderOverride = null;

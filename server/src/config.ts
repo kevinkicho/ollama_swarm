@@ -83,6 +83,11 @@ const Schema = z.object({
   // catalog. The key is informational here for the providers endpoint
   // so the UI can show "live discovery vs catalog fallback" hints.
   OLLAMA_API_KEY: z.string().optional(),
+  // 2026-05-04: dedicated key for Ollama Cloud direct API access.
+  // When set, the OllamaCloudProvider sends requests directly to
+  // https://ollama.com with Bearer auth, bypassing the local Ollama
+  // daemon entirely. Falls back to OLLAMA_API_KEY if this is unset.
+  OLLAMA_CLOUD_API_KEY: z.string().optional(),
   // E3 Phase 5 cleanup pt 4 (2026-04-29): USE_SESSION_PROVIDER +
   // USE_SESSION_NO_OPENCODE env flags REMOVED. The provider path is
   // now the only path; the opencode subprocess fallback no longer

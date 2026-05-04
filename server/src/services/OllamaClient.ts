@@ -69,6 +69,10 @@ export interface ChatOpts {
    *  pass a JSON Schema object for strict validation.
    *  See https://github.com/ollama/ollama/blob/main/docs/api.md#request-json-mode */
   format?: "json" | Record<string, unknown>;
+  /** Optional API key for Ollama Cloud direct access. When set, sent as
+   *  Authorization: Bearer <key> header. Local Ollama doesn't use auth
+   *  so this is typically only set by OllamaCloudProvider. */
+  apiKey?: string;
   /** Phase 5a of #243: Ollama generation parameters. Forwarded as
    *  the `options` field of /api/chat — temperature, top_p, etc.
    *  Per-agent topology overrides set this from the per-row temperature
@@ -151,7 +155,10 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {}),
+      },
       body,
       signal: composed,
     });

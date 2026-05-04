@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readAnthropicStream, readAnthropicStreamFull, AnthropicProvider } from "./AnthropicProvider.js";
 import { readOpenAiStream, readOpenAiStreamFull, OpenAIProvider } from "./OpenAIProvider.js";
 import { pickProvider, __resetProviderSingletons } from "./pickProvider.js";
+import { config } from "../config.js";
 
 // Helper: build a ReadableStream from an array of byte chunks.
 function streamOf(chunks: Array<string | Uint8Array>): ReadableStream<Uint8Array> {
@@ -250,10 +251,14 @@ test("OpenAIProvider — chat returns error when no API key set", async () => {
 // pickProvider factory
 // ---------------------------------------------------------------------------
 
-test("pickProvider — bare model defaults to ollama, strips no prefix", () => {
+test("pickProvider — :cloud model routes to ollama-cloud when API key present", () => {
   __resetProviderSingletons();
   const { provider, modelId } = pickProvider("glm-5.1:cloud");
-  assert.equal(provider.id, "ollama");
+  if (config.OLLAMA_CLOUD_API_KEY || config.OLLAMA_API_KEY) {
+    assert.equal(provider.id, "ollama-cloud");
+  } else {
+    assert.equal(provider.id, "ollama");
+  }
   assert.equal(modelId, "glm-5.1:cloud");
 });
 

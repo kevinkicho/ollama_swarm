@@ -278,7 +278,7 @@ app.post("/api/usage/clear-quota", (_req, res) => {
 app.get("/api/providers", (_req, res) => {
   res.json({
     ollama: { available: true, hasKey: true },
-    "ollama-cloud": { available: true, hasKey: !!config.OLLAMA_API_KEY },
+    "ollama-cloud": { available: true, hasKey: !!(config.OLLAMA_CLOUD_API_KEY || config.OLLAMA_API_KEY) },
     anthropic: {
       available: !!config.ANTHROPIC_API_KEY,
       hasKey: !!config.ANTHROPIC_API_KEY,
