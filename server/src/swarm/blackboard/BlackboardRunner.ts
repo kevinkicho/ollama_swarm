@@ -407,6 +407,26 @@ export class BlackboardRunner implements SwarmRunner {
   // failover chain exhausts. Empty when discovery failed or
   // SWARM_DEGRADATION_FALLBACK is off.
   private localOllamaTags: readonly string[] = [];
+  // 2026-05-04 (W16 wiring, R7 promotion): subscriber-disconnect
+  // pause flag. Set by setSubscriberPaused(true) when the WS
+  // subscriber count for this run drops to 0 (and SWARM_PAUSE_ON_
+  // DISCONNECT is on). Workers check this alongside this.paused so
+  // they idle without burning prompts when no browser is watching.
+  // Cleared on first reconnect.
+  private subscriberPaused = false;
+  // 2026-05-04 (W17 wiring, R13 promotion): heap-pressure pause flag.
+  // Set when checkMemoryPressureTick crosses to "pause" level;
+  // cleared when it drops back to "ok". Workers check it alongside
+  // the other pause flags.
+  private memoryPaused = false;
+  // 2026-05-04 (W18 wiring, R9 promotion): consecutive loop
+  // detections. Bumped per detection in the same window; cleared
+  // when a detection-free turn lands. After LOOP_DETECTIONS_TO_HALT
+  // consecutive hits, the runner sets terminationReason and stops
+  // gracefully (vs the wave-2 first-cut behavior which only emitted
+  // a transcript warning).
+  private consecutiveLoopDetections = 0;
+  private static readonly LOOP_DETECTIONS_TO_HALT = 3;
   // Task #167: soft-stop state. Set by drain(); workers see this in
   // their poll loop and exit after their current claim commits (no
   // new claims). drainWatcherTimer polls every 2s for "all in-flight
@@ -729,6 +749,12 @@ export class BlackboardRunner implements SwarmRunner {
     this.errorTracker = [];
     this.failoverState = { modelHealth: new Map() };
     this.localOllamaTags = [];
+    // 2026-05-04 (W16/W17/W18 wiring): clear pause/loop counters.
+    this.subscriberPaused = false;
+    this.memoryPaused = false;
+    this.lastMemoryPressureLevel = "ok";
+    this.consecutiveLoopDetections = 0;
+    this.lastLoopWarningAtTurn = -1;
     // 2026-05-04 (W14 wiring): when SWARM_DEGRADATION_FALLBACK is on,
     // discover local Ollama tags once at run-start so R3's
     // pickLocalFallback has candidates. Best-effort: discovery
@@ -2850,7 +2876,10 @@ export class BlackboardRunner implements SwarmRunner {
       // claim work, don't burn cooldown, just wait for the probe to
       // resume. checkAndApplyCaps short-circuits during pause so the
       // wall-clock cap doesn't burn either.
-      if (this.paused) continue;
+      // 2026-05-04 (W16/W17): also idle on subscriber-disconnect
+      // (R7) and heap-pressure (R13) pauses. Same semantics — wait
+      // here without claiming work or burning prompts.
+      if (this.paused || this.subscriberPaused || this.memoryPaused) continue;
       // Task #167: soft-stop. If draining was requested, this worker's
       // current iteration's executeWorkerTodo (if any) already ran to
       // completion above the loop boundary. Now: don't claim anything
@@ -4771,23 +4800,44 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   /** R13 wiring (2026-05-04): sample heap, emit a one-shot warning on
-   *  crossing into "throttle" or "pause" levels. Idempotent within a
-   *  level — only logs again when the level changes. */
+   *  crossing into "throttle" or "pause" levels.
+   *  W17 promotion: also flips this.memoryPaused so workers idle
+   *  while heap is critical, then clears it when heap drops back to
+   *  ok. Throttle level is signal-only (warns but doesn't pause). */
   private checkMemoryPressureTick(): void {
     const v = checkMemoryPressure();
-    if (v.level === this.lastMemoryPressureLevel) return;
-    if (v.level === "pause") {
+    // W17 promotion: heap pause logic. Pauses on rise to "pause";
+    // resumes on drop to "ok". Throttle stays paused-or-not (no
+    // transition).
+    if (v.level === "pause" && !this.memoryPaused) {
+      this.memoryPaused = true;
       this.appendSystem(
-        `[memory] heap pressure CRITICAL (${(v.ratio * 100).toFixed(0)}% of ${(v.limitBytes / 1024 / 1024).toFixed(0)} MB) — consider raising --max-old-space-size or reducing the run.`,
+        `[memory] auto-pause: heap pressure CRITICAL (${(v.ratio * 100).toFixed(0)}%) — workers idling until GC catches up.`,
       );
-    } else if (v.level === "throttle") {
+    } else if (v.level === "ok" && this.memoryPaused) {
+      this.memoryPaused = false;
+      this.appendSystem(`[memory] resume: heap pressure recovered (${(v.ratio * 100).toFixed(0)}%) — workers active again.`);
+    }
+    if (v.level === this.lastMemoryPressureLevel) return;
+    if (v.level === "throttle") {
       this.appendSystem(
         `[memory] heap pressure HIGH (${(v.ratio * 100).toFixed(0)}% of ${(v.limitBytes / 1024 / 1024).toFixed(0)} MB) — GC may slow incoming prompts.`,
       );
     }
-    // Only update on transitions away from "ok" (so dropping back to
-    // ok will reset the flag and let a re-crossing fire again).
     this.lastMemoryPressureLevel = v.level;
+  }
+
+  /** W16 wiring (R7 promotion, 2026-05-04): set/clear the
+   *  subscriber-disconnect pause flag. Called by the orchestrator
+   *  when WS subscriber count for this run crosses 0 ↔ N. */
+  setSubscriberPaused(paused: boolean): void {
+    if (this.subscriberPaused === paused) return;
+    this.subscriberPaused = paused;
+    if (paused) {
+      this.appendSystem(`[subscribers] auto-pause: no browser watching — workers idling.`);
+    } else {
+      this.appendSystem(`[subscribers] resume: subscriber reconnected — workers active again.`);
+    }
   }
 
   // T198c (2026-05-04): adaptive worker pool sizing — log-only watchdog.
@@ -5413,16 +5463,26 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   /** R9 wiring (2026-05-04): pull last-K agent texts from the
-   *  transcript, evaluate Jaccard similarity, emit a one-shot
-   *  amendment when the run looks stuck in a loop. Idempotent within
-   *  a window — re-fires only after the window has completely
-   *  rotated past the last warning. */
+   *  transcript, evaluate Jaccard similarity, emit a warning when
+   *  the run looks stuck in a loop. W18 promotion (2026-05-04):
+   *  after LOOP_DETECTIONS_TO_HALT consecutive detections (each
+   *  separated by a full window-worth of turns), set
+   *  terminationReason and stop the run gracefully so we don't burn
+   *  budget on visible repetition. A clear-window resets the
+   *  consecutive counter. */
   private maybeEmitLoopWarning(): void {
     const agentTexts = this.transcript
       .filter((e) => e.role === "agent" && typeof e.text === "string")
       .map((e) => e.text as string);
     const verdict = detectSemanticLoop({ recentTurns: agentTexts });
-    if (!verdict.inLoop) return;
+    if (!verdict.inLoop) {
+      // W18 promotion: a non-loop window resets the consecutive
+      // counter. Only counts after we have a full window of turns
+      // (so an early no-loop verdict on a small transcript doesn't
+      // mask a real loop later).
+      if (verdict.windowSize >= 4) this.consecutiveLoopDetections = 0;
+      return;
+    }
     // Idempotent: only emit once per "window worth" of turns. The
     // tracker stores the transcript length when we last warned;
     // a new warning requires `windowSize` more turns to have
@@ -5434,8 +5494,27 @@ export class BlackboardRunner implements SwarmRunner {
       return;
     }
     this.lastLoopWarningAtTurn = agentTexts.length;
+    this.consecutiveLoopDetections += 1;
+    const haltCap = BlackboardRunner.LOOP_DETECTIONS_TO_HALT;
+    if (this.consecutiveLoopDetections >= haltCap) {
+      // W18 promotion: stop the run gracefully. terminationReason
+      // surfaces in the run summary as "loop-detected" and is
+      // visible in the stop-reason classifier.
+      const reason = `loop-detected (${haltCap} consecutive detections — last: ${verdict.reason})`;
+      this.terminationReason = reason;
+      this.stopping = true;
+      this.appendSystem(
+        `[loop-detector] HALT: ${reason}. Stopping the run before more budget burns on repetition.`,
+      );
+      // Abort in-flight prompts so they fail fast — the workers will
+      // exit on the next poll-loop check.
+      for (const ctrl of this.activeAborts) {
+        try { ctrl.abort(new Error("loop-detected")); } catch { /* */ }
+      }
+      return;
+    }
     this.appendSystem(
-      `[loop-detector] ${verdict.reason} — consider changing tactic, splitting the todo, or wrapping up.`,
+      `[loop-detector] ${verdict.reason} — consider changing tactic, splitting the todo, or wrapping up. (${this.consecutiveLoopDetections}/${haltCap} consecutive detections; halts at ${haltCap})`,
     );
   }
 

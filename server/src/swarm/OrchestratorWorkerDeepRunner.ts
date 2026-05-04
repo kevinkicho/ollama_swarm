@@ -48,6 +48,7 @@ import type {
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
 import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
@@ -740,7 +741,8 @@ export class OrchestratorWorkerDeepRunner implements SwarmRunner {
       abortSession: async () => {},
     });
     try {
-      const res = await promptWithRetry(agent, prompt, {
+      // W19 (2026-05-04): swapped to promptWithFailoverAuto for R1 chain.
+      const res = await promptWithFailoverAuto(agent, prompt, {
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
         signal: controller.signal,
         manager: this.opts.manager,

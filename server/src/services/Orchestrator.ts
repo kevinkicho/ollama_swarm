@@ -408,6 +408,20 @@ export class Orchestrator {
     return true;
   }
 
+  /** W16 wiring (R7 promotion, 2026-05-04): set/clear the
+   *  subscriber-disconnect pause flag on a specific runner. Called by
+   *  the WS Broadcaster's subscriber-change listener when count
+   *  crosses 0 ↔ N. Currently only BlackboardRunner implements the
+   *  flag — calls on other runner types are silently no-ops (their
+   *  setSubscriberPaused is undefined; the optional-chaining guard
+   *  keeps it safe). */
+  setRunSubscriberPaused(runId: string, paused: boolean): void {
+    const run = this.runs.get(runId);
+    if (!run) return;
+    const r = run.runner as { setSubscriberPaused?: (paused: boolean) => void };
+    r.setSubscriberPaused?.(paused);
+  }
+
   /** T-Item-MultiTenant Phase 5 (2026-05-04): stop ONE run by id.
    *  Returns true on success, false when runId isn't active. Mirrors
    *  the legacy stop() cleanup but scoped to one entry. */

@@ -4,7 +4,27 @@
 > `TaskCreate` items die when the session ends; this file is the durable
 > equivalent. **Update it when you finish or queue work.**
 >
-> Last refreshed: 2026-05-04 (every prior "deferred" item shipped + multi-tenant runs end-to-end + per-run zustand factory + scoreboard plan retired + doc cleanup pass)
+> Last refreshed: 2026-05-04 (R1–R17 reliability layer shipped across 4 commits + extended to all 11 runner-shaped call sites + SetupForm exposes failover chain)
+
+---
+
+## Done recently — R1–R17 reliability layer (2026-05-04)
+
+Four commits landed the failure-mode resilience pass:
+
+- `099956a` — 17 standalone helpers (`server/src/swarm/{providerFailover,quotaProbeBackoff,degradationFallback,preflightCostProjector,autoResumeDecision,drainStopPolicy,subscriberPausePolicy,cloneLock,semanticLoopDetector,modelHealthTracker,repairJson,preflightDiskCheck,memoryPressure,memoryStorePruner,autoRca,runHealthScore,errorTaxonomy}.ts`) + 250 tests
+- `ebf5994` — Wave 1 wiring: R2/R8/R11/R12/R4/R14/R15/R16 (additive, no flags)
+- `f2da161` — Wave 2 wiring: R5/R6/R7/R9/R13/R17 behind 5 new env flags (default OFF)
+- `d191eba` — Wave 3 wiring: R1/R3/R10 layered failover via `promptWithFailover` wrapper, env defaults + per-run `cfg.providerFailover` override
+
+Plus follow-ups (post-deferred):
+- Promoted R7/R13/R9 from signal-only to actual intervention (workers idle on `subscriberPaused` / `memoryPaused`; loop detector halts after 3 consecutive detections)
+- Extended `promptWithFailoverAuto` thin wrapper to all 9 non-blackboard runners + 4 utility helpers (10 swap sites)
+- Surfaced `providerFailover` chain input in `SetupForm.tsx`
+
+**Coverage gap:** `BaselineRunner` calls `provider.chat()` directly (bypasses `promptWithRetry`), so it doesn't participate in the failover chain. Adding it requires a different wrapping pattern (per-call failover loop inside the runner). Deferred for a follow-up.
+
+See `docs/STATUS.md` for the full 17-helper table + new env-flag list.
 
 ---
 

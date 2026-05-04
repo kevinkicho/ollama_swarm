@@ -13,6 +13,7 @@ import type {
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { roleForAgent, type SwarmRole } from "./roles.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { formatChatReceipt } from "./chatReceipt.js";
 import { detectSemanticConvergence } from "./semanticConvergence.js";
 import { detectConvergence as detectJaccardConvergence } from "./moaConsensus.js";
@@ -584,7 +585,7 @@ export class RoundRobinRunner implements SwarmRunner {
       const role = this.roles ? roleForAgent(agent.index, this.roles) : null;
       const roleProfile: "swarm-read" | "swarm-builder" | "swarm" =
         role?.profile ?? "swarm-read";
-      const res = await promptWithRetry(agent, prompt, {
+      const res = await promptWithFailoverAuto(agent, prompt, {
         signal: controller.signal,
         manager: this.opts.manager,
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
@@ -644,7 +645,7 @@ export class RoundRobinRunner implements SwarmRunner {
             retryReason: reasonShort,
           });
         },
-      });
+      }, this.active?.providerFailover);
 
       const diagCtx = {
         runner: "round-robin",
@@ -784,14 +785,14 @@ export class RoundRobinRunner implements SwarmRunner {
       abortSession: async () => {},
     });
     try {
-      const res = (await promptWithRetry(lead, prompt, {
+      const res = (await promptWithFailoverAuto(lead, prompt, {
         signal: controller.signal,
         manager: this.opts.manager,
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens),
         agentName: "swarm-read",
         promptAddendum: getAgentAddendum(this.active?.topology, lead.index),
         describeError: (e) => describeSdkError(e),
-      })) as { data: { parts: Array<{ type: "text"; text: string }> } };
+      }, this.active?.providerFailover)) as { data: { parts: Array<{ type: "text"; text: string }> } };
       const text = (res?.data?.parts?.find((p) => p.type === "text")?.text ?? "").trim();
       if (text.length === 0) {
         this.appendSystem(`[improvement #4] Synthesis returned empty response; skipping.`);
@@ -870,7 +871,7 @@ export class RoundRobinRunner implements SwarmRunner {
       abortSession: async () => {},
     });
     try {
-      const res = await promptWithRetry(lead, prompt, {
+      const res = await promptWithFailoverAuto(lead, prompt, {
         signal: controller.signal,
         manager: this.opts.manager,
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens),
@@ -897,7 +898,7 @@ export class RoundRobinRunner implements SwarmRunner {
             `[${lead.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
           );
         },
-      });
+      }, this.active?.providerFailover);
       const diagCtx = {
         runner: "role-diff",
         agentId: lead.id,

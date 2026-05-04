@@ -16,6 +16,7 @@
 
 import type { Agent, AgentManager } from "../services/AgentManager.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractText } from "./extractText.js";
 import { describeSdkError } from "./sdkError.js";
 
@@ -106,7 +107,8 @@ export async function deriveRubric({
   const prompt = buildRubricPrompt(trimmed);
   const ctrl = new AbortController();
   try {
-    const res = (await promptWithRetry(agent, prompt, {
+    // W19 (2026-05-04): swapped to promptWithFailoverAuto for R1 chain.
+    const res = (await promptWithFailoverAuto(agent, prompt, {
       signal: ctrl.signal,
       manager,
       formatExpect: "json",

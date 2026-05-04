@@ -345,6 +345,11 @@ export function SetupForm() {
   );
   const providersStatus = useProviders();
   const [maxCostUsd, setMaxCostUsd] = useState<string>("");
+  // W20 (2026-05-04): R1 provider-failover chain — comma-separated
+  // model strings (e.g. "anthropic/claude-haiku-4-5,glm-5.1:cloud").
+  // Empty = no per-run override; server falls back to its
+  // SWARM_PROVIDER_FAILOVER env default.
+  const [providerFailover, setProviderFailover] = useState<string>("");
   const [rounds, setRounds] = useState(3);
   const [userDirective, setUserDirective] = useState("");
   // Unit 32: per-preset knobs. State lives in SetupForm so it persists
@@ -639,6 +644,15 @@ export function SetupForm() {
             presetSpecific.maxCostUsd = cost;
           }
         }
+      }
+      // W20 (2026-05-04): R1 provider-failover chain. Comma-separated
+      // input → string[]; empty entries dropped. Server caps at 8 entries.
+      const failoverList = providerFailover
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      if (failoverList.length > 0) {
+        presetSpecific.providerFailover = failoverList;
       }
       // T199 (2026-05-04): per-tier model state for the open-weights-
       // parallelism value prop. Round-robin disposition models +
@@ -1082,6 +1096,22 @@ export function SetupForm() {
               />
             </Field>
           ) : null}
+          {/* W20 (2026-05-04): R1 provider-failover chain. Comma-
+              separated model strings; first one is tried after the
+              default model fails with quota / auth. Empty → server
+              uses its SWARM_PROVIDER_FAILOVER env default. */}
+          <Field
+            label="Failover chain (comma-separated)"
+            hint="Models to try after the default fails with quota/auth. Example: anthropic/claude-haiku-4-5,glm-5.1:cloud,llama3:8b"
+          >
+            <input
+              type="text"
+              value={providerFailover}
+              onChange={(e) => setProviderFailover(e.target.value)}
+              placeholder="anthropic/claude-haiku-4-5, glm-5.1:cloud"
+              className="input"
+            />
+          </Field>
         </Section>
 
         {/* 2026-05-03 (UX win #3): Topology collapsed by default. Most

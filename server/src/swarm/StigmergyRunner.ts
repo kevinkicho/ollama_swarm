@@ -11,6 +11,7 @@ import type {
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { formatChatReceipt } from "./chatReceipt.js";
 import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
 // T197 (2026-05-04): cross-cluster discovery via import graph.
@@ -479,7 +480,8 @@ export class StigmergyRunner implements SwarmRunner {
     const controller = new AbortController();
     let raw = "";
     try {
-      const res = (await promptWithRetry(lead, prompt, {
+      // W19 (2026-05-04): swapped to promptWithFailoverAuto for R1 chain.
+      const res = (await promptWithFailoverAuto(lead, prompt, {
         signal: controller.signal,
         manager: this.opts.manager,
         agentName: "swarm-read",
@@ -562,7 +564,8 @@ export class StigmergyRunner implements SwarmRunner {
       abortSession: async () => {},
     });
     try {
-      const res = await promptWithRetry(lead, prompt, {
+      // W19 (2026-05-04): swapped to promptWithFailoverAuto for R1 chain.
+      const res = await promptWithFailoverAuto(lead, prompt, {
         signal: controller.signal,
         manager: this.opts.manager,
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens),
@@ -857,7 +860,8 @@ export class StigmergyRunner implements SwarmRunner {
 
     try {
       // Unit 16: shared retry wrapper.
-      const res = await promptWithRetry(agent, prompt, {
+      // W19 (2026-05-04): swapped to promptWithFailoverAuto for R1 chain.
+      const res = await promptWithFailoverAuto(agent, prompt, {
         signal: controller.signal,
         manager: this.opts.manager,
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),

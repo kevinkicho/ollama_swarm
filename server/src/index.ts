@@ -73,25 +73,20 @@ const orchestrator = new Orchestrator({
   maxConcurrentRuns: config.SWARM_MAX_CONCURRENT_RUNS,
 });
 
-// R7 wiring (2026-05-04): pause-on-disconnect signal. When the flag
-// is on, surface subscriber-count changes as a system message so the
-// run's transcript records "all browsers closed" / "browser opened
-// again" boundaries. Actual auto-pause/resume requires deeper
-// orchestrator integration (adding a 'paused-due-to-disconnect'
-// state alongside the existing quota-pause); first cut is signal-only.
+// R7 wiring (2026-05-04, W16 promotion 2026-05-04): pause-on-WS-
+// disconnect. When SWARM_PAUSE_ON_DISCONNECT is on, the listener
+// flips the matching runner's subscriberPaused flag so workers idle
+// without burning prompts when no browser is watching. Resumes on
+// first reconnect (orchestrator hook is a no-op for runners that
+// don't implement setSubscriberPaused — discussion-only presets).
 if (config.SWARM_PAUSE_ON_DISCONNECT) {
   broadcaster.setSubscriberChangeListener((change) => {
     if (change.action === "no-change") return;
-    broadcaster.broadcast({
-      type: "transcript_append",
-      runId: change.runId,
-      entry: {
-        id: `subscriber-${Date.now()}`,
-        role: "system",
-        ts: Date.now(),
-        text: `[subscribers] ${change.reason}`,
-      },
-    });
+    if (change.action === "pause") {
+      orchestrator.setRunSubscriberPaused(change.runId, true);
+    } else if (change.action === "resume") {
+      orchestrator.setRunSubscriberPaused(change.runId, false);
+    }
   });
 }
 

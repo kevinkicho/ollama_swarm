@@ -36,6 +36,7 @@ import type {
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { extractText } from "./extractText.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { describeSdkError } from "./sdkError.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import {
@@ -870,7 +871,8 @@ export class MoaRunner implements SwarmRunner {
         });
         try {
           const ctrl = new AbortController();
-          const result = (await promptWithRetry(agg, prompt, {
+          // W19 (2026-05-04): swapped to promptWithFailoverAuto for R1 chain.
+          const result = (await promptWithFailoverAuto(agg, prompt, {
             signal: ctrl.signal,
             manager: this.opts.manager,
             agentName: "swarm-read",
@@ -990,7 +992,8 @@ export class MoaRunner implements SwarmRunner {
       const proposerAgentName = this.active?.moaProposerTools
         ? "swarm-read"
         : "swarm";
-      const res = (await promptWithRetry(agent, prompt, {
+      // W19 (2026-05-04): swapped to promptWithFailoverAuto for R1 chain.
+      const res = (await promptWithFailoverAuto(agent, prompt, {
         signal: ctrl.signal,
         manager: this.opts.manager,
         formatExpect: "free",

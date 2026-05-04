@@ -32,6 +32,7 @@
 import type { Agent, AgentManager } from "../services/AgentManager.js";
 import type { SwarmRole } from "./roles.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractText } from "./extractText.js";
 import { describeSdkError } from "./sdkError.js";
 
@@ -58,7 +59,8 @@ export async function deriveDynamicRoleCatalog(
   let raw: string;
   try {
     const ctrl = new AbortController();
-    const result = (await promptWithRetry(input.agent, prompt, {
+    // W19 (2026-05-04): swapped to promptWithFailoverAuto for R1 chain.
+    const result = (await promptWithFailoverAuto(input.agent, prompt, {
       signal: ctrl.signal,
       manager: input.manager,
       agentName: "swarm-read",

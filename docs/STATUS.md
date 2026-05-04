@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-05-04 (multi-tenant runs end-to-end + per-run zustand factory + every prior "deferred" item shipped + doc cleanup)
+**Last updated:** 2026-05-04 (17 reliability helpers + 3-wave wiring + 6 cfg flags + per-run providerFailover + extended to all 11 runner-shaped call sites)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -71,11 +71,62 @@ The V1 SDK loop (per-agent opencode subprocess + SSE chunked streaming) was reti
 | Event log reader | `server/src/swarm/blackboard/EventLogReaderV2.ts` | primary; backs `/api/v2/event-log/runs` |
 | `formatServerSummary` | `shared/src/formatServerSummary.ts` | shared between server + web |
 
-**Test totals:** 1848 server tests passing / 3 skipped / 0 failing as of 2026-05-04. Web type-check clean. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
+**Test totals:** 2271 server tests passing / 3 skipped / 0 failing as of 2026-05-04 (was 1848 → +423 across the reliability + wave 1/2/3 work). Web type-check clean. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
 
 ---
 
-## What landed 2026-05-04 (every prior "deferred" item shipped + multi-tenant + doc cleanup)
+## What landed 2026-05-04 (R1–R17 reliability layer, 4 commits)
+
+A round of failure-mode resilience: 17 standalone pure helpers + three waves of wiring + six new env flags. Together they harden the swarm against quota walls, network blips, malformed JSON, disk pressure, memory pressure, browser disconnect, runaway loops, and unclean stops.
+
+**The 17 helpers** (`server/src/swarm/`, all pure / synchronous):
+
+| ID | Module | What it does |
+|---|---|---|
+| R1 | `providerFailover.ts` | `decideFailover(currentModel, classified, chain)` → swap / retry-same / give-up |
+| R2 | `quotaProbeBackoff.ts` | exponential 1/2/4/8/16/30 min cap (replaces fixed 5-min `PAUSE_PROBE_INTERVAL_MS`) |
+| R3 | `degradationFallback.ts` | `pickLocalFallback()` picks the largest local Ollama tag when cloud chain exhausts |
+| R4 | `preflightCostProjector.ts` | `projectRunCost()` quadratic-growth estimate; `exceedsBudget()` vs `cfg.maxCostUsd` |
+| R5 | `autoResumeDecision.ts` | auto-resume / notify-only / skip based on snapshot age + transcript length |
+| R6 | `drainStopPolicy.ts` | first stop = drain, second within 5s = kill |
+| R7 | `subscriberPausePolicy.ts` | pause when WS subscriber count drops to 0 |
+| R8 | `cloneLock.ts` | cross-process `.lock` at `runs/<name>/.lock` with PID+host |
+| R9 | `semanticLoopDetector.ts` | Jaccard pairwise sim over last K turns; halts after 3 consecutive detections |
+| R10 | `modelHealthTracker.ts` | sliding-window success rate; degraded when <50% over ≥5 samples |
+| R11 | `repairJson.ts` | strict → fence-strip → balanced-span → soft-repairs (trailing commas, smart quotes, missing braces) |
+| R12 | `preflightDiskCheck.ts` | `fs.statfs` wrapper; default refuses runs with <2 GB free |
+| R13 | `memoryPressure.ts` | heap-usage ratio → ok/throttle/pause |
+| R14 | `memoryStorePruner.ts` | bounded by age (90d) + count (200) |
+| R15 | `autoRca.ts` | primary cause + concrete recommendation per error category |
+| R16 | `runHealthScore.ts` | 0–100 score with green/yellow/red buckets |
+| R17 | `errorTaxonomy.ts` | 12-variant `ClassifiedError` (foundation for R1, R2, R10, R15) |
+
+**Wiring waves** (4 commits):
+
+- **Wave 1** — additive / replaces ad-hoc code, no flags: R11 swaps `transcriptSummary.tryParseJson` + `DebateJudgeRunner.parseLooseJson`; R2 wires the exponential probe into `BlackboardRunner`; R8 acquires `.lock` in `Orchestrator.start`, releases in every cleanup path; R12 + R4 preflight at `/api/swarm/start`; R14 prunes on every `appendMemoryEntry`; R15 + R16 populate new `RunSummary.rca` + `RunSummary.healthScore` fields.
+- **Wave 2** — gated by new env flags default OFF: R17 errorTracker accumulates per-run `ClassifiedError` records; R6 drain-on-stop; R5 auto-resume on startup; R13 memory backpressure; R9 loop detector; R7 pause-on-WS-disconnect.
+- **Wave 3** — provider-aware failover: new `promptWithFailover` wrapper layers R1 + R3 + R10. Drop-in for `promptWithRetry` with `FailoverState` + `FailoverConfig` parameters. Wired into `BlackboardRunner` with full per-run state + `/api/tags` discovery. Per-run `cfg.providerFailover` overrides env default.
+- **Wave 4 (post-deferred)** — promotion + coverage: R7 + R13 + R9 lifted from signal-only to actual intervention (workers idle on `subscriberPaused` / `memoryPaused`; loop detector halts after 3 consecutive detections); `promptWithFailoverAuto` thin wrapper extends the failover chain to all 9 non-blackboard runners + 4 helpers (RoundRobin, Council, OW, OW-Deep, DebateJudge, MapReduce, MoA, Stigmergy + dynamicRoleCatalog, propositionDerive, qualityPasses, rubricPrePass). BaselineRunner uses `provider.chat()` directly and is the one remaining uncovered call path.
+
+**New env flags** (`server/src/config.ts`, all default OFF):
+
+- `SWARM_DRAIN_ON_STOP` — first /stop drains, second within 5s kills
+- `SWARM_AUTO_RESUME` — scan + restart recoverable snapshots at startup
+- `SWARM_MEMORY_BACKPRESSURE` — pause workers when heap >90% of `heapTotal`
+- `SWARM_LOOP_DETECTION` — emit warnings + halt after 3 consecutive Jaccard-loop detections
+- `SWARM_PAUSE_ON_DISCONNECT` — pause workers when WS subscriber count drops to 0
+- `SWARM_PROVIDER_FAILOVER` — comma-separated chain (e.g. `"anthropic/claude-haiku-4-5,glm-5.1:cloud"`)
+- `SWARM_DEGRADATION_FALLBACK` — when cloud chain exhausts, fall back to local Ollama tag
+- `SWARM_DEGRADATION_PREFERRED` — comma-separated local tag preferences
+- `SWARM_MODEL_HEALTH_SWAP` — proactive pre-flight swap when active model is degraded
+
+**Per-run override:** `RunConfig.providerFailover` (string[], max 8 entries) wins over the env default. Surfaced as a "Failover chain" input in `SetupForm.tsx`.
+
+**RunSummary additions:** every blackboard run now writes `rca: RcaReport` + `healthScore: RunHealthScore` fields. With all flags off and an empty failover chain, runtime behavior is unchanged.
+
+---
+
+## What landed 2026-05-04 earlier (every prior "deferred" item shipped + multi-tenant + doc cleanup)
 
 A long session that closed every still-deferred item across the project. Net: **1209 → 1848 tests** (~+640), every preset's deferred lever shipped, multi-tenant runs end-to-end (server + client), 8 fully-shipped doc plans archived then deleted.
 

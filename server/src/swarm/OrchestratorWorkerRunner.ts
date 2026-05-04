@@ -12,6 +12,7 @@ import type {
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { selectModelForRole } from "./dynamicModelRoute.js";
 import { defaultRoleForIndex } from "../../../shared/src/topology.js";
 import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
@@ -633,7 +634,8 @@ export class OrchestratorWorkerRunner implements SwarmRunner {
             )
           : undefined;
       // Unit 16: shared retry wrapper.
-      const res = await promptWithRetry(agent, prompt, {
+      // W19 (2026-05-04): swapped to promptWithFailoverAuto for R1 chain.
+      const res = await promptWithFailoverAuto(agent, prompt, {
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
         signal: controller.signal,
         manager: this.opts.manager,

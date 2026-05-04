@@ -12,6 +12,7 @@ import type {
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { promptWithRetry } from "./promptWithRetry.js";
+import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildSeedSummary } from "./runSummary.js";
 import { discussionWriteSummary } from "./discussionWriteSummary.js";
@@ -592,7 +593,7 @@ export class CouncilRunner implements SwarmRunner {
     });
     try {
       const onTokens = ({ promptTokens, responseTokens }: { promptTokens: number; responseTokens: number }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens);
-      const res = await promptWithRetry(lead, prompt, {
+      const res = await promptWithFailoverAuto(lead, prompt, {
         onTokens,
         signal: controller.signal,
         manager: this.opts.manager,
@@ -727,7 +728,7 @@ export class CouncilRunner implements SwarmRunner {
       });
       const ctrl = new AbortController();
       try {
-        const res = await promptWithRetry(agent, prompt, {
+        const res = await promptWithFailoverAuto(agent, prompt, {
           signal: ctrl.signal,
           manager: this.opts.manager,
           agentName: "swarm-read",
@@ -799,7 +800,9 @@ export class CouncilRunner implements SwarmRunner {
 
     try {
       // Unit 16: shared retry wrapper.
-      const res = await promptWithRetry(agent, prompt, {
+      // W19 (2026-05-04): swapped to promptWithFailoverAuto so the
+      // call participates in R1 chain failover when configured.
+      const res = await promptWithFailoverAuto(agent, prompt, {
         signal: controller.signal,
         manager: this.opts.manager,
         // Unit 20: read-only tools for discussion presets.
