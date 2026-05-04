@@ -255,6 +255,52 @@ const Schema = z.object({
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // R1 wiring (2026-05-04): provider failover chain. Comma-separated
+  // model strings (provider-prefixed, e.g.
+  // "anthropic/claude-haiku-4-5,glm-5.1:cloud"). When the active
+  // model hits a quota / auth wall, the runner swaps to the next
+  // model in this list. Default empty (R1 disabled). Per-run
+  // cfg.providerFailover overrides this when set.
+  SWARM_PROVIDER_FAILOVER: z
+    .string()
+    .default("")
+    .transform((v) =>
+      v
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    ),
+  // R3 wiring (2026-05-04): when the cloud failover chain is
+  // exhausted, fall back to a local Ollama model. Default OFF.
+  // Caller's job to ensure the local Ollama install has at least one
+  // model pulled (we discover via /api/tags at run-start).
+  SWARM_DEGRADATION_FALLBACK: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // R3 wiring (2026-05-04): preferred local model order when
+  // degrading. Comma-separated. Empty → pickLocalFallback chooses by
+  // size (largest first). When set, first match wins.
+  SWARM_DEGRADATION_PREFERRED: z
+    .string()
+    .default("")
+    .transform((v) =>
+      v
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    ),
+  // R10 wiring (2026-05-04): proactive model-health swap. When ON,
+  // before each prompt the runner evaluates the active model's
+  // recent success rate (sliding window of 10, threshold 50% over
+  // ≥5 samples). Degraded models are swapped pre-flight so we don't
+  // burn a turn re-confirming what the tracker already knows.
+  // Default OFF — only fires after enough samples have accumulated
+  // anyway; opt-in keeps the legacy "try-anyway" semantics by default.
+  SWARM_MODEL_HEALTH_SWAP: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
 });
 
 const parsed = Schema.parse(process.env);

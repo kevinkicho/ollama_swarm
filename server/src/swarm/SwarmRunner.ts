@@ -144,6 +144,16 @@ export interface RunConfig {
    */
   maxCostUsd?: number;
   /**
+   * W13 wiring (2026-05-04): per-run provider failover chain. When
+   * the active model hits a quota/auth wall, the runner swaps to
+   * the next model in this list. Overrides the env-derived
+   * SWARM_PROVIDER_FAILOVER default. Empty / absent → legacy
+   * "single-model, no failover" behavior. Models are
+   * provider-prefixed strings (e.g. "anthropic/claude-haiku-4-5",
+   * "glm-5.1:cloud", "llama3:8b").
+   */
+  providerFailover?: readonly string[];
+  /**
    * Task #127: when no userDirective is set, run a one-shot
    * goal-generation pre-pass using the planner agent — it inspects
    * the repo and proposes 3-5 ambitious-but-feasible improvements,

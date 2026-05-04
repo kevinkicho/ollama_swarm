@@ -157,6 +157,8 @@ const TEST_FILES = [
   "src/swarm/autoRca.test.ts",
   // 2026-05-04 (R16): per-run health score.
   "src/swarm/runHealthScore.test.ts",
+  // 2026-05-04 (W13/W14/W15): provider-failover wrapper around promptWithRetry.
+  "src/swarm/promptWithFailover.test.ts",
 
   // routes/
   "src/routes/swarm.test.ts",

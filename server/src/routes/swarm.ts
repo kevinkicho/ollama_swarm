@@ -174,6 +174,12 @@ const StartBody = z.object({
   // from authorizing a runaway run; users with legitimately bigger
   // budgets can lift this in the schema after deliberate review.
   maxCostUsd: z.number().positive().max(100).optional(),
+  // W13 wiring (2026-05-04): per-run provider failover chain. When
+  // set, overrides the env-derived SWARM_PROVIDER_FAILOVER list. Each
+  // element is a provider-prefixed model string (e.g.
+  // "anthropic/claude-haiku-4-5", "glm-5.1:cloud"). Capped at 8
+  // entries to keep failover bounded.
+  providerFailover: z.array(z.string().min(1)).max(8).optional(),
   // Task #127: when no userDirective is set, auto-generate one via a
   // pre-pass. Default true (caller can pass false to disable).
   autoGenerateGoals: z.boolean().optional(),
@@ -649,6 +655,8 @@ export function swarmRouter(orch: Orchestrator): Router {
         executeNextAction: parsed.data.executeNextAction,
         tokenBudget: parsed.data.tokenBudget,
         maxCostUsd: parsed.data.maxCostUsd,
+        // W13 wiring: per-run failover chain pass-through.
+        providerFailover: parsed.data.providerFailover,
         autoGenerateGoals: parsed.data.autoGenerateGoals,
         autoStretchReflection: parsed.data.autoStretchReflection,
         verifier: parsed.data.verifier,

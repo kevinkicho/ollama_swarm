@@ -18,6 +18,11 @@ import {
 import { checkMemoryPressure } from "../memoryPressure.js";
 import { detectSemanticLoop } from "../semanticLoopDetector.js";
 import { config as appConfig } from "../../config.js";
+import {
+  promptWithFailover,
+  type FailoverState,
+  type FailoverConfig,
+} from "../promptWithFailover.js";
 import type {
   AgentState,
   SwarmEvent,
@@ -392,6 +397,16 @@ export class BlackboardRunner implements SwarmRunner {
   // size has fully rotated past this point so the same loop doesn't
   // spam the transcript.
   private lastLoopWarningAtTurn = -1;
+  // 2026-05-04 (W13/W14/W15 wiring): per-run failover state. Carries
+  // R10's per-model attempt-history window across calls (so a model's
+  // degradation verdict accumulates within the run). triedModels
+  // lives per-call inside promptWithFailover.
+  private failoverState: FailoverState = { modelHealth: new Map() };
+  // 2026-05-04 (W14 wiring): local Ollama tags discovered at
+  // run-start. Used by R3's pickLocalFallback when the cloud
+  // failover chain exhausts. Empty when discovery failed or
+  // SWARM_DEGRADATION_FALLBACK is off.
+  private localOllamaTags: readonly string[] = [];
   // Task #167: soft-stop state. Set by drain(); workers see this in
   // their poll loop and exit after their current claim commits (no
   // new claims). drainWatcherTimer polls every 2s for "all in-flight
@@ -710,6 +725,20 @@ export class BlackboardRunner implements SwarmRunner {
     // to "stop = hard user-stop" classification unless drain() fires.
     this.wasDrained = false;
     this.terminationReason = undefined;
+    // 2026-05-04 (W7/W13/W14/W15 wiring): clear per-run trackers.
+    this.errorTracker = [];
+    this.failoverState = { modelHealth: new Map() };
+    this.localOllamaTags = [];
+    // 2026-05-04 (W14 wiring): when SWARM_DEGRADATION_FALLBACK is on,
+    // discover local Ollama tags once at run-start so R3's
+    // pickLocalFallback has candidates. Best-effort: discovery
+    // failure just disables R3 silently. The fetch is bounded at
+    // 3 s so a slow Ollama doesn't block run startup.
+    if (appConfig.SWARM_DEGRADATION_FALLBACK) {
+      this.discoverLocalOllamaTags().catch(() => {
+        /* best-effort */
+      });
+    }
     // Unit 31: clear any lingering state-write timer from a prior run.
     // stateWriteInFlight may still be true momentarily if a run was torn
     // down mid-write; that's fine — the flush path handles re-entrancy
@@ -4707,6 +4736,40 @@ export class BlackboardRunner implements SwarmRunner {
     this.capWatchdog.unref?.();
   }
 
+  /** W14 wiring (2026-05-04): one-shot discovery of locally-pulled
+   *  Ollama tags, used by R3's pickLocalFallback when the cloud
+   *  failover chain exhausts. Best-effort: any failure leaves
+   *  localOllamaTags empty, which gracefully disables R3. */
+  private async discoverLocalOllamaTags(): Promise<void> {
+    try {
+      const baseUrl = (this.opts.ollamaBaseUrl ?? "http://127.0.0.1:11434").replace(/\/v1\/?$/, "");
+      const r = await fetch(`${baseUrl}/api/tags`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!r.ok) return;
+      const body = (await r.json()) as { models?: Array<{ name?: string }> };
+      const tags = (body.models ?? [])
+        .map((m) => m.name)
+        .filter((n): n is string => typeof n === "string" && n.length > 0);
+      this.localOllamaTags = tags;
+    } catch {
+      /* discovery failed → R3 stays disabled */
+    }
+  }
+
+  /** R1/R3/R10 wiring (2026-05-04): build the per-call FailoverConfig
+   *  from app cfg + per-run cfg + discovered local tags. Centralized
+   *  so the worker prompt path doesn't repeat assembly logic. */
+  private buildFailoverConfig(): FailoverConfig {
+    const chain = this.active?.providerFailover ?? appConfig.SWARM_PROVIDER_FAILOVER;
+    return {
+      failoverChain: chain,
+      localTags: appConfig.SWARM_DEGRADATION_FALLBACK ? this.localOllamaTags : [],
+      localPreferred: appConfig.SWARM_DEGRADATION_PREFERRED,
+      enableHealthSwap: appConfig.SWARM_MODEL_HEALTH_SWAP,
+    };
+  }
+
   /** R13 wiring (2026-05-04): sample heap, emit a one-shot warning on
    *  crossing into "throttle" or "pause" levels. Idempotent within a
    *  level — only logs again when the level changes. */
@@ -5089,7 +5152,14 @@ export class BlackboardRunner implements SwarmRunner {
       // callback preserves the prior surface — system message + agent
       // status flip to "retrying" with attempt counter — so the UI and
       // event log read identically to the pre-Unit-16 behavior.
-      const res = await promptWithRetry(agent, prompt, {
+      // 2026-05-04 (W13/W14/W15 wiring): wrap in promptWithFailover
+      // so quota/auth walls swap models per cfg.SWARM_PROVIDER_FAILOVER
+      // (R1), R10 health-swaps degraded models pre-flight, and R3
+      // falls back to a local Ollama tag when the cloud chain
+      // exhausts. With all three flags off + chain empty, this
+      // reduces to a plain promptWithRetry call.
+      const failoverCfg = this.buildFailoverConfig();
+      const res = await promptWithFailover(agent, prompt, {
         signal: controller.signal,
         // Task #166: streamed-prompt path. Per-chunk SSE timeout
         // replaces the blocking 5-min headersTimeout that was wedging
@@ -5196,6 +5266,18 @@ export class BlackboardRunner implements SwarmRunner {
             retryReason: reasonShort,
           });
         },
+      }, this.failoverState, failoverCfg, (info) => {
+        // W13/W14/W15 wiring: surface every model swap to the
+        // transcript so users can see when failover fired. Also feed
+        // the classified error into errorTracker so the run-end RCA
+        // counts it.
+        this.errorTracker.push(info.classified);
+        if (this.errorTracker.length > BlackboardRunner.MAX_TRACKED_ERRORS) {
+          this.errorTracker.shift();
+        }
+        this.appendSystem(
+          `[${agent.id}] failover: ${info.fromModel} → ${info.toModel} (${info.reason})`,
+        );
       });
       const text = this.extractText(res) ?? "";
       this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
