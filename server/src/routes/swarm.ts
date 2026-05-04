@@ -11,6 +11,7 @@ import { deriveCloneDir, RepoService } from "../services/RepoService.js";
 import { normalizeWslPath } from "../services/pathNormalize.js";
 import { preflightDiskCheck } from "../swarm/preflightDiskCheck.js";
 import { projectRunCost, exceedsBudget } from "../swarm/preflightCostProjector.js";
+import { decideStopAction } from "../swarm/drainStopPolicy.js";
 
 // `parentPath` is the folder the user points at on the setup form; the repo
 // is cloned into `<parentPath>/<repo-name-from-URL>`. The older name
@@ -249,6 +250,11 @@ export function swarmRouter(orch: Orchestrator): Router {
   // cloneStats) don't touch orchestrator state, so a fresh instance is
   // fine and avoids threading orch.opts.repos through.
   const repos = new RepoService();
+  // R6 wiring (2026-05-04): tracks the wall-clock of the last
+  // /api/swarm/stop click for the double-click-within-5s detection.
+  // null until the first click; carried inside the closure so it's
+  // bounded to the router's lifetime.
+  let lastStopClickAt: number | null = null;
 
   r.get("/status", (_req: Request, res: Response) => {
     res.json(orch.status());
@@ -671,10 +677,27 @@ export function swarmRouter(orch: Orchestrator): Router {
     }
   });
 
+  // R6 wiring (2026-05-04): when SWARM_DRAIN_ON_STOP is ON, the
+  // first /stop click drains (finish current turn); a second click
+  // within 5s hard-kills. Tracked at module scope per-process — a
+  // single user clicking Stop twice is the canonical case. With the
+  // flag OFF (default), every click hard-kills as before.
   r.post("/stop", async (_req: Request, res: Response) => {
     try {
+      if (config.SWARM_DRAIN_ON_STOP) {
+        const decision = decideStopAction({
+          now: Date.now(),
+          lastStopAt: lastStopClickAt,
+        });
+        lastStopClickAt = Date.now();
+        if (decision.action === "drain") {
+          await orch.drain();
+          res.json({ ok: true, action: "drain", reason: decision.reason });
+          return;
+        }
+      }
       await orch.stop();
-      res.json({ ok: true });
+      res.json({ ok: true, action: "kill" });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: msg });

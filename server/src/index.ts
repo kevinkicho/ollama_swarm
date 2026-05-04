@@ -29,6 +29,8 @@ import {
   OPENAI_MODELS as FALLBACK_OPENAI,
   OLLAMA_CLOUD_MODELS,
 } from "../../shared/src/providers.js";
+import { decideAutoResume } from "./swarm/autoResumeDecision.js";
+import { loadSnapshot } from "./services/RunStatePersister.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // server/src/index.ts (dev) or server/dist/index.js (built) -> up two to root.
@@ -70,6 +72,28 @@ const orchestrator = new Orchestrator({
   // T-Item-MultiTenant Phase 4 (2026-05-04): cap on concurrent runs.
   maxConcurrentRuns: config.SWARM_MAX_CONCURRENT_RUNS,
 });
+
+// R7 wiring (2026-05-04): pause-on-disconnect signal. When the flag
+// is on, surface subscriber-count changes as a system message so the
+// run's transcript records "all browsers closed" / "browser opened
+// again" boundaries. Actual auto-pause/resume requires deeper
+// orchestrator integration (adding a 'paused-due-to-disconnect'
+// state alongside the existing quota-pause); first cut is signal-only.
+if (config.SWARM_PAUSE_ON_DISCONNECT) {
+  broadcaster.setSubscriberChangeListener((change) => {
+    if (change.action === "no-change") return;
+    broadcaster.broadcast({
+      type: "transcript_append",
+      runId: change.runId,
+      entry: {
+        id: `subscriber-${Date.now()}`,
+        role: "system",
+        ts: Date.now(),
+        text: `[subscribers] ${change.reason}`,
+      },
+    });
+  });
+}
 
 broadcaster.attach(wss, (ws) => {
   // Send current status snapshot so new clients are caught up immediately.
@@ -357,5 +381,57 @@ void reclaimOrphans(repoRoot)
       console.log(`  ollama: ${config.OLLAMA_BASE_URL}`);
       console.log(`  default model: ${config.DEFAULT_MODEL}`);
       console.log(`  event log: ${eventLogger.path}`);
+      // R5 wiring (2026-05-04): auto-resume mid-flight runs from disk.
+      // Fire-and-forget — startup must complete even if resume fails.
+      if (config.SWARM_AUTO_RESUME) {
+        void autoResumeOnStartup();
+      }
     });
   });
+
+/** R5 wiring (2026-05-04): scan recoverable snapshots, ask the policy
+ *  helper which ones are safe to auto-restart, and kick recoverRun
+ *  for each. Best-effort: any per-run failure is logged + skipped so
+ *  one bad snapshot can't block the others. */
+async function autoResumeOnStartup(): Promise<void> {
+  let recoverable;
+  try {
+    recoverable = orchestrator.listRecoverableRuns();
+  } catch (err) {
+    console.error("  auto-resume: listRecoverableRuns failed:", err);
+    return;
+  }
+  if (recoverable.length === 0) {
+    console.log("  auto-resume: no recoverable snapshots");
+    return;
+  }
+  const now = Date.now();
+  let resumed = 0;
+  let skipped = 0;
+  for (const r of recoverable) {
+    const snap = loadSnapshot(r.stateFilePath);
+    if (!snap) {
+      skipped += 1;
+      continue;
+    }
+    const decision = decideAutoResume(snap, { now });
+    if (decision.action !== "auto-resume") {
+      skipped += 1;
+      continue;
+    }
+    try {
+      const out = await orchestrator.recoverRun(r.runId);
+      console.log(
+        `  auto-resume: kicked recovery for runId=${r.runId} → newRunId=${out.newRunId}`,
+      );
+      resumed += 1;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`  auto-resume: failed for runId=${r.runId}: ${msg}`);
+      skipped += 1;
+    }
+  }
+  console.log(
+    `  auto-resume: ${resumed} resumed, ${skipped} skipped of ${recoverable.length} recoverable`,
+  );
+}

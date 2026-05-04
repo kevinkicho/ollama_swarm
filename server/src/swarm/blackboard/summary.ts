@@ -262,6 +262,11 @@ export interface BuildSummaryInput {
   v2QueueState?: RunSummary["v2QueueState"];
   // Phase 4a of #243: pass-through to RunSummary.topology.
   topology?: RunSummary["topology"];
+  // R17 wiring (2026-05-04): structured errors collected during the
+  // run. Empty array → RCA generates a degraded (but still useful)
+  // report from timing + commit signals only. Populated → RCA gets
+  // per-category counts and produces a sharper recommendation.
+  errors?: readonly import("../errorTaxonomy.js").ClassifiedError[];
 }
 
 export function buildSummary(input: BuildSummaryInput): RunSummary {
@@ -329,10 +334,9 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     // Phase 4a of #243: topology passthrough.
     topology: input.topology,
     // R15 + R16 wiring (2026-05-04): post-build RCA + health score.
-    // Computed from the same inputs we already have — no separate
-    // tracker required for this first cut. Future improvement: feed
-    // a ClassifiedError[] from a run-level error tracker so RCA can
-    // categorize failures (the helpers accept errors=[] cleanly).
+    // R17 wiring (2026-05-04): now consumes input.errors when the
+    // runner has collected ClassifiedError records — falls back to []
+    // when not, matching the pre-tracker first cut.
     rca: buildRca({ input, stopReason, wallClockMs }),
     healthScore: buildHealthScore({ input, wallClockMs }),
   };
@@ -355,7 +359,7 @@ function buildRca(args: {
   return generateRca({
     finalPhase,
     terminationReason: input.terminationReason ?? input.crashMessage ?? null,
-    errors: [],
+    errors: input.errors ?? [],
     commitsLanded: input.board.committed,
     tier: input.maxTierReached ?? 0,
     durationMs: wallClockMs,
@@ -391,7 +395,7 @@ function buildHealthScore(args: {
     durationMs: wallClockMs,
     wallClockCapMs: 0,
     commitsCap: 0,
-    errorCount: 0,
+    errorCount: input.errors?.length ?? 0,
   });
 }
 

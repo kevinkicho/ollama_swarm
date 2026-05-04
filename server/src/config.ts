@@ -210,6 +210,51 @@ const Schema = z.object({
       const n = Number.parseInt(v, 10);
       return Number.isInteger(n) && n >= 1 && n <= 10_000 ? n : 300;
     }),
+  // R6 wiring (2026-05-04): drain-by-default stop policy. When ON,
+  // the first /api/swarm/stop click drains (finish current turn);
+  // a second click within 5s hard-kills. Default OFF preserves the
+  // legacy single-click hard-kill behavior.
+  SWARM_DRAIN_ON_STOP: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // R5 wiring (2026-05-04): auto-resume on server startup. When ON,
+  // the server scans known parent dirs at boot and auto-resumes
+  // recoverable snapshots that meet the freshness/size policy.
+  // Default OFF — auto-restoring runs the user wanted abandoned is
+  // surprising; user opt-in only.
+  SWARM_AUTO_RESUME: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // R13 wiring (2026-05-04): memory-pressure backpressure. When ON,
+  // BlackboardRunner samples heap on each cap-tick and flips a
+  // "memory-paused" flag when usage crosses 90% of heapTotal.
+  // Default OFF — the cap watchdog already handles wall-clock; this
+  // adds heap as an extra signal for very long runs.
+  SWARM_MEMORY_BACKPRESSURE: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // R9 wiring (2026-05-04): semantic loop detector. When ON, the
+  // runner evaluates Jaccard similarity over the last K agent turns
+  // after each turn; on detected loop, injects a "you're going in
+  // circles" amendment. Default OFF — false positives on tight
+  // technical discussion (where vocabulary repeats by design) are
+  // still a real risk; opt in once you've calibrated the threshold.
+  SWARM_LOOP_DETECTION: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // R7 wiring (2026-05-04): pause-on-WS-disconnect. When ON, the
+  // run pauses new dispatch when its last WS subscriber drops; on
+  // first reconnect, resumes (unless quota / user-paused). Default
+  // OFF — could break headless / cron callers that legitimately
+  // never connect a browser.
+  SWARM_PAUSE_ON_DISCONNECT: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
 });
 
 const parsed = Schema.parse(process.env);

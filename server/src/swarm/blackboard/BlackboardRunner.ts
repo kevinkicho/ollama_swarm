@@ -10,6 +10,14 @@ import {
   nextQuotaProbeDelayMs,
   formatProbeDelayLabel,
 } from "../quotaProbeBackoff.js";
+import {
+  classifyError,
+  type ClassifiedError,
+  type ErrorCategory,
+} from "../errorTaxonomy.js";
+import { checkMemoryPressure } from "../memoryPressure.js";
+import { detectSemanticLoop } from "../semanticLoopDetector.js";
+import { config as appConfig } from "../../config.js";
 import type {
   AgentState,
   SwarmEvent,
@@ -370,6 +378,20 @@ export class BlackboardRunner implements SwarmRunner {
   // probe back-off. Reset to 0 on exitPause so a fresh wall starts the
   // back-off curve from 1 min again.
   private pauseProbeAttempt = 0;
+  // 2026-05-04 (R17 wiring): per-run ClassifiedError tracker. Bounded
+  // at MAX_TRACKED_ERRORS so a runaway loop can't blow memory; oldest
+  // dropped first. Surfaces in the run summary's RCA + healthScore.
+  private errorTracker: ClassifiedError[] = [];
+  private static readonly MAX_TRACKED_ERRORS = 200;
+  // 2026-05-04 (R13 wiring): tracks the last memory-pressure level we
+  // emitted a warning for, so we one-shot per crossing instead of
+  // logging the same warning every 5s.
+  private lastMemoryPressureLevel: "ok" | "throttle" | "pause" = "ok";
+  // 2026-05-04 (R9 wiring): turn count at which we last emitted a
+  // loop-detector warning. -1 = never. Re-emit only after the window
+  // size has fully rotated past this point so the same loop doesn't
+  // spam the transcript.
+  private lastLoopWarningAtTurn = -1;
   // Task #167: soft-stop state. Set by drain(); workers see this in
   // their poll loop and exit after their current claim commits (no
   // new claims). drainWatcherTimer polls every 2s for "all in-flight
@@ -1004,8 +1026,13 @@ export class BlackboardRunner implements SwarmRunner {
       // instead of "crash" (which previously caused user-stop runs
       // to mis-show stopReason="crash" + write a crash snapshot).
       if (this.stopping) {
+        // R17 wiring: classify the abort with causeHint=user-stop so RCA
+        // doesn't mis-categorize it as a network/timeout failure.
+        this.recordError(err, { causeHint: "user-stop" });
         this.appendSystem(`Run halted: ${msg}`);
       } else {
+        // R17 wiring: classify the crash for the run-end RCA report.
+        this.recordError(err);
         errored = true;
         crashMessage = msg;
         this.opts.emit({ type: "error", message: `blackboard run failed: ${crashMessage}` });
@@ -3995,6 +4022,8 @@ export class BlackboardRunner implements SwarmRunner {
       void probeRes;
       probeOk = true;
     } catch (err) {
+      // R17 wiring: each failed probe is itself a quota-class error.
+      this.recordError(err, { causeHint: "quota" });
       const msg = err instanceof Error ? err.message : String(err);
       const nextDelayLabel = formatProbeDelayLabel(nextQuotaProbeDelayMs(this.pauseProbeAttempt));
       this.appendSystem(`[quota-probe] still walled (${msg.slice(0, 120)}). Next probe in ${nextDelayLabel}.`);
@@ -4388,6 +4417,9 @@ export class BlackboardRunner implements SwarmRunner {
       },
       // Phase 4a of #243: topology passthrough.
       topology: cfg.topology,
+      // R17 wiring: surface the per-run ClassifiedError records so
+      // buildRca/buildHealthScore can categorize failures.
+      errors: this.errorTracker,
     });
 
     // Unit 49: dual write — per-run timestamped file (never overwrites
@@ -4662,8 +4694,37 @@ export class BlackboardRunner implements SwarmRunner {
       // checkAndApplyCaps does the full work: tick accumulator
       // advance + cap-reason resolution + abort propagation.
       this.checkAndApplyCaps();
+      // R13 wiring (2026-05-04): cheap heap-pressure sample on every
+      // tick. Behind cfg.SWARM_MEMORY_BACKPRESSURE so the default
+      // path stays unaffected. Emits a single transcript warning per
+      // level crossing — doesn't auto-pause workers (that requires
+      // deeper integration with the worker poll loops; R13 first cut
+      // is signal-only).
+      if (appConfig.SWARM_MEMORY_BACKPRESSURE) {
+        this.checkMemoryPressureTick();
+      }
     }, 5_000);
     this.capWatchdog.unref?.();
+  }
+
+  /** R13 wiring (2026-05-04): sample heap, emit a one-shot warning on
+   *  crossing into "throttle" or "pause" levels. Idempotent within a
+   *  level — only logs again when the level changes. */
+  private checkMemoryPressureTick(): void {
+    const v = checkMemoryPressure();
+    if (v.level === this.lastMemoryPressureLevel) return;
+    if (v.level === "pause") {
+      this.appendSystem(
+        `[memory] heap pressure CRITICAL (${(v.ratio * 100).toFixed(0)}% of ${(v.limitBytes / 1024 / 1024).toFixed(0)} MB) — consider raising --max-old-space-size or reducing the run.`,
+      );
+    } else if (v.level === "throttle") {
+      this.appendSystem(
+        `[memory] heap pressure HIGH (${(v.ratio * 100).toFixed(0)}% of ${(v.limitBytes / 1024 / 1024).toFixed(0)} MB) — GC may slow incoming prompts.`,
+      );
+    }
+    // Only update on transitions away from "ok" (so dropping back to
+    // ok will reset the flag and let a re-crossing fire again).
+    this.lastMemoryPressureLevel = v.level;
   }
 
   // T198c (2026-05-04): adaptive worker pool sizing — log-only watchdog.
@@ -5182,6 +5243,29 @@ export class BlackboardRunner implements SwarmRunner {
     this.opts.emit({ type: "transcript_append", entry });
   }
 
+  /** R17 wiring (2026-05-04): classify a thrown error + push to the
+   *  per-run errorTracker. Bounded at MAX_TRACKED_ERRORS — drops
+   *  oldest when full so a runaway-error run can't blow memory. The
+   *  causeHint lets callers override message-pattern matching when
+   *  they have authoritative context (e.g. "user-stop" when an abort
+   *  was triggered by the stop endpoint, not a watchdog). */
+  private recordError(
+    err: unknown,
+    opts: { causeHint?: ErrorCategory; statusCode?: number } = {},
+  ): ClassifiedError {
+    const message = err instanceof Error ? err.message : String(err);
+    const classified = classifyError({
+      message,
+      statusCode: opts.statusCode,
+      causeHint: opts.causeHint,
+    });
+    this.errorTracker.push(classified);
+    if (this.errorTracker.length > BlackboardRunner.MAX_TRACKED_ERRORS) {
+      this.errorTracker.shift();
+    }
+    return classified;
+  }
+
   /** #299: returns the active directive with any mid-run user
    *  amendments appended. Helper used everywhere a planner-tier
    *  prompt reads userDirective so HITL nudges take effect at the
@@ -5236,6 +5320,41 @@ export class BlackboardRunner implements SwarmRunner {
     };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
+    // R9 wiring (2026-05-04): semantic-loop check after every agent
+    // turn. Behind cfg.SWARM_LOOP_DETECTION so the default path is
+    // unaffected. On detected loop: inject a one-shot system message
+    // (idempotent — `loopWarningEmittedAt` is bumped per-detection
+    // and only re-emits after the window has fully turned over).
+    if (appConfig.SWARM_LOOP_DETECTION) {
+      this.maybeEmitLoopWarning();
+    }
+  }
+
+  /** R9 wiring (2026-05-04): pull last-K agent texts from the
+   *  transcript, evaluate Jaccard similarity, emit a one-shot
+   *  amendment when the run looks stuck in a loop. Idempotent within
+   *  a window — re-fires only after the window has completely
+   *  rotated past the last warning. */
+  private maybeEmitLoopWarning(): void {
+    const agentTexts = this.transcript
+      .filter((e) => e.role === "agent" && typeof e.text === "string")
+      .map((e) => e.text as string);
+    const verdict = detectSemanticLoop({ recentTurns: agentTexts });
+    if (!verdict.inLoop) return;
+    // Idempotent: only emit once per "window worth" of turns. The
+    // tracker stores the transcript length when we last warned;
+    // a new warning requires `windowSize` more turns to have
+    // happened since.
+    if (
+      this.lastLoopWarningAtTurn >= 0 &&
+      agentTexts.length - this.lastLoopWarningAtTurn < verdict.windowSize
+    ) {
+      return;
+    }
+    this.lastLoopWarningAtTurn = agentTexts.length;
+    this.appendSystem(
+      `[loop-detector] ${verdict.reason} — consider changing tactic, splitting the todo, or wrapping up.`,
+    );
   }
 
   private setPhase(phase: SwarmPhase): void {

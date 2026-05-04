@@ -2,6 +2,17 @@ import type { WebSocket, WebSocketServer } from "ws";
 import type { IncomingMessage } from "node:http";
 import type { SwarmEvent } from "../types.js";
 import type { EventLogger } from "./eventLogger.js";
+import { decideSubscriberAction, type SubscriberAction } from "../swarm/subscriberPausePolicy.js";
+
+export interface SubscriberChange {
+  runId: string;
+  prevCount: number;
+  newCount: number;
+  action: SubscriberAction;
+  reason: string;
+}
+
+export type SubscriberChangeListener = (change: SubscriberChange) => void;
 
 export class Broadcaster {
   // T-Item-MultiTenant Phase 2 (2026-05-04): per-client filter. When
@@ -11,10 +22,26 @@ export class Broadcaster {
   // client receives ALL events (legacy "all events" behavior; the
   // existing single-page UI uses this).
   private clients = new Map<WebSocket, { runIdFilter?: string }>();
+  // R7 wiring (2026-05-04): per-runId subscriber count + a listener
+  // hook so callers (orchestrator, transcript appender) can react to
+  // "last subscriber dropped" / "first subscriber arrived" events.
+  // Empty when no listener is registered → no overhead in the
+  // legacy unfiltered path.
+  private runIdCounts = new Map<string, number>();
+  private subscriberChangeListener?: SubscriberChangeListener;
 
   // Logger is optional so tests can construct a Broadcaster without touching
   // the filesystem. In prod the server always wires one up.
   constructor(private readonly logger?: EventLogger) {}
+
+  /** R7 wiring: register a listener that fires when a runId's
+   *  subscriber count crosses the 0 ↔ N+ boundary. The orchestrator
+   *  uses this to decide pause/resume. Caller pre-checks the cfg
+   *  flag — Broadcaster fires unconditionally when a listener is
+   *  attached. */
+  setSubscriberChangeListener(listener: SubscriberChangeListener | undefined): void {
+    this.subscriberChangeListener = listener;
+  }
 
   attach(wss: WebSocketServer, onConnect: (ws: WebSocket) => void): void {
     wss.on("connection", (ws, req) => {
@@ -24,10 +51,48 @@ export class Broadcaster {
       // open is safe; client just sees all events).
       const filter = parseRunIdFromUpgrade(req);
       this.clients.set(ws, filter ? { runIdFilter: filter } : {});
-      ws.on("close", () => this.clients.delete(ws));
-      ws.on("error", () => this.clients.delete(ws));
+      if (filter) this.bumpRunIdCount(filter, +1);
+      ws.on("close", () => {
+        this.clients.delete(ws);
+        if (filter) this.bumpRunIdCount(filter, -1);
+      });
+      ws.on("error", () => {
+        this.clients.delete(ws);
+        if (filter) this.bumpRunIdCount(filter, -1);
+      });
       onConnect(ws);
     });
+  }
+
+  /** R7 wiring: adjust the per-runId subscriber count + fire the
+   *  listener (if any) on cross-zero transitions. */
+  private bumpRunIdCount(runId: string, delta: number): void {
+    const prev = this.runIdCounts.get(runId) ?? 0;
+    const next = Math.max(0, prev + delta);
+    if (next === 0) this.runIdCounts.delete(runId);
+    else this.runIdCounts.set(runId, next);
+    if (!this.subscriberChangeListener) return;
+    // Caller-side pause/resume state is unknown to the broadcaster —
+    // pass false defaults; caller can refine if it tracks them.
+    const decision = decideSubscriberAction({
+      prevCount: prev,
+      newCount: next,
+      pausedDueToDisconnect: false,
+      pausedDueToOther: false,
+    });
+    this.subscriberChangeListener({
+      runId,
+      prevCount: prev,
+      newCount: next,
+      action: decision.action,
+      reason: decision.reason,
+    });
+  }
+
+  /** R7 wiring: read-only access to the current per-runId subscriber
+   *  count, for diagnostics + tests. */
+  getSubscriberCount(runId: string): number {
+    return this.runIdCounts.get(runId) ?? 0;
   }
 
   // send() is for per-client replay to a newly-connected socket. We do NOT
