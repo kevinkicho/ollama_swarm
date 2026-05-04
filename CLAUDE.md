@@ -24,3 +24,27 @@ This file is auto-loaded into every session. Keep it short; link out for depth.
 ## Where memory lives
 
 User-level memory at `~/.claude/projects/-mnt-c-Users-kevin-Desktop-ollama-swarm/memory/` is auto-loaded into context. The `MEMORY.md` index there is the table of contents.
+
+## Crash recovery (session checkpoint)
+
+Sessions crash frequently. Two layers preserve in-progress state:
+
+**Automatic (opencode plugin):** The `SessionCheckpointPlugin` at
+`~/.config/opencode/plugins/session-checkpoint.ts` hooks into session
+lifecycle events (`session.created`, `session.idle`, `session.error`,
+`tool.execute.after`, `file.edited`) and automatically writes
+`session-checkpoint.json` + `session-checkpoint.md` to `.opencode/`
+in the project root (also mirrors to the `.claude/projects/` memory
+directory for backward compat). On crash (SIGTERM/SIGINT/beforeExit),
+it writes immediately. On session start, it marks the previous session
+as `crashed` and injects the checkpoint into the new session via a
+`noReply` prompt. The `opencode.json` instructions list includes
+`.opencode/session-checkpoint.md` so it's auto-loaded into context.
+
+**Manual fallback:** During complex work, after each significant step
+(file edit, test run, commit), also update
+`.opencode/session-checkpoint.md` with: current task, done steps, next
+steps, blocked items, partial state. On session start, if that file
+exists with status "crashed", read it and offer to resume. This is
+lightweight — not a replacement for `docs/active-work.md` (which tracks
+durable queued/shipped work).

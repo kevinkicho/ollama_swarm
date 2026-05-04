@@ -10,6 +10,50 @@
 
 ## Queued (waiting on user nod or specific trigger)
 
+### Sweep review: results.json commit/health data is all zeros (2026-05-04)
+
+Surfaced during all-presets sweep review. The `results.json` written by the sweep script shows `"commits": 0, "tier": 0, "healthScore": null` for every entry, but the REPORT.md aggregate clearly shows real numbers (9/13/3 commits across blackboard modes). The sweep script likely reads `summary.json` before the blackboard runner has finalized commit counts (race condition: the phase transitions to "completed" but the summary hasn't been re-written yet).
+
+**Fix scope:**
+- Add a brief poll/retry loop in the sweep script when reading `summary.json`: wait up to 5s for `commits > 0` or `healthScore != null` for blackboard runs.
+- Alternatively, read `summary-<iso>.json` (the timestamped final copy) instead of `summary.json`.
+- Verify by re-running a 1-preset sweep against a known-blackboard target.
+
+**Trigger:** explicit user "go fix sweep results capture."
+
+### Sweep review: first sweep (08:09) blackboard completed in 153s with 0 commits (2026-05-04)
+
+The earlier sweep run on 2026-05-04 at 08:09 UTC completed blackboard in only 153s with 0 commits — suspiciously fast. The second sweep (08:24) showed blackboard A taking 1471s with 9 commits under the same config. The 08:09 run then stopped after 1 preset (progress.log ends mid-round-robin). This is likely the same planner JSON-drift bug that was later patched mid-sweep by switching to nemotron.
+
+**Fix scope:**
+- Confirm by inspecting the 08:09 clone's `summary.json` or event log at `runs/_sweep/all-presets-2026-05-04T08-09-03-941Z/`.
+- The planner JSON drift fix (Ollama constrained decoding) should prevent this class of failure; no separate fix needed if that ships.
+- Consider adding a sweep sanity check: if blackboard completes in <5 min with 0 commits, flag it as a probable error rather than "completed."
+
+**Trigger:** after planner JSON drift fix ships; this becomes a verification step.
+
+### Sweep review: cap wall-clock times for discussion presets (2026-05-04)
+
+The sweep uses a uniform `cap=1200000ms` (20 min) across all presets, but discussion presets complete much faster: map-reduce in 62–153s, stigmergy in 84–122s, debate-judge in 153–245s. A 20-min cap wastes up to ~17 theoretical minutes of idle time if a preset hangs. Shorter per-preset caps (e.g., 5 min for map-reduce/stigmergy, 10 min for council/OW-deep) would provide faster failure detection and tighter cost controls.
+
+**Fix scope:**
+- Add per-preset default wall-clock caps in the sweep script (or in `RunConfig` defaults).
+- Conservative approach: `Math.min(requestedCap, presetDefaultCap * 1.5)` so user overrides still work.
+- Discussion preset suggested caps: map-reduce 5m, stigmergy 5m, debate-judge 8m, round-robin 8m, council 10m, OW 12m, role-diff 12m, OW-deep 15m, moa 15m.
+
+**Trigger:** explicit user "go tighten preset caps" — cost optimization, not a bug.
+
+### Sweep review: MoA cloning overhead (2026-05-04)
+
+MoA presets consistently show 31s of cloning time before the discussing phase starts (visible in sweep-stdout-2.log as the gap between `phase=cloning` and `phase=discussing`). Other presets clone in ~1–2s. This adds up across the 4 MoA runs in the sweep (~2 min of pure overhead). Likely MoA triggers a larger clone or a slower clone path.
+
+**Fix scope:**
+- Investigate why MoA cloning takes 31s vs 1–2s for other presets. Check if MoA's `repoUrl` or `parentPath` differs, or if something in the MoA setup blocks the clone.
+- If the 31s is inherent to MoA's multi-model proposer setup, document it as a known overhead in cost projections.
+- Consider git `--depth=1` or `--single-branch` for the clone if not already used.
+
+**Trigger:** explicit user "investigate MoA clone overhead" — optimization, not blocking.
+
 ### Drop obsolete port:0 from agent UI + transcript (2026-05-04)
 
 After E3 Phase 5 (2026-04-29) removed the opencode subprocess, agents no longer have per-agent HTTP ports — the `port` field on AgentState is always `0`. But the legacy UI surfaces still display it: agent cards render `:0`, and the system transcript message at run-start says `"3/3 agents ready on ports 0, 0, 0"` which is misleading + noisy.

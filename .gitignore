@@ -17,6 +17,7 @@ logs/
 # need to live in the README. The screenshots/ folder itself is local-only.
 screenshots/
 .claude/
+.opencode/
 *.tsbuildinfo
 # SWE-Bench Lite dataset (~5MB, not licensed for redistribution)
 eval/swe-bench/dataset/
