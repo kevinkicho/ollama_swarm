@@ -131,11 +131,10 @@ test("buildAggregatorPrompt — variant 'actionability' adds actionability bias"
 // calls" which structural matching catches well.
 
 test("MoaRunner.runOne — emits markStatus(thinking) before the prompt", () => {
-  // Find the runOne method body
   const runOneMatch = MOA_RUNNER_SRC.match(/private async runOne[\s\S]*?\n  \}/);
   assert.ok(runOneMatch, "runOne private method must exist");
   assert.match(runOneMatch[0], /markStatus\([^)]*"thinking"\)/, "must mark thinking before prompt");
-  assert.match(runOneMatch[0], /emitAgentState\([^,]+,\s*"thinking"/, "must emitAgentState(thinking) so WS sees the transition");
+  assert.match(runOneMatch[0], /emitAgent(Status|State)\([^,]+,\s*"thinking"/, "must emit agent state/thinking so WS sees the transition");
 });
 
 test("MoaRunner.runOne — emits markStatus(ready) in a finally block (fires even on prompt error)", () => {
@@ -144,25 +143,22 @@ test("MoaRunner.runOne — emits markStatus(ready) in a finally block (fires eve
   const body = runOneMatch[0];
   assert.match(body, /try\s*\{/, "must use try/...");
   assert.match(body, /\}\s*finally\s*\{/, "...finally block so ready state always fires");
-  // Make sure the ready emission is inside the finally, not after the try
   const finallyMatch = body.match(/finally\s*\{[\s\S]*?\}\s*$/);
   assert.ok(finallyMatch, "finally block must exist");
   assert.match(finallyMatch[0], /markStatus\([^)]*"ready"\)/, "finally must mark ready");
-  assert.match(finallyMatch[0], /emitAgentState\([^,]+,\s*"ready"\)/, "finally must emitAgentState(ready)");
+  assert.match(finallyMatch[0], /emitAgent(Status|State)\([^,]+,\s*"ready"\)/, "finally must emit agent state/ready");
 });
 
 test("MoaRunner — emitAgentState helper exists with the right signature", () => {
-  // Helper takes (agent, status, thinkingSince?) and emits the
-  // {type:"agent_state", agent: AgentState} shape per server/src/types.ts.
   assert.match(
     MOA_RUNNER_SRC,
-    /private emitAgentState\(agent: Agent, status: "thinking" \| "ready", thinkingSince\?:/,
-    "emitAgentState signature must match the convention used by other runners",
+    /private emitAgent(Status|State)\(agent: Agent, status: "thinking" \| "ready"(, thinkingSince\?:)?/,
+    "emitAgentState/Status signature must match the convention used by other runners",
   );
   assert.match(
     MOA_RUNNER_SRC,
-    /type: "agent_state",\s*agent:\s*\{/,
-    "emitAgentState must emit the {type, agent} shape (not flat fields)",
+    /this\.emitAgentState\(\{/,
+    "emitAgentStatus must delegate to this.emitAgentState (base class) with an AgentState object",
   );
 });
 
