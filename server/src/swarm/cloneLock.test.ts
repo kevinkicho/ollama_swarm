@@ -92,9 +92,11 @@ test("tryAcquireLock — fresh dir → acquired", () => {
   try {
     const got = tryAcquireLock({ clonePath: dir, runId: "run-1" });
     assert.equal(got.acquired, true);
-    assert.ok(existsSync(path.join(dir, LOCK_FILE_NAME)));
+    const lockPath = `${dir}.lock`;
+    assert.ok(existsSync(lockPath));
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    rmSync(`${dir}.lock`, { force: true });
   }
 });
 
@@ -117,10 +119,10 @@ test("tryAcquireLock — second call from same process → blocked (pid is alive
 
 test("tryAcquireLock — stale lock (pid dead) → reclaimed", () => {
   const dir = tmpCloneDir();
+  const lockPath = `${dir}.lock`;
   try {
-    // Plant a stale lock owned by a "dead" pid.
     writeFileSync(
-      path.join(dir, LOCK_FILE_NAME),
+      lockPath,
       JSON.stringify({
         pid: 9_999_999,
         runId: "old-run",
@@ -134,19 +136,21 @@ test("tryAcquireLock — stale lock (pid dead) → reclaimed", () => {
       isPidAlive: () => false,
     });
     assert.equal(got.acquired, true);
-    const raw = readFileSync(path.join(dir, LOCK_FILE_NAME), "utf8");
+    const raw = readFileSync(lockPath, "utf8");
     const parsed = parseLockFile(raw);
     assert.equal(parsed?.runId, "new-run");
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    rmSync(lockPath, { force: true });
   }
 });
 
 test("tryAcquireLock — cross-host lock NOT reclaimed even if pid 'dead'", () => {
   const dir = tmpCloneDir();
+  const lockPath = `${dir}.lock`;
   try {
     writeFileSync(
-      path.join(dir, LOCK_FILE_NAME),
+      lockPath,
       JSON.stringify({
         pid: 1,
         runId: "remote-run",
@@ -163,42 +167,48 @@ test("tryAcquireLock — cross-host lock NOT reclaimed even if pid 'dead'", () =
     assert.equal(got.heldBy?.hostname, "some-other-host");
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    rmSync(lockPath, { force: true });
   }
 });
 
 test("tryAcquireLock — garbage lock contents → reclaimed", () => {
   const dir = tmpCloneDir();
+  const lockPath = `${dir}.lock`;
   try {
-    writeFileSync(path.join(dir, LOCK_FILE_NAME), "not json at all");
+    writeFileSync(lockPath, "not json at all");
     const got = tryAcquireLock({
       clonePath: dir,
       runId: "fresh",
-      isPidAlive: () => true, // doesn't matter, lock is unparseable
+      isPidAlive: () => true,
     });
     assert.equal(got.acquired, true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    rmSync(lockPath, { force: true });
   }
 });
 
 test("releaseLock — owner releases successfully", () => {
   const dir = tmpCloneDir();
+  const lockPath = `${dir}.lock`;
   try {
     const got = tryAcquireLock({ clonePath: dir, runId: "run-1" });
     assert.equal(got.acquired, true);
     const rel = releaseLock({ clonePath: dir, runId: "run-1" });
     assert.equal(rel.released, true);
-    assert.equal(existsSync(path.join(dir, LOCK_FILE_NAME)), false);
+    assert.equal(existsSync(lockPath), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    rmSync(lockPath, { force: true });
   }
 });
 
 test("releaseLock — refuses to delete foreign lock", () => {
   const dir = tmpCloneDir();
+  const lockPath = `${dir}.lock`;
   try {
     writeFileSync(
-      path.join(dir, LOCK_FILE_NAME),
+      lockPath,
       JSON.stringify({
         pid: 99999,
         runId: "other-run",
@@ -208,9 +218,10 @@ test("releaseLock — refuses to delete foreign lock", () => {
     );
     const rel = releaseLock({ clonePath: dir, runId: "our-run" });
     assert.equal(rel.released, false);
-    assert.equal(existsSync(path.join(dir, LOCK_FILE_NAME)), true);
+    assert.equal(existsSync(lockPath), true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    rmSync(lockPath, { force: true });
   }
 });
 
