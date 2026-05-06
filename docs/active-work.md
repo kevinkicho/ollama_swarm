@@ -7,6 +7,24 @@
 
 ## Done recently
 
+### 2026-05-06 — 7 combination plans + runner refactor + pipeline preset (commit e96d002)
+
+**Completed:** All 7 swarm combination plans implemented, all runners refactored, pipeline preset live end-to-end:
+
+- ✅ Plan 1: `debateAuditor.ts` — PRO/CON/JUDGE debate replaces single-agent audit in blackboard
+- ✅ Plan 2: `mapReduceCouncilMapper.ts` — draft→revise per mapper slice for richer reducer inputs
+- ✅ Plan 3: `pheromoneHeatmap.ts` — cross-preset file-attention signal from stigmergy → blackboard workers
+- ✅ Plan 4: `PipelineRunner.ts` + `pipelinePhases.ts` — chains sub-runs with transcript/deliverable piping
+- ✅ Plan 5: `postRoundCritique.ts` — one agent reviews each round for the next (RR/Council/MR/OW)
+- ✅ Plan 6: Worker dispositions — rotating Critic/Synthesizer/Gap-finder/Builder in blackboard
+- ✅ Plan 7: `postSynthesisCritique.ts` — critic revises synthesis for gaps (Council/MR/OW)
+
+**Runner refactor:** All 8 discussion runners now extend `DiscussionRunnerBase` (~120 LOC shared). Per-runner prompt helpers + deliverable writers extracted into standalone modules. BlackboardRunner: 5606 → 818 LOC (22 extracted modules).
+
+**Route schema:** `"pipeline"` preset + 10 new StartBody fields wired through API. All combination feature toggles in web UI (PresetExtras.tsx).
+
+**Verified:** postRoundCritique working in round-robin run (Round 1/2 Critique system messages observed). Server + web TypeScript clean. Unit tests: 2618 pass, 6 pre-existing failures.
+
 ### 2026-05-04 — MultiWriterState integration across all discussion presets (Phase 3.2 complete)
 
 **Completed:** All 9 discussion presets now support multi-writer mode with proposal collection and reconciliation:
