@@ -1150,6 +1150,45 @@ export function swarmRouter(orch: Orchestrator): Router {
     res.json(timeline);
   });
 
+  // Direction 5: persistent memory store CRUD.
+  r.get("/memory-store", async (req: Request, res: Response) => {
+    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
+    if (!clonePath) {
+      res.status(400).json({ error: "clonePath required" });
+      return;
+    }
+    const { loadMemoryStore } = await import("../memory/MemoryStore.js");
+    const store = await loadMemoryStore(clonePath);
+    res.json({ entries: store.snapshot() });
+  });
+
+  r.post("/memory-store", async (req: Request, res: Response) => {
+    const { key, value, tags, clonePath } = req.body as { key?: string; value?: string; tags?: string[]; clonePath?: string };
+    if (!key || !value || !clonePath) {
+      res.status(400).json({ error: "key, value, and clonePath required" });
+      return;
+    }
+    const { loadMemoryStore } = await import("../memory/MemoryStore.js");
+    const store = await loadMemoryStore(clonePath);
+    store.store(key, value, tags, "user");
+    await store.flush();
+    res.json({ ok: true, key });
+  });
+
+  r.delete("/memory-store/:key", async (req: Request, res: Response) => {
+    const key = typeof req.params.key === "string" ? req.params.key : String(req.params.key);
+    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
+    if (!clonePath) {
+      res.status(400).json({ error: "clonePath required" });
+      return;
+    }
+    const { loadMemoryStore } = await import("../memory/MemoryStore.js");
+    const store = await loadMemoryStore(clonePath);
+    const deleted = store.forget(key);
+    await store.flush();
+    res.json({ ok: true, deleted });
+  });
+
   return r;
 }
 
