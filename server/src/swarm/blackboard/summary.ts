@@ -205,6 +205,10 @@ export interface RunSummary {
   // compat with summaries written before this lands.
   rca?: import("../autoRca.js").RcaReport;
   healthScore?: import("../runHealthScore.js").RunHealthScore;
+  // Direction 1: run outcome scoring. Multi-dimensional rubric grade
+  // appended at run-end by outcomeScorer. Optional for back-compat
+  // with summaries written before this lands.
+  outcome?: import("../outcomeScorer.js").RunOutcomeSummary;
 }
 
 export interface SummaryConfig {

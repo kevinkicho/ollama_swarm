@@ -20,6 +20,7 @@
 
 import { runEndReflection } from "./runEndReflection.js";
 import { formatPortReleaseLine } from "./runSummary.js";
+import { scoreRun, appendOutcomeHistory, outcomeToMarkdown, type RunOutcome } from "./outcomeScorer.js";
 import type { Agent, AgentManager } from "../services/AgentManager.js";
 import type { RunConfig } from "./SwarmRunner.js";
 import type { SwarmPhase } from "../types.js";
@@ -49,10 +50,22 @@ export interface CloseOutOpts {
   manager: AgentManager;
   appendSystem: (text: string) => void;
   setPhase: (phase: SwarmPhase) => void;
-  /** writeSummary callback — fired AFTER reflection but BEFORE killAll.
-   *  Caller-owned because it touches private fields. */
+  /** writeSummary callback — fired AFTER reflection + outcome scoring but
+   *  BEFORE killAll. Caller-owned because it touches private fields. */
   writeSummary: () => Promise<void>;
   hooks: CloseOutHooks;
+  /** Transcript entries at run-end (for outcome scoring context). */
+  transcript?: Array<{ text: string; role: string }>;
+  /** Final deliverable text (synthesis or summary). If absent, scoring
+   *  uses the last transcript entries as context. */
+  deliverableText?: string;
+  /** Wall-clock ms for the outcome record. */
+  wallClockMs?: number;
+  /** Emit function for the outcome_scored event. */
+  emitOutcome?: (outcome: RunOutcome) => void;
+  /** Token totals from run-end summary for outcome record. */
+  totalPromptTokens?: number;
+  totalResponseTokens?: number;
 }
 
 /** Shared finally close-out. Calling pattern in each runner:
@@ -99,6 +112,51 @@ export async function runDiscussionCloseOut(opts: CloseOutOpts): Promise<void> {
       }).catch(() => {
         // Reflection failure is non-fatal — runs still complete.
       });
+    }
+  }
+
+  // 1.5 Outcome scoring (Direction 1 Phase 1). Fires when cfg.rubricGrading
+  // is enabled and the run completed naturally (no crash/stop).
+  if (
+    !opts.crashMessage &&
+    !opts.stopping &&
+    opts.cfg.runId &&
+    opts.cfg.rubricGrading &&
+    opts.hooks.pickReflectionAgent
+  ) {
+    const agent = opts.hooks.pickReflectionAgent(opts.manager);
+    if (agent) {
+      const runOutput =
+        opts.deliverableText ??
+        (opts.transcript && opts.transcript.length > 0
+          ? opts.transcript
+              .filter((e) => e.role === "agent")
+              .slice(-3)
+              .map((e) => e.text)
+              .join("\n\n")
+          : "");
+      if (runOutput) {
+        const outcome = await scoreRun({
+          agent,
+          preset: opts.cfg.preset as import("./SwarmRunner.js").PresetId,
+          runId: opts.cfg.runId,
+          clonePath: opts.cfg.localPath,
+          userDirective: opts.cfg.userDirective ?? "",
+          runOutput,
+          agentCount: opts.cfg.agentCount,
+          rounds: opts.round,
+          wallClockMs: opts.wallClockMs ?? 0,
+          totalPromptTokens: opts.totalPromptTokens ?? 0,
+          totalResponseTokens: opts.totalResponseTokens ?? 0,
+          log: (msg) => opts.appendSystem(msg),
+        }).catch(() => null);
+
+        if (outcome) {
+          opts.emitOutcome?.(outcome);
+          await appendOutcomeHistory(opts.cfg.localPath, outcome).catch(() => {});
+          opts.appendSystem(outcomeToMarkdown(outcome));
+        }
+      }
     }
   }
 

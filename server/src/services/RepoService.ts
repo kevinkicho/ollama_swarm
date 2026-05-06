@@ -238,6 +238,9 @@ export class RepoService {
       "blackboard-state.json",
       "summary.json",
       "summary-*.json",
+      "# Direction 1 + 6: outcome history + checkpoints",
+      ".swarm-data/",
+      ".swarm-checkpoints/",
     ];
     let existing = "";
     try {

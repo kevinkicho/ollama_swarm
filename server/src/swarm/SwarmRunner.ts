@@ -573,7 +573,14 @@ export interface RunConfig {
    *  scored 7/10 on correctness but 3/10 on completeness" so users
    *  know which dimension to retry. +1 judge call per run. Default
    *  OFF. Honored via the shared `rubricGrading.ts` helpers. */
-  rubricGrading?: boolean;
+   rubricGrading?: boolean;
+  /** Direction 6: per-actor-turn checkpoint persistence. When set,
+   *  a checkpoint is written to <clone>/.swarm-checkpoints/<runId>/
+   *  after each agent's turn completes. Enables timeline scrubbing
+   *  and replay-from-checkpoint. Default OFF — adds one disk write
+   *  per agent turn. Honored by DiscussionRunnerBase (all 8 discussion
+   *  presets); blackboard deferred. */
+  checkpointing?: boolean;
   /** Q3 (2026-05-04): inter-agent @-mention contracts. When set, the
    *  runner extracts ```mention``` envelopes from agent output +
    *  surfaces them in the targeted agent's next prompt as "Pending

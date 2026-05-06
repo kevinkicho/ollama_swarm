@@ -137,10 +137,12 @@ export class MoaRunner extends DiscussionRunnerBase {
         setPhase: (p) => this.setPhase(p),
         writeSummary: () => this.writeSummary(cfg, crashMessage),
         hooks: {
-          // null = MoA-style opt-out (no reflection)
           pickReflectionAgent: () => null,
           shouldSetCompleted: (current) => current !== "failed",
         },
+        transcript: this.transcript,
+        emitOutcome: (outcome: any) => this.opts.emit({ type: "outcome_scored" as const, runId: outcome.runId, score: outcome.score, verdict: outcome.verdict, dimensions: outcome.dimensions }),
+        wallClockMs: this.startedAt ? Date.now() - this.startedAt : 0,
       });
     }
   }

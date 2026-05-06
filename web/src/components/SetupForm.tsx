@@ -403,6 +403,7 @@ export function SetupForm() {
   const [workerDispositions, setWorkerDispositions] = useState(false);
   const [debateAudit, setDebateAudit] = useState(false);
   const [councilMappers, setCouncilMappers] = useState(false);
+  const [rubricGrading, setRubricGrading] = useState(false);
   const [uiUrl, setUiUrl] = useState("");
   // #296: pre-commit verify command for blackboard worker pipeline.
   // Empty = legacy commit-without-verify behavior.
@@ -737,6 +738,8 @@ export function SetupForm() {
           pipeMaxEntries: 20,
         };
       }
+
+      if (rubricGrading) presetSpecific.rubricGrading = true;
 
       const res = await fetch("/api/swarm/start", {
         method: "POST",
@@ -1112,6 +1115,8 @@ export function SetupForm() {
             setDebateAudit={setDebateAudit}
             councilMappers={councilMappers}
             setCouncilMappers={setCouncilMappers}
+            rubricGrading={rubricGrading}
+            setRubricGrading={setRubricGrading}
           />
         </Section>
 

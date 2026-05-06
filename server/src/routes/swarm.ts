@@ -260,6 +260,8 @@ const StartBody = z.object({
     pipeMode: z.enum(["transcript", "deliverable", "both"]).optional(),
     pipeMaxEntries: z.number().int().min(1).max(100).optional(),
   }).optional(),
+  rubricGrading: z.boolean().optional(),
+  checkpointing: z.boolean().optional(),
 });
 
 // 2026-05-02: extended /say body with optional intent tag + targetAgent.
@@ -718,6 +720,8 @@ export function swarmRouter(orch: Orchestrator): Router {
         pheromoneHotseed: parsed.data.pheromoneHotseed,
         pheromoneHotFiles: parsed.data.pheromoneHotFiles,
         pipeline: parsed.data.pipeline,
+        rubricGrading: parsed.data.rubricGrading,
+        checkpointing: parsed.data.checkpointing,
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {
@@ -1065,6 +1069,68 @@ export function swarmRouter(orch: Orchestrator): Router {
         ? { primaryEntries, otherParentEntries, otherClones }
         : {}),
     });
+  });
+
+  // Direction 1 Phase 2: outcome history + preset recommendation.
+  r.get("/outcome/stats", async (req: Request, res: Response) => {
+    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
+    if (!clonePath) {
+      res.status(400).json({ error: "clonePath required" });
+      return;
+    }
+    const { readOutcomeHistory: readHistory, computeStats: computeOutcomeStats } = await import("../swarm/outcomeHistory.js");
+    const outcomes = await readHistory(clonePath);
+    const stats = computeOutcomeStats(outcomes);
+    const result: Record<string, unknown> = {};
+    for (const [preset, stat] of stats) {
+      result[preset] = stat;
+    }
+    res.json({ outcomes: outcomes.length, stats: result });
+  });
+
+  r.get("/outcome/recommend", async (req: Request, res: Response) => {
+    const directive = typeof req.query.directive === "string" ? req.query.directive : "";
+    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
+    if (!directive) {
+      res.status(400).json({ error: "directive required" });
+      return;
+    }
+    const { recommendPreset: recommend, readOutcomeHistory: readHistory } = await import("../swarm/outcomeHistory.js");
+    const { suggestAdaptiveParams } = await import("../swarm/adaptiveParams.js");
+    const outcomes = clonePath ? await readHistory(clonePath) : [];
+    const recommendation = recommend(directive, outcomes);
+    const adaptive = suggestAdaptiveParams(recommendation.preset as import("../swarm/SwarmRunner.js").PresetId, outcomes);
+    res.json({ ...recommendation, adaptiveParams: adaptive });
+  });
+
+  // Direction 6: checkpoint listing + read.
+  r.get("/checkpoints/:runId", async (req: Request, res: Response) => {
+    const runId = typeof req.params.runId === "string" ? req.params.runId : String(req.params.runId);
+    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
+    if (!clonePath) {
+      res.status(400).json({ error: "clonePath query parameter required" });
+      return;
+    }
+    const { listCheckpoints } = await import("../swarm/checkpoint.js");
+    const checkpoints = await listCheckpoints(clonePath, runId);
+    res.json({ runId, checkpoints });
+  });
+
+  r.get("/checkpoints/:runId/:fileName", async (req: Request, res: Response) => {
+    const runId = typeof req.params.runId === "string" ? req.params.runId : String(req.params.runId);
+    const fileName = typeof req.params.fileName === "string" ? req.params.fileName : String(req.params.fileName);
+    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
+    if (!clonePath) {
+      res.status(400).json({ error: "clonePath query parameter required" });
+      return;
+    }
+    const { readCheckpoint } = await import("../swarm/checkpoint.js");
+    const checkpoint = await readCheckpoint(clonePath, runId, fileName);
+    if (!checkpoint) {
+      res.status(404).json({ error: "Checkpoint not found" });
+      return;
+    }
+    res.json(checkpoint);
   });
 
   return r;

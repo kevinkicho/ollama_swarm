@@ -226,6 +226,8 @@ export function PresetAdvancedSettings(props: {
   setDebateAudit: (v: boolean) => void;
   councilMappers: boolean;
   setCouncilMappers: (v: boolean) => void;
+  rubricGrading: boolean;
+  setRubricGrading: (v: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const {
@@ -288,6 +290,8 @@ export function PresetAdvancedSettings(props: {
     setDebateAudit,
     councilMappers,
     setCouncilMappers,
+    rubricGrading,
+    setRubricGrading,
   } = props;
 
   // T199 (2026-05-04): expanded the gate to include round-robin,
@@ -512,6 +516,15 @@ export function PresetAdvancedSettings(props: {
                   <p className="text-xs text-ink-400">The default pipeline runs: Explore (stigmergy) → Decompose (orchestrator-worker) → Validate (debate-judge). Each phase feeds its transcript + deliverable to the next.</p>
                 </div>
               ) : null}
+              <div className="space-y-1.5 pt-1">
+                <div className="text-xs uppercase tracking-wide text-ink-500 font-semibold pt-1">Quality</div>
+                <ToggleField
+                  label="Rubric grading"
+                  checked={rubricGrading}
+                  onChange={setRubricGrading}
+                  hint="After the run, an external judge scores output against a rubric (correctness, completeness, etc.). +1 judge call."
+                />
+              </div>
             </div>
           ) : null}
         </div>

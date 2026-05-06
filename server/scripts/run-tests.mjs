@@ -88,6 +88,7 @@ const TEST_FILES = [
   "src/swarm/hunkRag.test.ts",
   "src/swarm/presetRouter.test.ts",
   "src/swarm/rubricGrading.test.ts",
+  "src/swarm/outcomeScorer.test.ts",
   "src/services/AgentManager.killAgent.test.ts",
   "src/services/Orchestrator.multiTenant.test.ts",
   "src/ws/broadcast.test.ts",

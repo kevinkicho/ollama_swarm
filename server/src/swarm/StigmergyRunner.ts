@@ -272,6 +272,9 @@ export class StigmergyRunner extends DiscussionRunnerBase {
           buildReflectionContext: (s) =>
             `Stigmergy preset · ${cfg.agentCount} explorers · ran ${s.round}/${cfg.rounds} rounds${s.earlyStopDetail ? ` · early-stop: ${s.earlyStopDetail}` : ""}`,
         },
+        transcript: this.transcript,
+        emitOutcome: (outcome: any) => this.opts.emit({ type: "outcome_scored" as const, runId: outcome.runId, score: outcome.score, verdict: outcome.verdict, dimensions: outcome.dimensions }),
+        wallClockMs: this.startedAt ? Date.now() - this.startedAt : 0,
       });
     }
   }

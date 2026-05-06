@@ -341,6 +341,9 @@ export class OrchestratorWorkerRunner extends DiscussionRunnerBase {
           buildReflectionContext: (s) =>
             `Orchestrator-worker preset · ${cfg.agentCount} agents (1 lead + workers) · ran ${s.round}/${cfg.rounds} cycles${s.earlyStopDetail ? ` · early-stop: ${s.earlyStopDetail}` : ""}`,
         },
+        transcript: this.transcript,
+        emitOutcome: (outcome: any) => this.opts.emit({ type: "outcome_scored" as const, runId: outcome.runId, score: outcome.score, verdict: outcome.verdict, dimensions: outcome.dimensions }),
+        wallClockMs: this.startedAt ? Date.now() - this.startedAt : 0,
       });
     }
   }

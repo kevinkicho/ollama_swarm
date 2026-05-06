@@ -150,5 +150,13 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
         topology: ev.topology,
       });
       break;
+    case "outcome_scored":
+      s.appendEntry({
+        id: `outcome-${ev.runId}-${Date.now()}`,
+        role: "system",
+        text: `Run outcome: ${ev.verdict.toUpperCase()} · Score: ${ev.score.toFixed(1)}/10`,
+        ts: Date.now(),
+      });
+      break;
   }
 }

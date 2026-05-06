@@ -31,6 +31,7 @@ import { retryEmptyResponse } from "./promptAndExtract.js";
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import { getAgentAddendum } from "../../../shared/src/topology.js";
 import { describeSdkError } from "./sdkError.js";
+import { buildCheckpoint, writeCheckpoint } from "./checkpoint.js";
 
 export interface CloneSpawnResult {
   destPath: string;
@@ -378,6 +379,21 @@ export abstract class DiscussionRunnerBase {
         status: "ready",
         lastMessageAt: entry.ts,
       });
+
+      // Direction 6: checkpoint after each agent turn (when configured)
+      if (this.active?.runId && this.active?.checkpointing) {
+        const ckpt = buildCheckpoint(
+          this.active.runId,
+          this.phase,
+          this.round,
+          agent.index,
+          this.transcript,
+          this.opts.manager.toStates(),
+          this.active,
+        );
+        writeCheckpoint(this.active.localPath, ckpt).catch(() => {});
+      }
+
       return text;
     } catch (err) {
       const msg = watchdog.getAbortReason() ?? describeSdkError(err);

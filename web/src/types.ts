@@ -379,11 +379,16 @@ export type SwarmEvent =
       clonePath: string;
       agentCount: number;
       rounds: number;
-      // Phase 4b of #243: topology event payload mirrors the run_config
-      // snapshot so SwarmView's hydration on page-refresh sees the same
-      // shape as the live event-driven path.
       topology?: import("../../shared/src/topology").Topology;
-    };
+    }
+  // Direction 1 Phase 1: emitted after rubric grading completes at run-end.
+  | {
+      type: "outcome_scored";
+      runId: string;
+      score: number;
+      verdict: "ship-quality" | "needs-revision" | "fundamentally-flawed";
+      dimensions: Array<{ id: string; label: string; score: number; note: string }>;
+    }
 
 // Shared shape returned by GET /api/swarm/preflight. Drives both the
 // inline PreflightPreview under the Parent folder field AND the

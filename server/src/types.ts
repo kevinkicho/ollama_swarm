@@ -289,7 +289,15 @@ export type SwarmEventBody =
       clonePath: string;
       agentCount: number;
       rounds: number;
-    };
+    }
+  // Direction 1 Phase 1: emitted after outcome scoring completes at run-end.
+  | {
+      type: "outcome_scored";
+      runId: string;
+      score: number;
+      verdict: "ship-quality" | "needs-revision" | "fundamentally-flawed";
+      dimensions: Array<{ id: string; label: string; score: number; note: string }>;
+    }
 
 // T-Item-MultiTenant Phase 1 (2026-05-04): the public SwarmEvent type
 // intersects every variant with `{ runId?: string }` so consumers can
