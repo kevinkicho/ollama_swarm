@@ -1133,6 +1133,23 @@ export function swarmRouter(orch: Orchestrator): Router {
     res.json(checkpoint);
   });
 
+  // Direction 6 Phase 2: event timeline.
+  r.get("/timeline/:runId", async (req: Request, res: Response) => {
+    const runId = typeof req.params.runId === "string" ? req.params.runId : String(req.params.runId);
+    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
+    if (!clonePath) {
+      res.status(400).json({ error: "clonePath query parameter required" });
+      return;
+    }
+    const { getTimeline } = await import("../swarm/timeline.js");
+    const timeline = await getTimeline(clonePath, runId);
+    if (!timeline) {
+      res.status(404).json({ error: "No event log found for this run" });
+      return;
+    }
+    res.json(timeline);
+  });
+
   return r;
 }
 
