@@ -1,25 +1,35 @@
 import { randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
 import path from "node:path";
+import {
+  runPlanner as runPlannerExtracted,
+  runPlannerFallbackForUnmetCriteria as runPlannerFallbackForUnmetCriteriaExtracted,
+  type PlannerContext,
+} from "./plannerRunner.js";
+import {
+  writeCrashSnapshot as writeCrashSnapshotExtracted,
+  boardCounts as boardCountsExtracted,
+  boardListTodos as boardListTodosExtracted,
+  boardSnapshot as boardSnapshotExtracted,
+  boardGetTodo as boardGetTodoExtracted,
+  readExpectedFiles as readExpectedFilesExtracted,
+  resolveSafePath as resolveSafePathExtracted,
+  sleep as sleepExtracted,
+  directiveWithAmendments as directiveWithAmendmentsExtracted,
+  appendAgent as appendAgentExtracted,
+  maybeEmitLoopWarning as maybeEmitLoopWarningExtracted,
+  setPhase as setPhaseExtracted,
+  emitAgentState as emitAgentStateExtracted,
+  extractText as extractTextExtracted,
+  type RunnerUtilContext,
+} from "./runnerUtil.js";
 import type { Agent } from "../../services/AgentManager.js";
 import { AgentManager } from "../../services/AgentManager.js";
 import { toOpenCodeModelRef } from "../../../../shared/src/providers.js";
-import { chatOnce } from "../chatOnce.js";
-import { costCapExceeded } from "../../services/CostTracker.js";
+import { type ClassifiedError, type ErrorCategory } from "../errorTaxonomy.js";
+import { recordError as recordErrorExtracted, type ErrorRecorderContext } from "./errorRecorder.js";
+import { startQueueReaper as startQueueReaperExtracted, stopQueueReaper as stopQueueReaperExtracted, type QueueReaperContext } from "./queueReaper.js";
+
 import {
-  nextQuotaProbeDelayMs,
-  formatProbeDelayLabel,
-} from "../quotaProbeBackoff.js";
-import {
-  classifyError,
-  type ClassifiedError,
-  type ErrorCategory,
-} from "../errorTaxonomy.js";
-import { checkMemoryPressure } from "../memoryPressure.js";
-import { detectSemanticLoop } from "../semanticLoopDetector.js";
-import { config as appConfig } from "../../config.js";
-import {
-  promptWithFailover,
   type FailoverState,
   type FailoverConfig,
 } from "../promptWithFailover.js";
@@ -33,9 +43,7 @@ import type {
 } from "../../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "../SwarmRunner.js";
 // V2 cutover Phase 2c (2026-04-28): Board.ts is unreferenced from
-// BlackboardRunner. The class file still exists for the dev.ts smoke
-// route + the boardCompat type aliases; Phase 2f deletes it once
-// dev.ts is migrated to the V2 queue.
+// BlackboardRunner. See docs/known-limitations.md.
 import { FindingsLog } from "./FindingsLog.js";
 import {
   makeTodoQueueWrappers,
@@ -54,7 +62,6 @@ import {
 } from "./TodoQueue.js";
 import { applyAndCommit } from "./WorkerPipeline.js";
 import {
-  detectHypothesisTag,
   evaluateConflictDispatch,
   updateDeferralTimestamps,
   type CandidateForConflict,
@@ -65,72 +72,115 @@ import { buildJudgePrompt } from "./hunkJudgePrompt.js";
 import { realFilesystemAdapter, realGitAdapter, realVerifyAdapter } from "./v2Adapters.js";
 import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaster.js";
 import {
-  advanceTickAccumulator,
-  checkCaps,
-  createTickAccumulator,
-  WALL_CLOCK_CAP_MS,
   type TickAccumulator,
 } from "./caps.js";
-import { buildCrashSnapshot } from "./crashSnapshot.js";
 import {
   buildStateSnapshot,
   STATE_SNAPSHOT_DEBOUNCE_MS,
+  type BlackboardStateSnapshot,
 } from "./stateSnapshot.js";
-import { shouldRunFinalAudit } from "./finalAudit.js";
-import { promptWithRetry } from "../promptWithRetry.js";
-import { shouldHaltOnQuota, snapshotLifetimeTokens, tokenBudgetExceeded, tokenTracker } from "../../services/ollamaProxy.js";
-import { formatCloneMessage } from "../cloneMessage.js";
+import { StateSnapshotScheduler } from "./stateSnapshotScheduler.js";
+import { buildPerAgentStats as buildPerAgentStatsExtracted, type PerAgentCounters, writeRunSummary as writeRunSummaryExtracted } from "./runSummaryWriter.js";
 import { buildSummary, computeLatencyStats, type PerAgentStat, type RunSummary } from "./summary.js";
 import { applyHunks } from "./applyHunks.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
-import { resolveSafe } from "./resolveSafe.js";
-import { writeFileAtomic } from "./writeFileAtomic.js";
 import { buildPerRunSummaryFileName, buildRunFinishedSummary, findAndReadNewestPriorSummary, formatPortReleaseLine, formatRunFinishedBanner } from "../runSummary.js";
-import type { PriorRunSummary } from "./prompts/planner.js";
-import { summarizeAgentResponse } from "./transcriptSummary.js";
-import { readBlackboardStateSnapshot, type BlackboardStateSnapshot } from "./stateSnapshot.js";
-import { assignWorkerRole } from "./workerRoles.js";
+import type { PriorRunSummary, PlannerSeed } from "./prompts/planner.js";
+
 import {
-  buildPlannerUserPrompt,
-  buildRepairPrompt,
-  parsePlannerResponse,
-  PLANNER_SYSTEM_PROMPT,
-  type PlannerSeed,
-} from "./prompts/planner.js";
-import {
-  buildCouncilContractMergePrompt,
-  buildFirstPassContractRepairPrompt,
-  buildFirstPassContractUserPrompt,
-  buildTierUpPrompt,
-  type CouncilContractDraft,
-  FIRST_PASS_CONTRACT_SYSTEM_PROMPT,
-  parseFirstPassContractResponse,
   type ParsedContract,
 } from "./prompts/firstPassContract.js";
 import {
-  CONTRACT_JSON_SCHEMA,
-  PLANNER_TODOS_JSON_SCHEMA,
-  AUDITOR_VERDICT_JSON_SCHEMA,
-  CRITIC_ENVELOPE_JSON_SCHEMA,
-  WORKER_HUNKS_JSON_SCHEMA,
-  REPLANNER_JSON_SCHEMA,
-} from "./prompts/jsonSchemas.js";
+  runFirstPassContract as runFirstPassContractExtracted,
+  runFirstPassContractOrchestrator as runFirstPassContractOrchestratorExtracted,
+  tryCouncilContract as tryCouncilContractExtracted,
+  finalizeContract as finalizeContractExtracted,
+  buildContract as buildContractExtracted,
+  cloneContract as cloneContractExtracted,
+  tryResumeContract as tryResumeContractExtracted,
+  loadPriorRunSummary as loadPriorRunSummaryExtracted,
+  buildSeed as buildSeedExtracted,
+  type ContractContext,
+} from "./contractBuilder.js";
+// Auditor prompt imports moved to auditorRunner.ts
 import {
-  AUDITOR_SYSTEM_PROMPT,
-  buildAuditorRepairPrompt,
-  buildAuditorUserPrompt,
-  parseAuditorResponse,
+  enqueueReplan as enqueueReplanExtracted,
+  processReplanQueue as processReplanQueueExtracted,
+  replanOne as replanOneExtracted,
+  startReplanWatcher as startReplanWatcherExtracted,
+  stopReplanWatcher as stopReplanWatcherExtracted,
+  type ReplanContext,
+} from "./replanManager.js";
+import {
+  runAuditedExecution as runAuditedExecutionExtracted,
+  allCriteriaResolved as allCriteriaResolvedExtracted,
+  allCriteriaResolvedSnapshot as allCriteriaResolvedSnapshotExtracted,
+  resolvedMaxTiers as resolvedMaxTiersExtracted,
+  recordTierCompletion as recordTierCompletionExtracted,
+  tryPromoteNextTier as tryPromoteNextTierExtracted,
+  largestCriterionIdNumber as largestCriterionIdNumberExtracted,
+  maxAuditInvocations as maxAuditInvocationsExtracted,
+  type TierContext,
+  type TierHistoryEntry,
+} from "./tierRunner.js";
+import {
+  runAuditor as runAuditorExtracted,
+  applyAuditorResult as applyAuditorResultExtracted,
+  type AuditorContext,
   type AuditorResult,
-  type AuditorSeed,
-} from "./prompts/auditor.js";
+} from "./auditorRunner.js";
 import {
-  buildReplannerRepairPrompt,
-  buildReplannerUserPrompt,
-  parseReplannerResponse,
-  REPLANNER_SYSTEM_PROMPT,
-  type ReplannerSeed,
-} from "./prompts/replanner.js";
-import { classifyExpectedFiles } from "./prompts/pathValidation.js";
+  promptAgent as promptAgentExtracted,
+  promptPlannerSafely as promptPlannerSafelyExtracted,
+  markPlannerStatus as markPlannerStatusExtracted,
+  type PromptContext,
+} from "./promptRunner.js";
+import {
+  discoverLocalOllamaTags as discoverLocalOllamaTagsExtracted,
+  buildFailoverConfig as buildFailoverConfigExtracted,
+} from "./failoverDiscovery.js";
+import {
+  injectUser as injectUserExtracted,
+} from "./userInputHandler.js";
+import {
+  status as statusExtracted,
+  type StatusContext,
+} from "./statusBuilder.js";
+import {
+  utilCtx as utilCtxBuilder,
+  lifecycleContext as lifecycleContextBuilder,
+  contractContext as contractContextBuilder,
+  tierContext as tierContextBuilder,
+  plannerContext as plannerContextBuilder,
+  workerContext as workerContextBuilder,
+  promptContext as promptContextBuilder,
+  capContext as capContextBuilder,
+  replanContext as replanContextBuilder,
+  auditorContext as auditorContextBuilder,
+  adaptiveWatchdogCtx as adaptiveWatchdogCtxBuilder,
+  type BlackboardRunnerFields,
+} from "./contextBuilders.js";
+import {
+  startAdaptiveWorkerWatchdog as startAdaptiveWorkerWatchdogExtracted,
+  scaleUpAdaptive as scaleUpAdaptiveExtracted,
+  scaleDownAdaptive as scaleDownAdaptiveExtracted,
+  type AdaptiveWatchdogContext,
+  type AdaptiveWatchdogOpts,
+} from "./adaptiveWorkerWatchdog.js";
+import {
+  isOverWallClockCap as isOverWallClockCapExtracted,
+  checkAndApplyCaps as checkAndApplyCapsExtracted,
+  enterPause as enterPauseExtracted,
+  schedulePauseProbe as schedulePauseProbeExtracted,
+  runPauseProbe as runPauseProbeExtracted,
+  exitPause as exitPauseExtracted,
+  startCapWatchdog as startCapWatchdogExtracted,
+  stopCapWatchdog as stopCapWatchdogExtracted,
+  checkMemoryPressureTick as checkMemoryPressureTickExtracted,
+  setSubscriberPaused as setSubscriberPausedExtracted,
+  type CapContext,
+} from "./capManager.js";
+
 import type { BoardEvent, ExitContract, Todo } from "./types.js";
 import {
   buildHunkRepairPrompt,
@@ -149,13 +199,6 @@ import {
   readDesignMemory,
   renderDesignMemoryForSeed,
 } from "./designMemoryStore.js";
-// Task #164 (refactor): post-completion reflection passes split out.
-import {
-  runStretchGoalReflectionPass,
-  runMemoryDistillationPass,
-  runDesignMemoryUpdatePass,
-  type ReflectionContext,
-} from "./reflectionPasses.js";
 // Task #164 (refactor): goal-list parser split out (used by both
 // goal-generation pre-pass and stretch reflection).
 import { parseGoalList } from "./goalListParser.js";
@@ -165,124 +208,37 @@ import { parseGoalList } from "./goalListParser.js";
 // either feature into the V2 worker is a separate enhancement; revive
 // from git history (1110084 + prior) when needed.
 // Task #164 (refactor): goal-generation pre-pass split out.
-import { runGoalGenerationPrePass } from "./goalGenerationPrePass.js";
 // Task #164 (refactor): auditor seed builder + UI snapshot capture split out.
-import { buildAuditorSeed } from "./auditorSeedBuilder.js";
+// buildAuditorSeed import moved to auditorRunner.ts
 import { truncate } from "./truncate.js";
-import { config } from "../../config.js";
-import { stripAgentText } from "../../../../shared/src/stripAgentText.js";
+
 import { formatChatReceipt } from "../chatReceipt.js";
-import { writeDeliverable, runQualityPasses } from "../deliverable.js";
-import { detectCoverageGaps, formatCoverageGapsMarkdown } from "./coverageGap.js";
-import { detectAntiPatterns, formatAntiPatternsMarkdown } from "./diffCritic.js";
-import { buildPRDescription, type PRCommitEntry, type PRCriterionEntry } from "./prDescription.js";
-import { rollbackTodoCommits } from "./todoRollback.js";
+import { writeBlackboardDeliverable as writeBlackboardDeliverableExtracted } from "./deliverableWriter.js";
+import { runAutoRollbacks as runAutoRollbacksExtracted } from "./autoRollbackOrchestrator.js";
 import {
-  getAgentAddendum,
-  getAgentOllamaOptions,
-  type Topology,
-} from "../../../../shared/src/topology.js";
-import { describeSdkError } from "../sdkError.js";
-import { interruptibleSleep } from "../interruptibleSleep.js";
+  runWorkers as runWorkersExtracted,
+  runWorker as runWorkerExtracted,
+  executeBuildTodo as executeBuildTodoExtracted,
+  maybeSettleHypothesisGroup as maybeSettleHypothesisGroupExtracted,
+  executeWorkerTodo as executeWorkerTodoExtracted,
+  type WorkerContext,
+} from "./workerRunner.js";
+
 import {
   bumpAgentCounter,
-  checkExpectedSymbols,
-  countNewlines,
 } from "./runnerHelpers.js";
 
-// Phase 5c of #243: derive {tag → count} for the planner prompt's
-// AVAILABLE WORKER TAGS section. Empty array when no workers carry a
-// tag — the planner sees no tag block + emits no preferredTag.
-function computeWorkerTagCounts(
-  topology: Topology | undefined,
-): Array<{ tag: string; count: number }> {
-  if (!topology) return [];
-  const counts = new Map<string, number>();
-  for (const a of topology.agents) {
-    if (!a.tag) continue;
-    const t = a.tag.trim();
-    if (t.length === 0) continue;
-    counts.set(t, (counts.get(t) ?? 0) + 1);
-  }
-  return Array.from(counts.entries()).map(([tag, count]) => ({ tag, count }));
-}
-import { checkBuildCommand } from "./buildCommandAllowlist.js";
-// T188 (2026-05-04): code-context preloading via the MoA gather helper.
-import { gatherProposerContext } from "../moaContextGather.js";
-
-// Blackboard preset: planner posts TODOs, workers drain them in a
-// claim/execute loop. Workers produce full-file diffs as JSON; the runner
-// does an optimistic-CAS re-hash at commit time, writes each diff via
-// tmp+rename, then records the commit on the board.
-//
-// Lifecycle: cloning -> spawning -> seeding -> planning -> executing -> completed.
-// Stop at any point aborts in-flight prompts, kills agents, frees ports.
-
-// V2 cutover Phase 2c (2026-04-28): in-progress timeout. The reaper
-// transitions any in-progress todo older than this to failed →
-// replan. Was originally V1's CLAIM_TTL_MS (10 min); kept the same
-// value so behavior carries over.
-const IN_PROGRESS_TTL_MS = 10 * 60_000;
-const REAPER_INTERVAL_MS = 30_000;
-const WORKER_POLL_MS = 2_000;
-const WORKER_POLL_JITTER_MS = 500;
-const WORKER_COOLDOWN_MS = 5_000;
-// Phase 6: after this many replans, stop trying and mark the todo skipped.
-// Keeps a pathological todo from burning planner turns indefinitely.
-const MAX_REPLAN_ATTEMPTS = 3;
-// Fallback sweep in case the event path missed a stale (e.g. replanOne threw).
-const REPLAN_FALLBACK_TICK_MS = 20_000;
-// Backstop on the drain-audit-repeat loop. Without this, a confused auditor
-// could keep proposing todos that workers produce empty diffs for, cycling
-// forever. The cap is now `cfg.rounds` (the setup-form "Rounds" value) —
-// Unit 11 flipped this from a hardcoded 5 so users can turn the knob.
-// `cfg.rounds` is validated to [1, 10] by the Zod schema on the start
-// endpoint. See `maxAuditInvocations` getter below.
-// No "idle silence" cap. OpenCode's SSE /event stream is observed to stay
-// completely silent across session.prompt's entire duration for our setup, so
-// there is no reliable activity signal to gate on. We rely solely on the
-// absolute turn cap below — if a prompt hasn't returned in 20 minutes, abort.
-const ABSOLUTE_MAX_MS = 20 * 60_000;
-// Task #165: pause-on-quota constants. When the proxy detects a
-// persistent Ollama-quota wall, the run pauses (workers idle, no
-// new prompts) and probes upstream on an exponential schedule
-// (1m, 2m, 4m, 8m, 16m, capped at 30m — see quotaProbeBackoff.ts).
-// Resume on first successful probe. Total pause time is capped so
-// a never-clearing wall (plan exhausted till next billing cycle)
-// eventually escalates to a real cap:quota halt rather than
-// pausing forever.
-//
-// 2026-05-04 (R2 wiring): replaced the fixed 5-min PAUSE_PROBE_INTERVAL_MS
-// with nextQuotaProbeDelayMs(attempt). Brief blips clear in 1-2 min
-// without the full 5; long walls don't churn the transcript every 5.
-const MAX_PAUSE_TOTAL_MS = 2 * 60 * 60_000;
-// Task #167: soft-stop deadline. After drain() fires we wait up to
-// this long for in-flight worker claims to commit cleanly; if they
-// don't, escalate to hard stop. 3 minutes covers a normal worker
-// turn (usually <60s on glm/gemma) plus headroom for retries.
-const DRAIN_DEADLINE_MS = 3 * 60_000;
-const DRAIN_WATCHER_INTERVAL_MS = 2_000;
-
-// Issue #3 (2026-04-27): planner-empty model fallback. When the
-// primary planner returns 0 valid todos after parse + grounding +
-// repair, we re-prompt ONCE with a sibling model — same prompt,
-// different model. Hardcoded for the REASONING-tier models we ship;
-// per-run cfg.plannerFallbackModel overrides. Returns undefined for
-// unknown / coding-tier / verifier-tier models so the caller falls
-// through to "no fallback."
-//
-// 2026-04-27 (later): pair is glm-5.1 ↔ nemotron now. deepseek-v4-pro
-// kept as a fallback target FROM either (in case user picks it
-// explicitly), but it's unstable and not chosen as a sibling FOR
-// either. nemotron is the safer fallback for all three.
-const SIBLING_MODELS: Readonly<Record<string, string>> = {
-  "glm-5.1:cloud": "nemotron-3-super:cloud",
-  "nemotron-3-super:cloud": "glm-5.1:cloud",
-  "deepseek-v4-pro:cloud": "nemotron-3-super:cloud",
-};
-function siblingModelFor(model: string): string | undefined {
-  return SIBLING_MODELS[model];
-}
+import {
+  computeWorkerTagCounts,
+} from "./BlackboardRunnerConstants.js";
+import {
+  start as lifecycleStart,
+  planAndExecute as lifecyclePlanAndExecute,
+  drain as lifecycleDrain,
+  checkDrainComplete as lifecycleCheckDrainComplete,
+  stop as lifecycleStop,
+  type LifecycleContext,
+} from "./lifecycleRunner.js";
 
 export class BlackboardRunner implements SwarmRunner {
   private transcript: TranscriptEntry[] = [];
@@ -291,60 +247,30 @@ export class BlackboardRunner implements SwarmRunner {
   private stopping = false;
   private active?: RunConfig;
   private boardBroadcaster: BoardBroadcaster;
-  // V2 cutover Phase 2c-pre (2026-04-28): findings extracted from Board
-  // into their own append-only log. Lives alongside the V2 TodoQueue
-  // (which doesn't model findings) so the auditor + replanner still
-  // have somewhere to emit diagnostic notes.
+  // V2: append-only findings log alongside the V2 TodoQueue.
   private findings: FindingsLog;
-  // Mutation wrappers — bundle queue/findings ops with state-write +
-  // BoardEvent emit + lifecycle callbacks. Replaced inline private
-  // methods so the orchestration is unit-testable in isolation.
+  // Mutation wrappers bundling queue/findings ops with state-write + emit + lifecycle callbacks.
   private wrappers!: TodoQueueWrappers;
-  // Every in-flight prompt registers its AbortController so stop() can abort
-  // them all at once without needing to know about planner vs worker.
+  // In-flight prompt AbortControllers so stop() can abort them all.
   private activeAborts = new Set<AbortController>();
-  // Periodic sweep that fails any in-progress todo idle past
-  // IN_PROGRESS_TTL_MS (~10 min). Sole TTL enforcer.
+  // Periodic sweep: fails in-progress todos idle past IN_PROGRESS_TTL_MS.
   private reaperTimer?: NodeJS.Timeout;
-  // #305 (2026-04-28): run-long cap watchdog. Polls isOverWallClockCap
-  // every 5s and aborts in-flight prompts when the cap fires. Pre-fix,
-  // cap checks only happened at top of audit loop iterations + per
-  // worker-poll; long planner calls (runAuditor + planner-fallback,
-  // 2-3 min each) could elapse 5+ min between checks, blowing the
-  // cap by minutes. Tour v2 blackboard overshot 15-min cap to 20m 14s.
+  // #305: cap watchdog polls isOverWallClockCap every 5s; aborts in-flight prompts on cap fire.
   private capWatchdog?: NodeJS.Timeout;
-  // Phase 6: replan orchestration. Planner is captured during executing and
-  // reused to replan stale todos — see docs/known-limitations.md.
+  // Planner agent captured during executing; reused for replans.
   private planner?: Agent;
-  // Unit 58: dedicated auditor agent. Populated when
-  // cfg.dedicatedAuditor === true; runAuditor routes to this agent
-  // instead of reusing the planner. Undefined otherwise (default
-  // behavior — planner wears the auditor hat).
+  // Dedicated auditor agent (cfg.dedicatedAuditor); undefined = planner wears auditor hat.
   private auditor?: Agent;
-  // #97 (2026-05-01): full worker pool — all spawned workers — so the
-  // self-consistency K-fan-out can route across DIFFERENT agents instead
-  // of running K sequential calls on the SAME agent. Borrowed workers
-  // skip one poll cycle (~3s) of their own work; given the cooperative
-  // board, this is safe.
+  // #97: full worker pool for self-consistency K-fan-out across different agents.
   private workerPool: Agent[] = [];
-  // Unit 59 (59a): per-worker role guidance (correctness / simplicity
-  // / consistency). Populated at spawn time when
-  // cfg.specializedWorkers === true; looked up by agent id when
-  // building each worker prompt. Empty map = default flat-pool
-  // behavior.
+  // #59: per-worker role guidance (correctness/simplicity/consistency).
   private workerRoles = new Map<string, string>();
-  // Unit 62: bounded per-agent rolling latency window for the
-  // page-refresh catch-up snapshot. Same shape + cap (20) as the
-  // client-side store.latency. Populated alongside the
-  // agent_latency_sample WS emit so live and catch-up paths use
-  // identical data.
+  // #62: per-agent rolling latency window for page-refresh catch-up snapshot.
   private recentLatencySamples = new Map<
     string,
     Array<{ ts: number; elapsedMs: number; success: boolean; attempt: number }>
   >();
-  // Unit 62: cloneState payload stashed at clone time so the
-  // page-refresh catch-up returns it. The WS clone_state event still
-  // fires for live observers; this stash is purely for catch-up.
+  // #62: cloneState payload stashed at clone time for page-refresh catch-up.
   private cloneStateForStatus?: {
     alreadyPresent: boolean;
     clonePath: string;
@@ -355,126 +281,58 @@ export class BlackboardRunner implements SwarmRunner {
   private replanPending = new Set<string>();
   private replanRunning = false;
   private replanTickTimer?: NodeJS.Timeout;
-  // Phase 7: hard-cap state. runStartedAt is stamped when executing begins so
-  // the wall-clock cap is scoped to the worker loop (planning time doesn't
-  // count). terminationReason is set by the cap-enforcement helper so the
-  // finally block can tell "user pressed stop" (phase → stopped) apart from
-  // "cap tripped and asked us to stop" (phase → completed, with a transcript
-  // note explaining which cap).
+  // Phase 7: hard-cap state. runStartedAt scopes wall-clock cap to worker loop.
   private runStartedAt?: number;
-  // Task #124: lifetime token total at run-start, snapshotted alongside
-  // runStartedAt. Used by checkAndApplyCaps to compute "tokens consumed
-  // by THIS run" = current lifetime - this baseline.
+  // #124: lifetime token total at run-start for per-run token accounting.
   private tokenBaselineForRun?: number;
-  // Unit 27: host-sleep-proof tick accumulator. Advanced in
-  // checkAndApplyCaps; inter-tick deltas are clamped so an 8-hour host
-  // suspend contributes at most MAX_REASONABLE_TICK_DELTA_MS. Seeded
-  // alongside runStartedAt when the executing phase begins.
+  // #27: host-sleep-proof tick accumulator; deltas clamped so host suspend doesn't blow caps.
   private tickAccumulator?: TickAccumulator;
-  // Task #165: pause-on-quota state. When a persistent quota wall
-  // trips, paused=true; pauseStartedAt stamps when the current
-  // pause began (cleared on resume); totalPausedMs accumulates
-  // across all pause periods in this run; pauseProbeTimer drives
-  // the 5-min upstream probe.
+  // #165: pause-on-quota state.
   private paused = false;
   private pauseStartedAt?: number;
   private totalPausedMs = 0;
   private pauseProbeTimer?: NodeJS.Timeout;
-  // 2026-05-04 (R2 wiring): 0-indexed attempt counter for exponential
-  // probe back-off. Reset to 0 on exitPause so a fresh wall starts the
-  // back-off curve from 1 min again.
+  // R2: exponential probe back-off counter; reset on exitPause.
   private pauseProbeAttempt = 0;
-  // 2026-05-04 (R17 wiring): per-run ClassifiedError tracker. Bounded
-  // at MAX_TRACKED_ERRORS so a runaway loop can't blow memory; oldest
-  // dropped first. Surfaces in the run summary's RCA + healthScore.
+  // R17: per-run ClassifiedError tracker; bounded at MAX_TRACKED_ERRORS.
   private errorTracker: ClassifiedError[] = [];
   private static readonly MAX_TRACKED_ERRORS = 200;
-  // 2026-05-04 (R13 wiring): tracks the last memory-pressure level we
-  // emitted a warning for, so we one-shot per crossing instead of
-  // logging the same warning every 5s.
+  // R13: last emitted memory-pressure level for one-shot warnings.
   private lastMemoryPressureLevel: "ok" | "throttle" | "pause" = "ok";
-  // 2026-05-04 (R9 wiring): turn count at which we last emitted a
-  // loop-detector warning. -1 = never. Re-emit only after the window
-  // size has fully rotated past this point so the same loop doesn't
-  // spam the transcript.
+  // R9: turn of last loop-detector warning; -1 = never.
   private lastLoopWarningAtTurn = -1;
-  // 2026-05-04 (W13/W14/W15 wiring): per-run failover state. Carries
-  // R10's per-model attempt-history window across calls (so a model's
-  // degradation verdict accumulates within the run). triedModels
-  // lives per-call inside promptWithFailover.
+  // W13/W14/W15: per-run failover state carrying per-model attempt-history.
   private failoverState: FailoverState = { modelHealth: new Map() };
-  // 2026-05-04 (W14 wiring): local Ollama tags discovered at
-  // run-start. Used by R3's pickLocalFallback when the cloud
-  // failover chain exhausts. Empty when discovery failed or
-  // SWARM_DEGRADATION_FALLBACK is off.
+  // W14: local Ollama tags discovered at run-start for local fallback.
   private localOllamaTags: readonly string[] = [];
-  // 2026-05-04 (W16 wiring, R7 promotion): subscriber-disconnect
-  // pause flag. Set by setSubscriberPaused(true) when the WS
-  // subscriber count for this run drops to 0 (and SWARM_PAUSE_ON_
-  // DISCONNECT is on). Workers check this alongside this.paused so
-  // they idle without burning prompts when no browser is watching.
-  // Cleared on first reconnect.
+  // W16/R7: subscriber-disconnect pause flag.
   private subscriberPaused = false;
-  // 2026-05-04 (W17 wiring, R13 promotion): heap-pressure pause flag.
-  // Set when checkMemoryPressureTick crosses to "pause" level;
-  // cleared when it drops back to "ok". Workers check it alongside
-  // the other pause flags.
+  // W17/R13: heap-pressure pause flag.
   private memoryPaused = false;
-  // 2026-05-04 (W18 wiring, R9 promotion): consecutive loop
-  // detections. Bumped per detection in the same window; cleared
-  // when a detection-free turn lands. After LOOP_DETECTIONS_TO_HALT
-  // consecutive hits, the runner sets terminationReason and stops
-  // gracefully (vs the wave-2 first-cut behavior which only emitted
-  // a transcript warning).
+  // W18/R9: consecutive loop detections; halts after LOOP_DETECTIONS_TO_HALT.
   private consecutiveLoopDetections = 0;
   private static readonly LOOP_DETECTIONS_TO_HALT = 3;
-  // Task #167: soft-stop state. Set by drain(); workers see this in
-  // their poll loop and exit after their current claim commits (no
-  // new claims). drainWatcherTimer polls every 2s for "all in-flight
-  // settled" and escalates to hard stop once true (or on the deadline).
+  // #167: drain/soft-stop state.
   private draining = false;
   private drainStartedAt?: number;
   private drainWatcherTimer?: NodeJS.Timeout;
-  // Task #168: sticks across drain → stop transition so post-run
-  // gates (memory distillation, stretch reflection) treat a drained
-  // run as a clean exit (the user opted into "finish current work
-  // and stop") rather than as a hard user-stop (which suppresses
-  // both passes). Reset to false on next start().
+  // #168: sticks across drain→stop so post-run gates treat drained as clean exit.
   private wasDrained = false;
   private terminationReason?: string;
-  // Phase 9: run-summary counters. runBootedAt is the wall-clock origin
-  // (stamped in start(), covers cloning+spawning+seeding+planning+executing)
-  // while runStartedAt scopes hard caps. staleEventCount tracks every stale
-  // transition, including ones that get replanned back — the spec's
-  // "staleEvents" metric is the total thrash count, not the residual.
-  // turnsPerAgent counts promptAgent calls, incremented on each invocation
-  // regardless of whether the prompt succeeded.
+  // Phase 9: run-summary counters + per-agent stats.
   private runBootedAt?: number;
   private staleEventCount = 0;
   private turnsPerAgent = new Map<string, number>();
-  // Unit 21: per-agent attempt + retry + latency tallies fed by the
-  // existing onTiming / onRetry callbacks on promptWithRetry. Cleared
-  // alongside turnsPerAgent on each start(). Latency samples are only
-  // pushed when the SDK call SUCCEEDED — failed attempts are usually
-  // headers-timeout aborts that don't measure model speed.
+  // #21: per-agent attempt/retry/latency tallies from promptWithRetry callbacks.
   private attemptsPerAgent = new Map<string, number>();
   private retriesPerAgent = new Map<string, number>();
   private latenciesPerAgent = new Map<string, number[]>();
-  // Task #66: per-agent commit + line attribution. Incremented at
-  // commit-success below applyHunks; the modal renders these as
-  // columns in the per-agent table so users can see who actually
-  // produced code vs who just spent turns thinking.
+  // #66: per-agent commit + line attribution.
   private commitsPerAgent = new Map<string, number>();
   private linesAddedPerAgent = new Map<string, number>();
-  // 2026-05-02 (auto-rollback decisions #1, #2, #6): per-criterion
-  // commit attribution. Populated in executeWorkerTodo after a
-  // successful commit. Read by the auto-rollback orchestrator at
-  // auditor-FALSE verdicts. Read by the deliverable's "Auto-rollbacks
-  // fired" section. Also populates the audit trail.
+  // auto-rollback: per-criterion commit attribution + audit trail.
   private commitsByCriterion = new Map<string, string[]>();
-  // 2026-05-02 (auto-rollback decision #6): audit trail of every
-  // rollback that fired during the run. Surfaced in summary.json +
-  // the deliverable.
+  // auto-rollback audit trail.
   private autoRollbacks: Array<{
     criterionId: string;
     resetTo: string;
@@ -484,103 +342,42 @@ export class BlackboardRunner implements SwarmRunner {
     timestamp: number;
   }> = [];
   private linesRemovedPerAgent = new Map<string, number>();
-  // Task #67: per-agent rejected-work + recovery counters.
+  // #67: per-agent rejected-work + recovery counters.
   private rejectedAttemptsPerAgent = new Map<string, number>();
   private jsonRepairsPerAgent = new Map<string, number>();
   private promptErrorsPerAgent = new Map<string, number>();
-  // Task #163: per-agent token accumulators populated via promptWithRetry's
-  // onTokens hook. Approximate for parallel paths (worker pool, audit
-  // ensemble) since the underlying tracker is global.
+  // #163: per-agent token accumulators from promptWithRetry's onTokens hook.
   private promptTokensPerAgent = new Map<string, number>();
   private responseTokensPerAgent = new Map<string, number>();
-  // Stashed at spawn time so writeRunSummary can still produce per-agent
-  // stats even after AgentManager.killAll() has cleared its own roster
-  // (stop() path runs killAll concurrently with the summary write).
+  // Stashed at spawn time so writeRunSummary works after killAll.
   private agentRoster: Array<{ id: string; index: number }> = [];
-  // Phase 11b: first-pass exit contract. Populated by runFirstPassContract
-  // before the planner posts todos. Undefined when the contract prompt failed
-  // to parse after one repair — in that case the run falls back to the
-  // Phase 10 drain-exit termination (no auditor is invoked).
+  // Phase 11b: first-pass exit contract.
   private contract?: ExitContract;
-  // Unit 57: snapshot of the prior run's blackboard-state.json, captured
-  // at the very TOP of start() BEFORE any setPhase fires. tryResumeContract
-  // reads from THIS cached value, not the live disk file — by the time
-  // tryResumeContract runs, our own setPhase("spawning") has fired
-  // scheduleStateWrite which after ~1 s overwrites the prior snapshot
-  // with our own fresh phase=spawning + no-contract shape. Race window
-  // is ~3-5 s (spawning takes that long for N opencode subprocesses);
-  // caching at the very top sidesteps it entirely.
+  // #57: cached prior run snapshot (read before any setPhase fires).
   private priorSnapshot?: BlackboardStateSnapshot | null;
-  // Phase 11c: drain-audit-repeat bookkeeping. auditInvocations is the
-  // backstop counter compared against maxAuditInvocations (Unit 11: now
-  // derived from cfg.rounds). completionDetail, when set, propagates into
-  // the run summary's stopDetail on the "completed" branch to explain WHY
-  // a contract-driven run chose to stop.
+  // Phase 11c: drain-audit-repeat bookkeeping.
   private auditInvocations = 0;
   private completionDetail?: string;
-  // Stashed by writeRunSummary so status() can hand it to the WS catch-up
-  // on reconnect. Without this, reloading the page after a completed run
-  // would lose the Summary card since run_summary only fires once.
+  // Stashed by writeRunSummary for WS catch-up on reconnect.
   private lastSummary?: RunSummary;
-  // Unit 31: live state-snapshot debounce machinery. Writes
-  // `<clone>/blackboard-state.json` on every phase change, board event, or
-  // contract update. Trailing-edge debounce (see STATE_SNAPSHOT_DEBOUNCE_MS)
-  // so a burst of events coalesces into one write; `stateWriteAgain` flags
-  // that another write is due once the in-flight one finishes, so we never
-  // lose the latest state.
-  private stateWriteTimer?: NodeJS.Timeout;
-  private stateWriteInFlight = false;
-  private stateWriteAgain = false;
-  // Unit 34: ambition ratchet. currentTier starts at 1 once the first
-  // contract is installed; tiersCompleted bumps every time a tier's
-  // criteria all resolve AND the ratchet fires; tierHistory captures a
-  // per-tier summary for cross-run analysis. tierStartedAt is reset on
-  // every successful promotion so each tier has its own wall-clock
-  // delta. tierUpFailures guards against an infinite failed-ratchet
-  // loop — after 3 consecutive parse failures we bail to the normal
-  // termination path.
+  // #31: state-snapshot debounce via StateSnapshotScheduler.
+  private stateSnapshotScheduler: StateSnapshotScheduler;
+  // #34: ambition ratchet tier state.
   private currentTier = 0;
   private tiersCompleted = 0;
-  private tierHistory: Array<{
-    tier: number;
-    missionStatement: string;
-    criteriaTotal: number;
-    criteriaMet: number;
-    criteriaWontDo: number;
-    criteriaUnmet: number;
-    wallClockMs: number;
-    startedAt: number;
-    endedAt: number;
-  }> = [];
+  private tierHistory: TierHistoryEntry[] = [];
   private tierStartedAt?: number;
   private tierUpFailures = 0;
-  // V2 Step 3b: parallel-track state observer. User-action events
-  // (start/stop/drain/pause/resume/fatal) are wired here; internal
-  // events (todos posted, todo committed, auditor returned, tier-up
-  // decision) are NOT yet wired — that's Step 3b.2. checkPhase() is
-  // therefore not yet called against the V1 phase, since the V2
-  // reducer would lag without the internal events. The observer's
-  // current state still ships in the run summary as `v2State` for
-  // telemetry — Kevin can compare V2's user-action-only view to V1's
-  // setPhase trail.
-  // The swarm's todo store. Source of truth for all in-flight work
-  // and per-status counts. Cleared on every start().
+  // V2: parallel-track state observer.
+  // The swarm's todo store — source of truth for all in-flight work.
   private todoQueue = new TodoQueue();
-  // T-Item-3 (2026-05-04): per-hypothesis-group AbortController. When
-  // the FIRST alternative in a group commits successfully, abort()
-  // is called on the rest's controllers + the queue's other
-  // alternatives are marked skipped. Cleared on stop().
+  // #3/Item: per-hypothesis-group AbortController for race settlement.
   private hypothesisGroupAborts = new Map<string, AbortController>();
-  // T-Item-StigBb (2026-05-04): per-file commit count for stigmergy-
-  // style worker dispatch. Incremented on every successful commit's
-  // expectedFiles. Cleared on start(). Used only when
-  // cfg.stigmergyOnBlackboard is set.
+  // Stigmergy: per-file commit count for worker dispatch.
   private fileCommitCounts = new Map<string, number>();
-  // T-Item-HypTimeout (2026-05-04): per-todo first-deferred-at
-  // timestamps for conflict-detection deferral. Maps todoId →
-  // first-deferred-at (ms epoch). Updated by the dispatch logic
-  // when a candidate is deferred OR cleared when one dispatches.
-  // Cleared on start().
+  // Plan 6: per-worker disposition cycle count (critic/synthesizer/gap-finder/builder rotation).
+  private dispositionCycle: Map<string, number> = new Map();
+  // Hypothesis deferral timestamps for conflict detection.
   private hypothesisDeferralTimestamps = new Map<string, number>();
   private v2Observer = new RunStateObserver({
     getCtx: () => {
@@ -601,6 +398,29 @@ export class BlackboardRunner implements SwarmRunner {
   constructor(private readonly opts: RunnerOpts) {
     this.boardBroadcaster = createBoardBroadcaster(this.opts.emit);
     this.findings = new FindingsLog();
+    this.stateSnapshotScheduler = new StateSnapshotScheduler(
+      () => ({
+        phase: this.phase,
+        round: this.round,
+        runBootedAt: this.runBootedAt,
+        runStartedAt: this.runStartedAt,
+        tickAccumulatorActiveElapsedMs: this.tickAccumulator?.activeElapsedMs,
+        active: this.active,
+        contract: this.contract,
+        cloneContract: (c) => this.cloneContract(c),
+        boardSnapshot: () => this.boardSnapshot(),
+        buildPerAgentStats: () => this.buildPerAgentStats(),
+        staleEventCount: this.staleEventCount,
+        auditInvocations: this.auditInvocations,
+        agentRoster: this.agentRoster,
+        terminationReason: this.terminationReason,
+        completionDetail: this.completionDetail,
+        currentTier: this.currentTier,
+        tiersCompleted: this.tiersCompleted,
+        tierHistory: this.tierHistory,
+      }),
+      () => this.active?.localPath,
+    );
     // boardBroadcaster pulls live snapshots from the todo queue +
     // findings log, translated to wire shape via boardWireCompat.
     this.boardBroadcaster.bindSnapshotSource(() => ({
@@ -629,88 +449,52 @@ export class BlackboardRunner implements SwarmRunner {
     });
   }
 
-  // V2 Step 3b helper: derive whether all contract criteria have a
-  // terminal status (met/wont-do). Mirrors the logic the auditor uses
-  // when it decides "all resolved → completed". Returns false when
-  // there's no contract yet (planning hasn't completed).
-  private allCriteriaResolvedSnapshot(): boolean {
-    if (!this.contract) return false;
-    return this.contract.criteria.every(
-      (c) => c.status === "met" || c.status === "wont-do",
-    );
+  private asFields(): BlackboardRunnerFields {
+    return this as unknown as BlackboardRunnerFields;
   }
 
+  private utilCtx(): RunnerUtilContext {
+    return utilCtxBuilder(this.asFields());
+  }
+
+  private allCriteriaResolvedSnapshot(): boolean { return allCriteriaResolvedSnapshotExtracted(this.tierContext()); }
+
   status(): SwarmStatus {
-    // Unit 62: include the catch-up payload so a page refresh can
-    // hydrate the zustand store from one HTTP fetch. WS events keep
-    // the live store fresh; this is purely the reload path.
-    const board = this.boardSnapshot();
-    const counts = this.boardCounts();
-    const latency: Record<string, Array<{ ts: number; elapsedMs: number; success: boolean; attempt: number }>> = {};
-    for (const [agentId, samples] of this.recentLatencySamples.entries()) {
-      // Defensive copy so callers can't mutate our internal buffer.
-      latency[agentId] = samples.map((s) => ({ ...s }));
-    }
-    const runConfig = this.active
-      ? {
-          preset: this.active.preset,
-          plannerModel: this.active.plannerModel ?? this.active.model,
-          workerModel: this.active.workerModel ?? this.active.model,
-          auditorModel: this.active.auditorModel ?? this.active.plannerModel ?? this.active.model,
-          dedicatedAuditor: this.active.dedicatedAuditor === true,
-          repoUrl: this.active.repoUrl,
-          clonePath: this.active.localPath,
-          agentCount: this.active.agentCount,
-          rounds: this.active.rounds,
-        }
-      : undefined;
-    return {
+    return statusExtracted({
       phase: this.phase,
       round: this.round,
-      repoUrl: this.active?.repoUrl,
-      localPath: this.active?.localPath,
-      model: this.active?.model,
-      agents: this.opts.manager.toStates(),
-      transcript: [...this.transcript],
-      summary: this.lastSummary,
-      contract: this.contract ? this.cloneContract(this.contract) : undefined,
-      cloneState: this.cloneStateForStatus,
-      runConfig,
-      runStartedAt: this.runBootedAt,
-      board: { todos: board.todos, findings: board.findings, counts },
-      latency,
-      // Task #39: include per-agent partial-stream buffer so a page-
-      // refresh catch-up can restore mid-stream UI. AgentManager
-      // owns the buffer; we just forward its current snapshot.
-      streaming: this.opts.manager.getPartialStreams(),
-    };
+      active: this.active,
+      transcript: this.transcript,
+      lastSummary: this.lastSummary,
+      contract: this.contract,
+      cloneStateForStatus: this.cloneStateForStatus,
+      runBootedAt: this.runBootedAt,
+      recentLatencySamples: this.recentLatencySamples,
+      cloneContract: (c) => this.cloneContract(c),
+      agentStates: () => this.opts.manager.toStates(),
+      getPartialStreams: () => this.opts.manager.getPartialStreams(),
+      utilCtx: () => this.utilCtx(),
+    });
   }
 
   injectUser(
     text: string,
     opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
   ): void {
-    const intent = opts?.intent ?? "steer";
-    const entry: TranscriptEntry = {
-      id: randomUUID(),
-      role: "user",
+    injectUserExtracted(
+      {
+        transcript: this.transcript,
+        emit: (e) => this.opts.emit(e as SwarmEvent),
+        appendSystem: (t, s?) => this.appendSystem(t, s),
+        tierContext: () => this.tierContext(),
+      },
       text,
-      ts: Date.now(),
-      intent,
-      ...(opts?.targetAgent ? { targetAgent: opts.targetAgent } : {}),
-    };
-    this.transcript.push(entry);
-    this.opts.emit({ type: "transcript_append", entry });
-    // 2026-05-02 (lever #1): synthetic system receipt — see chatReceipt.ts.
-    this.appendSystem(formatChatReceipt(intent, opts?.targetAgent));
+      opts,
+    );
   }
 
   isRunning(): boolean {
-    // Task #34: terminal phases ("completed", "failed") must NOT be
-    // treated as running — otherwise the orchestrator can't accept a
-    // new start without an explicit /stop in between, even though the
-    // prior run is fully done. Sequential preset tours hit this on
-    // every transition.
+    // Terminal phases must not count as running.
     return (
       this.phase !== "idle" &&
       this.phase !== "stopped" &&
@@ -719,3702 +503,138 @@ export class BlackboardRunner implements SwarmRunner {
     );
   }
 
-  async start(cfg: RunConfig): Promise<void> {
-    if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
-    this.transcript = [];
-    this.stopping = false;
-    this.round = 0;
-    this.runStartedAt = undefined;
-    this.tokenBaselineForRun = undefined;
-    this.tickAccumulator = undefined;
-    // Task #165: clear pause state from any prior run.
-    this.paused = false;
-    this.pauseStartedAt = undefined;
-    this.totalPausedMs = 0;
-    if (this.pauseProbeTimer) {
-      clearTimeout(this.pauseProbeTimer);
-      this.pauseProbeTimer = undefined;
-    }
-    // Task #167: clear drain state from any prior run.
-    this.draining = false;
-    this.drainStartedAt = undefined;
-    if (this.drainWatcherTimer) {
-      clearInterval(this.drainWatcherTimer);
-      this.drainWatcherTimer = undefined;
-    }
-    // Task #168: clear the drain-marker so this fresh run defaults
-    // to "stop = hard user-stop" classification unless drain() fires.
-    this.wasDrained = false;
-    this.terminationReason = undefined;
-    // 2026-05-04 (W7/W13/W14/W15 wiring): clear per-run trackers.
-    this.errorTracker = [];
-    this.failoverState = { modelHealth: new Map() };
-    this.localOllamaTags = [];
-    // 2026-05-04 (W16/W17/W18 wiring): clear pause/loop counters.
-    this.subscriberPaused = false;
-    this.memoryPaused = false;
-    this.lastMemoryPressureLevel = "ok";
-    this.consecutiveLoopDetections = 0;
-    this.lastLoopWarningAtTurn = -1;
-    // 2026-05-04 (W14 wiring): when SWARM_DEGRADATION_FALLBACK is on,
-    // discover local Ollama tags once at run-start so R3's
-    // pickLocalFallback has candidates. Best-effort: discovery
-    // failure just disables R3 silently. The fetch is bounded at
-    // 3 s so a slow Ollama doesn't block run startup.
-    if (appConfig.SWARM_DEGRADATION_FALLBACK) {
-      this.discoverLocalOllamaTags().catch(() => {
-        /* best-effort */
-      });
-    }
-    // Unit 31: clear any lingering state-write timer from a prior run.
-    // stateWriteInFlight may still be true momentarily if a run was torn
-    // down mid-write; that's fine — the flush path handles re-entrancy
-    // via stateWriteAgain.
-    if (this.stateWriteTimer) {
-      clearTimeout(this.stateWriteTimer);
-      this.stateWriteTimer = undefined;
-    }
-    this.stateWriteAgain = false;
-    this.runBootedAt = Date.now();
-    // Task #171: persist a "Run started" entry as the FIRST transcript
-    // line so it survives a page-refresh catch-up. The WS run_started
-    // event already fires for live observers; this gives refreshing
-    // observers (and review-mode readers) the same anchor at the top
-    // of the transcript. Includes runId8 + preset + model summary so
-    // it's self-explanatory without needing the surrounding UI chrome.
-    {
-      // Task #171 + 2026-04-26 fix: emit the "▸▸RUN-START▸▸" sentinel
-      // format so the web RunStartDivider component renders the rich
-      // horizontal-rule block (matching the divider shown when starting
-      // a new run mid-session). Previously we emitted a plain "▶ Run
-      // started" prose string which rendered as a generic system bubble
-      // — visually inconsistent with the in-session run-start divider.
-      const plannerModel = cfg.plannerModel ?? cfg.model;
-      const workerModel = cfg.workerModel ?? cfg.model;
-      const dividerText = [
-        "▸▸RUN-START▸▸",
-        `runId=${cfg.runId ?? ""}`,
-        `preset=${cfg.preset ?? ""}`,
-        `plannerModel=${plannerModel}`,
-        `workerModel=${workerModel}`,
-        `agentCount=${cfg.agentCount ?? ""}`,
-        `repoUrl=${cfg.repoUrl ?? ""}`,
-      ].join("|");
-      this.appendSystem(dividerText);
-    }
-    this.staleEventCount = 0;
-    this.turnsPerAgent.clear();
-    this.attemptsPerAgent.clear();
-    this.commitsPerAgent.clear();
-    this.linesAddedPerAgent.clear();
-    this.linesRemovedPerAgent.clear();
-    this.rejectedAttemptsPerAgent.clear();
-    this.jsonRepairsPerAgent.clear();
-    this.promptErrorsPerAgent.clear();
-    this.promptTokensPerAgent.clear();
-    this.responseTokensPerAgent.clear();
-    this.retriesPerAgent.clear();
-    this.latenciesPerAgent.clear();
-    this.agentRoster = [];
-    this.contract = undefined;
-    this.auditInvocations = 0;
-    this.completionDetail = undefined;
-    // Unit 34: reset tier state on every start.
-    this.currentTier = 0;
-    this.tiersCompleted = 0;
-    this.tierHistory = [];
-    this.tierStartedAt = undefined;
-    this.tierUpFailures = 0;
-    this.active = cfg;
-    // V2 Step 3b: reset the parallel V2 reducer + fire start.
-    this.v2Observer.reset();
-    this.v2Observer.apply({ type: "start", ts: this.runBootedAt });
-    // Reset the V2 todo-queue mirror so the run starts clean.
-    this.todoQueue.clear();
-    this.findings.clear();
-    // T-Item-3 (2026-05-04): clear any stale per-group AbortControllers
-    // from a prior run so a new run starts clean.
-    this.hypothesisGroupAborts.clear();
-    // T-Item-StigBb (2026-05-04): clear stigmergy commit counts for the
-    // new run.
-    this.fileCommitCounts.clear();
-    // T-Item-HypTimeout (2026-05-04): clear deferral timestamps.
-    this.hypothesisDeferralTimestamps.clear();
+  async start(cfg: RunConfig): Promise<void> { await lifecycleStart(this.lifecycleContext(), cfg); }
 
-    this.setPhase("cloning");
-    const cloneResult = await this.opts.repos.clone({
-      url: cfg.repoUrl,
-      destPath: cfg.localPath,
-    });
-    const { destPath } = cloneResult;
-    // Unit 47: tell the UI whether this is a fresh clone or a resume,
-    // and how much prior work it's building on. The build-on-existing
-    // pattern (Units 47-51) makes this distinction load-bearing —
-    // user shouldn't be confused when their re-run silently picks up
-    // 4 prior commits + 5 modified files.
-    // Unit 62: ALSO stash for the page-refresh catch-up snapshot so a
-    // reload re-renders the banner instead of forgetting we resumed.
-    this.cloneStateForStatus = {
-      alreadyPresent: cloneResult.alreadyPresent,
-      clonePath: destPath,
-      priorCommits: cloneResult.priorCommits,
-      priorChangedFiles: cloneResult.priorChangedFiles,
-      priorUntrackedFiles: cloneResult.priorUntrackedFiles,
-    };
-    this.opts.emit({
-      type: "clone_state",
-      ...this.cloneStateForStatus,
-    });
-    // Unit 42: per-agent model overrides. Each falls back to cfg.model
-    // when absent, so existing single-model runs are byte-identical.
-    const plannerModel = cfg.plannerModel ?? cfg.model;
-    const workerModel = cfg.workerModel ?? cfg.model;
-    // Unit 58: auditor model. Falls back to plannerModel (same role
-    // family — reasoning over criteria + file state) then to model.
-    // Only meaningful when cfg.dedicatedAuditor is true; harmless to
-    // compute either way.
-    const auditorModel = cfg.auditorModel ?? plannerModel;
-    // Unit 48: hide runner-written artifacts (opencode.json,
-    // blackboard-state.json, summary.json, summary-*.json) from
-    // `git status` via the clone's local .git/info/exclude — NOT the
-    // user's .gitignore. See RepoService.excludeRunnerArtifacts.
-    await this.opts.repos.excludeRunnerArtifacts(destPath);
-    // E3 Phase 5: opencode.json no longer needed — prompts route through pickProvider directly.
-    this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
-    if (plannerModel !== workerModel) {
-      this.appendSystem(`Per-agent models: planner=${plannerModel}, workers=${workerModel}`);
-    }
-    if (cfg.dedicatedAuditor && auditorModel !== plannerModel) {
-      this.appendSystem(`Per-agent models: auditor=${auditorModel}`);
-    }
+  private async planAndExecute(planner: Agent, workers: Agent[], seed: PlannerSeed): Promise<void> { await lifecyclePlanAndExecute(this.lifecycleContext(), planner, workers, seed); }
 
-    // Unit 57: cache the prior run's blackboard-state.json BEFORE the
-    // spawning phase fires its scheduled snapshot write. See the field
-    // declaration for the race details. Read here (clone exists, no
-    // snapshot writes have fired yet because cloning phase skips
-    // scheduleStateWrite). Always reads — Unit 51's tryResumeContract
-    // uses the cached value when cfg.resumeContract is true; cheap
-    // I/O when it's not.
-    this.priorSnapshot = await readBlackboardStateSnapshot(destPath);
+  async drain(): Promise<void> { await lifecycleDrain(this.lifecycleContext()); }
 
-    this.setPhase("spawning");
-    // Planner is always index 1. Workers take 2..N. If the user picks
-    // agentCount=1 there are no workers — planner posts TODOs, nothing drains
-    // them, and we transition straight to completed. Documented in README.
-    // E3 Phase 5: opencode subprocess is gone. spawnAgentNoOpencode is
-    // the only spawn path. The auxiliary direct-prompt helpers
-    // (auditorSeedBuilder, goalGenerationPrePass, reflectionPasses,
-    // runEndReflection, promptAndExtract) all migrated to chatOnce in
-    // earlier cleanup commits.
-    const planner = await this.opts.manager.spawnAgentNoOpencode({
-      cwd: destPath,
-      index: 1,
-      model: plannerModel,
-    });
-    this.appendSystem(`Planner agent ready on port ${planner.port}`);
+  private async checkDrainComplete(): Promise<void> { await lifecycleCheckDrainComplete(this.lifecycleContext()); }
 
-    const workerCount = Math.max(0, cfg.agentCount - 1);
-    const workers: Agent[] = [];
-    if (workerCount > 0) {
-      // Parallel spawn: each opencode serve takes a few seconds to boot,
-      // sequential would compound that for every extra worker.
-      const workerSpawns = Array.from({ length: workerCount }, (_, i) =>
-        this.opts.manager.spawnAgentNoOpencode({ cwd: destPath, index: 2 + i, model: workerModel }),
-      );
-      const spawned = await Promise.all(workerSpawns);
-      workers.push(...spawned);
-      // Unit 59 (59a): assign a static role bias to each worker when
-      // specializedWorkers is on. workerOrdinal is 1-based (worker-2 is
-      // ordinal 1). Roles cycle through workerRoles.ts catalog.
-      this.workerRoles.clear();
-      if (cfg.specializedWorkers) {
-        spawned.forEach((w, i) => {
-          const role = assignWorkerRole(i + 1);
-          this.workerRoles.set(w.id, role.guidance);
-          this.appendSystem(
-            `Worker agent ${w.id} ready on port ${w.port} (role: ${role.name})`,
-          );
-        });
-      } else {
-        for (const w of workers) this.appendSystem(`Worker agent ${w.id} ready on port ${w.port}`);
-      }
-    } else {
-      this.appendSystem("No workers spawned (agentCount=1). Planner will post TODOs, nothing will drain them.");
-    }
+  async stop(): Promise<void> { await lifecycleStop(this.lifecycleContext()); }
 
-    // Unit 58: spawn the dedicated auditor agent (opt-in). Index is
-    // agentCount + 1 so it doesn't collide with workers (1=planner,
-    // 2..N=workers, N+1=auditor). Total agents = agentCount + 1.
-    if (cfg.dedicatedAuditor) {
-      const auditorIndex = cfg.agentCount + 1;
-      this.auditor = await this.opts.manager.spawnAgentNoOpencode({
-        cwd: destPath,
-        index: auditorIndex,
-        model: auditorModel,
-      });
-      this.appendSystem(
-        `Auditor agent ${this.auditor.id} ready on port ${this.auditor.port} (model=${auditorModel}). Audit calls will route here in parallel with workers.`,
-      );
-    } else {
-      this.auditor = undefined;
-    }
+  private async buildSeed(clonePath: string, cfg: RunConfig): Promise<PlannerSeed> { return buildSeedExtracted(this.contractContext(), clonePath, cfg); }
 
-    // Freeze the roster for the summary artifact — killAll() will later
-    // empty AgentManager's own map.
-    this.agentRoster = [planner, ...workers, ...(this.auditor ? [this.auditor] : [])]
-      .map((a) => ({ id: a.id, index: a.index }));
+  private async tryResumeContract(_clonePath: string): Promise<boolean> { return tryResumeContractExtracted(this.contractContext()); }
 
-    this.setPhase("seeding");
-    const seed = await this.buildSeed(destPath, cfg);
-    this.appendSystem(
-      `Seed: ${seed.topLevel.length} top-level entries, README ${
-        seed.readmeExcerpt ? `${seed.readmeExcerpt.length} chars` : "(missing)"
-      }.`,
-    );
+  private async loadPriorRunSummary(clonePath: string): Promise<PriorRunSummary | undefined> { return loadPriorRunSummaryExtracted(clonePath); }
 
-    // Task #127: goal-generation pre-pass. When no userDirective is
-    // set AND autoGenerateGoals isn't explicitly disabled, ask the
-    // planner to propose 3-5 ambitious-but-feasible improvements;
-    // the top one becomes the directive for this run. Lifts the
-    // swarm from "do something" to "do something that matters."
-    const shouldGenerateGoals =
-      (!seed.userDirective || seed.userDirective.length === 0) &&
-      cfg.autoGenerateGoals !== false;
-    if (shouldGenerateGoals) {
-      const generated = await runGoalGenerationPrePass(
-        planner,
-        seed,
-        (text) => this.appendSystem(text),
-        // Issue C-min: status callback so the UI shows the planner as
-        // thinking during the pre-pass (was showing "ready" because
-        // this code path bypassed promptAgent's markStatus).
-        { onStatusChange: (status) => this.markPlannerStatus(planner, status) },
-      );
-      if (generated && generated.length > 0) {
-        seed.userDirective = generated;
-        this.appendSystem(
-          `Goal-generation pre-pass: directive set to "${generated.length > 200 ? generated.slice(0, 200) + "…" : generated}"`,
-        );
-      } else {
-        this.appendSystem(
-          `Goal-generation pre-pass: no usable directive returned — falling back to planner-from-scratch.`,
-        );
-      }
-    }
+  // --- Phase 11b: first-pass exit contract ---
 
-    // V2 Step 3b.2: agents are ready — fire spawned event so the V2
-    // reducer can advance from "spawning" to "planning".
-    this.v2Observer.apply({
-      type: "spawned",
-      ts: Date.now(),
-      agentCount: this.agentRoster.length,
-    });
-    this.setPhase("planning");
-    // Background so the HTTP POST that triggered start() returns immediately.
-    // The UI watches progress over /ws.
-    // Task #198: planAndExecute has internal try/catch (line ~676), but its
-    // finally block runs async ops (writeRunSummary, runAuditor) that can
-    // throw on their own. Defense in depth: surface any leak as an error
-    // event so the UI doesn't hang in "planning" forever.
-    this.planAndExecute(planner, workers, seed).catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.opts.emit({ type: "error", message: `Run aborted (unhandled): ${msg}` });
-      this.appendSystem(`Run aborted (unhandled): ${msg}`);
-      void this.stop().catch(() => {});
-    });
+  private async runFirstPassContract(agent: Agent, seed: PlannerSeed): Promise<void> { return runFirstPassContractExtracted(this.contractContext(), agent, seed); }
+
+  private async runFirstPassContractOrchestrator(planner: Agent, workers: Agent[], seed: PlannerSeed): Promise<void> {
+    return runFirstPassContractOrchestratorExtracted(this.contractContext(), planner, workers, seed);
   }
 
-  private async planAndExecute(
-    planner: Agent,
-    workers: Agent[],
-    seed: PlannerSeed,
-  ): Promise<void> {
-    let errored = false;
-    let crashMessage: string | undefined;
-    try {
-      // Unit 51: opt-in resume from blackboard-state.json. When the
-      // user set cfg.resumeContract AND the snapshot is present +
-      // valid, install the prior contract directly and skip the
-      // first-pass-contract round entirely. Tier counters hydrate
-      // from the snapshot too. Falls through to the normal path on
-      // missing/invalid snapshot — silent fallback so the user gets
-      // SOMETHING even if the resume can't bind.
-      const resumed = this.active?.resumeContract === true
-        ? await this.tryResumeContract(seed.clonePath)
-        : false;
-      if (!resumed) {
-        await this.runFirstPassContractOrchestrator(planner, workers, seed);
-      }
-      if (this.stopping) return;
-      await this.runPlanner(planner, seed);
-      if (this.stopping) return;
-      if (workers.length > 0 && this.boardCounts().open > 0) {
-        // Stamp the wall-clock origin just before caps start being checked.
-        // Planning time (seeding, initial planner prompt, repair) does NOT
-        // count toward the cap — the cap is a worker-loop guard, not a total
-        // run guard.
-        this.runStartedAt = Date.now();
-        // Task #124: same baseline timing for token-budget — planner
-        // tokens before this point don't count toward the budget.
-        this.tokenBaselineForRun = snapshotLifetimeTokens();
-        this.tickAccumulator = createTickAccumulator(this.runStartedAt);
-        this.setPhase("executing");
-        this.startQueueReaper();
-        // T198c (2026-05-04): adaptive worker pool sizing — log-only
-        // first-cut. Polls todo queue depth + worker count every 30s
-        // and logs scale-up/scale-down recommendations. Real dynamic
-        // spawn/teardown deferred (AgentManager surgery, days of work).
-        if (this.active?.adaptiveWorkers) {
-          this.startAdaptiveWorkerWatchdog(this.active.adaptiveWorkers);
-        }
-        this.startCapWatchdog();
-        this.planner = planner;
-        this.startReplanWatcher();
-        await this.runAuditedExecution(planner, workers);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // Task #168: when stop() or drain() aborted in-flight prompts,
-      // the abort propagates here as an exception. That's exactly
-      // what the user asked for — don't classify it as a crash.
-      // Leaves errored=false + crashMessage=undefined so summary
-      // classification routes to "user" / drain-completion paths
-      // instead of "crash" (which previously caused user-stop runs
-      // to mis-show stopReason="crash" + write a crash snapshot).
-      if (this.stopping) {
-        // R17 wiring: classify the abort with causeHint=user-stop so RCA
-        // doesn't mis-categorize it as a network/timeout failure.
-        this.recordError(err, { causeHint: "user-stop" });
-        this.appendSystem(`Run halted: ${msg}`);
-      } else {
-        // R17 wiring: classify the crash for the run-end RCA report.
-        this.recordError(err);
-        errored = true;
-        crashMessage = msg;
-        this.opts.emit({ type: "error", message: `blackboard run failed: ${crashMessage}` });
-        this.appendSystem(`Run failed: ${crashMessage}`);
-        // Best-effort post-mortem. Awaited so the write lands before the
-        // finally block flips phase to "failed" — a WS consumer watching for
-        // the failed transition should be able to trust the artifact is
-        // already on disk.
-        await this.writeCrashSnapshot(err);
-      }
-    } finally {
-      this.stopQueueReaper();
-      this.stopCapWatchdog();
-      this.stopReplanWatcher();
-      // Cap-trip audit: one last pass so the summary's contract reflects
-      // true met/wont-do/unmet distribution instead of leaving every
-      // unresolved criterion at the default "unmet". shouldRunFinalAudit
-      // narrows this to the exact case that benefits — cap trip, no crash,
-      // no user stop, budget remaining, unresolved criteria still present.
-      // Errors here are swallowed: a missing final audit is worse than
-      // "all unmet" but better than trading a useful summary for a crash.
-      if (
-        shouldRunFinalAudit({
-          errored,
-          hasContract: !!this.contract && this.contract.criteria.length > 0,
-          allCriteriaResolved: this.allCriteriaResolved(),
-          terminationReason: this.terminationReason,
-          auditInvocations: this.auditInvocations,
-          maxInvocations: this.maxAuditInvocations,
-          // Task #168: drained runs should run the final audit (the
-          // user opted into a clean exit + wants final criterion
-          // status). Hard user-stop still suppresses.
-          userStopped: this.stopping && !this.terminationReason && !this.wasDrained,
-        })
-      ) {
-        try {
-          await this.runAuditor(planner, { allowWhenStopping: true });
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          this.appendSystem(`Final audit failed: ${msg}`);
-        }
-      }
-      // Task #129: stretch-goal reflection pass. Asks the planner one
-      // meta-question — "what would the BEST version of this work have
-      // done?" — so the next run (or the user) has a launchpad for a
-      // more ambitious follow-up. Gated on:
-      //   - run did NOT error (a crashed run can't reflect honestly)
-      //   - was NOT stopped manually by the user (they explicitly opted
-      //     out of finishing — pestering them with reflection is rude)
-      //   - has substantive output (committed > 0 OR a contract exists)
-      //   - autoStretchReflection !== false (default ON)
-      //   - wall-clock cap not exceeded (each pass is a 1-3 min planner
-      //     prompt; running them past the user's cap defeats the cap
-      //     entirely — see run 0254ca7c which overshot 15-min by 4 min
-      //     because reflection happened post-audit unconditionally).
-      // Errors are swallowed for the same reason as the final audit:
-      // a missing reflection is annoying, not run-fatal.
-      // Task #168: differentiate hard-user-stop from drain-stop. Drained
-      // runs ARE "the user opted into a clean exit" — let memory +
-      // stretch reflection fire so the work isn't lost. Only hard
-      // user-stop (Stop button, no drain) suppresses both passes.
-      const userStoppedHard =
-        this.stopping && !this.terminationReason && !this.wasDrained;
-      const hasOutput =
-        this.boardCounts().committed > 0 ||
-        (this.contract?.criteria.length ?? 0) > 0;
-      const overWallClockCap = this.isOverWallClockCap();
-      if (overWallClockCap) {
-        const capMin = Math.round(
-          (this.active?.wallClockCapMs ?? WALL_CLOCK_CAP_MS) / 60_000,
-        );
-        this.appendSystem(
-          `Wall-clock cap (${capMin} min) already exceeded by the time the audit loop ended; skipping post-audit reflection passes (stretch goals, memory distillation, design memory) to honor the cap. Set wallClockCapMs higher to allow them.`,
-        );
-      }
-      // Issue B (2026-04-27): hard-cap watchdog for the reflection
-      // block. Pre-fix, isOverWallClockCap was checked PER-PASS so a
-      // pass starting at 19m30s with cap=20m would run for 3-5 more
-      // min past cap (run 04575ce4 overshot 20-min cap to 25.6 min).
-      // Now: a 5s-tick interval polls isOverWallClockCap and aborts
-      // the shared signal as soon as cap is hit. Each reflection pass
-      // forwards the signal to its session.prompt call, so an
-      // in-flight prompt past cap gets aborted promptly.
-      const reflectionAbort = new AbortController();
-      const reflectionWatchdog = setInterval(() => {
-        if (this.isOverWallClockCap() && !reflectionAbort.signal.aborted) {
-          const capMin = Math.round(
-            (this.active?.wallClockCapMs ?? WALL_CLOCK_CAP_MS) / 60_000,
-          );
-          this.appendSystem(
-            `Wall-clock cap (${capMin} min) hit during reflection passes — aborting any in-flight reflection prompt to honor the cap.`,
-          );
-          reflectionAbort.abort(new Error("wallClockCapMs hit during reflection passes"));
-        }
-      }, 5_000);
-      reflectionWatchdog.unref?.();
-      // Task #164 (refactor): build the reflection context once and
-      // pass to both extracted helpers.
-      const reflectionCtx: ReflectionContext = {
-        transcript: this.transcript,
-        appendSystem: (text, summary) => this.appendSystem(text, summary),
-        emit: (e) => this.opts.emit(e),
-        currentTier: this.currentTier,
-        committedCount: this.boardCounts().committed,
-        contractCriteria: this.contract?.criteria ?? [],
-        runId: this.active?.runId ?? "unknown",
-        // Issue B: forward the cap-watchdog signal so reflection
-        // prompts get aborted when the cap fires mid-flight.
-        signal: reflectionAbort.signal,
-        // Issue C-min: status callback so the planner agent's UI
-        // status flips to "thinking" while reflection prompts are
-        // in-flight, restoring the truthful UI signal pre-fix lacked.
-        onPlannerStatusChange: (status) => this.markPlannerStatus(planner, status),
-      };
-      if (
-        !errored &&
-        !userStoppedHard &&
-        hasOutput &&
-        !overWallClockCap &&
-        this.active?.autoStretchReflection !== false
-      ) {
-        try {
-          await runStretchGoalReflectionPass(planner, reflectionCtx);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          this.appendSystem(`Stretch-goal reflection failed: ${msg}`);
-        }
-      }
-      // Task #130: persistent memory write. Runs AFTER the stretch
-      // reflection so the planner has the most context (commits +
-      // contract resolution + stretch goals all in transcript) when
-      // distilling lessons. Same gating as stretch reflection plus
-      // autoMemory !== false. Errors swallowed; missing memory write
-      // is annoying, not run-fatal.
-      if (
-        !errored &&
-        !userStoppedHard &&
-        hasOutput &&
-        !overWallClockCap &&
-        this.active?.autoMemory !== false
-      ) {
-        try {
-          await runMemoryDistillationPass(planner, this.active?.localPath, reflectionCtx);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          this.appendSystem(`Memory distillation failed: ${msg}`);
-        }
-      }
-      // Task #177: design memory update pass. Runs AFTER memory
-      // distillation so the planner has the freshest engineering
-      // lessons to inform its creative/product update. Same gates
-      // as the other reflection passes plus autoDesignMemory !== false.
-      if (
-        !errored &&
-        !userStoppedHard &&
-        hasOutput &&
-        !overWallClockCap &&
-        this.active?.autoDesignMemory !== false
-      ) {
-        try {
-          await runDesignMemoryUpdatePass(planner, this.active?.localPath, reflectionCtx);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          this.appendSystem(`Design memory update failed: ${msg}`);
-        }
-      }
-      // Issue B: stop the reflection-cap watchdog now that all
-      // reflection passes are done. The setInterval would otherwise
-      // keep firing isOverWallClockCap probes until process exit.
-      clearInterval(reflectionWatchdog);
-      // 2026-05-02 (blackboard feature #4 — auto-rollback): fire
-      // BEFORE the deliverable so the audit trail appears in the
-      // deliverable's "Auto-rollbacks fired" section. Decision rules:
-      //   - cfg.autoRollback === true (decision #5: opt-in)
-      //   - !user-stop && !cap-trip (decision #4: never on intentional exit)
-      //   - per-criterion granularity (decision #2)
-      //   - refuse-on-collateral safety (decision #3)
-      if (
-        !errored &&
-        this.active?.autoRollback === true &&
-        !(this.stopping && !this.terminationReason) &&
-        !this.terminationReason
-      ) {
-        try {
-          await this.runAutoRollbacks();
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          this.appendSystem(`[auto-rollback] orchestrator failed (best-effort): ${msg}`);
-        }
-      }
-      // 2026-05-02 (blackboard features #1, #2, #3, #5): structured
-      // markdown deliverable with PR-shaped output, diff-aware critic,
-      // and coverage-gap detection. Best-effort — never blocks the
-      // summary write below.
-      if (!errored) {
-        try {
-          await this.writeBlackboardDeliverable();
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          this.appendSystem(`Deliverable write failed (best-effort): ${msg}`);
-        }
-      }
-      // Phase 9: always try to write a summary, regardless of how we got
-      // here (completed / stopped / failed / cap). Awaited so the file and
-      // the broadcast event land before the terminal phase transition, so
-      // a UI consumer reacting to `completed|stopped|failed` can trust the
-      // summary is already available.
-      await this.writeRunSummary(crashMessage);
-    }
-    // Ensure the final snapshot lands even if the debounce timer hasn't fired.
-    this.boardBroadcaster.flushSnapshot();
-    // User-initiated stop: stop() sets phase to "stopping" → "stopped" itself,
-    // so we bail. Cap-initiated stop also sets this.stopping, but we detect
-    // that via terminationReason and fall through to setPhase("completed")
-    // so the UI reflects the run actually finishing at the cap boundary.
-    if (this.stopping && !this.terminationReason) {
-      await this.flushStateWrite();
-      return;
-    }
-    // Unit 55: auto-killAll on natural completion (and on errored
-    // termination). Before this unit, only stop() killed agents — a
-    // run that finished naturally ("auditor produced no new work,"
-    // all-met, cap reached) left every opencode subprocess and cloud
-    // session alive, holding ports + paying cloud upkeep until the
-    // user/Claude manually intervened. Mirrors the killAll inside
-    // stop(): same verified-kill semantics from Unit 41 (poll +
-    // taskkill escalation + pidTracker.remove). Idempotent if a
-    // sibling code path already cleared the roster.
-    // Task #68: surface the kill result in the transcript.
-    const killResult = await this.opts.manager.killAll();
-    this.appendSystem(formatPortReleaseLine(killResult));
-    // V2 Step 3b: feed terminal event to the parallel reducer.
-    if (errored) {
-      this.v2Observer.apply({
-        type: "fatal-error",
-        ts: Date.now(),
-        message: crashMessage ?? "(no message)",
-      });
-    }
-    this.setPhase(errored ? "failed" : "completed");
-    // Unit 31: final non-debounced write so the on-disk state reflects the
-    // terminal phase even if the debounced timer hasn't fired yet.
-    if (this.stateWriteTimer) {
-      clearTimeout(this.stateWriteTimer);
-      this.stateWriteTimer = undefined;
-    }
-    await this.flushStateWrite();
+  private async tryCouncilContract(planner: Agent, workers: Agent[], seed: PlannerSeed): Promise<ParsedContract | null> {
+    return tryCouncilContractExtracted(this.contractContext(), planner, workers, seed);
   }
 
-  // Task #167: soft-stop. Sets draining=true; workers that are
-  // mid-claim finish + commit cleanly, and no new claims are taken.
-  // A 2s-tick watcher polls for "all in-flight settled" (no claimed
-  // todos AND no active prompts) and escalates to hard stop()
-  // when quiet — or hits the DRAIN_DEADLINE_MS backstop and force-
-  // escalates so a stuck claim can't deadlock the drain.
-  //
-  // No-op if already stopping/draining (idempotent — clicking
-  // Drain twice doesn't compound; clicking Stop after Drain
-  // immediately escalates via the separate stop() path).
-  async drain(): Promise<void> {
-    if (this.stopping || this.draining) return;
-    this.draining = true;
-    this.drainStartedAt = Date.now();
-    // Task #168: marker for the post-run gate — drained runs ARE
-    // allowed to fire memory distillation + stretch reflection (the
-    // user opted in to "finish work then stop", which is closer to
-    // a natural completion than to a hard abort).
-    this.wasDrained = true;
-    // V2 Step 3b: feed drain event to the parallel reducer.
-    this.v2Observer.apply({ type: "drain-requested", ts: this.drainStartedAt });
-    this.setPhase("draining");
-    this.appendSystem(
-      `Drain & Stop requested. Workers will finish their current claim (${this.boardCounts().claimed} in-flight); no new claims. ` +
-        `Backstop ${DRAIN_DEADLINE_MS / 60_000} min before forced hard stop. ` +
-        `Press Stop to escalate immediately.`,
-    );
-    // Cancel pause probe (no point continuing to poll upstream
-    // during drain — we're committed to stopping).
-    if (this.pauseProbeTimer) {
-      clearTimeout(this.pauseProbeTimer);
-      this.pauseProbeTimer = undefined;
-    }
-    this.paused = false;
-    // Task #199: surface unhandled rejections so a single bad tick doesn't
-    // become a silent stream of unhandled errors firing every 2s.
-    this.drainWatcherTimer = setInterval(() => {
-      this.checkDrainComplete().catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.appendSystem(`Drain watcher tick failed: ${msg}`);
-      });
-    }, DRAIN_WATCHER_INTERVAL_MS);
-  }
+  private finalizeContract(parsed: ParsedContract, seed: PlannerSeed, ownerAgent: Agent): void { finalizeContractExtracted(this.contractContext(), parsed, seed, ownerAgent); }
 
-  private async checkDrainComplete(): Promise<void> {
-    if (this.stopping || !this.draining) {
-      if (this.drainWatcherTimer) {
-        clearInterval(this.drainWatcherTimer);
-        this.drainWatcherTimer = undefined;
-      }
-      return;
-    }
-    const claimed = this.boardCounts().claimed;
-    const activePrompts = this.activeAborts.size;
-    const elapsed = Date.now() - (this.drainStartedAt ?? Date.now());
-    const overDeadline = elapsed >= DRAIN_DEADLINE_MS;
-    if (claimed === 0 && activePrompts === 0) {
-      this.appendSystem(`Drain complete (${Math.round(elapsed / 1000)}s); escalating to hard stop.`);
-      if (this.drainWatcherTimer) {
-        clearInterval(this.drainWatcherTimer);
-        this.drainWatcherTimer = undefined;
-      }
-      await this.stop();
-      return;
-    }
-    if (overDeadline) {
-      this.appendSystem(
-        `Drain deadline reached (${DRAIN_DEADLINE_MS / 60_000} min) with ${claimed} claim(s) + ${activePrompts} prompt(s) still in-flight. Forcing hard stop.`,
-      );
-      if (this.drainWatcherTimer) {
-        clearInterval(this.drainWatcherTimer);
-        this.drainWatcherTimer = undefined;
-      }
-      await this.stop();
-    }
-  }
+  private buildContract(parsed: ParsedContract): ExitContract { return buildContractExtracted(parsed); }
 
-  async stop(): Promise<void> {
-    this.stopping = true;
-    // V2 Step 3b: feed user-stop event to the parallel reducer.
-    this.v2Observer.apply({ type: "stop-requested", ts: Date.now() });
-    this.setPhase("stopping");
-    this.stopQueueReaper();
-    this.stopCapWatchdog();
-    this.stopReplanWatcher();
-    // Task #165: cancel any in-flight quota-pause probe so it doesn't
-    // try to resume a run that's being torn down.
-    if (this.pauseProbeTimer) {
-      clearTimeout(this.pauseProbeTimer);
-      this.pauseProbeTimer = undefined;
-    }
-    this.paused = false;
-    // Task #167: cancel drain watcher if soft-stop is being escalated
-    // to hard stop (either by completion or by user clicking Stop
-    // during drain).
-    if (this.drainWatcherTimer) {
-      clearInterval(this.drainWatcherTimer);
-      this.drainWatcherTimer = undefined;
-    }
-    this.draining = false;
-    for (const ctrl of this.activeAborts) {
-      try {
-        ctrl.abort(new Error("user stop"));
-      } catch {
-        // ignore — best-effort
-      }
-    }
-    this.activeAborts.clear();
-    await this.opts.manager.killAll();
-    this.boardBroadcaster.dispose();
-    this.setPhase("stopped");
-  }
+  private cloneContract(c: ExitContract): ExitContract { return cloneContractExtracted(c); }
 
-  private async buildSeed(clonePath: string, cfg: RunConfig): Promise<PlannerSeed> {
-    const topLevel = (await this.opts.repos.listTopLevel(clonePath)).slice(0, 200);
-    const readmeExcerpt = await this.opts.repos.readReadme(clonePath);
-    // Grounding Unit 6a: real file paths from a BFS walk, with common
-    // ignores (node_modules, .git, dist, binaries) stripped. Gives the
-    // planner + first-pass-contract something concrete to reference in
-    // expectedFiles instead of guessing from top-level directories.
-    const repoFiles = await this.opts.repos.listRepoFiles(clonePath, { maxFiles: 150 });
-    // Unit 50: when this run is a resume on an existing clone, look for
-    // the newest prior summary and distill it for the planner. The
-    // first-pass-contract prompt's Rule 12 instructs the planner to
-    // build on it rather than re-attempt resolved criteria. Fresh
-    // clones skip this (no prior summary on disk, returns null).
-    const priorRunSummary = await this.loadPriorRunSummary(clonePath);
-    // Task #130: persistent cross-run memory (.swarm-memory.jsonl).
-    // Independent of priorRunSummary above — that's the immediately-
-    // preceding run's contract; this is the planner-authored "lessons
-    // learned" log across many runs. Read failure here is not fatal:
-    // a missing file returns []; bad JSON lines are skipped silently.
-    // Disabled by cfg.autoMemory === false (default true).
-    let priorMemoryRendered: string | undefined;
-    if (cfg.autoMemory !== false) {
-      try {
-        const recent = await readRecentMemory(clonePath);
-        const rendered = renderMemoryForSeed(recent);
-        priorMemoryRendered = rendered.length > 0 ? rendered : undefined;
-        if (recent.length > 0) {
-          this.appendSystem(
-            `Memory: surfaced ${recent.length} prior-run lesson entry(ies) from .swarm-memory.jsonl into the planner seed.`,
-          );
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.appendSystem(`Memory read failed (${msg}); continuing without prior-run context.`);
-      }
-    }
-    // Task #177: design memory (north-star + decisions + roadmap).
-    // Read at seed time so the planner honors the long-horizon vision
-    // when proposing the first-pass contract + tier-up missions.
-    let priorDesignMemoryRendered: string | undefined;
-    if (cfg.autoDesignMemory !== false) {
-      try {
-        const dm = await readDesignMemory(clonePath);
-        priorDesignMemoryRendered = renderDesignMemoryForSeed(dm);
-        if (priorDesignMemoryRendered) {
-          const parts: string[] = [];
-          if (dm.northStar) parts.push("north-star");
-          if (dm.roadmap.length > 0) parts.push(`roadmap (${dm.roadmap.length})`);
-          if (dm.decisions.length > 0) parts.push(`${dm.decisions.length} decision(s)`);
-          this.appendSystem(
-            `Design memory: surfaced ${parts.join(" + ")} from .swarm-design/ into the planner seed.`,
-          );
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.appendSystem(`Design memory read failed (${msg}); continuing without long-horizon vision context.`);
-      }
-    }
-    // Phase 5c of #243: derive {tag → count} for any workers that
-    // carry a topology tag. Renders into the planner prompt's
-    // AVAILABLE WORKER TAGS section so the planner can emit
-    // `preferredTag` per TODO. Empty array → no tags rendered.
-    const workerTags = computeWorkerTagCounts(cfg.topology);
-    // T188 (2026-05-04): code-context preloading. Pre-fetch head
-    // excerpts of files matching directive keywords + standard
-    // config files so the planner sees actual content not just
-    // names. Reuses gatherProposerContext (from MoA's lever #1).
-    // Best-effort: any failure leaves codeContextExcerpts undefined
-    // and the planner falls back to the file-list-only view.
-    let codeContextExcerpts: ReadonlyArray<{ path: string; excerpt: string }> | undefined;
-    try {
-      const directive = (cfg.userDirective ?? "").trim();
-      if (directive.length > 0 && repoFiles.length > 0) {
-        const excerpts = await gatherProposerContext({
-          clonePath,
-          seed: `User directive: ${directive}`,
-          repoFiles,
-        });
-        if (excerpts.length > 0) {
-          codeContextExcerpts = excerpts;
-        }
-      }
-    } catch {
-      // best-effort — gather failure shouldn't block the planner
-    }
-    return {
-      repoUrl: cfg.repoUrl,
-      clonePath,
-      topLevel,
-      repoFiles,
-      readmeExcerpt,
-      // Unit 25: pass user directive (if any) through to the first-pass
-      // contract prompt. Empty/whitespace was already stripped at the
-      // route boundary; this is just pass-through.
-      userDirective: cfg.userDirective,
-      priorRunSummary,
-      priorMemoryRendered,
-      priorDesignMemoryRendered,
-      workerTags,
-      ...(codeContextExcerpts ? { codeContextExcerpts } : {}),
-      // T198h (2026-05-04): test-driven todo expansion flag.
-      ...(cfg.testDrivenTodos ? { testDrivenTodos: true } : {}),
-      // T198i (2026-05-04): parallel-hypothesis instruction flag.
-      ...(cfg.parallelHypothesis ? { parallelHypothesis: true } : {}),
-    };
-  }
+  // --- Context builders ---
 
-  // Unit 51: opt-in resume path. Reads blackboard-state.json from
-  // the clone, installs the prior run's contract + tier state
-  // directly, and tells the caller to skip first-pass-contract.
-  // Returns false on missing/invalid snapshot — caller falls back
-  // to the normal planner-derives-contract path silently. Logs the
-  // resume to the transcript so the user knows we picked it up.
-  //
-  // Unit 57: reads from the cached priorSnapshot (captured at the top
-  // of start() BEFORE any spawning-phase scheduleStateWrite fires).
-  // Re-reading from disk here would race with our own snapshot writes
-  // and almost always see our own freshly-written empty-contract
-  // shape — exactly the bug Unit 57 fixes.
-  private async tryResumeContract(_clonePath: string): Promise<boolean> {
-    const snap = this.priorSnapshot;
-    if (!snap || !snap.contract) {
-      this.appendSystem(
-        "Resume requested but no valid blackboard-state.json found — falling back to first-pass-contract.",
-      );
-      return false;
-    }
-    // Install contract + tier state from the snapshot. cloneContract
-    // (NOT buildContract) is intentional — buildContract resets every
-    // criterion to status="unmet" and renumbers ids, but on resume we
-    // want to PRESERVE the prior met/unmet/wont-do status, rationales,
-    // and ids. The auditor will re-evaluate them against the current
-    // working tree on its first invocation, so a "met" criterion whose
-    // evidence got reverted will flip back to unmet.
-    this.contract = this.cloneContract(snap.contract);
-    this.currentTier = snap.currentTier ?? 1;
-    this.tiersCompleted = snap.tiersCompleted ?? 0;
-    this.tierStartedAt = Date.now();
-    if (snap.tierHistory && snap.tierHistory.length > 0) {
-      // Restore the prior tier-history entries verbatim. The current
-      // (in-flight) tier isn't in there yet — recordTierCompletion
-      // appends as tiers close. Defensive copy so a downstream
-      // mutation doesn't reach into the snapshot.
-      this.tierHistory = snap.tierHistory.map((t) => ({ ...t }));
-    }
-    this.opts.emit({
-      type: "contract_updated",
-      contract: this.cloneContract(this.contract),
-    });
-    this.scheduleStateWrite();
-    let met = 0;
-    let unmet = 0;
-    let wontDo = 0;
-    for (const c of this.contract.criteria) {
-      if (c.status === "met") met++;
-      else if (c.status === "wont-do") wontDo++;
-      else unmet++;
-    }
-    this.appendSystem(
-      `Resumed contract from blackboard-state.json (tier ${this.currentTier}, ${this.tiersCompleted} tiers completed prior). ` +
-        `${met} met / ${unmet} unmet / ${wontDo} wont-do criteria carried over — ` +
-        `auditor will re-evaluate against the current working tree.`,
-    );
-    return true;
-  }
+  private lifecycleContext(): LifecycleContext { return lifecycleContextBuilder(this.asFields()); }
+  private contractContext(): ContractContext { return contractContextBuilder(this.asFields()); }
+  private tierContext(): TierContext { return tierContextBuilder(this.asFields()); }
+  private plannerContext(): PlannerContext { return plannerContextBuilder(this.asFields()); }
+  private workerContext(): WorkerContext { return workerContextBuilder(this.asFields()); }
+  private promptContext(): PromptContext { return promptContextBuilder(this.asFields()); }
+  private capContext(): CapContext { return capContextBuilder(this.asFields()); }
+  private replanContext(): ReplanContext { return replanContextBuilder(this.asFields()); }
+  private auditorContext(): AuditorContext { return auditorContextBuilder(this.asFields()); }
+  private adaptiveWatchdogCtx(): AdaptiveWatchdogContext { return adaptiveWatchdogCtxBuilder(this.asFields()); }
 
-  // Unit 50: read + distill the most recent prior summary in this
-  // clone path. Returns undefined when no prior summary exists OR when
-  // it lacks a usable contract (e.g. a discussion-preset run has no
-  // contract at all — those runs can't inform a blackboard resume).
-  private async loadPriorRunSummary(clonePath: string): Promise<PriorRunSummary | undefined> {
-    const summary = await findAndReadNewestPriorSummary(clonePath);
-    if (!summary || !summary.contract || summary.contract.criteria.length === 0) {
-      return undefined;
-    }
-    const startedAtIso = new Date(summary.startedAt).toISOString();
-    return {
-      startedAtIso,
-      missionStatement: summary.contract.missionStatement,
-      criteria: summary.contract.criteria.map((c) => ({
-        id: c.id,
-        description: c.description,
-        status: c.status,
-        rationale: c.rationale,
-        expectedFiles: [...c.expectedFiles],
-      })),
-    };
-  }
-
-  // ---------------------------------------------------------------------
-  // Phase 11b: first-pass exit contract
-  // ---------------------------------------------------------------------
-
-  // Ask the planner for a mission statement + criteria list BEFORE it posts
-  // todos. One shot + one repair attempt, matching runPlanner's pattern. If
-  // the contract can't be parsed we log, leave this.contract undefined, and
-  // return — the caller proceeds to runPlanner either way.
-  private async runFirstPassContract(agent: Agent, seed: PlannerSeed): Promise<void> {
-    // Unit 24: planner fallback. If primary planner exhausts retries,
-    // fall through to each worker in turn so the run survives a
-    // single-shard cloud cold-start failure.
-    // #86 (2026-05-01): pass the strict CONTRACT_JSON_SCHEMA instead
-    // of bare "json" so Ollama's decoder constrains output to the
-    // mission+criteria SHAPE, not just any JSON. The repair prompt
-    // path becomes effectively dead code on the Ollama path — kept
-    // for paid providers (Anthropic / OpenAI) which ignore `format`.
-    const { response: firstResponse, agentUsed: contractAgent } = await this.promptPlannerSafely(
-      agent,
-      `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed)}`,
-      "swarm",
-      CONTRACT_JSON_SCHEMA,
-    );
-    if (this.stopping) return;
-    this.appendAgent(contractAgent, firstResponse);
-
-    let parsed = parseFirstPassContractResponse(firstResponse);
-    if (!parsed.ok) {
-      this.appendSystem(
-        `Contract response did not parse (${parsed.reason}). Issuing repair prompt.`,
-      );
-      const { response: repairResponse, agentUsed: repairAgent } = await this.promptPlannerSafely(
-        contractAgent,
-        `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractRepairPrompt(
-          firstResponse,
-          parsed.reason,
-        )}`,
-        "swarm",
-        CONTRACT_JSON_SCHEMA,
-      );
-      if (this.stopping) return;
-      this.appendAgent(repairAgent, repairResponse);
-      parsed = parseFirstPassContractResponse(repairResponse);
-      if (!parsed.ok) {
-        this.appendSystem(
-          `Contract still invalid after repair (${parsed.reason}). Proceeding without a contract.`,
-        );
-        return;
-      }
-    }
-
-    if (parsed.dropped.length > 0) {
-      this.appendSystem(
-        `Dropped ${parsed.dropped.length} invalid criterion(s): ${parsed.dropped
-          .map((d) => d.reason)
-          .join(" | ")}`,
-      );
-    }
-
-    this.finalizeContract(parsed.contract, seed, agent);
-  }
-
-  // Unit 30: council-mode dispatch. When COUNCIL_CONTRACT_ENABLED is on AND
-  // there's at least one worker to add cognitive diversity, run the
-  // two-phase council flow (N drafts in parallel, then planner-merge). If
-  // Task #164 (refactor): goal-generation pre-pass body now lives in
-  // ./goalGenerationPrePass.ts.
-
-  // Task #164 (refactor): the inline stretch-goal (#129) +
-  // memory-distillation (#130) method bodies that lived here are now
-  // in ./reflectionPasses.ts. Call sites in the run-end finally block
-  // construct a ReflectionContext and invoke the exported
-  // runStretchGoalReflectionPass + runMemoryDistillationPass.
-
-  // the council flow produces nothing usable (all drafts failed to parse
-  // OR the merge itself failed), fall through to the legacy single-agent
-  // path so the run still gets a contract. When the flag is off, skip
-  // straight to single-agent.
-  private async runFirstPassContractOrchestrator(
-    planner: Agent,
-    workers: Agent[],
-    seed: PlannerSeed,
-  ): Promise<void> {
-    // Unit 32: per-run knob wins over env flag. Absent → env decides,
-    // same as pre-Unit-32 behavior. Lets users A/B with and without
-    // council via the form without restarting the server to flip
-    // COUNCIL_CONTRACT_ENABLED.
-    const councilEnabled =
-      this.active?.councilContract ?? config.COUNCIL_CONTRACT_ENABLED;
-    if (councilEnabled && workers.length > 0) {
-      const merged = await this.tryCouncilContract(planner, workers, seed);
-      if (merged !== null) {
-        this.finalizeContract(merged, seed, planner);
-        return;
-      }
-      this.appendSystem(
-        "Council contract produced no usable drafts or merge failed; falling back to single-agent contract.",
-      );
-    }
-    await this.runFirstPassContract(planner, seed);
-  }
-
-  // Unit 30: two-phase council contract.
-  //
-  // Phase A (DRAFT): every agent in [planner, ...workers] produces a
-  // first-pass contract INDEPENDENTLY from the same seed. Parallel,
-  // peer-hidden (each agent's prompt is identical to the single-agent
-  // one — no agent sees any other agent's draft).
-  //
-  // Phase B (MERGE): the planner receives all parseable drafts in one
-  // prompt and produces the final authoritative contract. Uses the
-  // usual promptPlannerSafely so a planner cold-start failure
-  // cycles through workers as merge candidates.
-  //
-  // Returns the merged ParsedContract on success, OR the sole
-  // surviving draft when only 1 agent's draft parsed (no merge needed),
-  // OR null when nothing usable came back (caller falls back to
-  // single-agent). The caller is responsible for grounding + finalizing.
-  private async tryCouncilContract(
-    planner: Agent,
-    workers: Agent[],
-    seed: PlannerSeed,
-  ): Promise<ParsedContract | null> {
-    const allAgents = [planner, ...workers];
-    const draftPrompt = `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(
-      seed,
-    )}`;
-
-    this.appendSystem(
-      `Council contract: prompting ${allAgents.length} agents for independent first-pass drafts.`,
-    );
-
-    const draftResults = await Promise.allSettled(
-      allAgents.map(async (a) => {
-        // #231 (2026-04-27 evening): drop tools for council contract
-        // drafts. FIRST_PASS_CONTRACT_SYSTEM_PROMPT is tool-agnostic;
-        // file list comes from the user prompt. With tools enabled,
-        // glm-5.1 / nemotron-3-super hallucinate <read>/<grep> markers
-        // that prefix the JSON envelope and cause parse failures (RCA
-        // run 6a256a18, 2026-04-27 evening).
-        const text = await this.promptAgent(a, draftPrompt, "swarm", "json", CONTRACT_JSON_SCHEMA);
-        return { agent: a, text };
-      }),
-    );
-
-    const drafts: CouncilContractDraft[] = [];
-    for (const r of draftResults) {
-      if (r.status !== "fulfilled") {
-        this.appendSystem(
-          `Council draft prompt rejected: ${
-            r.reason instanceof Error ? r.reason.message : String(r.reason)
-          }`,
-        );
-        continue;
-      }
-      this.appendAgent(r.value.agent, r.value.text);
-      const parsed = parseFirstPassContractResponse(r.value.text);
-      if (!parsed.ok) {
-        this.appendSystem(
-          `Council draft from ${r.value.agent.id} did not parse (${parsed.reason}); skipping.`,
-        );
-        continue;
-      }
-      if (parsed.dropped.length > 0) {
-        this.appendSystem(
-          `Council draft from ${r.value.agent.id}: dropped ${parsed.dropped.length} invalid criterion(s) at parse time.`,
-        );
-      }
-      drafts.push({ agentId: r.value.agent.id, contract: parsed.contract });
-    }
-
-    if (drafts.length === 0) {
-      this.appendSystem("Council contract: 0 drafts survived parsing.");
-      return null;
-    }
-    if (drafts.length === 1) {
-      this.appendSystem(
-        `Council contract: only 1 of ${allAgents.length} drafts parsed — using it directly (no merge).`,
-      );
-      return drafts[0].contract;
-    }
-
-    this.appendSystem(
-      `Council contract: ${drafts.length} drafts parsed; running merge via planner.`,
-    );
-    const mergePrompt = buildCouncilContractMergePrompt(seed, drafts);
-    const { response: mergeResponse, agentUsed: mergeAgent } =
-      await this.promptPlannerSafely(planner, mergePrompt, undefined, CONTRACT_JSON_SCHEMA);
-    if (this.stopping) return null;
-    this.appendAgent(mergeAgent, mergeResponse);
-
-    let mergeParsed = parseFirstPassContractResponse(mergeResponse);
-    if (!mergeParsed.ok) {
-      this.appendSystem(
-        `Council merge response did not parse (${mergeParsed.reason}). Issuing repair prompt.`,
-      );
-      const { response: repairResponse, agentUsed: repairAgent } =
-        await this.promptPlannerSafely(
-          mergeAgent,
-          `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractRepairPrompt(
-            mergeResponse,
-            mergeParsed.reason,
-          )}`,
-          undefined,
-          CONTRACT_JSON_SCHEMA,
-        );
-      if (this.stopping) return null;
-      this.appendAgent(repairAgent, repairResponse);
-      mergeParsed = parseFirstPassContractResponse(repairResponse);
-      if (!mergeParsed.ok) {
-        this.appendSystem(
-          `Council merge still invalid after repair (${mergeParsed.reason}). Using best draft (most criteria) as fallback.`,
-        );
-        // Deterministic tie-break: prefer the draft with the most criteria;
-        // ties go to the earliest agent (planner first). Gives us *some*
-        // contract rather than punting back to single-agent after we've
-        // already paid for N drafts.
-        const best = drafts.reduce((a, b) =>
-          b.contract.criteria.length > a.contract.criteria.length ? b : a,
-        );
-        return best.contract;
-      }
-    }
-    if (mergeParsed.dropped.length > 0) {
-      this.appendSystem(
-        `Council merge: dropped ${mergeParsed.dropped.length} invalid criterion(s) at parse time.`,
-      );
-    }
-    return mergeParsed.contract;
-  }
-
-  // Unit 6b grounding + contract publish, extracted (Unit 30) so both the
-  // single-agent and council paths produce identical downstream shape.
-  // `ownerAgent` is only used to label the agent on path-strip findings
-  // — both paths treat the planner as the nominal author.
-  private finalizeContract(
-    parsed: ParsedContract,
-    seed: PlannerSeed,
-    ownerAgent: Agent,
-  ): void {
-    // Unit 6b: strip criterion paths not grounded in the REPO FILE LIST.
-    // v9 showed rule 9 is ignorable as advice (planner invented `src/tests/`
-    // despite colocated tests being right there); enforcement turns it from
-    // "might work" into "only bindable paths can reach the auditor".
-    const groundedCriteria = parsed.criteria.map((c, idx) => {
-      const { accepted, rejected } = classifyExpectedFiles(c.expectedFiles, seed.repoFiles);
-      for (const r of rejected) {
-        this.findings.post({
-          agentId: ownerAgent.id,
-          text: `Contract c${idx + 1}: stripped suspicious path '${r.path}' (${r.reason}). Unit 5d linked-commit fallback will rebind from later commits.`,
-          createdAt: Date.now(),
-        });
-      }
-      if (rejected.length > 0) {
-        this.appendSystem(
-          `Contract c${idx + 1}: ${rejected.length}/${c.expectedFiles.length} path(s) stripped as unbindable — criterion kept with expectedFiles=${JSON.stringify(accepted)}.`,
-        );
-      }
-      return { description: c.description, expectedFiles: accepted };
-    });
-    const groundedContract: ParsedContract = {
-      missionStatement: parsed.missionStatement,
-      criteria: groundedCriteria,
-    };
-
-    this.contract = this.buildContract(groundedContract);
-    // Unit 34: first-pass contract installation → tier 1.
-    this.currentTier = 1;
-    this.tierStartedAt = Date.now();
-    this.opts.emit({ type: "contract_updated", contract: this.cloneContract(this.contract) });
-    // V2 Step 3b.2: contract installed — fire contract-built event.
-    // Empty-contract path (criteria.length === 0) transitions V2 directly
-    // to "completed"; otherwise V2 stays in "planning" awaiting todos.
-    this.v2Observer.apply({
-      type: "contract-built",
-      ts: Date.now(),
-      criteriaCount: this.contract.criteria.length,
-    });
-    // Unit 31: the contract is load-bearing state; make sure the very next
-    // observer read sees it even if no board event follows for a while.
-    this.scheduleStateWrite();
-
-    if (this.contract.criteria.length === 0) {
-      this.appendSystem(
-        `Contract (tier 1): "${this.contract.missionStatement}" (0 criteria — planner found nothing to commit to).`,
-      );
-    } else {
-      this.appendSystem(
-        `Contract (tier 1): "${this.contract.missionStatement}" (${this.contract.criteria.length} criteria).`,
-      );
-    }
-  }
-
-  private buildContract(parsed: ParsedContract): ExitContract {
-    const addedAt = Date.now();
-    return {
-      missionStatement: parsed.missionStatement,
-      criteria: parsed.criteria.map((c, i) => ({
-        id: `c${i + 1}`,
-        description: c.description,
-        expectedFiles: [...c.expectedFiles],
-        status: "unmet",
-        addedAt,
-      })),
-    };
-  }
-
-  private cloneContract(c: ExitContract): ExitContract {
-    return {
-      missionStatement: c.missionStatement,
-      criteria: c.criteria.map((crit) => ({
-        ...crit,
-        expectedFiles: [...crit.expectedFiles],
-      })),
-    };
-  }
-
-  // ---------------------------------------------------------------------
-  // Planner
-  // ---------------------------------------------------------------------
-
-  private async runPlanner(
-    agent: Agent,
-    seed: PlannerSeed,
-    // Issue #3 (2026-04-27): when the primary model produces 0 valid
-    // todos, this method recurses ONCE with the sibling model. The
-    // flag prevents infinite recursion if the fallback also fails.
-    isFallbackAttempt = false,
-  ): Promise<void> {
-    // Unit 24: planner fallback (see promptPlannerSafely comment).
-    // #231 follow-up (2026-04-27 evening): the todos pass uses
-    // PLANNER_SYSTEM_PROMPT which explicitly requires tool use ("USE
-    // THEM", "REQUIRED VERIFICATION: GREP for the symbol FIRST"). With
-    // tools removed, the model returns empty (validation run 07e37525).
-    // Pass "swarm-read" explicitly here so todos has tool access. Marker
-    // leaks are now caught by stripAgentText (#229+#230) so the parse
-    // path sees clean JSON via extractFirstBalanced. Contract pass keeps
-    // the new "swarm" default since FIRST_PASS_CONTRACT_SYSTEM_PROMPT is
-    // tool-agnostic (file list is supplied in the user prompt).
-    // #231 follow-up: pass the just-produced contract into the todos
-    // prompt so the planner can ground each TODO against a specific
-    // criterion. RCA: without this, the model returns [] because it has
-    // no actionable target.
-    const contractForPrompt = this.contract
-      ? {
-          missionStatement: this.contract.missionStatement,
-          criteria: this.contract.criteria.map((c) => ({
-            description: c.description,
-            expectedFiles: c.expectedFiles,
-          })),
-        }
-      : undefined;
-    // #91 (2026-05-01): pass the strict PLANNER_TODOS_JSON_SCHEMA
-    // instead of bare "json" so Ollama's decoder constrains output to
-    // the array-of-todos SHAPE (with discriminated hunks/build union),
-    // not just any JSON. The repair-prompt path becomes effectively
-    // dead code on the Ollama path.
-    const { response: firstResponse, agentUsed: planAgent } = await this.promptPlannerSafely(
-      agent,
-      `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed, contractForPrompt)}`,
-      "swarm-read",
-      PLANNER_TODOS_JSON_SCHEMA,
-    );
-    if (this.stopping) return;
-    this.appendAgent(planAgent, firstResponse);
-
-    let parsed = parsePlannerResponse(firstResponse);
-    if (!parsed.ok) {
-      this.appendSystem(`Planner response did not parse (${parsed.reason}). Issuing repair prompt.`);
-      const { response: repairResponse, agentUsed: repairAgent } = await this.promptPlannerSafely(
-        planAgent,
-        `${PLANNER_SYSTEM_PROMPT}\n\n${buildRepairPrompt(firstResponse, parsed.reason)}`,
-        "swarm-read",
-        PLANNER_TODOS_JSON_SCHEMA,
-      );
-      if (this.stopping) return;
-      this.appendAgent(repairAgent, repairResponse);
-      parsed = parsePlannerResponse(repairResponse);
-      if (!parsed.ok) {
-        this.appendSystem(`Planner still invalid after repair (${parsed.reason}). Giving up this run.`);
-        this.findings.post({
-          agentId: agent.id,
-          text: `Planner failed to produce valid JSON after one repair attempt. Last error: ${parsed.reason}`,
-          createdAt: Date.now(),
-        });
-        return;
-      }
-    }
-
-    if (parsed.dropped.length > 0) {
-      this.appendSystem(
-        `Dropped ${parsed.dropped.length} invalid todo(s): ${parsed.dropped
-          .map((d) => d.reason)
-          .join(" | ")}`,
-      );
-    }
-
-    // Unit 6b: apply the same grounding filter to each todo. Planner schema
-    // requires expectedFiles.min(1), so a todo that loses every path has to
-    // be dropped entirely — leaving it with [] would later fail board CAS.
-    const groundedTodos: typeof parsed.todos = [];
-    let suspiciousStripped = 0;
-    let todosDropped = 0;
-    for (const t of parsed.todos) {
-      const { accepted, rejected } = classifyExpectedFiles(t.expectedFiles, seed.repoFiles);
-      for (const r of rejected) {
-        suspiciousStripped += 1;
-        this.findings.post({
-          agentId: agent.id,
-          text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": stripped suspicious path '${r.path}' (${r.reason}).`,
-          createdAt: Date.now(),
-        });
-      }
-      if (accepted.length === 0) {
-        todosDropped += 1;
-        this.findings.post({
-          agentId: agent.id,
-          text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": dropped entirely — all ${t.expectedFiles.length} path(s) rejected by grounding check.`,
-          createdAt: Date.now(),
-        });
-        continue;
-      }
-      groundedTodos.push({
-        description: t.description,
-        expectedFiles: accepted,
-        expectedAnchors: t.expectedAnchors,
-        expectedSymbols: t.expectedSymbols,
-      });
-    }
-    if (suspiciousStripped > 0 || todosDropped > 0) {
-      this.appendSystem(
-        `Grounding check: stripped ${suspiciousStripped} suspicious path(s); dropped ${todosDropped} todo(s) that lost every path.`,
-      );
-    }
-
-    // Task #70: symbol-grounding pass. For each surviving todo, read
-    // each expectedFile and word-boundary-grep each expectedSymbol.
-    // Drop the todo if ANY declared symbol is missing from EVERY
-    // expectedFile (the file probably doesn't have it; the worker
-    // would just decline). Files that don't exist on disk are
-    // skipped (create-style todo). Cheap: cap=5 todos × ≤2 files.
-    const symbolGroundedTodos: typeof groundedTodos = [];
-    let symbolDropped = 0;
-    for (const t of groundedTodos) {
-      const result = await checkExpectedSymbols(t, seed.clonePath);
-      if (!result.ok) {
-        symbolDropped += 1;
-        this.findings.post({
-          agentId: agent.id,
-          text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": dropped by symbol-grounding — missing ${result.missing.map((m) => `'${m.symbol}' in ${m.file}`).join(", ")}.`,
-          createdAt: Date.now(),
-        });
-        continue;
-      }
-      symbolGroundedTodos.push(t);
-    }
-    if (symbolDropped > 0) {
-      this.appendSystem(
-        `Symbol-grounding check: dropped ${symbolDropped} todo(s) whose declared expectedSymbols don't exist in expectedFiles.`,
-      );
-    }
-    // Re-bind for downstream code paths.
-    groundedTodos.length = 0;
-    groundedTodos.push(...symbolGroundedTodos);
-
-    if (groundedTodos.length === 0) {
-      // Issue #3 (2026-04-27): minimal-viable model fallback. Per-run
-      // cfg.plannerFallbackModel wins; otherwise look up sibling
-      // (deepseek↔nemotron). Fallback is one shot — if the recursion
-      // also returns 0 todos, we declare failure.
-      const fallback = !isFallbackAttempt
-        ? this.active?.plannerFallbackModel ?? siblingModelFor(agent.model)
-        : undefined;
-      if (fallback && fallback !== agent.model) {
-        const original = agent.model;
-        this.appendSystem(
-          `Planner produced 0 valid todos with ${original}; retrying once with sibling model ${fallback}.`,
-        );
-        agent.model = fallback;
-        try {
-          await this.runPlanner(agent, seed, true);
-          return; // recursive call already handled posting OR loud-warn
-        } finally {
-          // Restore original so subsequent planner calls (replan,
-          // auditor pass, reflection) use the user's chosen model.
-          agent.model = original;
-        }
-      }
-      // Either no fallback exists, or fallback also produced 0 todos.
-      // Surface the failure loudly — previous wording ("Planner produced
-      // 0 valid todos after grounding.") read as a benign system note
-      // while the run was actually headed for a no-op terminal state.
-      const dropDetail =
-        parsed.dropped.length > 0 || todosDropped > 0
-          ? `Planner returned only invalid/unbindable todos (${parsed.dropped.length} schema-dropped, ${todosDropped} grounding-dropped).`
-          : "Planner returned an empty todo list — nothing actionable in the repo.";
-      const fallbackNote = isFallbackAttempt
-        ? " (sibling-model fallback also produced 0 todos)"
-        : "";
-      this.appendSystem(
-        `⚠ Planner failed to produce actionable todos${fallbackNote}. ${dropDetail} The run will exit with stopReason="no-progress" after fallback reflection — no commits will land.`,
-      );
-      this.findings.post({
-        agentId: agent.id,
-        text: dropDetail,
-        createdAt: Date.now(),
-      });
-      return;
-    }
-
-    const now = Date.now();
-    // T-Item-3 (2026-05-04): in-flight parallel hypothesis grouping.
-    // When cfg.parallelHypothesisInFlight is set + the planner emitted
-    // any `[hypothesis: X]`-tagged todos, the runner assigns shared
-    // groupIds so first-to-commit wins + others auto-skip.
-    //
-    // T-Item-HypGrp (2026-05-04): refined grouping. When the planner
-    // attributes each hypothesis-tagged todo to a criterion (via the
-    // criteria field), group BY CRITERION rather than by cycle —
-    // each criterion's alternatives form their own group. Falls back
-    // to per-cycle (single shared groupId) when criteria attribution
-    // is missing for ALL hypothesis-tagged todos.
-    //
-    // Why this matters: when the planner emits 3 alternatives for
-    // crypto-choice + 3 alternatives for db-choice in one cycle,
-    // per-cycle grouping would treat them all as competing
-    // alternatives (cross-cancel when any one lands) — wrong.
-    // Per-criterion correctly recognizes them as TWO independent
-    // groups.
-    const cycleHypothesisGroupIds = new Map<string, string>();
-    if (this.active?.parallelHypothesisInFlight) {
-      const hypothesisTodos = groundedTodos.filter(
-        (t) => detectHypothesisTag(t.description) !== null,
-      );
-      if (hypothesisTodos.length > 0) {
-        // Per-criterion path: when EVERY hypothesis-tagged todo has at
-        // least one criterion attribution, bucket by criterion.
-        const allHaveCriteria = hypothesisTodos.every(
-          (t) => Array.isArray(t.criteria) && t.criteria.length > 0,
-        );
-        if (allHaveCriteria) {
-          // First criterion is the canonical bucketing key (matches the
-          // singular criterionId fallback used elsewhere). Same key →
-          // same group; new key → new group.
-          const criterionToGroupId = new Map<string, string>();
-          for (const t of hypothesisTodos) {
-            const key = t.criteria![0];
-            let gid = criterionToGroupId.get(key);
-            if (!gid) {
-              gid = `hyp-${randomUUID().slice(0, 8)}`;
-              criterionToGroupId.set(key, gid);
-              this.hypothesisGroupAborts.set(gid, new AbortController());
-            }
-            // Use the todo's description as a stable key for the
-            // post-loop lookup (descriptions are unique per cycle from
-            // the planner's emit).
-            cycleHypothesisGroupIds.set(t.description, gid);
-          }
-          this.appendSystem(
-            `[T-Item-HypGrp per-criterion] ${hypothesisTodos.length} alternative(s) → ${criterionToGroupId.size} group(s) by criterion attribution.`,
-          );
-        } else {
-          // Legacy per-cycle path: all hypothesis-tagged todos share ONE
-          // group. Conservative fallback when criteria attribution is
-          // missing or partial.
-          const cycleGroupId = `hyp-${randomUUID().slice(0, 8)}`;
-          this.hypothesisGroupAborts.set(cycleGroupId, new AbortController());
-          for (const t of hypothesisTodos) {
-            cycleHypothesisGroupIds.set(t.description, cycleGroupId);
-          }
-          this.appendSystem(
-            `[T-Item-3 per-cycle hypothesis] detected ${hypothesisTodos.length} alternative(s) WITHOUT criteria attribution; falling back to one shared groupId=${cycleGroupId}.`,
-          );
-        }
-      }
-    }
-    for (const t of groundedTodos) {
-      const groupId = cycleHypothesisGroupIds.get(t.description);
-      this.wrappers.postTodoQ({
-        description: t.description,
-        expectedFiles: t.expectedFiles,
-        createdBy: agent.id,
-        createdAt: now,
-        // Unit 44b: forward planner-declared anchors. Undefined / empty
-        // → omitted. Each surviving anchor gets resolved at worker
-        // prompt build time.
-        expectedAnchors: t.expectedAnchors,
-        // #237 (2026-04-28): forward kind + command for build-style
-        // TODOs. Defaults (kind="hunks", command undefined) keep the
-        // existing hunks-emit pipeline unchanged.
-        ...(t.kind ? { kind: t.kind } : {}),
-        ...(t.command ? { command: t.command } : {}),
-        // Phase 5c of #243: forward planner-emitted tag preference for
-        // claim routing. Empty / absent → omitted (no preference).
-        ...(t.preferredTag ? { preferredTag: t.preferredTag } : {}),
-        // 2026-05-02 (auto-rollback decision #1): forward criterion
-        // attribution. Singular criterionId is set to the FIRST criterion
-        // for back-compat with existing per-criterion auditor lookup;
-        // criteriaIds carries the full list for multi-criterion rollback.
-        ...(t.criteria && t.criteria.length > 0
-          ? { criterionId: t.criteria[0], criteriaIds: t.criteria }
-          : {}),
-        // T-Item-3 / T-Item-HypGrp: per-criterion (preferred) or
-        // per-cycle (fallback) group assignment.
-        ...(groupId ? { groupId } : {}),
-      });
-    }
-    this.appendSystem(`Posted ${groundedTodos.length} todo(s) to the board.`);
-    // V2 Step 3b.2: planner finished — fire todos-posted event so V2
-    // can transition from "planning" to "executing" (count>0) or
-    // "auditing" (count=0). The reducer's branch on count drives the
-    // next phase without needing a separate setPhase call.
-    this.v2Observer.apply({
-      type: "todos-posted",
-      ts: now,
-      count: groundedTodos.length,
-    });
-  }
-
-  // ---------------------------------------------------------------------
-  // Phase 11c: drain-audit-repeat loop
-  //
-  // Each iteration drains the board (runWorkers returns once all todos are
-  // open=0/claimed=0/stale=0 and no replans are in flight), then asks the
-  // auditor whether the contract is satisfied. The auditor's verdicts are
-  // applied in-place: "met"/"wont-do" flip the criterion's status; "unmet"
-  // also posts fresh todos linked by criterionId. If the auditor adds new
-  // criteria, they get a fresh c{N+1} id and show up in the next round.
-  //
-  // Exit conditions (first match wins):
-  //   1. stopping set (user stop / cap / crash)     → caller handles phase
-  //   2. no contract or contract.criteria == 0      → drain-exit (Phase 10)
-  //   3. every criterion has a terminal status      → completionDetail
-  //   4. auditor invocation cap reached             → completionDetail
-  //   5. auditor's parse failed twice and no new
-  //      todos were posted (workers would spin)     → completionDetail
-  // ---------------------------------------------------------------------
+  private async runPlanner(agent: Agent, seed: PlannerSeed, isFallbackAttempt = false): Promise<void> { return runPlannerExtracted(this.plannerContext(), agent, seed, isFallbackAttempt); }
 
   private async runAuditedExecution(planner: Agent, workers: Agent[]): Promise<void> {
-    // #97 (2026-05-01): expose the full worker pool so executeWorkerTodo's
-    // self-consistency fan-out can borrow other workers for the K-1
-    // additional prompts. Single-worker setups (workers.length === 1) just
-    // see the same agent K times — same as pre-#97 behavior.
     this.workerPool = workers;
-    while (!this.stopping) {
-      // Task #116: cap-check before each audit cycle. Worker loop
-      // checks per-iteration too, but if workers are stuck in long
-      // retry sequences (Pattern 8 / glm-5.1 slow turns) the loop can
-      // overshoot the wall-clock cap by minutes. This adds a second
-      // gate at the audit boundary so the cap fires reliably.
-      if (this.checkAndApplyCaps()) return;
-      await this.runWorkers(workers);
-      if (this.stopping) return;
-
-      // No contract at all → drain-exit behavior (back-compat). An empty
-      // criteria list means the planner had nothing to commit to, so an
-      // audit can't add information — also exit.
-      if (!this.contract || this.contract.criteria.length === 0) return;
-
-      if (this.allCriteriaResolved()) {
-        // Unit 34: intercept the natural "all met" termination. If the
-        // ratchet is enabled AND we haven't hit max tiers AND the
-        // tier-up prompt hasn't failed too many times in a row, climb
-        // to tier N+1 instead of terminating. If the ratchet is off or
-        // any guard trips, fall through to the normal termination
-        // path (completionDetail below).
-        const maxTiers = this.resolvedMaxTiers();
-        if (
-          maxTiers > 1 &&
-          this.currentTier < maxTiers &&
-          this.tierUpFailures < 3 &&
-          !this.stopping
-        ) {
-          this.recordTierCompletion();
-          const promoted = await this.tryPromoteNextTier(planner, maxTiers);
-          if (this.stopping) return;
-          // V2 Step 3b.2: tier-up decision made — fire event so the V2
-          // reducer transitions tier-up → planning (promoted) or
-          // tier-up → completed (failed). Also need to bump V2 into
-          // tier-up first via auditor-returned with allCriteriaResolved.
-          this.v2Observer.apply({
-            type: "tier-up-decision",
-            ts: Date.now(),
-            promoted,
-          });
-          if (promoted) {
-            // New tier installed; auditor's criteria are fresh "unmet"
-            // and runWorkers will pick up the new todos on the next
-            // loop iteration. Continue without returning.
-            continue;
-          }
-          // Promotion failed — fall through to normal completion.
-          this.completionDetail =
-            "all tier criteria satisfied; tier-up failed after retries — ending run.";
-          this.appendSystem(this.completionDetail);
-          return;
-        }
-        // Ratchet disabled / max tiers reached / too many failures —
-        // record the final tier's stats, then terminate as before.
-        this.recordTierCompletion();
-        this.completionDetail =
-          this.currentTier > 1
-            ? `all tier ${this.currentTier} criteria satisfied; ratchet cap reached (${maxTiers} tier${maxTiers === 1 ? "" : "s"}).`
-            : "all contract criteria satisfied";
-        this.appendSystem("All contract criteria resolved. Stopping.");
-        return;
-      }
-
-      const cap = this.maxAuditInvocations;
-      if (this.auditInvocations >= cap) {
-        this.completionDetail = `auditor invocation cap reached (${cap})`;
-        this.appendSystem(
-          `Auditor invocation cap reached (${cap}). Stopping with unresolved criteria. Raise "Rounds" on the setup form if you want more plan-audit cycles.`,
-        );
-        return;
-      }
-
-      const openBefore = this.boardCounts().open;
-      await this.runAuditor(planner);
-      if (this.stopping) return;
-
-      // Guard against a wedge: auditor produced no new todos AND no new
-      // criteria AND nothing transitioned to terminal — another loop would
-      // just re-audit against the same state.
-      //
-      // Unit 64b: before giving up, give the planner one chance to author
-      // todos for the unmet criteria. The auditor doesn't always post
-      // todos for fresh criteria — most notably right after a tier
-      // promotion (Unit 34), where the just-installed tier-N+1 criteria
-      // have no prior worker output for the auditor to evaluate. The
-      // pre-fix wedge fired immediately on that empty audit and stopped
-      // the run, leaving the entire new tier abandoned. Calling the
-      // planner here lets it ground a fresh batch of todos against the
-      // current repo state + the unmet criteria sitting on the contract.
-      // If even the planner produces nothing, THEN we stop with a more
-      // accurate completion detail.
-      const openAfter = this.boardCounts().open;
-      if (openAfter === openBefore && !this.allCriteriaResolved() && openAfter === 0) {
-        const fallbackSucceeded = await this.runPlannerFallbackForUnmetCriteria(planner);
-        if (this.stopping) return;
-        if (fallbackSucceeded) {
-          // Planner posted todos; continue to runWorkers on the next
-          // iteration so they can be drained.
-          continue;
-        }
-        this.completionDetail = "auditor + planner produced no new work; unresolved criteria remain";
-        this.appendSystem(this.completionDetail + ".");
-        return;
-      }
-    }
+    await runAuditedExecutionExtracted(this.tierContext(), planner, workers);
   }
 
-  // Unit 64b: rebuild a fresh PlannerSeed and ask the planner to author
-  // todos. Returns true if at least one todo landed on the board.
-  // Best-effort — a missing clonePath or seed-build failure returns false
-  // so the caller stops cleanly. Caller is responsible for the post-call
-  // continue/stop branch.
-  private async runPlannerFallbackForUnmetCriteria(planner: Agent): Promise<boolean> {
-    if (!this.active) return false;
-    const openBefore = this.boardCounts().open;
-    this.appendSystem(
-      "Auditor produced no new work; trying a planner pass against the current contract before stopping.",
-    );
-    let seed: PlannerSeed;
-    try {
-      seed = await this.buildSeed(this.active.localPath, this.active);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(`Planner-fallback seed build failed: ${msg}.`);
-      return false;
-    }
-    if (this.stopping) return false;
-    await this.runPlanner(planner, seed);
-    if (this.stopping) return false;
-    const openAfter = this.boardCounts().open;
-    return openAfter > openBefore;
-  }
+  private async runPlannerFallbackForUnmetCriteria(planner: Agent): Promise<boolean> { return runPlannerFallbackForUnmetCriteriaExtracted(this.plannerContext(), planner); }
 
-  private allCriteriaResolved(): boolean {
-    if (!this.contract) return true;
-    return this.contract.criteria.every((c) => c.status !== "unmet");
-  }
+  private allCriteriaResolved(): boolean { return allCriteriaResolvedExtracted(this.tierContext()); }
+  private resolvedMaxTiers(): number { return resolvedMaxTiersExtracted(this.tierContext()); }
+  private recordTierCompletion(): void { recordTierCompletionExtracted(this.tierContext()); }
+  private async tryPromoteNextTier(planner: Agent, maxTiers: number): Promise<boolean> { return tryPromoteNextTierExtracted(this.tierContext(), planner, maxTiers); }
+  private largestCriterionIdNumber(): number { return largestCriterionIdNumberExtracted(this.tierContext()); }
+  private get maxAuditInvocations(): number { return maxAuditInvocationsExtracted(this.tierContext()); }
 
-  // Unit 34: resolve the effective tier cap for this run.
-  //
-  //   - `cfg.ambitionTiers === 0` → ratchet explicitly disabled (max = 1,
-  //     meaning "stop at tier 1" = today's behavior).
-  //   - `cfg.ambitionTiers >= 1` → that value, regardless of env flag.
-  //   - Otherwise, check env: AMBITION_RATCHET_ENABLED=true →
-  //     AMBITION_RATCHET_MAX_TIERS; AMBITION_RATCHET_ENABLED=false → 1.
-  //
-  // Capped at 20 by the route schema; also capped by the env's
-  // max-tier value when inheriting.
-  private resolvedMaxTiers(): number {
-    const perRun = this.active?.ambitionTiers;
-    if (perRun !== undefined) {
-      return Math.max(1, perRun);
-    }
-    if (!config.AMBITION_RATCHET_ENABLED) return 1;
-    return config.AMBITION_RATCHET_MAX_TIERS;
-  }
+  private async runAuditor(planner: Agent, opts: { allowWhenStopping?: boolean } = {}): Promise<void> { await runAuditorExtracted(this.auditorContext(), planner, opts); }
 
-  // Unit 34: capture the just-completed tier's stats. Called when all
-  // criteria for the CURRENT tier are resolved — either right before a
-  // tier promotion or right before final termination. Push stats to
-  // tierHistory; the summary + state snapshot include this array so
-  // cross-run analysis can see the per-tier breakdown.
-  //
-  // The "current tier's criteria" are the tail slice of this.contract.criteria
-  // whose addedAt matches the current tier's startedAt — since buildContract /
-  // appendTierCriteria stamp each batch with the tier's start time, a group-by
-  // on addedAt recovers the per-tier subset.
-  private recordTierCompletion(): void {
-    if (!this.contract || this.currentTier < 1) return;
-    const now = Date.now();
-    const startedAt = this.tierStartedAt ?? now;
-    // The current tier's criteria are the ones whose addedAt is >= this
-    // tier's startedAt (tier N criteria are stamped with tierStartedAt
-    // when promoted; tier 1's are stamped at buildContract time just
-    // after tierStartedAt was set).
-    const tierCriteria = this.contract.criteria.filter(
-      (c) => c.addedAt >= startedAt,
-    );
-    const met = tierCriteria.filter((c) => c.status === "met").length;
-    const wontDo = tierCriteria.filter((c) => c.status === "wont-do").length;
-    const unmet = tierCriteria.filter((c) => c.status === "unmet").length;
-    this.tierHistory.push({
-      tier: this.currentTier,
-      missionStatement: this.contract.missionStatement,
-      criteriaTotal: tierCriteria.length,
-      criteriaMet: met,
-      criteriaWontDo: wontDo,
-      criteriaUnmet: unmet,
-      wallClockMs: Math.max(0, now - startedAt),
-      startedAt,
-      endedAt: now,
-    });
-    this.tiersCompleted += 1;
-  }
+  private applyAuditorResult(result: AuditorResult, planner: Agent): void { applyAuditorResultExtracted(this.auditorContext(), result, planner); }
 
-  // Unit 34: attempt to promote tier N → tier N+1 via a planner prompt.
-  // Returns true if a new tier contract was installed; false otherwise
-  // (parse failure, zero valid criteria, or user stop mid-prompt).
-  //
-  // Preserves prior-tier criteria in this.contract.criteria (they stay
-  // "met"/"wont-do" for the summary record) and appends the new tier's
-  // criteria with continuing IDs (tier 1 = c1-c5; tier 2 = c6-cN; etc.).
-  // The missionStatement is replaced with the new tier's so the UI and
-  // downstream prompts frame work by the current ambition level.
-  private async tryPromoteNextTier(
-    planner: Agent,
-    maxTiers: number,
-  ): Promise<boolean> {
-    if (!this.contract || !this.active) return false;
-    const nextTier = this.currentTier + 1;
-    this.appendSystem(
-      `Ambition ratchet: all tier ${this.currentTier} criteria resolved; attempting tier ${nextTier} (max ${maxTiers}).`,
-    );
+  // --- Workers ---
 
-    // Gather committed files across all tiers so the planner doesn't
-    // propose duplicating prior work.
-    const committed = this.boardListTodos().filter((t) => t.status === "committed");
-    const committedFiles = Array.from(
-      new Set(committed.flatMap((t) => t.expectedFiles)),
-    );
+  private async runWorkers(workers: Agent[]): Promise<void> { await runWorkersExtracted(this.workerContext(), workers); }
+  private async runWorker(agent: Agent): Promise<void> { await runWorkerExtracted(this.workerContext(), agent); }
+  private async executeBuildTodo(agent: Agent, todo: Todo): Promise<"committed" | "stale" | "lost-race" | "aborted"> { return executeBuildTodoExtracted(this.workerContext(), agent, todo); }
+  private maybeSettleHypothesisGroup(todoId: string): void { maybeSettleHypothesisGroupExtracted(this.workerContext(), todoId); }
+  private async executeWorkerTodo(agent: Agent, todo: Todo): Promise<"committed" | "stale" | "lost-race" | "aborted"> { return executeWorkerTodoExtracted(this.workerContext(), agent, todo); }
 
-    const priorCriteria = this.contract.criteria.map((c) => ({
-      id: c.id,
-      description: c.description,
-      status: c.status,
-      rationale: c.rationale,
-      expectedFiles: [...c.expectedFiles],
-    }));
-
-    // We need the latest PlannerSeed-style inputs (REPO FILE LIST, README,
-    // user directive). Rebuild from the active cfg — cheap and the
-    // directive is carried on the run config.
-    const clone = this.active.localPath;
-    // Task #209: log tier-up file-read failures instead of silent fallback.
-    // Previously these `.catch(() => null/[])` swallows let a deleted-clone
-    // or unreadable-repo scenario produce an empty file list → planner
-    // posts 0 todos → run "succeeds" doing nothing. Surface the failure
-    // both to diag log and transcript so the user can recognize the
-    // degraded-context state.
-    const readmeExcerpt = await this.opts.repos.readReadme(clone).catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.opts.logDiag?.({ type: "_tier_up_readme_failed", clone, error: msg });
-      this.appendSystem(`Tier-up README read failed (${msg}); planner gets no README context.`);
-      return null;
-    });
-    const repoFiles = await this.opts.repos.listRepoFiles(clone, { maxFiles: 150 }).catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.opts.logDiag?.({ type: "_tier_up_files_failed", clone, error: msg });
-      this.appendSystem(`Tier-up file list failed (${msg}); planner gets empty file list.`);
-      return [] as string[];
-    });
-
-    const prompt = buildTierUpPrompt({
-      nextTier,
-      maxTiers,
-      priorMissionStatement: this.contract.missionStatement,
-      priorCriteria,
-      committedFiles,
-      repoFiles,
-      readmeExcerpt,
-      // #299: weave any user-submitted mid-run amendments into the
-      // tier-upgrade directive. The next contract authoring sees
-      // them as if they were part of the original directive.
-      userDirective: this.directiveWithAmendments(),
-    });
-
-    const { response, agentUsed } = await this.promptPlannerSafely(
-      planner,
-      prompt,
-      undefined,
-      CONTRACT_JSON_SCHEMA,
-    );
-    if (this.stopping) return false;
-    this.appendAgent(agentUsed, response);
-
-    let parsed = parseFirstPassContractResponse(response);
-    if (!parsed.ok) {
-      this.appendSystem(
-        `Tier ${nextTier} response did not parse (${parsed.reason}). Issuing repair prompt.`,
-      );
-      const { response: repairResponse, agentUsed: repairAgent } =
-        await this.promptPlannerSafely(
-          agentUsed,
-          `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractRepairPrompt(
-            response,
-            parsed.reason,
-          )}`,
-          undefined,
-          CONTRACT_JSON_SCHEMA,
-        );
-      if (this.stopping) return false;
-      this.appendAgent(repairAgent, repairResponse);
-      parsed = parseFirstPassContractResponse(repairResponse);
-      if (!parsed.ok) {
-        this.tierUpFailures += 1;
-        this.appendSystem(
-          `Tier ${nextTier} still invalid after repair (${parsed.reason}). Ratchet failure ${this.tierUpFailures}/3.`,
-        );
-        return false;
-      }
-    }
-    if (parsed.contract.criteria.length === 0) {
-      this.tierUpFailures += 1;
-      this.appendSystem(
-        `Tier ${nextTier} produced 0 criteria — planner saw nothing left to do. Ratchet failure ${this.tierUpFailures}/3.`,
-      );
-      return false;
-    }
-
-    // Reset the failure counter on successful parse — we only count
-    // CONSECUTIVE failures.
-    this.tierUpFailures = 0;
-
-    // Ground paths (Unit 6b). Same as the first-pass pass.
-    const priorMaxId = this.largestCriterionIdNumber();
-    const tierStartedAt = Date.now();
-    const appendedCriteria = parsed.contract.criteria.map((c, idx) => {
-      const { accepted, rejected } = classifyExpectedFiles(c.expectedFiles, repoFiles);
-      for (const r of rejected) {
-        this.findings.post({
-          agentId: planner.id,
-          text: `Tier ${nextTier} c${priorMaxId + idx + 1}: stripped suspicious path '${r.path}' (${r.reason}).`,
-          createdAt: Date.now(),
-        });
-      }
-      if (rejected.length > 0) {
-        this.appendSystem(
-          `Tier ${nextTier} c${priorMaxId + idx + 1}: ${rejected.length}/${c.expectedFiles.length} path(s) stripped as unbindable.`,
-        );
-      }
-      return {
-        id: `c${priorMaxId + idx + 1}`,
-        description: c.description,
-        expectedFiles: accepted,
-        status: "unmet" as const,
-        addedAt: tierStartedAt,
-      };
-    });
-
-    // Install the new tier on top of prior criteria.
-    this.contract = {
-      missionStatement: parsed.contract.missionStatement,
-      criteria: [...this.contract.criteria, ...appendedCriteria],
-    };
-    this.currentTier = nextTier;
-    this.tierStartedAt = tierStartedAt;
-    this.opts.emit({
-      type: "contract_updated",
-      contract: this.cloneContract(this.contract),
-    });
-    this.scheduleStateWrite();
-    this.appendSystem(
-      `Contract (tier ${nextTier}): "${this.contract.missionStatement}" (+${appendedCriteria.length} new criteria, ${this.contract.criteria.length} total).`,
-    );
-    return true;
-  }
-
-  // Unit 34: highest numeric suffix across current criterion IDs, for ID
-  // continuation on tier promotion. Criteria are IDed c1, c2, c3, ... so
-  // the number is the part after 'c'. Returns 0 if no criteria exist or
-  // none parse (shouldn't happen at ratchet time — we just saw a full
-  // tier complete).
-  private largestCriterionIdNumber(): number {
-    if (!this.contract) return 0;
-    let max = 0;
-    for (const c of this.contract.criteria) {
-      const m = /^c(\d+)$/.exec(c.id);
-      if (m) {
-        const n = Number.parseInt(m[1], 10);
-        if (n > max) max = n;
-      }
-    }
-    return max;
-  }
-
-  // Audit fix (2026-04-28): criticEnabled() / verifierEnabled() gate
-  // methods removed — neither feature has been re-wired into the V2
-  // worker pipeline since V2 cutover Phase 2c. cfg.critic / cfg.verifier
-  // / cfg.criticEnsemble flags continue to be accepted by the route
-  // schema for back-compat (older clients won't 400) but are no-op.
-  // When the features get re-wired, the gates come back with them.
-
-  // Unit 11: the drain-audit-repeat loop's backstop. Reads from cfg.rounds so
-  // the user's setup-form "Rounds" slider actually has teeth in blackboard
-  // mode (previously ignored — see README notes). The fallback of 5 matches
-  // the pre-Unit-11 hardcoded value and only triggers if this.active is
-  // missing, which shouldn't happen once start() has run.
-  private get maxAuditInvocations(): number {
-    return this.active?.rounds ?? 5;
-  }
-
-  private async runAuditor(
-    planner: Agent,
-    opts: { allowWhenStopping?: boolean } = {},
-  ): Promise<void> {
-    if (!this.contract) return;
-    this.auditInvocations++;
-    const label = opts.allowWhenStopping ? "final audit" : "auditor invocation";
-    this.appendSystem(
-      `${label} ${this.auditInvocations}/${this.maxAuditInvocations}.`,
-    );
-    // V2 Step 3b.2: auditor invocation counter just incremented; fire
-    // auditor-fired so the V2 reducer can advance executing → auditing
-    // (it already entered auditing on the last todo-committed event,
-    // but keep the explicit fire for symmetry with auditor-returned).
-    this.v2Observer.apply({ type: "auditor-fired", ts: Date.now() });
-
-    const seed = await buildAuditorSeed({
-      contract: this.contract!,
-      todos: this.boardListTodos(),
-      findings: this.findings.list(),
-      readExpectedFiles: (paths) => this.readExpectedFiles(paths),
-      auditInvocation: this.auditInvocations,
-      maxInvocations: this.maxAuditInvocations,
-      uiUrl: this.active?.uiUrl,
-      model: this.active?.model ?? "glm-5.1:cloud",
-      clonePath: this.active?.localPath ?? "",
-      appendSystem: (text) => this.appendSystem(text),
-    });
-    // Unit 24: planner fallback (see promptPlannerSafely comment).
-    // Unit 58: when a dedicated auditor agent was spawned, route the
-    // audit prompt to it instead of reusing the planner. Workers can
-    // continue draining new todos in parallel during the audit (they
-    // were idle on the planner-as-auditor path). promptPlannerSafely's
-    // fallback-to-worker safety net still kicks in if the auditor times out.
-    const auditPrimary = this.auditor ?? planner;
-    // #91 (2026-05-01): pass strict AUDITOR_VERDICT_JSON_SCHEMA so
-    // Ollama constrains output to the verdicts+optional-newCriteria
-    // shape. Eliminates the "auditor wrote markdown fences" repair path.
-    const { response: firstResponse, agentUsed: auditAgent } = await this.promptPlannerSafely(
-      auditPrimary,
-      `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorUserPrompt(seed)}`,
-      "swarm-read",
-      AUDITOR_VERDICT_JSON_SCHEMA,
-    );
-    // Cap-trip final audit needs to keep going even though stopping=true —
-    // that IS the whole reason it's running. In-loop audits short-circuit
-    // as before to honor user stops and crash aborts.
-    if (this.stopping && !opts.allowWhenStopping) return;
-    this.appendAgent(auditAgent, firstResponse);
-
-    let parsed = parseAuditorResponse(firstResponse);
-    if (!parsed.ok) {
-      this.appendSystem(
-        `Auditor response did not parse (${parsed.reason}). Issuing repair prompt.`,
-      );
-      // Unit 58: repair pass also stays on the auditor (or falls back).
-      const { response: repairResponse, agentUsed: repairAgent } = await this.promptPlannerSafely(
-        auditAgent,
-        `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorRepairPrompt(firstResponse, parsed.reason)}`,
-        "swarm-read",
-        AUDITOR_VERDICT_JSON_SCHEMA,
-      );
-      if (this.stopping && !opts.allowWhenStopping) return;
-      this.appendAgent(repairAgent, repairResponse);
-      parsed = parseAuditorResponse(repairResponse);
-      if (!parsed.ok) {
-        this.appendSystem(
-          `Auditor still invalid after repair (${parsed.reason}). Skipping this round; unresolved criteria remain.`,
-        );
-        return;
-      }
-    }
-
-    if (parsed.dropped.length > 0) {
-      this.appendSystem(
-        `Auditor dropped ${parsed.dropped.length} invalid item(s): ${parsed.dropped
-          .map((d) => d.reason)
-          .join(" | ")}`,
-      );
-    }
-
-    // V2 Step 3b.2: count new todos the auditor added BEFORE applying
-    // (applyAuditorResult mutates the board, so post-apply counts would
-    // include any prior open todos too). The reducer uses
-    // newTodosCount + allCriteriaResolved together to decide whether
-    // to keep auditing, transition to executing, or terminate.
-    const newTodosCount = parsed.result.verdicts.reduce(
-      (n, v) => n + (v.status === "unmet" ? v.todos.length : 0),
-      0,
-    );
-    this.applyAuditorResult(parsed.result, planner);
-    this.v2Observer.apply({
-      type: "auditor-returned",
-      ts: Date.now(),
-      allCriteriaResolved: this.allCriteriaResolvedSnapshot(),
-      newTodosCount,
-    });
-  }
-
-  private applyAuditorResult(result: AuditorResult, planner: Agent): void {
-    if (!this.contract) return;
-    const criteriaById = new Map(this.contract.criteria.map((c) => [c.id, c]));
-    const now = Date.now();
-    let statusChanges = 0;
-    let todosPosted = 0;
-
-    for (const v of result.verdicts) {
-      const crit = criteriaById.get(v.id);
-      if (!crit) {
-        this.appendSystem(
-          `Auditor emitted verdict for unknown criterion '${v.id}' — ignored.`,
-        );
-        continue;
-      }
-      if (crit.status !== "unmet") {
-        // Prompt tells auditor not to re-verdict resolved criteria, but if it
-        // does we skip silently (resolved is resolved).
-        continue;
-      }
-
-      if (v.status === "unmet") {
-        if (v.todos.length === 0) {
-          // Schema permits this but the prompt forbids it — auto-convert to
-          // wont-do rather than leaving the criterion wedged unmet with no
-          // new work. The auto-rationale records that we did so.
-          crit.status = "wont-do";
-          crit.rationale = `auto-converted: auditor returned unmet with no todos. Original rationale: ${v.rationale}`;
-          statusChanges++;
-          continue;
-        }
-        for (const t of v.todos) {
-          this.wrappers.postTodoQ({
-            description: t.description,
-            expectedFiles: [...t.expectedFiles],
-            createdBy: planner.id,
-            createdAt: now,
-            criterionId: crit.id,
-            // Unit 44b: auditor-emitted todos may also carry anchors.
-            // Optional chaining keeps the call backward-compatible if the
-            // auditor schema wasn't extended yet.
-            expectedAnchors: (t as { expectedAnchors?: string[] }).expectedAnchors,
-          });
-          todosPosted++;
-        }
-        // Leave crit.status as "unmet" — next audit round will re-check.
-        crit.rationale = v.rationale;
-      } else {
-        crit.status = v.status;
-        crit.rationale = v.rationale;
-        statusChanges++;
-      }
-    }
-
-    // New criteria are appended; their id is the next slot in the criteria
-    // array. Future audit rounds can propose todos for them.
-    let added = 0;
-    if (result.newCriteria.length > 0) {
-      let nextIdx = this.contract.criteria.length;
-      for (const nc of result.newCriteria) {
-        nextIdx++;
-        this.contract.criteria.push({
-          id: `c${nextIdx}`,
-          description: nc.description,
-          expectedFiles: [...nc.expectedFiles],
-          status: "unmet",
-          addedAt: now,
-        });
-        added++;
-      }
-    }
-
-    this.opts.emit({ type: "contract_updated", contract: this.cloneContract(this.contract) });
-    this.appendSystem(
-      `Auditor applied: ${statusChanges} status change(s), ${todosPosted} new todo(s), ${added} new criterion(s).`,
-    );
-  }
-
-  // ---------------------------------------------------------------------
-  // Workers (Phase 4: dry-run — no file writes)
-  // ---------------------------------------------------------------------
-
-  private async runWorkers(workers: Agent[]): Promise<void> {
-    await Promise.all(workers.map((w) => this.runWorker(w)));
-  }
-
-  private async runWorker(agent: Agent): Promise<void> {
-    // Task #215: instrument the wait-loop to surface "all conditions to
-    // exit are NOT met" wedges. Periodically log which condition is
-    // keeping the worker in the wait branch so we can identify state
-    // wedges in real-time instead of post-mortem.
-    let waitTickN = 0;
-    let lastWaitDiagAt = 0;
-    while (!this.stopping) {
-      // Jittered poll so N workers don't hit the board in lockstep.
-      const jitter = Math.floor(Math.random() * WORKER_POLL_JITTER_MS);
-      await this.sleep(WORKER_POLL_MS + jitter);
-      if (this.stopping) return;
-
-      // Phase 7: cap guard. Check BEFORE considering new work so we don't
-      // burn another prompt right after a cap would have tripped. Sets
-      // stopping=true under the hood, so the next loop iteration (if any)
-      // exits cleanly; we also return early here for promptness.
-      if (this.checkAndApplyCaps()) return;
-      // Task #165: while paused on quota wall, idle silently — don't
-      // claim work, don't burn cooldown, just wait for the probe to
-      // resume. checkAndApplyCaps short-circuits during pause so the
-      // wall-clock cap doesn't burn either.
-      // 2026-05-04 (W16/W17): also idle on subscriber-disconnect
-      // (R7) and heap-pressure (R13) pauses. Same semantics — wait
-      // here without claiming work or burning prompts.
-      if (this.paused || this.subscriberPaused || this.memoryPaused) continue;
-      // Task #167: soft-stop. If draining was requested, this worker's
-      // current iteration's executeWorkerTodo (if any) already ran to
-      // completion above the loop boundary. Now: don't claim anything
-      // new — exit cleanly so the drain watcher can escalate to hard
-      // stop once all workers have exited and no claims remain.
-      if (this.draining) return;
-
-      const counts = this.boardCounts();
-      // Nothing left to do: no open, nothing claimed, no stales, AND no
-      // in-flight replan work. Stales can resurrect to open via replan, and
-      // a slow replan can finish AFTER the last worker loop — so we must
-      // also wait for replanPending to drain and replanRunning to clear,
-      // otherwise a revised todo would be posted to an already-terminated
-      // swarm and stuck at open forever.
-      if (
-        counts.open === 0 &&
-        counts.claimed === 0 &&
-        counts.stale === 0 &&
-        this.replanPending.size === 0 &&
-        !this.replanRunning
-      ) {
-        return;
-      }
-      // Task #216: emit "ready" status during the wait/poll branch so
-      // the UI doesn't show stale "thinking" from the start of the
-      // previous prompt. Without this, a worker that finished a prompt
-      // and is now polling shows as actively-thinking for minutes.
-      this.opts.manager.markStatus(agent.id, "ready", { lastMessageAt: Date.now() });
-      this.emitAgentState({
-        id: agent.id,
-        index: agent.index,
-        port: agent.port,
-        sessionId: agent.sessionId,
-        status: "ready",
-        lastMessageAt: Date.now(),
-      });
-      // Task #215 + #219: log wedge state when the worker has been
-      // wait-spinning for a while. Validation run c05898ab (2026-04-26)
-      // showed the original "fire on first tick" was too eager — every
-      // normal "one worker mid-flight while siblings finished" transient
-      // tripped the alarm. Real wedges (b2a4d987 — 12+ min with claimed=1
-      // stuck) need MULTIPLE consecutive wait ticks. Worker poll = 2-2.5s
-      // per tick; require ~12 ticks (30s+ wait) before surfacing anything.
-      if (counts.open === 0) {
-        waitTickN += 1;
-        const now = Date.now();
-        const PERSISTENT_WEDGE_MIN_TICKS = 12; // ≈30s at WORKER_POLL_MS=2000+jitter
-        // Task #222: only fire the wedge diag when NO agent is in flight.
-        // Sibling waiting on a slow-but-alive worker is normal, not a wedge.
-        // The wedge is for the case where everyone's idle but state is
-        // stuck — that's when something is truly broken.
-        const someoneInFlight = this.opts.manager.anyAgentThinking();
-        const sustainedWedge = waitTickN >= PERSISTENT_WEDGE_MIN_TICKS && !someoneInFlight;
-        if (sustainedWedge && now - lastWaitDiagAt > 30_000) {
-          lastWaitDiagAt = now;
-          this.opts.logDiag?.({
-            type: "_worker_wait_wedge",
-            agentId: agent.id,
-            tickN: waitTickN,
-            counts: { ...counts },
-            replanPending: Array.from(this.replanPending),
-            replanRunning: this.replanRunning,
-            // V2 Step 3b.2: include the V2 reducer's view at wedge-
-            // detection time. If V2 says "completed" or "auditing"
-            // while V1 is sustained-executing, that's the wedge
-            // bug class (#215, #219, #222) confirmed in real time.
-            v2Phase: this.v2Observer.getState().phase,
-            v2QueueCounts: this.todoQueue.counts(),
-            ts: now,
-          });
-          // V2 cutover Phase 1a: explicit divergence-capture call
-          // removed (was: this.v2Observer.checkPhase(...) — the
-          // checkPhase method no longer exists). The diag emit above
-          // still records the V2 phase + queue counts so wedges are
-          // visible in logs/current.jsonl.
-          // Surface to transcript ONCE per worker, the first time we
-          // cross the persistent threshold. Subsequent re-logs (every
-          // 30s while still wedged) only update the diag log, not the
-          // transcript — avoid spam.
-          if (waitTickN === PERSISTENT_WEDGE_MIN_TICKS) {
-            this.appendSystem(
-              `[${agent.id}] worker idle ${Math.round(waitTickN * (WORKER_POLL_MS + WORKER_POLL_JITTER_MS / 2) / 1000)}s but exit-condition not met: ` +
-                `claimed=${counts.claimed} stale=${counts.stale} ` +
-                `replanPending=${this.replanPending.size} replanRunning=${this.replanRunning}`,
-            );
-          }
-        }
-        continue;
-      } else {
-        // Reset on any tick where there's open work — the wedge counter
-        // tracks CONSECUTIVE waits, not cumulative. A single open todo
-        // appearing means the prior wait is over.
-        waitTickN = 0;
-      }
-
-      // Unit 45: prefer the claimable-finder so we skip todos whose
-      // expectedFiles are already locked by a sibling worker's live
-      // claim. When every open todo is locked we just continue —
-      // another worker will commit/expire soon and free a file. The
-      // jittered sleep at the top of the loop is the implicit backoff.
-      //
-      // Phase 5c of #243: pass this worker's topology tag so the
-      // selector picks a tag-matching TODO first when possible. Falls
-      // through to any open todo when no match. Untagged workers
-      // (no row tag in topology) get undefined → behaves like before.
-      //
-      // V2 cutover Phase 2c (2026-04-28): atomic dequeue replaces V1's
-      // findClaimableTodo+claimTodo two-step. The todo arrives already
-      // in-progress; downstream executors no longer call claimTodo.
-      const myTag = this.active?.topology?.agents.find((a) => a.index === agent.index)?.tag;
-      // T-Item-StigBb (2026-05-04): when stigmergy-on-blackboard is set,
-      // pick the pending todo whose expectedFiles overlap LEAST with
-      // already-committed files (anti-attraction: spread the swarm).
-      // Score = -sum(commitCount[file]) so untouched-file todos win.
-      // Falls back to the standard tag-preferring dequeue when
-      // stigmergyOnBlackboard is off.
-      //
-      // T-Item-HypTimeout (2026-05-04): conflict-aware dispatch when
-      // parallelHypothesisInFlight is set. Score function combines:
-      //   - stigmergy bias (when also on)
-      //   - conflict verdict: defer (-Infinity), dispatch (0),
-      //     force-dispatch (+1, preempts normal candidates)
-      // The deferral-timestamp map is updated in lockstep so the
-      // 5-min timeout fires correctly across iterations.
-      let queued;
-      const useHypothesisCheck = this.active?.parallelHypothesisInFlight;
-      const useStigmergy = this.active?.stigmergyOnBlackboard;
-      if (useHypothesisCheck || useStigmergy) {
-        const stigmergyCounts = this.fileCommitCounts;
-        // Snapshot the full todo list ONCE so siblings checks see
-        // consistent state during this dequeue cycle.
-        const allTodos = this.todoQueue.list();
-        const candidates: CandidateForConflict[] = allTodos.map((t) => ({
-          id: t.id,
-          groupId: t.groupId ?? null,
-          expectedFiles: t.expectedFiles,
-          status: t.status === "in-progress" ? "in-progress" : t.status,
-        }));
-        const now = Date.now();
-        // Track verdicts per-candidate so we can update the timestamp
-        // map AFTER the dequeue picks one (winner gets cleared; losers
-        // stay deferred).
-        const verdictsByTodoId = new Map<
-          string,
-          "dispatch" | "defer" | "force-dispatch"
-        >();
-        queued = this.todoQueue.dequeueByScore(agent.id, (t) => {
-          // Stigmergy bias (always small magnitude so hypothesis verdicts dominate).
-          let stigmergyBias = 0;
-          if (useStigmergy) {
-            let touched = 0;
-            for (const f of t.expectedFiles) touched += stigmergyCounts.get(f) ?? 0;
-            stigmergyBias = -touched;
-          }
-          // Hypothesis check (when enabled).
-          if (useHypothesisCheck && t.groupId) {
-            const candidate = candidates.find((c) => c.id === t.id)!;
-            const groupSiblings = candidates.filter((c) => c.groupId === t.groupId);
-            const verdict = evaluateConflictDispatch({
-              candidate,
-              groupSiblings,
-              deferralTimestamps: this.hypothesisDeferralTimestamps,
-              now,
-            });
-            verdictsByTodoId.set(t.id, verdict);
-            // Defer → never picked unless every other candidate also
-            // defers. Force-dispatch → +1 base preempts normal dispatch.
-            if (verdict === "defer") return Number.NEGATIVE_INFINITY;
-            const baseScore = verdict === "force-dispatch" ? 1000 : 0;
-            return baseScore + stigmergyBias;
-          }
-          return stigmergyBias;
-        });
-        // Update the deferral-timestamp map. Winner (queued.id) is
-        // cleared; deferred candidates start/keep their first-deferred
-        // stamp. We only mutate when hypothesis-check is on.
-        if (useHypothesisCheck) {
-          for (const [todoId, verdict] of verdictsByTodoId.entries()) {
-            // The winner counts as "dispatch" regardless of its raw
-            // verdict — clearing the timestamp is correct either way.
-            const effectiveVerdict =
-              queued && queued.id === todoId ? "dispatch" : verdict;
-            this.hypothesisDeferralTimestamps = updateDeferralTimestamps({
-              candidateId: todoId,
-              verdict: effectiveVerdict,
-              current: this.hypothesisDeferralTimestamps,
-              now,
-            });
-          }
-          // Surface a one-time log when a force-dispatch fires — useful
-          // for debugging "why did alt-A run despite alt-B being in-flight".
-          if (
-            queued &&
-            verdictsByTodoId.get(queued.id) === "force-dispatch"
-          ) {
-            this.appendSystem(
-              `[T-Item-HypTimeout] force-dispatched ${queued.id.slice(0, 8)} after ${(5 * 60_000) / 1000}s deferral (group ${queued.groupId}); CAS may revert if sibling commits first.`,
-            );
-          }
-        }
-        // Mirror the broadcast side-effects that dequeueTodoQ would have
-        // fired. Best-effort; the wrapper normally fires todo_claimed +
-        // schedules a state write. We emit the same event payload here.
-        if (queued) {
-          const wire = v2QueueTodoToWireTodo(queued);
-          if (wire.claim) {
-            this.opts.emit({
-              type: "todo_claimed",
-              todoId: queued.id,
-              claim: wire.claim,
-            });
-          }
-        }
-      } else {
-        queued = this.wrappers.dequeueTodoQ(agent.id, myTag);
-      }
-      if (!queued) continue;
-      const todo = v2QueueTodoToWireTodo(queued);
-
-      // #237 (2026-04-28): build-style TODOs short-circuit the hunks
-      // pipeline entirely — dispatched through swarm-builder + opencode
-      // bash. Hunks TODOs go through executeWorkerTodo (apply-and-commit
-      // via search-anchor matching). V2 cutover Phase 2c removed the
-      // V1 CAS-based pipeline; the env-gated A/B flag is gone with it.
-      let outcome: "committed" | "stale" | "lost-race" | "aborted";
-      if (todo.kind === "build") {
-        outcome = await this.executeBuildTodo(agent, todo);
-      } else {
-        outcome = await this.executeWorkerTodo(agent, todo);
-      }
-      if (outcome === "committed") {
-        // Cooldown so one worker doesn't monopolize the board. Random jitter
-        // helps desync workers that all finished around the same time.
-        await this.sleep(WORKER_COOLDOWN_MS + Math.floor(Math.random() * 500));
-      }
-    }
-  }
-
-  // #237 (2026-04-28): build-style TODO executor. Bypasses the
-  // hunks-emit pipeline (executeWorkerTodo / executeWorkerTodo)
-  // entirely. Flow: allowlist-check the command → prompt swarm-builder
-  // agent to run it via opencode bash → check working tree for changes
-  // → git add+commit if dirty → mark committed; else mark stale.
-  // Defense-in-depth: buildCommandAllowlist enforces a binary
-  // allowlist + forbids shell metacharacters; opencode bash sandbox
-  // is the second safety layer.
-  private async executeBuildTodo(
-    agent: Agent,
-    todo: Todo,
-  ): Promise<"committed" | "stale" | "lost-race" | "aborted"> {
-    if (!todo.command || todo.command.trim().length === 0) {
-      this.appendSystem(`[${agent.id}] build TODO ${todo.id.slice(0, 8)} has no command — marking stale.`);
-      this.wrappers.failTodoQ(todo.id, "build TODO missing command field");
-      return "stale";
-    }
-    // Allowlist check BEFORE any model call. Refused commands never
-    // reach the agent.
-    const check = checkBuildCommand(todo.command);
-    if (!check.ok) {
-      this.appendSystem(
-        `[${agent.id}] build TODO ${todo.id.slice(0, 8)} command refused by allowlist: ${check.reason}`,
-      );
-      this.wrappers.failTodoQ(todo.id, `build command not allowed: ${check.reason}`);
-      return "stale";
-    }
-    this.appendSystem(
-      `[${agent.id}] running build command for todo ${todo.id.slice(0, 8)}: \`${todo.command}\` (binary: ${check.binary})`,
-    );
-
-    // Capture pre-state of git status so we can detect what changed.
-    const clonePath = this.active?.localPath;
-    if (!clonePath) {
-      this.wrappers.failTodoQ(todo.id, "no localPath — runner state corrupt");
-      return "stale";
-    }
-
-    // Prompt the agent. The model must invoke the bash tool with the
-    // exact command we whitelisted (we tell it the command verbatim).
-    const buildPrompt = [
-      "You are a build worker. Your job is to run ONE shell command via the bash tool.",
-      "",
-      `Command to run: ${todo.command}`,
-      `Working directory: ${clonePath}`,
-      "",
-      "Steps:",
-      "1. Invoke the bash tool with the EXACT command above. Do not modify, prefix, or chain.",
-      "2. After the command completes, respond with this JSON envelope and NOTHING ELSE:",
-      `   {"ok": true|false, "exitCode": <number>, "summary": "<one-line summary of what changed>"}`,
-      "",
-      "If the command exits non-zero, set ok=false. Do not edit files manually — bash side effects are the entire delivery mechanism.",
-    ].join("\n");
-
-    let response: string;
-    try {
-      response = await this.promptAgent(agent, buildPrompt, "swarm-builder", "json", "json");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(`[${agent.id}] build prompt failed: ${msg.slice(0, 120)}`);
-      this.wrappers.failTodoQ(todo.id, `build prompt failed: ${msg.slice(0, 200)}`);
-      return "stale";
-    }
-    this.appendAgent(agent, response);
-
-    // Check working tree for changes via git status.
-    const dirty = await this.opts.repos.gitStatus(clonePath);
-    if (!dirty.changedFiles || dirty.changedFiles === 0) {
-      this.appendSystem(
-        `[${agent.id}] build command ran but working tree is clean — marking todo stale.`,
-      );
-      this.wrappers.failTodoQ(todo.id, "build command produced no file changes");
-      return "stale";
-    }
-
-    // Commit. simpleGit add+commit reusing existing helper.
-    try {
-      await this.opts.repos.commitAll(clonePath, `build: ${todo.description.slice(0, 80)}`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(`[${agent.id}] git commit failed: ${msg.slice(0, 120)}`);
-      this.wrappers.failTodoQ(todo.id, `git commit failed: ${msg.slice(0, 200)}`);
-      return "stale";
-    }
-
-    // Note: build TODOs don't go through Board.commitTodo's CAS check
-    // because there's no per-file hash baseline. Mark committed
-    // directly so the board state stays consistent.
-    this.wrappers.completeTodoQ(todo.id);
-    this.maybeSettleHypothesisGroup(todo.id);
-    this.appendSystem(
-      `[${agent.id}] ✓ build commit landed for todo ${todo.id.slice(0, 8)} (${dirty.changedFiles} file change(s))`,
-    );
-    return "committed";
-  }
-
-  // T-Item-3 (2026-05-04): when a todo in a hypothesis group commits
-  // successfully, this is called to:
-  //  1. mark every other non-terminal alternative in the same group
-  //     as `skipped` with reason "alternative <id> landed first"
-  //  2. abort() the group's AbortController so any in-flight worker
-  //     prompts on the losing alternatives bail cleanly
-  //  3. surface the settlement to the transcript for auditor visibility
-  // No-op when the todo isn't in any hypothesis group.
-  private maybeSettleHypothesisGroup(todoId: string): void {
-    const t = this.todoQueue.get(todoId);
-    if (!t || !t.groupId) return;
-    const groupId = t.groupId;
-    const settled = this.todoQueue.markGroupSettled(groupId, todoId);
-    const ctrl = this.hypothesisGroupAborts.get(groupId);
-    if (ctrl) {
-      ctrl.abort();
-      this.hypothesisGroupAborts.delete(groupId);
-    }
-    if (settled.skipped.length > 0) {
-      this.appendSystem(
-        `[T-Item-3] hypothesis group ${groupId} settled: winner=${todoId.slice(0, 8)}; cancelled ${settled.skipped.length} alternative(s) (${settled.skipped.map((id) => id.slice(0, 8)).join(", ")}).`,
-      );
-    } else {
-      this.appendSystem(
-        `[T-Item-3] hypothesis group ${groupId} settled: winner=${todoId.slice(0, 8)}; no other alternatives left to cancel.`,
-      );
-    }
-  }
-
-  // The hunks worker pipeline. After V2 cutover Phase 2c (2026-04-28)
-  // this is the only hunks pipeline — the V1 CAS-based pipeline was
-  // deleted with its env-gated A/B flag. Apply via applyAndCommit;
-  // search-anchor matching catches sibling-worker conflicts at apply
-  // time. Method name keeps the V2 suffix until Phase 2g rename so
-  // anyone reading the diff can see V1 truly went away.
-  private async executeWorkerTodo(
-    agent: Agent,
-    todo: Todo,
-  ): Promise<"committed" | "stale" | "lost-race" | "aborted"> {
-    // V2 cutover Phase 2c (2026-04-28): the explicit claimTodo step is
-    // gone — the dequeueTodoQ in runWorker already transitioned this
-    // todo to in-progress atomically. If a worker crashes mid-prompt,
-    // the reaper (startQueueReaper) sweeps in-progress todos older
-    // than IN_PROGRESS_TTL_MS and routes them through replan.
-
-    let contents: Record<string, string | null>;
-    try {
-      contents = await this.readExpectedFiles(todo.expectedFiles);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.wrappers.failTodoQ(todo.id, `[v2] read failure: ${msg}`);
-      return "stale";
-    }
-
-    const seed: WorkerSeed = {
-      todoId: todo.id,
-      description: todo.description,
-      expectedFiles: todo.expectedFiles,
-      fileContents: contents,
-      expectedAnchors: todo.expectedAnchors,
-      roleGuidance: this.workerRoles.get(agent.id),
-    };
-
-    let response: string;
-    try {
-      // #96 (2026-05-01): pass strict WORKER_HUNKS_JSON_SCHEMA so Ollama
-      // constrains output to the {hunks: [...replace|create|append]}
-      // shape. This is the highest-frequency parse-failure path in the
-      // system — workers emit complex multi-line search/replace strings
-      // that frequently break JSON validity. The schema kills the failure
-      // class on the Ollama path. Anthropic + OpenAI ignore format
-      // gracefully (they have their own structured-output paths).
-      response = await this.promptAgent(
-        agent,
-        `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`,
-        "swarm",
-        "json",
-        WORKER_HUNKS_JSON_SCHEMA,
-      );
-    } catch (err) {
-      if (this.stopping) return "aborted";
-      const msg = err instanceof Error ? err.message : String(err);
-      this.wrappers.failTodoQ(todo.id, `[v2] worker prompt failed: ${msg}`);
-      bumpAgentCounter(this.promptErrorsPerAgent, agent.id);
-      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-      return "stale";
-    }
-    if (this.stopping) return "aborted";
-    this.appendAgent(agent, response);
-
-    let parsed = parseWorkerResponse(response, todo.expectedFiles);
-    if (!parsed.ok) {
-      bumpAgentCounter(this.jsonRepairsPerAgent, agent.id);
-      this.appendSystem(`[${agent.id}] [v2] worker JSON invalid (${parsed.reason}); issuing repair prompt.`);
-      let repair: string;
-      try {
-        repair = await this.promptAgent(
-          agent,
-          `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerRepairPrompt(response, parsed.reason)}`,
-          "swarm",
-          "json",
-          WORKER_HUNKS_JSON_SCHEMA,
-        );
-      } catch (err) {
-        if (this.stopping) return "aborted";
-        const msg = err instanceof Error ? err.message : String(err);
-        this.wrappers.failTodoQ(todo.id, `[v2] worker repair prompt failed: ${msg}`);
-        bumpAgentCounter(this.promptErrorsPerAgent, agent.id);
-        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-        return "stale";
-      }
-      if (this.stopping) return "aborted";
-      this.appendAgent(agent, repair);
-      parsed = parseWorkerResponse(repair, todo.expectedFiles);
-      if (!parsed.ok) {
-        this.wrappers.failTodoQ(todo.id, `[v2] worker produced invalid JSON after repair: ${parsed.reason}`);
-        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-        return "stale";
-      }
-    }
-
-    if (parsed.skip) {
-      this.appendSystem(`[${agent.id}] [v2] worker declined todo: ${parsed.skip}`);
-      this.wrappers.failTodoQ(todo.id, `[v2] worker declined: ${parsed.skip}`);
-      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-      return "stale";
-    }
-
-    if (parsed.hunks.length === 0) {
-      this.wrappers.failTodoQ(todo.id, "[v2] worker returned empty hunks with no skip reason");
-      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-      return "stale";
-    }
-
-    // #87 (2026-05-01) + #92 deeper (2026-05-01): self-consistency voting.
-    // When cfg.selfConsistencyK > 1, run K-1 additional worker prompts in
-    // PARALLEL (Promise.allSettled), collect attempts that parsed cleanly,
-    // and vote on the majority-agreed hunks-envelope. Tied votes go through
-    // an LLM-as-judge that asks the auditor (or planner if no auditor)
-    // which patch is best. Cost: K× tokens per committable todo + 1 judge
-    // call when no majority. Quality lift: measurable on tasks with > 1
-    // plausible patch.
-    const k = Math.max(1, Math.min(5, this.active?.selfConsistencyK ?? 1));
-    let hunksToCommit: readonly Hunk[] = parsed.hunks;
-    if (k > 1) {
-      const initialVotes: HunkVote[] = [{ workerId: `${agent.id}#1`, hunks: parsed.hunks }];
-      // #97 (2026-05-01): route the K-1 additional prompts across DIFFERENT
-      // workers in the pool when more than one worker exists. Cross-agent
-      // diversity tests "different prompt context" not just "sampling
-      // noise from the same agent" (which is all the K=K-on-same-agent
-      // path tested). Falls back to same-agent rotation when only one
-      // worker exists (single-worker setups, agentCount=1, etc.). The
-      // borrowed worker skips one poll cycle (~3s) of its own loop,
-      // which is fine on a cooperative board.
-      const otherWorkers = this.workerPool.filter((w) => w.id !== agent.id);
-      const fanoutAgents: Agent[] = Array.from({ length: k - 1 }, (_, idx) => {
-        if (otherWorkers.length === 0) return agent; // fall back to same agent
-        return otherWorkers[idx % otherWorkers.length]; // round-robin
-      });
-      this.appendSystem(
-        `[${agent.id}] [v2] self-consistency K=${k} fan-out across ${
-          otherWorkers.length > 0
-            ? `${new Set(fanoutAgents.map((a) => a.id)).size + 1} agents (${[agent.id, ...new Set(fanoutAgents.map((a) => a.id))].join(", ")})`
-            : "1 agent (single-worker setup)"
-        }`,
-      );
-      const extraPromises = Array.from({ length: k - 1 }, (_, idx) =>
-        this.promptAgent(
-          fanoutAgents[idx],
-          `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`,
-          "swarm",
-          "json",
-          WORKER_HUNKS_JSON_SCHEMA,
-        )
-          .then((response) => ({ ok: true as const, idx: idx + 2, response, workerId: fanoutAgents[idx].id }))
-          .catch((err) => ({ ok: false as const, idx: idx + 2, err, workerId: fanoutAgents[idx].id })),
-      );
-      const settled = await Promise.allSettled(extraPromises);
-      if (this.stopping) return "aborted";
-      for (const s of settled) {
-        if (s.status === "rejected") continue; // never happens (catch above)
-        const r = s.value;
-        if (!r.ok) {
-          this.appendSystem(
-            `[${r.workerId}] [v2] self-consistency attempt ${r.idx}/${k} prompt failed: ${
-              r.err instanceof Error ? r.err.message : String(r.err)
-            } — excluded from vote`,
-          );
-          continue;
-        }
-        // #97: attribute the transcript entry to the actual worker that
-        // produced it (may be a different agent from the claiming worker
-        // when cross-agent fan-out is active).
-        const sourceAgent =
-          this.workerPool.find((w) => w.id === r.workerId) ?? agent;
-        this.appendAgent(sourceAgent, r.response);
-        const extraParsed = parseWorkerResponse(r.response, todo.expectedFiles);
-        if (!extraParsed.ok) {
-          this.appendSystem(
-            `[${r.workerId}] [v2] self-consistency attempt ${r.idx}/${k} parse failed: ${extraParsed.reason} — excluded from vote`,
-          );
-          continue;
-        }
-        if (extraParsed.skip || extraParsed.hunks.length === 0) {
-          this.appendSystem(
-            `[${r.workerId}] [v2] self-consistency attempt ${r.idx}/${k} declined or empty — excluded from vote`,
-          );
-          continue;
-        }
-        // #97: vote workerId now uses the actual fan-out agent, so
-        // hunkVoting's diagnostics show "agent-2#3 voted for X" not
-        // "agent-1#3 voted for X" when the prompt actually ran on agent-2.
-        initialVotes.push({ workerId: `${r.workerId}#${r.idx}`, hunks: extraParsed.hunks });
-      }
-
-      // Build LLM-as-judge: only consulted when there's no strict
-      // majority. Routes through the auditor (or planner) — those are
-      // the agents with read tools enabled, which the judge needs to
-      // evaluate which patch actually fits the codebase.
-      const judgeAgent = this.auditor ?? agent;
-      const judgeFn: JudgeFn = async (candidates) => {
-        if (this.stopping) return null;
-        const judgePrompt = buildJudgePrompt({
-          todoDescription: todo.description,
-          expectedFiles: todo.expectedFiles,
-          candidates,
-        });
-        let judgeResponse: string;
-        try {
-          judgeResponse = await this.promptAgent(judgeAgent, judgePrompt, "swarm-read", "json", {
-            type: "object",
-            properties: { winner: { type: "integer", minimum: 1, maximum: candidates.length } },
-            required: ["winner"],
-          });
-        } catch (err) {
-          this.appendSystem(
-            `[${agent.id}] [v2] LLM-judge call failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          return null;
-        }
-        try {
-          const parsed = JSON.parse(judgeResponse);
-          const winnerIdx = typeof parsed.winner === "number" ? parsed.winner : -1;
-          if (winnerIdx < 1 || winnerIdx > candidates.length) return null;
-          return candidates[winnerIdx - 1].id;
-        } catch {
-          return null;
-        }
-      };
-
-      const verdict = await voteOnHunksWithJudge(initialVotes, judgeFn);
-      this.appendSystem(
-        `[${agent.id}] [v2] self-consistency vote: ${verdict.agreementCount}/${verdict.totalConsidered} agreed` +
-          ` · ${verdict.distinctShapes} distinct shape(s)` +
-          ` · ${verdict.unanimous ? "unanimous" : verdict.hasMajority ? "majority" : `tiebreak=${verdict.tiebreak}`}`,
-      );
-      if (!verdict.winner) {
-        this.wrappers.failTodoQ(todo.id, "[v2] self-consistency: zero eligible votes after K attempts");
-        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-        return "stale";
-      }
-      hunksToCommit = verdict.winner;
-    }
-
-    // V2 path: apply + git commit via the substrate. No CAS hash check —
-    // applyHunks anchor failure catches sibling-worker conflicts.
-    const fsAdapter = realFilesystemAdapter(this.active!.localPath);
-    const gitAdapter = realGitAdapter(this.active!.localPath);
-    // #296: pre-commit verify gate. Only constructed when the user
-    // supplied a verifyCommand on RunConfig — undefined skips the
-    // verify step in WorkerPipeline and the legacy commit-without-
-    // verify behavior is preserved.
-    const verifyCommand = this.active?.verifyCommand?.trim();
-    const verifyAdapter =
-      verifyCommand && verifyCommand.length > 0
-        ? realVerifyAdapter(this.active!.localPath, verifyCommand)
-        : undefined;
-    let applyResult = await applyAndCommit({
-      todoId: todo.id,
-      workerId: agent.id,
-      expectedFiles: todo.expectedFiles,
-      hunks: hunksToCommit,
-      fs: fsAdapter,
-      git: gitAdapter,
-      ...(verifyAdapter ? { verify: verifyAdapter } : {}),
-    });
-    // 2026-05-02: hunk-repair retry. When applyHunks fails with a
-    // recoverable error (failedHunkIndex set → anchor mismatch, not-
-    // unique, create-on-existing), give the worker ONE retry with the
-    // actual file content + the precise applyHunks error. Pre-fix:
-    // every apply failure went straight to replan, which forces the
-    // PLANNER to re-emit a new TODO — much higher latency than just
-    // letting the worker fix its own hunk. Targets the ~30% of
-    // search-not-found / search-not-unique failures the few-shot
-    // examples didn't already prevent.
-    if (
-      !applyResult.ok &&
-      applyResult.failedHunkIndex !== undefined &&
-      !this.stopping
-    ) {
-      this.appendSystem(
-        `[${agent.id}] [v2] hunk-repair: apply failed (${applyResult.reason}); re-prompting worker with actual file content (one retry).`,
-      );
-      // Re-read files in case partial writes happened (applyAndCommit
-      // is atomic per file, but a prior hunk in a multi-hunk batch may
-      // have changed sibling files before the failing hunk fired).
-      let freshContents: Record<string, string>;
-      try {
-        const raw = await this.readExpectedFiles(todo.expectedFiles);
-        freshContents = Object.fromEntries(
-          Object.entries(raw).map(([k, v]) => [k, v ?? ""]),
-        );
-      } catch (readErr) {
-        const msg = readErr instanceof Error ? readErr.message : String(readErr);
-        this.appendSystem(`[${agent.id}] [v2] hunk-repair: re-read failed (${msg}); falling through to replan.`);
-        this.wrappers.failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`);
-        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-        return "stale";
-      }
-      const repairPrompt = buildHunkRepairPrompt(
-        hunksToCommit.slice(),
-        applyResult.reason,
-        freshContents,
-      );
-      let repairResponse: string;
-      try {
-        repairResponse = await this.promptAgent(
-          agent,
-          `${WORKER_SYSTEM_PROMPT}\n\n${repairPrompt}`,
-          "swarm",
-          "json",
-          WORKER_HUNKS_JSON_SCHEMA,
-        );
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.appendSystem(`[${agent.id}] [v2] hunk-repair prompt failed (${msg}); falling through to replan.`);
-        this.wrappers.failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`);
-        bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-        return "stale";
-      }
-      this.appendAgent(agent, repairResponse);
-      const repairParsed = parseWorkerResponse(repairResponse, todo.expectedFiles);
-      if (repairParsed.ok && repairParsed.hunks.length > 0 && !repairParsed.skip) {
-        applyResult = await applyAndCommit({
-          todoId: todo.id,
-          workerId: agent.id,
-          expectedFiles: todo.expectedFiles,
-          hunks: repairParsed.hunks,
-          fs: fsAdapter,
-          git: gitAdapter,
-          ...(verifyAdapter ? { verify: verifyAdapter } : {}),
-        });
-        if (applyResult.ok) {
-          this.appendSystem(
-            `[${agent.id}] [v2] ✓ hunk-repair retry succeeded on second attempt.`,
-          );
-        }
-      } else {
-        this.appendSystem(
-          `[${agent.id}] [v2] hunk-repair response empty or unparseable (${repairParsed.ok ? "skip/empty" : repairParsed.reason}); falling through to replan.`,
-        );
-      }
-    }
-    if (!applyResult.ok) {
-      this.wrappers.failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`);
-      bumpAgentCounter(this.rejectedAttemptsPerAgent, agent.id);
-      return "stale";
-    }
-
-    // V2 cutover Phase 2c (2026-04-28): commit transitions the V2 queue
-    // entry. completeTodoQ also fires the v2Observer's todo-committed
-    // event so the reducer transitions executing→auditing on drain.
-    // If the reaper transitioned this todo to failed mid-prompt
-    // (worker timeout), complete() throws — caught here as lost-race.
-    try {
-      this.wrappers.completeTodoQ(todo.id);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(`[${agent.id}] commit lost race (todo reaped): ${msg}`);
-      return "lost-race";
-    }
-    this.maybeSettleHypothesisGroup(todo.id);
-    bumpAgentCounter(this.commitsPerAgent, agent.id);
-    this.linesAddedPerAgent.set(
-      agent.id,
-      (this.linesAddedPerAgent.get(agent.id) ?? 0) + applyResult.linesAdded,
-    );
-    this.linesRemovedPerAgent.set(
-      agent.id,
-      (this.linesRemovedPerAgent.get(agent.id) ?? 0) + applyResult.linesRemoved,
-    );
-    // 2026-05-02 (auto-rollback decision #1+#2): per-criterion commit
-    // tracking. Each criterion the planner attributed to this todo
-    // gets the new commit SHA appended to its list. Pulled at end-of-
-    // run by the rollback orchestrator.
-    if (applyResult.commitSha) {
-      const criteriaForTodo = todo.criteriaIds && todo.criteriaIds.length > 0
-        ? todo.criteriaIds
-        : todo.criterionId ? [todo.criterionId] : [];
-      for (const criterionId of criteriaForTodo) {
-        const list = this.commitsByCriterion.get(criterionId) ?? [];
-        list.push(applyResult.commitSha);
-        this.commitsByCriterion.set(criterionId, list);
-      }
-    }
-    // T-Item-StigBb (2026-05-04): increment per-file commit count for
-    // the next dequeue-by-score pass to read. Tracks the FILES this
-    // todo touched (not the SHA) so dispatch can spread future todos
-    // across cold areas of the repo. Always tracks (cheap +
-    // future-proof); only consulted when cfg.stigmergyOnBlackboard.
-    if (applyResult.commitSha) {
-      for (const f of todo.expectedFiles) {
-        this.fileCommitCounts.set(f, (this.fileCommitCounts.get(f) ?? 0) + 1);
-      }
-    }
-    return "committed";
-  }
-
-  // ---------------------------------------------------------------------
-  // Phase 6 — replan orchestration
-  //
-  // The mutation wrappers (failTodoQ + the reaper) enqueue replans
-  // directly. The planner agent is captured during executing and
-  // reused across replans so each runs in the same session — see
-  // docs/known-limitations.md for why this matters.
-  // ---------------------------------------------------------------------
-
-  private enqueueReplan(todoId: string): void {
-    if (this.replanPending.has(todoId)) return;
-    this.replanPending.add(todoId);
-    void this.processReplanQueue();
-  }
-
-  private async processReplanQueue(): Promise<void> {
-    // One-at-a-time: the planner is a single agent with one session, so
-    // parallel replans would interleave prompts on the same session.
-    if (this.replanRunning) return;
-    if (!this.planner) return;
-    this.replanRunning = true;
-    try {
-      while (!this.stopping && this.replanPending.size > 0 && this.planner) {
-        // Task #116: cap-check at each replan iteration so a long
-        // queue of replans can't drag the run past wall-clock.
-        if (this.checkAndApplyCaps()) return;
-        const todoId = this.replanPending.values().next().value as string;
-        this.replanPending.delete(todoId);
-        try {
-          await this.replanOne(todoId);
-        } catch (err) {
-          // If replanOne crashes mid-prompt, don't kill the whole queue — but
-          // also don't leave the todo hanging. The fallback tick would re-
-          // enqueue a still-stale todo forever, which then prevents workers
-          // from ever exiting (see shutdown-race fix). Mark it skipped so it
-          // leaves in-flight state cleanly.
-          const msg = err instanceof Error ? err.message : String(err);
-          this.appendSystem(`Replan handler crashed on todo ${todoId}: ${msg}`);
-          try {
-            this.wrappers.skipTodoQ(todoId, `replanner crashed: ${msg}`);
-          } catch {
-            // skip can throw if the todo moved state meanwhile — ignore.
-          }
-        }
-      }
-    } finally {
-      this.replanRunning = false;
-    }
-  }
-
-  private async replanOne(todoId: string): Promise<void> {
-    const planner = this.planner;
-    if (!planner) return;
-    const todo = this.boardListTodos().find((t) => t.id === todoId);
-    if (!todo) return;
-    // Dedup: the same todo could be enqueued twice. Only act if still stale.
-    if (todo.status !== "stale") return;
-
-    if (todo.replanCount >= MAX_REPLAN_ATTEMPTS) {
-      this.wrappers.skipTodoQ(
-        todoId,
-        `auto-skipped: replan attempts exhausted (${todo.replanCount})`,
-      );
-      this.appendSystem(
-        `Replan exhausted for todo ${todoId} after ${todo.replanCount} attempt(s). Skipped.`,
-      );
-      return;
-    }
-
-    let contents: Record<string, string | null>;
-    try {
-      contents = await this.readExpectedFiles(todo.expectedFiles);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.wrappers.skipTodoQ(todoId, `replanner unable to read files: ${msg}`);
-      return;
-    }
-
-    const seed: ReplannerSeed = {
-      todoId: todo.id,
-      originalDescription: todo.description,
-      originalExpectedFiles: todo.expectedFiles,
-      staleReason: todo.staleReason ?? "(unknown)",
-      fileContents: contents,
-      replanCount: todo.replanCount,
-    };
-
-    let response: string;
-    let replanAgent: Agent;
-    try {
-      // Unit 24: planner fallback (see promptPlannerSafely comment).
-      const r = await this.promptPlannerSafely(
-        planner,
-        `${REPLANNER_SYSTEM_PROMPT}\n\n${buildReplannerUserPrompt(seed)}`,
-        undefined,
-        REPLANNER_JSON_SCHEMA,
-      );
-      response = r.response;
-      replanAgent = r.agentUsed;
-    } catch (err) {
-      if (this.stopping) return;
-      const msg = err instanceof Error ? err.message : String(err);
-      this.wrappers.skipTodoQ(todoId, `replanner prompt failed: ${msg}`);
-      return;
-    }
-    if (this.stopping) return;
-    this.appendAgent(replanAgent, response);
-
-    let parsed = parseReplannerResponse(response);
-    if (!parsed.ok) {
-      this.appendSystem(
-        `Replanner JSON invalid for ${todoId} (${parsed.reason}); issuing repair prompt.`,
-      );
-      let repair: string;
-      let repairAgent: Agent;
-      try {
-        const r = await this.promptPlannerSafely(
-          replanAgent,
-          `${REPLANNER_SYSTEM_PROMPT}\n\n${buildReplannerRepairPrompt(response, parsed.reason)}`,
-          undefined,
-          REPLANNER_JSON_SCHEMA,
-        );
-        repair = r.response;
-        repairAgent = r.agentUsed;
-      } catch (err) {
-        if (this.stopping) return;
-        const msg = err instanceof Error ? err.message : String(err);
-        this.wrappers.skipTodoQ(todoId, `replanner repair prompt failed: ${msg}`);
-        return;
-      }
-      if (this.stopping) return;
-      this.appendAgent(repairAgent, repair);
-      parsed = parseReplannerResponse(repair);
-      if (!parsed.ok) {
-        this.wrappers.skipTodoQ(
-          todoId,
-          `replanner produced invalid JSON after repair: ${parsed.reason}`,
-        );
-        return;
-      }
-    }
-
-    if (parsed.action === "skip") {
-      this.wrappers.skipTodoQ(todoId, `replanner decided to skip: ${parsed.reason}`);
-      this.appendSystem(`Replanner skipped todo ${todoId}: ${parsed.reason}`);
-      return;
-    }
-
-    // V2 cutover Phase 2c (2026-04-28): replan via V2 queue's reset
-    // (with optional updates). The replanner produces revisions for
-    // description/files/anchors/kind/command; reset applies them
-    // and transitions failed → pending atomically.
-    try {
-      this.wrappers.resetTodoQ(todoId, {
-        description: parsed.description,
-        expectedFiles: parsed.expectedFiles,
-        // Unit 44b: anchor revision is optional. undefined → keep prior
-        // anchors; explicit array → replace them.
-        expectedAnchors: parsed.expectedAnchors,
-        // #241 (2026-04-28): replanner can switch a todo's kind.
-        ...(parsed.kind ? { kind: parsed.kind } : {}),
-        ...(parsed.command ? { command: parsed.command } : {}),
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(`Replan refused for todo ${todoId}: ${msg}`);
-      return;
-    }
-    const updated = this.boardGetTodo(todoId);
-    this.appendSystem(
-      `Replanned todo ${todoId} (attempt ${updated?.replanCount ?? 0}): "${truncate(updated?.description ?? parsed.description)}"`,
-    );
-  }
+  private enqueueReplan(todoId: string): void { enqueueReplanExtracted(this.replanContext(), todoId); }
+  private async processReplanQueue(): Promise<void> { await processReplanQueueExtracted(this.replanContext()); }
+  private async replanOne(todoId: string): Promise<void> { await replanOneExtracted(this.replanContext(), todoId); }
 
   private startReplanWatcher(): void {
     if (this.replanTickTimer) return;
-    this.replanTickTimer = setInterval(() => {
-      if (this.stopping) return;
-      // Task #199: board.skip / enqueueReplan can throw on a corrupted
-      // board state. Without try/catch the rejection silently kills the
-      // replan loop AND fires every 20s as an unhandled rejection.
-      try {
-        for (const todo of this.boardListTodos()) {
-          if (todo.status === "stale" && todo.replanCount < MAX_REPLAN_ATTEMPTS) {
-            this.enqueueReplan(todo.id);
-          }
-        }
-        // Also sweep exhausted stales into skipped right away — otherwise
-        // workers would keep looping (counts.stale>0) waiting for them.
-        for (const todo of this.boardListTodos()) {
-          if (todo.status === "stale" && todo.replanCount >= MAX_REPLAN_ATTEMPTS) {
-            this.wrappers.skipTodoQ(
-              todo.id,
-              `auto-skipped: replan attempts exhausted (${todo.replanCount})`,
-            );
-          }
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.appendSystem(`Replan tick failed: ${msg}`);
-      }
-    }, REPLAN_FALLBACK_TICK_MS);
-    this.replanTickTimer.unref?.();
+    this.replanTickTimer = startReplanWatcherExtracted(this.replanContext());
   }
 
   private stopReplanWatcher(): void {
-    if (this.replanTickTimer) clearInterval(this.replanTickTimer);
+    stopReplanWatcherExtracted(this.replanTickTimer);
     this.replanTickTimer = undefined;
     this.replanPending.clear();
     this.planner = undefined;
-    // Unit 58: forget the auditor handle on stop too. AgentManager's
-    // killAll has already terminated the underlying opencode process;
-    // the field itself just shouldn't keep referencing a dead agent.
     this.auditor = undefined;
   }
 
-  // ---------------------------------------------------------------------
-  // Phase 7 — hard caps
-  //
-  // Called from each worker loop iteration. If any cap trips, sets
-  // terminationReason, flips stopping=true so all workers exit their
-  // `while (!this.stopping)` guard, and aborts in-flight prompts so a
-  // worker mid-prompt doesn't sit for the full ABSOLUTE_MAX_MS watchdog.
-  //
-  // Idempotent: if terminationReason is already set (a peer worker beat us
-  // to it) we just return true without double-logging or double-aborting.
-  // Also returns true unconditionally once stopping is set — any non-cap
-  // path that flipped stopping (user stop, shutdown race) wants workers
-  // to exit too, so short-circuit here keeps the call site simple.
-  // ---------------------------------------------------------------------
-
-  // Cap probe that does NOT flip `stopping` / `terminationReason` (which
-  // checkAndApplyCaps does as a side effect). Used by the post-audit
-  // reflection-pass gate so we honor the cap by skipping bonus passes
-  // instead of trying to halt an already-finished audit loop.
-  // Advances the tick accumulator so a long gap since the last
-  // checkAndApplyCaps doesn't undercount the cap.
-  // Issue C-min (2026-04-27): UI-status helper for code paths that
-  // bypass promptAgent (goal-gen pre-pass, all 3 reflection passes).
-  // Those paths use chatOnce(planner, ...) directly + never call
-  // manager.markStatus, so the UI shows the planner as "ready" while
-  // it's actually mid-prompt. Calling this from the bypass paths'
-  // onStatusChange callback restores truthful UI signal.
   private markPlannerStatus(planner: Agent, status: "thinking" | "ready"): void {
-    this.opts.manager.markStatus(planner.id, status);
-    this.emitAgentState({
-      id: planner.id,
-      index: planner.index,
-      port: planner.port,
-      sessionId: planner.sessionId,
-      status,
-      ...(status === "thinking" ? { thinkingSince: Date.now() } : { lastMessageAt: Date.now() }),
-    });
+    markPlannerStatusExtracted(planner, status, this.opts.manager, (s) => this.emitAgentState(s));
   }
 
-  private isOverWallClockCap(): boolean {
-    if (this.tickAccumulator === undefined) return false;
-    const cap = this.active?.wallClockCapMs ?? WALL_CLOCK_CAP_MS;
-    const { next } = advanceTickAccumulator(this.tickAccumulator, Date.now());
-    this.tickAccumulator = next;
-    return next.activeElapsedMs >= cap;
-  }
+  private isOverWallClockCap(): boolean { return isOverWallClockCapExtracted(this.capContext()); }
+  private checkAndApplyCaps(): boolean { return checkAndApplyCapsExtracted(this.capContext()); }
+  private enterPause(quotaState: { statusCode: number; reason: string } | null): void { enterPauseExtracted(this.capContext(), quotaState); }
+  private schedulePauseProbe(): void { schedulePauseProbeExtracted(this.capContext()); }
+  private async runPauseProbe(): Promise<void> { await runPauseProbeExtracted(this.capContext()); }
+  private exitPause(): void { exitPauseExtracted(this.capContext()); }
 
-  private checkAndApplyCaps(): boolean {
-    if (this.stopping) return true;
-    if (this.runStartedAt === undefined || this.tickAccumulator === undefined) {
-      return false;
-    }
-    // Task #165: pause-on-quota. If we're already paused, skip the
-    // tick accumulator advance entirely so wall-clock budget doesn't
-    // burn during pause. The pause-cap (2h max paused total) is
-    // checked inside runPauseProbe; here we just no-op cleanly so
-    // worker / planner / replan loops keep ticking without acting.
-    if (this.paused) return false;
-    // Unit 27: advance the tick accumulator with host-sleep clamping,
-    // then hand the active elapsed to checkCaps via `startedAt: 0`
-    // semantics. `Date.now()` is still fine as the "now" SOURCE — it's
-    // only the DELTA between consecutive ticks that we clamp. Wall
-    // time → accumulator advance per tick, bounded by
-    // MAX_REASONABLE_TICK_DELTA_MS so an 8-hour laptop sleep no longer
-    // silently burns the cap.
-    const now = Date.now();
-    const { next, jumpMs } = advanceTickAccumulator(this.tickAccumulator, now);
-    this.tickAccumulator = next;
-    // Only surface jumps >1 min as "host sleep?" to avoid noise from
-    // legitimate multi-minute gaps (e.g. a worker blocked on a cold-
-    // start retry sequence while no other worker has ticked). Anything
-    // smaller gets clamped silently.
-    if (jumpMs > 60_000) {
-      const skippedMin = Math.round(jumpMs / 60_000);
-      this.appendSystem(
-        `Clock jump detected: ~${skippedMin} min skipped from cap math (host sleep?).`,
-      );
-    }
-    const reason = checkCaps({
-      startedAt: 0,
-      now: this.tickAccumulator.activeElapsedMs,
-      committed: this.boardCounts().committed,
-      totalTodos: this.boardListTodos().length,
-      // Unit 43: thread the per-run override through. Undefined when
-      // the user didn't set it — checkCaps falls back to the baked-in
-      // 8-h default in that case.
-      wallClockCapMs: this.active?.wallClockCapMs,
-    });
-    // Task #124: token-budget cap check. Independent of the wall-
-    // clock/commits/todos caps. Returns its own reason string so the
-    // run-summary distinguishes "budget hit" from other cap-trips.
-    const tokenReason = (
-      this.tokenBaselineForRun !== undefined &&
-      tokenBudgetExceeded(this.tokenBaselineForRun, this.active?.tokenBudget)
-    )
-      ? `token-budget reached (${this.active?.tokenBudget?.toLocaleString()} tokens)`
-      : null;
-    // Phase 2 of #314: cost-cap check for paid providers (Anthropic /
-    // OpenAI). Ollama records cost $0 so an Ollama-only run never
-    // trips even when maxCostUsd is set. Independent of token-budget;
-    // a high token count on Sonnet may cost less than a small token
-    // count on Opus, so the two caps catch different overrun shapes.
-    const costReason = (
-      this.runStartedAt !== undefined &&
-      costCapExceeded(tokenTracker.recordsSinceTs(this.runStartedAt), this.active?.maxCostUsd)
-    )
-      ? `cost-cap reached ($${this.active?.maxCostUsd?.toFixed(2)} USD)`
-      : null;
-    // Task #165 (was #137-halt): quota-exhausted check. Was an
-    // immediate halt; now triggers enterPause() which suspends new
-    // prompts + probes upstream every 5 min. Persistent walls that
-    // never clear escalate to a permanent halt after MAX_PAUSE_TOTAL_MS
-    // (handled inside runPauseProbe); transient walls don't reach
-    // here at all (shouldHaltOnQuota returns false for them).
-    if (this.tokenBaselineForRun !== undefined && shouldHaltOnQuota()) {
-      const quotaState = tokenTracker.getQuotaState();
-      this.enterPause(quotaState);
-      return false;
-    }
-    const finalReason = reason ?? tokenReason ?? costReason;
-    if (!finalReason) return false;
-    this.terminationReason = finalReason;
-    this.appendSystem(`Stopping: ${finalReason}`);
-    this.stopping = true;
-    for (const ctrl of this.activeAborts) {
-      try {
-        ctrl.abort(new Error(`cap: ${finalReason}`));
-      } catch {
-        // best-effort; AbortController.abort throws on already-aborted in
-        // some runtimes.
-      }
-    }
-    return true;
-  }
+  private async writeCrashSnapshot(err: unknown): Promise<void> { await writeCrashSnapshotExtracted(this.utilCtx(), err); }
 
-  // Task #165: enter a paused state on persistent Ollama-quota wall.
-  // Suspends new prompt traffic (workers idle, planner idles between
-  // turns) and aborts in-flight prompts so they don't keep hammering
-  // a wall the proxy will keep rejecting. The 5-min probe timer is
-  // armed here and self-reschedules until upstream clears or the 2h
-  // pause cap escalates to a permanent halt.
-  private enterPause(quotaState: { statusCode: number; reason: string } | null): void {
-    if (this.paused) return;
-    this.paused = true;
-    this.pauseStartedAt = Date.now();
-    // V2 Step 3b: feed pause event (orthogonal in V2 model).
-    this.v2Observer.apply({
-      type: "pause-on-quota",
-      ts: this.pauseStartedAt,
-      reason: quotaState
-        ? `${quotaState.statusCode}: ${quotaState.reason.slice(0, 60)}`
-        : "(no quota detail)",
-    });
-    this.setPhase("paused");
-    const detail = quotaState
-      ? `${quotaState.statusCode}: ${quotaState.reason.slice(0, 120)}`
-      : "(no quota detail)";
-    this.appendSystem(
-      `Ollama quota wall hit (${detail}). Pausing run; will probe upstream on exponential back-off (1m → 2m → 4m → 8m → 16m, capped at 30m) and resume when it clears. Total pause cap: ${MAX_PAUSE_TOTAL_MS / 60_000} min.`,
-      { kind: "quota_paused", statusCode: quotaState?.statusCode, reason: quotaState?.reason },
-    );
-    // Abort in-flight prompts so they fail fast — they'd hit the wall
-    // and burn time anyway. Workers will see this.paused and idle.
-    for (const ctrl of this.activeAborts) {
-      try {
-        ctrl.abort(new Error("paused: quota wall"));
-      } catch {
-        // best-effort
-      }
-    }
-    this.schedulePauseProbe();
-  }
-
-  private schedulePauseProbe(): void {
-    if (this.pauseProbeTimer) return;
-    const delayMs = nextQuotaProbeDelayMs(this.pauseProbeAttempt);
-    this.pauseProbeAttempt += 1;
-    this.pauseProbeTimer = setTimeout(() => {
-      this.pauseProbeTimer = undefined;
-      // Task #199: if runPauseProbe throws (e.g., planner agent gone),
-      // pause becomes permanent because nothing reschedules. Reschedule
-      // on failure so the user's run can recover when the wall clears.
-      this.runPauseProbe().catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.appendSystem(`Pause probe failed: ${msg}. Will retry.`);
-        if (this.paused && !this.stopping) this.schedulePauseProbe();
-      });
-    }, delayMs);
-  }
-
-  // Task #165: pings the planner with a tiny prompt to test whether
-  // the upstream wall has cleared. Cheap (~10 tokens). On success
-  // (no thrown error AND quota state didn't re-flip), clears the
-  // proxy quota state and resumes the run. On failure, reschedules
-  // the next probe — UNLESS the total accumulated pause has crossed
-  // MAX_PAUSE_TOTAL_MS, at which point we escalate to a permanent
-  // halt with stopReason cap:quota.
-  private async runPauseProbe(): Promise<void> {
-    if (!this.paused || this.stopping) return;
-    const totalSoFar = this.totalPausedMs + (this.pauseStartedAt ? Date.now() - this.pauseStartedAt : 0);
-    if (totalSoFar >= MAX_PAUSE_TOTAL_MS) {
-      // Escalate to permanent halt. Roll up totalPausedMs first so
-      // the run summary reflects the full pause time.
-      this.totalPausedMs = totalSoFar;
-      this.pauseStartedAt = undefined;
-      this.paused = false;
-      const q = tokenTracker.getQuotaState();
-      const detail = q ? `${q.statusCode}: ${q.reason.slice(0, 120)}` : "(no detail)";
-      const reason = `ollama-quota-exhausted (${detail}) — pause cap exceeded after ${Math.round(totalSoFar / 60_000)} min`;
-      this.terminationReason = reason;
-      this.appendSystem(
-        `Pause cap of ${MAX_PAUSE_TOTAL_MS / 60_000} min exceeded; upstream wall never cleared. Stopping permanently.`,
-      );
-      this.stopping = true;
-      for (const ctrl of this.activeAborts) {
-        try { ctrl.abort(new Error("paused: cap exceeded")); } catch { /* */ }
-      }
-      return;
-    }
-    const planner = this.opts.manager.list().find((a) => a.index === 1);
-    if (!planner) {
-      // No planner — odd state. Reschedule and try again.
-      this.schedulePauseProbe();
-      return;
-    }
-    let probeOk = false;
-    try {
-      // E3 Phase 5: opencode session.create + session.prompt gone.
-      // Probe via chatOnce against the existing session — same effect.
-      const probeRes = await chatOnce(planner, {
-        agentName: "swarm-read",
-        promptText: "ping",
-      });
-      void probeRes;
-      probeOk = true;
-    } catch (err) {
-      // R17 wiring: each failed probe is itself a quota-class error.
-      this.recordError(err, { causeHint: "quota" });
-      const msg = err instanceof Error ? err.message : String(err);
-      const nextDelayLabel = formatProbeDelayLabel(nextQuotaProbeDelayMs(this.pauseProbeAttempt));
-      this.appendSystem(`[quota-probe] still walled (${msg.slice(0, 120)}). Next probe in ${nextDelayLabel}.`);
-    }
-    if (!this.paused || this.stopping) return;
-    if (probeOk && !shouldHaltOnQuota()) {
-      // Real recovery: clear proxy state + resume.
-      tokenTracker.clearQuotaState();
-      this.exitPause();
-      return;
-    }
-    if (probeOk && shouldHaltOnQuota()) {
-      // Probe succeeded but proxy still flagged — rare race; another
-      // request hit a fresh 429 between our probe + this check.
-      // Treat as still-walled.
-      this.appendSystem("[quota-probe] probe succeeded but proxy re-flagged quota mid-flight; staying paused.");
-    }
-    this.schedulePauseProbe();
-  }
-
-  private exitPause(): void {
-    if (!this.paused) return;
-    const pauseDur = this.pauseStartedAt ? Date.now() - this.pauseStartedAt : 0;
-    this.totalPausedMs += pauseDur;
-    this.pauseStartedAt = undefined;
-    this.paused = false;
-    // 2026-05-04 (R2 wiring): reset back-off so the next quota wall
-    // restarts the curve from 1 min.
-    this.pauseProbeAttempt = 0;
-    if (this.pauseProbeTimer) {
-      clearTimeout(this.pauseProbeTimer);
-      this.pauseProbeTimer = undefined;
-    }
-    // Reset the tick accumulator's lastTickAt so the next advance
-    // doesn't accidentally count the pause window — the clamp would
-    // catch most of it but a pause < MAX_REASONABLE_TICK_DELTA_MS
-    // would still leak through.
-    if (this.tickAccumulator) {
-      this.tickAccumulator = { ...this.tickAccumulator, lastTickAt: Date.now() };
-    }
-    // V2 Step 3b: clear pausedReason on the parallel reducer.
-    this.v2Observer.apply({ type: "resume-from-quota", ts: Date.now() });
-    this.setPhase("executing");
-    this.appendSystem(
-      `Quota wall cleared after ${Math.round(pauseDur / 60_000)} min. Resuming run (total paused this run: ${Math.round(this.totalPausedMs / 60_000)} min).`,
-      { kind: "quota_resumed", pausedMs: pauseDur, totalPausedMs: this.totalPausedMs },
-    );
-  }
-
-  // Phase 7 Step B: write a post-mortem blob at the clone root so a crashed
-  // run leaves behind enough state to diagnose what happened. Writes via
-  // writeFileAtomic so a crash *during* the snapshot write doesn't leave a
-  // half-written JSON. Swallows its own errors — if we can't write the
-  // snapshot, we log the failure to the transcript (which still broadcasts
-  // over WS) and move on. Losing the snapshot is better than turning a
-  // normal run failure into a recursive crash.
-  // Phase 9: run summary artifact. Builds a RunSummary, writes it to
-  // `<clone>/summary.json`, and broadcasts `run_summary` so the UI can
-  // render without re-reading the file. Swallows its own errors like
-  // writeCrashSnapshot — a missing summary is an annoyance, not worth
-  // escalating into a run failure.
-  // 2026-05-02 (blackboard feature #4 — auto-rollback orchestrator):
-  // for every criterion ending at status="unmet" with attributed commits,
-  // try to roll back THIS criterion's commits via git reset. Refuses
-  // when there's collateral (commits from OTHER criteria interleaved
-  // chronologically — git history is linear, can't surgically remove
-  // mid-history commits without rewriting). Records the audit trail
-  // for the deliverable + summary.json.
   private async runAutoRollbacks(): Promise<void> {
     const cfg = this.active;
     if (!cfg) return;
-    const criteria = this.contract?.criteria ?? [];
-    const targets = criteria.filter(
-      (c) => c.status === "unmet" && (this.commitsByCriterion.get(c.id)?.length ?? 0) > 0,
-    );
-    if (targets.length === 0) {
-      this.appendSystem(`[auto-rollback] No criteria ended unmet with attributed commits — nothing to roll back.`);
-      return;
-    }
-    // Build the chronological list of all attributed commits across
-    // ALL criteria (newest-first via reverse-iteration of insertion
-    // order, since git commits are appended monotonically).
-    const allAttributed = new Map<string, string[]>(); // sha → [criterionIds]
-    for (const [criterionId, shas] of this.commitsByCriterion) {
-      for (const sha of shas) {
-        const list = allAttributed.get(sha) ?? [];
-        if (!list.includes(criterionId)) list.push(criterionId);
-        allAttributed.set(sha, list);
-      }
-    }
-    for (const target of targets) {
-      const shasToRollback = this.commitsByCriterion.get(target.id) ?? [];
-      // Decision #3: collateral check. For each commit we'd unwind,
-      // is it ALSO attributed to some OTHER criterion that ended met
-      // or wont-do? If yes, refuse — can't surgically remove it
-      // without rewriting history.
-      const collateral: string[] = [];
-      for (const sha of shasToRollback) {
-        const otherCriteria = (allAttributed.get(sha) ?? []).filter((cid) => cid !== target.id);
-        for (const cid of otherCriteria) {
-          const otherCrit = criteria.find((c) => c.id === cid);
-          if (otherCrit && (otherCrit.status === "met" || otherCrit.status === "wont-do")) {
-            if (!collateral.includes(sha)) collateral.push(sha);
-          }
-        }
-      }
-      if (collateral.length > 0) {
-        this.appendSystem(
-          `[auto-rollback] Refused for criterion ${target.id}: ${collateral.length} commit(s) shared with met/wont-do criteria (would wipe their work). Manual git intervention needed.`,
-        );
-        this.autoRollbacks.push({
-          criterionId: target.id,
-          resetTo: "",
-          commitsUnwound: [],
-          reason: "refused: collateral with met/wont-do criteria",
-          refusedCollateral: collateral,
-          timestamp: Date.now(),
-        });
-        continue;
-      }
-      const result = await rollbackTodoCommits({
-        clonePath: cfg.localPath,
-        commitShas: shasToRollback,
-        reason: `Criterion ${target.id} ended unmet with attributed commits`,
-      });
-      if (result.ok) {
-        this.appendSystem(
-          `[auto-rollback] Criterion ${target.id} (unmet) → reset HEAD to ${result.resetTo?.slice(0, 8)}; commits unwound: ${shasToRollback.map((s) => s.slice(0, 8)).join(", ")}`,
-        );
-        this.autoRollbacks.push({
-          criterionId: target.id,
-          resetTo: result.resetTo ?? "",
-          commitsUnwound: [...shasToRollback],
-          reason: `criterion ended unmet`,
-          timestamp: Date.now(),
-        });
-      } else {
-        this.appendSystem(
-          `[auto-rollback] Failed for criterion ${target.id}: ${result.error}`,
-        );
-        this.autoRollbacks.push({
-          criterionId: target.id,
-          resetTo: "",
-          commitsUnwound: [],
-          reason: `git reset failed: ${result.error}`,
-          timestamp: Date.now(),
-        });
-      }
-    }
+    await runAutoRollbacksExtracted({
+      cfg,
+      contract: this.contract,
+      commitsByCriterion: this.commitsByCriterion,
+      autoRollbacks: this.autoRollbacks,
+      appendSystem: (msg) => this.appendSystem(msg),
+    });
   }
 
-  // 2026-05-02 (blackboard features #1+#2+#3+#5): structured markdown
-  // deliverable for blackboard. Composes:
-  //   - Contract criteria + per-criterion verdict (from auditor + status)
-  //   - Per-commit summary (from gitStatus + transcript)
-  //   - PR-shaped section (drop-in for GitHub PR description)
-  //   - Diff-aware critic findings (anti-patterns in the actual diff)
-  //   - Coverage-gap detection (files the directive/contract asked for
-  //     but no commit touched)
-  //   - Standard runQualityPasses augmentation: critic notes + next
-  //     actions (rubric=null since blackboard's contract IS the rubric)
   private async writeBlackboardDeliverable(): Promise<void> {
     const cfg = this.active;
     if (!cfg || !cfg.runId) return;
-
-    // Pull commits via simple-git. Best-effort — return [] on failure
-    // so the deliverable still gets written without a commit table.
-    let commits: PRCommitEntry[] = [];
-    let touchedFiles: string[] = [];
-    let diff = "";
-    try {
-      const { simpleGit } = await import("simple-git");
-      const git = simpleGit(cfg.localPath);
-      const startedAtIso = new Date(this.runStartedAt ?? Date.now()).toISOString();
-      const log = await git.log({ "--since": startedAtIso });
-      commits = log.all.map((c) => ({
-        shaPrefix: c.hash.slice(0, 8),
-        message: c.message,
-        filesChanged: 0, // populated below from the diff if available
-      }));
-      // Touched files via git diff against the run's starting commit.
-      // Use HEAD~N where N=commits.length, or fall back to no-diff.
-      if (commits.length > 0) {
-        const baseRef = `HEAD~${commits.length}`;
-        try {
-          const namesOnly = await git.raw(["diff", "--name-only", baseRef, "HEAD"]);
-          touchedFiles = namesOnly.split(/\r?\n/).filter((f) => f.trim().length > 0);
-          diff = await git.raw(["diff", baseRef, "HEAD"]);
-        } catch {
-          // Repo may not have N+1 commits; fall back to working-tree diff.
-          touchedFiles = [];
-          diff = "";
-        }
-      }
-    } catch {
-      // git unavailable or broken — proceed with empty commit list
-    }
-
-    // Map criteria → PR-shaped + the latest verifier verdict from transcript
-    const criteria = this.contract?.criteria ?? [];
-    const latestVerdictByCriterionId = new Map<string, "verified" | "partial" | "false" | "unverifiable">();
-    for (const e of this.transcript) {
-      if (e.summary?.kind === "verifier_verdict" && e.summary.verdict) {
-        // proposingAgentId is per-attempt; we want the LAST verdict per criterion.
-        // The verifier_verdict envelope doesn't carry criterion ID directly —
-        // it's tied to the todo description. Best-effort: skip when ambiguous.
-        // (#5 coverage-gap uses the criterion.status field which IS canonical.)
-      }
-    }
-    const prCriteria: PRCriterionEntry[] = criteria.map((c) => ({
-      id: c.id,
-      description: c.description,
-      verdict:
-        c.status === "met" ? "verified" :
-        c.status === "wont-do" ? "unverifiable" :
-        (latestVerdictByCriterionId.get(c.id) ?? "unmet"),
-      ...(c.rationale ? { rationale: c.rationale } : {}),
-    }));
-
-    // Stretch goals from transcript (kind: "stretch_goals")
-    const stretchGoalsEntry = [...this.transcript].reverse().find((e) => e.summary?.kind === "stretch_goals");
-    const stretchGoals: string[] =
-      stretchGoalsEntry?.summary?.kind === "stretch_goals"
-        ? stretchGoalsEntry.summary.goals
-        : [];
-
-    // Verify gate status — true / false / null
-    const verifyPassed: boolean | null = cfg.verifyCommand
-      ? // best-effort signal from transcript: presence of any verifier_verdict !== "false" is OK-ish
-        criteria.length === 0
-        ? null
-        : criteria.every((c) => c.status !== "wont-do")
-      : null;
-
-    // PR-shaped output (#2)
-    const prMd = buildPRDescription({
-      directive: cfg.userDirective ?? "",
-      commits,
-      verifyPassed,
-      criteria: prCriteria,
-      stretchGoals,
-    });
-
-    // Diff-aware anti-pattern findings (#3)
-    const antiPatterns = detectAntiPatterns(diff);
-
-    // Coverage gaps (#5)
-    let repoFiles: string[] = [];
-    try {
-      repoFiles = await this.opts.repos.listRepoFiles(cfg.localPath, { maxFiles: 500 });
-    } catch {
-      repoFiles = [];
-    }
-    const gaps = detectCoverageGaps({
-      directive: cfg.userDirective ?? "",
-      criteriaExpectedFiles: criteria.map((c) => ({
-        criterionId: c.id,
-        expectedFiles: c.expectedFiles,
-        verdict: c.status,
-      })),
-      touchedFiles,
-      repoFiles,
-    });
-
-    // 2026-05-02 (auto-rollback decision #6): audit trail section.
-    // Empty when feature opt-in (cfg.autoRollback) was off OR no
-    // criteria triggered rollback. Otherwise shows what got unwound +
-    // any collateral refusals.
-    const rollbackBody =
-      this.autoRollbacks.length === 0
-        ? cfg.autoRollback
-          ? "_(no rollbacks fired — every criterion either met or had no attributed commits)_"
-          : "_(auto-rollback disabled for this run; set `autoRollback: true` in cfg to enable)_"
-        : this.autoRollbacks
-            .map((r) => {
-              if (r.commitsUnwound.length === 0) {
-                return `- **${r.criterionId}** — ${r.reason}${r.refusedCollateral?.length ? ` (collateral: ${r.refusedCollateral.map((s) => s.slice(0, 8)).join(", ")})` : ""}`;
-              }
-              return `- **${r.criterionId}** — reset HEAD to \`${r.resetTo.slice(0, 8)}\`; unwound ${r.commitsUnwound.length} commit(s): ${r.commitsUnwound.map((s) => `\`${s.slice(0, 8)}\``).join(", ")}`;
-            })
-            .join("\n");
-
-    // Compose the base sections — order chosen so a maintainer reading
-    // top-to-bottom sees the actionable summary first, then the
-    // diagnostics that contextualize it.
-    const baseSections = [
-      { title: "PR description", body: prMd },
-      { title: "Anti-pattern findings (diff-aware critic)", body: formatAntiPatternsMarkdown(antiPatterns) },
-      { title: "Coverage gaps", body: formatCoverageGapsMarkdown(gaps) },
-      { title: "Auto-rollbacks fired", body: rollbackBody },
-    ];
-
-    // Augment with rubric (none — contract is the rubric) + critic + next-actions (#1)
-    // Critic uses the planner agent (most context for spotting issues).
-    const planner = this.planner ?? this.opts.manager.list().find((a) => a.index === 1) ?? null;
-    const sections = await runQualityPasses({
-      baseSections,
-      rubric: null, // blackboard's contract IS the rubric — no separate pre-pass needed
-      criticAgent: planner,
+    const planner = this.planner;
+    await writeBlackboardDeliverableExtracted({
+      cfg,
+      runStartedAt: this.runStartedAt,
+      contract: this.contract,
+      transcript: this.transcript,
+      autoRollbacks: this.autoRollbacks,
+      planner,
       manager: this.opts.manager,
+      repos: this.opts.repos,
+      appendSystem: (msg, meta) => this.appendSystem(msg, meta as any),
     });
-
-    const result = writeDeliverable({
-      preset: "blackboard",
-      runId: cfg.runId,
-      clonePath: cfg.localPath,
-      title: "Blackboard run report",
-      subtitle: `${commits.length} commit${commits.length === 1 ? "" : "s"} · ${criteria.filter((c) => c.status === "met").length}/${criteria.length} criteria met`,
-      sections,
-    });
-    if (result.ok) {
-      this.appendSystem(`Deliverable saved → ${result.filename}`, {
-        kind: "deliverable",
-        preset: "blackboard",
-        filename: result.filename,
-        fullPath: result.fullPath,
-        bytes: result.bytes,
-        sectionTitles: sections.map((s) => s.title),
-      });
-    } else {
-      this.appendSystem(`Failed to write deliverable (${result.reason})`);
-    }
   }
 
   private async writeRunSummary(crashMessage: string | undefined): Promise<void> {
@@ -4430,961 +650,135 @@ export class BlackboardRunner implements SwarmRunner {
       // gitStatus already swallows, but belt-and-braces.
     }
 
-    // Unit 31: extracted to buildPerAgentStats so the state snapshot and
-    // summary stay in sync on agent-row shape.
     const agentStats: PerAgentStat[] = this.buildPerAgentStats();
-
     const counts = this.boardCounts();
-    const summary = buildSummary({
-      config: {
-        repoUrl: cfg.repoUrl,
-        localPath: cfg.localPath,
-        preset: cfg.preset,
-        model: cfg.model,
-        runId: cfg.runId,
-      },
-      agentCount: cfg.agentCount,
-      rounds: cfg.rounds,
-      startedAt: this.runBootedAt,
-      endedAt: Date.now(),
-      crashMessage,
-      terminationReason: this.terminationReason,
+
+    await writeRunSummaryExtracted({
+      cfg,
+      runBootedAt: this.runBootedAt!,
+      runStartedAt: this.runStartedAt,
+      tickAccumulatorActiveElapsedMs: this.tickAccumulator?.activeElapsedMs,
       stopping: this.stopping,
+      terminationReason: this.terminationReason,
       completionDetail: this.completionDetail,
-      board: {
-        committed: counts.committed,
-        skipped: counts.skipped,
-        total: counts.total,
-      },
-      staleEvents: this.staleEventCount,
-      filesChanged: gitStatus.changedFiles,
-      finalGitStatus: gitStatus.porcelain,
-      agents: agentStats,
-      contract: this.contract ? this.cloneContract(this.contract) : undefined,
-      // Unit 34: ambition-ratchet output. Passed through unconditionally
-      // when a tier was ever installed; `undefined` on the pre-contract
-      // drain-exit path (which never even reached tier 1).
-      maxTierReached: this.currentTier > 0 ? this.currentTier : undefined,
-      tiersCompleted: this.currentTier > 0 ? this.tiersCompleted : undefined,
-      tierHistory: this.tierHistory.length > 0 ? this.tierHistory.slice() : undefined,
-      // Task #65: persist transcript so the modal + review view can replay.
+      staleEventCount: this.staleEventCount,
+      auditInvocations: this.auditInvocations,
+      currentTier: this.currentTier,
+      tiersCompleted: this.tiersCompleted,
+      tierHistory: this.tierHistory,
+      contract: this.contract,
       transcript: this.transcript,
-      // V2 reducer snapshot at run end. After cutover Phase 1a
-      // (2026-04-28), divergence tracking is gone; the field captures
-      // the reducer's final phase + pause state for forward compat.
+      agentStats,
+      boardCounts: { committed: counts.committed, skipped: counts.skipped, total: counts.total },
+      gitStatus,
+      errorTracker: this.errorTracker,
       v2State: {
         phase: this.v2Observer.getState().phase,
         enteredAt: this.v2Observer.getState().enteredAt,
         detail: this.v2Observer.getState().detail,
         pausedReason: this.v2Observer.getState().pausedReason,
       },
-      // TodoQueue counts at run end. Field name kept under v2QueueState
-      // for back-compat with summary.json consumers; rename happens in
-      // a later wire-protocol pass.
-      v2QueueState: {
-        counts: this.todoQueue.counts(),
-      },
-      // Phase 4a of #243: topology passthrough.
-      topology: cfg.topology,
-      // R17 wiring: surface the per-run ClassifiedError records so
-      // buildRca/buildHealthScore can categorize failures.
-      errors: this.errorTracker,
+      v2QueueState: { counts: this.todoQueue.counts() },
+      cloneContract: (c) => this.cloneContract(c),
+      lastSummarySetter: (s) => { this.lastSummary = s; },
+      emit: this.opts.emit,
+      appendSystem: (msg, ...args) => this.appendSystem(msg, ...args),
     });
-
-    // Unit 49: dual write — per-run timestamped file (never overwrites
-    // a prior run's summary) + summary.json "latest" pointer. Mirrors
-    // the runSummary.ts helper used by the discussion presets so the
-    // on-disk shape is identical across all 7 runners.
-    const json = JSON.stringify(summary, null, 2);
-    const perRunPath = path.join(clone, buildPerRunSummaryFileName(summary.startedAt));
-    const latestPath = path.join(clone, "summary.json");
-    try {
-      await writeFileAtomic(perRunPath, json);
-      await writeFileAtomic(latestPath, json);
-      // Task #68: rich end-of-run banner with per-agent rollup,
-      // posted before the file-write line so the most informative
-      // content lands first.
-      this.appendSystem(formatRunFinishedBanner(summary), buildRunFinishedSummary(summary));
-      this.appendSystem(
-        `Wrote run summary to ${perRunPath} + ${latestPath} (stopReason=${summary.stopReason}, commits=${summary.commits}, files=${summary.filesChanged}).`,
-      );
-    } catch (writeErr) {
-      const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
-      this.appendSystem(`Failed to write run summary (${msg})`);
-    }
-    // Stash before the broadcast so a client that connects between emit and
-    // the next status() call still gets the summary via the WS catch-up.
-    this.lastSummary = summary;
-    // Broadcast regardless of write success so the UI still gets the card.
-    this.opts.emit({ type: "run_summary", summary });
   }
 
-  private async writeCrashSnapshot(err: unknown): Promise<void> {
-    const clone = this.active?.localPath;
-    if (!clone) {
-      this.appendSystem("Could not write crash snapshot: no clone path set.");
-      return;
-    }
-    const snapshot = buildCrashSnapshot({
-      error: err,
-      phase: this.phase,
-      runStartedAt: this.runStartedAt,
-      crashedAt: Date.now(),
-      config: this.active,
-      board: this.boardSnapshot(),
-      transcript: this.transcript,
-    });
-    const outPath = path.join(clone, "board-final.json");
-    try {
-      await writeFileAtomic(outPath, JSON.stringify(snapshot, null, 2));
-      this.appendSystem(`Wrote crash snapshot to ${outPath}`);
-    } catch (writeErr) {
-      const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
-      this.appendSystem(`Failed to write crash snapshot (${msg})`);
-    }
-  }
-
-  // Unit 31: per-agent stats shaped for summary.json / state snapshot
-  // consumption. Extracted so both writers produce identical agent rows
-  // without drift; the summary writer and the state-snapshot scheduler
-  // both call this.
   private buildPerAgentStats(): PerAgentStat[] {
-    return this.agentRoster.map((a) => {
-      const lats = this.latenciesPerAgent.get(a.id) ?? [];
-      const stats = computeLatencyStats(lats);
-      return {
-        agentId: a.id,
-        agentIndex: a.index,
-        turnsTaken: this.turnsPerAgent.get(a.id) ?? 0,
-        // Task #163: per-agent token deltas captured via promptWithRetry's
-        // onTokens hook. Approximate for parallel paths (worker pool +
-        // audit ensemble may overlap with planner/auditor). Null when
-        // no tokens recorded for this agent.
-        tokensIn: this.promptTokensPerAgent.has(a.id) ? this.promptTokensPerAgent.get(a.id)! : null,
-        tokensOut: this.responseTokensPerAgent.has(a.id) ? this.responseTokensPerAgent.get(a.id)! : null,
-        totalAttempts: this.attemptsPerAgent.get(a.id) ?? 0,
-        totalRetries: this.retriesPerAgent.get(a.id) ?? 0,
-        successfulAttempts: lats.length,
-        meanLatencyMs: stats.mean,
-        p50LatencyMs: stats.p50,
-        p95LatencyMs: stats.p95,
-        // Task #66: blackboard-only signals; default 0 since the runner
-        // attributes commits to the agent that landed each diff. Stays
-        // 0 for the planner / auditor when they don't produce diffs.
-        commits: this.commitsPerAgent.get(a.id) ?? 0,
-        linesAdded: this.linesAddedPerAgent.get(a.id) ?? 0,
-        linesRemoved: this.linesRemovedPerAgent.get(a.id) ?? 0,
-        // Task #67: rejected-work + recovery counters.
-        rejectedAttempts: this.rejectedAttemptsPerAgent.get(a.id) ?? 0,
-        jsonRepairs: this.jsonRepairsPerAgent.get(a.id) ?? 0,
-        promptErrors: this.promptErrorsPerAgent.get(a.id) ?? 0,
-      };
+    return buildPerAgentStatsExtracted({
+      agentRoster: this.agentRoster,
+      turnsPerAgent: this.turnsPerAgent,
+      promptTokensPerAgent: this.promptTokensPerAgent,
+      responseTokensPerAgent: this.responseTokensPerAgent,
+      attemptsPerAgent: this.attemptsPerAgent,
+      retriesPerAgent: this.retriesPerAgent,
+      latenciesPerAgent: this.latenciesPerAgent,
+      commitsPerAgent: this.commitsPerAgent,
+      linesAddedPerAgent: this.linesAddedPerAgent,
+      linesRemovedPerAgent: this.linesRemovedPerAgent,
+      rejectedAttemptsPerAgent: this.rejectedAttemptsPerAgent,
+      jsonRepairsPerAgent: this.jsonRepairsPerAgent,
+      promptErrorsPerAgent: this.promptErrorsPerAgent,
     });
   }
 
-  // Unit 31: schedule a debounced state-snapshot write to
-  // `<clone>/blackboard-state.json`. Trailing-edge: every call resets the
-  // timer so only the LATEST state gets written. When a write is already
-  // in flight, flip `stateWriteAgain` so the next write fires as soon as
-  // the current one finishes — we never stop at stale data.
-  //
-  // Skips when the phase is `idle` or `cloning`: `idle` means there's no
-  // run to persist, and writing during `cloning` would land a file in the
-  // destination directory BEFORE simpleGit.clone runs, tripping
-  // RepoService's "destination is not empty and is not a git repo"
-  // guard and failing the clone. Cloning is short enough that the
-  // post-mortem hole isn't meaningful.
-  private scheduleStateWrite(): void {
-    if (this.phase === "idle" || this.phase === "cloning") return;
-    if (this.stateWriteInFlight) {
-      this.stateWriteAgain = true;
-      return;
-    }
-    if (this.stateWriteTimer) clearTimeout(this.stateWriteTimer);
-    this.stateWriteTimer = setTimeout(() => {
-      this.stateWriteTimer = undefined;
-      void this.flushStateWrite();
-    }, STATE_SNAPSHOT_DEBOUNCE_MS);
-    // Let Node exit even if this timer is pending (it's best-effort state).
-    this.stateWriteTimer.unref?.();
-  }
+  private scheduleStateWrite(): void { this.stateSnapshotScheduler.schedule(); }
+  private async flushStateWrite(): Promise<void> { await this.stateSnapshotScheduler.flush(); }
 
-  // Immediate write, no debounce. Used at run termination so the final
-  // state lands on disk before we clear the in-memory one. Also used as
-  // the body of the debounced path.
-  private async flushStateWrite(): Promise<void> {
-    const clone = this.active?.localPath;
-    if (!clone) return; // No active run; nothing to persist.
-    // Defensive: also skip at flush time in case the phase moved back to
-    // `cloning` (shouldn't happen, but we never want to race the clone).
-    if (this.phase === "idle" || this.phase === "cloning") return;
-    if (this.stateWriteInFlight) {
-      // Another write raced in; mark that we need a follow-up and bail.
-      this.stateWriteAgain = true;
-      return;
-    }
-    this.stateWriteInFlight = true;
-    this.stateWriteAgain = false;
-    try {
-      const snapshot = buildStateSnapshot({
-        writtenAt: Date.now(),
-        phase: this.phase,
-        round: this.round,
-        runBootedAt: this.runBootedAt,
-        runStartedAt: this.runStartedAt,
-        activeElapsedMs: this.tickAccumulator?.activeElapsedMs,
-        config: this.active,
-        contract: this.contract ? this.cloneContract(this.contract) : undefined,
-        board: this.boardSnapshot(),
-        perAgent: this.buildPerAgentStats(),
-        staleEventCount: this.staleEventCount,
-        auditInvocations: this.auditInvocations,
-        agentRoster: this.agentRoster.map((a) => ({
-          agentId: a.id,
-          agentIndex: a.index,
-        })),
-        terminationReason: this.terminationReason,
-        completionDetail: this.completionDetail,
-        // Unit 34: tier state. currentTier is 0 before the first contract
-        // lands, 1+ after. tierHistory grows one entry per completed tier.
-        currentTier: this.currentTier > 0 ? this.currentTier : undefined,
-        tiersCompleted: this.tiersCompleted,
-        tierHistory: this.tierHistory.length > 0 ? this.tierHistory.slice() : undefined,
-      });
-      const outPath = path.join(clone, "blackboard-state.json");
-      await writeFileAtomic(outPath, JSON.stringify(snapshot, null, 2));
-    } catch (err) {
-      // Best-effort — a state write failure must never crash the run.
-      // Log to the transcript so operators can see it happened, but
-      // swallow otherwise.
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error("blackboard-state write failed:", msg);
-    } finally {
-      this.stateWriteInFlight = false;
-      // If another scheduling request came in during our write, honor it now.
-      if (this.stateWriteAgain) {
-        this.stateWriteAgain = false;
-        this.scheduleStateWrite();
-      }
-    }
-  }
+  // --- File I/O helpers ---
 
-  // ---------------------------------------------------------------------
-  // File I/O helpers
-  // ---------------------------------------------------------------------
+  private boardCounts() { return boardCountsExtracted(this.utilCtx()); }
+  private boardListTodos() { return boardListTodosExtracted(this.utilCtx()); }
+  private boardSnapshot() { return boardSnapshotExtracted(this.utilCtx()); }
+  private boardGetTodo(id: string) { return boardGetTodoExtracted(this.utilCtx(), id); }
 
-  // V2 cutover Phase 2c (2026-04-28): hashExpectedFiles / hashFile /
-  // writeDiff used only by V1 worker pipeline (CAS baseline + atomic
-  // write). V2 path uses applyAndCommit which does its own read +
-  // write via the realFilesystemAdapter. Helpers removed with the V1
-  // pipeline.
+  private async readExpectedFiles(files: string[]): Promise<Record<string, string | null>> { return readExpectedFilesExtracted(this.active?.localPath, files); }
 
-  // V2 cutover Phase 2c read helpers — translate V2 queue to V1 wire
-  // shapes so the rest of BlackboardRunner (and downstream consumers
-  // like summary writer + crashSnapshot) keep working unchanged.
-  private boardCounts() {
-    return v2QueueCountsToWireCounts(this.todoQueue.counts());
-  }
-  private boardListTodos() {
-    return this.todoQueue.list().map(v2QueueTodoToWireTodo);
-  }
-  private boardSnapshot() {
-    return buildWireSnapshot(this.todoQueue.list(), this.findings.list());
-  }
-  /** Lookup a single todo by id, returning the V1 wire shape. */
-  private boardGetTodo(id: string) {
-    const t = this.todoQueue.get(id);
-    return t ? v2QueueTodoToWireTodo(t) : undefined;
-  }
+  private async resolveSafe(relPath: string): Promise<string> { return resolveSafePathExtracted(this.active?.localPath, relPath); }
 
-  private async readExpectedFiles(files: string[]): Promise<Record<string, string | null>> {
-    const out: Record<string, string | null> = {};
-    for (const f of files) {
-      const abs = await this.resolveSafe(f);
-      try {
-        out[f] = await fs.readFile(abs, "utf8");
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-          out[f] = null;
-        } else {
-          throw err;
-        }
-      }
-    }
-    return out;
-  }
+  // --- Expiry + cap watchdog ---
 
-  private async resolveSafe(relPath: string): Promise<string> {
-    const clone = this.active?.localPath;
-    if (!clone) throw new Error("no active clone path");
-    return resolveSafe(clone, relPath);
-  }
+  private startCapWatchdog(): void { startCapWatchdogExtracted(this.capContext()); }
 
-  // ---------------------------------------------------------------------
-  // Expiry watchdog
-  // ---------------------------------------------------------------------
-
-  // Periodic sweep of the todo queue. Reaps in-progress todos older
-  // than IN_PROGRESS_TTL_MS (default 10 min) by transitioning them to
-  // failed via reapStaleInProgress. Each reaped id is then:
-  //   1. broadcast as todo_failed (UI sync)
-  //   2. scheduleStateWrite (persist transition)
-  //   3. enqueueReplan (planner decides retry vs skip)
-  //
-  // Audit fix (2026-04-28): the broadcast + persist were missing —
-  // UI lagged the actual state by the snapshot debounce window.
-  // The wrapper failTodoQ can't be reused here because the queue
-  // already mutated to "failed" inside reapStaleInProgress; calling
-  // failTodoQ would throw "Cannot fail todo: status=failed".
-  /** #305: run-long cap watchdog. Polls isOverWallClockCap every 5s
-   *  and aborts in-flight prompts when the cap fires. Necessary
-   *  because the audit cycle's long planner calls (runAuditor +
-   *  runPlannerFallbackForUnmetCriteria) can elapse 4-5 min between
-   *  the existing per-iteration cap checks. Pre-watchdog, tour v2
-   *  blackboard overshot a 15-min cap to 20m 14s before the tour
-   *  script's safety net force-stopped it.
-   *
-   *  Mirrors the pattern of startQueueReaper (setInterval, idempotent
-   *  start, cleared in cleanup). When the cap trips, calls
-   *  checkAndApplyCaps which appends "Stopping: wall-clock cap
-   *  reached" + sets stopping=true + aborts every activeAborts
-   *  controller — the in-flight prompts unwind naturally. */
-  private startCapWatchdog(): void {
-    if (this.capWatchdog) return;
-    this.capWatchdog = setInterval(() => {
-      if (this.stopping) {
-        // Self-stop on terminal — no further work for the watchdog.
-        if (this.capWatchdog) {
-          clearInterval(this.capWatchdog);
-          this.capWatchdog = undefined;
-        }
-        return;
-      }
-      // checkAndApplyCaps does the full work: tick accumulator
-      // advance + cap-reason resolution + abort propagation.
-      this.checkAndApplyCaps();
-      // R13 wiring (2026-05-04): cheap heap-pressure sample on every
-      // tick. Behind cfg.SWARM_MEMORY_BACKPRESSURE so the default
-      // path stays unaffected. Emits a single transcript warning per
-      // level crossing — doesn't auto-pause workers (that requires
-      // deeper integration with the worker poll loops; R13 first cut
-      // is signal-only).
-      if (appConfig.SWARM_MEMORY_BACKPRESSURE) {
-        this.checkMemoryPressureTick();
-      }
-    }, 5_000);
-    this.capWatchdog.unref?.();
-  }
-
-  /** W14 wiring (2026-05-04): one-shot discovery of locally-pulled
-   *  Ollama tags, used by R3's pickLocalFallback when the cloud
-   *  failover chain exhausts. Best-effort: any failure leaves
-   *  localOllamaTags empty, which gracefully disables R3. */
   private async discoverLocalOllamaTags(): Promise<void> {
-    try {
-      const baseUrl = (this.opts.ollamaBaseUrl ?? "http://127.0.0.1:11434").replace(/\/v1\/?$/, "");
-      const r = await fetch(`${baseUrl}/api/tags`, {
-        signal: AbortSignal.timeout(3000),
-      });
-      if (!r.ok) return;
-      const body = (await r.json()) as { models?: Array<{ name?: string }> };
-      const tags = (body.models ?? [])
-        .map((m) => m.name)
-        .filter((n): n is string => typeof n === "string" && n.length > 0);
-      this.localOllamaTags = tags;
-    } catch {
-      /* discovery failed → R3 stays disabled */
-    }
+    await discoverLocalOllamaTagsExtracted({
+      active: this.active,
+      localOllamaTags: this.localOllamaTags,
+      setLocalOllamaTags: (v) => { this.localOllamaTags = v; },
+      getOllamaBaseUrl: () => this.opts.ollamaBaseUrl,
+    });
   }
 
-  /** R1/R3/R10 wiring (2026-05-04): build the per-call FailoverConfig
-   *  from app cfg + per-run cfg + discovered local tags. Centralized
-   *  so the worker prompt path doesn't repeat assembly logic. */
   private buildFailoverConfig(): FailoverConfig {
-    const chain = this.active?.providerFailover ?? appConfig.SWARM_PROVIDER_FAILOVER;
+    return buildFailoverConfigExtracted({
+      active: this.active,
+      localOllamaTags: this.localOllamaTags,
+      setLocalOllamaTags: (v) => { this.localOllamaTags = v; },
+      getOllamaBaseUrl: () => this.opts.ollamaBaseUrl,
+    });
+  }
+
+  private checkMemoryPressureTick(): void { checkMemoryPressureTickExtracted(this.capContext()); }
+
+  setSubscriberPaused(paused: boolean): void { setSubscriberPausedExtracted(this.capContext(), paused); }
+
+  // Adaptive worker pool: polls backlog vs pool size; spawn/kill with hysteresis.
+  private adaptiveWatchdog: NodeJS.Timeout | undefined;
+  private adaptiveHysteresis = { upPolls: 0, downPolls: 0 };
+  private adaptiveScaleInFlight = false;
+  private startAdaptiveWorkerWatchdog(opts: AdaptiveWatchdogOpts): void { startAdaptiveWorkerWatchdogExtracted(this.adaptiveWatchdogCtx(), opts); }
+  private async scaleUpAdaptive(opts: AdaptiveWatchdogOpts, totalLive: number): Promise<void> { await scaleUpAdaptiveExtracted(this.adaptiveWatchdogCtx(), opts, totalLive); }
+  private async scaleDownAdaptive(opts: AdaptiveWatchdogOpts): Promise<void> { await scaleDownAdaptiveExtracted(this.adaptiveWatchdogCtx(), opts); }
+
+  private queueReaperCtx(): QueueReaperContext {
     return {
-      failoverChain: chain,
-      localTags: appConfig.SWARM_DEGRADATION_FALLBACK ? this.localOllamaTags : [],
-      localPreferred: appConfig.SWARM_DEGRADATION_PREFERRED,
-      enableHealthSwap: appConfig.SWARM_MODEL_HEALTH_SWAP,
+      getReaperTimer: () => this.reaperTimer,
+      setReaperTimer: (v) => { this.reaperTimer = v; },
+      todoQueue: this.todoQueue,
+      appendSystem: (msg) => this.appendSystem(msg),
+      boardBroadcaster: this.boardBroadcaster,
+      bumpStaleEventCount: () => { this.staleEventCount++; },
+      enqueueReplan: (id) => this.enqueueReplan(id),
+      scheduleStateWrite: () => this.scheduleStateWrite(),
+      adaptiveWatchdogCtx: () => this.adaptiveWatchdogCtx(),
     };
   }
 
-  /** R13 wiring (2026-05-04): sample heap, emit a one-shot warning on
-   *  crossing into "throttle" or "pause" levels.
-   *  W17 promotion: also flips this.memoryPaused so workers idle
-   *  while heap is critical, then clears it when heap drops back to
-   *  ok. Throttle level is signal-only (warns but doesn't pause). */
-  private checkMemoryPressureTick(): void {
-    const v = checkMemoryPressure();
-    // W17 promotion: heap pause logic. Pauses on rise to "pause";
-    // resumes on drop to "ok". Throttle stays paused-or-not (no
-    // transition).
-    if (v.level === "pause" && !this.memoryPaused) {
-      this.memoryPaused = true;
-      this.appendSystem(
-        `[memory] auto-pause: heap pressure CRITICAL (${(v.ratio * 100).toFixed(0)}%) — workers idling until GC catches up.`,
-      );
-    } else if (v.level === "ok" && this.memoryPaused) {
-      this.memoryPaused = false;
-      this.appendSystem(`[memory] resume: heap pressure recovered (${(v.ratio * 100).toFixed(0)}%) — workers active again.`);
-    }
-    if (v.level === this.lastMemoryPressureLevel) return;
-    if (v.level === "throttle") {
-      this.appendSystem(
-        `[memory] heap pressure HIGH (${(v.ratio * 100).toFixed(0)}% of ${(v.limitBytes / 1024 / 1024).toFixed(0)} MB) — GC may slow incoming prompts.`,
-      );
-    }
-    this.lastMemoryPressureLevel = v.level;
-  }
+  private startQueueReaper(): void { startQueueReaperExtracted(this.queueReaperCtx()); }
 
-  /** W16 wiring (R7 promotion, 2026-05-04): set/clear the
-   *  subscriber-disconnect pause flag. Called by the orchestrator
-   *  when WS subscriber count for this run crosses 0 ↔ N. */
-  setSubscriberPaused(paused: boolean): void {
-    if (this.subscriberPaused === paused) return;
-    this.subscriberPaused = paused;
-    if (paused) {
-      this.appendSystem(`[subscribers] auto-pause: no browser watching — workers idling.`);
-    } else {
-      this.appendSystem(`[subscribers] resume: subscriber reconnected — workers active again.`);
-    }
-  }
+  private stopQueueReaper(): void { stopQueueReaperExtracted(this.queueReaperCtx()); }
 
-  // T198c (2026-05-04): adaptive worker pool sizing — log-only watchdog.
-  // Polls every 30s; scales the worker pool up or down based on todo
-  // backlog vs current worker pool size.
-  //
-  // T198c (2026-05-04): originally LOG-ONLY first-cut.
-  // T-Item-4 (2026-05-04): promoted to REAL spawn/kill with hysteresis.
-  // Sustained-signal logic: scale-up/scale-down triggers only fire after
-  // N consecutive polls (default 2 = 60s sustained) — short backlog
-  // spikes don't oscillate the pool.
-  //
-  // Cost shape: spawn calls cost the next prompt window of tokens for
-  // each new agent. The existing maxCostUsd watchdog already enforces
-  // the upper cap — adaptive scale-up is bounded by opts.max AND by
-  // the cost cap (which fails the run when exceeded).
-  private adaptiveWatchdog: NodeJS.Timeout | undefined;
-  // T-Item-4: hysteresis state. Counters bump per consecutive poll;
-  // reset to 0 when the signal flips OR when the steady-state band
-  // (between 1× and 2× workers backlog) is observed.
-  private adaptiveHysteresis = { upPolls: 0, downPolls: 0 };
-  private static readonly ADAPTIVE_SUSTAINED_POLLS = 2;
-  // T-Item-4: prevent overlapping scale operations. The watchdog tick
-  // fires every 30s but a scale-up's spawnAgentNoOpencode can take
-  // longer (cold-start). Skip the next tick if we're still scaling.
-  private adaptiveScaleInFlight = false;
-  private startAdaptiveWorkerWatchdog(opts: { min: number; max: number }): void {
-    if (this.adaptiveWatchdog) return;
-    this.adaptiveWatchdog = setInterval(() => {
-      // Don't enqueue a second scale operation on top of an in-flight one.
-      if (this.adaptiveScaleInFlight) return;
-      const counts = this.todoQueue.counts();
-      const openTodos = counts.pending;
-      const inProgress = counts.inProgress;
-      const totalLive = openTodos + inProgress;
-      const workers = this.opts.manager
-        .list()
-        .filter((a) => a.index !== 1).length; // exclude planner
-      const SUSTAINED = BlackboardRunner.ADAPTIVE_SUSTAINED_POLLS;
-      if (totalLive > workers * 2 && workers < opts.max) {
-        // Backlog spike: bump up-counter, reset down-counter.
-        this.adaptiveHysteresis.upPolls += 1;
-        this.adaptiveHysteresis.downPolls = 0;
-        if (this.adaptiveHysteresis.upPolls >= SUSTAINED) {
-          this.adaptiveHysteresis.upPolls = 0;
-          this.adaptiveScaleInFlight = true;
-          void this.scaleUpAdaptive(opts, totalLive)
-            .catch((err) => {
-              this.appendSystem(
-                `[T-Item-4 adaptive workers] scale-up error: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            })
-            .finally(() => {
-              this.adaptiveScaleInFlight = false;
-            });
-        }
-      } else if (totalLive === 0 && workers > opts.min) {
-        // Backlog drained: bump down-counter, reset up-counter.
-        this.adaptiveHysteresis.downPolls += 1;
-        this.adaptiveHysteresis.upPolls = 0;
-        if (this.adaptiveHysteresis.downPolls >= SUSTAINED) {
-          this.adaptiveHysteresis.downPolls = 0;
-          this.adaptiveScaleInFlight = true;
-          void this.scaleDownAdaptive(opts)
-            .catch((err) => {
-              this.appendSystem(
-                `[T-Item-4 adaptive workers] scale-down error: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            })
-            .finally(() => {
-              this.adaptiveScaleInFlight = false;
-            });
-        }
-      } else {
-        // Steady-state band (between 0 and 2× workers backlog): reset both.
-        this.adaptiveHysteresis.upPolls = 0;
-        this.adaptiveHysteresis.downPolls = 0;
-      }
-    }, 30_000);
-    this.adaptiveWatchdog.unref?.();
-  }
+  private stopCapWatchdog(): void { stopCapWatchdogExtracted(this.capContext()); }
 
-  // T-Item-4 (2026-05-04): real scale-up. Spawns recommended-add new
-  // workers via AgentManager.spawnAgentNoOpencode. New agent indexes
-  // pick up after the current worker tail (planner=1, workers=2..N+1).
-  // Stops on first failure to avoid runaway error loops; the next
-  // watchdog tick will retry if the backlog still warrants it.
-  private async scaleUpAdaptive(
-    opts: { min: number; max: number },
-    totalLive: number,
-  ): Promise<void> {
-    const cfg = this.active;
-    if (!cfg) return;
-    const currentWorkers = this.opts.manager
-      .list()
-      .filter((a) => a.index !== 1);
-    if (currentWorkers.length >= opts.max) return;
-    const recommendedAdd = Math.max(
-      1,
-      Math.min(
-        opts.max - currentWorkers.length,
-        Math.ceil(totalLive / 2 - currentWorkers.length),
-      ),
-    );
-    this.appendSystem(
-      `[T-Item-4 adaptive workers] sustained backlog ≥${BlackboardRunner.ADAPTIVE_SUSTAINED_POLLS} polls; scaling up by ${recommendedAdd} worker(s) (current=${currentWorkers.length}, max=${opts.max}).`,
-    );
-    const baseIdx = currentWorkers.length + 2; // existing workers occupy 2..N+1
-    for (let i = 0; i < recommendedAdd; i++) {
-      try {
-        const newAgent = await this.opts.manager.spawnAgentNoOpencode({
-          cwd: cfg.localPath,
-          index: baseIdx + i,
-          model: cfg.workerModel ?? cfg.model,
-        });
-        this.appendSystem(
-          `[T-Item-4 adaptive workers] spawned worker ${newAgent.index} (${newAgent.id.slice(0, 8)}).`,
-        );
-      } catch (err) {
-        this.appendSystem(
-          `[T-Item-4 adaptive workers] spawn failed at index ${baseIdx + i}: ${err instanceof Error ? err.message : String(err)}; will retry next poll.`,
-        );
-        break;
-      }
-    }
-  }
+  private async promptPlannerSafely(primaryAgent: Agent, promptText: string, agentName: "swarm" | "swarm-read" | "swarm-builder" = "swarm", ollamaFormat?: "json" | Record<string, unknown>): Promise<{ response: string; agentUsed: Agent }> { return promptPlannerSafelyExtracted(this.promptContext(), primaryAgent, promptText, agentName, ollamaFormat); }
 
-  // T-Item-4 (2026-05-04): real scale-down. Kills idle workers via
-  // AgentManager.killAgent. Picks ONLY workers reporting status
-  // ready/spawning (NOT thinking/retrying — killing mid-prompt would
-  // orphan the in-flight commit attempt). Bounded by opts.min so the
-  // pool never drops below the user-set floor.
-  private async scaleDownAdaptive(opts: {
-    min: number;
-    max: number;
-  }): Promise<void> {
-    const currentWorkers = this.opts.manager
-      .list()
-      .filter((a) => a.index !== 1);
-    if (currentWorkers.length <= opts.min) return;
-    const recommendedKill = currentWorkers.length - opts.min;
-    // Only kill IDLE workers (isInFlight=false). Active workers stay.
-    const idleWorkers = currentWorkers.filter(
-      (w) => !this.opts.manager.isInFlight(w.id),
-    );
-    if (idleWorkers.length === 0) {
-      this.appendSystem(
-        `[T-Item-4 adaptive workers] backlog drained but all ${currentWorkers.length} workers in-flight; deferring scale-down.`,
-      );
-      return;
-    }
-    const toKill = idleWorkers.slice(
-      0,
-      Math.min(recommendedKill, idleWorkers.length),
-    );
-    this.appendSystem(
-      `[T-Item-4 adaptive workers] sustained drain ≥${BlackboardRunner.ADAPTIVE_SUSTAINED_POLLS} polls; killing ${toKill.length} idle worker(s) (min=${opts.min}).`,
-    );
-    for (const w of toKill) {
-      try {
-        await this.opts.manager.killAgent(w.id);
-        this.appendSystem(
-          `[T-Item-4 adaptive workers] killed worker ${w.index} (${w.id.slice(0, 8)}).`,
-        );
-      } catch (err) {
-        this.appendSystem(
-          `[T-Item-4 adaptive workers] kill failed for ${w.id.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-  }
+  private async promptAgent(agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" = "swarm", formatExpect: "json" | "free" = "json", ollamaFormat?: "json" | Record<string, unknown>): Promise<string> { return promptAgentExtracted(this.promptContext(), agent, prompt, agentName, formatExpect, ollamaFormat); }
 
-  private startQueueReaper(): void {
-    if (this.reaperTimer) return;
-    this.reaperTimer = setInterval(() => {
-      const reaped = this.todoQueue.reapStaleInProgress(
-        Date.now(),
-        IN_PROGRESS_TTL_MS,
-      );
-      if (reaped.length === 0) return;
-      this.appendSystem(
-        `[v2-reaper] Reaped ${reaped.length} stale in-progress todo(s) past ${Math.round(IN_PROGRESS_TTL_MS / 60_000)}min TTL: ${reaped.join(", ")}`,
-      );
-      for (const id of reaped) {
-        const t = this.todoQueue.get(id);
-        const reason = t?.reason ?? `worker timeout (>${Math.round(IN_PROGRESS_TTL_MS / 60_000)}min in-progress)`;
-        this.boardBroadcaster.emit({
-          type: "todo_stale",
-          todoId: id,
-          reason,
-          replanCount: t?.retries ?? 0,
-        });
-        this.staleEventCount++;
-        this.enqueueReplan(id);
-      }
-      this.scheduleStateWrite();
-    }, REAPER_INTERVAL_MS);
-    this.reaperTimer.unref?.();
-  }
+  // --- Misc helpers ---
 
-  private stopQueueReaper(): void {
-    if (this.reaperTimer) clearInterval(this.reaperTimer);
-    this.reaperTimer = undefined;
-    // T198c: paired teardown for the adaptive watchdog.
-    if (this.adaptiveWatchdog) clearInterval(this.adaptiveWatchdog);
-    this.adaptiveWatchdog = undefined;
-  }
-
-  private stopCapWatchdog(): void {
-    if (this.capWatchdog) clearInterval(this.capWatchdog);
-    this.capWatchdog = undefined;
-  }
-
-  // ---------------------------------------------------------------------
-  // Prompting
-  // ---------------------------------------------------------------------
-
-  // Task #220: replaces Unit 24 fallback chain (#195/#190) with a
-  // health-check + respawn approach. Why the change:
-  //   - The old fallback chain re-routed planner prompts to a worker
-  //     agent's session. Even with the model override (#195), the
-  //     worker session has accumulated context from prior worker
-  //     prompts — the planner's reasoning gets polluted.
-  //   - The "primary chip reset to ready" (#190) was misleading when
-  //     the primary's subprocess was actually dead — every subsequent
-  //     planner call wastes one attempt on the dead primary, then
-  //     fallback again, then chip resets to ready again. The UI looked
-  //     like the agent was alive when it was a corpse.
-  //
-  // New behavior: before every planner-role call, ping the planner's
-  // /api/health. If alive → proceed. If dead → respawn the subprocess
-  // with the same identity (id, index, model) and a fresh session.
-  // Then prompt. Identity preserved, no context pollution, no misleading
-  // chip state. If respawn itself fails, the run ends cleanly with the
-  // actual root cause surfaced.
-  private async promptPlannerSafely(
-    primaryAgent: Agent,
-    promptText: string,
-    // #231 (2026-04-27 evening): default flipped from "swarm-read" → "swarm".
-    // Investigation showed glm-5.1 / nemotron-3-super / gemma4 don't emit
-    // OpenAI-style structured tool_calls — they hallucinate XML markers
-    // (<read path='X'>) which opencode never executes. The planner's
-    // "tool inspection" was always a fiction; removing the tool grant
-    // stops the hallucinations + the resulting JSON parse failures.
-    // Discussion presets keep using swarm-read because they don't strict-
-    // parse JSON envelopes; their prose tolerates the markers (and we now
-    // strip + surface the markers via stripAgentText + ToolCallsBlock).
-    // See runs_overnight/_INVESTIGATION-231-pseudo-tool-calls.md for
-    // the full RCA.
-    agentName: "swarm" | "swarm-read" | "swarm-builder" = "swarm",
-    // #233: forward Ollama structured-output constraint for parser-
-    // strict prompts. Pass "json" to constrain the decoder to valid
-    // JSON; the model literally cannot emit XML markers when this is
-    // set. Effective only on USE_OLLAMA_DIRECT path.
-    ollamaFormat?: "json" | Record<string, unknown>,
-  ): Promise<{ response: string; agentUsed: Agent }> {
-    // E3 Phase 5 cleanup pt 5: subprocess-death recovery dance removed.
-    // With no opencode subprocess there's no subprocess to die — every
-    // failure is now either model output (bad JSON) or transport (HTTP
-    // error from the provider). Both propagate naturally; promptWithRetry's
-    // retry loop handles transient transport errors at a layer below.
-    const response = await this.promptAgent(primaryAgent, promptText, agentName, "json", ollamaFormat);
-    return { response, agentUsed: primaryAgent };
-  }
-
-  private async promptAgent(
-    agent: Agent,
-    prompt: string,
-    agentName: "swarm" | "swarm-read" | "swarm-builder" = "swarm",
-    // Task #196: default to "json" since virtually every blackboard
-    // prompt (planner contract, worker hunks, auditor verdict, replanner)
-    // expects JSON output. Pass "free" if a future prompt legitimately
-    // produces prose. Sniff only fires after 2048 chars accumulated, so
-    // short answers pass through naturally.
-    formatExpect: "json" | "free" = "json",
-    // #233 (2026-04-27 evening): Ollama structured-output passthrough.
-    // When set + USE_OLLAMA_DIRECT=1, the model's decoder is grammar-
-    // constrained to emit JSON (or output matching the schema). Closes
-    // #231 at the source: model literally cannot emit XML markers for
-    // parser-strict prompts. Pass "json" for free-form JSON, or a JSON
-    // Schema for strict shape validation. Ignored when on the SDK path.
-    ollamaFormat?: "json" | Record<string, unknown>,
-  ): Promise<string> {
-    // Unit 37: agentName defaults to "swarm" (no tools — preserved worker
-    // behavior). Planner / auditor / replanner / tier-up / council-drafts
-    // should pass "swarm-read" to get read / grep / glob / list tools so
-    // they can actually inspect the repo before producing contracts or
-    // verdicts. The route selects the opencode agent profile per-prompt
-    // via session.prompt body.agent — profiles are declared in the
-    // clone's opencode.json (RepoService.writeOpencodeConfig / Unit 20).
-    this.turnsPerAgent.set(agent.id, (this.turnsPerAgent.get(agent.id) ?? 0) + 1);
-    this.opts.manager.markStatus(agent.id, "thinking");
-    const turnStart = Date.now();
-    this.emitAgentState({
-      id: agent.id,
-      index: agent.index,
-      port: agent.port,
-      sessionId: agent.sessionId,
-      status: "thinking",
-      // Unit 39: UI uses this to render "thinking 3m54s" while we wait
-      // for the real response, distinguishing a legitimate slow prompt
-      // from an error.
-      thinkingSince: turnStart,
-    });
-
-    this.opts.manager.touchActivity(agent.sessionId, turnStart);
-
-    const controller = new AbortController();
-    this.activeAborts.add(controller);
-    let abortedReason: string | null = null;
-    // Task #142: when the absolute turn cap fires, the @opencode-ai SDK
-    // doesn't always honor AbortSignal — the underlying fetch can keep
-    // running until natural completion. The agent's UI status stays
-    // "thinking" past the documented 4-min cap, surprising users (smoke
-    // tour 2026-04-25 17:30: agent-4 thinking for 7 min). Surface a
-    // visible warning when the watchdog first fires AND the call hasn't
-    // returned yet, then a periodic reminder every 60s thereafter.
-    let abortFiredAt = 0;
-    let lastVisibilityWarn = 0;
-
-    const watchdog = setInterval(() => {
-      if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
-        // Task #191: consult the SSE per-chunk timer before guillotining.
-        // The 90s STREAM_PER_CHUNK_TIMEOUT_MS is the SSE-aware liveness
-        // signal — if it hasn't fired, chunks are arriving and the model
-        // is actively producing tokens. The 1200s wall-clock cap predates
-        // reliable SSE (#170); now that streaming works, the inner timer
-        // is the better signal. Only fire the cap when SSE has ALSO been
-        // silent for ≥60s — the call is genuinely stuck.
-        const lastChunkAt = this.opts.manager.getLastChunkAt(agent.id);
-        if (abortFiredAt === 0 && lastChunkAt && Date.now() - lastChunkAt < 60_000) {
-          // Healthy SSE; let it keep running. Watchdog re-checks in 10s.
-          return;
-        }
-        if (abortFiredAt === 0) {
-          abortFiredAt = Date.now();
-          const sseQuiet = lastChunkAt
-            ? `SSE silent ${Math.round((Date.now() - lastChunkAt) / 1000)}s`
-            : "no SSE chunks received";
-          abortedReason = `absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s, ${sseQuiet})`;
-          controller.abort(new Error(abortedReason));
-          // E3 Phase 5: opencode session.abort gone; AbortController above is the only abort.
-          this.appendSystem(
-            `[${agent.id}] absolute turn cap (${ABSOLUTE_MAX_MS / 1000}s) hit — ${sseQuiet}. Abort signaled.`,
-          );
-        } else if (Date.now() - lastVisibilityWarn > 60_000) {
-          // Periodic reminder while the SDK refuses to return — gives
-          // the user a signal that the agent is genuinely uncancellable
-          // rather than the marker being stale.
-          lastVisibilityWarn = Date.now();
-          const stuckS = Math.round((Date.now() - turnStart) / 1000);
-          this.appendSystem(
-            `[${agent.id}] still in flight ${stuckS}s after start despite abort — SDK has not returned (Task #142).`,
-          );
-        }
-      }
-    }, 10_000);
-    watchdog.unref?.();
-
-    try {
-      // Unit 16: retry loop extracted to shared helper. The onRetry
-      // callback preserves the prior surface — system message + agent
-      // status flip to "retrying" with attempt counter — so the UI and
-      // event log read identically to the pre-Unit-16 behavior.
-      // 2026-05-04 (W13/W14/W15 wiring): wrap in promptWithFailover
-      // so quota/auth walls swap models per cfg.SWARM_PROVIDER_FAILOVER
-      // (R1), R10 health-swaps degraded models pre-flight, and R3
-      // falls back to a local Ollama tag when the cloud chain
-      // exhausts. With all three flags off + chain empty, this
-      // reduces to a plain promptWithRetry call.
-      const failoverCfg = this.buildFailoverConfig();
-      const res = await promptWithFailover(agent, prompt, {
-        signal: controller.signal,
-        // Task #166: streamed-prompt path. Per-chunk SSE timeout
-        // replaces the blocking 5-min headersTimeout that was wedging
-        // on heavy planner / audit prompts.
-        manager: this.opts.manager,
-        // Task #196: early-format sniff aborts wrong-format responses
-        // in ~10s instead of waiting for the absolute turn cap (1200s).
-        formatExpect,
-        // R9 extended (2026-05-04): intra-stream loop detection. If
-        // the model starts emitting the same block repeatedly (observed:
-        // 132 identical JSON tool-call envelopes in one streaming turn),
-        // abort the prompt early instead of burning through the 90s SSE
-        // idle timeout. Saves ~80s of token budget per occurrence.
-        intraStreamLoop: true,
-        // V2 Step 1: when USE_OLLAMA_DIRECT=1, route through OllamaClient
-        // (bypasses OpenCode subprocess entirely). config import here is
-        // safe — BlackboardRunner already depends on config. The flag
-        // gates by env so dev can flip between paths without rebuilding.
-        ollamaDirect: process.env.USE_OLLAMA_DIRECT === "1"
-          ? { baseUrl: this.opts.ollamaBaseUrl ?? "http://127.0.0.1:11533" }
-          : undefined,
-        // #233: pass structured-output constraint to Ollama when
-        // caller requested it AND we're on the direct path.
-        ...(ollamaFormat !== undefined ? { ollamaFormat } : {}),
-        // V2 Step 1: thread the diag logger so OllamaClient's
-        // _ollama_direct_call entries land in logs/current.jsonl.
-        logDiag: this.opts.logDiag,
-        // Phase 5b of #243: per-agent addendum from the topology row.
-        // Active topology lives on this.active (set in start()).
-        promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
-        // Phase 5a of #243: per-agent generation params (temperature)
-        // from the topology row. Effective only on USE_OLLAMA_DIRECT
-        // path — the SDK path drops these because session.prompt has
-        // no per-call generation-options field. To wire temperature
-        // for the SDK path we'd need per-index opencode.json profiles.
-        ollamaOptions: getAgentOllamaOptions(this.active?.topology, agent.index),
-        onTokens: ({ promptTokens, responseTokens }) => {
-          if (promptTokens > 0) this.promptTokensPerAgent.set(agent.id, (this.promptTokensPerAgent.get(agent.id) ?? 0) + promptTokens);
-          if (responseTokens > 0) this.responseTokensPerAgent.set(agent.id, (this.responseTokensPerAgent.get(agent.id) ?? 0) + responseTokens);
-        },
-        agentName,
-        describeError: (e) => describeSdkError(e),
-        sleep: (ms, sig) => interruptibleSleep(ms, sig),
-        onTiming: ({ attempt, elapsedMs, success }) => {
-          // Unit 21: per-agent stats for summary.json. Count every
-          // attempt (incl. retries); only sample latency on success.
-          this.attemptsPerAgent.set(
-            agent.id,
-            (this.attemptsPerAgent.get(agent.id) ?? 0) + 1,
-          );
-          if (success) {
-            const lats = this.latenciesPerAgent.get(agent.id) ?? [];
-            lats.push(elapsedMs);
-            this.latenciesPerAgent.set(agent.id, lats);
-          }
-          // Unit 19: per-call telemetry.
-          this.opts.logDiag?.({
-            type: "_prompt_timing",
-            preset: this.active?.preset,
-            agentId: agent.id,
-            agentIndex: agent.index,
-            attempt,
-            elapsedMs,
-            success,
-          });
-          // Improvement #4: per-agent first-prompt cold-start logging.
-          this.opts.manager.recordPromptComplete(agent.id, { attempt, elapsedMs, success });
-          // Unit 40: live latency sample over WS for the UI sparkline.
-          const sampleTs = Date.now();
-          this.opts.emit({
-            type: "agent_latency_sample",
-            agentId: agent.id,
-            agentIndex: agent.index,
-            attempt,
-            elapsedMs,
-            success,
-            ts: sampleTs,
-          });
-          // Unit 62: also push into the bounded rolling window stash
-          // so the page-refresh catch-up snapshot has the same data
-          // a live observer would see. Cap at 20 (matches the
-          // client-side LATENCY_WINDOW in store.ts).
-          const recent = this.recentLatencySamples.get(agent.id) ?? [];
-          recent.push({ ts: sampleTs, elapsedMs, success, attempt });
-          if (recent.length > 20) recent.splice(0, recent.length - 20);
-          this.recentLatencySamples.set(agent.id, recent);
-        },
-        onRetry: ({ attempt, max, reasonShort, delayMs }) => {
-          // Unit 21: track retry firings per-agent for summary.json.
-          this.retriesPerAgent.set(
-            agent.id,
-            (this.retriesPerAgent.get(agent.id) ?? 0) + 1,
-          );
-          this.appendSystem(
-            `[${agent.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
-          );
-          this.opts.manager.markStatus(agent.id, "retrying", {
-            retryAttempt: attempt,
-            retryMax: max,
-            retryReason: reasonShort,
-          });
-          this.emitAgentState({
-            id: agent.id,
-            index: agent.index,
-            port: agent.port,
-            sessionId: agent.sessionId,
-            status: "retrying",
-            retryAttempt: attempt,
-            retryMax: max,
-            retryReason: reasonShort,
-          });
-        },
-      }, this.failoverState, failoverCfg, (info) => {
-        // W13/W14/W15 wiring: surface every model swap to the
-        // transcript so users can see when failover fired. Also feed
-        // the classified error into errorTracker so the run-end RCA
-        // counts it.
-        this.errorTracker.push(info.classified);
-        if (this.errorTracker.length > BlackboardRunner.MAX_TRACKED_ERRORS) {
-          this.errorTracker.shift();
-        }
-        this.appendSystem(
-          `[${agent.id}] failover: ${info.fromModel} → ${info.toModel} (${info.reason})`,
-        );
-      });
-      const text = this.extractText(res) ?? "";
-      this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
-      this.opts.manager.markStatus(agent.id, "ready", { lastMessageAt: Date.now() });
-      this.emitAgentState({
-        id: agent.id,
-        index: agent.index,
-        port: agent.port,
-        sessionId: agent.sessionId,
-        status: "ready",
-        lastMessageAt: Date.now(),
-      });
-      return text;
-    } catch (err) {
-      const msg = abortedReason ?? describeSdkError(err);
-      this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
-      this.opts.manager.markStatus(agent.id, "failed", { error: msg });
-      this.emitAgentState({
-        id: agent.id,
-        index: agent.index,
-        port: agent.port,
-        sessionId: agent.sessionId,
-        status: "failed",
-        error: msg,
-      });
-      throw new Error(msg);
-    } finally {
-      clearInterval(watchdog);
-      this.activeAborts.delete(controller);
-    }
-  }
-
-  // ---------------------------------------------------------------------
-  // Misc helpers
-  // ---------------------------------------------------------------------
-
-  private sleep(ms: number): Promise<void> {
-    return new Promise((r) => setTimeout(r, ms));
-  }
-
+  private sleep(ms: number): Promise<void> { return sleepExtracted(ms); }
 
   private appendSystem(text: string, summary?: TranscriptEntrySummary): void {
     const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now(), summary };
@@ -5392,197 +786,35 @@ export class BlackboardRunner implements SwarmRunner {
     this.opts.emit({ type: "transcript_append", entry });
   }
 
-  /** R17 wiring (2026-05-04): classify a thrown error + push to the
-   *  per-run errorTracker. Bounded at MAX_TRACKED_ERRORS — drops
-   *  oldest when full so a runaway-error run can't blow memory. The
-   *  causeHint lets callers override message-pattern matching when
-   *  they have authoritative context (e.g. "user-stop" when an abort
-   *  was triggered by the stop endpoint, not a watchdog). */
-  private recordError(
-    err: unknown,
-    opts: { causeHint?: ErrorCategory; statusCode?: number } = {},
-  ): ClassifiedError {
-    const message = err instanceof Error ? err.message : String(err);
-    const classified = classifyError({
-      message,
-      statusCode: opts.statusCode,
-      causeHint: opts.causeHint,
-    });
-    this.errorTracker.push(classified);
-    if (this.errorTracker.length > BlackboardRunner.MAX_TRACKED_ERRORS) {
-      this.errorTracker.shift();
-    }
-    return classified;
+  private recordError(err: unknown, opts: { causeHint?: ErrorCategory; statusCode?: number } = {}): ClassifiedError {
+    return recordErrorExtracted({ errorTracker: this.errorTracker, maxTrackedErrors: BlackboardRunner.MAX_TRACKED_ERRORS }, err, opts);
   }
 
-  /** #299: returns the active directive with any mid-run user
-   *  amendments appended. Helper used everywhere a planner-tier
-   *  prompt reads userDirective so HITL nudges take effect at the
-   *  next prompt boundary. Returns the original directive unchanged
-   *  when no amendments exist or getAmendments isn't wired (older
-   *  test rigs). */
-  private directiveWithAmendments(): string | undefined {
-    const base = this.active?.userDirective?.trim() ?? "";
-    const amendments = this.opts.getAmendments?.() ?? [];
-    if (amendments.length === 0) {
-      return base.length > 0 ? base : undefined;
-    }
-    const nudges = amendments
-      .map((a, i) => {
-        const stamp = new Date(a.ts).toISOString();
-        return `[user nudge #${i + 1} @ ${stamp}] ${a.text}`;
-      })
-      .join("\n");
-    const header =
-      "MID-RUN USER NUDGES (treat as additions to the directive — incorporate into the next contract):";
-    return base.length > 0
-      ? `${base}\n\n${header}\n${nudges}`
-      : `${header}\n${nudges}`;
-  }
+  private directiveWithAmendments(): string | undefined { return directiveWithAmendmentsExtracted(this.utilCtx()); }
 
   private appendAgent(agent: Agent, text: string): void {
-    // Two-stage strip via shared helper (#230, 2026-04-27 evening):
-    //  1. extractThinkTags pulls <think>...</think> reasoning into
-    //     entry.thoughts (UI Phase 1, 2026-04-27).
-    //  2. extractToolCallMarkers pulls <read>/<grep>/<list>/etc. into
-    //     entry.toolCalls (#229, 2026-04-27 evening). Some models
-    //     (notably glm-5.1) emit these as raw text when they think
-    //     they're invoking SDK tools. Pre-fix they leaked into bubbles
-    //     AND caused contract/todos parse failures.
-    const { finalText, thoughts, toolCalls } = stripAgentText(text);
-    // Unit 54: attach a structured summary when the response parses
-    // as a known JSON envelope. UI uses this to collapse worker
-    // hunks/skips into a one-line summary by default. Summary parses
-    // against finalText (post-strip) so it doesn't mistake chain-of-
-    // thought prose or pseudo-tool-calls for envelope content.
-    const summary = summarizeAgentResponse(finalText);
-    const entry: TranscriptEntry = {
-      id: randomUUID(),
-      role: "agent",
-      agentId: agent.id,
-      agentIndex: agent.index,
-      text: finalText || "(empty response)",
-      ts: Date.now(),
-      summary,
-      ...(thoughts.length > 0 ? { thoughts } : {}),
-      ...(toolCalls.length > 0 ? { toolCalls } : {}),
-    };
-    this.transcript.push(entry);
-    this.opts.emit({ type: "transcript_append", entry });
-    // R9 wiring (2026-05-04): semantic-loop check after every agent
-    // turn. Behind cfg.SWARM_LOOP_DETECTION so the default path is
-    // unaffected. On detected loop: inject a one-shot system message
-    // (idempotent — `loopWarningEmittedAt` is bumped per-detection
-    // and only re-emits after the window has fully turned over).
-    if (appConfig.SWARM_LOOP_DETECTION) {
-      this.maybeEmitLoopWarning();
-    }
+    const ctx = this.utilCtx();
+    appendAgentExtracted(ctx, agent, text);
+    this.consecutiveLoopDetections = ctx.consecutiveLoopDetections;
+    this.lastLoopWarningAtTurn = ctx.lastLoopWarningAtTurn;
+    this.stopping = ctx.stopping;
+    this.terminationReason = ctx.terminationReason;
   }
 
-  /** R9 wiring (2026-05-04): pull last-K agent texts from the
-   *  transcript, evaluate Jaccard similarity, emit a warning when
-   *  the run looks stuck in a loop. W18 promotion (2026-05-04):
-   *  after LOOP_DETECTIONS_TO_HALT consecutive detections (each
-   *  separated by a full window-worth of turns), set
-   *  terminationReason and stop the run gracefully so we don't burn
-   *  budget on visible repetition. A clear-window resets the
-   *  consecutive counter. */
   private maybeEmitLoopWarning(): void {
-    const agentTexts = this.transcript
-      .filter((e) => e.role === "agent" && typeof e.text === "string")
-      .map((e) => e.text as string);
-    const verdict = detectSemanticLoop({ recentTurns: agentTexts });
-    if (!verdict.inLoop) {
-      // W18 promotion: a non-loop window resets the consecutive
-      // counter. Only counts after we have a full window of turns
-      // (so an early no-loop verdict on a small transcript doesn't
-      // mask a real loop later).
-      if (verdict.windowSize >= 4) this.consecutiveLoopDetections = 0;
-      return;
-    }
-    // Idempotent: only emit once per "window worth" of turns. The
-    // tracker stores the transcript length when we last warned;
-    // a new warning requires `windowSize` more turns to have
-    // happened since.
-    if (
-      this.lastLoopWarningAtTurn >= 0 &&
-      agentTexts.length - this.lastLoopWarningAtTurn < verdict.windowSize
-    ) {
-      return;
-    }
-    this.lastLoopWarningAtTurn = agentTexts.length;
-    this.consecutiveLoopDetections += 1;
-    const haltCap = BlackboardRunner.LOOP_DETECTIONS_TO_HALT;
-    if (this.consecutiveLoopDetections >= haltCap) {
-      // W18 promotion: stop the run gracefully. terminationReason
-      // surfaces in the run summary as "loop-detected" and is
-      // visible in the stop-reason classifier.
-      const reason = `loop-detected (${haltCap} consecutive detections — last: ${verdict.reason})`;
-      this.terminationReason = reason;
-      this.stopping = true;
-      this.appendSystem(
-        `[loop-detector] HALT: ${reason}. Stopping the run before more budget burns on repetition.`,
-      );
-      // Abort in-flight prompts so they fail fast — the workers will
-      // exit on the next poll-loop check.
-      for (const ctrl of this.activeAborts) {
-        try { ctrl.abort(new Error("loop-detected")); } catch { /* */ }
-      }
-      return;
-    }
-    this.appendSystem(
-      `[loop-detector] ${verdict.reason} — consider changing tactic, splitting the todo, or wrapping up. (${this.consecutiveLoopDetections}/${haltCap} consecutive detections; halts at ${haltCap})`,
-    );
+    const ctx = this.utilCtx();
+    maybeEmitLoopWarningExtracted(ctx);
+    this.consecutiveLoopDetections = ctx.consecutiveLoopDetections;
+    this.lastLoopWarningAtTurn = ctx.lastLoopWarningAtTurn;
+    this.stopping = ctx.stopping;
+    this.terminationReason = ctx.terminationReason;
   }
 
-  private setPhase(phase: SwarmPhase): void {
-    this.phase = phase;
-    this.opts.emit({ type: "swarm_state", phase, round: this.round });
-    // Unit 31: phase is a first-class state change; persist it so an
-    // observer tailing blackboard-state.json sees the transition promptly.
-    this.scheduleStateWrite();
-    // V2 cutover Phase 1a (2026-04-28): the parallel-track divergence
-    // check that lived here was removed after 7/7 SDK presets validated
-    // zero divergences. V2 events still flow through this.v2Observer.apply
-    // at their explicit call sites — that's all the V2 reducer needs
-    // to stay in sync with V1's transitions. The reducer's snapshot
-    // ships in summary.v2State for forward compat with Phase 1b/3
-    // (UI-driven by V2 phase).
-  }
+  private setPhase(phase: SwarmPhase): void { setPhaseExtracted(this.utilCtx(), phase); this.phase = phase; }
 
-  private emitAgentState(s: AgentState): void {
-    // thinkingSince REST-snapshot fix: route through the manager so
-    // the agentStates mirror gets updated AND the WS event still
-    // fires (the manager's onState callback IS opts.emit-equivalent
-    // for `agent_state` events). Before this change, fields like
-    // `thinkingSince` (Unit 39) only appeared on the live WS stream
-    // — REST /status served a stale mirror that omitted them.
-    this.opts.manager.recordAgentState(s);
-  }
+  private emitAgentState(s: AgentState): void { emitAgentStateExtracted(this.opts.manager, s); }
 
-
-  private extractText(res: unknown): string | undefined {
-    const any = res as {
-      data?: {
-        parts?: Array<{ type?: string; text?: string }>;
-        info?: { parts?: Array<{ type?: string; text?: string }> };
-        text?: string;
-      };
-    };
-    const parts = any?.data?.parts ?? any?.data?.info?.parts;
-    if (Array.isArray(parts)) {
-      const texts = parts
-        .filter((p) => p?.type === "text" && typeof p.text === "string")
-        .map((p) => p.text as string);
-      if (texts.length) return texts.join("\n");
-    }
-    return any?.data?.text;
-  }
+  private extractText(res: unknown): string | undefined { return extractTextExtracted(res); }
 }
 
-
-// Task #164 (refactor): parseGoalList moved to ./goalListParser.ts.
-// 2026-04-28: bumpAgentCounter / countNewlines / checkExpectedSymbols
-// moved to ./runnerHelpers.ts. Re-exported from this module for
-// back-compat with any external consumer that imported them by name.
 export { parseGoalList } from "./goalListParser.js";

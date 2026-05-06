@@ -8,7 +8,7 @@ import {
   shouldRunNextActionAfterBiasCheck,
 } from "./swapSidesBiasCheck.js";
 import type { TranscriptEntry } from "../types.js";
-import type { ParsedDebateVerdict } from "./DebateJudgeRunner.js";
+import type { ParsedDebateVerdict } from "./debatePromptHelpers.js";
 
 function entry(overrides: Partial<TranscriptEntry>): TranscriptEntry {
   return {

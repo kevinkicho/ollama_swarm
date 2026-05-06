@@ -13,11 +13,12 @@ import {
   getDispositionForTurn,
   buildStructuredSynthesisPrompt,
   buildRoundRobinDeliverableSections,
-} from "./RoundRobinRunner.js";
+} from "./roundRobinPromptHelpers.js";
 import type { TranscriptEntry } from "../types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RUNNER_SRC = readFileSync(join(__dirname, "RoundRobinRunner.ts"), "utf8");
+const HELPERS_SRC = readFileSync(join(__dirname, "roundRobinPromptHelpers.ts"), "utf8");
 
 describe("DISPOSITIONS — structured deliberation lenses", () => {
   it("ships exactly 4 dispositions: Critic / Synthesizer / Gap-finder / Builder", () => {
@@ -161,19 +162,19 @@ test("(T185) NEXT-DISPOSITION VOTE prompt + parser + runner override are wired",
     "prompt body must request the vote",
   );
   assert.match(
-    RUNNER_SRC,
+    HELPERS_SRC,
     /export function extractDispositionVote/,
     "parser must be exported",
   );
   assert.match(
-    RUNNER_SRC,
+    HELPERS_SRC,
     /export function pickNextDisposition/,
     "picker must be exported",
   );
 });
 
 test("(T185) extractDispositionVote — returns the disposition name when present", async () => {
-  const { extractDispositionVote } = await import("./RoundRobinRunner.js");
+  const { extractDispositionVote } = await import("./roundRobinPromptHelpers.js");
   assert.equal(
     extractDispositionVote("...prose...\nNEXT-DISPOSITION VOTE: critic — claims accumulating"),
     "critic",
@@ -189,7 +190,7 @@ test("(T185) extractDispositionVote — returns the disposition name when presen
 });
 
 test("(T185) pickNextDisposition — picks majority vote from recent agent turns", async () => {
-  const { pickNextDisposition } = await import("./RoundRobinRunner.js");
+  const { pickNextDisposition } = await import("./roundRobinPromptHelpers.js");
   const transcript = [
     { id: "1", role: "agent" as const, agentIndex: 1, text: "p1\nNEXT-DISPOSITION VOTE: critic — x", ts: 1 },
     { id: "2", role: "agent" as const, agentIndex: 2, text: "p2\nNEXT-DISPOSITION VOTE: critic — y", ts: 2 },
@@ -200,7 +201,7 @@ test("(T185) pickNextDisposition — picks majority vote from recent agent turns
 });
 
 test("(T185) pickNextDisposition — tied votes fall back to mechanical rotation", async () => {
-  const { pickNextDisposition, getDispositionForTurn } = await import("./RoundRobinRunner.js");
+  const { pickNextDisposition, getDispositionForTurn } = await import("./roundRobinPromptHelpers.js");
   const transcript = [
     { id: "1", role: "agent" as const, agentIndex: 1, text: "p\nNEXT-DISPOSITION VOTE: critic — x", ts: 1 },
     { id: "2", role: "agent" as const, agentIndex: 2, text: "p\nNEXT-DISPOSITION VOTE: builder — y", ts: 2 },
@@ -213,7 +214,7 @@ test("(T185) pickNextDisposition — tied votes fall back to mechanical rotation
 });
 
 test("(T185) pickNextDisposition — no votes in transcript → mechanical rotation", async () => {
-  const { pickNextDisposition, getDispositionForTurn } = await import("./RoundRobinRunner.js");
+  const { pickNextDisposition, getDispositionForTurn } = await import("./roundRobinPromptHelpers.js");
   const transcript = [
     { id: "1", role: "agent" as const, agentIndex: 1, text: "no vote here at all", ts: 1 },
   ];

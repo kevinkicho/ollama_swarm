@@ -117,9 +117,11 @@ export function extractToolCallMarkers(text: string): {
     return "";
   });
 
-  // Collapse the whitespace introduced by removed markers. Two newlines
-  // max in a row keeps paragraph structure intact.
-  const finalText = stripped.replace(/\n{3,}/g, "\n\n").trim();
+  // Collapse the whitespace introduced by removed markers. After tool-call
+  // markers are stripped, their surrounding \n\n paragraph breaks orphan
+  // into micro-segments in useSegmentSplitter (splits on \n\n). Collapse
+  // to single \n so the remaining prose merges into coherent segments.
+  const finalText = stripped.replace(/\n{2,}/g, "\n").trim();
 
   // 2026-05-01 fix: previously fell back to returning the original text
   // when stripping emptied everything, mirroring extractThinkTags. That

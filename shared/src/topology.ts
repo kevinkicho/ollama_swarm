@@ -138,6 +138,8 @@ export function defaultRoleForIndex(
       if (index === 2) return "con";
       if (index === 3) return "judge";
       return "peer";
+    case "pipeline":
+      return index === 1 ? "planner" : "peer";
     default:
       return index === 1 ? "planner" : "worker";
   }

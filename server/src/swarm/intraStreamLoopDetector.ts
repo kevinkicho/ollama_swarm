@@ -151,6 +151,25 @@ export function createIntraStreamLoopDetector(
         }
       }
 
+      // Check 4: pseudo-tool-call marker density. Models sometimes emit
+      // dozens of <read>/<grep>/<bash> XML markers as raw text instead of
+      // using the SDK's structured tool_calls. Each marker has different
+      // content (different file paths), so the identical-delta and
+      // substring-repeat checks don't catch them. But 20+ XML pseudo-tool
+      // markers in a single streaming turn is a clear hallucination loop.
+      if (currentLength >= 500) {
+        const selfClosingCount = (cumulativeText.match(/<(?:read|grep|list|glob|edit|bash|write|search|find|tree|ls|cat|tool_use|tool_call|function_call|invoke)\b[^>]*\/?>/gi) ?? []).length;
+        const pairedCount = (cumulativeText.match(/<(?:read|grep|list|glob|edit|bash|write|search|find|tree|ls|cat|tool_use|tool_call|function_call|invoke)\b[^>]*>[\s\S]*?<\/(?:read|grep|list|glob|edit|bash|write|search|find|tree|ls|cat|tool_use|tool_call|function_call|invoke)>/gi) ?? []).length;
+        const markerCount = selfClosingCount + pairedCount;
+        if (markerCount >= 20) {
+          return {
+            detected: true,
+            reason: `intra-stream loop: ${markerCount} pseudo-tool-call markers in ${currentLength}-char response`,
+            repeatCount: markerCount,
+          };
+        }
+      }
+
       return { detected: false, reason: "", repeatCount: 0 };
     },
 

@@ -7,7 +7,7 @@ import { DebateStream } from "./DebateStream.js";
 import {
   buildCrossStreamJudgePrompt,
   parseCrossStreamPick,
-} from "./DebateJudgeRunner.js";
+} from "./debatePromptHelpers.js";
 import type { TranscriptEntry } from "../types.js";
 import type { Agent } from "../services/AgentManager.js";
 

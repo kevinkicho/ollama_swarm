@@ -28,8 +28,8 @@ const execAsync = promisify(exec);
 const BASH_TIMEOUT_MS = 60_000;
 const BASH_OUTPUT_CAP = 200 * 1024;
 
-export type ToolName = "read" | "grep" | "glob" | "list" | "bash" | "write" | "edit";
-export type ProfileName = "swarm" | "swarm-read" | "swarm-builder";
+export type ToolName = "read" | "grep" | "glob" | "list" | "bash" | "write" | "edit" | "propose_hunks";
+export type ProfileName = "swarm" | "swarm-read" | "swarm-builder" | "swarm-write";
 export type Permission = "allow" | "deny";
 
 // Default tools list to advertise to the model per profile. Mirrors
@@ -38,7 +38,7 @@ export type Permission = "allow" | "deny";
 // without each caller having to spell out the per-profile list.
 export function defaultToolsForProfile(
   profile: ProfileName,
-): ReadonlyArray<"read" | "grep" | "glob" | "list" | "bash"> {
+): ReadonlyArray<"read" | "grep" | "glob" | "list" | "bash" | "propose_hunks"> {
   switch (profile) {
     case "swarm":
       return [];
@@ -46,6 +46,8 @@ export function defaultToolsForProfile(
       return ["read", "grep", "glob", "list"];
     case "swarm-builder":
       return ["read", "grep", "glob", "list", "bash"];
+    case "swarm-write":
+      return ["read", "grep", "glob", "list", "propose_hunks"];
   }
 }
 
@@ -58,6 +60,7 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     bash: "deny",
     write: "deny",
     edit: "deny",
+    propose_hunks: "deny",
   },
   "swarm-read": {
     read: "allow",
@@ -67,18 +70,27 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     bash: "deny",
     write: "deny",
     edit: "deny",
+    propose_hunks: "deny",
   },
   "swarm-builder": {
     read: "allow",
     grep: "allow",
     glob: "allow",
     list: "allow",
-    // bash declared as allow in the table for parity with opencode's
-    // permission rules, but the dispatcher's bash() handler throws
-    // "not yet implemented" until the security review lands.
     bash: "allow",
     write: "deny",
     edit: "deny",
+    propose_hunks: "deny",
+  },
+  "swarm-write": {
+    read: "allow",
+    grep: "allow",
+    glob: "allow",
+    list: "allow",
+    bash: "deny",
+    write: "deny",
+    edit: "deny",
+    propose_hunks: "allow",
   },
 };
 
@@ -263,6 +275,17 @@ export class ToolDispatcher {
         return grepTool(this.clonePath, call.args);
       case "bash":
         return bashTool(this.clonePath, call.args);
+      case "propose_hunks":
+        // Phase 2 (writeMode: multi): agent proposes hunks during turn.
+        // The dispatcher doesn't apply them — just returns the envelope
+        // for the runner to collect and reconcile.
+        return {
+          ok: true,
+          output: JSON.stringify({
+            note: "propose_hunks tool called — return hunks in your response",
+            format: { hunks: "Hunk[]", skip: "string (optional)" },
+          }),
+        };
       case "write":
       case "edit":
         // No profile allows these today; if we ever change that, the

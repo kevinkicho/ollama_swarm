@@ -136,6 +136,7 @@ export function buildPresetRouterPrompt(args: {
     stigmergy: "self-organizing repo exploration via pheromone trails",
     moa: "Mixture of Agents — N proposers + 1 aggregator",
     baseline: "single agent / single prompt — eval-harness floor",
+    pipeline: "multi-phase pipeline; chains sub-runs with transcript/deliverable piping",
   };
   return [
     "You are picking the BEST preset to handle a user directive.",

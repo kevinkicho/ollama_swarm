@@ -244,8 +244,17 @@ const PRESETS: readonly SwarmPreset[] = [
     min: 2,
     max: 8,
     recommended: 5,
-    // Aggregator does the heavy synthesis lift; reasoning-tier helps.
-    // Proposers can be coding-tier (fast independent drafts).
+    recommendedModel: MODEL_REASONING,
+    status: "active",
+    directive: "honored",
+  },
+  {
+    id: "pipeline",
+    label: "Pipeline (sequential stages)",
+    summary: "Chain multiple presets together. Each phase's output feeds the next. Default: Explore (stigmergy) → Decompose (orchestrator-worker) → Validate (debate-judge).",
+    min: 2,
+    max: 8,
+    recommended: 4,
     recommendedModel: MODEL_REASONING,
     status: "active",
     directive: "honored",
@@ -388,6 +397,12 @@ export function SetupForm() {
   const [auditorModel, setAuditorModel] = useState(BLACKBOARD_DEFAULT_AUDITOR_MODEL);
   const [specializedWorkers, setSpecializedWorkers] = useState(false);
   const [criticEnsemble, setCriticEnsemble] = useState(false);
+  // Combination feature toggles (Plans 1-7)
+  const [postRoundCritique, setPostRoundCritique] = useState(false);
+  const [postSynthesisCritique, setPostSynthesisCritique] = useState(false);
+  const [workerDispositions, setWorkerDispositions] = useState(false);
+  const [debateAudit, setDebateAudit] = useState(false);
+  const [councilMappers, setCouncilMappers] = useState(false);
   const [uiUrl, setUiUrl] = useState("");
   // #296: pre-commit verify command for blackboard worker pipeline.
   // Empty = legacy commit-without-verify behavior.
@@ -418,6 +433,10 @@ export function SetupForm() {
       return out;
     });
   };
+  // Phase 1+2 (2026-05-04): write mode and conflict policy for
+  // discussion presets. Default OFF (none) for backward compat.
+  const [writeMode, setWriteMode] = useState<"none" | "single" | "multi">("none");
+  const [conflictPolicy, setConflictPolicy] = useState<"merge" | "sequential" | "vote" | "judge" | "pick">("merge");
   const [busy, setBusy] = useState(false);
   const setError = useSwarm((s) => s.setError);
   const reset = useSwarm((s) => s.reset);
@@ -683,6 +702,40 @@ export function SetupForm() {
         if (cleaned.some((m) => m.length > 0)) {
           presetSpecific.moaProposerModels = cleaned;
         }
+      }
+      // Phase 1+2 (2026-05-04): write mode + conflict policy for
+      // discussion presets. Only send when writeMode !== "none".
+      if (preset.id !== "blackboard" && writeMode !== "none") {
+        presetSpecific.writeMode = writeMode;
+        if (writeMode === "multi") {
+          presetSpecific.conflictPolicy = conflictPolicy;
+        }
+      }
+      // Combination feature toggles (Plans 1-7).
+      // Only send the ones relevant to the selected preset.
+      const critiquePresets = ["round-robin", "council", "map-reduce", "orchestrator-worker", "orchestrator-worker-deep"];
+      if (critiquePresets.includes(preset.id)) {
+        if (postRoundCritique) presetSpecific.postRoundCritique = true;
+        if (postSynthesisCritique) presetSpecific.postSynthesisCritique = true;
+      }
+      if (preset.id === "blackboard") {
+        if (workerDispositions) presetSpecific.workerDispositions = true;
+        if (debateAudit) presetSpecific.debateAudit = true;
+      }
+      if (preset.id === "map-reduce") {
+        if (councilMappers) presetSpecific.councilMappers = true;
+      }
+      // Pipeline preset: send the pipeline config with default phases.
+      if (preset.id === "pipeline") {
+        presetSpecific.pipeline = {
+          phases: [
+            { preset: "stigmergy", rounds },
+            { preset: "orchestrator-worker", rounds },
+            { preset: "debate-judge", rounds: 1 },
+          ],
+          pipeMode: "both",
+          pipeMaxEntries: 20,
+        };
       }
 
       const res = await fetch("/api/swarm/start", {
@@ -1045,6 +1098,20 @@ export function SetupForm() {
             setOwDeepWorkerModel={setOwDeepWorkerModel}
             moaProposerModels={moaProposerModels}
             setMoaProposerModelAt={setMoaProposerModelAt}
+            writeMode={writeMode}
+            setWriteMode={setWriteMode}
+            conflictPolicy={conflictPolicy}
+            setConflictPolicy={setConflictPolicy}
+            postRoundCritique={postRoundCritique}
+            setPostRoundCritique={setPostRoundCritique}
+            postSynthesisCritique={postSynthesisCritique}
+            setPostSynthesisCritique={setPostSynthesisCritique}
+            workerDispositions={workerDispositions}
+            setWorkerDispositions={setWorkerDispositions}
+            debateAudit={debateAudit}
+            setDebateAudit={setDebateAudit}
+            councilMappers={councilMappers}
+            setCouncilMappers={setCouncilMappers}
           />
         </Section>
 

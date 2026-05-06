@@ -246,26 +246,47 @@ describe("BlackboardRunner cap-check call sites (Task #136)", () => {
     // re-spelling that `.pathname` does naively (and ends up as
     // C:\C:\... when joined with another path).
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const src = await fs.readFile(path.join(here, "BlackboardRunner.ts"), "utf8");
+    const srcFiles = [
+      "BlackboardRunner.ts",
+      "workerRunner.ts",
+      "replanManager.ts",
+      "tierRunner.ts",
+    ];
+    const allSrc = (await Promise.all(
+      srcFiles.map((f) => fs.readFile(path.join(here, f), "utf8")),
+    )).join("\n// --- file boundary ---\n");
     // Each named loop method is required to call checkAndApplyCaps.
     // We grep for the function header followed (within reasonable
     // distance) by a checkAndApplyCaps invocation. This catches the
     // common regression: someone adds a new loop and forgets the cap
-    // gate.
+    // gate. The search covers both the main runner and extracted modules
+    // since the cap-check call may be in either.
     const guardedLoops = ["runAuditedExecution", "runWorkers", "processReplanQueue"];
     for (const name of guardedLoops) {
-      // Match the method DEFINITION (visibility modifier + async +
-      // name + paren list + return type + opening brace), not a call
-      // site. `private async runX(args): Promise<void> {`
+      // Match method DEFINITION in both "private async name(...)" and
+      // "export async function name(...)" forms. Scan ALL matches across
+      // the joined source (main runner + extracted modules) and require
+      // that at least one definition has a checkAndApplyCaps call within
+      // 4000 chars.
       const defRe = new RegExp(
-        `private\\s+async\\s+${name}\\s*\\([^)]*\\)\\s*:\\s*Promise<[^>]*>\\s*\\{`,
+        `(?:private\\s+async\\s+${name}\\s*\\([^)]*\\)\\s*:\\s*Promise<[^>]*>\\s*\\{|export\\s+async\\s+function\\s+${name}\\s*\\([^)]*\\)\\s*:\\s*Promise<[^>]*>\\s*\\{)`,
+        "g",
       );
-      const defMatch = defRe.exec(src);
-      assert.ok(defMatch, `expected to find DEFINITION of loop method ${name}`);
-      const tailWindow = src.slice(defMatch!.index, defMatch!.index + 4_000);
-      assert.match(
-        tailWindow,
-        /checkAndApplyCaps\(\)/,
+      let found = false;
+      let match: RegExpExecArray | null;
+      while ((match = defRe.exec(allSrc)) !== null) {
+        const tailWindow = allSrc.slice(match.index, match.index + 4_000);
+        if (
+          /checkAndApplyCaps\(\)|checkAndApplyCapsExtracted|ctx\.checkAndApplyCaps/.test(
+            tailWindow,
+          )
+        ) {
+          found = true;
+          break;
+        }
+      }
+      assert.ok(
+        found,
         `loop method ${name} is missing a checkAndApplyCaps() guard within 4000 chars of its definition`,
       );
     }

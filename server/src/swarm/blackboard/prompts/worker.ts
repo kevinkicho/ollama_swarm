@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Hunk } from "../applyHunks.js";
 import { windowFileForWorker, windowFileWithAnchors } from "../windowFile.js";
+import type { RoundRobinDisposition } from "../../roundRobinPromptHelpers.js";
 
 // ---------------------------------------------------------------------------
 // Worker response schema (v2). Shape: {"hunks": [ ...discriminated on op ]}.
@@ -194,6 +195,13 @@ export interface WorkerSeed {
   // default-pool runs; the worker prompt is byte-identical to the
   // pre-Unit-59 shape when omitted.
   roleGuidance?: string;
+  // Plan 3: hot files from pheromone heatmap (prior stigmergy exploration).
+  // When present, surfaces files that accumulated the most visits/interest/
+  // confidence during a stigmergy run so the worker can prioritize them.
+  hotFiles?: Array<{ path: string; score: number; visits: number; avgInterest: number; avgConfidence: number }>;
+  // Plan 6: rotating disposition from round-robin, applied per cycle
+  // so the same worker approaches todos from different angles.
+  disposition?: RoundRobinDisposition;
 }
 
 export function buildWorkerUserPrompt(seed: WorkerSeed): string {
@@ -204,6 +212,18 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
   // mode is on; absent renders the pre-Unit-59 shape verbatim.
   if (seed.roleGuidance && seed.roleGuidance.trim().length > 0) {
     parts.push(seed.roleGuidance.trim());
+    parts.push("");
+  }
+  if (seed.disposition) {
+    parts.push(`**${seed.disposition.name.toUpperCase()} DISPOSITION THIS CYCLE:** ${seed.disposition.framing}`);
+    parts.push("");
+  }
+  if (seed.hotFiles && seed.hotFiles.length > 0) {
+    parts.push("## Hot Files (from prior exploration)");
+    parts.push("The following files were identified as most relevant by a prior exploration pass:");
+    for (const hf of seed.hotFiles) {
+      parts.push(`  ${hf.path} (score: ${hf.score.toFixed(1)}, interest: ${hf.avgInterest.toFixed(0)}, confidence: ${hf.avgConfidence.toFixed(0)})`);
+    }
     parts.push("");
   }
   parts.push(`TODO: ${seed.description}`);

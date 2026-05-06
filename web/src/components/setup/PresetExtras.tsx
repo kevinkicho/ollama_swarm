@@ -11,12 +11,18 @@ import {
 } from "./BlackboardSettings";
 import { RoleDiffAdvanced, type SwarmRoleWeb } from "./RoleDiffSettings";
 import { DebateJudgeAdvanced } from "./DebateJudgeSettings";
+import { ToggleField } from "./SharedFields";
 // T199 (2026-05-04): per-tier model pickers for round-robin / OW-Deep / MoA.
 import {
   RoundRobinDispositionModels,
   OwDeepTierModels,
   MoaProposerModels,
 } from "./PerTierModelPicker";
+import {
+  WriteModeSelector,
+  type WriteMode,
+  type ConflictPolicy,
+} from "./WriteSettings";
 
 export type PresetStatus = "active" | "planned";
 
@@ -89,6 +95,8 @@ export function directiveHintFor(preset: SwarmPreset): string {
           return "This preset will use the directive. Each proposer drafts an independent answer to it; the aggregator synthesizes them. Leave empty for the proposers' own read of the repo. Max 4000 chars.";
         case "debate-judge":
           return "This preset will use the directive. If you leave the Proposition (Advanced) field empty, the judge auto-derives a sharp PRO/CON proposition from your directive at run start. Debaters see directive as broader context; implementer's nextAction file edits target the directive. Set both for full control. Max 4000 chars.";
+        case "pipeline":
+          return "This preset passes the directive to the first phase. Each subsequent phase receives the previous phase's transcript + deliverable as context. Max 4000 chars.";
         default:
           return "This preset will use the directive to shape the run. Leave empty for the preset's default behavior. Max 4000 chars.";
       }
@@ -202,6 +210,22 @@ export function PresetAdvancedSettings(props: {
   // MoA per-proposer models
   moaProposerModels: readonly string[];
   setMoaProposerModelAt: (idx: number, value: string) => void;
+  // Write mode (Phase 1+2, 2026-05-04)
+  writeMode: WriteMode;
+  setWriteMode: (m: WriteMode) => void;
+  conflictPolicy: ConflictPolicy;
+  setConflictPolicy: (p: ConflictPolicy) => void;
+  // Combination feature toggles (Plans 1-7)
+  postRoundCritique: boolean;
+  setPostRoundCritique: (v: boolean) => void;
+  postSynthesisCritique: boolean;
+  setPostSynthesisCritique: (v: boolean) => void;
+  workerDispositions: boolean;
+  setWorkerDispositions: (v: boolean) => void;
+  debateAudit: boolean;
+  setDebateAudit: (v: boolean) => void;
+  councilMappers: boolean;
+  setCouncilMappers: (v: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const {
@@ -250,6 +274,20 @@ export function PresetAdvancedSettings(props: {
     setOwDeepWorkerModel,
     moaProposerModels,
     setMoaProposerModelAt,
+    writeMode,
+    setWriteMode,
+    conflictPolicy,
+    setConflictPolicy,
+    postRoundCritique,
+    setPostRoundCritique,
+    postSynthesisCritique,
+    setPostSynthesisCritique,
+    workerDispositions,
+    setWorkerDispositions,
+    debateAudit,
+    setDebateAudit,
+    councilMappers,
+    setCouncilMappers,
   } = props;
 
   // T199 (2026-05-04): expanded the gate to include round-robin,
@@ -260,8 +298,23 @@ export function PresetAdvancedSettings(props: {
     presetId === "debate-judge" ||
     presetId === "round-robin" ||
     presetId === "orchestrator-worker-deep" ||
-    presetId === "moa";
-  if (!hasAdvanced) return null;
+    presetId === "moa" ||
+    presetId === "pipeline" ||
+    presetId === "map-reduce" ||
+    presetId === "council" ||
+    presetId === "orchestrator-worker";
+  // Write mode selector shows for all discussion presets (not blackboard)
+  const hasWriteMode =
+    presetId === "round-robin" ||
+    presetId === "role-diff" ||
+    presetId === "council" ||
+    presetId === "orchestrator-worker" ||
+    presetId === "orchestrator-worker-deep" ||
+    presetId === "debate-judge" ||
+    presetId === "map-reduce" ||
+    presetId === "moa" ||
+    presetId === "pipeline";
+  if (!hasAdvanced && !hasWriteMode) return null;
 
   const label = (() => {
     switch (presetId) {
@@ -279,111 +332,187 @@ export function PresetAdvancedSettings(props: {
         return "Advanced settings — per-tier models (T196)";
       case "moa":
         return "Advanced settings — per-proposer models (T196)";
+      case "pipeline":
+        return "Advanced settings — combination features";
       default:
         return "Advanced settings";
     }
   })();
 
   return (
-    <div className="rounded border border-ink-700 bg-ink-900/60 text-xs">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between px-3 py-2 text-ink-300 hover:text-ink-100"
-      >
-        <span>{label}</span>
-        <span className="text-ink-500">{open ? "▾" : "▸"}</span>
-      </button>
-      {open ? (
-        <div className="px-3 pb-3 pt-1 space-y-2">
-          {presetId === "role-diff" ? (
-            <RoleDiffAdvanced roles={roles} setRoles={setRoles} />
+    <div className="space-y-2">
+      {hasWriteMode ? (
+        <div className="rounded border border-ink-700 bg-ink-900/60 text-xs">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="w-full flex items-center justify-between px-3 py-2 text-ink-300 hover:text-ink-100"
+          >
+            <span>Write settings — enable file modifications (Phase 1+2)</span>
+            <span className="text-ink-500">{open ? "▾" : "▸"}</span>
+          </button>
+          {open ? (
+            <div className="px-3 pb-3 pt-1">
+              <WriteModeSelector
+                presetId={presetId}
+                writeMode={writeMode}
+                setWriteMode={setWriteMode}
+                conflictPolicy={conflictPolicy}
+                setConflictPolicy={setConflictPolicy}
+              />
+            </div>
           ) : null}
-          {presetId === "blackboard" ? (
-            <>
-              <BlackboardAdvanced
-                pref={councilContractPref}
-                setPref={setCouncilContractPref}
-              />
-              <BlackboardModelOverrides
-                plannerModel={plannerModel}
-                setPlannerModel={setPlannerModel}
-                workerModel={workerModel}
-                setWorkerModel={setWorkerModel}
-                fallbackModel={fallbackModel}
-              />
-              <BlackboardWallClockCap
-                wallClockCapMin={wallClockCapMin}
-                setWallClockCapMin={setWallClockCapMin}
-              />
-              <BlackboardAmbitionTiers
-                ambitionTiers={ambitionTiers}
-                setAmbitionTiers={setAmbitionTiers}
-                wallClockCapMin={wallClockCapMin}
-              />
-              <MultiHourPresetChip
-                setWallClockCapMin={setWallClockCapMin}
-                setAmbitionTiers={setAmbitionTiers}
-              />
-              <BlackboardAgentTopology
-                dedicatedAuditor={dedicatedAuditor}
-                setDedicatedAuditor={setDedicatedAuditor}
-                auditorModel={auditorModel}
-                setAuditorModel={setAuditorModel}
-                specializedWorkers={specializedWorkers}
-                setSpecializedWorkers={setSpecializedWorkers}
-                criticEnsemble={criticEnsemble}
-                setCriticEnsemble={setCriticEnsemble}
-                fallbackModel={fallbackModel}
-              />
-              <BlackboardUiUrl uiUrl={uiUrl} setUiUrl={setUiUrl} />
-              <BlackboardVerifyCommand
-                verifyCommand={verifyCommand}
-                setVerifyCommand={setVerifyCommand}
-              />
-            </>
-          ) : null}
-          {presetId === "debate-judge" ? (
-            <DebateJudgeAdvanced
-              proposition={proposition}
-              setProposition={setProposition}
-            />
-          ) : null}
-          {/* T199 (2026-05-04): per-tier model pickers. Each renders
-            * the relevant variant of PerTierModelPicker. Substrate
-            * ships in T193 (round-robin disposition models) + T196
-            * (OW-Deep tier models + MoA per-proposer). */}
-          {presetId === "round-robin" ? (
-            <RoundRobinDispositionModels
-              fallbackModel={fallbackModel}
-              critic={dispositionCriticModel}
-              synthesizer={dispositionSynthesizerModel}
-              gapFinder={dispositionGapFinderModel}
-              builder={dispositionBuilderModel}
-              setCritic={setDispositionCriticModel}
-              setSynthesizer={setDispositionSynthesizerModel}
-              setGapFinder={setDispositionGapFinderModel}
-              setBuilder={setDispositionBuilderModel}
-            />
-          ) : null}
-          {presetId === "orchestrator-worker-deep" ? (
-            <OwDeepTierModels
-              fallbackModel={fallbackModel}
-              orchestratorModel={orchestratorModel}
-              midLeadModel={midLeadModel}
-              workerModel={owDeepWorkerModel}
-              setOrchestratorModel={setOrchestratorModel}
-              setMidLeadModel={setMidLeadModel}
-              setWorkerModel={setOwDeepWorkerModel}
-            />
-          ) : null}
-          {presetId === "moa" ? (
-            <MoaProposerModels
-              fallbackModel={fallbackModel}
-              proposerCount={agentCount}
-              proposerModels={moaProposerModels}
-              setProposerModel={setMoaProposerModelAt}
-            />
+        </div>
+      ) : null}
+      {hasAdvanced ? (
+        <div className="rounded border border-ink-700 bg-ink-900/60 text-xs">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="w-full flex items-center justify-between px-3 py-2 text-ink-300 hover:text-ink-100"
+          >
+            <span>{label}</span>
+            <span className="text-ink-500">{open ? "▾" : "▸"}</span>
+          </button>
+          {open ? (
+            <div className="px-3 pb-3 pt-1 space-y-2">
+              {presetId === "role-diff" ? (
+                <RoleDiffAdvanced roles={roles} setRoles={setRoles} />
+              ) : null}
+              {presetId === "blackboard" ? (
+                <>
+                  <BlackboardAdvanced
+                    pref={councilContractPref}
+                    setPref={setCouncilContractPref}
+                  />
+                  <BlackboardModelOverrides
+                    plannerModel={plannerModel}
+                    setPlannerModel={setPlannerModel}
+                    workerModel={workerModel}
+                    setWorkerModel={setWorkerModel}
+                    fallbackModel={fallbackModel}
+                  />
+                  <BlackboardWallClockCap
+                    wallClockCapMin={wallClockCapMin}
+                    setWallClockCapMin={setWallClockCapMin}
+                  />
+                  <BlackboardAmbitionTiers
+                    ambitionTiers={ambitionTiers}
+                    setAmbitionTiers={setAmbitionTiers}
+                    wallClockCapMin={wallClockCapMin}
+                  />
+                  <MultiHourPresetChip
+                    setWallClockCapMin={setWallClockCapMin}
+                    setAmbitionTiers={setAmbitionTiers}
+                  />
+                  <BlackboardAgentTopology
+                    dedicatedAuditor={dedicatedAuditor}
+                    setDedicatedAuditor={setDedicatedAuditor}
+                    auditorModel={auditorModel}
+                    setAuditorModel={setAuditorModel}
+                    specializedWorkers={specializedWorkers}
+                    setSpecializedWorkers={setSpecializedWorkers}
+                    criticEnsemble={criticEnsemble}
+                    setCriticEnsemble={setCriticEnsemble}
+                    fallbackModel={fallbackModel}
+                  />
+                  <BlackboardUiUrl uiUrl={uiUrl} setUiUrl={setUiUrl} />
+                  <BlackboardVerifyCommand
+                    verifyCommand={verifyCommand}
+                    setVerifyCommand={setVerifyCommand}
+                  />
+                </>
+              ) : null}
+              {presetId === "debate-judge" ? (
+                <DebateJudgeAdvanced
+                  proposition={proposition}
+                  setProposition={setProposition}
+                />
+              ) : null}
+              {presetId === "round-robin" ? (
+                <RoundRobinDispositionModels
+                  fallbackModel={fallbackModel}
+                  critic={dispositionCriticModel}
+                  synthesizer={dispositionSynthesizerModel}
+                  gapFinder={dispositionGapFinderModel}
+                  builder={dispositionBuilderModel}
+                  setCritic={setDispositionCriticModel}
+                  setSynthesizer={setDispositionSynthesizerModel}
+                  setGapFinder={setDispositionGapFinderModel}
+                  setBuilder={setDispositionBuilderModel}
+                />
+              ) : null}
+              {presetId === "orchestrator-worker-deep" ? (
+                <OwDeepTierModels
+                  fallbackModel={fallbackModel}
+                  orchestratorModel={orchestratorModel}
+                  midLeadModel={midLeadModel}
+                  workerModel={owDeepWorkerModel}
+                  setOrchestratorModel={setOrchestratorModel}
+                  setMidLeadModel={setMidLeadModel}
+                  setWorkerModel={setOwDeepWorkerModel}
+                />
+              ) : null}
+              {presetId === "moa" ? (
+                <MoaProposerModels
+                  fallbackModel={fallbackModel}
+                  proposerCount={agentCount}
+                  proposerModels={moaProposerModels}
+                  setProposerModel={setMoaProposerModelAt}
+                />
+              ) : null}
+              {/* Combination feature toggles — Plans 1-7 */}
+              {(presetId === "round-robin" || presetId === "council" || presetId === "map-reduce" || presetId === "orchestrator-worker" || presetId === "orchestrator-worker-deep") && (
+                <div className="space-y-1.5 pt-1">
+                  <div className="text-xs uppercase tracking-wide text-ink-500 font-semibold pt-1">Combination features</div>
+                  <ToggleField
+                    label="Post-round critique"
+                    checked={postRoundCritique}
+                    onChange={setPostRoundCritique}
+                    hint="After each round, one agent reviews the discussion and writes a critique for the next round. +1 prompt/round."
+                  />
+                  <ToggleField
+                    label="Post-synthesis critique"
+                    checked={postSynthesisCritique}
+                    onChange={setPostSynthesisCritique}
+                    hint="After the final synthesis, a critic agent revises it for gaps and weaknesses. +1 prompt total."
+                  />
+                </div>
+              )}
+              {presetId === "blackboard" ? (
+                <div className="space-y-1.5 pt-1">
+                  <div className="text-xs uppercase tracking-wide text-ink-500 font-semibold pt-1">Combination features</div>
+                  <ToggleField
+                    label="Worker dispositions"
+                    checked={workerDispositions}
+                    onChange={setWorkerDispositions}
+                    hint="Rotate workers through Critic/Synthesizer/Gap-finder/Builder dispositions across cycles for angle diversity."
+                  />
+                  <ToggleField
+                    label="Debate audit"
+                    checked={debateAudit}
+                    onChange={setDebateAudit}
+                    hint="Replace single-agent audit with a PRO/CON/JUDGE debate that catches gaps single reviewers miss."
+                  />
+                </div>
+              ) : null}
+              {presetId === "map-reduce" ? (
+                <div className="space-y-1.5 pt-1">
+                  <ToggleField
+                    label="Council mappers"
+                    checked={councilMappers}
+                    onChange={setCouncilMappers}
+                    hint="Each mapper runs a 2-round council (draft → revise) so the reducer gets richer, vetted inputs."
+                  />
+                </div>
+              ) : null}
+              {presetId === "pipeline" ? (
+                <div className="space-y-1.5 pt-1">
+                  <div className="text-xs uppercase tracking-wide text-ink-500 font-semibold pt-1">Pipeline phases</div>
+                  <p className="text-xs text-ink-400">The default pipeline runs: Explore (stigmergy) → Decompose (orchestrator-worker) → Validate (debate-judge). Each phase feeds its transcript + deliverable to the next.</p>
+                </div>
+              ) : null}
+            </div>
           ) : null}
         </div>
       ) : null}

@@ -3,6 +3,7 @@ import { agentBubblePalette, hueForAgent } from "../agentPalette";
 import { useSegmentSplitterWithPoints } from "../useSegmentSplitter";
 import { useSwarm } from "../../state/store";
 import { MAX_BUBBLE_HEIGHT_PX } from "./JsonBubbles";
+import { extractThinkTags } from "../../../../shared/src/extractThinkTags";
 import { extractToolCallMarkers } from "../../../../shared/src/extractToolCallMarkers";
 
 // Task #173 + #176 Phase A+B: per-agent streaming dock. Each agent
@@ -93,9 +94,19 @@ function PersistentStreamBubble({
   // here makes the live display readable; the marker count is surfaced
   // separately. Server-side appendAgent ALSO strips for the final
   // transcript entry, so the finalized bubble is clean too.
-  const { finalText: cleanedText, toolCalls } = useMemo(
-    () => extractToolCallMarkers(text),
+  //
+  // Also strip think tags (extractThinkTags) client-side so the segment
+  // splitter computes split points on text that matches what the server
+  // will finalize (stripAgentText runs both extractors). Without this,
+  // split points are offset from the final text, causing bracket-junk
+  // rendering like "[]" in the finalized bubble.
+  const { thoughts, finalText: postThink } = useMemo(
+    () => extractThinkTags(text),
     [text],
+  );
+  const { finalText: cleanedText, toolCalls } = useMemo(
+    () => extractToolCallMarkers(postThink),
+    [postThink],
   );
   const { segments, splitPoints } = useSegmentSplitterWithPoints(cleanedText);
   // 2026-04-26: persist split points to the store so the finalized

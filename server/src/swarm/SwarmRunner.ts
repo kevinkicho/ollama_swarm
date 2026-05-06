@@ -14,7 +14,8 @@ export type PresetId =
   | "map-reduce"
   | "stigmergy"
   | "baseline"
-  | "moa";
+  | "moa"
+  | "pipeline";
 
 export interface RunConfig {
   repoUrl: string;
@@ -198,6 +199,21 @@ export interface RunConfig {
    */
   verifier?: boolean;
   /**
+   * Post-synthesis critique: runs a critic agent after any synthesis
+   * pass (council consensus, OW lead plan, map-reduce reducer) to
+   * find gaps and produce a revised synthesis. Uses the MoA
+   * self-critique pattern adapted for general use. Default false
+   * (opt-in).
+   */
+  postSynthesisCritique?: boolean;
+  /**
+   * Plan 6: round-robin dispositions for blackboard workers. When true,
+   * each worker rotates through critic/synthesizer/gap-finder/builder
+   * dispositions across cycles so the same worker approaches todos from
+   * different angles. Default false. Blackboard-only.
+   */
+  workerDispositions?: boolean;
+  /**
    * Task #132: continuous mode — run-against-budget instead of
    * run-against-rounds. When true, the runner treats `rounds` as
    * effectively unbounded; the run halts on cap (tokenBudget /
@@ -210,6 +226,14 @@ export interface RunConfig {
    * #124 (token-budget) which together make the budget gate real.
    */
   continuous?: boolean;
+  /**
+   * Post-round critique hook: after each discussion round, pick the
+   * agent with the fewest turns and prompt it to critique the recent
+   * entries. The critique is appended as a system message visible to
+   * all agents next round. Costs 1 extra prompt per round. Default
+   * false.
+   */
+  postRoundCritique?: boolean;
   /**
    * Task #130: persistent cross-run memory (`<clone>/.swarm-memory.jsonl`).
    * On run-start, the planner seed surfaces the most recent N
@@ -584,6 +608,14 @@ export interface RunConfig {
    *  recently-visited files, not seek them). Default OFF — strict
    *  FIFO + tag-match preserves existing behavior. Blackboard only. */
   stigmergyOnBlackboard?: boolean;
+  /** Plan 3: run ID to load heatmap from (future: cross-run pheromone
+   *  carry). When set, the blackboard worker seed includes hot files
+   *  from a prior or concurrent stigmergy run. Blackboard-only. */
+  pheromoneHotseed?: string;
+  /** Plan 3: explicit file list to seed worker attention. When set,
+   *  these files are surfaced in the worker prompt as hot-file context
+   *  regardless of stigmergy state. Blackboard-only. */
+  pheromoneHotFiles?: string[];
   /** T-Item-CouncilRec (2026-05-04): council reconcile policy.
    *  Picks how the council settles on a final answer:
    *  - "revise" (default): existing behavior — agents see peer drafts
@@ -611,6 +643,16 @@ export interface RunConfig {
    *    is set to "import-graph", `cfg.importGraphSlicing` semantics
    *    are used. Map-reduce only. */
   mapReducePartition?: "round-robin" | "size-balanced" | "import-graph";
+  /** Plan 2: council inside map-reduce mappers. When true, each mapper
+   *  slice is processed by a 2-3 agent council (draft → revise) instead
+   *  of a single-shot prompt. The council's synthesis becomes the mapper
+   *  output fed to the reducer. Produces richer, more vetted inputs at
+   *  the cost of more agent calls per slice. Map-reduce only. */
+  councilMappers?: boolean;
+  /** Number of council rounds for council mappers (default 2, max 3).
+   *  Round 1 = draft, Round 2 = revise, Round 3 (optional) = refine.
+   *  Map-reduce only; ignored when councilMappers is false. */
+  councilMapperRounds?: number;
   /** T-Item-AutoRoute (2026-05-04): runtime per-prompt model routing.
    *  When true, runners that normally fan all agents through cfg.model
    *  consult per-tier overrides on a per-prompt basis using the role
@@ -640,6 +682,23 @@ export interface RunConfig {
    *  Requires testDrivenTodos OR auditorParallelHypothesis to actually
    *  emit hypothesis-tagged todos. Blackboard only. */
   parallelHypothesisInFlight?: boolean;
+  /**
+   * Debate-judge auditor: replace Blackboard's single-agent auditor pass
+   * with an optional 2-round debate (PRO/CON/JUDGE) where PRO argues
+   * "criteria met", CON argues "criteria not met", and JUDGE issues a
+   * structured verdict with confidence. Adversarial pressure catches gaps
+   * that single-reviewer audits miss. Uses the auditor agent for all three
+   * roles (different prompts provide the framing). Default false.
+   * Blackboard-only.
+   */
+  debateAudit?: boolean;
+  /**
+   * Maximum debate rounds per criterion when debateAudit is true.
+   * If the first round judge confidence is "low" and this is >= 2,
+   * a second round runs with the additional evidence. Default 1, max 2.
+   * Blackboard-only; ignored when debateAudit is false.
+   */
+  debateAuditRounds?: number;
   /** T198i: blackboard auditor parallel hypothesis. When true + last
    *  auditor verdict was "partial", next planner cycle's prompt
    *  instructs the planner to propose 2-3 ALTERNATIVE approaches to
@@ -695,6 +754,13 @@ export interface RunConfig {
    */
   baselineSelfCritique?: boolean;
   /**
+   * Pipeline preset: chains multiple sub-runs together. Each phase's
+   * transcript + deliverable feeds the next phase's seed directive.
+   * When set AND preset is "pipeline", the PipelineRunner executes
+   * the phases sequentially. Absent → DEFAULT_PIPELINE used.
+   */
+  pipeline?: import("./pipelinePhases.js").PipelineConfig;
+  /**
    * Task #102 + T2.2 (2026-05-04): opt-in wrap-up apply phase.
    *
    * **Debate-judge** (Task #102 original use): post-verdict "build"
@@ -727,6 +793,52 @@ export interface RunConfig {
    * ignored by discussion presets (no worker write path to gate).
    */
   useWorkerPipeline?: boolean;
+  /**
+   * Write phase mode for discussion presets. Replaces and generalizes
+   * executeNextAction with more granular control:
+   *
+   * - "none" (default): discussion-only, no file writes. Preserves the
+   *   legacy behavior for all presets except blackboard/baseline.
+   * - "single": ONE implementer agent (or synthesizer) produces hunks
+   *   after discussion completes. Reuses wrapUpApplyPhase infrastructure.
+   *   Synthesizer produces { hunks: [...] } envelope instead of prose.
+   * - "multi": each agent can propose hunks during their turn; preset-
+   *   specific reconciliation (vote/judge/pick/merge) at end. Harder
+   *   coordination; shipped after single-mode is stable.
+   *
+   * Blackboard and baseline ignore this flag (already write-capable).
+   * Stigmergy ignores it (exploration-focused, not action-driven).
+   */
+  writeMode?: "none" | "single" | "multi";
+  /**
+   * Model for the write phase when writeMode !== "none". Falls back to
+   * cfg.model when absent. Useful when you want a cheaper/faster model
+   * for the discussion phase but a capable model for hunk generation.
+   * Ignored when writeMode is "none" or absent.
+   */
+  writeModel?: string;
+  /**
+   * Phase 2 (writeMode: multi): conflict resolution strategy when
+   * multiple agents propose overlapping hunks.
+   *
+   * - "merge" — combine non-overlapping hunks; fail on any conflict
+   * - "sequential" — apply in agent-index order; later sees earlier's result
+   * - "vote" — agents vote on conflicting hunks; majority wins
+   * - "judge" — designated judge picks best hunk from conflicting set
+   * - "pick" — synthesizer picks one agent's full proposal
+   *
+   * Each preset has a default strategy matching its decision-making model:
+   *   - Council → "vote"
+   *   - MoA → "pick" (aggregator chooses)
+   *   - Map-reduce → "merge" (isolated slices)
+   *   - Debate-judge → "judge"
+   *   - OW/OW-Deep → "sequential"
+   *   - Round-robin → "vote"
+   *   - Stigmergy → "merge" (file-isolated)
+   *
+   * User can override the per-preset default when needed.
+   */
+  conflictPolicy?: "merge" | "sequential" | "vote" | "judge" | "pick";
   /**
    * Issue #3 (2026-04-27): override the sibling-model used when the
    * planner returns 0 valid todos. Absent → look up sibling from the

@@ -17,7 +17,7 @@
 
 import type { Agent } from "../services/AgentManager.js";
 import type { TranscriptEntry } from "../types.js";
-import type { ParsedDebateVerdict } from "./DebateJudgeRunner.js";
+import type { ParsedDebateVerdict } from "./debatePromptHelpers.js";
 
 export interface DebateStreamInit {
   id: string;

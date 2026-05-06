@@ -1,36 +1,80 @@
 # ADR 003 — Blackboard is the only write-capable preset
 
-**Status:** accepted
+**Status:** superseded (2026-05-04 Phase 1 writeMode rollout)
 **Decided:** Unit 20 era; reaffirmed across multiple validation tours
-**Last verified:** 2026-04-27
+**Superseded by:** `cfg.writeMode` + `cfg.writeModel` infrastructure
+**Last verified:** 2026-05-04
 
-## Decision
+## Original Decision
 
-Of the 8 swarm presets that ship, only `blackboard` modifies files
-in the cloned repo. The other 7 (round-robin, role-diff, council,
-orchestrator-worker, orchestrator-worker-deep, debate-judge,
-map-reduce, stigmergy) are discussion-only — they read files via
+Of the 8 swarm presets that shipped in the initial release, only `blackboard` 
+modified files in the cloned repo. The other 7 (round-robin, role-diff, 
+council, orchestrator-worker, orchestrator-worker-deep, debate-judge,
+map-reduce, stigmergy) were discussion-only — they read files via
 the `swarm-read` agent profile but cannot edit, write, or shell.
 
-## Context
+## Why This Changed
 
-The presets were originally going to fan out — every pattern would
-get a write-capable variant ("council-write", "debate-write", etc.).
-After shipping blackboard's CAS + atomic-todo + stale-replan
-machinery, it became clear that the *coordination* layer (not the
-model) was the hard part. Discussion presets are useful as
-analyzers / specifiers / debaters; their output flows into a human
-or into a write-capable preset later.
+**Phase 1 (2026-05-04)** introduced `cfg.writeMode` and `cfg.writeModel` 
+infrastructure that enables all discussion presets to opt into writes:
 
-## Alternatives considered
+1. **writeMode: "none" (default)** — discussion-only, no file writes. 
+   Preserves backward compatibility.
 
-1. **All presets write-capable.** Each would need its own
+2. **writeMode: "single"** — synthesizer produces hunks directly after 
+   multi-agent discussion completes. Uses the new `synthesizerHunks.ts` 
+   module with `buildSynthesizerHunksPrompt` + `runSynthesizerHunksAndApply`.
+
+3. **writeMode: "multi"** — each agent can propose hunks during their turn;
+   preset-specific reconciliation (vote/judge/pick/merge) at end. 
+   Future work (Phase 2+).
+
+## Implementation Details
+
+### Phase 1 (single writer mode)
+
+- **RunConfig extensions**: `writeMode?: "none" | "single" | "multi"` and 
+  `writeModel?: string`
+- **Infrastructure**: `synthesizerHunks.ts` module with:
+  - `buildSynthesizerHunksPrompt()` — prompts synthesizer to emit hunks
+  - `parseSynthesizerHunks()` — parses `{ hunks: [...] }` envelope
+  - `runSynthesizerHunksAndApply()` — orchestrates prompt + apply
+- **Extension to wrapUpApplyPhase**: `hunksFromSynthesizer` field allows
+  passing pre-computed hunks directly
+- **Discussion context**: Each runner passes its synthesis + relevant files
+  to `maybeRunWrapUpApply()` for the synthesizer-hunks path
+
+### Presets Updated
+
+- **Council**: Synthesis lead produces hunks from council consensus
+- **MoA**: Aggregator produces hunks from multiple proposer drafts
+- **Map-reduce**: Reducer produces hunks from mapper findings
+- **Debate-judge**: Judge produces hunks based on winning side
+- **Round-robin**: Lead produces hunks from rotating disposition synthesis
+- **Role-diff**: Specialist synthesis produces hunks for `deliverable.md`
+
+### Why This Approach
+
+1. **Preserves preset character**: Council still debates. MoA still 
+   aggregates. The write phase is additive AFTER discussion completes.
+
+2. **Shared infrastructure**: All runners use the same `synthesizerHunks` 
+   module, so improvements benefit all presets.
+
+3. **Single point of failure (acceptable)**: One synthesizer = one commit.
+   Simpler than multi-writer coordination. For more complex workloads,
+   users should use `blackboard` preset.
+
+4. **Opt-in default OFF**: Existing behavior unchanged. Users must set
+   `cfg.writeMode: "single"` or `cfg.executeNextAction: true`.
+
+## Alternatives Considered (Original ADR)
+
+1. **All presets write-capable from the start.** Each would need its own
    coordination story: how do N orchestrator-workers commit without
-   stomping each other? How does a council reconcile diffs across
-   N drafters? Designing those is a multi-week project per preset.
-   We didn't have appetite without evidence one of them is needed.
+   stomping each other? Too much initial complexity.
 
-2. **Blackboard only writes (this ADR).** Other presets stay
+2. **Blackboard only writes (original decision).** Other presets stay
    discussion. If a user wants writes from "council-style" thinking,
    they run council to produce the consensus, then run blackboard
    with the consensus as `userDirective`.
@@ -39,33 +83,50 @@ or into a write-capable preset later.
    Doable but the verifier turns into a single-agent blackboard
    anyway. Not worth the abstraction inversion.
 
-## Trade-offs
+## Future Work
 
-- **Win:** complexity stays bounded. One hard problem (atomic
-  multi-worker commits) solved well, in one place.
-- **Limit:** a user who wants "debate-judge writes the winning
-  side's argument as a real patch" has to run debate-judge first,
-  then blackboard. Not a single-call workflow.
-- **UX:** the start form has an `executeNextAction: true` opt-in for
-  debate-judge that adds a post-verdict "build phase" — a narrow
-  exception that makes Pro the implementer. This is
-  blackboard-pattern logic running inside debate-judge for one
-  round, not a true write-capable variant.
+### Phase 2 — Multi-writer mode (writeMode: "multi")
 
-## When to revisit
+Each preset needs its own reconciliation strategy:
 
-- If a specific discussion preset routinely produces output that
-  *should* land as code and the manual "run blackboard with the
-  output as directive" becomes painful enough to justify writing
-  that preset's coordination story.
-- If we add a 9th preset designed write-first.
+| Preset | Multi-writer strategy |
+|--------|----------------------|
+| Council | Per-round vote on hunks (extend `councilReconcile`) |
+| MoA | Aggregator picks best proposer's hunks |
+| Map-reduce | Reducer reconciles cross-slice conflicts |
+| Debate-judge | Judge picks winner's hunks |
+| OW/OW-Deep | Claim + CAS on file hashes (blackboard-style) |
+| Round-robin | Sequential commit OR final-round hunk voting |
+| Stigmergy | File-based isolation (already spreads across repo) |
+
+**Infrastructure needed:**
+- Hunk reconciliation module (`reconcileHunks.ts`)
+- Conflict detection (reuse `applyHunks` search-anchor failure)
+- Per-preset conflict policies (`retry | skip | ask-user`)
+
+### Phase 3 — Tool dispatcher writes
+
+New agent profile `swarm-write` that allows agents to call a 
+`propose_hunks` tool during their turn (not just synthesizer at end):
+
+```typescript
+"swarm-write": {
+  read: "allow",
+  grep: "allow",
+  glob: "allow",
+  list: "allow",
+  bash: "allow",
+  propose_hunks: "allow",  // returns { hunks: [...] }
+}
+```
+
+ Dispatcher validates + applies hunks, detects conflicts.
 
 ## References
 
-- `server/src/swarm/{Council,Debate,...}Runner.ts` — every non-blackboard
-  runner uses `agentName: "swarm-read"` (read tools only)
-- `server/src/services/RepoService.ts:writeOpencodeConfig` — the
-  `swarm-read` agent profile sets `tools.{edit,bash,patch,write}: false`
-- `docs/swarm-patterns.md` — per-preset design notes
-- The post-verdict-build-phase exception lives in
-  `DebateJudgeRunner.runBuildPhase` (commit batch around #102)
+- `server/src/swarm/SwarmRunner.ts` — `writeMode` + `writeModel` config
+- `server/src/swarm/synthesizerHunks.ts` — synthesizer-hunks infrastructure
+- `server/src/swarm/wrapUpApplyPhase.ts` — `hunksFromSynthesizer` extension
+- `server/src/swarm/{Council,Moa,MapReduce,DebateJudge,RoundRobin}Runner.ts` — 
+  per-preset write phase integration
+- `docs/STATUS.md` — updated preset table with write-capable column

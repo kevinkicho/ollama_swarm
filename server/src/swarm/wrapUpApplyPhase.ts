@@ -32,6 +32,7 @@ import path from "node:path";
 import type { Agent, AgentManager } from "../services/AgentManager.js";
 import type { SwarmEvent } from "../types.js";
 import type { RepoService } from "../services/RepoService.js";
+import type { Hunk } from "./blackboard/applyHunks.js";
 import { extractText } from "./extractText.js";
 import { parseWorkerResponse } from "./blackboard/prompts/worker.js";
 import {
@@ -77,6 +78,14 @@ export interface WrapUpApplyInput {
    *  — apply hunks, run command, on non-zero exit revert the writes
    *  and return ok:false with verifyFailed:true. Bounded to 60s. */
   verifyCommand?: string;
+  /**
+   * Phase 1 (writeMode: single): when the synthesizer already produced
+   *   hunks (e.g. from a structured {hunks: [...]} response), pass them
+   *   directly to skip the worker prompt step. The directive field is
+   *   still required for commit message attribution. When absent, the
+   *   helper builds and runs a worker prompt as before.
+   */
+  hunksFromSynthesizer?: import("./blackboard/applyHunks.js").Hunk[];
 }
 
 export interface WrapUpApplyResult {
@@ -116,80 +125,91 @@ export async function runWrapUpApplyPhase(
     `Wrap-up apply (${input.presetName}): turning the synthesized next-action into a single best-effort commit. Directive: "${directive.slice(0, 120)}${directive.length > 120 ? "..." : ""}"`,
   );
 
-  // Build the prompt — same shape as BaselineRunner uses, so any
-  // future improvements to baseline-style prompting flow here for free.
-  const repoFiles = await input.repos.listRepoFiles(input.clonePath, {
-    maxFiles: 50,
-  });
-  const readme = await input.repos.readReadme(input.clonePath);
-  const prompt = buildBaselinePrompt({ directive, repoFiles, readme });
-
-  // Run the prompt
-  let raw: string;
-  const abortController = new AbortController();
-  try {
-    input.manager.markStatus(input.agent.id, "thinking");
-    const { provider, modelId } = pickProvider(input.model);
-    const t0 = Date.now();
-    const result = await provider.chat({
-      model: modelId,
-      messages: [{ role: "user", content: prompt }],
-      signal: abortController.signal,
-      agentId: input.agent.id,
+  // Phase 1 extension: if hunksFromSynthesizer is provided, skip the
+  // worker prompt and use the pre-computed hunks directly.
+  let hunksToApply: import("./blackboard/applyHunks.js").Hunk[];
+  if (input.hunksFromSynthesizer && input.hunksFromSynthesizer.length > 0) {
+    hunksToApply = input.hunksFromSynthesizer;
+    input.appendSystem(
+      `Wrap-up apply: using ${hunksToApply.length} hunk(s) from synthesizer directly.`,
+    );
+  } else {
+    // Build the prompt — same shape as BaselineRunner uses, so any
+    // future improvements to baseline-style prompting flow here for free.
+    const repoFiles = await input.repos.listRepoFiles(input.clonePath, {
+      maxFiles: 50,
     });
-    if (result.usage) {
-      tokenTracker.add({
-        ts: Date.now(),
-        promptTokens: result.usage.promptTokens,
-        responseTokens: result.usage.responseTokens,
-        durationMs: Date.now() - t0,
-        model: input.model,
-        path: `/wrap-up-apply (${provider.id})`,
-      });
-    }
-    if (result.finishReason === "error") {
-      throw new Error(result.errorMessage ?? "wrap-up apply: provider error");
-    }
-    if (result.finishReason === "aborted") {
-      throw new Error("aborted");
-    }
-    raw = result.text;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    input.appendSystem(`Wrap-up apply: prompt failed — ${msg}`);
-    return {
-      ok: false,
-      reason: msg,
-      hunksAttempted: 0,
-      hunksApplied: 0,
-    };
-  } finally {
-    input.manager.markStatus(input.agent.id, "ready");
-  }
+    const readme = await input.repos.readReadme(input.clonePath);
+    const prompt = buildBaselinePrompt({ directive, repoFiles, readme });
 
-  // Parse hunks from the response. Use the same allow-set discipline
-  // BaselineRunner uses so a hallucinated /etc/passwd doesn't sneak
-  // through.
-  const text = extractText(raw) ?? raw;
-  const expectedFiles = await collectAllFiles(input.clonePath);
-  const parsed = parseWorkerResponse(text, expectedFiles);
-  if (!parsed.ok) {
-    input.appendSystem(`Wrap-up apply: parse failed — ${parsed.reason}`);
-    return {
-      ok: false,
-      reason: parsed.reason,
-      hunksAttempted: 0,
-      hunksApplied: 0,
-    };
-  }
-  if (parsed.hunks.length === 0) {
-    const skipNote = parsed.skip ? ` — ${parsed.skip}` : "";
-    input.appendSystem(`Wrap-up apply: 0 hunks${skipNote}`);
-    return {
-      ok: true,
-      hunksAttempted: 0,
-      hunksApplied: 0,
-    };
+    // Run the prompt
+    let raw: string;
+    const abortController = new AbortController();
+    try {
+      input.manager.markStatus(input.agent.id, "thinking");
+      const { provider, modelId } = pickProvider(input.model);
+      const t0 = Date.now();
+      const result = await provider.chat({
+        model: modelId,
+        messages: [{ role: "user", content: prompt }],
+        signal: abortController.signal,
+        agentId: input.agent.id,
+      });
+      if (result.usage) {
+        tokenTracker.add({
+          ts: Date.now(),
+          promptTokens: result.usage.promptTokens,
+          responseTokens: result.usage.responseTokens,
+          durationMs: Date.now() - t0,
+          model: input.model,
+          path: `/wrap-up-apply (${provider.id})`,
+        });
+      }
+      if (result.finishReason === "error") {
+        throw new Error(result.errorMessage ?? "wrap-up apply: provider error");
+      }
+      if (result.finishReason === "aborted") {
+        throw new Error("aborted");
+      }
+      raw = result.text;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      input.appendSystem(`Wrap-up apply: prompt failed — ${msg}`);
+      return {
+        ok: false,
+        reason: msg,
+        hunksAttempted: 0,
+        hunksApplied: 0,
+      };
+    } finally {
+      input.manager.markStatus(input.agent.id, "ready");
+    }
+
+    // Parse hunks from the response. Use the same allow-set discipline
+    // BaselineRunner uses so a hallucinated /etc/passwd doesn't sneak
+    // through.
+    const text = extractText(raw) ?? raw;
+    const expectedFiles = await collectAllFiles(input.clonePath);
+    const parsed = parseWorkerResponse(text, expectedFiles);
+    if (!parsed.ok) {
+      input.appendSystem(`Wrap-up apply: parse failed — ${parsed.reason}`);
+      return {
+        ok: false,
+        reason: parsed.reason,
+        hunksAttempted: 0,
+        hunksApplied: 0,
+      };
+    }
+    if (parsed.hunks.length === 0) {
+      const skipNote = parsed.skip ? ` — ${parsed.skip}` : "";
+      input.appendSystem(`Wrap-up apply: 0 hunks${skipNote}`);
+      return {
+        ok: true,
+        hunksAttempted: 0,
+        hunksApplied: 0,
+      };
+    }
+    hunksToApply = parsed.hunks;
   }
 
   // Apply + (optional verify) + commit
@@ -198,7 +218,7 @@ export async function runWrapUpApplyPhase(
   // T171: snapshot pre-hunk content of touched files BEFORE applying.
   // Required for the verify-failure revert path. Skipped when no
   // verify command is configured (don't pay the read cost).
-  const touchedFiles = Array.from(new Set(parsed.hunks.map((h) => h.file)));
+  const touchedFiles = Array.from(new Set(hunksToApply.map((h) => h.file)));
   const preHunkContents: Record<string, string | null> = {};
   if (input.verifyCommand) {
     for (const f of touchedFiles) {
@@ -211,17 +231,17 @@ export async function runWrapUpApplyPhase(
   }
   try {
     const apply = await applyBaselineHunks({
-      hunks: parsed.hunks,
+      hunks: hunksToApply,
       fs: fsAdapter,
     });
     if (apply.applied === 0) {
       input.appendSystem(
-        `Wrap-up apply: ${parsed.hunks.length} hunk(s) returned, 0 applied — ${apply.reasons.join("; ")}`,
+        `Wrap-up apply: ${hunksToApply.length} hunk(s) returned, 0 applied — ${apply.reasons.join("; ")}`,
       );
       return {
         ok: false,
-        reason: `0 of ${parsed.hunks.length} hunks landed: ${apply.reasons.join("; ")}`,
-        hunksAttempted: parsed.hunks.length,
+        reason: `0 of ${hunksToApply.length} hunks landed: ${apply.reasons.join("; ")}`,
+        hunksAttempted: hunksToApply.length,
         hunksApplied: 0,
       };
     }
@@ -249,7 +269,7 @@ export async function runWrapUpApplyPhase(
         return {
           ok: false,
           reason: `verify failed: ${v.reason.slice(0, 400)}`,
-          hunksAttempted: parsed.hunks.length,
+          hunksAttempted: hunksToApply.length,
           hunksApplied: apply.applied,
           verifyFailed: true,
         };
@@ -267,17 +287,17 @@ export async function runWrapUpApplyPhase(
       return {
         ok: false,
         reason: commitResult.reason,
-        hunksAttempted: parsed.hunks.length,
+        hunksAttempted: hunksToApply.length,
         hunksApplied: apply.applied,
       };
     }
     const verifyTag = input.verifyCommand ? " (verify ✓)" : "";
     input.appendSystem(
-      `Wrap-up apply: ${apply.applied}/${parsed.hunks.length} hunk(s) applied → committed${verifyTag} (${commitResult.sha.slice(0, 7)}).`,
+      `Wrap-up apply: ${apply.applied}/${hunksToApply.length} hunk(s) applied → committed${verifyTag} (${commitResult.sha.slice(0, 7)}).`,
     );
     return {
       ok: true,
-      hunksAttempted: parsed.hunks.length,
+      hunksAttempted: hunksToApply.length,
       hunksApplied: apply.applied,
       commitSha: commitResult.sha,
     };
@@ -287,7 +307,7 @@ export async function runWrapUpApplyPhase(
     return {
       ok: false,
       reason: msg,
-      hunksAttempted: parsed.hunks.length,
+      hunksAttempted: hunksToApply.length,
       hunksApplied: 0,
     };
   }
@@ -305,9 +325,11 @@ export async function runWrapUpApplyPhase(
 export interface MaybeRunWrapUpApplyInput {
   cfg: {
     executeNextAction?: boolean;
+    writeMode?: "none" | "single" | "multi";
     runId?: string;
     localPath: string;
     workerModel?: string;
+    writeModel?: string;
     model: string;
     userDirective?: string;
     /** T171: when set, runs as a pre-commit verification gate. Same
@@ -320,12 +342,19 @@ export interface MaybeRunWrapUpApplyInput {
   repos: import("../services/RepoService.js").RepoService;
   emit: (e: import("../types.js").SwarmEvent) => void;
   appendSystem: (text: string) => void;
+  /** Phase 1 (writeMode: single): discussion context for synthesizer. */
+  discussionContext?: string;
+  /** Phase 1: relevant files identified during discussion. */
+  relevantFiles?: string[];
 }
 
 export async function maybeRunWrapUpApply(
   input: MaybeRunWrapUpApplyInput,
 ): Promise<WrapUpApplyResult | null> {
-  if (!input.cfg.executeNextAction) return null;
+  // Backward compatibility: executeNextAction=true maps to writeMode="single"
+  // with the worker-prompt path (hunksFromSynthesizer not set).
+  const writeMode = input.cfg.writeMode ?? (input.cfg.executeNextAction ? "single" : "none");
+  if (writeMode === "none") return null;
   if (!input.cfg.runId) return null;
 
   // Read the top action from the just-written next-actions JSON.
@@ -339,15 +368,38 @@ export async function maybeRunWrapUpApply(
     const fallback = (input.cfg.userDirective ?? "").trim();
     if (!fallback) {
       input.appendSystem(
-        `Wrap-up apply: no extractable next-action and no userDirective — skipping apply phase.`,
+        `Wrap-up apply (${writeMode}): no extractable next-action and no userDirective — skipping apply phase.`,
       );
       return null;
     }
     input.appendSystem(
-      `Wrap-up apply: no extractable next-action found in deliverable — falling back to userDirective.`,
+      `Wrap-up apply (${writeMode}): no extractable next-action found in deliverable — falling back to userDirective.`,
     );
     directive = fallback;
   }
+
+  // Phase 1 extension: if writeMode="single" and discussionContext is
+  // provided, use synthesizer-hunks path. Otherwise fall back to the
+  // worker-prompt path (legacy executeNextAction behavior).
+  if (writeMode === "single" && input.discussionContext) {
+    const { runSynthesizerHunksAndApply } = await import("./synthesizerHunks.js");
+    return runSynthesizerHunksAndApply({
+      directive,
+      clonePath: input.cfg.localPath,
+      model: input.cfg.writeModel ?? input.cfg.workerModel ?? input.cfg.model,
+      agent: input.agent,
+      manager: input.manager,
+      repos: input.repos,
+      emit: input.emit,
+      appendSystem: input.appendSystem,
+      presetName: input.presetName,
+      verifyCommand: input.cfg.verifyCommand,
+      discussionContext: input.discussionContext,
+      relevantFiles: input.relevantFiles,
+    });
+  }
+
+  // Legacy path: worker prompt + parse + apply
   return runWrapUpApplyPhase({
     directive,
     clonePath: input.cfg.localPath,

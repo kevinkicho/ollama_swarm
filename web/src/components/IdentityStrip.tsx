@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useSwarm } from "../state/store";
 import { useEventLogStream } from "../hooks/useEventLogStream";
+import { detectProvider } from "../../../shared/src/providers";
 
 // E2 incremental cutover (#336): when ?useEventLogRunId=1 is set in the
 // URL, the run-id chip pulls from the event-log stream instead of the
@@ -101,6 +102,9 @@ export function IdentityStrip() {
           monospace runId and the model chips. */}
       {cfg ? (
         <PresetBadge preset={cfg.preset} />
+      ) : null}
+      {cfg ? (
+        <ProviderBadge model={cfg.plannerModel} />
       ) : null}
       {cfg ? (
         <>
@@ -376,6 +380,31 @@ function PresetBadge({ preset }: { preset: string }) {
       className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] uppercase tracking-wider font-semibold ${palette.bg} ${palette.fg} ${palette.border}`}
     >
       {preset}
+    </span>
+  );
+}
+
+// Provider badge derived from the model string. Shows which AI provider
+// the run is using — critical for monitoring failover chains and cost.
+// Post-E3: every prompt goes through direct SessionProvider (Ollama /
+// Anthropic / OpenAI), so the provider is always knowable from the model
+// prefix or :cloud suffix.
+const PROVIDER_STYLES: Record<string, { bg: string; fg: string; border: string; label: string }> = {
+  "ollama-cloud": { bg: "bg-violet-900/40", fg: "text-violet-200", border: "border-violet-700", label: "ollama☁" },
+  anthropic: { bg: "bg-orange-900/40", fg: "text-orange-200", border: "border-orange-700", label: "anthropic" },
+  openai: { bg: "bg-green-900/40", fg: "text-green-200", border: "border-green-700", label: "openai" },
+  ollama: { bg: "bg-sky-900/40", fg: "text-sky-200", border: "border-sky-700", label: "ollama" },
+};
+
+function ProviderBadge({ model }: { model: string }) {
+  const provider = detectProvider(model);
+  const style = PROVIDER_STYLES[provider] ?? PROVIDER_STYLES.ollama;
+  return (
+    <span
+      title={`AI provider: ${provider} (model: ${model})`}
+      className={`inline-flex items-center px-1.5 py-0.5 rounded-full border text-[10px] uppercase tracking-wider font-medium ${style.bg} ${style.fg} ${style.border}`}
+    >
+      {style.label}
     </span>
   );
 }

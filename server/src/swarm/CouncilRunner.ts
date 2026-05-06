@@ -1,28 +1,25 @@
 import { randomUUID } from "node:crypto";
 import type { Agent } from "../services/AgentManager.js";
-import { buildAgentsReadySummary } from "./agentsReadySummary.js";
+
 import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
 import type {
-  AgentState,
-  SwarmEvent,
-  SwarmPhase,
-  SwarmStatus,
   TranscriptEntry,
-  TranscriptEntrySummary,
 } from "../types.js";
-import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
-import { promptWithRetry } from "./promptWithRetry.js";
+import type { RunConfig, RunnerOpts } from "./SwarmRunner.js";
+import { DiscussionRunnerBase } from "./DiscussionRunnerBase.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { buildSeedSummary } from "./runSummary.js";
 import { discussionWriteSummary } from "./discussionWriteSummary.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
+import { maybeRunPostRoundCritique } from "./postRoundCritique.js";
+import { runPostSynthesisCritique } from "./postSynthesisCritique.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk, extractText } from "./extractText.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { checkBudgetGuards } from "./loopGuards.js";
 import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
-import { formatCloneMessage } from "./cloneMessage.js";
+
 import { staggerStart } from "./staggerStart.js";
 // runEndReflection moved into runFinallyHooks (Phase D).
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
@@ -34,13 +31,12 @@ import {
   parseVoteResponse,
   type VoteRecord,
 } from "./councilReconcile.js";
-import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
+import { userEntryVisibleTo } from "./chatReceipt.js";
 import { writeDeliverable, runQualityPasses } from "./deliverable.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
 import { deriveRubric, type DerivedRubric } from "./rubricPrePass.js";
 import {
   buildCouncilPositionsSection,
-  getLastPositionForAgent,
   countPositionFlips,
 } from "./councilPosition.js";
 import {
@@ -52,6 +48,14 @@ import {
   maybeDirectiveSection,
 } from "./directivePromptHelpers.js";
 import { parseConvergenceSignal } from "./convergenceSignal.js";
+import {
+  MultiWriterState,
+  DEFAULT_CONFLICT_POLICIES,
+} from "./multiWriterState.js";
+import {
+  buildCouncilSynthesisPrompt,
+  buildCouncilPrompt,
+} from "./councilPromptHelpers.js";
 
 // Council / parallel drafts + reconcile.
 // Round 1: every agent drafts independently. Each agent's prompt contains
@@ -65,120 +69,37 @@ import { parseConvergenceSignal } from "./convergenceSignal.js";
 // Round 2..N: everyone sees everyone's drafts (and any prior revisions) and
 // revises. The reconcile step is whatever the agents converge to across
 // later rounds — no vote, no explicit judge. Discussion-only, no file edits.
-export class CouncilRunner implements SwarmRunner {
-  private transcript: TranscriptEntry[] = [];
-  private phase: SwarmPhase = "idle";
-  private round = 0;
-  private stopping = false;
-  private active?: RunConfig;
-  // Unit 33: cross-preset metrics — see RoundRobinRunner for rationale.
+export class CouncilRunner extends DiscussionRunnerBase {
   private stats = new AgentStatsCollector();
-  private startedAt?: number;
-  private summaryWritten = false;
-  // Phase B (Task #99): set when the midpoint convergence check
-  // returns "high"; promoted to stopReason="early-stop" by writeSummary.
-  private earlyStopDetail?: string;
-  // 2026-05-02 (quality lever #2): rubric derived at run-start via
-  // deriveRubric. Stored so writeCouncilDeliverable can bake it into
-  // the deliverable AND pass it to the critic pass.
   private derivedRubric: DerivedRubric | null = null;
+  private multiWriter?: MultiWriterState;
 
-  constructor(private readonly opts: RunnerOpts) {}
-
-  status(): SwarmStatus {
-    return {
-      phase: this.phase,
-      round: this.round,
-      repoUrl: this.active?.repoUrl,
-      localPath: this.active?.localPath,
-      model: this.active?.model,
-      agents: this.opts.manager.toStates(),
-      transcript: [...this.transcript],
-      // Task #39: per-agent partial-stream buffer for catch-up.
-      streaming: this.opts.manager.getPartialStreams(),
-    };
-  }
-
-  injectUser(
-    text: string,
-    opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
-  ): void {
-    const intent = opts?.intent ?? "steer";
-    const entry: TranscriptEntry = {
-      id: randomUUID(),
-      role: "user",
-      text,
-      ts: Date.now(),
-      intent,
-      ...(opts?.targetAgent ? { targetAgent: opts.targetAgent } : {}),
-    };
-    this.transcript.push(entry);
-    this.opts.emit({ type: "transcript_append", entry });
-    this.appendSystem(formatChatReceipt(intent, opts?.targetAgent));
-  }
-
-  isRunning(): boolean {
-    // Task #34: see BlackboardRunner.isRunning() — terminal phases
-    // are not running.
-    return (
-      this.phase !== "idle" &&
-      this.phase !== "stopped" &&
-      this.phase !== "completed" &&
-      this.phase !== "failed"
-    );
+  constructor(opts: RunnerOpts) {
+    super(opts);
   }
 
   async start(cfg: RunConfig): Promise<void> {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
-    this.transcript = [];
-    this.stopping = false;
-    this.round = 0;
-    this.active = cfg;
+    this.resetState(cfg);
     this.stats.reset();
-    this.startedAt = undefined;
-    this.summaryWritten = false;
-    this.earlyStopDetail = undefined;
 
-    this.setPhase("cloning");
-    const cloneResult = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
-    const { destPath } = cloneResult;
-    // Unit 47: tell the UI whether this is a fresh clone or a resume.
-    this.opts.emit({
-      type: "clone_state",
-      alreadyPresent: cloneResult.alreadyPresent,
-      clonePath: destPath,
-      priorCommits: cloneResult.priorCommits,
-      priorChangedFiles: cloneResult.priorChangedFiles,
-      priorUntrackedFiles: cloneResult.priorUntrackedFiles,
+    const { destPath, ready } = await this.initCloneAndSpawn(cfg, {
+      preset: "council",
+      roleResolver: () => "Drafter",
     });
-    // Unit 48: hide runner artifacts from `git status` (see RoundRobinRunner).
-    await this.opts.repos.excludeRunnerArtifacts(destPath);
-    // E3 Phase 5: opencode.json no longer needed — no opencode subprocess.
-    this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
-
-    this.setPhase("spawning");
-    const spawnStart = Date.now();
-    const spawnTasks: Promise<Agent>[] = [];
-    for (let i = 1; i <= cfg.agentCount; i++) {
-      spawnTasks.push(this.opts.manager.spawnAgentNoOpencode({ cwd: destPath, index: i, model: cfg.model }));
-    }
-    const results = await Promise.allSettled(spawnTasks);
-    const ready = results
-      .filter((r): r is PromiseFulfilledResult<Agent> => r.status === "fulfilled")
-      .map((r) => r.value);
-    if (ready.length === 0) throw new Error("No agents started successfully");
-    this.appendSystem(
-      `${ready.length}/${cfg.agentCount} agents ready on ports ${ready.map((a) => a.port).join(", ")}`,
-      buildAgentsReadySummary({
-        manager: this.opts.manager,
-        preset: "council",
-        ready,
-        requestedCount: cfg.agentCount,
-        spawnElapsedMs: Date.now() - spawnStart,
-        roleResolver: () => "Drafter",
-      }),
-    );
     this.stats.registerAgents(ready);
+
+    // Phase 2 (writeMode: multi): initialize multi-writer state
+    if (cfg.writeMode === "multi") {
+      this.multiWriter = new MultiWriterState({
+        writeMode: cfg.writeMode,
+        conflictPolicy: cfg.conflictPolicy ?? DEFAULT_CONFLICT_POLICIES["council"],
+        clonePath: destPath,
+      });
+      this.appendSystem(
+        `Multi-writer mode enabled — agents will propose hunks during rounds, reconciled via ${cfg.conflictPolicy ?? "vote"} policy.`,
+      );
+    }
 
     this.setPhase("seeding");
     await this.seed(destPath, cfg);
@@ -204,13 +125,6 @@ export class CouncilRunner implements SwarmRunner {
     this.setPhase("discussing");
     this.startedAt = Date.now();
     void this.loop(cfg);
-  }
-
-  async stop(): Promise<void> {
-    this.stopping = true;
-    this.setPhase("stopping");
-    await this.opts.manager.killAll();
-    this.setPhase("stopped");
   }
 
   private async seed(clonePath: string, cfg: RunConfig): Promise<void> {
@@ -333,6 +247,22 @@ export class CouncilRunner implements SwarmRunner {
               `[T181 contrarian round trigger] Round 2 had ${flips.keeps}× KEEP and 0× CHANGE — the council converged without anyone updating their position. Round ${r + 1}: at least ONE agent should produce a grounded CHANGE (cite evidence the team didn't engage with) OR explicitly justify why every position survived peer challenge unmodified. "Everyone politely converged" is the failure mode this guard exists to catch.`,
             );
           }
+        }
+
+        if (cfg.postRoundCritique) {
+          await maybeRunPostRoundCritique({
+            agents: this.opts.manager.list(),
+            round: this.round,
+            totalRounds: cfg.rounds,
+            transcript: this.transcript,
+            userDirective: cfg.userDirective,
+            enabled: cfg.postRoundCritique ?? false,
+            runDiscussionAgent: (agent, prompt, opts) => this.runDiscussionAgent(agent, prompt, opts),
+            stats: this.stats,
+            appendSystem: (text, summary) => this.appendSystem(text, summary),
+            presetName: "council",
+            stopping: this.stopping,
+          });
         }
 
         // Phase B (Task #99): midpoint synthesis check. If the
@@ -546,7 +476,40 @@ export class CouncilRunner implements SwarmRunner {
     // don't need to spawn a new agent. Best-effort; any failure is
     // logged via appendSystem and doesn't block the rest of the
     // close-out.
+    //
+    // Phase 1 (writeMode: single): when cfg.writeMode === "single",
+    // use the synthesizer-hunks path if discussionContext is available.
+    // The synthesis pass already ran, so we construct the context from
+    // the transcript.
     if (lead) {
+      // Build discussion context for synthesizer-hunks path
+      const synthesisEntry = this.transcript.find(
+        (e) => e.summary?.kind === "council_synthesis",
+      );
+      const discussionContext = synthesisEntry
+        ? [
+            `Council synthesis after ${finalRound}/${cfg.rounds} round(s):`,
+            synthesisEntry.text,
+            "",
+            "Key positions from agents:",
+            ...this.transcript
+              .filter((e) => e.role === "agent" && e.summary?.kind !== "council_synthesis")
+              .slice(-cfg.agentCount * 2) // last ~2 rounds per agent
+              .map((e) => `[Agent ${e.agentIndex ?? "?"}] ${e.text.slice(0, 500)}…`),
+          ].join("\n")
+        : undefined;
+
+      // Extract relevant files from the transcript (grounding citations)
+      const relevantFiles: string[] = [];
+      const filePattern = /(?:src\/|tests\/|lib\/|dist\/)[a-zA-Z0-9_./-]+\.(ts|js|tsx|jsx|py|rs|go)/g;
+      for (const e of this.transcript) {
+        if (e.role !== "agent") continue;
+        const matches = e.text.match(filePattern) || [];
+        for (const m of matches) {
+          if (!relevantFiles.includes(m)) relevantFiles.push(m);
+        }
+      }
+
       await maybeRunWrapUpApply({
         cfg,
         presetName: "council",
@@ -555,7 +518,76 @@ export class CouncilRunner implements SwarmRunner {
         repos: this.opts.repos,
         emit: this.opts.emit,
         appendSystem: (text) => this.appendSystem(text),
+        discussionContext,
+        relevantFiles: relevantFiles.slice(0, 20), // cap at 20 files
       });
+    }
+
+    // Phase 2 (writeMode: multi): reconcile proposals if multi-writer active
+    if (this.multiWriter?.isActive() && this.multiWriter.proposalCount() > 0) {
+      const proposals = this.multiWriter.getProposals();
+      this.appendSystem(
+        `Multi-writer reconcile: ${proposals.length} proposal(s) from ${new Set(proposals.map(p => p.agentId)).size} agent(s).`,
+      );
+
+      const currentFiles: Record<string, string | null> = {};
+      const allFiles = new Set(proposals.flatMap(p => p.hunks.map(h => h.file)));
+      for (const file of allFiles) {
+        try {
+          const fs = await import("node:fs/promises");
+          const path = await import("node:path");
+          const absPath = path.join(cfg.localPath, file);
+          currentFiles[file] = await fs.readFile(absPath, "utf8");
+        } catch {
+          currentFiles[file] = null;
+        }
+      }
+
+      const strategy = cfg.conflictPolicy ?? "vote";
+      const result = await this.multiWriter.reconcile(currentFiles, strategy);
+
+      if (!result.ok) {
+        this.appendSystem(
+          `Multi-writer reconcile: failed — ${result.conflicts.length} conflict(s) detected.`,
+        );
+        for (const conflict of result.conflicts.slice(0, 5)) {
+          this.appendSystem(
+            `  ${conflict.type} on ${conflict.file}: ${conflict.conflictingAgents.map(a => `agent-${a.agentIndex}`).join(", ")}`,
+          );
+        }
+      } else if (result.hunks.length > 0) {
+        this.appendSystem(
+          `Multi-writer reconcile: ${result.hunks.length} hunk(s) ready to apply (${strategy} strategy).`,
+        );
+
+        // Apply reconciled hunks via wrapUpApplyPhase
+        const { runWrapUpApplyPhase } = await import("./wrapUpApplyPhase.js");
+        const applyResult = await runWrapUpApplyPhase({
+          directive: cfg.userDirective ?? "Council multi-writer synthesis",
+          clonePath: cfg.localPath,
+          model: cfg.writeModel ?? cfg.model,
+          agent: lead!,
+          repos: this.opts.repos,
+          manager: this.opts.manager,
+          emit: this.opts.emit,
+          appendSystem: (text) => this.appendSystem(text),
+          presetName: "council",
+          verifyCommand: cfg.verifyCommand,
+          hunksFromSynthesizer: result.hunks,
+        });
+
+        if (applyResult.ok) {
+          this.appendSystem(
+            `Multi-writer apply: ${applyResult.hunksApplied}/${applyResult.hunksAttempted} hunk(s) committed (${applyResult.commitSha?.slice(0, 7)}).`,
+          );
+        } else {
+          this.appendSystem(
+            `Multi-writer apply: failed — ${applyResult.reason}`,
+          );
+        }
+      } else {
+        this.appendSystem(`Multi-writer reconcile: 0 hunks to apply.`);
+      }
     }
   }
 
@@ -645,6 +677,25 @@ export class CouncilRunner implements SwarmRunner {
       // shows what happened) but without the synthesis kind, the
       // UI won't render a single character as the "consensus".
       const isJunkSynthesis = looksLikeJunk(text) || extracted.isEmpty;
+      if (cfg.postSynthesisCritique && !isJunkSynthesis && text.length > 0) {
+        const proposals = this.transcript
+          .filter(e => e.role === "agent")
+          .slice(-this.opts.manager.list().length)
+          .map(e => ({ workerId: `agent-${e.agentIndex}`, text: e.text }));
+        const criticAgent = this.opts.manager.list()[0] ?? lead;
+        const revised = await runPostSynthesisCritique({
+          synthesis: text,
+          proposals,
+          criticAgent,
+          manager: this.opts.manager,
+          appendSystem: (txt) => this.appendSystem(txt),
+          stopping: this.stopping,
+          runDiscussionAgent: (agent, pr, opts) => this.runDiscussionAgent(agent, pr, opts),
+          stats: this.stats,
+          presetName: "council",
+        });
+        text = revised;
+      }
       const stripped = stripAgentText(text);
       const entry: TranscriptEntry = {
         id: randomUUID(),
@@ -769,417 +820,34 @@ export class CouncilRunner implements SwarmRunner {
     snapshot: readonly TranscriptEntry[],
     userDirective?: string,
   ): Promise<void> {
-    this.opts.manager.markStatus(agent.id, "thinking");
-    this.emitAgentState({
-      id: agent.id,
-      index: agent.index,
-      port: agent.port,
-      sessionId: agent.sessionId,
-      status: "thinking",
-      thinkingSince: Date.now(),
-    });
-    this.stats.countTurn(agent.id);
-
-    // 2026-05-02 (chat lever #3): drop user entries @mentioned at OTHER
-    // agents so this agent's prompt only sees broadcast + targeted-at-me.
     const visible = snapshot.filter((e) => userEntryVisibleTo(e, agent.id));
     const prompt = buildCouncilPrompt(agent.index, round, totalRounds, visible, userDirective);
-    // 2026-04-27: replaced wall-clock 4-min cap with SSE-aware watchdog.
-    // Pre-fix the cap killed prompts the model was actively producing
-    // (cloud streaming has long-tail latency for big prompts but SSE
-    // chunks keep arriving — wall clock saw "4 min" and killed regardless).
-    // New behavior: only abort when SSE has been silent >90s OR total
-    // wall-clock exceeds 30 min. See sseAwareTurnWatchdog for details.
-    const controller = new AbortController();
-    const watchdog = startSseAwareTurnWatchdog({
-      manager: this.opts.manager,
-      sessionId: agent.sessionId,
-      controller,
-      abortSession: async () => {},
+    await this.runDiscussionAgent(agent, prompt, {
+      runnerName: "council",
+      agentName: "swarm-read",
+      stats: this.stats,
+      enrichSummary: {
+        kind: "council_draft",
+        round,
+        phase: round === 1 ? "draft" : "reveal",
+      },
+      onEntryPushed: (_entry, strippedText) => {
+        if (this.multiWriter?.isActive()) {
+          const result = this.multiWriter.addProposal(agent, strippedText);
+          if (!result.skipped && result.hunks.length > 0) {
+            this.appendSystem(
+              `[${agent.id}] proposed ${result.hunks.length} hunk(s) — collected for reconciliation.`,
+            );
+          }
+        }
+      },
     });
-
-    try {
-      // Unit 16: shared retry wrapper.
-      // W19 (2026-05-04): swapped to promptWithFailoverAuto so the
-      // call participates in R1 chain failover when configured.
-      const res = await promptWithFailoverAuto(agent, prompt, {
-        signal: controller.signal,
-        manager: this.opts.manager,
-        // Unit 20: read-only tools for discussion presets.
-        agentName: "swarm-read",
-        // Phase 5b of #243: per-agent addendum from the topology row.
-        promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
-        describeError: describeSdkError,
-        onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
-        onTiming: ({ attempt, elapsedMs, success }) => {
-          this.stats.onTiming(agent.id, success, elapsedMs);
-          this.opts.logDiag?.({
-            type: "_prompt_timing",
-            preset: this.active?.preset,
-            agentId: agent.id,
-            agentIndex: agent.index,
-            attempt,
-            elapsedMs,
-            success,
-          });
-          // Improvement #4: per-agent first-prompt cold-start logging.
-          // No-op after the first call per agent.
-          this.opts.manager.recordPromptComplete(agent.id, { attempt, elapsedMs, success });
-          // Unit 40: live latency sample over WS for the UI sparkline.
-          this.opts.emit({
-            type: "agent_latency_sample",
-            agentId: agent.id,
-            agentIndex: agent.index,
-            attempt,
-            elapsedMs,
-            success,
-            ts: Date.now(),
-          });
-        },
-        onRetry: ({ attempt, max, reasonShort, delayMs }) => {
-          this.stats.onRetry(agent.id);
-          this.appendSystem(
-            `[${agent.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
-          );
-          this.opts.manager.markStatus(agent.id, "retrying", {
-            retryAttempt: attempt,
-            retryMax: max,
-            retryReason: reasonShort,
-          });
-          this.emitAgentState({
-            id: agent.id,
-            index: agent.index,
-            port: agent.port,
-            sessionId: agent.sessionId,
-            status: "retrying",
-            retryAttempt: attempt,
-            retryMax: max,
-            retryReason: reasonShort,
-          });
-        },
-      });
-
-      const diagCtx = {
-        runner: "council",
-        agentId: agent.id,
-        agentIndex: agent.index,
-        logDiag: this.opts.logDiag,
-      };
-      const extracted = extractTextWithDiag(res, diagCtx);
-      let text = extracted.text;
-      // Task #54: one-shot retry when the response came back with no
-      // text part (model-silence pattern, observed on nemotron under
-      // parallel fanout). Best-effort — if the retry also empties or
-      // throws, we keep the original "(empty response)" placeholder.
-      // Pattern 8 (2026-04-24): also retry on junk-short single-token
-      // outputs ("4", a hex SHA, a passwd-like string) — same nemotron
-      // failure mode, the response is non-empty but useless.
-      if ((extracted.isEmpty || looksLikeJunk(text)) && !this.stopping) {
-        const retryText = await retryEmptyResponse(agent, prompt, "swarm-read", diagCtx);
-        if (retryText !== null) text = retryText;
-      }
-      // Task #115: track Pattern 8 stuck-loop, warn on threshold.
-      trackPostRetryJunk(text, {
-        agentId: agent.id,
-        recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
-        appendSystem: (msg) => this.appendSystem(msg),
-      });
-      // #230: strip <think> + XML tool-call markers before saving
-      // (matches BlackboardRunner.appendAgent treatment).
-      const stripped = stripAgentText(text);
-      const entry: TranscriptEntry = {
-        id: randomUUID(),
-        role: "agent",
-        agentId: agent.id,
-        agentIndex: agent.index,
-        text: stripped.finalText || "(empty response)",
-        ts: Date.now(),
-        // Phase 2b: tag with round + phase so the DraftMatrix can
-        // bucket without fragile index math. Round 1 = independent
-        // drafts (peer-hidden in the prompt); Round 2+ = reveal &
-        // revise (peers visible).
-        summary: {
-          kind: "council_draft",
-          round,
-          phase: round === 1 ? "draft" : "reveal",
-        },
-        ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
-        ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
-      };
-      this.transcript.push(entry);
-      this.opts.emit({ type: "transcript_append", entry });
-      this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
-      this.opts.manager.markStatus(agent.id, "ready", { lastMessageAt: entry.ts });
-      this.emitAgentState({
-        id: agent.id,
-        index: agent.index,
-        port: agent.port,
-        sessionId: agent.sessionId,
-        status: "ready",
-        lastMessageAt: entry.ts,
-      });
-    } catch (err) {
-      const msg = watchdog.getAbortReason() ?? describeSdkError(err);
-      this.appendSystem(`[${agent.id}] error: ${msg}`);
-      this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
-      this.opts.manager.markStatus(agent.id, "failed", { error: msg });
-      this.emitAgentState({
-        id: agent.id,
-        index: agent.index,
-        port: agent.port,
-        sessionId: agent.sessionId,
-        status: "failed",
-        error: msg,
-      });
-    } finally {
-      watchdog.cancel();
-    }
   }
 
-  private appendSystem(text: string, summary?: TranscriptEntrySummary): void {
-    const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now(), summary };
-    this.transcript.push(entry);
-    this.opts.emit({ type: "transcript_append", entry });
-  }
-
-  private setPhase(phase: SwarmPhase): void {
-    this.phase = phase;
-    this.opts.emit({ type: "swarm_state", phase, round: this.round });
-  }
-
-  private emitAgentState(s: AgentState): void {
-    // thinkingSince REST-snapshot fix: route through the manager so
-    // the agentStates mirror gets updated in lockstep with the WS
-    // broadcast. See AgentManager.recordAgentState.
-    this.opts.manager.recordAgentState(s);
-  }
 }
 
-// Task #79: synthesis prompt. Uses ALL transcript entries (system +
-// agent) so the lead can see the seed + every draft. Frames the
-// output expectation explicitly: one consolidated answer, what
-// converged, what's still contested, one concrete next action.
-// Phase B (Task #99): scan a synthesis response for the
-// "CONVERGENCE: high|medium|low" line.
-// 2026-05-03 (Phase A): the parser implementation moved to the shared
-// `convergenceSignal.ts` module (also used by RoundRobinRunner). This
-// re-export preserves the legacy public name for any external caller.
+// Re-exports for backward compat with external callers (tests, etc.)
+// that import these from this module.
 export { parseConvergenceSignal as parseCouncilConvergence } from "./convergenceSignal.js";
-
-export function buildCouncilSynthesisPrompt(
-  totalRounds: number,
-  transcript: readonly TranscriptEntry[],
-  userDirective?: string,
-): string {
-  const transcriptText = transcript
-    .map((e) => {
-      if (e.role === "system") return `[SYSTEM] ${e.text}`;
-      if (e.role === "user") return `[HUMAN] ${e.text}`;
-      return `[Agent ${e.agentIndex}] ${e.text}`;
-    })
-    .join("\n\n");
-
-  // 2026-05-02 (council improvement #1 + #3): directive-aware synthesis
-  // with a required Minority report section. The minority report is the
-  // counter to "synthesis collapse" — when 5 drafts get squeezed into
-  // 1 consensus answer, the dissenting view (often the right one) is
-  // lost. Forcing the synthesis to NAME the strongest dissent + who
-  // held it preserves it; "_consensus reached_" is a valid value when
-  // there genuinely was no dissent.
-  // 2026-05-03 (Phase A): directive block extracted to shared helper.
-  const dirCtx = readDirective({ userDirective });
-  const directiveBlock = buildDirectiveBlock(dirCtx, {
-    labelSuffix: "(the question this council was answering)",
-  });
-
-  // 2026-05-04 (idea T173): per-position confidence weighting. Each
-  // agent tags MY POSITION with CONFIDENCE: high|medium|low. Synthesis
-  // weights consensus by confidence — low-confidence positions don't
-  // count toward "convergence" the same as high-confidence ones, and
-  // a single high-confidence dissent matters more than three low-
-  // confidence agreements.
-  const structure = dirCtx.hasDirective
-    ? [
-        "STRUCTURE your response as:",
-        "1. **Answer to directive** — direct response to the user's question. State what the council concluded, not how it deliberated.",
-        "2. **Consensus** — what every agent (including you) converged on while resolving the directive. State as a direct claim. **Weigh each agent's contribution by their CONFIDENCE tag** (high > medium > low) — don't treat 3 low-confidence agreements as equivalent to 1 high-confidence agreement.",
-        "3. **Disagreements** — where agents still hold different positions on the directive. Name the agents, their stances, AND their confidence tags.",
-        "4. **Minority report** — when at least one agent's `### MY POSITION` diverges from the consensus, name them and state their strongest argument **verbatim** from their last position. **A high-confidence minority dissent should be weighed seriously even when numerically outvoted.** If the council genuinely converged with no dissent, write `_consensus reached — no minority position_`. Do NOT invent dissent for show.",
-        "5. **Next action** — ONE concrete next step toward the directive. Cite files / decisions / experiments. If no action is needed, say so.",
-        "",
-      ]
-    : [
-        "STRUCTURE your response as:",
-        "1. **Consensus** — what every agent (including you) converged on. State it as a direct claim, not a meta-observation. **Weigh each agent's contribution by their CONFIDENCE tag** — don't treat 3 low-confidence agreements as equivalent to 1 high-confidence agreement.",
-        "2. **Disagreements** — where agents still hold different positions. Name the agents, their stances, AND their confidence tags.",
-        "3. **Minority report** — when at least one agent's `### MY POSITION` diverges from the consensus, name them and state their strongest argument **verbatim** from their last position. **A high-confidence minority dissent should be weighed seriously even when numerically outvoted.** If the council genuinely converged with no dissent, write `_consensus reached — no minority position_`. Do NOT invent dissent for show.",
-        "4. **Next action** — ONE concrete next step the swarm or user should take, given the council's findings. If no action is needed, say so.",
-        "",
-      ];
-
-  return [
-    `You are Agent 1, the council's synthesis lead. The council just finished ${totalRounds} round${totalRounds === 1 ? "" : "s"} of independent drafts + reveal/revise.`,
-    "Your job NOW is to produce a SINGLE consolidated answer that integrates every agent's final position.",
-    "",
-    ...directiveBlock,
-    ...structure,
-    "Keep it under ~500 words. Be specific. Cite file paths or peer claims when relevant. Do not just summarize the drafts — synthesize them.",
-    "",
-    // Phase B (Task #99): convergence signal on the FINAL line. Lets
-    // the runner end mid-loop when the council has clearly settled.
-    // Be conservative — only mark "high" when consensus genuinely
-    // dominates and any remaining disagreements are minor. Marking
-    // converged=high prematurely cuts off useful debate.
-    "On the FINAL line of your response (no markdown, nothing after it), output exactly one of:",
-    "  CONVERGENCE: high   — agents largely agree; further rounds would only restate the consensus.",
-    "  CONVERGENCE: medium — partial consensus with real open questions still in play.",
-    "  CONVERGENCE: low    — significant unresolved disagreement; more rounds would help.",
-    "",
-    "=== FULL COUNCIL TRANSCRIPT ===",
-    transcriptText,
-    "=== END TRANSCRIPT ===",
-    "",
-    "Produce your synthesis now.",
-  ].join("\n");
-}
-
-// Exported so CouncilRunner.test.ts can lock down the independence invariant
-// without spinning up real agents.
-export function buildCouncilPrompt(
-  agentIndex: number,
-  round: number,
-  totalRounds: number,
-  snapshot: readonly TranscriptEntry[],
-  userDirective?: string,
-): string {
-  // Round 1 is the draft round: strip peer-agent entries so an agent writing
-  // its first-pass answer cannot anchor on what anyone else has said. Round
-  // 2..N is the revision round: show everything, including prior drafts.
-  const visible =
-    round === 1 ? snapshot.filter((e) => e.role !== "agent") : snapshot;
-
-  const transcriptText = visible
-    .map((e) => {
-      if (e.role === "system") return `[SYSTEM] ${e.text}`;
-      if (e.role === "user") return `[HUMAN] ${e.text}`;
-      return `[Agent ${e.agentIndex}] ${e.text}`;
-    })
-    .join("\n\n");
-
-  const header = `You are Agent ${agentIndex} in a council of AI engineers reviewing a cloned GitHub project.`;
-  const roundIntent =
-    round === 1
-      ? "This is ROUND 1 — your independent first draft. You cannot see the other agents' drafts; that is deliberate. Answer without anchoring on anyone else."
-      : `This is ROUND ${round} of ${totalRounds} — revision. The other agents' prior drafts are in the transcript below. Revise your own position: keep what still holds, change what a peer's draft convinced you of, explicitly disagree where you think they're wrong. Do not just agree.`;
-
-  const transcriptLabel =
-    round === 1
-      ? "=== SEED + ANY HUMAN INPUT (peer drafts hidden this round) ==="
-      : "=== COUNCIL TRANSCRIPT SO FAR ===";
-
-  // 2026-05-02 (council improvement #1): user directive injected into
-  // every drafter's prompt. Without this, agents draft answers to "what
-  // is this project" while the rubric (derived from the directive) is
-  // only used by the deliverable critic — load-bearing miss.
-  // 2026-05-03 (Phase A): directive block extracted to shared helper.
-  const dirCtx = readDirective({ userDirective });
-  const directiveBlock = buildDirectiveBlock(dirCtx, {
-    labelSuffix: "(the question this council is answering)",
-  });
-  // Local boolean for the existing flow control further down (KEEP / Goals branches).
-  const directive = dirCtx.directive;
-
-  // 2026-05-02 (council improvement #2): position pre-registration to
-  // counter Round-3 conformity drift. Each turn ends with a
-  // `### MY POSITION` block — one short statement of the agent's
-  // current best answer. Round 2+ is given its OWN prior position back
-  // and required to explicitly own KEEP / CHANGE with a one-line WHY.
-  // Anchors the agent against unconscious drift toward the loudest
-  // voice — they have to actively renounce their prior position to
-  // converge, not just quietly stop defending it.
-  const priorPosition =
-    round > 1 ? getLastPositionForAgent(snapshot, agentIndex) : null;
-  const priorPositionBlock =
-    round > 1
-      ? [
-          "=== YOUR PRIOR POSITION (from last round) ===",
-          priorPosition ?? "_(you did not produce a `### MY POSITION` block last round — start fresh this round)_",
-          "=== END PRIOR POSITION ===",
-          "",
-        ]
-      : [];
-
-  const positionContract =
-    round === 1
-      ? [
-          "**POSITION CONTRACT (every turn):** End your response with:",
-          "    ### MY POSITION",
-          "    <one short sentence — ≤300 chars — your direct answer to the directive (or to 'what should this project do' when no directive). This is your anchor against drift in later rounds.>",
-          "    CONFIDENCE: high|medium|low — <one-line why you trust this position at this strength>",
-          // 2026-05-04 (idea T181): external grounding requirement.
-          // Every MY POSITION must cite at least one file path / test
-          // name / measurement. Forces drafts onto the actual codebase
-          // instead of generic prose.
-          "    GROUNDING: <at least one citation — file path (e.g. src/foo.ts:42), test name (e.g. tests/auth.test.ts \"should reject expired tokens\"), command output (e.g. `git log` shows 3 recent commits to auth/), or README claim. NO grounding = re-prompted.>",
-          "",
-        ]
-      : [
-          // 2026-05-04 (idea T173): forced steelmanning before MY POSITION.
-          // R2+ requires the agent to first state the strongest peer
-          // position they DON'T currently agree with, in its most
-          // charitable form. Counters the failure mode of "everyone
-          // converges politely without engaging the actual disagreement."
-          // After steelmanning, the agent must explicitly KEEP / CHANGE
-          // their own position with confidence — knowing they've truly
-          // engaged the alternative.
-          "**STEELMAN STEP (R2+ only):** BEFORE your `### MY POSITION` block, write:",
-          "    ### STEELMAN OF PEER POSITION",
-          "    <Pick the peer position you most disagree with. State it in its strongest, most well-grounded form — better than the peer themselves did. ~1-2 sentences. Cite which agent + roughly which round.>",
-          "",
-          "**POSITION CONTRACT (every turn):** End your response with:",
-          "    ### MY POSITION",
-          "    KEEP: <restate your prior position verbatim>   — OR —   CHANGE: <new one-sentence position>",
-          "    WHY: <one line — what specifically convinced you to keep or change. Cite the agent + their argument when CHANGE. After steelmanning, mention what the steelman did NOT change about your position.>",
-          "    CONFIDENCE: high|medium|low — <one-line why you trust this position at this strength after the steelman exercise>",
-          // 2026-05-04 (idea T181): external grounding required in R2+ too.
-          "    GROUNDING: <at least one citation — file path / test name / command output / README claim. NO grounding = re-prompted.>",
-          "",
-          "Drift without an explicit CHANGE is the failure mode this contract exists to prevent. If you find yourself softening your prior position without naming who convinced you and how, KEEP it.",
-          "",
-        ];
-
-  const goals = directive.length > 0
-    ? [
-        "Goals of this council:",
-        "1. Read the repo just enough to ground your answer to the directive in real code (not filename guesses).",
-        "2. Round 1: produce YOUR independent answer to the directive. Don't anchor on peers — you cannot see them.",
-        "3. Round 2+: revise vs. prior round. Keep what still holds, change what a peer's draft genuinely convinced you of, explicitly disagree where you think they're wrong.",
-        "",
-      ]
-    : [
-        "Goals of this discussion:",
-        "1. Figure out what this project is and who it is for.",
-        "2. Identify what is working and what is missing.",
-        "3. Propose one concrete next action the swarm should take.",
-        "",
-      ];
-
-  return [
-    header,
-    roundIntent,
-    "Your working directory IS the project clone — use file-read, grep, and find-files tools to inspect it.",
-    "Round 1: skim README.md and the top-level tree before opining. Later rounds: re-read files when a peer's claim needs checking.",
-    "Keep responses under ~250 words. Be specific. Cite file paths (e.g. `src/foo.ts:42`) when you reference code.",
-    "",
-    ...directiveBlock,
-    ...priorPositionBlock,
-    ...positionContract,
-    ...goals,
-    transcriptLabel,
-    transcriptText || "(empty — you are writing the first entry)",
-    "=== END TRANSCRIPT ===",
-    "",
-    `Now respond as Agent ${agentIndex}. End with your \`### MY POSITION\` block.`,
-  ].join("\n");
-}
+export { buildCouncilPrompt, buildCouncilSynthesisPrompt } from "./councilPromptHelpers.js";
 

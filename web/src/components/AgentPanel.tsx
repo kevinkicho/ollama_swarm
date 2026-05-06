@@ -214,7 +214,6 @@ export function AgentPanel({
             </span>
           ) : null}
         </div>
-        <span className="text-xs font-mono text-ink-400">:{agent.port}</span>
       </div>
       <div
         ref={triggerRef}

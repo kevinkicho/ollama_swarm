@@ -26,7 +26,7 @@ const MAX_TOOL_TURNS = 10;
 // OpenAIProvider can share them. Mirror the args ToolDispatcher's
 // handlers actually consume.
 export const TOOL_SCHEMAS: Record<
-  "read" | "grep" | "glob" | "list" | "bash",
+  "read" | "grep" | "glob" | "list" | "bash" | "propose_hunks",
   { description: string; input_schema: Record<string, unknown> }
 > = {
   read: {
@@ -69,6 +69,15 @@ export const TOOL_SCHEMAS: Record<
       type: "object",
       properties: { command: { type: "string" } },
       required: ["command"],
+    },
+  },
+  propose_hunks: {
+    description: "Phase 2 (writeMode: multi): Propose file modifications as hunks during your turn. The runner collects proposals from all agents and reconciles them.",
+    input_schema: {
+      type: "object",
+      properties: {
+        hint: { type: "string", description: "optional hint about the hunks you'll propose" },
+      },
     },
   },
 };

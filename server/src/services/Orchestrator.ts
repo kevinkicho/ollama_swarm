@@ -18,6 +18,7 @@ import { MoaRunner } from "../swarm/MoaRunner.js";
 import { StigmergyRunner } from "../swarm/StigmergyRunner.js";
 import { BaselineRunner } from "../swarm/BaselineRunner.js";
 import { BaselineSwarmHarness } from "../swarm/BaselineSwarmHarness.js";
+import { PipelineRunner } from "../swarm/PipelineRunner.js";
 import { roleForAgent, selectRoleCatalog } from "../swarm/roles.js";
 import { ConformanceMonitor } from "./ConformanceMonitor.js";
 import { EmbeddingDriftMonitor } from "./EmbeddingDriftMonitor.js";
@@ -1074,6 +1075,12 @@ export class Orchestrator {
         // beats single-large-model on reasoning benchmarks using only
         // small open-weights models — exactly this project's value prop.
         return new MoaRunner(opts);
+      case "pipeline": {
+        // Pipeline preset: chains N sub-runs together, piping each
+        // phase's transcript + deliverable into the next phase's seed.
+        const factory = (p: PresetId) => this.buildRunner(p, cfg);
+        return new PipelineRunner(opts, factory);
+      }
       default: {
         // Exhaustiveness check — if a new preset is added to PresetId, TS errors here.
         const _exhaustive: never = preset;

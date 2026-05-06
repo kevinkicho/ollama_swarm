@@ -1,0 +1,303 @@
+// Extracted from BlackboardRunner.ts — prompt execution subsystem.
+// Manages promptAgent (failover+retry+watchdog+streaming) and promptPlannerSafely.
+// Takes a narrow context object instead of referencing `this.*`.
+
+import { AgentManager } from "../../services/AgentManager.js";
+import type { Agent } from "../../services/AgentManager.js";
+import type { AgentState, SwarmEvent, TranscriptEntrySummary } from "../../types.js";
+import type { RunConfig } from "../SwarmRunner.js";
+import type { ClassifiedError } from "../errorTaxonomy.js";
+import {
+  promptWithFailover,
+  type FailoverState,
+  type FailoverConfig,
+} from "../promptWithFailover.js";
+import { describeSdkError } from "../sdkError.js";
+import { interruptibleSleep } from "../interruptibleSleep.js";
+import {
+  ABSOLUTE_MAX_MS,
+} from "./BlackboardRunnerConstants.js";
+import { config as appConfig } from "../../config.js";
+import {
+  getAgentAddendum,
+  getAgentOllamaOptions,
+} from "../../../../shared/src/topology.js";
+
+export interface PromptContext {
+  // --- mutable counter maps (referenced in place) ---
+  turnsPerAgent: Map<string, number>;
+  promptTokensPerAgent: Map<string, number>;
+  responseTokensPerAgent: Map<string, number>;
+  attemptsPerAgent: Map<string, number>;
+  retriesPerAgent: Map<string, number>;
+  latenciesPerAgent: Map<string, number[]>;
+  recentLatencySamples: Map<string, Array<{ ts: number; elapsedMs: number; success: boolean; attempt: number }>>;
+  errorTracker: ClassifiedError[];
+  activeAborts: Set<AbortController>;
+  failoverState: FailoverState;
+  localOllamaTags: readonly string[];
+
+  // --- field getters / setters ---
+  getActive: () => RunConfig | undefined;
+  isStopping: () => boolean;
+  setStopping: (v: boolean) => void;
+  getTerminationReason: () => string | undefined;
+  setTerminationReason: (v: string | undefined) => void;
+  getConsecutiveLoopDetections: () => number;
+  setConsecutiveLoopDetections: (v: number) => void;
+  getLastLoopWarningAtTurn: () => number;
+  setLastLoopWarningAtTurn: (v: number) => void;
+
+  // --- runner deps ---
+  manager: AgentManager;
+  emit: (e: SwarmEvent) => void;
+  logDiag: ((record: unknown) => void) | undefined;
+  getOllamaBaseUrl: () => string | undefined;
+
+  // --- callbacks ---
+  appendSystem: (msg: string, summary?: TranscriptEntrySummary) => void;
+  emitAgentState: (s: AgentState) => void;
+  extractText: (res: unknown) => string | undefined;
+
+  // --- static-like config ---
+  maxTrackedErrors: number;
+}
+
+export async function promptPlannerSafely(
+  ctx: PromptContext,
+  primaryAgent: Agent,
+  promptText: string,
+  agentName: "swarm" | "swarm-read" | "swarm-builder" = "swarm",
+  ollamaFormat?: "json" | Record<string, unknown>,
+): Promise<{ response: string; agentUsed: Agent }> {
+  const response = await promptAgent(ctx, primaryAgent, promptText, agentName, "json", ollamaFormat);
+  return { response, agentUsed: primaryAgent };
+}
+
+export async function promptAgent(
+  ctx: PromptContext,
+  agent: Agent,
+  prompt: string,
+  agentName: "swarm" | "swarm-read" | "swarm-builder" = "swarm",
+  formatExpect: "json" | "free" = "json",
+  ollamaFormat?: "json" | Record<string, unknown>,
+): Promise<string> {
+  ctx.turnsPerAgent.set(agent.id, (ctx.turnsPerAgent.get(agent.id) ?? 0) + 1);
+  ctx.manager.markStatus(agent.id, "thinking");
+  const turnStart = Date.now();
+  ctx.emitAgentState({
+    id: agent.id,
+    index: agent.index,
+    port: agent.port,
+    sessionId: agent.sessionId,
+    status: "thinking",
+    thinkingSince: turnStart,
+  });
+
+  ctx.manager.touchActivity(agent.sessionId, turnStart);
+
+  const controller = new AbortController();
+  ctx.activeAborts.add(controller);
+  let abortedReason: string | null = null;
+  let abortFiredAt = 0;
+  let lastVisibilityWarn = 0;
+
+  const watchdog = setInterval(() => {
+    if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
+      const lastChunkAt = ctx.manager.getLastChunkAt(agent.id);
+      if (abortFiredAt === 0 && lastChunkAt && Date.now() - lastChunkAt < 60_000) {
+        return;
+      }
+      if (abortFiredAt === 0) {
+        abortFiredAt = Date.now();
+        const sseQuiet = lastChunkAt
+          ? `SSE silent ${Math.round((Date.now() - lastChunkAt) / 1000)}s`
+          : "no SSE chunks received";
+        abortedReason = `absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s, ${sseQuiet})`;
+        controller.abort(new Error(abortedReason));
+        ctx.appendSystem(
+          `[${agent.id}] absolute turn cap (${ABSOLUTE_MAX_MS / 1000}s) hit — ${sseQuiet}. Abort signaled.`,
+        );
+      } else if (Date.now() - lastVisibilityWarn > 60_000) {
+        lastVisibilityWarn = Date.now();
+        const stuckS = Math.round((Date.now() - turnStart) / 1000);
+        ctx.appendSystem(
+          `[${agent.id}] still in flight ${stuckS}s after start despite abort — SDK has not returned (Task #142).`,
+        );
+      }
+    }
+  }, 10_000);
+  watchdog.unref?.();
+
+  try {
+    const failoverCfg = buildFailoverConfig(ctx);
+    const res = await promptWithFailover(agent, prompt, {
+      signal: controller.signal,
+      manager: ctx.manager,
+      formatExpect,
+      intraStreamLoop: true,
+      ollamaDirect: process.env.USE_OLLAMA_DIRECT === "1"
+        ? { baseUrl: ctx.getOllamaBaseUrl() ?? "http://127.0.0.1:11533" }
+        : undefined,
+      ...(ollamaFormat !== undefined ? { ollamaFormat } : {}),
+      logDiag: ctx.logDiag,
+      promptAddendum: getAgentAddendum(ctx.getActive()?.topology, agent.index),
+      ollamaOptions: getAgentOllamaOptions(ctx.getActive()?.topology, agent.index),
+      onTokens: ({ promptTokens, responseTokens }) => {
+        if (promptTokens > 0) ctx.promptTokensPerAgent.set(agent.id, (ctx.promptTokensPerAgent.get(agent.id) ?? 0) + promptTokens);
+        if (responseTokens > 0) ctx.responseTokensPerAgent.set(agent.id, (ctx.responseTokensPerAgent.get(agent.id) ?? 0) + responseTokens);
+      },
+      agentName,
+      describeError: (e) => describeSdkError(e),
+      sleep: (ms, sig) => interruptibleSleep(ms, sig),
+      onTiming: ({ attempt, elapsedMs, success }) => {
+        ctx.attemptsPerAgent.set(
+          agent.id,
+          (ctx.attemptsPerAgent.get(agent.id) ?? 0) + 1,
+        );
+        if (success) {
+          const lats = ctx.latenciesPerAgent.get(agent.id) ?? [];
+          lats.push(elapsedMs);
+          ctx.latenciesPerAgent.set(agent.id, lats);
+        }
+        ctx.logDiag?.({
+          type: "_prompt_timing",
+          preset: ctx.getActive()?.preset,
+          agentId: agent.id,
+          agentIndex: agent.index,
+          attempt,
+          elapsedMs,
+          success,
+        });
+        ctx.manager.recordPromptComplete(agent.id, { attempt, elapsedMs, success });
+        const sampleTs = Date.now();
+        ctx.emit({
+          type: "agent_latency_sample",
+          agentId: agent.id,
+          agentIndex: agent.index,
+          attempt,
+          elapsedMs,
+          success,
+          ts: sampleTs,
+        });
+        const recent = ctx.recentLatencySamples.get(agent.id) ?? [];
+        recent.push({ ts: sampleTs, elapsedMs, success, attempt });
+        if (recent.length > 20) recent.splice(0, recent.length - 20);
+        ctx.recentLatencySamples.set(agent.id, recent);
+      },
+      onRetry: ({ attempt, max, reasonShort, delayMs }) => {
+        ctx.retriesPerAgent.set(
+          agent.id,
+          (ctx.retriesPerAgent.get(agent.id) ?? 0) + 1,
+        );
+        ctx.appendSystem(
+          `[${agent.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
+        );
+        ctx.manager.markStatus(agent.id, "retrying", {
+          retryAttempt: attempt,
+          retryMax: max,
+          retryReason: reasonShort,
+        });
+        ctx.emitAgentState({
+          id: agent.id,
+          index: agent.index,
+          port: agent.port,
+          sessionId: agent.sessionId,
+          status: "retrying",
+          retryAttempt: attempt,
+          retryMax: max,
+          retryReason: reasonShort,
+        });
+      },
+    }, ctx.failoverState, failoverCfg, (info) => {
+      ctx.errorTracker.push(info.classified);
+      if (ctx.errorTracker.length > ctx.maxTrackedErrors) {
+        ctx.errorTracker.shift();
+      }
+      ctx.manager.updateAgentModel(agent.id, info.toModel);
+      ctx.appendSystem(
+        `[${agent.id}] failover: ${info.fromModel} → ${info.toModel} (${info.reason})`,
+      );
+      ctx.emit({
+        type: "model_shift",
+        agentId: agent.id,
+        agentIndex: agent.index,
+        fromModel: info.fromModel,
+        toModel: info.toModel,
+        reason: info.reason,
+      });
+    });
+    const text = ctx.extractText(res) ?? "";
+    ctx.emit({ type: "agent_streaming_end", agentId: agent.id });
+    ctx.manager.markStatus(agent.id, "ready", { lastMessageAt: Date.now() });
+    ctx.emitAgentState({
+      id: agent.id,
+      index: agent.index,
+      port: agent.port,
+      sessionId: agent.sessionId,
+      status: "ready",
+      lastMessageAt: Date.now(),
+    });
+    return text;
+  } catch (err) {
+    const msg = abortedReason ?? describeSdkError(err);
+    ctx.emit({ type: "agent_streaming_end", agentId: agent.id });
+    ctx.manager.markStatus(agent.id, "failed", { error: msg });
+    ctx.emitAgentState({
+      id: agent.id,
+      index: agent.index,
+      port: agent.port,
+      sessionId: agent.sessionId,
+      status: "failed",
+      error: msg,
+    });
+    throw new Error(msg);
+  } finally {
+    clearInterval(watchdog);
+    ctx.activeAborts.delete(controller);
+  }
+}
+
+export function buildFailoverConfig(ctx: PromptContext): FailoverConfig {
+  const chain = ctx.getActive()?.providerFailover ?? appConfig.SWARM_PROVIDER_FAILOVER;
+  return {
+    failoverChain: chain,
+    localTags: appConfig.SWARM_DEGRADATION_FALLBACK ? ctx.localOllamaTags : [],
+    localPreferred: appConfig.SWARM_DEGRADATION_PREFERRED,
+    enableHealthSwap: appConfig.SWARM_MODEL_HEALTH_SWAP,
+  };
+}
+
+export async function discoverLocalOllamaTags(ctx: PromptContext): Promise<void> {
+  try {
+    const baseUrl = (ctx.getOllamaBaseUrl() ?? "http://127.0.0.1:11434").replace(/\/v1\/?$/, "");
+    const r = await fetch(`${baseUrl}/api/tags`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!r.ok) return;
+    const body = (await r.json()) as { models?: Array<{ name?: string }> };
+    const tags = (body.models ?? [])
+      .map((m) => m.name)
+      .filter((n): n is string => typeof n === "string" && n.length > 0);
+    ctx.localOllamaTags = tags;
+  } catch {
+    // discovery failed -> R3 stays disabled
+  }
+}
+
+export function markPlannerStatus(
+  planner: Agent,
+  status: "thinking" | "ready",
+  manager: AgentManager,
+  emitAgentState: (s: AgentState) => void,
+): void {
+  manager.markStatus(planner.id, status);
+  emitAgentState({
+    id: planner.id,
+    index: planner.index,
+    port: planner.port,
+    sessionId: planner.sessionId,
+    status,
+    ...(status === "thinking" ? { thinkingSince: Date.now() } : { lastMessageAt: Date.now() }),
+  });
+}

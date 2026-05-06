@@ -11,11 +11,14 @@ import {
   buildSignoffPrompt,
   DEFAULT_PROPOSITION,
   scanImplementerForNoOp,
-} from "./DebateJudgeRunner.js";
+} from "./debatePromptHelpers.js";
 import type { TranscriptEntry } from "../types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DJ_SRC = readFileSync(join(__dirname, "DebateJudgeRunner.ts"), "utf8");
+const DJ_DELIVERABLE_SRC = readFileSync(join(__dirname, "debateDeliverableWriter.ts"), "utf8");
+const DJ_PROMPT_SRC = readFileSync(join(__dirname, "debatePromptHelpers.ts"), "utf8");
+const DJ_ALL = [DJ_SRC, DJ_DELIVERABLE_SRC, DJ_PROMPT_SRC].join("\n\n");
 
 const STUB_VERDICT = {
   winner: "pro" as const,
@@ -376,23 +379,23 @@ describe("DebateJudgeRunner — directive plumbing (structural)", () => {
 
   it("(#2) build phase callees thread userDirective into all three prompts", () => {
     assert.match(
-      DJ_SRC,
+      DJ_ALL,
       /buildImplementerPrompt\(proposition, verdict, userDirective\)/,
     );
     assert.match(
-      DJ_SRC,
+      DJ_ALL,
       /buildReviewerPrompt\(proposition, verdict, \[\.\.\.this\.transcript\], userDirective\)/,
     );
     assert.match(
-      DJ_SRC,
+      DJ_ALL,
       /buildSignoffPrompt\(proposition, verdict, \[\.\.\.this\.transcript\], userDirective\)/,
     );
   });
 
   it("(#3 + Phase A) deliverable uses maybeDirectiveSection + pickDeliverableTitle helpers", () => {
-    assert.match(DJ_SRC, /maybeDirectiveSection\(dirCtx\)/);
+    assert.match(DJ_ALL, /maybeDirectiveSection\(dirCtx\)/);
     assert.match(
-      DJ_SRC,
+      DJ_ALL,
       /pickDeliverableTitle\(dirCtx,\s*\{[\s\S]{0,200}?withDirective:\s*"Debate-judge: directive decision"/,
       "deliverable title must use pickDeliverableTitle helper",
     );
@@ -400,11 +403,11 @@ describe("DebateJudgeRunner — directive plumbing (structural)", () => {
 
   it("(#3) deliverable labels proposition source (auto-derived / fallback / user-set)", () => {
     assert.match(
-      DJ_SRC,
+      DJ_ALL,
       /Proposition \(auto-derived from directive\)/,
     );
     assert.match(
-      DJ_SRC,
+      DJ_ALL,
       /Proposition \(fallback — auto-derive failed\)/,
     );
   });

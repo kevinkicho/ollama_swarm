@@ -1,0 +1,483 @@
+import type { Agent } from "../../services/AgentManager.js";
+import type { AgentState, SwarmEvent, SwarmPhase, TranscriptEntry, TranscriptEntrySummary } from "../../types.js";
+import type { RunConfig, RunnerOpts } from "../SwarmRunner.js";
+import type { ClassifiedError, ErrorCategory } from "../errorTaxonomy.js";
+import type { FailoverState, FailoverConfig } from "../promptWithFailover.js";
+import type { ExitContract, Todo } from "./types.js";
+import type { FindingsLog } from "./FindingsLog.js";
+import type { TodoQueue } from "./TodoQueue.js";
+import type { TodoQueueWrappers } from "./todoQueueWrappers.js";
+import type { TierHistoryEntry } from "./tierRunner.js";
+import type { TickAccumulator } from "./caps.js";
+import type { BlackboardStateSnapshot } from "./stateSnapshot.js";
+import type { RunSummary } from "./summary.js";
+import type { LifecycleContext } from "./lifecycleRunner.js";
+import type { ContractContext } from "./contractBuilder.js";
+import type { TierContext } from "./tierRunner.js";
+import type { PlannerContext } from "./plannerRunner.js";
+import type { WorkerContext } from "./workerRunner.js";
+import type { PromptContext } from "./promptRunner.js";
+import type { ReplanContext } from "./replanManager.js";
+import type { AuditorContext } from "./auditorRunner.js";
+import type { CapContext } from "./capManager.js";
+import type { AdaptiveWatchdogContext } from "./adaptiveWorkerWatchdog.js";
+import type { RunnerUtilContext } from "./runnerUtil.js";
+import type { PlannerSeed } from "./prompts/planner.js";
+import { bumpAgentCounter } from "./runnerHelpers.js";
+import { pheromoneHeatmap } from "../pheromoneHeatmap.js";
+
+// BlackboardRunnerFields describes the subset of the BlackboardRunner
+// instance that the extracted context builders need. Because many
+// fields are private on the class, the runner casts `this` via
+// `asFields()` — the interface exists for documentation, not for
+// compile-time enforcement. Using `any` for method-heavy fields avoids
+// cascading type-mismatch errors while still documenting intent.
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type BlackboardRunnerFields = any;
+
+export function utilCtx(r: BlackboardRunnerFields): RunnerUtilContext {
+  return {
+    active: r.active,
+    phase: r.phase,
+    round: r.round,
+    runStartedAt: r.runStartedAt,
+    transcript: r.transcript,
+    todoQueue: r.todoQueue,
+    findings: r.findings,
+    consecutiveLoopDetections: r.consecutiveLoopDetections,
+    lastLoopWarningAtTurn: r.lastLoopWarningAtTurn,
+    activeAborts: r.activeAborts,
+    stopping: r.stopping,
+    terminationReason: r.terminationReason,
+    loopDetectionsToHalt: r.loopDetectionsToHalt,
+    scheduleStateWrite: () => r.scheduleStateWrite(),
+    appendSystem: (text: string, summary?: TranscriptEntrySummary) => r.appendSystem(text, summary),
+    emit: (e: SwarmEvent) => r.opts.emit(e),
+    getAmendments: r.opts.getAmendments,
+  } as RunnerUtilContext;
+}
+
+export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
+  return {
+    isRunning: () => r.isRunning(),
+    getStopping: () => r.stopping,
+    setStopping: (v: boolean) => { r.stopping = v; },
+    getDraining: () => r.draining,
+    setDraining: (v: boolean) => { r.draining = v; },
+    getWasDrained: () => r.wasDrained,
+    setWasDrained: (v: boolean) => { r.wasDrained = v; },
+    getPaused: () => r.paused,
+    setPaused: (v: boolean) => { r.paused = v; },
+    getRound: () => r.round,
+    setRound: (v: number) => { r.round = v; },
+    getRunStartedAt: () => r.runStartedAt,
+    setRunStartedAt: (v: number | undefined) => { r.runStartedAt = v; },
+    getRunBootedAt: () => r.runBootedAt,
+    setRunBootedAt: (v: number | undefined) => { r.runBootedAt = v; },
+    getTokenBaselineForRun: () => r.tokenBaselineForRun,
+    setTokenBaselineForRun: (v: number | undefined) => { r.tokenBaselineForRun = v; },
+    getTickAccumulator: () => r.tickAccumulator,
+    setTickAccumulator: (v: TickAccumulator | undefined) => { r.tickAccumulator = v; },
+    getTerminationReason: () => r.terminationReason,
+    setTerminationReason: (v: string | undefined) => { r.terminationReason = v; },
+    getDrainStartedAt: () => r.drainStartedAt,
+    setDrainStartedAt: (v: number | undefined) => { r.drainStartedAt = v; },
+    getPauseProbeTimer: () => r.pauseProbeTimer,
+    setPauseProbeTimer: (v: NodeJS.Timeout | undefined) => { r.pauseProbeTimer = v; },
+    getDrainWatcherTimer: () => r.drainWatcherTimer,
+    setDrainWatcherTimer: (v: NodeJS.Timeout | undefined) => { r.drainWatcherTimer = v; },
+    getPauseStartedAt: () => r.pauseStartedAt,
+    setPauseStartedAt: (v: number | undefined) => { r.pauseStartedAt = v; },
+    getTotalPausedMs: () => r.totalPausedMs,
+    setTotalPausedMs: (v: number) => { r.totalPausedMs = v; },
+    getSubscriberPaused: () => r.subscriberPaused,
+    setSubscriberPaused: (v: boolean) => { r.subscriberPaused = v; },
+    getMemoryPaused: () => r.memoryPaused,
+    setMemoryPaused: (v: boolean) => { r.memoryPaused = v; },
+    getLastMemoryPressureLevel: () => r.lastMemoryPressureLevel,
+    setLastMemoryPressureLevel: (v: "ok" | "throttle" | "pause") => { r.lastMemoryPressureLevel = v; },
+    getConsecutiveLoopDetections: () => r.consecutiveLoopDetections,
+    setConsecutiveLoopDetections: (v: number) => { r.consecutiveLoopDetections = v; },
+    getLastLoopWarningAtTurn: () => r.lastLoopWarningAtTurn,
+    setLastLoopWarningAtTurn: (v: number) => { r.lastLoopWarningAtTurn = v; },
+    getActive: () => r.active,
+    setActive: (v: RunConfig | undefined) => { r.active = v; },
+    getContract: () => r.contract,
+    setContract: (v: ExitContract | undefined) => { r.contract = v; },
+    getPriorSnapshot: () => r.priorSnapshot,
+    setPriorSnapshot: (v: BlackboardStateSnapshot | null | undefined) => { r.priorSnapshot = v; },
+    getTranscript: () => r.transcript,
+    setTranscript: (v: TranscriptEntry[]) => { r.transcript = v; },
+    getTurnsPerAgent: () => r.turnsPerAgent,
+    getAttemptsPerAgent: () => r.attemptsPerAgent,
+    getCommitsPerAgent: () => r.commitsPerAgent,
+    getLinesAddedPerAgent: () => r.linesAddedPerAgent,
+    getLinesRemovedPerAgent: () => r.linesRemovedPerAgent,
+    getRejectedAttemptsPerAgent: () => r.rejectedAttemptsPerAgent,
+    getJsonRepairsPerAgent: () => r.jsonRepairsPerAgent,
+    getPromptErrorsPerAgent: () => r.promptErrorsPerAgent,
+    getPromptTokensPerAgent: () => r.promptTokensPerAgent,
+    getResponseTokensPerAgent: () => r.responseTokensPerAgent,
+    getRetriesPerAgent: () => r.retriesPerAgent,
+    getLatenciesPerAgent: () => r.latenciesPerAgent,
+    getErrorTracker: () => r.errorTracker,
+    getFailoverState: () => r.failoverState,
+    setFailoverState: (v: FailoverState) => { r.failoverState = v; },
+    getLocalOllamaTags: () => r.localOllamaTags,
+    setLocalOllamaTags: (v: string[]) => { r.localOllamaTags = v; },
+    getStaleEventCount: () => r.staleEventCount,
+    setStaleEventCount: (v: number) => { r.staleEventCount = v; },
+    getHypothesisGroupAborts: () => r.hypothesisGroupAborts,
+    getFileCommitCounts: () => r.fileCommitCounts,
+    getHypothesisDeferralTimestamps: () => r.hypothesisDeferralTimestamps,
+    getActiveAborts: () => r.activeAborts,
+    getAuditor: () => r.auditor,
+    setAuditor: (v: Agent | undefined) => { r.auditor = v; },
+    getPlanner: () => r.planner,
+    setPlanner: (v: Agent | undefined) => { r.planner = v; },
+    getAgentRoster: () => r.agentRoster,
+    setAgentRoster: (v: Array<{ id: string; index: number }>) => { r.agentRoster = v; },
+    getWorkerRoles: () => r.workerRoles,
+    getAuditInvocations: () => r.auditInvocations,
+    setAuditInvocations: (v: number) => { r.auditInvocations = v; },
+    getCompletionDetail: () => r.completionDetail,
+    setCompletionDetail: (v: string | undefined) => { r.completionDetail = v; },
+    getCurrentTier: () => r.currentTier,
+    setCurrentTier: (v: number) => { r.currentTier = v; },
+    getTiersCompleted: () => r.tiersCompleted,
+    setTiersCompleted: (v: number) => { r.tiersCompleted = v; },
+    getTierHistory: () => r.tierHistory,
+    setTierHistory: (v: TierHistoryEntry[]) => { r.tierHistory = v; },
+    getTierStartedAt: () => r.tierStartedAt,
+    setTierStartedAt: (v: number | undefined) => { r.tierStartedAt = v; },
+    getTierUpFailures: () => r.tierUpFailures,
+    setTierUpFailures: (v: number) => { r.tierUpFailures = v; },
+    get cloneStateForStatus() { return r.cloneStateForStatus; },
+    set cloneStateForStatus(v: LifecycleContext["cloneStateForStatus"]) { r.cloneStateForStatus = v; },
+    setPhase: (phase: SwarmPhase) => r.setPhase(phase),
+    appendSystem: (text: string, summary?: TranscriptEntrySummary) => r.appendSystem(text, summary),
+    discoverLocalOllamaTags: () => r.discoverLocalOllamaTags(),
+    clearStateSnapshotScheduler: () => r.stateSnapshotScheduler.clearTimer(),
+    emit: (ev: SwarmEvent) => r.opts.emit(ev),
+    excludeRunnerArtifacts: (destPath: string) => r.opts.repos.excludeRunnerArtifacts(destPath),
+    buildSeed: (clonePath: string, cfg: RunConfig) => r.buildSeed(clonePath, cfg),
+    spawnAgentNoOpencode: (opts: any) => r.opts.manager.spawnAgentNoOpencode(opts),
+    markPlannerStatus: (planner: Agent, status: "thinking" | "ready") => r.markPlannerStatus(planner, status),
+    v2ObserverApply: (ev: any) => r.v2Observer.apply(ev),
+    v2ObserverReset: () => r.v2Observer.reset(),
+    flushBoardBroadcasterSnapshot: () => r.boardBroadcaster.flushSnapshot(),
+    boardCounts: () => r.boardCounts(),
+    allCriteriaResolved: () => r.allCriteriaResolved(),
+    get maxAuditInvocations() { return r.maxAuditInvocations; },
+    runAuditor: (planner: Agent, opts?: { allowWhenStopping?: boolean }) => r.runAuditor(planner, opts),
+    writeRunSummary: (crashMessage: string | undefined) => r.writeRunSummary(crashMessage),
+    writeBlackboardDeliverable: () => r.writeBlackboardDeliverable(),
+    runAutoRollbacks: () => r.runAutoRollbacks(),
+    runPlanner: (planner: Agent, seed: PlannerSeed, isFallbackAttempt?: boolean) => r.runPlanner(planner, seed, isFallbackAttempt),
+    runFirstPassContractOrchestrator: (planner: Agent, workers: Agent[], seed: PlannerSeed) => r.runFirstPassContractOrchestrator(planner, workers, seed),
+    tryResumeContract: (clonePath: string) => r.tryResumeContract(clonePath),
+    runAuditedExecution: (planner: Agent, workers: Agent[]) => r.runAuditedExecution(planner, workers),
+    recordError: (err: unknown, opts?: { causeHint?: ErrorCategory; statusCode?: number }) => r.recordError(err, opts),
+    writeCrashSnapshot: (err: unknown) => r.writeCrashSnapshot(err),
+    killAll: () => r.opts.manager.killAll(),
+    flushStateWrite: () => r.flushStateWrite(),
+    stopQueueReaper: () => r.stopQueueReaper(),
+    stopCapWatchdog: () => r.stopCapWatchdog(),
+    stopReplanWatcher: () => r.stopReplanWatcher(),
+    startQueueReaper: () => r.startQueueReaper(),
+    startCapWatchdog: () => r.startCapWatchdog(),
+    startReplanWatcher: () => r.startReplanWatcher(),
+    isOverWallClockCap: () => r.isOverWallClockCap(),
+    startAdaptiveWorkerWatchdog: (opts: any) => r.startAdaptiveWorkerWatchdog(opts),
+    disposeBoardBroadcaster: () => r.boardBroadcaster.dispose(),
+    clone: (opts: any) => r.opts.repos.clone(opts),
+    clearTodoQueue: () => r.todoQueue.clear(),
+    clearFindings: () => r.findings.clear(),
+    stop: () => r.stop(),
+    buildReflectionContext: (planner: Agent, abortSignal: AbortSignal) => r.buildReflectionContext(planner, abortSignal),
+  } as unknown as LifecycleContext;
+}
+
+export function contractContext(r: BlackboardRunnerFields): ContractContext {
+  return {
+    getStopping: () => r.stopping,
+    getActive: () => r.active,
+    getContract: () => r.contract,
+    getPriorSnapshot: () => r.priorSnapshot,
+    getFindingsPost: () => r.findings.post.bind(r.findings),
+    setContract: (c: ExitContract | undefined) => { r.contract = c; },
+    setCurrentTier: (t: number) => { r.currentTier = t; },
+    setTiersCompleted: (t: number) => { r.tiersCompleted = t; },
+    setTierStartedAt: (t: number | undefined) => { r.tierStartedAt = t; },
+    setTierHistory: (h: TierHistoryEntry[]) => { r.tierHistory = h; },
+    appendSystem: (msg: string) => r.appendSystem(msg),
+    appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
+    promptPlannerSafely: (primaryAgent: Agent, promptText: string, agentName?: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => r.promptPlannerSafely(primaryAgent, promptText, agentName ?? "swarm", ollamaFormat),
+    promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => r.promptAgent(agent, prompt, agentName, formatExpect, ollamaFormat),
+    emit: (e: unknown) => r.opts.emit(e as SwarmEvent),
+    scheduleStateWrite: () => r.scheduleStateWrite(),
+    v2ObserverApply: (event: any) => r.v2Observer.apply(event),
+    repos: r.opts.repos,
+  } as unknown as ContractContext;
+}
+
+export function tierContext(r: BlackboardRunnerFields): TierContext {
+  return {
+    getContract: () => r.contract,
+    getActive: () => r.active,
+    getStopping: () => r.stopping,
+    getCurrentTier: () => r.currentTier,
+    getTiersCompleted: () => r.tiersCompleted,
+    getTierHistory: () => r.tierHistory,
+    getTierStartedAt: () => r.tierStartedAt,
+    getTierUpFailures: () => r.tierUpFailures,
+    getAuditInvocations: () => r.auditInvocations,
+    getCompletionDetail: () => r.completionDetail,
+    setCurrentTier: (t: number) => { r.currentTier = t; },
+    setTiersCompleted: (t: number) => { r.tiersCompleted = t; },
+    setTierStartedAt: (t: number | undefined) => { r.tierStartedAt = t; },
+    setTierHistory: (h: TierHistoryEntry[]) => { r.tierHistory = h; },
+    setTierUpFailures: (t: number) => { r.tierUpFailures = t; },
+    setCompletionDetail: (d: string | undefined) => { r.completionDetail = d; },
+    setContract: (c: ExitContract | undefined) => { r.contract = c; },
+    appendSystem: (msg: string) => r.appendSystem(msg),
+    appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
+    promptPlannerSafely: (agent: Agent, promptText: string, agentName: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => r.promptPlannerSafely(agent, promptText, agentName, ollamaFormat),
+    emit: (e: SwarmEvent) => r.opts.emit(e),
+    scheduleStateWrite: () => r.scheduleStateWrite(),
+    cloneContract: (c: ExitContract) => r.cloneContract(c),
+    directiveWithAmendments: () => r.directiveWithAmendments(),
+    logDiag: r.opts.logDiag,
+    boardListTodos: () => r.boardListTodos(),
+    boardCounts: () => r.boardCounts(),
+    readReadme: (clonePath: string) => r.opts.repos.readReadme(clonePath),
+    listRepoFiles: (clonePath: string, opts: any) => r.opts.repos.listRepoFiles(clonePath, opts),
+    findPost: (entry: any) => r.findings.post(entry),
+    checkAndApplyCaps: () => r.checkAndApplyCaps(),
+    runWorkers: (workers: Agent[]) => r.runWorkers(workers),
+    runAuditor: (planner: Agent, opts?: { allowWhenStopping?: boolean }) => r.runAuditor(planner, opts),
+    runPlannerFallbackForUnmetCriteria: (planner: Agent) => r.runPlannerFallbackForUnmetCriteria(planner),
+    v2ObserverApply: (event: any) => r.v2Observer.apply(event),
+  } as unknown as TierContext;
+}
+
+export function plannerContext(r: BlackboardRunnerFields): PlannerContext {
+  return {
+    getContract: () => r.contract,
+    getActive: () => r.active ?? undefined,
+    isStopping: () => r.stopping,
+    getPlannerFallbackModel: () => r.active?.plannerFallbackModel,
+    updateAgentModel: (agentId: string, model: string) => { r.opts.manager.updateAgentModel(agentId, model); },
+    emit: (e: SwarmEvent) => r.opts.emit(e),
+    appendSystem: (msg: string) => r.appendSystem(msg),
+    appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
+    promptPlannerSafely: (agent: Agent, promptText: string, agentName: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => r.promptPlannerSafely(agent, promptText, agentName, ollamaFormat),
+    wrappers: r.wrappers,
+    findingsPost: (entry: any) => r.findings.post(entry),
+    v2ObserverApply: (event: any) => r.v2Observer.apply(event),
+    hypothesisGroupAbortsSet: (groupId: string, controller: AbortController) => { r.hypothesisGroupAborts.set(groupId, controller); },
+    buildSeed: (clonePath: string, cfg: RunConfig) => r.buildSeed(clonePath, cfg),
+    boardCounts: () => r.boardCounts(),
+  } as unknown as PlannerContext;
+}
+
+export function workerContext(r: BlackboardRunnerFields): WorkerContext {
+  return {
+    isStopping: () => r.stopping,
+    isDraining: () => r.draining,
+    isPaused: () => r.paused,
+    isSubscriberPaused: () => r.subscriberPaused,
+    isMemoryPaused: () => r.memoryPaused,
+    checkAndApplyCaps: () => r.checkAndApplyCaps(),
+    boardCounts: () => r.boardCounts(),
+    getActive: () => r.active,
+    getReplanPending: () => r.replanPending,
+    isReplanRunning: () => r.replanRunning,
+    getWrappers: () => r.wrappers,
+    getTodoQueue: () => r.todoQueue,
+    getWorkerPool: () => r.workerPool,
+    getWorkerRoles: () => r.workerRoles,
+    getFileCommitCounts: () => r.fileCommitCounts,
+    setFileCommitCounts: (v: Map<string, number>) => { r.fileCommitCounts = v; },
+    getHypothesisGroupAborts: () => r.hypothesisGroupAborts,
+    getHypothesisDeferralTimestamps: () => r.hypothesisDeferralTimestamps,
+    setHypothesisDeferralTimestamps: (v: Map<string, number>) => { r.hypothesisDeferralTimestamps = v; },
+    getAuditor: () => r.auditor,
+    appendSystem: (msg: string) => r.appendSystem(msg),
+    appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
+    promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => r.promptAgent(agent, prompt, agentName, formatExpect, ollamaFormat),
+    emitAgentState: (s: AgentState) => r.emitAgentState(s),
+    readExpectedFiles: (files: string[]) => r.readExpectedFiles(files),
+    sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+    markStatus: (agentId: string, status: any, meta?: any) => r.opts.manager.markStatus(agentId, status, meta),
+    anyAgentThinking: () => r.opts.manager.anyAgentThinking(),
+    logDiag: (entry: any) => { r.opts.logDiag?.(entry); },
+    emit: (ev: SwarmEvent) => r.opts.emit(ev),
+    maybeSettleHypothesisGroup: (todoId: string) => r.maybeSettleHypothesisGroup(todoId),
+    bumpStaleEventCount: () => { r.staleEventCount++; },
+    enqueueReplan: (todoId: string) => r.enqueueReplan(todoId),
+    bumpCommitsPerAgent: (agentId: string) => bumpAgentCounter(r.commitsPerAgent, agentId),
+    addLinesPerAgent: (agentId: string, added: number, removed: number) => {
+      r.linesAddedPerAgent.set(agentId, (r.linesAddedPerAgent.get(agentId) ?? 0) + added);
+      r.linesRemovedPerAgent.set(agentId, (r.linesRemovedPerAgent.get(agentId) ?? 0) + removed);
+    },
+    recordCriterionCommits: (todo: Todo, commitSha: string | undefined) => {
+      if (commitSha) {
+        const criteriaForTodo = todo.criteriaIds && todo.criteriaIds.length > 0
+          ? todo.criteriaIds
+          : todo.criterionId ? [todo.criterionId] : [];
+        for (const criterionId of criteriaForTodo) {
+          const list = r.commitsByCriterion.get(criterionId) ?? [];
+          list.push(commitSha);
+          r.commitsByCriterion.set(criterionId, list);
+        }
+      }
+    },
+    bumpStigmergyFileCounts: (expectedFiles: string[], commitSha: string | undefined) => {
+      if (commitSha) {
+        for (const f of expectedFiles) {
+          r.fileCommitCounts.set(f, (r.fileCommitCounts.get(f) ?? 0) + 1);
+        }
+      }
+    },
+    gitStatus: (clonePath: string) => r.opts.repos.gitStatus(clonePath),
+    commitAll: (clonePath: string, message: string) => r.opts.repos.commitAll(clonePath, message),
+    bumpRejectedAttempts: (agentId: string) => bumpAgentCounter(r.rejectedAttemptsPerAgent, agentId),
+    bumpJsonRepairs: (agentId: string) => bumpAgentCounter(r.jsonRepairsPerAgent, agentId),
+    bumpPromptErrors: (agentId: string) => bumpAgentCounter(r.promptErrorsPerAgent, agentId),
+    getSelfConsistencyK: () => Math.max(1, Math.min(5, r.active?.selfConsistencyK ?? 1)),
+    getPheromoneHeatmap: () => pheromoneHeatmap,
+  } as unknown as WorkerContext;
+}
+
+export function promptContext(r: BlackboardRunnerFields): PromptContext {
+  return {
+    turnsPerAgent: r.turnsPerAgent,
+    promptTokensPerAgent: r.promptTokensPerAgent,
+    responseTokensPerAgent: r.responseTokensPerAgent,
+    attemptsPerAgent: r.attemptsPerAgent,
+    retriesPerAgent: r.retriesPerAgent,
+    latenciesPerAgent: r.latenciesPerAgent,
+    recentLatencySamples: r.recentLatencySamples,
+    errorTracker: r.errorTracker,
+    activeAborts: r.activeAborts,
+    failoverState: r.failoverState,
+    localOllamaTags: r.localOllamaTags,
+    getActive: () => r.active,
+    isStopping: () => r.stopping,
+    setStopping: (v: boolean) => { r.stopping = v; },
+    getTerminationReason: () => r.terminationReason,
+    setTerminationReason: (v: string | undefined) => { r.terminationReason = v; },
+    getConsecutiveLoopDetections: () => r.consecutiveLoopDetections,
+    setConsecutiveLoopDetections: (v: number) => { r.consecutiveLoopDetections = v; },
+    getLastLoopWarningAtTurn: () => r.lastLoopWarningAtTurn,
+    setLastLoopWarningAtTurn: (v: number) => { r.lastLoopWarningAtTurn = v; },
+    manager: r.opts.manager,
+    emit: r.opts.emit,
+    logDiag: r.opts.logDiag,
+    getOllamaBaseUrl: () => r.opts.ollamaBaseUrl,
+    appendSystem: (msg: string, summary?: TranscriptEntrySummary) => r.appendSystem(msg, summary),
+    emitAgentState: (s: AgentState) => r.emitAgentState(s),
+    extractText: (res: unknown) => r.extractText(res),
+    maxTrackedErrors: r.maxTrackedErrors,
+  } as unknown as PromptContext;
+}
+
+export function capContext(r: BlackboardRunnerFields): CapContext {
+  return {
+    getPaused: () => r.paused,
+    setPaused: (v: boolean) => { r.paused = v; },
+    getPauseStartedAt: () => r.pauseStartedAt,
+    setPauseStartedAt: (v: number | undefined) => { r.pauseStartedAt = v; },
+    getTotalPausedMs: () => r.totalPausedMs,
+    setTotalPausedMs: (v: number) => { r.totalPausedMs = v; },
+    getPauseProbeTimer: () => r.pauseProbeTimer,
+    setPauseProbeTimer: (v: NodeJS.Timeout | undefined) => { r.pauseProbeTimer = v; },
+    getPauseProbeAttempt: () => r.pauseProbeAttempt,
+    setPauseProbeAttempt: (v: number) => { r.pauseProbeAttempt = v; },
+    getCapWatchdog: () => r.capWatchdog,
+    setCapWatchdog: (v: NodeJS.Timeout | undefined) => { r.capWatchdog = v; },
+    getMemoryPaused: () => r.memoryPaused,
+    setMemoryPaused: (v: boolean) => { r.memoryPaused = v; },
+    getLastMemoryPressureLevel: () => r.lastMemoryPressureLevel,
+    setLastMemoryPressureLevel: (v: "ok" | "throttle" | "pause") => { r.lastMemoryPressureLevel = v; },
+    getSubscriberPaused: () => r.subscriberPaused,
+    setSubscriberPaused: (v: boolean) => { r.subscriberPaused = v; },
+    getStopping: () => r.stopping,
+    setStopping: (v: boolean) => { r.stopping = v; },
+    getTickAccumulator: () => r.tickAccumulator,
+    setTickAccumulator: (v: TickAccumulator | undefined) => { r.tickAccumulator = v; },
+    getRunStartedAt: () => r.runStartedAt,
+    getTokenBaselineForRun: () => r.tokenBaselineForRun,
+    getTerminationReason: () => r.terminationReason,
+    setTerminationReason: (v: string | undefined) => { r.terminationReason = v; },
+    getActiveAborts: () => r.activeAborts,
+    getActive: () => r.active,
+    boardCounts: () => r.boardCounts(),
+    getPlanner: () => r.planner,
+    isStopping: () => r.stopping,
+    appendSystem: (msg: string, summary?: TranscriptEntrySummary) => r.appendSystem(msg, summary),
+    setPhase: (phase: SwarmPhase) => r.setPhase(phase),
+    v2ObserverApply: (event: any) => r.v2Observer.apply(event),
+    recordError: (err: unknown, opts?: { causeHint?: ErrorCategory; statusCode?: number }) => r.recordError(err, opts),
+  } as unknown as CapContext;
+}
+
+export function replanContext(r: BlackboardRunnerFields): ReplanContext {
+  return {
+    getReplanPending: () => r.replanPending,
+    getReplanRunning: () => r.replanRunning,
+    setReplanRunning: (v: boolean) => { r.replanRunning = v; },
+    getPlanner: () => r.planner,
+    isStopping: () => r.stopping,
+    boardListTodos: () => r.boardListTodos(),
+    boardGetTodo: (id: string) => r.boardGetTodo(id),
+    readExpectedFiles: (files: string[]) => r.readExpectedFiles(files),
+    wrappers: r.wrappers,
+    appendSystem: (msg: string) => r.appendSystem(msg),
+    appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
+    promptPlannerSafely: (agent: Agent, prompt: string, name: "swarm" | "swarm-read" | "swarm-builder", format?: "json" | Record<string, unknown>) => r.promptPlannerSafely(agent, prompt, name, format),
+    checkAndApplyCaps: () => r.checkAndApplyCaps(),
+  } as unknown as ReplanContext;
+}
+
+export function auditorContext(r: BlackboardRunnerFields): AuditorContext {
+  return {
+    getContract: () => r.contract,
+    getAuditInvocations: () => r.auditInvocations,
+    incrementAuditInvocations: () => { r.auditInvocations++; },
+    getMaxAuditInvocations: () => r.maxAuditInvocations,
+    getAuditor: () => r.auditor,
+    getStopping: () => r.stopping,
+    boardListTodos: () => r.boardListTodos(),
+    getFindingsList: () => r.findings.list(),
+    readExpectedFiles: (paths: string[]) => r.readExpectedFiles(paths),
+    getActive: () => r.active,
+    cloneContract: (c: ExitContract) => r.cloneContract(c),
+    emitContractUpdated: (contract: ExitContract) => { r.opts.emit({ type: "contract_updated", contract }); },
+    appendSystem: (msg: string) => r.appendSystem(msg),
+    appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
+    promptPlannerSafely: (agent: Agent, prompt: string, name: "swarm" | "swarm-read" | "swarm-builder", format?: "json" | Record<string, unknown>) => r.promptPlannerSafely(agent, prompt, name, format),
+    wrappers: r.wrappers,
+    allCriteriaResolvedSnapshot: () => r.allCriteriaResolvedSnapshot(),
+    v2ObserverApply: (event: any) => r.v2Observer.apply(event),
+    getWorkTranscript: () => r.transcript,
+  } as unknown as AuditorContext;
+}
+
+export function adaptiveWatchdogCtx(r: BlackboardRunnerFields): AdaptiveWatchdogContext {
+  return {
+    getAdaptiveWatchdog: () => r.adaptiveWatchdog,
+    setAdaptiveWatchdog: (v: NodeJS.Timeout | undefined) => { r.adaptiveWatchdog = v; },
+    getAdaptiveHysteresis: () => r.adaptiveHysteresis,
+    setAdaptiveHysteresis: (v: { upPolls: number; downPolls: number }) => { r.adaptiveHysteresis = v; },
+    getAdaptiveScaleInFlight: () => r.adaptiveScaleInFlight,
+    setAdaptiveScaleInFlight: (v: boolean) => { r.adaptiveScaleInFlight = v; },
+    getActive: () => r.active,
+    getManager: () => r.opts.manager,
+    getTodoQueue: () => r.todoQueue,
+    isStopping: () => r.stopping,
+    appendSystem: (msg: string) => r.appendSystem(msg),
+  } as unknown as AdaptiveWatchdogContext;
+}

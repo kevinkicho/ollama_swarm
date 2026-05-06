@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import {
   DEEP_OW_MIN_AGENTS,
   TARGET_WORKERS_PER_MID_LEAD,
+  computeDeepTopology,
+} from "./OrchestratorWorkerDeepRunner.js";
+import {
   buildMidLeadPlanPrompt,
   buildMidLeadSynthesisPrompt,
   buildTopPlanPrompt,
   buildTopSynthesisPrompt,
-  computeDeepTopology,
-} from "./OrchestratorWorkerDeepRunner.js";
+} from "./orchestratorWorkerDeepPromptHelpers.js";
 import type { TranscriptEntry } from "../types.js";
 
 describe("computeDeepTopology — sizing rules", () => {
@@ -242,6 +244,8 @@ import { fileURLToPath as _fileURLToPath } from "node:url";
 
 const _here = _dirname(_fileURLToPath(import.meta.url));
 const DEEP_SRC = _read(_join(_here, "OrchestratorWorkerDeepRunner.ts"), "utf8");
+const DEEP_PROMPT_SRC = _read(_join(_here, "orchestratorWorkerDeepPromptHelpers.ts"), "utf8");
+const DEEP_ALL = [DEEP_SRC, DEEP_PROMPT_SRC].join("\n\n");
 
 describe("OrchestratorWorkerDeepRunner — directive plumbing (structural, post Phase A)", () => {
   it("seed uses readDirective + buildDirectiveBlock helpers", () => {
@@ -251,7 +255,7 @@ describe("OrchestratorWorkerDeepRunner — directive plumbing (structural, post 
 
   it("loop threads cfg.userDirective into top plan/synthesis + mid-lead subtree", () => {
     assert.match(
-      DEEP_SRC,
+      DEEP_ALL,
       /buildTopPlanPrompt\(r, cfg\.rounds, liveMidLeads\.map\(\(m\) => m\.index\), \[\.\.\.this\.transcript\], cfg\.userDirective\)/,
     );
     assert.match(
@@ -259,14 +263,14 @@ describe("OrchestratorWorkerDeepRunner — directive plumbing (structural, post 
       /this\.runMidLeadSubtree\(midLead, pool, a, r, cfg\.rounds, seedSnapshot, cfg\.userDirective\)/,
     );
     assert.match(
-      DEEP_SRC,
+      DEEP_ALL,
       /buildTopSynthesisPrompt\(r, cfg\.rounds, \[\.\.\.this\.transcript\], cfg\.userDirective\)/,
     );
   });
 
   it("runMidLeadSubtree threads userDirective to mid-lead plan + worker + mid-lead synth", () => {
     assert.match(
-      DEEP_SRC,
+      DEEP_ALL,
       /buildMidLeadPlanPrompt\([\s\S]{0,300}?userDirective,?\s*\)/,
     );
     assert.match(
@@ -274,14 +278,14 @@ describe("OrchestratorWorkerDeepRunner — directive plumbing (structural, post 
       /this\.runWorkerForMidLead\(w, midLead\.index, round, totalRounds, a\.subtask, seedSnapshot, userDirective\)/,
     );
     assert.match(
-      DEEP_SRC,
+      DEEP_ALL,
       /buildMidLeadSynthesisPrompt\(midLead\.index, round, totalRounds, coarseAssignment\.subtask, \[\.\.\.this\.transcript\], userDirective\)/,
     );
   });
 
   it("runWorkerForMidLead threads userDirective into buildWorkerPrompt", () => {
     assert.match(
-      DEEP_SRC,
+      DEEP_ALL,
       /buildWorkerPrompt\(worker\.index, round, totalRounds, subtask, visibleSeed, userDirective\)/,
     );
   });

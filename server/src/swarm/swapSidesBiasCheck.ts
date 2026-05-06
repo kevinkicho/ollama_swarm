@@ -23,7 +23,7 @@
 //     decision logic.
 
 import type { TranscriptEntry } from "../types.js";
-import type { ParsedDebateVerdict } from "./DebateJudgeRunner.js";
+import type { ParsedDebateVerdict } from "./debatePromptHelpers.js";
 
 /** Transform debate transcript so PRO ↔ CON labels are swapped in
  *  every entry's text. Pure; returns a new array; doesn't mutate

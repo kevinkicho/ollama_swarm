@@ -64,8 +64,9 @@ actual response after the cluster`;
 
   it("collapses whitespace gaps from removed markers", () => {
     const r = extractToolCallMarkers("para1\n\n\n<list>x</list>\n\n\npara2");
-    assert.match(r.finalText, /para1\n\npara2/);
-    assert.doesNotMatch(r.finalText, /\n{3,}/);
+    // After the \n{2,} → \n collapse fix, triple-newlines collapse to single.
+    assert.match(r.finalText, /para1\npara2/);
+    assert.doesNotMatch(r.finalText, /\n{2,}/);
   });
 });
 

@@ -100,6 +100,16 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
         windowSimilarities: ev.windowSimilarities,
       });
       break;
+    case "model_shift":
+      s.appendEntry({
+        id: `model-shift-${ev.agentId}-${Date.now()}`,
+        role: "system",
+        agentId: ev.agentId,
+        agentIndex: ev.agentIndex,
+        text: `[${ev.agentId}] failover: ${ev.fromModel} → ${ev.toModel} (${ev.reason})`,
+        ts: Date.now(),
+      });
+      break;
     case "clone_state":
       s.setCloneState({
         alreadyPresent: ev.alreadyPresent,

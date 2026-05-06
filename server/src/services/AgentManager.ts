@@ -189,6 +189,11 @@ export class AgentManager {
   // Keyed by agent.id; survives process exit so the REST snapshot still
   // shows the terminal status until killAll() clears.
   private readonly agentStates = new Map<string, AgentState>();
+  // Kill guard: once killAll() completes, any stale setAgentState calls
+  // that race with the clear (e.g., a prompt catch-block running on a
+  // microtask after the kill) are silently dropped instead of re-adding
+  // an already-dead agent to the map. Reset by spawnAgent / spawnAgentNoOpencode.
+  private killed = false;
   // Unit 38: persistent PID tracking for orphan reclamation across
   // dev-server restarts. When present, AgentManager appends a record
   // per successful spawn and removes it on clean exit / killAll. When
@@ -297,6 +302,7 @@ export class AgentManager {
   // stays consistent with the WS event stream. Every callsite that
   // used to call `this.onState(s)` directly now calls this.
   private setAgentState(s: AgentState): void {
+    if (this.killed) return;
     this.agentStates.set(s.id, s);
     this.onState(s);
   }
@@ -319,7 +325,9 @@ export class AgentManager {
       port,
       status: "ready",
       sessionId: session.id,
+      model: opts.model,
     };
+    this.killed = false;
     this.setAgentState(stateBase);
     const agent: Agent = {
       id,
@@ -375,7 +383,17 @@ export class AgentManager {
   markStatus(id: string, status: AgentState["status"], extra: Partial<AgentState> = {}): void {
     const a = this.agents.get(id);
     if (!a) return;
-    this.setAgentState({ id, index: a.index, port: a.port, sessionId: a.sessionId, status, ...extra });
+    this.setAgentState({ id, index: a.index, port: a.port, sessionId: a.sessionId, model: a.model, status, ...extra });
+  }
+
+  updateAgentModel(id: string, model: string): void {
+    const a = this.agents.get(id);
+    if (!a) return;
+    a.model = model;
+    const existing = this.agentStates.get(id);
+    if (existing) {
+      this.setAgentState({ ...existing, model });
+    }
   }
 
   // thinkingSince REST-snapshot fix (bundled with Unit 56b/57 cleanup
@@ -388,6 +406,16 @@ export class AgentManager {
   // route their direct emits through the same single source of truth
   // setAgentState writes to (mirror + broadcast in lockstep).
   recordAgentState(s: AgentState): void {
+    // Auto-fill model from the Agent object if missing. Most runner
+    // callsites build AgentState without model; this ensures the
+    // agentStates mirror always carries the current model.
+    if (s.model === undefined) {
+      const a = this.agents.get(s.id);
+      if (a?.model) {
+        this.setAgentState({ ...s, model: a.model });
+        return;
+      }
+    }
     this.setAgentState(s);
   }
 
@@ -558,11 +586,13 @@ export class AgentManager {
       index: a.index,
       port: a.port,
       sessionId: a.sessionId,
+      model: a.model,
       status: "killed",
     });
   }
 
   async killAll(): Promise<KillAllResult> {
+    this.killed = true;
     for (const ctrl of this.eventAborts.values()) ctrl.abort();
     this.eventAborts.clear();
     let escaped = 0;
@@ -642,7 +672,7 @@ export class AgentManager {
       }
       // E3 Phase 5: no port allocator — port is sentinel 0.
       this.lastActivity.delete(a.sessionId);
-      this.setAgentState({ id: a.id, index: a.index, port: a.port, sessionId: a.sessionId, status: "stopped" });
+      this.setAgentState({ id: a.id, index: a.index, port: a.port, sessionId: a.sessionId, model: a.model, status: "stopped" });
     });
     const total = tasks.length;
     await Promise.allSettled(tasks);

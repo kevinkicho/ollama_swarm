@@ -3,7 +3,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { stripAnnotationEnvelope } from "./StigmergyRunner.js";
+import { stripAnnotationEnvelope } from "./stigmergyPromptHelpers.js";
 
 describe("stripAnnotationEnvelope", () => {
   it("returns text unchanged when there's no JSON envelope", () => {

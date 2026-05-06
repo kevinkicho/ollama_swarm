@@ -60,12 +60,18 @@ export async function promptWithFailoverAuto(
     // wrapper uses ephemeral state.
     enableHealthSwap: false,
   };
+  const combinedOnFailover: typeof onFailover = opts.manager
+    ? (info) => {
+        opts.manager!.updateAgentModel(agent.id, info.toModel);
+        onFailover?.(info);
+      }
+    : onFailover;
   return promptWithFailover(
     agent,
     promptText,
     opts,
     { modelHealth: new Map() },
     cfg,
-    onFailover,
+    combinedOnFailover,
   );
 }

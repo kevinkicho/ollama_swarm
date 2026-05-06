@@ -256,6 +256,8 @@ import { fileURLToPath as _fileURLToPath } from "node:url";
 
 const _here = _dirname(_fileURLToPath(import.meta.url));
 const OW_SRC = _read(_join(_here, "OrchestratorWorkerRunner.ts"), "utf8");
+const OW_PROMPT_SRC = _read(_join(_here, "orchestratorWorkerPromptHelpers.ts"), "utf8");
+const OW_ALL = [OW_SRC, OW_PROMPT_SRC].join("\n\n");
 
 describe("OrchestratorWorkerRunner — directive plumbing (structural, post Phase A)", () => {
   it("seed uses readDirective + buildDirectiveBlock helpers", () => {
@@ -265,7 +267,7 @@ describe("OrchestratorWorkerRunner — directive plumbing (structural, post Phas
 
   it("loop threads cfg.userDirective into buildLeadPlanPrompt + runWorkerTurn + buildLeadSynthesisPrompt", () => {
     assert.match(
-      OW_SRC,
+      OW_ALL,
       /buildLeadPlanPrompt\(r, cfg\.rounds, workers\.map\(\(w\) => w\.index\), \[\.\.\.this\.transcript\], cfg\.userDirective\)/,
     );
     assert.match(
@@ -273,7 +275,7 @@ describe("OrchestratorWorkerRunner — directive plumbing (structural, post Phas
       /this\.runWorkerTurn\(\s*w,\s*r,\s*cfg\.rounds,\s*a\.subtask,\s*seedSnapshot,\s*cfg\.userDirective,\s*a\.successCriteria,?\s*\)/,
     );
     assert.match(
-      OW_SRC,
+      OW_ALL,
       /buildLeadSynthesisPrompt\(r, cfg\.rounds, \[\.\.\.this\.transcript\], cfg\.userDirective\)/,
     );
   });
@@ -283,7 +285,7 @@ describe("OrchestratorWorkerRunner — directive plumbing (structural, post Phas
     // (successCriteria) that the lead's plan can populate. The
     // wire-through must also pass it from runWorkerTurn's signature.
     assert.match(
-      OW_SRC,
+      OW_ALL,
       /buildWorkerPrompt\(\s*agent\.index,\s*round,\s*totalRounds,\s*subtask,\s*visibleSeed,\s*userDirective,\s*successCriteria,?\s*\)/,
     );
   });
@@ -292,12 +294,12 @@ describe("OrchestratorWorkerRunner — directive plumbing (structural, post Phas
     // The lead's plan JSON can include successCriteria per assignment;
     // parsePlan extracts it; the runner threads it to buildWorkerPrompt.
     assert.match(
-      OW_SRC,
+      OW_ALL,
       /successCriteria\?:\s*string/,
       "Assignment interface must declare optional successCriteria",
     );
     assert.match(
-      OW_SRC,
+      OW_ALL,
       /successCriteria\s*\}\s*:\s*\{\s*\}/,
       "parsePlan must conditionally include successCriteria in assignments",
     );
@@ -305,17 +307,17 @@ describe("OrchestratorWorkerRunner — directive plumbing (structural, post Phas
 
   it("(T175) buildLeadPlanPrompt instructs the lead to emit successCriteria", () => {
     assert.match(
-      OW_SRC,
+      OW_ALL,
       /successCriteria/,
       "lead's plan prompt must reference successCriteria",
     );
     assert.match(
-      OW_SRC,
+      OW_ALL,
       /SUCCESS CRITERIA/,
       "worker prompt must surface the success criteria block",
     );
     assert.match(
-      OW_SRC,
+      OW_ALL,
       /SELF-EVAL: PASS/,
       "worker prompt must require a self-eval line under the rubric",
     );

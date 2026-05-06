@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { buildProposerPrompt, buildAggregatorPrompt, pickSelfCritiqueAgent } from "./MoaRunner.js";
+import { buildProposerPrompt, buildAggregatorPrompt } from "./moaPromptHelpers.js";
+import { pickSelfCritiqueAgent } from "./moaPromptHelpers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MOA_RUNNER_SRC = readFileSync(join(__dirname, "MoaRunner.ts"), "utf8");
@@ -455,15 +456,15 @@ test("MoaRunner.loop — uses thresholdForDeliverableShape for convergence (#5)"
 // function so we can test directly.
 test("pickSelfCritiqueAgent — prefers loser aggregator when K≥2 (#2)", () => {
   const winner = { id: "agg-2", index: 2, port: 0, sessionId: "s2" } as unknown as Parameters<
-    typeof import("./MoaRunner.js").pickSelfCritiqueAgent
+    typeof import("./moaPromptHelpers.js").pickSelfCritiqueAgent
   >[0]["winningAgg"];
   const aggregators = [
     { id: "agg-1", index: 1, port: 0, sessionId: "s1" },
     { id: "agg-2", index: 2, port: 0, sessionId: "s2" },
     { id: "agg-3", index: 3, port: 0, sessionId: "s3" },
-  ] as unknown as Parameters<typeof import("./MoaRunner.js").pickSelfCritiqueAgent>[0]["aggregators"];
+  ] as unknown as Parameters<typeof import("./moaPromptHelpers.js").pickSelfCritiqueAgent>[0]["aggregators"];
   const proposers = [{ id: "p1", index: 0, port: 0, sessionId: "p1s" }] as unknown as Parameters<
-    typeof import("./MoaRunner.js").pickSelfCritiqueAgent
+    typeof import("./moaPromptHelpers.js").pickSelfCritiqueAgent
   >[0]["proposers"];
   const picked = pickSelfCritiqueAgent({ winningAgg: winner, aggregators, proposers, validSyntheses: [] });
   assert.notEqual(picked.id, "agg-2", "must NOT pick the winner");
@@ -472,22 +473,22 @@ test("pickSelfCritiqueAgent — prefers loser aggregator when K≥2 (#2)", () =>
 
 test("pickSelfCritiqueAgent — falls back to challenger proposer when K=1 (#2)", () => {
   const winner = { id: "agg-1", index: 1, port: 0, sessionId: "s1" } as unknown as Parameters<
-    typeof import("./MoaRunner.js").pickSelfCritiqueAgent
+    typeof import("./moaPromptHelpers.js").pickSelfCritiqueAgent
   >[0]["winningAgg"];
   const aggregators = [winner] as unknown as Parameters<
-    typeof import("./MoaRunner.js").pickSelfCritiqueAgent
+    typeof import("./moaPromptHelpers.js").pickSelfCritiqueAgent
   >[0]["aggregators"];
   const proposers = [
     { id: "p1", index: 1, port: 0, sessionId: "p1s" },
     { id: "p2-challenger", index: 2, port: 0, sessionId: "p2s" },
-  ] as unknown as Parameters<typeof import("./MoaRunner.js").pickSelfCritiqueAgent>[0]["proposers"];
+  ] as unknown as Parameters<typeof import("./moaPromptHelpers.js").pickSelfCritiqueAgent>[0]["proposers"];
   const picked = pickSelfCritiqueAgent({ winningAgg: winner, aggregators, proposers, validSyntheses: [] });
   assert.equal(picked.id, "p2-challenger", "must pick the LAST proposer (the challenger)");
 });
 
 test("pickSelfCritiqueAgent — falls back to winning aggregator when nothing else available", () => {
   const winner = { id: "agg-1", index: 1, port: 0, sessionId: "s1" } as unknown as Parameters<
-    typeof import("./MoaRunner.js").pickSelfCritiqueAgent
+    typeof import("./moaPromptHelpers.js").pickSelfCritiqueAgent
   >[0]["winningAgg"];
   const picked = pickSelfCritiqueAgent({
     winningAgg: winner,

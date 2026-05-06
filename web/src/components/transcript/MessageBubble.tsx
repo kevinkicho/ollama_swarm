@@ -182,6 +182,32 @@ function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
   // response and is retrying) — they're not real errors but they LOOK
   // like them in the default neutral system bubble. Amber chip signals
   // "transient, in recovery" so users don't read them as fatal.
+  // W17: failover messages get a distinct violet/amber style so provider
+  // shifts are immediately visible in the transcript.
+  const isFailover = entry.text.includes("failover:");
+  if (isFailover) {
+    const match = entry.text.match(/\[([^\]]+)\]\s*failover:\s*(\S+)\s*→\s*(\S+)\s*\(([^)]+)\)/);
+    const agentId = match?.[1] ?? entry.agentId ?? "agent";
+    const from = match?.[2] ?? "?";
+    const to = match?.[3] ?? "?";
+    const reason = match?.[4] ?? "";
+    return (
+      <div className="border-l-2 border-violet-500/60 pl-3 py-1 text-xs font-mono">
+        <div className="text-violet-400/80 mb-0.5">
+          <span className="inline-block px-1 py-0 text-[9px] uppercase tracking-wider rounded bg-violet-900/40 mr-1.5">
+            failover
+          </span>
+          {agentId} · {ts}
+        </div>
+        <div className="text-amber-200/70">
+          {from} <span className="text-violet-400">→</span> {to}
+        </div>
+        {reason ? (
+          <div className="text-ink-500 mt-0.5">{reason}</div>
+        ) : null}
+      </div>
+    );
+  }
   const isRecoveryNotice =
     entry.text.includes("did not parse") ||
     entry.text.includes("Issuing repair prompt") ||
@@ -720,7 +746,6 @@ function AgentsReadyBubble({
               <tr className="text-ink-500">
                 <th className="text-left px-1 py-0.5">id</th>
                 <th className="text-left px-1 py-0.5">role</th>
-                <th className="text-left px-1 py-0.5">port</th>
                 <th className="text-left px-1 py-0.5">model</th>
                 <th className="text-left px-1 py-0.5">warmup</th>
                 <th className="text-left px-1 py-0.5">session</th>
@@ -731,7 +756,6 @@ function AgentsReadyBubble({
                 <tr key={a.id} className="border-t border-ink-800">
                   <td className="px-1 py-0.5 text-ink-300">{a.id}</td>
                   <td className="px-1 py-0.5 text-emerald-300">{a.role}</td>
-                  <td className="px-1 py-0.5 text-ink-300">{a.port}</td>
                   <td className="px-1 py-0.5 text-ink-300">{a.model}</td>
                   <td className={`px-1 py-0.5 ${a.warmupMs && a.warmupMs > 30000 ? "text-amber-300" : "text-ink-300"}`}>
                     {a.warmupMs !== undefined ? `${(a.warmupMs / 1000).toFixed(1)}s` : "—"}

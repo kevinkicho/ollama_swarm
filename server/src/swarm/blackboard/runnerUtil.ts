@@ -1,0 +1,231 @@
+import path from "node:path";
+import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
+
+import type { Agent } from "../../services/AgentManager.js";
+import type { AgentState, SwarmPhase, TranscriptEntry, TranscriptEntrySummary } from "../../types.js";
+import { config as appConfig } from "../../config.js";
+import { detectSemanticLoop } from "../semanticLoopDetector.js";
+import { buildCrashSnapshot } from "./crashSnapshot.js";
+import {
+  buildWireSnapshot,
+  v2QueueCountsToWireCounts,
+  v2QueueTodoToWireTodo,
+} from "./boardWireCompat.js";
+import { resolveSafe } from "./resolveSafe.js";
+import { writeFileAtomic } from "./writeFileAtomic.js";
+import { summarizeAgentResponse } from "./transcriptSummary.js";
+import { stripAgentText } from "../../../../shared/src/stripAgentText.js";
+import type { RunConfig } from "../SwarmRunner.js";
+import type { TodoQueue } from "./TodoQueue.js";
+import type { FindingsLog } from "./FindingsLog.js";
+
+export interface RunnerUtilContext {
+  active?: RunConfig;
+  phase: SwarmPhase;
+  round: number;
+  runStartedAt?: number;
+  transcript: TranscriptEntry[];
+  todoQueue: TodoQueue;
+  findings: FindingsLog;
+  consecutiveLoopDetections: number;
+  lastLoopWarningAtTurn: number;
+  activeAborts: Set<AbortController>;
+  stopping: boolean;
+  terminationReason?: string;
+  loopDetectionsToHalt: number;
+  getAmendments?: () => Array<{ ts: number; text: string }>;
+  scheduleStateWrite(): void;
+  appendSystem(text: string, summary?: TranscriptEntrySummary): void;
+  emit(e: { type: string; [key: string]: unknown }): void;
+}
+
+export async function writeCrashSnapshot(
+  ctx: RunnerUtilContext,
+  err: unknown,
+): Promise<void> {
+  const clone = ctx.active?.localPath;
+  if (!clone) {
+    ctx.appendSystem("Could not write crash snapshot: no clone path set.");
+    return;
+  }
+  const snapshot = buildCrashSnapshot({
+    error: err,
+    phase: ctx.phase,
+    runStartedAt: ctx.runStartedAt,
+    crashedAt: Date.now(),
+    config: ctx.active,
+    board: boardSnapshot(ctx),
+    transcript: ctx.transcript,
+  });
+  const outPath = path.join(clone, "board-final.json");
+  try {
+    await writeFileAtomic(outPath, JSON.stringify(snapshot, null, 2));
+    ctx.appendSystem(`Wrote crash snapshot to ${outPath}`);
+  } catch (writeErr) {
+    const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
+    ctx.appendSystem(`Failed to write crash snapshot (${msg})`);
+  }
+}
+
+export function boardCounts(ctx: RunnerUtilContext) {
+  return v2QueueCountsToWireCounts(ctx.todoQueue.counts());
+}
+
+export function boardListTodos(ctx: RunnerUtilContext) {
+  return ctx.todoQueue.list().map(v2QueueTodoToWireTodo);
+}
+
+export function boardSnapshot(ctx: RunnerUtilContext) {
+  return buildWireSnapshot(ctx.todoQueue.list(), ctx.findings.list());
+}
+
+export function boardGetTodo(ctx: RunnerUtilContext, id: string) {
+  const t = ctx.todoQueue.get(id);
+  return t ? v2QueueTodoToWireTodo(t) : undefined;
+}
+
+export async function readExpectedFiles(
+  clonePath: string | undefined,
+  files: string[],
+): Promise<Record<string, string | null>> {
+  const out: Record<string, string | null> = {};
+  for (const f of files) {
+    const abs = await resolveSafePath(clonePath, f);
+    try {
+      out[f] = await fs.readFile(abs, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        out[f] = null;
+      } else {
+        throw err;
+      }
+    }
+  }
+  return out;
+}
+
+export async function resolveSafePath(
+  clonePath: string | undefined,
+  relPath: string,
+): Promise<string> {
+  if (!clonePath) throw new Error("no active clone path");
+  return resolveSafe(clonePath, relPath);
+}
+
+export function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+export function directiveWithAmendments(ctx: RunnerUtilContext): string | undefined {
+  const base = ctx.active?.userDirective?.trim() ?? "";
+  const amendments = ctx.getAmendments?.() ?? [];
+  if (amendments.length === 0) {
+    return base.length > 0 ? base : undefined;
+  }
+  const nudges = amendments
+    .map((a, i) => {
+      const stamp = new Date(a.ts).toISOString();
+      return `[user nudge #${i + 1} @ ${stamp}] ${a.text}`;
+    })
+    .join("\n");
+  const header =
+    "MID-RUN USER NUDGES (treat as additions to the directive — incorporate into the next contract):";
+  return base.length > 0
+    ? `${base}\n\n${header}\n${nudges}`
+    : `${header}\n${nudges}`;
+}
+
+export function appendAgent(
+  ctx: RunnerUtilContext,
+  agent: Agent,
+  text: string,
+): void {
+  const { finalText, thoughts, toolCalls } = stripAgentText(text);
+  const summary = summarizeAgentResponse(finalText);
+  const entry: TranscriptEntry = {
+    id: randomUUID(),
+    role: "agent",
+    agentId: agent.id,
+    agentIndex: agent.index,
+    text: finalText || "(empty response)",
+    ts: Date.now(),
+    summary,
+    ...(thoughts.length > 0 ? { thoughts } : {}),
+    ...(toolCalls.length > 0 ? { toolCalls } : {}),
+  };
+  ctx.transcript.push(entry);
+  ctx.emit({ type: "transcript_append", entry });
+  if (appConfig.SWARM_LOOP_DETECTION) {
+    maybeEmitLoopWarning(ctx);
+  }
+}
+
+export function maybeEmitLoopWarning(ctx: RunnerUtilContext): void {
+  const agentTexts = ctx.transcript
+    .filter((e) => e.role === "agent" && typeof e.text === "string")
+    .map((e) => e.text as string);
+  const verdict = detectSemanticLoop({ recentTurns: agentTexts });
+  if (!verdict.inLoop) {
+    if (verdict.windowSize >= 4) ctx.consecutiveLoopDetections = 0;
+    return;
+  }
+  if (
+    ctx.lastLoopWarningAtTurn >= 0 &&
+    agentTexts.length - ctx.lastLoopWarningAtTurn < verdict.windowSize
+  ) {
+    return;
+  }
+  ctx.lastLoopWarningAtTurn = agentTexts.length;
+  ctx.consecutiveLoopDetections += 1;
+  const haltCap = ctx.loopDetectionsToHalt;
+  if (ctx.consecutiveLoopDetections >= haltCap) {
+    const reason = `loop-detected (${haltCap} consecutive detections — last: ${verdict.reason})`;
+    ctx.terminationReason = reason;
+    ctx.stopping = true;
+    ctx.appendSystem(
+      `[loop-detector] HALT: ${reason}. Stopping the run before more budget burns on repetition.`,
+    );
+    for (const ctrl of ctx.activeAborts) {
+      try { ctrl.abort(new Error("loop-detected")); } catch { /* */ }
+    }
+    return;
+  }
+  ctx.appendSystem(
+    `[loop-detector] ${verdict.reason} — consider changing tactic, splitting the todo, or wrapping up. (${ctx.consecutiveLoopDetections}/${haltCap} consecutive detections; halts at ${haltCap})`,
+  );
+}
+
+export function setPhase(
+  ctx: RunnerUtilContext,
+  phase: SwarmPhase,
+): void {
+  ctx.phase = phase;
+  ctx.emit({ type: "swarm_state", phase, round: ctx.round });
+  ctx.scheduleStateWrite();
+}
+
+export function emitAgentState(
+  manager: { recordAgentState(s: AgentState): void },
+  s: AgentState,
+): void {
+  manager.recordAgentState(s);
+}
+
+export function extractText(res: unknown): string | undefined {
+  const any = res as {
+    data?: {
+      parts?: Array<{ type?: string; text?: string }>;
+      info?: { parts?: Array<{ type?: string; text?: string }> };
+      text?: string;
+    };
+  };
+  const parts = any?.data?.parts ?? any?.data?.info?.parts;
+  if (Array.isArray(parts)) {
+    const texts = parts
+      .filter((p) => p?.type === "text" && typeof p.text === "string")
+      .map((p) => p.text as string);
+    if (texts.length) return texts.join("\n");
+  }
+  return any?.data?.text;
+}

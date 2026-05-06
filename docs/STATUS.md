@@ -16,21 +16,23 @@
 
 ## What ships today
 
-**10 swarm presets** (one write-capable, nine discussion) + 1 baseline. Every preset honors the user directive except `stigmergy` (exploration is repo-driven):
+**10 swarm presets** (one write-capable, nine discussion) + 1 baseline. Every preset honors the user directive except `stigmergy` (exploration is repo-driven). **Phase 1 + Phase 2 (2026-05-04)** added opt-in write capability for all discussion presets:
 
 | Preset | Write-capable? | Honors directive? | Notes |
 |---|---|---|---|
-| `blackboard` | ✅ | ✅ | planner + workers + auditor; tier ratchet; Aider-style hunks; pre-commit verify gate (`verifyCommand`) |
-| `round-robin` | ❌ | ✅ | structured deliberation — turns rotate Critic/Synthesizer/Gap-finder/Builder dispositions; lead synthesizes a directive answer |
-| `role-diff` | ❌ | ✅ | with directive: Researcher/Designer/Implementer/Tester/Reviewer/Documenter/Devil's-advocate → `deliverable.md`. Without: 7-lens audit |
-| `council` | ❌ | ✅ | drafters commit to `### MY POSITION` per round, must KEEP/CHANGE in R2+; synthesis preserves dissent via Minority report |
-| `orchestrator-worker` (flat) | ❌ | ✅ | lead decomposes directive; workers report directive-relevant findings |
-| `orchestrator-worker-deep` | ❌ | ✅ | 3-tier (orchestrator → mid-leads → workers) for ≥4 agents |
-| `debate-judge` | ❌ (default) | ✅ | exactly 3 agents Pro/Con/Judge; judge auto-derives proposition from directive; `executeNextAction: true` opts into a write phase |
-| `map-reduce` | ❌ | ✅ | reducer + N mappers; with directive, mappers find directive-relevant evidence in their slice |
-| `stigmergy` | ❌ | ❌ | pheromone-table + per-file annotations; structured-card bubbles (#303) |
-| `moa` | ❌ | ✅ | Mixture of Agents — N proposers (peer-hidden, parallel) + aggregator synthesizes; heterogeneous models via `moaProposerModel` / `moaAggregatorModel` |
-| `baseline` | ✅ | ✅ | single agent / single prompt / single apply step — eval-harness path, not in the form's normal preset list |
+| `blackboard` | ✅ (native) | ✅ | planner + workers + auditor; tier ratchet; Aider-style hunks; pre-commit verify gate (`verifyCommand`) |
+| `round-robin` | ⚡ (opt-in) | ✅ | Phase 1: `cfg.writeMode: "single"` → synthesizer produces hunks. Phase 2: `cfg.writeMode: "multi"` → vote reconciliation |
+| `role-diff` | ⚡ (opt-in) | ✅ | Phase 1: specialist synthesis produces hunks. Phase 2: vote reconciliation |
+| `council` | ⚡ (opt-in) | ✅ | Phase 1: council consensus produces hunks. Phase 2: per-round vote on overlapping hunks |
+| `orchestrator-worker` (flat) | ⚡ (opt-in) | ✅ | Phase 1: lead synthesis produces hunks. Phase 2: sequential reconciliation (CAS on file hashes) |
+| `orchestrator-worker-deep` | ⚡ (opt-in) | ✅ | Phase 1: multi-tier synthesis produces hunks. Phase 2: sequential reconciliation |
+| `debate-judge` | ⚡ (opt-in) | ✅ | Phase 1: judge verdict produces hunks. Phase 2: judge picks winner's hunks |
+| `map-reduce` | ⚡ (opt-in) | ✅ | Phase 1: reducer produces hunks. Phase 2: merge reconciliation (isolated slices) |
+| `stigmergy` | ❌ | ❌ | pheromone-table + per-file annotations; exploration-focused (no action-driven writes) |
+| `moa` | ⚡ (opt-in) | ✅ | Phase 1: aggregator produces hunks. Phase 2: aggregator picks best proposer's hunks |
+| `baseline` | ✅ (native) | ✅ | single agent / single prompt / single apply step — eval-harness path, not in the form's normal preset list |
+
+**Legend:** ✅ native write support | ⚡ opt-in via `cfg.writeMode: "single" | "multi"` + `cfg.writeModel` | ❌ no write support
 
 Validation: tour v2 (2026-04-28) ran 9 sequentially with 8/9 self-terminating cleanly. MoA shipped 2026-05-01 with three layers of depth (initial → convergence detection → heterogeneous models per layer). Blackboard caps tightened by #304 (git committer identity) + #305 (cap watchdog 5s tick).
 

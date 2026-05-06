@@ -53,6 +53,7 @@ const StartBody = z.object({
       "stigmergy",
       "baseline",
       "moa",
+      "pipeline",
     ])
     .default("round-robin"),
   // Unit 25: optional free-text directive that shapes the blackboard
@@ -229,6 +230,36 @@ const StartBody = z.object({
   // RunConfig.topology is always populated for downstream phases
   // (4a History column, 4b AgentPanel mirroring) to consume.
   topology: TopologySchema.optional(),
+  // Plan 5: post-round critique — 1 extra prompt/round, any discussion preset.
+  postRoundCritique: z.boolean().optional(),
+  // Plan 7: post-synthesis critique — 1 extra prompt after synthesis, MoA pattern.
+  postSynthesisCritique: z.boolean().optional(),
+  // Plan 6: rotating dispositions for blackboard workers across cycles.
+  workerDispositions: z.boolean().optional(),
+  // Plan 1: debate-judge auditor — PRO/CON/JUDGE replaces single-agent audit.
+  debateAudit: z.boolean().optional(),
+  debateAuditRounds: z.number().int().min(1).max(2).optional(),
+  // Plan 2: council inside map-reduce mappers — draft→revise per slice.
+  councilMappers: z.boolean().optional(),
+  councilMapperRounds: z.number().int().min(1).max(3).optional(),
+  // Plan 3: pheromone heatmap — cross-preset file-attention signal.
+  pheromoneHotseed: z.string().trim().max(100).optional(),
+  pheromoneHotFiles: z.array(z.string().min(1).max(500)).max(50).optional(),
+  // Plan 4: pipeline preset — chain sub-runs with transcript/deliverable piping.
+  pipeline: z.object({
+    phases: z.array(z.object({
+      preset: z.enum([
+        "round-robin", "blackboard", "role-diff", "council",
+        "orchestrator-worker", "orchestrator-worker-deep", "debate-judge",
+        "map-reduce", "stigmergy", "baseline", "moa",
+      ]),
+      rounds: z.number().int().min(1).max(100).optional(),
+      agentCount: z.number().int().min(1).max(8).optional(),
+      model: z.string().trim().min(1).max(200).optional(),
+    })).min(2).max(10),
+    pipeMode: z.enum(["transcript", "deliverable", "both"]).optional(),
+    pipeMaxEntries: z.number().int().min(1).max(100).optional(),
+  }).optional(),
 });
 
 // 2026-05-02: extended /say body with optional intent tag + targetAgent.
@@ -677,6 +708,16 @@ export function swarmRouter(orch: Orchestrator): Router {
             workerModel: effWorkerModel,
             auditorModel: effAuditorModel,
           }),
+        postRoundCritique: parsed.data.postRoundCritique,
+        postSynthesisCritique: parsed.data.postSynthesisCritique,
+        workerDispositions: parsed.data.workerDispositions,
+        debateAudit: parsed.data.debateAudit,
+        debateAuditRounds: parsed.data.debateAuditRounds,
+        councilMappers: parsed.data.councilMappers,
+        councilMapperRounds: parsed.data.councilMapperRounds,
+        pheromoneHotseed: parsed.data.pheromoneHotseed,
+        pheromoneHotFiles: parsed.data.pheromoneHotFiles,
+        pipeline: parsed.data.pipeline,
       });
       res.json({ ok: true, status: orch.status() });
     } catch (err) {

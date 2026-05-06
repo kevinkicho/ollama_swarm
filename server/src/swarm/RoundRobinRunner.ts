@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Agent } from "../services/AgentManager.js";
-import { buildAgentsReadySummary } from "./agentsReadySummary.js";
+
 import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
 import type {
   AgentState,
@@ -10,7 +10,8 @@ import type {
   TranscriptEntry,
   TranscriptEntrySummary,
 } from "../types.js";
-import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
+import type { RunConfig, RunnerOpts } from "./SwarmRunner.js";
+import { DiscussionRunnerBase } from "./DiscussionRunnerBase.js";
 import { roleForAgent, type SwarmRole } from "./roles.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
@@ -26,12 +27,13 @@ import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { checkBudgetGuards } from "./loopGuards.js";
 // runEndReflection moved into runFinallyHooks (Phase D).
 import { retryEmptyResponse } from "./promptAndExtract.js";
-import { formatCloneMessage } from "./cloneMessage.js";
+
 import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import { getAgentAddendum } from "../../../shared/src/topology.js";
 import { describeSdkError } from "./sdkError.js";
 import { writeDeliverableAndEmit } from "./deliverable.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
+import { maybeRunPostRoundCritique } from "./postRoundCritique.js";
 // T199 (2026-05-04): LLM-driven dynamic role catalog.
 import { deriveDynamicRoleCatalog } from "./dynamicRoleCatalog.js";
 import { buildRoleDiffDeliverableSections } from "./roleDiffDeliverable.js";
@@ -40,17 +42,23 @@ import {
   buildDirectiveBlock,
   pickDeliverableTitle,
   pickDeliverableSubtitle,
-  pickAnswerSectionTitle,
-  maybeDirectiveSection,
 } from "./directivePromptHelpers.js";
-import {
-  extractNextActions,
-  formatNextActionsMarkdown,
-} from "./qualityPasses.js";
+
 import {
   parseConvergenceSignal,
   parseConvergenceSignalLoose,
 } from "./convergenceSignal.js";
+import {
+  pickNextDisposition,
+  buildStructuredSynthesisPrompt,
+  buildRoleDiffSynthesisPrompt,
+  buildRoundRobinDeliverableSections,
+  buildRoundRobinTurnPrompt,
+} from "./roundRobinPromptHelpers.js";
+import {
+  MultiWriterState,
+  DEFAULT_CONFLICT_POLICIES,
+} from "./multiWriterState.js";
 
 export interface RoundRobinOptions {
   // Unit 8: when set, every agent gets a per-index role prepended to its
@@ -62,136 +70,40 @@ export interface RoundRobinOptions {
 // The current collaboration pattern: N identical agents take turns in a fixed
 // order, each one seeing the full transcript before speaking. Discussion-only —
 // agents may read files but don't edit them.
-export class RoundRobinRunner implements SwarmRunner {
-  private transcript: TranscriptEntry[] = [];
-  private phase: SwarmPhase = "idle";
-  private round = 0;
-  private stopping = false;
-  private active?: RunConfig;
+export class RoundRobinRunner extends DiscussionRunnerBase {
   // T199 (2026-05-04): no longer readonly — when cfg.dynamicRoles is
   // set, the runner replaces this with an LLM-derived catalog before
   // the discussion loop starts. Default still set in the constructor
   // from options.roles for back-compat.
   private roles?: readonly SwarmRole[];
+  // Phase 2 (writeMode: multi): collects hunk proposals during rounds
+  private multiWriter?: MultiWriterState;
   // Unit 33: cross-preset metrics. Collector aggregates per-agent
   // counters (turns, attempts, retries, latencies) via the same
   // onTiming/onRetry hooks promptWithRetry already surfaces. startedAt
   // is stamped once the discussing loop begins so wall-clock excludes
   // clone + spawn (mirrors BlackboardRunner.runStartedAt scoping).
   private stats = new AgentStatsCollector();
-  private startedAt?: number;
-  private summaryWritten = false;
-  // Phase B (Task #100): set when the role-diff midpoint synthesis
-  // returns CONVERGENCE: high. Promoted to stopReason="early-stop"
-  // by writeSummary. 2026-05-02: also set when plain round-robin's
-  // structured-deliberation convergence check (improvement #3) detects
-  // the discussion has settled.
-  private earlyStopDetail?: string;
   // 2026-05-02 (round-robin improvement #1): cumulative turn counter
   // across all agents + rounds. Drives disposition rotation in
   // buildPrompt. Pre-incremented by runTurn before each prompt build.
   private turnsTaken = 0;
 
-  constructor(private readonly opts: RunnerOpts, options?: RoundRobinOptions) {
+  constructor(opts: RunnerOpts, options?: RoundRobinOptions) {
+    super(opts);
     this.roles = options?.roles && options.roles.length > 0 ? options.roles : undefined;
-  }
-
-  status(): SwarmStatus {
-    return {
-      phase: this.phase,
-      round: this.round,
-      repoUrl: this.active?.repoUrl,
-      localPath: this.active?.localPath,
-      model: this.active?.model,
-      agents: this.opts.manager.toStates(),
-      transcript: [...this.transcript],
-      // Task #39: per-agent partial-stream buffer for catch-up.
-      streaming: this.opts.manager.getPartialStreams(),
-    };
-  }
-
-  injectUser(
-    text: string,
-    opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
-  ): void {
-    const intent = opts?.intent ?? "steer";
-    const entry: TranscriptEntry = {
-      id: randomUUID(),
-      role: "user",
-      text,
-      ts: Date.now(),
-      intent,
-      ...(opts?.targetAgent ? { targetAgent: opts.targetAgent } : {}),
-    };
-    this.transcript.push(entry);
-    this.opts.emit({ type: "transcript_append", entry });
-    this.appendSystem(formatChatReceipt(intent, opts?.targetAgent));
-  }
-
-  isRunning(): boolean {
-    // Task #34: see BlackboardRunner.isRunning() — terminal phases
-    // are not running.
-    return (
-      this.phase !== "idle" &&
-      this.phase !== "stopped" &&
-      this.phase !== "completed" &&
-      this.phase !== "failed"
-    );
   }
 
   async start(cfg: RunConfig): Promise<void> {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
-    this.transcript = [];
-    this.stopping = false;
-    this.round = 0;
-    this.active = cfg;
+    this.resetState(cfg);
     this.stats.reset();
-    this.startedAt = undefined;
-    this.earlyStopDetail = undefined;
-    this.summaryWritten = false;
+    this.turnsTaken = 0;
 
-    this.setPhase("cloning");
-    const cloneResult = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
-    const { destPath } = cloneResult;
-    // Unit 47: tell the UI whether this is a fresh clone or a resume.
-    this.opts.emit({
-      type: "clone_state",
-      alreadyPresent: cloneResult.alreadyPresent,
-      clonePath: destPath,
-      priorCommits: cloneResult.priorCommits,
-      priorChangedFiles: cloneResult.priorChangedFiles,
-      priorUntrackedFiles: cloneResult.priorUntrackedFiles,
+    const { destPath, ready } = await this.initCloneAndSpawn(cfg, {
+      preset: "round-robin",
+      roleResolver: () => "Discussant",
     });
-    // Unit 48: hide runner-written artifacts from `git status` via the
-    // clone's local .git/info/exclude (NOT the user's .gitignore).
-    await this.opts.repos.excludeRunnerArtifacts(destPath);
-    // E3 Phase 5: opencode.json no longer needed.
-    this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
-
-    this.setPhase("spawning");
-    const spawnStart = Date.now();
-    const spawnTasks: Promise<Agent>[] = [];
-    for (let i = 1; i <= cfg.agentCount; i++) {
-      spawnTasks.push(this.opts.manager.spawnAgentNoOpencode({ cwd: destPath, index: i, model: cfg.model }));
-    }
-    const results = await Promise.allSettled(spawnTasks);
-    const ready = results
-      .filter((r): r is PromiseFulfilledResult<Agent> => r.status === "fulfilled")
-      .map((r) => r.value);
-    if (ready.length === 0) throw new Error("No agents started successfully");
-    this.appendSystem(
-      `${ready.length}/${cfg.agentCount} agents ready on ports ${ready.map((a) => a.port).join(", ")}`,
-      buildAgentsReadySummary({
-        manager: this.opts.manager,
-        preset: "round-robin",
-        ready,
-        requestedCount: cfg.agentCount,
-        spawnElapsedMs: Date.now() - spawnStart,
-        roleResolver: () => "Discussant",
-      }),
-    );
-    // Unit 33: register the spawned roster so buildPerAgentStats still
-    // produces rows after AgentManager.killAll() clears its own roster.
     this.stats.registerAgents(ready);
 
     this.setPhase("seeding");
@@ -243,16 +155,24 @@ export class RoundRobinRunner implements SwarmRunner {
       }
     }
 
+    // Phase 2 (writeMode: multi): initialize multi-writer state
+    if (cfg.writeMode === "multi") {
+      const destPath = this.active?.localPath;
+      if (destPath) {
+        this.multiWriter = new MultiWriterState({
+          writeMode: cfg.writeMode,
+          conflictPolicy: cfg.conflictPolicy ?? DEFAULT_CONFLICT_POLICIES["round-robin"],
+          clonePath: destPath,
+        });
+        this.appendSystem(
+          `Multi-writer mode enabled — agents will propose hunks during rounds, reconciled via ${cfg.conflictPolicy ?? "vote"} policy.`,
+        );
+      }
+    }
+
     this.setPhase("discussing");
     this.startedAt = Date.now();
     void this.loop(cfg);
-  }
-
-  async stop(): Promise<void> {
-    this.stopping = true;
-    this.setPhase("stopping");
-    await this.opts.manager.killAll();
-    this.setPhase("stopped");
   }
 
   private async seed(clonePath: string, cfg: RunConfig): Promise<void> {
@@ -313,6 +233,26 @@ export class RoundRobinRunner implements SwarmRunner {
         for (const agent of agents) {
           if (this.stopping) break;
           await this.runTurn(agent, r, cfg.rounds);
+        }
+
+        if (cfg.postRoundCritique) {
+          try {
+            await maybeRunPostRoundCritique({
+              agents: this.opts.manager.list(),
+              round: this.round,
+              totalRounds: cfg.rounds,
+              transcript: this.transcript,
+              userDirective: cfg.userDirective,
+              enabled: cfg.postRoundCritique ?? false,
+              runDiscussionAgent: (agent, prompt, opts) => this.runDiscussionAgent(agent, prompt, opts),
+              stats: this.stats,
+              appendSystem: (text, summary) => this.appendSystem(text, summary),
+              presetName: "round-robin",
+              stopping: this.stopping,
+            });
+          } catch (err) {
+            this.appendSystem(`[postRoundCritique error] ${err instanceof Error ? err.message : String(err)}`);
+          }
         }
 
         // Phase B (Task #100): midpoint synthesis check for role-diff.
@@ -406,6 +346,27 @@ export class RoundRobinRunner implements SwarmRunner {
           // round-robin. Lead (agent-1) doubles as implementer.
           const lead = this.opts.manager.list().find((a) => a.index === 1);
           if (lead) {
+            // Phase 1 (writeMode: single): build discussion context
+            const synthesisEntries = this.transcript.filter(
+              (e) => e.role === "agent" && e.agentIndex === 1
+            );
+            const synthesisEntry = synthesisEntries.length > 0 
+              ? synthesisEntries[synthesisEntries.length - 1] 
+              : undefined;
+            const discussionContext = synthesisEntry ? [
+              `Round-robin synthesis (${cfg.agentCount} agents, ${this.round}/${cfg.rounds} rounds, rotating dispositions):`,
+              synthesisEntry.text.slice(0, 2000),
+            ].join("\n") : undefined;
+
+            const relevantFiles: string[] = [];
+            const filePattern = /(?:src\/|tests\/|lib\/|dist\/)[a-zA-Z0-9_./-]+\.(ts|js|tsx|jsx|py|rs|go)/g;
+            for (const e of this.transcript.filter((e) => e.role === "agent").slice(-10)) {
+              const matches = e.text.match(filePattern) || [];
+              for (const m of matches) {
+                if (!relevantFiles.includes(m)) relevantFiles.push(m);
+              }
+            }
+
             await maybeRunWrapUpApply({
               cfg,
               presetName: "round-robin",
@@ -414,6 +375,8 @@ export class RoundRobinRunner implements SwarmRunner {
               repos: this.opts.repos,
               emit: this.opts.emit,
               appendSystem: (text) => this.appendSystem(text),
+              discussionContext,
+              relevantFiles: relevantFiles.slice(0, 20),
             });
           }
         } catch (err) {
@@ -461,6 +424,30 @@ export class RoundRobinRunner implements SwarmRunner {
           // Synthesis lead (agent-1) doubles as implementer.
           const lead = this.opts.manager.list().find((a) => a.index === 1);
           if (lead) {
+            // Phase 1 (writeMode: single): build discussion context for role-diff
+            const synthesisEntry = this.transcript.find(
+              (e) => e.role === "agent" && e.agentIndex === 1
+            );
+            const roleContext = this.roles
+              ? this.roles.map((r) => `${r.name}: ${r.guidance}`).join("\n")
+              : "";
+            const discussionContext = synthesisEntry ? [
+              `Role-diff synthesis (${cfg.agentCount} specialists, ${this.round}/${cfg.rounds} rounds):`,
+              synthesisEntry.text.slice(0, 2000),
+              "",
+              "Specialist roles:",
+              roleContext,
+            ].join("\n") : undefined;
+
+            const relevantFiles: string[] = [];
+            const filePattern = /(?:src\/|tests\/|lib\/|dist\/)[a-zA-Z0-9_./-]+\.(ts|js|tsx|jsx|py|rs|go)/g;
+            for (const e of this.transcript.filter((e) => e.role === "agent").slice(-10)) {
+              const matches = e.text.match(filePattern) || [];
+              for (const m of matches) {
+                if (!relevantFiles.includes(m)) relevantFiles.push(m);
+              }
+            }
+
             await maybeRunWrapUpApply({
               cfg,
               presetName: "role-diff",
@@ -469,6 +456,8 @@ export class RoundRobinRunner implements SwarmRunner {
               repos: this.opts.repos,
               emit: this.opts.emit,
               appendSystem: (text) => this.appendSystem(text),
+              discussionContext,
+              relevantFiles: relevantFiles.slice(0, 20),
             });
           }
         } catch (err) {
@@ -532,19 +521,18 @@ export class RoundRobinRunner implements SwarmRunner {
   }
 
   private async runTurn(agent: Agent, round: number, totalRounds: number): Promise<void> {
-    this.turnsTaken += 1; // 2026-05-02 (improvement #1): drive disposition rotation
-    this.opts.manager.markStatus(agent.id, "thinking");
-    this.emitAgentState({ id: agent.id, index: agent.index, port: agent.port, sessionId: agent.sessionId, status: "thinking", thinkingSince: Date.now() });
-    // Unit 33: one turn = one call to runTurn (retries inside
-    // promptWithRetry don't bump this; onTiming counts those separately).
-    this.stats.countTurn(agent.id);
-
-    const prompt = this.buildPrompt(agent, round, totalRounds);
-    // T193 (2026-05-04): per-disposition model routing. When
-    // cfg.dispositionModels[<disposition>] is set, override the
-    // agent's spawn-time model for THIS turn. Skipped when role-diff
-    // is active (roles ARE the specialization). Skipped on first
-    // call (turnsTaken not yet incremented past 0).
+    this.turnsTaken += 1;
+    const prompt = buildRoundRobinTurnPrompt({
+      turnsTaken: this.turnsTaken,
+      transcript: this.transcript,
+      roles: this.roles,
+      userDirective: this.active?.userDirective,
+      agentIndex: agent.index,
+      totalRounds,
+      round,
+      topology: this.active?.topology,
+    });
+    // T193: per-disposition model routing.
     let modelOverride: string | undefined;
     if (!this.roles && this.active?.dispositionModels) {
       const turnNumber = this.turnsTaken;
@@ -559,159 +547,24 @@ export class RoundRobinRunner implements SwarmRunner {
         modelOverride = mapped.trim();
       }
     }
-    // 2026-04-27: SSE-aware watchdog. Replaces the wall-clock 4-min cap
-    // that killed prompts the model was actively producing. The old
-    // comment claimed "OpenCode's SSE stays completely silent" — that
-    // was true before the #170 SSE auth fix; SSE chunks now flow
-    // reliably and AgentManager.getLastActivity tracks them. See
-    // sseAwareTurnWatchdog.
-    const controller = new AbortController();
-    const watchdog = startSseAwareTurnWatchdog({
-      manager: this.opts.manager,
-      sessionId: agent.sessionId,
-      controller,
-      abortSession: async () => {},
+    await this.runDiscussionAgent(agent, prompt, {
+      runnerName: "round-robin",
+      stats: this.stats,
+      agentName: "swarm-read",
+      ...(modelOverride ? { modelOverride } : {}),
+      onEntryPushed: (_entry, strippedText) => {
+        if (this.multiWriter?.isActive()) {
+          const result = this.multiWriter.addProposal(agent, strippedText);
+          if (!result.skipped && result.hunks.length > 0) {
+            this.appendSystem(
+              `[${agent.id}] proposed ${result.hunks.length} hunk(s) — collected for reconciliation.`,
+            );
+          }
+        }
+      },
     });
-
-    try {
-      // Unit 16: shared retry wrapper. Same retry semantics as
-      // BlackboardRunner — UND_ERR_HEADERS_TIMEOUT and friends get up
-      // to 3 attempts with [4s, 16s] backoff before giving up.
-      // T194 (2026-05-04): per-role tool grants. When the active
-      // role declares a profile (Tester=swarm-builder for bash;
-      // Security=swarm-builder for dep queries), use it; else
-      // default to "swarm-read". Skipped for plain round-robin
-      // (no role) which uses swarm-read unconditionally.
-      const role = this.roles ? roleForAgent(agent.index, this.roles) : null;
-      const roleProfile: "swarm-read" | "swarm-builder" | "swarm" =
-        role?.profile ?? "swarm-read";
-      const res = await promptWithFailoverAuto(agent, prompt, {
-        signal: controller.signal,
-        manager: this.opts.manager,
-        onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
-        // T194: per-role profile (defaults to swarm-read).
-        agentName: roleProfile,
-        // Phase 5b of #243: per-agent addendum from the topology row.
-        promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
-        describeError: (e) => describeSdkError(e),
-        // T193 (2026-05-04): per-disposition model override.
-        ...(modelOverride ? { modelOverride } : {}),
-        onTiming: ({ attempt, elapsedMs, success }) => {
-          this.stats.onTiming(agent.id, success, elapsedMs);
-          this.opts.logDiag?.({
-            type: "_prompt_timing",
-            preset: this.active?.preset,
-            agentId: agent.id,
-            agentIndex: agent.index,
-            attempt,
-            elapsedMs,
-            success,
-            // Task #104: prompt-size to correlate with elapsedMs.
-            promptChars: prompt.length,
-            round,
-          });
-          // Improvement #4: per-agent first-prompt cold-start logging.
-          this.opts.manager.recordPromptComplete(agent.id, { attempt, elapsedMs, success });
-          // Unit 40: live-stream latency samples over WS so the UI can
-          // render a sparkline tooltip on the thinking ticker.
-          this.opts.emit({
-            type: "agent_latency_sample",
-            agentId: agent.id,
-            agentIndex: agent.index,
-            attempt,
-            elapsedMs,
-            success,
-            ts: Date.now(),
-          });
-        },
-        onRetry: ({ attempt, max, reasonShort, delayMs }) => {
-          this.stats.onRetry(agent.id);
-          this.appendSystem(
-            `[${agent.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
-          );
-          this.opts.manager.markStatus(agent.id, "retrying", {
-            retryAttempt: attempt,
-            retryMax: max,
-            retryReason: reasonShort,
-          });
-          this.emitAgentState({
-            id: agent.id,
-            index: agent.index,
-            port: agent.port,
-            sessionId: agent.sessionId,
-            status: "retrying",
-            retryAttempt: attempt,
-            retryMax: max,
-            retryReason: reasonShort,
-          });
-        },
-      }, this.active?.providerFailover);
-
-      const diagCtx = {
-        runner: "round-robin",
-        agentId: agent.id,
-        agentIndex: agent.index,
-        logDiag: this.opts.logDiag,
-      };
-      const extracted = extractTextWithDiag(res, diagCtx);
-      let text = extracted.text;
-      // Task #117: response-side breakdown for latency RCA. Logged
-      // per-turn so analysis can correlate (agentIndex, round) with
-      // the same-key _prompt_timing record. Captures FIRST attempt's
-      // breakdown — retries are visible separately via the timing log.
-      const breakdown = extractResponseBreakdown(res);
-      this.opts.logDiag?.({
-        type: "_response_breakdown",
-        preset: this.active?.preset,
-        agentId: agent.id,
-        agentIndex: agent.index,
-        round,
-        ...breakdown,
-      });
-      // Task #54: retry on model silence (see CouncilRunner for detail).
-      // Pattern 8: retry on junk-short single-token output too.
-      if ((extracted.isEmpty || looksLikeJunk(text)) && !this.stopping) {
-        const retryText = await retryEmptyResponse(agent, prompt, "swarm-read", diagCtx);
-        if (retryText !== null) text = retryText;
-      }
-      // Task #115: track Pattern 8 stuck-loop, warn on threshold.
-      trackPostRetryJunk(text, {
-        agentId: agent.id,
-        recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
-        appendSystem: (msg) => this.appendSystem(msg),
-      });
-      // #230: strip <think> + XML pseudo-tool-call markers first.
-      const stripped = stripAgentText(text);
-      const entry: TranscriptEntry = {
-        id: randomUUID(),
-        role: "agent",
-        agentId: agent.id,
-        agentIndex: agent.index,
-        text: stripped.finalText || "(empty response)",
-        ts: Date.now(),
-        ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
-        ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
-      };
-      this.transcript.push(entry);
-      this.opts.emit({ type: "transcript_append", entry });
-      this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
-      this.opts.manager.markStatus(agent.id, "ready", { lastMessageAt: entry.ts });
-      this.emitAgentState({ id: agent.id, index: agent.index, port: agent.port, sessionId: agent.sessionId, status: "ready", lastMessageAt: entry.ts });
-    } catch (err) {
-      const msg = watchdog.getAbortReason() ?? describeSdkError(err);
-      this.appendSystem(`[${agent.id}] error: ${msg}`);
-      this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
-      this.opts.manager.markStatus(agent.id, "failed", { error: msg });
-      this.emitAgentState({ id: agent.id, index: agent.index, port: agent.port, sessionId: agent.sessionId, status: "failed", error: msg });
-    } finally {
-      watchdog.cancel();
-    }
   }
 
-  // Phase B (Task #100): role-diff synthesis pass. Mirrors the
-  // council #79 pattern — agent-1 takes every role's findings and
-  // produces a cross-role consolidation. Same prompt also asks for
-  // a CONVERGENCE: high|medium|low signal (parsed for the early-stop
   // 2026-05-02 (round-robin improvement #3): semantic convergence
   // check. Compares the LAST agent's turn this round to the SAME
   // agent's turn last round. When >0.85 cosine similar (or 0.7 Jaccard
@@ -963,491 +816,16 @@ export class RoundRobinRunner implements SwarmRunner {
   }
 
   private buildPrompt(agent: Agent, round: number, totalRounds: number): string {
-    // 2026-05-02 (round-robin improvement #1): rotating dispositions
-    // when NO roles configured. Lifts plain round-robin out of "neutral
-    // baseline" by assigning each turn a deliberate LENS — critic /
-    // synthesizer / gap-finder / builder. Forces value-add per turn:
-    // no two consecutive turns can be the same character. Skipped when
-    // role-diff is active (roles ARE the specialization).
-    const turnNumber = this.turnsTaken; // pre-increment in caller
-    // T185 (2026-05-04): voted-next disposition. Reads votes from the
-    // last 4 agent turns; falls back to mechanical rotation when
-    // votes are absent or tied. First turn (no prior votes) always
-    // mechanical.
-    const disposition = !this.roles
-      ? pickNextDisposition(this.transcript, turnNumber)
-      : null;
-    const transcriptText = this.transcript
-      .map((e) => {
-        if (e.role === "system") return `[SYSTEM] ${e.text}`;
-        if (e.role === "user") return `[HUMAN] ${e.text}`;
-        const label = this.roles
-          ? `Agent ${e.agentIndex} (${roleForAgent(e.agentIndex ?? 1, this.roles).name})`
-          : `Agent ${e.agentIndex}`;
-        return `[${label}] ${e.text}`;
-      })
-      .join("\n\n");
-
-    const role = this.roles ? roleForAgent(agent.index, this.roles) : null;
-    const header = role
-      ? `You are Agent ${agent.index} in a swarm of collaborating AI engineers reviewing a cloned GitHub project. Your role is "${role.name}".`
-      : disposition
-        ? `You are Agent ${agent.index} in a structured deliberation. This turn, you take the **${disposition.name}** disposition.`
-        : `You are Agent ${agent.index} in a swarm of collaborating AI engineers reviewing a cloned GitHub project.`;
-    const roleGuidance = role ? [`As the ${role.name}: ${role.guidance}`, ""] : [];
-    // 2026-05-02 (improvement #5): user directive injected into every
-    // turn. Placed BEFORE the disposition block so each disposition
-    // is explicitly applied to the directive (Critic critiques peers'
-    // take on it, Builder proposes a next step toward it, etc.).
-    // 2026-05-03 (Phase A): directive helpers extracted to shared module.
-    const dirCtx = readDirective({ userDirective: this.active?.userDirective });
-    const directiveBlock = buildDirectiveBlock(dirCtx, {
-      labelSuffix: "(the question this deliberation must resolve)",
+    return buildRoundRobinTurnPrompt({
+      turnsTaken: this.turnsTaken,
+      transcript: this.transcript,
+      roles: this.roles,
+      userDirective: this.active?.userDirective,
+      agentIndex: agent.index,
+      totalRounds,
+      round,
+      topology: this.active?.topology,
     });
-    const directive = dirCtx.directive;
-    // 2026-05-02 (improvement #1 + #2): disposition framing + active-
-    // disagreement backbone. Both omitted when role-diff is active
-    // (roles ARE the specialization).
-    const dispositionBlock = disposition
-      ? [
-          `**${disposition.name.toUpperCase()} disposition this turn:** ${disposition.framing}`,
-          "",
-          "**ACTIVE-DISAGREEMENT RULE (every turn):** You MUST do at least ONE of: (a) challenge a specific prior point with reasoning, (b) add a NEW dimension peers haven't named, or (c) call out a real tradeoff being glossed. Never just agree or restate. If you have nothing to push on, say so explicitly + name what's still unclear.",
-          "",
-          // T185 (2026-05-04): voted-next disposition. End your turn
-          // with a one-line vote on what disposition is needed NEXT.
-          // Runner aggregates votes from the last N turns to pick the
-          // next disposition; majority wins, tie/none → mechanical
-          // rotation falls back. Lets the discussion adapt to what
-          // it actually needs (more Critic when claims pile up; more
-          // Gap-finder when nobody's surfacing what's missing).
-          "**NEXT-DISPOSITION VOTE (every turn):** End your response with a one-line vote on what should come NEXT. Format:",
-          "    NEXT-DISPOSITION VOTE: critic|synthesizer|gap-finder|builder — <one-line why>",
-          "Vote based on what the discussion needs, not what's mechanically next. If everyone keeps voting the same lens, the runner will keep firing it until the need shifts.",
-          "",
-        ]
-      : [];
-
-    // 2026-05-02 (role-diff improvement #3): per-role concrete-deliverable
-    // contract. Every role MUST end its turn with a `### MY DELIVERABLE`
-    // block — not commentary, but the role's piece of the actual answer.
-    // Implementer lists file changes; Tester lists assertions; etc.
-    // The deliverable artifact (#4) extracts these blocks per-role to
-    // assemble a portable PR-shaped doc. Without this contract role-diff
-    // produces 7 commentaries; with it, 7 specialists each own one piece
-    // of one answer.
-    const deliverableBlock = role
-      ? [
-          "**MY DELIVERABLE CONTRACT (every turn, role-diff):** End your prose with a `### MY DELIVERABLE` heading followed by your role's concrete contribution.",
-          role.deliverableHint
-            ? `For your role (${role.name}): ${role.deliverableHint}`
-            : `For your role (${role.name}): a concrete contribution toward the directive — not commentary on it.`,
-          "Even if your role's piece doesn't change this round, write what your CURRENT best answer is — peers and the synthesis lead read this block, not your prose.",
-          "",
-          // T186 (2026-05-04): cross-role peer review (R2+ only — R1
-          // has no peer turns yet). Before writing your own output,
-          // pick ONE peer role's last deliverable and react to it
-          // (build / push back / refine). Surfaces blind spots within
-          // the run instead of waiting for synthesis to catch them.
-          ...(round >= 2
-            ? [
-                "**CROSS-ROLE PEER REVIEW (R2+):** BEFORE your `### MY DELIVERABLE` block, write:",
-                "    ### PEER REVIEW",
-                "    Reviewing: <Role X's deliverable from round R-1>",
-                "    Reaction: <BUILD ON: <one line>> | <PUSH BACK: <one line + grounding>> | <NEEDS WORK: <what's missing>>",
-                "Pick a peer whose stance you can engage substantively — not your own role. Be specific; ground reactions in file paths or peer's claims when possible.",
-                "",
-              ]
-            : []),
-        ]
-      : [];
-
-    return [
-      header,
-      `This is discussion round ${round} of ${totalRounds}. (Total turns so far: ${turnNumber}.)`,
-      ...roleGuidance,
-      ...directiveBlock,
-      ...dispositionBlock,
-      ...deliverableBlock,
-      "Your working directory IS the project clone — use file-read, grep, and find-files tools to inspect it.",
-      // Task #118: hard tool-use requirement. Run daf5c92e showed
-      // role-diff agents NEVER invoked file-read tools (0 tool calls
-      // across 8 turns) — they were guessing from filenames in the
-      // seed snapshot. Without file grounding, role-diff degenerates
-      // to filename-trivia. The "REQUIRED" framing mirrors the OW
-      // lead-grounding rule (#83) that fixed the same problem there.
-      "REQUIRED — BEFORE writing your prose response:",
-      "  1. Use the `read` tool on AT LEAST ONE file from the repo. Pick a file relevant to your role (e.g. Architect → README.md or main entry point; Tester → a test file; Security → auth/config; Performance → hot-path code).",
-      "  2. If a peer in the transcript cited a specific file path you haven't seen, read THAT file before agreeing or pushing back.",
-      "  3. If your prior turn made a claim about file contents, re-verify with a tool call before defending or revising the claim.",
-      "Failing to make at least one tool call means your turn is uninformed and will be flagged as such by reviewers.",
-      "",
-      "Round 1: skim README.md and the top-level tree before opining. Later rounds: read the specific files needed to verify peer claims.",
-      "Keep responses under ~250 words. Be specific. Cite file paths (e.g. `src/foo.ts:42`) when you reference code.",
-      "You may @mention another agent (e.g. @Agent2) to address them directly.",
-      "",
-      ...(directive.length > 0
-        ? role
-          ? [
-              "Goals of this deliberation:",
-              "1. Read the repo just enough to ground your role's deliverable in real code (not filename guesses).",
-              `2. Through your role (${role.name}), produce YOUR specialist piece of the directive's answer. Other roles handle the other pieces — focus on yours.`,
-              "3. By the final round the team should have converged on a coherent answer to the directive built from each role's deliverable, with the synthesis lead consolidating.",
-              "",
-            ]
-          : [
-              "Goals of this deliberation:",
-              "1. Read the repo just enough to ground your take on the directive in real code (not filename guesses).",
-              "2. Through your assigned disposition, advance the team's answer to the directive — challenge a peer's framing of it, surface what they're missing about it, or propose a concrete step toward it.",
-              "3. By the final round the team should have converged on: a clear plan for the directive, what's risky about it, and what the next concrete step is.",
-              "",
-            ]
-        : [
-            "Goals of this discussion:",
-            "1. Figure out what this project is and who it is for.",
-            "2. Identify what is working and what is missing.",
-            "3. Propose one concrete next action the swarm should take.",
-            "",
-          ]),
-      "=== SHARED TRANSCRIPT ===",
-      transcriptText || "(empty — you are first to speak)",
-      "=== END TRANSCRIPT ===",
-      "",
-      role
-        ? `Now respond as Agent ${agent.index} (${role.name}), through the lens of your role. Tool-call first, then prose, then your \`### MY DELIVERABLE\` block.`
-        : `Now respond as Agent ${agent.index}. Tool-call first, then prose.`,
-    ].join("\n");
   }
 
-  private appendSystem(text: string, summary?: TranscriptEntrySummary): void {
-    const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now(), summary };
-    this.transcript.push(entry);
-    this.opts.emit({ type: "transcript_append", entry });
-  }
-
-  private setPhase(phase: SwarmPhase): void {
-    this.phase = phase;
-    this.opts.emit({ type: "swarm_state", phase, round: this.round });
-  }
-
-  private emitAgentState(s: AgentState): void {
-    // thinkingSince REST-snapshot fix: route through the manager so
-    // the agentStates mirror gets updated in lockstep with the WS
-    // broadcast. See AgentManager.recordAgentState.
-    this.opts.manager.recordAgentState(s);
-  }
-
-
-}
-
-// Phase B (Task #100): role-diff synthesis prompt. Same shape as
-// the council synthesis (#79) — labeled cross-role table, not a
-// re-summary of each agent's draft. The CONVERGENCE: line at the
-// end is the early-stop signal (same parser pattern as council #99).
-// 2026-05-02 (round-robin improvement #1): rotating dispositions for
-// the structured deliberation framework. When NO roles are configured,
-// each turn cycles through these four lenses — every turn deliberately
-// adds a distinct kind of value, no two consecutive turns can be the
-// same character.
-//
-// Calibrated to a small fixed set: 4 dispositions covers the most
-// useful axes of deliberation (push back / consolidate / surface gaps /
-// move forward). More dispositions would dilute; fewer wouldn't cycle
-// before agents repeat themselves.
-export interface RoundRobinDisposition {
-  name: string;
-  framing: string;
-}
-
-export const DISPOSITIONS: readonly RoundRobinDisposition[] = [
-  {
-    name: "Critic",
-    framing:
-      "Find weaknesses in what's been said. Cite the specific claim you're challenging + your reason. Don't be contrary for its own sake — name the gap or unfounded assumption.",
-  },
-  {
-    name: "Synthesizer",
-    framing:
-      "Distill what peers AGREED on (consensus) and what they DISAGREED on (open tradeoffs). Cite who said what. Surface 1-2 sentences that capture the current state of the discussion.",
-  },
-  {
-    name: "Gap-finder",
-    framing:
-      "Name what HASN'T been addressed yet. What did the directive ask for that no peer has touched? What perspective (security, performance, ergonomics, cost) is missing? Cite specifics, not generalities.",
-  },
-  {
-    name: "Builder",
-    framing:
-      "Propose ONE concrete next action the team should take. Name files to touch, decisions to make, or experiments to run. Be specific enough that a peer could execute on it. Build on what's been said; don't restart.",
-  },
-];
-
-/** Pure helper — get the disposition for a 1-indexed turn number.
- *  Cycles through DISPOSITIONS in order. Pure — exported for tests. */
-export function getDispositionForTurn(turnNumber: number): RoundRobinDisposition {
-  const idx = ((turnNumber - 1) % DISPOSITIONS.length + DISPOSITIONS.length) % DISPOSITIONS.length;
-  return DISPOSITIONS[idx];
-}
-
-// T185 (2026-05-04): voted-next disposition. Each agent ends their
-// turn with `NEXT-DISPOSITION VOTE: <name> — <reason>`. Runner
-// aggregates the last few votes to pick the next disposition; falls
-// back to mechanical rotation when votes are absent or tied.
-
-/** Parse a NEXT-DISPOSITION VOTE line out of an agent's text. Returns
- *  null when no recognizable vote is present. Tolerant to whitespace,
- *  case, and the trailing reason. */
-export function extractDispositionVote(text: string | undefined): string | null {
-  if (!text) return null;
-  // Match "NEXT-DISPOSITION VOTE: <name>" with the name being one of
-  // the disposition names (case-insensitive). Allow "next disposition vote"
-  // too (model may drop the hyphen).
-  const m = text.match(
-    /NEXT[- ]DISPOSITION\s+VOTE\s*:\s*(critic|synthesizer|gap-?finder|builder)\b/i,
-  );
-  if (!m) return null;
-  // Normalize gap-finder vs gapfinder.
-  const raw = m[1]!.toLowerCase().replace(/-?finder/, "-finder");
-  return raw;
-}
-
-/** Pick the next disposition based on votes from the last `lookback`
- *  agent turns. Returns the disposition that won the most votes;
- *  falls back to the mechanical rotation when no votes / tied votes /
- *  unrecognized vote names. Pure — exported for tests. */
-export function pickNextDisposition(
-  transcript: readonly TranscriptEntry[],
-  fallbackTurnNumber: number,
-  lookback: number = 4,
-): RoundRobinDisposition {
-  const recentAgentTurns = transcript
-    .filter((e) => e.role === "agent")
-    .slice(-lookback);
-  const tally: Record<string, number> = {};
-  for (const e of recentAgentTurns) {
-    const vote = extractDispositionVote(e.text);
-    if (!vote) continue;
-    // Match against DISPOSITIONS catalog (lowercased name).
-    const matchIdx = DISPOSITIONS.findIndex(
-      (d) => d.name.toLowerCase().replace(/[ -]/g, "-") === vote,
-    );
-    if (matchIdx === -1) continue;
-    const name = DISPOSITIONS[matchIdx]!.name;
-    tally[name] = (tally[name] ?? 0) + 1;
-  }
-  // Pick the highest-vote disposition. Ties + no-votes → mechanical fallback.
-  const entries = Object.entries(tally);
-  if (entries.length === 0) return getDispositionForTurn(fallbackTurnNumber);
-  entries.sort((a, b) => b[1] - a[1]);
-  // Tied between top-2? Fall back to rotation rather than picking arbitrarily.
-  if (entries.length >= 2 && entries[0]![1] === entries[1]![1]) {
-    return getDispositionForTurn(fallbackTurnNumber);
-  }
-  const winner = DISPOSITIONS.find((d) => d.name === entries[0]![0]);
-  return winner ?? getDispositionForTurn(fallbackTurnNumber);
-}
-
-// 2026-05-02 (round-robin improvement #4): structured-deliberation
-// final synthesis. Mirrors buildRoleDiffSynthesisPrompt but for the
-// no-roles structured-deliberation case. Lead distills the whole
-// transcript into Consensus / Disagreements / Recommended next step.
-export function buildStructuredSynthesisPrompt(
-  totalRounds: number,
-  transcript: readonly TranscriptEntry[],
-  userDirective?: string,
-): string {
-  const transcriptText = transcript
-    .map((e) => {
-      if (e.role === "system") return `[SYSTEM] ${e.text}`;
-      if (e.role === "user") return `[HUMAN] ${e.text}`;
-      return `[Agent ${e.agentIndex}] ${e.text}`;
-    })
-    .join("\n\n");
-  // 2026-05-02 (improvement #5): directive-aware synthesis. When a
-  // directive is set the synthesis MUST answer it directly — adds a
-  // dedicated "Answer to directive" section and reframes
-  // "Recommended next step" as the next action toward the directive.
-  // 2026-05-03 (Phase A): directive helpers extracted to shared module.
-  const dirCtx = readDirective({ userDirective });
-  const directiveBlock = buildDirectiveBlock(dirCtx, {
-    labelSuffix: "(the question the team was deliberating)",
-  });
-  const structure = dirCtx.hasDirective
-    ? [
-        "STRUCTURE your response as:",
-        "1. **Answer to directive** — direct response to the user's question / request. State what the team concluded, not how it deliberated.",
-        "2. **Consensus** — what every agent agreed on while resolving the directive.",
-        "3. **Disagreements** — where agents still hold different positions on the directive. Name the agents and their stances.",
-        "4. **Cross-round flips** — positions that CHANGED between rounds (signal of weak ground; likely needs more evidence). Name the agent + the prior position + the new position. If no notable flips, say so explicitly.",
-        "5. **Recommended next step** — ONE concrete next action toward the directive. Cite files / decisions / experiments. Build on the Builder-disposition turns.",
-        "6. **Open questions** — anything the Gap-finder turns surfaced about the directive that the team didn't resolve.",
-      ]
-    : [
-        "STRUCTURE your response as:",
-        "1. **Consensus** — what every agent (including you) converged on. State as a direct claim, not a meta-observation.",
-        "2. **Disagreements** — where agents still hold different positions. Name the agents and their stances.",
-        "3. **Cross-round flips** — positions that CHANGED between rounds (signal of weak ground; likely needs more evidence). Name the agent + prior position + new position. If no notable flips, say so explicitly.",
-        "4. **Recommended next step** — ONE concrete next action. Cite files / decisions / experiments. Build on the Builder-disposition turns from the discussion.",
-        "5. **Open questions** — anything the Gap-finder turns surfaced that the team didn't resolve.",
-      ];
-  return [
-    `You are Agent 1, the deliberation synthesis lead. The team just finished ${totalRounds} round${totalRounds === 1 ? "" : "s"} of structured deliberation across rotating dispositions (Critic / Synthesizer / Gap-finder / Builder).`,
-    "Your job NOW is to produce a SINGLE consolidated answer that integrates the whole discussion.",
-    "",
-    ...directiveBlock,
-    ...structure,
-    "",
-    "Keep under ~500 words. Be specific. Cite file paths when relevant.",
-    "",
-    "On the FINAL line of your response (no markdown, nothing after it), output exactly one of:",
-    "  CONVERGENCE: high   — agents largely agree; further rounds would only restate consensus.",
-    "  CONVERGENCE: medium — partial consensus with real open questions still in play.",
-    "  CONVERGENCE: low    — significant unresolved disagreement; more rounds would help.",
-    "",
-    "=== FULL TRANSCRIPT ===",
-    transcriptText,
-    "=== END TRANSCRIPT ===",
-    "",
-    "Produce your synthesis now.",
-  ].join("\n");
-}
-
-export function buildRoleDiffSynthesisPrompt(
-  roles: readonly SwarmRole[],
-  transcript: readonly TranscriptEntry[],
-): string {
-  const transcriptText = transcript
-    .map((e) => {
-      if (e.role === "system") return `[SYSTEM] ${e.text}`;
-      if (e.role === "user") return `[HUMAN] ${e.text}`;
-      const role =
-        e.agentIndex !== undefined ? roleForAgent(e.agentIndex, roles) : null;
-      const label = role
-        ? `Agent ${e.agentIndex} (${role.name})`
-        : `Agent ${e.agentIndex}`;
-      return `[${label}] ${e.text}`;
-    })
-    .join("\n\n");
-  const roleNames = roles.map((r) => r.name).join(", ");
-
-  return [
-    `You are Agent 1, the role-diff synthesis lead. The swarm just finished N rounds of discussion with agents wearing different roles: ${roleNames}.`,
-    "Your job NOW is to produce a SINGLE consolidated cross-role view that integrates every role's findings.",
-    "",
-    "STRUCTURE your response as:",
-    "1. **Cross-role agreement** — what every role independently flagged. State as direct claims, cite which role surfaced each (e.g. \"Architect + Tester both noted the absence of integration tests in src/api/\").",
-    "2. **Role-specific findings** — one short bullet per role naming its single most important standalone observation that the others didn't make.",
-    // T186 (2026-05-04): role-pair conflicts. Pre-T186 the synthesis
-    // surfaced general "disagreements" but never explicitly RESOLVED
-    // them. Now: name the specific role-pair, state both sides, then
-    // PICK A SIDE with reasoning (or explicitly say "this is a real
-    // ongoing tradeoff the user must decide"). Every conflict left
-    // unresolved is a deferred decision.
-    "3. **Role-pair conflicts (RESOLVE, don't just list)** — for each pair of roles pulling in opposite directions, render as:",
-    "    `<Role A> vs <Role B>: <one-line claim from A> ↔ <one-line counter from B>`",
-    "    `Resolution: <which side wins for this directive AND why> — OR — \"Real tradeoff: user decides\" with context for that decision.`",
-    "    Common pairs to watch: Performance ↔ Security (caching vs staleness); Architect ↔ Implementer (clean shape vs ship-now); Tester ↔ Performance (coverage vs hot-path overhead). If no pairs conflicted, write `_no role-pair conflicts surfaced this run_`.",
-    "4. **Next action** — ONE concrete next step grounded in the cross-role view AND the conflict resolutions above.",
-    "",
-    "Keep it under ~400 words. Cite file paths from the discussion. Do NOT just restate each role's draft — synthesize across them.",
-    "",
-    // Phase B (Task #100): convergence signal — same line shape as
-    // CouncilRunner so any UI/parser pattern transfers.
-    "On the FINAL line of your response (no markdown, nothing after it), output exactly one of:",
-    "  CONVERGENCE: high   — roles largely agree; further rounds would only restate the cross-role view.",
-    "  CONVERGENCE: medium — partial cross-role agreement with real open tensions still in play.",
-    "  CONVERGENCE: low    — roles still pulling in different directions; more rounds would help.",
-    "",
-    "=== FULL ROLE-DIFF TRANSCRIPT ===",
-    transcriptText,
-    "=== END TRANSCRIPT ===",
-    "",
-    "Produce your synthesis now.",
-  ].join("\n");
-}
-
-// Phase B (Task #100): scan a synthesis response for the
-// "CONVERGENCE: high|medium|low" line. Mirrors parseCouncilConvergence
-// in CouncilRunner.ts.
-// 2026-05-03 (Phase A): both parsers consolidated into the shared
-// `convergenceSignal.ts` module. This re-export preserves the legacy
-// public name for external callers.
-export { parseConvergenceSignal as parseRoleDiffConvergence } from "./convergenceSignal.js";
-
-// 2026-05-04 (T1.1 universal deliverable): build deliverable sections
-// for plain round-robin (no roles). Mirrors CouncilRunner's section
-// shape: directive (if set), final synthesis, last-round per-agent
-// turns. Quality augmentation (rubric/critic) is skipped — round-robin
-// doesn't carry a derivedRubric — but next-actions extraction is
-// always free (pure parser) so it still runs.
-export function buildRoundRobinDeliverableSections(input: {
-  cfg: { userDirective?: string; agentCount: number; rounds: number };
-  transcript: readonly TranscriptEntry[];
-  actualRounds: number;
-}): Array<{ title: string; body: string }> {
-  const dirCtx = readDirective(input.cfg);
-  const sections: Array<{ title: string; body: string }> = [];
-
-  // Directive section first when set, so the deliverable opens with
-  // the question being answered.
-  const directiveSection = maybeDirectiveSection(dirCtx);
-  if (directiveSection) sections.push(directiveSection);
-
-  // Final synthesis — written by runStructuredSynthesisPass right
-  // before this helper runs. Tagged with summary.kind="role_diff_synthesis"
-  // (the structured-deliberation case reuses that envelope).
-  const synthesisEntry = [...input.transcript]
-    .reverse()
-    .find(
-      (e) =>
-        e.role === "agent" &&
-        e.summary?.kind === "role_diff_synthesis" &&
-        e.summary.roles === 0,
-    );
-  const synthesisText = synthesisEntry?.text.trim() ?? "";
-  sections.push({
-    title: pickAnswerSectionTitle(dirCtx, {
-      withDirective: "Answer to directive",
-      withoutDirective: "Final synthesis",
-    }),
-    body:
-      synthesisText.length > 0
-        ? synthesisText
-        : "_(synthesis pass returned empty; transcript may have partial discussion)_",
-  });
-
-  // Per-agent last-round turns so the reader sees the disposition
-  // rotation that produced the synthesis. Filter to the final round
-  // only — full transcript would dwarf the synthesis.
-  const finalRoundTurns: Array<{ agentIndex?: number; text: string }> = [];
-  // The transcript has agent entries tagged by round via summary.kind=
-  // "agent_turn"; without that, fall back to the last cfg.agentCount
-  // agent entries (one per agent in the final round under round-robin).
-  const agentEntries = input.transcript.filter((e) => e.role === "agent");
-  const tail = agentEntries.slice(-input.cfg.agentCount);
-  for (const e of tail) {
-    finalRoundTurns.push({ agentIndex: e.agentIndex, text: e.text.trim() });
-  }
-  sections.push({
-    title: `Round ${input.actualRounds} — final-round turns (rotating dispositions)`,
-    body:
-      finalRoundTurns.length > 0
-        ? finalRoundTurns
-            .map((t) => `### Agent ${t.agentIndex ?? "?"}\n\n${t.text}`)
-            .join("\n\n")
-        : "_(no final-round turns captured)_",
-  });
-
-  // Always-free next-actions extraction (pure parser) so the
-  // deliverable lands with concrete recommendations the user can chase.
-  const baseText = sections
-    .map((s) => `## ${s.title}\n\n${s.body}`)
-    .join("\n\n");
-  const actions = extractNextActions(baseText);
-  sections.push({
-    title: "Next actions",
-    body: formatNextActionsMarkdown(actions),
-  });
-
-  return sections;
 }

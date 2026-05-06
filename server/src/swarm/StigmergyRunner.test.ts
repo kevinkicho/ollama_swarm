@@ -7,7 +7,7 @@ import {
   rankingScore,
   PHEROMONE_DECAY_PER_ROUND,
   type AnnotationState,
-} from "./StigmergyRunner.js";
+} from "./stigmergyPromptHelpers.js";
 
 describe("parseAnnotation — happy path", () => {
   it("parses a clean JSON object", () => {
@@ -220,7 +220,7 @@ describe("rankingScore — confidence-weighted + decay-aware (improvements #4 + 
 });
 
 // 2026-05-02 (improvement #2): territory-plan prompt + parser tests.
-import { buildTerritoryPlanPrompt, parseTerritoryPlan } from "./StigmergyRunner.js";
+import { buildTerritoryPlanPrompt, parseTerritoryPlan } from "./stigmergyPromptHelpers.js";
 
 describe("buildTerritoryPlanPrompt", () => {
   it("includes directive, candidate paths, and explorer count", () => {

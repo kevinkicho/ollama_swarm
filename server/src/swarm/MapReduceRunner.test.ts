@@ -5,7 +5,7 @@ import {
   sliceSizeBalanced,
   buildMapperPrompt,
   buildReducerPrompt,
-} from "./MapReduceRunner.js";
+} from "./mapReducePromptHelpers.js";
 import type { TranscriptEntry } from "../types.js";
 
 const system = (text: string): TranscriptEntry => ({
@@ -296,6 +296,9 @@ import { fileURLToPath as _fileURLToPath } from "node:url";
 
 const _here = _dirname(_fileURLToPath(import.meta.url));
 const MR_SRC = _read(_join(_here, "MapReduceRunner.ts"), "utf8");
+const MR_DELIVERABLE_SRC = _read(_join(_here, "mapReduceDeliverableWriter.ts"), "utf8");
+const MR_PROMPT_SRC = _read(_join(_here, "mapReducePromptHelpers.ts"), "utf8");
+const MR_ALL = [MR_SRC, MR_DELIVERABLE_SRC, MR_PROMPT_SRC].join("\n\n");
 
 describe("MapReduceRunner — directive plumbing (structural, post Phase A)", () => {
   it("(#1 + Phase A) seed uses readDirective + buildDirectiveBlock helpers", () => {
@@ -313,7 +316,7 @@ describe("MapReduceRunner — directive plumbing (structural, post Phase A)", ()
       "loop must thread cfg.userDirective + reframing into runMapperTurn",
     );
     assert.match(
-      MR_SRC,
+      MR_ALL,
       /buildMapperPrompt\(\s*agent\.index,\s*round,\s*totalRounds,\s*slice,\s*visibleSeed,\s*userDirective,\s*reframing,?\s*\)/,
       "runMapperTurn must thread userDirective + reframing into buildMapperPrompt",
     );
@@ -326,7 +329,7 @@ describe("MapReduceRunner — directive plumbing (structural, post Phase A)", ()
       "loop must thread cfg.userDirective into runReducerTurn",
     );
     assert.match(
-      MR_SRC,
+      MR_ALL,
       /buildReducerPrompt\(round, totalRounds, \[\.\.\.this\.transcript\], userDirective\)/,
       "runReducerTurn must thread userDirective into buildReducerPrompt",
     );
@@ -334,16 +337,16 @@ describe("MapReduceRunner — directive plumbing (structural, post Phase A)", ()
 
   it("(#2 + Phase A) deliverable uses pickDeliverableTitle + maybeDirectiveSection helpers", () => {
     assert.match(
-      MR_SRC,
+      MR_ALL,
       /pickDeliverableTitle\(dirCtx,\s*\{[\s\S]{0,200}?withDirective:\s*"Map-reduce: directive answer"/,
       "deliverable title must use pickDeliverableTitle helper",
     );
     assert.match(
-      MR_SRC,
+      MR_ALL,
       /pickAnswerSectionTitle\(dirCtx,\s*\{[\s\S]{0,200}?withDirective:\s*"Answer to directive"/,
       "synthesis section title must use pickAnswerSectionTitle helper",
     );
-    assert.match(MR_SRC, /maybeDirectiveSection\(dirCtx\)/);
+    assert.match(MR_ALL, /maybeDirectiveSection\(dirCtx\)/);
   });
 });
 

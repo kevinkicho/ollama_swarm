@@ -5,7 +5,33 @@
 
 ---
 
-## Queued (waiting on user nod or specific trigger)
+## Done recently
+
+### 2026-05-04 — MultiWriterState integration across all discussion presets (Phase 3.2 complete)
+
+**Completed:** All 9 discussion presets now support multi-writer mode with proposal collection and reconciliation:
+
+- ✅ CouncilRunner (reference implementation from Phase 2)
+- ✅ MoaRunner (proposers + aggregators)
+- ✅ MapReduceRunner (mappers + reducer)
+- ✅ RoundRobinRunner (disposition rotation)
+- ✅ DebateJudgeRunner (PRO/CON/JUDGE)
+- ✅ OrchestratorWorkerRunner (lead + workers)
+- ✅ OrchestratorWorkerDeepRunner (3-tier: orchestrator/mid-leads/workers)
+
+**Pattern applied to each runner:**
+1. Import `MultiWriterState` and `DEFAULT_CONFLICT_POLICIES`
+2. Add `private multiWriter?: MultiWriterState` field
+3. Initialize in `start()` if `cfg.writeMode === "multi"`
+4. Collect proposals where agent text is processed (`stripped.finalText`)
+5. Reconcile after discussion loop ends, before `maybeRunWrapUpApply()`
+6. Apply reconciled hunks via `runWrapUpApplyPhase()`
+
+**Default conflict policies:** council→vote, moa→pick, map-reduce→merge, round-robin→vote, debate-judge→judge, orchestrator-worker→sequential, orchestrator-worker-deep→sequential
+
+**UI:** `WriteSettings.tsx` component with writeMode selector (none/single/multi) and conflictPolicy selector (merge/sequential/vote/judge/pick). State wired through `PresetAdvancedSettings` → `SetupForm` → `/api/swarm/start` POST.
+
+### 2026-05-04 — R1–R17 reliability layer + intra-stream loop detector + Ollama Cloud provider
 
 ### Sweep review: results.json commit/health data is all zeros
 

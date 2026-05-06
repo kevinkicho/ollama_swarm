@@ -20,6 +20,10 @@ export interface AgentState {
   status: AgentStatus;
   lastMessageAt?: number;
   error?: string;
+  // Current model this agent is using (reflects failover). Post-E3 Phase 5
+  // removed per-agent opencode subprocesses, so port is always 0 and
+  // model is the meaningful per-agent identifier.
+  model?: string;
   // Unit 7: populated while status === "retrying" so the panel can render
   // "retrying 2/3 · UND_ERR_HEADERS_TIMEOUT" during the backoff window.
   retryAttempt?: number;
@@ -259,6 +263,15 @@ export type SwarmEvent =
   | { type: "todo_committed"; todoId: string }
   | { type: "todo_failed"; todoId: string; reason: string; replanCount: number }
   | { type: "todo_skipped"; todoId: string; reason: string }
+  // W17: model shift event for failover visibility in UI
+  | {
+      type: "model_shift";
+      agentId: string;
+      agentIndex: number;
+      fromModel: string;
+      toModel: string;
+      reason: string;
+    }
   | {
       type: "todo_replanned";
       todoId: string;

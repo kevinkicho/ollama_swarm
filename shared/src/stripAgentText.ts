@@ -28,8 +28,17 @@ export interface StrippedAgentText {
   toolCalls: string[];
 }
 
+// After stripping think tags and tool-call markers, the remaining text can
+// be semantically empty even if it's not literally "". Common post-strip
+// artifacts: "[]", "[]]", "{}", "  ", etc. — bracket/brace junk from a
+// model that wrapped its entire response in tool calls or thinking tags.
+// Treat these as empty so the bubble placeholder "(empty response)" kicks
+// in instead of rendering raw brackets.
+const SEMANTICALLY_EMPTY_RE = /^\s*[\[\]{}]+\s*$/;
+
 export function stripAgentText(text: string): StrippedAgentText {
   const { thoughts, finalText: postThink } = extractThinkTags(text);
-  const { toolCalls, finalText } = extractToolCallMarkers(postThink);
+  const { toolCalls, finalText: rawFinal } = extractToolCallMarkers(postThink);
+  const finalText = SEMANTICALLY_EMPTY_RE.test(rawFinal) ? "" : rawFinal;
   return { finalText, thoughts, toolCalls };
 }

@@ -29,22 +29,22 @@ function loadSrc(file: string): string {
   return readFileSync(join(__dirname, file), "utf8");
 }
 
-const OPT_IN_RUNNERS: ReadonlyArray<{ file: string; presetName: string; minWiringSites: number }> = [
-  { file: "CouncilRunner.ts", presetName: "council", minWiringSites: 1 },
-  { file: "MoaRunner.ts", presetName: "moa", minWiringSites: 1 },
-  { file: "MapReduceRunner.ts", presetName: "map-reduce", minWiringSites: 1 },
-  { file: "OrchestratorWorkerRunner.ts", presetName: "orchestrator-worker", minWiringSites: 1 },
+const OPT_IN_RUNNERS: ReadonlyArray<{ files: string[]; presetName: string; minWiringSites: number }> = [
+  { files: ["CouncilRunner.ts"], presetName: "council", minWiringSites: 1 },
+  { files: ["MoaRunner.ts", "moaDeliverableWriter.ts"], presetName: "moa", minWiringSites: 1 },
+  { files: ["MapReduceRunner.ts", "mapReduceDeliverableWriter.ts"], presetName: "map-reduce", minWiringSites: 1 },
+  { files: ["OrchestratorWorkerRunner.ts"], presetName: "orchestrator-worker", minWiringSites: 1 },
   {
-    file: "OrchestratorWorkerDeepRunner.ts",
+    files: ["OrchestratorWorkerDeepRunner.ts"],
     presetName: "orchestrator-worker-deep",
     minWiringSites: 1,
   },
   // RoundRobinRunner has TWO wiring sites — plain round-robin + role-diff.
-  { file: "RoundRobinRunner.ts", presetName: "round-robin", minWiringSites: 1 },
-  { file: "RoundRobinRunner.ts", presetName: "role-diff", minWiringSites: 1 },
+  { files: ["RoundRobinRunner.ts"], presetName: "round-robin", minWiringSites: 1 },
+  { files: ["RoundRobinRunner.ts"], presetName: "role-diff", minWiringSites: 1 },
   // T176: debate-judge added 2026-05-04 alongside its legacy
   // implementer/reviewer/signoff phase (which is prose-only).
-  { file: "DebateJudgeRunner.ts", presetName: "debate-judge", minWiringSites: 1 },
+  { files: ["DebateJudgeRunner.ts", "debateDeliverableWriter.ts"], presetName: "debate-judge", minWiringSites: 1 },
 ];
 
 const OUT_OF_SCOPE_RUNNERS: ReadonlyArray<string> = [
@@ -55,30 +55,28 @@ const OUT_OF_SCOPE_RUNNERS: ReadonlyArray<string> = [
 
 describe("(T2.2) maybeRunWrapUpApply — opt-in runners must wire the helper", () => {
   for (const runner of OPT_IN_RUNNERS) {
-    test(`${runner.file} imports maybeRunWrapUpApply`, () => {
-      const src = loadSrc(runner.file);
+    const allSrc = runner.files.map((f) => loadSrc(f)).join("\n\n");
+    test(`${runner.files.join(", ")} imports maybeRunWrapUpApply`, () => {
       assert.match(
-        src,
+        allSrc,
         /from "\.\/wrapUpApplyPhase\.js"/,
-        `${runner.file} must import from ./wrapUpApplyPhase.js`,
+        `${runner.files.join(", ")} must import from ./wrapUpApplyPhase.js`,
       );
       assert.match(
-        src,
+        allSrc,
         /maybeRunWrapUpApply/,
-        `${runner.file} must reference maybeRunWrapUpApply`,
+        `${runner.files.join(", ")} must reference maybeRunWrapUpApply`,
       );
     });
 
-    test(`${runner.file} passes presetName: "${runner.presetName}" to maybeRunWrapUpApply`, () => {
-      const src = loadSrc(runner.file);
-      // Match: maybeRunWrapUpApply({\s*[whatever fields, including presetName: "X"]\s*})
+    test(`${runner.files.join(", ")} passes presetName: "${runner.presetName}" to maybeRunWrapUpApply`, () => {
       const pattern = new RegExp(
         `maybeRunWrapUpApply\\([\\s\\S]{0,500}presetName:\\s*"${runner.presetName.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}"`,
       );
       assert.match(
-        src,
+        allSrc,
         pattern,
-        `${runner.file} must call maybeRunWrapUpApply with presetName: "${runner.presetName}"`,
+        `${runner.files.join(", ")} must call maybeRunWrapUpApply with presetName: "${runner.presetName}"`,
       );
     });
   }

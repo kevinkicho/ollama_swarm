@@ -11,7 +11,7 @@ export type CouncilContractPref = "" | "on" | "off";
 // MODEL_REASONING / MODEL_CODING / MODEL_VERIFIER framework above.
 // Pre-populated as initial state for the matching SetupForm inputs;
 // users can clear to fall through to the main Model field.
-export const BLACKBOARD_DEFAULT_PLANNER_MODEL = "nemotron-3-super:cloud";
+export const BLACKBOARD_DEFAULT_PLANNER_MODEL = "glm-5.1:cloud";
 export const BLACKBOARD_DEFAULT_WORKER_MODEL = "gemma4:31b-cloud";
 export const BLACKBOARD_DEFAULT_AUDITOR_MODEL = "nemotron-3-super:cloud";
 
