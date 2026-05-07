@@ -104,6 +104,15 @@ export async function runPlanner(
           return;
         } finally {
           agent.model = original;
+          ctx.updateAgentModel(agent.id, original);
+          ctx.emit({
+            type: "model_shift",
+            agentId: agent.id,
+            agentIndex: agent.index,
+            fromModel: fallback,
+            toModel: original,
+            reason: "sibling-retry reverted",
+          });
         }
       }
       ctx.appendSystem(`Planner still invalid after repair (${parsed.reason}). Giving up this run.`);
@@ -138,6 +147,15 @@ export async function runPlanner(
         return;
       } finally {
         agent.model = original;
+        ctx.updateAgentModel(agent.id, original);
+        ctx.emit({
+          type: "model_shift",
+          agentId: agent.id,
+          agentIndex: agent.index,
+          fromModel: fallback,
+          toModel: original,
+          reason: "sibling-retry reverted",
+        });
       }
     }
   }
@@ -232,6 +250,15 @@ export async function runPlanner(
         return;
       } finally {
         agent.model = original;
+        ctx.updateAgentModel(agent.id, original);
+        ctx.emit({
+          type: "model_shift",
+          agentId: agent.id,
+          agentIndex: agent.index,
+          fromModel: fallback,
+          toModel: original,
+          reason: "sibling-retry reverted",
+        });
       }
     }
     const dropDetail =

@@ -172,6 +172,15 @@ export async function runFirstPassContract(
           return;
         } finally {
           agent.model = original;
+          ctx.updateAgentModel(agent.id, original);
+          ctx.emit({
+            type: "model_shift",
+            agentId: agent.id,
+            agentIndex: agent.index,
+            fromModel: fallback,
+            toModel: original,
+            reason: "sibling-retry reverted",
+          });
         }
       }
       ctx.appendSystem(
