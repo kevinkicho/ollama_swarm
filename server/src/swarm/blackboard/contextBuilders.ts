@@ -460,6 +460,8 @@ export function auditorContext(r: BlackboardRunnerFields): AuditorContext {
     emitContractUpdated: (contract: ExitContract) => { r.opts.emit({ type: "contract_updated", contract }); },
     appendSystem: (msg: string) => r.appendSystem(msg),
     appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
+    emit: (e: unknown) => r.opts.emit(e as SwarmEvent),
+    updateAgentModel: (agentId: string, model: string) => { r.opts.manager.updateAgentModel(agentId, model); },
     promptPlannerSafely: (agent: Agent, prompt: string, name: "swarm" | "swarm-read" | "swarm-builder", format?: "json" | Record<string, unknown>) => r.promptPlannerSafely(agent, prompt, name, format),
     wrappers: r.wrappers,
     allCriteriaResolvedSnapshot: () => r.allCriteriaResolvedSnapshot(),

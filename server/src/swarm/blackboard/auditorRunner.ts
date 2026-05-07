@@ -5,6 +5,7 @@
 import type { Agent } from "../../services/AgentManager.js";
 import type { TodoQueueWrappers } from "./todoQueueWrappers.js";
 import type { ExitContract, ExitCriterion, Todo } from "./types.js";
+import type { SwarmEvent } from "../../types.js";
 import {
   AUDITOR_SYSTEM_PROMPT,
   buildAuditorUserPrompt,
@@ -20,6 +21,7 @@ import {
 } from "./prompts/jsonSchemas.js";
 import { buildAuditorSeed } from "./auditorSeedBuilder.js";
 import { runDebateAudit } from "./debateAuditor.js";
+import { siblingModelFor } from "./BlackboardRunnerConstants.js";
 
 export interface AuditorContext {
   getContract: () => ExitContract | undefined;
@@ -31,11 +33,13 @@ export interface AuditorContext {
   boardListTodos: () => Todo[];
   getFindingsList: () => readonly { id: string; agentId: string; text: string; createdAt: number }[];
   readExpectedFiles: (paths: string[]) => Promise<Record<string, string | null>>;
-  getActive: () => { uiUrl?: string; model?: string; localPath?: string; rounds?: number; debateAudit?: boolean; debateAuditRounds?: number; userDirective?: string } | undefined;
+  getActive: () => { uiUrl?: string; model?: string; localPath?: string; rounds?: number; debateAudit?: boolean; debateAuditRounds?: number; userDirective?: string; plannerFallbackModel?: string } | undefined;
   cloneContract: (c: ExitContract) => ExitContract;
   emitContractUpdated: (contract: ExitContract) => void;
   appendSystem: (msg: string) => void;
   appendAgent: (agent: Agent, text: string) => void;
+  emit: (e: SwarmEvent) => void;
+  updateAgentModel: (agentId: string, model: string) => void;
   promptPlannerSafely: (agent: Agent, promptText: string, agentName?: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => Promise<{ response: string; agentUsed: Agent }>;
   wrappers: TodoQueueWrappers;
   allCriteriaResolvedSnapshot: () => boolean;
@@ -99,6 +103,38 @@ export async function runAuditor(
     ctx.appendAgent(repairAgent, repairResponse);
     parsed = parseAuditorResponse(repairResponse);
     if (!parsed.ok) {
+      const fallback = ctx.getActive()?.plannerFallbackModel ?? siblingModelFor(auditAgent.model);
+      if (fallback && fallback !== auditAgent.model) {
+        const original = auditAgent.model;
+        ctx.appendSystem(
+          `[${auditAgent.id}] failover: ${original} → ${fallback} (sibling-retry: auditor JSON parse failed after repair)`,
+        );
+        ctx.updateAgentModel(auditAgent.id, fallback);
+        ctx.emit({
+          type: "model_shift" as const,
+          agentId: auditAgent.id,
+          agentIndex: auditAgent.index,
+          fromModel: original,
+          toModel: fallback,
+          reason: "sibling-retry: auditor JSON parse failed after repair",
+        });
+        auditAgent.model = fallback;
+        try {
+          await runAuditor(ctx, planner, opts);
+          return;
+        } finally {
+          auditAgent.model = original;
+          ctx.updateAgentModel(auditAgent.id, original);
+          ctx.emit({
+            type: "model_shift" as const,
+            agentId: auditAgent.id,
+            agentIndex: auditAgent.index,
+            fromModel: fallback,
+            toModel: original,
+            reason: "sibling-retry reverted",
+          });
+        }
+      }
       ctx.appendSystem(
         `Auditor still invalid after repair (${parsed.reason}). Skipping this round; unresolved criteria remain.`,
       );
