@@ -33,6 +33,7 @@ import {
   type FailoverState,
   type FailoverConfig,
 } from "../promptWithFailover.js";
+import type { ReflectionContext } from "./reflectionPasses.js";
 import type {
   AgentState,
   SwarmEvent,
@@ -713,6 +714,23 @@ export class BlackboardRunner implements SwarmRunner {
   private boardListTodos() { return boardListTodosExtracted(this.utilCtx()); }
   private boardSnapshot() { return boardSnapshotExtracted(this.utilCtx()); }
   private boardGetTodo(id: string) { return boardGetTodoExtracted(this.utilCtx(), id); }
+
+  buildReflectionContext(_planner: Agent, abortSignal: AbortSignal): ReflectionContext {
+    const counts = this.boardCounts();
+    return {
+      transcript: this.transcript,
+      appendSystem: (text, summary) => this.appendSystem(text, summary),
+      emit: (e) => this.opts.emit(e as SwarmEvent),
+      currentTier: this.currentTier,
+      committedCount: counts.committed,
+      contractCriteria: this.contract?.criteria ?? [],
+      runId: this.active?.runId ?? "",
+      signal: abortSignal,
+      onPlannerStatusChange: (status) => {
+        this.markPlannerStatus(_planner, status);
+      },
+    };
+  }
 
   private async readExpectedFiles(files: string[]): Promise<Record<string, string | null>> { return readExpectedFilesExtracted(this.active?.localPath, files); }
 
