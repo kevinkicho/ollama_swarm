@@ -265,6 +265,7 @@ export const PLANNER_SYSTEM_PROMPT = [
   "3. `description` is one imperative sentence (e.g., \"Add a readme section explaining the API.\").",
   "4. `expectedFiles` lists 1 or 2 repo-relative paths the agent will need to touch. NEVER more than 2.",
   "5. Each TODO must be independently completable without coordinating with another agent.",
+  "5a. NEVER emit read-only TODOs. A TODO must describe a concrete CHANGE to one or more files (add content, modify code, create a new file). DO NOT emit TODOs that only ask an agent to \"read\", \"understand\", \"analyze\", \"review\", or \"explore\" a file — the worker already receives the file contents in its prompt. TODOs like \"Read ARCHITECTURE_REVIEW.md\" or \"Analyze the architecture\" will be declined by workers and skipped by the replanner, wasting an entire cycle.",
   "6. If the repo is trivial, already complete, or there is nothing meaningful to add, return an empty array [].",
   "7. Maximum 5 TODOs per response. Smaller is better — the replanner re-prompts you for more after these land, and a smaller initial batch lets you see worker feedback (declined / repaired / committed) before you commit to the next 5.",
   "8. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, `docs/`, or any path ending in `/` or `\\`. If the TODO covers a whole directory, pick the specific files it will touch (e.g., `src/lib/a.ts`, `src/lib/b.ts`) or split it into smaller TODOs. Directory entries are rejected by the parser and the TODO is dropped.",
