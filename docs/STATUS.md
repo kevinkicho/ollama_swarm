@@ -73,7 +73,7 @@ The V1 SDK loop (per-agent opencode subprocess + SSE chunked streaming) was reti
 | Event log reader | `server/src/swarm/blackboard/EventLogReaderV2.ts` | primary; backs `/api/v2/event-log/runs` |
 | `formatServerSummary` | `shared/src/formatServerSummary.ts` | shared between server + web |
 
-**Test totals:** 2271 server tests passing / 3 skipped / 0 failing as of 2026-05-04 (was 1848 → +423 across the reliability + wave 1/2/3 work). Web type-check clean. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
+**Test totals:** 2297 server tests passing / 0 failing as of 2026-05-06 (was 2271 → +26 across sibling-retry, symbol-grounding, planner fixes, UI fixes). Web type-check clean. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
 
 ---
 
@@ -158,6 +158,11 @@ A long day. Headline categories:
 
 ## Recent fixes worth knowing about
 
+- **Sibling-retry model failover (2026-05-06)** — when planner, contract, or auditor JSON parsing fails after repair, the runner retries once with a sibling model via `siblingModelFor()` lookup. All five retry paths (3 planner, 1 contract, 1 auditor) emit reverse `model_shift` in `finally` blocks so the UI doesn't permanently show the fallback model.
+- **Symbol-grounding strips hallucinations (2026-05-06)** — `checkExpectedSymbols()` now strips invalid `expectedSymbols` rather than dropping the entire todo. A todo with valid `expectedFiles` but hallucinated symbol references keeps its files and loses only the symbols.
+- **Planner read-only todo ban (2026-05-06)** — hard rule 5a in the planner prompt explicitly bans read-only TODOs ("read X", "analyze Y"). Workers decline these, wasting cycles.
+- **Client-side bare todo object recognition (2026-05-06)** — `summarizeAgentJson.ts` now recognizes a single `{description, expectedFiles}` object (not wrapped in an array) from planner output, rendering it as a TodosBubble instead of raw JSON.
+- **UI sidebar update on run completion (2026-05-06)** — two fixes: `AgentManager.killAll()` now broadcasts agent "stopped" states before setting `killed=true`; Zustand `setPhase()` clears `agents: {}` on terminal phase so `SidebarSummaryAgents` renders from summary.
 - **`eff8c4f` (2026-05-01)** — provider streaming chunk-drop bug in `AnthropicProvider` + `OpenAIProvider`. `Promise.race([reader.read(), timeout])` was abandoning in-flight reads on every 200ms tick; abandoned reads silently consumed subsequent chunks, truncating responses to whatever fit in the first SSE batch. Pre-fix: Claude Sonnet returned `"Here"` for `"Count from 1 to 10"` (28 tokens generated, 4 captured). Fix keeps one in-flight read across iterations. Regression test in `5c13b10` uses 250ms-delay async streams to surface the bug if reintroduced.
 - **`4190afe` (2026-05-01)** — latent dotenv path bug. `server/src/config.ts` did `import "dotenv/config"` which resolved relative to `process.cwd()`. `dev.mjs` runs the server with `cwd=server/`, so the canonical repo-root `.env` was silently ignored. Paid keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) would never load. Replaced with explicit `dotenv.config({ path: <repoRoot>/.env })`.
 - **`f3d0aeb` (2026-05-01)** — V2 Step 6c first thin slice: `GET /api/v2/event-log/runs/:runId` per-run record replay endpoint + 5 tests. Pure backend addition; unblocks every UI cutover step that follows. Full remaining cutover scoped in `docs/V2-STEP-6C.md`.
@@ -211,6 +216,11 @@ server/src/
     councilReconcile.ts                      T-Item-CouncilRec: vote tally + parser for cfg.councilReconcile
     blackboard/
       BlackboardRunner.ts                    blackboard preset orchestration (~4,500 LOC; +T-Item-3 hypothesis groups, +T-Item-StigBb file commit counts, +T-Item-4 adaptive scaleUp/Down)
+      plannerRunner.ts                       planner + replanner agent with sibling-retry
+      contractBuilder.ts                     first-pass contract builder with sibling-retry
+      auditorRunner.ts                        auditor agent with sibling-retry
+      contextBuilders.ts                      prompt/context assembly for all blackboard agents
+      BlackboardRunnerConstants.ts            sibling-model lookup + shared constants
       TodoQueue.ts                           FIFO substrate + groupId/listGroup/markGroupSettled/dequeueByScore
       WorkerPipeline.ts                      apply-and-commit pipeline
       v2Adapters.ts                          real fs+git adapters
@@ -249,7 +259,7 @@ web/src/
 - **No more opencode subprocess.** E3 Phase 5 removed it. Every prompt goes through `pickProvider` → `chatOnce`. Don't reintroduce subprocess spawning without checking ADR 001 (which is now historical).
 - **Don't rotate the planner role.** Single-session context continuity matters — see `feedback_blackboard_planner_design.md` in memory.
 - **Workers return JSON envelopes only** (no tool grants). Planner/auditor get the in-process `ToolDispatcher` (read/grep/glob/list/bash) — not the legacy opencode permission system.
-- **Discussion presets are read-only.** Only blackboard's workers commit to the clone.
+- **Discussion presets are write-capable when `cfg.writeMode` is set.** Blackboard's workers commit natively; all others produce hunks when writeMode is `single` or `multi`. Only `stigmergy` remains read-only.
 - **`npm test` works from any shell, any cwd** as of `c27f857` (2026-05-01). The runner shim (`server/scripts/run-tests.mjs`) sets `OPENCODE_SERVER_PASSWORD=test-only` if not already set; `config.ts` still validates the env var even though no subprocess uses it.
 - **`/mnt/c` is the project root** (WSL → Windows). npm install hazards from WSL — see `feedback_wsl_windows_esbuild` in memory.
 

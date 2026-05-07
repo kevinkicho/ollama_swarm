@@ -47,8 +47,7 @@ system prompt. Same model + same todo, different priors. Default off.
 
 ## Worker pipeline (the commit critical path)
 
-`BlackboardRunner.workerPipeline()` (around line 2270) is the heart
-of the runner. Each worker turn flows through this single function:
+`BlackboardRunner.workerPipeline()` is the heart of the runner. Each worker turn flows through this single function:
 
 1. **Read expectedFiles** → hash them now, stash as `hashes`.
 2. **Build worker prompt** with seed + todo + (anchored context if
@@ -147,10 +146,18 @@ generates todos premised on code that doesn't exist):
    symbol todo. Concrete example, names the failure mode, frames cost.
 2. **expectedSymbols validation (#70)** — `checkExpectedSymbols()` does
    word-boundary grep of each declared symbol in each expectedFile
-   before posting the todo. Drop-on-mismatch with a finding.
+   before posting the todo. **Strips** hallucinated symbols rather than
+   dropping the entire todo — a todo with valid `expectedFiles` but
+   invalid `expectedSymbols` keeps its files and loses only the symbol
+   references. Only todos whose `expectedFiles` fail file-grounding are
+   dropped entirely.
 3. **Smaller batches (#71)** — `MAX_TODOS_PER_BATCH = 5` (was 20).
    Replanner re-prompts per batch; smaller batches give the planner
    feedback (decline / repair / commit) sooner.
+4. **Read-only todo suppression (rule 5a)** — The planner prompt
+   hard-bans read-only TODOs ("read X", "analyze Y", "explore Z").
+   Workers decline these and the replanner confirms the skip, wasting
+   an entire cycle.
 
 Combined effect measured in one blackboard run on multi-agent-
 orchestrator: skip rate dropped from **60-80% → 12%**, commits
@@ -171,11 +178,44 @@ When debugging "why did so many todos go stale," look here:
 | `critic rejected (...)` | Critic flagged busywork | Opt-in via `cfg.critic`. |
 | `auto-skipped: replan attempts exhausted (3)` | Replanner couldn't make the todo workable | `MAX_REPLANS_PER_TODO` constant; not currently configurable. |
 
+## Sibling-retry (model failover)
+
+When the planner, contract builder, or auditor produces JSON that fails
+parsing (even after repair), the runner retries once with a **sibling
+model** before giving up. The sibling model is looked up via
+`siblingModelFor()` in `BlackboardRunnerConstants.ts`, which maps each
+primary model to a failover candidate (e.g. `nemotron-3-super → gemma4`).
+
+Three retry paths:
+
+| Path | Trigger | Runner | Behavior |
+|---|---|---|---|
+| Planner low-quality | ≤1 grounded todo after grounding check | `plannerRunner.ts` | Re-prompt with sibling model |
+| Planner parse fail | JSON invalid after repair attempt | `plannerRunner.ts` | Re-prompt with sibling model |
+| Planner 0 grounded | All todos fail file+symbol grounding | `plannerRunner.ts` | Re-prompt with sibling model |
+| Contract parse fail | JSON invalid after repair attempt | `contractBuilder.ts` | Re-build contract with sibling |
+| Auditor parse fail | JSON invalid after repair attempt | `auditorRunner.ts` | Re-run audit with sibling |
+
+All five paths emit a `model_shift` WS event so the UI shows the
+temporary model change. **Critical:** every path emits a **reverse**
+`model_shift` in a `finally` block + calls `updateAgentModel(original)`
+so the UI reverts to the primary model after the retry, whether it
+succeeds or fails. Without this revert, the sidebar permanently shows
+the fallback model.
+
+Retry is limited to one level — the `isFallbackAttempt` flag prevents
+recursive fallback. If the sibling model also fails, the run continues
+with whatever partial output was produced (or an empty contract).
+
 ## File map
 
 ```
 BlackboardRunner.ts        # The 3500-line god class. Most logic here.
 Board.ts                   # In-memory todo/claim/finding store + events.
+plannerRunner.ts           # Planner + replanner agent, including sibling-retry.
+contractBuilder.ts         # First-pass contract builder, including sibling-retry.
+auditorRunner.ts            # Auditor agent, including sibling-retry.
+contextBuilders.ts          # Prompt/context assembly for all blackboard agents.
 applyHunks.ts              # Replace/create/append hunk application.
 diffValidation.ts          # Zero-file + BOM checks.
 caps.ts                    # Wall-clock + commits + todos hard caps.
@@ -188,6 +228,7 @@ summary.ts                 # RunSummary builder + types (incl. PerAgentStat).
 transcriptSummary.ts       # Lenient JSON summarizer for worker_hunks tagging.
 boardBroadcaster.ts        # WS event fan-out.
 writeFileAtomic.ts         # tmp + rename helper.
+BlackboardRunnerConstants.ts # Sibling-model lookup, max-replan limit, shared constants.
 prompts/
   planner.ts               # PLANNER_SYSTEM_PROMPT + parsePlannerResponse.
   worker.ts                # Worker system prompt + parseWorkerResponse.
@@ -210,3 +251,15 @@ prompts/
 - **Don't delete the `transcriptSummary.ts` slice-between-braces
   fallback.** Models occasionally append a stray `]` to JSON; without
   the fallback, summaries drop and the modal renders raw JSON.
+- **Don't drop todos entirely when expectedSymbols fail.** Strip the
+  hallucinated symbols and keep the todo with its valid expectedFiles.
+  Production runs showed models hallucinate symbol references (functions
+  that don't exist in the declared files); dropping the entire todo is
+  worse than keeping it without symbols.
+- **Don't forget to revert model_shift after sibling-retry.** If the
+  retry path emits `model_shift` but the `finally` block doesn't emit
+  a reverse shift, the UI permanently shows the fallback model. Always
+  pair every `model_shift` with a revert in `finally`.
+- **Don't broadcast agent states after `killAll` sets `killed=true`.**
+  The `setAgentState` guard silently drops events when `killed=true`,
+  so "stopped" broadcasts must fire BEFORE setting the flag.

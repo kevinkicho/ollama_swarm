@@ -7,6 +7,24 @@
 
 ## Done recently
 
+### 2026-05-06 — Sibling-retry failover, symbol-grounding, planner fixes, UI sidebar
+
+**Sibling-retry model failover:** When planner/contract/auditor JSON parsing fails (even after repair), the runner retries once with a sibling model before giving up. Five paths (3 planner, 1 contract, 1 auditor). All emit reverse `model_shift` in `finally` blocks so the UI doesn't permanently show the fallback model. `siblingModelFor()` in `BlackboardRunnerConstants.ts` maps primary → fallback.
+
+**Symbol-grounding strips instead of drops:** `checkExpectedSymbols()` now strips hallucinated `expectedSymbols` from a todo rather than dropping the entire todo. A todo with valid `expectedFiles` but invalid symbols keeps its files; only todos failing file-grounding entirely are dropped.
+
+**Planner read-only todo ban:** Hard rule 5a in `planner.ts` explicitly bans read-only TODOs ("read X", "analyze Y"). Workers decline these, wasting cycles.
+
+**Client-side bare todo recognition:** `summarizeAgentJson.ts` now recognizes a single `{description, expectedFiles}` object from planner output (not wrapped in array) and renders it as TodosBubble.
+
+**UI sidebar fix:** Two fixes for stale sidebar on run completion: (1) `AgentManager.killAll()` broadcasts "stopped" states before setting `killed=true`; (2) `setPhase()` clears `agents: {}` on terminal phase transition.
+
+**Runner refactoring:** Extracted `stats` and `writeSummary` to `DiscussionRunnerBase`. MoaRunner override kept as `protected`. 7 runner files simplified.
+
+**Outcome history seeding:** `SEED_DIRECTIVES` in `outcomeHistory.ts` — 12 curated regex patterns mapping common directive shapes to optimal presets. `recommendPreset` checks seed directives before heuristic keywords when history is thin (<5 runs).
+
+**All 2297 tests pass, TypeScript clean (server + web + shared).**
+
 ### 2026-05-06 — 7 combination plans + runner refactor + pipeline preset (commit e96d002)
 
 **Completed:** All 7 swarm combination plans implemented, all runners refactored, pipeline preset live end-to-end:
