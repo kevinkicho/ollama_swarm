@@ -271,6 +271,19 @@ export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
     }
   }
 
+  // Planner: bare single todo object (not wrapped in array)
+  if (isObject(parsed) && typeof (parsed as { description?: unknown }).description === "string") {
+    const desc = (parsed as { description: string }).description;
+    const files = Array.isArray((parsed as { expectedFiles?: unknown }).expectedFiles)
+      ? (parsed as { expectedFiles: unknown[] }).expectedFiles.filter((f): f is string => typeof f === "string")
+      : [];
+    return {
+      summary: `Posted 1 todo: ${truncate(desc, 100)}`,
+      json: pretty,
+      parsed: { kind: "todos", todos: [{ description: desc, expectedFiles: files }] },
+    };
+  }
+
   return null;
 }
 
