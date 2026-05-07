@@ -400,7 +400,7 @@ export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionSt
   // ground todos against them.
   const directiveBlock = seed.userDirective && seed.userDirective.trim().length > 0
     ? `=== USER DIRECTIVE (the work the user wants done) ===\n${seed.userDirective.trim()}\n=== end USER DIRECTIVE ===\n\n`
-    : "";
+    : `=== USER DIRECTIVE (no specific directive provided — default: improve the codebase) ===\nAudit this repository for code quality, correctness, and maintainability. Propose concrete improvements: fix bugs, reduce duplication, improve error handling, and add tests where coverage is weak. Each TODO should change or add specific files.\n=== end USER DIRECTIVE ===\n\n`;
   const contractBlock = contract
     ? [
         "=== CONTRACT (just produced; your TODOs should make these criteria met) ===",

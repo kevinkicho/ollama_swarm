@@ -111,6 +111,21 @@ const PRESET_KEYWORDS: Record<string, string[]> = {
   pipeline: ["multi-step", "pipeline", "sequence of steps", "chain"],
 };
 
+const SEED_DIRECTIVES: Array<{ pattern: RegExp; preset: PresetId; agentCount: number; rounds: number }> = [
+  { pattern: /\b(fix|repair|patch|resolve)\b.*\b(bug|issue|error|crash)\b/i, preset: "orchestrator-worker", agentCount: 3, rounds: 3 },
+  { pattern: /\b(add|create|build|implement)\b.*\b(feature|function|endpoint|api)\b/i, preset: "orchestrator-worker", agentCount: 3, rounds: 3 },
+  { pattern: /\b(refactor|rewrite|restructure|reorganize)\b/i, preset: "orchestrator-worker-deep", agentCount: 4, rounds: 4 },
+  { pattern: /\b(design|architect|plan)\b.*\b(system|architecture|layout)\b/i, preset: "council", agentCount: 4, rounds: 3 },
+  { pattern: /\b(debate|argue|pros?\s*cons|should\s+we)\b/i, preset: "debate-judge", agentCount: 3, rounds: 4 },
+  { pattern: /\b(audit|find\s+all|list\s+every|comprehensive)\b/i, preset: "map-reduce", agentCount: 4, rounds: 3 },
+  { pattern: /\b(explore|understand|what\s+does|how\s+does)\b/i, preset: "stigmergy", agentCount: 3, rounds: 3 },
+  { pattern: /\b(compare|contrast|versus|vs\.?)\b/i, preset: "role-diff", agentCount: 3, rounds: 2 },
+  { pattern: /\b(synthesize|aggregate|combine|blend)\b/i, preset: "moa", agentCount: 4, rounds: 3 },
+  { pattern: /\bpipeline|multi.?step|chain\s+of\b/i, preset: "pipeline", agentCount: 3, rounds: 3 },
+  { pattern: /\b(review|discuss|thoughts|opinion)\b/i, preset: "round-robin", agentCount: 3, rounds: 3 },
+  { pattern: /\b(write|modify|change)\b.*\b(files?|code)\b/i, preset: "blackboard", agentCount: 4, rounds: 3 },
+];
+
 function heuristicPickPreset(directive: string): { preset: PresetId; confidence: number } | null {
   const lower = directive.toLowerCase();
   let bestMatch: PresetId | null = null;
@@ -150,8 +165,22 @@ export function recommendPreset(
 ): RecommendResult {
   const stats = computeStats(outcomes);
 
-  // When we have limited history, fall back to heuristic
+  // Seed directive match: before heuristics, try curated patterns.
+  // These encode domain knowledge about which preset works best for
+  // common directive shapes. Only used when history is thin.
   if (outcomes.length < 5) {
+    for (const seed of SEED_DIRECTIVES) {
+      if (seed.pattern.test(directive)) {
+        return {
+          preset: seed.preset,
+          agentCount: seed.agentCount,
+          rounds: seed.rounds,
+          confidence: 0.6,
+          rationale: `Seed match (insufficient history: ${outcomes.length} runs)`,
+          source: "heuristic",
+        };
+      }
+    }
     const heuristic = heuristicPickPreset(directive);
     if (heuristic) {
       return {

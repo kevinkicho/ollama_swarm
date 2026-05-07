@@ -13,6 +13,7 @@ import { OwSubtasksPanel } from "./OwSubtasksPanel";
 import { MemoryLogPanel } from "./MemoryLogPanel";
 import { CloneBanner } from "./CloneBanner";
 import { IdentityStrip } from "./IdentityStrip";
+import { OutcomeChip } from "./OutcomeChip";
 import { fmtMs, roleForRow } from "./RunHistory";
 
 type Tab =
@@ -361,6 +362,7 @@ export function SwarmView() {
               Memory
             </TabButton>
           ) : null}
+          <span className="ml-auto self-center px-2"><OutcomeChip /></span>
         </div>
         <div className="flex-1 overflow-hidden">
           {tab === "transcript" ? (

@@ -18,9 +18,8 @@ import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
 import { writeMapReduceDeliverableImpl } from "./mapReduceDeliverableWriter.js";
 // T197 (2026-05-04): smart slicing by import graph (opt-in via cfg.importGraphSlicing).
 import { buildImportGraph, clusterByImports } from "./importGraph.js";
-import { AgentStatsCollector } from "./agentStatsCollector.js";
+
 import { buildSeedSummary } from "./runSummary.js";
-import { discussionWriteSummary } from "./discussionWriteSummary.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
@@ -76,7 +75,7 @@ import { runCouncilMapperSlice, type CouncilMapperResult } from "./mapReduceCoun
 // Discussion-only, no file edits.
 export class MapReduceRunner extends DiscussionRunnerBase {
   // Unit 33: cross-preset metrics — see RoundRobinRunner for rationale.
-  private stats = new AgentStatsCollector();
+
   // Phase 2d: mapper slice assignments, keyed by agentId. Empty map
   // pre-run or if slicing hasn't happened yet.
   private mapperSlices: Record<string, string[]> = {};
@@ -107,7 +106,6 @@ export class MapReduceRunner extends DiscussionRunnerBase {
   async start(cfg: RunConfig): Promise<void> {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
     this.resetState(cfg);
-    this.stats.reset();
     this.mappersComplete = new Set();
 
     const { destPath, ready } = await this.initCloneAndSpawn(cfg, {
@@ -558,26 +556,6 @@ export class MapReduceRunner extends DiscussionRunnerBase {
   }
 
   // Unit 33: shared summary writer pattern — see RoundRobinRunner.
-  private async writeSummary(cfg: RunConfig, crashMessage?: string): Promise<void> {
-    if (this.summaryWritten) return;
-    this.summaryWritten = true;
-    if (this.startedAt === undefined) return;
-    // 2026-05-03 (Phase C): writeSummary body extracted to shared helper.
-    await discussionWriteSummary({
-      cfg,
-      crashMessage,
-      stopping: this.stopping,
-      startedAt: this.startedAt,
-      earlyStopDetail: this.earlyStopDetail,
-      agentCount: cfg.agentCount,
-      agents: this.stats.buildPerAgentStats(),
-      transcript: this.transcript,
-      topology: cfg.topology,
-      repos: this.opts.repos,
-      appendSystem: (text, summary) => this.appendSystem(text, summary),
-    });
-  }
-
   // T199 (2026-05-04): real streaming reducer. Replaces T198a's
   // half-batch synchronous split with an event-driven scheduler that
   // fires intermediate reducer turns at fractional thresholds (1/3,

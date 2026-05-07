@@ -19,9 +19,8 @@ import {
   type ImportGraph,
 } from "./importGraph.js";
 import { detectExplorationGaps, formatExplorationGapsMarkdown } from "./stigmergyExplorationGap.js";
-import { AgentStatsCollector } from "./agentStatsCollector.js";
+
 import { buildSeedSummary } from "./runSummary.js";
-import { discussionWriteSummary } from "./discussionWriteSummary.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
@@ -65,7 +64,7 @@ import { pheromoneHeatmap } from "./pheromoneHeatmap.js";
 // rounds × agentCount. Discussion-only, no file edits.
 export class StigmergyRunner extends DiscussionRunnerBase {
   // Unit 33: cross-preset metrics — see RoundRobinRunner for rationale.
-  private stats = new AgentStatsCollector();
+
   // The annotation table — the shared "pheromone" state. File path →
   // aggregated annotation. Updated after each agent's turn.
   private annotations = new Map<string, AnnotationState>();
@@ -109,7 +108,6 @@ export class StigmergyRunner extends DiscussionRunnerBase {
   async start(cfg: RunConfig): Promise<void> {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
     this.resetState(cfg);
-    this.stats.reset();
     this.annotations = new Map();
     this.rankingHistory = [];
 
@@ -364,25 +362,6 @@ export class StigmergyRunner extends DiscussionRunnerBase {
 
   // Unit 33: shared summary writer pattern — see RoundRobinRunner.
   // 2026-05-03 (Phase C): writeSummary body extracted to shared helper.
-  private async writeSummary(cfg: RunConfig, crashMessage?: string): Promise<void> {
-    if (this.summaryWritten) return;
-    this.summaryWritten = true;
-    if (this.startedAt === undefined) return;
-    await discussionWriteSummary({
-      cfg,
-      crashMessage,
-      stopping: this.stopping,
-      startedAt: this.startedAt,
-      earlyStopDetail: this.earlyStopDetail,
-      agentCount: cfg.agentCount,
-      agents: this.stats.buildPerAgentStats(),
-      transcript: this.transcript,
-      topology: cfg.topology,
-      repos: this.opts.repos,
-      appendSystem: (text, summary) => this.appendSystem(text, summary),
-    });
-  }
-
   // Task #80: report-out pass at end of run. Routes through agent-1
   // with the ranked annotation table and asks for a top-N narrative.
   // Tagged with summary kind "stigmergy_report" so the modal renders

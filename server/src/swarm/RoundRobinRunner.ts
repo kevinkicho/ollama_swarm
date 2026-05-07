@@ -18,9 +18,8 @@ import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { formatChatReceipt } from "./chatReceipt.js";
 import { detectSemanticConvergence } from "./semanticConvergence.js";
 import { detectConvergence as detectJaccardConvergence } from "./moaConsensus.js";
-import { AgentStatsCollector } from "./agentStatsCollector.js";
+
 import { buildSeedSummary } from "./runSummary.js";
-import { discussionWriteSummary } from "./discussionWriteSummary.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import { extractResponseBreakdown, extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
@@ -83,7 +82,7 @@ export class RoundRobinRunner extends DiscussionRunnerBase {
   // onTiming/onRetry hooks promptWithRetry already surfaces. startedAt
   // is stamped once the discussing loop begins so wall-clock excludes
   // clone + spawn (mirrors BlackboardRunner.runStartedAt scoping).
-  private stats = new AgentStatsCollector();
+
   // 2026-05-02 (round-robin improvement #1): cumulative turn counter
   // across all agents + rounds. Drives disposition rotation in
   // buildPrompt. Pre-incremented by runTurn before each prompt build.
@@ -97,7 +96,6 @@ export class RoundRobinRunner extends DiscussionRunnerBase {
   async start(cfg: RunConfig): Promise<void> {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
     this.resetState(cfg);
-    this.stats.reset();
     this.turnsTaken = 0;
 
     const { destPath, ready } = await this.initCloneAndSpawn(cfg, {
@@ -503,26 +501,6 @@ export class RoundRobinRunner extends DiscussionRunnerBase {
   // regardless of termination cause (completed / user-stop / crash).
   // summaryWritten guards against a double-write if stop() races the
   // natural completion path.
-  private async writeSummary(cfg: RunConfig, crashMessage?: string): Promise<void> {
-    if (this.summaryWritten) return;
-    this.summaryWritten = true;
-    if (this.startedAt === undefined) return; // never reached discussing
-    // 2026-05-03 (Phase C): writeSummary body extracted to shared helper.
-    await discussionWriteSummary({
-      cfg,
-      crashMessage,
-      stopping: this.stopping,
-      startedAt: this.startedAt,
-      earlyStopDetail: this.earlyStopDetail,
-      agentCount: cfg.agentCount,
-      agents: this.stats.buildPerAgentStats(),
-      transcript: this.transcript,
-      topology: cfg.topology,
-      repos: this.opts.repos,
-      appendSystem: (text, summary) => this.appendSystem(text, summary),
-    });
-  }
-
   private async runTurn(agent: Agent, round: number, totalRounds: number): Promise<void> {
     this.turnsTaken += 1;
     const prompt = buildRoundRobinTurnPrompt({

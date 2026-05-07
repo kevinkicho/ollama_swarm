@@ -32,6 +32,9 @@ import { stripAgentText } from "../../../shared/src/stripAgentText.js";
 import { getAgentAddendum } from "../../../shared/src/topology.js";
 import { describeSdkError } from "./sdkError.js";
 import { buildCheckpoint, writeCheckpoint } from "./checkpoint.js";
+import { discussionWriteSummary } from "./discussionWriteSummary.js";
+import { AgentStatsCollector } from "./agentStatsCollector.js";
+import { maybeRunPostRoundCritique } from "./postRoundCritique.js";
 
 export interface CloneSpawnResult {
   destPath: string;
@@ -81,6 +84,7 @@ export abstract class DiscussionRunnerBase {
   protected summaryWritten = false;
   protected earlyStopDetail?: string;
   protected startedAt?: number;
+  protected stats = new AgentStatsCollector();
 
   constructor(protected readonly opts: RunnerOpts) {}
 
@@ -167,6 +171,50 @@ export abstract class DiscussionRunnerBase {
     this.startedAt = undefined;
     this.summaryWritten = false;
     this.earlyStopDetail = undefined;
+    this.stats.reset();
+  }
+
+  /** Write the run summary to disk. Guards against double-write.
+   *  Subclasses no longer need their own writeSummary — this handles it. */
+  protected async writeSummary(cfg: RunConfig, crashMessage?: string): Promise<void> {
+    if (this.summaryWritten) return;
+    this.summaryWritten = true;
+    if (this.startedAt === undefined) return;
+    await discussionWriteSummary({
+      cfg,
+      crashMessage,
+      stopping: this.stopping,
+      startedAt: this.startedAt,
+      earlyStopDetail: this.earlyStopDetail,
+      agentCount: cfg.agentCount,
+      agents: this.stats.buildPerAgentStats(),
+      transcript: this.transcript,
+      topology: cfg.topology,
+      repos: this.opts.repos,
+      appendSystem: (text, summary) => this.appendSystem(text, summary),
+    });
+  }
+
+  /** Run post-round critique if enabled. Subclasses call this after each round. */
+  protected async maybePostRoundCritique(
+    cfg: RunConfig,
+    presetName: string,
+  ): Promise<void> {
+    if (!cfg.postRoundCritique) return;
+    if (this.stopping) return;
+    await maybeRunPostRoundCritique({
+      agents: this.opts.manager.list(),
+      round: this.round,
+      totalRounds: cfg.rounds,
+      transcript: this.transcript,
+      userDirective: cfg.userDirective ?? "",
+      enabled: cfg.postRoundCritique ?? false,
+      runDiscussionAgent: (agent, prompt, opts) => this.runDiscussionAgent(agent, prompt, opts),
+      stats: this.stats,
+      appendSystem: (text) => this.appendSystem(text),
+      presetName,
+      stopping: this.stopping,
+    });
   }
 
   /**

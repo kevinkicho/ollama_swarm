@@ -15,9 +15,8 @@ import { defaultRoleForIndex } from "../../../shared/src/topology.js";
 import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
 import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
-import { AgentStatsCollector } from "./agentStatsCollector.js";
+
 import { buildSeedSummary } from "./runSummary.js";
-import { discussionWriteSummary } from "./discussionWriteSummary.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
@@ -74,7 +73,7 @@ import {
 // controlled rather than emergent.
 export class OrchestratorWorkerRunner extends DiscussionRunnerBase {
   // Unit 33: cross-preset metrics — see RoundRobinRunner for rationale.
-  private stats = new AgentStatsCollector();
+
   // Phase 2 (writeMode: multi): collects hunk proposals during rounds
   private multiWriter?: MultiWriterState;
 
@@ -85,7 +84,6 @@ export class OrchestratorWorkerRunner extends DiscussionRunnerBase {
   async start(cfg: RunConfig): Promise<void> {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
     this.resetState(cfg);
-    this.stats.reset();
 
     const { destPath, ready } = await this.initCloneAndSpawn(cfg, {
       preset: "orchestrator-worker",
@@ -215,9 +213,31 @@ export class OrchestratorWorkerRunner extends DiscussionRunnerBase {
           );
           break;
         }
-        // 2026-05-03 (Phase B): plan-empty guard extracted to shared class.
-        const planHit = planEmptyGuard.recordCycle(plan.assignments);
-        if (plan.assignments.length === 0) {
+
+        // 2026-05-06: when the lead produces no parseable assignments,
+        // retry once with a re-prompt that explicitly asks for JSON
+        // before counting this cycle as empty. This cuts ~50% of
+        // early-stop scenarios where the lead emitted valid thinking
+        // but forgot the JSON block.
+        let finalPlan = plan;
+        if (plan.assignments.length === 0 && planText.length > 20) {
+          this.appendSystem(
+            `Cycle ${r}: lead output was not valid JSON assignments — retrying with explicit format reminder.`,
+          );
+          const retryPrompt = buildLeadPlanPrompt(r, cfg.rounds, workers.map((w) => w.index), [...this.transcript], cfg.userDirective)
+            + "\n\nIMPORTANT: Your response MUST contain a ```json code block with an \"assignments\" array. For example:\n```json\n{\n  \"assignments\": [\n    {\"agentIndex\": 2, \"subtask\": \"...\", \"successCriteria\": \"...\"},\n    {\"agentIndex\": 3, \"subtask\": \"...\", \"successCriteria\": \"...\"}\n  ]\n}\n```\nDo NOT just explore the repo — you MUST output the JSON block.";
+          const retryText = await this.runLeadTurn(lead, r, cfg.rounds, retryPrompt, "plan");
+          if (!this.stopping) {
+            const retryPlan = parsePlan(retryText, workers.map((w) => w.index));
+            if (retryPlan.assignments.length > 0) {
+              finalPlan = retryPlan;
+              this.appendSystem(`Cycle ${r}: retry succeeded — got ${retryPlan.assignments.length} assignments.`);
+            }
+          }
+        }
+
+        const planHit = planEmptyGuard.recordCycle(finalPlan.assignments);
+        if (finalPlan.assignments.length === 0) {
           this.appendSystem(
             `Cycle ${r}: lead produced no parseable assignments — skipping execute phase this cycle. Raw lead output preserved in transcript. (consecutive=${planHit.consecutive})`,
           );
@@ -489,26 +509,6 @@ export class OrchestratorWorkerRunner extends DiscussionRunnerBase {
   }
 
   // Unit 33: shared summary writer pattern — see RoundRobinRunner.
-  private async writeSummary(cfg: RunConfig, crashMessage?: string): Promise<void> {
-    if (this.summaryWritten) return;
-    this.summaryWritten = true;
-    if (this.startedAt === undefined) return;
-    // 2026-05-03 (Phase C): writeSummary body extracted to shared helper.
-    await discussionWriteSummary({
-      cfg,
-      crashMessage,
-      stopping: this.stopping,
-      startedAt: this.startedAt,
-      earlyStopDetail: this.earlyStopDetail,
-      agentCount: cfg.agentCount,
-      agents: this.stats.buildPerAgentStats(),
-      transcript: this.transcript,
-      topology: cfg.topology,
-      repos: this.opts.repos,
-      appendSystem: (text, summary) => this.appendSystem(text, summary),
-    });
-  }
-
   private async runLeadTurn(
     agent: Agent,
     round: number,

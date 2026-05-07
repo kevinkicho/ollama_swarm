@@ -500,6 +500,10 @@ export function SetupForm() {
     setPresetId(next.id);
     const recommended = clamp(next.recommended, next.min, next.max);
     setAgentCount(recommended);
+    // Default writeMode='single' for OW and council presets — their
+    // structured output benefits most from the discussion→file write path.
+    const writeByDefault = ["orchestrator-worker", "orchestrator-worker-deep", "council"];
+    setWriteMode(writeByDefault.includes(next.id) ? "single" : "none");
     // Match the agentCount auto-update pattern: switching presets
     // also flips the main Model to the new preset's recommendation
     // (e.g. round-robin → stigmergy lands you on MODEL_CODING).

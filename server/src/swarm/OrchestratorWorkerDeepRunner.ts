@@ -51,11 +51,10 @@ import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
 import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
 import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
-import { AgentStatsCollector } from "./agentStatsCollector.js";
+
 import {
   buildSeedSummary,
 } from "./runSummary.js";
-import { discussionWriteSummary } from "./discussionWriteSummary.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
@@ -158,7 +157,7 @@ export function computeDeepTopology(agentCount: number): DeepTopology {
 }
 
 export class OrchestratorWorkerDeepRunner extends DiscussionRunnerBase {
-  private stats = new AgentStatsCollector();
+
   // Phase 2 (writeMode: multi): collects hunk proposals during rounds
   private multiWriter?: MultiWriterState;
   // T199 (2026-05-04): per-cycle pushback tracker. Mid-leads append
@@ -176,7 +175,6 @@ export class OrchestratorWorkerDeepRunner extends DiscussionRunnerBase {
   async start(cfg: RunConfig): Promise<void> {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
     this.resetState(cfg);
-    this.stats.reset();
     this.topology = computeDeepTopology(cfg.agentCount);
 
     const { destPath, ready } = await this.initCloneAndSpawn(cfg, {
@@ -305,9 +303,29 @@ export class OrchestratorWorkerDeepRunner extends DiscussionRunnerBase {
           );
           break;
         }
+
+        // 2026-05-06: retry once when the orchestrator produces no parseable
+        // assignments, with an explicit format reminder. Same pattern as OW.
+        let finalTopPlan = topPlan;
+        if (topPlan.assignments.length === 0 && topPlanText.length > 20) {
+          this.appendSystem(
+            `Cycle ${r}: orchestrator output was not valid JSON assignments — retrying with format reminder.`,
+          );
+          const retryPrompt = buildTopPlanPrompt(r, cfg.rounds, liveMidLeads.map((m) => m.index), [...this.transcript], cfg.userDirective)
+            + "\n\nIMPORTANT: Your response MUST contain a ```json code block with an \"assignments\" array. For example:\n```json\n{\n  \"assignments\": [\n    {\"agentIndex\": 2, \"subtask\": \"...\", \"successCriteria\": \"...\"},\n    {\"agentIndex\": 3, \"subtask\": \"...\", \"successCriteria\": \"...\"}\n  ]\n}\n```\nDo NOT just explore the repo — you MUST output the JSON block.";
+          const retryText = await this.runAgent(orchestrator, retryPrompt);
+          if (!this.stopping) {
+            const retryPlan = parsePlan(retryText, liveMidLeads.map((m) => m.index));
+            if (retryPlan.assignments.length > 0) {
+              finalTopPlan = retryPlan;
+              this.appendSystem(`Cycle ${r}: retry succeeded — got ${retryPlan.assignments.length} assignments.`);
+            }
+          }
+        }
+
         // 2026-05-03 (Phase B): plan-empty guard extracted to shared class.
-        const planHit = planEmptyGuard.recordCycle(topPlan.assignments);
-        if (topPlan.assignments.length === 0) {
+        const planHit = planEmptyGuard.recordCycle(finalTopPlan.assignments);
+        if (finalTopPlan.assignments.length === 0) {
           this.appendSystem(
             `Cycle ${r}: orchestrator produced no parseable mid-lead assignments — skipping execute phase this cycle. (consecutive=${planHit.consecutive})`,
           );
@@ -674,26 +692,6 @@ export class OrchestratorWorkerDeepRunner extends DiscussionRunnerBase {
     const prompt = buildWorkerPrompt(worker.index, round, totalRounds, subtask, visibleSeed, userDirective);
     this.appendSystem(`[mid-lead ${midLeadIndex} → worker ${worker.index}] dispatching: ${truncate(subtask)}`);
     await this.runAgent(worker, prompt);
-  }
-
-  private async writeSummary(cfg: RunConfig, crashMessage?: string): Promise<void> {
-    if (this.summaryWritten) return;
-    this.summaryWritten = true;
-    if (this.startedAt === undefined) return;
-    // 2026-05-03 (Phase C): writeSummary body extracted to shared helper.
-    await discussionWriteSummary({
-      cfg,
-      crashMessage,
-      stopping: this.stopping,
-      startedAt: this.startedAt,
-      earlyStopDetail: this.earlyStopDetail,
-      agentCount: cfg.agentCount,
-      agents: this.stats.buildPerAgentStats(),
-      transcript: this.transcript,
-      topology: cfg.topology,
-      repos: this.opts.repos,
-      appendSystem: (text, summary) => this.appendSystem(text, summary),
-    });
   }
 
   // T196 (2026-05-04): pick the right per-tier model for this agent.

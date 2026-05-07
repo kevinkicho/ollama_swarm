@@ -151,6 +151,7 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
       });
       break;
     case "outcome_scored":
+      s.setOutcome({ score: ev.score, verdict: ev.verdict, dimensions: ev.dimensions });
       s.appendEntry({
         id: `outcome-${ev.runId}-${Date.now()}`,
         role: "system",

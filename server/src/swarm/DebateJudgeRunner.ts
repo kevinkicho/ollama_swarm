@@ -16,9 +16,8 @@ import { extractText } from "./extractText.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { userEntryVisibleTo } from "./chatReceipt.js";
 import { writeDebateDeliverable } from "./debateDeliverableWriter.js";
-import { AgentStatsCollector } from "./agentStatsCollector.js";
+
 import { buildSeedSummary } from "./runSummary.js";
-import { discussionWriteSummary } from "./discussionWriteSummary.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
@@ -71,7 +70,7 @@ import {
 // Discussion-only, no file edits.
 export class DebateJudgeRunner extends DiscussionRunnerBase {
   // Unit 33: cross-preset metrics — see RoundRobinRunner for rationale.
-  private stats = new AgentStatsCollector();
+
   // User-supplied proposition override, captured by injectUser before start.
   // Only the most recent pre-start injection counts as the proposition;
   // mid-run injections are treated as regular transcript commentary.
@@ -113,7 +112,6 @@ export class DebateJudgeRunner extends DiscussionRunnerBase {
     }
     const propositionAtStart = this.proposition;
     this.resetState(cfg);
-    this.stats.reset();
     this.proposition = propositionAtStart; // re-set after transcript reset
 
 
@@ -395,26 +393,6 @@ export class DebateJudgeRunner extends DiscussionRunnerBase {
   }
 
   // Unit 33: shared summary writer pattern — see RoundRobinRunner.
-  private async writeSummary(cfg: RunConfig, crashMessage?: string): Promise<void> {
-    if (this.summaryWritten) return;
-    this.summaryWritten = true;
-    if (this.startedAt === undefined) return;
-    // 2026-05-03 (Phase C): writeSummary body extracted to shared helper.
-    await discussionWriteSummary({
-      cfg,
-      crashMessage,
-      stopping: this.stopping,
-      startedAt: this.startedAt,
-      earlyStopDetail: this.earlyStopDetail,
-      agentCount: cfg.agentCount,
-      agents: this.stats.buildPerAgentStats(),
-      transcript: this.transcript,
-      topology: cfg.topology,
-      repos: this.opts.repos,
-      appendSystem: (text, summary) => this.appendSystem(text, summary),
-    });
-  }
-
   // T-Item-2 (2026-05-04): single-stream N-round debate. Extracted
   // from the original `loop` body so the multi-stream path can reuse
   // the same per-stream rounding logic. When `stream` is undefined,

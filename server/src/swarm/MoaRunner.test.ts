@@ -498,7 +498,7 @@ test("pickSelfCritiqueAgent — falls back to winning aggregator when nothing el
 test("MoaRunner.writeSummary — fires once + uses shared discussionWriteSummary helper (Phase C)", () => {
   assert.match(
     MOA_RUNNER_SRC,
-    /private async writeSummary\(cfg: RunConfig, crashMessage\?:/,
+    /protected async writeSummary\(cfg: RunConfig, crashMessage\?:/,
     "writeSummary signature must match the convention used by other runners",
   );
   assert.match(

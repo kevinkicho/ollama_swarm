@@ -125,6 +125,8 @@ export interface SwarmStore {
   pheromones: Record<string, PheromoneEntry>;
   // Phase 2d: map-reduce mapper slice assignments. Keyed by agentId.
   mapperSlices: Record<string, string[]>;
+  // Direction 1 Phase 1: outcome score from rubric grading at run end.
+  outcome?: { score: number; verdict: string; dimensions: Array<{ id: string; label: string; score: number; note: string }> };
 
   setPhase: (phase: SwarmPhase, round: number) => void;
   upsertAgent: (a: AgentState) => void;
@@ -172,6 +174,7 @@ export interface SwarmStore {
   setRunId: (id: string) => void;
   upsertPheromone: (file: string, state: PheromoneEntry) => void;
   setMapperSlices: (slices: Record<string, string[]>) => void;
+  setOutcome: (outcome: { score: number; verdict: string; dimensions: Array<{ id: string; label: string; score: number; note: string }> }) => void;
 
   setError: (msg: string | undefined) => void;
   // Dismiss the topbar error banner (sets error → undefined).
@@ -238,6 +241,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   runId: undefined,
   pheromones: {},
   mapperSlices: {},
+  outcome: undefined,
 
   setPhase: (phase, round) =>
     set((s) => {
@@ -479,6 +483,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   upsertPheromone: (file, state) =>
     set((s) => ({ pheromones: { ...s.pheromones, [file]: state } })),
   setMapperSlices: (slices) => set({ mapperSlices: { ...slices } }),
+  setOutcome: (outcome) => set({ outcome }),
 
   setError: (msg) =>
     set((s) =>
@@ -510,6 +515,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       runId: undefined,
       pheromones: {},
       mapperSlices: {},
+      outcome: undefined,
     }),
   // Task #37 (partial): clear per-run state when a new run kicks off
   // WITHOUT blowing away transcript/findings/board — those are the
@@ -545,6 +551,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         // Phase 2d: map-reduce slice assignments — same cross-run
         // leak category; cleared on new-run boundary.
         mapperSlices: {},
+        outcome: undefined,
         // Task #189: clear stale topbar error when a new run starts.
         // A failed prior run's "blackboard run failed: …" banner
         // shouldn't ride along into the new run's session — if the

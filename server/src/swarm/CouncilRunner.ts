@@ -8,9 +8,8 @@ import type {
 import type { RunConfig, RunnerOpts } from "./SwarmRunner.js";
 import { DiscussionRunnerBase } from "./DiscussionRunnerBase.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
-import { AgentStatsCollector } from "./agentStatsCollector.js";
+
 import { buildSeedSummary } from "./runSummary.js";
-import { discussionWriteSummary } from "./discussionWriteSummary.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import { maybeRunPostRoundCritique } from "./postRoundCritique.js";
 import { runPostSynthesisCritique } from "./postSynthesisCritique.js";
@@ -70,7 +69,7 @@ import {
 // revises. The reconcile step is whatever the agents converge to across
 // later rounds — no vote, no explicit judge. Discussion-only, no file edits.
 export class CouncilRunner extends DiscussionRunnerBase {
-  private stats = new AgentStatsCollector();
+
   private derivedRubric: DerivedRubric | null = null;
   private multiWriter?: MultiWriterState;
 
@@ -81,7 +80,6 @@ export class CouncilRunner extends DiscussionRunnerBase {
   async start(cfg: RunConfig): Promise<void> {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
     this.resetState(cfg);
-    this.stats.reset();
 
     const { destPath, ready } = await this.initCloneAndSpawn(cfg, {
       preset: "council",
@@ -346,26 +344,6 @@ export class CouncilRunner extends DiscussionRunnerBase {
   }
 
   // Unit 33: shared summary writer pattern — see RoundRobinRunner.
-  private async writeSummary(cfg: RunConfig, crashMessage?: string): Promise<void> {
-    if (this.summaryWritten) return;
-    this.summaryWritten = true;
-    if (this.startedAt === undefined) return;
-    // 2026-05-03 (Phase C): writeSummary body extracted to shared helper.
-    await discussionWriteSummary({
-      cfg,
-      crashMessage,
-      stopping: this.stopping,
-      startedAt: this.startedAt,
-      earlyStopDetail: this.earlyStopDetail,
-      agentCount: cfg.agentCount,
-      agents: this.stats.buildPerAgentStats(),
-      transcript: this.transcript,
-      topology: cfg.topology,
-      repos: this.opts.repos,
-      appendSystem: (text, summary) => this.appendSystem(text, summary),
-    });
-  }
-
   // 2026-05-02 (deliverables initiative + quality levers #1-#3):
   // per-preset structured markdown artifact. Pulls the synthesis bubble
   // from the transcript (latest entry tagged council_synthesis) + the

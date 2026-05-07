@@ -760,7 +760,7 @@ export class MoaRunner extends DiscussionRunnerBase {
     });
   }
 
-  private async writeSummary(cfg: RunConfig, crashMessage?: string): Promise<void> {
+  protected async writeSummary(cfg: RunConfig, crashMessage?: string): Promise<void> {
     if (this.summaryWritten) return;
     this.summaryWritten = true;
     if (this.startedAt === undefined) return;
