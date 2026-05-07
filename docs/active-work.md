@@ -156,6 +156,15 @@ Planner occasionally generates todo descriptions longer than the 500-char `max(5
 **Files:** `server/src/swarm/blackboard/prompts/planner.ts` lines 60, 77
 **Trigger:** explicit "go fix planner todo description length limit."
 
+### Tier-ratchet criteria with all-expectedFiles-stripped (unbindable paths)
+
+When the ambition ratchet promotes to tier 3, the planner generates new criteria whose `expectedFiles` reference directories that don't exist in the repo (e.g. `src/tests/integration/` when the repo uses colocated tests). The path validation layer strips these as "suspicious", resulting in messages like "2/2 path(s) stripped as unbindable." Criteria with zero accepted paths are effectively unverifiable — the auditor can't check them.
+
+This is the same hallucination class as symbol-grounding (expectedSymbols referencing non-existent symbols) and file-grounding (expectedFiles referencing non-existent paths). The current defense (strip suspicious paths, keep criteria with empty expectedFiles) is correct but makes the criteria weak. Possible improvements: (a) Drop criteria whose expectedFiles are entirely stripped (analogous to how we now strip expectedSymbols but keep the todo). (b) Add a prompt instruction for the tier-ratchet contract builder to only reference paths from the seed file list. (c) If all paths are stripped, auto-mark the criterion as "wont-do" instead of "unmet".
+
+**Files:** `server/src/swarm/blackboard/tierRunner.ts` lines 248-269, `server/src/swarm/blackboard/prompts/pathValidation.ts`
+**Trigger:** explicit "go fix unbindable tier-ratchet criteria."
+
 ---
 
 ## Done recently
