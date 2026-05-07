@@ -205,22 +205,40 @@ export async function runPlanner(
 
   const symbolGroundedTodos: typeof groundedTodos = [];
   let symbolDropped = 0;
+  let symbolStripped = 0;
   for (const t of groundedTodos) {
     const result = await checkExpectedSymbols(t, seed.clonePath);
     if (!result.ok) {
-      symbolDropped += 1;
-      ctx.findingsPost({
-        agentId: agent.id,
-        text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": dropped by symbol-grounding — missing ${result.missing.map((m) => `'${m.symbol}' in ${m.file}`).join(", ")}.`,
-        createdAt: Date.now(),
-      });
+      if (t.expectedSymbols && t.expectedSymbols.length > 0) {
+        symbolStripped += 1;
+        ctx.findingsPost({
+          agentId: agent.id,
+          text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": stripped hallucinated expectedSymbols (${result.missing.map((m) => `'${m.symbol}' in ${m.file}`).join(", ")}) — keeping todo with expectedFiles only.`,
+          createdAt: Date.now(),
+        });
+        symbolGroundedTodos.push({
+          description: t.description,
+          expectedFiles: t.expectedFiles,
+          expectedAnchors: t.expectedAnchors,
+        });
+      } else {
+        symbolDropped += 1;
+        ctx.findingsPost({
+          agentId: agent.id,
+          text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": dropped by symbol-grounding — missing ${result.missing.map((m) => `'${m.symbol}' in ${m.file}`).join(", ")}.`,
+          createdAt: Date.now(),
+        });
+      }
       continue;
     }
     symbolGroundedTodos.push(t);
   }
-  if (symbolDropped > 0) {
+  if (symbolDropped > 0 || symbolStripped > 0) {
+    const parts: string[] = [];
+    if (symbolDropped > 0) parts.push(`dropped ${symbolDropped} todo(s)`);
+    if (symbolStripped > 0) parts.push(`stripped hallucinated expectedSymbols from ${symbolStripped} todo(s)`);
     ctx.appendSystem(
-      `Symbol-grounding check: dropped ${symbolDropped} todo(s) whose declared expectedSymbols don't exist in expectedFiles.`,
+      `Symbol-grounding check: ${parts.join("; ")}.`,
     );
   }
   groundedTodos.length = 0;
