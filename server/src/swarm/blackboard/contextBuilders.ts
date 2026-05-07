@@ -213,6 +213,8 @@ export function contractContext(r: BlackboardRunnerFields): ContractContext {
     setTierHistory: (h: TierHistoryEntry[]) => { r.tierHistory = h; },
     appendSystem: (msg: string) => r.appendSystem(msg),
     appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
+    getPlannerFallbackModel: () => r.active?.plannerFallbackModel,
+    updateAgentModel: (agentId: string, model: string) => { r.opts.manager.updateAgentModel(agentId, model); },
     promptPlannerSafely: (primaryAgent: Agent, promptText: string, agentName?: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => r.promptPlannerSafely(primaryAgent, promptText, agentName ?? "swarm", ollamaFormat),
     promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => r.promptAgent(agent, prompt, agentName, formatExpect, ollamaFormat),
     emit: (e: unknown) => r.opts.emit(e as SwarmEvent),

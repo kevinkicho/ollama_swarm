@@ -116,6 +116,32 @@ export async function runPlanner(
     }
   }
 
+  if (parsed.ok && !isFallbackAttempt && parsed.todos.length <= 1) {
+    const fallback = ctx.getPlannerFallbackModel() ?? siblingModelFor(agent.model);
+    if (fallback && fallback !== agent.model) {
+      const original = agent.model;
+      ctx.appendSystem(
+        `[${agent.id}] failover: ${original} → ${fallback} (sibling-retry: planner produced only ${parsed.todos.length} todo(s) — likely low-quality repair)`,
+      );
+      ctx.updateAgentModel(agent.id, fallback);
+      ctx.emit({
+        type: "model_shift",
+        agentId: agent.id,
+        agentIndex: agent.index,
+        fromModel: original,
+        toModel: fallback,
+        reason: `sibling-retry: planner produced only ${parsed.todos.length} todo(s)`,
+      });
+      agent.model = fallback;
+      try {
+        await runPlanner(ctx, agent, seed, true);
+        return;
+      } finally {
+        agent.model = original;
+      }
+    }
+  }
+
   if (parsed.dropped.length > 0) {
     ctx.appendSystem(
       `Dropped ${parsed.dropped.length} invalid todo(s): ${parsed.dropped

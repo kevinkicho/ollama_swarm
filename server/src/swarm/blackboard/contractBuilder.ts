@@ -18,6 +18,7 @@ import {
 } from "./prompts/firstPassContract.js";
 import { CONTRACT_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
 import { classifyExpectedFiles } from "./prompts/pathValidation.js";
+import { siblingModelFor } from "./BlackboardRunnerConstants.js";
 import { config as appConfig } from "../../config.js";
 import {
   readRecentMemory,
@@ -62,6 +63,8 @@ export interface ContractContext {
   // --- callbacks ---
   appendSystem: (msg: string) => void;
   appendAgent: (agent: Agent, text: string) => void;
+  getPlannerFallbackModel: () => string | undefined;
+  updateAgentModel: (agentId: string, model: string) => void;
   promptPlannerSafely: (
     primaryAgent: Agent,
     promptText: string,
@@ -119,6 +122,7 @@ export async function runFirstPassContract(
   ctx: ContractContext,
   agent: Agent,
   seed: PlannerSeed,
+  isFallbackAttempt = false,
 ): Promise<void> {
   const { response: firstResponse, agentUsed: contractAgent } = await ctx.promptPlannerSafely(
     agent,
@@ -147,6 +151,29 @@ export async function runFirstPassContract(
     ctx.appendAgent(repairAgent, repairResponse);
     parsed = parseFirstPassContractResponse(repairResponse);
     if (!parsed.ok) {
+      const fallback = ctx.getPlannerFallbackModel() ?? siblingModelFor(agent.model);
+      if (fallback && fallback !== agent.model) {
+        const original = agent.model;
+        ctx.appendSystem(
+          `[${agent.id}] failover: ${original} → ${fallback} (sibling-retry: contract JSON parse failed after repair)`,
+        );
+        ctx.updateAgentModel(agent.id, fallback);
+        ctx.emit({
+          type: "model_shift",
+          agentId: agent.id,
+          agentIndex: agent.index,
+          fromModel: original,
+          toModel: fallback,
+          reason: "sibling-retry: contract JSON parse failed after repair",
+        });
+        agent.model = fallback;
+        try {
+          await runFirstPassContract(ctx, agent, seed, true);
+          return;
+        } finally {
+          agent.model = original;
+        }
+      }
       ctx.appendSystem(
         `Contract still invalid after repair (${parsed.reason}). Proceeding without a contract.`,
       );
