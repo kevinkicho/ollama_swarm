@@ -592,6 +592,14 @@ export class AgentManager {
   }
 
   async killAll(): Promise<KillAllResult> {
+    // Broadcast "stopped" state for each agent BEFORE setting killed=true.
+    // The killed guard in setAgentState discards events after killed is set,
+    // so these intentional "stopped" transitions must fire first for the
+    // UI to update agent cards to "stopped" before they're cleared.
+    for (const a of this.agents.values()) {
+      this.agentStates.set(a.id, { id: a.id, index: a.index, port: a.port, sessionId: a.sessionId, model: a.model, status: "stopped" });
+      this.onState({ id: a.id, index: a.index, port: a.port, sessionId: a.sessionId, model: a.model, status: "stopped" });
+    }
     this.killed = true;
     for (const ctrl of this.eventAborts.values()) ctrl.abort();
     this.eventAborts.clear();
@@ -672,7 +680,7 @@ export class AgentManager {
       }
       // E3 Phase 5: no port allocator — port is sentinel 0.
       this.lastActivity.delete(a.sessionId);
-      this.setAgentState({ id: a.id, index: a.index, port: a.port, sessionId: a.sessionId, model: a.model, status: "stopped" });
+      // "stopped" state already broadcast before killed=true at top of killAll.
     });
     const total = tasks.length;
     await Promise.allSettled(tasks);

@@ -245,17 +245,16 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
 
   setPhase: (phase, round) =>
     set((s) => {
-      // Task #214: when transitioning to a terminal phase, hard-clear
-      // any leftover streaming state. Late `agent_streaming` events
-      // arriving AFTER the run-finished transcript_append would
-      // re-populate the StreamingDock and render bubbles AFTER the
-      // "Run finished" card — confusing post-run order. Forcing the
-      // streaming maps empty at terminal-phase guarantees the dock
-      // renders nothing and any late events get re-set into an empty
-      // map (still cleaned up by the 30s sweeper in Transcript.tsx).
       const isTerminal = phase === "completed" || phase === "stopped" || phase === "failed";
-      if (isTerminal && (Object.keys(s.streaming).length > 0 || Object.keys(s.streamingMeta).length > 0)) {
-        return { phase, round, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {} };
+      if (isTerminal) {
+        return {
+          phase,
+          round,
+          streaming: {},
+          streamingMeta: {},
+          streamingSegmentPoints: {},
+          agents: {},
+        };
       }
       return { phase, round };
     }),
