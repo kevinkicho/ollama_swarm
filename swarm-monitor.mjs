@@ -18,6 +18,10 @@ const PRESETS = (process.env.SWARM_PRESETS || "blackboard").split(",");
 const AGENT_COUNT = parseInt(process.env.SWARM_AGENTS || "4", 10);
 const ROUNDS = parseInt(process.env.SWARM_ROUNDS || "1", 10);
 const MODEL = process.env.SWARM_MODEL || "glm-5.1:cloud";
+const PLANNER_MODEL = process.env.SWARM_PLANNER_MODEL || "";
+const WORKER_MODEL = process.env.SWARM_WORKER_MODEL || "";
+const AUDITOR_MODEL = process.env.SWARM_AUDITOR_MODEL || "";
+const DEDICATED_AUDITOR = process.env.SWARM_DEDICATED_AUDITOR !== "0" && process.env.SWARM_DEDICATED_AUDITOR !== "";
 const WRITE_MODE = process.env.SWARM_WRITE_MODE || "none";
 const RUBRIC_GRADING = process.env.SWARM_RUBRIC !== "0";
 const IDLE_TIMEOUT_SEC = parseInt(process.env.SWARM_IDLE_TIMEOUT || "180", 10);
@@ -97,6 +101,10 @@ async function startRun(preset, directive) {
   };
   if (WRITE_MODE !== "none") body.writeMode = WRITE_MODE;
   if (RUBRIC_GRADING) body.rubricGrading = true;
+  if (PLANNER_MODEL) body.plannerModel = PLANNER_MODEL;
+  if (WORKER_MODEL) body.workerModel = WORKER_MODEL;
+  if (AUDITOR_MODEL) body.auditorModel = AUDITOR_MODEL;
+  if (DEDICATED_AUDITOR) body.dedicatedAuditor = true;
 
   const res = await fetch(`${API}/api/swarm/start`, {
     method: "POST",

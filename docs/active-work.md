@@ -120,6 +120,42 @@ Open-weights cloud models drift into XML pseudo-tool-calls under repeated struct
 **Fix:** add `ollamaFormat` schema to planner todo-batch prompt path.
 **Trigger:** explicit "go fix planner JSON drift."
 
+### Sibling-retry double-failover model capture bug (plannerRunner.ts)
+
+When provider-level failover swaps `agent.model` (e.g. glm→nemotron via `promptWithFailover`), the sibling-retry block in `runPlanner` captures `original = agent.model` at line 131 — but `agent.model` has already been updated to the failover model by the `onFailover` callback. So the `finally` block restores to the *failover* model (nemotron), not the *original* model (glm). This means:
+
+1. The `model_shift revert` event says `nemotron → glm` instead of `glm → glm` (no-op revert).
+2. If the sibling-retry re-prompt hits a provider error on glm, `promptWithFailover` will swap back to nemotron — creating a bounded but wasteful loop (up to `maxSwaps=3`).
+
+**Fix:** Capture `original` before the `promptPlannerSafely` call (before provider failover can mutate `agent.model`), then restore to that true original in the `finally` block.
+
+Also: the 0-or-1 todo threshold (`parsed.todos.length <= 1` at line 128) means a single valid todo triggers sibling-retry, wasting a prompt turn. Consider lowering to `=== 0` or making it configurable.
+
+**Files:** `server/src/swarm/blackboard/plannerRunner.ts` lines 62-67, 128-161
+**Trigger:** explicit "go fix sibling-retry model capture."
+
+### Blackboard sibling-retry also applies to 0-grounded-todos path (line 247)
+
+When `groundedTodos.length === 0` after file+symbol grounding, the code at line 247 checks `!isFallbackAttempt` to decide whether to attempt sibling-retry. If `isFallbackAttempt=true` (already in a sibling-retry), `fallback` is `undefined` and the function silently gives up. This is correct (prevents infinite loops) but the transition is invisible to the user — no `model_shift revert` event is emitted for this "give up" path. The run continues with 0 new todos, likely ending with "no progress" or "auditor cap."
+
+**Fix:** emit a `model_shift revert` in the `finally` block of this path as well, matching the pattern used in the other sibling-retry paths.
+**Trigger:** same session as the model-capture fix above.
+
+### Worker failover "non-retryable unknown" — error taxonomy gap
+
+Workers (gemma4:31b-cloud) are failing with "non-retryable unknown" and falling back to nemotron-3-super:cloud. This means `classifyError` in `errorTaxonomy.ts` doesn't match the error gemma returns. Likely causes: rate limit with unusual format, 503 with non-standard body, or connection reset. Instead of retrying (which would succeed after a brief wait), the system immediately swaps model — wasting a prompt budget and producing lower-quality output from the fallback model.
+
+**Fix:** (a) Add logging of the raw error message whenever `classifyError` returns "unknown" so the exact error can be diagnosed. (b) Consider treating "unknown" as retryable with a short backoff (1 retry, 5s delay) before swapping models. (c) Check if gemma4:31b-cloud is returning a new error format not covered by the existing patterns in `errorTaxonomy.ts`.
+**Files:** `server/src/swarm/errorTaxonomy.ts`, `server/src/swarm/promptWithFailover.ts`
+**Trigger:** explicit "go diagnose worker failover unknown errors."
+
+### Planner todo description exceeds 500-char Zod limit
+
+Planner occasionally generates todo descriptions longer than the 500-char `max(500)` in the Zod schema (`PlannerTodoSchema`). The planner prompt says "one imperative sentence" but models sometimes write long descriptions with rationale. The dropped todo wastes a planner slot.
+**Fix:** (a) Truncate descriptions to 500 chars in `parsePlannerResponse` instead of dropping. (b) Add a prompt instruction reinforcing brevity. (c) Consider increasing the limit to 800 or making it configurable.
+**Files:** `server/src/swarm/blackboard/prompts/planner.ts` lines 60, 77
+**Trigger:** explicit "go fix planner todo description length limit."
+
 ---
 
 ## Done recently
