@@ -81,6 +81,31 @@ export async function runPlanner(
     ctx.appendAgent(repairAgent, repairResponse);
     parsed = parsePlannerResponse(repairResponse);
     if (!parsed.ok) {
+      const fallback = !isFallbackAttempt
+        ? ctx.getPlannerFallbackModel() ?? siblingModelFor(agent.model)
+        : undefined;
+      if (fallback && fallback !== agent.model) {
+        const original = agent.model;
+        ctx.appendSystem(
+          `[${agent.id}] failover: ${original} → ${fallback} (sibling-retry: planner JSON parse failed after repair)`,
+        );
+        ctx.updateAgentModel(agent.id, fallback);
+        ctx.emit({
+          type: "model_shift",
+          agentId: agent.id,
+          agentIndex: agent.index,
+          fromModel: original,
+          toModel: fallback,
+          reason: "sibling-retry: planner JSON parse failed after repair",
+        });
+        agent.model = fallback;
+        try {
+          await runPlanner(ctx, agent, seed, true);
+          return;
+        } finally {
+          agent.model = original;
+        }
+      }
       ctx.appendSystem(`Planner still invalid after repair (${parsed.reason}). Giving up this run.`);
       ctx.findingsPost({
         agentId: agent.id,
