@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { extractJsonFromText as stripFences } from "../../extractJson.js";
+import { lenientPreprocess } from "./lenientParse.js";
 
 // ---------------------------------------------------------------------------
 // Schema. The replanner is shown a stale TODO + current file state and must
@@ -56,32 +58,25 @@ const SkipSchema = z.object({
   reason: z.string().trim().min(1).max(500),
 });
 
-const ReplannerResponseSchema = z.union([RevisedSchema, SkipSchema]);
+export const ReplannerResponseSchema = z.union([RevisedSchema, SkipSchema]);
 
 export type ReplannerParseResult =
   | {
       ok: true;
       action: "revised";
-      // #241: revision can switch to/from kind:"build". When kind="build",
-      // `command` is set. When omitted/hunks, `command` is undefined and
-      // the existing hunks-emit pipeline runs.
       kind?: "hunks" | "build";
       command?: string;
       description: string;
       expectedFiles: string[];
-      // Unit 44b: optional anchor revision. undefined → keep prior; empty
-      // array (after parsing) → schema rejects, so undefined is the only
-      // way to leave anchors unchanged.
       expectedAnchors?: string[];
     }
   | { ok: true; action: "skip"; reason: string }
   | { ok: false; reason: string };
 
-// Task #204: shared stripFences helper across 6 prompt parsers.
-// Same extraction pattern: fenced first, then prose-surround slice.
-import { extractJsonFromText as stripFences } from "../../extractJson.js";
-
 export function parseReplannerResponse(raw: string): ReplannerParseResult {
+  if (raw.trim().length === 0) {
+    return { ok: false, reason: "empty response — model produced no output after stripping thinking tags" };
+  }
   let parsed: unknown;
   let lastError = "";
   try {
@@ -104,7 +99,13 @@ export function parseReplannerResponse(raw: string): ReplannerParseResult {
     return { ok: false, reason: "expected top-level JSON object, got array" };
   }
 
-  const v = ReplannerResponseSchema.safeParse(parsed);
+  const processed = lenientPreprocess(parsed, {
+    maxDescription: 500,
+    maxExpectedFiles: 2,
+    maxExpectedAnchors: REPLAN_ANCHOR_MAX_PER_TODO,
+    maxCommand: 500,
+  });
+  const v = ReplannerResponseSchema.safeParse(processed);
   if (!v.success) {
     const reason = v.error.issues
       .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)

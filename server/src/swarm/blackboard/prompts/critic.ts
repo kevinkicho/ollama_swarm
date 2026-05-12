@@ -21,6 +21,8 @@
 // firstPassContract's parser.
 
 import { z } from "zod";
+import { extractJsonFromText as stripFences } from "../../extractJson.js";
+import { lenientPreprocess } from "./lenientParse.js";
 
 const VerdictSchema = z.enum(["accept", "reject"]);
 
@@ -38,10 +40,10 @@ export type CriticParseResult =
   | { ok: true; critic: ParsedCriticResponse }
   | { ok: false; reason: string };
 
-// Task #204: stripFences now uses the shared extractJsonFromText helper.
-import { extractJsonFromText as stripFences } from "../../extractJson.js";
-
 export function parseCriticResponse(raw: string): CriticParseResult {
+  if (raw.trim().length === 0) {
+    return { ok: false, reason: "empty response — model produced no output after stripping thinking tags" };
+  }
   let parsed: unknown;
   let lastError = "";
   try {
@@ -65,7 +67,10 @@ export function parseCriticResponse(raw: string): CriticParseResult {
       reason: `expected top-level JSON object, got ${Array.isArray(parsed) ? "array" : typeof parsed}`,
     };
   }
-  const v = CriticResponseSchema.safeParse(parsed);
+  const processed = lenientPreprocess(parsed, {
+    maxRationale: 400,
+  });
+  const v = CriticResponseSchema.safeParse(processed);
   if (!v.success) {
     const reason = v.error.issues
       .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)

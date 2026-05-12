@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createOutcomeEmitter, type OutcomeScoredEvent } from "./outcomeTypes.js";
 import type { Agent } from "../services/AgentManager.js";
 
 import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
@@ -70,6 +71,8 @@ export interface RoundRobinOptions {
 // order, each one seeing the full transcript before speaking. Discussion-only —
 // agents may read files but don't edit them.
 export class RoundRobinRunner extends DiscussionRunnerBase {
+  protected getPresetName(): string { return "Round-robin"; }
+
   // T199 (2026-05-04): no longer readonly — when cfg.dynamicRoles is
   // set, the runner replaces this with an LLM-derived catalog before
   // the discussion loop starts. Default still set in the constructor
@@ -198,34 +201,12 @@ export class RoundRobinRunner extends DiscussionRunnerBase {
   }
 
   private async loop(cfg: RunConfig): Promise<void> {
-    let crashMessage: string | undefined;
-    try {
-      // Phase B (Task #100): role-diff midpoint convergence check.
-      // Only fires when the runner is in role-diff mode (this.roles
-      // defined). Same midpoint pattern as council #99 — one extra
-      // agent-1 call max, not per-round.
-      const earlyCheckRound =
-        this.roles && cfg.rounds >= 4 ? Math.ceil(cfg.rounds / 2) : 0;
-
-      // 2026-05-03 (Phase B): budget + quota guards extracted to shared helper.
+    await this.runDiscussionLoop(cfg, "Round-robin", async (cfg) => {
+      const earlyCheckRound = this.roles && cfg.rounds >= 4 ? Math.ceil(cfg.rounds / 2) : 0;
       const tokenBaseline = snapshotLifetimeTokens();
 
       for (let r = 1; r <= cfg.rounds; r++) {
-        if (this.stopping) break;
-        const guard = checkBudgetGuards({
-          tokenBaseline,
-          tokenBudget: cfg.tokenBudget,
-          round: r,
-          totalRounds: cfg.rounds,
-          unit: "round",
-        });
-        if (guard.halt) {
-          this.earlyStopDetail = guard.earlyStopDetail;
-          this.appendSystem(guard.message ?? "");
-          break;
-        }
-        this.round = r;
-        this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
+        if (!this.checkRoundBudget(cfg, "round", r, tokenBaseline)) break;
 
         const agents = this.opts.manager.list();
         for (const agent of agents) {
@@ -466,35 +447,14 @@ export class RoundRobinRunner extends DiscussionRunnerBase {
       }
 
       if (!this.stopping) this.appendSystem("Discussion complete.");
-    } catch (err) {
-      crashMessage = err instanceof Error ? err.message : String(err);
-      this.opts.emit({ type: "error", message: crashMessage });
-    } finally {
-      // 2026-05-03 (Phase D): finally close-out extracted to shared helper.
-      // RoundRobin's role-diff path's deliverable was already written
-      // earlier in the try-block (gated on this.roles + runId), so the
-      // helper here just handles reflection + summary + killAll + setPhase.
-      await runDiscussionCloseOut({
-        cfg,
-        crashMessage,
-        stopping: this.stopping,
-        earlyStopDetail: this.earlyStopDetail,
-        round: this.round,
-        currentPhase: this.phase,
-        manager: this.opts.manager,
-        appendSystem: (text) => this.appendSystem(text),
-        setPhase: (p) => this.setPhase(p),
-        writeSummary: () => this.writeSummary(cfg, crashMessage),
-        hooks: {
-          pickReflectionAgent: (m) => m.list().find((a) => a.index === 1) ?? null,
-          buildReflectionContext: (s) =>
-            `${cfg.preset} preset · ${cfg.agentCount} agents · ran ${s.round}/${cfg.rounds} rounds${s.earlyStopDetail ? ` · early-stop: ${s.earlyStopDetail}` : ""}`,
-        },
-        transcript: this.transcript,
-        emitOutcome: (outcome: any) => this.opts.emit({ type: "outcome_scored" as const, runId: outcome.runId, score: outcome.score, verdict: outcome.verdict, dimensions: outcome.dimensions }),
-        wallClockMs: this.startedAt ? Date.now() - this.startedAt : 0,
-      });
-    }
+    }, {
+      pickReflectionAgent: (m) => m.list().find((a) => a.index === 1) ?? null,
+      buildReflectionContext: (s) =>
+        `${cfg.preset} preset · ${cfg.agentCount} agents · ran ${s.round}/${cfg.rounds} rounds${s.earlyStopDetail ? ` · early-stop: ${s.earlyStopDetail}` : ""}`,
+      transcript: this.transcript as any,
+      emitOutcome: createOutcomeEmitter((e) => this.opts.emit(e)),
+      wallClockMs: this.startedAt ? Date.now() - this.startedAt : 0,
+    });
   }
 
   // Unit 33: shared summary writer. Called once from the loop's finally

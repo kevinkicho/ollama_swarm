@@ -21,7 +21,12 @@ import {
 } from "./prompts/jsonSchemas.js";
 import { buildAuditorSeed } from "./auditorSeedBuilder.js";
 import { runDebateAudit } from "./debateAuditor.js";
-import { siblingModelFor } from "./BlackboardRunnerConstants.js";
+import { withSiblingRetry } from "./siblingRetry.js";
+import {
+  tryBrainFallback,
+  type BrainFallbackEvent,
+} from "./prompts/brainIntegration.js";
+import { AuditorResponseSchema } from "./prompts/auditor.js";
 
 export interface AuditorContext {
   getContract: () => ExitContract | undefined;
@@ -45,6 +50,14 @@ export interface AuditorContext {
   allCriteriaResolvedSnapshot: () => boolean;
   v2ObserverApply: (event: any) => void;
   getWorkTranscript: () => readonly import("../../types.js").TranscriptEntry[];
+  /** Brain fallback: prompt an LLM to extract structured JSON from a
+   *  failed parse. The promptFn signature matches promptWithFailover. */
+  brainPromptFn?: (
+    prompt: string,
+    model: string,
+    maxTokens: number,
+    timeoutMs: number,
+  ) => Promise<string>;
 }
 
 export async function runAuditor(
@@ -53,6 +66,12 @@ export async function runAuditor(
   opts: { allowWhenStopping?: boolean } = {},
 ): Promise<void> {
   if (!ctx.getContract()) return;
+  // Skip audit if all criteria are already resolved — nothing to evaluate.
+  const unresolved = ctx.getContract()!.criteria.filter((c) => c.status === "unmet");
+  if (unresolved.length === 0) {
+    ctx.appendSystem(`Audit skipped — all ${ctx.getContract()!.criteria.length} criteria already resolved (met or wont-do).`);
+    return;
+  }
   ctx.incrementAuditInvocations();
   const label = opts.allowWhenStopping ? "final audit" : "auditor invocation";
   ctx.appendSystem(
@@ -79,6 +98,7 @@ export async function runAuditor(
   }
 
   const auditPrimary = ctx.getAuditor() ?? planner;
+  const modelAtEntry = auditPrimary.model;
   const { response: firstResponse, agentUsed: auditAgent } = await ctx.promptPlannerSafely(
     auditPrimary,
     `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorUserPrompt(seed)}`,
@@ -103,38 +123,42 @@ export async function runAuditor(
     ctx.appendAgent(repairAgent, repairResponse);
     parsed = parseAuditorResponse(repairResponse);
     if (!parsed.ok) {
-      const fallback = ctx.getActive()?.plannerFallbackModel ?? siblingModelFor(auditAgent.model);
-      if (fallback && fallback !== auditAgent.model) {
-        const original = auditAgent.model;
-        ctx.appendSystem(
-          `[${auditAgent.id}] failover: ${original} → ${fallback} (sibling-retry: auditor JSON parse failed after repair)`,
-        );
-        ctx.updateAgentModel(auditAgent.id, fallback);
-        ctx.emit({
-          type: "model_shift" as const,
-          agentId: auditAgent.id,
-          agentIndex: auditAgent.index,
-          fromModel: original,
-          toModel: fallback,
-          reason: "sibling-retry: auditor JSON parse failed after repair",
-        });
-        auditAgent.model = fallback;
+      // Brain fallback: try AI-assisted parsing before sibling-retry.
+      if (ctx.brainPromptFn) {
+        ctx.appendSystem(`Auditor parse still failed after repair — trying brain fallback (${parsed.reason}).`);
         try {
-          await runAuditor(ctx, planner, opts);
-          return;
-        } finally {
-          auditAgent.model = original;
-          ctx.updateAgentModel(auditAgent.id, original);
-          ctx.emit({
-            type: "model_shift" as const,
-            agentId: auditAgent.id,
-            agentIndex: auditAgent.index,
-            fromModel: fallback,
-            toModel: original,
-            reason: "sibling-retry reverted",
-          });
+          const brainResult = await tryBrainFallback(
+            firstResponse,
+            AuditorResponseSchema,
+            "auditor",
+            ctx.brainPromptFn,
+            (e: BrainFallbackEvent) => { ctx.emit({ type: "brain-fallback", ...e }); },
+          );
+          if (brainResult) {
+            parsed = { ok: true as const, result: brainResult, dropped: [] };
+            ctx.appendSystem(`Brain fallback succeeded — extracted auditor verdict.`);
+          }
+        } catch {
+          // Brain call failed — fall through to sibling-retry.
         }
       }
+    }
+    if (!parsed.ok) {
+      const retried = await withSiblingRetry(
+        {
+          agent: auditAgent,
+          modelAtEntry,
+          logPrefix: `[${auditAgent.id}]`,
+          updateAgentModel: ctx.updateAgentModel,
+          emit: ctx.emit,
+          getFallbackModel: () => ctx.getActive()?.plannerFallbackModel,
+          reason: "sibling-retry: auditor JSON parse failed after repair",
+        },
+        async () => {
+          await runAuditor(ctx, planner, opts);
+        },
+      );
+      if (retried) return;
       ctx.appendSystem(
         `Auditor still invalid after repair (${parsed.reason}). Skipping this round; unresolved criteria remain.`,
       );

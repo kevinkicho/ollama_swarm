@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { PlannerSeed, PriorRunSummary } from "./planner.js";
 import { PRIOR_RATIONALE_MAX_CHARS } from "./planner.js";
+import { lenientPreprocess, softCap } from "./lenientParse.js";
 
 // ---------------------------------------------------------------------------
 // Phase 11b: first-pass exit contract.
@@ -34,7 +35,7 @@ const CriterionSchema = z.object({
 
 // Contract envelope. missionStatement is the one-line framing; criteria is the
 // bounded list (planner-side cap of 12 keeps LLMs from over-decomposing).
-const ContractSchema = z.object({
+export const ContractSchema = z.object({
   missionStatement: z.string().trim().min(1).max(500),
   criteria: z.array(CriterionSchema).min(0).max(12),
 });
@@ -65,6 +66,9 @@ export type ContractParseResult =
 import { extractJsonFromText as stripFences } from "../../extractJson.js";
 
 export function parseFirstPassContractResponse(raw: string): ContractParseResult {
+  if (raw.trim().length === 0) {
+    return { ok: false, reason: "empty response — model produced no output after stripping thinking tags" };
+  }
   let parsed: unknown;
   let lastError = "";
   try {
@@ -95,6 +99,10 @@ export function parseFirstPassContractResponse(raw: string): ContractParseResult
   if (typeof missionRaw !== "string" || missionRaw.trim().length === 0) {
     return { ok: false, reason: "missionStatement missing or empty" };
   }
+  // Truncate missionStatement to schema max instead of hard-failing.
+  const missionTruncated = missionRaw.trim().length > 500
+    ? missionRaw.trim().slice(0, 499) + "\u2026"
+    : missionRaw.trim();
   if (!Array.isArray(envelope.criteria)) {
     return { ok: false, reason: "criteria must be an array" };
   }
@@ -102,7 +110,11 @@ export function parseFirstPassContractResponse(raw: string): ContractParseResult
   const criteria: ParsedCriterion[] = [];
   const dropped: ContractDropped[] = [];
   for (const item of envelope.criteria) {
-    const v = CriterionSchema.safeParse(item);
+    const itemProcessed = lenientPreprocess(item, {
+      maxDescription: 400,
+      maxExpectedFiles: 4,
+    });
+    const v = CriterionSchema.safeParse(itemProcessed);
     if (v.success) {
       criteria.push({ description: v.data.description, expectedFiles: v.data.expectedFiles });
     } else {
@@ -113,11 +125,14 @@ export function parseFirstPassContractResponse(raw: string): ContractParseResult
     }
   }
 
+  // Soft-cap: keep up to 12 criteria instead of hard-failing on 13+.
+  const cappedCriteria = softCap(criteria, 12);
+
   // Validate the envelope AFTER per-item filtering, so a single junk criterion
   // doesn't poison the whole contract.
   const capResult = ContractSchema.safeParse({
-    missionStatement: missionRaw.trim(),
-    criteria,
+    missionStatement: missionTruncated,
+    criteria: cappedCriteria,
   });
   if (!capResult.success) {
     const reason = capResult.error.issues

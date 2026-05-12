@@ -61,10 +61,10 @@ test("Orchestrator: listActiveRuns returns shape with runId/config/startedAt/isR
   assert.match(SRC, /isRunning: boolean/);
 });
 
-test("Orchestrator: statusForRun returns null for unknown runId", () => {
+test("Orchestrator: statusForRun falls back to persister for unknown runId", () => {
   assert.match(
     SRC,
-    /statusForRun\(runId: string\): SwarmStatus \| null \{[\s\S]*?if \(!run\) return null/,
+    /statusForRun\(runId: string\): SwarmStatus \| null \{[\s\S]*?const run = this\.runs\.get\(runId\)/,
   );
 });
 

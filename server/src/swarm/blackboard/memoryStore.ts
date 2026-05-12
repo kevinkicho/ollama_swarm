@@ -83,8 +83,8 @@ export async function readMemory(clonePath: string): Promise<MemoryEntry[]> {
     try {
       const parsed = JSON.parse(trimmed);
       if (isValidMemoryEntry(parsed)) out.push(parsed);
-    } catch {
-      // skip malformed line
+    } catch (err) {
+      console.warn('[memoryStore] parse-memory-line-failed:', err instanceof Error ? err.message : String(err));
     }
   }
   return out;
@@ -199,7 +199,8 @@ export function parseMemoryLessons(text: string): string[] {
   const tryParse = (raw: string): unknown => {
     try {
       return JSON.parse(raw.trim());
-    } catch {
+    } catch (err) {
+      console.warn('[memoryStore] parse-memory-lessons-tryParse-failed:', err instanceof Error ? err.message : String(err));
       return null;
     }
   };

@@ -114,14 +114,14 @@ describe("parsePlannerResponse — rejections", () => {
     }
   });
 
-  it("rejects when there are more than 20 valid todos", () => {
+  it("soft-caps to MAX_TODOS_PER_BATCH when more valid todos than the limit", () => {
     const many = Array.from({ length: 21 }, (_, i) => ({
       description: `task ${i}`,
       expectedFiles: [`f${i}.ts`],
     }));
     const r = parsePlannerResponse(JSON.stringify(many));
-    assert.equal(r.ok, false);
-    if (!r.ok) assert.match(r.reason, /too many/);
+    assert.equal(r.ok, true);
+    if (r.ok) assert.equal(r.todos.length, 5); // MAX_TODOS_PER_BATCH
   });
 });
 
@@ -138,16 +138,16 @@ describe("parsePlannerResponse — drops invalid items", () => {
     assert.equal(r.dropped.length, 1);
   });
 
-  it("drops items with more than 2 expectedFiles (atomic-unit rule)", () => {
+  it("truncates items with more than 2 expectedFiles to first 2", () => {
     const raw = JSON.stringify([
       { description: "ok", expectedFiles: ["a.ts"] },
       { description: "too big", expectedFiles: ["a.ts", "b.ts", "c.ts"] },
     ]);
     const r = parsePlannerResponse(raw);
     expectOk(r);
-    assert.equal(r.todos.length, 1);
-    assert.equal(r.dropped.length, 1);
-    assert.match(r.dropped[0].reason, /expectedFiles/);
+    assert.equal(r.todos.length, 2);
+    assert.equal(r.dropped.length, 0);
+    assert.deepEqual(r.todos[1].expectedFiles, ["a.ts", "b.ts"]);
   });
 
   it("drops items with empty expectedFiles list", () => {

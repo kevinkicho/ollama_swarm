@@ -148,13 +148,17 @@ describe("parseWorkerResponse — rejections (v2 hunks)", () => {
     expectErr(r, /expected object|hunks/i);
   });
 
-  it("rejects missing `hunks` field", () => {
+  it("accepts skip-only response even when hunks is missing", () => {
     const raw = JSON.stringify({ skip: "why" });
     const r = parseWorkerResponse(raw, ["a.ts"]);
-    expectErr(r, /hunks/);
+    assert(r.ok, "should accept skip-only response");
+    if (r.ok) {
+      assert.strictEqual(r.skip, "why");
+      assert.strictEqual(r.hunks.length, 0);
+    }
   });
 
-  it("rejects more than 8 hunks", () => {
+  it("soft-caps more than 8 hunks to 8", () => {
     const raw = JSON.stringify({
       hunks: Array.from({ length: 9 }, (_, i) => ({
         op: "replace" as const,
@@ -164,7 +168,8 @@ describe("parseWorkerResponse — rejections (v2 hunks)", () => {
       })),
     });
     const r = parseWorkerResponse(raw, ["a.ts"]);
-    expectErr(r, /hunks/);
+    assert(r.ok, "should succeed with soft cap");
+    assert.strictEqual(r.hunks.length, 8, "should cap to 8 hunks");
   });
 
   it("rejects a hunk whose file is not in expectedFiles", () => {

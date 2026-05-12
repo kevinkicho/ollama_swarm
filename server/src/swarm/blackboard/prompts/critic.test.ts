@@ -115,11 +115,12 @@ describe("parseCriticResponse — rejections", () => {
     if (!res.ok) assert.match(res.reason, /JSON parse failed/);
   });
 
-  it("rejects an over-long rationale (400-char cap)", () => {
+  it("truncates an over-long rationale to 400-char cap", () => {
     const res = parseCriticResponse(
       JSON.stringify({ verdict: "accept", rationale: "x".repeat(401) }),
     );
-    assert.equal(res.ok, false);
+    assert.equal(res.ok, true);
+    if (res.ok) assert.equal(res.critic.rationale.length, 400);
   });
 });
 

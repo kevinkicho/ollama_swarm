@@ -1,5 +1,17 @@
 export type TodoStatus = "open" | "claimed" | "committed" | "stale" | "skipped";
 
+/** Which tier of the parse cascade failed, causing the todo to go stale.
+ *  Used for diagnostics — tells you WHERE work is dying without reading logs. */
+export type StaleReason =
+  | "parse"         // raw output unparseable
+  | "repair"        // repair prompt also failed to produce valid JSON
+  | "brain"         // brain fallback couldn't extract
+  | "sibling"       // sibling model retry also failed
+  | "declined"      // worker explicitly skipped / declined
+  | "hunk-empty"    // worker returned zero hunks with no skip reason
+  | "hunk-fail"     // applyAndCommit failed
+  | "prompt-fail";  // promptAgent threw
+
 export interface Todo {
   id: string;
   description: string;
@@ -12,6 +24,8 @@ export interface Todo {
   replanCount: number;
   claim?: Claim;
   committedAt?: number;
+  /** Which cascade tier produced the committed hunk. */
+  commitTier?: CommitTier;
   // Phase 11a: optional link back to an ExitContract criterion. When set, this
   // todo is the planner/auditor's concrete plan for satisfying that criterion.
   // Unused in Phase 11a behavior — only plumbed through postTodo so later phases

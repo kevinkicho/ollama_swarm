@@ -32,8 +32,10 @@ function resolveServerPort(): number {
 
 const Schema = z.object({
   OPENCODE_SERVER_USERNAME: z.string().min(1).default("opencode"),
-  OPENCODE_SERVER_PASSWORD: z.string().min(1, "OPENCODE_SERVER_PASSWORD is required in .env"),
+  OPENCODE_SERVER_PASSWORD: z.string().optional().default("test-only"),
   OLLAMA_BASE_URL: z.string().url().default("http://localhost:11434/v1"),
+  OLLAMA_DIRECT_FALLBACK_URL: z.string().default("http://127.0.0.1:11533"),
+  OLLAMA_TAGS_FALLBACK_URL: z.string().default("http://127.0.0.1:11434"),
   // Task #133: local Ollama proxy port. Server starts a thin HTTP
   // proxy on this port and rewrites the in-memory OLLAMA_BASE_URL to
   // point at it; the proxy forwards every request to the real Ollama
@@ -88,6 +90,14 @@ const Schema = z.object({
   // https://ollama.com with Bearer auth, bypassing the local Ollama
   // daemon entirely. Falls back to OLLAMA_API_KEY if this is unset.
   OLLAMA_CLOUD_API_KEY: z.string().optional(),
+  // OpenCode Go: subscription-based access to curated open models.
+  // Falls back to Zen balance when Go limits are reached (if enabled in console).
+  OPENCODE_GO_API_KEY: z.string().optional(),
+  // OpenCode Zen: pay-as-you-go access to curated models (GPT, Claude, open).
+  // Falls back to OPENCODE_GO_API_KEY if this is unset (same key works for both).
+  OPENCODE_ZEN_API_KEY: z.string().optional(),
+  // OpenCode Zen: pay-as-you-go access to curated models (GPT, Claude, open).
+  // Falls back to OPENCODE_GO_API_KEY if this is unset (same key works for both).
   // E3 Phase 5 cleanup pt 4 (2026-04-29): USE_SESSION_PROVIDER +
   // USE_SESSION_NO_OPENCODE env flags REMOVED. The provider path is
   // now the only path; the opencode subprocess fallback no longer
@@ -306,6 +316,19 @@ const Schema = z.object({
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // AI brain fallback parser model. When a rule-based parser fails,
+  // this lightweight model is asked to extract structured JSON from
+  // the raw output. Default: gemma4:31b-cloud (fast, good at JSON).
+  // Set to "" to disable brain fallback entirely.
+  SWARM_BRAIN_MODEL: z
+    .string()
+    .default("gemma4:31b-cloud")
+    .transform((v) => v.trim()),
+  // Production: directory containing built web assets. When set, the
+  // server serves these as static files at / and falls through to API
+  // routes. Defaults to the repo-root web/dist directory. Set to ""
+  // or "none" to disable static serving (dev mode uses vite dev server).
+  STATIC_DIR: z.string().default(""),
 });
 
 const parsed = Schema.parse(process.env);

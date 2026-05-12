@@ -19,6 +19,7 @@ import { stripAgentText } from "../../../../shared/src/stripAgentText.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { TodoQueue } from "./TodoQueue.js";
 import type { FindingsLog } from "./FindingsLog.js";
+import type { LifecycleState } from "./lifecycleState.js";
 
 export interface RunnerUtilContext {
   active?: RunConfig;
@@ -31,7 +32,7 @@ export interface RunnerUtilContext {
   consecutiveLoopDetections: number;
   lastLoopWarningAtTurn: number;
   activeAborts: Set<AbortController>;
-  stopping: boolean;
+  lifecycleState: LifecycleState;
   terminationReason?: string;
   loopDetectionsToHalt: number;
   getAmendments?: () => Array<{ ts: number; text: string }>;
@@ -90,18 +91,21 @@ export async function readExpectedFiles(
   files: string[],
 ): Promise<Record<string, string | null>> {
   const out: Record<string, string | null> = {};
-  for (const f of files) {
-    const abs = await resolveSafePath(clonePath, f);
-    try {
-      out[f] = await fs.readFile(abs, "utf8");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        out[f] = null;
-      } else {
-        throw err;
+  // Parallel reads — saves ~500ms-2s per worker turn on multi-file todos.
+  await Promise.all(
+    files.map(async (f) => {
+      try {
+        const abs = await resolveSafePath(clonePath, f);
+        out[f] = await fs.readFile(abs, "utf8");
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          out[f] = null;
+        } else {
+          throw err;
+        }
       }
-    }
-  }
+    }),
+  );
   return out;
 }
 
@@ -182,7 +186,7 @@ export function maybeEmitLoopWarning(ctx: RunnerUtilContext): void {
   if (ctx.consecutiveLoopDetections >= haltCap) {
     const reason = `loop-detected (${haltCap} consecutive detections — last: ${verdict.reason})`;
     ctx.terminationReason = reason;
-    ctx.stopping = true;
+    ctx.lifecycleState = "stopping";
     ctx.appendSystem(
       `[loop-detector] HALT: ${reason}. Stopping the run before more budget burns on repetition.`,
     );

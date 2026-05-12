@@ -79,7 +79,8 @@ async function promptOnFreshSession(
       signal: opts.signal,
     });
     return extractText(res);
-  } catch {
+  } catch (err) {
+    console.warn('[reflectionPasses] prompt-on-fresh-session-failed:', err instanceof Error ? err.message : String(err));
     return undefined;
   } finally {
     opts.onStatusChange?.("ready");

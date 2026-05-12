@@ -36,7 +36,10 @@ const DEBOUNCE_MS = 500;
 // optional `runConfig` field; v1 snapshots are still readable +
 // listable, just not resumable (the recover endpoint refuses
 // without cfg).
-const SCHEMA_VERSION = 2;
+// v3 (2026-05-08): adds optional `contract` field so that post-run
+// REST hydration can recover the contract even after the runner
+// is removed from the in-memory runs map.
+const SCHEMA_VERSION = 3;
 
 /** Subset of the run's RunConfig persisted in the snapshot, just
  *  enough to reconstruct a runnable cfg for /api/swarm/recover.
@@ -73,6 +76,10 @@ export interface PersistedRunState {
   /** T-Item-Recover (2026-05-04): cfg snapshot for resume. Optional
    *  for back-compat with v1 snapshots; absent → not resumable. */
   runConfig?: PersistedRunConfig;
+  /** v3: contract snapshot so that post-run REST hydration can
+   *  recover the contract even after the runner is removed from the
+   *  in-memory runs map. Absent in v1/v2 snapshots. */
+  contract?: unknown;
 }
 
 export interface SnapshotInput {
@@ -86,6 +93,10 @@ export interface SnapshotInput {
    *  is resumable. Optional — the orchestrator passes it; the
    *  persister forwards it as-is. */
   runConfig?: PersistedRunConfig;
+  /** v3 (2026-05-08): contract snapshot for post-run recovery.
+   *  When the runner is removed from the in-memory runs map,
+   *  this is the only source of truth for the contract. */
+  contract?: unknown;
 }
 
 /** RunStatePersister — one instance per active run. Owned by the
@@ -137,6 +148,7 @@ export class RunStatePersister {
       transcript: snap.transcript,
       amendments: snap.amendments,
       ...(snap.runConfig ? { runConfig: snap.runConfig } : {}),
+      ...(snap.contract ? { contract: snap.contract } : {}),
     };
     try {
       // Atomic via tmp + rename. Atomic-rename keeps any concurrent

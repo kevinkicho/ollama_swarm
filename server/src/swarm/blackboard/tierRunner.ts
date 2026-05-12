@@ -2,6 +2,8 @@
 // Manages the drain-audit-repeat loop, tier-up promotion, and related helpers.
 // Takes a narrow TierContext object instead of referencing `this.*`.
 
+const MAX_STUCK_CYCLES_FOR_INFINITE_RUN = 3;
+
 import type { Agent } from "../../services/AgentManager.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { TodoQueueWrappers } from "./todoQueueWrappers.js";
@@ -30,6 +32,7 @@ export interface TierContext {
   getTierUpFailures: () => number;
   getAuditInvocations: () => number;
   getCompletionDetail: () => string | undefined;
+  getConsecutiveStuckCycles: () => number;
 
   // --- state setters ---
   setCurrentTier: (t: number) => void;
@@ -39,6 +42,7 @@ export interface TierContext {
   setTierUpFailures: (t: number) => void;
   setCompletionDetail: (d: string | undefined) => void;
   setContract: (c: ExitContract | undefined) => void;
+  setConsecutiveStuckCycles: (n: number) => void;
 
   // --- callbacks ---
   appendSystem: (msg: string) => void;
@@ -84,6 +88,12 @@ export function allCriteriaResolved(ctx: TierContext): boolean {
   return contract.criteria.every((c) => c.status !== "unmet");
 }
 
+export function allCriteriaMet(ctx: TierContext): boolean {
+  const contract = ctx.getContract();
+  if (!contract) return true;
+  return contract.criteria.every((c) => c.status === "met");
+}
+
 export function allCriteriaResolvedSnapshot(ctx: TierContext): boolean {
   const contract = ctx.getContract();
   if (!contract) return false;
@@ -102,7 +112,9 @@ export function resolvedMaxTiers(ctx: TierContext): number {
 }
 
 export function maxAuditInvocations(ctx: TierContext): number {
-  return ctx.getActive()?.rounds ?? 5;
+  const rounds = ctx.getActive()?.rounds;
+  if (rounds === 0) return Infinity; // autonomous mode — no hard cap
+  return rounds ?? 5;
 }
 
 export function largestCriterionIdNumber(ctx: TierContext): number {
@@ -180,7 +192,7 @@ export async function tryPromoteNextTier(
     ctx.appendSystem(`Tier-up README read failed (${msg}); planner gets no README context.`);
     return null;
   });
-  const repoFiles = await ctx.listRepoFiles(clone, { maxFiles: 150 }).catch((err: unknown) => {
+  const repoFiles = await ctx.listRepoFiles(clone, { maxFiles: 500 }).catch((err: unknown) => {
     const msg = err instanceof Error ? err.message : String(err);
     ctx.logDiag?.({ type: "_tier_up_files_failed", clone, error: msg });
     ctx.appendSystem(`Tier-up file list failed (${msg}); planner gets empty file list.`);
@@ -259,6 +271,18 @@ export async function tryPromoteNextTier(
         `Tier ${nextTier} c${priorMaxId + idx + 1}: ${rejected.length}/${c.expectedFiles.length} path(s) stripped as unbindable.`,
       );
     }
+    if (accepted.length === 0 && c.expectedFiles.length > 0) {
+      ctx.appendSystem(
+        `Tier ${nextTier} c${priorMaxId + idx + 1}: auto-marking as wont-do — all ${c.expectedFiles.length} expectedFile(s) rejected by grounding check.`,
+      );
+      return {
+        id: `c${priorMaxId + idx + 1}`,
+        description: c.description,
+        expectedFiles: [],
+        status: "wont-do" as const,
+        addedAt: tierStartedAt,
+      };
+    }
     return {
       id: `c${priorMaxId + idx + 1}`,
       description: c.description,
@@ -298,7 +322,7 @@ export async function runAuditedExecution(
 
     if (!ctx.getContract() || ctx.getContract()!.criteria.length === 0) return;
 
-    if (allCriteriaResolved(ctx)) {
+    if (allCriteriaMet(ctx)) {
       const maxTiers = resolvedMaxTiers(ctx);
       if (
         maxTiers > 1 &&
@@ -318,7 +342,7 @@ export async function runAuditedExecution(
           continue;
         }
         ctx.setCompletionDetail(
-          "all tier criteria satisfied; tier-up failed after retries — ending run.",
+          "all tier criteria met; tier-up failed after retries — ending run.",
         );
         ctx.appendSystem(ctx.getCompletionDetail()!);
         return;
@@ -327,10 +351,22 @@ export async function runAuditedExecution(
       const currentTier = ctx.getCurrentTier();
       ctx.setCompletionDetail(
         currentTier > 1
-          ? `all tier ${currentTier} criteria satisfied; ratchet cap reached (${maxTiers} tier${maxTiers === 1 ? "" : "s"}).`
-          : "all contract criteria satisfied",
+          ? `all tier ${currentTier} criteria met; ratchet cap reached (${maxTiers} tier${maxTiers === 1 ? "" : "s"}).`
+          : "all contract criteria met",
       );
-      ctx.appendSystem("All contract criteria resolved. Stopping.");
+      ctx.appendSystem("All contract criteria met. Stopping.");
+      return;
+    }
+
+    // All resolved (met or wont-do) but not all met — partial progress.
+    if (allCriteriaResolved(ctx)) {
+      const contract = ctx.getContract();
+      const wontDoCount = contract?.criteria.filter((c) => c.status === "wont-do").length ?? 0;
+      const metCount = contract?.criteria.filter((c) => c.status === "met").length ?? 0;
+      ctx.setCompletionDetail(
+        `${metCount} criterion(crite)ria met, ${wontDoCount} wont-do; remaining unresolvable`,
+      );
+      ctx.appendSystem(ctx.getCompletionDetail()!);
       return;
     }
 
@@ -338,7 +374,9 @@ export async function runAuditedExecution(
     if (ctx.getAuditInvocations() >= cap) {
       ctx.setCompletionDetail(`auditor invocation cap reached (${cap})`);
       ctx.appendSystem(
-        `Auditor invocation cap reached (${cap}). Stopping with unresolved criteria. Raise "Rounds" on the setup form if you want more plan-audit cycles.`,
+        cap === Infinity
+          ? "All criteria resolved — ratchet satisfied."
+          : `Auditor invocation cap reached (${cap}). Stopping with unresolved criteria. Set rounds=0 for autonomous mode.`,
       );
       return;
     }
@@ -352,11 +390,22 @@ export async function runAuditedExecution(
       const fallbackSucceeded = await ctx.runPlannerFallbackForUnmetCriteria(planner);
       if (ctx.getStopping()) return;
       if (fallbackSucceeded) {
+        ctx.setConsecutiveStuckCycles(0);
+        continue;
+      }
+      const stuckCycles = ctx.getConsecutiveStuckCycles() + 1;
+      ctx.setConsecutiveStuckCycles(stuckCycles);
+      const isAutonomous = (ctx.getActive()?.rounds ?? 1) === 0;
+      if (isAutonomous && stuckCycles < MAX_STUCK_CYCLES_FOR_INFINITE_RUN) {
+        ctx.appendSystem(
+          `Stuck cycle ${stuckCycles}/${MAX_STUCK_CYCLES_FOR_INFINITE_RUN} — auditor + planner produced no new work; re-trying in autonomous mode.`,
+        );
         continue;
       }
       ctx.setCompletionDetail("auditor + planner produced no new work; unresolved criteria remain");
       ctx.appendSystem(ctx.getCompletionDetail()! + ".");
       return;
     }
+    ctx.setConsecutiveStuckCycles(0);
   }
 }

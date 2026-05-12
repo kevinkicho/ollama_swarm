@@ -3,6 +3,7 @@ import type { IncomingMessage } from "node:http";
 import type { SwarmEvent } from "../types.js";
 import type { EventLogger } from "./eventLogger.js";
 import { decideSubscriberAction, type SubscriberAction } from "../swarm/subscriberPausePolicy.js";
+import { validateSwarmEvent } from "../../../shared/src/wsProtocol.js";
 
 export interface SubscriberChange {
   runId: string;
@@ -32,7 +33,10 @@ export class Broadcaster {
 
   // Logger is optional so tests can construct a Broadcaster without touching
   // the filesystem. In prod the server always wires one up.
-  constructor(private readonly logger?: EventLogger) {}
+  // validate: when true, validate all broadcast events against the Zod schema
+  // before sending. Defaults to false in production for performance; set to
+  // true in tests or via env SWARM_VALIDATE_WS_EVENTS=1.
+  constructor(private readonly logger?: EventLogger, private readonly validate = false) {}
 
   /** R7 wiring: register a listener that fires when a runId's
    *  subscriber count crosses the 0 ↔ N+ boundary. The orchestrator
@@ -43,15 +47,39 @@ export class Broadcaster {
     this.subscriberChangeListener = listener;
   }
 
+  private heartbeatInterval: NodeJS.Timeout | null = null;
+  private static readonly HEARTBEAT_INTERVAL_MS = 30_000;
+  private static readonly MAX_PAYLOAD_BYTES = 1024 * 1024; // 1MB
+
   attach(wss: WebSocketServer, onConnect: (ws: WebSocket) => void): void {
+    // Start heartbeat that pings all clients every 30s.
+    // Clients that don't respond with pong within 30s are terminated.
+    this.heartbeatInterval = setInterval(() => {
+      for (const [ws, _meta] of this.clients) {
+        const meta = _meta as { runIdFilter?: string; isAlive?: boolean };
+        if (!meta.isAlive) {
+          ws.terminate();
+          this.clients.delete(ws);
+          const filter = meta.runIdFilter;
+          if (filter) this.bumpRunIdCount(filter, -1);
+          continue;
+        }
+        meta.isAlive = false;
+        ws.ping();
+      }
+    }, Broadcaster.HEARTBEAT_INTERVAL_MS);
+    this.heartbeatInterval?.unref?.();
+
     wss.on("connection", (ws, req) => {
       // T-Item-MultiTenant Phase 2: parse `?runId=` from the upgrade
       // URL to set the per-client filter. Bare /ws (no query) → no
       // filter (legacy behavior). Malformed URLs → no filter (fail-
       // open is safe; client just sees all events).
       const filter = parseRunIdFromUpgrade(req);
-      this.clients.set(ws, filter ? { runIdFilter: filter } : {});
+      const meta: { runIdFilter?: string; isAlive?: boolean } = filter ? { runIdFilter: filter, isAlive: true } : { isAlive: true };
+      this.clients.set(ws, meta as unknown as { runIdFilter?: string });
       if (filter) this.bumpRunIdCount(filter, +1);
+      ws.on("pong", () => { meta.isAlive = true; });
       ws.on("close", () => {
         this.clients.delete(ws);
         if (filter) this.bumpRunIdCount(filter, -1);
@@ -62,6 +90,14 @@ export class Broadcaster {
       });
       onConnect(ws);
     });
+  }
+
+  /** Stop heartbeat. Call on server shutdown. */
+  detach(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
   }
 
   /** R7 wiring: adjust the per-runId subscriber count + fire the
@@ -89,6 +125,13 @@ export class Broadcaster {
     });
   }
 
+  /** Parse the runId filter for a connected client. Returns undefined
+   *  when the client has no filter (legacy "all events" mode). */
+  getRunIdFilter(ws: WebSocket): string | undefined {
+    const entry = this.clients.get(ws);
+    return entry?.runIdFilter;
+  }
+
   /** R7 wiring: read-only access to the current per-runId subscriber
    *  count, for diagnostics + tests. */
   getSubscriberCount(runId: string): number {
@@ -108,8 +151,28 @@ export class Broadcaster {
   }
 
   broadcast(event: SwarmEvent): void {
+    // Validate event shape in dev/test mode. When validation is enabled,
+    // malformed events are logged but still broadcast (best-effort) so
+    // the system stays functional — the broadcast layer never drops events
+    // due to schema mismatches, only logs them for debugging.
+    if (this.validate) {
+      const result = validateSwarmEvent(event);
+      if (!result.ok) {
+        console.error(
+          `[ws] broadcast event failed schema validation (type=${(event as Record<string, unknown>).type}):`,
+          result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
+        );
+      }
+    }
     this.logger?.log(event);
     const payload = JSON.stringify(event);
+    if (Buffer.byteLength(payload, "utf8") > Broadcaster.MAX_PAYLOAD_BYTES) {
+      console.warn(
+        `[ws] broadcast dropped: payload ${Buffer.byteLength(payload, "utf8")} bytes exceeds ` +
+        `${Broadcaster.MAX_PAYLOAD_BYTES} byte max (type=${(event as Record<string, unknown>).type}).`,
+      );
+      return;
+    }
     for (const [ws, meta] of this.clients) {
       if (ws.readyState !== ws.OPEN) continue;
       // T-Item-MultiTenant Phase 2: per-runId filter check. When the

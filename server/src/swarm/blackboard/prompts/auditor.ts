@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { ExitContract, ExitCriterion, Finding, Todo } from "../types.js";
 import { windowFileForWorker } from "../windowFile.js";
-// Task #204: shared JSON-from-fenced-text extractor (was duplicated 6×).
 import { extractJsonFromText as stripFences } from "../../extractJson.js";
+import { lenientPreprocess, softCap } from "./lenientParse.js";
 
 // ---------------------------------------------------------------------------
 // Phase 11c: auditor.
@@ -46,7 +46,7 @@ const AuditorNewCriterionSchema = z.object({
   expectedFiles: z.array(filePathEntry).min(0).max(4),
 });
 
-const AuditorResponseSchema = z.object({
+export const AuditorResponseSchema = z.object({
   verdicts: z.array(AuditorVerdictSchema).max(20),
   newCriteria: z.array(AuditorNewCriterionSchema).max(8).optional(),
 });
@@ -84,6 +84,9 @@ export type AuditorParseResult =
 
 
 export function parseAuditorResponse(raw: string): AuditorParseResult {
+  if (raw.trim().length === 0) {
+    return { ok: false, reason: "empty response — model produced no output after stripping thinking tags" };
+  }
   let parsed: unknown;
   let lastError = "";
   try {
@@ -117,7 +120,12 @@ export function parseAuditorResponse(raw: string): AuditorParseResult {
   const verdicts: AuditorVerdict[] = [];
   const dropped: AuditorDropped[] = [];
   for (const item of envelope.verdicts) {
-    const v = AuditorVerdictSchema.safeParse(item);
+    const itemProcessed = lenientPreprocess(item, {
+      maxDescription: 500,
+      maxExpectedFiles: 2,
+      maxRationale: 800,
+    });
+    const v = AuditorVerdictSchema.safeParse(itemProcessed);
     if (v.success) {
       verdicts.push({
         id: v.data.id,
@@ -142,7 +150,11 @@ export function parseAuditorResponse(raw: string): AuditorParseResult {
       return { ok: false, reason: "newCriteria must be an array when present" };
     }
     for (const item of envelope.newCriteria) {
-      const v = AuditorNewCriterionSchema.safeParse(item);
+      const itemProcessed = lenientPreprocess(item, {
+        maxDescription: 400,
+        maxExpectedFiles: 4,
+      });
+      const v = AuditorNewCriterionSchema.safeParse(itemProcessed);
       if (v.success) {
         newCriteria.push({
           description: v.data.description,
@@ -157,9 +169,12 @@ export function parseAuditorResponse(raw: string): AuditorParseResult {
     }
   }
 
+  const cappedVerdicts = softCap(verdicts, 20);
+  const cappedNewCriteria = softCap(newCriteria, 8);
+
   const cap = AuditorResponseSchema.safeParse({
-    verdicts,
-    newCriteria: newCriteria.length > 0 ? newCriteria : undefined,
+    verdicts: cappedVerdicts,
+    newCriteria: cappedNewCriteria.length > 0 ? cappedNewCriteria : undefined,
   });
   if (!cap.success) {
     const reason = cap.error.issues

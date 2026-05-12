@@ -7,6 +7,7 @@ import type { Agent } from "../../services/AgentManager.js";
 import type { AgentState, SwarmEvent, TranscriptEntrySummary } from "../../types.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { ClassifiedError } from "../errorTaxonomy.js";
+import type { LifecycleState } from "./lifecycleState.js";
 import {
   promptWithFailover,
   type FailoverState,
@@ -40,7 +41,7 @@ export interface PromptContext {
   // --- field getters / setters ---
   getActive: () => RunConfig | undefined;
   isStopping: () => boolean;
-  setStopping: (v: boolean) => void;
+  setLifecycleState: (v: LifecycleState) => void;
   getTerminationReason: () => string | undefined;
   setTerminationReason: (v: string | undefined) => void;
   getConsecutiveLoopDetections: () => number;
@@ -137,7 +138,7 @@ export async function promptAgent(
       formatExpect,
       intraStreamLoop: true,
       ollamaDirect: process.env.USE_OLLAMA_DIRECT === "1"
-        ? { baseUrl: ctx.getOllamaBaseUrl() ?? "http://127.0.0.1:11533" }
+        ? { baseUrl: ctx.getOllamaBaseUrl() ?? config.OLLAMA_DIRECT_FALLBACK_URL }
         : undefined,
       ...(ollamaFormat !== undefined ? { ollamaFormat } : {}),
       logDiag: ctx.logDiag,
@@ -270,7 +271,7 @@ export function buildFailoverConfig(ctx: PromptContext): FailoverConfig {
 
 export async function discoverLocalOllamaTags(ctx: PromptContext): Promise<void> {
   try {
-    const baseUrl = (ctx.getOllamaBaseUrl() ?? "http://127.0.0.1:11434").replace(/\/v1\/?$/, "");
+    const baseUrl = (ctx.getOllamaBaseUrl() ?? config.OLLAMA_TAGS_FALLBACK_URL).replace(/\/v1\/?$/, "");
     const r = await fetch(`${baseUrl}/api/tags`, {
       signal: AbortSignal.timeout(3000),
     });

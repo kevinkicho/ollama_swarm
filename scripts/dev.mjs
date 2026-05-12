@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -59,6 +59,30 @@ for (const [label, p] of [["tsx", tsxCli], ["vite", viteCli]]) {
     process.exit(1);
   }
 }
+
+// Git identity check: blackboard workers create commits. If user.name
+// isn't set, commits fail with "Author identity unknown" — a cryptic
+// error that wastes a worker turn. Warn early so the contributor can
+// fix it before starting a run. Don't block startup — non-blackboard
+// presets and local dev don't need git identity.
+(function checkGitIdentity() {
+  try {
+    let name = "";
+    let email = "";
+    try { name = execSync("git config user.name", { encoding: "utf8", windowsHide: true }).trim(); } catch {}
+    try { email = execSync("git config user.email", { encoding: "utf8", windowsHide: true }).trim(); } catch {}
+    if (!name || !email) {
+      console.warn(
+        `[dev] git identity not configured (user.name="${name || '<unset>'}" user.email="${email || '<unset>'}").\n` +
+        `  Blackboard workers create git commits — commits will fail with "Author identity unknown" unless set.\n` +
+        `  Fix: git config user.name "Your Name" && git config user.email "you@example.com"\n` +
+        `  Or for this repo only: git -c user.name="..." -c user.email="..." commit ...\n`
+      );
+    }
+  } catch {
+    // git not installed or not a repo — silently skip.
+  }
+})();
 
 const children = [];
 let shuttingDown = false;

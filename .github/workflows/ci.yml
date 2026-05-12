@@ -56,3 +56,9 @@ jobs:
         env:
           OPENCODE_SERVER_PASSWORD: test-only
         run: npm test --workspace=server
+
+      - name: Verify BlackboardRunner field discovery is current
+        run: npx tsx server/scripts/discover-runner-fields.ts --check
+
+      - name: Verify prompt assertions (drift check)
+        run: npx tsx eval/drift-check.ts

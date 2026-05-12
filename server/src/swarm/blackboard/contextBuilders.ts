@@ -1,4 +1,4 @@
-import type { Agent } from "../../services/AgentManager.js";
+import type { Agent, AgentManager, SpawnOpts } from "../../services/AgentManager.js";
 import type { AgentState, SwarmEvent, SwarmPhase, TranscriptEntry, TranscriptEntrySummary } from "../../types.js";
 import type { RunConfig, RunnerOpts } from "../SwarmRunner.js";
 import type { ClassifiedError, ErrorCategory } from "../errorTaxonomy.js";
@@ -18,6 +18,8 @@ import type { PlannerContext } from "./plannerRunner.js";
 import type { WorkerContext } from "./workerRunner.js";
 import type { PromptContext } from "./promptRunner.js";
 import type { ReplanContext } from "./replanManager.js";
+import type { CloneOptions } from "../../services/RepoService.js";
+import type { AdaptiveWatchdogOpts } from "./adaptiveWorkerWatchdog.js";
 import type { AuditorContext } from "./auditorRunner.js";
 import type { CapContext } from "./capManager.js";
 import type { AdaptiveWatchdogContext } from "./adaptiveWorkerWatchdog.js";
@@ -25,16 +27,14 @@ import type { RunnerUtilContext } from "./runnerUtil.js";
 import type { PlannerSeed } from "./prompts/planner.js";
 import { bumpAgentCounter } from "./runnerHelpers.js";
 import { pheromoneHeatmap } from "../pheromoneHeatmap.js";
+import type { LifecycleState } from "./lifecycleState.js";
+import { brainEnabled } from "./prompts/brainIntegration.js";
 
-// BlackboardRunnerFields describes the subset of the BlackboardRunner
-// instance that the extracted context builders need. Because many
-// fields are private on the class, the runner casts `this` via
-// `asFields()` — the interface exists for documentation, not for
-// compile-time enforcement. Using `any` for method-heavy fields avoids
-// cascading type-mismatch errors while still documenting intent.
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type BlackboardRunnerFields = any;
+// BlackboardRunnerFields is now a generated interface (125 properties,
+// 11 per-context subsets). Regenerate via:
+//   npx tsx server/scripts/discover-runner-fields.ts > server/src/swarm/blackboard/runnerContextTypes.ts
+// The CI check in ci.yml guards against drift (<100 unique props fails).
+import type { BlackboardRunnerFields } from "./runnerContextTypes.js";
 
 export function utilCtx(r: BlackboardRunnerFields): RunnerUtilContext {
   return {
@@ -48,7 +48,7 @@ export function utilCtx(r: BlackboardRunnerFields): RunnerUtilContext {
     consecutiveLoopDetections: r.consecutiveLoopDetections,
     lastLoopWarningAtTurn: r.lastLoopWarningAtTurn,
     activeAborts: r.activeAborts,
-    stopping: r.stopping,
+    lifecycleState: r.lifecycleState,
     terminationReason: r.terminationReason,
     loopDetectionsToHalt: r.loopDetectionsToHalt,
     scheduleStateWrite: () => r.scheduleStateWrite(),
@@ -61,12 +61,10 @@ export function utilCtx(r: BlackboardRunnerFields): RunnerUtilContext {
 export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
   return {
     isRunning: () => r.isRunning(),
-    getStopping: () => r.stopping,
-    setStopping: (v: boolean) => { r.stopping = v; },
-    getDraining: () => r.draining,
-    setDraining: (v: boolean) => { r.draining = v; },
-    getWasDrained: () => r.wasDrained,
-    setWasDrained: (v: boolean) => { r.wasDrained = v; },
+    getLifecycleState: () => r.lifecycleState,
+    setLifecycleState: (v: LifecycleState) => { r.lifecycleState = v; },
+    getWasDrained: () => r._wasDrained,
+    setWasDrained: (v: boolean) => { r._wasDrained = v; },
     getPaused: () => r.paused,
     setPaused: (v: boolean) => { r.paused = v; },
     getRound: () => r.round,
@@ -162,13 +160,14 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
     emit: (ev: SwarmEvent) => r.opts.emit(ev),
     excludeRunnerArtifacts: (destPath: string) => r.opts.repos.excludeRunnerArtifacts(destPath),
     buildSeed: (clonePath: string, cfg: RunConfig) => r.buildSeed(clonePath, cfg),
-    spawnAgentNoOpencode: (opts: any) => r.opts.manager.spawnAgentNoOpencode(opts),
+    spawnAgentNoOpencode: (opts: SpawnOpts) => r.opts.manager.spawnAgentNoOpencode(opts),
     markPlannerStatus: (planner: Agent, status: "thinking" | "ready") => r.markPlannerStatus(planner, status),
-    v2ObserverApply: (ev: any) => r.v2Observer.apply(ev),
+    v2ObserverApply: (ev: SwarmEvent) => r.v2Observer.apply(ev),
     v2ObserverReset: () => r.v2Observer.reset(),
     flushBoardBroadcasterSnapshot: () => r.boardBroadcaster.flushSnapshot(),
     boardCounts: () => r.boardCounts(),
     allCriteriaResolved: () => r.allCriteriaResolved(),
+    allCriteriaMet: () => r.allCriteriaMet(),
     get maxAuditInvocations() { return r.maxAuditInvocations; },
     runAuditor: (planner: Agent, opts?: { allowWhenStopping?: boolean }) => r.runAuditor(planner, opts),
     writeRunSummary: (crashMessage: string | undefined) => r.writeRunSummary(crashMessage),
@@ -189,9 +188,9 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
     startCapWatchdog: () => r.startCapWatchdog(),
     startReplanWatcher: () => r.startReplanWatcher(),
     isOverWallClockCap: () => r.isOverWallClockCap(),
-    startAdaptiveWorkerWatchdog: (opts: any) => r.startAdaptiveWorkerWatchdog(opts),
+    startAdaptiveWorkerWatchdog: (opts: AdaptiveWatchdogOpts) => r.startAdaptiveWorkerWatchdog(opts),
     disposeBoardBroadcaster: () => r.boardBroadcaster.dispose(),
-    clone: (opts: any) => r.opts.repos.clone(opts),
+    clone: (opts: CloneOptions) => r.opts.repos.clone(opts),
     clearTodoQueue: () => r.todoQueue.clear(),
     clearFindings: () => r.findings.clear(),
     stop: () => r.stop(),
@@ -201,7 +200,7 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
 
 export function contractContext(r: BlackboardRunnerFields): ContractContext {
   return {
-    getStopping: () => r.stopping,
+    getStopping: () => r.lifecycleState === "stopping",
     getActive: () => r.active,
     getContract: () => r.contract,
     getPriorSnapshot: () => r.priorSnapshot,
@@ -219,8 +218,9 @@ export function contractContext(r: BlackboardRunnerFields): ContractContext {
     promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => r.promptAgent(agent, prompt, agentName, formatExpect, ollamaFormat),
     emit: (e: unknown) => r.opts.emit(e as SwarmEvent),
     scheduleStateWrite: () => r.scheduleStateWrite(),
-    v2ObserverApply: (event: any) => r.v2Observer.apply(event),
+    v2ObserverApply: (event: SwarmEvent) => r.v2Observer.apply(event),
     repos: r.opts.repos,
+    brainPromptFn: brainEnabled() ? r.brainPromptFn.bind(r) : undefined,
   } as unknown as ContractContext;
 }
 
@@ -228,7 +228,7 @@ export function tierContext(r: BlackboardRunnerFields): TierContext {
   return {
     getContract: () => r.contract,
     getActive: () => r.active,
-    getStopping: () => r.stopping,
+    getStopping: () => r.lifecycleState === "stopping",
     getCurrentTier: () => r.currentTier,
     getTiersCompleted: () => r.tiersCompleted,
     getTierHistory: () => r.tierHistory,
@@ -236,6 +236,7 @@ export function tierContext(r: BlackboardRunnerFields): TierContext {
     getTierUpFailures: () => r.tierUpFailures,
     getAuditInvocations: () => r.auditInvocations,
     getCompletionDetail: () => r.completionDetail,
+    getConsecutiveStuckCycles: () => r.consecutiveStuckCycles,
     setCurrentTier: (t: number) => { r.currentTier = t; },
     setTiersCompleted: (t: number) => { r.tiersCompleted = t; },
     setTierStartedAt: (t: number | undefined) => { r.tierStartedAt = t; },
@@ -243,6 +244,7 @@ export function tierContext(r: BlackboardRunnerFields): TierContext {
     setTierUpFailures: (t: number) => { r.tierUpFailures = t; },
     setCompletionDetail: (d: string | undefined) => { r.completionDetail = d; },
     setContract: (c: ExitContract | undefined) => { r.contract = c; },
+    setConsecutiveStuckCycles: (n: number) => { r.consecutiveStuckCycles = n; },
     appendSystem: (msg: string) => r.appendSystem(msg),
     appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
     promptPlannerSafely: (agent: Agent, promptText: string, agentName: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => r.promptPlannerSafely(agent, promptText, agentName, ollamaFormat),
@@ -254,13 +256,13 @@ export function tierContext(r: BlackboardRunnerFields): TierContext {
     boardListTodos: () => r.boardListTodos(),
     boardCounts: () => r.boardCounts(),
     readReadme: (clonePath: string) => r.opts.repos.readReadme(clonePath),
-    listRepoFiles: (clonePath: string, opts: any) => r.opts.repos.listRepoFiles(clonePath, opts),
-    findPost: (entry: any) => r.findings.post(entry),
+    listRepoFiles: (clonePath: string, opts: { maxFiles?: number }) => r.opts.repos.listRepoFiles(clonePath, opts),
+    findPost: (entry: { agentId: string; text: string; createdAt: number }) => r.findings.post(entry),
     checkAndApplyCaps: () => r.checkAndApplyCaps(),
     runWorkers: (workers: Agent[]) => r.runWorkers(workers),
     runAuditor: (planner: Agent, opts?: { allowWhenStopping?: boolean }) => r.runAuditor(planner, opts),
     runPlannerFallbackForUnmetCriteria: (planner: Agent) => r.runPlannerFallbackForUnmetCriteria(planner),
-    v2ObserverApply: (event: any) => r.v2Observer.apply(event),
+    v2ObserverApply: (event: SwarmEvent) => r.v2Observer.apply(event),
   } as unknown as TierContext;
 }
 
@@ -268,7 +270,7 @@ export function plannerContext(r: BlackboardRunnerFields): PlannerContext {
   return {
     getContract: () => r.contract,
     getActive: () => r.active ?? undefined,
-    isStopping: () => r.stopping,
+    isStopping: () => r.lifecycleState === "stopping",
     getPlannerFallbackModel: () => r.active?.plannerFallbackModel,
     updateAgentModel: (agentId: string, model: string) => { r.opts.manager.updateAgentModel(agentId, model); },
     emit: (e: SwarmEvent) => r.opts.emit(e),
@@ -276,18 +278,19 @@ export function plannerContext(r: BlackboardRunnerFields): PlannerContext {
     appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
     promptPlannerSafely: (agent: Agent, promptText: string, agentName: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => r.promptPlannerSafely(agent, promptText, agentName, ollamaFormat),
     wrappers: r.wrappers,
-    findingsPost: (entry: any) => r.findings.post(entry),
-    v2ObserverApply: (event: any) => r.v2Observer.apply(event),
+    findingsPost: (entry: { agentId: string; text: string; createdAt: number }) => r.findings.post(entry),
+    v2ObserverApply: (event: SwarmEvent) => r.v2Observer.apply(event),
     hypothesisGroupAbortsSet: (groupId: string, controller: AbortController) => { r.hypothesisGroupAborts.set(groupId, controller); },
     buildSeed: (clonePath: string, cfg: RunConfig) => r.buildSeed(clonePath, cfg),
     boardCounts: () => r.boardCounts(),
+    brainPromptFn: brainEnabled() ? r.brainPromptFn.bind(r) : undefined,
   } as unknown as PlannerContext;
 }
 
 export function workerContext(r: BlackboardRunnerFields): WorkerContext {
   return {
-    isStopping: () => r.stopping,
-    isDraining: () => r.draining,
+    isStopping: () => r.lifecycleState === "stopping",
+    isDraining: () => r.lifecycleState === "draining",
     isPaused: () => r.paused,
     isSubscriberPaused: () => r.subscriberPaused,
     isMemoryPaused: () => r.memoryPaused,
@@ -312,9 +315,9 @@ export function workerContext(r: BlackboardRunnerFields): WorkerContext {
     emitAgentState: (s: AgentState) => r.emitAgentState(s),
     readExpectedFiles: (files: string[]) => r.readExpectedFiles(files),
     sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
-    markStatus: (agentId: string, status: any, meta?: any) => r.opts.manager.markStatus(agentId, status, meta),
+    markStatus: (agentId: string, status: AgentState["status"], meta?: Partial<AgentState>) => r.opts.manager.markStatus(agentId, status, meta),
     anyAgentThinking: () => r.opts.manager.anyAgentThinking(),
-    logDiag: (entry: any) => { r.opts.logDiag?.(entry); },
+    logDiag: (entry: unknown) => { r.opts.logDiag?.(entry as Record<string, unknown>); },
     emit: (ev: SwarmEvent) => r.opts.emit(ev),
     maybeSettleHypothesisGroup: (todoId: string) => r.maybeSettleHypothesisGroup(todoId),
     bumpStaleEventCount: () => { r.staleEventCount++; },
@@ -350,6 +353,9 @@ export function workerContext(r: BlackboardRunnerFields): WorkerContext {
     bumpPromptErrors: (agentId: string) => bumpAgentCounter(r.promptErrorsPerAgent, agentId),
     getSelfConsistencyK: () => Math.max(1, Math.min(5, r.active?.selfConsistencyK ?? 1)),
     getPheromoneHeatmap: () => pheromoneHeatmap,
+    brainPromptFn: brainEnabled() ? r.brainPromptFn.bind(r) : undefined,
+    updateAgentModel: (agentId: string, model: string) => { r.opts.manager.updateAgentModel(agentId, model); },
+    getPlannerFallbackModel: () => r.active?.plannerFallbackModel,
   } as unknown as WorkerContext;
 }
 
@@ -367,8 +373,8 @@ export function promptContext(r: BlackboardRunnerFields): PromptContext {
     failoverState: r.failoverState,
     localOllamaTags: r.localOllamaTags,
     getActive: () => r.active,
-    isStopping: () => r.stopping,
-    setStopping: (v: boolean) => { r.stopping = v; },
+    isStopping: () => r.lifecycleState === "stopping",
+    setLifecycleState: (v: LifecycleState) => { r.lifecycleState = v; },
     getTerminationReason: () => r.terminationReason,
     setTerminationReason: (v: string | undefined) => { r.terminationReason = v; },
     getConsecutiveLoopDetections: () => r.consecutiveLoopDetections,
@@ -406,8 +412,8 @@ export function capContext(r: BlackboardRunnerFields): CapContext {
     setLastMemoryPressureLevel: (v: "ok" | "throttle" | "pause") => { r.lastMemoryPressureLevel = v; },
     getSubscriberPaused: () => r.subscriberPaused,
     setSubscriberPaused: (v: boolean) => { r.subscriberPaused = v; },
-    getStopping: () => r.stopping,
-    setStopping: (v: boolean) => { r.stopping = v; },
+    getLifecycleState: () => r.lifecycleState,
+    setLifecycleState: (v: LifecycleState) => { r.lifecycleState = v; },
     getTickAccumulator: () => r.tickAccumulator,
     setTickAccumulator: (v: TickAccumulator | undefined) => { r.tickAccumulator = v; },
     getRunStartedAt: () => r.runStartedAt,
@@ -418,10 +424,10 @@ export function capContext(r: BlackboardRunnerFields): CapContext {
     getActive: () => r.active,
     boardCounts: () => r.boardCounts(),
     getPlanner: () => r.planner,
-    isStopping: () => r.stopping,
+    isStopping: () => r.lifecycleState === "stopping",
     appendSystem: (msg: string, summary?: TranscriptEntrySummary) => r.appendSystem(msg, summary),
     setPhase: (phase: SwarmPhase) => r.setPhase(phase),
-    v2ObserverApply: (event: any) => r.v2Observer.apply(event),
+    v2ObserverApply: (event: SwarmEvent) => r.v2Observer.apply(event),
     recordError: (err: unknown, opts?: { causeHint?: ErrorCategory; statusCode?: number }) => r.recordError(err, opts),
   } as unknown as CapContext;
 }
@@ -432,7 +438,7 @@ export function replanContext(r: BlackboardRunnerFields): ReplanContext {
     getReplanRunning: () => r.replanRunning,
     setReplanRunning: (v: boolean) => { r.replanRunning = v; },
     getPlanner: () => r.planner,
-    isStopping: () => r.stopping,
+    isStopping: () => r.lifecycleState === "stopping",
     boardListTodos: () => r.boardListTodos(),
     boardGetTodo: (id: string) => r.boardGetTodo(id),
     readExpectedFiles: (files: string[]) => r.readExpectedFiles(files),
@@ -441,6 +447,8 @@ export function replanContext(r: BlackboardRunnerFields): ReplanContext {
     appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
     promptPlannerSafely: (agent: Agent, prompt: string, name: "swarm" | "swarm-read" | "swarm-builder", format?: "json" | Record<string, unknown>) => r.promptPlannerSafely(agent, prompt, name, format),
     checkAndApplyCaps: () => r.checkAndApplyCaps(),
+    emit: (e: unknown) => r.opts.emit(e as SwarmEvent),
+    brainPromptFn: brainEnabled() ? r.brainPromptFn.bind(r) : undefined,
   } as unknown as ReplanContext;
 }
 
@@ -451,7 +459,7 @@ export function auditorContext(r: BlackboardRunnerFields): AuditorContext {
     incrementAuditInvocations: () => { r.auditInvocations++; },
     getMaxAuditInvocations: () => r.maxAuditInvocations,
     getAuditor: () => r.auditor,
-    getStopping: () => r.stopping,
+    getStopping: () => r.lifecycleState === "stopping",
     boardListTodos: () => r.boardListTodos(),
     getFindingsList: () => r.findings.list(),
     readExpectedFiles: (paths: string[]) => r.readExpectedFiles(paths),
@@ -465,8 +473,9 @@ export function auditorContext(r: BlackboardRunnerFields): AuditorContext {
     promptPlannerSafely: (agent: Agent, prompt: string, name: "swarm" | "swarm-read" | "swarm-builder", format?: "json" | Record<string, unknown>) => r.promptPlannerSafely(agent, prompt, name, format),
     wrappers: r.wrappers,
     allCriteriaResolvedSnapshot: () => r.allCriteriaResolvedSnapshot(),
-    v2ObserverApply: (event: any) => r.v2Observer.apply(event),
+    v2ObserverApply: (event: SwarmEvent) => r.v2Observer.apply(event),
     getWorkTranscript: () => r.transcript,
+    brainPromptFn: brainEnabled() ? r.brainPromptFn.bind(r) : undefined,
   } as unknown as AuditorContext;
 }
 
@@ -481,7 +490,7 @@ export function adaptiveWatchdogCtx(r: BlackboardRunnerFields): AdaptiveWatchdog
     getActive: () => r.active,
     getManager: () => r.opts.manager,
     getTodoQueue: () => r.todoQueue,
-    isStopping: () => r.stopping,
+    isStopping: () => r.lifecycleState === "stopping",
     appendSystem: (msg: string) => r.appendSystem(msg),
   } as unknown as AdaptiveWatchdogContext;
 }

@@ -37,6 +37,7 @@ import {
   trimAttemptWindow,
   type AttemptRecord,
 } from "./modelHealthTracker.js";
+import { interruptibleSleep } from "./interruptibleSleep.js";
 
 /** Function shape promptWithFailover invokes for each per-model
  *  attempt. Defaults to promptWithRetry; tests inject a stub. */
@@ -81,6 +82,7 @@ export interface FailoverConfig {
 }
 
 const DEFAULT_MAX_SWAPS = 3;
+const UNKNOWN_ERROR_RETRY_BACKOFF_MS = 5_000;
 
 /** Drop-in for promptWithRetry that adds R1/R3/R10 layered failover.
  *  When failoverChain is empty AND localTags is empty AND health-swap
@@ -155,6 +157,22 @@ export async function promptWithFailover(
       message: thrown instanceof Error ? thrown.message : String(thrown),
     });
     if (swaps >= maxSwaps) throw thrown;
+    // When classifyError returns "unknown", the error might be an
+    // unusual transient (non-standard rate limit, unusual 503 variant,
+    // etc.) that isRetryableSdkError didn't catch. Try one more time
+    // with a short backoff before swapping models — a retry is cheaper
+    // than a model swap and the error might be transient.
+    if (classified.category === "unknown") {
+      console.warn(
+        `[promptWithFailover] unclassified error on ${activeModel}: ${classified.rawMessage}`,
+      );
+      if (!triedThisCall.has(`${activeModel}__unknown_retry`)) {
+        triedThisCall.add(`${activeModel}__unknown_retry`);
+        await interruptibleSleep(UNKNOWN_ERROR_RETRY_BACKOFF_MS, baseOpts.signal);
+        continue;
+      }
+      // Second unknown error on the same model — fall through to swap.
+    }
     const decision = decideFailover({
       currentModel: activeModel,
       classified,

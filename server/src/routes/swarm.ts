@@ -6,12 +6,28 @@ import { z } from "zod";
 import { TopologySchema, deriveLegacyFields, synthesizeTopology } from "../../../shared/src/topology.js";
 import { config } from "../config.js";
 import { validateContinuousMode } from "./continuousMode.js";
+import {
+  validate,
+  MemoryStorePostBody,
+  MemoryStoreDeleteParams,
+  ClonePathQuery,
+  PreflightQuery,
+  RunSummaryQuery,
+  OutcomeStatsQuery,
+  OutcomeRecommendQuery,
+  CheckpointsParams,
+  CheckpointFileParams,
+  TimelineParams,
+  SayPerRunBody,
+  RunsQuery,
+} from "./schemas.js";
 import type { Orchestrator } from "../services/Orchestrator.js";
 import { deriveCloneDir, RepoService } from "../services/RepoService.js";
 import { normalizeWslPath } from "../services/pathNormalize.js";
 import { preflightDiskCheck } from "../swarm/preflightDiskCheck.js";
 import { projectRunCost, exceedsBudget } from "../swarm/preflightCostProjector.js";
 import { decideStopAction } from "../swarm/drainStopPolicy.js";
+import { SwarmRoleSchema, StartBody, SayBody, OpenBody } from './schemas.js';
 
 // `parentPath` is the folder the user points at on the setup form; the repo
 // is cloned into `<parentPath>/<repo-name-from-URL>`. The older name
@@ -22,267 +38,6 @@ import { decideStopAction } from "../swarm/drainStopPolicy.js";
 // Unit 32: preset-specific knob shape for role-diff's custom roles list.
 // Max 16 roles (DEFAULT_ROLES has 7; we give headroom without letting the
 // user stuff an unbounded transcript of guidance into every prompt).
-const SwarmRoleSchema = z.object({
-  name: z.string().trim().min(1).max(80),
-  guidance: z.string().trim().min(1).max(2000),
-});
-
-const StartBody = z.object({
-  repoUrl: z.string().url(),
-  parentPath: z.string().min(1),
-  agentCount: z.number().int().min(1).max(8),
-  model: z.string().optional(),
-  // Bumped 2026-04-22 from .max(10) → .max(100). For blackboard, rounds
-  // = max auditor invocations; the 20min wall-clock / 20 commits / 30
-  // todos hard caps still bound runtime so a high `rounds` just removes
-  // a tertiary cap. For non-blackboard presets, rounds maps to actual
-  // work — rounds=100 with 6 agents on a serial preset (round-robin /
-  // role-diff / debate-judge / stigmergy) can mean hours of wall-clock
-  // and proportional cloud-token spend. Use accordingly.
-  rounds: z.number().int().min(1).max(100).optional(),
-  preset: z
-    .enum([
-      "round-robin",
-      "blackboard",
-      "role-diff",
-      "council",
-      "orchestrator-worker",
-      "orchestrator-worker-deep",
-      "debate-judge",
-      "map-reduce",
-      "stigmergy",
-      "baseline",
-      "moa",
-      "pipeline",
-    ])
-    .default("round-robin"),
-  // Unit 25: optional free-text directive that shapes the blackboard
-  // planner's first-pass contract. Capped at 4000 chars to match the
-  // README-excerpt window already in the planner seed (same order of
-  // magnitude of prompt real-estate). Empty/whitespace gets treated as
-  // absent — the planner only sees it when there's actual content.
-  userDirective: z.string().trim().max(4000).optional(),
-  // Unit 32: per-preset knobs. Validated here so the route layer is the
-  // sole boundary between user input and RunConfig. Runners receive
-  // already-validated values and only need to decide how to apply them.
-  roles: z.array(SwarmRoleSchema).min(1).max(16).optional(),
-  councilContract: z.boolean().optional(),
-  proposition: z.string().trim().max(2000).optional(),
-  // Unit 34: per-run ambition ratchet cap. 0 = explicitly disabled; 1-20
-  // enables with that many tiers max. Absent = inherit from env.
-  // Blackboard-only.
-  ambitionTiers: z.number().int().min(0).max(20).optional(),
-  // Unit 35: per-run critic override. Blackboard-only.
-  critic: z.boolean().optional(),
-  // Unit 36: user-supplied running-app URL for auditor UI verification.
-  // Requires MCP_PLAYWRIGHT_ENABLED=true. Blackboard-only.
-  uiUrl: z.string().url().optional(),
-  // Unit 42: per-agent model overrides (blackboard-only). Each falls
-  // back to `model` when absent. Validated as the same loose string
-  // shape as `model` itself — opencode/Ollama is the authoritative
-  // resolver.
-  plannerModel: z.string().trim().min(1).max(200).optional(),
-  workerModel: z.string().trim().min(1).max(200).optional(),
-  // Unit 43: per-run wall-clock cap override (ms). Bounded
-  // [60_000, 8 * 60 * 60_000] = 1 min … 8 h, matching the baked-in
-  // default's range. Anything outside is a config bug, not a feature.
-  wallClockCapMs: z
-    .number()
-    .int()
-    .min(60_000)
-    .max(8 * 60 * 60_000)
-    .optional(),
-  // #296 (2026-04-28): pre-commit verify command (e.g. "npm test").
-  // Bounded length so we don't accept a 100KB shell script via the
-  // route. Trimmed; empty string → undefined → skip the gate
-  // entirely (legacy behavior). Blackboard-only.
-  verifyCommand: z.string().trim().min(1).max(500).optional(),
-  // Unit 51: reload contract + tier state from prior run's
-  // blackboard-state.json instead of re-deriving via first-pass-
-  // contract. Blackboard-only. Default false = existing behavior.
-  resumeContract: z.boolean().optional(),
-  // Unit 58: opt-in to a 4th agent dedicated to the auditor role.
-  // Total agents = agentCount + 1 (auditor is extra; workers
-  // unchanged). Blackboard-only.
-  dedicatedAuditor: z.boolean().optional(),
-  auditorModel: z.string().trim().min(1).max(200).optional(),
-  // Unit 59 (59a): per-worker role bias (correctness / simplicity /
-  // consistency cycling). Blackboard-only.
-  specializedWorkers: z.boolean().optional(),
-  // Unit 60: 3-critic ensemble (substance / regression / consistency)
-  // with majority vote. Blackboard-only; only meaningful when critic
-  // is enabled.
-  criticEnsemble: z.boolean().optional(),
-  // #87 (2026-05-01): self-consistency K for worker hunks. K > 1 runs
-  // the worker prompt K times per todo + applies the majority-voted
-  // hunks envelope. Capped at 5 to bound token cost. Blackboard-only.
-  selfConsistencyK: z.number().int().min(1).max(5).optional(),
-  // #93 deeper (2026-05-01): MoA aggregator count + convergence threshold.
-  // moaAggregatorCount > 1 = K aggregators in parallel, pick most-central.
-  // moaConvergenceThreshold gates round-to-round early stop. MoA-only.
-  moaAggregatorCount: z.number().int().min(1).max(3).optional(),
-  moaConvergenceThreshold: z.number().min(0).max(1).optional(),
-  // #98 (2026-05-01): heterogeneous models per MoA layer. Tests the
-  // value prop "N small + 1 big > 1 big alone" cleanly. MoA-only.
-  moaProposerModel: z.string().trim().min(1).max(200).optional(),
-  moaAggregatorModel: z.string().trim().min(1).max(200).optional(),
-  // T196 + T199 (2026-05-04): per-tier model arrays + extras for the
-  // open-weights-parallelism value prop. Each is opt-in, falls back
-  // to cfg.model when absent.
-  moaProposerModels: z
-    .array(z.string().trim().min(0).max(200))
-    .max(20)
-    .optional(),
-  moaAggregationLevels: z.number().int().min(1).max(4).optional(),
-  orchestratorModel: z.string().trim().min(1).max(200).optional(),
-  midLeadModel: z.string().trim().min(1).max(200).optional(),
-  dispositionModels: z
-    .object({
-      critic: z.string().trim().min(1).max(200).optional(),
-      synthesizer: z.string().trim().min(1).max(200).optional(),
-      "gap-finder": z.string().trim().min(1).max(200).optional(),
-      builder: z.string().trim().min(1).max(200).optional(),
-    })
-    .optional(),
-  // T199 cluster of opt-in flags wired in earlier passes (T197/T198/T199).
-  importGraphSlicing: z.boolean().optional(),
-  crossClusterDiscovery: z.boolean().optional(),
-  streamingReducer: z.boolean().optional(),
-  dynamicRoles: z.boolean().optional(),
-  parallelPropositions: z.boolean().optional(),
-  twoStageMoA: z.boolean().optional(),
-  bidirectionalRefinement: z.boolean().optional(),
-  baselineSelfCritique: z.boolean().optional(),
-  baselineAttempts: z.number().int().min(1).max(5).optional(),
-  testDrivenTodos: z.boolean().optional(),
-  parallelHypothesis: z.boolean().optional(),
-  chainTo: z.enum(["blackboard", "baseline"]).optional(),
-  adaptiveWorkers: z
-    .object({
-      min: z.number().int().min(1).max(20),
-      max: z.number().int().min(1).max(20),
-    })
-    .optional(),
-  // Task #102 (2026-04-25): opt-in post-verdict "build" round for
-  // debate-judge — PRO becomes implementer, CON reviewer, JUDGE
-  // signoff. Default off; debate-judge-only.
-  executeNextAction: z.boolean().optional(),
-  // Task #124: optional per-run hard cap on total tokens (prompt +
-  // response) consumed. User-supplied number, no defaults.
-  tokenBudget: z.number().int().positive().optional(),
-  // Phase 2 of #314: optional per-run dollar ceiling for paid
-  // providers. Capped at $100 to prevent obvious typos (extra zero)
-  // from authorizing a runaway run; users with legitimately bigger
-  // budgets can lift this in the schema after deliberate review.
-  maxCostUsd: z.number().positive().max(100).optional(),
-  // W13 wiring (2026-05-04): per-run provider failover chain. When
-  // set, overrides the env-derived SWARM_PROVIDER_FAILOVER list. Each
-  // element is a provider-prefixed model string (e.g.
-  // "anthropic/claude-haiku-4-5", "glm-5.1:cloud"). Capped at 8
-  // entries to keep failover bounded.
-  providerFailover: z.array(z.string().min(1)).max(8).optional(),
-  // Task #127: when no userDirective is set, auto-generate one via a
-  // pre-pass. Default true (caller can pass false to disable).
-  autoGenerateGoals: z.boolean().optional(),
-  // Task #129: post-completion stretch-goal reflection pass — one
-  // planner prompt asks "what would the BEST version of this work
-  // have done?" and tags the answer for next-run / user review.
-  // Default true; pass false to skip.
-  autoStretchReflection: z.boolean().optional(),
-  // Task #128: per-commit verifier (claim-vs-diff). Default off; opt-in.
-  verifier: z.boolean().optional(),
-  // Per-run override for the V2 worker pipeline. When set, wins over
-  // the USE_WORKER_PIPELINE_V2 env flag for THIS run only. Lets the
-  // user A/B without restarting the dev server. Blackboard-only;
-  // ignored by discussion presets. (See SwarmRunner RunConfig comment
-  // for context.)
-  useWorkerPipeline: z.boolean().optional(),
-  // Issue #3: override the sibling-model fallback used when the
-  // planner returns 0 valid todos. Set to the same value as the
-  // planner model to disable fallback. Blackboard-only.
-  plannerFallbackModel: z.string().trim().min(1).max(200).optional(),
-  // Task #132: continuous mode — run-against-budget instead of
-  // run-against-rounds. Requires at least one budget cap (tokenBudget
-  // or wallClockCapMs); the start handler rejects otherwise.
-  continuous: z.boolean().optional(),
-  // Task #130: persistent cross-run memory (.swarm-memory.jsonl).
-  // Read at planner-seed time + written at run-end (post-stretch).
-  // Default true.
-  autoMemory: z.boolean().optional(),
-  // Task #177: long-horizon DESIGN memory at <clone>/.swarm-design/
-  // (north-star + decisions + roadmap). Default true.
-  autoDesignMemory: z.boolean().optional(),
-  // Task #147: when true, the route auto-stops any existing runner
-  // before starting the new one, instead of returning 409 "A swarm
-  // is already running". Lets clients recover from a stuck-orchestrator
-  // state (e.g. previous start hung in spawning phase, client gave up
-  // on its HTTP request, but the server-side runner is still around).
-  // Default false — explicit opt-in so the UI's normal Start button
-  // can't accidentally clobber a healthy run.
-  force: z.boolean().optional(),
-  // Phase 1 of the topology refactor (#243): explicit per-agent specs.
-  // When present, supersedes legacy fields (agentCount, plannerModel,
-  // workerModel, auditorModel, dedicatedAuditor) — those are derived
-  // from the topology via deriveLegacyFields() and re-injected into
-  // the runner's RunConfig. When absent (older clients), the legacy
-  // fields drive the run unchanged. Synthesis happens at the end of
-  // the handler via synthesizeTopology(), so the post-resolution
-  // RunConfig.topology is always populated for downstream phases
-  // (4a History column, 4b AgentPanel mirroring) to consume.
-  topology: TopologySchema.optional(),
-  // Plan 5: post-round critique — 1 extra prompt/round, any discussion preset.
-  postRoundCritique: z.boolean().optional(),
-  // Plan 7: post-synthesis critique — 1 extra prompt after synthesis, MoA pattern.
-  postSynthesisCritique: z.boolean().optional(),
-  // Plan 6: rotating dispositions for blackboard workers across cycles.
-  workerDispositions: z.boolean().optional(),
-  // Plan 1: debate-judge auditor — PRO/CON/JUDGE replaces single-agent audit.
-  debateAudit: z.boolean().optional(),
-  debateAuditRounds: z.number().int().min(1).max(2).optional(),
-  // Plan 2: council inside map-reduce mappers — draft→revise per slice.
-  councilMappers: z.boolean().optional(),
-  councilMapperRounds: z.number().int().min(1).max(3).optional(),
-  // Plan 3: pheromone heatmap — cross-preset file-attention signal.
-  pheromoneHotseed: z.string().trim().max(100).optional(),
-  pheromoneHotFiles: z.array(z.string().min(1).max(500)).max(50).optional(),
-  // Plan 4: pipeline preset — chain sub-runs with transcript/deliverable piping.
-  pipeline: z.object({
-    phases: z.array(z.object({
-      preset: z.enum([
-        "round-robin", "blackboard", "role-diff", "council",
-        "orchestrator-worker", "orchestrator-worker-deep", "debate-judge",
-        "map-reduce", "stigmergy", "baseline", "moa",
-      ]),
-      rounds: z.number().int().min(1).max(100).optional(),
-      agentCount: z.number().int().min(1).max(8).optional(),
-      model: z.string().trim().min(1).max(200).optional(),
-    })).min(2).max(10),
-    pipeMode: z.enum(["transcript", "deliverable", "both"]).optional(),
-    pipeMaxEntries: z.number().int().min(1).max(100).optional(),
-  }).optional(),
-  rubricGrading: z.boolean().optional(),
-  checkpointing: z.boolean().optional(),
-});
-
-// 2026-05-02: extended /say body with optional intent tag + targetAgent.
-//   intent="suggest" → low-pressure, considered if relevant
-//   intent="steer"   → reshape next planner turn (current behavior, default)
-//   intent="ask"     → answer inline; do NOT change direction
-//   targetAgent      → @mention routing; only this agent's prompt sees the input
-// Default intent is "steer" so existing /say callers keep current semantics.
-const SayBody = z.object({
-  text: z.string().min(1),
-  intent: z.enum(["suggest", "steer", "ask"]).optional(),
-  targetAgent: z.string().min(1).max(64).optional(),
-});
-
-// Unit 52c: open-clone request body. Path is the absolute path of the
-// directory the user wants to open in the OS file manager. Validated
-// at handler time against the orchestrator's known clone — we only
-// open paths the runner is currently or was recently working in,
-// never arbitrary filesystem locations.
-const OpenBody = z.object({ path: z.string().min(1).max(4096) });
-
 export function swarmRouter(orch: Orchestrator): Router {
   const r = Router();
   // Stateless helper — RepoService methods we use here (dirExists,
@@ -347,28 +102,71 @@ export function swarmRouter(orch: Orchestrator): Router {
     const runId = String(req.params.runId);
     const status = orch.statusForRun(runId);
     if (!status) {
-      res.status(404).json({ error: "runId not active" });
+      res.status(404).json({ error: "runId not found" });
       return;
     }
     res.json(status);
   });
 
-  // T-Item-MultiTenant Phase 5 (2026-05-04): per-run user inject.
-  r.post("/runs/:runId/say", (req: Request, res: Response) => {
+  // Cascade stats: stale reasons, commit tiers, hunk/parse quality.
+  // Aggregated from TodoQueue entries for the live run.
+  r.get("/runs/:runId/stats", (req: Request, res: Response) => {
     const runId = String(req.params.runId);
-    const text = typeof req.body?.text === "string" ? req.body.text : "";
-    if (text.trim().length === 0) {
-      res.status(400).json({ error: "text is required" });
+    const status = orch.statusForRun(runId);
+    if (!status) {
+      res.status(404).json({ error: "runId not found" });
       return;
     }
-    const intent =
-      req.body?.intent === "suggest" || req.body?.intent === "ask"
-        ? req.body.intent
-        : "steer";
-    const targetAgent =
-      typeof req.body?.targetAgent === "string" ? req.body.targetAgent : undefined;
+    const board = status.board;
+    const counts = board?.counts;
+    const todos = board?.todos ?? [];
+
+    const staleness: Record<string, number> = {};
+    const commits: Record<string, number> = {};
+    for (const t of todos) {
+      if ((t as any).staleReason) staleness[(t as any).staleReason] = (staleness[(t as any).staleReason] ?? 0) + 1;
+      if ((t as any).commitTier) commits[(t as any).commitTier] = (commits[(t as any).commitTier] ?? 0) + 1;
+    }
+
+    const totalTodos = (counts?.committed ?? 0) + (counts?.stale ?? 0) + (counts?.skipped ?? 0);
+    const cascadeEfficiency = totalTodos > 0 ? Math.round(((counts?.committed ?? 0) / totalTodos) * 1000) / 10 : 0;
+    const EST_MEAN_TURN_MS = 15_000;
+    const wastedWallClockSec = Math.round(((counts?.stale ?? 0) * EST_MEAN_TURN_MS) / 1000);
+
+    const hunkMetrics = {
+      firstTry: (commits["parse"] ?? 0) + (commits["repair"] ?? 0) + (commits["brain"] ?? 0) + (commits["sibling"] ?? 0),
+      hunkRepair: commits["hunk-repair"] ?? 0,
+      hunkFail: staleness["hunk-fail"] ?? 0,
+    };
+
+    const parseMetrics = {
+      parseFails: staleness["parse"] ?? 0,
+      repairFails: staleness["repair"] ?? 0,
+      brainFails: staleness["brain"] ?? 0,
+      siblingFails: staleness["sibling"] ?? 0,
+      declined: staleness["declined"] ?? 0,
+      hunkEmpty: staleness["hunk-empty"] ?? 0,
+    };
+
+    res.json({
+      runId,
+      cascadeEfficiency,
+      wastedWallClockSec,
+      staleness,
+      commits,
+      hunk: hunkMetrics,
+      parse: parseMetrics,
+    });
+  });
+
+  // T-Item-MultiTenant Phase 5 (2026-05-04): per-run user inject.
+  r.post("/runs/:runId/say", validate(SayPerRunBody, "body"), (req: Request, res: Response) => {
+    const runId = String(req.params.runId);
+    const { text, intent, targetAgent } = req.body as unknown as z.infer<typeof SayPerRunBody>;
+    const normalizedIntent =
+      intent === "suggest" || intent === "ask" ? intent : "steer";
     const ok = orch.injectUserForRun(runId, text, {
-      intent,
+      intent: normalizedIntent,
       ...(targetAgent ? { targetAgent } : {}),
     });
     if (!ok) {
@@ -408,13 +206,8 @@ export function swarmRouter(orch: Orchestrator): Router {
   // we flag blocker="not-git-repo" — clone() would reject this with
   // "Destination is not empty and is not a git repo". If destPath
   // doesn't exist, alreadyPresent=false and a fresh clone would happen.
-  r.get("/preflight", async (req: Request, res: Response) => {
-    const repoUrl = typeof req.query.repoUrl === "string" ? req.query.repoUrl : "";
-    const rawParentPath = typeof req.query.parentPath === "string" ? req.query.parentPath : "";
-    if (!repoUrl || !rawParentPath) {
-      res.status(400).json({ error: "repoUrl and parentPath are required" });
-      return;
-    }
+  r.get("/preflight", validate(PreflightQuery, "query"), async (req: Request, res: Response) => {
+    const { repoUrl, parentPath: rawParentPath } = req.query as unknown as z.infer<typeof PreflightQuery>;
     // WSL ↔ Windows boundary: clients under /mnt/c send WSL-style
     // paths; on Windows we must re-spell them as <DRIVE>:\... or
     // path.resolve will create a parallel C:\mnt\c\... tree.
@@ -486,8 +279,8 @@ export function swarmRouter(orch: Orchestrator): Router {
     if (parsed.data.force === true) {
       try {
         await orch.stop();
-      } catch {
-        // ignore — proceed to start; if it fails it'll fail with a real reason
+      } catch (err) {
+        console.warn('[swarm] force-stop-ignored:', err instanceof Error ? err.message : String(err));
       }
     }
     // Phase 1 (#243): when the client posted a topology, derive the
@@ -570,7 +363,7 @@ export function swarmRouter(orch: Orchestrator): Router {
       // long before round 1M. Avoids touching every runner's loop.
       const effectiveRounds = parsed.data.continuous
         ? 1_000_000
-        : (parsed.data.rounds ?? 3);
+        : (parsed.data.rounds ?? (parsed.data.preset === "blackboard" ? 0 : 3));
       // R4 wiring (2026-05-04): pre-flight cost projector. When the
       // user has set maxCostUsd AND the projected spend already
       // exceeds it on Day 1, refuse rather than start a run that's
@@ -639,6 +432,9 @@ export function swarmRouter(orch: Orchestrator): Router {
         // so BlackboardRunner.executeWorkerTodoV2 can construct the
         // verify adapter when present. Other presets ignore.
         verifyCommand: parsed.data.verifyCommand,
+        plannerTools: parsed.data.plannerTools,
+        useLocal: parsed.data.useLocal,
+        createdBy: parsed.data.createdBy,
         resumeContract: parsed.data.resumeContract,
         // Blackboard defaults dedicatedAuditor to ON (env-overridable
         // via DEFAULT_DEDICATED_AUDITOR). Explicit per-run value
@@ -690,6 +486,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         maxCostUsd: parsed.data.maxCostUsd,
         // W13 wiring: per-run failover chain pass-through.
         providerFailover: parsed.data.providerFailover,
+        brainModel: parsed.data.brainModel,
         autoGenerateGoals: parsed.data.autoGenerateGoals,
         autoStretchReflection: parsed.data.autoStretchReflection,
         verifier: parsed.data.verifier,
@@ -849,7 +646,8 @@ export function swarmRouter(orch: Orchestrator): Router {
         res.status(400).json({ error: "open: path is not a directory" });
         return;
       }
-    } catch {
+    } catch (err) {
+      console.warn('[swarm] open-stat-failed:', err instanceof Error ? err.message : String(err));
       res.status(404).json({ error: "open: path does not exist" });
       return;
     }
@@ -904,7 +702,8 @@ export function swarmRouter(orch: Orchestrator): Router {
       let entries: string[];
       try {
         entries = await fs.readdir(parent);
-      } catch {
+      } catch (err) {
+        console.warn('[swarm] readdir-parent-failed:', err instanceof Error ? err.message : String(err));
         continue;
       }
       parentsScanned.push(parent);
@@ -913,7 +712,8 @@ export function swarmRouter(orch: Orchestrator): Router {
         let stat: import("node:fs").Stats;
         try {
           stat = await fs.stat(cloneDir);
-        } catch {
+        } catch (err) {
+          console.warn('[swarm] stat-cloneDir-failed:', err instanceof Error ? err.message : String(err));
           continue;
         }
         if (!stat.isDirectory()) continue;
@@ -950,17 +750,13 @@ export function swarmRouter(orch: Orchestrator): Router {
   // Defensive on bad inputs: 400 on missing params, 404 if the
   // matching summary file doesn't exist or doesn't carry the
   // requested runId, 500 on unexpected I/O.
-  r.get("/run-summary", async (req: Request, res: Response) => {
-    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
-    const runId = typeof req.query.runId === "string" ? req.query.runId : "";
-    if (!clonePath) {
-      res.status(400).json({ error: "clonePath required" });
-      return;
-    }
+  r.get("/run-summary", validate(RunSummaryQuery, "query"), async (req: Request, res: Response) => {
+    const { clonePath, runId } = req.query as unknown as z.infer<typeof RunSummaryQuery>;
     let entries: string[];
     try {
       entries = await fs.readdir(clonePath);
-    } catch {
+    } catch (err) {
+      console.warn('[swarm] readdir-clonePath-failed:', err instanceof Error ? err.message : String(err));
       res.status(404).json({ error: "clonePath not readable" });
       return;
     }
@@ -973,7 +769,8 @@ export function swarmRouter(orch: Orchestrator): Router {
       let raw: string;
       try {
         raw = await fs.readFile(path.join(clonePath, e), "utf8");
-      } catch {
+      } catch (err) {
+        console.warn('[swarm] read-summary-file-failed:', err instanceof Error ? err.message : String(err));
         continue;
       }
       let parsed: Record<string, unknown>;
@@ -981,7 +778,8 @@ export function swarmRouter(orch: Orchestrator): Router {
         const tmp = JSON.parse(raw);
         if (typeof tmp !== "object" || tmp === null) continue;
         parsed = tmp as Record<string, unknown>;
-      } catch {
+      } catch (err) {
+        console.warn('[swarm] parse-summary-json-failed:', err instanceof Error ? err.message : String(err));
         continue;
       }
       // If runId requested, only return the matching summary. If not
@@ -997,18 +795,9 @@ export function swarmRouter(orch: Orchestrator): Router {
   // entries (newest first by ts), or [] if missing. Cheap — file is
   // capped at 1 MB by memoryStore's prune logic. Used by the UI memory-
   // log sidebar to surface lessons learned across prior runs.
-  r.get("/memory", async (req: Request, res: Response) => {
-    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
-    if (!clonePath) {
-      res.status(400).json({ error: "clonePath required" });
-      return;
-    }
-    // #240 (2026-04-28): when ?includeOtherParents=true, also aggregate
-    // memory entries from clones in OTHER known parent paths. Each
-    // entry gets tagged with its source clone so the UI can group.
-    const includeOtherParents =
-      typeof req.query.includeOtherParents === "string" &&
-      req.query.includeOtherParents.toLowerCase() === "true";
+  r.get("/memory", validate(ClonePathQuery, "query"), async (req: Request, res: Response) => {
+    const { clonePath, includeOtherParents: includeOther } = req.query as unknown as z.infer<typeof ClonePathQuery>;
+    const includeOtherParents = includeOther === true;
     const clonesToScan: string[] = [clonePath];
     const otherClones: string[] = [];
     if (includeOtherParents) {
@@ -1024,8 +813,8 @@ export function swarmRouter(orch: Orchestrator): Router {
             clonesToScan.push(candidate);
             otherClones.push(candidate);
           }
-        } catch {
-          // skip parent dirs that don't have this clone
+        } catch (err) {
+          console.warn('[swarm] stat-other-parent-clone-failed:', err instanceof Error ? err.message : String(err));
         }
       }
     }
@@ -1055,8 +844,8 @@ export function swarmRouter(orch: Orchestrator): Router {
             if (dir === clonePath) primaryEntries++;
             else otherParentEntries++;
           }
-        } catch {
-          // skip malformed lines silently — same policy as memoryStore.readMemory
+        } catch (err) {
+          console.warn('[swarm] parse-memory-line-failed:', err instanceof Error ? err.message : String(err));
         }
       }
     }
@@ -1072,12 +861,8 @@ export function swarmRouter(orch: Orchestrator): Router {
   });
 
   // Direction 1 Phase 2: outcome history + preset recommendation.
-  r.get("/outcome/stats", async (req: Request, res: Response) => {
-    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
-    if (!clonePath) {
-      res.status(400).json({ error: "clonePath required" });
-      return;
-    }
+  r.get("/outcome/stats", validate(OutcomeStatsQuery, "query"), async (req: Request, res: Response) => {
+    const { clonePath } = req.query as unknown as z.infer<typeof OutcomeStatsQuery>;
     const { readOutcomeHistory: readHistory, computeStats: computeOutcomeStats } = await import("../swarm/outcomeHistory.js");
     const outcomes = await readHistory(clonePath);
     const stats = computeOutcomeStats(outcomes);
@@ -1088,13 +873,8 @@ export function swarmRouter(orch: Orchestrator): Router {
     res.json({ outcomes: outcomes.length, stats: result });
   });
 
-  r.get("/outcome/recommend", async (req: Request, res: Response) => {
-    const directive = typeof req.query.directive === "string" ? req.query.directive : "";
-    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
-    if (!directive) {
-      res.status(400).json({ error: "directive required" });
-      return;
-    }
+  r.get("/outcome/recommend", validate(OutcomeRecommendQuery, "query"), async (req: Request, res: Response) => {
+    const { directive, clonePath } = req.query as unknown as z.infer<typeof OutcomeRecommendQuery>;
     const { recommendPreset: recommend, readOutcomeHistory: readHistory } = await import("../swarm/outcomeHistory.js");
     const { suggestAdaptiveParams } = await import("../swarm/adaptiveParams.js");
     const outcomes = clonePath ? await readHistory(clonePath) : [];
@@ -1104,26 +884,17 @@ export function swarmRouter(orch: Orchestrator): Router {
   });
 
   // Direction 6: checkpoint listing + read.
-  r.get("/checkpoints/:runId", async (req: Request, res: Response) => {
-    const runId = typeof req.params.runId === "string" ? req.params.runId : String(req.params.runId);
-    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
-    if (!clonePath) {
-      res.status(400).json({ error: "clonePath query parameter required" });
-      return;
-    }
+  r.get("/checkpoints/:runId", validate(CheckpointsParams, "params"), validate(ClonePathQuery, "query"), async (req: Request, res: Response) => {
+    const { runId } = req.params as unknown as z.infer<typeof CheckpointsParams>;
+    const { clonePath } = req.query as unknown as z.infer<typeof ClonePathQuery>;
     const { listCheckpoints } = await import("../swarm/checkpoint.js");
     const checkpoints = await listCheckpoints(clonePath, runId);
     res.json({ runId, checkpoints });
   });
 
-  r.get("/checkpoints/:runId/:fileName", async (req: Request, res: Response) => {
-    const runId = typeof req.params.runId === "string" ? req.params.runId : String(req.params.runId);
-    const fileName = typeof req.params.fileName === "string" ? req.params.fileName : String(req.params.fileName);
-    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
-    if (!clonePath) {
-      res.status(400).json({ error: "clonePath query parameter required" });
-      return;
-    }
+  r.get("/checkpoints/:runId/:fileName", validate(CheckpointFileParams, "params"), validate(ClonePathQuery, "query"), async (req: Request, res: Response) => {
+    const { runId, fileName } = req.params as unknown as z.infer<typeof CheckpointFileParams>;
+    const { clonePath } = req.query as unknown as z.infer<typeof ClonePathQuery>;
     const { readCheckpoint } = await import("../swarm/checkpoint.js");
     const checkpoint = await readCheckpoint(clonePath, runId, fileName);
     if (!checkpoint) {
@@ -1134,13 +905,9 @@ export function swarmRouter(orch: Orchestrator): Router {
   });
 
   // Direction 6 Phase 2: event timeline.
-  r.get("/timeline/:runId", async (req: Request, res: Response) => {
-    const runId = typeof req.params.runId === "string" ? req.params.runId : String(req.params.runId);
-    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
-    if (!clonePath) {
-      res.status(400).json({ error: "clonePath query parameter required" });
-      return;
-    }
+  r.get("/timeline/:runId", validate(TimelineParams, "params"), validate(ClonePathQuery, "query"), async (req: Request, res: Response) => {
+    const { runId } = req.params as unknown as z.infer<typeof TimelineParams>;
+    const { clonePath } = req.query as unknown as z.infer<typeof ClonePathQuery>;
     const { getTimeline } = await import("../swarm/timeline.js");
     const timeline = await getTimeline(clonePath, runId);
     if (!timeline) {
@@ -1151,23 +918,15 @@ export function swarmRouter(orch: Orchestrator): Router {
   });
 
   // Direction 5: persistent memory store CRUD.
-  r.get("/memory-store", async (req: Request, res: Response) => {
-    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
-    if (!clonePath) {
-      res.status(400).json({ error: "clonePath required" });
-      return;
-    }
+  r.get("/memory-store", validate(ClonePathQuery, "query"), async (req: Request, res: Response) => {
+    const { clonePath } = req.query as unknown as z.infer<typeof ClonePathQuery>;
     const { loadMemoryStore } = await import("../memory/MemoryStore.js");
     const store = await loadMemoryStore(clonePath);
     res.json({ entries: store.snapshot() });
   });
 
-  r.post("/memory-store", async (req: Request, res: Response) => {
-    const { key, value, tags, clonePath } = req.body as { key?: string; value?: string; tags?: string[]; clonePath?: string };
-    if (!key || !value || !clonePath) {
-      res.status(400).json({ error: "key, value, and clonePath required" });
-      return;
-    }
+  r.post("/memory-store", validate(MemoryStorePostBody, "body"), async (req: Request, res: Response) => {
+    const { key, value, tags, clonePath } = req.body as unknown as z.infer<typeof MemoryStorePostBody>;
     const { loadMemoryStore } = await import("../memory/MemoryStore.js");
     const store = await loadMemoryStore(clonePath);
     store.store(key, value, tags, "user");
@@ -1175,13 +934,9 @@ export function swarmRouter(orch: Orchestrator): Router {
     res.json({ ok: true, key });
   });
 
-  r.delete("/memory-store/:key", async (req: Request, res: Response) => {
-    const key = typeof req.params.key === "string" ? req.params.key : String(req.params.key);
-    const clonePath = typeof req.query.clonePath === "string" ? req.query.clonePath : "";
-    if (!clonePath) {
-      res.status(400).json({ error: "clonePath required" });
-      return;
-    }
+  r.delete("/memory-store/:key", validate(MemoryStoreDeleteParams, "params"), validate(ClonePathQuery, "query"), async (req: Request, res: Response) => {
+    const { key } = req.params as unknown as z.infer<typeof MemoryStoreDeleteParams>;
+    const { clonePath } = req.query as unknown as z.infer<typeof ClonePathQuery>;
     const { loadMemoryStore } = await import("../memory/MemoryStore.js");
     const store = await loadMemoryStore(clonePath);
     const deleted = store.forget(key);
@@ -1227,7 +982,8 @@ function parseSummaryToDigest(
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    console.warn('[swarm] parse-summary-digest-failed:', err instanceof Error ? err.message : String(err));
     return null;
   }
   if (typeof parsed !== "object" || parsed === null) return null;
@@ -1288,7 +1044,8 @@ async function readAllRunDigests(
   try {
     const all = await fs.readdir(cloneDir);
     perRun = all.filter((e) => /^summary-.+\.json$/.test(e));
-  } catch {
+  } catch (err) {
+    console.warn('[swarm] readdir-cloneDir-digests-failed:', err instanceof Error ? err.message : String(err));
     // unreadable cloneDir — return empty
     return [];
   }
@@ -1296,7 +1053,8 @@ async function readAllRunDigests(
     let raw: string;
     try {
       raw = await fs.readFile(path.join(cloneDir, e), "utf8");
-    } catch {
+    } catch (err) {
+      console.warn('[swarm] read-perRun-summary-failed:', err instanceof Error ? err.message : String(err));
       continue;
     }
     const d = parseSummaryToDigest(raw, cloneDir, name);
@@ -1314,7 +1072,8 @@ async function readAllRunDigests(
   let latestRaw: string | null = null;
   try {
     latestRaw = await fs.readFile(path.join(cloneDir, "summary.json"), "utf8");
-  } catch {
+  } catch (err) {
+    console.warn('[swarm] read-summary-pointer-failed:', err instanceof Error ? err.message : String(err));
     // no latest pointer — fine
   }
   if (latestRaw !== null) {
@@ -1341,7 +1100,8 @@ function isWsl2(): boolean {
   try {
     const release = readFileSync("/proc/version", "utf8");
     return /microsoft/i.test(release);
-  } catch {
+  } catch (err) {
+    console.warn('[swarm] read-proc-version-failed:', err instanceof Error ? err.message : String(err));
     return false;
   }
 }
@@ -1417,7 +1177,8 @@ function wslPathToWindows(linuxPath: string): string | null {
     if (result.status !== 0) return null;
     const out = (result.stdout ?? "").trim();
     return out.length > 0 ? out : null;
-  } catch {
+  } catch (err) {
+    console.warn('[swarm] wslpath-failed:', err instanceof Error ? err.message : String(err));
     return null;
   }
 }

@@ -122,3 +122,32 @@ test("broadcast — multiple clients with different filters get different stream
   assert.equal(wsB.sent.length, 1);
   assert.equal(wsAll.sent.length, 2);
 });
+
+test("getRunIdFilter — returns filter for seeded client, undefined for unfiltered", () => {
+  const bc = new Broadcaster();
+  const wsFiltered = makeFakeWs();
+  const wsUnfiltered = makeFakeWs();
+  seedClient(bc, wsFiltered, "run-42");
+  seedClient(bc, wsUnfiltered);
+  assert.equal(bc.getRunIdFilter(wsFiltered as unknown as WebSocket), "run-42");
+  assert.equal(bc.getRunIdFilter(wsUnfiltered as unknown as WebSocket), undefined);
+});
+
+test("broadcast drops events exceeding MAX_PAYLOAD_BYTES", () => {
+  const bc = new Broadcaster();
+  const ws = makeFakeWs();
+  seedClient(bc, ws);
+
+  // Create an event large enough to exceed 1MB
+  const huge = "x".repeat(1.1 * 1024 * 1024); // ~1.1 MB
+  bc.broadcast({ type: "system", text: huge, ts: Date.now() } as unknown as SwarmEvent);
+  assert.equal(ws.sent.length, 0, "oversized event should be dropped");
+});
+
+test("broadcast still sends events under MAX_PAYLOAD_BYTES", () => {
+  const bc = new Broadcaster();
+  const ws = makeFakeWs();
+  seedClient(bc, ws);
+  bc.broadcast({ type: "swarm_state", phase: "idle", round: 0 } as SwarmEvent);
+  assert.equal(ws.sent.length, 1, "normal event should pass through");
+});

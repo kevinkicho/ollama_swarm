@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createOutcomeEmitter, type OutcomeScoredEvent } from "./outcomeTypes.js";
 import type { Agent } from "../services/AgentManager.js";
 
 import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
@@ -69,6 +70,8 @@ import {
 // runner picks up the most recent user-injected text as the proposition.
 // Discussion-only, no file edits.
 export class DebateJudgeRunner extends DiscussionRunnerBase {
+  protected getPresetName(): string { return "Debate-Judge"; }
+
   // Unit 33: cross-preset metrics — see RoundRobinRunner for rationale.
 
   // User-supplied proposition override, captured by injectUser before start.
@@ -369,7 +372,7 @@ export class DebateJudgeRunner extends DiscussionRunnerBase {
             `Debate-judge preset · 3 agents · ran ${s.round}/${cfg.rounds} rounds${s.earlyStopDetail ? ` · early-stop: ${s.earlyStopDetail}` : ""}`,
         },
         transcript: this.transcript,
-        emitOutcome: (outcome: any) => this.opts.emit({ type: "outcome_scored" as const, runId: outcome.runId, score: outcome.score, verdict: outcome.verdict, dimensions: outcome.dimensions }),
+        emitOutcome: createOutcomeEmitter((e) => this.opts.emit(e)),
         wallClockMs: this.startedAt ? Date.now() - this.startedAt : 0,
       });
     }
@@ -417,23 +420,7 @@ export class DebateJudgeRunner extends DiscussionRunnerBase {
       unit: "round",
     });
     for (let r = 1; r <= cfg.rounds; r++) {
-      if (this.stopping) break;
-      const guard = checkBudgetGuards({
-        tokenBaseline,
-        tokenBudget: cfg.tokenBudget,
-        round: r,
-        totalRounds: cfg.rounds,
-        unit: "round",
-      });
-      if (guard.halt) {
-        this.earlyStopDetail = guard.earlyStopDetail;
-        this.appendSystem(guard.message ?? "");
-        break;
-      }
-      // In stream-mode, this.round becomes the max round any stream
-      // has reached so far — informational only (UI sparkline).
-      if (r > this.round) this.round = r;
-      this.opts.emit({ type: "swarm_state", phase: "discussing", round: this.round });
+      if (!this.checkRoundBudget(cfg, "round", r, tokenBaseline)) break;
 
       const isFinalRound = r === cfg.rounds;
       // Track stream-local OR main-transcript additions for the

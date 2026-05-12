@@ -57,3 +57,45 @@ export {
   OPENAI_MODELS,
 } from "./providers.js";
 export type { Provider, OpenCodeModelRef } from "./providers.js";
+
+// WS wire-protocol schemas + types (single source of truth for both
+// server broadcast and web client validation).
+export {
+  SwarmPhaseSchema,
+  TodoStatusSchema,
+  ExitCriterionStatusSchema,
+  StopReasonSchema,
+  AgentStatusSchema,
+  TranscriptRoleSchema,
+  ClaimSchema,
+  ExitCriterionSchema,
+  ExitContractSchema,
+  TodoSchema,
+  AgentStateSchema,
+  FindingSchema,
+  BoardSnapshotSchema,
+  BoardCountsDTOSchema,
+  DeliverableSchema,
+  SwarmEventSchema,
+  PerAgentStatSchema,
+  validateSwarmEvent,
+} from "./wsProtocol.js";
+export type {
+  SwarmPhase,
+  TodoStatus,
+  ExitCriterionStatus,
+  StopReason,
+  AgentStatus,
+  TranscriptRole,
+  Claim,
+  ExitCriterion,
+  ExitContract,
+  Todo,
+  AgentState as WsAgentState,
+  Finding,
+  BoardSnapshot as WsBoardSnapshot,
+  BoardCountsDTO as WsBoardCountsDTO,
+  Deliverable,
+  SwarmEvent,
+  PerAgentStat,
+} from "./wsProtocol.js";

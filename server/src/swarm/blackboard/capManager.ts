@@ -3,6 +3,7 @@
 // memory-pressure pause, subscriber-disconnect pause, and the cap watchdog.
 // Takes a narrow context object instead of referencing `this.*`.
 
+import type { LifecycleState } from "./lifecycleState.js";
 import type { Agent } from "../../services/AgentManager.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { TranscriptEntrySummary } from "../../types.js";
@@ -51,8 +52,8 @@ export interface CapContext {
   setLastMemoryPressureLevel: (v: "ok" | "throttle" | "pause") => void;
   getSubscriberPaused: () => boolean;
   setSubscriberPaused: (v: boolean) => void;
-  getStopping: () => boolean;
-  setStopping: (v: boolean) => void;
+  getLifecycleState: () => LifecycleState;
+  setLifecycleState: (v: LifecycleState) => void;
   getTickAccumulator: () => TickAccumulator | undefined;
   setTickAccumulator: (v: TickAccumulator | undefined) => void;
   getRunStartedAt: () => number | undefined;
@@ -74,6 +75,7 @@ export interface CapContext {
 
   // --- misc ---
   isStopping: () => boolean;
+  // shorthand: isStopping() === lifecycleState === "stopping"
   appendSystem: (msg: string, summary?: TranscriptEntrySummary) => void;
   setPhase: (phase: string) => void;
   v2ObserverApply: (event: { type: string; ts: number; reason?: string }) => void;
@@ -135,7 +137,7 @@ export function checkAndApplyCaps(ctx: CapContext): boolean {
   if (!finalReason) return false;
   ctx.setTerminationReason(finalReason);
   ctx.appendSystem(`Stopping: ${finalReason}`);
-  ctx.setStopping(true);
+  ctx.setLifecycleState("stopping");
   for (const ctrl of ctx.getActiveAborts()) {
     try {
       ctrl.abort(new Error(`cap: ${finalReason}`));
@@ -209,7 +211,7 @@ export async function runPauseProbe(ctx: CapContext): Promise<void> {
     ctx.appendSystem(
       `Pause cap of ${MAX_PAUSE_TOTAL_MS / 60_000} min exceeded; upstream wall never cleared. Stopping permanently.`,
     );
-    ctx.setStopping(true);
+    ctx.setLifecycleState("stopping");
     for (const ctrl of ctx.getActiveAborts()) {
       try { ctrl.abort(new Error("paused: cap exceeded")); } catch { /* */ }
     }

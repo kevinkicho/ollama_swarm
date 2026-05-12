@@ -16,6 +16,7 @@
 import {
   writeFileSync,
   readFileSync,
+  readdirSync,
   unlinkSync,
   existsSync,
   mkdirSync,
@@ -98,6 +99,37 @@ export interface AcquireResult {
   heldBy?: LockInfo;
   /** Diagnostic / log message. */
   reason: string;
+}
+
+/** Walk known parent directories and remove any clone lock files whose
+ *  PID is no longer alive. Called at server startup to prevent stale
+ *  locks left by killed/crashed processes from blocking new runs.
+ *  Returns the number of stale locks reclaimed. */
+export function reclaimStaleLocks(parentPaths: string[], isPidAlive: (pid: number) => boolean = defaultIsPidAlive): number {
+  let reclaimed = 0;
+  for (const parent of parentPaths) {
+    try {
+      const entries = readdirSync(parent);
+      for (const entry of entries) {
+        if (!entry.endsWith(LOCK_FILE_NAME)) continue;
+        const lockPath = path.join(parent, entry);
+        let raw: string;
+        try { raw = readFileSync(lockPath, "utf8"); } catch { continue; }
+        const existing = parseLockFile(raw);
+        if (!existing) {
+          try { unlinkSync(lockPath); reclaimed++; } catch { /* ignore */ }
+          continue;
+        }
+        const status = classifyLock({ lock: existing, isPidAlive, currentHostname: os.hostname() });
+        if (status.kind === "stale") {
+          try { unlinkSync(lockPath); reclaimed++; } catch { /* ignore */ }
+        }
+      }
+    } catch {
+      // parent dir doesn't exist or is unreadable — skip
+    }
+  }
+  return reclaimed;
 }
 
 /** Default PID-liveness check using `process.kill(pid, 0)`. Returns

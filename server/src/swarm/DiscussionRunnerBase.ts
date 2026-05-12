@@ -35,6 +35,10 @@ import { buildCheckpoint, writeCheckpoint } from "./checkpoint.js";
 import { discussionWriteSummary } from "./discussionWriteSummary.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { maybeRunPostRoundCritique } from "./postRoundCritique.js";
+import type { RunAgentOpts } from "./postRoundCritiqueTypes.js";
+import { tokenTracker, snapshotLifetimeTokens } from "../services/ollamaProxy.js";
+import { checkBudgetGuards } from "./loopGuards.js";
+import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 
 export interface CloneSpawnResult {
   destPath: string;
@@ -52,28 +56,7 @@ export interface CloneSpawnOpts {
   extraReadyMessage?: string;
 }
 
-export interface RunAgentOpts {
-  /** Runner name for diagnostic logging (e.g. "council", "debate-judge") */
-  runnerName: string;
-  /** Agent name for the prompt call: "swarm-read" (discussion) or "swarm" (write-capable) */
-  agentName?: "swarm" | "swarm-read";
-  /** Custom summary for the transcript entry. Can be a static value or a
-   *  function that receives the final stripped text and returns a summary. */
-  enrichSummary?: TranscriptEntrySummary | ((text: string) => TranscriptEntrySummary | undefined);
-  /** Optional model override for this specific prompt call (e.g. dynamic routing) */
-  modelOverride?: string;
-  /** Called after the transcript entry is pushed (for multiWriter collection, etc.) */
-  onEntryPushed?: (entry: TranscriptEntry, strippedText: string) => void;
-  /** Stats instance to record timing/retry/junk metrics. If provided,
-   *  onTiming/onRetry/recordTokens are wired automatically. */
-  stats: {
-    countTurn(agentId: string): void;
-    onTiming(agentId: string, success: boolean, elapsedMs: number): void;
-    onRetry(agentId: string): void;
-    recordJunkPostRetry(agentId: string, isJunk: boolean): number;
-    recordTokens(agentId: string, promptTokens: number, responseTokens: number): void;
-  };
-}
+export { type RunAgentOpts } from "./postRoundCritiqueTypes.js";
 
 export abstract class DiscussionRunnerBase {
   protected transcript: TranscriptEntry[] = [];
@@ -262,10 +245,10 @@ export abstract class DiscussionRunnerBase {
       );
     }
 
-    const portList = ready.map((a) => a.port).join(", ");
+    const modelList = ready.map((a) => a.model).join(", ");
     const extra = spawnOpts.extraReadyMessage ? ` ${spawnOpts.extraReadyMessage}` : "";
     this.appendSystem(
-      `${ready.length}/${cfg.agentCount} agents ready on ports ${portList}.${extra}`,
+      `${ready.length}/${cfg.agentCount} agents ready — models: ${modelList}.${extra}`,
       buildAgentsReadySummary({
         manager: this.opts.manager,
         preset: spawnOpts.preset,
@@ -304,7 +287,7 @@ export abstract class DiscussionRunnerBase {
     this.emitAgentState({
       id: agent.id,
       index: agent.index,
-      port: agent.port,
+
       sessionId: agent.sessionId,
       status: "thinking",
       thinkingSince: Date.now(),
@@ -365,7 +348,7 @@ export abstract class DiscussionRunnerBase {
           this.emitAgentState({
             id: agent.id,
             index: agent.index,
-            port: agent.port,
+      
             sessionId: agent.sessionId,
             status: "retrying",
             retryAttempt: attempt,
@@ -422,7 +405,7 @@ export abstract class DiscussionRunnerBase {
       this.emitAgentState({
         id: agent.id,
         index: agent.index,
-        port: agent.port,
+  
         sessionId: agent.sessionId,
         status: "ready",
         lastMessageAt: entry.ts,
@@ -451,7 +434,7 @@ export abstract class DiscussionRunnerBase {
       this.emitAgentState({
         id: agent.id,
         index: agent.index,
-        port: agent.port,
+  
         sessionId: agent.sessionId,
         status: "failed",
         error: msg,
@@ -460,5 +443,91 @@ export abstract class DiscussionRunnerBase {
     } finally {
       watchdog.cancel();
     }
+  }
+
+  /** Subclass must return its preset name (e.g. "Council", "Round-robin").
+   *  Used by system messages and the closeOut path.
+   *  Replaces magic strings scattered across each runner. */
+  protected abstract getPresetName(): string;
+
+  /**
+   * Shared discussion loop skeleton. Handles try/catch error capture
+   * and finally closeOut. The inner function receives (cfg) and runs
+   * the preset-specific rounds loop. Saves ~48 lines across 8 runners.
+   */
+  protected async runDiscussionLoop(
+    cfg: RunConfig,
+    presetName: string,
+    runRounds: (cfg: RunConfig) => Promise<void>,
+    closeOutHooks?: import("./runFinallyHooks.js").CloseOutHooks & {
+      transcript?: Array<{ text: string; role: string }>;
+      deliverableText?: string;
+      wallClockMs?: number;
+      emitOutcome?: (outcome: import("./runFinallyHooks.js").RunOutcome) => void;
+    },
+  ): Promise<void> {
+    let crashMessage: string | undefined;
+    try {
+      await runRounds(cfg);
+    } catch (err) {
+      crashMessage = err instanceof Error ? err.message : String(err);
+      this.opts.emit({ type: "error", message: crashMessage });
+    } finally {
+      await runDiscussionCloseOut({
+        cfg,
+        crashMessage,
+        stopping: this.stopping,
+        earlyStopDetail: this.earlyStopDetail,
+        round: this.round,
+        currentPhase: this.phase,
+        manager: this.opts.manager,
+        appendSystem: (text: string) => this.appendSystem(text),
+        setPhase: (p) => this.setPhase(p),
+        writeSummary: () => this.writeSummary(cfg, crashMessage),
+        hooks: closeOutHooks?.pickReflectionAgent
+          ? {
+              pickReflectionAgent: closeOutHooks.pickReflectionAgent,
+              buildReflectionContext: closeOutHooks.buildReflectionContext,
+              shouldSetCompleted: closeOutHooks.shouldSetCompleted,
+            }
+          : {
+              onIdleAgentDetection: (idleReport: string) => {
+                this.appendSystem(idleReport);
+              },
+            } as unknown as import("./runFinallyHooks.js").CloseOutHooks,
+        transcript: closeOutHooks?.transcript as any,
+        deliverableText: closeOutHooks?.deliverableText,
+        wallClockMs: closeOutHooks?.wallClockMs,
+        emitOutcome: closeOutHooks?.emitOutcome,
+      });
+    }
+  }
+
+  /**
+   * Budget guard + round-state update + emit. Call at the top of each
+   * round iteration. Returns true if the round should proceed.
+   */
+  protected checkRoundBudget(
+    cfg: RunConfig,
+    presetName: string,
+    r: number,
+    tokenBaseline: ReturnType<typeof snapshotLifetimeTokens>,
+  ): boolean {
+    if (this.stopping) return false;
+    const guard = checkBudgetGuards({
+      tokenBaseline,
+      tokenBudget: cfg.tokenBudget,
+      round: r,
+      totalRounds: cfg.rounds,
+      unit: presetName,
+    });
+    if (guard.halt) {
+      this.earlyStopDetail = guard.earlyStopDetail;
+      this.appendSystem(guard.message ?? "");
+      return false;
+    }
+    this.round = r;
+    this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
+    return true;
   }
 }

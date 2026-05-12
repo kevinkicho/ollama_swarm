@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createOutcomeEmitter, type OutcomeScoredEvent } from "./outcomeTypes.js";
 import type { Agent } from "../services/AgentManager.js";
 
 import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
@@ -74,6 +75,8 @@ import { runCouncilMapperSlice, type CouncilMapperResult } from "./mapReduceCoun
 // specific gaps surfaced by the prior synthesis.
 // Discussion-only, no file edits.
 export class MapReduceRunner extends DiscussionRunnerBase {
+  protected getPresetName(): string { return "Map-Reduce"; }
+
   // Unit 33: cross-preset metrics — see RoundRobinRunner for rationale.
 
   // Phase 2d: mapper slice assignments, keyed by agentId. Empty map
@@ -293,21 +296,7 @@ export class MapReduceRunner extends DiscussionRunnerBase {
       });
 
       for (let r = 1; r <= cfg.rounds; r++) {
-        if (this.stopping) break;
-        const guard = checkBudgetGuards({
-          tokenBaseline,
-          tokenBudget: cfg.tokenBudget,
-          round: r,
-          totalRounds: cfg.rounds,
-          unit: "cycle",
-        });
-        if (guard.halt) {
-          this.earlyStopDetail = guard.earlyStopDetail;
-          this.appendSystem(guard.message ?? "");
-          break;
-        }
-        this.round = r;
-        this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
+        if (!this.checkRoundBudget(cfg, "cycle", r, tokenBaseline)) break;
 
         this.appendSystem(`Cycle ${r}/${cfg.rounds}: MAP phase — mappers inspecting slices in parallel.`);
 
@@ -531,7 +520,7 @@ export class MapReduceRunner extends DiscussionRunnerBase {
             `Map-reduce preset · 1 reducer + ${cfg.agentCount - 1} mappers · ran ${s.round}/${cfg.rounds} cycles${s.earlyStopDetail ? ` · early-stop: ${s.earlyStopDetail}` : ""}`,
         },
         transcript: this.transcript,
-        emitOutcome: (outcome: any) => this.opts.emit({ type: "outcome_scored" as const, runId: outcome.runId, score: outcome.score, verdict: outcome.verdict, dimensions: outcome.dimensions }),
+        emitOutcome: createOutcomeEmitter((e) => this.opts.emit(e)),
         wallClockMs: this.startedAt ? Date.now() - this.startedAt : 0,
       });
     }

@@ -42,6 +42,8 @@ export interface UsageRecord {
    *  preset; orchestrator pushes the current preset into the tracker on
    *  run-start / run-end via setCurrentPreset(). Null between runs. */
   preset?: string;
+  /** Run ID for per-run attribution. Null for calls outside a run. */
+  runId?: string;
 }
 
 export interface UsageWindow {
@@ -170,13 +172,18 @@ class TokenTracker {
   // history. Records older than PERSIST_RETENTION_MS are dropped at
   // load time (see loadPersistedRecords).
   private records: UsageRecord[] = loadPersistedRecords();
-  private currentPreset?: string;
+  private currentPresets = new Map<string, string>();
   private quota: QuotaState | null = null;
 
-  add(r: UsageRecord): void {
+  add(r: UsageRecord, runId?: string): void {
+    if (runId) r = { ...r, runId };
     // Stamp current preset at insertion time; the orchestrator owns
-    // setCurrentPreset across run boundaries.
-    if (this.currentPreset && !r.preset) {
+    // run-id mapping. If runId is provided, it takes priority.
+    if (runId && this.currentPresets.has(runId)) {
+      if (!r.preset) {
+        r = { ...r, preset: this.currentPresets.get(runId) };
+      }
+    } else if (this.currentPreset && !r.preset) {
       r = { ...r, preset: this.currentPreset };
     }
     this.records.push(r);
@@ -189,9 +196,15 @@ class TokenTracker {
   }
 
   /** Called from Orchestrator on run start / end. */
-  setCurrentPreset(preset: string | undefined): void {
-    this.currentPreset = preset;
+  setCurrentPreset(preset: string | undefined, runId?: string): void {
+    if (runId) {
+      if (preset) this.currentPresets.set(runId, preset);
+      else this.currentPresets.delete(runId);
+    } else {
+      this.currentPreset = preset;
+    }
   }
+
 
   /** Task #137: proxy flips this when upstream Ollama returns a quota-
    *  shaped response. Runners poll between turns; UI surfaces the wall.
@@ -229,7 +242,7 @@ class TokenTracker {
     return this.quota;
   }
 
-  totalsInWindow(windowMs: number, label: string): UsageWindow {
+  totalsInWindow(windowMs: number, label: string, runId?: string): UsageWindow {
     const cutoff = Date.now() - windowMs;
     let p = 0;
     let r = 0;
@@ -238,6 +251,7 @@ class TokenTracker {
     const byPreset: Record<string, { promptTokens: number; responseTokens: number; calls: number }> = {};
     for (const rec of this.records) {
       if (rec.ts < cutoff) continue;
+      if (runId && rec.runId !== runId) continue;
       p += rec.promptTokens;
       r += rec.responseTokens;
       c += 1;
@@ -490,8 +504,10 @@ export function startOllamaProxy(opts: ProxyOpts): { stop: () => Promise<void> }
               durationMs: Date.now() - t0,
               path: reqPath,
             });
-          } catch {
-            // ignore
+          } catch (err) {
+            if (process.env.NODE_ENV !== "production") {
+              console.warn("[proxy] token recording failed:", err instanceof Error ? err.message : String(err));
+            }
           }
         });
       },
@@ -521,7 +537,7 @@ interface RecordCtx {
   path: string;
 }
 
-function recordTokensFromBody(body: string, ctx: RecordCtx): void {
+function recordTokensFromBody(body: string, ctx: RecordCtx, runId?: string): void {
   if (!body) return;
   // Strategy 1: single JSON response (non-streaming).
   const trimmed = body.trim();
@@ -529,7 +545,7 @@ function recordTokensFromBody(body: string, ctx: RecordCtx): void {
     const parsed = tryParseJson(trimmed);
     if (parsed) {
       const rec = extractTokens(parsed, ctx);
-      if (rec) tokenTracker.add(rec);
+      if (rec) tokenTracker.add(rec, undefined);
       return;
     }
   }
@@ -550,7 +566,7 @@ function recordTokensFromBody(body: string, ctx: RecordCtx): void {
     const rec = extractTokens(parsed, ctx);
     if (rec) captured = rec;
   }
-  if (captured) tokenTracker.add(captured);
+  if (captured) tokenTracker.add(captured, undefined);
 }
 
 function tryParseJson(s: string): unknown {

@@ -26,7 +26,62 @@
 //   - When the LLM router fires, +1 prompt before the run starts (cost
 //     proportional to how often the heuristic is ambiguous).
 
-import type { PresetId } from "./SwarmRunner.js";
+import type { PresetId, RunConfig, RunnerOpts } from "./SwarmRunner.js";
+
+// ── Runner factory (UML-G, 2026-05-09) ──
+// Lazy imports avoid circular dependencies with Orchestrator.
+// The factory maps preset → runner constructor; Orchestrator.start()
+// calls createRunner() instead of importing all 9 runners directly.
+
+export async function createRunner(
+  cfg: RunConfig,
+  opts: RunnerOpts,
+): Promise<any> {
+  switch (cfg.preset) {
+    case "blackboard": {
+      const { BlackboardRunner } = await import("./blackboard/BlackboardRunner.js");
+      return new BlackboardRunner(opts);
+    }
+    case "round-robin": {
+      const { RoundRobinRunner } = await import("./RoundRobinRunner.js");
+      return new RoundRobinRunner(opts);
+    }
+    case "council": {
+      const { CouncilRunner } = await import("./CouncilRunner.js");
+      return new CouncilRunner(opts);
+    }
+    case "orchestrator-worker": {
+      const { OrchestratorWorkerRunner } = await import("./OrchestratorWorkerRunner.js");
+      return new OrchestratorWorkerRunner(opts);
+    }
+    case "orchestrator-worker-deep": {
+      const { OrchestratorWorkerDeepRunner } = await import("./OrchestratorWorkerDeepRunner.js");
+      return new OrchestratorWorkerDeepRunner(opts);
+    }
+    case "debate-judge": {
+      const { DebateJudgeRunner } = await import("./DebateJudgeRunner.js");
+      return new DebateJudgeRunner(opts);
+    }
+    case "map-reduce": {
+      const { MapReduceRunner } = await import("./MapReduceRunner.js");
+      return new MapReduceRunner(opts);
+    }
+    case "stigmergy": {
+      const { StigmergyRunner } = await import("./StigmergyRunner.js");
+      return new StigmergyRunner(opts);
+    }
+    case "moa": {
+      const { MoaRunner } = await import("./MoaRunner.js");
+      return new MoaRunner(opts);
+    }
+    case "baseline": {
+      const { BaselineRunner } = await import("./BaselineRunner.js");
+      return new BaselineRunner(opts);
+    }
+    default:
+      throw new Error(`Unknown preset: ${cfg.preset}`);
+  }
+}
 
 export interface PresetRouterDecision {
   pickedPreset: PresetId;

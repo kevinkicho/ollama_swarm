@@ -15,14 +15,13 @@ export type AgentStatus =
 export interface AgentState {
   id: string;
   index: number;
-  port: number;
   sessionId?: string;
   status: AgentStatus;
   lastMessageAt?: number;
   error?: string;
   // Current model this agent is using (reflects failover). Post-E3 Phase 5
-  // removed per-agent opencode subprocesses, so port is always 0 and
-  // model is the meaningful per-agent identifier.
+  // removed per-agent opencode subprocesses; this is the meaningful
+  // per-agent identifier (port was always 0 and has been removed).
   model?: string;
   // Unit 7: populated while status === "retrying" so the panel can render
   // "retrying 2/3 · UND_ERR_HEADERS_TIMEOUT" during the backoff window.
@@ -157,7 +156,8 @@ export type StopReason =
   | "cap:tokens"
   | "cap:quota"
   | "early-stop"
-  | "no-progress";
+  | "no-progress"
+  | "partial-progress";
 
 export interface PerAgentStat {
   agentId: string;
@@ -197,6 +197,7 @@ export interface RunSummary {
   startedAt: number;
   endedAt: number;
   wallClockMs: number;
+  wastedWallClockMs?: number;
   stopReason: StopReason;
   stopDetail?: string;
   commits: number;
@@ -379,8 +380,12 @@ export type SwarmEvent =
       clonePath: string;
       agentCount: number;
       rounds: number;
-      topology?: import("../../shared/src/topology").Topology;
-    }
+  topology?: import("../../shared/src/topology").Topology;
+  // Deliverables: files created or meaningfully changed by this run.
+  // Created = new file; Modified = existing file edited. Empty for
+  // discussion presets (no code changes). Optional for back-compat.
+  deliverables?: Array<{ path: string; status: "created" | "modified" }>;
+}
   // Direction 1 Phase 1: emitted after rubric grading completes at run-end.
   | {
       type: "outcome_scored";
@@ -513,4 +518,13 @@ export interface SwarmStatusSnapshot {
   pheromones?: Record<string, PheromoneEntry>;
   // Phase 2d: map-reduce mapper slice assignments for catch-up.
   mapperSlices?: Record<string, string[]>;
+  regions?: RegionStatus;
+}
+
+export interface RegionStatus {
+  lifecycle: "idle" | "booting" | "active" | "draining" | "stopped";
+  planner: "idle" | "thinking" | "waiting";
+  workers: { total: number; thinking: number; idle: number };
+  queue: { open: number; claimed: number; committed: number; stale: number };
+  caps: { paused: boolean; reason?: string };
 }

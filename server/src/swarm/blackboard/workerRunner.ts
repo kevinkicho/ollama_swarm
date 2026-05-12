@@ -28,6 +28,7 @@ import {
   parseWorkerResponse,
   WORKER_SYSTEM_PROMPT,
   type WorkerSeed,
+  WorkerResponseSchema,
 } from "./prompts/worker.js";
 import { DISPOSITIONS, type RoundRobinDisposition, getDispositionForTurn } from "../roundRobinPromptHelpers.js";
 import { WORKER_HUNKS_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
@@ -36,9 +37,14 @@ import { applyAndCommit } from "./WorkerPipeline.js";
 import { realFilesystemAdapter, realGitAdapter, realVerifyAdapter } from "./v2Adapters.js";
 import { voteOnHunksWithJudge, type HunkVote, type JudgeFn } from "./hunkVoting.js";
 import { buildJudgePrompt } from "./hunkJudgePrompt.js";
+import {
+  tryBrainFallback,
+  type BrainFallbackEvent,
+} from "./prompts/brainIntegration.js";
 import { v2QueueTodoToWireTodo } from "./boardWireCompat.js";
 import { bumpAgentCounter } from "./runnerHelpers.js";
 import { pheromoneHeatmap } from "../pheromoneHeatmap.js";
+import { withSiblingRetry } from "./siblingRetry.js";
 
 export interface WorkerContext {
   isStopping: () => boolean;
@@ -93,6 +99,16 @@ export interface WorkerContext {
   setDispositionCycle: (v: Map<string, number>) => void;
   // Plan 3: pheromone heatmap access for hot-files seeding
   getPheromoneHeatmap: () => import("../pheromoneHeatmap.js").PheromoneHeatmap | undefined;
+  /** Brain fallback: prompt an LLM to extract structured JSON from a
+   *  failed parse. The promptFn signature matches promptWithFailover. */
+  brainPromptFn?: (
+    prompt: string,
+    model: string,
+    maxTokens: number,
+    timeoutMs: number,
+  ) => Promise<string>;
+  updateAgentModel: (agentId: string, model: string) => void;
+  getPlannerFallbackModel: () => string | undefined;
 }
 
 export async function runWorkers(
@@ -366,6 +382,8 @@ export async function executeWorkerTodo(
   agent: Agent,
   todo: Todo,
 ): Promise<"committed" | "stale" | "lost-race" | "aborted"> {
+  const modelAtEntry = agent.model;
+  let commitTier: import("./types.js").CommitTier | undefined;
   let contents: Record<string, string | null>;
   try {
     contents = await ctx.readExpectedFiles(todo.expectedFiles);
@@ -408,7 +426,7 @@ export async function executeWorkerTodo(
   } catch (err) {
     if (ctx.isStopping()) return "aborted";
     const msg = err instanceof Error ? err.message : String(err);
-    ctx.getWrappers().failTodoQ(todo.id, `[v2] worker prompt failed: ${msg}`);
+    ctx.getWrappers().failTodoQ(todo.id, `[v2] worker prompt failed: ${msg}`, "prompt-fail");
     ctx.bumpPromptErrors(agent.id);
     ctx.bumpRejectedAttempts(agent.id);
     return "stale";
@@ -417,6 +435,7 @@ export async function executeWorkerTodo(
   ctx.appendAgent(agent, response);
 
   let parsed = parseWorkerResponse(response, todo.expectedFiles);
+  commitTier = "parse";  // assumed success tier — overridden below if parse fails
   if (!parsed.ok) {
     ctx.bumpJsonRepairs(agent.id);
     ctx.appendSystem(`[${agent.id}] [v2] worker JSON invalid (${parsed.reason}); issuing repair prompt.`);
@@ -432,7 +451,7 @@ export async function executeWorkerTodo(
     } catch (err) {
       if (ctx.isStopping()) return "aborted";
       const msg = err instanceof Error ? err.message : String(err);
-      ctx.getWrappers().failTodoQ(todo.id, `[v2] worker repair prompt failed: ${msg}`);
+      ctx.getWrappers().failTodoQ(todo.id, `[v2] worker repair prompt failed: ${msg}`, "repair");
       ctx.bumpPromptErrors(agent.id);
       ctx.bumpRejectedAttempts(agent.id);
       return "stale";
@@ -440,8 +459,74 @@ export async function executeWorkerTodo(
     if (ctx.isStopping()) return "aborted";
     ctx.appendAgent(agent, repair);
     parsed = parseWorkerResponse(repair, todo.expectedFiles);
+    if (parsed.ok) commitTier = "repair";
     if (!parsed.ok) {
-      ctx.getWrappers().failTodoQ(todo.id, `[v2] worker produced invalid JSON after repair: ${parsed.reason}`);
+      // Brain fallback: try AI-assisted parsing before giving up.
+      if (ctx.brainPromptFn) {
+        ctx.appendSystem(`[${agent.id}] [v2] worker parse still failed after repair — trying brain fallback (${parsed.reason}).`);
+        try {
+          const brainResult = await tryBrainFallback(
+            response,
+            WorkerResponseSchema,
+            "worker",
+            ctx.brainPromptFn,
+            (e: BrainFallbackEvent) => { ctx.emit({ type: "brain-fallback", ...e }); },
+          );
+          if (brainResult) {
+            // Validate that brain-extracted hunks reference allowed files
+            const allowed = new Set(todo.expectedFiles);
+            const validHunks = (brainResult as { hunks: { op: string; file: string; search?: string; replace?: string; content?: string }[]; skip?: string }).hunks
+              ?.filter((h: { file: string }) => allowed.has(h.file)) ?? [];
+            if (validHunks.length > 0 || (brainResult as { skip?: string }).skip) {
+              parsed = {
+                ok: true as const,
+                hunks: validHunks as import("./prompts/worker.js").Hunk[],
+                skip: (brainResult as { skip?: string }).skip,
+              };
+              commitTier = "brain";
+              ctx.appendSystem(`[${agent.id}] [v2] Brain fallback succeeded — extracted ${validHunks.length} valid hunk(s).`);
+            }
+          }
+        } catch (err) {
+          ctx.appendSystem(`⚠ worker [brain-fallback]: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+    if (!parsed.ok) {
+      let stopAborted = false;
+      await withSiblingRetry(
+        {
+          agent,
+          modelAtEntry,
+          logPrefix: `[${agent.id}]`,
+          updateAgentModel: ctx.updateAgentModel,
+          emit: ctx.emit,
+          getFallbackModel: ctx.getPlannerFallbackModel,
+          reason: "sibling-retry: worker JSON parse failed after repair",
+        },
+        async () => {
+          if (ctx.isStopping()) { stopAborted = true; return; }
+          const siblingResponse = await ctx.promptAgent(
+            agent,
+            `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`,
+            "swarm",
+            "json",
+            WORKER_HUNKS_JSON_SCHEMA,
+          );
+          if (ctx.isStopping()) { stopAborted = true; return; }
+          ctx.appendAgent(agent, siblingResponse);
+          const siblingParsed = parseWorkerResponse(siblingResponse, todo.expectedFiles);
+          if (siblingParsed.ok && siblingParsed.hunks.length > 0 && !siblingParsed.skip) {
+            parsed = siblingParsed;
+            commitTier = "sibling";
+            ctx.appendSystem(`[${agent.id}] [v2] sibling-retry succeeded — ${siblingParsed.hunks.length} hunk(s) from ${agent.model}.`);
+          }
+        },
+      );
+      if (stopAborted) return "aborted";
+    }
+    if (!parsed.ok) {
+      ctx.getWrappers().failTodoQ(todo.id, `[v2] worker produced invalid JSON after repair: ${parsed.reason}`, "repair");
       ctx.bumpRejectedAttempts(agent.id);
       return "stale";
     }
@@ -449,13 +534,13 @@ export async function executeWorkerTodo(
 
   if (parsed.skip) {
     ctx.appendSystem(`[${agent.id}] [v2] worker declined todo: ${parsed.skip}`);
-    ctx.getWrappers().failTodoQ(todo.id, `[v2] worker declined: ${parsed.skip}`);
+    ctx.getWrappers().failTodoQ(todo.id, `[v2] worker declined: ${parsed.skip}`, "declined");
     ctx.bumpRejectedAttempts(agent.id);
     return "stale";
   }
 
   if (parsed.hunks.length === 0) {
-    ctx.getWrappers().failTodoQ(todo.id, "[v2] worker returned empty hunks with no skip reason");
+    ctx.getWrappers().failTodoQ(todo.id, "[v2] worker returned empty hunks with no skip reason", "hunk-empty");
     ctx.bumpRejectedAttempts(agent.id);
     return "stale";
   }
@@ -545,7 +630,8 @@ export async function executeWorkerTodo(
         const winnerIdx = typeof parsed.winner === "number" ? parsed.winner : -1;
         if (winnerIdx < 1 || winnerIdx > candidates.length) return null;
         return candidates[winnerIdx - 1].id;
-      } catch {
+      } catch (err) {
+        ctx.appendSystem(`⚠ worker [judge-parse]: ${err instanceof Error ? err.message : String(err)}`);
         return null;
       }
     };
@@ -580,6 +666,7 @@ export async function executeWorkerTodo(
     fs: fsAdapter,
     git: gitAdapter,
     ...(verifyAdapter ? { verify: verifyAdapter } : {}),
+    expectedAnchors: todo.expectedAnchors,
   });
 
   if (
@@ -599,7 +686,7 @@ export async function executeWorkerTodo(
     } catch (readErr) {
       const msg = readErr instanceof Error ? (readErr as Error).message : String(readErr);
       ctx.appendSystem(`[${agent.id}] [v2] hunk-repair: re-read failed (${msg}); falling through to replan.`);
-      ctx.getWrappers().failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`);
+      ctx.getWrappers().failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`, "hunk-fail");
       ctx.bumpRejectedAttempts(agent.id);
       return "stale";
     }
@@ -620,7 +707,7 @@ export async function executeWorkerTodo(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       ctx.appendSystem(`[${agent.id}] [v2] hunk-repair prompt failed (${msg}); falling through to replan.`);
-      ctx.getWrappers().failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`);
+      ctx.getWrappers().failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`, "hunk-fail");
       ctx.bumpRejectedAttempts(agent.id);
       return "stale";
     }
@@ -635,8 +722,10 @@ export async function executeWorkerTodo(
         fs: fsAdapter,
         git: gitAdapter,
         ...(verifyAdapter ? { verify: verifyAdapter } : {}),
+        expectedAnchors: todo.expectedAnchors,
       });
       if (applyResult.ok) {
+        commitTier = "hunk-repair";
         ctx.appendSystem(
           `[${agent.id}] [v2] ✓ hunk-repair retry succeeded on second attempt.`,
         );
@@ -648,13 +737,13 @@ export async function executeWorkerTodo(
     }
   }
   if (!applyResult.ok) {
-    ctx.getWrappers().failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`);
+    ctx.getWrappers().failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`, "hunk-fail");
     ctx.bumpRejectedAttempts(agent.id);
     return "stale";
   }
 
   try {
-    ctx.getWrappers().completeTodoQ(todo.id);
+  ctx.getWrappers().completeTodoQ(todo.id, commitTier);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     ctx.appendSystem(`[${agent.id}] commit lost race (todo reaped): ${msg}`);

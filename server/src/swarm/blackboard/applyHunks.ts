@@ -83,7 +83,25 @@ export function applyFileHunks(
         text = text + h.content;
         break;
       case "replace": {
-        const count = countOccurrences(text, h.search);
+        let search = h.search;
+        let count = countOccurrences(text, search);
+        let usedNormalized = false;
+
+        // Fuzzy fallback: trailing whitespace and line-ending drift are
+        // the most common source of search mismatches. Try normalized
+        // matching before giving up.
+        if (count === 0) {
+          const normalized = search.split("\n").map((l) => l.trimEnd()).join("\n");
+          if (normalized !== search) {
+            const normCount = countOccurrences(text, normalized);
+            if (normCount === 1) {
+              search = normalized;
+              count = 1;
+              usedNormalized = true;
+            }
+          }
+        }
+
         if (count === 0) {
           return {
             ok: false,
@@ -96,7 +114,7 @@ export function applyFileHunks(
             error: `hunk[${i}] op "replace": "search" text matches ${count} times — must be unique; add surrounding context`,
           };
         }
-        const idx = text.indexOf(h.search);
+        const idx = text.indexOf(search);
         text = text.slice(0, idx) + h.replace + text.slice(idx + h.search.length);
         break;
       }

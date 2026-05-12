@@ -63,6 +63,8 @@ import { pheromoneHeatmap } from "./pheromoneHeatmap.js";
 // `rounds` = how many exploration passes through agents. Total turns =
 // rounds × agentCount. Discussion-only, no file edits.
 export class StigmergyRunner extends DiscussionRunnerBase {
+  protected getPresetName(): string { return "Stigmergy"; }
+
   // Unit 33: cross-preset metrics — see RoundRobinRunner for rationale.
 
   // The annotation table — the shared "pheromone" state. File path →
@@ -176,21 +178,7 @@ export class StigmergyRunner extends DiscussionRunnerBase {
       }
 
       for (let r = 1; r <= cfg.rounds; r++) {
-        if (this.stopping) break;
-        const guard = checkBudgetGuards({
-          tokenBaseline,
-          tokenBudget: cfg.tokenBudget,
-          round: r,
-          totalRounds: cfg.rounds,
-          unit: "round",
-        });
-        if (guard.halt) {
-          this.earlyStopDetail = guard.earlyStopDetail;
-          this.appendSystem(guard.message ?? "");
-          break;
-        }
-        this.round = r;
-        this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
+        if (!this.checkRoundBudget(cfg, "round", r, tokenBaseline)) break;
 
         const transcriptLenBefore = this.transcript.length;
         for (const agent of agents) {

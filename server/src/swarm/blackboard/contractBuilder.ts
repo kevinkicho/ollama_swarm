@@ -18,7 +18,7 @@ import {
 } from "./prompts/firstPassContract.js";
 import { CONTRACT_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
 import { classifyExpectedFiles } from "./prompts/pathValidation.js";
-import { siblingModelFor } from "./BlackboardRunnerConstants.js";
+import { withSiblingRetry } from "./siblingRetry.js";
 import { config as appConfig } from "../../config.js";
 import {
   readRecentMemory,
@@ -34,6 +34,11 @@ import {
 import { computeWorkerTagCounts } from "./BlackboardRunnerConstants.js";
 import { gatherProposerContext } from "../moaContextGather.js";
 import type { BlackboardStateSnapshot } from "./stateSnapshot.js";
+import {
+  tryBrainFallback,
+  type BrainFallbackEvent,
+} from "./prompts/brainIntegration.js";
+import { ContractSchema } from "./prompts/firstPassContract.js";
 
 export interface ContractContext {
   // --- state getters ---
@@ -82,6 +87,15 @@ export interface ContractContext {
   scheduleStateWrite: () => void;
   v2ObserverApply: (event: unknown) => void;
 
+  /** Brain fallback: prompt an LLM to extract structured JSON from a
+   *  failed parse. The promptFn signature matches promptWithFailover. */
+  brainPromptFn?: (
+    prompt: string,
+    model: string,
+    maxTokens: number,
+    timeoutMs: number,
+  ) => Promise<string>;
+
   // --- deps ---
   repos: {
     listTopLevel: (clonePath: string) => Promise<string[]>;
@@ -124,6 +138,8 @@ export async function runFirstPassContract(
   seed: PlannerSeed,
   isFallbackAttempt = false,
 ): Promise<void> {
+  const modelAtEntry = agent.model;
+
   const { response: firstResponse, agentUsed: contractAgent } = await ctx.promptPlannerSafely(
     agent,
     `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed)}`,
@@ -151,38 +167,55 @@ export async function runFirstPassContract(
     ctx.appendAgent(repairAgent, repairResponse);
     parsed = parseFirstPassContractResponse(repairResponse);
     if (!parsed.ok) {
-      const fallback = ctx.getPlannerFallbackModel() ?? siblingModelFor(agent.model);
-      if (fallback && fallback !== agent.model) {
-        const original = agent.model;
-        ctx.appendSystem(
-          `[${agent.id}] failover: ${original} → ${fallback} (sibling-retry: contract JSON parse failed after repair)`,
-        );
-        ctx.updateAgentModel(agent.id, fallback);
-        ctx.emit({
-          type: "model_shift",
-          agentId: agent.id,
-          agentIndex: agent.index,
-          fromModel: original,
-          toModel: fallback,
-          reason: "sibling-retry: contract JSON parse failed after repair",
-        });
-        agent.model = fallback;
+      // Brain fallback: try AI-assisted parsing before sibling-retry.
+      if (ctx.brainPromptFn) {
+        ctx.appendSystem(`Contract parse still failed after repair — trying brain fallback (${parsed.reason}).`);
         try {
-          await runFirstPassContract(ctx, agent, seed, true);
-          return;
-        } finally {
-          agent.model = original;
-          ctx.updateAgentModel(agent.id, original);
-          ctx.emit({
-            type: "model_shift",
-            agentId: agent.id,
-            agentIndex: agent.index,
-            fromModel: fallback,
-            toModel: original,
-            reason: "sibling-retry reverted",
-          });
+          const brainResult = await tryBrainFallback(
+            firstResponse,
+            ContractSchema,
+            "contract",
+            ctx.brainPromptFn,
+            (e: BrainFallbackEvent) => { ctx.emit({ type: "brain-fallback", ...e }); },
+          );
+          if (brainResult) {
+            parsed = {
+              ok: true as const,
+              contract: {
+                missionStatement: brainResult.missionStatement,
+                criteria: brainResult.criteria.map((c: { description: string; expectedFiles: string[] }, i: number) => ({
+                  id: `c${i + 1}`,
+                  description: c.description,
+                  expectedFiles: [...c.expectedFiles],
+                  status: "unmet" as const,
+                  addedAt: Date.now(),
+                })),
+              },
+              dropped: [],
+            };
+            ctx.appendSystem(`Brain fallback succeeded — extracted contract with ${brainResult.criteria.length} criterion(crite)ria.`);
+          }
+        } catch {
+          // Brain call failed — fall through to sibling-retry.
         }
       }
+    }
+    if (!parsed.ok) {
+      const retried = await withSiblingRetry(
+        {
+          agent,
+          modelAtEntry,
+          logPrefix: `[${agent.id}]`,
+          updateAgentModel: ctx.updateAgentModel,
+          emit: ctx.emit,
+          getFallbackModel: ctx.getPlannerFallbackModel,
+          reason: "sibling-retry: contract JSON parse failed after repair",
+        },
+        async () => {
+          await runFirstPassContract(ctx, agent, seed, true);
+        },
+      );
+      if (retried) return;
       ctx.appendSystem(
         `Contract still invalid after repair (${parsed.reason}). Proceeding without a contract.`,
       );
@@ -438,7 +471,7 @@ export async function buildSeed(
 ): Promise<PlannerSeed> {
   const topLevel = (await ctx.repos.listTopLevel(clonePath)).slice(0, 200);
   const readmeExcerpt = await ctx.repos.readReadme(clonePath);
-  const repoFiles = await ctx.repos.listRepoFiles(clonePath, { maxFiles: 150 });
+  const repoFiles = await ctx.repos.listRepoFiles(clonePath, { maxFiles: 500 });
   const priorRunSummary = await loadPriorRunSummary(clonePath);
 
   let priorMemoryRendered: string | undefined;

@@ -101,7 +101,7 @@ describe("parseFirstPassContractResponse — rejections and drops", () => {
     if (!res.ok) assert.match(res.reason, /criteria must be an array/);
   });
 
-  it("drops individual invalid criteria but keeps the contract", () => {
+  it("drops invalid criteria but truncates expectedFiles over max instead of dropping", () => {
     const res = parseFirstPassContractResponse(
       JSON.stringify({
         missionStatement: "m",
@@ -114,8 +114,12 @@ describe("parseFirstPassContractResponse — rejections and drops", () => {
     );
     assert.equal(res.ok, true);
     if (res.ok) {
-      assert.equal(res.contract.criteria.length, 1);
-      assert.equal(res.dropped.length, 2);
+      // "too many" is kept with truncated expectedFiles (4 max)
+      assert.equal(res.contract.criteria.length, 2);
+      assert.equal(res.dropped.length, 1);
+      const truncated = res.contract.criteria.find(c => c.description === "too many");
+      assert.ok(truncated, "should find truncated criterion");
+      assert.equal(truncated.expectedFiles.length, 4);
     }
   });
 

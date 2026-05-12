@@ -47,6 +47,8 @@
 // real work.
 
 import { z } from "zod";
+import { extractJsonFromText as stripFences } from "../../extractJson.js";
+import { lenientPreprocess } from "./lenientParse.js";
 
 export const VERIFIER_VERDICTS = ["verified", "partial", "false", "unverifiable"] as const;
 export type VerifierVerdict = (typeof VERIFIER_VERDICTS)[number];
@@ -72,10 +74,10 @@ export type VerifierParseResult =
   | { ok: true; verifier: ParsedVerifierResponse }
   | { ok: false; reason: string };
 
-// Task #204: shared stripFences helper across 6 prompt parsers.
-import { extractJsonFromText as stripFences } from "../../extractJson.js";
-
 export function parseVerifierResponse(raw: string): VerifierParseResult {
+  if (raw.trim().length === 0) {
+    return { ok: false, reason: "empty response — model produced no output after stripping thinking tags" };
+  }
   let parsed: unknown;
   let lastError = "";
   try {
@@ -99,7 +101,10 @@ export function parseVerifierResponse(raw: string): VerifierParseResult {
       reason: `expected top-level JSON object, got ${Array.isArray(parsed) ? "array" : typeof parsed}`,
     };
   }
-  const v = VerifierResponseSchema.safeParse(parsed);
+  const processed = lenientPreprocess(parsed, {
+    maxRationale: 400,
+  });
+  const v = VerifierResponseSchema.safeParse(processed);
   if (!v.success) {
     const reason = v.error.issues
       .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)

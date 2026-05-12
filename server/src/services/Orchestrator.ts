@@ -4,18 +4,9 @@ import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
 import type { AgentManager } from "./AgentManager.js";
 import type { RepoService } from "./RepoService.js";
-import type { SwarmEvent, SwarmStatus, SwarmStatusRunConfig } from "../types.js";
+import type { SwarmEvent, SwarmPhase, SwarmStatus, SwarmStatusRunConfig } from "../types.js";
 import type { PresetId, RunConfig, RunnerOpts, SwarmRunner } from "../swarm/SwarmRunner.js";
-import { tokenTracker } from "./ollamaProxy.js";
 import { RoundRobinRunner } from "../swarm/RoundRobinRunner.js";
-import { BlackboardRunner } from "../swarm/blackboard/BlackboardRunner.js";
-import { CouncilRunner } from "../swarm/CouncilRunner.js";
-import { OrchestratorWorkerRunner } from "../swarm/OrchestratorWorkerRunner.js";
-import { OrchestratorWorkerDeepRunner } from "../swarm/OrchestratorWorkerDeepRunner.js";
-import { DebateJudgeRunner } from "../swarm/DebateJudgeRunner.js";
-import { MapReduceRunner } from "../swarm/MapReduceRunner.js";
-import { MoaRunner } from "../swarm/MoaRunner.js";
-import { StigmergyRunner } from "../swarm/StigmergyRunner.js";
 import { BaselineRunner } from "../swarm/BaselineRunner.js";
 import { BaselineSwarmHarness } from "../swarm/BaselineSwarmHarness.js";
 import { PipelineRunner } from "../swarm/PipelineRunner.js";
@@ -49,15 +40,16 @@ function readPersistedLastParent(): string | undefined {
   try {
     const v = readFileSync(LAST_PARENT_FILE, "utf8").trim();
     return v.length > 0 ? v : undefined;
-  } catch {
+  } catch (err) {
+    console.warn('[Orchestrator] read-persisted-last-parent-failed:', err instanceof Error ? err.message : String(err));
     return undefined;
   }
 }
 function writePersistedLastParent(p: string): void {
   try {
     writeFileSync(LAST_PARENT_FILE, p, "utf8");
-  } catch {
-    // best-effort; the in-memory cache still works for this session
+  } catch (err) {
+    console.warn('[Orchestrator] write-persisted-last-parent-failed:', err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -73,15 +65,16 @@ function readPersistedKnownParents(): string[] {
     const raw = readFileSync(KNOWN_PARENTS_FILE, "utf8");
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === "string") : [];
-  } catch {
+  } catch (err) {
+    console.warn('[Orchestrator] read-persisted-known-parents-failed:', err instanceof Error ? err.message : String(err));
     return [];
   }
 }
 function writePersistedKnownParents(paths: string[]): void {
   try {
     writeFileSync(KNOWN_PARENTS_FILE, JSON.stringify(paths.slice(0, KNOWN_PARENTS_MAX)), "utf8");
-  } catch {
-    // best-effort
+  } catch (err) {
+    console.warn('[Orchestrator] write-persisted-known-parents-failed:', err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -134,7 +127,8 @@ export function scanForRunParents(cwd: string): string[] {
     let topLevel: string[];
     try {
       topLevel = readdirSync(base);
-    } catch {
+    } catch (err) {
+      console.warn('[Orchestrator] scan-readdir-base-failed:', err instanceof Error ? err.message : String(err));
       continue;
     }
     for (const name of topLevel) {
@@ -143,7 +137,8 @@ export function scanForRunParents(cwd: string): string[] {
       let stat;
       try {
         stat = statSync(root);
-      } catch {
+      } catch (err) {
+        console.warn('[Orchestrator] scan-stat-root-failed:', err instanceof Error ? err.message : String(err));
         continue;
       }
       if (!stat.isDirectory()) continue;
@@ -151,14 +146,16 @@ export function scanForRunParents(cwd: string): string[] {
       let clones: string[];
       try {
         clones = readdirSync(root);
-      } catch {
+      } catch (err) {
+        console.warn('[Orchestrator] scan-readdir-root-failed:', err instanceof Error ? err.message : String(err));
         continue;
       }
       for (const clone of clones) {
         const cloneDir = nodePath.join(root, clone);
         try {
           if (!statSync(cloneDir).isDirectory()) continue;
-        } catch {
+        } catch (err) {
+          console.warn('[Orchestrator] scan-stat-cloneDir-failed:', err instanceof Error ? err.message : String(err));
           continue;
         }
         // Cheap probe: is there at least one summary*.json? Fast since
@@ -171,7 +168,8 @@ export function scanForRunParents(cwd: string): string[] {
               break;
             }
           }
-        } catch {
+        } catch (err) {
+          console.warn('[Orchestrator] scan-readdir-cloneDir-failed:', err instanceof Error ? err.message : String(err));
           continue;
         }
         if (hasSummary) found.add(root);
@@ -222,6 +220,11 @@ export class Orchestrator {
   // the most-recently-started run without an explicit "active"
   // pointer. Capped at 1 in Phase 3; Phase 4 relaxes.
   private runs = new Map<string, ActiveRun>();
+  // After a run completes and is removed from `runs`, its clonePath
+  // is retained here so that statusForRun can fall back to the
+  // persister file on disk. Without this, a page refresh after run
+  // completion would lose the contract (404 on /runs/:id/status).
+  private runPaths = new Map<string, { clonePath: string; preset: string; startedAt: number }>();
   // 2026-04-24: parent dir of the last successfully-started run.
   // Survives stop() / completion (unlike runConfig + runId) so the
   // /api/swarm/runs route can keep showing historical runs from the
@@ -289,6 +292,26 @@ export class Orchestrator {
     }
   }
 
+  /** Cleanup any runs that have terminated naturally but weren't
+   *  explicitly stopped. Prevents stale runs from counting against
+   *  the concurrent-run cap. */
+  private async cleanupStaleRuns(): Promise<void> {
+    for (const [id, run] of [...this.runs.entries()]) {
+      if (!run.runner.isRunning()) {
+        try { await run.runner.stop(); } catch (err) {
+          console.warn('cleanupStaleRuns stop failed:', err instanceof Error ? err.message : String(err));
+        }
+        run.conformanceMonitor?.stop();
+        run.embeddingDriftMonitor?.stop();
+        run.persister.stop();
+        if (run.holdsCloneLock) {
+          try { releaseLock({ clonePath: run.cfg.localPath, runId: run.runId }); } catch {}
+        }
+        this.runs.delete(id);
+      }
+    }
+  }
+
   status(): SwarmStatus {
     if (this.runner) {
       const runnerStatus = this.runner.status();
@@ -303,6 +326,7 @@ export class Orchestrator {
         runId: runnerStatus.runId ?? this.runId,
         runConfig: runnerStatus.runConfig ?? this.runConfig,
         runStartedAt: runnerStatus.runStartedAt ?? this.runStartedAt,
+        regions: this.computeRegions(runnerStatus),
       };
     }
     return {
@@ -310,6 +334,44 @@ export class Orchestrator {
       round: 0,
       agents: this.opts.manager.toStates(),
       transcript: [],
+    };
+  }
+
+  private computeRegions(status: SwarmStatus): import("../types.js").RegionStatus {
+    const agents = status.agents;
+    const thinking = agents.filter((a) => a.status === "thinking").length;
+    const plannerThinking = agents.length > 0 && agents[0].status === "thinking";
+    const phase = status.phase;
+    let lifecycle: import("../types.js").RegionStatus["lifecycle"] = "idle";
+    if (phase === "booting") lifecycle = "booting";
+    else if (phase === "draining") lifecycle = "draining";
+    else if (phase === "stopped" || phase === "completed") lifecycle = "stopped";
+    else if (phase !== "idle") lifecycle = "active";
+
+    let capsPaused = false;
+    let capsReason: import("../types.js").RegionStatus["caps"]["reason"];
+    if (status.phase === "paused") {
+      capsPaused = true;
+      // Runner-specific cap flags aren't in SwarmStatus — best-effort from known paused reasons
+      capsReason = "quota"; // most common reason; refine later when runner exposes cap detail
+    }
+
+    const board = status.board?.counts;
+    return {
+      lifecycle,
+      planner: plannerThinking ? "thinking" : (phase !== "idle" && phase !== "stopped" && phase !== "completed") ? "waiting" : "idle",
+      workers: {
+        total: agents.length > 0 ? agents.length - 1 : 0, // exclude planner (agent-0)
+        thinking: thinking,
+        idle: agents.length - thinking,
+      },
+      queue: {
+        open: board?.open ?? 0,
+        claimed: board?.claimed ?? 0,
+        committed: board?.committed ?? 0,
+        stale: board?.stale ?? 0,
+      },
+      caps: { paused: capsPaused, reason: capsReason },
     };
   }
 
@@ -359,12 +421,14 @@ export class Orchestrator {
     runConfig: SwarmStatusRunConfig;
     startedAt: number;
     isRunning: boolean;
+    createdBy: string;
   }> {
     const out: Array<{
       runId: string;
       runConfig: SwarmStatusRunConfig;
       startedAt: number;
       isRunning: boolean;
+      createdBy: string;
     }> = [];
     for (const r of this.runs.values()) {
       out.push({
@@ -372,6 +436,7 @@ export class Orchestrator {
         runConfig: r.runConfig,
         startedAt: r.startedAt,
         isRunning: r.runner.isRunning(),
+        createdBy: r.cfg.createdBy ?? "default",
       });
     }
     return out;
@@ -379,16 +444,36 @@ export class Orchestrator {
 
   /** T-Item-MultiTenant Phase 5 (2026-05-04): status snapshot for ONE
    *  run (vs the single-run status() which targets activeRun).
-   *  Returns null when the runId isn't in the active map. */
+   *  Falls back to the persister file on disk when the run is no longer
+   *  in memory (completed + cleaned up). This ensures page refreshes
+   *  after run completion still get the contract, summary, etc. */
   statusForRun(runId: string): SwarmStatus | null {
     const run = this.runs.get(runId);
-    if (!run) return null;
-    const status = run.runner.status();
+    if (run) {
+      const status = run.runner.status();
+      return {
+        ...status,
+        runId,
+        runConfig: status.runConfig ?? run.runConfig,
+        runStartedAt: status.runStartedAt ?? run.startedAt,
+        regions: this.computeRegions(status),
+      };
+    }
+    // Run no longer in memory — fall back to persister file on disk.
+    const pathInfo = this.runPaths.get(runId);
+    if (!pathInfo) return null;
+    const stateFilePath = `${pathInfo.clonePath}.run-state.json`;
+    const snap = loadSnapshot(stateFilePath);
+    if (!snap) return null;
     return {
-      ...status,
+      phase: snap.phase as SwarmPhase,
+      round: 0,
+      agents: [],
+      transcript: snap.transcript as SwarmStatus["transcript"],
+      contract: snap.contract as SwarmStatus["contract"] | undefined,
       runId,
-      runConfig: status.runConfig ?? run.runConfig,
-      runStartedAt: status.runStartedAt ?? run.startedAt,
+      runConfig: snap.runConfig as SwarmStatusRunConfig | undefined,
+      runStartedAt: snap.startedAt,
     };
   }
 
@@ -439,14 +524,14 @@ export class Orchestrator {
       // imprecision here — multi-tenant cost attribution is a known
       // gap (the global tokenTracker can't bucket usage per active
       // runId today; cross-cutting refactor needed for full fidelity).
+      tokenTracker.setCurrentPreset(undefined, run.runId);
       run.persister.stop();
-      // R8 wiring: release the clone lock so a follow-up run can
-      // immediately reuse the path.
+      // R8 wiring: release the clone lock so the path is reusable.
       if (run.holdsCloneLock) {
         try {
           releaseLock({ clonePath: run.cfg.localPath, runId: run.runId });
-        } catch {
-          /* best-effort */
+        } catch (err) {
+          console.warn('[Orchestrator] stopRun-release-lock-failed:', err instanceof Error ? err.message : String(err));
         }
       }
       this.runs.delete(runId);
@@ -568,37 +653,31 @@ export class Orchestrator {
 
   async start(cfg: RunConfig): Promise<void> {
     // T-Item-MultiTenant Phase 4 (2026-05-04): cap on concurrent runs.
-    // Reads SWARM_MAX_CONCURRENT_RUNS (default 4); reject when at cap.
-    // Pre-Phase-4 behavior was cap=1 — to preserve, set the env var to 1.
-    // Cleanup pass: drop any ActiveRun whose runner has terminated
-    // naturally (isRunning false) — these stay pinned in the map
-    // until the user explicitly stops them OR a new run starts. With
-    // cap > 1 we'd otherwise leak terminal-phase runs into the cap.
-    for (const [id, run] of [...this.runs.entries()]) {
-      if (!run.runner.isRunning()) {
-        try {
-          await run.runner.stop();
-        } catch {
-          // best-effort cleanup
-        }
-        run.conformanceMonitor?.stop();
-        run.embeddingDriftMonitor?.stop();
-        run.persister.stop();
-        if (run.holdsCloneLock) {
-          try {
-            releaseLock({ clonePath: run.cfg.localPath, runId: run.runId });
-          } catch {
-            /* best-effort */
-          }
-        }
-        this.runs.delete(id);
-      }
-    }
+    await this.cleanupStaleRuns();
     const cap = this.opts.maxConcurrentRuns ?? 4;
     if (this.runs.size >= cap) {
       throw new Error(
         `Concurrent-run cap reached (${this.runs.size}/${cap}). Stop a run before starting another.`,
       );
+    }
+    // Drift check: validate prompt assertions before starting the run.
+    // Non-blocking — drift warnings are informational. The run proceeds
+    // regardless, but the user sees drift warnings in the system transcript.
+    {
+      try {
+        const { checkPromptDrift } = await import("../swarm/blackboard/prompts/driftGuard.js");
+        const drift = await checkPromptDrift();
+        if (!drift.ok) {
+          const names = [...new Set(drift.failures.map((f) => f.prompt))].join(", ");
+          console.warn(
+            `[drift-guard] ${drift.failedAssertions}/${drift.totalAssertions} prompt assertions failed across: ${names}. ` +
+            `Run will start but prompt behavior may differ from expected. Run 'npx tsx eval/drift-check.ts' for details.`,
+          );
+        }
+      } catch {
+        // Drift check is best-effort. If the registry module can't be loaded
+        // (e.g., during tests without full source tree), silently skip.
+      }
     }
     // T-Item-MultiTenant Phase 3: mint runId FIRST so we can build the
     // ActiveRun atomically. 2026-05-02 (persistence lever #2): persister
@@ -627,11 +706,11 @@ export class Orchestrator {
     // buildRunner's wrappedEmit closure reads this.runStatePersister
     // (= activeRun.persister via the getter) lazily, so it'll see the
     // right persister once we insert the ActiveRun below.
-    const runner = this.buildRunner(cfg.preset, cfg);
+    const runner = await this.buildRunner(cfg.preset, cfg);
     // Task #125: tag every Ollama call made during this run with its
     // preset, so the usage dashboard can break down "blackboard ate
     // 60% of today's tokens" etc. Cleared in stop().
-    tokenTracker.setCurrentPreset(cfg.preset);
+    tokenTracker.setCurrentPreset(cfg.preset, runId);
     // Task #137: clear any prior run's quota-exhausted flag so this
     // run gets to probe the wall fresh. If the rate window has
     // reset / the user upgraded their plan / etc., the new run finds
@@ -702,6 +781,11 @@ export class Orchestrator {
       holdsCloneLock,
     };
     this.runs.set(runId, activeRun);
+    this.runPaths.set(runId, {
+      clonePath: cfg.localPath,
+      preset: cfg.preset,
+      startedAt: Date.now(),
+    });
     // Cache parent dir so /api/swarm/runs can keep showing historical
     // runs in this folder even after this run terminates. Persisted
     // to /tmp so a dev-server restart doesn't lose it.
@@ -783,8 +867,8 @@ export class Orchestrator {
       // stuck runner and the next start call false-positives as "already running".
       try {
         await runner.stop();
-      } catch {
-        // ignore cleanup errors; the original failure is what we want to surface
+      } catch (err) {
+        console.warn('[Orchestrator] start-error-runner-stop-failed:', err instanceof Error ? err.message : String(err));
       }
       // T-Item-MultiTenant Phase 3: cleanup the ActiveRun entry. Stop
       // monitors + persister, then remove from the map.
@@ -794,8 +878,8 @@ export class Orchestrator {
       if (activeRun.holdsCloneLock) {
         try {
           releaseLock({ clonePath: activeRun.cfg.localPath, runId: activeRun.runId });
-        } catch {
-          /* best-effort */
+        } catch (err) {
+          console.warn('[Orchestrator] start-error-release-lock-failed:', err instanceof Error ? err.message : String(err));
         }
       }
       this.runs.delete(runId);
@@ -843,18 +927,16 @@ export class Orchestrator {
       active.embeddingDriftMonitor?.stop();
       // Task #125: clear preset tag — calls between runs (e.g. an
       // exploratory direct curl to the proxy) bucket as "(idle)".
-      tokenTracker.setCurrentPreset(undefined);
+      tokenTracker.setCurrentPreset(undefined, active.runId);
       // 2026-05-02 (persistence lever #2): flush any pending snapshot
       // so terminal phase is on disk before we drop the persister.
-      // Without the explicit stop, the last 0-DEBOUNCE_MS of events
-      // could be trapped behind the timer.
       active.persister.stop();
       // R8 wiring: release the clone lock so the path is reusable.
       if (active.holdsCloneLock) {
         try {
           releaseLock({ clonePath: active.cfg.localPath, runId: active.runId });
-        } catch {
-          /* best-effort */
+        } catch (err) {
+          console.warn('[Orchestrator] stop-release-lock-failed:', err instanceof Error ? err.message : String(err));
         }
       }
       // Drop the ActiveRun from the map. The next start gets a fresh
@@ -923,8 +1005,8 @@ export class Orchestrator {
     // the chained run. Recursion guard: chainTo cleared.
     try {
       await this.stop();
-    } catch {
-      // best-effort
+    } catch (err) {
+      console.warn('[Orchestrator] forward-chain-stop-failed:', err instanceof Error ? err.message : String(err));
     }
     const chainedCfg: RunConfig = {
       ...originalCfg,
@@ -947,7 +1029,7 @@ export class Orchestrator {
     }
   }
 
-  private buildRunner(preset: PresetId, cfg: RunConfig): SwarmRunner {
+  private async buildRunner(preset: PresetId, cfg: RunConfig): Promise<SwarmRunner> {
     // #299: thread getAmendments into runner opts so each runner can
     // read live HITL nudges via this.opts.getAmendments(). The
     // amendments buffer lives on the orchestrator; we bind it here
@@ -995,6 +1077,7 @@ export class Orchestrator {
           model,
           ...(Object.keys(extras).length > 0 ? { extras } : {}),
         },
+        contract: status?.contract,
       });
     };
     const opts = {
@@ -1003,89 +1086,28 @@ export class Orchestrator {
       getAmendments: () =>
         this.runId ? this.amendments.list(this.runId) : [],
     };
+        const { heuristicPickPreset, createRunner } = await import("../swarm/presetRouter.js");
     switch (preset) {
-      case "round-robin":
-        return new RoundRobinRunner(opts);
+      // Special cases: role-diff → RoundRobin with custom roles
       case "role-diff": {
-        // Unit 32: optional user-supplied roles take precedence over the
-        // default catalog. The route validates shape (name + guidance,
-        // bounded counts) so we just need to pick which list to pass.
-        // 2026-05-02 (improvement #2): selectRoleCatalog auto-picks
-        // BUILD_ROLES (task-shaped) when a directive is set; otherwise
-        // DEFAULT_ROLES (audit catalog). User-supplied custom roles
-        // still win when present.
-        const roles = selectRoleCatalog({
-          customRoles: cfg.roles,
-          userDirective: cfg.userDirective,
-          // T198b (2026-05-04): forward dynamicRoles flag.
-          dynamicRoles: cfg.dynamicRoles,
-        });
+        const roles = selectRoleCatalog({ customRoles: cfg.roles, userDirective: cfg.userDirective, dynamicRoles: cfg.dynamicRoles });
         return new RoundRobinRunner(opts, { roles });
       }
-      case "blackboard":
-        return new BlackboardRunner(opts);
-      case "council":
-        // Parallel drafts + reconcile. Round 1 hides peer drafts from each
-        // agent's prompt; Round 2+ reveals them. Discussion-only.
-        return new CouncilRunner(opts);
-      case "orchestrator-worker":
-        // Agent 1 = lead (plans + synthesizes), 2..N = workers (parallel,
-        // isolated subtasks). `rounds` = plan→execute→synthesize cycles.
-        return new OrchestratorWorkerRunner(opts);
-      case "orchestrator-worker-deep":
-        // Task #131: 3-tier OW. Agent 1 = orchestrator, agents 2..K+1 =
-        // mid-leads (K = max(1, ceil((N-1)/6))), agents K+2..N = workers
-        // partitioned across mid-leads. Per cycle: top-plan → mid-plan →
-        // workers → mid-synth → top-synth. Scales coverage past ~8
-        // workers without inflating any single tier's prompt context.
-        return new OrchestratorWorkerDeepRunner(opts);
-      case "debate-judge":
-        // Fixed 3 agents: Agent 1 = PRO, Agent 2 = CON, Agent 3 = JUDGE.
-        // Per round Pro+Con exchange; Judge scores on the final round.
-        return new DebateJudgeRunner(opts);
-      case "map-reduce":
-        // Agent 1 = reducer, 2..N = mappers. Mappers each get a round-robin
-        // slice of top-level repo entries and inspect them in isolation;
-        // reducer synthesizes all mapper reports per cycle.
-        return new MapReduceRunner(opts);
-      case "stigmergy":
-        // Self-organizing repo exploration. No planner, no roles — agents
-        // pick their own next file based on a shared annotation table
-        // (pheromone trail) that the runner maintains in memory.
-        return new StigmergyRunner(opts);
-      case "baseline":
-        // Phase 5 of #314: thinnest honest single-agent runner. One
-        // agent, one prompt, one apply step, one commit. Used by the
-        // scoreboard sweep to anchor "did the swarm beat doing it
-        // alone?" comparisons.
-        //
-        // T-Item-1 (2026-05-04): when cfg.baselineAttempts > 1, swap
-        // in the parallel-clone harness — K subdirs, K parallel runners,
-        // pick the winner by (hunks_applied + 5*verify_passed). The
-        // harness implements the same SwarmRunner contract so this
-        // dispatcher swap is transparent to callers.
+      // Special case: baseline with parallel-clone harness
+      case "baseline": {
         if ((cfg.baselineAttempts ?? 1) > 1) {
           return new BaselineSwarmHarness(opts);
         }
         return new BaselineRunner(opts);
-      case "moa":
-        // #88 (2026-05-01): Mixture of Agents. Layer 1 = N peer-hidden
-        // proposers (parallel). Layer 2 = 1 aggregator that synthesizes
-        // their N drafts into one answer. Discussion-only; reproducibly
-        // beats single-large-model on reasoning benchmarks using only
-        // small open-weights models — exactly this project's value prop.
-        return new MoaRunner(opts);
+      }
+      // Special case: pipeline chains sub-runs
       case "pipeline": {
-        // Pipeline preset: chains N sub-runs together, piping each
-        // phase's transcript + deliverable into the next phase's seed.
-        const factory = (p: PresetId) => this.buildRunner(p, cfg);
+        const factory = async (p: PresetId) => this.buildRunner(p, cfg);
         return new PipelineRunner(opts, factory);
       }
-      default: {
-        // Exhaustiveness check — if a new preset is added to PresetId, TS errors here.
-        const _exhaustive: never = preset;
-        throw new Error(`unknown preset: ${String(_exhaustive)}`);
-      }
+      // Standard presets: delegate to factory
+      default:
+        return createRunner(cfg, opts);
     }
   }
 }

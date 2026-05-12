@@ -1,5 +1,6 @@
 // Extracted from BlackboardRunner.ts — planner prompt + JSON parsing + repair +
-// grounding + hypothesis grouping + sibling-retry fallback + V2 observer events.
+// grounding + hypothesis grouping + sibling-retry fallback + V2 observer events +
+// brain fallback (AI-assisted parsing when rule-based parsing fails).
 // Takes a narrow PlannerContext object instead of referencing `this.*`.
 
 import { randomUUID } from "node:crypto";
@@ -18,7 +19,12 @@ import { PLANNER_TODOS_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
 import { classifyExpectedFiles } from "./prompts/pathValidation.js";
 import { checkExpectedSymbols } from "./runnerHelpers.js";
 import { detectHypothesisTag } from "./hypothesisGrouping.js";
-import { siblingModelFor } from "./BlackboardRunnerConstants.js";
+import { withSiblingRetry } from "./siblingRetry.js";
+import {
+  tryBrainFallback,
+  type BrainFallbackEvent,
+} from "./prompts/brainIntegration.js";
+import { PlannerResponseSchema } from "./prompts/planner.js";
 
 export interface PlannerContext {
   getContract: () => ExitContract | undefined;
@@ -35,6 +41,14 @@ export interface PlannerContext {
     agentName?: "swarm" | "swarm-read" | "swarm-builder",
     ollamaFormat?: "json" | Record<string, unknown>,
   ) => Promise<{ response: string; agentUsed: Agent }>;
+  /** Brain fallback: prompt an LLM to extract structured JSON from a
+   *  failed parse. The promptFn signature matches promptWithFailover. */
+  brainPromptFn?: (
+    prompt: string,
+    model: string,
+    maxTokens: number,
+    timeoutMs: number,
+  ) => Promise<string>;
   wrappers: TodoQueueWrappers;
   findingsPost: (entry: { agentId: string; text: string; createdAt: number }) => void;
   v2ObserverApply: (event: unknown) => void;
@@ -49,6 +63,8 @@ export async function runPlanner(
   seed: PlannerSeed,
   isFallbackAttempt = false,
 ): Promise<void> {
+  const modelAtEntry = agent.model;
+
   const contractForPrompt = ctx.getContract()
     ? {
         missionStatement: ctx.getContract()!.missionStatement,
@@ -81,40 +97,47 @@ export async function runPlanner(
     ctx.appendAgent(repairAgent, repairResponse);
     parsed = parsePlannerResponse(repairResponse);
     if (!parsed.ok) {
-      const fallback = !isFallbackAttempt
-        ? ctx.getPlannerFallbackModel() ?? siblingModelFor(agent.model)
-        : undefined;
-      if (fallback && fallback !== agent.model) {
-        const original = agent.model;
-        ctx.appendSystem(
-          `[${agent.id}] failover: ${original} → ${fallback} (sibling-retry: planner JSON parse failed after repair)`,
-        );
-        ctx.updateAgentModel(agent.id, fallback);
-        ctx.emit({
-          type: "model_shift",
-          agentId: agent.id,
-          agentIndex: agent.index,
-          fromModel: original,
-          toModel: fallback,
-          reason: "sibling-retry: planner JSON parse failed after repair",
-        });
-        agent.model = fallback;
+      // Brain fallback: try AI-assisted parsing before sibling-retry.
+      if (ctx.brainPromptFn) {
+        ctx.appendSystem(`Planner parse still failed after repair — trying brain fallback (${parsed.reason}).`);
+        const brainEvent = (e: BrainFallbackEvent) => {
+          ctx.emit({ type: "brain-fallback", ...e });
+        };
         try {
-          await runPlanner(ctx, agent, seed, true);
-          return;
-        } finally {
-          agent.model = original;
-          ctx.updateAgentModel(agent.id, original);
-          ctx.emit({
-            type: "model_shift",
-            agentId: agent.id,
-            agentIndex: agent.index,
-            fromModel: fallback,
-            toModel: original,
-            reason: "sibling-retry reverted",
-          });
+          const brainResult = await tryBrainFallback(
+            firstResponse,
+            PlannerResponseSchema,
+            "planner",
+            ctx.brainPromptFn,
+            brainEvent,
+          );
+          if (brainResult) {
+            const brainTodos = brainResult as unknown[];
+            parsed = { ok: true as const, todos: brainTodos, dropped: [] };
+            ctx.appendSystem(`Brain fallback succeeded — extracted ${brainTodos.length} todo(s).`);
+          }
+        } catch {
+          // Brain call failed — fall through to sibling-retry.
         }
       }
+    }
+    if (!parsed.ok) {
+      const retried = await withSiblingRetry(
+        {
+          agent,
+          modelAtEntry,
+          logPrefix: `[${agent.id}]`,
+          updateAgentModel: ctx.updateAgentModel,
+          emit: ctx.emit,
+          getFallbackModel: ctx.getPlannerFallbackModel,
+          reason: "sibling-retry: planner JSON parse failed after repair",
+          isFallbackAttempt,
+        },
+        async () => {
+          await runPlanner(ctx, agent, seed, true);
+        },
+      );
+      if (retried) return;
       ctx.appendSystem(`Planner still invalid after repair (${parsed.reason}). Giving up this run.`);
       ctx.findingsPost({
         agentId: agent.id,
@@ -125,40 +148,24 @@ export async function runPlanner(
     }
   }
 
-  if (parsed.ok && !isFallbackAttempt && parsed.todos.length <= 1) {
-    const fallback = ctx.getPlannerFallbackModel() ?? siblingModelFor(agent.model);
-    if (fallback && fallback !== agent.model) {
-      const original = agent.model;
-      ctx.appendSystem(
-        `[${agent.id}] failover: ${original} → ${fallback} (sibling-retry: planner produced only ${parsed.todos.length} todo(s) — likely low-quality repair)`,
+  if (parsed.ok && !isFallbackAttempt && parsed.todos.length === 0) {
+      const retried = await withSiblingRetry(
+        {
+          agent,
+          modelAtEntry,
+          logPrefix: `[${agent.id}]`,
+          updateAgentModel: ctx.updateAgentModel,
+          emit: ctx.emit,
+          getFallbackModel: ctx.getPlannerFallbackModel,
+          reason: `sibling-retry: planner produced only ${parsed.todos.length} todo(s)`,
+          isFallbackAttempt,
+        },
+        async () => {
+          await runPlanner(ctx, agent, seed, true);
+        },
       );
-      ctx.updateAgentModel(agent.id, fallback);
-      ctx.emit({
-        type: "model_shift",
-        agentId: agent.id,
-        agentIndex: agent.index,
-        fromModel: original,
-        toModel: fallback,
-        reason: `sibling-retry: planner produced only ${parsed.todos.length} todo(s)`,
-      });
-      agent.model = fallback;
-      try {
-        await runPlanner(ctx, agent, seed, true);
-        return;
-      } finally {
-        agent.model = original;
-        ctx.updateAgentModel(agent.id, original);
-        ctx.emit({
-          type: "model_shift",
-          agentId: agent.id,
-          agentIndex: agent.index,
-          fromModel: fallback,
-          toModel: original,
-          reason: "sibling-retry reverted",
-        });
-      }
+      if (retried) return;
     }
-  }
 
   if (parsed.dropped.length > 0) {
     ctx.appendSystem(
@@ -245,40 +252,22 @@ export async function runPlanner(
   groundedTodos.push(...symbolGroundedTodos);
 
   if (groundedTodos.length === 0) {
-    const fallback = !isFallbackAttempt
-      ? ctx.getPlannerFallbackModel() ?? siblingModelFor(agent.model)
-      : undefined;
-    if (fallback && fallback !== agent.model) {
-      const original = agent.model;
-      ctx.appendSystem(
-        `[${agent.id}] failover: ${original} → ${fallback} (sibling-retry: planner produced 0 valid todos)`,
-      );
-      ctx.updateAgentModel(agent.id, fallback);
-      ctx.emit({
-        type: "model_shift",
-        agentId: agent.id,
-        agentIndex: agent.index,
-        fromModel: original,
-        toModel: fallback,
+    const retried = await withSiblingRetry(
+      {
+        agent,
+        modelAtEntry,
+        logPrefix: `[${agent.id}]`,
+        updateAgentModel: ctx.updateAgentModel,
+        emit: ctx.emit,
+        getFallbackModel: ctx.getPlannerFallbackModel,
         reason: "sibling-retry: planner produced 0 valid todos",
-      });
-      agent.model = fallback;
-      try {
+        isFallbackAttempt,
+      },
+      async () => {
         await runPlanner(ctx, agent, seed, true);
-        return;
-      } finally {
-        agent.model = original;
-        ctx.updateAgentModel(agent.id, original);
-        ctx.emit({
-          type: "model_shift",
-          agentId: agent.id,
-          agentIndex: agent.index,
-          fromModel: fallback,
-          toModel: original,
-          reason: "sibling-retry reverted",
-        });
-      }
-    }
+      },
+    );
+    if (retried) return;
     const dropDetail =
       parsed.dropped.length > 0 || todosDropped > 0
         ? `Planner returned only invalid/unbindable todos (${parsed.dropped.length} schema-dropped, ${todosDropped} grounding-dropped).`

@@ -48,6 +48,7 @@ const TEST_FILES = [
   "src/swarm/blackboard/workerRoles.test.ts",
   "src/swarm/blackboard/memoryStore.test.ts",
   "src/swarm/blackboard/RunStateObserver.test.ts",
+  "src/swarm/blackboard/lifecycleState.test.ts",
   "src/swarm/blackboard/TodoQueue.test.ts",
   "src/swarm/blackboard/WorkerPipeline.test.ts",
   "src/swarm/blackboard/v2Adapters.test.ts",
@@ -58,6 +59,7 @@ const TEST_FILES = [
   "src/swarm/blackboard/boardBroadcaster.test.ts",
   "src/swarm/blackboard/boardWireCompat.test.ts",
   "src/swarm/blackboard/todoQueueWrappers.test.ts",
+  "src/swarm/blackboard/siblingRetry.test.ts",
 
   // swarm/ (non-blackboard)
   "src/swarm/roles.test.ts",
@@ -92,6 +94,7 @@ const TEST_FILES = [
   "src/services/AgentManager.killAgent.test.ts",
   "src/services/Orchestrator.multiTenant.test.ts",
   "src/ws/broadcast.test.ts",
+  "src/ws/reconnect.test.ts",
   "src/swarm/councilReconcile.test.ts",
   "src/swarm/extractText.test.ts",
   "src/swarm/runEndReflection.test.ts",
@@ -170,6 +173,7 @@ const TEST_FILES = [
   // shared/
   "../shared/src/extractThinkTags.test.ts",
   "../shared/src/extractToolCallMarkers.test.ts",
+  "../shared/src/wsProtocol.test.ts",
   "../shared/src/subtaskPart.test.ts",
   "../shared/src/providers.test.ts",
   "src/swarm/blackboard/buildCommandAllowlist.test.ts",
@@ -192,8 +196,29 @@ const TEST_FILES = [
   "src/services/AgentManager.usage.test.ts",
   "src/providers/providers.test.ts",
   "src/providers/discoverModels.test.ts",
+  "src/providers/providers.test.extended.ts",
   "src/services/Session.test.ts",
   "src/tools/ToolDispatcher.test.ts",
+
+  // web/ (state + event reducer)
+  "../web/src/state/applyEvent.test.ts",
+
+  // swarm/ DiscussionRunnerBase lifecycle
+  "src/swarm/DiscussionRunnerBase.test.ts",
+
+  // blackboard/ BlackboardRunner lifecycle
+  "src/swarm/blackboard/BlackboardRunner.lifecycle.test.ts",
+
+  // streamMerge/ OTEngine
+  "src/swarm/streamMerge/OTEngine.test.ts",
+
+  // middleware/
+  "src/middleware/securityHeaders.test.ts",
+  "src/middleware/requestLogger.test.ts",
+  "src/middleware/apiVersion.test.ts",
+  "src/middleware/cors.test.ts",
+  "src/middleware/compression.test.ts",
+  "src/middleware/staticServing.test.ts",
 ];
 
 // Forward CLI args so callers can pass --test-name-pattern etc:

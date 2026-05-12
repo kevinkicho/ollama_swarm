@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RUNNER_SRC = readFileSync(join(__dirname, "BlackboardRunner.ts"), "utf8");
+const WORKER_SRC = readFileSync(join(__dirname, "workerRunner.ts"), "utf8");
 
 test("BlackboardRunner — buildHunkRepairPrompt is actually called (was dead import pre-fix)", () => {
   // Pre-fix: buildHunkRepairPrompt was imported but never called. The
@@ -88,12 +89,12 @@ test("BlackboardRunner — retry falls through to replan on second failure", () 
   );
 });
 
-test("BlackboardRunner — retry is gated on !this.stopping (don't spend a turn after user stop)", () => {
+test("BlackboardRunner — retry is gated on !ctx.isStopping() (don't spend a turn after user stop)", () => {
   // If the user pressed Stop while the first apply was running, don't
   // burn a second worker prompt before honoring the stop signal.
   assert.match(
-    RUNNER_SRC,
-    /failedHunkIndex !== undefined[\s\S]{0,60}!this\.stopping/,
-    "retry block must check this.stopping before re-prompting",
+    WORKER_SRC,
+    /failedHunkIndex !== undefined[\s\S]{0,80}!ctx\.isStopping\(\)/,
+    "retry block must check ctx.isStopping() before re-prompting",
   );
 });

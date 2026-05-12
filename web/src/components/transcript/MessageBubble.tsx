@@ -725,7 +725,7 @@ function AgentsReadyBubble({
         <button
           onClick={() => setOpen((v) => !v)}
           className="text-[10px] uppercase tracking-wide hover:text-ink-200"
-          title="Per-agent spawn details: port, role, model, sessionId, warmup elapsed"
+          title="Per-agent spawn details: role, model, sessionId, warmup elapsed"
         >
           {open ? "hide details" : "details"}
         </button>

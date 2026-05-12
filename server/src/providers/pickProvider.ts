@@ -8,6 +8,7 @@ import { OllamaProvider } from "./OllamaProvider.js";
 import { OllamaCloudProvider } from "./OllamaCloudProvider.js";
 import { AnthropicProvider } from "./AnthropicProvider.js";
 import { OpenAIProvider } from "./OpenAIProvider.js";
+import { OpenCodeProvider } from "./OpenCodeProvider.js";
 import { detectProvider, stripProviderPrefix } from "../../../shared/src/providers.js";
 import { config } from "../config.js";
 
@@ -15,6 +16,7 @@ let ollamaSingleton: OllamaProvider | null = null;
 let ollamaCloudSingleton: OllamaCloudProvider | null = null;
 let anthropicSingleton: AnthropicProvider | null = null;
 let openaiSingleton: OpenAIProvider | null = null;
+let opencodeSingleton: OpenCodeProvider | null = null;
 
 // Test seam: when set, every pickProvider() call returns this provider
 // regardless of the model string's prefix. Lets unit tests bypass the
@@ -53,6 +55,9 @@ export function pickProvider(modelString: string): PickedProvider {
     case "openai":
       openaiSingleton ??= new OpenAIProvider();
       return { provider: openaiSingleton, modelId };
+    case "opencode":
+      opencodeSingleton ??= new OpenCodeProvider();
+      return { provider: opencodeSingleton, modelId };
   }
 }
 

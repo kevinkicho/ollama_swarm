@@ -223,11 +223,14 @@ export class TodoQueue {
    *
    *  When all pending todos score 0, behaves identically to FIFO
    *  dequeue (oldest wins). */
-  dequeueByScore(
-    workerId: string,
-    scoreFn: (todo: QueuedTodo) => number,
-    ts: number = Date.now(),
-  ): QueuedTodo | null {
+   dequeueByScore(
+     workerId: string,
+     /** SYNCHRONOUS and MUST NOT throw. Async scorers silently break
+      *  this method (Promise > number is always false). Pure functions
+      *  only — no I/O, no async, no side effects. */
+     scoreFn: (todo: QueuedTodo) => number,
+     ts: number = Date.now(),
+   ): QueuedTodo | null {
     const pending = this.todos.filter((t) => t.status === "pending");
     if (pending.length === 0) return null;
     let best: QueuedTodo | undefined;

@@ -35,7 +35,6 @@ export function buildAgentsReadySummary(
     agents: input.ready.map((a) => ({
       id: a.id,
       index: a.index,
-      port: a.port,
       model: a.model,
       sessionId: a.sessionId,
       role: input.roleResolver(a),

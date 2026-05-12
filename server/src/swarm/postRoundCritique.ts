@@ -1,7 +1,7 @@
 import type { TranscriptEntry, TranscriptEntrySummary } from "../types.js";
 import type { Agent } from "../services/AgentManager.js";
 import type { AgentStatsCollector } from "./agentStatsCollector.js";
-import type { RunAgentOpts } from "./DiscussionRunnerBase.js";
+import type { RunAgentOpts } from "./postRoundCritiqueTypes.js";
 
 export async function maybeRunPostRoundCritique(args: {
   agents: Agent[];

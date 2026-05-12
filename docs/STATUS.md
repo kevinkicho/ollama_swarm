@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-05-04 (17 reliability helpers + 3-wave wiring + 6 cfg flags + per-run providerFailover + extended to all 11 runner-shaped call sites)
+**Last updated:** 2026-05-09 (test count, preset count, recent fix entries)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -16,21 +16,24 @@
 
 ## What ships today
 
-**10 swarm presets** (one write-capable, nine discussion) + 1 baseline. Every preset honors the user directive except `stigmergy` (exploration is repo-driven). **Phase 1 + Phase 2 (2026-05-04)** added opt-in write capability for all discussion presets:
+**11 swarm presets** (one write-capable, nine discussion, one pipeline) + 1 baseline. **Phase 1 + Phase 2 (2026-05-04)** added opt-in write capability for all discussion presets:
 
-| Preset | Write-capable? | Honors directive? | Notes |
+| Preset | Maturity | Write-capable? | Notes |
 |---|---|---|---|
-| `blackboard` | ✅ (native) | ✅ | planner + workers + auditor; tier ratchet; Aider-style hunks; pre-commit verify gate (`verifyCommand`) |
-| `round-robin` | ⚡ (opt-in) | ✅ | Phase 1: `cfg.writeMode: "single"` → synthesizer produces hunks. Phase 2: `cfg.writeMode: "multi"` → vote reconciliation |
-| `role-diff` | ⚡ (opt-in) | ✅ | Phase 1: specialist synthesis produces hunks. Phase 2: vote reconciliation |
-| `council` | ⚡ (opt-in) | ✅ | Phase 1: council consensus produces hunks. Phase 2: per-round vote on overlapping hunks |
-| `orchestrator-worker` (flat) | ⚡ (opt-in) | ✅ | Phase 1: lead synthesis produces hunks. Phase 2: sequential reconciliation (CAS on file hashes) |
-| `orchestrator-worker-deep` | ⚡ (opt-in) | ✅ | Phase 1: multi-tier synthesis produces hunks. Phase 2: sequential reconciliation |
-| `debate-judge` | ⚡ (opt-in) | ✅ | Phase 1: judge verdict produces hunks. Phase 2: judge picks winner's hunks |
-| `map-reduce` | ⚡ (opt-in) | ✅ | Phase 1: reducer produces hunks. Phase 2: merge reconciliation (isolated slices) |
-| `stigmergy` | ❌ | ❌ | pheromone-table + per-file annotations; exploration-focused (no action-driven writes) |
-| `moa` | ⚡ (opt-in) | ✅ | Phase 1: aggregator produces hunks. Phase 2: aggregator picks best proposer's hunks |
-| `baseline` | ✅ (native) | ✅ | single agent / single prompt / single apply step — eval-harness path, not in the form's normal preset list |
+| `blackboard` | production | ✅ (native) | planner + workers + auditor; tier ratchet; Aider-style hunks; pre-commit verify gate (`verifyCommand`). Most tested preset with deepest maturity. |
+| `round-robin` | production | ⚡ (opt-in) | Rotating Critic/Synthesizer/Gap-finder/Builder dispositions framed around directive. `cfg.writeMode: "single"` → synthesizer produces hunks; `"multi"` → vote reconciliation. |
+| `council` | production | ⚡ (opt-in) | Per-agent position papers → president reconciliation. `cfg.writeMode: "single"` → council consensus hunks; `"multi"` → per-round vote on overlapping hunks. |
+| `orchestrator-worker` (flat) | production | ⚡ (opt-in) | Lead decomposes directive into subtasks for workers. Phase 1: lead synthesis; Phase 2: sequential reconciliation (CAS on file hashes). |
+| `role-diff` | beta | ⚡ (opt-in) | Specialist role assignment per agent with diff-based deliverable. Phase 1: specialist synthesis; Phase 2: vote reconciliation. |
+| `debate-judge` | beta | ⚡ (opt-in) | PRO/CON/JUDGE debate structure. Phase 1: judge verdict produces hunks; Phase 2: judge picks winner's hunks. |
+| `map-reduce` | beta | ⚡ (opt-in) | Mappers find directive-relevant evidence → reducer synthesizes. Phase 1: reducer hunks; Phase 2: merge reconciliation (isolated slices). Partition-dependent quality. |
+| `orchestrator-worker-deep` | needs-validation | ⚡ (opt-in) | 3-tier: orchestrator → mid-leads → workers. Phase 1: multi-tier synthesis; Phase 2: sequential reconciliation. **Known issue:** validation tour (2026-04-28) hit model-drift failures — glm-5.1 produces XML pseudo-tool-calls under structured-output pressure in deep chains. |
+| `stigmergy` | exploration | ❌ | Pheromone-table + per-file annotations. **Read-only by design** — exploration mode, no write pipeline. Pheromone heatmap feeds blackboard workers when `cfg.stigmergyOnBlackboard` is on. |
+| `moa` | beta | ⚡ (opt-in) | Mixture of Agents: proposers → aggregators, three layers of depth. Phase 1: aggregator hunks; Phase 2: aggregator picks best proposer's hunks. **Shipped 2026-05-01 in a single day; less polish than older presets.** |
+| `baseline` | production | ✅ (native) | single agent / single prompt / single apply step — eval-harness path, not in the form's normal preset list |
+| `pipeline` | beta | ⚡ (opt-in) | Chains sub-runs with transcript/deliverable piping. Default phases: Explore → Decompose → Validate. Each phase's output feeds the next. |
+
+All presets honor the user directive except `stigmergy` (exploration is repo-driven by design).
 
 **Legend:** ✅ native write support | ⚡ opt-in via `cfg.writeMode: "single" | "multi"` + `cfg.writeModel` | ❌ no write support
 
@@ -73,7 +76,7 @@ The V1 SDK loop (per-agent opencode subprocess + SSE chunked streaming) was reti
 | Event log reader | `server/src/swarm/blackboard/EventLogReaderV2.ts` | primary; backs `/api/v2/event-log/runs` |
 | `formatServerSummary` | `shared/src/formatServerSummary.ts` | shared between server + web |
 
-**Test totals:** 2297 server tests passing / 0 failing as of 2026-05-06 (was 2271 → +26 across sibling-retry, symbol-grounding, planner fixes, UI fixes). Web type-check clean. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
+**Test totals:** 2,516 tests passing / 0 failing as of 2026-05-09. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
 
 ---
 
@@ -158,11 +161,14 @@ A long day. Headline categories:
 
 ## Recent fixes worth knowing about
 
+- **Worker sibling-retry (2026-05-08)** — 4-tier parse cascade in `workerRunner.ts`: parse → repair prompt → brain fallback → sibling model retry. Model restored in `finally` via `withSiblingRetry()`. Matches planner/contract/auditor pattern. All 6 retry paths now share a single helper (`siblingRetry.ts`).
+- **Parser reliability (2026-05-08)** — Lenient extraction across all 7 parsers (truncate over-size fields instead of dropping). Brain fallback parser (gemma4 extracts JSON when rule-based parsing fails). Wont-do tier-up fix (allCriteriaMet gates tier promotion, not allCriteriaResolved).
+- **Static build + Docker (2026-05-08)** — `Dockerfile` (node:22-slim, two-stage), `docker-compose.yml`, SPA fallback static serving middleware. `npm run build` produces production artifacts.
+- **API hardening (2026-05-08)** — `X-API-Version: 1.0.0` header on all responses. CORS middleware (origin: true, credentials). Compression middleware (1KB threshold). WS authentication via cookie token. WS payload 1MB guard.
+- **Bus-factor remediation (2026-05-09)** — `BlackboardRunnerFields` typed (125-property generated interface). `DiscussionRunnerBase` consolidation (Council -117 LOC, RoundRobin -43 LOC, 7 runners use shared budget guard). `RunnerFactory` (Orchestrator -8 imports). `types.ts` split into domain files. Sibling-retry extraction (`withSiblingRetry()`). LifecycleState single source in `types.ts`. WSL esbuild guard.
+- **Observability (2026-05-09)** — `StaleReason` + `CommitTier` tracking in worker pipeline. Cascade stats endpoint (`/runs/:id/stats`). Multi-tenant token attribution (UsageRecord.runId). Wall-clock cost attribution (wastedWallClockMs in RunSummary). Region status API plumbed.
+- **Hunk quality (2026-05-09)** — Trailing-whitespace normalization in hunk search matching. Pre-commit large-deletion validation. Hunk quality as 5th eval scoring dimension. 6 fuzzy-matching regression tests.
 - **Sibling-retry model failover (2026-05-06)** — when planner, contract, or auditor JSON parsing fails after repair, the runner retries once with a sibling model via `siblingModelFor()` lookup. All five retry paths (3 planner, 1 contract, 1 auditor) emit reverse `model_shift` in `finally` blocks so the UI doesn't permanently show the fallback model.
-- **Symbol-grounding strips hallucinations (2026-05-06)** — `checkExpectedSymbols()` now strips invalid `expectedSymbols` rather than dropping the entire todo. A todo with valid `expectedFiles` but hallucinated symbol references keeps its files and loses only the symbols.
-- **Planner read-only todo ban (2026-05-06)** — hard rule 5a in the planner prompt explicitly bans read-only TODOs ("read X", "analyze Y"). Workers decline these, wasting cycles.
-- **Client-side bare todo object recognition (2026-05-06)** — `summarizeAgentJson.ts` now recognizes a single `{description, expectedFiles}` object (not wrapped in an array) from planner output, rendering it as a TodosBubble instead of raw JSON.
-- **UI sidebar update on run completion (2026-05-06)** — two fixes: `AgentManager.killAll()` now broadcasts agent "stopped" states before setting `killed=true`; Zustand `setPhase()` clears `agents: {}` on terminal phase so `SidebarSummaryAgents` renders from summary.
 - **`eff8c4f` (2026-05-01)** — provider streaming chunk-drop bug in `AnthropicProvider` + `OpenAIProvider`. `Promise.race([reader.read(), timeout])` was abandoning in-flight reads on every 200ms tick; abandoned reads silently consumed subsequent chunks, truncating responses to whatever fit in the first SSE batch. Pre-fix: Claude Sonnet returned `"Here"` for `"Count from 1 to 10"` (28 tokens generated, 4 captured). Fix keeps one in-flight read across iterations. Regression test in `5c13b10` uses 250ms-delay async streams to surface the bug if reintroduced.
 - **`4190afe` (2026-05-01)** — latent dotenv path bug. `server/src/config.ts` did `import "dotenv/config"` which resolved relative to `process.cwd()`. `dev.mjs` runs the server with `cwd=server/`, so the canonical repo-root `.env` was silently ignored. Paid keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) would never load. Replaced with explicit `dotenv.config({ path: <repoRoot>/.env })`.
 - **`f3d0aeb` (2026-05-01)** — V2 Step 6c first thin slice: `GET /api/v2/event-log/runs/:runId` per-run record replay endpoint + 5 tests. Pure backend addition; unblocks every UI cutover step that follows. Full remaining cutover scoped in `docs/V2-STEP-6C.md`.

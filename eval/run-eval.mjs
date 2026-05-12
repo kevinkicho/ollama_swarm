@@ -53,6 +53,10 @@ let FIXTURE_DIR = "";
 // a specific model without touching .env or restarting dev. Empty =
 // server default.
 let MODEL_OVERRIDE = "";
+// 2026-05-09 (LCCA): --local strips :cloud suffix from all model refs
+// so the sweep benchmarks against local Ollama models. Useful for
+// comparing local vs cloud latency + cost.
+let USE_LOCAL_OLLAMA = false;
 // 2026-05-01: --maxCostUsd applies the per-run dollar ceiling to every
 // attempt in the sweep. Bounds runaway spend on paid providers. 0 =
 // no cap. Capped server-side at $100; eval also clamps for sanity.
@@ -102,8 +106,24 @@ function buildPayload(task, preset) {
     userDirective: task.directive,
     force: true,
   };
-  if (typeof task.wallClockCapMs === "number" && preset === "blackboard") {
-    payload.wallClockCapMs = task.wallClockCapMs;
+  if (preset === "blackboard") {
+    // Blackboard: honor explicit task cap, else 20 min.
+    payload.wallClockCapMs = task.wallClockCapMs ?? 1_200_000;
+  } else {
+    // Discussion presets: per-preset defaults for faster failure detection.
+    const presetCaps = {
+      "round-robin": 300_000,
+      "council": 300_000,
+      "role-diff": 300_000,
+      "debate-judge": 300_000,
+      "map-reduce": 300_000,
+      "orchestrator-worker": 600_000,
+      "orchestrator-worker-deep": 600_000,
+      "stigmergy": 600_000,
+      "moa": 300_000,
+      "baseline": 300_000,
+    };
+    payload.wallClockCapMs = task.wallClockCapMs ?? presetCaps[preset] ?? 600_000;
   }
   if (preset === "debate-judge" && task.proposition) {
     payload.proposition = task.proposition;
@@ -112,6 +132,16 @@ function buildPayload(task, preset) {
   // don't require touching .env / restarting dev. Applied uniformly to
   // every (task, preset, seed) attempt.
   if (MODEL_OVERRIDE) payload.model = MODEL_OVERRIDE;
+  // 2026-05-09: --local strips :cloud from all model refs for local
+  // Ollama benchmarks. Applied after MODEL_OVERRIDE so --model can
+  // override the local model too.
+  if (USE_LOCAL_OLLAMA) {
+    const strip = (s) => s?.replace(/:cloud$/, "").replace(/-cloud$/, "") ?? s;
+    if (payload.model) payload.model = strip(payload.model);
+    if (payload.plannerModel) payload.plannerModel = strip(payload.plannerModel);
+    if (payload.workerModel) payload.workerModel = strip(payload.workerModel);
+    if (payload.auditorModel) payload.auditorModel = strip(payload.auditorModel);
+  }
   if (MAX_COST_USD > 0) payload.maxCostUsd = MAX_COST_USD;
   // 2026-05-01 (scoreboard pre-flight): MoA per-layer model overrides.
   // Only meaningful when preset === "moa". Other presets ignore them.
@@ -256,10 +286,11 @@ function sleep(ms) {
 //  - completion (40 pts): completed cleanly = 40, stopped/timeout = 20, failed = 0
 //  - throughput (30 pts): commits + transcript activity normalized
 //  - efficiency (20 pts): tokens per minute (lower = better)
-//  - conformance (10 pts): from #295 conformance samples if present in summary
+//  - hunk-quality (10 pts): cascade efficiency from stale/commit ratios
+//  - conformance (0 pts): reserved (#295 not aggregated yet)
 export function scoreRun(summary, task) {
   if (!summary || typeof summary !== "object") {
-    return { total: 0, components: { completion: 0, throughput: 0, efficiency: 0, conformance: 0 }, notes: "no summary" };
+    return { total: 0, components: { completion: 0, throughput: 0, efficiency: 0, hunkQuality: 0, conformance: 0 }, notes: "no summary" };
   }
 
   // Completion (40)
@@ -303,28 +334,52 @@ export function scoreRun(summary, task) {
   else if (tokPerMin < 200_000) efficiency = Math.round(20 - ((tokPerMin - 50_000) / 150_000) * 15);
   else efficiency = 5;
 
-  // Conformance (10): server doesn't yet bake conformance averages
-  // into summary.json (#295 emits live samples but doesn't aggregate).
-  // Reserve the slot; default to 5 (neutral) until aggregation lands.
-  const conformance = 5;
+  // Conformance (0): reserved slot — #295 emits live samples but
+  // doesn't aggregate into summary.json yet. Default to 0 (neutral)
+  // so it doesn't inflate scores. Restore to 10 when aggregation lands.
+  const conformance = 0;
 
-  const total = completion + throughput + efficiency + conformance;
+  // Hunk quality (10): derived from cascade efficiency. Higher =
+  // fewer stale todos, more first-try commits. Directly measures
+  // the system's primary throughput bottleneck (Monte Carlo, 2026-05-09).
+  let hunkQuality = 5; // neutral default
+  const board = summary.board ?? {};
+  const counts = board.counts ?? {};
+  const totalTodos = (counts.committed ?? 0) + (counts.stale ?? 0) + (counts.skipped ?? 0);
+  if (totalTodos > 0) {
+    const cascadeEfficiency = (counts.committed ?? 0) / totalTodos;
+    if (cascadeEfficiency >= 0.95) hunkQuality = 10;
+    else if (cascadeEfficiency >= 0.85) hunkQuality = 8;
+    else if (cascadeEfficiency >= 0.70) hunkQuality = 5;
+    else hunkQuality = 2;
+  }
+
+  const total = completion + throughput + efficiency + conformance + hunkQuality;
   return {
     total,
-    components: { completion, throughput, efficiency, conformance },
-    notes: `${stopReason} · commits=${commits} · ${Math.round(wallS)}s · ${Math.round(tokPerMin)} tok/min`,
+    components: { completion, throughput, efficiency, hunkQuality, conformance },
+    notes: `${stopReason} · commits=${commits} · ${Math.round(wallS)}s · ${Math.round(tokPerMin)} tok/min · cascade=${((counts?.committed ?? 0) / Math.max(totalTodos, 1) * 100).toFixed(0)}%`,
   };
 }
 
 async function readSummary(clonePath) {
   // summary.json lives at the clone root. Best-effort — return null
   // if missing or unparseable.
-  try {
-    const raw = readFileSync(path.join(clonePath, "summary.json"), "utf8");
-    return JSON.parse(raw);
-  } catch {
-    return null;
+  // 2026-05-07: Poll/retry to avoid race condition where summarize.json
+  // is read before finalize has actually written the file.
+  for (let i = 0; i < 5; i++) {
+    try {
+      if (!existsSync(path.join(clonePath, "summary.json"))) {
+        await sleep(2000);
+        continue;
+      }
+      const raw = readFileSync(path.join(clonePath, "summary.json"), "utf8");
+      return JSON.parse(raw);
+    } catch {
+      await sleep(2000);
+    }
   }
+  return null;
 }
 
 async function main() {
@@ -416,6 +471,7 @@ async function main() {
   const seedsRaw = Number(args.seeds ?? 1);
   SEEDS = Number.isFinite(seedsRaw) && seedsRaw >= 1 && seedsRaw <= 20 ? Math.floor(seedsRaw) : 1;
   MODEL_OVERRIDE = args.model ?? "";
+  USE_LOCAL_OLLAMA = args.local === "true" || args.local === "1";
   const maxCostRaw = Number(args.maxCostUsd ?? args["max-cost-usd"] ?? 0);
   MAX_COST_USD = Number.isFinite(maxCostRaw) && maxCostRaw > 0 && maxCostRaw <= 100
     ? maxCostRaw

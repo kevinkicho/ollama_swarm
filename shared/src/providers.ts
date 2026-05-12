@@ -23,7 +23,7 @@
 //      that need to pass `model: { providerID, modelID }` — they call
 //      toOpenCodeModelRef(model) instead of hardcoding providerID.
 
-export const PROVIDERS = ["ollama", "ollama-cloud", "anthropic", "openai"] as const;
+export const PROVIDERS = ["ollama", "ollama-cloud", "anthropic", "openai", "opencode"] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 const PROVIDER_PREFIX: Record<Provider, string> = {
@@ -31,11 +31,14 @@ const PROVIDER_PREFIX: Record<Provider, string> = {
   "ollama-cloud": "",
   anthropic: "anthropic/",
   openai: "openai/",
+  opencode: "opencode/",
 };
 
 export function detectProvider(model: string): Provider {
   if (model.startsWith("anthropic/")) return "anthropic";
   if (model.startsWith("openai/")) return "openai";
+  // OpenCode Go: opencode-go/ prefix; Zen: opencode/ prefix
+  if (model.startsWith("opencode-go/") || model.startsWith("opencode-zen/") || model.startsWith("opencode/")) return "opencode";
   // 2026-05-03: cloud-tag suffix → Ollama Cloud. Two shapes are in
   // use on ollama.com: bare ":cloud" (e.g. glm-5.1:cloud) and
   // size-tagged "...b-cloud" or "...m-cloud" (e.g. gemma4:31b-cloud,

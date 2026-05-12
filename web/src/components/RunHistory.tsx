@@ -37,7 +37,8 @@ function tryReadCache<T>(key: string): T | null {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
     return JSON.parse(raw) as T;
-  } catch {
+  } catch (err) {
+    console.error('[RunHistory] tryReadCache-failed:', err);
     return null;
   }
 }
@@ -46,7 +47,8 @@ function tryWriteCache(key: string, value: unknown): void {
     const serialized = JSON.stringify(value);
     if (serialized.length > CACHE_SUMMARY_MAX_BYTES) return;
     localStorage.setItem(key, serialized);
-  } catch {
+  } catch (err) {
+    console.error('[RunHistory] tryWriteCache-failed:', err);
     // Quota exceeded or storage disabled — silent fallback. The cache
     // is a nice-to-have, not load-bearing.
   }
@@ -630,6 +632,27 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
             </section>
           ) : null}
 
+          {/* Deliverables — created/modified file chips */}
+          {summary && summary.deliverables && summary.deliverables.length > 0 ? (
+            <section>
+              <SectionLabel>Deliverables ({summary.deliverables.length})</SectionLabel>
+              <div className="flex flex-wrap gap-1">
+                {summary.deliverables.map((d) => (
+                  <span
+                    key={d.path}
+                    className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${
+                      d.status === "created"
+                        ? "bg-emerald-900/40 border-emerald-700/50 text-emerald-300"
+                        : "bg-ink-700 border-ink-600 text-ink-300"
+                    }`}
+                  >
+                    {d.path}
+                  </span>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
           {/* Per-agent table */}
           {summary && summary.agents.length > 0 ? (
             <section>
@@ -1055,6 +1078,9 @@ function ResultChip({ reason }: { reason: string }) {
   } else if (reason === "no-progress") {
     cls = "bg-amber-900/40 border-amber-700/50 text-amber-300";
     label = "no-progress";
+  } else if (reason === "partial-progress") {
+    cls = "bg-sky-900/40 border-sky-700/50 text-sky-300";
+    label = "partial-progress";
   }
   return (
     <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${cls}`}>

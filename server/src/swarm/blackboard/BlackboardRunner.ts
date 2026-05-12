@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { brainConfigFromApp } from "./prompts/brainIntegration.js";
 import {
   runPlanner as runPlannerExtracted,
   runPlannerFallbackForUnmetCriteria as runPlannerFallbackForUnmetCriteriaExtracted,
@@ -115,6 +116,7 @@ import {
 import {
   runAuditedExecution as runAuditedExecutionExtracted,
   allCriteriaResolved as allCriteriaResolvedExtracted,
+  allCriteriaMet as allCriteriaMetExtracted,
   allCriteriaResolvedSnapshot as allCriteriaResolvedSnapshotExtracted,
   resolvedMaxTiers as resolvedMaxTiersExtracted,
   recordTierCompletion as recordTierCompletionExtracted,
@@ -159,8 +161,8 @@ import {
   replanContext as replanContextBuilder,
   auditorContext as auditorContextBuilder,
   adaptiveWatchdogCtx as adaptiveWatchdogCtxBuilder,
-  type BlackboardRunnerFields,
 } from "./contextBuilders.js";
+import type { BlackboardRunnerFields } from "./runnerContextTypes.js";
 import {
   startAdaptiveWorkerWatchdog as startAdaptiveWorkerWatchdogExtracted,
   scaleUpAdaptive as scaleUpAdaptiveExtracted,
@@ -240,12 +242,18 @@ import {
   stop as lifecycleStop,
   type LifecycleContext,
 } from "./lifecycleRunner.js";
+import type { LifecycleState } from "./lifecycleState.js";
 
 export class BlackboardRunner implements SwarmRunner {
   private transcript: TranscriptEntry[] = [];
   private phase: SwarmPhase = "idle";
   private round = 0;
-  private stopping = false;
+  private lifecycleState: LifecycleState = "idle";
+  /** Sticky marker: true once `draining` entered, survives into `stopping`/`stopped`. */
+  private _wasDrained = false;
+  private isStopping(): boolean { return this.lifecycleState === "stopping"; }
+  private isDraining(): boolean { return this.lifecycleState === "draining"; }
+  private isWasDrained(): boolean { return this._wasDrained; }
   private active?: RunConfig;
   private boardBroadcaster: BoardBroadcaster;
   // V2: append-only findings log alongside the V2 TodoQueue.
@@ -313,12 +321,10 @@ export class BlackboardRunner implements SwarmRunner {
   // W18/R9: consecutive loop detections; halts after LOOP_DETECTIONS_TO_HALT.
   private consecutiveLoopDetections = 0;
   private static readonly LOOP_DETECTIONS_TO_HALT = 3;
-  // #167: drain/soft-stop state.
-  private draining = false;
+  private consecutiveStuckCycles = 0;
+  // #167: drain/soft-stop state (timing metadata only; primary state in lifecycleState).
   private drainStartedAt?: number;
   private drainWatcherTimer?: NodeJS.Timeout;
-  // #168: sticks across drain→stop so post-run gates treat drained as clean exit.
-  private wasDrained = false;
   private terminationReason?: string;
   // Phase 9: run-summary counters + per-agent stats.
   private runBootedAt?: number;
@@ -561,6 +567,7 @@ export class BlackboardRunner implements SwarmRunner {
   private async runPlannerFallbackForUnmetCriteria(planner: Agent): Promise<boolean> { return runPlannerFallbackForUnmetCriteriaExtracted(this.plannerContext(), planner); }
 
   private allCriteriaResolved(): boolean { return allCriteriaResolvedExtracted(this.tierContext()); }
+  private allCriteriaMet(): boolean { return allCriteriaMetExtracted(this.tierContext()); }
   private resolvedMaxTiers(): number { return resolvedMaxTiersExtracted(this.tierContext()); }
   private recordTierCompletion(): void { recordTierCompletionExtracted(this.tierContext()); }
   private async tryPromoteNextTier(planner: Agent, maxTiers: number): Promise<boolean> { return tryPromoteNextTierExtracted(this.tierContext(), planner, maxTiers); }
@@ -659,7 +666,7 @@ export class BlackboardRunner implements SwarmRunner {
       runBootedAt: this.runBootedAt!,
       runStartedAt: this.runStartedAt,
       tickAccumulatorActiveElapsedMs: this.tickAccumulator?.activeElapsedMs,
-      stopping: this.stopping,
+      stopping: this.isStopping(),
       terminationReason: this.terminationReason,
       completionDetail: this.completionDetail,
       staleEventCount: this.staleEventCount,
@@ -794,6 +801,25 @@ export class BlackboardRunner implements SwarmRunner {
 
   private async promptAgent(agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" = "swarm", formatExpect: "json" | "free" = "json", ollamaFormat?: "json" | Record<string, unknown>): Promise<string> { return promptAgentExtracted(this.promptContext(), agent, prompt, agentName, formatExpect, ollamaFormat); }
 
+  /** Brain fallback prompt function. Calls the configured brain model directly
+   *  via promptAgent to extract structured JSON from a failed parse. */
+  private async brainPromptFn(prompt: string, model: string, maxTokens: number, _timeoutMs: number): Promise<string> {
+    const brainCfg = brainConfigFromApp(this.cfg?.brainModel);
+    const agent: Agent = {
+      id: "brain",
+      index: -1,
+      model: brainCfg.brainModel,
+      port: 0,
+      sessionId: "brain",
+      status: "idle",
+      thinkingSince: undefined,
+      lastChunkAt: undefined,
+      pid: undefined,
+      cwd: undefined,
+    };
+    return this.promptAgent(agent, prompt, "swarm-read", "json", { type: "object" });
+  }
+
   // --- Misc helpers ---
 
   private sleep(ms: number): Promise<void> { return sleepExtracted(ms); }
@@ -815,7 +841,7 @@ export class BlackboardRunner implements SwarmRunner {
     appendAgentExtracted(ctx, agent, text);
     this.consecutiveLoopDetections = ctx.consecutiveLoopDetections;
     this.lastLoopWarningAtTurn = ctx.lastLoopWarningAtTurn;
-    this.stopping = ctx.stopping;
+    this.lifecycleState = ctx.lifecycleState;
     this.terminationReason = ctx.terminationReason;
   }
 
@@ -824,7 +850,7 @@ export class BlackboardRunner implements SwarmRunner {
     maybeEmitLoopWarningExtracted(ctx);
     this.consecutiveLoopDetections = ctx.consecutiveLoopDetections;
     this.lastLoopWarningAtTurn = ctx.lastLoopWarningAtTurn;
-    this.stopping = ctx.stopping;
+    this.lifecycleState = ctx.lifecycleState;
     this.terminationReason = ctx.terminationReason;
   }
 

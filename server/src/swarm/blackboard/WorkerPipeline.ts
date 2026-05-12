@@ -86,6 +86,10 @@ export interface WorkerPipelineInput {
   git: GitAdapter;
   /** #296: optional pre-commit verification. Skipped when absent. */
   verify?: VerifyAdapter;
+  /** Optional anchors from the todo for fallback search matching.
+   *  When a hunk's search text fails to match, each anchor is tried
+   *  as a positional hint. */
+  expectedAnchors?: readonly string[];
 }
 
 /** V2 post-LLM pipeline: read files → apply hunks → write changed
@@ -108,24 +112,55 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
   // 2. Apply hunks in memory. applyHunks returns a structured error
   //    on first failure (search anchor not found, create-on-existing,
   //    etc.) with the hunk index baked in.
-  // applyHunks expects a mutable Hunk[] but our input is readonly for
-  // caller safety. Slice a defensive copy — applyHunks doesn't mutate
-  // the array, but the type signature insists.
   const applied = applyHunks(contents, input.hunks.slice());
   if (!applied.ok) {
-    // Try to extract the hunk index from the error message for the
-    // failedHunkIndex field. applyHunks errors look like "hunk 2:
-    // search not found in foo.ts" — best-effort regex.
+    // Multi-anchor diagnostic: when expectedAnchors were provided but
+    // hunks still failed, check which anchors still exist in the file.
+    // This tells us whether the failure is from anchor drift (anchors
+    // present but search mismatched) or anchor obsolescence (anchors
+    // gone because the file changed too much).
+    let anchorDiag = "";
+    const anchors = input.expectedAnchors;
+    if (anchors && anchors.length > 0) {
+      for (const anchor of anchors) {
+        for (const file of input.expectedFiles) {
+          const text = contents[file];
+          if (text && text.indexOf(anchor) !== -1) {
+            anchorDiag = ` (${anchors.length} expectedAnchor(s) present in file but hunk search failed — likely whitespace/format drift)`;
+            break;
+          }
+        }
+        if (anchorDiag) break;
+      }
+      if (!anchorDiag) {
+        anchorDiag = ` (${anchors.length} expectedAnchor(s) no longer found in file — file may have been modified by another worker)`;
+      }
+    }
     const match = applied.error.match(/hunk (\d+)/i);
     const idx = match ? Number.parseInt(match[1], 10) : undefined;
     return {
       ok: false,
-      reason: applied.error,
+      reason: applied.error + anchorDiag,
       ...(idx !== undefined && Number.isFinite(idx) ? { failedHunkIndex: idx } : {}),
     };
   }
 
-  // 3. Write only files whose content actually changed. Skipping
+  // 3. Pre-commit validation: catch hunks that would delete substantial
+  //    file content (>80% of a file with >200 chars). This is almost
+  //    always a bug — workers modify files, not erase them. No-change
+  //    hunks (search === replace) are handled gracefully below at step 4.
+  let largeDeleteCount = 0;
+  for (const [file, newText] of Object.entries(applied.newTextsByFile)) {
+    const before = contents[file];
+    if (before && newText.length < before.length * 0.2 && before.length > 200) {
+      largeDeleteCount++;
+    }
+  }
+  if (largeDeleteCount > 0) {
+    return { ok: false, reason: `hunk(s) would delete >80% of content in ${largeDeleteCount} file(s) — likely a bug (workers modify files, not erase them); check the hunk's search/replace pairs` };
+  }
+
+  // 4. Write only files whose content actually changed. Skipping
   //    no-op writes saves I/O AND keeps the commit's tree clean —
   //    git status would otherwise show every "touched" file even if
   //    its content matched what was on disk.
@@ -151,7 +186,7 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
     }
   }
 
-  // 4. Empty diff: hunks applied but produced no actual changes
+  // 5. Empty diff: hunks applied but produced no actual changes
   //    (e.g., the search-replace was a no-op, or every file was
   //    already at the target state). Treat as a successful no-op
   //    commit elision — return ok with empty filesWritten so the

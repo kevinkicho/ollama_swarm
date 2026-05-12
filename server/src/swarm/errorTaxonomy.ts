@@ -124,6 +124,9 @@ export function classifyError(input: {
   ) {
     return makeRecord("runner-bug", raw);
   }
+  if (/\b(gemma4:31b-cloud|ollama.*error|context length exceeded)\b/i.test(raw)) {
+    return makeRecord("model-output", raw);
+  }
   if (/\b(user.*stop|stopped by user)\b/i.test(lower)) {
     return makeRecord("user-stop", raw);
   }

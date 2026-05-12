@@ -12,11 +12,16 @@ This file is auto-loaded into every session. Keep it short; link out for depth.
 ## Two reference docs to know about (don't read cold; reach for when needed)
 
 - **`docs/known-limitations.md`** — what's a deliberate trade-off vs. a bug.
+- **`docs/model-behaviors.md`** — model-specific quirks, reliability, and role recommendations (empirical, from production runs).
 - **`server/src/swarm/blackboard/ARCHITECTURE.md`** — code-near design doc. Read before editing the blackboard directory.
+
+## Git
+
+- **Commit author**: `git -c user.name='Kevin' -c user.email='kevinkicho@gmail.com' commit ...` — Kevin's global git config isn't always set. The `-c` flags set identity per-commit without modifying global config. A bare `git commit` without `-c` will fail with "Author identity unknown" unless you've set `user.name` and `user.email` globally or in this repo's `.git/config`. When making commits in this repo, always pass `-c user.name='Kevin' -c user.email='kevinkicho@gmail.com'`.
+- When staging, add ONLY files relevant to the change. Avoid accidentally committing `.env`, `runs/`, `logs/`, or build artifacts.
 
 ## Conventions specific to this repo
 
-- **Commit author**: `git -c user.name='Kevin' -c user.email='kevinkicho@gmail.com' commit ...` — Kevin's git config isn't always set; pass inline.
 - **Test command**: `npm test` from any shell, any cwd. The runner shim (`server/scripts/run-tests.mjs`) sets `OPENCODE_SERVER_PASSWORD=test-only` if not already set. The bash-only `OPENCODE_SERVER_PASSWORD=test-only npm test` prefix is no longer needed (was: until 2026-04-27 commit `0b3cda6`).
 
 - **Don't `npm install` from WSL.** It swaps esbuild binaries and breaks Kevin's next Windows dev-server. See `feedback_wsl_windows_esbuild` in memory.

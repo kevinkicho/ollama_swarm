@@ -260,4 +260,50 @@ describe("applyHunks — multi-file dispatch", () => {
       newTextsByFile: { "old.md": "bar", "new.md": "hello\n" },
     });
   });
+
+  // Fuzzy matching: trailing whitespace normalization
+  it("matches search with trailing spaces via normalization", () => {
+    // File has "hello\n" (no trailing spaces), hunk search has "hello  \n" (trailing spaces)
+    const hunks: Hunk[] = [{ op: "replace", file: "a.txt", search: "hello  \n", replace: "hi\n" }];
+    const r = applyHunks({ "a.txt": "hello\nworld\n" }, hunks);
+    assert.equal(r.ok, true);
+  });
+
+  it("matches search with tab-to-space conversion via normalization", () => {
+    // File uses spaces, hunk search uses tabs (trimEnd normalizes trailing chars)
+    const hunks: Hunk[] = [{ op: "replace", file: "a.txt", search: "hello\t\n", replace: "hi\n" }];
+    const r = applyHunks({ "a.txt": "hello\nworld\n" }, hunks);
+    assert.equal(r.ok, true);
+  });
+
+  it("rejects normalized search when it would produce multi-match", () => {
+    const hunks: Hunk[] = [
+      { op: "replace", file: "a.txt", search: "dup  \n", replace: "fixed\n" },
+    ];
+    // Normalized search produces 2 matches, so it's rejected (ambiguous)
+    const r = applyHunks({ "a.txt": "dup\ndup\n" }, hunks);
+    assert.equal(r.ok, false);
+  });
+
+  it("falls through to error when normalized search also not found", () => {
+    const hunks: Hunk[] = [
+      { op: "replace", file: "a.txt", search: "nonexistent  \n", replace: "x\n" },
+    ];
+    const r = applyHunks({ "a.txt": "hello\n" }, hunks);
+    assert.equal(r.ok, false);
+    assert.ok((r as any).error?.includes("not found"));
+  });
+
+  it("exact match still works correctly (regression guard)", () => {
+    const hunks: Hunk[] = [{ op: "replace", file: "a.txt", search: "hello", replace: "hi" }];
+    const r = applyHunks({ "a.txt": "hello world" }, hunks);
+    assert.equal(r.ok, true);
+  });
+
+  it("normalization is identity when search is already clean", () => {
+    // Clean search — normalization should be a no-op
+    const hunks: Hunk[] = [{ op: "replace", file: "a.txt", search: "hello\n", replace: "hi\n" }];
+    const r = applyHunks({ "a.txt": "hello\nworld\n" }, hunks);
+    assert.equal(r.ok, true);
+  });
 });

@@ -11,7 +11,7 @@ export interface FailoverDiscoveryContext {
 
 export async function discoverLocalOllamaTags(ctx: FailoverDiscoveryContext): Promise<void> {
   try {
-    const baseUrl = (ctx.getOllamaBaseUrl() ?? "http://127.0.0.1:11434").replace(/\/v1\/?$/, "");
+    const baseUrl = (ctx.getOllamaBaseUrl() ?? appConfig.OLLAMA_TAGS_FALLBACK_URL).replace(/\/v1\/?$/, "");
     const r = await fetch(`${baseUrl}/api/tags`, {
       signal: AbortSignal.timeout(3000),
     });

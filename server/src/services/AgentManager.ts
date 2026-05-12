@@ -60,9 +60,6 @@ export function extractUsageFromMessageInfo(info: {
 export interface Agent {
   id: string;
   index: number;
-  /** Sentinel 0 in no-opencode mode (no real port allocated). Kept on
-   *  the type for back-compat with callers that grep for it. */
-  port: number;
   sessionId: string;
   /** Always undefined post-E3 (no opencode subprocess). Field kept for
    *  callers that still type-narrow with `agent.child?.pid`. */
@@ -322,7 +319,6 @@ export class AgentManager {
     const stateBase: AgentState = {
       id,
       index: opts.index,
-      port,
       status: "ready",
       sessionId: session.id,
       model: opts.model,
@@ -332,7 +328,6 @@ export class AgentManager {
     const agent: Agent = {
       id,
       index: opts.index,
-      port,
       sessionId: session.id,
       child: undefined,
       model: opts.model,
@@ -383,7 +378,7 @@ export class AgentManager {
   markStatus(id: string, status: AgentState["status"], extra: Partial<AgentState> = {}): void {
     const a = this.agents.get(id);
     if (!a) return;
-    this.setAgentState({ id, index: a.index, port: a.port, sessionId: a.sessionId, model: a.model, status, ...extra });
+    this.setAgentState({ id, index: a.index, sessionId: a.sessionId, model: a.model, status, ...extra });
   }
 
   updateAgentModel(id: string, model: string): void {
@@ -520,7 +515,7 @@ export class AgentManager {
       type: "cold_start",
       agentId,
       agentIndex: agent?.index,
-      port: agent?.port,
+      port: agent?.port ?? 0,
       model: agent?.model,
       attempt: info.attempt,
       elapsedMs: info.elapsedMs,
@@ -584,7 +579,6 @@ export class AgentManager {
     this.setAgentState({
       id: a.id,
       index: a.index,
-      port: a.port,
       sessionId: a.sessionId,
       model: a.model,
       status: "killed",
@@ -597,8 +591,8 @@ export class AgentManager {
     // so these intentional "stopped" transitions must fire first for the
     // UI to update agent cards to "stopped" before they're cleared.
     for (const a of this.agents.values()) {
-      this.agentStates.set(a.id, { id: a.id, index: a.index, port: a.port, sessionId: a.sessionId, model: a.model, status: "stopped" });
-      this.onState({ id: a.id, index: a.index, port: a.port, sessionId: a.sessionId, model: a.model, status: "stopped" });
+      this.agentStates.set(a.id, { id: a.id, index: a.index, sessionId: a.sessionId, model: a.model, status: "stopped" });
+      this.onState({ id: a.id, index: a.index, sessionId: a.sessionId, model: a.model, status: "stopped" });
     }
     this.killed = true;
     for (const ctrl of this.eventAborts.values()) ctrl.abort();

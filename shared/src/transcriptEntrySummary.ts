@@ -238,7 +238,6 @@ export type TranscriptEntrySummary =
       agents: Array<{
         id: string;
         index: number;
-        port: number;
         model: string;
         sessionId: string;
         /** Free-form role label per preset: "Planner", "Worker", "Auditor",

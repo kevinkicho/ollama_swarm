@@ -23,6 +23,8 @@ import {
   runDesignMemoryUpdatePass,
   type ReflectionContext,
 } from "./reflectionPasses.js";
+import type { LifecycleState } from "./lifecycleState.js";
+import { isStopping as lifecycleIsStopping, isDraining as lifecycleIsDraining } from "./lifecycleState.js";
 import {
   DRAIN_DEADLINE_MS,
   DRAIN_WATCHER_INTERVAL_MS,
@@ -33,12 +35,10 @@ import {
 // ---------------------------------------------------------------------------
 
 export interface LifecycleContext {
-  // --- boolean / state flags ---
+  // --- lifecycle state machine (replaces stopping/draining/wasDrained booleans) ---
   isRunning(): boolean;
-  getStopping(): boolean;
-  setStopping(v: boolean): void;
-  getDraining(): boolean;
-  setDraining(v: boolean): void;
+  getLifecycleState(): LifecycleState;
+  setLifecycleState(v: LifecycleState): void;
   getWasDrained(): boolean;
   setWasDrained(v: boolean): void;
   getPaused(): boolean;
@@ -210,7 +210,7 @@ export interface LifecycleContext {
 export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void> {
   if (ctx.isRunning()) throw new Error("A swarm is already running. Stop it first.");
   ctx.setTranscript([]);
-  ctx.setStopping(false);
+  ctx.setLifecycleState("running");
   ctx.setRound(0);
   ctx.setRunStartedAt(undefined);
   ctx.setTokenBaselineForRun(undefined);
@@ -224,7 +224,6 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
     ctx.setPauseProbeTimer(undefined);
   }
   // Task #167: clear drain state from any prior run.
-  ctx.setDraining(false);
   ctx.setDrainStartedAt(undefined);
   if (ctx.getDrainWatcherTimer()) {
     clearInterval(ctx.getDrainWatcherTimer()!);
@@ -250,8 +249,8 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   // failure just disables R3 silently. The fetch is bounded at
   // 3 s so a slow Ollama doesn't block run startup.
   if (appConfig.SWARM_DEGRADATION_FALLBACK) {
-    ctx.discoverLocalOllamaTags().catch(() => {
-      /* best-effort */
+    ctx.discoverLocalOllamaTags().catch((err) => {
+      ctx.appendSystem(`⚠ lifecycle discoverLocalOllamaTags: ${err instanceof Error ? err.message : String(err)}`);
     });
   }
   // Unit 31: clear any lingering state-write timer from a prior run.
@@ -394,7 +393,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
     index: 1,
     model: plannerModel,
   });
-  ctx.appendSystem(`Planner agent ready on port ${planner.port}`);
+  ctx.appendSystem(`Planner agent ${planner.id} ready (model=${planner.model})`);
 
   const workerCount = Math.max(0, cfg.agentCount - 1);
   const workers: Agent[] = [];
@@ -415,11 +414,11 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
         const role = assignWorkerRole(i + 1);
         ctx.getWorkerRoles().set(w.id, role.guidance);
         ctx.appendSystem(
-          `Worker agent ${w.id} ready on port ${w.port} (role: ${role.name})`,
+          `Worker agent ${w.id} ready (model=${w.model}, role: ${role.name})`,
         );
       });
     } else {
-      for (const w of workers) ctx.appendSystem(`Worker agent ${w.id} ready on port ${w.port}`);
+      for (const w of workers) ctx.appendSystem(`Worker agent ${w.id} ready (model=${w.model})`);
     }
   } else {
     ctx.appendSystem("No workers spawned (agentCount=1). Planner will post TODOs, nothing will drain them.");
@@ -436,7 +435,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
       model: auditorModel,
     }));
     ctx.appendSystem(
-      `Auditor agent ${ctx.getAuditor()!.id} ready on port ${ctx.getAuditor()!.port} (model=${auditorModel}). Audit calls will route here in parallel with workers.`,
+      `Auditor agent ${ctx.getAuditor()!.id} ready (model=${auditorModel}). Audit calls will route here in parallel with workers.`,
     );
   } else {
     ctx.setAuditor(undefined);
@@ -503,7 +502,9 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
     const msg = err instanceof Error ? err.message : String(err);
     ctx.emit({ type: "error", message: `Run aborted (unhandled): ${msg}` });
     ctx.appendSystem(`Run aborted (unhandled): ${msg}`);
-    void ctx.stop().catch(() => {});
+    void ctx.stop().catch((err) => {
+      ctx.appendSystem(`⚠ lifecycle stopAfterAbort: ${err instanceof Error ? err.message : String(err)}`);
+    });
   });
 }
 
@@ -534,9 +535,9 @@ export async function planAndExecute(
     if (!resumed) {
       await ctx.runFirstPassContractOrchestrator(planner, workers, seed);
     }
-    if (ctx.getStopping()) return;
+    if (lifecycleIsStopping(ctx.getLifecycleState())) return;
     await ctx.runPlanner(planner, seed);
-    if (ctx.getStopping()) return;
+    if (lifecycleIsStopping(ctx.getLifecycleState())) return;
     const counts = ctx.boardCounts();
     if (workers.length > 0 && counts.open > 0) {
       // Stamp the wall-clock origin just before caps start being checked.
@@ -572,7 +573,7 @@ export async function planAndExecute(
     // classification routes to "user" / drain-completion paths
     // instead of "crash" (which previously caused user-stop runs
     // to mis-show stopReason="crash" + write a crash snapshot).
-    if (ctx.getStopping()) {
+    if (lifecycleIsStopping(ctx.getLifecycleState())) {
       // R17 wiring: classify the abort with causeHint=user-stop so RCA
       // doesn't mis-categorize it as a network/timeout failure.
       ctx.recordError(err, { causeHint: "user-stop" });
@@ -612,7 +613,7 @@ export async function planAndExecute(
         // Task #168: drained runs should run the final audit (the
         // user opted into a clean exit + wants final criterion
         // status). Hard user-stop still suppresses.
-        userStopped: ctx.getStopping() && !ctx.getTerminationReason() && !ctx.getWasDrained(),
+        userStopped: lifecycleIsStopping(ctx.getLifecycleState()) && !ctx.getTerminationReason() && !ctx.getWasDrained(),
       })
     ) {
       try {
@@ -642,7 +643,7 @@ export async function planAndExecute(
     // stretch reflection fire so the work isn't lost. Only hard
     // user-stop (Stop button, no drain) suppresses both passes.
     const userStoppedHard =
-      ctx.getStopping() && !ctx.getTerminationReason() && !ctx.getWasDrained();
+      lifecycleIsStopping(ctx.getLifecycleState()) && !ctx.getTerminationReason() && !ctx.getWasDrained();
     const counts2 = ctx.boardCounts();
     const hasOutput =
       counts2.committed > 0 ||
@@ -746,7 +747,7 @@ export async function planAndExecute(
     if (
       !errored &&
       ctx.getActive()?.autoRollback === true &&
-      !(ctx.getStopping() && !ctx.getTerminationReason()) &&
+      !(lifecycleIsStopping(ctx.getLifecycleState()) && !ctx.getTerminationReason()) &&
       !ctx.getTerminationReason()
     ) {
       try {
@@ -781,7 +782,7 @@ export async function planAndExecute(
   // so we bail. Cap-initiated stop also sets this.stopping, but we detect
   // that via terminationReason and fall through to setPhase("completed")
   // so the UI reflects the run actually finishing at the cap boundary.
-  if (ctx.getStopping() && !ctx.getTerminationReason()) {
+  if (lifecycleIsStopping(ctx.getLifecycleState()) && !ctx.getTerminationReason()) {
     await ctx.flushStateWrite();
     return;
   }
@@ -817,8 +818,8 @@ export async function planAndExecute(
 // ---------------------------------------------------------------------------
 
 export async function drain(ctx: LifecycleContext): Promise<void> {
-  if (ctx.getStopping() || ctx.getDraining()) return;
-  ctx.setDraining(true);
+  if (lifecycleIsStopping(ctx.getLifecycleState()) || lifecycleIsDraining(ctx.getLifecycleState())) return;
+  ctx.setLifecycleState("draining");
   ctx.setDrainStartedAt(Date.now());
   // Task #168: marker for the post-run gate — drained runs ARE
   // allowed to fire memory distillation + stretch reflection (the
@@ -855,7 +856,7 @@ export async function drain(ctx: LifecycleContext): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function checkDrainComplete(ctx: LifecycleContext): Promise<void> {
-  if (ctx.getStopping() || !ctx.getDraining()) {
+  if (lifecycleIsStopping(ctx.getLifecycleState()) || !lifecycleIsDraining(ctx.getLifecycleState())) {
     if (ctx.getDrainWatcherTimer()) {
       clearInterval(ctx.getDrainWatcherTimer()!);
       ctx.setDrainWatcherTimer(undefined);
@@ -891,7 +892,7 @@ export async function checkDrainComplete(ctx: LifecycleContext): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function stop(ctx: LifecycleContext): Promise<void> {
-  ctx.setStopping(true);
+  ctx.setLifecycleState("stopping");
   // V2 Step 3b: feed user-stop event to the parallel reducer.
   ctx.v2ObserverApply({ type: "stop-requested", ts: Date.now() });
   ctx.setPhase("stopping");
@@ -912,12 +913,11 @@ export async function stop(ctx: LifecycleContext): Promise<void> {
     clearInterval(ctx.getDrainWatcherTimer()!);
     ctx.setDrainWatcherTimer(undefined);
   }
-  ctx.setDraining(false);
   for (const ctrl of ctx.getActiveAborts()) {
     try {
       ctrl.abort(new Error("user stop"));
-    } catch {
-      // ignore — best-effort
+    } catch (err) {
+      ctx.appendSystem(`⚠ lifecycle abortDuringStop: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
   ctx.getActiveAborts().clear();

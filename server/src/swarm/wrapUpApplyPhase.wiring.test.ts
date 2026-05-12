@@ -96,7 +96,7 @@ describe("(T2.2) maybeRunWrapUpApply — out-of-scope runners must NOT wire the 
 });
 
 describe("(T2.2) RunConfig.executeNextAction docstring covers all-presets semantics", () => {
-  const src = loadSrc("SwarmRunner.ts");
+  const src = loadSrc("RunConfig.ts");
   test("docstring mentions T2.2 + the all-other-presets semantic", () => {
     assert.match(src, /T2\.2/, "docstring should reference T2.2 task");
     assert.match(

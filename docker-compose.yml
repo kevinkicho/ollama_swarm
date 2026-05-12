@@ -1,0 +1,23 @@
+services:
+  swarm:
+    build: .
+    ports:
+      - "${SERVER_PORT:-8243}:8243"
+    environment:
+      - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-change-me}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-glm-5.1:cloud}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - SERVER_PORT=8243
+      - STATIC_DIR=/app/web/dist
+    volumes:
+      - swarm-runs:/app/runs
+      - swarm-logs:/app/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  swarm-runs:
+  swarm-logs:

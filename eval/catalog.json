@@ -14,14 +14,18 @@
         "stigmergy",
         "orchestrator-worker",
         "blackboard",
-        "moa"
+        "moa",
+        "orchestrator-worker-deep"
       ],
       "rounds": 2,
       "agentCount": 4,
       "wallClockCapMs": 600000,
       "expectFilesChanged": false,
       "qualityRubric": "(a) Names specific README claims (not generic). (b) Cites specific source files/symbols when verifying each claim. (c) Distinguishes 'claim with no implementation' from 'implementation with no docs' from 'aspirational vs current'. (d) Quantifies confidence (e.g. 'verified' vs 'partial' vs 'no evidence'). (e) Avoids hallucinating files or features that don't exist.",
-      "$rationale": "Pure analysis task. Tests whether each preset can produce a coherent audit list. Blackboard included because its planner can extract auditable claims into todos."
+      "$rationale": "Pure analysis task. Tests whether each preset can produce a coherent audit list. Blackboard included because its planner can extract auditable claims into todos.",
+      "qualityDimensions": [
+        "hunkQuality"
+      ]
     },
     {
       "id": "fix-todos",
@@ -34,7 +38,10 @@
       "agentCount": 4,
       "wallClockCapMs": 600000,
       "expectFilesChanged": true,
-      "$rationale": "Code-modification task. Blackboard-only because other presets are discussion-only. Tight scope (per-comment small commits) suits the worker pipeline."
+      "$rationale": "Code-modification task. Blackboard-only because other presets are discussion-only. Tight scope (per-comment small commits) suits the worker pipeline.",
+      "qualityDimensions": [
+        "hunkQuality"
+      ]
     },
     {
       "id": "council-architecture-decision",
@@ -52,7 +59,10 @@
       "expectFilesChanged": false,
       "proposition": "This project should migrate from Express to Fastify.",
       "qualityRubric": "(a) Names 2+ specific architectural alternatives (not just 'pros vs cons of one'). (b) Lists concrete tradeoffs with numbers/specifics (latency, ecosystem size, migration LOC). (c) Makes a CLEAR recommendation — not 'it depends' alone. (d) Acknowledges conditions under which the recommendation flips. (e) References specific code in the target repo (not generic Express vs Fastify discussion).",
-      "$rationale": "Decision task with two clear sides. Council parallel-drafts pros/cons; debate-judge formal PRO/CON; role-diff different angles. Tests preset suitability for architectural decisions."
+      "$rationale": "Decision task with two clear sides. Council parallel-drafts pros/cons; debate-judge formal PRO/CON; role-diff different angles. Tests preset suitability for architectural decisions.",
+      "qualityDimensions": [
+        "hunkQuality"
+      ]
     },
     {
       "id": "stigmergy-coverage-map",
@@ -69,7 +79,10 @@
       "wallClockCapMs": 600000,
       "expectFilesChanged": false,
       "qualityRubric": "(a) Names specific source files (not just 'utils.ts has tests'). (b) Reports approximate coverage levels — not just yes/no. (c) Identifies CONCRETE test gaps tied to specific functions or behaviors. (d) Prioritizes gaps by impact (which untested paths are user-facing vs internal). (e) Distinguishes unit tests from integration tests when relevant.",
-      "$rationale": "Repo-walk task. Stigmergy's pheromone-trail design fits naturally; map-reduce's per-file slicing also works; round-robin baseline."
+      "$rationale": "Repo-walk task. Stigmergy's pheromone-trail design fits naturally; map-reduce's per-file slicing also works; round-robin baseline.",
+      "qualityDimensions": [
+        "hunkQuality"
+      ]
     },
     {
       "id": "fixture-fix-off-by-one",
@@ -85,7 +98,10 @@
       "agentCount": 3,
       "wallClockCapMs": 600000,
       "expectFilesChanged": true,
-      "$rationale": "First fixture-mode catalog entry — exercises end-to-end fixture staging + verify."
+      "$rationale": "First fixture-mode catalog entry — exercises end-to-end fixture staging + verify.",
+      "qualityDimensions": [
+        "hunkQuality"
+      ]
     },
     {
       "id": "fixture-add-null-guard",
@@ -101,7 +117,10 @@
       "agentCount": 3,
       "wallClockCapMs": 600000,
       "expectFilesChanged": true,
-      "$rationale": "Defensive-coding fixture. Tests whether the swarm/baseline can add an early-return without breaking the happy path. Verify exercises null + undefined fallback."
+      "$rationale": "Defensive-coding fixture. Tests whether the swarm/baseline can add an early-return without breaking the happy path. Verify exercises null + undefined fallback.",
+      "qualityDimensions": [
+        "hunkQuality"
+      ]
     },
     {
       "id": "fixture-extract-pure-helper",
@@ -117,7 +136,10 @@
       "agentCount": 3,
       "wallClockCapMs": 600000,
       "expectFilesChanged": true,
-      "$rationale": "Refactor fixture. Tests whether the swarm/baseline can extract a pure helper while preserving behavior. Verify checks computePrice still works AND applyTax exists."
+      "$rationale": "Refactor fixture. Tests whether the swarm/baseline can extract a pure helper while preserving behavior. Verify checks computePrice still works AND applyTax exists.",
+      "qualityDimensions": [
+        "hunkQuality"
+      ]
     },
     {
       "id": "fixture-rename-symbol",
@@ -133,7 +155,10 @@
       "agentCount": 3,
       "wallClockCapMs": 600000,
       "expectFilesChanged": true,
-      "$rationale": "Multi-file consistency edit. Tests whether the agent finds + updates ALL call sites, not just the export."
+      "$rationale": "Multi-file consistency edit. Tests whether the agent finds + updates ALL call sites, not just the export.",
+      "qualityDimensions": [
+        "hunkQuality"
+      ]
     },
     {
       "id": "fixture-fix-failing-test",
@@ -149,7 +174,10 @@
       "agentCount": 3,
       "wallClockCapMs": 600000,
       "expectFilesChanged": true,
-      "$rationale": "Constraint-respecting fix. Tests whether the agent honors the 'do not modify src/sum.js' constraint and changes only the test assertion."
+      "$rationale": "Constraint-respecting fix. Tests whether the agent honors the 'do not modify src/sum.js' constraint and changes only the test assertion.",
+      "qualityDimensions": [
+        "hunkQuality"
+      ]
     },
     {
       "id": "fixture-add-readme-section",
@@ -165,7 +193,10 @@
       "agentCount": 3,
       "wallClockCapMs": 600000,
       "expectFilesChanged": true,
-      "$rationale": "Doc-writing task with code-grounding. Tests whether the agent reads source to write accurate docs (vs hallucinating an API)."
+      "$rationale": "Doc-writing task with code-grounding. Tests whether the agent reads source to write accurate docs (vs hallucinating an API).",
+      "qualityDimensions": [
+        "hunkQuality"
+      ]
     },
     {
       "id": "fixture-audit-console-logs",
@@ -181,7 +212,10 @@
       "agentCount": 3,
       "wallClockCapMs": 600000,
       "expectFilesChanged": true,
-      "$rationale": "Analysis-style task: scan + structured-emit. Tests whether the agent can produce JSON with file:line precision (not hallucinated lines)."
+      "$rationale": "Analysis-style task: scan + structured-emit. Tests whether the agent can produce JSON with file:line precision (not hallucinated lines).",
+      "qualityDimensions": [
+        "hunkQuality"
+      ]
     },
     {
       "id": "fixture-categorize-deps",
@@ -197,7 +231,10 @@
       "agentCount": 3,
       "wallClockCapMs": 600000,
       "expectFilesChanged": true,
-      "$rationale": "Structured-data extraction. Tests whether the agent reads JSON correctly + emits the right shape (names not versions, three buckets)."
+      "$rationale": "Structured-data extraction. Tests whether the agent reads JSON correctly + emits the right shape (names not versions, three buckets).",
+      "qualityDimensions": [
+        "hunkQuality"
+      ]
     },
     {
       "id": "fixture-multistep-add-script",
@@ -213,7 +250,10 @@
       "agentCount": 3,
       "wallClockCapMs": 600000,
       "expectFilesChanged": true,
-      "$rationale": "Multi-file change requiring two coordinated edits. Single-shot baseline often hits one half but not the other — good test of swarm sequencing."
+      "$rationale": "Multi-file change requiring two coordinated edits. Single-shot baseline often hits one half but not the other — good test of swarm sequencing.",
+      "qualityDimensions": [
+        "hunkQuality"
+      ]
     },
     {
       "id": "fixture-multistep-config-then-test",
@@ -229,7 +269,45 @@
       "agentCount": 3,
       "wallClockCapMs": 600000,
       "expectFilesChanged": true,
-      "$rationale": "Code-and-test paired change. Tests both implementation skill AND test-writing skill in one task."
+      "$rationale": "Code-and-test paired change. Tests both implementation skill AND test-writing skill in one task.",
+      "qualityDimensions": [
+        "hunkQuality"
+      ]
+    },
+    {
+      "id": "deep-plan-feature",
+      "title": "Deep-plan a multi-file feature",
+      "directive": "Plan and implement a small feature that requires changes across 3+ files. The orchestrator should decompose this into sub-tasks for mid-leads, who further decompose for workers.",
+      "presets": [
+        "orchestrator-worker-deep"
+      ],
+      "rounds": 2,
+      "agentCount": 8,
+      "wallClockCapMs": 900000,
+      "expectFilesChanged": true,
+      "qualityRubric": "(a) Orchestrator produces a top-level plan with at least 2 sub-tasks. (b) At least one mid-lead further decomposes into worker tasks. (c) At least one file is modified. (d) The run completes without crashing. (f) Hunk quality: >85% of worker hunks committed on first try with minimal stale-cascade waste. High-quality hunks have unique search anchors and produce observable file changes.",
+      "$rationale": "Validates the 3-tier OW architecture end-to-end. This preset had 0 eval tasks (91% coverage gap).",
+      "qualityDimensions": [
+        "hunkQuality"
+      ]
+    },
+    {
+      "id": "tier-ratchet-ambition",
+      "title": "Tier-ratchet ambition climb (tier 1→2→3)",
+      "directive": "Add a small feature to this codebase. After completing it, the system should detect that all criteria are met and propose a more ambitious tier-2 contract. After tier 2, it should attempt tier 3.",
+      "presets": [
+        "blackboard"
+      ],
+      "rounds": 0,
+      "agentCount": 4,
+      "ambitionTiers": 3,
+      "wallClockCapMs": 1800000,
+      "expectFilesChanged": true,
+      "qualityRubric": "(a) Run completes at tier 2 or higher. (b) At least 2 commits per tier. (c) The summary shows maxTierReached >= 2. (d) No crash or timeout. (e) Different files are modified across tiers (tier 2 is more ambitious than tier 1). (f) Hunk quality: >85% of worker hunks committed on first try with minimal stale-cascade waste.",
+      "qualityDimensions": [
+        "hunkQuality"
+      ],
+      "$rationale": "Validates the tier-ratchet ambition mechanism end-to-end. The Monte Carlo proved the cascade is efficient; this task validates whether the planner can generate progressively more ambitious contracts. Currently untested in open-ended production scenarios."
     }
   ],
   "$presetOverrides": {

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createOutcomeEmitter, type OutcomeScoredEvent } from "./outcomeTypes.js";
 import type { Agent } from "../services/AgentManager.js";
 import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
 import type {
@@ -72,6 +73,8 @@ import {
 // division of labor: the lead decides who studies what, so coverage is
 // controlled rather than emergent.
 export class OrchestratorWorkerRunner extends DiscussionRunnerBase {
+  protected getPresetName(): string { return "Orchestrator-Worker"; }
+
   // Unit 33: cross-preset metrics — see RoundRobinRunner for rationale.
 
   // Phase 2 (writeMode: multi): collects hunk proposals during rounds
@@ -154,21 +157,7 @@ export class OrchestratorWorkerRunner extends DiscussionRunnerBase {
       });
 
       for (let r = 1; r <= cfg.rounds; r++) {
-        if (this.stopping) break;
-        const guard = checkBudgetGuards({
-          tokenBaseline,
-          tokenBudget: cfg.tokenBudget,
-          round: r,
-          totalRounds: cfg.rounds,
-          unit: "cycle",
-        });
-        if (guard.halt) {
-          this.earlyStopDetail = guard.earlyStopDetail;
-          this.appendSystem(guard.message ?? "");
-          break;
-        }
-        this.round = r;
-        this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
+        if (!this.checkRoundBudget(cfg, "cycle", r, tokenBaseline)) break;
 
         // PLAN — lead gets the full transcript (including any prior cycles'
         // syntheses) and produces a fresh plan.
@@ -362,7 +351,7 @@ export class OrchestratorWorkerRunner extends DiscussionRunnerBase {
             `Orchestrator-worker preset · ${cfg.agentCount} agents (1 lead + workers) · ran ${s.round}/${cfg.rounds} cycles${s.earlyStopDetail ? ` · early-stop: ${s.earlyStopDetail}` : ""}`,
         },
         transcript: this.transcript,
-        emitOutcome: (outcome: any) => this.opts.emit({ type: "outcome_scored" as const, runId: outcome.runId, score: outcome.score, verdict: outcome.verdict, dimensions: outcome.dimensions }),
+        emitOutcome: createOutcomeEmitter((e) => this.opts.emit(e)),
         wallClockMs: this.startedAt ? Date.now() - this.startedAt : 0,
       });
     }
@@ -613,8 +602,8 @@ export class OrchestratorWorkerRunner extends DiscussionRunnerBase {
     const prompt = buildDecompositionReviewPrompt(plan, round, totalRounds, userDirective);
     try {
       await this.runAgent(reviewer, round, totalRounds, prompt, "decomposition-review");
-    } catch {
-      // best-effort — review failure shouldn't stop workers
+    } catch (err) {
+      this.appendSystem(`[OrchestratorWorkerRunner] [decomposition peer review]: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

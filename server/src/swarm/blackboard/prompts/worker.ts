@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { Hunk } from "../applyHunks.js";
 import { windowFileForWorker, windowFileWithAnchors } from "../windowFile.js";
 import type { RoundRobinDisposition } from "../../roundRobinPromptHelpers.js";
+import { extractJsonFromText as stripFences } from "../../extractJson.js";
+import { softCap } from "./lenientParse.js";
 
 // ---------------------------------------------------------------------------
 // Worker response schema (v2). Shape: {"hunks": [ ...discriminated on op ]}.
@@ -64,7 +66,7 @@ const HunkSchema = z.discriminatedUnion("op", [
 // without needing to bundle them into one giant replace block.
 const MAX_HUNKS = 8;
 
-const WorkerResponseSchema = z.object({
+export const WorkerResponseSchema = z.object({
   hunks: z.array(HunkSchema).max(MAX_HUNKS),
   skip: z.string().trim().min(1).max(500).optional(),
 });
@@ -73,16 +75,13 @@ export type WorkerParseResult =
   | { ok: true; hunks: Hunk[]; skip?: string }
   | { ok: false; reason: string };
 
-// Same extraction pattern as planner.ts: try strict JSON.parse first so a
-// perfectly-shaped top-level object isn't chewed into something else by the
-// fallback heuristics. Only if that fails do we try fence-stripping.
-// Task #204: shared stripFences helper across 6 prompt parsers.
-import { extractJsonFromText as stripFences } from "../../extractJson.js";
-
 export function parseWorkerResponse(
   raw: string,
   expectedFiles: string[],
 ): WorkerParseResult {
+  if (raw.trim().length === 0) {
+    return { ok: false, reason: "empty response — model produced no output after stripping thinking tags" };
+  }
   let parsed: unknown;
   let lastError = "";
   try {
@@ -101,26 +100,57 @@ export function parseWorkerResponse(
     }
   }
 
+  // Try strict parse first; if it fails, attempt per-hunk extraction so one
+  // bad hunk doesn't kill the whole response.
   const v = WorkerResponseSchema.safeParse(parsed);
-  if (!v.success) {
+  if (v.success) {
+    const allowed = new Set(expectedFiles);
+    for (const h of v.data.hunks) {
+      if (!allowed.has(h.file)) {
+        return { ok: false, reason: `hunk file "${h.file}" not in expectedFiles` };
+      }
+    }
+    return { ok: true, hunks: v.data.hunks as Hunk[], skip: v.data.skip };
+  }
+
+  // Lenient path: try to extract partial valid hunks from the parsed object.
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     const reason = v.error.issues
       .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
       .join("; ");
     return { ok: false, reason };
   }
 
-  // Workers must stay inside the TODO's expectedFiles. Anything else is a bug
-  // or a prompt-injection attempt, and either way the runner shouldn't have
-  // to decide what to do with it. Unlike v1, multiple hunks per file are now
-  // expected (that's the whole point) — don't reject on duplicate file.
-  const allowed = new Set(expectedFiles);
-  for (const h of v.data.hunks) {
-    if (!allowed.has(h.file)) {
-      return { ok: false, reason: `hunk file "${h.file}" not in expectedFiles` };
-    }
+  const envelope = parsed as Record<string, unknown>;
+  const rawHunks = Array.isArray(envelope.hunks) ? envelope.hunks as unknown[] : [];
+  if (rawHunks.length === 0 && typeof envelope.skip !== "string") {
+    const reason = v.error.issues
+      .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+      .join("; ");
+    return { ok: false, reason };
   }
 
-  return { ok: true, hunks: v.data.hunks as Hunk[], skip: v.data.skip };
+  const allowed = new Set(expectedFiles);
+  const validHunks: Hunk[] = [];
+  for (const h of softCap(rawHunks, MAX_HUNKS)) {
+    const hv = HunkSchema.safeParse(h);
+    if (!hv.success) continue;
+    if (!allowed.has(hv.data.file)) continue;
+    validHunks.push(hv.data as Hunk);
+  }
+
+  const skip = typeof envelope.skip === "string" && envelope.skip.trim().length > 0
+    ? envelope.skip.trim().slice(0, 500)
+    : undefined;
+
+  if (validHunks.length === 0 && !skip) {
+    const reason = v.error.issues
+      .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+      .join("; ");
+    return { ok: false, reason };
+  }
+
+  return { ok: true, hunks: validHunks, skip };
 }
 
 // ---------------------------------------------------------------------------

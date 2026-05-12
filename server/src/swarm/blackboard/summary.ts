@@ -43,7 +43,8 @@ export type StopReason =
   | "cap:tokens"
   | "cap:quota"
   | "early-stop"
-  | "no-progress";
+  | "no-progress"
+  | "partial-progress";
 
 export interface PerAgentStat {
   agentId: string;
@@ -163,7 +164,11 @@ export interface RunSummary {
     criteriaMet: number;
     criteriaWontDo: number;
     criteriaUnmet: number;
-    wallClockMs: number;
+  wallClockMs: number;
+  /** Estimated wall-clock time lost to stale todos. Computed as
+   *  staleCount × estimatedMeanTurnMs (conservative: 15s per stale turn).
+   *  Useful for computing the dollar cost of cascade failures. */
+  wastedWallClockMs: number;
     startedAt: number;
     endedAt: number;
   }>;
@@ -209,6 +214,12 @@ export interface RunSummary {
   // appended at run-end by outcomeScorer. Optional for back-compat
   // with summaries written before this lands.
   outcome?: import("../outcomeScorer.js").RunOutcomeSummary;
+  // Deliverables: files created or meaningfully changed by the run.
+  // Populated from git diff --name-status at run-end. Each entry is
+  // either "created" (new file) or "modified" (existing file changed).
+  // Empty for discussion presets (no code changes). Optional for
+  // back-compat with summaries written before this lands.
+  deliverables?: Array<{ path: string; status: "created" | "modified" }>;
 }
 
 export interface SummaryConfig {
@@ -271,10 +282,17 @@ export interface BuildSummaryInput {
   // report from timing + commit signals only. Populated → RCA gets
   // per-category counts and produces a sharper recommendation.
   errors?: readonly import("../errorTaxonomy.js").ClassifiedError[];
+  /** Deliverables: files created or modified by this run. Derived from
+   *  git porcelain output at summary time. When undefined, deliverables
+   *  are extracted from `finalGitStatus` porcelain automatically. */
+  deliverables?: Array<{ path: string; status: "created" | "modified" }>;
 }
 
 export function buildSummary(input: BuildSummaryInput): RunSummary {
   const wallClockMs = Math.max(0, input.endedAt - input.startedAt);
+  const staleCount = input.board?.stale ?? 0;
+  const ESTIMATED_MEAN_TURN_MS = 15_000; // conservative: stale turns average ~15s
+  const wastedWallClockMs = staleCount * ESTIMATED_MEAN_TURN_MS;
   const { stopReason, stopDetail } = classifyStopReason(input);
 
   let finalGitStatus = input.finalGitStatus;
@@ -303,6 +321,7 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     startedAt: input.startedAt,
     endedAt: input.endedAt,
     wallClockMs,
+    wastedWallClockMs,
     stopReason,
     stopDetail,
     commits: input.board.committed,
@@ -343,7 +362,34 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     // when not, matching the pre-tracker first cut.
     rca: buildRca({ input, stopReason, wallClockMs }),
     healthScore: buildHealthScore({ input, wallClockMs }),
+    // Deliverables: extract created/modified files from git porcelain.
+    deliverables: input.deliverables ?? extractDeliverables(input.finalGitStatus),
   };
+}
+
+/** Extract deliverables (created/modified files) from git porcelain output.
+ *  The porcelain format is: XY PATH\n where X is index status, Y is worktree
+ *  status. We treat A (added) and ? (untracked) as "created"; everything
+ *  else as "modified". Cap at 50 entries to keep the summary bounded. */
+export function extractDeliverables(
+  porcelain: string,
+): Array<{ path: string; status: "created" | "modified" }> | undefined {
+  if (!porcelain || porcelain.trim().length === 0) return undefined;
+  const DELIVERABLES_MAX = 50;
+  const lines = porcelain.trim().split("\n");
+  const result: Array<{ path: string; status: "created" | "modified" }> = [];
+  for (const line of lines) {
+    if (result.length >= DELIVERABLES_MAX) break;
+    // Porcelain format: XY PATH or XY ORIG_PATH -> PATH
+    // X = index status, Y = worktree status
+    const x = line.charAt(0);
+    const pathStart = line.indexOf(" ", 2);
+    const filePath = pathStart >= 0 ? line.slice(pathStart + 1).trim() : line.slice(3).trim();
+    if (!filePath) continue;
+    const status: "created" | "modified" = (x === "A" || x === "?" || x === "a") ? "created" : "modified";
+    result.push({ path: filePath, status });
+  }
+  return result.length > 0 ? result : undefined;
 }
 
 function buildRca(args: {
@@ -437,6 +483,7 @@ function classifyStopReason(
   const criteria = input.contract?.criteria ?? [];
   const hadCriteria = criteria.length > 0;
   const allUnmet = hadCriteria && criteria.every((c) => c.status === "unmet");
+  const hasUnmet = hadCriteria && criteria.some((c) => c.status === "unmet");
   const noBoardActivity = input.board.total === 0 && input.board.committed === 0;
   if (allUnmet && noBoardActivity) {
     return {
@@ -444,6 +491,22 @@ function classifyStopReason(
       stopDetail:
         input.completionDetail ??
         "planner produced no actionable todos; no commits and all criteria still unmet",
+    };
+  }
+  if (hasUnmet && !allUnmet && input.completionDetail?.includes("no new work")) {
+    return {
+      stopReason: "no-progress",
+      stopDetail: input.completionDetail,
+    };
+  }
+  // Partial progress: some criteria met, some wont-do, rest unresolvable.
+  // The wont-do ones mean the auditor explicitly gave up on them.
+  const hasWontDo = hadCriteria && criteria.some((c) => c.status === "wont-do");
+  const someMet = hadCriteria && criteria.some((c) => c.status === "met");
+  if (hasWontDo && someMet && !hasUnmet) {
+    return {
+      stopReason: "partial-progress",
+      stopDetail: input.completionDetail,
     };
   }
   return { stopReason: "completed", stopDetail: input.completionDetail };

@@ -44,6 +44,7 @@ export function estimateWallClockSeconds(
   mainModel: string,
 ): number | null {
   const t = turnSecondsForModel(mainModel);
+  if (rounds === 0) return null; // autonomous — no round-based estimate
   const r = Math.max(1, rounds);
   const n = Math.max(1, agentCount);
   const SAFETY = 1.2;
@@ -109,16 +110,28 @@ export function WallClockEstimate({
   mainModel: string;
   wallClockCapMin: string;
 }) {
+  if (rounds === 0) {
+    const cap = wallClockCapMin.trim();
+    const capParsed = Number(cap);
+    const capValid = cap.length > 0 && Number.isFinite(capParsed) && capParsed >= 1;
+    return (
+      <div className="text-xs text-emerald-400 px-1">
+        Autonomous mode — the run keeps going until the ambition ratchet is satisfied
+        {capValid ? ` or the ${capParsed} min wall-clock cap is hit` : " or the 8 h default cap is hit"}.
+        <div className="text-ink-500 mt-0.5">
+          Each round uses {turnSecondsForModel(mainModel)}s/turn for {mainModel || "(unknown model)"} × {presetId} shape × {agentCount} agents.
+        </div>
+      </div>
+    );
+  }
   if (presetId === "blackboard") {
     const cap = wallClockCapMin.trim();
     const capParsed = Number(cap);
     const capValid = cap.length > 0 && Number.isFinite(capParsed) && capParsed >= 1;
     return (
-      <div className="text-xs text-ink-400 px-1">
-        Blackboard runs are gated by wall-clock cap, not rounds.{" "}
-        {capValid
-          ? `This run will stop after ~${capParsed} min.`
-          : "Defaulting to the 8 h baked-in cap (override in Advanced settings)."}
+      <div className="text-xs text-emerald-400 px-1">
+        Autonomous — runs until ratchet satisfied
+        {capValid ? ` or ${capParsed} min cap hit` : " or 8 h default cap hit"}.
       </div>
     );
   }

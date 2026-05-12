@@ -37,6 +37,7 @@
 // correctness, and verifier today is blackboard-only.
 
 import { randomUUID } from "node:crypto";
+import { createOutcomeEmitter, type OutcomeScoredEvent } from "./outcomeTypes.js";
 import type { Agent } from "../services/AgentManager.js";
 import type {
   SwarmEvent,
@@ -157,6 +158,8 @@ export function computeDeepTopology(agentCount: number): DeepTopology {
 }
 
 export class OrchestratorWorkerDeepRunner extends DiscussionRunnerBase {
+  protected getPresetName(): string { return "Orchestrator-Worker-Deep"; }
+
 
   // Phase 2 (writeMode: multi): collects hunk proposals during rounds
   private multiWriter?: MultiWriterState;
@@ -272,21 +275,7 @@ export class OrchestratorWorkerDeepRunner extends DiscussionRunnerBase {
       });
 
       for (let r = 1; r <= cfg.rounds; r++) {
-        if (this.stopping) break;
-        const guard = checkBudgetGuards({
-          tokenBaseline,
-          tokenBudget: cfg.tokenBudget,
-          round: r,
-          totalRounds: cfg.rounds,
-          unit: "cycle",
-        });
-        if (guard.halt) {
-          this.earlyStopDetail = guard.earlyStopDetail;
-          this.appendSystem(guard.message ?? "");
-          break;
-        }
-        this.round = r;
-        this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
+        if (!this.checkRoundBudget(cfg, "cycle", r, tokenBaseline)) break;
 
         // Phase 1 — TOP-PLAN
         this.appendSystem(`Cycle ${r}/${cfg.rounds}: orchestrator planning at top level.`);
@@ -441,7 +430,7 @@ export class OrchestratorWorkerDeepRunner extends DiscussionRunnerBase {
             `Orchestrator-worker-deep · 1 orchestrator + ${topo?.midLeadIndices.length ?? 0} mid-leads + ${topo?.workerIndices.length ?? 0} workers · ran ${s.round}/${cfg.rounds} cycles${s.earlyStopDetail ? ` · early-stop: ${s.earlyStopDetail}` : ""}`,
         },
         transcript: this.transcript,
-        emitOutcome: (outcome: any) => this.opts.emit({ type: "outcome_scored" as const, runId: outcome.runId, score: outcome.score, verdict: outcome.verdict, dimensions: outcome.dimensions }),
+        emitOutcome: createOutcomeEmitter((e) => this.opts.emit(e)),
         wallClockMs: this.startedAt ? Date.now() - this.startedAt : 0,
       });
     }

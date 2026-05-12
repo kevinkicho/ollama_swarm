@@ -207,11 +207,11 @@ const sumAgentsReady: Extract<TranscriptEntrySummary, { kind: "agents_ready" }> 
   requestedCount: 5,
   spawnElapsedMs: 28_400,
   agents: [
-    { id: "agent-1", index: 1, port: 41201, model: "glm-5.1:cloud", sessionId: "ses_abc123def456ghi789jklmnopqrstuvwxyz", role: "Planner", warmupMs: 22_400 },
-    { id: "agent-2", index: 2, port: 41203, model: "glm-5.1:cloud", sessionId: "ses_xyz789uvw456rst123onmlkjihgfedcba0987", role: "Worker", warmupMs: 25_100 },
-    { id: "agent-3", index: 3, port: 41205, model: "glm-5.1:cloud", sessionId: "ses_qrs456tuv789wxy123zabcdefghijklmnop4321", role: "Worker", warmupMs: 27_800 },
-    { id: "agent-4", index: 4, port: 41207, model: "glm-5.1:cloud", sessionId: "ses_lmn012opq345rst678uvwxyzabcdefghijkl5678", role: "Worker", warmupMs: 35_200 },
-    { id: "agent-5", index: 5, port: 41209, model: "glm-5.1:cloud", sessionId: "ses_efg678hij901klm234nopqrstuvwxyzabcdef9012", role: "Auditor", warmupMs: 26_900 },
+    { id: "agent-1", index: 1, model: "glm-5.1:cloud", sessionId: "ses_abc123def456ghi789jklmnopqrstuvwxyz", role: "Planner", warmupMs: 22_400 },
+    { id: "agent-2", index: 2, model: "glm-5.1:cloud", sessionId: "ses_xyz789uvw456rst123onmlkjihgfedcba0987", role: "Worker", warmupMs: 25_100 },
+    { id: "agent-3", index: 3, model: "glm-5.1:cloud", sessionId: "ses_qrs456tuv789wxy123zabcdefghijklmnop4321", role: "Worker", warmupMs: 27_800 },
+    { id: "agent-4", index: 4, model: "glm-5.1:cloud", sessionId: "ses_lmn012opq345rst678uvwxyzabcdefghijkl5678", role: "Worker", warmupMs: 35_200 },
+    { id: "agent-5", index: 5, model: "glm-5.1:cloud", sessionId: "ses_efg678hij901klm234nopqrstuvwxyzabcdef9012", role: "Auditor", warmupMs: 26_900 },
   ],
 };
 
@@ -287,7 +287,7 @@ const fixtures: Array<{ label: string; entries: TranscriptEntry[] }> = [
   },
   {
     label: "[system] agents_ready (AgentsReadyBubble - click 'details' to expand grid)",
-    entries: [entry({ role: "system", text: "5/5 agents ready on ports 41201, 41203, 41205, 41207, 41209", summary: sumAgentsReady })],
+    entries: [entry({ role: "system", text: "5/5 agents ready — models: glm-5.1:cloud, glm-5.1:cloud, glm-5.1:cloud, glm-5.1:cloud, glm-5.1:cloud", summary: sumAgentsReady })],
   },
   {
     label: "[system] recovery notice (amber chip - regex match in SystemBubble)",

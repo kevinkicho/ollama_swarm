@@ -114,7 +114,8 @@ export function realGitAdapter(clonePath: string): GitAdapter {
         let headBefore: string | null;
         try {
           headBefore = (await git.revparse(["HEAD"])).trim();
-        } catch {
+        } catch (err) {
+          console.warn('[v2Adapters] git-revparse-HEAD-failed:', err instanceof Error ? err.message : String(err));
           // No HEAD yet (empty repo) — that's fine; the commit will be the first.
           headBefore = null;
         }

@@ -1,0 +1,16 @@
+node_modules
+dist
+runs
+logs
+*.log
+.git
+.env
+.env.*
+*.md
+docs
+eval
+scripts
+.dockerignore
+Dockerfile
+docker-compose.yml
+.github

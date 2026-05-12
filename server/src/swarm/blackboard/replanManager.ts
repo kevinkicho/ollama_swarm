@@ -15,11 +15,16 @@ import {
   buildReplannerRepairPrompt,
   parseReplannerResponse,
   type ReplannerSeed,
+  ReplannerResponseSchema,
 } from "./prompts/replanner.js";
 import {
   REPLANNER_JSON_SCHEMA,
 } from "./prompts/jsonSchemas.js";
 import { truncate } from "./truncate.js";
+import {
+  tryBrainFallback,
+  type BrainFallbackEvent,
+} from "./prompts/brainIntegration.js";
 
 export interface ReplanContext {
   getReplanPending: () => Set<string>;
@@ -35,6 +40,15 @@ export interface ReplanContext {
   appendAgent: (agent: Agent, text: string) => void;
   promptPlannerSafely: (agent: Agent, promptText: string, agentName?: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => Promise<{ response: string; agentUsed: Agent }>;
   checkAndApplyCaps: () => boolean;
+  emit?: (e: unknown) => void;
+  /** Brain fallback: prompt an LLM to extract structured JSON from a
+   *  failed parse. The promptFn signature matches promptWithFailover. */
+  brainPromptFn?: (
+    prompt: string,
+    model: string,
+    maxTokens: number,
+    timeoutMs: number,
+  ) => Promise<string>;
 }
 
 export function enqueueReplan(ctx: ReplanContext, todoId: string): void {
@@ -59,8 +73,8 @@ export async function processReplanQueue(ctx: ReplanContext): Promise<void> {
         ctx.appendSystem(`Replan handler crashed on todo ${todoId}: ${msg}`);
         try {
           ctx.wrappers.skipTodoQ(todoId, `replanner crashed: ${msg}`);
-        } catch {
-          // skip can throw if the todo moved state meanwhile — ignore.
+        } catch (err) {
+          ctx.appendSystem(`⚠ replan skip-todo: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     }
@@ -150,6 +164,27 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
     if (ctx.isStopping()) return;
     ctx.appendAgent(repairAgent, repair);
     parsed = parseReplannerResponse(repair);
+    if (!parsed.ok) {
+      // Brain fallback: try AI-assisted parsing before giving up.
+      if (ctx.brainPromptFn) {
+        ctx.appendSystem(`Replanner parse still failed after repair — trying brain fallback (${parsed.reason}).`);
+        try {
+          const brainResult = await tryBrainFallback(
+            response,
+            ReplannerResponseSchema,
+            "replanner",
+            ctx.brainPromptFn,
+            (e: BrainFallbackEvent) => { ctx.emit?.({ type: "brain-fallback", ...e }); },
+          );
+          if (brainResult) {
+            parsed = brainResult as typeof parsed;
+            ctx.appendSystem(`Brain fallback succeeded — extracted replanner result.`);
+          }
+        } catch (err) {
+          ctx.appendSystem(`⚠ replan brain-fallback: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
     if (!parsed.ok) {
       ctx.wrappers.skipTodoQ(
         todoId,

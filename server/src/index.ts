@@ -1,7 +1,11 @@
+import fs from "node:fs";
 import http from "node:http";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import type { IncomingMessage } from "node:http";
+import type { Socket } from "node:net";
 import { WebSocketServer } from "ws";
 import { configureHttpDispatcher } from "./services/httpDispatcher.js";
 
@@ -14,6 +18,10 @@ import { config } from "./config.js";
 import { AgentManager } from "./services/AgentManager.js";
 import { AgentPidTracker } from "./services/agentPids.js";
 import { reclaimOrphans } from "./services/reclaimOrphans.js";
+import { reclaimStaleLocks } from "./swarm/cloneLock.js";
+import { readFileSync as readFileSyncNode } from "node:fs";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
 import { RepoService } from "./services/RepoService.js";
 import { Orchestrator } from "./services/Orchestrator.js";
 import { startOllamaProxy, tokenTracker } from "./services/ollamaProxy.js";
@@ -31,16 +39,67 @@ import {
 } from "../../shared/src/providers.js";
 import { decideAutoResume } from "./swarm/autoResumeDecision.js";
 import { loadSnapshot } from "./services/RunStatePersister.js";
+import { globalErrorHandler } from "./middleware/errorHandler.js";
+import { startLimiter, writeLimiter } from "./middleware/rateLimiter.js";
+import { securityHeaders } from "./middleware/securityHeaders.js";
+import { requestLogger } from "./middleware/requestLogger.js";
+import { apiVersion } from "./middleware/apiVersion.js";
+import { corsMiddleware } from "./middleware/cors.js";
+import { compressionMiddleware } from "./middleware/compression.js";
+import { staticServing } from "./middleware/staticServing.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // server/src/index.ts (dev) or server/dist/index.js (built) -> up two to root.
 const repoRoot = path.resolve(here, "..", "..");
 
 const app = express();
+app.use(securityHeaders);
+app.use(apiVersion);
+app.use(corsMiddleware);
+app.use(compressionMiddleware);
+app.use(requestLogger);
+
+// WS auth — set a token cookie so the upgrade handler can validate it.
+// Same token for the process lifetime; page refresh doesn't break WS.
+const wsToken = randomUUID();
+app.use((_req, res, next) => {
+  res.cookie("ws_token", wsToken, { httpOnly: true, sameSite: "strict", path: "/" });
+  next();
+});
+
 app.use(express.json({ limit: "1mb" }));
 
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws" });
+
+// WS auth — intercept upgrade BEFORE wss to reject unauthenticated connections.
+server.on("upgrade", (req: IncomingMessage, socket: import("node:stream").Duplex, head: Buffer) => {
+  if (!req.url?.startsWith("/ws")) {
+    socket.destroy();
+    return;
+  }
+  const cookieHeader = req.headers.cookie ?? "";
+  const cookies = Object.fromEntries(
+    cookieHeader.split(";").map((c) => c.trim().split("=").map(decodeURIComponent)),
+  );
+  const token = cookies.ws_token;
+
+  if (token !== wsToken) {
+    // Only reject if the token cookie is missing/wrong AND there's no query param override.
+    // The query param fallback allows CLI tools and tests to connect without cookies.
+    let queryToken = "";
+    try { queryToken = new URL(req.url ?? "/", "http://localhost").searchParams.get("token") ?? ""; } catch {}
+    if (queryToken !== wsToken) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+  }
+
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit("connection", ws, req);
+  });
+});
+const wss = new WebSocketServer({ noServer: true, path: "/ws", maxPayload: 1024 * 1024 });
 const eventLogger = createEventLogger({ logDir: path.join(repoRoot, "logs") });
 const broadcaster = new Broadcaster(eventLogger);
 
@@ -91,8 +150,13 @@ if (config.SWARM_PAUSE_ON_DISCONNECT) {
 }
 
 broadcaster.attach(wss, (ws) => {
-  // Send current status snapshot so new clients are caught up immediately.
-  const status = orchestrator.status();
+  // T-Item-MultiTenant: hydrate from the per-run status when the client
+  // subscribed with ?runId=X. Without this, multi-tenant runs show the
+  // active runner's contract/summary instead of the requested run's.
+  const runIdFilter = broadcaster.getRunIdFilter(ws);
+  const status = runIdFilter
+    ? (orchestrator.statusForRun(runIdFilter) ?? orchestrator.status())
+    : orchestrator.status();
   broadcaster.send(ws, { type: "swarm_state", phase: status.phase, round: status.round });
   for (const a of status.agents) broadcaster.send(ws, { type: "agent_state", agent: a });
   for (const entry of status.transcript) broadcaster.send(ws, { type: "transcript_append", entry });
@@ -230,14 +294,15 @@ function maybeClearStaleTransient(): void {
   }
 }
 
-app.get("/api/usage", (_req, res) => {
+app.get("/api/usage", (req, res) => {
   // Task #159: opportunistic auto-clear on every poll (cheap).
   maybeClearStaleTransient();
+  const runId = typeof req.query.runId === "string" ? req.query.runId : undefined;
   res.json({
-    last1h: tokenTracker.totalsInWindow(60 * 60_000, "1h"),
-    last5h: tokenTracker.totalsInWindow(5 * 60 * 60_000, "5h"),
-    last24h: tokenTracker.totalsInWindow(24 * 60 * 60_000, "24h"),
-    last7d: tokenTracker.totalsInWindow(7 * 24 * 60 * 60_000, "7d"),
+    last1h: tokenTracker.totalsInWindow(60 * 60_000, "1h", runId),
+    last5h: tokenTracker.totalsInWindow(5 * 60 * 60_000, "5h", runId),
+    last24h: tokenTracker.totalsInWindow(24 * 60 * 60_000, "24h", runId),
+    last7d: tokenTracker.totalsInWindow(7 * 24 * 60 * 60_000, "7d", runId),
     lifetime: tokenTracker.total(),
     // Task #169: lifetime breakdown (byModel + byPreset) for the
     // UsageWidget's All-time toggle. Same shape as the windowed
@@ -287,16 +352,44 @@ app.get("/api/providers", (_req, res) => {
       available: !!config.OPENAI_API_KEY,
       hasKey: !!config.OPENAI_API_KEY,
     },
+    opencode: {
+      available: !!(config.OPENCODE_GO_API_KEY || config.OPENCODE_ZEN_API_KEY),
+      hasKey: !!(config.OPENCODE_GO_API_KEY || config.OPENCODE_ZEN_API_KEY),
+    },
   });
 });
 
+// Rate limiting: /start is expensive (5/min); other POST writes (30/min).
+app.use("/api/swarm/start", startLimiter);
+app.use("/api/swarm", (req, res, next) => {
+  if (req.method === "POST") return writeLimiter(req, res, next);
+  next();
+});
 app.use("/api/swarm", swarmRouter(orchestrator));
 app.use("/api/dev", devRouter({ broadcaster, repos }));
 // V2 Step 6b: read-only event-log endpoint for the eventual UI cutover.
 app.use("/api/v2", v2Router({ eventLogPath: eventLogger.path }));
 
+// Static file serving for the built web frontend.
+// In production (STATIC_DIR set), serves web/dist assets.
+// Skips /api/* and /ws paths so they always hit the API routes.
+const staticDir = config.STATIC_DIR && config.STATIC_DIR !== "none"
+  ? config.STATIC_DIR
+  : path.join(repoRoot, "web", "dist");
+if (fs.existsSync(staticDir)) {
+  app.use(staticServing(staticDir));
+  console.log(`  static: serving web frontend from ${staticDir}`);
+}
+// Global error handler — must be after all routes.
+app.use(globalErrorHandler);
+
 const shutdown = async (signal: string) => {
   console.log(`\n${signal} received — shutting down swarm`);
+  try {
+    broadcaster.detach();
+  } catch {
+    // ignore
+  }
   try {
     await orchestrator.stop();
   } catch {
@@ -318,8 +411,10 @@ process.on("unhandledRejection", (reason) => {
   broadcaster.broadcast({ type: "error", message: `unhandledRejection: ${err.message}` });
 });
 process.on("uncaughtException", (err) => {
-  console.error("[server] uncaughtException:", err.stack ?? err.message);
-  broadcaster.broadcast({ type: "error", message: `uncaughtException: ${err.message}` });
+  console.error("[FATAL] Uncaught exception — exiting:", err.stack ?? err.message);
+  try { eventLogger.close(); } catch {}
+  broadcaster.broadcast({ type: "error", message: `Uncaught exception — server exiting: ${err.message}` });
+  process.exit(1);
 });
 
 // Task #133: start the Ollama proxy BEFORE listen so the rewritten
@@ -357,6 +452,8 @@ if (config.OLLAMA_PROXY_PORT > 0) {
 // prevents the PortAllocator from handing out a port that a zombie
 // process still holds, and bounds cumulative resource leak across
 // dev-server restarts. Await so listen doesn't race the kill.
+//
+// Also reclaim stale clone lock files left by killed/crashed runs.
 void reclaimOrphans(repoRoot)
   .then((result) => {
     if (result.scanned === 0) {
@@ -365,6 +462,21 @@ void reclaimOrphans(repoRoot)
       console.log(
         `  orphan reclamation: ${result.alive}/${result.scanned} PIDs were still alive, killed ${result.killed}`,
       );
+    }
+    // Reclaim stale clone locks from killed/crashed prior runs
+    const KNOWN_PARENTS_FILE = nodePath.join(tmpdir(), "ollama-swarm-known-parents.json");
+    const knownParents = (() => {
+      try {
+        const raw = readFileSyncNode(KNOWN_PARENTS_FILE, "utf8");
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed.filter((p: unknown): p is string => typeof p === "string") : [];
+      } catch { return []; }
+    })();
+    if (knownParents.length > 0) {
+      const reclaimed = reclaimStaleLocks(knownParents);
+      if (reclaimed > 0) {
+        console.log(`  stale lock reclamation: removed ${reclaimed} orphaned lock(s)`);
+      }
     }
   })
   .catch((err) => {

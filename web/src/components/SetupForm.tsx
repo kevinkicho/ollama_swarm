@@ -38,6 +38,7 @@ import {
 } from "./setup/PresetExtras";
 import { TopologyGrid, topologyForPreset } from "./setup/TopologyGrid";
 import { PresetTooltip } from "./setup/PresetTooltip";
+import { InfoTip } from "./setup/InfoTip";
 import {
   loadRecentRuns,
   saveRecentRun,
@@ -359,7 +360,10 @@ export function SetupForm() {
   // Empty = no per-run override; server falls back to its
   // SWARM_PROVIDER_FAILOVER env default.
   const [providerFailover, setProviderFailover] = useState<string>("");
-  const [rounds, setRounds] = useState(3);
+  const [brainModel, setBrainModel] = useState<string>("");
+  const [roundsInput, setRoundsInput] = useState(0);
+  const [roundsDirty, setRoundsDirty] = useState(false);
+  const rounds = roundsInput;
   const [userDirective, setUserDirective] = useState("");
   // Unit 32: per-preset knobs. State lives in SetupForm so it persists
   // across preset-switch round-trips (user flips blackboard → role-diff
@@ -678,6 +682,10 @@ export function SetupForm() {
       if (failoverList.length > 0) {
         presetSpecific.providerFailover = failoverList;
       }
+      // Brain model override for this run.
+      if (brainModel.trim().length > 0) {
+        presetSpecific.brainModel = brainModel.trim();
+      }
       // T199 (2026-05-04): per-tier model state for the open-weights-
       // parallelism value prop. Round-robin disposition models +
       // OW-Deep tier models + MoA per-proposer models. OUTSIDE the
@@ -819,24 +827,20 @@ export function SetupForm() {
 
   return (
     <>
-    {/* 2026-05-03 (UX win #1 fix): keep parent at pb-12 so the
-        scroller's content-box bottom = viewport bottom, which is
-        where `position: sticky; bottom: 0` calculates against. The
-        bottom spacer needed for the sticky CTA goes INSIDE the form
-        (after the sticky div) so visual gap is preserved without
-        shifting the sticky reference point. */}
-    <div className="h-full overflow-auto flex justify-center items-start px-6 pt-6 pb-12">
+    {/* Sticky-viewport bottom bar. The form content scrolls inside a
+        nested scrollable area; the CTA bar pins to the viewport bottom
+        so it never jumps around during scroll. Uses fixed positioning
+        so it stays put regardless of scroll position. */}
+    <div className="h-full overflow-auto flex justify-center items-start px-4 pt-5 pb-20">
       <form
+        id="setup-form"
         onSubmit={onSubmit}
-        className="w-full max-w-3xl space-y-5"
+        className="w-full max-w-4xl space-y-4"
         data-testid="setup-form"
       >
-        <div className="bg-ink-800 border border-ink-700 rounded-lg p-5 shadow-xl">
-          <h2 className="text-xl font-semibold mb-1">Start a swarm</h2>
-          <p className="text-sm text-ink-400">
-            Clone a GitHub repo and spawn N OpenCode agents inside it. Pick a pattern to decide how
-            they collaborate.
-          </p>
+        <div className="bg-ink-800 border border-ink-700 rounded-lg px-5 py-4 shadow-xl flex items-center gap-3">
+          <h2 className="text-xl font-semibold">Start a swarm</h2>
+          <InfoTip>Clone a GitHub repo and spawn agents that collaborate to improve it. Pick a pattern to decide how they work together. Set rounds to 0 for autonomous mode — the run keeps going until the ambition ratchet is satisfied or the wall-clock cap is hit.</InfoTip>
         </div>
 
         {/* 2026-05-02 (onboarding lever #3): warn early when the
@@ -859,10 +863,8 @@ export function SetupForm() {
             users via localStorage; one-line "Show starters" affordance
             keeps it discoverable. */}
         {showStarters ? (
-          <Section
-            title="First time?"
-            subtitle="Pick a starter to skip the blank-form paralysis (you can edit anything before submitting)"
-          >
+          <Section title="Starters">
+            <p className="text-xs text-ink-400 mb-2">Pick a starter to pre-fill the form — edit anything before submitting.</p>
             <div className="grid sm:grid-cols-2 gap-3">
               {STARTER_DIRECTIVES.map((s) => (
                 <button
@@ -917,10 +919,7 @@ export function SetupForm() {
             + preset + directive. Most users iterate on the same
             project — saves retyping the same repo URL + directive. */}
         {recentRuns.length > 0 ? (
-          <Section
-            title="Recent runs"
-            subtitle="Click to re-fill the form (you can edit anything before submitting)"
-          >
+          <Section title="Recent runs">
             <div className="flex flex-wrap gap-2">
               {recentRuns.map((r) => {
                 const presetLabel = PRESETS.find((p) => p.id === r.presetId)?.label ?? r.presetId;
@@ -944,9 +943,9 @@ export function SetupForm() {
           </Section>
         ) : null}
 
-        <Section title="Repository" subtitle="Where the swarm reads from + clones into">
+        <Section title="Repository">
           <div className="grid lg:grid-cols-2 gap-4">
-            <Field label="GitHub URL" hint="Public repo, or private if GITHUB_TOKEN is set in .env">
+            <Field label="GitHub URL" labelAccessory={<InfoTip>Public repo, or private if GITHUB_TOKEN is set in .env</InfoTip>}>
               <input
                 required
                 value={repoUrl}
@@ -957,11 +956,7 @@ export function SetupForm() {
             </Field>
             <Field
               label="Parent folder"
-              hint={
-                previewClonePath
-                  ? `Will clone into ${previewClonePath}`
-                  : "Repo is cloned into a subfolder named after the repo (e.g. is-odd)."
-              }
+              labelAccessory={<InfoTip>Repo is cloned into a subfolder named after the repo (e.g. is-odd)</InfoTip>}
             >
               <input
                 required
@@ -977,7 +972,7 @@ export function SetupForm() {
           <PreflightPreview state={preflight.state} error={preflight.error} />
         </Section>
 
-        <Section title="Pattern" subtitle="How the agents collaborate">
+        <Section title="Pattern">
           <div>
             <div className="text-xs uppercase tracking-wide text-ink-400 mb-1 flex items-center">
               Preset
@@ -1134,8 +1129,8 @@ export function SetupForm() {
             availability per-tab inline; ModelSelect renders a real
             <select> dropdown with discovery-source hint + "Custom..."
             escape hatch for free-text. */}
-        <Section title="AI Provider" subtitle="Pick a provider first; the model dropdown filters to what your account can run">
-          <Field label="Provider" hint={providerHint(provider, providersStatus)}>
+        <Section title="AI Provider">
+          <Field label="Provider" labelAccessory={<InfoTip>Pick a provider first; the model dropdown filters to what your account can run</InfoTip>}>
             <ProviderTabs
               value={provider}
               status={providersStatus}
@@ -1150,7 +1145,7 @@ export function SetupForm() {
               }}
             />
           </Field>
-          <Field label="Model" hint={modelHint(provider)}>
+          <Field label="Model" labelAccessory={<InfoTip>The default model for all agents. Per-agent overrides available in Topology</InfoTip>}>
             <ModelSelect
               value={model}
               onChange={setModel}
@@ -1160,7 +1155,7 @@ export function SetupForm() {
           </Field>
           <MissingModelsHint recommendedModel={preset.recommendedModel} provider={provider} />
           {provider !== "ollama" ? (
-            <Field label="Max cost ($USD)" hint="Per-run cap for paid providers. Stops the run with cap:cost when reached. Ollama-only runs ignore this.">
+            <Field label="Max cost ($USD)" labelAccessory={<InfoTip>Per-run cap for paid providers. Stops the run with cap:cost when reached. Ollama-only runs ignore this.</InfoTip>}>
               <input
                 type="number"
                 min={0}
@@ -1177,14 +1172,26 @@ export function SetupForm() {
               default model fails with quota / auth. Empty → server
               uses its SWARM_PROVIDER_FAILOVER env default. */}
           <Field
-            label="Failover chain (comma-separated)"
-            hint="Models to try after the default fails with quota/auth. Example: anthropic/claude-haiku-4-5,glm-5.1:cloud,llama3:8b"
+            label="Failover chain"
+            labelAccessory={<InfoTip>Comma-separated models to try after the default fails with quota/auth. Leave empty to use server defaults.</InfoTip>}
           >
             <input
               type="text"
               value={providerFailover}
               onChange={(e) => setProviderFailover(e.target.value)}
               placeholder="anthropic/claude-haiku-4-5, glm-5.1:cloud"
+              className="input"
+            />
+          </Field>
+          <Field
+            label="Brain model"
+            labelAccessory={<InfoTip>AI model used as a fallback parser when the primary model's output fails validation. Leave empty for the default (gemma4:31b-cloud). Set to "none" to disable brain fallback.</InfoTip>}
+          >
+            <input
+              type="text"
+              value={brainModel}
+              onChange={(e) => setBrainModel(e.target.value)}
+              placeholder="gemma4:31b-cloud"
               className="input"
             />
           </Field>
@@ -1196,7 +1203,8 @@ export function SetupForm() {
             renders a one-line summary chip with the agent count + a
             "uniform/mixed model" indicator. Click "Edit per-agent" to
             expand. */}
-        <Section title="Topology" subtitle="Per-agent role + model overrides">
+        <Section title="Topology">
+          <p className="text-xs text-ink-500 mb-2">Per-agent role + model overrides</p>
           {topologyOpen ? (
             <>
               <TopologyGrid
@@ -1223,17 +1231,22 @@ export function SetupForm() {
           )}
         </Section>
 
-        <Section title="Run" subtitle="Rounds + time budget">
+        <Section title="Run">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Rounds">
-              <input
-                type="number"
-                min={1}
-                max={100}
-                value={rounds}
-                onChange={(e) => setRounds(Number(e.target.value))}
-                className="input"
-              />
+            <Field label="Rounds" labelAccessory={<InfoTip>Number of audit cycles (blackboard) or full turns. 0 = autonomous — the run keeps going until the ambition ratchet is satisfied or the wall-clock cap is hit.</InfoTip>}>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={roundsInput}
+                  onChange={(e) => { setRoundsInput(Number(e.target.value)); setRoundsDirty(true); }}
+                  className="input"
+                />
+                {roundsInput === 0 && (
+                  <span className="text-xs text-emerald-400 whitespace-nowrap">infinite</span>
+                )}
+              </div>
             </Field>
             <div className="flex items-end">
               <WallClockEstimate
@@ -1247,58 +1260,52 @@ export function SetupForm() {
           </div>
         </Section>
 
-        {/* 2026-05-03 (UX win #1): sticky Start bar at the bottom of
-            the viewport. Pre-fix the user had to scroll past 5 cards
-            to reach Submit AND scroll back to the Run section to see
-            the wall-clock estimate. Sticky bar = always-visible
-            decision + always-visible cost preview.
-            Two-zone styling: a tall transparent-to-solid gradient
-            FADES content into the bar from above, then a SOLID
-            bg-ink-900 strip under the button row guarantees the
-            content scrolling underneath doesn't bleed through and
-            confuse the user. */}
-        <div className="sticky bottom-0 -mx-1 z-10">
-          <div className="h-6 bg-gradient-to-t from-ink-900 to-transparent pointer-events-none" />
-          <div className="bg-ink-900 px-1 pb-3 pt-1 border-t border-ink-700/50">
-            <div className="flex items-center gap-3">
-              <div className="flex-1 text-xs text-ink-400 min-w-0 truncate" title="Pre-flight estimate based on preset shape × agentCount × rounds × per-model turn time">
-                <CompactWallClockHint
-                  presetId={preset.id}
-                  agentCount={agentCount}
-                  rounds={rounds}
-                  mainModel={model}
-                  wallClockCapMin={wallClockCapMin}
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={busy || !isActive || preflightBlocked}
-                className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-ink-600 disabled:cursor-not-allowed text-white font-medium rounded px-6 py-3 text-base transition shadow-lg whitespace-nowrap"
-                title={
-                  preflightBlocked
-                    ? "Disabled: target path exists but is not a git repo. Edit Parent folder or delete the existing directory."
-                    : isResume
-                      ? "Resume the existing clone — no re-clone, no destructive operation. The inline notice in Repository above shows what state the clone is in."
-                      : undefined
-                }
-              >
-                {/* 2026-05-03 (UX win #8): label flips when preflight finds
-                    an existing clone — "Resume run" makes the deliberate
-                    choice explicit at click time. Replaces the prior
-                    StartConfirmModal as the confirmation gate. */}
-                {busy
-                  ? "Starting…"
-                  : !isActive
-                    ? "Coming soon"
-                    : preflightBlocked
-                      ? "Blocked — fix path"
-                      : isResume
-                        ? "Resume run"
-                        : "Start swarm"}
-              </button>
+        {/* Fixed bottom bar: stays at viewport bottom regardless of
+            scroll position. Uses fixed positioning so it never shifts
+            during scroll. Matches the form's max-w-4xl width. */}
+      </form>
+    </div>
+    <div className="fixed bottom-0 left-0 right-0 z-20 pointer-events-none">
+      <div className="mx-auto max-w-4xl px-4 pointer-events-auto">
+        <div className="h-4 bg-gradient-to-t from-ink-900 to-transparent pointer-events-none" />
+        <div className="bg-ink-900 px-5 pb-4 pt-2 border-t border-ink-700/50 rounded-b-lg">
+          <div className="flex items-center gap-3">
+            <div className="flex-1 text-xs text-ink-400 min-w-0 truncate">
+              <CompactWallClockHint
+                presetId={preset.id}
+                agentCount={agentCount}
+                rounds={rounds}
+                mainModel={model}
+                wallClockCapMin={wallClockCapMin}
+              />
             </div>
+            <button
+              type="submit"
+              form="setup-form"
+              disabled={busy || !isActive || preflightBlocked}
+              className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-ink-600 disabled:cursor-not-allowed text-white font-medium rounded px-6 py-3 text-base transition shadow-lg whitespace-nowrap"
+              title={
+                preflightBlocked
+                  ? "Disabled: target path exists but is not a git repo."
+                  : isResume
+                    ? "Resume the existing clone."
+                    : undefined
+              }
+            >
+              {busy
+                ? "Starting…"
+                : !isActive
+                  ? "Coming soon"
+                  : preflightBlocked
+                    ? "Blocked"
+                    : isResume
+                      ? "Resume run"
+                      : "Start swarm"}
+            </button>
           </div>
         </div>
+      </div>
+    </div>
 
         <style>{`
           .input {
@@ -1313,12 +1320,6 @@ export function SetupForm() {
           .input:focus { outline: none; border-color: #10b981; }
           .input:disabled { opacity: 0.5; cursor: not-allowed; }
         `}</style>
-      </form>
-    </div>
-    {/* 2026-05-03 (UX win #8): StartConfirmModal removed — see usePreflight
-        wiring above. The inline PreflightPreview + Start button label
-        ("Resume run" when alreadyPresent, "Blocked — fix path" when
-        blocker) replace the modal's confirmation step. */}
     </>
   );
 }
@@ -1336,7 +1337,7 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="bg-ink-800 border border-ink-700 rounded-lg p-5 shadow-xl space-y-4">
+    <section className="bg-ink-800 border border-ink-700 rounded-lg px-5 py-4 shadow-xl space-y-3">
       <header>
         <h3 className="text-sm font-semibold text-ink-100 uppercase tracking-wider">{title}</h3>
         {subtitle ? <p className="text-xs text-ink-400 mt-0.5">{subtitle}</p> : null}
@@ -1416,10 +1417,18 @@ function CompactWallClockHint({
   mainModel: string;
   wallClockCapMin: string;
 }) {
+  const cap = wallClockCapMin.trim();
+  const capParsed = Number(cap);
+  const capValid = cap.length > 0 && Number.isFinite(capParsed) && capParsed >= 1;
+  if (rounds === 0) {
+    return (
+      <span className="text-emerald-400">
+        autonomous — runs until ratchet satisfied
+        {capValid ? ` or ${capParsed} min cap` : " (8 h default cap)"}
+      </span>
+    );
+  }
   if (presetId === "blackboard") {
-    const cap = wallClockCapMin.trim();
-    const capParsed = Number(cap);
-    const capValid = cap.length > 0 && Number.isFinite(capParsed) && capParsed >= 1;
     return (
       <span className="text-ink-400">
         ~ blackboard cap: {capValid ? `${capParsed} min` : "8 h default"}
@@ -1430,10 +1439,7 @@ function CompactWallClockHint({
   if (seconds === null) {
     return <span className="text-ink-500">~ pre-flight estimate unavailable</span>;
   }
-  const cap = wallClockCapMin.trim();
-  const capMinParsed = Number(cap);
-  const capValid = cap.length > 0 && Number.isFinite(capMinParsed) && capMinParsed >= 1;
-  const capSec = capValid ? Math.round(capMinParsed * 60) : null;
+  const capSec = capValid ? Math.round(capParsed * 60) : null;
   let color = "text-ink-300";
   let warn = "";
   if (capSec !== null) {

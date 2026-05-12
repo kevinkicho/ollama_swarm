@@ -46,10 +46,10 @@ export interface TodoQueueWrappers {
   dequeueTodoQ: (workerId: string, preferTag?: string) => QueuedTodo | null;
   /** Mark in-progress → completed; emits todo_committed + fires
    *  the onTerminal callback for the runner's reducer. */
-  completeTodoQ: (id: string) => void;
+  completeTodoQ: (id: string, commitTier?: import("./types.js").CommitTier) => void;
   /** Mark in-progress → failed; emits todo_failed + fires
    *  onFailed for replan-queue routing + telemetry. */
-  failTodoQ: (id: string, reason: string) => void;
+  failTodoQ: (id: string, reason: string, staleReason?: import("./types.js").StaleReason) => void;
   /** Mark any non-terminal → skipped; emits todo_skipped + fires
    *  onTerminal. */
   skipTodoQ: (id: string, reason: string) => void;
@@ -84,21 +84,30 @@ export function makeTodoQueueWrappers(deps: TodoQueueWrapperDeps): TodoQueueWrap
       return t;
     },
 
-    completeTodoQ(id) {
+    completeTodoQ(id, commitTier?) {
       todoQueue.complete(id);
-      emit({ type: "todo_committed", todoId: id });
+      if (commitTier) {
+        const t = todoQueue.get(id);
+        if (t) t.commitTier = commitTier;
+      }
+      emit({ type: "todo_committed", todoId: id, commitTier });
       scheduleStateWrite();
       onTerminal("committed", todoQueue.counts().pending);
     },
 
-    failTodoQ(id, reason) {
+    failTodoQ(id, reason, staleReason?) {
       todoQueue.fail(id, reason);
-      const t = todoQueue.get(id);
+      if (staleReason) {
+        const t = todoQueue.get(id);
+        if (t) t.staleReason = staleReason;
+      }
+      const t2 = todoQueue.get(id);
       emit({
         type: "todo_stale",
         todoId: id,
         reason,
-        replanCount: t?.retries ?? 0,
+        staleReason,
+        replanCount: t2?.retries ?? 0,
       });
       scheduleStateWrite();
       onFailed(id);

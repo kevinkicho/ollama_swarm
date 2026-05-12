@@ -26,6 +26,7 @@
 // at `rounds` iterations.
 
 import { randomUUID } from "node:crypto";
+import { createOutcomeEmitter, type OutcomeScoredEvent } from "./outcomeTypes.js";
 import type { Agent } from "../services/AgentManager.js";
 import type {
   TranscriptEntry,
@@ -68,6 +69,8 @@ import {
 } from "./moaAggregation.js";
 
 export class MoaRunner extends DiscussionRunnerBase {
+  protected getPresetName(): string { return "MoA"; }
+
   // 2026-05-01: gates writeSummary so it fires exactly once per run even
   // if the loop exits via multiple paths (early return + finally).
   // Captured by writeSummary; undefined when run ended by exception.
@@ -141,7 +144,7 @@ export class MoaRunner extends DiscussionRunnerBase {
           shouldSetCompleted: (current) => current !== "failed",
         },
         transcript: this.transcript,
-        emitOutcome: (outcome: any) => this.opts.emit({ type: "outcome_scored" as const, runId: outcome.runId, score: outcome.score, verdict: outcome.verdict, dimensions: outcome.dimensions }),
+        emitOutcome: createOutcomeEmitter((e) => this.opts.emit(e)),
         wallClockMs: this.startedAt ? Date.now() - this.startedAt : 0,
       });
     }

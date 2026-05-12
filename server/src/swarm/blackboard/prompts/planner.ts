@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { lenientPreprocess, softCap } from "./lenientParse.js";
+import { registerParserSchema } from "./brainIntegration.js";
 
 // ---------------------------------------------------------------------------
 // Schema: what we expect back from the planner. Kept tight on purpose — small
@@ -57,7 +59,7 @@ const CRITERIA_PER_TODO_MAX = 5;
 
 const PlannerTodoSchemaHunks = z.object({
   kind: z.literal("hunks").optional(),
-  description: z.string().trim().min(1).max(500),
+  description: z.string().trim().min(1),
   expectedFiles: z.array(filePathEntry).min(1).max(2),
   expectedAnchors: z.array(anchorEntry).max(ANCHOR_MAX_PER_TODO).optional(),
   expectedSymbols: z.array(symbolEntry).max(SYMBOLS_MAX_PER_TODO).optional(),
@@ -74,7 +76,7 @@ const PlannerTodoSchemaHunks = z.object({
 });
 const PlannerTodoSchemaBuild = z.object({
   kind: z.literal("build"),
-  description: z.string().trim().min(1).max(500),
+  description: z.string().trim().min(1),
   // For build TODOs, expectedFiles describes files we EXPECT the command
   // to change (for the commit message + verification). At least one
   // path so the auditor has something to verify; cap stays at 2 to
@@ -89,7 +91,7 @@ const PlannerTodoSchemaBuild = z.object({
   // 2026-05-02: criterion attribution (see hunks variant above).
   criteria: z.array(criterionIdEntry).max(CRITERIA_PER_TODO_MAX).optional(),
 });
-const PlannerTodoSchema = z.union([PlannerTodoSchemaHunks, PlannerTodoSchemaBuild]);
+export const PlannerTodoSchema = z.union([PlannerTodoSchemaHunks, PlannerTodoSchemaBuild]);
 
 // Task #71 (2026-04-25): lowered cap from 20 → 5. Earlier blackboard
 // runs surfaced a "skip cascade" pattern — the planner posted up to 20
@@ -100,7 +102,8 @@ const PlannerTodoSchema = z.union([PlannerTodoSchemaHunks, PlannerTodoSchemaBuil
 // adjust its mental model of the codebase before the next batch.
 // Trade-off: more planner round-trips but less wasted worker work.
 const MAX_TODOS_PER_BATCH = 5;
-const PlannerResponseSchema = z.array(PlannerTodoSchema).max(MAX_TODOS_PER_BATCH);
+export const PlannerResponseSchema = z.array(PlannerTodoSchema).max(MAX_TODOS_PER_BATCH);
+registerParserSchema("planner", PlannerResponseSchema);
 
 export interface PlannerTodoInput {
   /** #237 (2026-04-28): "hunks" (default) or "build". Hunks workers
@@ -165,6 +168,9 @@ function stripFences(raw: string): string | null {
 }
 
 export function parsePlannerResponse(raw: string): PlannerParseResult {
+  if (raw.trim().length === 0) {
+    return { ok: false, reason: "empty response — model produced no output after stripping thinking tags" };
+  }
   let parsed: unknown;
   let lastError = "";
   try {
@@ -207,7 +213,15 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
   const todos: PlannerTodoInput[] = [];
   const dropped: PlannerDropped[] = [];
   for (const item of items) {
-    const v = PlannerTodoSchema.safeParse(item);
+    let itemProcessed = lenientPreprocess(item, {
+      maxDescription: 500,
+      maxExpectedFiles: 2,
+      maxExpectedAnchors: ANCHOR_MAX_PER_TODO,
+      maxExpectedSymbols: SYMBOLS_MAX_PER_TODO,
+      maxPreferredTag: 40,
+      maxCriteria: CRITERIA_PER_TODO_MAX,
+    });
+    const v = PlannerTodoSchema.safeParse(itemProcessed);
     if (v.success) {
       // #237: discriminated union — only one branch sets `command`.
       const isBuild = v.data.kind === "build";
@@ -230,14 +244,10 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
       dropped.push({ reason, raw: item });
     }
   }
-  // Sanity: reject if the top-level array exceeds the max. The item-level
-  // walk above keeps everything because it iterates parsed itself; instead
-  // just cap valid todos here.
-  const capResult = PlannerResponseSchema.safeParse(todos);
-  if (!capResult.success) {
-    return { ok: false, reason: `too many todos (max ${MAX_TODOS_PER_BATCH}), got ${todos.length}` };
-  }
-  return { ok: true, todos, dropped };
+  // Soft-cap: if more valid todos survived than the per-batch max, keep the
+  // first N rather than rejecting the entire response.
+  const cappedTodos = softCap(todos, MAX_TODOS_PER_BATCH);
+  return { ok: true, todos: cappedTodos, dropped };
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +261,8 @@ export const PLANNER_SYSTEM_PROMPT = [
   "",
   "TOOLS (Unit 37): You have `read`, `grep`, `glob`, `list` tools on the cloned repo. USE THEM before emitting TODOs. Read the files your criteria name (so the TODO description can be specific), grep for existing implementations (so you don't duplicate work), list adjacent directories (so you name real paths). A TODO shaped around what's actually in the code succeeds; a TODO shaped around a guess fails at worker time.",
   "",
+  "TOOL LIMIT: You may read at most 3 files per planning turn. Use grep first (cheaper) to narrow down which files to read. If you need more than 3 files to ground your TODOs, prioritize the ones that will make your TODO descriptions most specific.",
+  "",
   "REQUIRED VERIFICATION (Task #69): The single biggest source of wasted work is TODOs premised on symbols that DON'T EXIST in the codebase. Common pattern: you assume `class Foo` exists with a `constructor` because the project name suggests OOP, but the codebase is functional (factory functions like `createFoo`). Before emitting a TODO that references an EXISTING symbol (a class, function, named export the worker is supposed to modify):",
   "  - GREP for the symbol in the expectedFile FIRST. Example: `grep -n 'class Agent' src/agent.ts`.",
   "  - If the grep returns 0 hits, the symbol does NOT exist — pick a different file, change the TODO to create the symbol fresh, or skip it entirely.",
@@ -262,7 +274,7 @@ export const PLANNER_SYSTEM_PROMPT = [
   "1. Output ONLY a JSON array. No prose. No markdown fences. No commentary before or after.",
   "1a. (2026-04-27) Output the JSON array as your FINAL response after using your tools. Do NOT emit raw XML tool-call syntax (e.g. `<read path='src/foo.ts' start_line='1' end_line='50'>` or `<grep pattern='...' />`) AS the response — that's the SDK's internal tool-call format and parsing it as JSON fails closed. Use the actual `read` / `grep` / `glob` / `list` tool functions you have access to; the SDK invokes them transparently. When you've finished gathering evidence, your VISIBLE response MUST be only the JSON array.",
   "2. Each element MUST be an object of shape: {\"description\": string, \"expectedFiles\": string[]}.",
-  "3. `description` is one imperative sentence (e.g., \"Add a readme section explaining the API.\").",
+  "3. `description` is one imperitive sentence (e.g., \"Add a readme section explaining the API.\"). KEEP it brief (under 500 characters).",
   "4. `expectedFiles` lists 1 or 2 repo-relative paths the agent will need to touch. NEVER more than 2.",
   "5. Each TODO must be independently completable without coordinating with another agent.",
   "5a. NEVER emit read-only TODOs. A TODO must describe a concrete CHANGE to one or more files (add content, modify code, create a new file). DO NOT emit TODOs that only ask an agent to \"read\", \"understand\", \"analyze\", \"review\", or \"explore\" a file — the worker already receives the file contents in its prompt. TODOs like \"Read ARCHITECTURE_REVIEW.md\" or \"Analyze the architecture\" will be declined by workers and skipped by the replanner, wasting an entire cycle.",
@@ -509,3 +521,6 @@ export function buildRepairPrompt(previousResponse: string, parseError: string):
     "No prose. No markdown fences. No commentary. Just the JSON array.",
   ].join("\n");
 }
+
+const DESCRIPTION_MAX = 500;
+

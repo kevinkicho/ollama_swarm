@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createOutcomeEmitter, type OutcomeScoredEvent } from "./outcomeTypes.js";
 import type { Agent } from "../services/AgentManager.js";
 
 import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
@@ -69,6 +70,8 @@ import {
 // revises. The reconcile step is whatever the agents converge to across
 // later rounds — no vote, no explicit judge. Discussion-only, no file edits.
 export class CouncilRunner extends DiscussionRunnerBase {
+  protected getPresetName(): string { return "Council"; }
+
 
   private derivedRubric: DerivedRubric | null = null;
   private multiWriter?: MultiWriterState;
@@ -153,91 +156,31 @@ export class CouncilRunner extends DiscussionRunnerBase {
   }
 
   private async loop(cfg: RunConfig): Promise<void> {
-    let crashMessage: string | undefined;
-    try {
-      // Phase B (Task #99): single midpoint convergence check.
-      // Mirrors #94's debate-judge midpoint pattern — one extra
-      // synthesis call max, not per-round. Skip for tiny runs where
-      // a midpoint check IS the loop end.
+    await this.runDiscussionLoop(cfg, "Council", async (cfg) => {
       const earlyCheckRound = cfg.rounds >= 4 ? Math.ceil(cfg.rounds / 2) : 0;
-      // Task #146: dead-loop guard (mirrors #144).
-      // 2026-05-03 (Phase B): dead-loop guard extracted to shared class.
-      const deadLoopGuard = new OutputEmptyDeadLoopGuard({
-        roleLabel: "drafters",
-        unit: "round",
-      });
-
-      // Task #124: snapshot lifetime tokens at run start; budget
-      // checks compare delta vs cfg.tokenBudget.
-      // 2026-05-03 (Phase B): budget + quota guards extracted to shared helper.
+      const deadLoopGuard = new OutputEmptyDeadLoopGuard({ roleLabel: "drafters", unit: "round" });
       const tokenBaseline = snapshotLifetimeTokens();
 
       for (let r = 1; r <= cfg.rounds; r++) {
-        if (this.stopping) break;
-        const guard = checkBudgetGuards({
-          tokenBaseline,
-          tokenBudget: cfg.tokenBudget,
-          round: r,
-          totalRounds: cfg.rounds,
-          unit: "round",
-        });
-        if (guard.halt) {
-          this.earlyStopDetail = guard.earlyStopDetail;
-          this.appendSystem(guard.message ?? "");
-          break;
-        }
-        this.round = r;
-        this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
+        if (!this.checkRoundBudget(cfg, "round", r, tokenBaseline)) break;
 
-        // Snapshot the transcript at round start. Every agent in this round
-        // builds its prompt from this same snapshot, guaranteeing that within
-        // a round no agent sees another agent's output — even if one agent's
-        // session.prompt returns before another's. For Round 1, the snapshot
-        // contains only system + user entries (no agent output exists yet).
         const snapshot: readonly TranscriptEntry[] = [...this.transcript];
         const agents = this.opts.manager.list();
-
-        // Unit 18b (2026-04-22): pre-batch parallel warmup REMOVED. v4
-        // battle test showed it doubled timeout count (12 vs v3's 6) and
-        // retry count (8 vs 4) — the parallel warmup batch hit the same
-        // cloud cold-start ceiling as the real batch it was meant to
-        // protect. Serial spawn-warmup stays in start(); council relies
-        // on that alone now.
-
-        // Fan out: runTurn appends to this.transcript as each agent returns,
-        // so the UI sees drafts populate in real time while the prompts above
-        // were all built from the pre-round snapshot.
-        // Task #53: stagger the N parallel session.prompt calls by ~150ms
-        // per agent so they don't all hit the cloud at the same ms.
-        // Log analysis 2026-04-24 confirmed Pattern 3 — agent-2 consistently
-        // loses the queue race when all agents fire simultaneously.
         const transcriptLenBefore = this.transcript.length;
         await staggerStart(agents, (agent) =>
           this.runTurn(agent, r, cfg.rounds, snapshot, cfg.userDirective),
         );
-        // Task #146: dead-loop guard. After each council round, if EVERY
-        // drafter's new entry is empty/junk, count consecutive bad rounds
-        // and break at threshold. Same context-bloat root cause as #144.
-        // 2026-05-03 (Phase B): logic extracted to OutputEmptyDeadLoopGuard.
+
         const newEntries = this.transcript
           .slice(transcriptLenBefore)
           .filter((e) => e.role === "agent");
         const dlHit = deadLoopGuard.recordIteration(newEntries);
         if (dlHit.tripped) {
           this.earlyStopDetail = dlHit.earlyStopDetail;
-          this.appendSystem(
-            `All council drafters produced empty/junk output for ${dlHit.consecutive} consecutive rounds — ending council early.`,
-          );
+          this.appendSystem(`All council drafters produced empty/junk output for ${dlHit.consecutive} consecutive rounds — ending council early.`);
           break;
         }
 
-        // T181 (2026-05-04): convergence-too-fast detector. After R2,
-        // if EVERY drafter said KEEP (zero CHANGEs) the council
-        // converged before exposing positions to dissent — that's
-        // suspicious. Inject a system message that R3+ prompts will
-        // see, requiring at least ONE agent to produce CHANGE based
-        // on grounded re-examination. Soft signal — doesn't force
-        // anyone, just shifts the prompt's framing toward dissent.
         if (r === 2 && r < cfg.rounds) {
           const flips = countPositionFlips(this.transcript, 2, cfg.agentCount);
           if (flips.changes === 0 && flips.keeps >= 2) {
@@ -263,84 +206,27 @@ export class CouncilRunner extends DiscussionRunnerBase {
           });
         }
 
-        // Phase B (Task #99): midpoint synthesis check. If the
-        // synthesizer reports CONVERGENCE: high, the council has
-        // settled — running more rounds just restates the same
-        // consensus. The midpoint synthesis is the canonical
-        // synthesis (we don't run it again at end), so skip the
-        // post-loop pass.
-        if (
-          !this.stopping &&
-          r === earlyCheckRound &&
-          r < cfg.rounds
-        ) {
+        if (!this.stopping && r === earlyCheckRound && r < cfg.rounds) {
           const convergence = await this.runSynthesisPass(cfg);
           if (convergence === "high") {
-            this.earlyStopDetail =
-              `council-converged-high after round ${r}/${cfg.rounds}`;
-            this.appendSystem(
-              `Council reached convergence:high at round ${r}/${cfg.rounds} — ending early.`,
-            );
+            this.earlyStopDetail = `council-converged-high after round ${r}/${cfg.rounds}`;
+            this.appendSystem(`Council reached convergence:high at round ${r}/${cfg.rounds} — ending early.`);
             break;
           }
         }
       }
-      // Task #79 (2026-04-25): final consensus pass. After all rounds,
-      // agent-1 takes every drafter's final position and produces a
-      // single consolidated answer. Without this, council ends with N
-      // parallel drafts and no clear "what did we decide" output —
-      // users had to read every draft and synthesize themselves.
-      // Task #99: skip if the midpoint check already broke us out
-      // (in which case we already ran the synthesis above).
+
       if (!this.stopping && cfg.rounds > 0 && !this.earlyStopDetail) {
         await this.runSynthesisPass(cfg);
       }
-      // T-Item-CouncilRec (2026-05-04): post-synthesis vote pass when
-      // cfg.councilReconcile === "vote". Each drafter casts ONE vote
-      // for the BEST OTHER agent's final draft; tally announced as a
-      // system message. Doesn't replace the synthesis (which still
-      // produces a consolidated answer); the vote is an additional
-      // signal showing which drafter the council found most compelling.
-      if (
-        !this.stopping &&
-        cfg.councilReconcile === "vote" &&
-        cfg.rounds > 0
-      ) {
+      if (!this.stopping && cfg.councilReconcile === "vote" && cfg.rounds > 0) {
         await this.runVoteReconcile(cfg);
       }
-      // 2026-05-02 (deliverables initiative + quality levers): structured
-      // markdown artifact + rubric + critic + next-actions. Best-effort —
-      // never blocks run-end if it fails.
       if (!this.stopping && cfg.runId) {
         await this.writeCouncilDeliverable(cfg);
       }
       if (!this.stopping) this.appendSystem("Council complete.");
-    } catch (err) {
-      crashMessage = err instanceof Error ? err.message : String(err);
-      this.opts.emit({ type: "error", message: crashMessage });
-    } finally {
-      // 2026-05-03 (Phase D): finally close-out extracted to shared helper.
-      await runDiscussionCloseOut({
-        cfg,
-        crashMessage,
-        stopping: this.stopping,
-        earlyStopDetail: this.earlyStopDetail,
-        round: this.round,
-        currentPhase: this.phase,
-        manager: this.opts.manager,
-        appendSystem: (text) => this.appendSystem(text),
-        setPhase: (p) => this.setPhase(p),
-        writeSummary: () => this.writeSummary(cfg, crashMessage),
-        hooks: {
-          pickReflectionAgent: (m) => m.list().find((a) => a.index === 1) ?? null,
-          buildReflectionContext: (s) =>
-            `Council preset · ${cfg.agentCount} drafters · ran ${s.round}/${cfg.rounds} rounds${s.earlyStopDetail ? ` · early-stop: ${s.earlyStopDetail}` : ""}`,
-        },
-        transcript: this.transcript,
-        emitOutcome: (outcome: any) => this.opts.emit({ type: "outcome_scored" as const, runId: outcome.runId, score: outcome.score, verdict: outcome.verdict, dimensions: outcome.dimensions }),
-        wallClockMs: this.startedAt ? Date.now() - this.startedAt : 0,
-      });
-    }
+    });
   }
 
   // Unit 33: shared summary writer pattern — see RoundRobinRunner.
@@ -587,7 +473,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
     this.emitAgentState({
       id: lead.id,
       index: lead.index,
-      port: lead.port,
+
       sessionId: lead.sessionId,
       status: "thinking",
       thinkingSince: Date.now(),
@@ -715,7 +601,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
       this.emitAgentState({
         id: lead.id,
         index: lead.index,
-        port: lead.port,
+  
         sessionId: lead.sessionId,
         status: "ready",
         lastMessageAt: Date.now(),

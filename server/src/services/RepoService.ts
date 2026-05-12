@@ -83,6 +83,11 @@ export const LIST_REPO_IGNORED_DIRS: ReadonlySet<string> = new Set([
   ".pytest_cache",
   "target", // rust/java
   "vendor", // php/go
+  // Swarm run artifacts — not source code, pollute the file list
+  ".swarm-data",
+  ".swarm-monitor-logs",
+  ".opencode",
+  ".opencode_swarm",
 ]);
 
 const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
@@ -100,6 +105,23 @@ const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
 export function isLikelyBinaryPath(filename: string): boolean {
   const ext = path.extname(filename).toLowerCase();
   return BINARY_EXTENSIONS.has(ext);
+}
+
+// Swarm-generated artifacts that are not source code. These pollute the
+// file list and crowd out real source files when maxFiles is capped.
+function isArtifactDir(dirName: string): boolean {
+  // Digits_8 + timestamp_smoke pattern (e.g., 20260506_144420_smoke)
+  if (/^\d{8}_\d{6}_smoke$/.test(dirName)) return true;
+  return false;
+}
+
+function isArtifactFile(fileName: string): boolean {
+  if (fileName.startsWith("deliverable-") && fileName.endsWith(".md")) return true;
+  if (fileName.startsWith("summary-") && fileName.endsWith(".json")) return true;
+  if (fileName.startsWith("next-actions-") && fileName.endsWith(".json")) return true;
+  if (fileName === "summary.json") return true;
+  if (fileName === "blackboard-state.json") return true;
+  return false;
 }
 
 export class RepoService {
@@ -335,23 +357,31 @@ export class RepoService {
   // so their expectedFiles are grounded in real repo structure instead of
   // guessed from top-level-dirs-plus-README.
   //
-  // BFS on purpose: shallow files (README.md, package.json, src/index.ts)
-  // surface before deep files (src/a/b/c/helper.ts). That matches what a
-  // human glancing at a repo would see first, which is what the planner
-  // should weight heaviest.
-  //
-  // Paths are normalized to forward slashes for prompt consistency — the
-  // LLM shouldn't care about Windows backslashes.
+  // Two-phase BFS: first explore all directories to build parent coverage,
+  // then emit files. Pure BFS interleaves files with directory enqueues,
+  // which is fine for small repos but fails in repos with many root-level
+  // files (e.g., 149 deliverable-*.md files at root) — those fill the
+  // maxFiles cap before any subdirectory is visited, causing ALL
+  // expectedFiles paths to be classified "suspicious" (parent dir not in
+  // list). By dequeuing directories first (phase 1) we guarantee that
+  // meaningful source trees (server/src/, lib/, .swarm-design/) appear
+  // before we fill slots with root artifacts.
   async listRepoFiles(
     clonePath: string,
     opts: { maxFiles?: number } = {},
   ): Promise<string[]> {
-    const maxFiles = opts.maxFiles ?? 150;
+    const maxFiles = opts.maxFiles ?? 300;
     const out: string[] = [];
-    const queue: string[] = [""];
 
-    while (queue.length > 0 && out.length < maxFiles) {
-      const rel = queue.shift()!;
+    // Phase 1: BFS-expand directories, collecting files per-level.
+    // We process all directories at each depth before emitting any files,
+    // so parent directories are always represented in the output before
+    // deep files that depend on them for grounding.
+    const dirQueue: string[] = [""];
+    const filesByDir = new Map<string, string[]>();
+
+    while (dirQueue.length > 0) {
+      const rel = dirQueue.shift()!;
       const abs = rel === "" ? clonePath : path.join(clonePath, rel);
       let entries: Dirent[];
       try {
@@ -360,18 +390,36 @@ export class RepoService {
         continue;
       }
       entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+      const levelFiles: string[] = [];
       for (const entry of entries) {
-        if (out.length >= maxFiles) break;
         if (LIST_REPO_IGNORED_DIRS.has(entry.name)) continue;
+        if (entry.isDirectory() && isArtifactDir(entry.name)) continue;
         const childRel = rel === "" ? entry.name : `${rel}/${entry.name}`;
         if (entry.isDirectory()) {
-          queue.push(childRel);
+          dirQueue.push(childRel);
         } else if (entry.isFile()) {
           if (isLikelyBinaryPath(entry.name)) continue;
-          out.push(childRel);
+          if (isArtifactFile(entry.name)) continue;
+          levelFiles.push(childRel);
         }
-        // symlinks/sockets/etc. deliberately skipped
       }
+      if (levelFiles.length > 0) {
+        filesByDir.set(rel, levelFiles);
+      }
+    }
+
+    // Phase 2: Emit files directory by directory (BFS order), respecting cap.
+    // Root files come first (backward compat), but now we're guaranteed
+    // that subdirectories have already been discovered so their contents
+    // will follow. The Map preserves insertion order which is BFS order
+    // since dirQueue processes directories breadth-first.
+    for (const [, files] of filesByDir) {
+      for (const f of files) {
+        if (out.length >= maxFiles) break;
+        out.push(f);
+      }
+      if (out.length >= maxFiles) break;
     }
 
     return out;

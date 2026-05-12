@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildSummary,
   computeLatencyStats,
+  extractDeliverables,
   FINAL_GIT_STATUS_MAX,
   type BuildSummaryInput,
   type PerAgentStat,
@@ -126,6 +127,25 @@ describe("buildSummary — stopReason classification", () => {
       }),
     );
     assert.equal(s.stopReason, "completed");
+  });
+
+  it("reports 'no-progress' when some criteria met/wont-do but unmet remain and auditor+planner stuck", () => {
+    const s = buildSummary(
+      baseInput({
+        board: { committed: 6, skipped: 0, total: 26 },
+        completionDetail: "auditor + planner produced no new work; unresolved criteria remain",
+        contract: {
+          missionStatement: "Clean up root artifacts",
+          criteria: [
+            { id: "c1", description: "move files", expectedFiles: [".gitignore"], status: "wont-do", addedAt: 0 },
+            { id: "c2", description: "update .gitignore", expectedFiles: [".gitignore"], status: "unmet", addedAt: 0 },
+            { id: "c3", description: "done criterion", expectedFiles: ["app/api/swarm/run/route.ts"], status: "met", addedAt: 0 },
+          ],
+        },
+      }),
+    );
+    assert.equal(s.stopReason, "no-progress");
+    assert.match(s.stopDetail ?? "", /no new work/);
   });
 
   it("stays 'completed' when commits>0 even if all criteria still unmet (work was done)", () => {
@@ -376,5 +396,31 @@ describe("buildSummary — per-agent stats (Unit 21 fields passthrough)", () => 
     const s = buildSummary(baseInput({ agents }));
     assert.equal(s.agents[0].totalAttempts, undefined);
     assert.equal(s.agents[0].p50LatencyMs, undefined);
+  });
+});
+
+describe("extractDeliverables", () => {
+  it("returns undefined for empty porcelain", () => {
+    assert.equal(extractDeliverables(""), undefined);
+    assert.equal(extractDeliverables("  "), undefined);
+  });
+
+  it("classifies added and untracked files as created", () => {
+    const porcelain = "A  src/new.ts\n?? lib/added.js\nM  src/existing.ts";
+    const d = extractDeliverables(porcelain)!;
+    assert.equal(d.length, 3);
+    assert.deepEqual(d[0], { path: "src/new.ts", status: "created" });
+    assert.deepEqual(d[1], { path: "lib/added.js", status: "created" });
+    assert.deepEqual(d[2], { path: "src/existing.ts", status: "modified" });
+  });
+
+  it("caps at 50 entries", () => {
+    const lines = Array.from({ length: 60 }, (_, i) => `M  file${i}.ts`).join("\n");
+    const d = extractDeliverables(lines)!;
+    assert.equal(d.length, 50);
+  });
+
+  it("returns undefined when all lines are empty", () => {
+    assert.equal(extractDeliverables("\n\n"), undefined);
   });
 });

@@ -179,6 +179,7 @@ function paletteForStopReason(reason: string): { border: string; bg: string; tit
         title: "text-rose-300",
       };
     case "early-stop":
+    case "partial-progress":
       return {
         border: "border-sky-700/50",
         bg: "bg-sky-950/20",

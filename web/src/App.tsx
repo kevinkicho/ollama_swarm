@@ -306,6 +306,7 @@ function useReviewHydration(review: { runId: string; clonePath: string } | null)
         // a display phase that makes the PhasePill render sensibly.
         const phase = summary.stopReason === "completed" ? "completed"
           : summary.stopReason === "user" || summary.stopReason === "crash" ? "stopped"
+          : summary.stopReason === "no-progress" || summary.stopReason === "partial-progress" ? "completed"
           : "completed";
         setPhase(phase, 0);
       } catch (err) {
