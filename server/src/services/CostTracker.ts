@@ -43,6 +43,9 @@ const PRICES: Record<Provider, Record<string, Price>> = {
     "gpt-5-mini": { inputPerMtok: 1.0, outputPerMtok: 4.0 },
     "gpt-5-nano": { inputPerMtok: 0.2, outputPerMtok: 0.8 },
   },
+  // OpenCode Zen costs are calculated server-side via the Zen balance/
+  // subscription model (similar to ollama-cloud). Leave empty here.
+  opencode: {},
 };
 
 // Conservative fallback for unknown paid-provider models — better to
