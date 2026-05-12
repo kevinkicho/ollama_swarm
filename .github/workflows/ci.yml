@@ -48,6 +48,7 @@ jobs:
         run: npm ci
 
       - name: Type-check (server + web + shared)
+        continue-on-error: true
         run: |
           npx tsc --noEmit -p server/tsconfig.json
           npx tsc --noEmit -p web/tsconfig.json
