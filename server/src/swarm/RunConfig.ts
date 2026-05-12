@@ -2,20 +2,6 @@ import type { SwarmRole } from "./roles.js";
 import type { PresetId } from "./SwarmRunner.js";
 
 export interface RunConfig {
-  | "round-robin"
-  | "blackboard"
-  | "role-diff"
-  | "council"
-  | "orchestrator-worker"
-  | "orchestrator-worker-deep"
-  | "debate-judge"
-  | "map-reduce"
-  | "stigmergy"
-  | "baseline"
-  | "moa"
-  | "pipeline";
-
-export interface RunConfig {
   repoUrl: string;
   localPath: string;
   agentCount: number;

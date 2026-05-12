@@ -74,6 +74,7 @@ export interface SwarmStatus {
   mapperSlices?: Record<string, string[]>;
   /** Per-region status for the run-status dashboard (statechart insight). */
   regions?: RegionStatus;
+}
 
 export interface SwarmStatusStreamingEntry {
   text: string;

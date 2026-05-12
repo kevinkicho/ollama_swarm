@@ -86,7 +86,7 @@ export interface ChatResult {
 
 export interface SessionProvider {
   /** Provider identifier — matches the Provider type in shared/providers.ts. */
-  readonly id: "ollama" | "ollama-cloud" | "anthropic" | "openai";
+  readonly id: "ollama" | "ollama-cloud" | "anthropic" | "openai" | "opencode";
   /** Single round-trip chat call. Streaming is internal — the caller
    *  receives the assembled text on settle. Streaming hooks (incremental
    *  UI updates) come in a follow-up — Phase 1 is just the contract. */
