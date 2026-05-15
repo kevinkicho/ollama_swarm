@@ -104,6 +104,56 @@ export abstract class DiscussionRunnerBase {
     this.appendSystem(formatChatReceipt(intent, opts?.targetAgent));
   }
 
+  protected makeAgentEntry(agent: Agent, text: string, summary?: TranscriptEntrySummary): TranscriptEntry {
+    return {
+      id: randomUUID(),
+      role: "agent",
+      agentId: agent.id,
+      agentIndex: agent.index,
+      text,
+      ...(summary ? { summary } : {}),
+      ts: Date.now(),
+    };
+  }
+
+  protected pushEntry(entry: TranscriptEntry): void {
+    this.transcript.push(entry);
+    this.opts.emit({ type: "transcript_append", entry });
+  }
+
+  protected markAgentReady(agent: Agent): void {
+    this.opts.manager.markStatus(agent.id, "ready");
+    this.emitAgentState({
+      id: agent.id,
+      index: agent.index,
+      sessionId: agent.sessionId,
+      status: "ready",
+      lastMessageAt: Date.now(),
+    });
+  }
+
+  protected markAgentThinking(agent: Agent): void {
+    this.opts.manager.markStatus(agent.id, "thinking");
+    this.emitAgentState({
+      id: agent.id,
+      index: agent.index,
+      sessionId: agent.sessionId,
+      status: "thinking",
+      lastMessageAt: Date.now(),
+    });
+  }
+
+  protected markAgentFailed(agent: Agent, error: string): void {
+    this.opts.manager.markStatus(agent.id, "failed", { error });
+    this.emitAgentState({
+      id: agent.id,
+      index: agent.index,
+      sessionId: agent.sessionId,
+      status: "failed",
+      error,
+    });
+  }
+
   isRunning(): boolean {
     return (
       this.phase !== "idle" &&
