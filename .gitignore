@@ -27,3 +27,5 @@ eval/swe-bench/dataset/
 # stay tracked; the lighthouse.NNNNNNNN profile dirs are local-only.
 perf-reports/*lighthouse*/
 perf-reports/C*
+*.run-state.json
+blackboard-state.json
