@@ -39,6 +39,8 @@ import {
 import { TopologyGrid, topologyForPreset } from "./setup/TopologyGrid";
 import { PresetTooltip } from "./setup/PresetTooltip";
 import { InfoTip } from "./setup/InfoTip";
+import { SettingsHistory } from "./setup/SettingsHistory";
+import { useSwarmSettings, type SwarmSettings } from "../hooks/useSwarmSettings";
 import {
   loadRecentRuns,
   saveRecentRun,
@@ -354,6 +356,7 @@ export function SetupForm() {
     detectProvider(PRESETS[0].recommendedModel),
   );
   const providersStatus = useProviders();
+  const settingsHistory = useSwarmSettings();
   const [maxCostUsd, setMaxCostUsd] = useState<string>("");
   // W20 (2026-05-04): R1 provider-failover chain — comma-separated
   // model strings (e.g. "anthropic/claude-haiku-4-5,glm-5.1:cloud").
@@ -805,6 +808,21 @@ export function SetupForm() {
         presetId: preset.id,
         directive: userDirective,
       }));
+      // Save full settings to history
+      settingsHistory.save({
+        label: repoUrl.split("/").pop()?.replace(".git", "") || repoUrl,
+        repoUrl,
+        parentPath,
+        preset: preset.id,
+        model,
+        provider,
+        agentCount,
+        rounds,
+        userDirective,
+        plannerModel,
+        workerModel,
+        auditorModel,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -843,6 +861,27 @@ export function SetupForm() {
           <h2 className="text-xl font-semibold">Start a swarm</h2>
           <InfoTip>Clone a GitHub repo and spawn agents that collaborate to improve it. Pick a pattern to decide how they work together. Set rounds to 0 for autonomous mode — the run keeps going until the ambition ratchet is satisfied or the wall-clock cap is hit.</InfoTip>
         </div>
+
+        {/* Settings history — reuse saved configurations */}
+        <SettingsHistory
+          entries={settingsHistory.entries}
+          onSelect={(entry: SwarmSettings) => {
+            setRepoUrl(entry.repoUrl);
+            setParentPath(entry.parentPath);
+            setPresetId(entry.preset);
+            setModel(entry.model);
+            setProvider(entry.provider as Provider);
+            setAgentCount(entry.agentCount);
+            setRoundsInput(entry.rounds);
+            setUserDirective(entry.userDirective);
+            if (entry.plannerModel) setPlannerModel(entry.plannerModel);
+            if (entry.workerModel) setWorkerModel(entry.workerModel);
+            if (entry.auditorModel) setAuditorModel(entry.auditorModel);
+            settingsHistory.bumpUse(entry.id);
+          }}
+          onDelete={(id: string) => settingsHistory.remove(id)}
+          onDeleteAll={() => settingsHistory.removeAll()}
+        />
 
         {/* 2026-05-02 (onboarding lever #3): warn early when the
             selected model isn't pulled, with one-click swap to a

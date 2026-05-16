@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 3,
+  "runId": "55882504-e663-4efd-918b-ca396b1717b4",
+  "preset": "blackboard",
+  "phase": "stopping",
+  "startedAt": 1778903847857,
+  "lastEventAt": 1778903848612,
+  "transcript": [
+    {
+      "id": "88c62dee-487e-456e-acff-7533bd896f6c",
+      "role": "system",
+      "text": "▸▸RUN-START▸▸|runId=55882504-e663-4efd-918b-ca396b1717b4|preset=blackboard|plannerModel=nemotron-3-super:cloud|workerModel=gemma4:31b-cloud|agentCount=6|repoUrl=https://github.com/kevinkicho",
+      "ts": 1778903847860
+    }
+  ],
+  "amendments": [],
+  "runConfig": {
+    "preset": "blackboard",
+    "repoUrl": "https://github.com/kevinkicho",
+    "localPath": "/mnt/c/Users/kevin/Desktop/ollama_swarm/server/C:\\Users\\kevin\\Workspace\\matsci_research_051426/kevinkicho",
+    "agentCount": 6,
+    "rounds": 0,
+    "model": "opencode-go/deepseek-v4-pro",
+    "extras": {
+      "userDirective": "can you please study and do auto-research to find next novel room-temperature superconducting material please?",
+      "plannerModel": "nemotron-3-super:cloud",
+      "workerModel": "gemma4:31b-cloud",
+      "dedicatedAuditor": true,
+      "auditorModel": "nemotron-3-super:cloud",
+      "topology": {
+        "agents": [
+          {
+            "index": 1,
+            "role": "planner",
+            "model": "nemotron-3-super:cloud",
+            "removable": false
+          },
+          {
+            "index": 2,
+            "role": "worker",
+            "model": "gemma4:31b-cloud",
+            "removable": true
+          },
+          {
+            "index": 3,
+            "role": "worker",
+            "model": "gemma4:31b-cloud",
+            "removable": true
+          },
+          {
+            "index": 4,
+            "role": "worker",
+            "model": "gemma4:31b-cloud",
+            "removable": true
+          },
+          {
+            "index": 5,
+            "role": "worker",
+            "model": "gemma4:31b-cloud",
+            "removable": true
+          },
+          {
+            "index": 6,
+            "role": "worker",
+            "model": "gemma4:31b-cloud",
+            "removable": true
+          },
+          {
+            "index": 7,
+            "role": "auditor",
+            "model": "nemotron-3-super:cloud",
+            "removable": false
+          }
+        ]
+      },
+      "runId": "55882504-e663-4efd-918b-ca396b1717b4"
+    }
+  }
+}

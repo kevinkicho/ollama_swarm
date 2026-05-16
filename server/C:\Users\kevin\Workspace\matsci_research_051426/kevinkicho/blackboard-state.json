@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "writtenAt": 1778903849613,
+  "phase": "stopped",
+  "round": 0,
+  "runBootedAt": 1778903847860,
+  "config": {
+    "repoUrl": "https://github.com/kevinkicho",
+    "localPath": "/mnt/c/Users/kevin/Desktop/ollama_swarm/server/C:\\Users\\kevin\\Workspace\\matsci_research_051426/kevinkicho",
+    "agentCount": 6,
+    "rounds": 0,
+    "model": "opencode-go/deepseek-v4-pro",
+    "preset": "blackboard",
+    "userDirective": "can you please study and do auto-research to find next novel room-temperature superconducting material please?",
+    "plannerModel": "nemotron-3-super:cloud",
+    "workerModel": "gemma4:31b-cloud",
+    "dedicatedAuditor": true,
+    "auditorModel": "nemotron-3-super:cloud",
+    "topology": {
+      "agents": [
+        {
+          "index": 1,
+          "role": "planner",
+          "model": "nemotron-3-super:cloud",
+          "removable": false
+        },
+        {
+          "index": 2,
+          "role": "worker",
+          "model": "gemma4:31b-cloud",
+          "removable": true
+        },
+        {
+          "index": 3,
+          "role": "worker",
+          "model": "gemma4:31b-cloud",
+          "removable": true
+        },
+        {
+          "index": 4,
+          "role": "worker",
+          "model": "gemma4:31b-cloud",
+          "removable": true
+        },
+        {
+          "index": 5,
+          "role": "worker",
+          "model": "gemma4:31b-cloud",
+          "removable": true
+        },
+        {
+          "index": 6,
+          "role": "worker",
+          "model": "gemma4:31b-cloud",
+          "removable": true
+        },
+        {
+          "index": 7,
+          "role": "auditor",
+          "model": "nemotron-3-super:cloud",
+          "removable": false
+        }
+      ]
+    },
+    "runId": "55882504-e663-4efd-918b-ca396b1717b4"
+  },
+  "board": {
+    "todos": [],
+    "findings": []
+  },
+  "perAgent": [],
+  "staleEventCount": 0,
+  "auditInvocations": 0,
+  "agentRoster": [],
+  "tiersCompleted": 0
+}
