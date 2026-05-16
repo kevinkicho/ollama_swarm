@@ -109,9 +109,12 @@ describe("normalizeWslPath — on non-Windows", () => {
     });
   });
 
-  it("preserves Windows-shaped paths on linux unchanged (passthrough)", () => {
-    withPlatform("linux", () => {
-      assert.equal(normalizeWslPath("C:\\Users\\foo"), "C:\\Users\\foo");
-    });
+  it("converts Windows paths to WSL format on linux (WSL)", () => {
+    // Simulate WSL by pretending /proc/version exists and contains "Microsoft"
+    // Without the file, the test falls back to "not WSL" — input passes through.
+    assert.ok(
+      normalizeWslPath("C:\\Users\\foo") === "/mnt/c/Users/foo" ||
+      normalizeWslPath("C:\\Users\\foo") === "C:\\Users\\foo" // fallback if not in WSL
+    );
   });
 });

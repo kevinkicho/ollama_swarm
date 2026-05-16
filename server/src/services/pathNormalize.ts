@@ -24,13 +24,31 @@
  * equivalent ("C:\\Users\\foo") when running on Windows. No-op on
  * other platforms or for paths that don't match the WSL pattern.
  */
+import { readFileSync } from "node:fs";
+
+function isWsl(): boolean {
+  try {
+    return readFileSync("/proc/version", "utf8").toLowerCase().includes("microsoft");
+  } catch { return false; }
+}
+
 export function normalizeWslPath(input: string): string {
-  if (process.platform !== "win32") return input;
-  // Normalize backslashes (from Windows copy-paste) to forward slashes.
   const normalized = input.replace(/\\/g, "/");
-  const m = /^\/mnt\/([a-zA-Z])(\/.*)?$/.exec(normalized);
-  if (!m) return input;
-  const drive = m[1].toUpperCase();
-  const rest = (m[2] ?? "").replace(/\//g, "\\");
-  return `${drive}:${rest || "\\"}`;
+
+  // Windows platform: convert /mnt/c/... → C:\...
+  if (process.platform === "win32") {
+    const m = /^\/mnt\/([a-zA-Z])(\/.*)?$/.exec(normalized);
+    if (!m) return input;
+    const drive = m[1].toUpperCase();
+    const rest = (m[2] ?? "").replace(/\//g, "\\");
+    return `${drive}:${rest || "\\"}`;
+  }
+
+  // WSL (Linux kernel, Microsoft version): convert C:/... → /mnt/c/...
+  if (isWsl()) {
+    const m = /^([a-zA-Z]):(\/.*)?$/i.exec(normalized);
+    if (m) return `/mnt/${m[1].toLowerCase()}${m[2] || ""}`;
+  }
+
+  return input;
 }
