@@ -215,7 +215,7 @@ export function swarmRouter(orch: Orchestrator): Router {
     let destPath: string;
     try {
       if (!repoUrl.startsWith("http://") && !repoUrl.startsWith("https://")) {
-        destPath = path.resolve(repoUrl);
+        destPath = path.resolve(normalizeWslPath(repoUrl));
       } else {
         destPath = deriveCloneDir(repoUrl, parentPath);
       }
@@ -342,7 +342,7 @@ export function swarmRouter(orch: Orchestrator): Router {
       const rawUrl = parsed.data.repoUrl.trim();
       // Local folder path — use directly without cloning.
       if (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) {
-        localPath = path.resolve(rawUrl);
+        localPath = path.resolve(normalizeWslPath(rawUrl));
       } else {
         const parentPath = normalizeWslPath(parsed.data.parentPath);
         localPath = deriveCloneDir(rawUrl, parentPath);
