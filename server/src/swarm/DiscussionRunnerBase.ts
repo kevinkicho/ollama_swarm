@@ -261,7 +261,13 @@ export abstract class DiscussionRunnerBase {
     spawnOpts: CloneSpawnOpts,
   ): Promise<CloneSpawnResult> {
     this.setPhase("cloning");
-    const cloneResult = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
+    let cloneResult: { destPath: string; alreadyPresent: boolean; priorCommits?: number; priorChangedFiles?: number; priorUntrackedFiles?: number };
+    // Local folder path — skip clone, use the directory directly.
+    if (!cfg.repoUrl.startsWith("http://") && !cfg.repoUrl.startsWith("https://")) {
+      cloneResult = { destPath: cfg.localPath, alreadyPresent: true };
+    } else {
+      cloneResult = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
+    }
     const { destPath } = cloneResult;
     this.opts.emit({
       type: "clone_state",
