@@ -985,21 +985,19 @@ export function SetupForm() {
 
         <Section title="Repository">
           <div className="grid lg:grid-cols-2 gap-4">
-            <Field label="GitHub URL" labelAccessory={<InfoTip>Public repo, or private if GITHUB_TOKEN is set in .env</InfoTip>}>
+            <Field label="Target path" labelAccessory={<InfoTip>GitHub URL or local folder path (e.g. C:\Users\you\projects\my-repo)</InfoTip>}>
               <input
-                required
                 value={repoUrl}
                 onChange={(e) => setRepoUrl(e.target.value)}
                 className="input"
-                placeholder="https://github.com/owner/repo"
+                placeholder="https://github.com/owner/repo  or  C:\Users\you\projects\my-repo"
               />
             </Field>
             <Field
               label="Parent folder"
-              labelAccessory={<InfoTip>Repo is cloned into a subfolder named after the repo (e.g. is-odd)</InfoTip>}
+              labelAccessory={<InfoTip>For GitHub repos: clone destination. For local paths: leave same as above.</InfoTip>}
             >
               <input
-                required
                 value={parentPath}
                 onChange={(e) => setParentPath(e.target.value)}
                 className="input font-mono"
