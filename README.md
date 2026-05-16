@@ -4,12 +4,13 @@
 
 A local web app that runs **N open-weights coding agents in parallel** against a single GitHub repo — they collaborate in one shared transcript, each potentially a different model (e.g. planner=`glm-5.1:cloud`, worker=`gemma4:31b-cloud`, auditor=`nemotron-3-super:cloud`). The design point is **multi-model parallelism on your own hardware** — Claude Code does single-agent-Claude beautifully, but it can't run five different open-weights models reviewing the same code at the same time. That's what this is for.
 
-Four providers are wired in, surfaced as side-by-side tabs in the setup form:
+**Five providers** are wired in, surfaced as side-by-side tabs in the setup form:
 
-- **Ollama (local)** — models served by your local [Ollama](https://ollama.com) install (`llama3:8b`, `qwen2.5-coder:7b`, etc.). Free, GPU-bound, no key.
-- **Ollama Cloud** — `:cloud` / `-cloud` models hosted on [ollama.com](https://docs.ollama.com/cloud) (`glm-5.1:cloud`, `gemma4:31b-cloud`, `nemotron-3-super:cloud`, etc.). Routes through your local Ollama install transparently when you have an account configured; set `OLLAMA_API_KEY` in `.env` for direct calls.
-- **[Anthropic Claude](https://www.anthropic.com)** — set `ANTHROPIC_API_KEY` to enable; live model discovery via `/v1/models`.
-- **[OpenAI](https://openai.com)** — set `OPENAI_API_KEY` to enable; live model discovery via `/v1/models`.
+- **Ollama (local)** — models served by your local [Ollama](https://ollama.com) install. Free, GPU-bound, no key.
+- **Ollama Cloud** — `:cloud` / `-cloud` models hosted on ollama.com. Routes through your local Ollama install; set `OLLAMA_API_KEY` in `.env` for direct calls.
+- **OpenCode Go** — [subscription-based](https://opencode.ai/docs/go/) curated open models (`opencode-go/deepseek-v4-pro`, `opencode-go/glm-5.1`, etc.). Set `OPENCODE_API_KEY` in `.env`. Falls back to Zen balance when limits reached.
+- **[Anthropic Claude](https://www.anthropic.com)** — set `ANTHROPIC_API_KEY` to enable; live model discovery.
+- **[OpenAI](https://openai.com)** — set `OPENAI_API_KEY` to enable; live model discovery.
 
 Ollama Cloud is the default — `glm-5.1:cloud` ships pre-selected.
 
@@ -54,7 +55,7 @@ Then open **http://localhost:8244/** (or the WSL guest IP if you're hitting it f
 
 ## Tour
 
-**1. Setup form.** Pick a repo, a parent folder to clone into, an agent count, and one of the **eleven patterns** (ten swarm presets + a single-agent baseline). The optional User Directive seeds the conformance gauge and is honored by every preset except `stigmergy`. The AI Provider section is a 4-tab segmented control (Ollama / Ollama Cloud / Anthropic / OpenAI) with a model dropdown that filters per-provider — Anthropic and OpenAI lists come from live `/v1/models` discovery, Ollama from your local `/api/tags`, Ollama Cloud from the curated catalog at `ollama.com/search?c=cloud`.
+**1. Setup form.** Pick a repo, a parent folder to clone into, an agent count, and one of the **eleven patterns** (ten swarm presets + a single-agent baseline). The optional User Directive seeds the conformance gauge and is honored by every preset except `stigmergy`. The AI Provider section is a **5-tab** segmented control (Ollama / Ollama Cloud / OpenCode / Anthropic / OpenAI) with a model dropdown that filters per-provider.
 
 ![Setup form — GitHub URL, parent folder, pattern picker, agents/rounds/model fields](docs/images/setup-form.png)
 
@@ -104,16 +105,18 @@ Browser (React + Vite + Zustand + Tailwind)
    ▼
 Node server (Express + ws)
    ├── RepoService     git-clone target repo
-   ├── pickProvider    factory returning OllamaProvider | AnthropicProvider | OpenAIProvider
+   ├── pickProvider    factory returning OllamaProvider | OllamaCloudProvider | OpenCodeProvider | AnthropicProvider | OpenAIProvider
    ├── AgentManager    in-process Agent records (id, index, model, cwd) — no subprocess
    ├── ToolDispatcher  in-process read / grep / glob / list / bash for tool-using turns
    └── Orchestrator    shared-transcript message bus; round-robin turn loop gated
                        on SSE-aware liveness watchdog (not wall-clock)
       │
-      └── chatOnce(agent, prompt) → SessionProvider.chat()
-              ├─ Ollama   : POST localhost:11434/api/chat   (default)
-              ├─ Anthropic: POST api.anthropic.com/v1/messages   (tool_use loop)
-              └─ OpenAI   : POST api.openai.com/v1/chat/completions   (tool_calls loop)
+       └── chatOnce(agent, prompt) → SessionProvider.chat()
+               ├─ Ollama      : POST localhost:11434/api/chat   (default)
+               ├─ Ollama Cloud: POST ollama.com/api/chat   (:cloud models)
+               ├─ OpenCode Go : POST opencode.ai/zen/go/v1/chat/completions   (subscription)
+               ├─ Anthropic   : POST api.anthropic.com/v1/messages   (tool_use loop)
+               └─ OpenAI      : POST api.openai.com/v1/chat/completions   (tool_calls loop)
 ```
 
 **E3 (2026-04-29) removed the per-agent `opencode serve` subprocess.** Earlier
@@ -163,7 +166,7 @@ A phase-by-phase journal is archived at [`docs/archive/blackboard-changelog.md`]
 3. **Pattern** — one of the nine presets at the top of this README. Selecting blackboard reveals collapsible help explaining CAS and stale-replan; each pattern's `<PresetAdvancedSettings>` panel shows pattern-specific knobs.
 4. **Agents** — how many concurrent agents to spawn (2–8 for most presets). On blackboard, agent 1 is the planner and the remaining N−1 are workers. `debate-judge` requires exactly 3; `map-reduce` and `orchestrator-worker-deep` require ≥4.
 5. **Rounds** — for discussion presets: how many full passes through the agents. For blackboard: the maximum number of **auditor invocations** (plan → work → audit cycles) before the run stops even if unresolved criteria remain. Blackboard still stops earlier on the hard caps (per-run `wallClockCapMs` defaults to **8 hours** if not set, plus baked-in 200-commits / 300-todos backstops) or when every criterion is resolved. The cap is enforced by a 5s-tick watchdog (`#305`), so runs stop within ~5 seconds of the threshold rather than waiting for the next phase boundary. With non-blackboard presets, high values can mean hours of wall-clock and proportional cloud-token spend.
-6. **Model** — any model string the active provider can serve. For Ollama, this must be a model the local install can run (`ollama list`); the form's autocomplete reads `/api/models` for matches. For paid providers, prefix with the provider name: `anthropic/claude-opus-4-7`, `openai/gpt-5`, etc.
+6. **Model** — any model string the active provider can serve. For Ollama, this must be a model the local install can run (`ollama list`); the form's autocomplete reads `/api/models` for matches. For paid providers, prefix with the provider name: `anthropic/claude-opus-4-7`, `openai/gpt-5`, `opencode-go/deepseek-v4-pro`, etc. **Settings history** saves configurations across sessions for one-click reuse.
 
 Hit Start. You'll see each agent panel go from `spawning` → `ready` → `thinking` → `ready`, with live streaming bubbles in the transcript as each agent works. On blackboard runs, switch to the **Board** tab to watch todos flow through Open → Claimed → Committed (or Stale → back to Open on CAS rejection). When the run terminates the phase pill flips to `completed` / `stopped` / `failed` and a summary card appears at the top of the Board tab; a **New swarm** button is available in the sidebar.
 
@@ -178,6 +181,7 @@ Hit the **+ nudge** button next to the conformance gauge to submit a mid-run dir
 | `OLLAMA_API_KEY` | no (Ollama Cloud is always usable; key is informational) | Per [docs.ollama.com/cloud](https://docs.ollama.com/cloud). The Ollama Cloud tab is always selectable — the local Ollama install proxies `:cloud` models to ollama.com when an account is configured locally. Setting this key surfaces a "live key configured" hint in the tab tooltip. |
 | `ANTHROPIC_API_KEY` | no (only when using Anthropic provider) | Read by the in-process `AnthropicProvider` via `process.env`. The setup form's Anthropic tab is disabled when unset. |
 | `OPENAI_API_KEY` | no (only when using OpenAI provider) | Same pattern as `ANTHROPIC_API_KEY`. |
+| `OPENCODE_API_KEY` / `OPENCODE_GO_API_KEY` / `OPENCODE_ZEN_API_KEY` | no (only when using OpenCode provider) | OpenCode Go subscription key or Zen balance key. `OPENCODE_API_KEY` works for both. Get yours at [opencode.ai/auth](https://opencode.ai/auth). |
 | `DEFAULT_MODEL` | no (defaults to `glm-5.1:cloud`) | Model each agent uses when the form's model field is left blank. For paid providers use the prefixed form: `anthropic/claude-opus-4-7`, `openai/gpt-5`, etc. |
 | `SERVER_PORT` | no (defaults to `8243`) | Override the backend HTTP+WS port |
 | `WEB_PORT` | no (defaults to `8244`) | Override the Vite dev-server port |
@@ -198,12 +202,11 @@ For the current per-file map (with V2 substrate files, route mounts, and per-com
 
 See [`docs/known-limitations.md`](docs/known-limitations.md) for the full list with rationale + resolution status. Headline items today:
 
-- **Blackboard is the only write-capable preset.** All others are discussion-only (run through `swarm-read` agent profile with read-only tools).
+- **All discussion presets have opt-in write capability** (`cfg.writeMode: "single"` / `"multi"`). Blackboard has native writes. Only `stigmergy` remains read-only.
 - **Worker hunks are search/replace, not patches.** Aider-style `{op: "replace", file, search, replace}` envelope. Falls back closed when the search anchor isn't unique.
 - **One swarm at a time.** Stop the current swarm before starting another (or pass `force: true` on `/api/swarm/start`).
 - **In-memory transcript** — restarting the server loses live history. Per-run `summary.json` + per-event `logs/current.jsonl` are durable; the run-history dropdown reads the former.
-- **Localhost assumed.** No auth on the web app itself.
-- **`npm run start` doesn't serve the SPA.** Backend-only. Use `npm run dev` for local use; production deployment with a static-served `web/dist` is not yet wired.
+- **Localhost assumed.** No auth on the web app itself. Docker deployment available (`docker-compose up`).
 - **`/mnt/c` (WSL) flakiness.** tsx watch occasionally SIGTERMs the dev server when files in `/mnt/c` change rapidly; restart the dev server when this happens. Does not affect production. Don't `npm install` from WSL on a `/mnt/c` repo — it swaps esbuild's binary for Linux and breaks the next Windows-side dev server.
 
 ## Troubleshooting
