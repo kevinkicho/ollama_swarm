@@ -432,6 +432,7 @@ export class Orchestrator {
       createdBy: string;
     }> = [];
     for (const r of this.runs.values()) {
+      if (!r.runner.isRunning()) continue; // only truly active runs
       out.push({
         runId: r.runId,
         runConfig: r.runConfig,
