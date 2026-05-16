@@ -26,7 +26,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
         the whole app so route-based navigation (/runs/:runId) works.
         Routes themselves declared inside App.tsx so each branch can
         access useSwarm + the existing zustand store. */}
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <App />
     </BrowserRouter>
   </React.StrictMode>,
