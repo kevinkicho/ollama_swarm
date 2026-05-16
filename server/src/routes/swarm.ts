@@ -344,9 +344,11 @@ export function swarmRouter(orch: Orchestrator): Router {
     }
     let localPath: string;
     try {
-      const rawUrl = parsed.data.repoUrl.trim();
-      // Local folder path — use directly without cloning.
-      if (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) {
+      const rawUrl = parsed.data.repoUrl?.trim() || "";
+      // Empty repoUrl: use parentPath as the workspace directly.
+      if (!rawUrl) {
+        localPath = path.resolve(normalizeWslPath(parsed.data.parentPath));
+      } else if (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) {
         localPath = path.resolve(normalizeWslPath(rawUrl));
       } else {
         const parentPath = normalizeWslPath(parsed.data.parentPath);
