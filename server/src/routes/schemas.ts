@@ -77,7 +77,7 @@ export const SwarmRoleSchema = z.object({
 });
 
 export const StartBody = z.object({
-  repoUrl: z.string().url(),
+  repoUrl: z.string().min(1),
   parentPath: z.string().min(1),
   agentCount: z.number().int().min(1).max(8),
   model: z.string().optional(),
