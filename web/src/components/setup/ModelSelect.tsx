@@ -147,6 +147,14 @@ function DiscoverySourceHint({
       </div>
     );
   }
+  // OpenCode Go/Zen — same as ollama-cloud: curated, no live discovery.
+  if (provider === "opencode") {
+    return (
+      <div className="text-[11px] text-ink-500">
+        {count} model{count === 1 ? "" : "s"} from the OpenCode catalog
+      </div>
+    );
+  }
   return (
     <div className="text-[11px] text-amber-400/80">
       {count} fallback model{count === 1 ? "" : "s"} ({provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"} not set — list may be stale)
