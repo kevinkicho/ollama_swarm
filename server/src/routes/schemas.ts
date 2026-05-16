@@ -79,13 +79,13 @@ export const SwarmRoleSchema = z.object({
 export const StartBody = z.object({
   repoUrl: z.string().min(1),
   parentPath: z.string().min(1),
-  agentCount: z.number().int().min(1).max(8),
+  agentCount: z.coerce.number().int().min(1).max(8),
   model: z.string().optional(),
   // rounds=0 means infinite for blackboard (ratchet-driven, no audit cap).
   // For non-blackboard presets, rounds maps to actual work — rounds=100
   // with 6 agents on a serial preset can mean hours of wall-clock and
   // proportional cloud-token spend. Use accordingly.
-  rounds: z.number().int().min(0).max(100).optional(),
+  rounds: z.coerce.number().int().min(0).max(100).optional(),
   preset: z
     .enum([
       "round-robin",
@@ -117,7 +117,7 @@ export const StartBody = z.object({
   // Unit 34: per-run ambition ratchet cap. 0 = explicitly disabled; 1-20
   // enables with that many tiers max. Absent = inherit from env.
   // Blackboard-only.
-  ambitionTiers: z.number().int().min(0).max(20).optional(),
+  ambitionTiers: z.coerce.number().int().min(0).max(20).optional(),
   // Unit 35: per-run critic override. Blackboard-only.
   critic: z.boolean().optional(),
   // Unit 36: user-supplied running-app URL for auditor UI verification.
@@ -172,12 +172,12 @@ export const StartBody = z.object({
   // #87 (2026-05-01): self-consistency K for worker hunks. K > 1 runs
   // the worker prompt K times per todo + applies the majority-voted
   // hunks envelope. Capped at 5 to bound token cost. Blackboard-only.
-  selfConsistencyK: z.number().int().min(1).max(5).optional(),
+  selfConsistencyK: z.coerce.number().int().min(1).max(5).optional(),
   // #93 deeper (2026-05-01): MoA aggregator count + convergence threshold.
   // moaAggregatorCount > 1 = K aggregators in parallel, pick most-central.
   // moaConvergenceThreshold gates round-to-round early stop. MoA-only.
-  moaAggregatorCount: z.number().int().min(1).max(3).optional(),
-  moaConvergenceThreshold: z.number().min(0).max(1).optional(),
+  moaAggregatorCount: z.coerce.number().int().min(1).max(3).optional(),
+  moaConvergenceThreshold: z.coerce.number().min(0).max(1).optional(),
   // #98 (2026-05-01): heterogeneous models per MoA layer. Tests the
   // value prop "N small + 1 big > 1 big alone" cleanly. MoA-only.
   moaProposerModel: z.string().trim().min(1).max(200).optional(),
@@ -189,7 +189,7 @@ export const StartBody = z.object({
     .array(z.string().trim().min(0).max(200))
     .max(20)
     .optional(),
-  moaAggregationLevels: z.number().int().min(1).max(4).optional(),
+  moaAggregationLevels: z.coerce.number().int().min(1).max(4).optional(),
   orchestratorModel: z.string().trim().min(1).max(200).optional(),
   midLeadModel: z.string().trim().min(1).max(200).optional(),
   dispositionModels: z
@@ -209,14 +209,14 @@ export const StartBody = z.object({
   twoStageMoA: z.boolean().optional(),
   bidirectionalRefinement: z.boolean().optional(),
   baselineSelfCritique: z.boolean().optional(),
-  baselineAttempts: z.number().int().min(1).max(5).optional(),
+  baselineAttempts: z.coerce.number().int().min(1).max(5).optional(),
   testDrivenTodos: z.boolean().optional(),
   parallelHypothesis: z.boolean().optional(),
   chainTo: z.enum(["blackboard", "baseline"]).optional(),
   adaptiveWorkers: z
     .object({
-      min: z.number().int().min(1).max(20),
-      max: z.number().int().min(1).max(20),
+      min: z.coerce.number().int().min(1).max(20),
+      max: z.coerce.number().int().min(1).max(20),
     })
     .optional(),
   // Task #102 (2026-04-25): opt-in post-verdict "build" round for
@@ -225,12 +225,12 @@ export const StartBody = z.object({
   executeNextAction: z.boolean().optional(),
   // Task #124: optional per-run hard cap on total tokens (prompt +
   // response) consumed. User-supplied number, no defaults.
-  tokenBudget: z.number().int().positive().optional(),
+  tokenBudget: z.coerce.number().int().positive().optional(),
   // Phase 2 of #314: optional per-run dollar ceiling for paid
   // providers. Capped at $100 to prevent obvious typos (extra zero)
   // from authorizing a runaway run; users with legitimately bigger
   // budgets can lift this in the schema after deliberate review.
-  maxCostUsd: z.number().positive().max(100).optional(),
+  maxCostUsd: z.coerce.number().positive().max(100).optional(),
   // W13 wiring (2026-05-04): per-run provider failover chain. When
   // set, overrides the env-derived SWARM_PROVIDER_FAILOVER list. Each
   // element is a provider-prefixed model string (e.g.
@@ -298,10 +298,10 @@ export const StartBody = z.object({
   workerDispositions: z.boolean().optional(),
   // Plan 1: debate-judge auditor — PRO/CON/JUDGE replaces single-agent audit.
   debateAudit: z.boolean().optional(),
-  debateAuditRounds: z.number().int().min(1).max(2).optional(),
+  debateAuditRounds: z.coerce.number().int().min(1).max(2).optional(),
   // Plan 2: council inside map-reduce mappers — draft→revise per slice.
   councilMappers: z.boolean().optional(),
-  councilMapperRounds: z.number().int().min(1).max(3).optional(),
+  councilMapperRounds: z.coerce.number().int().min(1).max(3).optional(),
   // Plan 3: pheromone heatmap — cross-preset file-attention signal.
   pheromoneHotseed: z.string().trim().max(100).optional(),
   pheromoneHotFiles: z.array(z.string().min(1).max(500)).max(50).optional(),
@@ -313,12 +313,12 @@ export const StartBody = z.object({
         "orchestrator-worker", "orchestrator-worker-deep", "debate-judge",
         "map-reduce", "stigmergy", "baseline", "moa",
       ]),
-      rounds: z.number().int().min(0).max(100).optional(),
-      agentCount: z.number().int().min(1).max(8).optional(),
+      rounds: z.coerce.number().int().min(0).max(100).optional(),
+      agentCount: z.coerce.number().int().min(1).max(8).optional(),
       model: z.string().trim().min(1).max(200).optional(),
     })).min(2).max(10),
     pipeMode: z.enum(["transcript", "deliverable", "both"]).optional(),
-    pipeMaxEntries: z.number().int().min(1).max(100).optional(),
+    pipeMaxEntries: z.coerce.number().int().min(1).max(100).optional(),
   }).optional(),
   rubricGrading: z.boolean().optional(),
   checkpointing: z.boolean().optional(),
