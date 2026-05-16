@@ -336,8 +336,8 @@ app.get("/api/providers", (_req, res) => {
       hasKey: !!config.OPENAI_API_KEY,
     },
     opencode: {
-      available: !!(config.OPENCODE_GO_API_KEY || config.OPENCODE_ZEN_API_KEY),
-      hasKey: !!(config.OPENCODE_GO_API_KEY || config.OPENCODE_ZEN_API_KEY),
+      available: !!(config.OPENCODE_GO_API_KEY || config.OPENCODE_ZEN_API_KEY || config.OPENCODE_API_KEY),
+      hasKey: !!(config.OPENCODE_GO_API_KEY || config.OPENCODE_ZEN_API_KEY || config.OPENCODE_API_KEY),
     },
   });
 });
