@@ -460,7 +460,7 @@ void reclaimOrphans(repoRoot)
     console.error("  orphan reclamation failed (non-fatal):", err);
   })
   .finally(() => {
-    server.listen(config.SERVER_PORT, () => {
+    server.listen(config.SERVER_PORT, "0.0.0.0", () => {
       console.log(`ollama_swarm server listening on http://127.0.0.1:${config.SERVER_PORT}`);
       console.log(`  ollama: ${config.OLLAMA_BASE_URL}`);
       console.log(`  default model: ${config.DEFAULT_MODEL}`);

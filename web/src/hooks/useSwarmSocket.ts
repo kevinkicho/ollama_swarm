@@ -54,7 +54,7 @@ function connect(): void {
     reconnectTimer = null;
   }
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const socket = new WebSocket(`${proto}://127.0.0.1:${__BACKEND_PORT__}/ws`);
+  const socket = new WebSocket(`${proto}://${location.hostname}:${__BACKEND_PORT__}/ws`);
   ws = socket;
 
   socket.onopen = () => {

@@ -53,7 +53,7 @@ export function useRunScopedWebSocket(opts: UseRunScopedWebSocketOptions): void 
     const open = () => {
       if (cancelled) return;
       const proto = location.protocol === "https:" ? "wss" : "ws";
-      const url = `${proto}://127.0.0.1:${__BACKEND_PORT__}/ws?runId=${encodeURIComponent(runId)}`;
+      const url = `${proto}://${location.hostname}:${__BACKEND_PORT__}/ws?runId=${encodeURIComponent(runId)}`;
       onStateChangeRef.current?.("connecting");
       const sock = new WebSocket(url);
       socket = sock;
