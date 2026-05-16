@@ -330,7 +330,7 @@ function buildPreviewClonePath(repoUrl: string, parentPath: string): string {
 
 export function SetupForm() {
   const navigate = useNavigate();
-  const [repoUrl, setRepoUrl] = useState("https://github.com/kevinkicho");
+  const [repoUrl, setRepoUrl] = useState("");
   const [parentPath, setParentPath] = useState("C:\\users\\you\\projects");
   const [presetId, setPresetId] = useState<string>("round-robin");
   const [agentCount, setAgentCount] = useState(3);
@@ -819,7 +819,7 @@ export function SetupForm() {
       }));
       // Save full settings to history
       settingsHistory.save({
-        label: repoUrl.split("/").pop()?.replace(".git", "") || repoUrl,
+        label: repoUrl ? repoUrl.split("/").pop()?.replace(".git", "") || repoUrl : (parentPath.split(/[\/\\]/).pop() || parentPath),
         repoUrl,
         parentPath,
         preset: preset.id,
@@ -994,7 +994,7 @@ export function SetupForm() {
 
         <Section title="Repository">
           <div className="grid lg:grid-cols-2 gap-4">
-            <Field label="Target path" labelAccessory={<InfoTip>GitHub URL or local folder path (e.g. C:\Users\you\projects\my-repo)</InfoTip>}>
+            <Field label="GitHub URL or local path" labelAccessory={<InfoTip>GitHub URL clones the repo. Local path works directly on the folder. Leave empty to use Parent folder below.</InfoTip>}>
               <input
                 value={repoUrl}
                 onChange={(e) => setRepoUrl(e.target.value)}
@@ -1003,8 +1003,8 @@ export function SetupForm() {
               />
             </Field>
             <Field
-              label="Parent folder"
-              labelAccessory={<InfoTip>For GitHub repos: clone destination. For local paths: leave same as above.</InfoTip>}
+              label="Parent folder (or workspace)"
+              labelAccessory={<InfoTip>Used when Target path is a GitHub URL (clone here) or empty (work directly here)</InfoTip>}
             >
               <input
                 value={parentPath}
