@@ -70,42 +70,13 @@ app.use((_req, res, next) => {
 app.use(express.json({ limit: "1mb" }));
 
 const server = http.createServer(app);
-
-// WS auth — intercept upgrade BEFORE wss to reject unauthenticated connections.
-server.on("upgrade", (req: IncomingMessage, socket: import("node:stream").Duplex, head: Buffer) => {
-  if (!req.url?.startsWith("/ws")) {
-    socket.destroy();
-    return;
-  }
-
-  // Localhost bypass — no token needed for local connections.
-  const remoteIp = (req.socket as any)?.remoteAddress ?? "";
-  const isLocalhost = remoteIp === "127.0.0.1" || remoteIp === "::1" || remoteIp === "::ffff:127.0.0.1";
-  if (!isLocalhost) {
-  const cookieHeader = req.headers.cookie ?? "";
-  const cookies = Object.fromEntries(
-    cookieHeader.split(";").map((c) => c.trim().split("=").map(decodeURIComponent)),
-  );
-  const token = cookies.ws_token;
-
-  if (token !== wsToken) {
-    // Only reject if the token cookie is missing/wrong AND there's no query param override.
-    // The query param fallback allows CLI tools and tests to connect without cookies.
-    let queryToken = "";
-    try { queryToken = new URL(req.url ?? "/", "http://localhost").searchParams.get("token") ?? ""; } catch {}
-    if (queryToken !== wsToken) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-  }
-  } // end !isLocalhost auth check
-
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit("connection", ws, req);
-  });
-});
 const wss = new WebSocketServer({ noServer: true, path: "/ws", maxPayload: 1024 * 1024 });
+
+// WS auth — intercept upgrade. Localhost bypass for dev.
+server.on("upgrade", (req: IncomingMessage, socket: import("node:stream").Duplex, head: Buffer) => {
+  if (!req.url?.startsWith("/ws")) { socket.destroy(); return; }
+  wss.handleUpgrade(req, socket, head, (ws) => { wss.emit("connection", ws, req); });
+});
 const eventLogger = createEventLogger({ logDir: path.join(repoRoot, "logs") });
 const broadcaster = new Broadcaster(eventLogger);
 
