@@ -29,7 +29,6 @@ function fmtDate(ts: number): string {
 
 export function SettingsHistory({ entries, onSelect, onDelete, onDeleteAll }: SettingsHistoryProps) {
   const [expanded, setExpanded] = useState(false);
-  if (entries.length === 0) return null;
 
   return (
     <div className="border border-ink-700 rounded-lg overflow-hidden">
@@ -42,7 +41,13 @@ export function SettingsHistory({ entries, onSelect, onDelete, onDeleteAll }: Se
         <span className="text-[10px]">{expanded ? "▲" : "▼"}</span>
       </button>
 
-      {expanded && (
+      {expanded && entries.length === 0 && (
+        <div className="border-t border-ink-700 px-3 py-3 text-xs text-ink-500 text-center">
+          Run a swarm to save its configuration here for quick reuse
+        </div>
+      )}
+
+      {expanded && entries.length > 0 && (
         <div className="border-t border-ink-700">
           <div className="max-h-64 overflow-y-auto">
             {entries.map((entry) => (
@@ -80,6 +85,7 @@ export function SettingsHistory({ entries, onSelect, onDelete, onDeleteAll }: Se
               </div>
             ))}
           </div>
+          {entries.length > 0 && (
           <div className="border-t border-ink-700 px-3 py-1.5 flex justify-end">
             <button
               type="button"
@@ -89,6 +95,7 @@ export function SettingsHistory({ entries, onSelect, onDelete, onDeleteAll }: Se
               Delete all
             </button>
           </div>
+          )}
         </div>
       )}
     </div>
