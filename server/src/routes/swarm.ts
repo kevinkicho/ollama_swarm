@@ -214,7 +214,11 @@ export function swarmRouter(orch: Orchestrator): Router {
     const parentPath = normalizeWslPath(rawParentPath);
     let destPath: string;
     try {
-      destPath = deriveCloneDir(repoUrl, parentPath);
+      if (!repoUrl.startsWith("http://") && !repoUrl.startsWith("https://")) {
+        destPath = path.resolve(repoUrl);
+      } else {
+        destPath = deriveCloneDir(repoUrl, parentPath);
+      }
     } catch (err) {
       res.status(400).json({
         error: err instanceof Error ? err.message : "could not derive clone directory",
@@ -335,10 +339,14 @@ export function swarmRouter(orch: Orchestrator): Router {
     }
     let localPath: string;
     try {
-      // WSL ↔ Windows boundary normalization (see route preflight
-      // handler comment for context).
-      const parentPath = normalizeWslPath(parsed.data.parentPath);
-      localPath = deriveCloneDir(parsed.data.repoUrl, parentPath);
+      const rawUrl = parsed.data.repoUrl.trim();
+      // Local folder path — use directly without cloning.
+      if (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) {
+        localPath = path.resolve(rawUrl);
+      } else {
+        const parentPath = normalizeWslPath(parsed.data.parentPath);
+        localPath = deriveCloneDir(rawUrl, parentPath);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(400).json({ error: msg });
