@@ -900,7 +900,7 @@ export function SetupForm() {
         <ModelAvailabilityBanner
           selectedModel={model}
           provider={provider}
-          onSwap={setModel}
+          onSwap={(m) => { setModel(m); if (preset.id === "blackboard") setPlannerModel(m); }}
         />
 
         {/* 2026-05-02 (onboarding lever #3): click-to-fill starter
@@ -1195,7 +1195,11 @@ export function SetupForm() {
           <Field label="Model" labelAccessory={<InfoTip>The default model for all agents. Per-agent overrides available in Topology</InfoTip>}>
             <ModelSelect
               value={model}
-              onChange={setModel}
+              onChange={(m) => {
+                setModel(m);
+                // For blackboard, sync planner model with the main selection
+                if (preset.id === "blackboard") setPlannerModel(m);
+              }}
               provider={provider}
               ariaLabel="Default model"
             />
