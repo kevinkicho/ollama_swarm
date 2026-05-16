@@ -516,7 +516,11 @@ export function SetupForm() {
     // (e.g. round-robin → stigmergy lands you on MODEL_CODING).
     // User can override after.
     setModel(next.recommendedModel);
-    setProvider(detectProvider(next.recommendedModel));
+    // Only reset provider if the new model can't work with the current one.
+    // Preserves user's manual provider choice (e.g. OpenCode + DeepSeek).
+    if (detectProvider(next.recommendedModel) !== provider) {
+      setProvider(detectProvider(next.recommendedModel));
+    }
     // Regenerate the topology grid for the new preset. dedicatedAuditor
     // applies only to blackboard; pre-seed planner/worker/auditor models
     // from the existing per-role state so users don't lose what they typed.

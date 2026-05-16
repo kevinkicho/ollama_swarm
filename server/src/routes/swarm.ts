@@ -239,7 +239,8 @@ export function swarmRouter(orch: Orchestrator): Router {
       return;
     }
     const isGitRepo = await repos.dirExists(path.join(destPath, ".git"));
-    if (!isGitRepo) {
+    const isLocalPath = !repoUrl.startsWith("http://") && !repoUrl.startsWith("https://");
+    if (!isGitRepo && !isLocalPath) {
       // Non-empty non-git dir — clone() would reject unless force=true.
       // Surface as a blocker so the SetupForm can warn before Start.
       res.json({
