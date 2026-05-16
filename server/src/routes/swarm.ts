@@ -270,7 +270,11 @@ export function swarmRouter(orch: Orchestrator): Router {
   r.post("/start", async (req: Request, res: Response) => {
     const parsed = StartBody.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: parsed.error.flatten() });
+      const flat = parsed.error.flatten();
+      const msg = flat.fieldErrors
+        ? Object.entries(flat.fieldErrors).map(([k, v]) => `${k}: ${(v as string[]).join(", ")}`).join("; ")
+        : flat.formErrors.join("; ");
+      res.status(400).json({ error: msg || "invalid request body", _detail: flat });
       return;
     }
     // Task #147: force-restart path. When the caller sets force=true, we

@@ -784,7 +784,12 @@ export function SetupForm() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.error?.formErrors?.[0] ?? body.error ?? `HTTP ${res.status}`);
+        const msg = typeof body.error === "string" ? body.error
+          : body.error?.formErrors?.[0] ?? body.error?.fieldErrors
+          ? "Validation error — check browser console for details"
+          : body.error ?? `HTTP ${res.status}`;
+        console.error("Start failed:", body);
+        throw new Error(msg);
       }
       // T-Item-MultiTenant Phase 9 (2026-05-04): navigate to the new
       // run's deep-link URL on successful start. /api/swarm/start
