@@ -629,7 +629,7 @@ export function swarmRouter(orch: Orchestrator): Router {
       res.status(400).json({ error: parsed.error.flatten() });
       return;
     }
-    const requested = path.resolve(parsed.data.path);
+    const requested = path.resolve(normalizeWslPath(parsed.data.path));
     const status = orch.status();
     const activeClone = status.localPath ? path.resolve(status.localPath) : null;
     if (!activeClone) {

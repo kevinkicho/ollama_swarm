@@ -26,10 +26,9 @@
  */
 export function normalizeWslPath(input: string): string {
   if (process.platform !== "win32") return input;
-  // Match /mnt/<drive>/... where <drive> is a single ASCII letter.
-  // Allow trailing-empty path ("/mnt/c" with no slash after) and
-  // mixed-case drive letters.
-  const m = /^\/mnt\/([a-zA-Z])(\/.*)?$/.exec(input);
+  // Normalize backslashes (from Windows copy-paste) to forward slashes.
+  const normalized = input.replace(/\\/g, "/");
+  const m = /^\/mnt\/([a-zA-Z])(\/.*)?$/.exec(normalized);
   if (!m) return input;
   const drive = m[1].toUpperCase();
   const rest = (m[2] ?? "").replace(/\//g, "\\");

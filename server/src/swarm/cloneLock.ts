@@ -166,7 +166,8 @@ export function tryAcquireLock(input: {
   isPidAlive?: (pid: number) => boolean;
 }): AcquireResult {
   const { clonePath, runId, isPidAlive = defaultIsPidAlive } = input;
-  const lockPath = `${clonePath}${LOCK_FILE_NAME.startsWith(".") ? "" : "."}${LOCK_FILE_NAME}`;
+  const cleanPath = clonePath.replace(/[\/\\]$/, "");
+  const lockPath = `${cleanPath}${LOCK_FILE_NAME.startsWith(".") ? "" : "."}${LOCK_FILE_NAME}`;
   const ourLock: LockInfo = {
     pid: process.pid,
     runId,
@@ -241,7 +242,8 @@ export function releaseLock(input: {
 }): { released: boolean; reason: string } {
   const { clonePath, runId } = input;
   // 2026-05-04 fix: lock is now <clonePath>.lock (sibling), not inside.
-  const lockPath = `${clonePath}${LOCK_FILE_NAME.startsWith(".") ? "" : "."}${LOCK_FILE_NAME}`;
+  const cleanPath = clonePath.replace(/[\/\\]$/, "");
+  const lockPath = `${cleanPath}${LOCK_FILE_NAME.startsWith(".") ? "" : "."}${LOCK_FILE_NAME}`;
   if (!existsSync(lockPath)) {
     return { released: false, reason: "no lock file present" };
   }

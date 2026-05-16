@@ -11,8 +11,9 @@ const isWsl =
   fs.existsSync("/proc/sys/fs/binfmt_misc/WSLInterop");
 
 const isCI = process.env.CI === "true";
+const skipCheck = process.env.SKIP_WSL_CHECK === "true";
 
-if (isWsl && !isCI) {
+if (isWsl && !isCI && !skipCheck) {
   console.error(
     "WSL detected — DO NOT `npm install` from WSL.\n" +
     "esbuild ships platform-specific binaries. Running npm install from WSL\n" +
