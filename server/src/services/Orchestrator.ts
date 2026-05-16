@@ -13,6 +13,7 @@ import { PipelineRunner } from "../swarm/PipelineRunner.js";
 import { roleForAgent, selectRoleCatalog } from "../swarm/roles.js";
 import { ConformanceMonitor } from "./ConformanceMonitor.js";
 import { EmbeddingDriftMonitor } from "./EmbeddingDriftMonitor.js";
+import { tokenTracker } from "./ollamaProxy.js";
 import { AmendmentsBuffer, type Amendment } from "./AmendmentsBuffer.js";
 import { RunStatePersister, findRecoverableRuns, isRecoverablePhase, loadSnapshot, type RecoverableRun } from "./RunStatePersister.js";
 import { tryAcquireLock, releaseLock } from "../swarm/cloneLock.js";

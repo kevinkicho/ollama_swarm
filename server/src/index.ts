@@ -63,7 +63,7 @@ app.use(requestLogger);
 // Same token for the process lifetime; page refresh doesn't break WS.
 const wsToken = randomUUID();
 app.use((_req, res, next) => {
-  res.cookie("ws_token", wsToken, { httpOnly: true, sameSite: "strict", path: "/" });
+  res.cookie("ws_token", wsToken, { httpOnly: true, sameSite: "lax", path: "/" });
   next();
 });
 
@@ -77,6 +77,11 @@ server.on("upgrade", (req: IncomingMessage, socket: import("node:stream").Duplex
     socket.destroy();
     return;
   }
+
+  // Localhost bypass — no token needed for local connections.
+  const remoteIp = (req.socket as any)?.remoteAddress ?? "";
+  const isLocalhost = remoteIp === "127.0.0.1" || remoteIp === "::1" || remoteIp === "::ffff:127.0.0.1";
+  if (!isLocalhost) {
   const cookieHeader = req.headers.cookie ?? "";
   const cookies = Object.fromEntries(
     cookieHeader.split(";").map((c) => c.trim().split("=").map(decodeURIComponent)),
@@ -94,6 +99,7 @@ server.on("upgrade", (req: IncomingMessage, socket: import("node:stream").Duplex
       return;
     }
   }
+  } // end !isLocalhost auth check
 
   wss.handleUpgrade(req, socket, head, (ws) => {
     wss.emit("connection", ws, req);

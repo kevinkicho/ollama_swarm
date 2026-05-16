@@ -115,7 +115,7 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
     const open = () => {
       if (cancelled) return;
       const proto = location.protocol === "https:" ? "wss" : "ws";
-      const url = `${proto}://${location.hostname}:${__BACKEND_PORT__}/ws?runId=${encodeURIComponent(runId)}`;
+      const url = `${proto}://127.0.0.1:${__BACKEND_PORT__}/ws?runId=${encodeURIComponent(runId)}`;
       const sock = new WebSocket(url);
       socket = sock;
       sock.onopen = () => {
