@@ -135,16 +135,13 @@ export class RepoService {
       if (nonEmpty) {
         const isRepo = await this.dirExists(path.join(abs, ".git"));
         if (isRepo && !opts.force) {
-          // Unit 47: populate prior-state stats so the runner can emit
-          // a "you're resuming an existing clone" signal to the UI.
           const stats = await this.cloneStats(abs);
-          return {
-            destPath: abs,
-            alreadyPresent: true,
-            priorCommits: stats.commits,
-            priorChangedFiles: stats.changedFiles,
-            priorUntrackedFiles: stats.untrackedFiles,
-          };
+          return { destPath: abs, alreadyPresent: true, priorCommits: stats.commits, priorChangedFiles: stats.changedFiles, priorUntrackedFiles: stats.untrackedFiles };
+        }
+        // Local folder (not a git repo, not an HTTP URL) — use directly.
+        const isLocalPath = !opts.url.startsWith("http://") && !opts.url.startsWith("https://");
+        if (isLocalPath) {
+          return { destPath: abs, alreadyPresent: true };
         }
         if (!opts.force) {
           throw new Error(
