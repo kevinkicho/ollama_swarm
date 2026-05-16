@@ -26,8 +26,8 @@ export class OpenCodeProvider implements SessionProvider {
   private readonly zenKey: string;
 
   constructor() {
-    this.goKey = config.OPENCODE_GO_API_KEY ?? "";
-    this.zenKey = config.OPENCODE_ZEN_API_KEY ?? config.OPENCODE_GO_API_KEY ?? "";
+    this.goKey = config.OPENCODE_GO_API_KEY || config.OPENCODE_API_KEY || "";
+    this.zenKey = config.OPENCODE_ZEN_API_KEY || config.OPENCODE_API_KEY || "";
   }
 
   /** Derive which endpoint and key to use based on model prefix. */

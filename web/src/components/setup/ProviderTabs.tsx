@@ -23,16 +23,17 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   "ollama-cloud": "Ollama Cloud",
   anthropic: "Anthropic",
   openai: "OpenAI",
+  opencode: "OpenCode",
 };
 
-const PROVIDER_ORDER: readonly Provider[] = ["ollama", "ollama-cloud", "anthropic", "openai"];
+const PROVIDER_ORDER: readonly Provider[] = ["ollama", "ollama-cloud", "opencode", "anthropic", "openai"];
 
-// Env-var name to surface in the disabled-tab tooltip. Ollama-cloud is
-// always enabled (the local install handles auth) so it's not in this
-// map; ollama is also always enabled.
+// Env-var name to surface in the disabled-tab tooltip. Ollama and Ollama Cloud
+// are always enabled (local install handles auth). OpenCode detects keys from config.
 const PROVIDER_ENV_VAR: Partial<Record<Provider, string>> = {
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
+  opencode: "OPENCODE_GO_API_KEY / OPENCODE_ZEN_API_KEY",
 };
 
 export function ProviderTabs({
@@ -55,9 +56,11 @@ export function ProviderTabs({
         const available =
           p === "ollama" || p === "ollama-cloud"
             ? true
-            : status.providers
-              ? status.providers[p].available
-              : true; // optimistic while loading
+            : p === "opencode"
+              ? (status.providers?.opencode?.available ?? false)
+              : status.providers
+                ? status.providers[p].available
+                : true; // optimistic while loading
         const noKey = !available;
         const active = value === p;
         const envVar = PROVIDER_ENV_VAR[p];

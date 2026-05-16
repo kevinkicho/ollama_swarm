@@ -36,6 +36,7 @@ import {
   ANTHROPIC_MODELS as FALLBACK_ANTHROPIC,
   OPENAI_MODELS as FALLBACK_OPENAI,
   OLLAMA_CLOUD_MODELS,
+  OPENCODE_GO_MODELS,
 } from "../../shared/src/providers.js";
 import { decideAutoResume } from "./swarm/autoResumeDecision.js";
 import { loadSnapshot } from "./services/RunStatePersister.js";
@@ -226,6 +227,11 @@ app.get("/api/models", async (req, res) => {
   // hint accurately says "catalog" rather than "live discovery".
   if (provider === "ollama-cloud") {
     res.json({ models: OLLAMA_CLOUD_MODELS, source: "fallback" });
+    return;
+  }
+  // OpenCode Go — curated open models catalog.
+  if (provider === "opencode") {
+    res.json({ models: OPENCODE_GO_MODELS, source: "fallback" });
     return;
   }
   // Default / explicit "ollama" — existing behavior unchanged.

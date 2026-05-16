@@ -135,7 +135,24 @@ export function modelsForProvider(provider: Provider): readonly string[] {
     case "ollama-cloud":
       return OLLAMA_CLOUD_MODELS;
     case "ollama":
-      // Local Ollama models come from /api/tags at runtime; nothing to hardcode.
       return [];
+    case "opencode":
+      return OPENCODE_GO_MODELS;
   }
 }
+
+// OpenCode Go — curated open models (https://opencode.ai/docs/go/)
+export const OPENCODE_GO_MODELS = [
+  "opencode-go/glm-5.1",
+  "opencode-go/glm-5",
+  "opencode-go/kimi-k2.6",
+  "opencode-go/kimi-k2.5",
+  "opencode-go/deepseek-v4-pro",
+  "opencode-go/deepseek-v4-flash",
+  "opencode-go/mimo-v2.5",
+  "opencode-go/mimo-v2.5-pro",
+  "opencode-go/minimax-m2.7",
+  "opencode-go/minimax-m2.5",
+  "opencode-go/qwen3.6-plus",
+  "opencode-go/qwen3.5-plus",
+] as const;

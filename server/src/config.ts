@@ -94,8 +94,9 @@ const Schema = z.object({
   // Falls back to Zen balance when Go limits are reached (if enabled in console).
   OPENCODE_GO_API_KEY: z.string().optional(),
   // OpenCode Zen: pay-as-you-go access to curated models (GPT, Claude, open).
-  // Falls back to OPENCODE_GO_API_KEY if this is unset (same key works for both).
   OPENCODE_ZEN_API_KEY: z.string().optional(),
+  // OpenCode unified API key (works for both Go and Zen).
+  OPENCODE_API_KEY: z.string().optional(),
   // OpenCode Zen: pay-as-you-go access to curated models (GPT, Claude, open).
   // Falls back to OPENCODE_GO_API_KEY if this is unset (same key works for both).
   // E3 Phase 5 cleanup pt 4 (2026-04-29): USE_SESSION_PROVIDER +

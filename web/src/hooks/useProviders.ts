@@ -15,6 +15,7 @@ export interface ProvidersState {
   providers: {
     ollama: ProviderStatus;
     "ollama-cloud": ProviderStatus;
+    opencode: ProviderStatus;
     anthropic: ProviderStatus;
     openai: ProviderStatus;
   } | null;
