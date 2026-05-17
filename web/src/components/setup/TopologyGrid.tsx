@@ -668,9 +668,28 @@ export function topologyForPreset(
     lastUsed?: boolean;
   },
 ): Topology {
+  // Only recover from localStorage if the caller explicitly passed
+  // the current planner/worker/auditor models so we can merge them
+  // into the recovered topology. This prevents stale cached models
+  // from overriding the user's current form selections.
   if (options?.lastUsed) {
     const recovered = readLastUsed(presetId);
-    if (recovered && recovered.agents.length >= 1) return recovered;
+    if (recovered && recovered.agents.length >= 1) {
+      // Overlay current model selections onto the recovered topology
+      return {
+        agents: recovered.agents.map((a) => {
+          let model = a.model;
+          if ((a.role === "planner" || a.role === "orchestrator" || a.role === "reducer" || a.role === "judge") && options?.plannerModel) {
+            model = options.plannerModel;
+          } else if (a.role === "auditor" && options?.auditorModel) {
+            model = options.auditorModel;
+          } else if (options?.workerModel) {
+            model = options.workerModel;
+          }
+          return { ...a, model };
+        }),
+      };
+    }
   }
   return synthesizeTopology(presetId, agentCount, options);
 }
