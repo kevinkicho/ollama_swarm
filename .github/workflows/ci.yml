@@ -63,3 +63,7 @@ jobs:
 
       - name: Verify prompt assertions (drift check)
         run: npx tsx eval/drift-check.ts
+
+      - name: Verify production build succeeds
+        continue-on-error: true
+        run: npm run build
