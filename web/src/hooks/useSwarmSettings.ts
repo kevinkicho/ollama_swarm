@@ -38,18 +38,26 @@ export function useSwarmSettings() {
   const [entries, setEntries] = useState<SwarmSettings[]>(() => loadAll());
 
   const save = useCallback((settings: Omit<SwarmSettings, "id" | "createdAt" | "lastUsedAt" | "useCount">) => {
-    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const now = Date.now();
-    const entry: SwarmSettings = {
-      ...settings,
-      id,
-      createdAt: now,
-      lastUsedAt: now,
-      useCount: 1,
-    };
-    const updated = [entry, ...loadAll().filter((e) =>
-      !(e.repoUrl === settings.repoUrl && e.preset === settings.preset)
-    )];
+    const all = loadAll();
+    
+    // If an entry with the same repoUrl + preset already exists, bump it
+    // instead of creating a duplicate. This means useCount reflects actual
+    // successful run count, not just form loads.
+    const existingIdx = all.findIndex(
+      (e) => e.repoUrl === settings.repoUrl && e.preset === settings.preset
+    );
+    
+    let entry: SwarmSettings;
+    if (existingIdx !== -1) {
+      entry = { ...all[existingIdx], ...settings, lastUsedAt: now, useCount: all[existingIdx].useCount + 1 };
+      all.splice(existingIdx, 1);
+    } else {
+      const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      entry = { ...settings, id, createdAt: now, lastUsedAt: now, useCount: 1 };
+    }
+    
+    const updated = [entry, ...all];
     saveAll(updated);
     setEntries(updated);
   }, []);

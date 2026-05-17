@@ -886,7 +886,6 @@ export function SetupForm() {
             if (entry.plannerModel) setPlannerModel(entry.plannerModel);
             if (entry.workerModel) setWorkerModel(entry.workerModel);
             if (entry.auditorModel) setAuditorModel(entry.auditorModel);
-            settingsHistory.bumpUse(entry.id);
           }}
           onDelete={(id: string) => settingsHistory.remove(id)}
           onDeleteAll={() => settingsHistory.removeAll()}
