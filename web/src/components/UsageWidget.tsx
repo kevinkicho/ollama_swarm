@@ -143,10 +143,11 @@ export function UsageWidget() {
   // the header chip flips red as soon as the proxy detects a wall.
   const [quota, setQuota] = useState<QuotaState | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollAbortRef = useRef<AbortController | null>(null);
 
-  const fetchUsage = useCallback(async () => {
+  const fetchUsage = useCallback(async (signal?: AbortSignal) => {
     try {
-      const r = await fetch("/api/usage");
+      const r = await fetch("/api/usage", { signal });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const body = (await r.json()) as UsagePayload;
       setData(body);
@@ -164,12 +165,15 @@ export function UsageWidget() {
   // panel toggles so the user never sees a stale snapshot. Replaces
   // two overlapping intervals that double-hit /api/usage at 30s marks.
   useEffect(() => {
-    void fetchUsage();
+    const ctrl = new AbortController();
+    pollAbortRef.current = ctrl;
+    void fetchUsage(ctrl.signal);
     const interval = open ? POLL_OPEN_MS : POLL_CLOSED_MS;
-    pollTimerRef.current = setInterval(fetchUsage, interval);
+    pollTimerRef.current = setInterval(() => fetchUsage(ctrl.signal), interval);
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
+      ctrl.abort();
     };
   }, [open, fetchUsage]);
 

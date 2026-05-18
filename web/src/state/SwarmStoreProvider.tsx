@@ -56,6 +56,7 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
     let socket: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let backoffMs = 500;
+    const ctrl = new AbortController();
 
     // Hydrate from REST snapshot first so the store is non-empty
     // before the live socket starts streaming. Best-effort — a
@@ -65,6 +66,7 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
       try {
         const res = await fetch(
           `/api/swarm/runs/${encodeURIComponent(runId)}/status`,
+          { signal: ctrl.signal },
         );
         if (!res.ok) return;
         const snap = (await res.json()) as SwarmStatusSnapshot;
@@ -144,6 +146,7 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
 
     return () => {
       cancelled = true;
+      ctrl.abort();
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;

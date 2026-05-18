@@ -11,7 +11,7 @@
 // When fewer than 2 runs are active OR the cap is 1, the panel
 // renders nothing — single-run users keep the existing UI shape.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 interface ActiveRun {
@@ -48,9 +48,9 @@ function shortRunId(id: string): string {
   return id.length > 8 ? id.slice(0, 8) : id;
 }
 
-async function fetchActiveRuns(): Promise<ActiveRun[]> {
+async function fetchActiveRuns(signal?: AbortSignal): Promise<ActiveRun[]> {
   try {
-    const res = await fetch("/api/swarm/active-runs");
+    const res = await fetch("/api/swarm/active-runs", { signal });
     if (!res.ok) return [];
     const json = (await res.json()) as ActiveRunsResponse;
     return Array.isArray(json.runs) ? json.runs : [];
@@ -75,11 +75,14 @@ export function ActiveRunsPanel() {
   const [runs, setRuns] = useState<ActiveRun[]>([]);
   const [now, setNow] = useState(Date.now());
   const [stoppingId, setStoppingId] = useState<string | null>(null);
+  const pollRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    const ctrl = new AbortController();
+    pollRef.current = ctrl;
     let cancelled = false;
     const tick = async () => {
-      const next = await fetchActiveRuns();
+      const next = await fetchActiveRuns(ctrl.signal);
       if (!cancelled) setRuns(next);
     };
     void tick();
@@ -89,6 +92,7 @@ export function ActiveRunsPanel() {
     return () => {
       cancelled = true;
       clearInterval(interval);
+      ctrl.abort();
     };
   }, []);
 
@@ -169,7 +173,7 @@ export function ActiveRunsPanel() {
                         await stopRun(run.runId);
                         // Refetch so the row's status updates without
                         // waiting for the next 5s poll.
-                        const next = await fetchActiveRuns();
+                        const next = await fetchActiveRuns(pollRef.current?.signal);
                         setRuns(next);
                         setStoppingId(null);
                       }}

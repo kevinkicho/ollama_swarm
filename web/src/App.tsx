@@ -204,9 +204,10 @@ function useReviewedRunIsLive(review: { runId: string; clonePath: string } | nul
       return;
     }
     let cancelled = false;
+    const ctrl = new AbortController();
     async function check() {
       try {
-        const r = await fetch("/api/swarm/status");
+        const r = await fetch("/api/swarm/status", { signal: ctrl.signal });
         if (!r.ok) return;
         const body = (await r.json()) as { runId?: string };
         if (!cancelled) setIsLive(body.runId === review!.runId);
@@ -219,6 +220,7 @@ function useReviewedRunIsLive(review: { runId: string; clonePath: string } | nul
     return () => {
       cancelled = true;
       clearInterval(t);
+      ctrl.abort();
     };
   }, [review]);
   return isLive;
@@ -270,13 +272,14 @@ function useReviewHydration(review: { runId: string; clonePath: string } | null)
   useEffect(() => {
     if (!review) return;
     let cancelled = false;
+    const ctrl = new AbortController();
     (async () => {
       try {
         const params = new URLSearchParams({
           clonePath: review.clonePath,
           runId: review.runId,
         });
-        const r = await fetch(`/api/swarm/run-summary?${params.toString()}`);
+        const r = await fetch(`/api/swarm/run-summary?${params.toString()}`, { signal: ctrl.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const summary = (await r.json()) as RunSummary;
         if (cancelled) return;
@@ -317,6 +320,7 @@ function useReviewHydration(review: { runId: string; clonePath: string } | null)
     })();
     return () => {
       cancelled = true;
+      ctrl.abort();
     };
     // Hydrate once per (runId, clonePath); store setters are stable references.
     // eslint-disable-next-line react-hooks/exhaustive-deps
