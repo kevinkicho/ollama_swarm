@@ -23,6 +23,25 @@ const PARENT_BASE = process.env.SWEEP_PARENT ?? "C:\\Users\\kevin\\Workspace";
 const REPO = process.env.SWEEP_REPO ?? "https://github.com/kevinkicho/opencode_swarm";
 const POLL_MS = Number(process.env.SWEEP_POLL_MS ?? 30_000);
 const WALLCLOCK_CAP_MS = Number(process.env.SWEEP_WALL_MS ?? 20 * 60_000);
+
+// Per-preset default caps: discussion presets complete in 1-4 min so
+// shorter caps provide faster failure detection. Blackboard is the
+// heavy preset (multi-tier, worker pipeline). Override via env var.
+const PRESET_CAPS_MS = {
+  "blackboard": 20 * 60_000,
+  "round-robin": 4 * 60_000,
+  "role-diff": 6 * 60_000,
+  "council": 5 * 60_000,
+  "orchestrator-worker": 6 * 60_000,
+  "orchestrator-worker-deep": 8 * 60_000,
+  "debate-judge": 5 * 60_000,
+  "map-reduce": 6 * 60_000,
+  "stigmergy": 4 * 60_000,
+  "moa": 4 * 60_000,
+};
+function wallClockForPreset(preset) {
+  return PRESET_CAPS_MS[preset] ?? WALLCLOCK_CAP_MS;
+}
 const MODE = process.env.SWEEP_MODE ?? process.argv[2] ?? "all"; // A|B|C|all
 
 const ALL_SWARM_PRESETS = [
@@ -178,7 +197,7 @@ async function startRun({ preset, parentPath, directive, agentCount, rounds, fre
     agentCount,
     rounds,
     userDirective: directive,
-    wallClockCapMs: WALLCLOCK_CAP_MS,
+    wallClockCapMs: wallClockForPreset(preset),
     ...modelOverrides,
   };
   const res = await fetchJson(`${SERVER}/api/swarm/start`, {
@@ -192,7 +211,7 @@ async function startRun({ preset, parentPath, directive, agentCount, rounds, fre
   return res.body?.status?.runId ?? null;
 }
 
-async function pollUntilTerminal(runId) {
+async function pollUntilTerminal(runId, capMs) {
   const TERMINAL = new Set(["completed", "failed", "stopped"]);
   const start = Date.now();
   let lastPhase = "";
@@ -210,7 +229,7 @@ async function pollUntilTerminal(runId) {
       lastPhase = phase;
     }
     if (TERMINAL.has(phase)) return { snapshot, durationMs: Date.now() - start };
-    if (Date.now() - start > WALLCLOCK_CAP_MS + 5 * 60_000) {
+    if (Date.now() - start > capMs + 5 * 60_000) {
       logLine(`  WATCHDOG: poll timeout for runId=${runId} — abandoning`);
       try {
         await fetchJson(`${SERVER}/api/swarm/stop`, { method: "POST" });
@@ -281,7 +300,8 @@ async function runOnePreset({ mode, preset, pass = 1, parentPath, directive }) {
     results.push({ mode, preset, pass, ok: false, error: err.message });
     return;
   }
-  const { snapshot, durationMs, abandoned } = await pollUntilTerminal(runId);
+  const capMs = wallClockForPreset(preset);
+  const { snapshot, durationMs, abandoned } = await pollUntilTerminal(runId, capMs);
   const summary = await loadSummaryWithRetry(parentPath);
   const finalPhase = snapshot?.phase ?? "(unknown)";
   const commits = summary?.commits ?? 0;
@@ -329,7 +349,7 @@ async function modeC() {
 }
 
 async function main() {
-  logLine(`[sweep-start] mode=${MODE} repo=${REPO} parent=${PARENT_BASE} cap=${WALLCLOCK_CAP_MS}ms server=${SERVER}`);
+  logLine(`[sweep-start] mode=${MODE} repo=${REPO} parent=${PARENT_BASE} server=${SERVER}`);
   // Health-check once.
   try {
     const r = await fetchJson(`${SERVER}/api/health`);
