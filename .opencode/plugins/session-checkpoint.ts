@@ -10,9 +10,10 @@
  * To manually stop autoresearch: set Status: **finished** in the checkpoint.
  *
  * Reliability notes:
- * - The pending map prevents double-fire when session.idle events queue up.
- * - Failures are logged via client.app.log (not console) for server visibility.
- * - On three consecutive failures, the plugin gives up to prevent flood loops.
+ * - On the first session.idle, any leftover in_progress is reset to finished
+ *   (prevents automatic carryover to a fresh session). Only when the
+ *   autoresearch skill explicitly writes in_progress this session will the
+ *   plugin auto-resume on subsequent idle events.
  */
 
 import type { Plugin } from "@opencode-ai/plugin";
@@ -37,6 +38,7 @@ function readStatus(workdir: string): string | null {
 export const SessionCheckpointPlugin: Plugin = async ({ client, directory }) => {
   const pending = new Map<string, boolean>();
   const consecutiveFailures = new Map<string, number>();
+  const firstIdle = new Map<string, boolean>();
 
   return {
     event: async ({ event }) => {
@@ -66,6 +68,36 @@ export const SessionCheckpointPlugin: Plugin = async ({ client, directory }) => 
       if (failures >= MAX_CONSECUTIVE_FAILURES) return;
 
       if (pending.get(sid)) return;
+
+      // On the very first idle of a session, reset any leftover in_progress
+      // from a prior session to finished. This prevents the plugin from
+      // auto-triggering autoresearch on every fresh opencode start. The
+      // autoresearch skill must explicitly write in_progress this session.
+      if (!firstIdle.get(sid)) {
+        firstIdle.set(sid, true);
+        const status = readStatus(directory);
+        if (status === "in_progress") {
+          const p = path.resolve(directory, CHECKPOINT_FILE);
+          try {
+            const content = fs.readFileSync(p, "utf8");
+            const updated = content.replace(
+              /^> Status:\s*\*{2}\w+\*{2}/m,
+              "> Status: **finished**",
+            );
+            fs.writeFileSync(p, updated, "utf8");
+            await client.app.log({
+              body: {
+                service: "autoresume",
+                level: "info",
+                message: "First idle: reset leftover in_progress to finished",
+                extra: { sessionId: sid },
+              },
+            }).catch(() => {});
+          } catch { /* checkpoint write failed — ignore */ }
+        }
+        return;
+      }
+
       pending.set(sid, true);
 
       try {
