@@ -15,7 +15,17 @@
   },
   "agent": {
     "build": {
-      "permission": "allow"
+      "permission": {
+        "edit": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "question": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "todowrite": "allow",
+        "skill": "allow",
+        "doom_loop": "allow"
+      }
     }
   }
 }

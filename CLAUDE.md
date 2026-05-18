@@ -4,15 +4,17 @@ This file is auto-loaded into every session. Keep it short; link out for depth.
 
 ## Read these first (in order)
 
-1. **`docs/STATUS.md`** — what ships today; current V2 substrate status; recent fixes worth knowing about. If this disagrees with code, code wins.
-2. **`docs/AGENT-GUIDE.md`** — day-1 essentials: common commands, commit conventions, where new code goes, don'ts, operational hazards.
-3. **`docs/active-work.md`** — persistent TODO list across sessions. Per-session task lists die at session end; this is the durable equivalent.
-4. **`docs/decisions/`** — 4 active ADRs covering non-obvious "why this and not that" choices (per-agent subprocess history, hunk format, blackboard-only writes, V2 parallel-track rollout). ADR 005 (keep opencode) was superseded 2026-04-29 by E3 Phase 5; the file remains as historical record.
+1. **`.opencode/session-checkpoint.md`** — what shipped last session, known remaining items, test counts. This is the authoritative record of current state. **Always cross-reference against this before diagnosing any problem.** If a bug is listed here as "Done", verify the code has the fix; if listed as "Known remaining", don't re-explore it.
+2. **`docs/STATUS.md`** — what ships today; current V2 substrate status; recent fixes worth knowing about. If this disagrees with code, code wins. Includes the maintenance log and test counts.
+3. **`docs/AGENT-GUIDE.md`** — day-1 essentials: common commands, commit conventions, where new code goes, don'ts, operational hazards.
+4. **`docs/active-work.md`** — persistent TODO list across sessions. Per-session task lists die at session end; this is the durable equivalent.
 
 ## Two reference docs to know about (don't read cold; reach for when needed)
 
 - **`docs/known-limitations.md`** — what's a deliberate trade-off vs. a bug.
 - **`docs/model-behaviors.md`** — model-specific quirks, reliability, and role recommendations (empirical, from production runs).
+- **`docs/decisions.md`** — 5 ADRs covering non-obvious "why this and not that" choices (per-agent isolation, hunk format, write-capable preset boundary, V2 parallel-track rollout, opencode removal).
+- **`docs/changelog.md`** — all notable changes reverse-chronological, plus maintenance log.
 - **`server/src/swarm/blackboard/ARCHITECTURE.md`** — code-near design doc. Read before editing the blackboard directory.
 
 ## Git
