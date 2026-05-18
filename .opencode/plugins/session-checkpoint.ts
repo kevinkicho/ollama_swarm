@@ -1,10 +1,7 @@
 /**
- * Auto-resume plugin for autoresearch.
- * 
- * Uses setTimeout to defer prompt() so the idle event handler returns
- * first, allowing the session to fully transition to idle before a
- * new "autoresearch" message is injected. Stays active as long as
- * checkpoint status is in_progress.
+ * Auto-resume plugin — uses opencode run CLI (like watchdog) via $ shell.
+ * This spawns an external process, avoiding the in-process session deadlock.
+ * Only fires when checkpoint status is in_progress.
  */
 
 import type { Plugin } from "@opencode-ai/plugin";
@@ -12,7 +9,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 const CHECKPOINT_FILE = ".opencode/session-checkpoint.md";
-const RESUME_DELAY_MS = 2000;
 
 function readStatus(workdir: string): string | null {
   try {
@@ -26,38 +22,25 @@ function readStatus(workdir: string): string | null {
   }
 }
 
-export const SessionCheckpointPlugin: Plugin = async ({ client, directory }) => {
-  let scheduled = false;
+export const SessionCheckpointPlugin: Plugin = async ({ directory, $ }) => {
+  let firing = false;
 
   return {
     event: async ({ event }) => {
       if (event.type !== "session.idle") return;
-      if (scheduled) return;
+      if (firing) return;
 
       const status = readStatus(directory);
       if (status !== "in_progress") return;
 
-      const props = event.properties as Record<string, unknown> | undefined;
-      const sessionObj = props?.session as Record<string, unknown> | undefined;
-      const sid = (sessionObj?.id as string | undefined) ?? "";
-      if (!sid) return;
-
-      scheduled = true;
-
-      // Defer with setTimeout so the event handler returns first,
-      // session transitions to idle, then the prompt fires fresh.
-      setTimeout(async () => {
-        try {
-          await client.session.prompt({
-            path: { id: sid },
-            body: {
-              parts: [{ type: "text", text: "autoresearch" }],
-            },
-          });
-        } finally {
-          scheduled = false;
-        }
-      }, RESUME_DELAY_MS);
+      firing = true;
+      try {
+        await $`opencode run "autoresearch"`.cwd(directory).quiet();
+      } catch {
+        // subprocess may exit non-zero — ignore and retry next idle
+      } finally {
+        firing = false;
+      }
     },
   };
 };
