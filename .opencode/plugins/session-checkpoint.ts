@@ -14,6 +14,9 @@
  *   (prevents automatic carryover to a fresh session). Only when the
  *   autoresearch skill explicitly writes in_progress this session will the
  *   plugin auto-resume on subsequent idle events.
+ * - Failures are logged but never cause the plugin to give up. Only the
+ *   checkpoint transitioning to "finished" (set manually by the user) stops
+ *   the loop.
  */
 
 import type { Plugin } from "@opencode-ai/plugin";
@@ -21,7 +24,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const CHECKPOINT_FILE = ".opencode/session-checkpoint.md";
-const MAX_CONSECUTIVE_FAILURES = 3;
+const MAX_CONSECUTIVE_FAILURES = Number.POSITIVE_INFINITY;
 
 function readStatus(workdir: string): string | null {
   try {

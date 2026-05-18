@@ -172,11 +172,19 @@ If the session crashes (which is common), on the next session start:
 
 ## When to stop
 
-- All tiers exhausted (nothing meaningful left to do).
-- All queued items in `docs/active-work.md` are done and no new ones
-  discovered.
-- Explicitly told to stop.
-- Three consecutive test failures that can't be fixed within the tier.
+- **Explicitly told to stop by the user.** This is the ONLY way autoresearch
+  stops on its own. Tiers cycle — when one is functionally exhausted, move to
+  the next. When all are exhausted, cycle back to Tier 1 for incremental
+  improvements. The ratchet never goes backward and never idles.
+- **NEVER set the checkpoint to `**finished**`.** Leave it as `**in_progress**`
+  unless the user explicitly tells you to stop. The auto-resume plugin
+  continues the loop across sessions — finished kills it.
+- **Consecutive failures are NOT a stop condition.** If a batch of tests
+  fails, fix them and continue. If a tier's work fails 3+ times, skip to the
+  next tier and come back later. Never exit the loop.
+- **"All queued items done" is NOT a stop condition.** If active-work is
+  empty, use the tier instructions to discover new work. There is always
+  something to improve.
 
 ## Communication
 
@@ -184,5 +192,5 @@ If the session crashes (which is common), on the next session start:
 - **Only speak when blocked** — if you hit a decision you can't make (e.g.,
   choosing between two valid approaches), present the options concisely and ask
   which to take.
-- **When done with all tiers**, output a summary: tiers completed, items
-  shipped, test count delta.
+- **When done with a tier**, briefly note which tier completed and move to
+  the next. Keep the checkpoint updated with tier progress.
