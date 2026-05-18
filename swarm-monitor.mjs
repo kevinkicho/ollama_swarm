@@ -310,8 +310,8 @@ function monitorRun(runIdFromStart) {
           break;
 
         case "model_shift":
-          modelFailovers.push(`${ev.agentId}: ${ev.fromModel} → ${ev.toModel} (${ev.reason})`);
-          log("WARN", `MODEL-SHIFT: ${ev.agentId}: ${ev.fromModel} → ${ev.toModel} (${ev.reason})`);
+          modelFailovers.push(`${ev.agentId}: ${ev.fromModel} → ${ev.toModel} (${ev.reason})${ev.rawError ? ` — ${ev.rawError}` : ""}`);
+          log("WARN", `MODEL-SHIFT: ${ev.agentId}: ${ev.fromModel} → ${ev.toModel} (${ev.reason})${ev.rawError ? ` — ${ev.rawError}` : ""}`);
           break;
 
         case "conformance_sample":
