@@ -163,14 +163,9 @@ describe("V2 substrate integration", () => {
     assert.equal(observer.getState().phase, "planning");
   });
 
-  it("V2 reducer terminates correctly even when fed extra events post-completion", async () => {
-    // V2 cutover Phase 1a: this test was originally about the
-    // observer's checkPhase firing a divergence when V1 wedged in
-    // executing while V2 had reached completed. After cutover,
-    // checkPhase + divergence tracking are gone. The remaining
-    // value is verifying the reducer's terminal-state idempotence —
-    // applying further events to a "completed" state must not
-    // transition out.
+  it("V2 reducer stays in completed even when fed extra events", async () => {
+    // Verify terminal-state idempotence — stray events post-completion
+    // should not transition the state machine out of completed.
     const queue = new TodoQueue();
     const observer = new RunStateObserver({
       getCtx: () => ({
@@ -184,25 +179,40 @@ describe("V2 substrate integration", () => {
         allCriteriaResolved: false,
       }),
     });
-    observer.apply({ type: "start", ts: 1 });
-    observer.apply({ type: "spawned", ts: 2, agentCount: 4 });
-    observer.apply({ type: "contract-built", ts: 3, criteriaCount: 1 });
 
-    queue.post({ description: "x", expectedFiles: [], createdBy: "p" });
+    // Fast-forward to completed
+    observer.apply({ type: "start", ts: 1 });
+    observer.apply({ type: "spawned", ts: 2, agentCount: 2 });
+    observer.apply({ type: "contract-built", ts: 3, criteriaCount: 1 });
+    queue.post({ description: "t", expectedFiles: [], createdBy: "p" });
     observer.apply({ type: "todos-posted", ts: 4, count: 1 });
     const todo = queue.dequeue("w");
     queue.complete(todo!.id);
     observer.apply({ type: "todo-committed", ts: 5, remainingTodos: 0 });
-    observer.apply({
-      type: "auditor-returned",
-      ts: 6,
-      allCriteriaResolved: true,
-      newTodosCount: 0,
-    });
+    observer.apply({ type: "auditor-returned", ts: 6, allCriteriaResolved: true, newTodosCount: 0 });
     assert.equal(observer.getState().phase, "completed");
 
-    // Apply a stray event after completion — terminal state is sticky.
+    // Extra events — completed is sticky
     observer.apply({ type: "todo-committed", ts: 7, remainingTodos: 0 });
+    observer.apply({ type: "auditor-fired", ts: 8 });
+    observer.apply({ type: "spawned", ts: 9, agentCount: 1 });
+    assert.equal(observer.getState().phase, "completed");
+  });
+
+  it("zero todos still reaches completed via auditor", async () => {
+    const queue = new TodoQueue();
+    const observer = new RunStateObserver({
+      getCtx: () => ({
+        openTodos: 0, claimedTodos: 0, staleTodos: 0,
+        auditInvocations: 0, maxAuditInvocations: 3,
+        currentTier: 1, maxTiers: 1, allCriteriaResolved: false,
+      }),
+    });
+    observer.apply({ type: "start", ts: 1 });
+    observer.apply({ type: "spawned", ts: 2, agentCount: 2 });
+    observer.apply({ type: "contract-built", ts: 3, criteriaCount: 1 });
+    observer.apply({ type: "todos-posted", ts: 4, count: 0 });
+    observer.apply({ type: "auditor-returned", ts: 5, allCriteriaResolved: true, newTodosCount: 0 });
     assert.equal(observer.getState().phase, "completed");
   });
 });
