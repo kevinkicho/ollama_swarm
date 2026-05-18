@@ -4,6 +4,7 @@ import { promises as fs, readFileSync } from "node:fs";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { TopologySchema, deriveLegacyFields, synthesizeTopology } from "../../../shared/src/topology.js";
+import { resolveModels, type ModelDefaults } from "../../../shared/src/modelConfig.js";
 import { config } from "../config.js";
 import { validateContinuousMode } from "./continuousMode.js";
 import {
@@ -292,20 +293,33 @@ export function swarmRouter(orch: Orchestrator): Router {
         console.warn('[swarm] force-stop-ignored:', err instanceof Error ? err.message : String(err));
       }
     }
-    // Phase 1 (#243): when the client posted a topology, derive the
-    // legacy agentCount + per-role models from it. Topology wins over
-    // any conflicting legacy fields the same payload happens to carry.
-    // This single-source-of-truth shift lets the runner side stay
-    // unchanged for now — it still consumes agentCount + plannerModel
-    // etc., but those values came from the user's grid choices.
+    // ModelConfig consolidation (2026-05-17): replace scattered ?? chains
+    // with a single resolveModels() call. 31 decision points → 1 function.
+    const resolvedModels = resolveModels(
+      {
+        model: parsed.data.model,
+        plannerModel: parsed.data.plannerModel,
+        workerModel: parsed.data.workerModel,
+        auditorModel: parsed.data.auditorModel,
+        topology: parsed.data.topology,
+        preset: parsed.data.preset,
+        dedicatedAuditor: parsed.data.dedicatedAuditor,
+      },
+      {
+        model: config.DEFAULT_MODEL,
+        workerModel: config.DEFAULT_WORKER_MODEL,
+        auditorModel: config.DEFAULT_AUDITOR_MODEL,
+        dedicatedAuditor: config.DEFAULT_DEDICATED_AUDITOR,
+      } satisfies ModelDefaults,
+    );
+
+    // Agent count and dedicated-auditor flag still come from topology
+    // (these are NOT model fields — no consolidation applies).
     const legacy = parsed.data.topology
       ? deriveLegacyFields(parsed.data.topology, parsed.data.preset)
       : null;
     const effAgentCount = legacy?.agentCount ?? parsed.data.agentCount;
     const effDedicatedAuditor = legacy?.dedicatedAuditor ?? parsed.data.dedicatedAuditor;
-    const effPlannerModel = legacy?.plannerModel ?? parsed.data.plannerModel;
-    const effWorkerModel = legacy?.workerModel ?? parsed.data.workerModel;
-    const effAuditorModel = legacy?.auditorModel ?? parsed.data.auditorModel;
     // Task #109: map-reduce floor agentCount=4 (1 reducer + 3 mappers).
     // Smaller setups (agentCount=3 = 2 mappers) leave one mapper with a
     // trivially-small slice that the model collapses on; full RCA in
@@ -391,7 +405,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         !parsed.data.continuous
       ) {
         const projection = projectRunCost({
-          model: parsed.data.model ?? config.DEFAULT_MODEL,
+          model: resolvedModels.model,
           totalTurns: effectiveRounds * effAgentCount,
         });
         if (
@@ -411,7 +425,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         localPath,
         agentCount: effAgentCount,
         rounds: effectiveRounds,
-        model: parsed.data.model ?? config.DEFAULT_MODEL,
+        model: resolvedModels.model,
         preset: parsed.data.preset,
         // Unit 25: pass user directive through. Already trimmed + 4000-cap-
         // validated by zod. Empty string → undefined already (zod strips).
@@ -433,15 +447,14 @@ export function swarmRouter(orch: Orchestrator): Router {
         ambitionTiers: parsed.data.ambitionTiers,
         critic: parsed.data.critic,
         uiUrl: parsed.data.uiUrl,
-        plannerModel: effPlannerModel,
+        plannerModel: resolvedModels.plannerModel,
         // Blackboard workers default to DEFAULT_WORKER_MODEL (gemma4) so
         // the planner's heavier reasoning model isn't burned on every
         // worker turn. Other presets share `model` across all agents.
         workerModel:
-          effWorkerModel ??
-          (parsed.data.preset === "blackboard"
-            ? config.DEFAULT_WORKER_MODEL
-            : undefined),
+          resolvedModels.workerModel !== resolvedModels.model
+            ? resolvedModels.workerModel
+            : undefined,
         wallClockCapMs: parsed.data.wallClockCapMs,
         // #296: pre-commit verify command. Threaded into the runner
         // so BlackboardRunner.executeWorkerTodoV2 can construct the
@@ -464,11 +477,9 @@ export function swarmRouter(orch: Orchestrator): Router {
         // fires rarely so its latency is amortized; cross-criterion
         // synthesis benefits most from the strongest reasoning tier.
         auditorModel:
-          effAuditorModel ??
-          (parsed.data.preset === "blackboard" &&
-          (effDedicatedAuditor ?? config.DEFAULT_DEDICATED_AUDITOR)
-            ? config.DEFAULT_AUDITOR_MODEL
-            : undefined),
+          resolvedModels.auditorModel !== resolvedModels.model
+            ? resolvedModels.auditorModel
+            : undefined,
         specializedWorkers: parsed.data.specializedWorkers,
         criticEnsemble: parsed.data.criticEnsemble,
         selfConsistencyK: parsed.data.selfConsistencyK,
@@ -518,9 +529,9 @@ export function swarmRouter(orch: Orchestrator): Router {
           parsed.data.topology ??
           synthesizeTopology(parsed.data.preset, effAgentCount, {
             dedicatedAuditor: effDedicatedAuditor,
-            plannerModel: effPlannerModel,
-            workerModel: effWorkerModel,
-            auditorModel: effAuditorModel,
+            plannerModel: resolvedModels.plannerModel,
+            workerModel: resolvedModels.workerModel,
+            auditorModel: resolvedModels.auditorModel,
           }),
         postRoundCritique: parsed.data.postRoundCritique,
         postSynthesisCritique: parsed.data.postSynthesisCritique,
@@ -877,6 +888,7 @@ export function swarmRouter(orch: Orchestrator): Router {
 
   // Direction 1 Phase 2: outcome history + preset recommendation.
   r.get("/outcome/stats", validate(OutcomeStatsQuery, "query"), async (req: Request, res: Response) => {
+    try {
     const { clonePath } = req.query as unknown as z.infer<typeof OutcomeStatsQuery>;
     const { readOutcomeHistory: readHistory, computeStats: computeOutcomeStats } = await import("../swarm/outcomeHistory.js");
     const outcomes = await readHistory(clonePath);
@@ -886,9 +898,11 @@ export function swarmRouter(orch: Orchestrator): Router {
       result[preset] = stat;
     }
     res.json({ outcomes: outcomes.length, stats: result });
+    } catch (e) { res.status(500).json({ error: "outcome/stats unavailable", detail: (e as Error).message }); }
   });
 
   r.get("/outcome/recommend", validate(OutcomeRecommendQuery, "query"), async (req: Request, res: Response) => {
+    try {
     const { directive, clonePath } = req.query as unknown as z.infer<typeof OutcomeRecommendQuery>;
     const { recommendPreset: recommend, readOutcomeHistory: readHistory } = await import("../swarm/outcomeHistory.js");
     const { suggestAdaptiveParams } = await import("../swarm/adaptiveParams.js");
@@ -896,18 +910,22 @@ export function swarmRouter(orch: Orchestrator): Router {
     const recommendation = recommend(directive, outcomes);
     const adaptive = suggestAdaptiveParams(recommendation.preset as import("../swarm/SwarmRunner.js").PresetId, outcomes);
     res.json({ ...recommendation, adaptiveParams: adaptive });
+    } catch (e) { res.status(500).json({ error: "outcome/recommend unavailable", detail: (e as Error).message }); }
   });
 
   // Direction 6: checkpoint listing + read.
   r.get("/checkpoints/:runId", validate(CheckpointsParams, "params"), validate(ClonePathQuery, "query"), async (req: Request, res: Response) => {
+    try {
     const { runId } = req.params as unknown as z.infer<typeof CheckpointsParams>;
     const { clonePath } = req.query as unknown as z.infer<typeof ClonePathQuery>;
     const { listCheckpoints } = await import("../swarm/checkpoint.js");
     const checkpoints = await listCheckpoints(clonePath, runId);
     res.json({ runId, checkpoints });
+    } catch (e) { res.status(500).json({ error: "checkpoints unavailable", detail: (e as Error).message }); }
   });
 
   r.get("/checkpoints/:runId/:fileName", validate(CheckpointFileParams, "params"), validate(ClonePathQuery, "query"), async (req: Request, res: Response) => {
+    try {
     const { runId, fileName } = req.params as unknown as z.infer<typeof CheckpointFileParams>;
     const { clonePath } = req.query as unknown as z.infer<typeof ClonePathQuery>;
     const { readCheckpoint } = await import("../swarm/checkpoint.js");
@@ -917,10 +935,12 @@ export function swarmRouter(orch: Orchestrator): Router {
       return;
     }
     res.json(checkpoint);
+    } catch (e) { res.status(500).json({ error: "checkpoint read unavailable", detail: (e as Error).message }); }
   });
 
   // Direction 6 Phase 2: event timeline.
   r.get("/timeline/:runId", validate(TimelineParams, "params"), validate(ClonePathQuery, "query"), async (req: Request, res: Response) => {
+    try {
     const { runId } = req.params as unknown as z.infer<typeof TimelineParams>;
     const { clonePath } = req.query as unknown as z.infer<typeof ClonePathQuery>;
     const { getTimeline } = await import("../swarm/timeline.js");
@@ -930,17 +950,21 @@ export function swarmRouter(orch: Orchestrator): Router {
       return;
     }
     res.json(timeline);
+    } catch (e) { res.status(500).json({ error: "timeline unavailable", detail: (e as Error).message }); }
   });
 
   // Direction 5: persistent memory store CRUD.
   r.get("/memory-store", validate(ClonePathQuery, "query"), async (req: Request, res: Response) => {
+    try {
     const { clonePath } = req.query as unknown as z.infer<typeof ClonePathQuery>;
     const { loadMemoryStore } = await import("../memory/MemoryStore.js");
     const store = await loadMemoryStore(clonePath);
     res.json({ entries: store.snapshot() });
+    } catch (e) { res.status(500).json({ error: "memory-store unavailable", detail: (e as Error).message }); }
   });
 
   r.post("/memory-store", validate(MemoryStorePostBody, "body"), async (req: Request, res: Response) => {
+    try {
     const { key, value, tags, clonePath } = req.body as unknown as z.infer<typeof MemoryStorePostBody>;
     const { loadMemoryStore } = await import("../memory/MemoryStore.js");
     const store = await loadMemoryStore(clonePath);
@@ -950,6 +974,7 @@ export function swarmRouter(orch: Orchestrator): Router {
   });
 
   r.delete("/memory-store/:key", validate(MemoryStoreDeleteParams, "params"), validate(ClonePathQuery, "query"), async (req: Request, res: Response) => {
+    try {
     const { key } = req.params as unknown as z.infer<typeof MemoryStoreDeleteParams>;
     const { clonePath } = req.query as unknown as z.infer<typeof ClonePathQuery>;
     const { loadMemoryStore } = await import("../memory/MemoryStore.js");

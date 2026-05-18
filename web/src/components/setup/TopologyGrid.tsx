@@ -668,26 +668,31 @@ export function topologyForPreset(
     lastUsed?: boolean;
   },
 ): Topology {
-  // Only recover from localStorage if the caller explicitly passed
-  // the current planner/worker/auditor models so we can merge them
-  // into the recovered topology. This prevents stale cached models
-  // from overriding the user's current form selections.
+  // Recover cropology structure (roles, colors, tags, temp) from localStorage
+  // but NOT model selections — models come from the current form state only.
+  // The old overlay forced stale defaults (glm-5.1:cloud) onto recovered
+  // topologies, silently ignoring the user's real model choice.
   if (options?.lastUsed) {
     const recovered = readLastUsed(presetId);
     if (recovered && recovered.agents.length >= 1) {
-      // Overlay current model selections onto the recovered topology
+      // Apply current form models to recovered structure
+      const applyModel = (a: AgentSpec): string | undefined => {
+        // Never use cached model — always use current form state.
+        // If the user set an explicit per-role model in Advanced, use it;
+        // otherwise leave undefined (runner falls through to `model`).
+        if (a.role === "planner" || a.role === "orchestrator" || a.role === "reducer" || a.role === "judge") {
+          return options?.plannerModel || undefined;
+        }
+        if (a.role === "auditor") {
+          return options?.auditorModel || undefined;
+        }
+        return options?.workerModel || undefined;
+      };
       return {
-        agents: recovered.agents.map((a) => {
-          let model = a.model;
-          if ((a.role === "planner" || a.role === "orchestrator" || a.role === "reducer" || a.role === "judge") && options?.plannerModel) {
-            model = options.plannerModel;
-          } else if (a.role === "auditor" && options?.auditorModel) {
-            model = options.auditorModel;
-          } else if (options?.workerModel) {
-            model = options.workerModel;
-          }
-          return { ...a, model };
-        }),
+        agents: recovered.agents.map((a) => ({
+          ...a,
+          model: applyModel(a),
+        })),
       };
     }
   }
