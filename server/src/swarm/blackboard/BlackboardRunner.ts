@@ -676,7 +676,7 @@ export class BlackboardRunner implements SwarmRunner {
       contract: this.contract,
       transcript: this.transcript,
       agentStats,
-      boardCounts: { committed: counts.committed, skipped: counts.skipped, total: counts.total },
+      boardCounts: { committed: counts.committed, skipped: counts.skipped, stale: counts.stale, total: counts.total },
       gitStatus,
       errorTracker: this.errorTracker,
       v2State: {
