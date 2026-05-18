@@ -1,17 +1,11 @@
 /**
- * Auto-resume plugin for autoresearch — CLI-level approach.
+ * Auto-resume plugin for autoresearch.
  *
- * When the autoresearch skill runs, it writes status to
- * .opencode/session-checkpoint.md. This plugin watches for session.idle,
- * reads the checkpoint, and if status=in_progress, spawns an opencode
- * subprocess to continue the work.
+ * Watches session.idle events. When the checkpoint status is in_progress,
+ * sends "autoresearch" as a user message via session.prompt(), which
+ * triggers the AI to load the autoresearch skill and continue working.
  *
- * Uses `opencode run` (CLI) instead of SDK `session.prompt()` because
- * the SDK call can deadlock when fired from inside the session.idle
- * event handler — the session can't leave idle state while the handler
- * is blocked.
- *
- * To manually stop autoresearch: set Status: **finished** in the checkpoint.
+ * To manually stop: set Status: **finished** in .opencode/session-checkpoint.md
  */
 
 import type { Plugin } from "@opencode-ai/plugin";
@@ -32,32 +26,34 @@ function readStatus(workdir: string): string | null {
   }
 }
 
-export const SessionCheckpointPlugin: Plugin = async ({ client, directory, $ }) => {
-  const pending = new Map<string, boolean>();
+export const SessionCheckpointPlugin: Plugin = async ({ client, directory }) => {
+  let firing = false;
 
   return {
     event: async ({ event }) => {
       if (event.type !== "session.idle") return;
 
+      // Prevent re-entrant fires.
+      if (firing) return;
+
       const props = event.properties as Record<string, unknown> | undefined;
       const sessionObj = props?.session as Record<string, unknown> | undefined;
       const sid = (sessionObj?.id as string | undefined) ?? "";
 
-      if (pending.get(sid)) return;
-      pending.set(sid, true);
+      const status = readStatus(directory);
+      if (status !== "in_progress") return;
 
+      firing = true;
       try {
-        const status = readStatus(directory);
-        if (status !== "in_progress") return;
-
-        // Continue the current session with "autoresearch" prompt.
-        // --continue reuses the last session (this one).
-        // --dangerously-skip-permissions so it runs unattended.
-        // --dir sets the working directory.
-        await $`opencode run --continue --dangerously-skip-permissions --dir ${directory} "autoresearch"`
-          .quiet();
+        await client.session.prompt({
+          path: { id: sid },
+          body: {
+            noReply: false,
+            parts: [{ type: "text", text: "autoresearch" }],
+          },
+        });
       } finally {
-        pending.delete(sid);
+        firing = false;
       }
     },
   };
