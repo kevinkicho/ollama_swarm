@@ -617,6 +617,24 @@ describe("applyEventToStore", () => {
       assert.ok(store.getState().transcript[0].text.includes("glm-5.1"));
       assert.ok(store.getState().transcript[0].text.includes("nemotron-3-super"));
     });
+
+    it("includes rawError in the transcript text when present", () => {
+      applyEventToStore(
+        {
+          type: "model_shift",
+          agentId: "worker-1",
+          agentIndex: 1,
+          fromModel: "glm-5.1:cloud",
+          toModel: "nemotron-3-super:cloud",
+          reason: "network error",
+          rawError: "ECONNREFUSED 127.0.0.1:11436",
+        },
+        store.getState(),
+      );
+      assert.equal(store.getState().transcript.length, 1);
+      assert.ok(store.getState().transcript[0].text.includes("ECONNREFUSED"));
+      assert.ok(store.getState().transcript[0].text.includes("127.0.0.1:11436"));
+    });
   });
 
   describe("clone_state", () => {

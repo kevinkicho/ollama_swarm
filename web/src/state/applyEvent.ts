@@ -106,7 +106,7 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
         role: "system",
         agentId: ev.agentId,
         agentIndex: ev.agentIndex,
-        text: `[${ev.agentId}] failover: ${ev.fromModel} → ${ev.toModel} (${ev.reason})`,
+        text: `[${ev.agentId}] failover: ${ev.fromModel} → ${ev.toModel} (${ev.reason})${ev.rawError ? ` — ${ev.rawError}` : ""}`,
         ts: Date.now(),
       });
       break;

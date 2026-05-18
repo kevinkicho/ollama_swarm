@@ -60,16 +60,18 @@ export function EventLogPanel() {
 
   useEffect(() => {
     if (!open) return;
+    const ctrl = new AbortController();
     setLoading(true);
     setError(null);
-    fetch("/api/v2/event-log/runs")
+    fetch("/api/v2/event-log/runs", { signal: ctrl.signal })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return (await r.json()) as EventLogResponse;
       })
       .then((j) => setData(j))
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setLoading(false));
+      .catch((e) => { if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e)); })
+      .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
+    return () => ctrl.abort();
   }, [open, refreshNonce]);
 
   // Click-outside to close

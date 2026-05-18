@@ -16,6 +16,8 @@ import { IdentityStrip } from "./IdentityStrip";
 import { OutcomeChip } from "./OutcomeChip";
 import { fmtMs, roleForRow } from "./RunHistory";
 
+import { TranscriptTimeline } from "./TranscriptTimeline";
+
 type Tab =
   | "transcript"
   | "metrics"
@@ -26,7 +28,8 @@ type Tab =
   | "verdict"
   | "coverage"
   | "subtasks"
-  | "memory";
+  | "memory"
+  | "history";
 
 export function SwarmView() {
   const agents = useSwarm((s) => s.agents);
@@ -128,6 +131,7 @@ export function SwarmView() {
 
   const onNewSwarm = () => {
     reset();
+    window.location.replace("/");
   };
 
   // 2026-05-02: parse @mention prefix to honor lever #3's per-agent
@@ -362,6 +366,9 @@ export function SwarmView() {
               Memory
             </TabButton>
           ) : null}
+          <TabButton active={tab === "history"} onClick={() => setTab("history")}>
+            History
+          </TabButton>
           <span className="ml-auto self-center px-2"><OutcomeChip /></span>
         </div>
         <div className="flex-1 overflow-hidden">
@@ -385,6 +392,8 @@ export function SwarmView() {
             <OwSubtasksPanel />
           ) : tab === "memory" && showMemoryTab ? (
             <div className="h-full overflow-y-auto"><MemoryLogPanel clonePath={cfg?.clonePath} /></div>
+          ) : tab === "history" ? (
+            <TranscriptTimeline />
           ) : (
             <Transcript />
           )}

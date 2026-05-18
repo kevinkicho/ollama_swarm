@@ -241,6 +241,7 @@ export interface RunSummary {
   // landed don't have it (the modal falls back to a synthesized
   // best-guess from preset+agentCount in that case).
   topology?: import("../../shared/src/topology").Topology;
+  deliverables?: Array<{ path: string; status: "created" | "modified" }>;
 }
 
 export interface BoardCountsDTO {
@@ -272,6 +273,7 @@ export type SwarmEvent =
       fromModel: string;
       toModel: string;
       reason: string;
+      rawError?: string;
     }
   | {
       type: "todo_replanned";
