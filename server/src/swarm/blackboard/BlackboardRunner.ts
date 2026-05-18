@@ -814,7 +814,7 @@ export class BlackboardRunner implements SwarmRunner {
       thinkingSince: undefined,
       lastChunkAt: undefined,
       pid: undefined,
-      cwd: undefined,
+      cwd: "",
     };
     return this.promptAgent(agent, prompt, "swarm-read", "json", { type: "object" });
   }
