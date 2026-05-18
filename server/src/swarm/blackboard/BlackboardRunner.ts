@@ -803,7 +803,7 @@ export class BlackboardRunner implements SwarmRunner {
   /** Brain fallback prompt function. Calls the configured brain model directly
    *  via promptAgent to extract structured JSON from a failed parse. */
   private async brainPromptFn(prompt: string, model: string, maxTokens: number, _timeoutMs: number): Promise<string> {
-    const brainCfg = brainConfigFromApp(this.cfg?.brainModel);
+    const brainCfg = brainConfigFromApp(this.active?.brainModel);
     const agent: Agent = {
       id: "brain",
       index: -1,

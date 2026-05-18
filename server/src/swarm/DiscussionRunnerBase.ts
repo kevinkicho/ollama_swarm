@@ -519,7 +519,7 @@ export abstract class DiscussionRunnerBase {
       transcript?: Array<{ text: string; role: string }>;
       deliverableText?: string;
       wallClockMs?: number;
-      emitOutcome?: (outcome: import("./runFinallyHooks.js").RunOutcome) => void;
+      emitOutcome?: (outcome: import("./outcomeScorer.js").RunOutcome) => void;
     },
   ): Promise<void> {
     let crashMessage: string | undefined;
