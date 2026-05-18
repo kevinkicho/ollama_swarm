@@ -3,12 +3,15 @@
 > Last updated: 2026-05-18
 > Status: **in_progress**
 > Tier: 0 (Survey)
+> Tier: 0 (Survey)
+> Tier: 1 (Stability) → 2 (Test Coverage)
 
 ## Task
 Autoresearch Tier 2–5 — ongoing autonomous improvement
 
-## Done (this session — commit range: f6da841..ae52a92)
+## Done (this session — commit range: f6da841..e640ea5)
 - **Registered 4 orphaned web test files** (f6da841): +59 tests
+- **Registered orphaned shared providers.test.ts** (e640ea5): +12 tests
 - **New tests for 3 shared utils** (8d0cb26): stripAgentText (16), extractJson (23), topology (53)
 - **New tests for 2 web modules** (2ab3819): agentPalette (11), useSegmentSplitter (20)
 - **Dead code removal** (12579d3): subtaskPart.ts, StartConfirmModal.tsx
@@ -29,10 +32,11 @@ Autoresearch Tier 2–5 — ongoing autonomous improvement
 - **apiVersion test expansion** (571080b): 3→4
 - **loopGuards test expansion** (0cc511b): 2→7 (+5)
 - **External watchdog script** (ae52a92): cycle tracking, retries, timestamps
+- **Run-tests.mjs path typo** (fb4d934): leading spaces in modelConfig path (+10 tests)
 
 ## Test counts
 - Start: 2748
-- Current: **2943** (+195)
+- Current: **2965** (+217)
 - All passing, zero failures
 
 - Pre-flight model validation (complex)
