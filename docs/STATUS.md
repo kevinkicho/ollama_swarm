@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-05-09 (test count, preset count, recent fix entries)
+**Last updated:** 2026-05-17 (test count, provider count, recent fix entries)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -76,7 +76,7 @@ The V1 SDK loop (per-agent opencode subprocess + SSE chunked streaming) was reti
 | Event log reader | `server/src/swarm/blackboard/EventLogReaderV2.ts` | primary; backs `/api/v2/event-log/runs` |
 | `formatServerSummary` | `shared/src/formatServerSummary.ts` | shared between server + web |
 
-**Test totals:** 2,516 tests passing / 0 failing as of 2026-05-09. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
+**Test totals:** 2,909 tests passing / 0 failing as of 2026-05-18. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
 
 ---
 
@@ -161,6 +161,9 @@ A long day. Headline categories:
 
 ## Recent fixes worth knowing about
 
+- **Model pipeline consolidation (2026-05-17)** — `shared/src/modelConfig.ts`: single `resolveModels()` pure function replaces 31 scattered model decision points across 15 files. Fallback chain: explicit → topology → role default → model → config default. Server route, topology overlay, and localStorage caching all now use the same resolution. OpenCode Go provider fixed: `stripProviderPrefix` was mangling `opencode-go/` prefix causing 401 auth errors; `response_format` JSON schema downgrade to json_object for Go endpoint compatibility.
+- **Zombie process prevention (2026-05-17)** — 4 fixes: proxy stop handle saved + properly awaited, shutdown fire-and-forget → 15s await, verify adapter process group kill on timeout, treeKill SIGKILL escalation. Clean shutdown verified (no port leaks, no zombie processes).
+- **"New swarm" button (2026-05-17)** — navigating back from historic run review now goes to `/` instead of getting stuck on "Waiting for agents..."
 - **Worker sibling-retry (2026-05-08)** — 4-tier parse cascade in `workerRunner.ts`: parse → repair prompt → brain fallback → sibling model retry. Model restored in `finally` via `withSiblingRetry()`. Matches planner/contract/auditor pattern. All 6 retry paths now share a single helper (`siblingRetry.ts`).
 - **Parser reliability (2026-05-08)** — Lenient extraction across all 7 parsers (truncate over-size fields instead of dropping). Brain fallback parser (gemma4 extracts JSON when rule-based parsing fails). Wont-do tier-up fix (allCriteriaMet gates tier promotion, not allCriteriaResolved).
 - **Static build + Docker (2026-05-08)** — `Dockerfile` (node:22-slim, two-stage), `docker-compose.yml`, SPA fallback static serving middleware. `npm run build` produces production artifacts.
@@ -200,9 +203,9 @@ server/src/
     RepoService.ts                           git clone (opencode.json synthesis deleted in E3 Phase 5)
     ollamaProxy.ts                           local proxy at :11533 for token tracking + quota detection
     Session.ts                               in-process session shim (replaces opencode session.create)
-  providers/                                  E3: SessionProvider abstraction
-    pickProvider.ts                          factory: Ollama | Anthropic | OpenAI by model prefix
-    OllamaProvider.ts, AnthropicProvider.ts, OpenAIProvider.ts
+  providers/                                  E3: SessionProvider abstraction (5 providers)
+    pickProvider.ts                          factory: Ollama | Anthropic | OpenAI | OpenCode by model prefix
+    OllamaProvider.ts, AnthropicProvider.ts, OpenAIProvider.ts, OpenCodeProvider.ts
   swarm/
     chatOnce.ts                              one-shot prompt helper (used everywhere)
   tools/
@@ -270,6 +273,53 @@ web/src/
 - **`/mnt/c` is the project root** (WSL → Windows). npm install hazards from WSL — see `feedback_wsl_windows_esbuild` in memory.
 
 ---
+
+## Transcript and hunk display pipeline (2026-05-17)
+
+Every LLM response flows through this chain to become visible in the UI:
+
+```
+Agent raw text
+  │
+  ▼
+server: stripAgentText()        → extracts <think>, XML tool call markers
+server: summarizeAgentResponse() → builds entry.summary (kind: worker_hunks, worker_skip, etc.)
+server: emit(transcript_append) → pushes entry to WebSocket
+  │
+  ▼
+broadcast.ts                     → JSON.stringify → ws.send()
+  │
+  ▼
+usewarmSocket.ts                 → JSON.parse → applyEventToStore()
+  │
+  ▼
+store.ts: appendEntry()          → dedup by ID, copy streaming split points → transcript[]
+  │
+  ▼
+Transcript.tsx                   → .map(e => <MessageBubble entry={e} />)
+  │
+  ▼
+MessageBubble.tsx                → dispatches by entry.role + entry.summary.kind
+  │
+  ├── system → SystemBubble      → RUN-START divider, failover badge, quota pause/resume
+  ├── user   → CollapsibleBlock  → chat messages
+  └── agent  → AgentBubble       → dispatches by summary.kind across 13 sub-bubbles
+```
+
+**21 `TranscriptEntrySummary.kind` values** drive the renderer. See `shared/src/transcriptEntrySummary.ts` for the full union.
+
+**Worker hunks** specifically: `WorkerHunksBubble` (collapsed by default) shows a summary line + +/- line counts. Click "Show diff" to expand per-hunk diff panes:
+- Replace → amber header, rose bg for removed text, emerald bg for replacement
+- Create/append → emerald header and bg
+- First 12 lines shown, "show all N lines" to expand
+
+**13 files** in `web/src/components/transcript/` implement all bubble types: `MessageBubble`, `WorkerHunksBubble`, `JsonBubbles`, `RunFinishedGrid`, `StreamingDock`, `TodosBubble`, `DebateVerdictBubble`, `ContractBubble`, `AuditorVerdictBubble`, `ThoughtsBlock`, `ToolCallsBlock`, `RunStartDivider`, `formatServerSummary`.
+
+**Key design decisions:**
+- Server is the authoritative summarizer — client-side JSON parsing is a fallback only
+- Streaming dock holds live text until `transcript_append` replaces it
+- Worker hunks collapsed by default to prevent visual overwhelm in busy runs
+- ID-based dedup prevents double-rendering on reconnect
 
 ## Where to look next
 
