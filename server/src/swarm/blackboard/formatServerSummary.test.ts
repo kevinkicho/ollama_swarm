@@ -351,6 +351,23 @@ describe("formatServerSummary — exhaustiveness", () => {
       { kind: "next_action_phase", role: "announcement" },
       { kind: "quota_paused", reason: "x" },
       { kind: "quota_resumed", pausedMs: 0, totalPausedMs: 0 },
+      { kind: "stigmergy_annotation", file: "f.ts", interest: 5, confidence: 5, note: "n" },
+      {
+        kind: "agents_ready",
+        preset: "blackboard",
+        readyCount: 1,
+        requestedCount: 1,
+        spawnElapsedMs: 0,
+        agents: [{ id: "a", index: 0, model: "m", sessionId: "s", role: "r" }],
+      },
+      {
+        kind: "deliverable",
+        preset: "council",
+        filename: "output.md",
+        fullPath: "/tmp/output.md",
+        bytes: 1024,
+        sectionTitles: ["a", "b"],
+      },
     ];
     for (const s of samples) {
       const out = formatServerSummary(s);

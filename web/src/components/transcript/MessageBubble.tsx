@@ -169,6 +169,31 @@ function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
       </div>
     );
   }
+  // 2026-04-27: deliverable "Saved to <filename>" card for end-of-run
+  // artifact exports. Previously fell through to the generic system bubble
+  // — now renders a green-bordered card with filename, size, section count,
+  // and a clickable link text so the user can grab a portable artifact
+  // (paste into PR, issue, design doc) without grepping the summary JSON.
+  if (entry.summary?.kind === "deliverable") {
+    const d = entry.summary;
+    return (
+      <div className="rounded-md border-2 border-emerald-700/60 bg-emerald-950/20 px-3 py-2 text-xs space-y-1">
+        <div className="flex items-center gap-2">
+          <span className="inline-block bg-emerald-900/60 text-emerald-200 font-mono uppercase tracking-wider px-1.5 py-0.5 rounded text-[10px]">
+            deliverable
+          </span>
+          <span className="text-ink-400">system · {ts}</span>
+        </div>
+        <div className="text-emerald-200 font-mono">{entry.text}</div>
+        <div className="flex gap-3 text-ink-500">
+          <span>{d.filename}</span>
+          <span>{d.sectionTitles.length} section{d.sectionTitles.length !== 1 ? "s" : ""}</span>
+          <span>{d.bytes.toLocaleString()} bytes</span>
+          <span className="text-ink-600">{d.preset}</span>
+        </div>
+      </div>
+    );
+  }
   // 2026-04-27: agents-ready expandable summary. Replaces the bare
   // "N/M agents ready on ports X, Y, Z" line with a chip + click-to-
   // expand per-agent grid showing port, role, model, sessionId, and
@@ -232,6 +257,24 @@ function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           {ts}
         </div>
         <div className="whitespace-pre-wrap">{entry.text}</div>
+      </div>
+    );
+  }
+  // If the entry carries a summary kind that wasn't handled above, flag
+  // it so a new server-side kind surfaces immediately in dev — this
+  // prevents silent rendering failures where a novel envelope type falls
+  // through to a generic bubble that hides the structured data.
+  if (entry.summary?.kind) {
+    console.warn(`[MessageBubble] Unhandled system summary kind: "${entry.summary.kind}" — add a SystemBubble branch`);
+    return (
+      <div className="border-l-2 border-rose-500/40 pl-3 py-1 text-xs">
+        <div className="text-rose-400/70 mb-0.5">
+          <span className="inline-block px-1 py-0 text-[9px] uppercase tracking-wider rounded bg-rose-900/40 mr-1.5">
+            unknown:{entry.summary.kind}
+          </span>
+          {ts}
+        </div>
+        <div className="whitespace-pre-wrap text-ink-400 font-mono">{entry.text}</div>
       </div>
     );
   }
@@ -437,8 +480,13 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
       );
     }
     // Other server-summary kinds (ow_assignments / worker_skip) are JSON
-    // envelopes — AgentJsonBubble is correct.
+    // envelopes — AgentJsonBubble is correct. Unknown future kinds get
+    // a console.warn so they surface immediately during development.
     const oneLine = formatServerSummary(entry.summary);
+    const knownJsonKinds = new Set(["worker_skip", "ow_assignments"]);
+    if (!knownJsonKinds.has(entry.summary.kind)) {
+      console.warn(`[MessageBubble] Unhandled agent summary kind: "${entry.summary.kind}" — add an AgentBubble branch`);
+    }
     return (
       <AgentJsonBubble
         className={className}
