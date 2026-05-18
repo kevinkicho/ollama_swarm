@@ -48,6 +48,7 @@ import { apiVersion } from "./middleware/apiVersion.js";
 import { corsMiddleware } from "./middleware/cors.js";
 import { compressionMiddleware } from "./middleware/compression.js";
 import { staticServing } from "./middleware/staticServing.js";
+import { startupHealthCheck } from "./startupHealthCheck.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // server/src/index.ts (dev) or server/dist/index.js (built) -> up two to root.
@@ -72,6 +73,16 @@ app.use(express.json({ limit: "1mb" }));
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true, path: "/ws", maxPayload: 1024 * 1024 });
+
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`FATAL: Port ${config.SERVER_PORT} is already in use.`);
+    console.error(`  Kill the other process or set a different SERVER_PORT in .env.`);
+  } else {
+    console.error(`FATAL: server error: ${err.message}`);
+  }
+  process.exit(1);
+});
 
 // WS auth — intercept upgrade. Localhost bypass for dev.
 server.on("upgrade", (req: IncomingMessage, socket: import("node:stream").Duplex, head: Buffer) => {
@@ -366,24 +377,39 @@ if (fs.existsSync(staticDir)) {
 // Global error handler — must be after all routes.
 app.use(globalErrorHandler);
 
+let shuttingDown = false;
+
 const shutdown = async (signal: string) => {
+  if (shuttingDown) return; // guard against re-entrant signals
+  shuttingDown = true;
   console.log(`\n${signal} received — shutting down swarm`);
+  try { broadcaster.detach(); } catch { /* ignore */ }
+  // orchestrator.stop() can hang if a runner is mid-flight. Race it
+  // against a 20 s timeout so graceful shutdown doesn't block forever.
   try {
-    broadcaster.detach();
-  } catch {
-    // ignore
-  }
-  try {
-    await orchestrator.stop();
-  } catch {
-    // ignore
-  }
+    await Promise.race([
+      orchestrator.stop(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("orchestrator.stop() timed out")), 20_000)),
+    ]);
+  } catch { /* ignore */ }
   eventLogger.close();
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(1), 5000).unref();
+  try { await proxy?.stop(); } catch { /* ignore */ }
+
+  // Close the HTTP server — stops accepting new connections. Uses
+  // Promise wrapper so we await completion instead of hoping the
+  // callback fires before the Node event loop drains.
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+
+  // Give in-flight cleanup (killAll, file writes, Ollama proxy
+  // connections) up to 15 s to finish before force-exiting. The
+  // previous 5 s was too tight for killAll's three-stage escalation.
+  await new Promise((r) => setTimeout(r, 15_000));
+  process.exit(0);
 };
-process.on("SIGINT", () => void shutdown("SIGINT"));
-process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => { shutdown("SIGINT"); });
+process.on("SIGTERM", () => { shutdown("SIGTERM"); });
 
 // Without these, any rejected promise from an SDK call or stray fetch takes the
 // whole Node process down (Node >=15 default). Log the full error + stack and
@@ -394,10 +420,12 @@ process.on("unhandledRejection", (reason) => {
   broadcaster.broadcast({ type: "error", message: `unhandledRejection: ${err.message}` });
 });
 process.on("uncaughtException", (err) => {
-  console.error("[FATAL] Uncaught exception — exiting:", err.stack ?? err.message);
+  console.error("[FATAL] Uncaught exception — shutting down:", err.stack ?? err.message);
   try { eventLogger.close(); } catch {}
   broadcaster.broadcast({ type: "error", message: `Uncaught exception — server exiting: ${err.message}` });
-  process.exit(1);
+  // Attempt graceful shutdown before force-exiting — reuses the same
+  // cleanup path as SIGTERM/SIGINT for consistent resource release.
+  shutdown("uncaughtException").finally(() => process.exit(1));
 });
 
 // Task #133: start the Ollama proxy BEFORE listen so the rewritten
@@ -406,6 +434,11 @@ process.on("uncaughtException", (err) => {
 // URL. We then mutate config.OLLAMA_BASE_URL in-memory so every
 // downstream consumer (RepoService.writeOpencodeConfig, /api/health
 // readout) sees the proxied URL. Set OLLAMA_PROXY_PORT=0 to disable.
+// proxy: Ollama proxy server, started below. Declared here so the
+// shutdown function can access it regardless of whether the proxy
+// was conditionally started.
+let proxy: { stop: () => Promise<void> } | undefined;
+
 if (config.OLLAMA_PROXY_PORT > 0) {
   const upstreamUrl = config.OLLAMA_BASE_URL;
   // Strip /v1 suffix if present — proxy needs the host:port root so it
@@ -421,7 +454,7 @@ if (config.OLLAMA_PROXY_PORT > 0) {
   // OLLAMA_BASE_URL=http://localhost:11434 (no /v1) silently broke
   // every opencode-routed prompt with empty responses.
   const proxyUrlWithSuffix = `${proxyHost}/v1`;
-  startOllamaProxy({
+  proxy = startOllamaProxy({
     listenPort: config.OLLAMA_PROXY_PORT,
     upstreamUrl: upstreamRoot,
   });
@@ -465,7 +498,18 @@ void reclaimOrphans(repoRoot)
   .catch((err) => {
     console.error("  orphan reclamation failed (non-fatal):", err);
   })
-  .finally(() => {
+  .finally(async () => {
+    // Pre-flight health check — warns if port is in use or disk is low.
+    const runsDir = path.join(repoRoot, "runs");
+    const health = await startupHealthCheck(config.SERVER_PORT, runsDir);
+    if (health.warnings.length > 0) {
+      console.warn("┌──────────────────────────────────────────────────┐");
+      console.warn("│  Startup health check warnings                   │");
+      for (const w of health.warnings) {
+        console.warn(`│  ⚠ ${w}`);
+      }
+      console.warn("└──────────────────────────────────────────────────┘");
+    }
     server.listen(config.SERVER_PORT, "0.0.0.0", () => {
       console.log(`ollama_swarm server listening on http://127.0.0.1:${config.SERVER_PORT}`);
       console.log(`  ollama: ${config.OLLAMA_BASE_URL}`);
