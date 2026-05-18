@@ -23,9 +23,15 @@ describe("RunStatePersister — write side", () => {
     persister = new RunStatePersister(workdir);
   });
 
+  function statePath(dir: string) { return `${dir}.run-state.json`; }
+  function stateTmpPath(dir: string) { return `${dir}.run-state.json.tmp`; }
+
   afterEach(() => {
     persister.stop();
     rmSync(workdir, { recursive: true, force: true });
+    // Clean up the sibling .run-state.json file (persister writes outside workdir)
+    try { rmSync(`${workdir}.run-state.json`, { force: true }); } catch {}
+    try { rmSync(`${workdir}.run-state.json.tmp`, { force: true }); } catch {}
   });
 
   function fixtureSnap(overrides: Partial<Parameters<typeof persister.schedule>[0]> = {}) {
@@ -40,13 +46,13 @@ describe("RunStatePersister — write side", () => {
     };
   }
 
-  it("schedule + flush writes a complete snapshot to <clone>/run-state.json", async (t) => {
+  it("schedule + flush writes a complete snapshot to <clone>.run-state.json (sibling file)", async (t) => {
     persister.schedule(fixtureSnap());
     persister.flush();
-    const written = readFileSync(join(workdir, "run-state.json"), "utf8");
+    const written = readFileSync(`${workdir}.run-state.json`, "utf8");
     const parsed = JSON.parse(written);
-    // T-Item-Recover (2026-05-04): bumped to 2 with optional runConfig.
-    assert.equal(parsed.schemaVersion, 2);
+    // T-Item-Recover (2026-05-04): bumped to 3 with optional contract (v3).
+    assert.equal(parsed.schemaVersion, 3);
     assert.equal(parsed.runId, "run-1");
     assert.equal(parsed.preset, "blackboard");
     assert.equal(parsed.phase, "discussing");
@@ -66,14 +72,14 @@ describe("RunStatePersister — write side", () => {
     await new Promise((r) => setTimeout(r, 600));
     assert.equal(persister.getWriteCount(), 1, "5 schedule calls in <500ms must collapse to 1 write");
     // Last-snapshot-wins: phase-4 (the last one) is what landed.
-    const written = JSON.parse(readFileSync(join(workdir, "run-state.json"), "utf8"));
+    const written = JSON.parse(readFileSync(`${workdir}.run-state.json`, "utf8"));
     assert.equal(written.phase, "phase-4");
   });
 
   it("flush() is a no-op when no snapshot is pending", () => {
     persister.flush();
     assert.equal(persister.getWriteCount(), 0);
-    assert.ok(!existsSync(join(workdir, "run-state.json")), "no file should be written");
+    assert.ok(!existsSync(`${workdir}.run-state.json`), "no file should be written");
   });
 
   it("stop() flushes pending snapshot before clearing the timer", () => {
@@ -82,7 +88,7 @@ describe("RunStatePersister — write side", () => {
     // debounce. Stop must flush + write immediately.
     persister.stop();
     assert.equal(persister.getWriteCount(), 1);
-    const written = JSON.parse(readFileSync(join(workdir, "run-state.json"), "utf8"));
+    const written = JSON.parse(readFileSync(`${workdir}.run-state.json`, "utf8"));
     assert.equal(written.phase, "terminal");
   });
 
@@ -99,8 +105,8 @@ describe("RunStatePersister — write side", () => {
     persister.flush();
     // After flush, ONLY the final file should exist; the tmp file
     // should have been renamed away.
-    assert.ok(existsSync(join(workdir, "run-state.json")));
-    assert.ok(!existsSync(join(workdir, "run-state.json.tmp")), "tmp file must be renamed (atomic)");
+    assert.ok(existsSync(`${workdir}.run-state.json`));
+    assert.ok(!existsSync(`${workdir}.run-state.json.tmp`), "tmp file must be renamed (atomic)");
   });
 
   it("write failure on an unwritable path is silenced after the first error log", () => {

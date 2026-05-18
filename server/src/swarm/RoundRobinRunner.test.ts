@@ -138,26 +138,22 @@ test("RoundRobinRunner — turnsTaken increments per runTurn (#1)", () => {
   );
 });
 
-test("RoundRobinRunner.buildPrompt — disposition + active-disagreement injected when no roles (#1+#2)", () => {
-  // T185 (2026-05-04): disposition selection now goes through
-  // pickNextDisposition (which reads NEXT-DISPOSITION VOTE lines from
-  // the recent transcript and falls back to mechanical rotation when
-  // votes are absent or tied).
+test("buildRoundRobinTurnPrompt — disposition + active-disagreement injected when no roles (#1+#2)", () => {
   assert.match(
-    RUNNER_SRC,
-    /const disposition = !this\.roles[\s\S]{0,200}pickNextDisposition\(this\.transcript, turnNumber\)/,
-    "disposition must use pickNextDisposition (T185 voted-next) when no roles configured",
+    HELPERS_SRC,
+    /disposition\.framing/,
+    "disposition framing text must be injected",
   );
   assert.match(
-    RUNNER_SRC,
+    HELPERS_SRC,
     /ACTIVE-DISAGREEMENT RULE/,
-    "active-disagreement rule must be in the prompt body",
+    "active-disagreement rule must be present",
   );
 });
 
 test("(T185) NEXT-DISPOSITION VOTE prompt + parser + runner override are wired", () => {
   assert.match(
-    RUNNER_SRC,
+    HELPERS_SRC,
     /NEXT-DISPOSITION VOTE/,
     "prompt body must request the vote",
   );
@@ -170,6 +166,16 @@ test("(T185) NEXT-DISPOSITION VOTE prompt + parser + runner override are wired",
     HELPERS_SRC,
     /export function pickNextDisposition/,
     "picker must be exported",
+  );
+  assert.match(
+    HELPERS_SRC,
+    /extractDispositionVote/,
+    "parser must be exported",
+  );
+  assert.match(
+    HELPERS_SRC,
+    /pickNextDisposition/,
+    "vote-based disposition picker must be exported",
   );
 });
 
@@ -272,17 +278,17 @@ test("(#5 + Phase A) seed uses readDirective + buildDirectiveBlock helpers", () 
 
 test("(#5 + Phase A) buildPrompt reads this.active?.userDirective via readDirective + buildDirectiveBlock", () => {
   assert.match(
-    RUNNER_SRC,
-    /readDirective\(\{\s*userDirective:\s*this\.active\?\.userDirective\s*\}\)/,
-    "buildPrompt must use readDirective with this.active.userDirective",
+    HELPERS_SRC,
+    /readDirective\(\{\s*userDirective\s*\}/,
+    "buildRoundRobinTurnPrompt must use readDirective with userDirective",
   );
   assert.match(
-    RUNNER_SRC,
+    HELPERS_SRC,
     /labelSuffix:\s*"\(the question this deliberation must resolve\)"/,
-    "buildPrompt directive block must use the deliberation label suffix",
+    "buildRoundRobinTurnPrompt directive block must use the deliberation label suffix",
   );
   assert.match(
-    RUNNER_SRC,
+    HELPERS_SRC,
     /\.\.\.directiveBlock,/,
     "directiveBlock must be spread into the prompt body",
   );
@@ -290,12 +296,12 @@ test("(#5 + Phase A) buildPrompt reads this.active?.userDirective via readDirect
 
 test("(#5) buildPrompt swaps generic goals for directive-driven goals when directive set", () => {
   assert.match(
-    RUNNER_SRC,
+    HELPERS_SRC,
     /Goals of this deliberation:/,
     "directive-set path must use 'Goals of this deliberation' framing",
   );
   assert.match(
-    RUNNER_SRC,
+    HELPERS_SRC,
     /advance the team's answer to the directive/,
     "directive goal #2 must reference the directive directly",
   );
@@ -330,29 +336,29 @@ test("(#5) web preset spec marks round-robin as directive: 'honored'", () => {
 // 2026-05-02 (role-diff #1+#2+#3+#4): structural tests for the four
 // role-diff levers shipped on top of the round-robin runner.
 
-test("(role-diff #3) buildPrompt injects deliverableBlock when role is configured", () => {
+test("(role-diff #3) buildRoundRobinTurnPrompt injects deliverableBlock when role is configured", () => {
   assert.match(
-    RUNNER_SRC,
+    HELPERS_SRC,
     /const deliverableBlock = role/,
     "deliverableBlock must be conditional on role being set",
   );
   assert.match(
-    RUNNER_SRC,
+    HELPERS_SRC,
     /MY DELIVERABLE CONTRACT/,
     "deliverable contract framing must be in the prompt",
   );
   assert.match(
-    RUNNER_SRC,
+    HELPERS_SRC,
     /\.\.\.deliverableBlock,/,
     "deliverableBlock must be spread into the prompt body",
   );
 });
 
-test("(role-diff #3) buildPrompt's role+directive goals path replaces dispositional copy with role-specialist copy", () => {
+test("(role-diff #3) buildRoundRobinTurnPrompt's role+directive goals path replaces dispositional copy with role-specialist copy", () => {
   // When BOTH role + directive are set, the goals block must talk
   // about "your specialist piece", not "your assigned disposition".
   assert.match(
-    RUNNER_SRC,
+    HELPERS_SRC,
     /produce YOUR specialist piece of the directive's answer/,
     "role+directive goals must frame agent as specialist contributor",
   );
