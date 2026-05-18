@@ -224,6 +224,17 @@ const TEST_FILES = [
   "src/middleware/compression.test.ts",
   "src/middleware/staticServing.test.ts",
 
+  // web/ — previously orphaned (existed on disk but never registered).
+  "../web/src/components/PlannerThinkingPanel.test.ts",
+  "../web/src/hooks/useReplayState.test.ts",
+  "../web/src/lib/costBreakdown.test.ts",
+  "../web/src/state/store.test.ts",
+
+  // NOT REGISTERED: RoundRobinRunner.test.ts (38 tests), RunStatePersister.test.ts (26 tests),
+  // BlackboardRunner.hunkRepair.test.ts (6 tests). All are source-code-inspection tests that
+  // bit-rotted after the source was significantly refactored (directive helpers, v3 schema, imports).
+  // Needs test rewrite to match current code before re-registering.
+
   // 2026-05-17: previously orphaned (existed on disk but never registered).
   "src/swarm/blackboard/coverageGap.test.ts",
   "src/swarm/blackboard/diffCritic.test.ts",
