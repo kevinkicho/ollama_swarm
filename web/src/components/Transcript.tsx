@@ -18,14 +18,19 @@ export function Transcript() {
   const streamingCount = Object.keys(streaming).length;
   const streamingMeta = useSwarm((s) => s.streamingMeta);
 
-  // Task #176 Phase A: 30s safety sweeper — if a streaming entry
-  // is "done" but no transcript_append has cleared it, force-clear
-  // so the bubble doesn't persist forever on a runner that crashed
-  // mid-finalize. clearStreaming is the canonical removal path.
+  // Per-agent streaming timeout: if a streaming entry is still
+  // "live" but hasn't received a chunk in 90s, force-clear it.
+  // This replaces the old 30s sweeper which only scrubbed "done"
+  // entries — live agents that crash mid-stream are now caught too.
   const clearStreaming = useSwarm((s) => s.clearStreaming);
+  const STREAMING_TIMEOUT_MS = 90_000;
   useEffect(() => {
     const stuck = Object.entries(streamingMeta).filter(
-      ([, m]) => m.status === "done" && m.endedAt && Date.now() - m.endedAt > 30_000,
+      ([, m]) => {
+        if (m.status === "live" && Date.now() - m.lastTextAt > STREAMING_TIMEOUT_MS) return true;
+        if (m.status === "done" && m.endedAt && Date.now() - m.endedAt > STREAMING_TIMEOUT_MS) return true;
+        return false;
+      },
     );
     if (stuck.length === 0) return;
     for (const [id] of stuck) clearStreaming(id);

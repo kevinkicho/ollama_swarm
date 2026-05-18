@@ -80,10 +80,13 @@ function PersistentStreamBubble({
 }) {
   const hue = hueForAgent(agentIndex);
   const isDone = meta?.status === "done";
-  const palette = agentBubblePalette(hue, isDone);
   const now = Date.now();
   const sinceLastText = meta ? Math.max(0, now - meta.lastTextAt) : 0;
   const sinceStart = meta ? Math.max(0, now - meta.startedAt) : 0;
+  const STALL_THRESHOLD_MS = 60_000;
+  const isStalled = !isDone && sinceLastText > STALL_THRESHOLD_MS;
+
+  const palette = agentBubblePalette(hue, isStalled ? true : isDone);
 
   // 2026-04-27 evening (#231 follow-up 4): strip XML pseudo-tool-call
   // markers from the LIVE streaming text before segmenting. RCA: the
@@ -131,6 +134,8 @@ function PersistentStreamBubble({
   if (isDone) {
     const totalSec = Math.round(sinceStart / 1000);
     subtitle = `done · ${text.length.toLocaleString()} chars · ${totalSec}s total${segSuffix}`;
+  } else if (isStalled) {
+    subtitle = `⚠ stalled ${Math.round(sinceLastText / 1000)}s…${segSuffix}`;
   } else if (sinceLastText < 2000) {
     subtitle = `writing…${segSuffix}`;
   } else if (sinceLastText < 10_000) {
@@ -157,6 +162,8 @@ function PersistentStreamBubble({
         ) : null}
         {isDone ? (
           <span style={{ color: palette.accent }}>✓</span>
+        ) : isStalled ? (
+          <span className="text-ink-500" title="No chunks received for over 60s">⚠</span>
         ) : (
           <span className="inline-flex gap-0.5 items-end">
             <Dot hue={hue} delay={0} />
