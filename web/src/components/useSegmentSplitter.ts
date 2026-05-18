@@ -29,7 +29,8 @@ const MIN_SEGMENT_CHARS = 20;
 //   - "<think>" / "</think>" → split AT the tag (so the rendered
 //     segments naturally separate think content from final response;
 //     paired with Phase 1's server-side <think> stripping)
-function findContentBoundaries(text: string, prevLen: number): number[] {
+// Exported for testability.
+export function findContentBoundaries(text: string, prevLen: number): number[] {
   const boundaries: number[] = [];
   if (prevLen >= text.length) return boundaries;
   const appended = text.slice(prevLen);

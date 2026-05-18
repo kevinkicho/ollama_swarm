@@ -232,6 +232,8 @@ const TEST_FILES = [
   "../web/src/hooks/useReplayState.test.ts",
   "../web/src/lib/costBreakdown.test.ts",
   "../web/src/state/store.test.ts",
+  "../web/src/components/agentPalette.test.ts",
+  "../web/src/components/useSegmentSplitter.test.ts",
 
   // NOT REGISTERED: RoundRobinRunner.test.ts (38 tests), RunStatePersister.test.ts (26 tests),
   // BlackboardRunner.hunkRepair.test.ts (6 tests). All are source-code-inspection tests that
