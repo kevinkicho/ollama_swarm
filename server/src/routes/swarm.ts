@@ -971,6 +971,7 @@ export function swarmRouter(orch: Orchestrator): Router {
     store.store(key, value, tags, "user");
     await store.flush();
     res.json({ ok: true, key });
+    } catch (e) { res.status(500).json({ error: "memory-store write failed", detail: (e as Error).message }); }
   });
 
   r.delete("/memory-store/:key", validate(MemoryStoreDeleteParams, "params"), validate(ClonePathQuery, "query"), async (req: Request, res: Response) => {
@@ -982,6 +983,7 @@ export function swarmRouter(orch: Orchestrator): Router {
     const deleted = store.forget(key);
     await store.flush();
     res.json({ ok: true, deleted });
+    } catch (e) { res.status(500).json({ error: "memory-store delete failed", detail: (e as Error).message }); }
   });
 
   return r;
