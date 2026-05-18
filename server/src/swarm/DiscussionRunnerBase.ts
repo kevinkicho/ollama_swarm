@@ -575,7 +575,11 @@ export abstract class DiscussionRunnerBase {
       tokenBudget: cfg.tokenBudget,
       round: r,
       totalRounds: cfg.rounds,
-      unit: presetName,
+      unit: (
+        presetName.toLowerCase().includes("map") ||
+        presetName.toLowerCase().includes("orchestrator") ||
+        presetName.toLowerCase().includes("blackboard")
+      ) ? "cycle" : "round",
     });
     if (guard.halt) {
       this.earlyStopDetail = guard.earlyStopDetail;

@@ -141,7 +141,7 @@ export class RepoService {
         // Local folder (not a git repo, not an HTTP URL) — use directly.
         const isLocalPath = !opts.url.startsWith("http://") && !opts.url.startsWith("https://");
         if (isLocalPath) {
-          return { destPath: abs, alreadyPresent: true };
+          return { destPath: abs, alreadyPresent: true, priorCommits: 0, priorChangedFiles: 0, priorUntrackedFiles: 0 };
         }
         if (!opts.force) {
           throw new Error(
