@@ -235,11 +235,10 @@ const TEST_FILES = [
   "../web/src/components/useSegmentSplitter.test.ts",
   "../web/src/components/transcript/JsonBubbles.test.ts",
 
-  // 2026-05-18: registered after verifying pass (22 tests).
+  // 2026-05-18: registered after verifying pass (22 + 26 + 7 = 55 tests).
   "src/services/RunStatePersister.test.ts",
-  // NOT REGISTERED: RoundRobinRunner.test.ts (38 tests), BlackboardRunner.hunkRepair.test.ts (6 tests).
-  // All are source-code-inspection tests that bit-rotted after the source was significantly
-  // refactored (directive helpers, v3 schema, imports). Needs test rewrite to match current code.
+  "src/swarm/RoundRobinRunner.test.ts",
+  "src/swarm/blackboard/BlackboardRunner.hunkRepair.test.ts",
 
   // 2026-05-17: previously orphaned (existed on disk but never registered).
   "src/swarm/blackboard/coverageGap.test.ts",
