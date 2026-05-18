@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
+import { extractFirstBalanced } from "../../../../shared/src/extractJson";
 
 export const COLLAPSE_THRESHOLD = 600;
 export const JSON_COLLAPSE_THRESHOLD = 2000;
@@ -58,7 +59,7 @@ export interface AgentJsonBubbleProps {
 // Heuristic: find the first JSON marker (`{`, `[`, or fenced ```json) —
 // everything before it is prose, everything from it on is JSON. Trims
 // each side. If no marker is found, returns the whole text as prose.
-function splitProseAndJson(text: string): { prose: string; json: string } {
+export function splitProseAndJson(text: string): { prose: string; json: string } {
   const trimmed = text.trim();
   // Prefer a fenced block — it's the most explicit boundary.
   const fenceIdx = trimmed.indexOf("```json");
@@ -67,14 +68,31 @@ function splitProseAndJson(text: string): { prose: string; json: string } {
     trimmed.indexOf("["),
     fenceIdx >= 0 ? fenceIdx : -1,
   ].filter((i) => i >= 0);
-  if (candidates.length === 0) {
-    return { prose: trimmed, json: "" };
+  if (candidates.length > 0) {
+    const cut = Math.min(...candidates);
+    return {
+      prose: trimmed.slice(0, cut).trim(),
+      json: trimmed.slice(cut).trim(),
+    };
   }
-  const cut = Math.min(...candidates);
-  return {
-    prose: trimmed.slice(0, cut).trim(),
-    json: trimmed.slice(cut).trim(),
-  };
+
+  // Fallback: no standard boundary found. Try lenient balanced
+  // extraction — some models emit non-standard JSON wrappers (e.g.
+  // "JSON:" prefix, raw objects after prose with no braces/brackets
+  // at obvious positions). extractFirstBalanced handles nested
+  // objects/arrays and string content correctly.
+  const balanced = extractFirstBalanced(trimmed);
+  if (balanced) {
+    const idx = trimmed.indexOf(balanced);
+    if (idx >= 0) {
+      return {
+        prose: trimmed.slice(0, idx).trim(),
+        json: trimmed.slice(idx).trim(),
+      };
+    }
+  }
+
+  return { prose: trimmed, json: "" };
 }
 
 export function AgentJsonBubble({ summary, json, header, className, style, segmentSplitPoints, segmentHue }: AgentJsonBubbleProps) {
