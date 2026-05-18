@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { AgentJsonBubble, MAX_BUBBLE_HEIGHT_PX } from "./JsonBubbles";
-import { extractFirstBalancedJson } from "../extractJson";
+import { extractFirstBalancedJson } from "../../../shared/src/extractJson";
 
 // Task #74 (2026-04-25): readable diff renderer for worker_hunks
 // envelopes. Parses the JSON, renders one block per hunk: op + file
