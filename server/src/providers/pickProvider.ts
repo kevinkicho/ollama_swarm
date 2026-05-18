@@ -57,7 +57,10 @@ export function pickProvider(modelString: string): PickedProvider {
       return { provider: openaiSingleton, modelId };
     case "opencode":
       opencodeSingleton ??= new OpenCodeProvider();
-      return { provider: opencodeSingleton, modelId };
+      // opencode models need the full prefix (opencode-go/ vs opencode-zen/)
+      // intact so the provider can route to the correct endpoint. The provider
+      // internally strips the prefix after routing.
+      return { provider: opencodeSingleton, modelId: modelString };
   }
 }
 

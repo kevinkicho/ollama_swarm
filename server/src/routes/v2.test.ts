@@ -66,7 +66,7 @@ function getRunsHandler(router: import("express").Router): (
 }
 
 describe("v2Router /status", () => {
-  it("reports flag state from process.env", async () => {
+  it("reports flag state from config", async () => {
     const router = v2Router({ eventLogPath: "/tmp/test.jsonl" });
     // Find /status handler
     const stack = (router as unknown as { stack: Array<{
@@ -84,8 +84,8 @@ describe("v2Router /status", () => {
     const { res, mock } = makeRes();
     handler({} as import("express").Request, res);
     const body = mock.body as { flags: Record<string, boolean>; v2Substrates: Record<string, string> };
-    assert.equal(typeof body.flags.USE_OLLAMA_DIRECT, "boolean");
-    assert.equal(typeof body.flags.USE_WORKER_PIPELINE_V2, "boolean");
+    assert.equal(typeof body.flags.USE_OLLAMA_DIRECT, "string");
+    assert.equal(typeof body.flags.USE_WORKER_PIPELINE_V2, "string");
     assert.ok(body.v2Substrates.todoQueueV2);
     assert.ok(body.v2Substrates.workerPipelineV2);
   });

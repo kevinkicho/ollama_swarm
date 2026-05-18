@@ -41,6 +41,13 @@ test("stripProviderPrefix — strips anthropic/ and openai/", () => {
   assert.equal(stripProviderPrefix("openai/gpt-5"), "gpt-5");
 });
 
+test("stripProviderPrefix — strips opencode-go/ opencode-zen/ and opencode/", () => {
+  assert.equal(stripProviderPrefix("opencode-go/deepseek-v4-pro"), "deepseek-v4-pro");
+  assert.equal(stripProviderPrefix("opencode-go/glm-5.1"), "glm-5.1");
+  assert.equal(stripProviderPrefix("opencode-zen/glm-5.1"), "glm-5.1");
+  assert.equal(stripProviderPrefix("opencode/glm-5.1"), "glm-5.1");
+});
+
 test("withProviderPrefix — round-trips through stripProviderPrefix", () => {
   // ollama and ollama-cloud both use empty prefix — round-trip relies on
   // detectProvider seeing the right marker (`:cloud` suffix vs no marker).

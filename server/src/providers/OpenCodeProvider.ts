@@ -64,7 +64,24 @@ export class OpenCodeProvider implements SessionProvider {
     };
 
     if (opts.format) {
-      body.response_format = opts.format;
+      // OpenCode Go/Zen uses OpenAI-compatible endpoints which only support
+      // specific response_format.type values: "json_object", "json_schema",
+      // "regex", "text". Raw JSON Schema objects with type "object" or plain
+      // structured json_schema enforcement are not supported by many backends
+      // (DeepSeek, etc.). Downgrade to json_object in all cases except when
+      // the format is already a recognized accepted type.
+      if (typeof opts.format === "string") {
+        // "json" → { type: "json_object" }
+        body.response_format = { type: "json_object" as const };
+      } else if (opts.format.type === "json_object" || opts.format.type === "json_schema"
+        || opts.format.type === "regex" || opts.format.type === "text") {
+        // Already a valid OpenAI-compatible response_format — pass through
+        body.response_format = opts.format;
+      } else {
+        // Raw JSON Schema ({ type: "object", properties: {...} }) or
+        // unknown format → downgrade to json_object for compatibility
+        body.response_format = { type: "json_object" as const };
+      }
     }
 
     if (opts.options) {
@@ -93,12 +110,23 @@ export class OpenCodeProvider implements SessionProvider {
           errorMsg = "OpenCode API key invalid or expired";
         } else if (response.status === 402) {
           errorMsg = "OpenCode Zen balance depleted — add credits at opencode.ai/auth";
+        } else if (response.status === 408 || response.status === 504 || response.status === 524) {
+          errorMsg = `OpenCode API timeout (HTTP ${response.status}) — model may have been slow on this prompt`;
+        } else if (response.status >= 500) {
+          errorMsg = `OpenCode API server error (HTTP ${response.status})${errorText ? ` — ${errorText.slice(0, 300)}` : ""}`;
+        } else if (response.status === 400) {
+          errorMsg = `OpenCode API bad request (HTTP 400) — ${errorText.slice(0, 500)}`;
         } else if (errorText) {
           try {
             const parsed = JSON.parse(errorText);
             errorMsg = parsed.error?.message || errorMsg;
-          } catch {}
+          } catch {
+            errorMsg = `OpenCode API HTTP ${response.status} — ${errorText.slice(0, 500)}`;
+          }
         }
+
+        // Diagnostic log for all errors — surfaces the actual API response for debugging
+        console.warn(`[OpenCodeProvider] ${base} model=${bareModel} status=${response.status} error="${errorMsg}" raw="${errorText.slice(0, 500)}"`);
 
         return {
           text: "",

@@ -9,6 +9,7 @@
 
 import fs from "node:fs/promises";
 import { Router, type Request, type Response } from "express";
+import { config } from "../config.js";
 import {
   parseEventLog,
   splitIntoRuns,
@@ -31,8 +32,8 @@ export function v2Router(deps: V2RouterDeps): Router {
   r.get("/status", (_req: Request, res: Response) => {
     res.json({
       flags: {
-        USE_OLLAMA_DIRECT: process.env.USE_OLLAMA_DIRECT === "1",
-        USE_WORKER_PIPELINE_V2: process.env.USE_WORKER_PIPELINE_V2 === "1",
+        USE_OLLAMA_DIRECT: config.USE_OLLAMA_DIRECT ? "1" : "0",
+        USE_WORKER_PIPELINE_V2: config.USE_WORKER_PIPELINE_V2 ? "1" : "0",
       },
       eventLogPath: deps.eventLogPath,
       v2Substrates: {

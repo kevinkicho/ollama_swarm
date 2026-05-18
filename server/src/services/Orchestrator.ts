@@ -17,6 +17,7 @@ import { tokenTracker } from "./ollamaProxy.js";
 import { AmendmentsBuffer, type Amendment } from "./AmendmentsBuffer.js";
 import { RunStatePersister, findRecoverableRuns, isRecoverablePhase, loadSnapshot, type RecoverableRun } from "./RunStatePersister.js";
 import { tryAcquireLock, releaseLock } from "../swarm/cloneLock.js";
+import { config } from "../config.js";
 
 export interface OrchestratorOpts extends RunnerOpts {
   manager: AgentManager;
@@ -817,7 +818,7 @@ export class Orchestrator {
     if (
       trimmedDirective &&
       trimmedDirective.length > 0 &&
-      process.env.CONFORMANCE_MONITOR !== "off" &&
+      config.CONFORMANCE_MONITOR &&
       this.opts.ollamaBaseUrl
     ) {
       // #295 fix: monitor lives on the ActiveRun record so its

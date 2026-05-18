@@ -52,7 +52,13 @@ export function detectProvider(model: string): Provider {
 export function stripProviderPrefix(model: string): string {
   const provider = detectProvider(model);
   const prefix = PROVIDER_PREFIX[provider];
-  return prefix ? model.slice(prefix.length) : model;
+  if (!prefix) return model;
+  // opencode-go/ and opencode-zen/ are longer than opencode/ — strip
+  // the actual full prefix instead of blindly slicing the base prefix.
+  if (provider === "opencode") {
+    return model.replace(/^opencode(-go|-zen)?\//, "");
+  }
+  return model.slice(prefix.length);
 }
 
 export function withProviderPrefix(provider: Provider, modelId: string): string {

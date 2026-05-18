@@ -165,6 +165,7 @@ export const SwarmEventSchema = z.discriminatedUnion("type", [
     fromModel: z.string(),
     toModel: z.string(),
     reason: z.string(),
+    rawError: z.string().optional(),
   }),
   z.object({
     type: z.literal("todo_replanned"),

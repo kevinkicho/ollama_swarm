@@ -173,6 +173,7 @@ class TokenTracker {
   // load time (see loadPersistedRecords).
   private records: UsageRecord[] = loadPersistedRecords();
   private currentPresets = new Map<string, string>();
+  private currentPreset: string | undefined;
   private quota: QuotaState | null = null;
 
   add(r: UsageRecord, runId?: string): void {

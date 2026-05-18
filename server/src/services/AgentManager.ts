@@ -61,6 +61,9 @@ export interface Agent {
   id: string;
   index: number;
   sessionId: string;
+  /** Post-E3: port was removed from the formal type but many callers still
+   *  reference it at runtime (was always 0). Kept optional for backward compat. */
+  port?: number;
   /** Always undefined post-E3 (no opencode subprocess). Field kept for
    *  callers that still type-narrow with `agent.child?.pid`. */
   child?: ChildProcess;
@@ -646,7 +649,7 @@ export class AgentManager {
         // the port is still listening, even if `dead` claims true (the
         // tracked PID is dead but a different process can still hold
         // the port — common with opencode launchers).
-        const portKilled = killByPort(a.port);
+        const portKilled = (a.port !== undefined && a.port > 0) ? killByPort(a.port) : [];
         if (portKilled.length > 0) {
           // Wait for port-targeted PIDs to die.
           let allPortDead = false;
