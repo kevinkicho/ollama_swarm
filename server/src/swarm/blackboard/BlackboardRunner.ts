@@ -23,8 +23,7 @@ import {
   extractText as extractTextExtracted,
   type RunnerUtilContext,
 } from "./runnerUtil.js";
-import type { Agent } from "../../services/AgentManager.js";
-import { AgentManager } from "../../services/AgentManager.js";
+import { AgentManager, type Agent } from "../../services/AgentManager.js";
 import { toOpenCodeModelRef } from "../../../../shared/src/providers.js";
 import { type ClassifiedError, type ErrorCategory } from "../errorTaxonomy.js";
 import { recordError as recordErrorExtracted, type ErrorRecorderContext } from "./errorRecorder.js";

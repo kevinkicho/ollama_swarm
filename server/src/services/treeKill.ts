@@ -1,5 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 
 // Fire-and-forget process-tree kill. On Windows `child.kill()` (or SIGTERM)
 // only terminates the immediate child — for opencode agents that's the
@@ -36,6 +35,14 @@ export function treeKill(child: ChildProcess | undefined): void {
 
   try {
     child.kill("SIGTERM");
+    // Escalate to SIGKILL after 1s — subprocesses that ignore SIGTERM
+    // (common with shell-wrapped build commands) need the hard kill.
+    // The caller's polling loop will verify death independently.
+    // Do NOT unref() — the timer must fire even if the event loop
+    // drains early before the escalation window lapses.
+    setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch { /* ignore */ }
+    }, 1000);
   } catch {
     /* ignore */
   }

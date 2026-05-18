@@ -1,10 +1,8 @@
-import fs from "node:fs";
-import http from "node:http";
+import fs, { readFileSync as readFileSyncNode } from "node:fs";
+import http, { type IncomingMessage } from "node:http";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import express from "express";
-import type { IncomingMessage } from "node:http";
 import type { Socket } from "node:net";
 import { WebSocketServer } from "ws";
 import { configureHttpDispatcher } from "./services/httpDispatcher.js";
@@ -19,9 +17,7 @@ import { AgentManager } from "./services/AgentManager.js";
 import { AgentPidTracker } from "./services/agentPids.js";
 import { reclaimOrphans } from "./services/reclaimOrphans.js";
 import { reclaimStaleLocks } from "./swarm/cloneLock.js";
-import { readFileSync as readFileSyncNode } from "node:fs";
 import { tmpdir } from "node:os";
-import nodePath from "node:path";
 import { RepoService } from "./services/RepoService.js";
 import { Orchestrator } from "./services/Orchestrator.js";
 import { startOllamaProxy, tokenTracker } from "./services/ollamaProxy.js";
@@ -480,7 +476,7 @@ void reclaimOrphans(repoRoot)
       );
     }
     // Reclaim stale clone locks from killed/crashed prior runs
-    const KNOWN_PARENTS_FILE = nodePath.join(tmpdir(), "ollama-swarm-known-parents.json");
+    const KNOWN_PARENTS_FILE = path.join(tmpdir(), "ollama-swarm-known-parents.json");
     const knownParents = (() => {
       try {
         const raw = readFileSyncNode(KNOWN_PARENTS_FILE, "utf8");
