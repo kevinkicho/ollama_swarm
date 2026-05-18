@@ -24,9 +24,6 @@ import {
 } from "./setup/WallClockEstimate";
 import {
   BlackboardHelp,
-  BLACKBOARD_DEFAULT_PLANNER_MODEL,
-  BLACKBOARD_DEFAULT_WORKER_MODEL,
-  BLACKBOARD_DEFAULT_AUDITOR_MODEL,
   type CouncilContractPref,
 } from "./setup/BlackboardSettings";
 import { type SwarmRoleWeb, DEFAULT_ROLES_WEB } from "./setup/RoleDiffSettings";
@@ -377,13 +374,11 @@ export function SetupForm() {
   const [proposition, setProposition] = useState("");
   // Unit 42: per-agent model overrides (blackboard-only). Empty string
   // means "fall through to the main Model field" — same shape as the
-  // server falls back to cfg.model when these are absent. The non-
-  // empty initial values are the recommended blackboard model mix
-  // (see BLACKBOARD_DEFAULT_*_MODEL above); silently ignored on
-  // non-blackboard presets since the submit handler only POSTs them
-  // when preset === "blackboard".
-  const [plannerModel, setPlannerModel] = useState(BLACKBOARD_DEFAULT_PLANNER_MODEL);
-  const [workerModel, setWorkerModel] = useState(BLACKBOARD_DEFAULT_WORKER_MODEL);
+   // server falls back to cfg.model when these are absent. Empty
+   // initial values — no invisible defaults. The user's top-level
+   // model is used until they explicitly set a per-role override.
+  const [plannerModel, setPlannerModel] = useState("");
+  const [workerModel, setWorkerModel] = useState("");
   // Unit 43: per-run wall-clock cap (minutes). Empty = use the 8-h
   // baked-in default. UI is in MINUTES; we send ms over the wire.
   const [wallClockCapMin, setWallClockCapMin] = useState("");
@@ -401,7 +396,7 @@ export function SetupForm() {
   // on todo authorship (planner mean latency halved 117s→57s).
   // No downside on cost — one extra subprocess per run.
   const [dedicatedAuditor, setDedicatedAuditor] = useState(true);
-  const [auditorModel, setAuditorModel] = useState(BLACKBOARD_DEFAULT_AUDITOR_MODEL);
+  const [auditorModel, setAuditorModel] = useState("");
   const [specializedWorkers, setSpecializedWorkers] = useState(false);
   const [criticEnsemble, setCriticEnsemble] = useState(false);
   // Combination feature toggles (Plans 1-7)

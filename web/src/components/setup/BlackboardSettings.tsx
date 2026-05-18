@@ -85,7 +85,7 @@ export function BlackboardModelOverrides({
         <ModelInput
           value={plannerModel}
           onChange={(v) => setPlannerModel(v.slice(0, 200))}
-          placeholder={`(blackboard recommended: ${BLACKBOARD_DEFAULT_PLANNER_MODEL})`}
+          placeholder={`(empty = uses main model)`}
           ariaLabel="Planner model override"
         />
       </Field>
@@ -100,7 +100,7 @@ export function BlackboardModelOverrides({
         <ModelInput
           value={workerModel}
           onChange={(v) => setWorkerModel(v.slice(0, 200))}
-          placeholder={`(blackboard recommended: ${BLACKBOARD_DEFAULT_WORKER_MODEL})`}
+          placeholder={`(empty = uses main model)`}
           ariaLabel="Worker model override"
         />
       </Field>
@@ -244,7 +244,7 @@ export function BlackboardAgentTopology({
         <ModelInput
           value={auditorModel}
           onChange={(v) => setAuditorModel(v.slice(0, 200))}
-          placeholder={`(blackboard recommended: ${BLACKBOARD_DEFAULT_AUDITOR_MODEL})`}
+          placeholder={`(empty = uses main model)`}
           ariaLabel="Auditor model override"
           className={`input font-mono ${!dedicatedAuditor ? "opacity-50 pointer-events-none" : ""}`}
         />
