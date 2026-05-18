@@ -38,7 +38,6 @@ function readStatus(workdir: string): string | null {
 
 export const SessionCheckpointPlugin: Plugin = async ({ client, directory }) => {
   const pending = new Map<string, boolean>();
-  const consecutiveFailures = new Map<string, number>();
 
   return {
     event: async ({ event }) => {
@@ -74,27 +73,27 @@ export const SessionCheckpointPlugin: Plugin = async ({ client, directory }) => 
         // Brief settle so queued events drain before we fire a new prompt.
         await new Promise((r) => setTimeout(r, 500));
 
-        await client.session.prompt({
+        // Fire-and-forget — do NOT await. Awaiting inside the event
+        // handler can deadlock the session (session can't leave idle
+        // state until handler returns, but prompt needs the session
+        // to process). Let the handler return first, then the session
+        // picks up the injected "autoresearch" message naturally.
+        client.session.prompt({
           path: { id: sid },
           body: {
             parts: [{ type: "text", text: "autoresearch" }],
           },
+        }).catch(async (err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          await client.app.log({
+            body: {
+              service: "autoresume",
+              level: "error",
+              message: `Auto-resume prompt failed for ${sid.slice(0, 8)}: ${msg}`,
+              extra: { sessionId: sid },
+            },
+          }).catch(() => {});
         });
-
-        consecutiveFailures.delete(sid);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        const next = (consecutiveFailures.get(sid) ?? 0) + 1;
-        consecutiveFailures.set(sid, next);
-
-        await client.app.log({
-          body: {
-            service: "autoresume",
-            level: "error",
-            message: `Auto-resume attempt ${next} failed for ${sid.slice(0, 8)}: ${msg}`,
-            extra: { sessionId: sid, attempt: next },
-          },
-        }).catch(() => {});
       } finally {
         pending.delete(sid);
       }
