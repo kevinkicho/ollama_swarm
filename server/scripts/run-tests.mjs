@@ -169,6 +169,7 @@ const TEST_FILES = [
   // routes/
   "src/routes/swarm.test.ts",
   "src/routes/v2.test.ts",
+  "src/routes/smoke.test.ts",
 
   // shared/
   "../shared/src/extractThinkTags.test.ts",
@@ -176,6 +177,8 @@ const TEST_FILES = [
   "../shared/src/wsProtocol.test.ts",
   "../shared/src/subtaskPart.test.ts",
   "../shared/src/providers.test.ts",
+  "  ../shared/src/modelConfig.test.ts",
+  "../shared/src/summarizeAgentJson.test.ts",
   "src/swarm/blackboard/buildCommandAllowlist.test.ts",
 
   // services/
@@ -197,6 +200,7 @@ const TEST_FILES = [
   "src/providers/providers.test.ts",
   "src/providers/discoverModels.test.ts",
   "src/providers/providers.test.extended.ts",
+  "src/providers/openCodeProvider.test.ts",
   "src/services/Session.test.ts",
   "src/tools/ToolDispatcher.test.ts",
 
@@ -219,6 +223,22 @@ const TEST_FILES = [
   "src/middleware/cors.test.ts",
   "src/middleware/compression.test.ts",
   "src/middleware/staticServing.test.ts",
+
+  // 2026-05-17: previously orphaned (existed on disk but never registered).
+  "src/swarm/blackboard/coverageGap.test.ts",
+  "src/swarm/blackboard/diffCritic.test.ts",
+  "src/swarm/blackboard/prDescription.test.ts",
+  "src/swarm/blackboard/todoRollback.test.ts",
+  "src/swarm/blackboard/prompts/brainParser.test.ts",
+  "src/swarm/chatReceipt.test.ts",
+  "src/swarm/deliverable.test.ts",
+  "src/swarm/moaContextGather.test.ts",
+  "src/swarm/qualityPasses.test.ts",
+  "src/swarm/reconcileHunks.test.ts",
+  "src/swarm/rubricPrePass.test.ts",
+  "src/swarm/semanticConvergence.test.ts",
+  "src/swarm/stigmergyExplorationGap.test.ts",
+  "src/swarm/synthesizerHunks.test.ts",
 ];
 
 // Forward CLI args so callers can pass --test-name-pattern etc:
