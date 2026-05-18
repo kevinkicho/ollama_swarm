@@ -4,31 +4,30 @@
 > Status: **in_progress**
 
 ## Task
-Autoresearch Tier 2–3 — test coverage expansion + debt reduction
+Autoresearch Tier 2–5 — ongoing autonomous improvement
 
-## Done (previous sessions)
-- Tier 0: Full codebase survey complete
-- Tier 1: MessageBubble deliverable bubble + AbortController cleanup for 17 polling fetches
-- Tier 1: OpenCode Go critical fixes, zombie process prevention, model resolution consolidation
-- Tier 2: summarizeAgentJson 16 tests (2748 total)
-- Auto-resume plugin with first-idle guard (prevents auto-trigger on fresh session)
-
-## Done (this session)
-- **Registered 4 orphaned web test files** (commit f6da841): PlannerThinkingPanel (12), useReplayState (26), costBreakdown (14), store (7). All pass. THREE more orphaned files (RoundRobinRunner 38, RunStatePersister 26, hunkRepair 6) left unregistered — source-inspection tests bit-rotted after refactoring.
-- **New tests for 3 untested shared utils** (commit 8d0cb26): stripAgentText (16 tests — think tags, tool calls, semantically-empty detection), extractJson (23 tests — balanced extraction, fenced blocks, nested objects), topology (53 tests — roleForIndex all 11 presets, isRoleStructural, synthesizeTopology, deriveLegacyFields, schema validation).
-- **New tests for 2 untested web modules** (commit 2ab3819): agentPalette (11 tests — hueForAgent wrapping/fallback, palette keys), useSegmentSplitter (20 tests — findContentBoundaries, segmentsFromSplitPoints edge cases). Exported findContentBoundaries for testability.
-- **Tier 3: Dead code removal** (commit 12579d3): Deleted subtaskPart.ts + its test (zero production imports), StartConfirmModal.tsx (import commented out since 2026-05-03).
-- **Tier 4: Deleted 10 archive docs** (commit edbb364): Kept README.md + smoke-tour per queued plan. Trigger: "go delete archive docs".
+## Done (this session — commit range: f6da841..1546647)
+- **Registered 4 orphaned web test files** (f6da841): +59 tests
+- **New tests for 3 shared utils** (8d0cb26): stripAgentText (16), extractJson (23), topology (53)
+- **New tests for 2 web modules** (2ab3819): agentPalette (11), useSegmentSplitter (20)
+- **Dead code removal** (12579d3): subtaskPart.ts, StartConfirmModal.tsx
+- **Archive doc cleanup** (edbb364): deleted 10 archive docs (kept README + smoke-tour)
+- **Never-self-stop fix** (d6af835): skill says NEVER stop unless explicitly told; plugin failure cap removed to Infinity
+- **Dead barrel exports** (e2fab28): removed 4 unused exports from shared/src/index.ts
+- **void toOpenCodeModelRef hack** (28e5077): removed dead import + void expression from BaselineRunner.ts
+- **Startup health check** (15e876a): port conflict + disk space + orphaned run dir warnings
+- **Remove invisible model defaults** (877f111): blackboard plannerModel/workerModel/auditorModel no longer pre-filled with hardcoded values
+- **Delete re-export shims** (3b51973): removed 3 thin web shims, redirected imports to shared/
+- **Consolidate duplicate imports** (1546647): merged 5 cases in index.ts, BlackboardRunner.ts, treeKill.ts
 
 ## Test counts
 - Start: 2748
 - Current: **2909** (+161)
 - All passing, zero failures
 
-## Remaining Tier 2/3 opportunities (deferred)
-- 3 orphaned source-inspection tests need rewriting (RoundRobinRunner, RunStatePersister, hunkRepair)
-- Web transcript components (12 files, mostly React .tsx — needs jsdom/vitest setup)
-- ~40 files >500 lines, ~15 >800 lines — ripe for splitting (SetupForm 1511, swarm route 1224, Orchestrator 1116)
-- Dead barrel exports: withProviderPrefix, modelsForProvider, findAgentSpec, getAgentTag — only used in tests
-- Thin re-export shims in web (extractJson.ts, formatServerSummary.ts, transcriptSummarize.ts)
-- Duplicate imports in index.ts, BlackboardRunner.ts, treeKill.ts
+## Remaining opportunities
+- 3 orphaned source-inspection tests (RoundRobinRunner, RunStatePersister, hunkRepair)
+- Web transcript components (12 files, needs jsdom/vitest)
+- ~40 files >500 lines awaiting splitting
+- Pre-flight model validation (complex, needs provider integration)
+- Debug resolution panel (complex, needs API endpoint + UI)
