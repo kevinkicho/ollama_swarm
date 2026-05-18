@@ -1,21 +1,17 @@
 /**
- * Auto-resume plugin for autoresearch.
+ * Auto-resume plugin for autoresearch — CLI-level approach.
  *
  * When the autoresearch skill runs, it writes status to
  * .opencode/session-checkpoint.md. This plugin watches for session.idle,
- * reads the checkpoint, and if status=in_progress, auto-sends "autoresearch"
- * to keep the ratchet rolling. Stops when status transitions to "finished"
- * or when the checkpoint file is absent.
+ * reads the checkpoint, and if status=in_progress, spawns an opencode
+ * subprocess to continue the work.
+ *
+ * Uses `opencode run` (CLI) instead of SDK `session.prompt()` because
+ * the SDK call can deadlock when fired from inside the session.idle
+ * event handler — the session can't leave idle state while the handler
+ * is blocked.
  *
  * To manually stop autoresearch: set Status: **finished** in the checkpoint.
- *
- * Reliability notes:
- * - The pending map prevents double-fire when session.idle events queue up.
- * - Failures are logged but never stop the loop. Only the checkpoint
- *   transitioning to "finished" (set manually by the user) stops it.
- * - No first-idle guard — if checkpoint is in_progress when opencode
- *   starts, autoresearch fires immediately. Set it to finished manually
- *   if you want to prevent this.
  */
 
 import type { Plugin } from "@opencode-ai/plugin";
@@ -36,7 +32,7 @@ function readStatus(workdir: string): string | null {
   }
 }
 
-export const SessionCheckpointPlugin: Plugin = async ({ client, directory }) => {
+export const SessionCheckpointPlugin: Plugin = async ({ client, directory, $ }) => {
   const pending = new Map<string, boolean>();
 
   return {
@@ -45,55 +41,21 @@ export const SessionCheckpointPlugin: Plugin = async ({ client, directory }) => 
 
       const props = event.properties as Record<string, unknown> | undefined;
       const sessionObj = props?.session as Record<string, unknown> | undefined;
-      const sid =
-        sessionObj?.id as string | undefined
-        ?? props?.id as string | undefined
-        ?? props?.sessionID as string | undefined;
-
-      if (!sid) {
-        await client.app.log({
-          body: {
-            service: "autoresume",
-            level: "warn",
-            message: "session.idle with no recognizable session id",
-            extra: { props: Object.keys(props ?? {}).join(", ") },
-          },
-        }).catch(() => {});
-        return;
-      }
+      const sid = (sessionObj?.id as string | undefined) ?? "";
 
       if (pending.get(sid)) return;
-
       pending.set(sid, true);
 
       try {
         const status = readStatus(directory);
         if (status !== "in_progress") return;
 
-        // Brief settle so queued events drain before we fire a new prompt.
-        await new Promise((r) => setTimeout(r, 500));
-
-        // Fire-and-forget — do NOT await. Awaiting inside the event
-        // handler can deadlock the session (session can't leave idle
-        // state until handler returns, but prompt needs the session
-        // to process). Let the handler return first, then the session
-        // picks up the injected "autoresearch" message naturally.
-        client.session.prompt({
-          path: { id: sid },
-          body: {
-            parts: [{ type: "text", text: "autoresearch" }],
-          },
-        }).catch(async (err) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          await client.app.log({
-            body: {
-              service: "autoresume",
-              level: "error",
-              message: `Auto-resume prompt failed for ${sid.slice(0, 8)}: ${msg}`,
-              extra: { sessionId: sid },
-            },
-          }).catch(() => {});
-        });
+        // Continue the current session with "autoresearch" prompt.
+        // --continue reuses the last session (this one).
+        // --dangerously-skip-permissions so it runs unattended.
+        // --dir sets the working directory.
+        await $`opencode run --continue --dangerously-skip-permissions --dir ${directory} "autoresearch"`
+          .quiet();
       } finally {
         pending.delete(sid);
       }
