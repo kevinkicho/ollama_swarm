@@ -14,6 +14,16 @@ CHECKPOINT=".opencode/session-checkpoint.md"
 COOLDOWN=10
 MAX_RETRIES=3
 
+# Resolve opencode binary
+if command -v opencode &>/dev/null; then
+  OPENCODE_BIN="opencode"
+elif [[ -x "/home/linuxbrew/.linuxbrew/bin/opencode" ]]; then
+  OPENCODE_BIN="/home/linuxbrew/.linuxbrew/bin/opencode"
+else
+  echo "[watchdog] FATAL: opencode binary not found" >&2
+  exit 1
+fi
+
 info()  { echo "[watchdog] $(date +%H:%M:%S) $*"; }
 warn()  { echo "[watchdog] $(date +%H:%M:%S) WARN: $*" >&2; }
 
