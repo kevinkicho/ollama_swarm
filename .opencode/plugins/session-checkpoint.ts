@@ -1,7 +1,7 @@
 /**
- * Auto-resume plugin — uses opencode run CLI (like watchdog) via $ shell.
- * This spawns an external process, avoiding the in-process session deadlock.
- * Only fires when checkpoint status is in_progress.
+ * Auto-resume plugin — spawns opencode run "autoresearch" via $ shell
+ * when session.idle fires and checkpoint status is in_progress.
+ * Uses fire-and-forget to avoid blocking the idle event handler.
  */
 
 import type { Plugin } from "@opencode-ai/plugin";
@@ -24,23 +24,40 @@ function readStatus(workdir: string): string | null {
 
 export const SessionCheckpointPlugin: Plugin = async ({ directory, $ }) => {
   let firing = false;
+  console.log("[autoresume] Plugin loaded, watching session.idle");
 
   return {
     event: async ({ event }) => {
       if (event.type !== "session.idle") return;
-      if (firing) return;
+
+      console.log("[autoresume] session.idle fired");
+
+      if (firing) {
+        console.log("[autoresume] Still firing from previous cycle, skipping");
+        return;
+      }
 
       const status = readStatus(directory);
-      if (status !== "in_progress") return;
+      console.log("[autoresume] Checkpoint status:", status);
 
-      firing = true;
-      try {
-        await $`opencode run "autoresearch"`.cwd(directory).quiet();
-      } catch {
-        // subprocess may exit non-zero — ignore and retry next idle
-      } finally {
-        firing = false;
+      if (status !== "in_progress") {
+        console.log("[autoresume] Status not in_progress, skipping");
+        return;
       }
+
+      console.log("[autoresume] Firing autoresearch...");
+      firing = true;
+
+      $`opencode run "autoresearch"`.cwd(directory).quiet().then(
+        () => {
+          console.log("[autoresume] Cycle complete");
+          firing = false;
+        },
+        (err) => {
+          console.log("[autoresume] Cycle failed:", err);
+          firing = false;
+        },
+      );
     },
   };
 };
