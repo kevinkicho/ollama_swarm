@@ -2,7 +2,7 @@
 
 > Last updated: 2026-05-18
 > Status: **in_progress**
-> Tier: 0 (Survey)
+> Tier: 2 (Test Coverage)
 > Tier: 0 (Survey)
 > Tier: 1 (Stability) → 2 (Test Coverage)
 
@@ -42,8 +42,12 @@ Autoresearch Tier 2–5 — ongoing autonomous improvement
 - Pre-flight model validation (complex)
 - Debug resolution panel (complex)
 - Hunk syntax highlighting (needs npm)
-- 3 orphaned source-inspection tests need rewriting
 
+## Done (this session — commits: 323f4a4..15f3383)
+- **3 orphaned source-inspection tests rewritten** (323f4a4, 15f3383): 63 tests re-pass
+  - RunStatePersister: sibling-file path update, schema v2→v3
+  - RoundRobin: RUNNER_SRC→HELPERS_SRC redirect
+  - hunkRepair: RUNNER_SRC→WORKER_SRC rewrite
 
 ## Watchdog
 | Cycle | Time | Duration | Result |
