@@ -7,6 +7,57 @@
 
 ## Done recently
 
+### 2026-05-18 — Autoresearch Tier 2–3: test expansion, dead code, archive cleanup
+
+**Test coverage (+161 tests, 2748→2909):**
+- Registered 4 orphaned web test files (PlannerThinkingPanel, useReplayState, costBreakdown, store).
+- New tests for 3 untested shared utils: stripAgentText (16), extractJson (23), topology (53).
+- New tests for 2 untested web modules: agentPalette (11), useSegmentSplitter (20).
+
+**Dead code removal:**
+- Deleted `subtaskPart.ts` + its test (zero production imports).
+- Deleted `StartConfirmModal.tsx` (import commented out since 2026-05-03).
+
+**Archive cleanup:**
+- Deleted 10 archive docs, kept README.md + smoke-tour per plan.
+
+**Commits:** f6da841, 8d0cb26, 2ab3819, 12579d3, edbb364
+
+**Tests: 2748 → 2909 (+161). All passing.**
+
+### 2026-05-17 — Model pipeline consolidation, OpenCode Go fix, zombie prevention, New swarm fix, 17+ fixes
+
+**OpenCode Go provider fixes (2 critical bugs):**
+- `stripProviderPrefix` mangled `opencode-go/` prefix → model ID `go/deepseek-v4-pro` → Go detection failed → Zen 401. Fixed in shared/src/providers.ts.
+- `response_format` JSON schema → HTTP 400 from DeepSeek Go endpoint. Downgrade to json_object in OpenCodeProvider.ts.
+
+**Model resolution consolidation:**
+- Created `shared/src/modelConfig.ts` — `resolveModels()` single pure function replacing 31 scattered decision points. 8 regression tests.
+- Server route `swarm.ts` uses `resolveModels()` instead of scattered `eff*Model` + `??` chains.
+- TopologyGrid.tsx no longer forces stale defaults onto cached topologies.
+
+**Zombie process prevention (4 fixes):**
+- `index.ts` — saved proxy stop handle, properly awaits shutdown (15s deadline, was 5s fire-and-forget).
+- `v2Adapters.ts` — process group kill on verify adapter timeout (was leaking grandchildren).
+- `treeKill.ts` — SIGKILL escalation after 1s on POSIX.
+
+**Other:**
+- "New swarm" button navigates to `/` instead of getting stuck in review mode.
+- 17 orphaned test files registered (3 left out due to pre-existing failures).
+- `.env.example` updated with 25+ missing vars.
+- Type fixes: Agent.port, SwarmPhase union, duplicate RunConfig export, missing config import.
+- Doc cleanup across 5 files.
+
+**Tests: 2516 → 2715 (+199). All passing.**
+
+### 2026-05-17 — model_shift raw error + redundant TODOs + transcript history timeline
+
+**BUG: model_shift raw error:** `rawError?: string` added to model_shift event. Populated from `info.classified.rawMessage` in provider failover path. Displayed in web UI and CLI monitor.
+
+**BUG: Planner redundant TODOs:** Filesystem existence check in plannerRunner.ts drops TODOs whose plausible-new files all exist on disk.
+
+**FEATURE: Transcript history timeline:** TranscriptTimeline.tsx component with click-to-expand run details. History tab in SwarmView.
+
 ### 2026-05-08 — Worker sibling-retry + P3 quick wins (API versioning, CORS, compression) + static build/deployment
 
 **Worker sibling-retry (1C):** `executeWorkerTodo` now has a full 4-tier parse cascade: `parseWorkerResponse` → repair prompt → `tryBrainFallback` → sibling-retry. When brain fallback fails to extract valid JSON, the worker retries once with a sibling model (via `siblingModelFor()` / `getPlannerFallbackModel()`). Pattern matches the existing planner/contract/auditor implementations — `modelAtEntry` capture at function top, `model_shift` emit on swap, revert in `finally`. Wired `updateAgentModel` + `getPlannerFallbackModel` in `workerContext`.
@@ -245,68 +296,133 @@ Open-weights cloud models drift into XML pseudo-tool-calls under repeated struct
 - V2 Steps 1–6a shipped; SSE-aware watchdog; WSL path normalization
 - 8-preset validation tour: 7/7 PASS (discussion), 3/3 FAIL (blackboard/ow-deep model drift)
 - XML pseudo-tool-call stripping (#229/#230); think-tag support; contract bubble; content-boundary segmentation
+---
+
+## Queued
+
+### Provider integration tests ✅ (shipped 2026-05-17)
+
+Added `server/src/providers/openCodeProvider.test.ts` (12 tests) and `server/src/routes/smoke.test.ts` (5 tests). Covers: opencode-go/zen prefix detection/ stripping, pickProvider routing with full model string, resolveModels cross-layer contract (planner = model for blackboard, explicit wins over topology). Tests: 2715 → 2732 (+17).
+
+### Cross-layer smoke tests ✅ (shipped 2026-05-17)
+
+`server/src/routes/smoke.test.ts` — 5 tests verify resolveModels correctly preserves user model, explicit plannerModel wins over topology, non-blackboard presets share model, empty falls to defaults.
 
 ---
-## Queued (bus-factor remediation — 2026-05-08)
 
-### Presets readiness matrix (30 min, zero risk)
+### Fix uncaughtException handler ✅ (shipped 2026-05-17)
 
-STATUS.md shows 10 presets but doesn't convey production-readiness. `stigmergy` is deliberately read-only but a new person might debug "missing writes." `orchestrator-worker-deep` has known model-drift from validation tour. `moa` was shipped in one day.
+`server/src/index.ts:411-415` — `uncaughtException` now calls `shutdown("uncaughtException")` before `process.exit(1)` instead of immediately killing the server.
 
-**Do:** Add `Maturity` column (production/beta/needs-validation/exploration) to STATUS.md preset table. Drop the low-information "Honors directive?" column. Add model-drift notes to ow-deep and read-only-by-design note to stigmergy.
-**Trigger:** explicit "go presets readiness matrix."
+### Add try/catch around dynamic imports in swarm.ts routes ✅ (shipped 2026-05-17)
 
-### WSL esbuild guard (30 min, zero risk)
+All 9 `await import(...)` calls in `swarm.ts` routes now wrapped in try/catch with 500 error responses.
 
-`npm install` from WSL swaps platform-specific esbuild binaries from Windows → Linux, silently breaking the Windows dev server on next launch. CLAUDE.md warns about this but a new contributor on Windows who skips CLAUDE.md hits a cryptic failure.
+### Fix MemoryStore silent write error ✅ (shipped 2026-05-17)
 
-**Do:** Add `preinstall` script to `web/package.json` that detects WSL (`WSL_DISTRO_NAME` or `/proc/sys/fs/binfmt_misc/WSLInterop`) and exits with a clear message + exit code 1. Skip check when `CI=true`.
-**Trigger:** explicit "go WSL esbuild guard."
+`MemoryStore.ts:191-195` — `dirty = false` moved into `.then()` callback, only resets on successful write.
 
-### Operational gotcha guards (2 hr, low risk)
+### Route 10 process.env bypasses through config.ts ✅ (shipped 2026-05-17)
 
-Three small fixes: (a) `OPENCODE_SERVER_PASSWORD` validation in config.ts is dead code since E3 Phase 5 removed subprocess — make optional with default `"test-only"` so new contributors can start the server without a `.env`. (b) `dev.mjs` should warn if `user.name` isn't set (git commits will fail). (c) CLAUDE.md should have a top-level `## Git` section explaining the inline `-c` commit convention and why it exists.
-**Trigger:** explicit "go operational gotcha guards."
+Added `USE_OLLAMA_DIRECT`, `USE_WORKER_PIPELINE_V2`, `SWARM_DISABLE_TOOLS_AUTO`, `CONFORMANCE_MONITOR` to `config.ts` Zod schema. Updated 4 call sites from `process.env.XYZ` to `config.XYZ`.
 
-### Feedback memory extraction (2 hr, zero risk)
+### Plug 27 fetch() AbortController leaks in web UI ✅ (polling sites shipped 2026-05-18: 02af84f)
 
-`~/.claude/projects/.../memory/` contains accumulated model-specific knowledge (deepseek-v4-pro is unstable as planner, glm-5.1 drifts into XML pseudo-tool-calls, etc.) — loaded into agent context but invisible to human contributors.
-
-**Do:** Create `docs/model-behaviors.md` — one model per section, each entry citing a run or commit. Link from CLAUDE.md.
-**Trigger:** explicit "go feedback memory extraction."
-
-### Sibling-retry extraction (3 hr, medium risk — needs test coverage)
-
-Five call sites (plannerRunner, contractBuilder, auditorRunner, workerRunner, + potential sixth) duplicate the same ~30-line sibling-retry pattern with `modelAtEntry`, `model_shift`, and `finally` revert. The pattern was only documented *after* a bug was found (model already mutated by provider failover before sibling-retry captured it). A new runner would copy-paste and risk reintroducing the bug.
-
-**Do:** Create `server/src/swarm/blackboard/siblingRetry.ts` with `withSiblingRetry<T>()` async wrapper. Refactor all 5 call sites. 8-10 tests covering: happy path, sibling succeeds, sibling fails, no sibling available, recursive guard, `isStopping` short-circuit, model_shift events, model restored on error.
-**Trigger:** explicit "go sibling-retry extraction."
-
-### BlackboardRunnerFields typing Ph1: discovery script (2 hr, zero risk)
-
-The `BlackboardRunnerFields = any` in `contextBuilders.ts` has 126 catalogued property accesses. Every context builder casts through `as unknown as SomeContext`, so TypeScript silently swallows missing properties. Need to discover which 126 properties are actually used, grouped by context type.
-
-**Do:** Write `server/scripts/discover-runner-fields.mjs` — monkey-patches `contextBuilders.ts` at runtime with a Proxy on `r`, runs the test suite, outputs the definitive property set per context type to stdout.
-**Trigger:** explicit "go discover-runner-fields."
-
-### BlackboardRunnerFields typing Ph2: incremental typing (4-6 hr, medium risk)
-
-**Do:** Create `server/src/swarm/blackboard/runnerContextTypes.ts` with generated interfaces (one per context type) from Phase 1 output. Replace `BlackboardRunnerFields = any` with the generated union. Remove `as unknown as` casts — now that the interface is complete, TypeScript actually checks.
-**Trigger:** explicit "go incremental runner typing."
-
-### BlackboardRunnerFields typing Ph3: CI guard (30 min, zero risk)
-
-**Do:** Add CI step that runs `discover-runner-fields.mjs --check` — exits 1 if the generated types are stale. Catches the case where someone adds a property to `BlackboardRunner` but forgets to regenerate the interfaces.
-**Trigger:** explicit "go runner types CI guard."
-
-### BlackboardRunnerFields typing Ph2: incremental typing (4-6 hr, medium risk)
-
-**Blocked on:** Ph1 is done — `discover-runner-fields.ts` identifies 125 properties. Ph2 needs the actual type generation.
-
-**Do:** Create `server/src/swarm/blackboard/runnerContextTypes.ts` with generated interfaces (one per context type: LifecycleFields, WorkerFields, PlannerFields, etc.) from the 125 discovered properties. Replace `BlackboardRunnerFields = any` in `contextBuilders.ts` with a union of the generated interfaces. Remove `as unknown as` casts — TypeScript will now verify real types. Run full test suite and fix any missing property errors.
-**Trigger:** explicit "go incremental runner typing (Ph2)."
+Added `AbortController` + `{ signal }` to `EventLogPanel.tsx` and `RunHistory.tsx` — the two components with race conditions on rapid open/close. Remaining 25 sites are lower priority (single-submit forms, fire-and-forget calls).
 
 ---
+
+### Pre-flight model validation before run starts (3 hr, medium risk)
+
+Every run failure we debugged in this session — OpenCode Go 401, response_format 400, model_shift to nemotron — could have been caught with one 50 ms API call per model before posting the first TODO. Currently the failure surfaces 2-5 minutes into a run after the planner has been thinking.
+
+**Do:** After `resolveModels()` produces the final model set, call `provider.chat()` with a tiny prompt ("hi") for each unique model. If any fail with 401/400/timeout, block the run with a clear error: "Model opencode-go/deepseek-v4-pro is unreachable: HTTP 400 — unknown format variant 'object'. Try a different model." Stores results in a per-run health snapshot for the debug panel (see below).
+
+**Trigger:** "go pre-flight model validation"
+
+### Single "current run" debug panel (4 hr, low risk)
+
+Tracing why run 66165913 used glm-5.1 instead of opencode-go required following 31 decision points across 15 files. A `/api/runs/:id/resolution` endpoint + debug panel showing each model field's source (explicit, topology, default, config) would answer this in one glance.
+
+**Do:**
+1. Add `GET /api/runs/:id/resolution` endpoint that returns the resolved model chain for the active/target run
+2. Add a debug tab (collapsed by default, behind a gear icon) showing a table: Field | Value | Source (explicit | topology | model fallback | config default)
+
+**Trigger:** "go debug resolution panel"
+
+### Remove invisible Advanced model defaults (2 hr, medium risk)
+
+The `plannerModel`/`workerModel`/`auditorModel` Advanced fields default to `glm-5.1:cloud`/`gemma4:31b-cloud`/`nemotron-3-super:cloud`. These defaults are invisible to users who don't open Advanced, yet they override the user's top-level model selection. This caused both the 77ec1450 and 66165913 bugs.
+
+**Do:** Remove the hardcoded defaults from `BlackboardSettings.tsx` and `SetupForm.tsx`. If user doesn't open Advanced, every agent uses the top-level `model`. If they explicitly set per-role overrides, those win. Placeholder text shows "Uses default model" instead of the hardcoded value.
+
+**Trigger:** "go remove advanced model defaults"
+
+### Server startup health check (1 hr, zero risk)
+
+At server startup: check if ports are free, if orphaned processes exist, if disk space ≥2 GB. Log warnings instead of silently starting on wrong port or running out of disk mid-run.
+
+**Do:** Add a `startupHealthCheck()` function in `index.ts` that runs before the server starts listening. Logs warnings for: port conflict, orphaned opencode PIDs, disk <2 GB free.
+
+**Trigger:** "go startup health check"
+
+### Delete archive docs ✅ (shipped 2026-05-18: edbb364)
+
+Deleted 10 files from `docs/archive/`. Kept `README.md` and `smoke-tour-2026-04-25.md` per the queued plan. Git history preserves the content.
+
+**Trigger:** "go delete archive docs"
+
+### Dead code removal ✅ (shipped 2026-05-18: 12579d3)
+
+Deleted `subtaskPart.ts` + its test (zero production imports) and `StartConfirmModal.tsx` (import commented out since 2026-05-03).
+
+### Test coverage expansion ✅ (shipped 2026-05-18: f6da841, 8d0cb26, 2ab3819)
+
+Registered 4 orphaned web test files, wrote new tests for 5 untested modules (stripAgentText, extractJson, topology, agentPalette, useSegmentSplitter). **Tests: 2748 → 2909 (+161). All passing.**
+
+---
+
+---
+
+### Add diff syntax highlighting to WorkerHunksBubble (2 hr, medium risk)
+
+`WorkerHunksBubble.tsx` renders hunks as plain monospace text with rose/emerald backgrounds for removed/added lines. No syntax highlighting — all code looks the same regardless of language. Large diffs (>12 lines) are collapsed with a "show all" button, making review cumbersome.
+
+**Do:** Add a lightweight syntax highlighter (e.g., `highlight.js` or `shiki`) scoped to file extension detected from the hunk's file path. Also add a "copy" button per hunk. Increase default visible lines from 12 to 24.
+
+**Trigger:** "go hunk syntax highlighting"
+
+### Fix MessageBubble missing-summary-kind fallback (1 hr, low risk) ✅ (shipped 2026-05-18: 26a1227)
+
+`MessageBubble.tsx` has 18+ dispatch branches driven by `entry.summary.kind`. If a new kind is added server-side but the client doesn't have the corresponding bubble, it silently falls to `AgentClientFallback` which re-parses the JSON from scratch. This doubles the parse work and can produce wrong renderings (e.g., a new `worker_hunks_v2` kind would render as raw JSON instead of diffs).
+
+**Do:** Add a `default` case in the agent and system dispatchers that renders an "Unknown summary kind: {kind}" badge + the raw text. Logs a `console.warn` so new kinds are visible in dev tools. Also add a test that iterates all known summary kinds from `shared/src/transcriptEntrySummary.ts` and verifies each has a dispatch branch.
+
+**Trigger:** "go message bubble fallback"
+
+### Improve splitProseAndJson robustness (1 hr, low risk)
+
+`JsonBubbles.tsx:splitProseAndJson()` splits agent responses into prose preamble + JSON body by finding the first `{`, `[`, or `` ```json ``. Some models emit non-standard JSON wrappers (e.g., raw `{` after markdown explanation, or `JSON:` prefix). The current algorithm fails on these, dumping the entire response as prose.
+
+**Do:** Add a third fallback strategy: if no standard JSON boundary is found, try `repairAndParseJson` (the same lenient parser the server uses) on the full text. If it successfully extracts JSON, use the first parseable span. Also add test cases for 5 known failure patterns.
+
+**Trigger:** "go split prose json robust"
+
+### Add transcript entry count and run-phase timeline to transcript view (2 hr, low risk)
+
+The transcript is a flat list of entries with auto-scroll. There's no visual indication of how many entries exist, which phase the run was in at each point, or how much time elapsed between events. The only phase indicators are RUN-START and RunFinishedGrid.
+
+**Do:** Add a sticky timeline column (or hover tooltip on each entry) showing: phase at entry time, wall-clock elapsed, entry index (e.g., "entry 47/230"). Add a mini phase-timeline bar at the top of the Transcript tab (similar to YouTube chapters) showing phase transitions.
+
+**Trigger:** "go transcript timeline"
+
+### Fix streaming dock stalled-entry leak (30 min, low risk)
+
+The `StreamingDock` has a 30-second safety sweeper that force-clears stuck "done" streaming entries that were never replaced by `transcript_append`. This is a workaround for the real bug: if `transcript_append` never arrives (e.g., agent crashed, event loss), the streaming bubble stays visible forever until the sweeper fires.
+
+**Do:** Add a per-agent `streamingTimeout` (90s) that auto-scrubs streaming entries when no `agent_streaming` chunk has arrived for that duration. Remove the 30s sweeper. Also add a visual "stalled" state (greyed out with ⚠ icon) between streaming timeout and transcript arrival.
+
+**Trigger:** "go streaming dock stall fix"
 
 ## Conventions for this file
 
