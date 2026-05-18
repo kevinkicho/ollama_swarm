@@ -1,4 +1,21 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "instructions": [".opencode/session-checkpoint.md"]
+  "instructions": [".opencode/session-checkpoint.md"],
+  "compaction": { "auto": true, "tail_turns": 10, "reserved": 8000 },
+  "permission": {
+    "edit": "allow",
+    "bash": "allow",
+    "task": "allow",
+    "question": "allow",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "todowrite": "allow",
+    "skill": "allow",
+    "doom_loop": "allow"
+  },
+  "agent": {
+    "build": {
+      "permission": "allow"
+    }
+  }
 }
