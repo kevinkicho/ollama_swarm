@@ -1,11 +1,10 @@
 /**
  * Auto-resume plugin for autoresearch.
- *
- * Watches session.idle events. When the checkpoint status is in_progress,
- * sends "autoresearch" as a user message via session.prompt(), which
- * triggers the AI to load the autoresearch skill and continue working.
- *
- * To manually stop: set Status: **finished** in .opencode/session-checkpoint.md
+ * 
+ * Uses setTimeout to defer prompt() so the idle event handler returns
+ * first, allowing the session to fully transition to idle before a
+ * new "autoresearch" message is injected. Stays active as long as
+ * checkpoint status is in_progress.
  */
 
 import type { Plugin } from "@opencode-ai/plugin";
@@ -13,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const CHECKPOINT_FILE = ".opencode/session-checkpoint.md";
+const RESUME_DELAY_MS = 2000;
 
 function readStatus(workdir: string): string | null {
   try {
@@ -27,34 +27,37 @@ function readStatus(workdir: string): string | null {
 }
 
 export const SessionCheckpointPlugin: Plugin = async ({ client, directory }) => {
-  let firing = false;
+  let scheduled = false;
 
   return {
     event: async ({ event }) => {
       if (event.type !== "session.idle") return;
-
-      // Prevent re-entrant fires.
-      if (firing) return;
-
-      const props = event.properties as Record<string, unknown> | undefined;
-      const sessionObj = props?.session as Record<string, unknown> | undefined;
-      const sid = (sessionObj?.id as string | undefined) ?? "";
+      if (scheduled) return;
 
       const status = readStatus(directory);
       if (status !== "in_progress") return;
 
-      firing = true;
-      try {
-        await client.session.prompt({
-          path: { id: sid },
-          body: {
-            noReply: false,
-            parts: [{ type: "text", text: "autoresearch" }],
-          },
-        });
-      } finally {
-        firing = false;
-      }
+      const props = event.properties as Record<string, unknown> | undefined;
+      const sessionObj = props?.session as Record<string, unknown> | undefined;
+      const sid = (sessionObj?.id as string | undefined) ?? "";
+      if (!sid) return;
+
+      scheduled = true;
+
+      // Defer with setTimeout so the event handler returns first,
+      // session transitions to idle, then the prompt fires fresh.
+      setTimeout(async () => {
+        try {
+          await client.session.prompt({
+            path: { id: sid },
+            body: {
+              parts: [{ type: "text", text: "autoresearch" }],
+            },
+          });
+        } finally {
+          scheduled = false;
+        }
+      }, RESUME_DELAY_MS);
     },
   };
 };
