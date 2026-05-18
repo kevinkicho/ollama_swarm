@@ -223,14 +223,44 @@ async function pollUntilTerminal(runId) {
 
 function loadSummary(parentPath) {
   // The summary lives at <parentPath>/<repo-basename>/summary.json (or
-  // any *.summary.json sibling). Try the canonical name first.
+  // summary-<iso>.json for dated snapshots). Try the canonical name
+  // first, then fall back to the most recent *.summary.json sibling.
   const repoBase = REPO.split("/").pop().replace(/\.git$/, "");
-  const summaryPath = path.join(parentPath, repoBase, "summary.json");
+  const repoDir = path.join(parentPath, repoBase);
+  const canonical = path.join(repoDir, "summary.json");
   try {
-    return JSON.parse(readFileSync(summaryPath, "utf8"));
+    return JSON.parse(readFileSync(canonical, "utf8"));
   } catch {
+    // Fall back to summary-<iso>.json (dated snapshot).
+    try {
+      const files = require("node:fs").readdirSync(repoDir).filter((f) => f.endsWith(".summary.json"));
+      if (files.length > 0) {
+        files.sort(); // iso-dates sort lexicographically = chronologically
+        return JSON.parse(readFileSync(path.join(repoDir, files[files.length - 1]), "utf8"));
+      }
+    } catch { /* dir may not exist */ }
     return null;
   }
+}
+}
+
+// Race condition: pollUntilTerminal() returns when the API reports
+// the run is terminal, but the server may still be finalizing
+// summary.json (writing commits, health score, etc.). The file exists
+// but fields are zero/incomplete. Retry for up to 10s with 500ms
+// backoff until we see non-zero data or the retry budget is spent.
+async function loadSummaryWithRetry(parentPath, maxWaitMs = 10_000) {
+  const started = Date.now();
+  let summary = null;
+  while (Date.now() - started < maxWaitMs) {
+    summary = loadSummary(parentPath);
+    if (summary && (summary.commits > 0 || summary.tier > 0 || summary.healthScore != null)) {
+      return summary;
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  // Fall through: return whatever we have after retries exhausted.
+  return summary ?? loadSummary(parentPath);
 }
 
 async function runOnePreset({ mode, preset, pass = 1, parentPath, directive }) {
@@ -252,7 +282,7 @@ async function runOnePreset({ mode, preset, pass = 1, parentPath, directive }) {
     return;
   }
   const { snapshot, durationMs, abandoned } = await pollUntilTerminal(runId);
-  const summary = loadSummary(parentPath);
+  const summary = await loadSummaryWithRetry(parentPath);
   const finalPhase = snapshot?.phase ?? "(unknown)";
   const commits = summary?.commits ?? 0;
   const tier = summary?.maxTierReached ?? 0;
