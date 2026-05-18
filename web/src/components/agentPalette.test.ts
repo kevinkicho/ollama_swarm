@@ -66,7 +66,7 @@ describe("agentBubblePalette", () => {
     const palette = agentBubblePalette(140, false);
     const keys = ["border", "background", "header", "accent", "segmentBorder", "segmentBackground"];
     for (const key of keys) {
-      assert.ok(typeof (palette as Record<string, unknown>)[key] === "string");
+      assert.ok(typeof (palette as unknown as Record<string, unknown>)[key] === "string");
     }
   });
 });
