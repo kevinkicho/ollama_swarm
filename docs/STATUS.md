@@ -76,7 +76,7 @@ The V1 SDK loop (per-agent opencode subprocess + SSE chunked streaming) was reti
 | Event log reader | `server/src/swarm/blackboard/EventLogReaderV2.ts` | primary; backs `/api/v2/event-log/runs` |
 | `formatServerSummary` | `shared/src/formatServerSummary.ts` | shared between server + web |
 
-**Test totals:** 2,909 tests passing / 0 failing as of 2026-05-18. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
+**Test totals:** 2,945 tests passing / 0 failing as of 2026-05-18. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
 
 ---
 

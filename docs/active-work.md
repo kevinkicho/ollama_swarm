@@ -23,7 +23,7 @@
 
 **Commits:** f6da841, 8d0cb26, 2ab3819, 12579d3, edbb364
 
-**Tests: 2748 → 2909 (+161). All passing.**
+**Tests: 2748 → 2945 (+197). All passing.**
 
 ### 2026-05-17 — Model pipeline consolidation, OpenCode Go fix, zombie prevention, New swarm fix, 17+ fixes
 
@@ -378,7 +378,7 @@ Deleted `subtaskPart.ts` + its test (zero production imports) and `StartConfirmM
 
 ### Test coverage expansion ✅ (shipped 2026-05-18: f6da841, 8d0cb26, 2ab3819)
 
-Registered 4 orphaned web test files, wrote new tests for 5 untested modules (stripAgentText, extractJson, topology, agentPalette, useSegmentSplitter). **Tests: 2748 → 2909 (+161). All passing.**
+Registered 4 orphaned web test files, wrote new tests for 5 untested modules (stripAgentText, extractJson, topology, agentPalette, useSegmentSplitter). **Tests: 2748 → 2945 (+197). All passing.**
 
 ---
 
