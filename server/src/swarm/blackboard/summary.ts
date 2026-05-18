@@ -236,6 +236,7 @@ export interface SummaryConfig {
 export interface SummaryCounts {
   committed: number;
   skipped: number;
+  stale: number;
   total: number;
 }
 

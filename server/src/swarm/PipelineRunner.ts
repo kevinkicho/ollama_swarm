@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export type RunnerFactory = (preset: PresetId) => SwarmRunner;
+export type RunnerFactory = (preset: PresetId) => Promise<SwarmRunner>;
 
 export class PipelineRunner implements SwarmRunner {
   private active: RunConfig | undefined;
@@ -91,7 +91,7 @@ export class PipelineRunner implements SwarmRunner {
         `[Pipeline] Starting phase ${i + 1}/${pipeline.phases.length}: ${phase.preset} (${phase.rounds ?? cfg.rounds} rounds)`,
       );
 
-      const runner = this.factory(phase.preset);
+      const runner = await this.factory(phase.preset);
       this.currentRunner = runner;
 
       try {

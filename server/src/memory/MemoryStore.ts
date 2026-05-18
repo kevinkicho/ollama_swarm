@@ -190,9 +190,10 @@ export class MemoryStore {
 
   private flushSync(): void {
     if (!this.dirty) return;
-    this.dirty = false;
     const json = JSON.stringify({ entries: [...this.entries.values()] }, null, 2);
-    fs.writeFile(this.filePath, json, "utf8").catch(() => {});
+    fs.writeFile(this.filePath, json, "utf8")
+      .then(() => { this.dirty = false; })
+      .catch(() => { /* write failed — dirty stays true for next retry */ });
   }
 }
 

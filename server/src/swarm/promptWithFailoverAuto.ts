@@ -42,7 +42,7 @@ export async function promptWithFailoverAuto(
   // sidesteps this — agents work from seed context only. Blackboard's
   // worker pipeline is unaffected (uses promptWithFailover directly,
   // not the Auto wrapper).
-  if (process.env.SWARM_DISABLE_TOOLS_AUTO === "true") {
+  if (appConfig.SWARM_DISABLE_TOOLS_AUTO) {
     opts = { ...opts, agentName: "swarm-no-tools" };
   }
   const cfg: FailoverConfig = {

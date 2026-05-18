@@ -89,6 +89,8 @@ export type SwarmEventBody =
       fromModel: string;
       toModel: string;
       reason: string;
+      /** Raw API error message that triggered the shift (for diagnosis). Absent on sibling-retry shifts. */
+      rawError?: string;
     }
   | {
       type: "todo_replanned";

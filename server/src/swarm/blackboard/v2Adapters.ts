@@ -9,14 +9,11 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { exec } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import simpleGit from "simple-git";
 import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
 import type { FilesystemAdapter, GitAdapter, VerifyAdapter } from "./WorkerPipeline.js";
-
-const execAsync = promisify(exec);
 
 /** Real filesystem adapter scoped to a clone. Reads return null on
  *  missing file (matches WorkerPipeline semantics). Writes use
@@ -58,17 +55,48 @@ export function realVerifyAdapter(
   return {
     async run() {
       try {
-        await execAsync(command, {
+        // Use spawn with options.detached so we can kill the entire process
+        // group on timeout — execFile's timeout only kills the shell process,
+        // leaving its grandchildren (build/test subprocesses) orphaned.
+        const cp = spawn(command, [], {
+          shell: true,
           cwd: clonePath,
-          timeout: VERIFY_TIMEOUT_MS,
-          maxBuffer: 1024 * 1024, // 1 MB of output captured
-          // shell:true is implicit for exec() — accepts pipes, &&,
-          // env-var expansion. Caller is the user; injection isn't
-          // a threat surface (it's their own machine).
+          stdio: "pipe",
+          detached: true,
         });
-        return { ok: true };
+
+        let stdout = "";
+        let stderr = "";
+        cp.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
+        cp.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
+
+        const timeout = setTimeout(() => {
+          // Kill the entire process group — not just the shell.
+          // On POSIX: cp.pid is the shell, but -cp.pid signals the group.
+          if (cp.pid) {
+            try { process.kill(-cp.pid, "SIGTERM"); } catch {}
+            setTimeout(() => {
+              try { process.kill(-cp.pid, "SIGKILL"); } catch {}
+            }, 2000);
+          }
+        }, VERIFY_TIMEOUT_MS);
+
+        const exitCode: number | null = await new Promise((resolve, reject) => {
+          cp.on("close", resolve);
+          cp.on("error", reject);
+        });
+        clearTimeout(timeout);
+
+        if (exitCode === 0) return { ok: true };
+
+        const tailOf = (s: string, n: number) => (s.length > n ? "…" + s.slice(-n) : s);
+        const detail = stderr.trim() || stdout.trim() || `verify command exited with code ${exitCode}`;
+        return {
+          ok: false,
+          reason: `verify command exited non-zero: ${tailOf(detail, 700)}`,
+        };
       } catch (err) {
-        // execAsync rejects with an error that carries stdout + stderr
+        // The spawn process rejects with an error that carries stdout + stderr
         // properties when the command exits non-zero or times out.
         const e = err as { stdout?: string; stderr?: string; signal?: string; killed?: boolean; message?: string };
         const stdout = (e.stdout ?? "").toString();

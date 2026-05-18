@@ -44,7 +44,7 @@ export interface SubRunHandle {
 }
 
 export interface RunnerFactory {
-  (preset: PresetId, cfg: Record<string, unknown>): SwarmRunner;
+  (preset: PresetId, cfg: Record<string, unknown>): Promise<SwarmRunner>;
 }
 
 export function validateSubRunRequest(req: SubRunRequest): string | null {

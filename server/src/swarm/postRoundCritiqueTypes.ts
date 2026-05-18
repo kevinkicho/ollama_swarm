@@ -19,7 +19,7 @@ export interface RunAgentOpts {
   onEntryPushed?: (entry: TranscriptEntry, strippedText: string) => void;
   /** Stats instance to record timing/retry/junk metrics. If provided,
    *  onTiming/onRetry/recordTokens are wired automatically. */
-  stats?: {
+  stats: {
     countTurn(agentId: string): void;
     onTiming(agentId: string, success: boolean, elapsedMs: number): void;
     onRetry(agentId: string): void;

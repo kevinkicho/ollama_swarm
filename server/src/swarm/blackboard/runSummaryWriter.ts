@@ -82,7 +82,7 @@ export interface SummaryContext {
   contract: ExitContract | undefined;
   transcript: TranscriptEntry[];
   agentStats: PerAgentStat[];
-  boardCounts: { committed: number; skipped: number; total: number };
+  boardCounts: { committed: number; skipped: number; stale: number; total: number };
   gitStatus: { porcelain: string; changedFiles: number };
   errorTracker: ClassifiedError[];
   v2State: { phase: string; enteredAt: number; detail?: string; pausedReason?: string };
@@ -116,6 +116,7 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
     board: {
       committed: ctx.boardCounts.committed,
       skipped: ctx.boardCounts.skipped,
+      stale: ctx.boardCounts.stale || 0,
       total: ctx.boardCounts.total,
     },
     staleEvents: ctx.staleEventCount,

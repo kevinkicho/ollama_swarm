@@ -7,6 +7,7 @@ import type { Agent } from "../../services/AgentManager.js";
 import type { AgentState, SwarmEvent, TranscriptEntrySummary } from "../../types.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { ClassifiedError } from "../errorTaxonomy.js";
+import { config } from "../../config.js";
 import type { LifecycleState } from "./lifecycleState.js";
 import {
   promptWithFailover,
@@ -137,7 +138,7 @@ export async function promptAgent(
       manager: ctx.manager,
       formatExpect,
       intraStreamLoop: true,
-      ollamaDirect: process.env.USE_OLLAMA_DIRECT === "1"
+      ollamaDirect: config.USE_OLLAMA_DIRECT
         ? { baseUrl: ctx.getOllamaBaseUrl() ?? config.OLLAMA_DIRECT_FALLBACK_URL }
         : undefined,
       ...(ollamaFormat !== undefined ? { ollamaFormat } : {}),
@@ -226,6 +227,7 @@ export async function promptAgent(
         fromModel: info.fromModel,
         toModel: info.toModel,
         reason: info.reason,
+        rawError: info.classified.rawMessage,
       });
     });
     const text = ctx.extractText(res) ?? "";

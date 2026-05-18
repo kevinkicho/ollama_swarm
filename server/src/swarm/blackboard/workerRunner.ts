@@ -209,7 +209,8 @@ export async function runWorker(
           stigmergyBias = -touched;
         }
         if (useHypothesisCheck && t.groupId) {
-          const candidate = candidates.find((c) => c.id === t.id)!;
+          const candidate = candidates.find((c) => c.id === t.id);
+          if (!candidate) return -999_999;
           const groupSiblings = candidates.filter((c) => c.groupId === t.groupId);
           const verdict = evaluateConflictDispatch({
             candidate,

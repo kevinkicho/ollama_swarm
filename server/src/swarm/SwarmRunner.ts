@@ -67,5 +67,3 @@ export interface SwarmRunner {
   ): void;
   isRunning(): boolean;
 }
-// Re-exported from RunConfig.ts for backward compatibility
-export type { RunConfig } from "./RunConfig.js";

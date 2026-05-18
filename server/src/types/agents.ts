@@ -20,6 +20,9 @@ export interface AgentState {
   id: string;
   index: number;
   sessionId?: string;
+  /** Post-E3 Phase 5 removed per-agent opencode subprocesses; port was
+   *  always 0. Kept optional for backward compat with callers. */
+  port?: number;
   status: AgentStatus;
   lastMessageAt?: number;
   error?: string;

@@ -89,6 +89,7 @@ describe("withSiblingRetry", () => {
     assert.equal(events[0].type, "model_shift");
     assert.equal(events[0].fromModel, "glm-5.1:cloud");
     assert.equal(events[0].toModel, "nemotron-3-super:cloud");
+    assert.equal(events[0].rawError, undefined); // sibling-retry has no API error
     assert.equal(events[1].type, "model_shift");
     assert.equal(events[1].fromModel, "nemotron-3-super:cloud");
     assert.equal(events[1].toModel, "glm-5.1:cloud");

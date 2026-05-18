@@ -4,6 +4,8 @@
 // Takes a narrow PlannerContext object instead of referencing `this.*`.
 
 import { randomUUID } from "node:crypto";
+import { access } from "node:fs/promises";
+import { join } from "node:path";
 import type { Agent } from "../../services/AgentManager.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { TodoQueueWrappers } from "./todoQueueWrappers.js";
@@ -16,7 +18,7 @@ import {
   parsePlannerResponse,
 } from "./prompts/planner.js";
 import { PLANNER_TODOS_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
-import { classifyExpectedFiles } from "./prompts/pathValidation.js";
+import { classifyExpectedFiles, classifyPath } from "./prompts/pathValidation.js";
 import { checkExpectedSymbols } from "./runnerHelpers.js";
 import { detectHypothesisTag } from "./hypothesisGrouping.js";
 import { withSiblingRetry } from "./siblingRetry.js";
@@ -210,6 +212,44 @@ export async function runPlanner(
     );
   }
 
+  const redundancyGroundedTodos: typeof groundedTodos = [];
+  let redundancyDropped = 0;
+  for (const t of groundedTodos) {
+    const plausibleNews = t.expectedFiles.filter(
+      (f) => classifyPath(f, seed.repoFiles) === "plausible-new",
+    );
+    if (plausibleNews.length === 0 || plausibleNews.length < t.expectedFiles.length) {
+      redundancyGroundedTodos.push(t);
+      continue;
+    }
+    let allExist = true;
+    for (const f of plausibleNews) {
+      try {
+        await access(join(seed.clonePath, f));
+      } catch {
+        allExist = false;
+        break;
+      }
+    }
+    if (allExist) {
+      redundancyDropped++;
+      ctx.findingsPost({
+        agentId: agent.id,
+        text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": dropped as redundant — all ${t.expectedFiles.length} expected file(s) already exist on disk (likely created by earlier workers).`,
+        createdAt: Date.now(),
+      });
+      continue;
+    }
+    redundancyGroundedTodos.push(t);
+  }
+  if (redundancyDropped > 0) {
+    ctx.appendSystem(
+      `Redundancy check: dropped ${redundancyDropped} todo(s) whose files already exist on disk.`,
+    );
+  }
+  groundedTodos.length = 0;
+  groundedTodos.push(...redundancyGroundedTodos);
+
   const symbolGroundedTodos: typeof groundedTodos = [];
   let symbolDropped = 0;
   let symbolStripped = 0;
@@ -252,6 +292,15 @@ export async function runPlanner(
   groundedTodos.push(...symbolGroundedTodos);
 
   if (groundedTodos.length === 0) {
+    // If ALL todos were dropped by the redundancy check, don't trigger
+    // sibling-retry — the planner produced valid work that was already
+    // done. Retrying would waste a prompt on the same result.
+    if (redundancyDropped > 0 && todosDropped === 0 && suspiciousStripped === 0) {
+      ctx.appendSystem(
+        `All ${redundancyDropped} todo(s) were redundant — files already exist on disk. Skipping sibling-retry.`,
+      );
+      return;
+    }
     const retried = await withSiblingRetry(
       {
         agent,

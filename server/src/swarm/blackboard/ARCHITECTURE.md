@@ -84,7 +84,13 @@ Three planner invocations:
    spawn + seed. Produces the ExitContract. May be skipped via
    `cfg.resumeContract` (Unit 57) which loads the prior run's contract
    from `blackboard-state.json`.
-2. **First todo batch** (`runPlanner`) — posts initial todos.
+2. **First todo batch** (`runPlanner`) — posts initial todos. Includes
+   a **redundancy check** (2026-05-17): before posting, verifies that
+   `plausible-new` files don't already exist on disk. If every
+   expectedFile is a plausible-new path that already exists (workers
+   from prior tiers created them), the todo is dropped as redundant.
+   This prevents the "32/32 skipped" failure mode where the planner
+   proposes TODOs for files earlier workers already wrote.
 3. **Replan** (`processReplanQueue`) — fires whenever a todo goes
    stale. Serialized through agent-1 (single session). After
    `MAX_REPLANS_PER_TODO = 3` replans, the runner auto-skips with
@@ -174,7 +180,7 @@ When debugging "why did so many todos go stale," look here:
 | `worker JSON invalid (...)` | Model produced malformed envelope | Repair-prompt path; one retry. Surfaces in `jsonRepairs` per-agent. |
 | `worker produced invalid JSON after repair` | Repair also failed | Counted as `rejectedAttempts`. Often nemotron parser confusion. |
 | `CAS mismatch before write` | Lost the race to another worker | Inherent to optimistic-CAS. Higher concurrency = more collisions. |
-| `hunk apply failed: search text not found` | Worker's search anchor doesn't exactly match file (often whitespace) | Open: would benefit from fuzzy-match (suggested follow-up). |
+| `hunk apply failed: search text not found` | Worker's search anchor doesn't exactly match file (often whitespace) | Partial: trailing-whitespace normalization shipped 2026-05-09; content-drift anchors still fail. |
 | `worker output has leading UTF-8 BOM` | Rare; some models emit BOM | Detected + rejected. |
 | `critic rejected (...)` | Critic flagged busywork | Opt-in via `cfg.critic`. |
 | `auto-skipped: replan attempts exhausted (3)` | Replanner couldn't make the todo workable | `MAX_REPLANS_PER_TODO` constant; not currently configurable. |
@@ -187,7 +193,7 @@ model** before giving up. The sibling model is looked up via
 `siblingModelFor()` in `BlackboardRunnerConstants.ts`, which maps each
 primary model to a failover candidate (e.g. `nemotron-3-super → gemma4`).
 
-Four retry paths (all using `withSiblingRetry()` from `siblingRetry.ts`):
+Six retry paths (all using `withSiblingRetry()` from `siblingRetry.ts`):
 | Trigger | Condition | File | Retry |
 |---|---|---|---|
 | Planner parse fail | JSON invalid after repair + brain | `plannerRunner.ts` | Re-run planner with sibling |
@@ -255,10 +261,11 @@ which returns per-tier staleness and commit breakdowns.
 ```
 BlackboardRunner.ts        # The 864-line orchestration class. Most logic extracted into 22 standalone modules.
 Board.ts                   # In-memory todo/claim/finding store + events.
-plannerRunner.ts           # Planner + replanner agent, including sibling-retry.
+plannerRunner.ts           # Planner + replanner agent, including sibling-retry + redundant-TODO detection.
 contractBuilder.ts         # First-pass contract builder, including sibling-retry.
 auditorRunner.ts            # Auditor agent, including sibling-retry.
 contextBuilders.ts          # Prompt/context assembly for all blackboard agents.
+siblingRetry.ts             # Shared 6-path sibling-retry wrapper (withSiblingRetry).
 applyHunks.ts              # Replace/create/append hunk application.
 diffValidation.ts          # Zero-file + BOM checks.
 caps.ts                    # Wall-clock + commits + todos hard caps.

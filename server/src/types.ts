@@ -20,7 +20,6 @@ export type { TranscriptEntrySummary };
 
 
 // ── Events ──
-export type { TranscriptEntrySummary } from "./types/events.js";
 export type { TranscriptRole, TranscriptEntry, BoardCountsDTO, SwarmEventBody, SwarmEvent } from "./types/events.js";
 
 // ── Agents ──

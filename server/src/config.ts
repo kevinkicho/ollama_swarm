@@ -330,6 +330,27 @@ const Schema = z.object({
   // routes. Defaults to the repo-root web/dist directory. Set to ""
   // or "none" to disable static serving (dev mode uses vite dev server).
   STATIC_DIR: z.string().default(""),
+  // V2 substrate flags. USE_OLLAMA_DIRECT routes blackboard prompts
+  // directly to Ollama; USE_WORKER_PIPELINE_V2 enables the V2 worker
+  // path. Both default off — opt-in per-run.
+  USE_OLLAMA_DIRECT: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
+  USE_WORKER_PIPELINE_V2: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // Disable tool auto-dispatch for non-blackboard runners.
+  SWARM_DISABLE_TOOLS_AUTO: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // Conformance monitor: LLM-as-judge polls every 90s. Default on.
+  CONFORMANCE_MONITOR: z
+    .enum(["true", "false", "1", "0", "yes", "no", "off"])
+    .default("true")
+    .transform((v) => v !== "false" && v !== "0" && v !== "no" && v !== "off"),
 });
 
 const parsed = Schema.parse(process.env);

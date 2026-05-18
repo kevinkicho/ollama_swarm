@@ -19,7 +19,7 @@ export interface DriftCheckResult {
 }
 
 export async function checkPromptDrift(): Promise<DriftCheckResult> {
-  const registry = await import("../src/swarm/blackboard/prompts/registry.js");
+  const registry = await import("./registry.js");
   const entries = registry.promptRegistry;
 
   let totalAssertions = 0;
