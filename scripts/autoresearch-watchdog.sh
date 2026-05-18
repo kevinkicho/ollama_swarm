@@ -14,13 +14,16 @@ CHECKPOINT=".opencode/session-checkpoint.md"
 COOLDOWN=10
 MAX_RETRIES=3
 
-# Resolve opencode binary
-if command -v opencode &>/dev/null; then
-  OPENCODE_BIN="opencode"
-elif [[ -x "/home/linuxbrew/.linuxbrew/bin/opencode" ]]; then
-  OPENCODE_BIN="/home/linuxbrew/.linuxbrew/bin/opencode"
-else
-  echo "[watchdog] FATAL: opencode binary not found" >&2
+# Resolve opencode binary — try common WSL/brew paths
+OPENCODE_BIN=""
+for candidate in opencode /home/linuxbrew/.linuxbrew/bin/opencode /usr/local/bin/opencode /usr/bin/opencode; do
+  if command -v "$candidate" &>/dev/null; then
+    OPENCODE_BIN="$candidate"
+    break
+  fi
+done
+if [[ -z "$OPENCODE_BIN" ]]; then
+  echo "[watchdog] FATAL: opencode not found. Tried: opencode, homebrew, /usr/local/bin" >&2
   exit 1
 fi
 
@@ -78,7 +81,7 @@ while true; do
         fi
 
         set +e
-        opencode run --dangerously-skip-permissions "autoresearch" 2>&1
+        "$OPENCODE_BIN" run "autoresearch" 2>&1
         rc=$?
         set -e
 
