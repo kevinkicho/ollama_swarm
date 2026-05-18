@@ -38,7 +38,6 @@ import simpleGit from "simple-git";
 // T192: import the self-critique helpers shipped in T179.
 // Note: forward-references (the helpers are defined below the class
 // in the same file) — TypeScript hoists exports so this works.
-import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
 import { pickProvider } from "../providers/pickProvider.js";
 import { tokenTracker } from "../services/ollamaProxy.js";
 
@@ -641,7 +640,3 @@ export async function collectAllFiles(clonePath: string): Promise<string[]> {
   }
   return out;
 }
-// touchModel: silence unused-import warning when toOpenCodeModelRef is referenced
-// only conditionally elsewhere; baseline keeps the helper available for future
-// per-call provider routing.
-void toOpenCodeModelRef;
