@@ -179,6 +179,9 @@ const TEST_FILES = [
   "../shared/src/providers.test.ts",
   "  ../shared/src/modelConfig.test.ts",
   "../shared/src/summarizeAgentJson.test.ts",
+  "../shared/src/stripAgentText.test.ts",
+  "../shared/src/extractJson.test.ts",
+  "../shared/src/topology.test.ts",
   "src/swarm/blackboard/buildCommandAllowlist.test.ts",
 
   // services/
