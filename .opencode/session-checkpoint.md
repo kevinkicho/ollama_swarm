@@ -2,6 +2,7 @@
 
 > Last updated: 2026-05-18
 > Status: **in_progress**
+> Tier: 0 (Survey)
 
 ## Task
 Autoresearch Tier 2–5 — ongoing autonomous improvement

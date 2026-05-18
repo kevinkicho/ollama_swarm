@@ -175,7 +175,7 @@ const TEST_FILES = [
   "../shared/src/extractThinkTags.test.ts",
   "../shared/src/extractToolCallMarkers.test.ts",
   "../shared/src/wsProtocol.test.ts",
-  "  ../shared/src/modelConfig.test.ts",
+  "../shared/src/modelConfig.test.ts",
   "../shared/src/summarizeAgentJson.test.ts",
   "../shared/src/stripAgentText.test.ts",
   "../shared/src/extractJson.test.ts",
