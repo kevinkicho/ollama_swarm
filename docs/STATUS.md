@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-05-17 (test count, provider count, recent fix entries)
+**Last updated:** 2026-05-18 (test count, import path fix, rate limiter fix)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -76,7 +76,7 @@ The V1 SDK loop (per-agent opencode subprocess + SSE chunked streaming) was reti
 | Event log reader | `server/src/swarm/blackboard/EventLogReaderV2.ts` | primary; backs `/api/v2/event-log/runs` |
 | `formatServerSummary` | `shared/src/formatServerSummary.ts` | shared between server + web |
 
-**Test totals:** 2,965 tests passing / 0 failing as of 2026-05-18. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
+**Test totals:** 3,168 tests passing / 0 failing as of 2026-05-18. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
 
 ---
 

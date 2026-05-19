@@ -47,18 +47,12 @@ cd web && npx vite build
 
 ### Start dev server
 
-**Kevin runs `npm run dev` from Windows PowerShell.** The setup is WSL ↔ Windows: `node_modules` is shared but esbuild binaries are platform-specific. **Don't run `npm install` or naked `npm run dev` from WSL** — see `feedback_wsl_windows_esbuild` memory.
-
-If you need the dev server up from a WSL session, spawn it as a Windows process via `cmd.exe`:
-
-```bash
-cmd.exe /c "cd /d C:\\Users\\kevin\\Desktop\\ollama_swarm && npm run dev"
-```
+`npm run dev` works from WSL or Windows. The only WSL hazard is `npm install` — it swaps esbuild binaries to Linux and breaks the Windows dev-server. See `feedback_wsl_windows_esbuild` memory.
 
 For long validation runs where you want to avoid `/mnt/c` inotify SIGTERM flakes (the tsx watch occasionally killing the dev server after summary writes), append `--no-watch`:
 
 ```bash
-cmd.exe /c "...npm run dev -- --no-watch"
+npm run dev -- --no-watch
 ```
 
 Health: `curl -s http://localhost:8243/api/health` should return `{"ok":true,...}`.

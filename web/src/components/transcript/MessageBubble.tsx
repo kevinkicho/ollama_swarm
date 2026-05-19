@@ -15,7 +15,7 @@
 
 import { useMemo, useState } from "react";
 import type { TranscriptEntry } from "../../types";
-import { summarizeAgentJson } from "../../../shared/src/summarizeAgentJson";
+import { summarizeAgentJson } from "../../../../shared/src/summarizeAgentJson";
 import { agentBubblePalette, hueForAgent } from "../agentPalette";
 import { CollapsedSegment } from "./StreamingDock";
 import { segmentsFromSplitPoints } from "../useSegmentSplitter";
@@ -29,7 +29,7 @@ import { WorkerHunksBubble, tryParseWorkerHunks } from "./WorkerHunksBubble";
 import { RunFinishedGrid, SeedAnnounceGrid } from "./RunFinishedGrid";
 import { DebateVerdictBubble } from "./DebateVerdictBubble";
 import { RunStartDivider } from "./RunStartDivider";
-import { formatServerSummary } from "../../../shared/src/formatServerSummary";
+import { formatServerSummary } from "../../../../shared/src/formatServerSummary";
 import { ThoughtsBlock } from "./ThoughtsBlock";
 import { ToolCallsBlock } from "./ToolCallsBlock";
 import { ContractBubble } from "./ContractBubble";

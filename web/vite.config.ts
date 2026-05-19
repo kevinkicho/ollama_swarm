@@ -42,6 +42,11 @@ export default defineConfig(({ mode }) => {
   }
   return {
     plugins,
+    resolve: {
+      alias: {
+        "@shared": path.resolve(__dirname, "..", "shared", "src"),
+      },
+    },
     define: {
       __BACKEND_PORT__: JSON.stringify(backend),
     },
@@ -50,6 +55,9 @@ export default defineConfig(({ mode }) => {
       strictPort: false,
       proxy: {
         "/api": { target, changeOrigin: true },
+      },
+      fs: {
+        allow: [path.resolve(__dirname, "..")],
       },
       // WSL2 + /mnt/c — inotify doesn't see Windows-side file changes, so
       // chokidar must poll. Cheap on this small tree (a few dozen files);

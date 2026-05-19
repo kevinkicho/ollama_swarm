@@ -3,6 +3,20 @@
 All notable changes to ollama_swarm. Reverse chronological order.
 The git log is the authoritative record; this summarizes user-facing changes.
 
+## 2026-05-18 — Import path fix + rate limiter isolation + express import
+
+**Cross-package import fix.** Commit `3b51973` deleted 3 web shim files and redirected their callers directly to `shared/src/`, but the callers in `components/transcript/` are one directory deeper than the old shims. `../../../` from that depth reaches `web/`, not the project root — off by one `../`. Fixed the 3 affected imports: `../../../shared/` → `../../../../shared/`.
+
+**Rate limiter test isolation.** The `rateLimit` factory shared a module-level `entries` Map, causing test cross-contamination. Changed to per-instance state. Also fixed 3 test cases with inverted assertion logic (`blocked` was set to `true` in `next()` callback, meaning "allowed", but assertions expected it to mean "blocked").
+
+**Missing express import.** `server/src/index.ts` was missing `import express` — server failed to start.
+
+**AGENT-GUIDE.md:** Clarified that `npm run dev` works from WSL; only `npm install` is the WSL hazard.
+
+**Vite fs.allow:** Added to `vite.config.ts` to allow resolving imports outside the web directory.
+
+**Tests:** 3,168 passing, 0 failing.
+
 ## 2026-05-17 — Model pipeline consolidation + OpenCode Go fix + zombie prevention
 
 **Model resolution consolidation.** Created `shared/src/modelConfig.ts` — single `resolveModels()` replaces 31 scattered decision points. Fallback: explicit → topology → role default → model → config default. Server route, topology overlay, and localStorage all use same resolution.

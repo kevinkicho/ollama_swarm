@@ -5,9 +5,7 @@ interface RateLimitEntry {
   resetTime: number;
 }
 
-const entries = new Map<string, RateLimitEntry>();
-
-function cleanExpired(now: number): void {
+function cleanExpired(now: number, entries: Map<string, RateLimitEntry>): void {
   for (const [key, entry] of entries) {
     if (now > entry.resetTime) entries.delete(key);
   }
@@ -19,9 +17,10 @@ export function rateLimit(options: {
   keyFn?: (req: Request) => string;
 }): (req: Request, res: Response, next: NextFunction) => void {
   const { windowMs, max, keyFn = (req) => req.ip ?? "unknown" } = options;
+  const entries = new Map<string, RateLimitEntry>();
   return (req: Request, res: Response, next: NextFunction) => {
     const now = Date.now();
-    cleanExpired(now);
+    cleanExpired(now, entries);
     const key = keyFn(req);
     let entry = entries.get(key);
     if (!entry || now > entry.resetTime) {
