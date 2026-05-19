@@ -522,6 +522,13 @@ export function startOllamaProxy(opts: ProxyOpts): { stop: () => Promise<void> }
     req.pipe(proxyReq);
   });
 
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(`ollama-proxy: port ${opts.listenPort} is in use — set OLLAMA_PROXY_PORT=0 to disable or free the port`);
+    } else {
+      console.error(`ollama-proxy: ${err.message}`);
+    }
+  });
   server.listen(opts.listenPort, "127.0.0.1");
 
   return {

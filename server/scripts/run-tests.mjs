@@ -181,6 +181,7 @@ const TEST_FILES = [
   "../shared/src/extractJson.test.ts",
   "../shared/src/providers.test.ts",
   "../shared/src/topology.test.ts",
+  "../shared/src/workerHunks.test.ts",
   "src/swarm/blackboard/buildCommandAllowlist.test.ts",
 
   // services/
@@ -222,6 +223,8 @@ const TEST_FILES = [
   "src/middleware/securityHeaders.test.ts",
   "src/middleware/requestLogger.test.ts",
   "src/middleware/apiVersion.test.ts",
+  "src/middleware/errorHandler.test.ts",
+  "src/middleware/rateLimiter.test.ts",
   "src/middleware/cors.test.ts",
   "src/middleware/compression.test.ts",
   "src/middleware/staticServing.test.ts",
@@ -234,11 +237,22 @@ const TEST_FILES = [
   "../web/src/components/agentPalette.test.ts",
   "../web/src/components/useSegmentSplitter.test.ts",
   "../web/src/components/transcript/JsonBubbles.test.ts",
+  "../web/src/components/setup/RecentRuns.test.ts",
 
+  // 2026-05-18: new unit tests for previously untested modules (+73 tests).
+  "src/swarm/sdkError.test.ts",
+  "src/swarm/interruptibleSleep.test.ts",
+  "src/swarm/blackboard/prompts/lenientParse.test.ts",
+  "src/swarm/blackboard/runnerHelpers.test.ts",
   // 2026-05-18: registered after verifying pass (22 + 26 + 7 = 55 tests).
   "src/services/RunStatePersister.test.ts",
   "src/swarm/RoundRobinRunner.test.ts",
   "src/swarm/blackboard/BlackboardRunner.hunkRepair.test.ts",
+
+  // 2026-05-18: new tests for previously untested modules.
+  "src/swarm/blackboard/truncate.test.ts",
+  "src/swarm/sdkError.test.ts",
+  "src/swarm/blackboard/goalListParser.test.ts",
 
   // 2026-05-17: previously orphaned (existed on disk but never registered).
   "src/swarm/blackboard/coverageGap.test.ts",

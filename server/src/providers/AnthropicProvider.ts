@@ -310,6 +310,7 @@ export async function readAnthropicStreamFull(
   const timeoutSentinel: unique symbol = Symbol("timeout") as never;
   let pendingRead: Promise<{ done: boolean; value?: Uint8Array }> = reader.read();
 
+  try {
   while (true) {
     if (opts.signal.aborted) {
       return blocksFromState(blockState, stopReason, promptTokens, responseTokens, "aborted");
@@ -406,6 +407,10 @@ export async function readAnthropicStreamFull(
   }
   void t0;
   return blocksFromState(blockState, stopReason, promptTokens, responseTokens, "done");
+  } finally {
+    await reader.cancel().catch(() => {});
+    try { reader.releaseLock(); } catch { /* already released */ }
+  }
 }
 
 function blocksFromState(

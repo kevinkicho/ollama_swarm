@@ -276,6 +276,7 @@ export async function readOpenAiStreamFull(
   const timeoutSentinel: unique symbol = Symbol("timeout") as never;
   let pendingRead: Promise<{ done: boolean; value?: Uint8Array }> = reader.read();
 
+  try {
   while (true) {
     if (opts.signal.aborted) return finalize("aborted");
     const timeoutReason = checkTimeout();
@@ -341,6 +342,10 @@ export async function readOpenAiStreamFull(
     }
   }
   return finalize("done");
+  } finally {
+    await reader.cancel().catch(() => {});
+    try { reader.releaseLock(); } catch { /* already released */ }
+  }
 }
 
 /** Back-compat reader for the Phase 1 tests that returned just text + usage. */
