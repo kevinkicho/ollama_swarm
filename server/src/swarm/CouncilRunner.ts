@@ -434,6 +434,12 @@ export class CouncilRunner extends DiscussionRunnerBase {
     // Planner fallback
     if (newTodos.length === 0) {
       this.consecutiveEmptyCycles++;
+      // When all criteria are met, try tier promotion immediately
+      // instead of waiting for the planner fallback to fail.
+      if (unmetCount === 0) {
+        this.consecutiveEmptyCycles = 0;
+        return "retry";
+      }
       if (this.consecutiveEmptyCycles >= 2) {
         this.appendSystem(`[audit] No new todos for ${this.consecutiveEmptyCycles} cycles — trying planner fallback.`);
         const lead = this.opts.manager.list().find((a) => a.index === 1);
