@@ -255,6 +255,38 @@ export async function tryPromoteNextTier(
     return false;
   }
 
+  // Reject degenerate contracts that don't propose real new work.
+  // After compaction the planner may lose context and produce trivially-met
+  // criteria like "read the repo files" or "determine current state".
+  const degeneratePatterns = [
+    /read (the )?(repo|repository|project) file/i,
+    /determine (the )?current state/i,
+    /review (the )?(code|project|files)/i,
+    /readme/i,
+    /key files/i,
+  ];
+  const realCriteria = parsed.contract.criteria.filter((c) => {
+    const desc = c.description.toLowerCase();
+    const hasRealFiles = (c.expectedFiles ?? []).some(
+      (f: string) => f.startsWith("src/") || f.startsWith("server/") || f.startsWith("tests/"),
+    );
+    if (hasRealFiles) return true;
+    return !degeneratePatterns.some((p) => p.test(desc));
+  });
+  if (realCriteria.length === 0) {
+    ctx.setTierUpFailures(ctx.getTierUpFailures() + 1);
+    ctx.appendSystem(
+      `Tier ${nextTier} produced ${parsed.contract.criteria.length} degenerate criterion(crite)ria (no real file targets) — rejecting. Ratchet failure ${ctx.getTierUpFailures()}/3.`,
+    );
+    return false;
+  }
+  if (realCriteria.length < parsed.contract.criteria.length) {
+    ctx.appendSystem(
+      `Tier ${nextTier}: filtered ${parsed.contract.criteria.length - realCriteria.length} degenerate criterion(crite)ria, ${realCriteria.length} remain.`,
+    );
+    parsed.contract.criteria = realCriteria;
+  }
+
   ctx.setTierUpFailures(0);
 
   const priorMaxId = largestCriterionIdNumber(ctx);
@@ -380,6 +412,14 @@ export async function runAuditedExecution(
         if (promoted) {
           continue;
         }
+        // Tier promotion failed (0 criteria or parse failure) — retry
+        // instead of falling through to stop. The planner may succeed on
+        // the next cycle with a different angle. The tierUpFailures
+        // counter inside tryPromoteNextTier caps retries at 3.
+        ctx.appendSystem(
+          `Tier promotion failed (${ctx.getTierUpFailures()}/3) — retrying next cycle.`,
+        );
+        continue;
       }
       const contract = ctx.getContract();
       const wontDoCount = contract?.criteria.filter((c) => c.status === "wont-do").length ?? 0;
