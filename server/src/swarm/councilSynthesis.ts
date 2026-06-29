@@ -10,8 +10,6 @@ import { extractProviderText } from "./councilUtils.js";
 import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
-import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
-import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import { describeSdkError } from "./sdkError.js";
 import { buildCouncilSynthesisPrompt } from "./councilPromptHelpers.js";
 import { runPostSynthesisCritique } from "./postSynthesisCritique.js";
@@ -76,7 +74,7 @@ export async function runSynthesisPass(
       signal: controller.signal,
       manager: ctx.manager,
       agentName: "swarm-read",
-      promptAddendum: getAgentAddendum(cfg.topology, lead.index),
+      promptAddendum: "",
       describeError: describeSdkError,
       onTiming: ({ attempt, elapsedMs, success }: { attempt: number; elapsedMs: number; success: boolean }) => {
         stats.onTiming(lead.id, success, elapsedMs);
@@ -139,7 +137,7 @@ export async function runSynthesisPass(
       text = revised;
     }
 
-    const stripped = stripAgentText(text);
+    const stripped = { finalText: text, thoughts: [] as string[], toolCalls: [] as unknown[] };
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "agent",
