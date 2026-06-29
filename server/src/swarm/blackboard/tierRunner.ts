@@ -103,7 +103,9 @@ export function allCriteriaResolvedSnapshot(ctx: TierContext): boolean {
 }
 
 export function resolvedMaxTiers(ctx: TierContext): number {
-  const perRun = ctx.getActive()?.ambitionTiers;
+  const active = ctx.getActive();
+  if (active?.rounds === 0 || (active?.rounds ?? 0) >= 1_000_000) return Infinity; // autonomous/continuous mode — no tier cap
+  const perRun = active?.ambitionTiers;
   if (perRun !== undefined) {
     return Math.max(1, perRun);
   }
@@ -113,7 +115,7 @@ export function resolvedMaxTiers(ctx: TierContext): number {
 
 export function maxAuditInvocations(ctx: TierContext): number {
   const rounds = ctx.getActive()?.rounds;
-  if (rounds === 0) return Infinity; // autonomous mode — no hard cap
+  if (rounds === 0 || (rounds ?? 0) >= 1_000_000) return Infinity; // autonomous/continuous mode — no hard cap
   return rounds ?? 5;
 }
 
@@ -360,6 +362,25 @@ export async function runAuditedExecution(
 
     // All resolved (met or wont-do) but not all met — partial progress.
     if (allCriteriaResolved(ctx)) {
+      const maxTiers = resolvedMaxTiers(ctx);
+      if (
+        maxTiers > 1 &&
+        ctx.getCurrentTier() < maxTiers &&
+        ctx.getTierUpFailures() < 3 &&
+        !ctx.getStopping()
+      ) {
+        recordTierCompletion(ctx);
+        const promoted = await tryPromoteNextTier(ctx, planner, maxTiers);
+        if (ctx.getStopping()) return;
+        ctx.v2ObserverApply({
+          type: "tier-up-decision",
+          ts: Date.now(),
+          promoted,
+        });
+        if (promoted) {
+          continue;
+        }
+      }
       const contract = ctx.getContract();
       const wontDoCount = contract?.criteria.filter((c) => c.status === "wont-do").length ?? 0;
       const metCount = contract?.criteria.filter((c) => c.status === "met").length ?? 0;
@@ -382,12 +403,23 @@ export async function runAuditedExecution(
     }
 
     const openBefore = ctx.boardCounts().open;
-    await ctx.runAuditor(planner);
+    try {
+      await ctx.runAuditor(planner);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.appendSystem(`Auditor failed (${msg}) — skipping this cycle, will retry next.`);
+    }
     if (ctx.getStopping()) return;
 
     const openAfter = ctx.boardCounts().open;
     if (openAfter === openBefore && !allCriteriaResolved(ctx) && openAfter === 0) {
-      const fallbackSucceeded = await ctx.runPlannerFallbackForUnmetCriteria(planner);
+      let fallbackSucceeded = false;
+      try {
+        fallbackSucceeded = await ctx.runPlannerFallbackForUnmetCriteria(planner);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.appendSystem(`Planner fallback failed (${msg}) — will retry next cycle.`);
+      }
       if (ctx.getStopping()) return;
       if (fallbackSucceeded) {
         ctx.setConsecutiveStuckCycles(0);
@@ -395,7 +427,8 @@ export async function runAuditedExecution(
       }
       const stuckCycles = ctx.getConsecutiveStuckCycles() + 1;
       ctx.setConsecutiveStuckCycles(stuckCycles);
-      const isAutonomous = (ctx.getActive()?.rounds ?? 1) === 0;
+      const r = ctx.getActive()?.rounds ?? 1;
+      const isAutonomous = r === 0 || r >= 1_000_000;
       if (isAutonomous && stuckCycles < MAX_STUCK_CYCLES_FOR_INFINITE_RUN) {
         ctx.appendSystem(
           `Stuck cycle ${stuckCycles}/${MAX_STUCK_CYCLES_FOR_INFINITE_RUN} — auditor + planner produced no new work; re-trying in autonomous mode.`,
