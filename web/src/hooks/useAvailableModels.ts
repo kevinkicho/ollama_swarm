@@ -17,7 +17,7 @@
 // re-fetches.
 
 import { useEffect, useState } from "react";
-import type { Provider } from "../../../shared/src/providers";
+import type { Provider } from "@ollama-swarm/shared/providers";
 
 interface ModelsState {
   models: readonly string[];

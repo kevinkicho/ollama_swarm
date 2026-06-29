@@ -1,17 +1,17 @@
-// Task #164 (refactor): goal-generation pre-pass (#127) extracted
-// from BlackboardRunner.ts.
+// Goal-generation pre-pass: direction-aware variant.
 //
-// Asks the planner agent to propose 3-5 ambitious-but-feasible
-// improvements to the repo, then picks the top one (highest
-// impact:effort, surfaced as `TOP: N` on a trailing line) as the
-// directive. Returns the chosen directive string, or undefined when
-// the model's response can't be salvaged — caller silently falls
-// back to planner-from-scratch.
+// When a user directive IS provided, this pass proposes 3-5 improvements
+// that ADVANCE the directive given the current state of the codebase.
+// It does NOT replace the directive — it enriches it with concrete,
+// code-grounded goals that the planner can use to derive criteria.
 //
-// Costs one planner prompt; cheap. Failure-open everywhere.
+// When no directive is provided, falls back to the original behavior:
+// propose 3-5 ambitious improvements ranked by impact:effort.
+//
+// The output is always a list of goals. The caller (lifecycleRunner)
+// uses these goals to ENHANCE the directive, not replace it.
 
 import type { Agent } from "../../services/AgentManager.js";
-import { toOpenCodeModelRef } from "../../../../shared/src/providers.js";
 import { extractText } from "../extractText.js";
 import { parseGoalList } from "./goalListParser.js";
 import type { PlannerSeed } from "./prompts/planner.js";
@@ -21,40 +21,77 @@ export async function runGoalGenerationPrePass(
   planner: Agent,
   seed: PlannerSeed,
   appendSystem: (text: string) => void,
-  // Issue C-min (2026-04-27): caller-provided callbacks so the UI
-  // shows agent.status="thinking" while this pass is in flight (was
-  // showing "ready" because this code path bypasses promptAgent),
-  // and so the runner can abort the prompt via signal if needed.
   opts: {
     signal?: AbortSignal;
     onStatusChange?: (status: "thinking" | "ready") => void;
   } = {},
-): Promise<string | undefined> {
-  appendSystem("Goal-generation pre-pass: asking planner to propose ambitious goals…");
+): Promise<string[] | undefined> {
+  const hasDirective = seed.userDirective && seed.userDirective.length > 0;
   const topLevelText = seed.topLevel.slice(0, 60).join(", ");
   const readmeText = seed.readmeExcerpt
     ? `=== README excerpt ===\n${seed.readmeExcerpt.slice(0, 4000)}\n=== END ===`
     : "(no README)";
-  const prompt = [
-    "You are a senior engineer doing a one-shot triage of an unfamiliar repo.",
-    `Repo: ${seed.repoUrl}`,
-    `Top-level entries: ${topLevelText}`,
-    "",
-    readmeText,
-    "",
-    "Propose 3-5 AMBITIOUS-BUT-FEASIBLE improvements ranked by impact:effort. Each:",
-    "- 1 sentence describing the improvement.",
-    "- Cites 1-3 file paths from the repo where the work would land.",
-    "- Notes WHY it's ambitious (what gets unlocked) and WHY feasible (concrete attack path, no research wave required).",
-    "",
-    "Avoid trivia (typo fixes, dependency bumps, doc-only edits). Favor structural improvements that would matter to the next person reading the code.",
-    "",
-    "Output format:",
-    "1. [TITLE] - one-sentence description (files: a/b.ts, c.ts) — Ambitious because X. Feasible because Y.",
-    "2. ...",
-    "",
-    "After the list, on a NEW LINE, write `TOP: <number>` (e.g. `TOP: 1`) — the single goal that has the best impact:effort ratio. The user will run a swarm against this top goal.",
-  ].join("\n");
+
+  const repoFileList = seed.repoFiles && seed.repoFiles.length > 0
+    ? `\nProject files (${seed.repoFiles.length} total):\n${seed.repoFiles.slice(0, 100).join("\n")}${seed.repoFiles.length > 100 ? `\n... and ${seed.repoFiles.length - 100} more` : ""}`
+    : "";
+
+  let prompt: string;
+
+  if (hasDirective) {
+    appendSystem(
+      `Goal-generation pre-pass: analyzing codebase to enrich directive "${seed.userDirective!.slice(0, 80)}…"`,
+    );
+    prompt = [
+      "You are a senior engineer analyzing a codebase to help implement a specific user request.",
+      "",
+      `USER DIRECTIVE (what the user wants):`,
+      seed.userDirective,
+      "",
+      `Repo: ${seed.repoUrl}`,
+      `Top-level entries: ${topLevelText}`,
+      repoFileList,
+      readmeText,
+      "",
+      "Your job: Identify 3-5 CONCRETE, CODE-GROUNDED improvements that ADVANCE this directive.",
+      "For each improvement:",
+      "- 1 sentence describing what needs to happen.",
+      "- Cite 1-3 SPECIFIC file paths from the project where the work would land.",
+      "- Explain HOW this advances the user's directive.",
+      "- Explain WHY this is feasible given the current codebase state.",
+      "",
+      "RULES:",
+      "1. Every improvement MUST directly serve the user's directive. Do NOT propose unrelated features.",
+      "2. Every file path MUST appear in the PROJECT FILES list above. Do NOT invent paths.",
+      "3. Read the actual files using your tools before proposing. Do NOT guess.",
+      "4. Favor improvements that fix existing gaps over creating new features from scratch.",
+      "5. If the directive is already well-served by the codebase, say so — don't force improvements.",
+      "",
+      "Output format:",
+      "1. [TITLE] - description (files: a/b.ts, c.ts) — Advances directive because X.",
+      "2. ...",
+    ].join("\n");
+  } else {
+    appendSystem("Goal-generation pre-pass: no directive — proposing ambitious goals…");
+    prompt = [
+      "You are a senior engineer doing a one-shot triage of an unfamiliar repo.",
+      `Repo: ${seed.repoUrl}`,
+      `Top-level entries: ${topLevelText}`,
+      repoFileList,
+      readmeText,
+      "",
+      "Propose 3-5 AMBITIOUS-BUT-FEASIBLE improvements ranked by impact:effort. Each:",
+      "- 1 sentence describing the improvement.",
+      "- Cites 1-3 file paths from the repo where the work would land.",
+      "- Notes WHY it's ambitious (what gets unlocked) and WHY feasible (concrete attack path).",
+      "",
+      "Avoid trivia (typo fixes, dependency bumps, doc-only edits). Favor structural improvements.",
+      "",
+      "Output format:",
+      "1. [TITLE] - description (files: a/b.ts, c.ts) — Ambitious because X. Feasible because Y.",
+      "2. ...",
+    ].join("\n");
+  }
 
   if (opts.signal?.aborted) return undefined;
   opts.onStatusChange?.("thinking");
@@ -66,14 +103,11 @@ export async function runGoalGenerationPrePass(
     });
     const text = extractText(res);
     if (!text) return undefined;
-    const topMatch = /^\s*TOP\s*:\s*(\d+)\s*$/im.exec(text);
     const items = parseGoalList(text);
-    if (items.length === 0) return undefined;
-    const topIdx = topMatch ? Math.max(1, Math.min(items.length, Number(topMatch[1]!))) - 1 : 0;
-    return items[topIdx];
+    return items.length > 0 ? items : undefined;
   } catch (err) {
     appendSystem(
-      `Goal-generation pre-pass failed (${err instanceof Error ? err.message : String(err)}); falling back to planner-from-scratch.`,
+      `Goal-generation pre-pass failed (${err instanceof Error ? err.message : String(err)}); continuing without enrichment.`,
     );
     return undefined;
   } finally {

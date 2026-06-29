@@ -228,6 +228,7 @@ export function PresetAdvancedSettings(props: {
   setCouncilMappers: (v: boolean) => void;
   rubricGrading: boolean;
   setRubricGrading: (v: boolean) => void;
+  provider: string;
 }) {
   const [open, setOpen] = useState(false);
   const {
@@ -292,6 +293,7 @@ export function PresetAdvancedSettings(props: {
     setCouncilMappers,
     rubricGrading,
     setRubricGrading,
+    provider,
   } = props;
 
   // T199 (2026-05-04): expanded the gate to include round-robin,
@@ -395,6 +397,7 @@ export function PresetAdvancedSettings(props: {
                     workerModel={workerModel}
                     setWorkerModel={setWorkerModel}
                     fallbackModel={fallbackModel}
+                    provider={provider}
                   />
                   <BlackboardWallClockCap
                     wallClockCapMin={wallClockCapMin}
@@ -419,6 +422,7 @@ export function PresetAdvancedSettings(props: {
                     criticEnsemble={criticEnsemble}
                     setCriticEnsemble={setCriticEnsemble}
                     fallbackModel={fallbackModel}
+                    provider={provider}
                   />
                   <BlackboardUiUrl uiUrl={uiUrl} setUiUrl={setUiUrl} />
                   <BlackboardVerifyCommand
@@ -444,6 +448,7 @@ export function PresetAdvancedSettings(props: {
                   setSynthesizer={setDispositionSynthesizerModel}
                   setGapFinder={setDispositionGapFinderModel}
                   setBuilder={setDispositionBuilderModel}
+                  provider={provider}
                 />
               ) : null}
               {presetId === "orchestrator-worker-deep" ? (
@@ -455,6 +460,7 @@ export function PresetAdvancedSettings(props: {
                   setOrchestratorModel={setOrchestratorModel}
                   setMidLeadModel={setMidLeadModel}
                   setWorkerModel={setOwDeepWorkerModel}
+                  provider={provider}
                 />
               ) : null}
               {presetId === "moa" ? (
@@ -463,6 +469,7 @@ export function PresetAdvancedSettings(props: {
                   proposerCount={agentCount}
                   proposerModels={moaProposerModels}
                   setProposerModel={setMoaProposerModelAt}
+                  provider={provider}
                 />
               ) : null}
               {/* Combination feature toggles — Plans 1-7 */}

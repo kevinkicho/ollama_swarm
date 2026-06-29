@@ -11,9 +11,9 @@ export type CouncilContractPref = "" | "on" | "off";
 // MODEL_REASONING / MODEL_CODING / MODEL_VERIFIER framework above.
 // Pre-populated as initial state for the matching SetupForm inputs;
 // users can clear to fall through to the main Model field.
-export const BLACKBOARD_DEFAULT_PLANNER_MODEL = "glm-5.1:cloud";
-export const BLACKBOARD_DEFAULT_WORKER_MODEL = "gemma4:31b-cloud";
-export const BLACKBOARD_DEFAULT_AUDITOR_MODEL = "nemotron-3-super:cloud";
+export const BLACKBOARD_DEFAULT_PLANNER_MODEL = "deepseek-v4-flash:cloud";
+export const BLACKBOARD_DEFAULT_WORKER_MODEL = "deepseek-v4-flash:cloud";
+export const BLACKBOARD_DEFAULT_AUDITOR_MODEL = "deepseek-v4-flash:cloud";
 
 export function BlackboardHelp() {
   const [open, setOpen] = useState(false);
@@ -65,12 +65,14 @@ export function BlackboardModelOverrides({
   workerModel,
   setWorkerModel,
   fallbackModel,
+  provider,
 }: {
   plannerModel: string;
   setPlannerModel: (m: string) => void;
   workerModel: string;
   setWorkerModel: (m: string) => void;
   fallbackModel: string;
+  provider: string;
 }) {
   return (
     <div className="space-y-2">
@@ -87,6 +89,7 @@ export function BlackboardModelOverrides({
           onChange={(v) => setPlannerModel(v.slice(0, 200))}
           placeholder={`(empty = uses main model)`}
           ariaLabel="Planner model override"
+          provider={provider}
         />
       </Field>
       <Field
@@ -102,6 +105,7 @@ export function BlackboardModelOverrides({
           onChange={(v) => setWorkerModel(v.slice(0, 200))}
           placeholder={`(empty = uses main model)`}
           ariaLabel="Worker model override"
+          provider={provider}
         />
       </Field>
     </div>
@@ -212,6 +216,7 @@ export function BlackboardAgentTopology({
   criticEnsemble,
   setCriticEnsemble,
   fallbackModel,
+  provider,
 }: {
   dedicatedAuditor: boolean;
   setDedicatedAuditor: (v: boolean) => void;
@@ -222,6 +227,7 @@ export function BlackboardAgentTopology({
   criticEnsemble: boolean;
   setCriticEnsemble: (v: boolean) => void;
   fallbackModel: string;
+  provider: string;
 }) {
   return (
     <div className="space-y-2">
@@ -247,6 +253,7 @@ export function BlackboardAgentTopology({
           placeholder={`(empty = uses main model)`}
           ariaLabel="Auditor model override"
           className={`input font-mono ${!dedicatedAuditor ? "opacity-50 pointer-events-none" : ""}`}
+          provider={provider}
         />
       </Field>
       <ToggleField

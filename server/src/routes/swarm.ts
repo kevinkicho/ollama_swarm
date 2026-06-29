@@ -3,8 +3,8 @@ import path from "node:path";
 import { promises as fs, readFileSync } from "node:fs";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
-import { TopologySchema, deriveLegacyFields, synthesizeTopology } from "../../../shared/src/topology.js";
-import { resolveModels, type ModelDefaults } from "../../../shared/src/modelConfig.js";
+import { TopologySchema, deriveLegacyFields, synthesizeTopology } from "@ollama-swarm/shared/topology";
+import { resolveModels, type ModelDefaults } from "@ollama-swarm/shared/modelConfig";
 import { config } from "../config.js";
 import { validateContinuousMode } from "./continuousMode.js";
 import {
@@ -215,10 +215,14 @@ export function swarmRouter(orch: Orchestrator): Router {
     const parentPath = normalizeWslPath(rawParentPath);
     let destPath: string;
     try {
-      if (!repoUrl.startsWith("http://") && !repoUrl.startsWith("https://")) {
-        destPath = path.resolve(normalizeWslPath(repoUrl));
+      const trimmed = (repoUrl ?? "").trim();
+      if (!trimmed) {
+        // No repo URL: parentPath IS the workspace
+        destPath = path.resolve(normalizeWslPath(parentPath));
+      } else if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+        destPath = path.resolve(normalizeWslPath(trimmed));
       } else {
-        destPath = deriveCloneDir(repoUrl, parentPath);
+        destPath = deriveCloneDir(trimmed, parentPath);
       }
     } catch (err) {
       res.status(400).json({
@@ -278,6 +282,7 @@ export function swarmRouter(orch: Orchestrator): Router {
       res.status(400).json({ error: msg || "invalid request body", _detail: flat });
       return;
     }
+    console.log(`[diag-route] parsed.data.userDirective=${parsed.data.userDirective ? `"${parsed.data.userDirective.slice(0, 80)}…"` : "undefined"}, parsed.data.autoGenerateGoals=${parsed.data.autoGenerateGoals}`);
     // Task #147: force-restart path. When the caller sets force=true, we
     // pre-emptively stop any existing runner so the new start always gets
     // a clean slot. Recovers from the "stuck-orchestrator" state observed
@@ -330,6 +335,20 @@ export function swarmRouter(orch: Orchestrator): Router {
         error: `Map-reduce requires at least 4 agents (1 reducer + 3 mappers). With fewer mappers, slice quality degrades sharply and one mapper typically gets stuck on a tiny slice. Got agentCount=${effAgentCount}.`,
       });
       return;
+    }
+    // Council preset: always exactly 3 agents. 3 is the sweet spot for
+    // diverse independent drafts without excessive token burn. Fewer
+    // than 3 reduces diversity; more than 3 adds cost without meaningful
+    // improvement in coverage.
+    if (parsed.data.preset === "council" && effAgentCount !== 3) {
+      if (effAgentCount < 3) {
+        res.status(400).json({
+          error: `Council requires at least 3 agents. With fewer, draft diversity collapses and the council degenerates into a single-agent analysis. Got agentCount=${effAgentCount}.`,
+        });
+        return;
+      }
+      // Silently clamp to 3 when > 3
+      parsed.data.agentCount = 3;
     }
     // Task #131: orchestrator-worker-deep needs at least 1 orchestrator
     // + 1 mid-lead + 2 workers = 4 agents to add coverage over flat OW.
@@ -390,9 +409,15 @@ export function swarmRouter(orch: Orchestrator): Router {
       // unbounded value (1M). The runners see this same cfg.rounds in
       // their for-loop, but a budget cap is guaranteed to stop the run
       // long before round 1M. Avoids touching every runner's loop.
-      const effectiveRounds = parsed.data.continuous
-        ? 1_000_000
-        : (parsed.data.rounds ?? (parsed.data.preset === "blackboard" ? 0 : 3));
+      // If the user explicitly set rounds=0 (blackboard autonomous mode),
+      // honor that over the continuous override so tierRunner can detect
+      // autonomous mode via active?.rounds === 0.
+      const explicitRounds = parsed.data.rounds;
+      const effectiveRounds = explicitRounds === 0
+        ? 0
+        : parsed.data.continuous
+          ? 1_000_000
+          : (explicitRounds ?? (parsed.data.preset === "blackboard" ? 0 : 3));
       // R4 wiring (2026-05-04): pre-flight cost projector. When the
       // user has set maxCostUsd AND the projected spend already
       // exceeds it on Day 1, refuse rather than start a run that's
@@ -510,6 +535,9 @@ export function swarmRouter(orch: Orchestrator): Router {
         executeNextAction: parsed.data.executeNextAction,
         tokenBudget: parsed.data.tokenBudget,
         maxCostUsd: parsed.data.maxCostUsd,
+        // Write mode + conflict policy (UI sends, server now accepts).
+        writeMode: parsed.data.writeMode,
+        conflictPolicy: parsed.data.conflictPolicy,
         // W13 wiring: per-run failover chain pass-through.
         providerFailover: parsed.data.providerFailover,
         brainModel: parsed.data.brainModel,
@@ -711,6 +739,30 @@ export function swarmRouter(orch: Orchestrator): Router {
       req.query.includeOtherParents.toLowerCase() === "true";
     const parentsToScan = new Set<string>();
     if (activeParent) parentsToScan.add(activeParent);
+    // Also scan the project's logs/ directory and its subdirectories
+    // (runs are stored in logs/{runId}/)
+    if (activeParent) {
+      const projectDir = status.localPath ? path.dirname(path.resolve(status.localPath)) : null;
+      if (projectDir) {
+        const logsDir = path.join(projectDir, "logs");
+        try {
+          const stat = await fs.stat(logsDir);
+          if (stat.isDirectory()) {
+            // Scan each logs/{runId}/ subdirectory
+            const logEntries = await fs.readdir(logsDir);
+            for (const entry of logEntries) {
+              const entryPath = path.join(logsDir, entry);
+              try {
+                const entryStat = await fs.stat(entryPath);
+                if (entryStat.isDirectory()) {
+                  parentsToScan.add(entryPath);
+                }
+              } catch { /* skip */ }
+            }
+          }
+        } catch { /* logs/ doesn't exist — fine */ }
+      }
+    }
     if (includeOtherParents) {
       for (const p of orch.getKnownParentPaths()) parentsToScan.add(p);
     }

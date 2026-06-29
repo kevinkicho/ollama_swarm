@@ -34,7 +34,7 @@ import {
   OPENAI_MODELS as FALLBACK_OPENAI,
   OLLAMA_CLOUD_MODELS,
   OPENCODE_GO_MODELS,
-} from "../../shared/src/providers.js";
+} from "@ollama-swarm/shared/providers";
 import { decideAutoResume } from "./swarm/autoResumeDecision.js";
 import { loadSnapshot } from "./services/RunStatePersister.js";
 import { globalErrorHandler } from "./middleware/errorHandler.js";
@@ -497,8 +497,8 @@ void reclaimOrphans(repoRoot)
   })
   .finally(async () => {
     // Pre-flight health check — warns if port is in use or disk is low.
-    const runsDir = path.join(repoRoot, "runs");
-    const health = await startupHealthCheck(config.SERVER_PORT, runsDir);
+    const logsDir = path.join(repoRoot, "logs");
+    const health = await startupHealthCheck(config.SERVER_PORT, logsDir);
     if (health.warnings.length > 0) {
       console.warn("┌──────────────────────────────────────────────────┐");
       console.warn("│  Startup health check warnings                   │");

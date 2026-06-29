@@ -2,7 +2,7 @@
 
 > **For agents picking up this codebase**: read [`docs/STATUS.md`](docs/STATUS.md) first — it's the single "what's true right now" pointer + map. This README is the user-facing intro.
 
-A local web app that runs **N open-weights coding agents in parallel** against a single GitHub repo — they collaborate in one shared transcript, each potentially a different model (e.g. planner=`glm-5.1:cloud`, worker=`gemma4:31b-cloud`, auditor=`nemotron-3-super:cloud`). The design point is **multi-model parallelism on your own hardware** — Claude Code does single-agent-Claude beautifully, but it can't run five different open-weights models reviewing the same code at the same time. That's what this is for.
+A local web app that runs **N open-weights coding agents in parallel** against a single GitHub repo — they collaborate in one shared transcript, each potentially a different model (e.g. planner=`deepseek-v4-flash:cloud`, worker=`deepseek-v4-flash:cloud`, auditor=`deepseek-v4-flash:cloud`). The design point is **multi-model parallelism on your own hardware** — Claude Code does single-agent-Claude beautifully, but it can't run five different open-weights models reviewing the same code at the same time. That's what this is for.
 
 **Five providers** are wired in, surfaced as side-by-side tabs in the setup form:
 
@@ -12,7 +12,7 @@ A local web app that runs **N open-weights coding agents in parallel** against a
 - **[Anthropic Claude](https://www.anthropic.com)** — set `ANTHROPIC_API_KEY` to enable; live model discovery.
 - **[OpenAI](https://openai.com)** — set `OPENAI_API_KEY` to enable; live model discovery.
 
-Ollama Cloud is the default — `glm-5.1:cloud` ships pre-selected.
+Ollama Cloud is the default — `deepseek-v4-flash:cloud` ships pre-selected.
 
 > **2026-04-29 — opencode subprocess fully removed (E3 Phases 1–5).** Earlier
 > versions spawned an `opencode serve` HTTP subprocess per agent. That whole
@@ -41,7 +41,7 @@ cp .env.example .env
 # :cloud models when you have an ollama.com account configured locally).
 
 # 3. Pull the default Ollama model (skip if you'll only use paid providers)
-ollama pull glm-5.1:cloud
+ollama pull deepseek-v4-flash:cloud
 # Optional second signal for the drift gauge:
 ollama pull nomic-embed-text
 
@@ -55,7 +55,7 @@ Then open **http://localhost:8244/** (or the WSL guest IP if you're hitting it f
 
 ## Tour
 
-**1. Setup form.** Pick a repo, a parent folder to clone into, an agent count, and one of the **eleven patterns** (ten swarm presets + a single-agent baseline). The optional User Directive seeds the conformance gauge and is honored by every preset except `stigmergy`. The AI Provider section is a **5-tab** segmented control (Ollama / Ollama Cloud / OpenCode / Anthropic / OpenAI) with a model dropdown that filters per-provider.
+**1. Setup form.** Pick a repo, a parent folder to clone into, an agent count, and one of the **eleven patterns** (ten swarm presets + a single-agent baseline). The optional User Directive seeds the conformance gauge and is honored by every preset except `stigmergy`. The AI Provider section is a **5-tab** segmented control (Ollama / Ollama Cloud / OpenCode / Anthropic / OpenAI) with a model dropdown that filters per-provider. Council and Blackboard presets support autonomous mode (`rounds: 0`) for infinite improvement loops.
 
 ![Setup form — GitHub URL, parent folder, pattern picker, agents/rounds/model fields](docs/images/setup-form.png)
 
@@ -69,13 +69,13 @@ Then open **http://localhost:8244/** (or the WSL guest IP if you're hitting it f
 
 ## What it does
 
-You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. The agents spawn, clone the repo, and start collaborating — each running an open-weights model on your local Ollama (or, optionally, Ollama Cloud / Anthropic / OpenAI). **Eleven patterns** ship today (one write-capable, nine discussion, plus a single-agent baseline for evaluation):
+You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. The agents spawn, clone the repo, and start collaborating — each running an open-weights model on your local Ollama (or, optionally, Ollama Cloud / Anthropic / OpenAI). **Eleven patterns** ship today (two write-capable, eight discussion, plus a single-agent baseline for evaluation):
 
 - **Round-robin transcript** — N agents take turns on a shared transcript; each turn rotates through Critic / Synthesizer / Gap-finder / Builder dispositions, with the lead synthesizing a directive answer at the end. Discussion-only.
 - **Blackboard (optimistic + small units)** — planner posts atomic todos to a shared board; workers claim and commit in parallel, with CAS on file hashes catching stale plans. **The only write-capable preset** — workers actually modify the clone.
 - **Role differentiation** — with a directive, becomes a build team (Researcher / Designer / Implementer / Tester / Reviewer / Documenter / Devil's-advocate) producing `deliverable.md`. Without one, falls back to a 7-lens repo audit. Discussion-only.
 - **Map-reduce** — reducer + N mappers slicing the repo in parallel. With a directive, mappers find directive-relevant evidence in their slice and reducer synthesizes the answer. Convergence detector stops on consecutive empty cycles. Discussion-only.
-- **Council** — N drafters write in private round 1, then commit to a `### MY POSITION` per round and explicitly KEEP/CHANGE in subsequent rounds. Synthesis preserves dissent via a Minority report. Early-stop on convergence. Discussion-only.
+- **Council** — N drafters debate and synthesize a consensus (Phase 1: Analysis). Then ALL agents become workers and execute the consensus (Phase 2: Execution). Finally ALL agents become auditors and inspect the results (Phase 3: Audit). In autonomous mode (`rounds: 0`), cycles repeat: analysis → execution → audit → analysis. Supports infinite improvement loops. Now uses blackboard's infrastructure: TodoQueue, ExitContract, hunk-based editing, replanner, path grounding, and tier ratchet.
 - **Orchestrator–worker** — lead decomposes the directive into worker subtasks; workers report directive-relevant findings; lead synthesizes. Discussion-only.
 - **Orchestrator–worker (deep)** — 3-tier variant for ≥4 agents: orchestrator → mid-leads → workers. Synthesis flows back upward. Discussion-only.
 - **Debate-judge** — Pro / Con / Judge (exactly 3 agents). Judge auto-derives a debatable proposition from your directive. Optional post-verdict build phase turns Pro into implementer. Discussion-by-default; `executeNextAction: true` enables file edits.
@@ -95,7 +95,7 @@ A live transcript streams into the browser as it's generated — you see each ag
 - **Cost cap (paid providers)** — every run on Anthropic/OpenAI checks cumulative spend against `maxCostUsd` every 5 seconds; stops cleanly with `cap:cost` when the ceiling is reached. Ollama runs ignore the cap (every record costs $0).
 - **Eval harness + scoreboard** — `node eval/run-eval.mjs --repo=<url> --seeds=5` runs every preset against the catalog, then `node eval/aggregate.mjs runs/_eval/<ts>` writes `eval/RESULTS.md` with median + IQR per cell. See [`eval/fixtures/README.md`](eval/fixtures/README.md) for the self-contained fixture pattern.
 
-**Current architecture is V2 substrate** — the original opencode-SDK-streaming path was retired 2026-04-28; runs go through `OllamaClient` (direct `/api/chat`) + `WorkerPipelineV2` + `TodoQueue` + `RunStateObserver` + `EventLogReaderV2`. See [`server/src/swarm/blackboard/ARCHITECTURE.md`](server/src/swarm/blackboard/ARCHITECTURE.md) for the deep dive.
+**Current architecture is V2 substrate** — the original opencode-SDK-streaming path was retired 2026-04-28; runs go through `OllamaClient` (direct `/api/chat`) + `WorkerPipelineV2` + `TodoQueue` + `RunStateObserver` + `EventLogReaderV2`. The Council preset now supports a 3-phase autonomous cycle (Analysis → Execution → Audit) with infinite improvement loops. See [`server/src/swarm/blackboard/ARCHITECTURE.md`](server/src/swarm/blackboard/ARCHITECTURE.md) for the deep dive.
 
 ## Architecture
 
@@ -144,16 +144,16 @@ A phase-by-phase journal is archived at [`docs/archive/blackboard-changelog.md`]
 2. **Atomic todos.** Each todo names ≤2 `expectedFiles` and one logical change. Small units keep the conflict surface tiny and make stale replans cheap.
 3. **Optimistic CAS on file hashes.** At claim time the board records a SHA of every file the worker plans to touch. At commit time the runner re-hashes and rejects the commit if any hash changed underneath the worker (another worker committed first). No locks, no head-of-line blocking.
 4. **Stale → replan.** A rejected commit marks the todo `stale` with a reason. The planner re-reads the current code and rewrites the todo; the card shows an `R1` / `R2` badge counting replans. Workers see the fresh description on the next claim.
-5. **Hard caps.** Every run is bounded by **20 min wall-clock**, **20 commits**, and **30 total todos** (see `server/src/swarm/blackboard/caps.ts`). The loop stops on whichever fires first with a `cap:wall-clock` / `cap:commits` / `cap:todos` stop reason.
+5. **Hard caps.** Every run is bounded by configurable wall-clock (default **8 hours**, env-tunable to **7 days**), **10,000 commits**, and **10,000 todos** (see `server/src/swarm/blackboard/caps.ts`). The loop stops on whichever fires first with a `cap:wall-clock` / `cap:commits` / `cap:todos` stop reason. In autonomous mode (`rounds: 0`), the ambition ratchet has unlimited tiers.
 6. **Run artifact.** On any termination (`completed`, user `stop`, `crash`, or a cap), the runner writes `summary.json` at the clone root with `stopReason`, `wallClockMs`, commit/file counts, per-agent turn stats, and the final `git status --porcelain`. A summary card with the same data renders at the top of the Board tab.
 7. **Board tab.** The UI's Board tab shows todos in five columns — **Open** / **Claimed** / **Committed** / **Stale** / **Skipped** — and a collapsible Findings pane. Claim cards show which worker is holding them and how long; stale cards show the rejection reason.
 
 ## Prerequisites
 
 - **Node 22 LTS or 25** (CI runs 22.x; local dev tested on both)
-- **[Ollama](https://ollama.com) running** at `http://localhost:11434` with at least one model pulled. Default is `glm-5.1:cloud`:
+- **[Ollama](https://ollama.com) running** at `http://localhost:11434` with at least one model pulled. Default is `deepseek-v4-flash:cloud`:
   ```bash
-  ollama pull glm-5.1:cloud
+  ollama pull deepseek-v4-flash:cloud
   ```
   Optional but recommended: `ollama pull nomic-embed-text` to enable the embedding-similarity drift gauge alongside the LLM-judge conformance gauge.
 - **git** on `PATH`. (No need to set `user.name` / `user.email` globally — the worker pipeline injects them inline per-commit.)
@@ -182,7 +182,7 @@ Hit the **+ nudge** button next to the conformance gauge to submit a mid-run dir
 | `ANTHROPIC_API_KEY` | no (only when using Anthropic provider) | Read by the in-process `AnthropicProvider` via `process.env`. The setup form's Anthropic tab is disabled when unset. |
 | `OPENAI_API_KEY` | no (only when using OpenAI provider) | Same pattern as `ANTHROPIC_API_KEY`. |
 | `OPENCODE_API_KEY` / `OPENCODE_GO_API_KEY` / `OPENCODE_ZEN_API_KEY` | no (only when using OpenCode provider) | OpenCode Go subscription key or Zen balance key. `OPENCODE_API_KEY` works for both. Get yours at [opencode.ai/auth](https://opencode.ai/auth). |
-| `DEFAULT_MODEL` | no (defaults to `glm-5.1:cloud`) | Model each agent uses when the form's model field is left blank. For paid providers use the prefixed form: `anthropic/claude-opus-4-7`, `openai/gpt-5`, etc. |
+| `DEFAULT_MODEL` | no (defaults to `deepseek-v4-flash:cloud`) | Model each agent uses when the form's model field is left blank. For paid providers use the prefixed form: `anthropic/claude-opus-4-7`, `openai/gpt-5`, etc. |
 | `SERVER_PORT` | no (defaults to `8243`) | Override the backend HTTP+WS port |
 | `WEB_PORT` | no (defaults to `8244`) | Override the Vite dev-server port |
 | `GITHUB_TOKEN` | no | GitHub PAT for cloning private repos |
@@ -195,6 +195,15 @@ Three npm workspaces:
 - **`server/`** — Express + ws + `simple-git` + zod + `undici` (raw HTTP to provider APIs). Hosts the runners, the AgentManager, the proxy, the ToolDispatcher, and the REST + WS routes.
 - **`web/`** — Vite + React + Zustand + Tailwind. Setup form, transcript, board, run-history modal.
 - **`shared/`** — pure types + parsers consumed by both sides (state machine reducer, JSON extractors, summary formatter).
+
+**Target project structure:** When you clone a repo and run the swarm against it, the following structure is created inside the clone:
+- **`logs/<run-id>/summary.json`** + `logs/<run-id>/summary-<run-id>-<timestamp>.json` — run summaries (stop reason, commits, agent stats)
+- **`logs/<run-id>/deliverable/`** — deliverable markdown files (filenames include preset name, e.g., `deliverable-council-<run-id>-<timestamp>.md`)
+- **`logs/<run-id>/next-actions/`** — next-actions JSON files (filenames include preset name, e.g., `next-actions-council-<run-id>-<timestamp>.json`)
+- **`.swarm-memory.jsonl`** — lessons learned across runs (blackboard preset)
+- **`.swarm-design/`** — design memory (north-star, decisions, roadmap)
+
+Each run gets its own folder under `logs/` to keep files organized. Filenames already include the preset name (e.g., `deliverable-council-...`, `deliverable-blackboard-...`) so no need to organize by preset. All files in the `logs/` folder are gitignored by default.
 
 For the current per-file map (with V2 substrate files, route mounts, and per-component layout) see the **Where things live** section in [`docs/STATUS.md`](docs/STATUS.md). For per-function detail, the code is the source of truth — open the file.
 

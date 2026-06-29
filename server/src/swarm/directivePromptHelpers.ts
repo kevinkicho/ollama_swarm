@@ -43,6 +43,9 @@ export interface DirectiveBlockOptions {
    *  blank line. Each entry becomes its own line. Pass [] (or omit) for
    *  no framing — used by Debate-judge which has no separate framing. */
   framingLines?: readonly string[];
+  /** When true, labels the directive as AUTHORITATIVE and adds a strict
+   *  framing line telling agents they MUST follow it. Default false. */
+  authoritative?: boolean;
 }
 
 /** Build a USER DIRECTIVE block as an array of lines. Returns `[]` when
@@ -68,10 +71,17 @@ export function buildDirectiveBlock(
 ): readonly string[] {
   if (!ctx.hasDirective) return [];
   const labelSuffix = opts?.labelSuffix?.trim();
+  const authoritative = opts?.authoritative ?? false;
+  const authSuffix = authoritative ? " (AUTHORITATIVE)" : "";
   const openDelim = labelSuffix
-    ? `=== USER DIRECTIVE ${labelSuffix} ===`
-    : `=== USER DIRECTIVE ===`;
+    ? `=== USER DIRECTIVE ${labelSuffix}${authSuffix} ===`
+    : `=== USER DIRECTIVE${authSuffix} ===`;
   const out: string[] = [openDelim, ctx.directive, "=== END DIRECTIVE ===", ""];
+  if (authoritative) {
+    out.push("This directive is AUTHORITATIVE. Every file you create or modify MUST serve this directive's intent.");
+    out.push("Do NOT create mock/fake/placeholder data. Do NOT contradict or ignore the directive.");
+    out.push("");
+  }
   const framing = opts?.framingLines ?? [];
   if (framing.length > 0) {
     for (const line of framing) out.push(line);

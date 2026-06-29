@@ -6,7 +6,6 @@ build/
 .server-port
 *.log
 .DS_Store
-runs/
 logs/
 # 2026-05-02: per-clone operational state from RunStatePersister.
 # Lives next to the swarm's clone path so a server restart could

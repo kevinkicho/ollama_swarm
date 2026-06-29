@@ -45,53 +45,53 @@ describe("mergeKnownParents", () => {
   });
 });
 
-describe("scanForRunParents — discovers runs/* + runs_overnight*/* roots", () => {
+describe("scanForRunParents — discovers logs/{runId}/ directories with summary files", () => {
   function setupFixture(): { cwd: string; cleanup: () => void } {
     const cwd = mkdtempSync(join(tmpdir(), "scan-runs-"));
     return { cwd, cleanup: () => rmSync(cwd, { recursive: true, force: true }) };
   }
 
-  it("finds a runs/<clone>/summary.json root", () => {
+  it("finds a logs/{runId}/summary.json directory", () => {
     const { cwd, cleanup } = setupFixture();
     try {
-      mkdirSync(join(cwd, "runs", "my-clone"), { recursive: true });
-      writeFileSync(join(cwd, "runs", "my-clone", "summary.json"), "{}");
+      mkdirSync(join(cwd, "logs", "abc123"), { recursive: true });
+      writeFileSync(join(cwd, "logs", "abc123", "summary.json"), "{}");
       const out = scanForRunParents(cwd);
-      assert.deepEqual(out, [join(cwd, "runs")]);
+      assert.deepEqual(out, [join(cwd, "logs", "abc123")]);
     } finally {
       cleanup();
     }
   });
 
-  it("finds runs_overnight*/<clone>/summary-<iso>.json (per-run files)", () => {
+  it("finds logs/{runId}/summary-<iso>.json (per-run files)", () => {
     const { cwd, cleanup } = setupFixture();
     try {
-      mkdirSync(join(cwd, "runs_overnight9", "alpha"), { recursive: true });
+      mkdirSync(join(cwd, "logs", "def456"), { recursive: true });
       writeFileSync(
-        join(cwd, "runs_overnight9", "alpha", "summary-2026-04-28T01-00-00-000Z.json"),
+        join(cwd, "logs", "def456", "summary-2026-04-28T01-00-00-000Z.json"),
         "{}",
       );
       const out = scanForRunParents(cwd);
-      assert.deepEqual(out, [join(cwd, "runs_overnight9")]);
+      assert.deepEqual(out, [join(cwd, "logs", "def456")]);
     } finally {
       cleanup();
     }
   });
 
-  it("returns multiple roots when several exist", () => {
+  it("returns multiple run directories when several exist", () => {
     const { cwd, cleanup } = setupFixture();
     try {
-      mkdirSync(join(cwd, "runs", "a"), { recursive: true });
-      writeFileSync(join(cwd, "runs", "a", "summary.json"), "{}");
-      mkdirSync(join(cwd, "runs_overnight", "b"), { recursive: true });
-      writeFileSync(join(cwd, "runs_overnight", "b", "summary.json"), "{}");
-      mkdirSync(join(cwd, "runs_overnight2", "c"), { recursive: true });
-      writeFileSync(join(cwd, "runs_overnight2", "c", "summary-x.json"), "{}");
+      mkdirSync(join(cwd, "logs", "run1"), { recursive: true });
+      writeFileSync(join(cwd, "logs", "run1", "summary.json"), "{}");
+      mkdirSync(join(cwd, "logs", "run2"), { recursive: true });
+      writeFileSync(join(cwd, "logs", "run2", "summary.json"), "{}");
+      mkdirSync(join(cwd, "logs", "run3"), { recursive: true });
+      writeFileSync(join(cwd, "logs", "run3", "summary-x.json"), "{}");
       const out = new Set(scanForRunParents(cwd));
       assert.equal(out.size, 3);
-      assert.ok(out.has(join(cwd, "runs")));
-      assert.ok(out.has(join(cwd, "runs_overnight")));
-      assert.ok(out.has(join(cwd, "runs_overnight2")));
+      assert.ok(out.has(join(cwd, "logs", "run1")));
+      assert.ok(out.has(join(cwd, "logs", "run2")));
+      assert.ok(out.has(join(cwd, "logs", "run3")));
     } finally {
       cleanup();
     }
@@ -100,7 +100,7 @@ describe("scanForRunParents — discovers runs/* + runs_overnight*/* roots", () 
   it("skips dirs without any summary file", () => {
     const { cwd, cleanup } = setupFixture();
     try {
-      mkdirSync(join(cwd, "runs", "empty-clone"), { recursive: true });
+      mkdirSync(join(cwd, "logs", "empty-run"), { recursive: true });
       // No summary file dropped in.
       const out = scanForRunParents(cwd);
       assert.deepEqual(out, []);
@@ -109,11 +109,11 @@ describe("scanForRunParents — discovers runs/* + runs_overnight*/* roots", () 
     }
   });
 
-  it("skips top-level dirs that don't match runs / runs_*", () => {
+  it("skips non-directory entries in logs/", () => {
     const { cwd, cleanup } = setupFixture();
     try {
-      mkdirSync(join(cwd, "src", "anything"), { recursive: true });
-      writeFileSync(join(cwd, "src", "anything", "summary.json"), "{}");
+      mkdirSync(join(cwd, "logs"), { recursive: true });
+      writeFileSync(join(cwd, "logs", "stray-file.txt"), "not a run");
       const out = scanForRunParents(cwd);
       assert.deepEqual(out, []);
     } finally {
@@ -126,17 +126,15 @@ describe("scanForRunParents — discovers runs/* + runs_overnight*/* roots", () 
     assert.deepEqual(out, []);
   });
 
-  it("doesn't double-count one root that has multiple clones with summaries", () => {
+  it("doesn't double-count one run directory with multiple summary files", () => {
     const { cwd, cleanup } = setupFixture();
     try {
-      mkdirSync(join(cwd, "runs", "a"), { recursive: true });
-      writeFileSync(join(cwd, "runs", "a", "summary.json"), "{}");
-      mkdirSync(join(cwd, "runs", "b"), { recursive: true });
-      writeFileSync(join(cwd, "runs", "b", "summary-1.json"), "{}");
-      mkdirSync(join(cwd, "runs", "c"), { recursive: true });
-      writeFileSync(join(cwd, "runs", "c", "summary.json"), "{}");
+      mkdirSync(join(cwd, "logs", "run1"), { recursive: true });
+      writeFileSync(join(cwd, "logs", "run1", "summary.json"), "{}");
+      writeFileSync(join(cwd, "logs", "run1", "summary-1.json"), "{}");
+      writeFileSync(join(cwd, "logs", "run1", "summary-2.json"), "{}");
       const out = scanForRunParents(cwd);
-      assert.deepEqual(out, [join(cwd, "runs")]);
+      assert.deepEqual(out, [join(cwd, "logs", "run1")]);
     } finally {
       cleanup();
     }

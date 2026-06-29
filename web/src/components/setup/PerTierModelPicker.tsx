@@ -28,6 +28,8 @@ export interface PerTierModelPickerProps {
   }>;
   /** Fallback shown as ghost-text in each row's input. */
   fallbackModel: string;
+  /** Provider to use for model list autocomplete. */
+  provider: string;
 }
 
 export function PerTierModelPicker(props: PerTierModelPickerProps) {
@@ -56,6 +58,7 @@ export function PerTierModelPicker(props: PerTierModelPickerProps) {
                 onChange={t.setValue}
                 placeholder={`(fallback: ${props.fallbackModel})`}
                 ariaLabel={`${props.label} — ${t.name}`}
+                provider={props.provider}
               />
             </div>
           </div>
@@ -83,12 +86,14 @@ export function RoundRobinDispositionModels(props: {
   setSynthesizer: (v: string) => void;
   setGapFinder: (v: string) => void;
   setBuilder: (v: string) => void;
+  provider: string;
 }) {
   return (
     <PerTierModelPicker
       label="Disposition-tuned models (T193)"
       hint="Each disposition can use a different model. Critic/Gap-finder benefit from reasoning-tier; Builder/Synthesizer benefit from coding-tier."
       fallbackModel={props.fallbackModel}
+      provider={props.provider}
       tiers={[
         {
           name: "Critic",
@@ -127,12 +132,14 @@ export function OwDeepTierModels(props: {
   setOrchestratorModel: (v: string) => void;
   setMidLeadModel: (v: string) => void;
   setWorkerModel: (v: string) => void;
+  provider: string;
 }) {
   return (
     <PerTierModelPicker
       label="Per-tier models (T196)"
       hint="Orchestrator (strategy) → Mid-leads (tactics) → Workers (implementation). Reasoning-tier at top, coding-tier at bottom is the canonical pattern."
       fallbackModel={props.fallbackModel}
+      provider={props.provider}
       tiers={[
         {
           name: "Orchestrator",
@@ -164,6 +171,7 @@ export function MoaProposerModels(props: {
   proposerCount: number;
   proposerModels: readonly string[];
   setProposerModel: (idx: number, value: string) => void;
+  provider: string;
 }) {
   // Pad / trim to proposerCount so the form always renders the right
   // number of slots even if the underlying state hasn't synced.
@@ -176,6 +184,7 @@ export function MoaProposerModels(props: {
       label={`Per-proposer models (T196) — ${props.proposerCount} proposers`}
       hint="N DIFFERENT small models proposing > N copies of one model. Heterogeneous proposers were the original Together AI MoA insight."
       fallbackModel={props.fallbackModel}
+      provider={props.provider}
       tiers={padded.map((value, idx) => ({
         name: `Proposer ${idx + 1}`,
         value,

@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { createOutcomeEmitter, type OutcomeScoredEvent } from "./outcomeTypes.js";
 import type { Agent } from "../services/AgentManager.js";
 
-import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
 import type {
   TranscriptEntry,
 } from "../types.js";
@@ -11,70 +9,55 @@ import { DiscussionRunnerBase } from "./DiscussionRunnerBase.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 
 import { buildSeedSummary } from "./runSummary.js";
-import { runDiscussionCloseOut } from "./runFinallyHooks.js";
-import { maybeRunPostRoundCritique } from "./postRoundCritique.js";
-import { runPostSynthesisCritique } from "./postSynthesisCritique.js";
-import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk, extractText } from "./extractText.js";
-import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
-import { checkBudgetGuards } from "./loopGuards.js";
-import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
+import { extractProviderText } from "./councilUtils.js";
+import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 
 import { staggerStart } from "./staggerStart.js";
-// runEndReflection moved into runFinallyHooks (Phase D).
-import { stripAgentText } from "../../../shared/src/stripAgentText.js";
-import { getAgentAddendum } from "../../../shared/src/topology.js";
+import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
 import { describeSdkError } from "./sdkError.js";
-import {
-  tallyVotes,
-  buildVotePrompt,
-  parseVoteResponse,
-  type VoteRecord,
-} from "./councilReconcile.js";
 import { userEntryVisibleTo } from "./chatReceipt.js";
-import { writeDeliverable, runQualityPasses } from "./deliverable.js";
-import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
-import { deriveRubric, type DerivedRubric } from "./rubricPrePass.js";
-import {
-  buildCouncilPositionsSection,
-  countPositionFlips,
-} from "./councilPosition.js";
 import {
   readDirective,
   buildDirectiveBlock,
-  pickDeliverableTitle,
-  pickAnswerSectionTitle,
-  pickDeliverableSubtitle,
-  maybeDirectiveSection,
 } from "./directivePromptHelpers.js";
-import { parseConvergenceSignal } from "./convergenceSignal.js";
-import {
-  MultiWriterState,
-  DEFAULT_CONFLICT_POLICIES,
-} from "./multiWriterState.js";
 import {
   buildCouncilSynthesisPrompt,
   buildCouncilPrompt,
+  buildStandupPrompt,
 } from "./councilPromptHelpers.js";
+import {
+  extractActionableTodos,
+} from "./councilDecisions.js";
+import { writeCouncilDeliverable } from "./councilDeliverable.js";
+import { runSynthesisPass } from "./councilSynthesis.js";
+import { runCouncilWorkers } from "./councilWorkerRunner.js";
+import { runCouncilLlmAudit } from "./councilAuditor.js";
+import { TodoQueue } from "./blackboard/TodoQueue.js";
+import { FindingsLog } from "./blackboard/FindingsLog.js";
+import type { ExitContract, ExitCriterion } from "./blackboard/types.js";
+import {
+  buildCouncilAdapterState,
+  runContractDerivation,
+  runTierPromotion,
+  type CouncilAdapterState,
+} from "./councilAdapter.js";
+import { gatherCodeContext } from "./gatherCodeContext.js";
+import { readExpectedFiles } from "./sharedFileUtils.js";
 
-// Council / parallel drafts + reconcile.
-// Round 1: every agent drafts independently. Each agent's prompt contains
-// only the seed + any human-injected messages — NO peer drafts. Drafts are
-// fanned out in parallel and only land in the shared transcript after the
-// whole round has settled, so within Round 1 no agent can see what any other
-// agent wrote. That independence is the whole point: same-model agents
-// produce surprisingly different answers when they can't anchor on each
-// other's output first.
-//
-// Round 2..N: everyone sees everyone's drafts (and any prior revisions) and
-// revises. The reconcile step is whatever the agents converge to across
-// later rounds — no vote, no explicit judge. Discussion-only, no file edits.
 export class CouncilRunner extends DiscussionRunnerBase {
   protected getPresetName(): string { return "Council"; }
 
-
-  private derivedRubric: DerivedRubric | null = null;
-  private multiWriter?: MultiWriterState;
+  private state!: CouncilAdapterState;
+  private repoFiles: string[] = [];
+  private codeContextExcerpts: ReadonlyArray<{ path: string; excerpt: string }> = [];
+  private executionFailures: string[] = [];
+  private previousUnmetIds: Set<string> = new Set();
+  private stuckCycleCount = 0;
+  private consecutiveEmptyCycles = 0;
+  private maxTiers = 3;
+  private capWatchdog: ReturnType<typeof setInterval> | undefined;
+  private drainResolve: (() => void) | undefined;
 
   constructor(opts: RunnerOpts) {
     super(opts);
@@ -90,594 +73,455 @@ export class CouncilRunner extends DiscussionRunnerBase {
     });
     this.stats.registerAgents(ready);
 
-    // Phase 2 (writeMode: multi): initialize multi-writer state
-    if (cfg.writeMode === "multi") {
-      this.multiWriter = new MultiWriterState({
-        writeMode: cfg.writeMode,
-        conflictPolicy: cfg.conflictPolicy ?? DEFAULT_CONFLICT_POLICIES["council"],
-        clonePath: destPath,
-      });
-      this.appendSystem(
-        `Multi-writer mode enabled — agents will propose hunks during rounds, reconciled via ${cfg.conflictPolicy ?? "vote"} policy.`,
-      );
-    }
+    this.state = buildCouncilAdapterState(
+      cfg,
+      destPath,
+      this.opts.manager,
+      this.opts.repos,
+      (msg) => this.appendSystem(msg),
+      (agent, text) => this.appendAgent(agent, text),
+      (e) => this.opts.emit(e),
+      (entry) => this.opts.logDiag?.(entry),
+    );
+
+    // Gather project context
+    this.repoFiles = await this.opts.repos.listRepoFiles(destPath, { maxFiles: 500 });
+    this.codeContextExcerpts = await gatherCodeContext(destPath, cfg.userDirective, this.repoFiles);
 
     this.setPhase("seeding");
     await this.seed(destPath, cfg);
 
-    // 2026-05-02 (quality lever #2): derive a per-run rubric from the
-    // user directive BEFORE the main loop. Lead agent (index 1) does
-    // the derivation; result is stored for the deliverable + critic
-    // pass at run-end. Best-effort — failure falls back to DEFAULT_RUBRIC
-    // so the loop always proceeds.
-    const lead = ready[0];
-    if (lead && cfg.userDirective) {
-      this.appendSystem(`Deriving success rubric from directive (lever #2)…`);
-      this.derivedRubric = await deriveRubric({
-        agent: lead,
-        manager: this.opts.manager,
-        directive: cfg.userDirective,
-      });
-      this.appendSystem(
-        `Rubric derived: ${this.derivedRubric.criteria.length} criteria, shape "${this.derivedRubric.deliverableShape}".`,
-      );
+    // Derive initial contract
+    const planner = ready[0];
+    const workers = ready.slice(1);
+    if (planner && cfg.userDirective) {
+      this.appendSystem(`Deriving tier ${this.state.currentTier} contract from directive…`);
+      await runContractDerivation(this.state, planner, workers);
     }
 
     this.setPhase("discussing");
     this.startedAt = Date.now();
+    this.state.runStartedAt = this.startedAt;
+
+    // Start wall-clock cap watchdog if configured
+    if (cfg.wallClockCapMs && cfg.wallClockCapMs > 0) {
+      this.startCapWatchdog(cfg);
+    }
+
     void this.loop(cfg);
+  }
+
+  /**
+   * Override stop to support graceful drain: set stopping, let current
+   * workers finish, then kill agents.
+   */
+  async stop(): Promise<void> {
+    this.stopping = true;
+    this.state.stopping = true;
+    this.setPhase("draining");
+    // Signal the drain loop to stop accepting new work
+    this.drainResolve?.();
+    // Wait up to 30s for current workers to finish
+    const DRAIN_TIMEOUT = 30_000;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        this.appendSystem("[drain] Timeout waiting for workers — forcing stop.");
+        resolve();
+      }, DRAIN_TIMEOUT);
+      // If drain completes before timeout, resolve immediately
+      const origResolve = this.drainResolve;
+      this.drainResolve = () => {
+        clearTimeout(timer);
+        resolve();
+        origResolve?.();
+      };
+    });
+    // Now kill agents
+    const killResult = await this.opts.manager.killAll();
+    this.setPhase("stopped");
+    this.stopCapWatchdog();
+  }
+
+  private startCapWatchdog(cfg: RunConfig): void {
+    const deadline = this.startedAt! + cfg.wallClockCapMs!;
+    const CHECK_INTERVAL = 10_000;
+    this.capWatchdog = setInterval(() => {
+      if (Date.now() >= deadline) {
+        this.appendSystem(`[cap] Wall-clock cap reached (${Math.round(cfg.wallClockCapMs! / 60_000)} min) — stopping.`);
+        this.stop();
+      }
+    }, CHECK_INTERVAL);
+    this.capWatchdog.unref();
+  }
+
+  private stopCapWatchdog(): void {
+    if (this.capWatchdog) {
+      clearInterval(this.capWatchdog);
+      this.capWatchdog = undefined;
+    }
   }
 
   private async seed(clonePath: string, cfg: RunConfig): Promise<void> {
     const tree = (await this.opts.repos.listTopLevel(clonePath)).slice(0, 200);
-    // 2026-05-02 (council improvement #1): user directive surfaces
-    // at the TOP of the seed when set. Council was already deriving
-    // a rubric from cfg.userDirective at run-start (lever #2 of the
-    // deliverables initiative) but the agents themselves were
-    // directive-blind in their drafts. Now every drafter sees it.
-    // 2026-05-03 (Phase A): directive block extracted to shared helper.
     const dirCtx = readDirective(cfg);
-    const lines = [
+
+    const readmeExcerpt = await this.opts.repos.readReadme(clonePath);
+
+    const lines: string[] = [
       `Project clone: ${clonePath}`,
       `Repo: ${cfg.repoUrl}`,
       `Top-level entries: ${tree.join(", ") || "(empty)"}`,
       "",
       ...buildDirectiveBlock(dirCtx, {
         framingLines: [
-          "Every drafter answers the directive above. Round 1 = independent drafts (peers hidden); Round 2+ = reveal and revise. Synthesis at the end consolidates into a single answer with a minority report when dissent persists.",
+          "Every drafter answers the directive above. Round 1 = independent drafts (peers hidden); Round 2+ = reveal and revise. Synthesis at the end consolidates into a single plan.",
         ],
+        authoritative: true,
       }),
-      "Use your file-read / grep / find tools to actually inspect this repo — start with README.md if present.",
     ];
-    // Task #72: structured payload so the web renders the seed
-    // announce as a grid (definition list + collapsible top-level
-    // file list) instead of the wall-of-text comma-separated line.
+
+    if (readmeExcerpt) {
+      lines.push("", `README excerpt:\n${readmeExcerpt.slice(0, 3000)}`);
+    }
+
+    if (this.repoFiles.length > 0) {
+      lines.push(
+        "",
+        `Project files (${this.repoFiles.length} total):`,
+        ...this.repoFiles.slice(0, 100),
+      );
+      if (this.repoFiles.length > 100) {
+        lines.push(`... and ${this.repoFiles.length - 100} more`);
+      }
+    }
+
+    if (this.codeContextExcerpts.length > 0) {
+      lines.push("", "Key file excerpts:");
+      for (const { path, excerpt } of this.codeContextExcerpts) {
+        lines.push(`--- ${path} ---`, excerpt, "---");
+      }
+    }
+
+    lines.push(
+      "",
+      "Use your read / grep / find tools to actually inspect this repo — start with README.md if present.",
+    );
+
     this.appendSystem(lines.join("\n"), buildSeedSummary(cfg.repoUrl, clonePath, tree));
   }
 
   private async loop(cfg: RunConfig): Promise<void> {
+    const isAutonomous = cfg.rounds === 0;
+    let cycle = 0;
+
     await this.runDiscussionLoop(cfg, "Council", async (cfg) => {
-      const earlyCheckRound = cfg.rounds >= 4 ? Math.ceil(cfg.rounds / 2) : 0;
-      const deadLoopGuard = new OutputEmptyDeadLoopGuard({ roleLabel: "drafters", unit: "round" });
-      const tokenBaseline = snapshotLifetimeTokens();
+      while (!this.stopping) {
+        cycle++;
+        this.state.stopping = this.stopping;
+        const result = await this.runCycle(cfg, cycle, isAutonomous);
 
-      for (let r = 1; r <= cfg.rounds; r++) {
-        if (!this.checkRoundBudget(cfg, "round", r, tokenBaseline)) break;
-
-        const snapshot: readonly TranscriptEntry[] = [...this.transcript];
-        const agents = this.opts.manager.list();
-        const transcriptLenBefore = this.transcript.length;
-        await staggerStart(agents, (agent) =>
-          this.runTurn(agent, r, cfg.rounds, snapshot, cfg.userDirective),
-        );
-
-        const newEntries = this.transcript
-          .slice(transcriptLenBefore)
-          .filter((e) => e.role === "agent");
-        const dlHit = deadLoopGuard.recordIteration(newEntries);
-        if (dlHit.tripped) {
-          this.earlyStopDetail = dlHit.earlyStopDetail;
-          this.appendSystem(`All council drafters produced empty/junk output for ${dlHit.consecutive} consecutive rounds — ending council early.`);
-          break;
+        if (result === "stop") break;
+        if (result === "retry") {
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
         }
-
-        if (r === 2 && r < cfg.rounds) {
-          const flips = countPositionFlips(this.transcript, 2, cfg.agentCount);
-          if (flips.changes === 0 && flips.keeps >= 2) {
-            this.appendSystem(
-              `[T181 contrarian round trigger] Round 2 had ${flips.keeps}× KEEP and 0× CHANGE — the council converged without anyone updating their position. Round ${r + 1}: at least ONE agent should produce a grounded CHANGE (cite evidence the team didn't engage with) OR explicitly justify why every position survived peer challenge unmodified. "Everyone politely converged" is the failure mode this guard exists to catch.`,
-            );
-          }
-        }
-
-        if (cfg.postRoundCritique) {
-          await maybeRunPostRoundCritique({
-            agents: this.opts.manager.list(),
-            round: this.round,
-            totalRounds: cfg.rounds,
-            transcript: this.transcript,
-            userDirective: cfg.userDirective,
-            enabled: cfg.postRoundCritique ?? false,
-            runDiscussionAgent: (agent, prompt, opts) => this.runDiscussionAgent(agent, prompt, opts),
-            stats: this.stats,
-            appendSystem: (text, summary) => this.appendSystem(text, summary),
-            presetName: "council",
-            stopping: this.stopping,
-          });
-        }
-
-        if (!this.stopping && r === earlyCheckRound && r < cfg.rounds) {
-          const convergence = await this.runSynthesisPass(cfg);
-          if (convergence === "high") {
-            this.earlyStopDetail = `council-converged-high after round ${r}/${cfg.rounds}`;
-            this.appendSystem(`Council reached convergence:high at round ${r}/${cfg.rounds} — ending early.`);
-            break;
-          }
-        }
+        if (!isAutonomous || this.stopping) break;
+        this.earlyStopDetail = undefined;
+        await new Promise((r) => setTimeout(r, 2000));
       }
-
-      if (!this.stopping && cfg.rounds > 0 && !this.earlyStopDetail) {
-        await this.runSynthesisPass(cfg);
-      }
-      if (!this.stopping && cfg.councilReconcile === "vote" && cfg.rounds > 0) {
-        await this.runVoteReconcile(cfg);
-      }
-      if (!this.stopping && cfg.runId) {
-        await this.writeCouncilDeliverable(cfg);
-      }
-      if (!this.stopping) this.appendSystem("Council complete.");
     });
+
+    if (!this.stopping) this.appendSystem("Council complete.");
   }
 
-  // Unit 33: shared summary writer pattern — see RoundRobinRunner.
-  // 2026-05-02 (deliverables initiative + quality levers #1-#3):
-  // per-preset structured markdown artifact. Pulls the synthesis bubble
-  // from the transcript (latest entry tagged council_synthesis) + the
-  // per-round drafts and renders them as a portable report. Augmented
-  // by runQualityPasses with a rubric (top), critic notes (bottom),
-  // and extracted next-actions (bottom). Best-effort — failure posts
-  // a system message but doesn't break run-end.
-  private async writeCouncilDeliverable(cfg: RunConfig): Promise<void> {
-    if (!cfg.runId) return;
-    // 2026-05-03 (Phase A): directive helpers extracted to shared module.
-    const dirCtx = readDirective(cfg);
-    // Latest synthesis bubble (lead's consolidated answer).
-    const synthesisEntry = [...this.transcript]
-      .reverse()
-      .find((e) => e.summary?.kind === "council_synthesis");
-    const synthesisText = synthesisEntry?.text ?? "_(synthesis missing)_";
-    // Round 1 = independent drafts (peer-hidden). Group by agentIndex.
-    const round1Drafts = this.transcript.filter(
-      (e) =>
-        e.summary?.kind === "council_draft" &&
-        e.summary.round === 1 &&
-        e.role === "agent",
-    );
-    // Final round = revised drafts. Last round number we actually ran.
-    const finalRound = this.round;
-    const finalDrafts = this.transcript.filter(
-      (e) =>
-        e.summary?.kind === "council_draft" &&
-        e.summary.round === finalRound &&
-        e.role === "agent",
-    );
-    // 2026-05-02 (council improvement #4): per-agent latest position
-    // section, extracted from `### MY POSITION` blocks. Surfaces each
-    // agent's final answer side-by-side with the synthesis — counters
-    // synthesis-collapse by giving the reader the raw distinct
-    // positions, not just the consolidated view.
-    const positionsSection = buildCouncilPositionsSection(
-      this.transcript,
-      cfg.agentCount,
-    );
-    const baseSections: Array<{ title: string; body: string }> = [];
-    const directiveSection = maybeDirectiveSection(dirCtx);
-    if (directiveSection) baseSections.push(directiveSection);
-    baseSections.push(
-      {
-        title: pickAnswerSectionTitle(dirCtx, {
-          withDirective: "Answer to directive",
-          withoutDirective: "Final synthesis",
-        }),
-        body: synthesisText,
-      },
-      positionsSection,
-      {
-        title: `Round ${finalRound} — final drafts (full text)`,
-        body:
-          finalDrafts.length > 0
-            ? finalDrafts
-                .map((e) => `### Agent ${e.agentIndex ?? "?"}\n\n${e.text.trim()}`)
-                .join("\n\n")
-            : "_(no final-round drafts captured)_",
-      },
-      {
-        title: "Round 1 — independent first drafts (peer-hidden)",
-        body:
-          round1Drafts.length > 0
-            ? round1Drafts
-                .map((e) => `### Agent ${e.agentIndex ?? "?"}\n\n${e.text.trim()}`)
-                .join("\n\n")
-            : "_(no round 1 drafts captured)_",
-      },
-    );
-    // 2026-05-02 (quality levers #1-#3): augment with rubric +
-    // critic notes + extracted next-actions. The lead agent (index 1)
-    // doubles as critic so we don't burn a separate agent slot.
-    const lead = this.opts.manager.list().find((a) => a.index === 1) ?? null;
-    const sections = await runQualityPasses({
-      baseSections,
-      rubric: this.derivedRubric,
-      criticAgent: lead,
-      manager: this.opts.manager,
-    });
-    const subtitleBase = `${cfg.agentCount} drafter${cfg.agentCount === 1 ? "" : "s"} across ${finalRound}/${cfg.rounds} round${cfg.rounds === 1 ? "" : "s"}${this.earlyStopDetail ? " · early-stop" : ""}`;
-    const result = writeDeliverable({
-      preset: "council",
-      runId: cfg.runId,
-      clonePath: cfg.localPath,
-      title: pickDeliverableTitle(dirCtx, {
-        withDirective: "Council: directive answer",
-        withoutDirective: "Council synthesis",
-      }),
-      subtitle: pickDeliverableSubtitle(dirCtx, subtitleBase),
-      sections,
-    });
-    if (result.ok) {
-      this.appendSystem(`Deliverable saved → ${result.filename}`, {
-        kind: "deliverable",
-        preset: "council",
-        filename: result.filename,
-        fullPath: result.fullPath,
-        bytes: result.bytes,
-        sectionTitles: sections.map((s) => s.title),
-      });
+  private async runCycle(cfg: RunConfig, cycle: number, isAutonomous: boolean): Promise<"done" | "retry" | "stop"> {
+    const hasPendingTodos = this.state.todoQueue.counts().pending > 0;
+
+    if (hasPendingTodos) {
+      this.appendSystem(`═══ Council cycle ${cycle} — draining ${this.state.todoQueue.counts().pending} pending todo(s) ═══`);
     } else {
-      this.appendSystem(`Failed to write deliverable (${result.reason})`);
-    }
+      this.appendSystem(`═══ Council cycle ${cycle} ═══`);
 
-    // T2.2 (2026-05-04): opt-in wrap-up apply phase. When
-    // cfg.executeNextAction is set, fire one worker prompt against the
-    // top extracted next-action and apply hunks via the baseline path.
-    // Council's lead (agent-1) doubles as the implementer here so we
-    // don't need to spawn a new agent. Best-effort; any failure is
-    // logged via appendSystem and doesn't block the rest of the
-    // close-out.
-    //
-    // Phase 1 (writeMode: single): when cfg.writeMode === "single",
-    // use the synthesizer-hunks path if discussionContext is available.
-    // The synthesis pass already ran, so we construct the context from
-    // the transcript.
-    if (lead) {
-      // Build discussion context for synthesizer-hunks path
-      const synthesisEntry = this.transcript.find(
-        (e) => e.summary?.kind === "council_synthesis",
-      );
-      const discussionContext = synthesisEntry
-        ? [
-            `Council synthesis after ${finalRound}/${cfg.rounds} round(s):`,
-            synthesisEntry.text,
-            "",
-            "Key positions from agents:",
-            ...this.transcript
-              .filter((e) => e.role === "agent" && e.summary?.kind !== "council_synthesis")
-              .slice(-cfg.agentCount * 2) // last ~2 rounds per agent
-              .map((e) => `[Agent ${e.agentIndex ?? "?"}] ${e.text.slice(0, 500)}…`),
-          ].join("\n")
-        : undefined;
+      if (cycle === 1) {
+        // ── CYCLE 1: Full discussion (3 rounds) ──
+        this.setPhase("discussing");
+        this.appendSystem(`[Phase 1] Analysis — 3 round(s)`);
 
-      // Extract relevant files from the transcript (grounding citations)
-      const relevantFiles: string[] = [];
-      const filePattern = /(?:src\/|tests\/|lib\/|dist\/)[a-zA-Z0-9_./-]+\.(ts|js|tsx|jsx|py|rs|go)/g;
-      for (const e of this.transcript) {
-        if (e.role !== "agent") continue;
-        const matches = e.text.match(filePattern) || [];
-        for (const m of matches) {
-          if (!relevantFiles.includes(m)) relevantFiles.push(m);
-        }
-      }
-
-      await maybeRunWrapUpApply({
-        cfg,
-        presetName: "council",
-        agent: lead,
-        manager: this.opts.manager,
-        repos: this.opts.repos,
-        emit: this.opts.emit,
-        appendSystem: (text) => this.appendSystem(text),
-        discussionContext,
-        relevantFiles: relevantFiles.slice(0, 20), // cap at 20 files
-      });
-    }
-
-    // Phase 2 (writeMode: multi): reconcile proposals if multi-writer active
-    if (this.multiWriter?.isActive() && this.multiWriter.proposalCount() > 0) {
-      const proposals = this.multiWriter.getProposals();
-      this.appendSystem(
-        `Multi-writer reconcile: ${proposals.length} proposal(s) from ${new Set(proposals.map(p => p.agentId)).size} agent(s).`,
-      );
-
-      const currentFiles: Record<string, string | null> = {};
-      const allFiles = new Set(proposals.flatMap(p => p.hunks.map(h => h.file)));
-      for (const file of allFiles) {
-        try {
-          const fs = await import("node:fs/promises");
-          const path = await import("node:path");
-          const absPath = path.join(cfg.localPath, file);
-          currentFiles[file] = await fs.readFile(absPath, "utf8");
-        } catch {
-          currentFiles[file] = null;
-        }
-      }
-
-      const strategy = cfg.conflictPolicy ?? "vote";
-      const result = await this.multiWriter.reconcile(currentFiles, strategy);
-
-      if (!result.ok) {
-        this.appendSystem(
-          `Multi-writer reconcile: failed — ${result.conflicts.length} conflict(s) detected.`,
-        );
-        for (const conflict of result.conflicts.slice(0, 5)) {
-          this.appendSystem(
-            `  ${conflict.type} on ${conflict.file}: ${conflict.conflictingAgents.map(a => `agent-${a.agentIndex}`).join(", ")}`,
+        for (let r = 1; r <= 3; r++) {
+          if (this.stopping) break;
+          const snapshot: readonly TranscriptEntry[] = [...this.transcript];
+          await staggerStart(this.opts.manager.list(), (agent) =>
+            this.runTurn(agent, r, 3, snapshot, cfg.userDirective),
           );
         }
-      } else if (result.hunks.length > 0) {
-        this.appendSystem(
-          `Multi-writer reconcile: ${result.hunks.length} hunk(s) ready to apply (${strategy} strategy).`,
-        );
 
-        // Apply reconciled hunks via wrapUpApplyPhase
-        const { runWrapUpApplyPhase } = await import("./wrapUpApplyPhase.js");
-        const applyResult = await runWrapUpApplyPhase({
-          directive: cfg.userDirective ?? "Council multi-writer synthesis",
-          clonePath: cfg.localPath,
-          model: cfg.writeModel ?? cfg.model,
-          agent: lead!,
-          repos: this.opts.repos,
-          manager: this.opts.manager,
-          emit: this.opts.emit,
-          appendSystem: (text) => this.appendSystem(text),
-          presetName: "council",
-          verifyCommand: cfg.verifyCommand,
-          hunksFromSynthesizer: result.hunks,
-        });
-
-        if (applyResult.ok) {
-          this.appendSystem(
-            `Multi-writer apply: ${applyResult.hunksApplied}/${applyResult.hunksAttempted} hunk(s) committed (${applyResult.commitSha?.slice(0, 7)}).`,
+        // Final synthesis
+        if (!this.stopping) {
+          await runSynthesisPass(
+            cfg,
+            this.transcript,
+            this.stopping,
+            this.stats,
+            this.runDiscussionAgent.bind(this),
+            {
+              manager: this.opts.manager,
+              emit: this.opts.emit,
+              appendSystem: this.appendSystem.bind(this),
+              logDiag: this.opts.logDiag,
+            },
+            this.state.committedFiles,
+            this.state.currentTier,
+            this.repoFiles,
+            this.codeContextExcerpts,
           );
-        } else {
-          this.appendSystem(
-            `Multi-writer apply: failed — ${applyResult.reason}`,
+        }
+
+        // Write deliverable
+        if (!this.stopping && cfg.runId) {
+          await writeCouncilDeliverable(
+            cfg,
+            this.transcript,
+            null,
+            this.round,
+            this.earlyStopDetail,
+            undefined,
+            {
+              manager: this.opts.manager,
+              repos: this.opts.repos,
+              emit: this.opts.emit,
+              appendSystem: this.appendSystem.bind(this),
+            },
           );
         }
       } else {
-        this.appendSystem(`Multi-writer reconcile: 0 hunks to apply.`);
+        // ── CYCLE 2+: Fast standup (1 round) ──
+        this.setPhase("discussing");
+        const unmetCount = this.state.contract?.criteria.filter(c => c.status !== "met").length ?? 0;
+        this.appendSystem(`[Standup] Planning next batch — ${this.state.contract?.criteria.length ?? 0} criteria, ${unmetCount} unmet.`);
+
+        if (this.executionFailures.length > 0) {
+          this.appendSystem(`[Standup] Previous failures:\n${this.executionFailures.map(f => `  ${f}`).join("\n")}`);
+        }
+
+        const snapshot: readonly TranscriptEntry[] = [...this.transcript];
+        await staggerStart(this.opts.manager.list(), (agent) =>
+          this.runStandupTurn(agent, snapshot, cfg.userDirective),
+        );
+
+        await this.synthesizeStandup(cfg);
       }
+    }
+
+    // ── DRAIN LOOP: execute all pending todos ──
+    this.executionFailures = [];
+    if (!this.stopping) {
+      await this.drainTodos(cfg);
+    }
+
+    // ── AUDIT: check criteria ──
+    if (!this.stopping && this.state.contract) {
+      const auditResult = await this.runAudit(cfg);
+      if (auditResult === "stop") return "stop";
+      if (auditResult === "retry") return "retry";
+      return "done";
+    }
+
+    return "done";
+  }
+
+  private async drainTodos(cfg: RunConfig): Promise<void> {
+    const agents = this.opts.manager.list();
+    const executionAgents = agents.filter((a) => a.index !== 1);
+    if (executionAgents.length === 0) return;
+
+    const REAPER_INTERVAL = 30_000;
+    const IN_PROGRESS_TTL = 10 * 60_000;
+    const reaper = setInterval(() => {
+      const reaped = this.state.todoQueue.reapStaleInProgress(Date.now(), IN_PROGRESS_TTL);
+      for (const id of reaped) {
+        this.appendSystem(`[reaper] Timed out todo ${id} — was in-progress for >10min.`);
+      }
+    }, REAPER_INTERVAL);
+    reaper.unref();
+
+    try {
+      // Set up drain resolver so stop() can signal us
+      const drainPromise = new Promise<void>((resolve) => {
+        this.drainResolve = resolve;
+      });
+
+      const { completed, failed, skipped } = await runCouncilWorkers(
+        this.state,
+        executionAgents,
+        {
+          appendSystem: (msg) => this.appendSystem(msg),
+          recordFailure: (todoId, description, error) => {
+            this.executionFailures.push(`${description}: ${error.slice(0, 200)}`);
+          },
+          stopping: () => this.stopping,
+        },
+      );
+
+      this.appendSystem(`[execution] Complete: ${completed} done, ${failed} failed, ${skipped} skipped.`);
+      // Signal drain complete
+      this.drainResolve?.();
+    } finally {
+      clearInterval(reaper);
     }
   }
 
-  // Task #79: final consensus synthesis. Routes through agent-1 with
-  // all council drafts in context and asks for a unified answer. Uses
-  // the same promptWithRetry + extractText path as runTurn so timing
-  // + retry stats land in the per-agent rollup. Treated as a normal
-  // agent turn for stats purposes — the synthesis IS agent-1's last
-  // contribution. Tagged with summary kind "council_synthesis" so
-  // the modal can render it distinctively.
-  private async runSynthesisPass(cfg: RunConfig): Promise<"high" | "medium" | "low" | null> {
+  private async runAudit(cfg: RunConfig): Promise<"done" | "retry" | "stop"> {
+    if (!this.state.contract) return "done";
+
+    const { updatedCriteria, newTodos } = await runCouncilLlmAudit(
+      cfg,
+      this.state.contract,
+      this.state.committedFiles,
+      {
+        manager: this.opts.manager,
+        appendSystem: (msg) => this.appendSystem(msg),
+        stopping: () => this.stopping,
+      },
+    );
+
+    this.state.contract = { ...this.state.contract, criteria: updatedCriteria };
+    const metCount = updatedCriteria.filter(c => c.status === "met").length;
+    const unmetCount = updatedCriteria.filter(c => c.status === "unmet").length;
+    const currentUnmetIds = new Set(updatedCriteria.filter(c => c.status === "unmet").map(c => c.id));
+
+    // Convergence detection
+    const sameUnmet = [...currentUnmetIds].filter(id => this.previousUnmetIds.has(id)).length;
+    this.previousUnmetIds = currentUnmetIds;
+    if (unmetCount > 0 && sameUnmet === currentUnmetIds.size) {
+      this.stuckCycleCount++;
+      this.appendSystem(`[audit] Same ${sameUnmet} criteria unmet for ${this.stuckCycleCount} cycle(s).`);
+      if (this.stuckCycleCount >= 3) {
+        this.appendSystem(`[audit] Stuck for ${this.stuckCycleCount} cycles — stopping.`);
+        return "stop";
+      }
+    } else {
+      this.stuckCycleCount = 0;
+    }
+
+    if (unmetCount === 0) {
+      // All criteria met — try tier promotion
+      this.stuckCycleCount = 0;
+      this.previousUnmetIds = new Set();
+      this.consecutiveEmptyCycles = 0;
+
+      const planner = this.opts.manager.list().find((a) => a.index === 1);
+      if (planner && this.state.currentTier < this.maxTiers) {
+        this.appendSystem(`[ambition] All criteria met — attempting tier ${this.state.currentTier + 1} promotion.`);
+        const promoted = await runTierPromotion(this.state, planner, this.maxTiers);
+        if (promoted) {
+          return "done";
+        }
+      }
+      this.appendSystem(`[ambition] All criteria met, no more tiers — stopping.`);
+      return "stop";
+    }
+
+    // Create todos for unmet criteria
+    for (const t of newTodos) {
+      this.state.todoQueue.post({
+        description: t.description,
+        expectedFiles: t.expectedFiles,
+        createdBy: "auditor",
+      });
+    }
+    this.appendSystem(`[audit] Created ${newTodos.length} todo(s) for unmet criteria.`);
+
+    // Planner fallback
+    if (newTodos.length === 0) {
+      this.consecutiveEmptyCycles++;
+      if (this.consecutiveEmptyCycles >= 2) {
+        this.appendSystem(`[audit] No new todos for ${this.consecutiveEmptyCycles} cycles — trying planner fallback.`);
+        const lead = this.opts.manager.list().find((a) => a.index === 1);
+        if (lead) {
+          const todos = await extractActionableTodos(lead, cfg, this.transcript, this.opts.repos, this.appendSystem.bind(this), this.opts.manager);
+          for (const t of todos) {
+            this.state.todoQueue.post({
+              description: t.description,
+              expectedFiles: t.expectedFiles,
+              createdBy: "planner-fallback",
+            });
+          }
+          this.appendSystem(`[planner] Fallback created ${todos.length} todo(s).`);
+          if (todos.length === 0) {
+            this.appendSystem(`[planner] Fallback produced nothing — stopping.`);
+            return "stop";
+          }
+        }
+      }
+    } else {
+      this.consecutiveEmptyCycles = 0;
+    }
+
+    return "retry";
+  }
+
+  private async synthesizeStandup(cfg: RunConfig): Promise<void> {
     const agents = this.opts.manager.list();
     const lead = agents.find((a) => a.index === 1);
-    if (!lead) return null;
-    this.opts.manager.markStatus(lead.id, "thinking");
-    this.emitAgentState({
-      id: lead.id,
-      index: lead.index,
+    if (!lead) return;
 
-      sessionId: lead.sessionId,
-      status: "thinking",
-      thinkingSince: Date.now(),
-    });
-    this.stats.countTurn(lead.id);
-    this.appendSystem(`Synthesizing council consensus (agent-${lead.index})…`);
+    const proposals = this.transcript
+      .filter((e) => e.role === "agent" && e.summary?.kind === "council_draft" && (e.summary as any).phase === "standup")
+      .map((e) => `[Agent ${e.agentIndex}]:\n${e.text}`)
+      .join("\n\n---\n\n");
 
-    const prompt = buildCouncilSynthesisPrompt(cfg.rounds, this.transcript, cfg.userDirective);
-    // 2026-04-27: SSE-aware watchdog (see startSseAwareTurnWatchdog).
-    const controller = new AbortController();
-    const watchdog = startSseAwareTurnWatchdog({
-      manager: this.opts.manager,
-      sessionId: lead.sessionId,
-      controller,
-      abortSession: async () => {},
-    });
+    if (!proposals) return;
+
+    const prompt = `You are Agent 1, synthesizing standup proposals into a unified plan.
+
+Standup proposals from all agents:
+${proposals}
+
+Your task: Merge these proposals into a single, coherent plan. Focus on what's actionable.
+Output a JSON array of concrete todos:
+[{"description": "specific file change", "expectedFiles": ["path/to/file.ts"]}]
+
+Max 6 items. Each todo must target specific files. Return ONLY the JSON array.`;
+
     try {
-      const onTokens = ({ promptTokens, responseTokens }: { promptTokens: number; responseTokens: number }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens);
-      const res = await promptWithFailoverAuto(lead, prompt, {
-        onTokens,
-        signal: controller.signal,
+      const raw = await promptWithFailoverAuto(lead, prompt, {
         manager: this.opts.manager,
         agentName: "swarm-read",
-        // Phase 5b of #243: per-agent addendum from the topology row.
-        promptAddendum: getAgentAddendum(cfg.topology, lead.index),
-        describeError: describeSdkError,
-        onTiming: ({ attempt, elapsedMs, success }) => {
-          this.stats.onTiming(lead.id, success, elapsedMs);
-          this.opts.manager.recordPromptComplete(lead.id, { attempt, elapsedMs, success });
-          this.opts.emit({
-            type: "agent_latency_sample",
-            agentId: lead.id,
-            agentIndex: lead.index,
-            attempt,
-            elapsedMs,
-            success,
-            ts: Date.now(),
-          });
-        },
-        onRetry: ({ attempt, max, reasonShort, delayMs }) => {
-          this.stats.onRetry(lead.id);
-          this.appendSystem(
-            `[${lead.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
-          );
-        },
-      });
-      const diagCtx = {
-        runner: "council",
-        agentId: lead.id,
-        agentIndex: lead.index,
-        logDiag: this.opts.logDiag,
-      };
-      const extracted = extractTextWithDiag(res, diagCtx);
-      let text = extracted.text;
-      if ((extracted.isEmpty || looksLikeJunk(text)) && !this.stopping) {
-        const retryText = await retryEmptyResponse(lead, prompt, "swarm-read", diagCtx);
-        if (retryText !== null) text = retryText;
+        signal: new AbortController().signal,
+      }, cfg.providerFailover);
+      const text = extractProviderText(raw);
+      if (text) {
+        this.appendSystem(`[Standup] Synthesized proposals into unified plan.`);
       }
-      // Task #115: track Pattern 8 stuck-loop, warn on threshold.
-      trackPostRetryJunk(text, {
-        agentId: lead.id,
-        recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
-        appendSystem: (msg) => this.appendSystem(msg),
-      });
-      // Task #108: defensive guard — if the post-retry text still
-      // looks like junk, do NOT tag it as the canonical synthesis.
-      // The transcript still keeps the entry (so the run history
-      // shows what happened) but without the synthesis kind, the
-      // UI won't render a single character as the "consensus".
-      const isJunkSynthesis = looksLikeJunk(text) || extracted.isEmpty;
-      if (cfg.postSynthesisCritique && !isJunkSynthesis && text.length > 0) {
-        const proposals = this.transcript
-          .filter(e => e.role === "agent")
-          .slice(-this.opts.manager.list().length)
-          .map(e => ({ workerId: `agent-${e.agentIndex}`, text: e.text }));
-        const criticAgent = this.opts.manager.list()[0] ?? lead;
-        const revised = await runPostSynthesisCritique({
-          synthesis: text,
-          proposals,
-          criticAgent,
-          manager: this.opts.manager,
-          appendSystem: (txt) => this.appendSystem(txt),
-          stopping: this.stopping,
-          runDiscussionAgent: (agent, pr, opts) => this.runDiscussionAgent(agent, pr, opts),
-          stats: this.stats,
-          presetName: "council",
-        });
-        text = revised;
-      }
-      const stripped = stripAgentText(text);
-      const entry: TranscriptEntry = {
-        id: randomUUID(),
-        role: "agent",
-        agentId: lead.id,
-        agentIndex: lead.index,
-        text: stripped.finalText || "(empty response)",
-        ts: Date.now(),
-        summary: isJunkSynthesis
-          ? undefined
-          : { kind: "council_synthesis", rounds: cfg.rounds },
-        ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
-        ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
-      };
-      this.transcript.push(entry);
-      this.opts.emit({ type: "transcript_append", entry });
-      if (isJunkSynthesis) {
-        this.appendSystem(
-          `[${lead.id}] synthesis text is degenerate (${text.length} chars) — kept in transcript but NOT tagged as canonical synthesis.`,
-        );
-        return null;
-      }
-      // Phase B (Task #99): parse the convergence signal so the loop
-      // can act on it.
-      return parseConvergenceSignal(text);
-    } catch (err) {
-      // Synthesis failure is non-fatal — log and continue. The council
-      // still produced N final drafts that the user can read.
-      this.appendSystem(
-        `[${lead.id}] synthesis failed (${err instanceof Error ? err.message : String(err)}); skipping consolidation.`,
-      );
-      return null;
-    } finally {
-      watchdog.cancel();
-      this.opts.manager.markStatus(lead.id, "ready");
-      this.emitAgentState({
-        id: lead.id,
-        index: lead.index,
-  
-        sessionId: lead.sessionId,
-        status: "ready",
-        lastMessageAt: Date.now(),
-      });
-    }
+    } catch { /* ignore */ }
   }
 
-  // T-Item-CouncilRec (2026-05-04): vote reconcile pass. After the
-  // synthesis, fire ONE small prompt per drafter asking them to vote
-  // for the BEST OTHER agent's final draft. Tally + announce.
-  // Best-effort: any per-drafter failure counts as an abstention; the
-  // final tally still reports.
-  private async runVoteReconcile(cfg: RunConfig): Promise<void> {
-    const agents = this.opts.manager.list();
-    if (agents.length < 2) return;
-    // Collect each agent's FINAL-round draft (latest agent entry per
-    // agentIndex). The synthesis bubble is also a "final" entry but
-    // it's the lead's; for vote we only count the per-round drafts.
-    const finalDrafts = new Map<number, string>();
-    for (const e of this.transcript) {
-      if (e.role !== "agent") continue;
-      if (e.summary?.kind === "council_synthesis") continue;
-      if (typeof e.agentIndex === "number") {
-        finalDrafts.set(e.agentIndex, e.text);
-      }
-    }
-    const draftList = [...finalDrafts.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([agentIndex, text]) => ({ agentIndex, text }));
-    if (draftList.length < 2) return;
-    this.appendSystem(
-      `[T-Item-CouncilRec vote] reconcile phase: each drafter casts ONE vote for the best OTHER draft.`,
+  private async runStandupTurn(
+    agent: Agent,
+    snapshot: readonly TranscriptEntry[],
+    userDirective?: string,
+  ): Promise<void> {
+    const prompt = buildStandupPrompt(
+      agent.index,
+      {
+        missionStatement: this.state.contract?.missionStatement ?? "",
+        criteria: this.state.contract?.criteria ?? [],
+      },
+      this.state.committedFiles,
+      userDirective,
+      this.active?.localPath,
+      this.repoFiles,
     );
-    const validAgentIndexes = draftList.map((d) => d.agentIndex);
-    const votes: VoteRecord[] = [];
-    for (const agent of agents) {
-      if (!validAgentIndexes.includes(agent.index)) continue;
-      const prompt = buildVotePrompt({
-        voterIndex: agent.index,
-        drafts: draftList,
-        userDirective: cfg.userDirective,
-      });
-      const ctrl = new AbortController();
-      try {
-        const res = await promptWithFailoverAuto(agent, prompt, {
-          signal: ctrl.signal,
-          manager: this.opts.manager,
-          agentName: "swarm-read",
-          describeError: describeSdkError,
-        });
-        const raw = extractText(res) ?? "";
-        const parsed = parseVoteResponse(raw, agent.index);
-        votes.push({
-          voterIndex: agent.index,
-          votedForIndex: parsed.votedForIndex,
-          rationale: parsed.rationale,
-        });
-      } catch {
-        votes.push({
-          voterIndex: agent.index,
-          votedForIndex: null,
-          rationale: "",
-        });
-      }
-    }
-    const tally = tallyVotes(votes, validAgentIndexes);
-    const tallyLines = [...tally.countsByIndex.entries()]
-      .sort((a, b) => b[1] - a[1] || a[0] - b[0])
-      .map(([idx, count]) => `  Agent ${idx}: ${count} vote(s)`);
-    const winnerLine =
-      tally.winnerIndex !== null
-        ? `Winner: Agent ${tally.winnerIndex} (${tally.countsByIndex.get(tally.winnerIndex)} vote(s)).`
-        : `No clear winner — all ${tally.abstentions} ballots abstained.`;
-    this.appendSystem(
-      `[T-Item-CouncilRec vote] tally:\n${tallyLines.join("\n")}\n${winnerLine}`,
-    );
+    await this.runDiscussionAgent(agent, prompt, {
+      runnerName: "council",
+      agentName: "swarm-read",
+      stats: this.stats,
+      enrichSummary: {
+        kind: "council_draft",
+        round: 1,
+        phase: "standup",
+      },
+    });
   }
 
   private async runTurn(
@@ -688,7 +532,16 @@ export class CouncilRunner extends DiscussionRunnerBase {
     userDirective?: string,
   ): Promise<void> {
     const visible = snapshot.filter((e) => userEntryVisibleTo(e, agent.id));
-    const prompt = buildCouncilPrompt(agent.index, round, totalRounds, visible, userDirective);
+    const prompt = buildCouncilPrompt(
+      agent.index,
+      round,
+      totalRounds,
+      visible,
+      userDirective,
+      this.active?.localPath,
+      this.repoFiles,
+      this.codeContextExcerpts,
+    );
     await this.runDiscussionAgent(agent, prompt, {
       runnerName: "council",
       agentName: "swarm-read",
@@ -698,23 +551,9 @@ export class CouncilRunner extends DiscussionRunnerBase {
         round,
         phase: round === 1 ? "draft" : "reveal",
       },
-      onEntryPushed: (_entry, strippedText) => {
-        if (this.multiWriter?.isActive()) {
-          const result = this.multiWriter.addProposal(agent, strippedText);
-          if (!result.skipped && result.hunks.length > 0) {
-            this.appendSystem(
-              `[${agent.id}] proposed ${result.hunks.length} hunk(s) — collected for reconciliation.`,
-            );
-          }
-        }
-      },
     });
   }
-
 }
 
-// Re-exports for backward compat with external callers (tests, etc.)
-// that import these from this module.
 export { parseConvergenceSignal as parseCouncilConvergence } from "./convergenceSignal.js";
 export { buildCouncilPrompt, buildCouncilSynthesisPrompt } from "./councilPromptHelpers.js";
-

@@ -62,9 +62,9 @@ export const DRAIN_WATCHER_INTERVAL_MS = 2_000;
 // explicitly), but it's unstable and not chosen as a sibling FOR
 // either. nemotron is the safer fallback for all three.
 export const SIBLING_MODELS: Readonly<Record<string, string>> = {
-  "glm-5.1:cloud": "nemotron-3-super:cloud",
-  "nemotron-3-super:cloud": "glm-5.1:cloud",
-  "deepseek-v4-pro:cloud": "nemotron-3-super:cloud",
+  "glm-5.1:cloud": "deepseek-v4-flash:cloud",
+  "deepseek-v4-flash:cloud": "glm-5.1:cloud",
+  "deepseek-v4-pro:cloud": "deepseek-v4-flash:cloud",
 };
 
 export function siblingModelFor(model: string): string | undefined {

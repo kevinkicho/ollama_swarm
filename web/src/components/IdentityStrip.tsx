@@ -104,26 +104,10 @@ export function IdentityStrip() {
         <PresetBadge preset={cfg.preset} />
       ) : null}
       {cfg ? (
-        <ProviderBadge model={cfg.plannerModel} />
-      ) : null}
-      {cfg ? (
         <>
           <span className="text-ink-600">·</span>
           <span className="text-ink-100 font-semibold">{runName}</span>
           <span className="text-ink-600">·</span>
-          {sameModel ? (
-            <span title="Planner + worker model"><span className="text-ink-500">model</span> {cfg.plannerModel}</span>
-          ) : (
-            <>
-              <span title="Planner model"><span className="text-ink-500">planner</span> {cfg.plannerModel}</span>
-              <span className="text-ink-600">·</span>
-              <span title="Worker model"><span className="text-ink-500">worker</span> {cfg.workerModel}</span>
-            </>
-          )}
-          {/* Topbar dedup: dropped the "agents N" segment. cfg.agentCount
-              excludes the dedicated auditor (Unit 58) so the count was
-              wrong for 4-agent runs, and the live agent count is already
-              in the left sidebar header. Dedup over fix-the-count. */}
           <ConformanceGauge samples={conformance} drift={drift} />
           {runId && phase !== "idle" && phase !== "completed" && phase !== "stopped" ? (
             <AmendButton runId={runId} amendmentCount={amendments.length} />

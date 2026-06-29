@@ -76,8 +76,8 @@ import type { Topology } from "../../../shared/src/topology";
 // All three models remain available via the form's free-text Model
 // field. Keep constants separate so a future per-role split can
 // target REASONING / CODING / VERIFIER without touching every preset.
-const MODEL_REASONING = "glm-5.1:cloud";
-const MODEL_CODING = "gemma4:31b-cloud";
+const MODEL_REASONING = "deepseek-v4-flash:cloud";
+const MODEL_CODING = "deepseek-v4-flash:cloud";
 
 // Keep server-side cap (max=8) in mind when editing `max` values here.
 // Patterns that theoretically scale higher (blackboard, stigmergy) are
@@ -328,7 +328,7 @@ function buildPreviewClonePath(repoUrl: string, parentPath: string): string {
 export function SetupForm() {
   const navigate = useNavigate();
   const [repoUrl, setRepoUrl] = useState("");
-  const [parentPath, setParentPath] = useState("C:\\users\\you\\projects");
+  const [parentPath, setParentPath] = useState("C:\\Users\\you\\projects\\my-repo");
   const [presetId, setPresetId] = useState<string>("round-robin");
   const [agentCount, setAgentCount] = useState(3);
   // Phase 1 of #243: topology is the new source of truth. agentCount
@@ -511,6 +511,9 @@ export function SetupForm() {
     // (e.g. round-robin → stigmergy lands you on MODEL_CODING).
     // User can override after.
     setModel(next.recommendedModel);
+    // Reset rounds to default (0=infinite) so switching from blackboard
+    // (where 0 is natural) to other presets doesn't carry autonomous mode.
+    setRoundsInput(0);
     // Only reset provider if the new model can't work with the current one.
     // Preserves user's manual provider choice (e.g. OpenCode + DeepSeek).
     if (detectProvider(next.recommendedModel) !== provider) {
@@ -668,6 +671,17 @@ export function SetupForm() {
         // Otherwise pass through; BlackboardRunner's cap watchdog stops
         // the run with cap:cost when sum-of-spend reaches the ceiling.
         // Ollama-only runs ignore the cap (every record costs $0).
+        const costTrim = maxCostUsd.trim();
+        if (costTrim.length > 0) {
+          const cost = Number(costTrim);
+          if (Number.isFinite(cost) && cost > 0) {
+            presetSpecific.maxCostUsd = cost;
+          }
+        }
+      }
+      // Phase 2 of #314: maxCostUsd for ALL presets (not just blackboard).
+      // The server accepts it for any preset; only the UI was gated.
+      if (preset.id !== "blackboard") {
         const costTrim = maxCostUsd.trim();
         if (costTrim.length > 0) {
           const cost = Number(costTrim);
@@ -988,28 +1002,26 @@ export function SetupForm() {
 
         <Section title="Repository">
           <div className="grid lg:grid-cols-2 gap-4">
-            <Field label="GitHub URL or local path" labelAccessory={<InfoTip>GitHub URL clones the repo. Local path works directly on the folder. Leave empty to use Parent folder below.</InfoTip>}>
+            <Field label="GitHub URL (optional)" labelAccessory={<InfoTip>Leave empty to work directly on the Parent folder below. If provided, the repo is cloned into the Parent folder.</InfoTip>}>
               <input
                 value={repoUrl}
                 onChange={(e) => setRepoUrl(e.target.value)}
                 className="input"
-                placeholder="https://github.com/owner/repo  or  C:\Users\you\projects\my-repo"
+                placeholder="https://github.com/owner/repo"
               />
             </Field>
             <Field
-              label="Parent folder (or workspace)"
-              labelAccessory={<InfoTip>Used when Target path is a GitHub URL (clone here) or empty (work directly here)</InfoTip>}
+              label="Project folder (workspace)"
+              labelAccessory={<InfoTip>When GitHub URL is empty, this folder IS the repo to work on. When GitHub URL is provided, the repo is cloned into this folder.</InfoTip>}
             >
               <input
                 value={parentPath}
                 onChange={(e) => setParentPath(e.target.value)}
                 className="input font-mono"
-                placeholder="C:\\Users\\you\\projects"
+                placeholder="C:\\Users\\you\\projects\\my-repo"
               />
             </Field>
           </div>
-          {/* 2026-05-03 (UX win #8): preflight state lifted to usePreflight
-              hook above; passed down here as props. Same visual output. */}
           <PreflightPreview state={preflight.state} error={preflight.error} />
         </Section>
 
@@ -1157,6 +1169,7 @@ export function SetupForm() {
             setCouncilMappers={setCouncilMappers}
             rubricGrading={rubricGrading}
             setRubricGrading={setRubricGrading}
+            provider={provider}
           />
         </Section>
 

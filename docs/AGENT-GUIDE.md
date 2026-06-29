@@ -98,6 +98,51 @@ curl -s -X POST http://localhost:8243/api/swarm/start \
 
 ---
 
+## Council preset architecture
+
+The council preset is the most complex preset. Here's how it works:
+
+### 3-phase autonomous cycle
+
+1. **Phase 1 (Analysis):** N agents debate independently (Round 1), then revise based on peer drafts (Round 2+). Synthesis consolidates into consensus. Early convergence detection ends discussion if consensus is reached.
+
+2. **Phase 2 (Execution):** Agents work in parallel on extracted todos. The `claimed` set prevents two agents from grabbing the same todo. No file locking — agents can work on different parts of the same file or create new files.
+
+3. **Phase 3 (Audit):** All agents inspect the changes. Detects contradictions (agents undid each other's work) and partial work (incomplete items). Creates follow-up todos for the next cycle.
+
+### AI-driven decision gates
+
+- **Gate 1 (verifyTodo):** Before executing a todo, AI verifies the expected files exist on disk. Catches bad file paths from todo extraction.
+
+- **Gate 3 (resolveContradiction):** When audit detects contradictions, AI reads the actual git diffs and decides: keep-first, keep-second, merge, or revert-both. Falls back to generic extraction if AI can't determine resolution.
+
+- **Gate 4 (recoverDeletedFiles):** When contradictions involve deleted files, AI decides which should be restored vs. intentionally removed.
+
+### File structure
+
+```
+server/src/swarm/
+├── CouncilRunner.ts      (499 LOC) — Main orchestration, loop, seed
+├── councilDecisions.ts   (707 LOC) — Gate 1-4, todo extraction
+├── councilExecution.ts   (207 LOC) — Parallel worker execution
+├── councilAudit.ts       (149 LOC) — Audit phase
+├── councilSynthesis.ts   (180 LOC) — Synthesis pass
+├── councilDeliverable.ts (242 LOC) — Deliverable writing
+└── councilVoteReconcile.ts (95 LOC) — Vote reconciliation
+```
+
+### Autonomous loop
+
+When `rounds: 0` (infinite mode), the council cycles through all 3 phases repeatedly:
+- Cycle 1: Full discussion → execution → audit
+- Cycle 2+: Uses carry-forward todos from audit, or re-plans from scratch
+- Cycle cap: 20 planning cycles maximum
+- Execution-audit sub-cycle cap: 8 cycles for fixing incomplete work
+
+Contradictions and partial work are logged; the next synthesis accounts for them naturally. No fallback todos needed.
+
+---
+
 ## Conventions
 
 ### Commit style

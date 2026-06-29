@@ -104,32 +104,9 @@ export async function promptAgent(
   let abortFiredAt = 0;
   let lastVisibilityWarn = 0;
 
-  const watchdog = setInterval(() => {
-    if (Date.now() - turnStart > ABSOLUTE_MAX_MS) {
-      const lastChunkAt = ctx.manager.getLastChunkAt(agent.id);
-      if (abortFiredAt === 0 && lastChunkAt && Date.now() - lastChunkAt < 60_000) {
-        return;
-      }
-      if (abortFiredAt === 0) {
-        abortFiredAt = Date.now();
-        const sseQuiet = lastChunkAt
-          ? `SSE silent ${Math.round((Date.now() - lastChunkAt) / 1000)}s`
-          : "no SSE chunks received";
-        abortedReason = `absolute turn cap hit (${ABSOLUTE_MAX_MS / 1000}s, ${sseQuiet})`;
-        controller.abort(new Error(abortedReason));
-        ctx.appendSystem(
-          `[${agent.id}] absolute turn cap (${ABSOLUTE_MAX_MS / 1000}s) hit — ${sseQuiet}. Abort signaled.`,
-        );
-      } else if (Date.now() - lastVisibilityWarn > 60_000) {
-        lastVisibilityWarn = Date.now();
-        const stuckS = Math.round((Date.now() - turnStart) / 1000);
-        ctx.appendSystem(
-          `[${agent.id}] still in flight ${stuckS}s after start despite abort — SDK has not returned (Task #142).`,
-        );
-      }
-    }
-  }, 10_000);
-  watchdog.unref?.();
+  // No hard ceilings — the model runs until it finishes naturally.
+  // If the model is truly stuck, the user sees it in the streaming dock
+  // and can stop the run manually.
 
   try {
     const failoverCfg = buildFailoverConfig(ctx);
@@ -256,7 +233,6 @@ export async function promptAgent(
     });
     throw new Error(msg);
   } finally {
-    clearInterval(watchdog);
     ctx.activeAborts.delete(controller);
   }
 }

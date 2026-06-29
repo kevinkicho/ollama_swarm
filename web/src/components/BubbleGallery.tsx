@@ -114,7 +114,7 @@ const sumRunFinished: Extract<TranscriptEntrySummary, { kind: "run_finished" }> 
   preset: "blackboard",
   model: "glm-5.1:cloud",
   repoUrl: "https://github.com/kevinkicho/multi-agent-orchestrator",
-  clonePath: "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\multi-agent-orchestrator",
+  clonePath: "C:\\Users\\kevin\\Workspace\\kyahoofinance032926\\logs\\multi-agent-orchestrator",
   startedAt: Date.now() - 1042836,
   endedAt: Date.now(),
   wallClockMs: 1042836,
@@ -141,7 +141,7 @@ const sumRunFinished: Extract<TranscriptEntrySummary, { kind: "run_finished" }> 
 const sumSeedAnnounce: Extract<TranscriptEntrySummary, { kind: "seed_announce" }> = {
   kind: "seed_announce",
   repoUrl: "https://github.com/kevinkicho/multi-agent-orchestrator",
-  clonePath: "C:\\Users\\kevin\\Desktop\\ollama_swarm\\runs\\multi-agent-orchestrator",
+  clonePath: "C:\\Users\\kevin\\Workspace\\kyahoofinance032926\\logs\\multi-agent-orchestrator",
   topLevel: ["src/", "tests/", "package.json", "tsconfig.json", "README.md", "LICENSE", ".gitignore"],
 };
 
@@ -416,10 +416,6 @@ const fixtures: Array<{ label: string; entries: TranscriptEntry[] }> = [
         "<glob>src/**/*.test.ts</glob>",
       ],
     })],
-  },
-  {
-    label: "[agent client-fallback] segmented prose (segmentSplitPoints - shows collapsed-then-final-segment)",
-    entries: [entry({ role: "agent", agentIndex: 2, text: "First segment: setting up the analysis. I want to look at the request handler structure carefully to decide where to make cuts.\n\nSecond segment: scanning src/handlers/api.ts. Found 3 distinct domains: users (4 handlers), orders (5 handlers), sessions (2 handlers). All currently colocated in one 800-LOC file.\n\nThird segment (final): the cleanest split is by domain. I'll create src/handlers/routes/{users,orders,sessions}.ts and have api.ts re-export them as a barrel.", segmentSplitPoints: [121, 354] })],
   },
   {
     label: "[agent client-fallback] plain text (CollapsibleBlock final fallback)",

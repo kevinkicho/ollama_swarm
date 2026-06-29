@@ -12,12 +12,10 @@ services:
       - SERVER_PORT=8243
       - STATIC_DIR=/app/web/dist
     volumes:
-      - swarm-runs:/app/runs
       - swarm-logs:/app/logs
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
 volumes:
-  swarm-runs:
   swarm-logs:

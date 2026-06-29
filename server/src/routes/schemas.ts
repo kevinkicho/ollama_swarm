@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TopologySchema } from "../../../shared/src/topology.js";
+import { TopologySchema } from "@ollama-swarm/shared/topology";
 
 export const MemoryStorePostBody = z.object({
   key: z.string().min(1).max(200),
@@ -18,7 +18,7 @@ export const ClonePathQuery = z.object({
 });
 
 export const PreflightQuery = z.object({
-  repoUrl: z.string().min(1),
+  repoUrl: z.string().optional().default(""),
   parentPath: z.string().min(1).max(500),
   preset: z.string().optional(),
   model: z.string().optional(),
@@ -296,6 +296,12 @@ export const StartBody = z.object({
   postSynthesisCritique: z.boolean().optional(),
   // Plan 6: rotating dispositions for blackboard workers across cycles.
   workerDispositions: z.boolean().optional(),
+  // Write mode: controls how files are written during execution.
+  // "none" = single-worker hunk-based, "single" = single-writer synthesis,
+  // "multi" = multi-writer with conflict policy.
+  writeMode: z.enum(["none", "single", "multi"]).optional(),
+  // Conflict policy for multi-write mode.
+  conflictPolicy: z.enum(["merge", "sequential", "vote", "judge", "pick"]).optional(),
   // Plan 1: debate-judge auditor — PRO/CON/JUDGE replaces single-agent audit.
   debateAudit: z.boolean().optional(),
   debateAuditRounds: z.coerce.number().int().min(1).max(2).optional(),

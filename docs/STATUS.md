@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-05-18 (test count, import path fix, rate limiter fix)
+**Last updated:** 2026-06-26 (council 3-phase cycle, model change to deepseek-v4-flash, reliability fixes)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -22,12 +22,12 @@
 |---|---|---|---|
 | `blackboard` | production | ✅ (native) | planner + workers + auditor; tier ratchet; Aider-style hunks; pre-commit verify gate (`verifyCommand`). Most tested preset with deepest maturity. |
 | `round-robin` | production | ⚡ (opt-in) | Rotating Critic/Synthesizer/Gap-finder/Builder dispositions framed around directive. `cfg.writeMode: "single"` → synthesizer produces hunks; `"multi"` → vote reconciliation. |
-| `council` | production | ⚡ (opt-in) | Per-agent position papers → president reconciliation. `cfg.writeMode: "single"` → council consensus hunks; `"multi"` → per-round vote on overlapping hunks. |
+| `council` | production | ✅ (native) | **3-phase autonomous cycle:** Phase 1 (Analysis): N agents debate and synthesize consensus. Phase 2 (Execution): ALL agents become workers, produce hunks via pipeline. Phase 3 (Audit): ALL agents inspect changes. Cycles repeat in autonomous mode (`rounds: 0`). Retry-on-failure with error feedback. **AI-driven decision gates:** Gate 1 (verifyTodo) verifies file paths exist before execution. Gate 3 (resolveContradiction) reads actual git diffs to decide keep/merge/revert when agents conflict. Gate 4 (recoverDeletedFiles) decides which deleted files to restore. **Architecture:** CouncilRunner.ts (499 LOC) orchestrates; councilDecisions.ts (707 LOC) contains Gate 1-4 logic; councilExecution.ts handles parallel worker execution; councilAudit.ts handles audit phase; councilSynthesis.ts handles synthesis; councilDeliverable.ts handles deliverables; councilVoteReconcile.ts handles vote reconciliation. **Blackboard infrastructure:** Uses TodoQueue, ExitContract, hunk-based editing, replanner, path grounding, and tier ratchet. |
 | `orchestrator-worker` (flat) | production | ⚡ (opt-in) | Lead decomposes directive into subtasks for workers. Phase 1: lead synthesis; Phase 2: sequential reconciliation (CAS on file hashes). |
 | `role-diff` | beta | ⚡ (opt-in) | Specialist role assignment per agent with diff-based deliverable. Phase 1: specialist synthesis; Phase 2: vote reconciliation. |
 | `debate-judge` | beta | ⚡ (opt-in) | PRO/CON/JUDGE debate structure. Phase 1: judge verdict produces hunks; Phase 2: judge picks winner's hunks. |
 | `map-reduce` | beta | ⚡ (opt-in) | Mappers find directive-relevant evidence → reducer synthesizes. Phase 1: reducer hunks; Phase 2: merge reconciliation (isolated slices). Partition-dependent quality. |
-| `orchestrator-worker-deep` | needs-validation | ⚡ (opt-in) | 3-tier: orchestrator → mid-leads → workers. Phase 1: multi-tier synthesis; Phase 2: sequential reconciliation. **Known issue:** validation tour (2026-04-28) hit model-drift failures — glm-5.1 produces XML pseudo-tool-calls under structured-output pressure in deep chains. |
+| `orchestrator-worker-deep` | needs-validation | ⚡ (opt-in) | 3-tier: orchestrator → mid-leads → workers. Phase 1: multi-tier synthesis; Phase 2: sequential reconciliation. **Known issue:** validation tour hit model-drift failures — some models produce XML pseudo-tool-calls under structured-output pressure in deep chains. |
 | `stigmergy` | exploration | ❌ | Pheromone-table + per-file annotations. **Read-only by design** — exploration mode, no write pipeline. Pheromone heatmap feeds blackboard workers when `cfg.stigmergyOnBlackboard` is on. |
 | `moa` | beta | ⚡ (opt-in) | Mixture of Agents: proposers → aggregators, three layers of depth. Phase 1: aggregator hunks; Phase 2: aggregator picks best proposer's hunks. **Shipped 2026-05-01 in a single day; less polish than older presets.** |
 | `baseline` | production | ✅ (native) | single agent / single prompt / single apply step — eval-harness path, not in the form's normal preset list |
@@ -76,7 +76,7 @@ The V1 SDK loop (per-agent opencode subprocess + SSE chunked streaming) was reti
 | Event log reader | `server/src/swarm/blackboard/EventLogReaderV2.ts` | primary; backs `/api/v2/event-log/runs` |
 | `formatServerSummary` | `shared/src/formatServerSummary.ts` | shared between server + web |
 
-**Test totals:** 3,168 tests passing / 0 failing as of 2026-05-18. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
+**Test totals:** 3,168 tests passing / 0 failing as of 2026-06-26. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
 
 ---
 
@@ -120,7 +120,7 @@ A round of failure-mode resilience: 17 standalone pure helpers + three waves of 
 - `SWARM_MEMORY_BACKPRESSURE` — pause workers when heap >90% of `heapTotal`
 - `SWARM_LOOP_DETECTION` — emit warnings + halt after 3 consecutive Jaccard-loop detections
 - `SWARM_PAUSE_ON_DISCONNECT` — pause workers when WS subscriber count drops to 0
-- `SWARM_PROVIDER_FAILOVER` — comma-separated chain (e.g. `"anthropic/claude-haiku-4-5,glm-5.1:cloud"`)
+- `SWARM_PROVIDER_FAILOVER` — comma-separated chain (e.g. `"deepseek-v4-flash:cloud"`)`
 - `SWARM_DEGRADATION_FALLBACK` — when cloud chain exhausts, fall back to local Ollama tag
 - `SWARM_DEGRADATION_PREFERRED` — comma-separated local tag preferences
 - `SWARM_MODEL_HEALTH_SWAP` — proactive pre-flight swap when active model is degraded

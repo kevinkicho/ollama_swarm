@@ -47,9 +47,7 @@ describe("classifyPath — plausible-new (parent dir exists)", () => {
 });
 
 describe("classifyPath — suspicious (v9 failure mode)", () => {
-  it("rejects src/tests/* when no file in src/tests/ is in the list", () => {
-    // This is the exact v9 regression: planner invented src/tests/ despite the
-    // REPO FILE LIST showing colocated tests. 6b must flag this.
+  it("marks src/tests/* as suspicious but no longer rejects (planner may create new dirs)", () => {
     assert.equal(
       classifyPath("src/tests/token-tracker.test.ts", REPO_FILES),
       "suspicious",
@@ -60,11 +58,11 @@ describe("classifyPath — suspicious (v9 failure mode)", () => {
     );
   });
 
-  it("rejects docs/* when repo has no docs dir", () => {
+  it("marks docs/* as suspicious but no longer rejects", () => {
     assert.equal(classifyPath("docs/architecture.md", REPO_FILES), "suspicious");
   });
 
-  it("rejects a deeply nested invented path", () => {
+  it("marks a deeply nested invented path as suspicious but no longer rejects", () => {
     assert.equal(
       classifyPath("src/a/b/c/d/e/f.ts", REPO_FILES),
       "suspicious",
@@ -99,12 +97,12 @@ describe("classifyPath — empty repoFiles degrades gracefully", () => {
 });
 
 describe("classifyExpectedFiles — batch", () => {
-  it("splits accepted and rejected correctly", () => {
+  it("accepts all paths but reports suspicious as rejected", () => {
     const r = classifyExpectedFiles(
       [
         "src/brain/brain.ts", // existing
         "src/supervisor/supervisor.test.ts", // plausible-new
-        "src/tests/token-tracker.test.ts", // suspicious
+        "src/tests/token-tracker.test.ts", // suspicious (accepted but reported)
         "KNOWN_LIMITATIONS.md", // existing
       ],
       REPO_FILES,
@@ -112,12 +110,11 @@ describe("classifyExpectedFiles — batch", () => {
     assert.deepEqual(r.accepted, [
       "src/brain/brain.ts",
       "src/supervisor/supervisor.test.ts",
+      "src/tests/token-tracker.test.ts",
       "KNOWN_LIMITATIONS.md",
     ]);
     assert.equal(r.rejected.length, 1);
     assert.equal(r.rejected[0].path, "src/tests/token-tracker.test.ts");
-    assert.match(r.rejected[0].reason, /not in REPO FILE LIST/);
-    assert.match(r.rejected[0].reason, /src\/tests/);
   });
 
   it("returns empty arrays for empty input", () => {
@@ -135,12 +132,12 @@ describe("classifyExpectedFiles — batch", () => {
     assert.deepEqual(r.rejected, []);
   });
 
-  it("all-rejected input yields empty accepted", () => {
+  it("all-suspicious input yields all accepted with rejections reported", () => {
     const r = classifyExpectedFiles(
       ["src/tests/a.ts", "src/tests/b.ts"],
       REPO_FILES,
     );
-    assert.deepEqual(r.accepted, []);
+    assert.equal(r.accepted.length, 2);
     assert.equal(r.rejected.length, 2);
   });
 });

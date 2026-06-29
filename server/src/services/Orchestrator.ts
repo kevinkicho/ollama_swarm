@@ -87,13 +87,10 @@ function writePersistedKnownParents(paths: string[]): void {
 // during the 9-preset tour: only the CURRENT session's parent was
 // in the list, hiding 86 prior summaries.
 //
-// Fix: at orchestrator construction, scan project-relative `runs/`
-// + `runs_overnight*/` directories for any subfolder containing a
-// `summary*.json`. Treat those as known parents — backfills the
-// LRU list with everything we can see on disk regardless of /tmp
-// state. Cheap (one-shot dir walk, no I/O on individual summary
-// files), and idempotent — if /tmp already has the entries, the
-// existing dedupe handles it.
+// Fix: at orchestrator construction, scan each project's logs/
+// subdirectories for summary*.json files. Treat those as known
+// parents — backfills the LRU list with everything we can see on
+// disk regardless of /tmp state.
 /** #293: merge persisted (recent, ordered) + scanned (discovered)
  *  parent paths into a single LRU list. Persisted entries keep their
  *  order (most-recent first); scanned entries that aren't already in
@@ -116,66 +113,40 @@ export function mergeKnownParents(persisted: string[], scanned: string[]): strin
 
 export function scanForRunParents(cwd: string): string[] {
   const found = new Set<string>();
-  // dev.mjs launches the server with cwd=<root>/server, but the actual
-  // runs/ + runs_overnight*/ dirs live at the project root, one level
-  // up. Scan both bases so the discovery works regardless of where
-  // the orchestrator is launched from.
+  // Scan for logs/ directories containing {runId}/ subdirectories
+  // with summary*.json files. Runs are stored in <project>/logs/{runId}/.
   const bases = [cwd, nodePath.dirname(cwd)];
-  // Match runs, runs_overnight, runs_overnight2 — any top-level dir
-  // whose name suggests it holds run output.
-  const isRunRoot = (name: string) =>
-    name === "runs" || name.startsWith("runs_") || name.startsWith("runs-");
   for (const base of bases) {
-    let topLevel: string[];
+    // Look for logs/ directory at this base
+    const logsDir = nodePath.join(base, "logs");
+    let logEntries: string[];
     try {
-      topLevel = readdirSync(base);
-    } catch (err) {
-      console.warn('[Orchestrator] scan-readdir-base-failed:', err instanceof Error ? err.message : String(err));
-      continue;
+      logEntries = readdirSync(logsDir);
+    } catch {
+      continue; // no logs/ dir — fine
     }
-    for (const name of topLevel) {
-      if (!isRunRoot(name)) continue;
-      const root = nodePath.join(base, name);
+    for (const entry of logEntries) {
+      const runDir = nodePath.join(logsDir, entry);
       let stat;
       try {
-        stat = statSync(root);
-      } catch (err) {
-        console.warn('[Orchestrator] scan-stat-root-failed:', err instanceof Error ? err.message : String(err));
+        stat = statSync(runDir);
+      } catch {
         continue;
       }
       if (!stat.isDirectory()) continue;
-      // Each clone-dir lives one level deep under the root.
-      let clones: string[];
+      // Check if this run directory has a summary*.json
+      let hasSummary = false;
       try {
-        clones = readdirSync(root);
-      } catch (err) {
-        console.warn('[Orchestrator] scan-readdir-root-failed:', err instanceof Error ? err.message : String(err));
+        for (const e of readdirSync(runDir)) {
+          if (e === "summary.json" || (e.startsWith("summary-") && e.endsWith(".json"))) {
+            hasSummary = true;
+            break;
+          }
+        }
+      } catch {
         continue;
       }
-      for (const clone of clones) {
-        const cloneDir = nodePath.join(root, clone);
-        try {
-          if (!statSync(cloneDir).isDirectory()) continue;
-        } catch (err) {
-          console.warn('[Orchestrator] scan-stat-cloneDir-failed:', err instanceof Error ? err.message : String(err));
-          continue;
-        }
-        // Cheap probe: is there at least one summary*.json? Fast since
-        // we don't read it — just check the dir for any matching entry.
-        let hasSummary = false;
-        try {
-          for (const e of readdirSync(cloneDir)) {
-            if (e === "summary.json" || (e.startsWith("summary-") && e.endsWith(".json"))) {
-              hasSummary = true;
-              break;
-            }
-          }
-        } catch (err) {
-          console.warn('[Orchestrator] scan-readdir-cloneDir-failed:', err instanceof Error ? err.message : String(err));
-          continue;
-        }
-        if (hasSummary) found.add(root);
-      }
+      if (hasSummary) found.add(runDir);
     }
   }
   return [...found];
@@ -222,10 +193,9 @@ export class Orchestrator {
   // the most-recently-started run without an explicit "active"
   // pointer. Capped at 1 in Phase 3; Phase 4 relaxes.
   private runs = new Map<string, ActiveRun>();
-  // After a run completes and is removed from `runs`, its clonePath
-  // is retained here so that statusForRun can fall back to the
-  // persister file on disk. Without this, a page refresh after run
-  // completion would lose the contract (404 on /runs/:id/status).
+  // After a run completes, its clonePath is retained here so that
+  // statusForRun can fall back to the persister file on disk. Without
+  // this, a page refresh after run completion would lose the contract.
   private runPaths = new Map<string, { clonePath: string; preset: string; startedAt: number }>();
   // 2026-04-24: parent dir of the last successfully-started run.
   // Survives stop() / completion (unlike runConfig + runId) so the

@@ -32,6 +32,15 @@ export function realFilesystemAdapter(clonePath: string): FilesystemAdapter {
     },
     async write(relPath, content) {
       const abs = await resolveSafe(clonePath, relPath);
+      if (content === "") {
+        // Delete op — remove the file if it exists
+        try {
+          await fs.unlink(abs);
+        } catch (err) {
+          // File may not exist — ignore
+        }
+        return;
+      }
       // Ensure the parent directory exists. Worker hunks may create
       // a file in a directory that doesn't exist yet (e.g. new
       // src/sub/foo.ts when src/sub/ wasn't there).

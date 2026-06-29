@@ -7,11 +7,9 @@
 //                      list (or path is at repo root). The worker will create
 //                      the file and writeFileAtomic handles missing parents.
 //   - suspicious     — path not in repoFiles AND parent directory not in the
-//                      list. This is the failure mode Unit 6a's advisory rule
-//                      couldn't stop: planner inventing a `src/tests/` subdir
-//                      when the repo uses colocated tests. Enforcement here
-//                      strips these at contract/todo parse time so the auditor
-//                      isn't asked to score unbindable paths.
+//                      list. Previously this was a hard rejection; now it's
+//                      accepted with a warning — the planner may legitimately
+//                      create new directory structures.
 //
 // Pure. No I/O. repoFiles is expected to use forward slashes (listRepoFiles's
 // contract), but we defensively normalize inputs too — a model that emits
@@ -65,10 +63,10 @@ export function classifyExpectedFiles(
   for (const p of paths) {
     const verdict = classifyPath(p, repoFiles);
     if (verdict === "suspicious") {
-      rejected.push({
-        path: p,
-        reason: `path not in REPO FILE LIST and parent directory '${parentDir(toForwardSlashes(p))}' not present`,
-      });
+      // Accept suspicious paths with a warning — the planner may
+      // legitimately create new directory structures.
+      accepted.push(p);
+      rejected.push({ path: p, reason: `parent directory not in repo file list (${parentDir(toForwardSlashes(p))})` });
     } else {
       accepted.push(p);
     }

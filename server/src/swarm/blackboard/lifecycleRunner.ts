@@ -454,32 +454,42 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
     }.`,
   );
 
-  // Task #127: goal-generation pre-pass. When no userDirective is
-  // set AND autoGenerateGoals isn't explicitly disabled, ask the
-  // planner to propose 3-5 ambitious-but-feasible improvements;
-  // the top one becomes the directive for this run. Lifts the
-  // swarm from "do something" to "do something that matters."
-  const shouldGenerateGoals =
-    (!seed.userDirective || seed.userDirective.length === 0) &&
-    cfg.autoGenerateGoals !== false;
+  // Task #127 + direction-aware goal generation:
+  // When a directive IS provided, run goal generation to ANALYZE the codebase
+  // and find concrete gaps that the directive should address. The goals
+  // ENHANCE the directive — they don't replace it.
+  // When NO directive is provided, goal generation proposes ambitious goals
+  // as before (the top one becomes the directive).
+  const shouldGenerateGoals = cfg.autoGenerateGoals !== false;
+  ctx.appendSystem(
+    `[diag] cfg.userDirective=${cfg.userDirective ? `"${cfg.userDirective.slice(0, 80)}…"` : "undefined"}, seed.userDirective=${seed.userDirective ? `"${seed.userDirective.slice(0, 80)}…"` : "undefined"}, autoGenerateGoals=${cfg.autoGenerateGoals}.`,
+  );
   if (shouldGenerateGoals) {
-    const generated = await runGoalGenerationPrePass(
+    const generatedGoals = await runGoalGenerationPrePass(
       planner,
       seed,
       (text) => ctx.appendSystem(text),
-      // Issue C-min: status callback so the UI shows the planner as
-      // thinking during the pre-pass (was showing "ready" because
-      // this code path bypassed promptAgent's markStatus).
       { onStatusChange: (status) => ctx.markPlannerStatus(planner, status) },
     );
-    if (generated && generated.length > 0) {
-      seed.userDirective = generated;
-      ctx.appendSystem(
-        `Goal-generation pre-pass: directive set to "${generated.length > 200 ? generated.slice(0, 200) + "…" : generated}"`,
-      );
+    if (generatedGoals && generatedGoals.length > 0) {
+      if (seed.userDirective && seed.userDirective.length > 0) {
+        // Directive exists — goals ENHANCE it, not replace it.
+        // Append goals as context for the contract derivation.
+        const goalsText = generatedGoals.map((g, i) => `${i + 1}. ${g}`).join("\n");
+        seed.userDirective = `${seed.userDirective}\n\n=== CODEBASE ANALYSIS (concrete gaps found by goal-generation) ===\n${goalsText}\n=== Use these to produce grounded criteria that advance the directive ===`;
+        ctx.appendSystem(
+          `Goal-generation pre-pass: enriched directive with ${generatedGoals.length} code-grounded goal(s).`,
+        );
+      } else {
+        // No directive — goal generation proposes the directive.
+        seed.userDirective = generatedGoals[0];
+        ctx.appendSystem(
+          `Goal-generation pre-pass: directive set to "${generatedGoals[0].length > 200 ? generatedGoals[0].slice(0, 200) + "…" : generatedGoals[0]}"`,
+        );
+      }
     } else {
       ctx.appendSystem(
-        `Goal-generation pre-pass: no usable directive returned — falling back to planner-from-scratch.`,
+        `Goal-generation pre-pass: no usable goals returned — continuing without enrichment.`,
       );
     }
   }

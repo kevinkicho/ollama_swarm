@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import type { Server } from "node:net";
 import net from "node:net";
+import { readdirSync, statSync } from "node:fs";
 
 export interface HealthCheckResult {
   warnings: string[];
@@ -8,13 +9,11 @@ export interface HealthCheckResult {
 
 export async function startupHealthCheck(
   serverPort: number,
-  runsDir: string,
+  logsDir: string,
 ): Promise<HealthCheckResult> {
   const warnings: string[] = [];
 
-  // 1. Port conflict check. Try to briefly bind the port before the real
-  //    server does. If something is already listening, we log a warning
-  //    so the operator knows the real listen will fail.
+  // 1. Port conflict check.
   await new Promise<void>((resolve) => {
     const probe: Server = net.createServer();
     let settled = false;
@@ -36,14 +35,11 @@ export async function startupHealthCheck(
       probe.close();
       done();
     });
-    // 500 ms socket-level timeout — if the kernel holds the port
-    // in TIME_WAIT, EADDRINUSE fires faster than the timeout anyway.
     setTimeout(done, 500);
     probe.listen(serverPort, "0.0.0.0");
   });
 
-  // 2. Disk space check. For Linux/macOS only — on Windows this is
-  //    best-effort. Warn if available space drops below 2 GB.
+  // 2. Disk space check.
   try {
     const output = execSync("df -B 1 .", { encoding: "utf8", timeout: 3000 });
     const lines = output.trim().split("\n");
@@ -65,22 +61,25 @@ export async function startupHealthCheck(
     // df not available or timed out — non-critical, skip.
   }
 
-  // 3. Runs directory size check — warn if an unusual number of
-  //    leftover run directories exist (could indicate zombie cleanup
-  //    isn't working).
+  // 3. Logs directory size check — warn if too many run directories.
   try {
-    let entries: string[] = [];
+    let logEntries: string[] = [];
     try {
-      entries = require("node:fs").readdirSync(runsDir);
+      logEntries = readdirSync(logsDir);
     } catch {
-      // runs/ doesn't exist yet — no warning needed.
+      // logs/ doesn't exist yet — no warning needed.
     }
-    const runDirs = entries.filter((e) => /^\d{14}$/.test(e));
+    const runDirs = logEntries.filter((e) => {
+      try {
+        return statSync(`${logsDir}/${e}`).isDirectory();
+      } catch {
+        return false;
+      }
+    });
     if (runDirs.length > 50) {
       warnings.push(
-        `Large number of leftover run directories (${runDirs.length}) ` +
-        `in ${runsDir}. Consider running ` +
-        `'rm -rf ${runsDir.replace(/'/g, "\\'")}/*' to free disk space.`,
+        `Large number of run directories (${runDirs.length}) ` +
+        `in ${logsDir}. Consider cleaning up old runs.`,
       );
     }
   } catch {

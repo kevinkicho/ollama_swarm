@@ -31,7 +31,7 @@ export function usePreflight(repoUrl: string, parentPath: string): UsePreflightR
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!repoUrl.trim() || !parentPath.trim()) {
+    if (!parentPath.trim()) {
       setState(null);
       setError(null);
       setLoading(false);
@@ -40,7 +40,7 @@ export function usePreflight(repoUrl: string, parentPath: string): UsePreflightR
     setLoading(true);
     const t = setTimeout(() => {
       const params = new URLSearchParams({
-        repoUrl: repoUrl.trim(),
+        repoUrl: repoUrl.trim() || "",
         parentPath: parentPath.trim(),
       });
       let cancelled = false;
