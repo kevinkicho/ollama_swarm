@@ -9,19 +9,13 @@ export function Transcript() {
   const agents = useSwarm((s) => s.agents);
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Task #73: sticky-bottom auto-scroll only when the user is AT
-  // the bottom. When they scroll up to read history, freeze the
-  // viewport (don't yank them back) and surface a floating "↓ Latest"
-  // button that takes them back to the bottom + re-enables sticky.
   const [stickyBottom, setStickyBottom] = useState(true);
+  const [filter, setFilter] = useState<"all" | "system" | "agents" | "audit" | "issues">("all");
 
   const streamingCount = Object.keys(streaming).length;
   const streamingMeta = useSwarm((s) => s.streamingMeta);
 
-  // Per-agent streaming timeout: if a streaming entry is still
-  // "live" but hasn't received a chunk in 90s, force-clear it.
-  // This replaces the old 30s sweeper which only scrubbed "done"
-  // entries — live agents that crash mid-stream are now caught too.
+  // Per-agent streaming timeout
   const clearStreaming = useSwarm((s) => s.clearStreaming);
   const STREAMING_TIMEOUT_MS = 90_000;
   useEffect(() => {
@@ -42,8 +36,7 @@ export function Transcript() {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [transcript.length, streamingCount, stickyBottom]);
 
-  // Track scroll position to flip sticky-bottom on/off. 80px buffer
-  // so a tiny rendering shimmy doesn't accidentally drop sticky.
+  // Track scroll position to flip sticky-bottom on/off.
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -57,19 +50,71 @@ export function Transcript() {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  // Filter transcript entries
+  const filteredTranscript = transcript.filter((e) => {
+    if (filter === "all") return true;
+    if (filter === "system") return e.role === "system";
+    if (filter === "agents") return e.role === "agent";
+    if (filter === "audit") {
+      const text = e.text || "";
+      return text.includes("audit") || text.includes("Audit") || text.includes("Gate");
+    }
+    if (filter === "issues") {
+      const text = e.text || "";
+      return text.includes("CONTRADICTION") || text.includes("PARTIAL") || text.includes("error") || text.includes("failed");
+    }
+    return true;
+  });
+
   return (
     <div className="h-full relative">
+      {/* Filter bar */}
+      <div className="flex items-center gap-2 px-4 py-2 bg-ink-800/50 border-b border-ink-700/50">
+        <span className="text-[10px] text-ink-500">Filter:</span>
+        {(["all", "system", "agents", "audit", "issues"] as const).map((f) => (
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            className={`px-2 py-0.5 text-[10px] rounded transition-colors ${
+              filter === f
+                ? "bg-ink-600 text-ink-200"
+                : "text-ink-400 hover:text-ink-200 hover:bg-ink-700"
+            }`}
+          >
+            {f.charAt(0).toUpperCase() + f.slice(1)}
+          </button>
+        ))}
+        <span className="text-[10px] text-ink-500 ml-auto">
+          {filteredTranscript.length} / {transcript.length} entries
+        </span>
+      </div>
+
       <div
         ref={scrollRef}
         onScroll={onScroll}
         className="h-full overflow-y-auto p-4 space-y-3 bg-ink-900"
       >
-        {transcript.length === 0 && streamingCount === 0 ? (
+        {filteredTranscript.length === 0 && streamingCount === 0 ? (
           <div className="text-ink-400 text-sm">Waiting for agents…</div>
         ) : null}
-        {transcript.map((e) => (
+        {filteredTranscript.map((e) => (
           <MessageBubble key={e.id} entry={e} />
         ))}
+        {/* Inline streaming entries — show as MessageBubble-style entries */}
+        {Object.entries(streaming).map(([agentId, text]) => {
+          if (!text || text.length === 0) return null;
+          const meta = streamingMeta[agentId];
+          const elapsed = meta ? ((Date.now() - meta.startedAt) / 1000).toFixed(1) : "?";
+          return (
+            <div key={`streaming-${agentId}`} className="flex items-start gap-2 px-2 py-1 rounded bg-ink-800/50 border border-ink-700/50 animate-pulse">
+              <span className="text-[10px] font-mono text-ink-400 shrink-0 mt-0.5">
+                {agentId}
+              </span>
+              <span className="text-[10px] text-ink-500 shrink-0">thinking {elapsed}s…</span>
+              <span className="text-xs text-ink-300 truncate flex-1">{text.slice(-200)}</span>
+            </div>
+          );
+        })}
         {/* Task #173: per-agent streaming dock with collapse-by-default
             + smooth fade-out on completion. Replaces the previous
             "render N inline bubbles, snap-disappear on end" pattern. */}
