@@ -48,7 +48,7 @@ jobs:
         run: npm install
 
       - name: Build shared package
-        run: npm -w shared run typecheck
+        run: cd shared && npx tsc --noEmit
 
       - name: Type-check (server + web + shared)
         continue-on-error: true
