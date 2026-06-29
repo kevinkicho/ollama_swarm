@@ -47,8 +47,8 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build shared package
-        run: cd shared && npx tsc --noEmit
+      - name: Link workspace packages
+        run: npm link --workspaces
 
       - name: Type-check (server + web + shared)
         continue-on-error: true
