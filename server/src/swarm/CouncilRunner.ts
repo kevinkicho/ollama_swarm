@@ -55,7 +55,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private previousUnmetIds: Set<string> = new Set();
   private stuckCycleCount = 0;
   private consecutiveEmptyCycles = 0;
-  private maxTiers = 3;
+  private maxTiers = Infinity;
   private capWatchdog: ReturnType<typeof setInterval> | undefined;
   private drainResolve: (() => void) | undefined;
 

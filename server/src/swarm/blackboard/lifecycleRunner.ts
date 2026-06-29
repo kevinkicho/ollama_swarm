@@ -461,9 +461,6 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   // When NO directive is provided, goal generation proposes ambitious goals
   // as before (the top one becomes the directive).
   const shouldGenerateGoals = cfg.autoGenerateGoals !== false;
-  ctx.appendSystem(
-    `[diag] cfg.userDirective=${cfg.userDirective ? `"${cfg.userDirective.slice(0, 80)}…"` : "undefined"}, seed.userDirective=${seed.userDirective ? `"${seed.userDirective.slice(0, 80)}…"` : "undefined"}, autoGenerateGoals=${cfg.autoGenerateGoals}.`,
-  );
   if (shouldGenerateGoals) {
     const generatedGoals = await runGoalGenerationPrePass(
       planner,

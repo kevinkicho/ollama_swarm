@@ -282,7 +282,6 @@ export function swarmRouter(orch: Orchestrator): Router {
       res.status(400).json({ error: msg || "invalid request body", _detail: flat });
       return;
     }
-    console.log(`[diag-route] parsed.data.userDirective=${parsed.data.userDirective ? `"${parsed.data.userDirective.slice(0, 80)}…"` : "undefined"}, parsed.data.autoGenerateGoals=${parsed.data.autoGenerateGoals}`);
     // Task #147: force-restart path. When the caller sets force=true, we
     // pre-emptively stop any existing runner so the new start always gets
     // a clean slot. Recovers from the "stuck-orchestrator" state observed
