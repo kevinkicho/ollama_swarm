@@ -56,6 +56,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private previousUnmetIds: Set<string> = new Set();
   private stuckCycleCount = 0;
   private consecutiveEmptyCycles = 0;
+  private tierPromotionRetries = 0;
   private maxTiers = Infinity;
   private capWatchdog: ReturnType<typeof setInterval> | undefined;
   private drainResolve: (() => void) | undefined;
@@ -425,11 +426,16 @@ export class CouncilRunner extends DiscussionRunnerBase {
         this.appendSystem(`[ambition] All criteria met — attempting tier ${this.state.currentTier + 1} promotion.`);
         const promoted = await runTierPromotion(this.state, planner, this.maxTiers);
         if (promoted) {
+          this.tierPromotionRetries = 0;
           return "done";
         }
-        // Tier promotion failed — retry rather than stopping.
-        // The planner may succeed on next attempt with a different angle.
-        this.appendSystem(`[ambition] Tier promotion returned no criteria — retrying.`);
+        // Tier promotion failed — retry with bounded attempts.
+        this.tierPromotionRetries++;
+        if (this.tierPromotionRetries >= 3) {
+          this.appendSystem(`[ambition] Tier promotion failed ${this.tierPromotionRetries} times — stopping.`);
+          return "stop";
+        }
+        this.appendSystem(`[ambition] Tier promotion returned no criteria — retrying (${this.tierPromotionRetries}/3).`);
         return "retry";
       }
       this.appendSystem(`[ambition] All criteria met, no more tiers — stopping.`);
