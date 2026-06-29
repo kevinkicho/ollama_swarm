@@ -315,6 +315,7 @@ RULES:
 3. The tier must be MATERIALLY MORE AMBITIOUS than tier ${state.currentTier} — broader scope, deeper work, or capability the prior tier didn't touch.
 4. Do NOT redo what's already met. Focus on what's STILL MISSING from the directive.
 5. Think about what gaps remain in the project that prevent the directive from being fully achieved.
+6. If you've already added all the panels the directive asks for, broaden scope: code quality, performance, testing, documentation, error handling, accessibility, or other improvements that make the app MORE ROBUST and MORE COMPLETE.
 
 Return ONLY a JSON object:
 {
