@@ -427,6 +427,10 @@ export class CouncilRunner extends DiscussionRunnerBase {
         if (promoted) {
           return "done";
         }
+        // Tier promotion failed — retry rather than stopping.
+        // The planner may succeed on next attempt with a different angle.
+        this.appendSystem(`[ambition] Tier promotion returned no criteria — retrying.`);
+        return "retry";
       }
       this.appendSystem(`[ambition] All criteria met, no more tiers — stopping.`);
       return "stop";
