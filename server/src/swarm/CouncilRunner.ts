@@ -33,6 +33,7 @@ import { writeCouncilDeliverable } from "./councilDeliverable.js";
 import { runSynthesisPass } from "./councilSynthesis.js";
 import { runCouncilWorkers } from "./councilWorkerRunner.js";
 import { runCouncilLlmAudit } from "./councilAuditor.js";
+import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
 import { TodoQueue } from "./blackboard/TodoQueue.js";
 import { FindingsLog } from "./blackboard/FindingsLog.js";
 import type { ExitContract, ExitCriterion } from "./blackboard/types.js";
@@ -292,6 +293,16 @@ export class CouncilRunner extends DiscussionRunnerBase {
               appendSystem: this.appendSystem.bind(this),
             },
           );
+          await maybeRunWrapUpApply({
+            cfg,
+            presetName: "council",
+            agent: this.opts.manager.list()[0],
+            manager: this.opts.manager,
+            repos: this.opts.repos,
+            emit: this.opts.emit,
+            appendSystem: (text) => this.appendSystem(text),
+            relevantFiles: [],
+          });
         }
       } else {
         // ── CYCLE 2+: Fast standup (1 round) ──
