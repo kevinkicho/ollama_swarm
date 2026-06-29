@@ -97,7 +97,7 @@ export async function runGoalGenerationPrePass(
   opts.onStatusChange?.("thinking");
   try {
     const res = await chatOnce(planner, {
-      agentName: "swarm-read",
+      agentName: "swarm",
       promptText: prompt,
       signal: opts.signal,
     });
