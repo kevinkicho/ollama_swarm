@@ -45,10 +45,7 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm install
-
-      - name: Link workspace packages
-        run: npm link --workspaces
+        run: npm install --workspaces
 
       - name: Type-check (server + web + shared)
         continue-on-error: true
