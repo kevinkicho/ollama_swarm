@@ -444,19 +444,56 @@ export class CouncilRunner extends DiscussionRunnerBase {
         this.appendSystem(`[audit] No new todos for ${this.consecutiveEmptyCycles} cycles — trying planner fallback.`);
         const lead = this.opts.manager.list().find((a) => a.index === 1);
         if (lead) {
-          const todos = await extractActionableTodos(lead, cfg, this.transcript, this.opts.repos, this.appendSystem.bind(this), this.opts.manager);
-          for (const t of todos) {
-            this.state.todoQueue.post({
-              description: t.description,
-              expectedFiles: t.expectedFiles,
-              createdBy: "planner-fallback",
-            });
+          // Instead of extracting from synthesis, explicitly ask the planner
+          // to decompose unmet criteria into concrete todos.
+          const unmetCriteria = this.state.contract?.criteria.filter(c => c.status === "unmet") ?? [];
+          if (unmetCriteria.length > 0) {
+            const prompt = `You are the planner. The auditor found ${unmetCriteria.length} unmet criteria:
+
+${unmetCriteria.map(c => `- ${c.description} (files: ${c.expectedFiles.join(", ") || "none"})`).join("\n")}
+
+Your task: For EACH unmet criterion, produce 1-2 concrete, actionable todos that would satisfy it.
+Each todo must have a specific description and list the files it would modify.
+
+Output a JSON array:
+[{"description": "specific change", "expectedFiles": ["path/to/file.ts"]}]
+
+Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
+
+            try {
+              const { controller, cleanup } = createTimeoutController();
+              try {
+                const raw = await promptWithFailoverAuto(lead, prompt, {
+                  manager: this.opts.manager,
+                  agentName: "swarm-read",
+                  signal: controller.signal,
+                }, cfg.providerFailover);
+                const text = extractProviderText(raw);
+                if (text) {
+                  const todos = parseJsonArrayFromResponse(text, (t: Record<string, unknown>, i: number) => ({
+                    description: String(t.description ?? `Task ${i + 1}`),
+                    expectedFiles: Array.isArray(t.expectedFiles) ? t.expectedFiles.map(String) : [],
+                  }));
+                  for (const t of todos) {
+                    this.state.todoQueue.post({
+                      description: t.description,
+                      expectedFiles: t.expectedFiles,
+                      createdBy: "planner-fallback",
+                    });
+                  }
+                  this.appendSystem(`[planner] Fallback created ${todos.length} todo(s).`);
+                  if (todos.length > 0) {
+                    cleanup();
+                    return "retry";
+                  }
+                }
+              } finally {
+                cleanup();
+              }
+            } catch { /* ignore */ }
           }
-          this.appendSystem(`[planner] Fallback created ${todos.length} todo(s).`);
-          if (todos.length === 0) {
-            this.appendSystem(`[planner] Fallback produced nothing — stopping.`);
-            return "stop";
-          }
+          this.appendSystem(`[planner] Fallback produced nothing — stopping.`);
+          return "stop";
         }
       }
     } else {
