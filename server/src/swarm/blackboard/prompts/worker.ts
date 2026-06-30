@@ -238,6 +238,9 @@ export interface WorkerSeed {
   // Plan 2: optional files the worker needs to READ for context but
   // NOT modify. Rendered as read-only context in the prompt.
   contextFiles?: string[];
+  // Plan 8: model context budget — controls whether full files are shown
+  // or windowed. Derived from the model's context window size.
+  fullFileMode?: boolean;
 }
 
 export function buildWorkerUserPrompt(seed: WorkerSeed): string {
@@ -279,6 +282,11 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
     const content = seed.fileContents[f];
     if (content === null || content === undefined) {
       parts.push(`=== ${f} (does not exist — use op "create") ===`);
+    } else if (seed.fullFileMode && content.length > 8000) {
+      // Plan 8: large-context models see full file content
+      parts.push(`=== Current contents of ${f} (${content.length} chars, full) ===`);
+      parts.push(content);
+      parts.push(`=== end ${f} ===`);
     } else if (anchors.length > 0) {
       // Unit 44b: anchored view per file. Includes head + per-anchor
       // excerpts + tail when the file is large; behaves like the basic

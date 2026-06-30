@@ -47,6 +47,7 @@ import { pheromoneHeatmap } from "../pheromoneHeatmap.js";
 import { withSiblingRetry } from "./siblingRetry.js";
 import { verifyWorkerSkip } from "./auditorRunner.js";
 import { autoDetectAnchors } from "./autoAnchor.js";
+import { getModelBudget } from "../modelContextBudget.js";
 
 export interface WorkerContext {
   isStopping: () => boolean;
@@ -415,6 +416,7 @@ export async function executeWorkerTodo(
     }
   }
 
+  const budget = getModelBudget(agent.model);
   const seed: WorkerSeed = {
     todoId: todo.id,
     description: todo.description,
@@ -422,6 +424,7 @@ export async function executeWorkerTodo(
     fileContents: contents,
     expectedAnchors: effectiveAnchors,
     roleGuidance: ctx.getWorkerRoles().get(agent.id),
+    fullFileMode: budget.fullFileMode,
   };
 
   if (ctx.getActive()?.stigmergyOnBlackboard && pheromoneHeatmap.size > 0) {
