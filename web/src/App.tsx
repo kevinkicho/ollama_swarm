@@ -128,6 +128,10 @@ function AppMain() {
   useReviewHydration(review);
   const phase = useSwarm((s) => s.phase);
   const error = useSwarm((s) => s.error);
+  const clonePath = useSwarm((s) => s.runConfig?.clonePath);
+  // Derive parentPath from clonePath so history endpoints can scan
+  // even when no run is active (lastParentPath is empty).
+  const parentPath = review?.clonePath || clonePath?.replace(/[/\\][^/\\]+$/, "");
 
   // Task #163: when in review mode, poll /api/swarm/status to detect
   // whether the run being reviewed is ALSO the currently-live run. If
@@ -156,9 +160,7 @@ function AppMain() {
                 <ReviewActiveControls />
               ) : null}
             </>
-          ) : (
-            <span className="text-xs text-ink-400 font-mono">glm-5.1:cloud · opencode</span>
-          )}
+          ) : null}
         </div>
         <div className="flex items-center gap-3">
           <RuntimeTicker />
@@ -173,7 +175,7 @@ function AppMain() {
               page). The /api/swarm/runs route falls back to
               lastParentPath when no run is active, so the dropdown
               still loads recent history without a current run. */}
-          <RunHistoryDropdown />
+          <RunHistoryDropdown parentPath={parentPath} />
           {/* V2 Step 6b: read-only event-log viewer (logs/current.jsonl
               parsed via EventLogReaderV2 + summarized server-side). */}
           <EventLogPanel />

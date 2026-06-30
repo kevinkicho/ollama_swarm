@@ -68,7 +68,7 @@ function cachedRunSummary(clonePath: string, runId: string | undefined): RunSumm
   return tryReadCache<RunSummary>(`${CACHE_RUN_SUMMARY_PREFIX}${id}`);
 }
 
-export function RunHistoryDropdown() {
+export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {}) {
   const [open, setOpen] = useState(false);
   const [runs, setRuns] = useState<RunSummaryDigest[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -95,7 +95,9 @@ export function RunHistoryDropdown() {
     (async () => {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          const r = await fetch("/api/swarm/runs?includeOtherParents=true", { signal: ctrl.signal });
+          const params = new URLSearchParams({ includeOtherParents: "true" });
+          if (parentPath) params.set("parentPath", parentPath);
+          const r = await fetch(`/api/swarm/runs?${params}`, { signal: ctrl.signal });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           const body = await r.json();
           if (cancelled) return;
@@ -572,6 +574,16 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
                 </>
               ) : null}
             </div>
+            {summary?.startCommand ? (
+              <details className="mt-2 group">
+                <summary className="text-[10px] text-ink-400 cursor-pointer hover:text-ink-200 select-none">
+                  CLI command used to start this run
+                </summary>
+                <pre className="mt-1 p-2 rounded bg-ink-950 border border-ink-700 text-[10px] font-mono text-ink-300 overflow-x-auto whitespace-pre-wrap">
+                  {summary.startCommand}
+                </pre>
+              </details>
+            ) : null}
           </section>
 
           {/* Phase 4a of #243: full topology read-only grid. Shows the

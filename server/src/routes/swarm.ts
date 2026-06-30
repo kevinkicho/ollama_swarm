@@ -725,9 +725,15 @@ export function swarmRouter(orch: Orchestrator): Router {
     // lastParentPath so the dropdown stays useful between runs.
     // Without this fallback the dropdown was empty whenever the user
     // wasn't mid-run — which is most of the time.
+    // 2026-06-30: also accept ?parentPath= from the frontend so the
+    // history works even when lastParentPath was never set (fresh
+    // server start, no run yet).
+    const explicitParent = typeof req.query.parentPath === "string"
+      ? req.query.parentPath
+      : undefined;
     const activeParent = status.localPath
       ? path.dirname(path.resolve(status.localPath))
-      : orch.getLastParentPath();
+      : explicitParent ?? orch.getLastParentPath();
     // #238 (2026-04-28): when ?includeOtherParents=true, also scan
     // every parent path the orchestrator has tracked. Lets the UI
     // show prior runs even when the active parent is fresh (per the

@@ -61,7 +61,7 @@ function fmtChars(n: number): string {
   return String(n);
 }
 
-export function TranscriptTimeline() {
+export function TranscriptTimeline({ parentPath }: { parentPath?: string } = {}) {
   const [entries, setEntries] = useState<TimelineEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -75,7 +75,9 @@ export function TranscriptTimeline() {
     fetchCtrlRef.current = ctrl;
     (async () => {
       try {
-        const res = await fetch("/api/swarm/runs?includeOtherParents=true", { signal: ctrl.signal });
+        const params = new URLSearchParams({ includeOtherParents: "true" });
+        if (parentPath) params.set("parentPath", parentPath);
+        const res = await fetch(`/api/swarm/runs?${params}`, { signal: ctrl.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (cancelled) return;

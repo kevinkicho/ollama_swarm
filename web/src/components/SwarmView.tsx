@@ -17,6 +17,7 @@ import { OutcomeChip } from "./OutcomeChip";
 import { fmtMs, roleForRow } from "./RunHistory";
 
 import { TranscriptTimeline } from "./TranscriptTimeline";
+import { ProgressBar } from "./ProgressBar";
 
 type Tab =
   | "transcript"
@@ -316,6 +317,7 @@ export function SwarmView() {
         {agentList.length === 0 ? <SidebarSummaryAgents /> : null}
       </aside>
       <section className="flex flex-col overflow-hidden">
+        <ProgressBar />
         <div className="flex border-b border-ink-700 bg-ink-800 text-sm">
           <TabButton active={tab === "transcript"} onClick={() => setTab("transcript")}>
             Transcript
@@ -393,7 +395,7 @@ export function SwarmView() {
           ) : tab === "memory" && showMemoryTab ? (
             <div className="h-full overflow-y-auto"><MemoryLogPanel clonePath={cfg?.clonePath} /></div>
           ) : tab === "history" ? (
-            <TranscriptTimeline />
+            <TranscriptTimeline parentPath={cfg?.clonePath?.replace(/[/\\][^/\\]+$/, "")} />
           ) : (
             <Transcript />
           )}
