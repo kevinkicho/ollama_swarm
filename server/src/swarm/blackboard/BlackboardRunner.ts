@@ -735,6 +735,7 @@ export class BlackboardRunner implements SwarmRunner {
       onPlannerStatusChange: (status) => {
         this.markPlannerStatus(_planner, status);
       },
+      userDirective: this.active?.userDirective,
     };
   }
 

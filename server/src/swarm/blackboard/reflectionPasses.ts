@@ -118,6 +118,10 @@ export interface ReflectionContext {
    *  the planner as "ready" while reflection prompts are actually
    *  in-flight, masking real activity. */
   onPlannerStatusChange?: (status: "thinking" | "ready") => void;
+  /** User directive — the original goal statement. Used to anchor the
+   *  design memory roadmap so it stays aligned with the mission instead
+   *  of drifting toward generic platform features. */
+  userDirective?: string;
 }
 
 export async function runStretchGoalReflectionPass(
@@ -305,6 +309,10 @@ export async function runDesignMemoryUpdatePass(
     "",
     `This run reached tier ${tier} with ${committed} commits.`,
     "",
+    ctx.userDirective
+      ? `=== USER DIRECTIVE (the mission this project serves) ===\n${ctx.userDirective}\n=== END ===`
+      : "",
+    "",
     priorBlock,
     "",
     ctx.contractCriteria.length > 0
@@ -319,7 +327,7 @@ export async function runDesignMemoryUpdatePass(
     "",
     '2. NEW DECISIONS (0-3 entries): meaningful design CHOICES made this run that future runs should respect. Each: {title, body}. Title is short; body is 1-3 sentences explaining the choice + rationale. Skip trivial/mechanical commits.',
     "",
-    "3. ROADMAP (3-7 items, ranked): the top features to build next. Be ambitious — these are creative product decisions, not next-sprint tickets. Compare against EXISTING products in the genre (you know them). What would make this product distinctive vs them?",
+    "3. ROADMAP (3-7 items, ranked): the top features to build next. IMPORTANT: roadmap items MUST advance the user directive above. Do NOT propose generic platform features (user accounts, plugin marketplaces, collaborative editing) unless the directive explicitly calls for them. Focus on concrete data panels, API integrations, and data-quality improvements that serve the project's stated mission.",
     "",
     "Output format — ONE JSON object only, no fences, no prose:",
     `{"northStar": "...", "newDecisions": [{"title":"...", "body":"..."}], "roadmap": ["item1", "item2", ...]}`,
