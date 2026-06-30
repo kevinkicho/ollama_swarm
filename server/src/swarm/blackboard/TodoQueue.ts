@@ -291,9 +291,16 @@ export class TodoQueue {
   }
 
   /** Mark an in-progress todo as failed. Increments retries.
-   *  Caller decides whether to re-enqueue (via reset()) or leave failed. */
+   *  Caller decides whether to re-enqueue (via reset()) or leave failed.
+   *  Idempotent on already-failed todos (second fail just updates reason). */
   fail(id: string, reason: string, ts: number = Date.now()): void {
     const t = this.findOrThrow(id);
+    if (t.status === "failed") {
+      // Already failed — update reason and increment retries
+      t.reason = reason;
+      t.retries += 1;
+      return;
+    }
     if (t.status !== "in-progress") {
       throw new Error(`Cannot fail todo ${id}: status=${t.status}`);
     }
