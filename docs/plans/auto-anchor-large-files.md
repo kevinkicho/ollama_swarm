@@ -100,3 +100,105 @@ Auto-detection is a safety net.
 - File is large and planner already declared anchors → auto-detection skipped
 - Auto-detected anchor doesn't match the actual section → worker sees "miss" in anchored report
 - Todo description is generic ("fix the file") → no useful keywords extracted
+
+---
+
+## Part 2: Replanner — Same Problem, Worse Outcome
+
+### Problem
+
+The replanner has the same windowed-view issue, but with worse consequences. When a
+todo goes stale and the replanner can't find the target section in the windowed view:
+
+```
+[system] Replanner skipped todo t111: The target 'Demographics' section does not
+exist in the current file; the file has been substantially reorganized and the
+original move cannot be applied as described.
+```
+
+The replanner gives up and skips the todo entirely — even though the work (adding a
+UNHCR Refugee row) still needs to be done. The section was likely renamed or moved,
+not deleted.
+
+### Root Cause
+
+Two issues compound:
+
+1. **Windowed view**: The replanner sees head (3000 chars) + tail (3000 chars) of
+   `docs/PANELS.md`. The "Demographics" section is in the omitted middle, so the
+   replanner can't find it.
+
+2. **Replanner prompt encourages skipping**: Rule at line 158 says "Pick SKIP when:
+   the original intent no longer applies to the repo as it stands now." The LLM
+   interprets "section not in head/tail" as "section doesn't exist" and skips.
+
+### Fix: Apply Auto-Anchor to Replanner Too
+
+The same `extractSectionKeywords` heuristic from Part 1 applies. When the replanner
+reads a file and it's windowed, auto-detect anchors from the todo description before
+sending the prompt.
+
+#### Changes
+
+1. **`server/src/swarm/blackboard/replanManager.ts`** — After reading fileContents,
+   apply the same auto-anchor detection as workerRunner:
+
+   ```typescript
+   // After reading fileContents (line 106)
+   for (const f of todo.expectedFiles) {
+     const content = contents[f];
+     if (!content || content.length <= WORKER_FILE_WINDOW_THRESHOLD) continue;
+     const keywords = extractSectionKeywords(todo.description);
+     for (const kw of keywords) {
+       if (content.indexOf(kw) >= 0) {
+         // Found the section — inject as anchor so windowFileWithAnchors
+         // shows the relevant region
+         seed.autoAnchors = [...(seed.autoAnchors ?? []), kw];
+       }
+     }
+   }
+   ```
+
+2. **`server/src/swarm/blackboard/prompts/replanner.ts`** — Include auto-anchors
+   in the user prompt so the replanner sees the relevant region:
+
+   ```typescript
+   // In buildReplannerUserPrompt, after file contents
+   if (seed.autoAnchors && seed.autoAnchors.length > 0) {
+     parts.push(`[Auto-detected anchors from description: ${seed.autoAnchors.join(", ")}]`);
+     // Re-render the file content with anchors injected
+     for (const f of seed.originalExpectedFiles) {
+       const content = fileContents[f];
+       if (!content || content.length <= WORKER_FILE_WINDOW_THRESHOLD) continue;
+       const anchored = windowFileWithAnchors(content, seed.autoAnchors);
+       // Replace the plain windowed view with anchored view
+     }
+   }
+   ```
+
+3. **Strengthen replanner prompt** — Add explicit instruction:
+
+   ```
+   IMPORTANT: When a section is not visible in the shown file contents, it may
+   have been RENAMED or MOVED to a different location in the file — NOT deleted.
+   Use your tools (grep, read) to search for the section before skipping. Only
+   skip when you have CONCRETE EVIDENCE the section was removed, not just when
+   you can't see it in the shown excerpt.
+   ```
+
+### Additional: Plumb Auto-Anchor to Shared Module
+
+Since both workerRunner and replanManager need `extractSectionKeywords` and the
+auto-anchor logic, extract them into a shared module:
+
+**`server/src/swarm/blackboard/autoAnchor.ts`**:
+```typescript
+export function extractSectionKeywords(description: string): string[] { ... }
+export function autoDetectAnchors(
+  description: string,
+  fileContents: Record<string, string | null>,
+  expectedFiles: string[],
+): string[] { ... }
+```
+
+Both workerRunner and replanManager import from this shared module.
