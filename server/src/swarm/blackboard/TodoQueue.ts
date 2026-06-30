@@ -71,6 +71,9 @@ export interface QueuedTodo {
    *  - serialize within group when alternatives' expectedFiles overlap
    *  Absent on regular (non-alternative) todos. */
   groupId?: string;
+  /** Plan 2: optional files the worker needs to READ for context but
+   *  NOT modify. Max 3 context files per TODO. */
+  contextFiles?: readonly string[];
 }
 
 export interface TodoQueueCounts {
@@ -103,6 +106,9 @@ export interface PostTodoInput {
   /** T-Item-3 (2026-05-04): in-flight parallel hypothesis grouping.
    *  See QueuedTodo.groupId for semantics. */
   groupId?: string;
+  /** Plan 2: optional files the worker needs to READ for context but
+   *  NOT modify. Max 3 context files per TODO. */
+  contextFiles?: readonly string[];
 }
 
 export class TodoQueue {
@@ -131,6 +137,9 @@ export class TodoQueue {
       ...(input.command ? { command: input.command } : {}),
       ...(input.preferredTag ? { preferredTag: input.preferredTag } : {}),
       ...(input.groupId ? { groupId: input.groupId } : {}),
+      ...(input.contextFiles && input.contextFiles.length > 0
+        ? { contextFiles: input.contextFiles.slice() }
+        : {}),
     });
     return id;
   }
@@ -349,6 +358,7 @@ export class TodoQueue {
       expectedAnchors?: readonly string[];
       kind?: "hunks" | "build";
       command?: string;
+      contextFiles?: readonly string[];
     },
   ): void {
     const t = this.findOrThrow(id);
@@ -376,6 +386,9 @@ export class TodoQueue {
       }
       if (updates.kind !== undefined) t.kind = updates.kind;
       if (updates.command !== undefined) t.command = updates.command;
+      if (updates.contextFiles !== undefined) {
+        t.contextFiles = updates.contextFiles.length > 0 ? updates.contextFiles.slice() : undefined;
+      }
     }
   }
 

@@ -43,6 +43,7 @@ const RevisedBody = z.union([
     expectedFiles: z.array(filePathEntry).min(1).max(2),
     expectedAnchors: z.array(replanAnchorEntry).max(REPLAN_ANCHOR_MAX_PER_TODO).optional(),
     command: z.undefined().optional(),
+    contextFiles: z.array(filePathEntry).max(3).optional(),
   }),
   z.object({
     kind: z.literal("build"),
@@ -50,6 +51,7 @@ const RevisedBody = z.union([
     expectedFiles: z.array(filePathEntry).min(1).max(2),
     command: z.string().trim().min(1).max(500),
     expectedAnchors: z.array(replanAnchorEntry).max(REPLAN_ANCHOR_MAX_PER_TODO).optional(),
+    contextFiles: z.array(filePathEntry).max(3).optional(),
   }),
 ]);
 
@@ -70,6 +72,7 @@ export type ReplannerParseResult =
       description: string;
       expectedFiles: string[];
       expectedAnchors?: string[];
+      contextFiles?: string[];
     }
   | { ok: true; action: "skip"; reason: string }
   | { ok: false; reason: string };
@@ -125,6 +128,9 @@ export function parseReplannerResponse(raw: string): ReplannerParseResult {
       expectedFiles: [...v.data.revised.expectedFiles],
       expectedAnchors: v.data.revised.expectedAnchors
         ? [...v.data.revised.expectedAnchors]
+        : undefined,
+      contextFiles: v.data.revised.contextFiles
+        ? [...v.data.revised.contextFiles]
         : undefined,
     };
   }

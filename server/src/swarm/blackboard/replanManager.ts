@@ -223,6 +223,7 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
       expectedAnchors: parsed.expectedAnchors,
       ...(parsed.kind ? { kind: parsed.kind } : {}),
       ...(parsed.command ? { command: parsed.command } : {}),
+      ...(parsed.contextFiles ? { contextFiles: parsed.contextFiles } : {}),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

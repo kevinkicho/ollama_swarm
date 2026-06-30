@@ -389,7 +389,12 @@ export async function executeWorkerTodo(
   let commitTier: import("./types.js").CommitTier | undefined;
   let contents: Record<string, string | null>;
   try {
-    contents = await ctx.readExpectedFiles(todo.expectedFiles);
+    // Read both expectedFiles AND contextFiles
+    const allFiles = [
+      ...todo.expectedFiles,
+      ...(todo.contextFiles ?? []),
+    ];
+    contents = await ctx.readExpectedFiles(allFiles);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     ctx.getWrappers().failTodoQ(todo.id, `[v2] read failure: ${msg}`);

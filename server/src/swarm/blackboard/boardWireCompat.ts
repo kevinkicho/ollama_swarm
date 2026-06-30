@@ -56,6 +56,9 @@ export function v2QueueTodoToWireTodo(qt: QueuedTodo): Todo {
     ...(qt.kind ? { kind: qt.kind } : {}),
     ...(qt.command ? { command: qt.command } : {}),
     ...(qt.preferredTag ? { preferredTag: qt.preferredTag } : {}),
+    ...(qt.contextFiles && qt.contextFiles.length > 0
+      ? { contextFiles: qt.contextFiles.slice() }
+      : {}),
   };
 }
 

@@ -65,6 +65,10 @@ export interface Todo {
   // prefers a matching worker over a generic one when multiple
   // candidates are open. Absent → no preference (any worker is fine).
   preferredTag?: string;
+  // Plan 2: optional files the worker needs to READ for context but NOT
+  // modify. The planner declares these when a todo references or depends
+  // on files not in expectedFiles. Max 3 context files per TODO.
+  contextFiles?: string[];
 }
 
 export type ExitCriterionStatus = "unmet" | "met" | "wont-do";

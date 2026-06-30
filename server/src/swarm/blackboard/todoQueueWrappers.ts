@@ -36,6 +36,7 @@ export interface ResetUpdates {
   expectedAnchors?: readonly string[];
   kind?: "hunks" | "build";
   command?: string;
+  contextFiles?: readonly string[];
 }
 
 export interface TodoQueueWrappers {

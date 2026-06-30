@@ -73,6 +73,9 @@ const PlannerTodoSchemaHunks = z.object({
   // pre-tagged callers + analyses where the planner can't cleanly
   // attribute (e.g. exploratory cleanup todos).
   criteria: z.array(criterionIdEntry).max(CRITERIA_PER_TODO_MAX).optional(),
+  // Plan 2: optional files the worker needs to READ for context but
+  // NOT modify. Max 3 context files per TODO.
+  contextFiles: z.array(filePathEntry).max(3).optional(),
 });
 const PlannerTodoSchemaBuild = z.object({
   kind: z.literal("build"),
@@ -287,6 +290,8 @@ export const PLANNER_SYSTEM_PROMPT = [
   "12. (#237, 2026-04-28) BUILD-STYLE TODOS — for work that REQUIRES running a project script + committing the result (doc generators, codegen, formatters, linters with --fix, type-checkers that emit declaration files), use the build-style TODO shape: `{\"kind\": \"build\", \"description\": ...., \"expectedFiles\": [\"docs/api/index.md\"], \"command\": \"bun run docs:api\"}`. Constraints: `command` MUST start with one of {npm, npx, yarn, pnpm, bun, bunx, tsc, tsx, deno, eslint, prettier, biome, jest, vitest, mocha, make, task, just, typedoc, jsdoc, docusaurus} (the runner enforces an allowlist). NO shell metacharacters (`;`, `&&`, `||`, `|`, `>`, `<`, backticks, `$`) — chaining/piping is forbidden. expectedFiles describes paths the command WILL emit; the runner uses them for the auditor verification only. The default `kind` is `\"hunks\"` (or omitted entirely) — only mark `kind:\"build\"` when the work genuinely cannot be expressed as a search/replace patch.",
   "13. (#243, 2026-04-28) WORKER SPECIALIZATION — when the user's topology declares per-worker tags (e.g. agent #3 tagged `tests-expert`, agent #5 tagged `frontend`), the AVAILABLE WORKER TAGS section of the user message lists them. For each TODO, you MAY add an optional `preferredTag` field that names the tag of the worker who should ideally claim it (e.g. `\"preferredTag\": \"tests-expert\"` for a TODO that touches test files). Only set it when one of the listed tags clearly fits — do NOT invent tags or use a tag that no worker carries. Workers preferentially claim TODOs matching their tag; absent or no-match TODOs fall through to any available worker, so unset = no preference. When the topology has no tagged workers, this section is empty and you SHOULD NOT emit `preferredTag`.",
   "14. (2026-05-02) CRITERION ATTRIBUTION — for each TODO that serves one or more EXIT CONTRACT criteria, include a `criteria` field listing the criterion id(s) it serves: `\"criteria\": [\"c1\", \"c3\"]`. Criterion ids appear in the EXIT CONTRACT section of the user message. Tag liberally (a TODO that contributes to a criterion even partially should list it) but honestly (don't tag criteria the TODO has no plausible relation to). Auto-rollback (when enabled by the user) uses this attribution to know which commits to unwind when a criterion comes back FALSE. Untagged TODOs have their commits preserved on rollback — explicit attribution is the contract for opt-in cleanup.",
+  "",
+  "15. CONTEXT FILES — for TODOs that reference or depend on files NOT in expectedFiles, include an optional `contextFiles` array listing those files. The worker will see their content as read-only reference. Do NOT put files in contextFiles that you intend to modify — those go in expectedFiles. Max 3 context files per TODO. Example: if a TODO updates docs/PANELS.md but you need the worker to see config/dashboardPanels.js for reference, put config/dashboardPanels.js in contextFiles.",
   "",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",
 ].join("\n");

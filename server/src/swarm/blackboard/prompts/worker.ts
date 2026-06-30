@@ -164,16 +164,19 @@ export const WORKER_SYSTEM_PROMPT = [
   "1. Output ONLY a JSON object. No prose. No markdown fences. No commentary before or after.",
   "2. Shape: {\"hunks\": [ ...search/replace hunks ]}",
   "3. Each hunk has an `op` and a `file`. `file` MUST be one of the paths in the TODO's expectedFiles list — do not touch any other file.",
-  "4. Three ops, pick the right one for each change:",
+  "4. Four ops, pick the right one for each change:",
   "   - {\"op\": \"replace\", \"file\": \"...\", \"search\": \"<EXACT text to find>\", \"replace\": \"<new text>\"}",
   "     The `search` text must appear EXACTLY ONCE in the current file. Include enough surrounding context to be unique. If the same phrase appears twice, extend `search` until it's unique — otherwise the hunk is rejected.",
   "   - {\"op\": \"create\", \"file\": \"...\", \"content\": \"<entire file contents>\"}",
   "     Only valid when the file does not yet exist. Use this for scaffolding new files.",
   "   - {\"op\": \"append\", \"file\": \"...\", \"content\": \"<text to append at end of file>\"}",
   "     Use when you need to add at the very end and there's no stable anchor to replace (e.g. appending a new CHANGELOG entry).",
+  "   - {\"op\": \"delete\", \"file\": \"...\"}",
+  "     Deletes the entire file. Only valid when the TODO explicitly requires removing a file (e.g. removing duplicates, cleaning up deprecated code).",
   "5. Multiple hunks per file are allowed and applied in order — each hunk sees the output of the previous one.",
-  "6. If the TODO is impossible, unsafe, or already done, respond with: {\"hunks\": [], \"skip\": \"brief reason\"}",
+  "6. If the TODO is genuinely impossible or unsafe, respond with: {\"hunks\": [], \"skip\": \"brief reason\"}. Do NOT skip because expected files don't exist — that means you need to CREATE them. Do NOT skip because the work looks 'already done' — read the file contents and verify. If the file exists and its content already matches the TODO goal, then skip.",
   "7. Maximum 8 hunks per response.",
+  "8. CRITICAL — USER DIRECTIVE: When a USER DIRECTIVE block is present below, it is AUTHORITATIVE. Your implementation MUST serve the directive's intent. Do NOT create mock/fake/placeholder data — the directive explicitly forbids it. Do NOT contradict or ignore the directive. Every file you create or modify must align with what the directive asks for.",
   "",
   "You will be given the TODO description, the expected file paths, and the current contents of each file (or a note that it does not exist).",
   "",
@@ -197,9 +200,6 @@ export const WORKER_SYSTEM_PROMPT = [
   "Example 3 — append, adding to end of file when no stable anchor exists. Use this for CHANGELOG-style additions:",
   '{"hunks":[{"op":"append","file":"CHANGELOG.md","content":"\\n## v1.2.0\\n- Added clamp helper.\\n"}]}',
   "",
-  "Example 4 — multiple hunks in one response, each applied in order:",
-  '{"hunks":[{"op":"replace","file":"src/index.js","search":"const PORT = 3000","replace":"const PORT = 3001"},{"op":"append","file":"README.md","content":"\\n## Port\\nDefault port is now 3001.\\n"}]}',
-  "",
   "COMMON MISTAKES TO AVOID:",
   "  - search must appear EXACTLY ONCE — if `function foo() {` appears twice in the file, your hunk will be REJECTED. Extend `search` to include surrounding context until unique.",
   "  - JSON requires escaped newlines (\\n) and quotes (\\\") inside string values. Do not paste literal newlines.",
@@ -218,6 +218,9 @@ export interface WorkerSeed {
   // build time. When absent or empty, falls back to the head + tail
   // window from windowFileForWorker.
   expectedAnchors?: string[];
+  /** Unit X: the user directive from cfg.userDirective. When present, the worker
+   *  must follow it. Absent when no directive was provided. */
+  directive?: string;
   // Unit 59 (59a): worker role bias. When set, the runner prepends
   // this guidance to WORKER_SYSTEM_PROMPT before the rules so the
   // worker's diff carries the role's bias (correctness / simplicity /
@@ -232,6 +235,9 @@ export interface WorkerSeed {
   // Plan 6: rotating disposition from round-robin, applied per cycle
   // so the same worker approaches todos from different angles.
   disposition?: RoundRobinDisposition;
+  // Plan 2: optional files the worker needs to READ for context but
+  // NOT modify. Rendered as read-only context in the prompt.
+  contextFiles?: string[];
 }
 
 export function buildWorkerUserPrompt(seed: WorkerSeed): string {
@@ -254,6 +260,13 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
     for (const hf of seed.hotFiles) {
       parts.push(`  ${hf.path} (score: ${hf.score.toFixed(1)}, interest: ${hf.avgInterest.toFixed(0)}, confidence: ${hf.avgConfidence.toFixed(0)})`);
     }
+    parts.push("");
+  }
+  if (seed.directive && seed.directive.trim().length > 0) {
+    parts.push("");
+    parts.push("=== USER DIRECTIVE (AUTHORITATIVE — your work MUST serve this directive. Never create mock/fake/placeholder data.) ===");
+    parts.push(seed.directive.trim());
+    parts.push("=== end USER DIRECTIVE ===");
     parts.push("");
   }
   parts.push(`TODO: ${seed.description}`);
@@ -293,6 +306,25 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
       parts.push(`=== end ${f} ===`);
     }
     parts.push("");
+  }
+  // Plan 2: render context files as read-only reference
+  if (seed.contextFiles && seed.contextFiles.length > 0) {
+    parts.push("=== READ-ONLY CONTEXT FILES (do NOT modify these — reference only) ===");
+    for (const f of seed.contextFiles) {
+      const content = seed.fileContents[f];
+      if (content === null || content === undefined) {
+        parts.push(`=== ${f} (does not exist on disk — reference only) ===`);
+      } else {
+        const view = windowFileForWorker(content);
+        const header = view.full
+          ? `=== ${f} (${content.length} chars, full) ===`
+          : `=== ${f} (${content.length} chars, WINDOWED) ===`;
+        parts.push(header);
+        parts.push(view.content);
+        parts.push(`=== end ${f} ===`);
+      }
+      parts.push("");
+    }
   }
   parts.push(
     "Output your JSON now. Use search/replace hunks — do NOT paste whole files back. JSON only.",
