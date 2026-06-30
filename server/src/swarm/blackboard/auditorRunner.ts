@@ -60,6 +60,83 @@ export interface AuditorContext {
   ) => Promise<string>;
 }
 
+// ── Audit verification of worker skip reasons ──
+// When a worker declines a todo, the auditor can verify whether the
+// skip is legitimate or the worker was mistaken/lazy. If the skip is
+// invalid, the auditor provides revised instructions for the next worker.
+
+export interface SkipVerificationInput {
+  todoDescription: string;
+  expectedFiles: string[];
+  skipReason: string;
+  workerIndex: number;
+  fileContents: Record<string, string | null>;
+  criteriaCount: number;
+}
+
+export interface SkipVerificationOutput {
+  verdict: "valid" | "invalid" | "hallucinated-todo";
+  rationale: string;
+  revisedDescription?: string;
+  approachNotes?: string;
+}
+
+const SKIP_VERIFICATION_SCHEMA = {
+  type: "object",
+  properties: {
+    verdict: { type: "string", enum: ["valid", "invalid", "hallucinated-todo"] },
+    rationale: { type: "string", maxLength: 500 },
+    revisedDescription: { type: "string", maxLength: 500 },
+    approachNotes: { type: "string", maxLength: 800 },
+  },
+  required: ["verdict", "rationale"],
+} as const;
+
+export async function verifyWorkerSkip(
+  input: SkipVerificationInput,
+  promptAgent: (agent: import("../../services/AgentManager.js").Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder", formatExpect: "json" | "free") => Promise<string>,
+  auditor: import("../../services/AgentManager.js").Agent,
+): Promise<SkipVerificationOutput> {
+  const filesSection = input.expectedFiles.length > 0
+    ? `\nExpected files (current contents):\n${input.expectedFiles.map(f =>
+        `  ${f}: ${(input.fileContents[f] ?? "(file not found)").slice(0, 1000)}`
+      ).join("\n")}`
+    : "\nNo expected files for this todo.";
+
+  const prompt = `You are the AUDITOR verifying a worker's decision to skip a todo.
+
+Todo description: "${input.todoDescription}"
+Expected files: ${input.expectedFiles.join(", ") || "(none)"}
+Worker agent-${input.workerIndex} declined this todo with reason: "${input.skipReason}"
+${filesSection}
+Contract criteria count: ${input.criteriaCount}
+
+Evaluate the skip reason. Three possible verdicts:
+
+1. **valid** — The worker is right: the work is genuinely unnecessary, out of scope, or already done. Return verdict="valid" and a brief rationale.
+2. **invalid** — The worker was mistaken, lazy, or hallucinated. Return verdict="invalid", rationale explaining why, and optionally revisedDescription + approachNotes for the next worker.
+3. **hallucinated-todo** — The worker is right to skip, but the TODO itself was based on a false premise. Specifically: the worker confirmed the target content genuinely DOES NOT EXIST in the expected files (e.g. the worker searched for "duplicate rows" and found none, or looked for "API endpoint X" and it doesn't exist), and the todo description implies it should exist. This means the PLANNER hallucinated content that isn't in the codebase. Return verdict="hallucinated-todo" with rationale explaining what content the planner hallucinated.
+
+Respond in JSON: { "verdict": "valid"|"invalid"|"hallucinated-todo", "rationale": "...", "revisedDescription"?: "...", "approachNotes"?: "..." }`;
+
+  try {
+    const response = await promptAgent(auditor, prompt, "swarm-read", "json");
+    const parsed = JSON.parse(response);
+    const verdict = parsed.verdict === "invalid" ? "invalid"
+      : parsed.verdict === "hallucinated-todo" ? "hallucinated-todo"
+      : "valid";
+    return {
+      verdict,
+      rationale: parsed.rationale ?? "Auditor did not provide a rationale.",
+      revisedDescription: parsed.revisedDescription || undefined,
+      approachNotes: parsed.approachNotes || undefined,
+    };
+  } catch {
+    // If auditor fails to respond, default to valid-skip (preserve current behavior).
+    return { verdict: "valid", rationale: "Auditor unavailable — skip stands." };
+  }
+}
+
 export async function runAuditor(
   ctx: AuditorContext,
   planner: Agent,
@@ -133,6 +210,7 @@ export async function runAuditor(
             "auditor",
             ctx.brainPromptFn,
             (e: BrainFallbackEvent) => { ctx.emit({ type: "brain-fallback", ...e }); },
+            auditAgent,
           );
           if (brainResult) {
             parsed = { ok: true as const, result: brainResult, dropped: [] };

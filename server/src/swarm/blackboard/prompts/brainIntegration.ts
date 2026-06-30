@@ -84,10 +84,11 @@ export async function tryBrainFallback<T>(
   schema: z.ZodType<T>,
   promptFn: BrainPromptFn,
   onEvent: (event: BrainFallbackEvent) => void,
+  agent?: import("../../services/AgentManager.js").Agent,
 ): Promise<T | null> {
   if (!brainEnabled()) return null;
   if (!SCHEMA_DESCRIPTIONS[parserName]) return null;
 
-  const cfg = brainConfigFromApp();
-  return brainFallbackParse(rawOutput, schema, parserName, cfg, promptFn, onEvent);
+  const cfg = brainConfigFromApp(agent?.model);
+  return brainFallbackParse(rawOutput, schema, parserName, cfg, promptFn, onEvent, agent);
 }

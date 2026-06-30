@@ -801,14 +801,16 @@ export class BlackboardRunner implements SwarmRunner {
 
   private async promptAgent(agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" = "swarm", formatExpect: "json" | "free" = "json", ollamaFormat?: "json" | Record<string, unknown>): Promise<string> { return promptAgentExtracted(this.promptContext(), agent, prompt, agentName, formatExpect, ollamaFormat); }
 
-  /** Brain fallback prompt function. Calls the configured brain model directly
-   *  via promptAgent to extract structured JSON from a failed parse. */
-  private async brainPromptFn(prompt: string, model: string, maxTokens: number, _timeoutMs: number): Promise<string> {
-    const brainCfg = brainConfigFromApp(this.active?.brainModel);
-    const agent: Agent = {
+  /** Brain fallback prompt function. Uses the passed agent (the caller's
+   *  agent) for model, tools, and session context. Falls back to a
+   *  dedicated brain agent when no caller agent is provided. */
+  private async brainPromptFn(prompt: string, _model: string, maxTokens: number, _timeoutMs: number, callerAgent?: Agent): Promise<string> {
+    // Use the caller's agent when provided — this gives the brain real
+    // model context, tools, and session instead of a fake agent.
+    const agent: Agent = callerAgent ?? {
       id: "brain",
       index: -1,
-      model: brainCfg.brainModel,
+      model: brainConfigFromApp(this.active?.brainModel).brainModel,
       port: 0,
       sessionId: "brain",
       status: "idle",

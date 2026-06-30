@@ -174,6 +174,7 @@ export async function runFirstPassContract(
             "contract",
             ctx.brainPromptFn,
             (e: BrainFallbackEvent) => { ctx.emit({ type: "brain-fallback", ...e }); },
+            agent,
           );
           if (brainResult) {
             parsed = {

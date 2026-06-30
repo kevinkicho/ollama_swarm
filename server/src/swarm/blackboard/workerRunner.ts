@@ -45,6 +45,7 @@ import { v2QueueTodoToWireTodo } from "./boardWireCompat.js";
 import { bumpAgentCounter } from "./runnerHelpers.js";
 import { pheromoneHeatmap } from "../pheromoneHeatmap.js";
 import { withSiblingRetry } from "./siblingRetry.js";
+import { verifyWorkerSkip } from "./auditorRunner.js";
 
 export interface WorkerContext {
   isStopping: () => boolean;
@@ -472,6 +473,7 @@ export async function executeWorkerTodo(
             "worker",
             ctx.brainPromptFn,
             (e: BrainFallbackEvent) => { ctx.emit({ type: "brain-fallback", ...e }); },
+            agent,
           );
           if (brainResult) {
             // Validate that brain-extracted hunks reference allowed files
@@ -490,6 +492,49 @@ export async function executeWorkerTodo(
           }
         } catch (err) {
           ctx.appendSystem(`⚠ worker [brain-fallback]: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+    if (!parsed.ok) {
+      // Auditor interpretation: before sibling retry, let the auditor
+      // try to interpret the response. It has broader context than the
+      // brain fallback and can reason about the response content.
+      const auditor = ctx.getAuditor();
+      if (auditor && !ctx.isStopping()) {
+        ctx.appendSystem(`[${agent.id}] [v2] parse failed after brain — routing raw response to auditor for interpretation.`);
+        try {
+          const auditorPrompt = `You are the AUDITOR interpreting a worker's malformed response. The worker was asked to produce hunks for todo "${todo.description}". Expected files: ${todo.expectedFiles.join(", ") || "(none)"}
+
+The worker produced this response which failed JSON validation:
+\`\`\`
+${response.slice(0, 3000)}
+\`\`\`
+
+Parse error: ${parsed.reason}
+
+Your job: extract or fix the JSON. The response likely contains valid hunks wrapped in markdown fences or with minor syntax issues. Return ONLY valid JSON matching this schema:
+{ "hunks": [{ "op": "replace"|"create"|"append"|"delete", "file": string, "search"?: string, "replace"?: string, "content"?: string }], "skip"?: string }
+
+If the worker genuinely declined (e.g. "cannot do this"), return { "skip": "reason" }.
+If the response is completely unparseable, return { "skip": "auditor could not interpret response" }.`;
+          const auditorResponse = await ctx.promptAgent(
+            auditor,
+            auditorPrompt,
+            "swarm-read",
+            "json",
+          );
+          const auditorParsed = parseWorkerResponse(auditorResponse, todo.expectedFiles);
+          if (auditorParsed.ok && (auditorParsed.hunks.length > 0 || auditorParsed.skip)) {
+            parsed = auditorParsed;
+            commitTier = "auditor-parse";
+            ctx.appendSystem(
+              auditorParsed.skip
+                ? `[${agent.id}] [v2] auditor confirmed skip: ${auditorParsed.skip}`
+                : `[${agent.id}] [v2] auditor interpreted response — ${auditorParsed.hunks.length} hunk(s).`,
+            );
+          }
+        } catch (err) {
+          ctx.appendSystem(`⚠ [${agent.id}] [v2] auditor interpretation failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     }
@@ -535,6 +580,58 @@ export async function executeWorkerTodo(
 
   if (parsed.skip) {
     ctx.appendSystem(`[${agent.id}] [v2] worker declined todo: ${parsed.skip}`);
+    // Auditor skip verification (best-effort)
+    const auditor = ctx.getAuditor();
+    if (auditor) {
+      const fileContents = await ctx.readExpectedFiles(todo.expectedFiles);
+      const verification = await verifyWorkerSkip(
+        {
+          todoDescription: todo.description,
+          expectedFiles: todo.expectedFiles,
+          skipReason: parsed.skip,
+          workerIndex: agent.index,
+          fileContents,
+          criteriaCount: ctx.getActive()?.userDirective ? 1 : 0,
+        },
+        ctx.promptAgent,
+        auditor,
+      );
+      if (verification.verdict === "invalid") {
+        ctx.appendSystem(
+          `Auditor overrode worker-${agent.index}'s skip: "${verification.rationale}". ` +
+          `Reopening todo${verification.revisedDescription ? ' with revised description.' : '.'}`
+        );
+        ctx.getWrappers().failTodoQ(todo.id,
+          `auditor overrode skip: ${verification.rationale}`,
+          "declined"
+        );
+        if (verification.revisedDescription || verification.approachNotes) {
+          ctx.getWrappers().postTodoQ({
+            description: verification.revisedDescription ?? todo.description,
+            expectedFiles: todo.expectedFiles,
+            createdBy: auditor.id,
+          });
+          if (verification.approachNotes) {
+            ctx.appendSystem(`Auditor approach notes: ${verification.approachNotes}`);
+          }
+        }
+        ctx.bumpRejectedAttempts(agent.id);
+        return "stale";
+      }
+      if (verification.verdict === "hallucinated-todo") {
+        ctx.appendSystem(
+          `Auditor determined todo ${todo.id.slice(0, 8)} was a PLANNER HALLUCINATION: "${verification.rationale}". ` +
+          `The planner imagined content that doesn't exist. This diagnostic should be reviewed at the next audit cycle.`
+        );
+        ctx.getWrappers().failTodoQ(todo.id,
+          `hallucinated-todo: ${verification.rationale}`,
+          "declined"
+        );
+        ctx.bumpRejectedAttempts(agent.id);
+        return "stale";
+      }
+      ctx.appendSystem(`Auditor confirmed skip: ${verification.rationale}`);
+    }
     ctx.getWrappers().failTodoQ(todo.id, `[v2] worker declined: ${parsed.skip}`, "declined");
     ctx.bumpRejectedAttempts(agent.id);
     return "stale";

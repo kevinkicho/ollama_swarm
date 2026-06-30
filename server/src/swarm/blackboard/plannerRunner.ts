@@ -112,6 +112,7 @@ export async function runPlanner(
             "planner",
             ctx.brainPromptFn,
             brainEvent,
+            agent,
           );
           if (brainResult) {
             const brainTodos = brainResult as unknown[];

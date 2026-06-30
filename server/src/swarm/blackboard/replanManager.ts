@@ -175,6 +175,7 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
             "replanner",
             ctx.brainPromptFn,
             (e: BrainFallbackEvent) => { ctx.emit?.({ type: "brain-fallback", ...e }); },
+            planner,
           );
           if (brainResult) {
             parsed = brainResult as typeof parsed;
