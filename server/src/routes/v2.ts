@@ -1,13 +1,13 @@
 // V2 Step 6b: read-only endpoint that exposes the event log via
 // EventLogReaderV2. Lets the UI render a per-run history derived
-// from logs/current.jsonl rather than only the WebSocket-snapshot
-// state. Useful for offline replay + crash-recovery.
+// from logs/current.jsonl + rotated event log files.
 //
 // Read-only: the writer is ws/eventLogger.ts. This route just reads
 // and parses. No state mutation, no auth — same trust boundary as
 // the rest of /api/*.
 
 import fs from "node:fs/promises";
+import path from "node:path";
 import { Router, type Request, type Response } from "express";
 import { config } from "../config.js";
 import {
@@ -15,6 +15,7 @@ import {
   splitIntoRuns,
   deriveRunState,
   type DerivedRunState,
+  type LoggedRecord,
 } from "../swarm/blackboard/EventLogReaderV2.js";
 
 export interface V2RouterDeps {
@@ -22,13 +23,58 @@ export interface V2RouterDeps {
   eventLogPath: string;
 }
 
+/** Read all event log files (current.jsonl + rotated events-*.jsonl) and
+ *  concatenate their records in chronological order. Bounded to
+ *  MAX_LOG_FILES most recent files to avoid unbounded disk reads. */
+const MAX_LOG_FILES = 10;
+
+async function readAllEventLogs(eventLogPath: string): Promise<{ records: LoggedRecord[]; malformed: Array<{ lineNumber: number; raw: string; error: string }>; sources: string[] }> {
+  const logDir = path.dirname(eventLogPath);
+  const allRecords: LoggedRecord[] = [];
+  const allMalformed: Array<{ lineNumber: number; raw: string; error: string }> = [];
+  const sources: string[] = [];
+
+  // Find all JSONL files in the log directory
+  let entries: string[];
+  try {
+    entries = await fs.readdir(logDir);
+  } catch {
+    return { records: [], malformed: [], sources: [] };
+  }
+
+  const jsonlFiles = entries
+    .filter((e) => e.endsWith(".jsonl"))
+    .map((e) => path.join(logDir, e))
+    .sort((a, b) => {
+      // current.jsonl first, then rotated files by name (newest first)
+      const aBase = path.basename(a);
+      const bBase = path.basename(b);
+      if (aBase === "current.jsonl") return -1;
+      if (bBase === "current.jsonl") return 1;
+      return a > b ? -1 : 1;
+    })
+    .slice(0, MAX_LOG_FILES);
+
+  for (const filePath of jsonlFiles) {
+    let raw: string;
+    try {
+      raw = await fs.readFile(filePath, "utf8");
+    } catch {
+      continue; // skip unreadable files
+    }
+    const { records, malformed } = parseEventLog(raw);
+    allRecords.push(...records);
+    allMalformed.push(...malformed);
+    sources.push(filePath);
+  }
+
+  return { records: allRecords, malformed: allMalformed, sources };
+}
+
 export function v2Router(deps: V2RouterDeps): Router {
   const r = Router();
 
   // GET /api/v2/status → { flags: {...}, env: {...} }
-  // Reports which V2 flags are active so Kevin can verify the dev
-  // server picked up the env vars correctly. Cheap diagnostic — no
-  // expensive operations.
   r.get("/status", (_req: Request, res: Response) => {
     res.json({
       flags: {
@@ -48,88 +94,60 @@ export function v2Router(deps: V2RouterDeps): Router {
   });
 
   // GET /api/v2/event-log/runs → { runs: [{ derived, recordCount }] }
-  // Reads the event log, parses + slices into runs, and returns
-  // derived state per slice. Suitable for a sidebar list — for
-  // detailed per-run records use /api/v2/event-log/runs/:runId.
+  // Reads ALL event log files (current + rotated) and returns derived
+  // state per run slice.
   r.get("/event-log/runs", async (_req: Request, res: Response) => {
-    let raw: string;
     try {
-      raw = await fs.readFile(deps.eventLogPath, "utf8");
+      const { records, malformed, sources } = await readAllEventLogs(deps.eventLogPath);
+      const slices = splitIntoRuns(records);
+      const runs: Array<{ derived: DerivedRunState; recordCount: number; isSessionBoundary: boolean }> =
+        slices.map((s) => ({
+          derived: deriveRunState(s),
+          recordCount: s.records.length,
+          isSessionBoundary: s.isSessionBoundary,
+        }));
+      res.json({
+        runs,
+        malformed: malformed.length,
+        sources,
+        totalRecords: records.length,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      // ENOENT is the "no log yet" case — return empty rather than 500.
-      if (/ENOENT/.test(msg)) {
-        res.json({ runs: [], malformed: 0, source: deps.eventLogPath });
-        return;
-      }
-      res.status(500).json({ error: `failed to read event log: ${msg}` });
-      return;
+      res.status(500).json({ error: `failed to read event logs: ${msg}` });
     }
-    const { records, malformed } = parseEventLog(raw);
-    const slices = splitIntoRuns(records);
-    const runs: Array<{ derived: DerivedRunState; recordCount: number; isSessionBoundary: boolean }> =
-      slices.map((s) => ({
-        derived: deriveRunState(s),
-        recordCount: s.records.length,
-        isSessionBoundary: s.isSessionBoundary,
-      }));
-    res.json({
-      runs,
-      malformed: malformed.length,
-      source: deps.eventLogPath,
-      totalRecords: records.length,
-    });
   });
 
-  // V2 Step 6c first thin slice (2026-05-01): per-run record replay.
-  // The aggregated /event-log/runs endpoint is enough for a sidebar
-  // list, but the eventual UI cutover needs the FULL record stream
-  // for any specific run so it can re-derive state without going
-  // through the WS path. This endpoint unblocks that work without
-  // touching any WS dispatch code yet.
-  //
-  // Returns: { runId, derived, records: LoggedRecord[], isSessionBoundary, malformed }
-  // 404 if no slice has the requested runId. Records are returned in
-  // log order — caller's responsibility to fold into UI state.
+  // GET /api/v2/event-log/runs/:runId → per-run record replay
   r.get("/event-log/runs/:runId", async (req: Request, res: Response) => {
     const wantId = req.params.runId;
     if (!wantId || wantId.length > 100) {
       res.status(400).json({ error: "runId required (max 100 chars)" });
       return;
     }
-    let raw: string;
     try {
-      raw = await fs.readFile(deps.eventLogPath, "utf8");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/ENOENT/.test(msg)) {
-        res.status(404).json({ error: `no event log at ${deps.eventLogPath}` });
+      const { records, malformed, sources } = await readAllEventLogs(deps.eventLogPath);
+      const slices = splitIntoRuns(records);
+      const matched = slices.find((s) => {
+        const derived = deriveRunState(s);
+        return derived.runId === wantId;
+      });
+      if (!matched) {
+        res.status(404).json({ error: `no run with id ${wantId}`, totalSlices: slices.length });
         return;
       }
-      res.status(500).json({ error: `failed to read event log: ${msg}` });
-      return;
+      res.json({
+        runId: wantId,
+        derived: deriveRunState(matched),
+        records: matched.records,
+        isSessionBoundary: matched.isSessionBoundary,
+        malformed: malformed.length,
+        sources,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: `failed to read event logs: ${msg}` });
     }
-    const { records, malformed } = parseEventLog(raw);
-    const slices = splitIntoRuns(records);
-    // Match by either the run_started event's runId or a derived runId.
-    // Slices are forward-compat — if a future slice format hides the
-    // runId behind a derived field, we still find it.
-    const matched = slices.find((s) => {
-      const derived = deriveRunState(s);
-      return derived.runId === wantId;
-    });
-    if (!matched) {
-      res.status(404).json({ error: `no run with id ${wantId}`, totalSlices: slices.length });
-      return;
-    }
-    res.json({
-      runId: wantId,
-      derived: deriveRunState(matched),
-      records: matched.records,
-      isSessionBoundary: matched.isSessionBoundary,
-      malformed: malformed.length,
-      source: deps.eventLogPath,
-    });
   });
 
   return r;

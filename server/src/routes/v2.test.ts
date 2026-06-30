@@ -156,8 +156,9 @@ describe("v2Router /event-log/runs", () => {
       const handler = getRunsHandler(router);
       const { res, mock } = makeRes();
       await handler({} as import("express").Request, res);
-      const body = mock.body as { source: string };
-      assert.equal(body.source, logPath);
+      const body = mock.body as { sources: string[] };
+      assert.ok(Array.isArray(body.sources));
+      assert.ok(body.sources.includes(logPath));
     });
   });
 });
@@ -277,6 +278,6 @@ describe("v2Router /event-log/runs/:runId", () => {
     );
     assert.equal(mock.statusCode, 404);
     const body = mock.body as { error: string };
-    assert.match(body.error, /no event log/);
+    assert.match(body.error, /no run with id/);
   });
 });
