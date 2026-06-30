@@ -17,12 +17,14 @@ import { OutcomeChip } from "./OutcomeChip";
 import { fmtMs, roleForRow } from "./RunHistory";
 
 import { TranscriptTimeline } from "./TranscriptTimeline";
+import { PlanningTab } from "./PlanningTab";
 import { ProgressBar } from "./ProgressBar";
 
 type Tab =
   | "transcript"
   | "metrics"
   | "board"
+  | "planning"
   | "contract"
   | "pheromones"
   | "drafts"
@@ -330,9 +332,12 @@ export function SwarmView() {
               tabs and (pre-fix) a lingering prior-run contract. */}
           {showBlackboardTabs ? (
             <>
-              <TabButton active={tab === "board"} onClick={() => setTab("board")}>
-                Board
-              </TabButton>
+          <TabButton active={tab === "board"} onClick={() => setTab("board")}>
+            Board
+          </TabButton>
+          <TabButton active={tab === "planning"} onClick={() => setTab("planning")}>
+            Planning
+          </TabButton>
               <TabButton active={tab === "contract"} onClick={() => setTab("contract")}>
                 Contract
               </TabButton>
@@ -394,6 +399,8 @@ export function SwarmView() {
             <OwSubtasksPanel />
           ) : tab === "memory" && showMemoryTab ? (
             <div className="h-full overflow-y-auto"><MemoryLogPanel clonePath={cfg?.clonePath} /></div>
+          ) : tab === "planning" ? (
+            <PlanningTab />
           ) : tab === "history" ? (
             <TranscriptTimeline parentPath={cfg?.clonePath?.replace(/[/\\][^/\\]+$/, "")} />
           ) : (

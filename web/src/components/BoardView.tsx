@@ -1,7 +1,6 @@
 import { memo, useMemo, useState } from "react";
 import { useSwarm } from "../state/store";
 import type { Finding, RunSummary, Todo, TodoStatus } from "../types";
-import { PlannerThinkingPanel } from "./PlannerThinkingPanel";
 import { computeCostBreakdown } from "../lib/costBreakdown";
 
 const COLUMNS: { key: TodoStatus; label: string; accent: string; help: string }[] = [
@@ -74,10 +73,6 @@ export function BoardView() {
   return (
     <div className="h-full overflow-hidden flex flex-col bg-ink-900">
       {showSummary ? <SummaryCard summary={summary} /> : null}
-      {/* Task #160: planner-thinking widget. Mounts during phase=planning
-          OR when the planner has a non-empty streaming buffer. Self-hides
-          otherwise — no visual real estate cost when planner is idle. */}
-      <div className="px-3 pt-3"><PlannerThinkingPanel /></div>
       <div className="flex-1 min-h-0 overflow-x-auto">
         <div className="grid grid-cols-5 min-w-[900px] h-full">
           {COLUMNS.map((col) => (
