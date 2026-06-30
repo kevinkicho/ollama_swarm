@@ -23,7 +23,7 @@ function mkOpts(overrides?: Partial<SiblingRetryOpts>): SiblingRetryOpts {
     logPrefix: `[${agent.id}]`,
     updateAgentModel: () => {},
     emit: () => {},
-    getFallbackModel: () => "nemotron-3-super:cloud",
+    getFallbackModel: () => "deepseek-v4-flash:cloud",
     reason: "sibling-retry: test reason",
     ...overrides,
   };
@@ -88,12 +88,12 @@ describe("withSiblingRetry", () => {
     assert.equal(events.length, 2); // shift + revert
     assert.equal(events[0].type, "model_shift");
     assert.equal(events[0].fromModel, "glm-5.1:cloud");
-    assert.equal(events[0].toModel, "nemotron-3-super:cloud");
+    assert.equal(events[0].toModel, "deepseek-v4-flash:cloud");
     assert.equal(events[0].rawError, undefined); // sibling-retry has no API error
     assert.equal(events[1].type, "model_shift");
-    assert.equal(events[1].fromModel, "nemotron-3-super:cloud");
+    assert.equal(events[1].fromModel, "deepseek-v4-flash:cloud");
     assert.equal(events[1].toModel, "glm-5.1:cloud");
-    assert.equal(upgrades[0], "nemotron-3-super:cloud");
+    assert.equal(upgrades[0], "deepseek-v4-flash:cloud");
     assert.equal(upgrades[1], "glm-5.1:cloud");
   });
 
@@ -118,13 +118,13 @@ describe("withSiblingRetry", () => {
 
     assert.equal(threw, true);
     assert.equal(upgrades[1], "glm-5.1:cloud"); // reverted
-    assert.equal(events[1].fromModel, "nemotron-3-super:cloud");
+    assert.equal(events[1].fromModel, "deepseek-v4-flash:cloud");
     assert.equal(events[1].toModel, "glm-5.1:cloud");
   });
 
   it("uses modelAtEntry for fromModel, not current agent.model", async () => {
     // Simulate provider-level failover having already mutated agent.model
-    const agent = mockAgent({ model: "nemotron-3-super:cloud" }); // already swapped
+    const agent = mockAgent({ model: "deepseek-v4-flash:cloud" }); // already swapped
     const events: any[] = [];
 
     await withSiblingRetry(
@@ -143,24 +143,24 @@ describe("withSiblingRetry", () => {
     assert.equal(events[1].toModel, "glm-5.1:cloud"); // reverts to captured original
   });
 
-  it("calls fn and returns true on success", async () => {
+  it("returns false when SIBLING_MODELS is empty (no siblings configured)", async () => {
     let called = false;
     const result = await withSiblingRetry(
-      mkOpts(),
+      mkOpts({ getFallbackModel: () => undefined }),
       async () => { called = true; },
     );
-    assert.equal(result, true);
-    assert.equal(called, true);
+    // SIBLING_MODELS is empty — siblingModelFor returns undefined, no fallback
+    assert.equal(result, false);
+    assert.equal(called, false);
   });
 
-  it("uses siblingModelFor when getFallbackModel returns undefined", async () => {
+  it("returns false when SIBLING_MODELS is empty even with explicit fallback", async () => {
     let fnCalled = false;
     const result = await withSiblingRetry(
       mkOpts({ getFallbackModel: () => undefined }),
       async () => { fnCalled = true; },
     );
-    // glm-5.1 → nemotron via siblingModelFor
-    assert.equal(result, true);
-    assert.equal(fnCalled, true);
+    assert.equal(result, false);
+    assert.equal(fnCalled, false);
   });
 });

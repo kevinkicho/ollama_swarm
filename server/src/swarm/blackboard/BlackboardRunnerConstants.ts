@@ -61,11 +61,12 @@ export const DRAIN_WATCHER_INTERVAL_MS = 2_000;
 // kept as a fallback target FROM either (in case user picks it
 // explicitly), but it's unstable and not chosen as a sibling FOR
 // either. nemotron is the safer fallback for all three.
-export const SIBLING_MODELS: Readonly<Record<string, string>> = {
-  "glm-5.1:cloud": "deepseek-v4-flash:cloud",
-  "deepseek-v4-flash:cloud": "glm-5.1:cloud",
-  "deepseek-v4-pro:cloud": "deepseek-v4-flash:cloud",
-};
+// 2026-06-29: disabled. Model switching for content issues (invalid JSON,
+// empty response) is dead code — both models route through the same provider
+// path and fail the same way. The real safety net is stuck-cycle detection +
+// planner fallback + auditor re-fires. Empty map makes withSiblingRetry
+// return false immediately at its guard clause.
+export const SIBLING_MODELS: Readonly<Record<string, string>> = {};
 
 export function siblingModelFor(model: string): string | undefined {
   return SIBLING_MODELS[model];
