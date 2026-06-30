@@ -152,20 +152,17 @@ export async function runFirstPassContract(
   let parsed = parseFirstPassContractResponse(firstResponse);
   if (!parsed.ok) {
     ctx.appendSystem(
-      `Contract response did not parse (${parsed.reason}). Issuing repair prompt.`,
+      `Contract response did not parse (${parsed.reason}). Retrying with full prompt.`,
     );
-    const { response: repairResponse, agentUsed: repairAgent } = await ctx.promptPlannerSafely(
+    const { response: retryResponse, agentUsed: retryAgent } = await ctx.promptPlannerSafely(
       contractAgent,
-      `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractRepairPrompt(
-        firstResponse,
-        parsed.reason,
-      )}`,
+      `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed)}`,
       "swarm",
       CONTRACT_JSON_SCHEMA,
     );
     if (ctx.getStopping()) return;
-    ctx.appendAgent(repairAgent, repairResponse);
-    parsed = parseFirstPassContractResponse(repairResponse);
+    ctx.appendAgent(retryAgent, retryResponse);
+    parsed = parseFirstPassContractResponse(retryResponse);
     if (!parsed.ok) {
       // Brain fallback: try AI-assisted parsing before sibling-retry.
       if (ctx.brainPromptFn) {

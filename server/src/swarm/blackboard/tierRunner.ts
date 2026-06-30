@@ -11,7 +11,6 @@ import type { ExitContract, Todo } from "./types.js";
 import type { BoardCounts } from "./types.js";
 import {
   buildTierUpPrompt,
-  buildFirstPassContractRepairPrompt,
   FIRST_PASS_CONTRACT_SYSTEM_PROMPT,
   parseFirstPassContractResponse,
 } from "./prompts/firstPassContract.js";
@@ -224,25 +223,25 @@ export async function tryPromoteNextTier(
   let parsed = parseFirstPassContractResponse(response);
   if (!parsed.ok) {
     ctx.appendSystem(
-      `Tier ${nextTier} response did not parse (${parsed.reason}). Issuing repair prompt.`,
+      `Tier ${nextTier} response did not parse (${parsed.reason}). Retrying with full prompt.`,
     );
-    const { response: repairResponse, agentUsed: repairAgent } =
+    // Retry with the full original prompt instead of a minimal repair prompt.
+    // The repair prompt strips repo context, directive, and prior criteria —
+    // without that context the model can't generate a meaningful contract.
+    const { response: retryResponse, agentUsed: retryAgent } =
       await ctx.promptPlannerSafely(
         agentUsed,
-        `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractRepairPrompt(
-          response,
-          parsed.reason,
-        )}`,
+        prompt,
         undefined,
         CONTRACT_JSON_SCHEMA,
       );
     if (ctx.getStopping()) return false;
-    ctx.appendAgent(repairAgent, repairResponse);
-    parsed = parseFirstPassContractResponse(repairResponse);
+    ctx.appendAgent(retryAgent, retryResponse);
+    parsed = parseFirstPassContractResponse(retryResponse);
     if (!parsed.ok) {
       ctx.setTierUpFailures(ctx.getTierUpFailures() + 1);
       ctx.appendSystem(
-        `Tier ${nextTier} still invalid after repair (${parsed.reason}). Ratchet failure ${ctx.getTierUpFailures()}/3.`,
+        `Tier ${nextTier} still invalid after retry (${parsed.reason}). Ratchet failure ${ctx.getTierUpFailures()}/3.`,
       );
       return false;
     }
