@@ -1,31 +1,67 @@
-# Plan 4: Brain as System Overseer — Monitor Exception Cases and Improve Quality
+# Plan 4: Brain as System Overseer — Monitor Exception Cases, Agent-Auditor Interactions, and Improve Quality
 
 ## Problem
 
-The swarm system has recurring failure patterns that the AI models keep repeating:
+The swarm system has recurring failure patterns and a **broken feedback loop** for
+skip/reject decisions:
 
-- **Windowed file declines** — workers/replanner can't see middle sections of large files
-- **Degenerate contracts** — planner produces "read the repo files" after compaction
-- **Empty responses** — model emits XML tool-call syntax that gets stripped
-- **Redundant work** — planner proposes TODOs for things that already exist
-- **Skip loops** — replanner skips a todo, worker re-creates a similar one, cycle repeats
+1. **Agent-auditor interaction gaps** — When a worker skips a todo, the replanner
+   decides revise/skip, and the auditor evaluates the result — nobody tracks the
+   full chain. The information is scattered across the transcript (append-only log),
+   the todo's final status, and the criterion's rationale.
 
-Today these are handled by ad-hoc fixes (auto-anchor, degenerate filter, retry limits).
-The brain could do better: **monitor these patterns in real-time, record them, and
-propose systemic improvements**.
+2. **System failure patterns** — Windowed file declines, degenerate contracts, empty
+   responses, redundant work, skip loops.
 
-## Key Insight: Auditor vs Brain Overseer
+3. **No cross-run learning** — Each run starts fresh with no knowledge of what failed
+   in prior runs.
 
-**Auditor** = project-level concerns. "Is the work done? Are the criteria met?"
-Evaluates contract criteria, file state, worker output. Runs every audit cycle.
+Today these are handled by ad-hoc fixes. The brain could do better: **observe the
+full agent-auditor interaction chain, detect patterns, and propose systemic improvements**.
 
-**Brain Overseer** = system-level concerns. "Is the system itself working well?
-What failure patterns keep recurring? What should we fix in the next version?"
-Monitors exception events across runs. Runs post-audit or on-demand.
+## The Broken Feedback Loop
 
-These are fundamentally different responsibilities. The auditor shouldn't be
-polluted with system-monitoring logic. A dedicated agent (virtual — same brain
-prompt function infrastructure) handles system-level concerns.
+Here's what happens when a worker skips a todo:
+
+```
+Worker skips todo
+  → failTodoQ(staleReason="declined") → wire status "stale"
+  → enqueueReplan(todoId)
+  → Replanner sees stale todo + current file state
+  → Replanner decides: revise OR skip
+  → If skip: skipTodoQ() → wire status "skipped"
+  → Auditor sees skipped todos in its prompt
+  → Auditor decides: met/wont-do/unmet for the CRITERION
+```
+
+**Nobody tracks the full chain.** The events are:
+- ✅ Worker skip reason → recorded in todo
+- ✅ Replanner decision → recorded in todo (skip) or new todo (revise)
+- ✅ Auditor verdict → recorded on criterion
+- ❌ **The full chain (skip→replanner→auditor→result)** — only in transcript
+- ❌ **What happened AFTER the skip** — no structured tracking
+- ❌ **Whether the skip was correct** — brain never sees this interaction
+
+## Key Insight: Three Separate Concerns
+
+1. **Project-level** (Auditor): "Is the work done? Are the criteria met?"
+   - Evaluates contract criteria, file state, worker output
+   - Runs every audit cycle
+
+2. **System-level** (Brain Overseer): "Is the system itself working well?"
+   - Monitors failure patterns across runs
+   - Proposes prompt/rule/config improvements
+   - Runs post-audit or on-demand
+
+3. **Interaction-level** (Event Chain Tracker): "What happened when X did Y?"
+   - Tracks agent→replanner→auditor chains
+   - Records skip/revise/override outcomes
+   - Feeds into both auditor context and brain analysis
+
+These are three distinct responsibilities. The auditor shouldn't be polluted with
+monitoring logic. The brain shouldn't be doing real-time tracking. A dedicated
+event chain tracker captures structured interaction data that both the auditor
+and brain can consume.
 
 ## Architecture
 
@@ -34,215 +70,267 @@ prompt function infrastructure) handles system-level concerns.
 │                      Run Lifecycle                          │
 │                                                             │
 │  Planner → Workers → Auditor (project-level)                │
-│                          │                                  │
-│                          ▼                                  │
-│              Exception events emitted                       │
-│                          │                                  │
-│              ┌───────────▼───────────┐                      │
-│              │  Brain Overseer        │                      │
-│              │  (system-level)        │                      │
-│              │                        │                      │
-│              │  1. Collect exceptions │                      │
-│              │  2. Analyze patterns   │                      │
-│              │  3. Propose fixes      │                      │
-│              │  4. Record findings    │                      │
-│              └───────────┬───────────┘                      │
-│                          │                                  │
-│                          ▼                                  │
-│              .swarm-improvements/                            │
-│                proposals.jsonl  (cross-run)                  │
-│                implemented.jsonl                             │
+│         ↕              ↕                                    │
+│    Replanner ←── Event Chain Tracker (interaction-level)    │
+│         ↕              ↕                                    │
+│              Brain Overseer (system-level)                   │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
+```
 
-Next run reads .swarm-improvements/ in planner seed → avoids repeating
-the same mistakes.
+### Event Chain Tracker
+
+Records structured interaction events:
+
+```typescript
+interface InteractionEvent {
+  type: "worker_skip" | "replanner_revise" | "replanner_skip" 
+      | "auditor_override" | "auditor_accept" | "worker_retry_success"
+      | "worker_retry_fail" | "criterion_resolved" | "criterion_stuck";
+  todoId: string;
+  criterionId?: string;
+  agentId: string;
+  reason: string;
+  /** What the previous event in the chain was */
+  chainParent?: string;  // event ID
+  timestamp: number;
+}
+```
+
+This creates **linked chains** of events:
+```
+worker_skip(t1, "section not found")
+  → replanner_skip(t1, "file reorganized")
+    → auditor_accept(c3, "wont-do: section removed")
+```
+
+Or:
+```
+worker_skip(t1, "section not found")
+  → replanner_revise(t1, "add Demographics anchor")
+    → worker_retry_success(t1, "row inserted")
+      → auditor_accept(c3, "met: row present")
+```
+
+### Brain Overseer
+
+Analyzes interaction chains to find systemic issues:
+
+```typescript
+interface ChainAnalysis {
+  /** How many skip chains ended in auditor_accept vs auditor_override */
+  skipOutcomeDistribution: { accepted: number; overridden: number };
+  /** Which skip reasons are most common */
+  topSkipReasons: Array<{ reason: string; count: number; outcome: string }>;
+  /** Which criteria are perpetually stuck (never resolved) */
+  stuckCriteria: Array<{ criterionId: string; skipCount: number; reason: string }>;
+  /** Proposed fixes for recurring patterns */
+  proposals: ImprovementProposal[];
+}
 ```
 
 ## Components
 
-### 1. Exception Collector
+### 1. Event Chain Tracker (`server/src/swarm/blackboard/brainOverseer/interactionTracker.ts`)
 
-Captures structured exception events from the existing event system:
+Captures structured interaction events and links them into chains:
 
 ```typescript
-interface ExceptionEvent {
-  type: "brain_fallback" | "worker_declined" | "stale_todo" | "replan_skip"
-      | "empty_response" | "loop_detected" | "degenerate_contract"
-      | "auditor_override" | "retry_exhausted";
-  agentId: string;
-  todoId?: string;
-  reason: string;
-  timestamp: number;
-  /** Run ID — for cross-run deduplication */
-  runId: string;
-  context?: Record<string, unknown>;
+class InteractionTracker {
+  private events: InteractionEvent[] = [];
+  private chains: Map<string, InteractionEvent[]> = new Map();
+
+  recordSkip(todoId: string, agentId: string, reason: string): string {
+    const event = { type: "worker_skip", todoId, agentId, reason, ... };
+    this.events.push(event);
+    this.getChain(todoId).push(event);
+    return event.id;
+  }
+
+  recordReplannerDecision(todoId: string, decision: "revise" | "skip", reason: string, parentId: string): string {
+    const event = { type: decision === "skip" ? "replanner_skip" : "replanner_revise", ... };
+    this.events.push(event);
+    this.getChain(todoId).push(event);
+    return event.id;
+  }
+
+  recordAuditorVerdict(criterionId: string, todoId: string, verdict: string, reason: string, parentId: string): string {
+    const event = { type: verdict === "met" ? "auditor_accept" : "auditor_override", ... };
+    this.events.push(event);
+    return event.id;
+  }
+
+  getChain(todoId: string): InteractionEvent[] { ... }
+  getChains(): InteractionEvent[][] { ... }
+  getSummary(): ChainAnalysis { ... }
 }
 ```
 
-Wire into existing event emission points:
-- `brainIntegration.ts` → brain-fallback events
-- `workerRunner.ts` → worker_declined events
-- `replanManager.ts` → replan_skip events
-- `contractBuilder.ts` → degenerate_contract events
-- `plannerRunner.ts` → empty_response events
-- `tierRunner.ts` → loop_detected events
-- `auditorRunner.ts` → auditor_override events
+Wire into existing code paths:
 
-### 2. Pattern Analyzer
+| Code path | Event to record |
+|-----------|----------------|
+| `workerRunner.ts` line 635 (`failTodoQ` with "declined") | `worker_skip` |
+| `replanManager.ts` line 198 (`parsed.action === "skip"`) | `replanner_skip` |
+| `replanManager.ts` line 204 (after revise) | `replanner_revise` |
+| `workerRunner.ts` line 599 (auditor override) | `auditor_override` |
+| `workerRunner.ts` line 633 (auditor confirm) | `auditor_accept` |
+| `auditorRunner.ts` line 347 (criterion met) | `criterion_resolved` |
+| `auditorRunner.ts` line 351 (criterion wont-do) | `criterion_stuck` |
 
-Analyzes collected exceptions for recurring patterns:
+### 2. Brain Overseer (`server/src/swarm/blackboard/brainOverseer/brainOverseer.ts`)
+
+Analyzes interaction chains and proposes improvements:
 
 ```typescript
-interface PatternSummary {
-  totalExceptions: number;
-  byType: Record<string, number>;
-  recurringPatterns: Array<{
-    pattern: string;
-    count: number;
-    affectedTodos: string[];
-    suggestedFix: string;
-  }>;
+async function analyzeSystem(
+  tracker: InteractionTracker,
+  collector: ExceptionCollector,
+  promptFn: BrainPromptFn,
+  agent?: Agent,
+): Promise<SystemAnalysis> {
+  const chains = tracker.getChains();
+  const exceptions = collector.getPatternSummary();
+
+  // Build analysis prompt with full context
+  const prompt = buildAnalysisPrompt(chains, exceptions);
+
+  // Use caller's agent for real model context
+  const response = await promptFn(prompt, agent?.model ?? "gemma4:31b-cloud", 4096, 30000, agent);
+
+  return parseAnalysisResponse(response);
 }
 ```
 
-### 3. Improvement Proposer
-
-After each audit cycle (or when the run ends), generates improvement proposals:
-
-```typescript
-interface ImprovementProposal {
-  category: "prompt" | "rule" | "detector" | "config";
-  title: string;
-  description: string;
-  affectedComponent: string;
-  priority: "high" | "medium" | "low";
-}
-```
-
-### 4. Cross-Run Storage
-
-Improvements persist at clone root, NOT per-run:
+### 3. Cross-Run Storage
 
 ```
 .swarm-improvements/
   proposals.jsonl       ← append-only, accumulates across runs
+  interaction-chains.jsonl  ← structured chain records
   implemented.jsonl     ← tracks which proposals were acted on
 ```
 
-Format of `proposals.jsonl`:
-```json
-{"ts":1782836506,"runId":"d32fd98e","type":"pattern","pattern":"Worker declined because target section not in windowed view","count":12,"suggestedFix":"Auto-detect anchors from todo description","priority":"high","status":"pending"}
+### 4. Brain Prompt with Full Context
+
+The brain now receives:
+
+```
+=== INTERACTION CHAINS FROM THIS RUN ===
+
+Chain 1: todo t1 "Add UNHCR row to Demographics"
+  - worker_skip: "section not in windowed view"
+  - replanner_skip: "file reorganized, section moved"
+  - auditor_accept(c3, "wont-do: section removed")
+
+Chain 2: todo t5 "Add ILO panel"
+  - worker_skip: "panel already exists in registry"
+  - replanner_revise: "Register existing panel in App.jsx"
+  - worker_retry_success: "panel registered"
+  - auditor_accept(c2, "met: panel registered")
+
+Chain 3: todo t9 "Create ErrorFallback component"
+  - worker_skip: "Cannot see inline ErrorBoundary in windowed view"
+  - replanner_revise: "Extract inline ErrorBoundary to separate file"
+  - worker_retry_fail: "empty response"
+  - auditor_accept(c7, "unmet: component not created")
+
+=== EXCEPTION PATTERNS ===
+- 12 worker declines due to windowed file view
+- 8 replanner skips due to file reorganization
+- 3 empty responses from worker
+
+=== PRIOR RUN IMPROVEMENTS (from .swarm-improvements/) ===
+- Auto-anchor for large files (implemented)
+- Degenerate contract filter (implemented)
+
+=== YOUR TASK ===
+Analyze these interaction chains and exception patterns. Produce:
+1. Root causes for recurring skip chains
+2. Which auditor accept/override decisions were correct vs questionable
+3. Proposed improvements to prevent these patterns
+4. Priority ranking of improvements
 ```
 
-### 5. Integration Into Run Lifecycle
+### 5. Integration Points
 
-#### During run: lightweight monitoring
+#### During run: lightweight chain tracking
 
-In `tierRunner.ts` after each audit cycle, log a summary of recent exceptions.
-No heavy analysis — just visibility.
+In `workerRunner.ts`, `replanManager.ts`, `auditorRunner.ts` — emit interaction
+events as they happen. The tracker accumulates them in memory.
 
-```typescript
-// After runAuditor — lightweight check
-const recent = exceptionCollector.getRecent(10);
-if (recent.length >= 3) {
-  ctx.appendSystem(`[brain-overseer] ${recent.length} exceptions this cycle: ${summarize(recent)}`);
-}
-```
+#### Post-run: full analysis
 
-#### Post-run: full analysis + proposals
-
-In `lifecycleRunner.ts` reflection passes, after memory distillation:
+In `lifecycleRunner.ts` reflection passes:
 
 ```typescript
 if (brainEnabled()) {
-  const proposals = await proposeImprovements(exceptionCollector, promptFn, agent);
-  await appendProposals(clonePath, runId, proposals);
+  const analysis = await analyzeSystem(interactionTracker, exceptionCollector, promptFn, agent);
+  await appendProposals(clonePath, runId, analysis.proposals);
+  await appendInteractionChains(clonePath, runId, interactionTracker.getChains());
 }
 ```
 
 #### Next run: seed context
 
-In `plannerRunner.ts` or `contractBuilder.ts`, read `.swarm-improvements/proposals.jsonl`
-and include pending proposals in the planner seed:
-
 ```typescript
-const proposals = await readPendingProposals(clonePath);
-if (proposals.length > 0) {
-  seed.systemImprovements = proposals.map(p => `${p.title}: ${p.suggestedFix}`);
+// In plannerRunner.ts
+const priorImprovements = await readPendingProposals(clonePath);
+const priorChains = await readRecentChains(clonePath, 20);  // last 20 chains
+if (priorImprovements.length > 0 || priorChains.length > 0) {
+  seed.systemContext = buildSystemContextBlock(priorImprovements, priorChains);
 }
 ```
 
 Render in planner prompt:
 ```
-=== SYSTEM IMPROVEMENTS (from prior runs — avoid these failure patterns) ===
+=== SYSTEM CONTEXT (from prior runs) ===
+Improvement proposals:
 - Auto-anchor for replanner: When section not visible in windowed view, grep for it before skipping
-- Degenerate contract filter: Don't propose "read the repo" as a criterion
-=== end SYSTEM IMPROVATIONS ===
+- Worker context files: Add contextFiles to todos for related file reference
+
+Recent interaction patterns:
+- Chain: worker_skip → replanner_skip → auditor_accept (reason: file reorganized)
+- Chain: worker_skip → replanner_revise → worker_retry_success → auditor_accept (reason: section found via anchor)
+=== end SYSTEM CONTEXT ===
 ```
 
-### 6. Output
+### 6. Auditor Context Enhancement
 
-#### `proposals.jsonl` (cross-run)
+The auditor can also benefit from interaction chains. When evaluating a criterion
+that has associated skip/revise history, the auditor should see the chain:
 
-```json
-{"ts":1782836506,"runId":"d32fd98e","type":"pattern","pattern":"Worker declined because section not in windowed view","count":12,"suggestedFix":"Auto-detect anchors from todo description","priority":"high","status":"pending"}
-```
-
-#### Run summary addition
-
-Include exception summary in `summary.json`:
-```json
-{
-  "exceptions": {
-    "total": 47,
-    "byType": {"worker_declined": 12, "replan_skip": 8, "empty_response": 5},
-    "patternsFound": 3,
-    "proposalsGenerated": 2
-  }
+```typescript
+// In auditor seed builder, add interaction chain context
+if (interactionChains.length > 0) {
+  // Include chains for todos linked to the current criterion
+  seed.interactionHistory = interactionChains
+    .filter(chain => chain.some(e => e.criterionId === criterion.id))
+    .map(formatChainForAuditor);
 }
 ```
 
-### 7. Brain Prompt for Proposals
-
-```
-You are the SYSTEM OVERSEER for a coding-agent swarm. Your job is to analyze
-failure patterns and propose improvements to the system itself — not to the
-project code.
-
-You will receive a summary of exception events from the current run:
-- Types of failures (worker declined, replan skip, empty response, etc.)
-- Which todos were affected
-- Suggested fixes from pattern analysis
-
-Your task: produce a JSON array of improvement proposals. Each proposal:
-- category: "prompt" (change a prompt), "rule" (add a hard rule), "detector" (new pattern detection), or "config" (change a setting)
-- title: one-line description
-- description: what to change and why
-- affectedComponent: which file/module to modify
-- priority: "high", "medium", or "low"
-
-Do NOT propose changes to the project code — only to the swarm system itself.
-Focus on changes that would prevent the patterns you see repeating.
-
-Output ONLY a JSON array. No prose, no markdown fences.
-```
+This gives the auditor visibility into "this criterion was skipped 3 times before
+being resolved" — helping it make better met/wont-do decisions.
 
 ## Files to Create
 
-1. `server/src/swarm/blackboard/brainOverseer/exceptionCollector.ts`
-2. `server/src/swarm/blackboard/brainOverseer/patternAnalyzer.ts`
-3. `server/src/swarm/blackboard/brainOverseer/improvementProposer.ts`
-4. `server/src/swarm/blackboard/brainOverseer/prompt.ts`
+1. `server/src/swarm/blackboard/brainOverseer/interactionTracker.ts`
+2. `server/src/swarm/blackboard/brainOverseer/brainOverseer.ts` (updated from Plan 4 v1)
+3. `server/src/swarm/blackboard/brainOverseer/exceptionCollector.ts`
+4. `server/src/swarm/blackboard/brainOverseer/patternAnalyzer.ts`
+5. `server/src/swarm/blackboard/brainOverseer/prompt.ts`
 
 ## Files to Modify
 
-1. `server/src/swarm/blackboard/workerRunner.ts` — Emit worker_declined events
-2. `server/src/swarm/blackboard/replanManager.ts` — Emit replan_skip events
-3. `server/src/swarm/blackboard/tierRunner.ts` — Wire in exception monitoring + post-run proposals
-4. `server/src/swarm/blackboard/lifecycleRunner.ts` — Call improvement proposer in reflection passes
-5. `server/src/swarm/blackboard/plannerRunner.ts` — Read proposals.jsonl into planner seed
-6. `server/src/swarm/blackboard/summary.ts` — Include exception summary
+1. `server/src/swarm/blackboard/workerRunner.ts` — Emit interaction events on skip/override
+2. `server/src/swarm/blackboard/replanManager.ts` — Emit interaction events on revise/skip
+3. `server/src/swarm/blackboard/auditorRunner.ts` — Emit interaction events on verdicts
+4. `server/src/swarm/blackboard/tierRunner.ts` — Wire in chain tracking + post-run analysis
+5. `server/src/swarm/blackboard/lifecycleRunner.ts` — Post-run brain analysis
+6. `server/src/swarm/blackboard/plannerRunner.ts` — Read prior chains in seed
+7. `server/src/swarm/blackboard/prompts/auditor.ts` — Include interaction history in auditor context
+8. `server/src/swarm/blackboard/summary.ts` — Include chain analysis in run summary
 
 ## Implementation Priority
 
@@ -252,6 +340,10 @@ Output ONLY a JSON array. No prose, no markdown fences.
 - Plan 3: Auto-anchor for large files
 
 **Phase 2** (after Phase 1 stabilizes):
-- Plan 4: Brain system overseer (this plan)
+- Plan 4: Brain system overseer (this plan, updated)
+- Plan 5: Dedicated Planning tab
 
-Phase 2 is most valuable when there's a critical mass of exception events to analyze — after Plans 1-3 are in place and the system is generating richer exception data.
+Phase 2 depends on Phase 1 because:
+- The brain needs the streaming transcript data (Plan 1) for full context
+- The interaction tracker needs the worker context files (Plan 2) to understand skip reasons
+- The auto-anchor fix (Plan 3) reduces the noise in interaction chains
