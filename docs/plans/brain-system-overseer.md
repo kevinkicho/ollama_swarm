@@ -14,81 +14,82 @@ Today these are handled by ad-hoc fixes (auto-anchor, degenerate filter, retry l
 The brain could do better: **monitor these patterns in real-time, record them, and
 propose systemic improvements**.
 
-## Concept: Brain as Quality Overseer
+## Key Insight: Auditor vs Brain Overseer
 
-The brain already fires on parse failures (`brain-fallback` events). Expand it to:
+**Auditor** = project-level concerns. "Is the work done? Are the criteria met?"
+Evaluates contract criteria, file state, worker output. Runs every audit cycle.
 
-1. **Monitor exception events** — collect all `brain-fallback`, `worker_declined`,
-   `stale_todo`, `replan_skip`, `empty_response`, `loop_detected` events
-2. **Analyze patterns** — after each audit cycle (or on demand), summarize what
-   went wrong and why
-3. **Propose fixes** — generate concrete improvement proposals (prompt changes,
-   rule additions, new patterns to detect)
-4. **Record lessons** — write findings to `.swarm-memory.jsonl` so future runs
-   benefit
+**Brain Overseer** = system-level concerns. "Is the system itself working well?
+What failure patterns keep recurring? What should we fix in the next version?"
+Monitors exception events across runs. Runs post-audit or on-demand.
+
+These are fundamentally different responsibilities. The auditor shouldn't be
+polluted with system-monitoring logic. A dedicated agent (virtual — same brain
+prompt function infrastructure) handles system-level concerns.
 
 ## Architecture
 
 ```
-                    ┌─────────────────┐
-                    │  Brain Overseer  │
-                    │  (new module)    │
-                    └────────┬────────┘
-                             │
-              ┌──────────────┼──────────────┐
-              │              │              │
-     ┌────────▼───────┐ ┌───▼────────┐ ┌──▼──────────────┐
-     │ Exception       │ │ Pattern    │ │ Improvement     │
-     │ Collector       │ │ Analyzer   │ │ Proposer        │
-     │                 │ │            │ │                 │
-     │ • brain-fallback│ │ • count    │ │ • prompt fixes  │
-     │ • worker_decline│ │ • classify │ │ • rule additions│
-     │ • stale_todo    │ │ • trend    │ │ • new detectors │
-     │ • replan_skip   │ │            │ │                 │
-     │ • empty_response│ │            │ │                 │
-     │ • loop_detected │ │            │ │                 │
-     └─────────────────┘ └────────────┘ └─────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                      Run Lifecycle                          │
+│                                                             │
+│  Planner → Workers → Auditor (project-level)                │
+│                          │                                  │
+│                          ▼                                  │
+│              Exception events emitted                       │
+│                          │                                  │
+│              ┌───────────▼───────────┐                      │
+│              │  Brain Overseer        │                      │
+│              │  (system-level)        │                      │
+│              │                        │                      │
+│              │  1. Collect exceptions │                      │
+│              │  2. Analyze patterns   │                      │
+│              │  3. Propose fixes      │                      │
+│              │  4. Record findings    │                      │
+│              └───────────┬───────────┘                      │
+│                          │                                  │
+│                          ▼                                  │
+│              .swarm-improvements/                            │
+│                proposals.jsonl  (cross-run)                  │
+│                implemented.jsonl                             │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+
+Next run reads .swarm-improvements/ in planner seed → avoids repeating
+the same mistakes.
 ```
 
 ## Components
 
-### 1. Exception Collector (`server/src/swarm/blackboard/brainOverseer/exceptionCollector.ts`)
+### 1. Exception Collector
 
 Captures structured exception events from the existing event system:
 
 ```typescript
 interface ExceptionEvent {
-  type: "brain_fallback" | "worker_declined" | "stale_todo" | "replan_skip" 
-      | "empty_response" | "loop_detected" | "degenerate_contract";
+  type: "brain_fallback" | "worker_declined" | "stale_todo" | "replan_skip"
+      | "empty_response" | "loop_detected" | "degenerate_contract"
+      | "auditor_override" | "retry_exhausted";
   agentId: string;
   todoId?: string;
   reason: string;
   timestamp: number;
+  /** Run ID — for cross-run deduplication */
+  runId: string;
   context?: Record<string, unknown>;
-}
-
-class ExceptionCollector {
-  private events: ExceptionEvent[] = [];
-  
-  record(event: ExceptionEvent): void {
-    this.events.push(event);
-    // Also log to the run's transcript for visibility
-  }
-  
-  getRecent(n: number = 50): ExceptionEvent[] { ... }
-  getPatternSummary(): PatternSummary { ... }
-  reset(): void { this.events = []; }
 }
 ```
 
 Wire into existing event emission points:
-- `brainIntegration.ts` → already emits `brain-fallback` events
-- `workerRunner.ts` → emit on decline/skip
-- `replanManager.ts` → emit on skip
-- `contractBuilder.ts` → emit on degenerate contract detection
-- `plannerRunner.ts` → emit on empty response
+- `brainIntegration.ts` → brain-fallback events
+- `workerRunner.ts` → worker_declined events
+- `replanManager.ts` → replan_skip events
+- `contractBuilder.ts` → degenerate_contract events
+- `plannerRunner.ts` → empty_response events
+- `tierRunner.ts` → loop_detected events
+- `auditorRunner.ts` → auditor_override events
 
-### 2. Pattern Analyzer (`server/src/swarm/blackboard/brainOverseer/patternAnalyzer.ts`)
+### 2. Pattern Analyzer
 
 Analyzes collected exceptions for recurring patterns:
 
@@ -102,133 +103,155 @@ interface PatternSummary {
     affectedTodos: string[];
     suggestedFix: string;
   }>;
-  // e.g., "3 todos declined because target section not in windowed view"
-  // suggestedFix: "Add expectedAnchors to these todos or auto-detect anchors"
 }
 ```
 
-### 3. Improvement Proposer (`server/src/swarm/blackboard/brainOverseer/improvementProposer.ts`)
+### 3. Improvement Proposer
 
-After each audit cycle (or when the run ends), the brain generates improvement proposals:
+After each audit cycle (or when the run ends), generates improvement proposals:
 
 ```typescript
-async function proposeImprovements(
-  collector: ExceptionCollector,
-  promptFn: BrainPromptFn,
-  agent?: Agent,
-): Promise<ImprovementProposal[]> {
-  const summary = collector.getPatternSummary();
-  if (summary.totalExceptions === 0) return [];
-  
-  const prompt = buildImprovementPrompt(summary);
-  const response = await promptFn(prompt, agent?.model ?? "gemma4:31b-cloud", 4096, 30000, agent);
-  return parseImprovementResponse(response);
-}
-
 interface ImprovementProposal {
   category: "prompt" | "rule" | "detector" | "config";
   title: string;
   description: string;
-  affectedComponent: string;  // e.g., "planner prompt", "worker runner"
+  affectedComponent: string;
   priority: "high" | "medium" | "low";
 }
 ```
 
-### 4. Integration Points
+### 4. Cross-Run Storage
 
-#### During the run (lightweight monitoring)
+Improvements persist at clone root, NOT per-run:
 
-In `tierRunner.ts`'s audit cycle, after the auditor fires:
+```
+.swarm-improvements/
+  proposals.jsonl       ← append-only, accumulates across runs
+  implemented.jsonl     ← tracks which proposals were acted on
+```
+
+Format of `proposals.jsonl`:
+```json
+{"ts":1782836506,"runId":"d32fd98e","type":"pattern","pattern":"Worker declined because target section not in windowed view","count":12,"suggestedFix":"Auto-detect anchors from todo description","priority":"high","status":"pending"}
+```
+
+### 5. Integration Into Run Lifecycle
+
+#### During run: lightweight monitoring
+
+In `tierRunner.ts` after each audit cycle, log a summary of recent exceptions.
+No heavy analysis — just visibility.
 
 ```typescript
-// After runAuditor
-const exceptions = ctx.getExceptionCollector().getRecent(10);
-if (exceptions.length >= 3) {
-  const summary = ctx.getExceptionCollector().getPatternSummary();
-  ctx.appendSystem(`[brain-overseer] Detected ${exceptions.length} exceptions: ${summary.recurringPatterns.map(p => p.pattern).join("; ")}`);
+// After runAuditor — lightweight check
+const recent = exceptionCollector.getRecent(10);
+if (recent.length >= 3) {
+  ctx.appendSystem(`[brain-overseer] ${recent.length} exceptions this cycle: ${summarize(recent)}`);
 }
 ```
 
-#### Post-run (full analysis)
+#### Post-run: full analysis + proposals
 
 In `lifecycleRunner.ts` reflection passes, after memory distillation:
 
 ```typescript
-// After runMemoryDistillationPass
 if (brainEnabled()) {
   const proposals = await proposeImprovements(exceptionCollector, promptFn, agent);
-  if (proposals.length > 0) {
-    await writeImprovementProposals(clonePath, runId, proposals);
-    // Also append to .swarm-memory.jsonl as lessons
+  await appendProposals(clonePath, runId, proposals);
+}
+```
+
+#### Next run: seed context
+
+In `plannerRunner.ts` or `contractBuilder.ts`, read `.swarm-improvements/proposals.jsonl`
+and include pending proposals in the planner seed:
+
+```typescript
+const proposals = await readPendingProposals(clonePath);
+if (proposals.length > 0) {
+  seed.systemImprovements = proposals.map(p => `${p.title}: ${p.suggestedFix}`);
+}
+```
+
+Render in planner prompt:
+```
+=== SYSTEM IMPROVEMENTS (from prior runs — avoid these failure patterns) ===
+- Auto-anchor for replanner: When section not visible in windowed view, grep for it before skipping
+- Degenerate contract filter: Don't propose "read the repo" as a criterion
+=== end SYSTEM IMPROVATIONS ===
+```
+
+### 6. Output
+
+#### `proposals.jsonl` (cross-run)
+
+```json
+{"ts":1782836506,"runId":"d32fd98e","type":"pattern","pattern":"Worker declined because section not in windowed view","count":12,"suggestedFix":"Auto-detect anchors from todo description","priority":"high","status":"pending"}
+```
+
+#### Run summary addition
+
+Include exception summary in `summary.json`:
+```json
+{
+  "exceptions": {
+    "total": 47,
+    "byType": {"worker_declined": 12, "replan_skip": 8, "empty_response": 5},
+    "patternsFound": 3,
+    "proposalsGenerated": 2
   }
 }
 ```
 
-### 5. Output: Improvement Proposals File
+### 7. Brain Prompt for Proposals
 
-Write to `logs/{runId}/improvements.json`:
-
-```json
-{
-  "runId": "d32fd98e",
-  "totalExceptions": 47,
-  "patterns": [
-    {
-      "pattern": "Worker declined todo because target section not in windowed view",
-      "count": 12,
-      "suggestedFix": "Auto-detect anchors from todo description (Plan 3)"
-    },
-    {
-      "pattern": "Replanner skipped todo because section appears missing in windowed view",
-      "count": 8,
-      "suggestedFix": "Apply auto-anchor to replanner path + strengthen skip prompt"
-    },
-    {
-      "pattern": "Planner produced degenerate contract after compaction",
-      "count": 3,
-      "suggestedFix": "Filter degenerate contracts (already implemented)"
-    }
-  ],
-  "proposals": [
-    {
-      "category": "rule",
-      "title": "Auto-anchor for replanner",
-      "description": "Apply extractSectionKeywords to replanner path when file is windowed",
-      "affectedComponent": "replanManager.ts",
-      "priority": "high"
-    }
-  ]
-}
 ```
+You are the SYSTEM OVERSEER for a coding-agent swarm. Your job is to analyze
+failure patterns and propose improvements to the system itself — not to the
+project code.
 
-### 6. UI: Brain Insights Panel
+You will receive a summary of exception events from the current run:
+- Types of failures (worker declined, replan skip, empty response, etc.)
+- Which todos were affected
+- Suggested fixes from pattern analysis
 
-Add a tab or section in the Analytics/History view showing:
+Your task: produce a JSON array of improvement proposals. Each proposal:
+- category: "prompt" (change a prompt), "rule" (add a hard rule), "detector" (new pattern detection), or "config" (change a setting)
+- title: one-line description
+- description: what to change and why
+- affectedComponent: which file/module to modify
+- priority: "high", "medium", or "low"
 
-- Exception count and types
-- Recurring patterns
-- Improvement proposals
-- Status of proposals (implemented / pending)
+Do NOT propose changes to the project code — only to the swarm system itself.
+Focus on changes that would prevent the patterns you see repeating.
 
-This gives the user visibility into what the system learned.
+Output ONLY a JSON array. No prose, no markdown fences.
+```
 
 ## Files to Create
 
-1. `server/src/swarm/blackboard/brainOverseer/exceptionCollector.ts` — Event collection
-2. `server/src/swarm/blackboard/brainOverseer/patternAnalyzer.ts` — Pattern detection
-3. `server/src/swarm/blackboard/brainOverseer/improvementProposer.ts` — Proposal generation
-4. `server/src/swarm/blackboard/brainOverseer/prompt.ts` — Brain prompt for improvement proposals
+1. `server/src/swarm/blackboard/brainOverseer/exceptionCollector.ts`
+2. `server/src/swarm/blackboard/brainOverseer/patternAnalyzer.ts`
+3. `server/src/swarm/blackboard/brainOverseer/improvementProposer.ts`
+4. `server/src/swarm/blackboard/brainOverseer/prompt.ts`
 
 ## Files to Modify
 
 1. `server/src/swarm/blackboard/workerRunner.ts` — Emit worker_declined events
 2. `server/src/swarm/blackboard/replanManager.ts` — Emit replan_skip events
-3. `server/src/swarm/blackboard/tierRunner.ts` — Wire in exception monitoring
-4. `server/src/swarm/blackboard/lifecycleRunner.ts` — Post-run improvement proposal generation
-5. `server/src/swarm/blackboard/summary.ts` — Include exception summary in run summary
+3. `server/src/swarm/blackboard/tierRunner.ts` — Wire in exception monitoring + post-run proposals
+4. `server/src/swarm/blackboard/lifecycleRunner.ts` — Call improvement proposer in reflection passes
+5. `server/src/swarm/blackboard/plannerRunner.ts` — Read proposals.jsonl into planner seed
+6. `server/src/swarm/blackboard/summary.ts` — Include exception summary
 
 ## Implementation Priority
 
-This is a **Phase 2** feature — implement Plans 1-3 first, then add the overseer
-on top. The overseer is most valuable when there's a critical mass of exception
-events to analyze (after the other fixes are in place).
+**Phase 1** (do first):
+- Plan 1: Streaming transcript persistence
+- Plan 2: Worker context files
+- Plan 3: Auto-anchor for large files
+
+**Phase 2** (after Phase 1 stabilizes):
+- Plan 4: Brain system overseer (this plan)
+
+Phase 2 is most valuable when there's a critical mass of exception events to analyze — after Plans 1-3 are in place and the system is generating richer exception data.
