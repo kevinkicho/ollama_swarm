@@ -1,7 +1,7 @@
 // V2 Step 2b: TranscriptEntrySummary moved to shared/. Imported here
 // so the TranscriptEntry interface can reference it; re-exported so
 // existing web-side imports (`from "../types"`) keep working.
-import type { TranscriptEntrySummary } from "../../shared/src/transcriptEntrySummary";
+import type { TranscriptEntrySummary } from "@ollama-swarm/shared/transcriptEntrySummary";
 export type { TranscriptEntrySummary };
 
 export type AgentStatus =
@@ -34,7 +34,7 @@ export interface AgentState {
   thinkingSince?: number;
 }
 
-export type TranscriptRole = "system" | "user" | "agent";
+export type TranscriptRole = "system" | "user" | "agent" | "agent-stream";
 
 export interface TranscriptEntry {
   id: string;
@@ -49,13 +49,7 @@ export interface TranscriptEntry {
   // authoritative parser. Absent on system/user entries and on
   // agent entries that didn't parse server-side.
   summary?: TranscriptEntrySummary;
-  // 2026-04-26: client-only field. When the streaming bubble
-  // computed segment split points (5s+ pause boundaries), they get
-  // copied here on transcript_append finalization so the post-stream
-  // bubble can render with the same segment structure the user saw
-  // live. Indices into `text`. Never set by server (typed optional).
-  segmentSplitPoints?: number[];
-  // 2026-04-27 (UI Phase 1): when an agent emitted <think>...</think>
+  // 2026-04-27 (UI Phase 1): when an agent emitted  thinking... response
   // markers (reasoning models), the server-side appendAgent strips
   // them out into this field via shared/extractThinkTags. The text
   // field carries the FINAL response only. UI renders thoughts as a
@@ -67,6 +61,15 @@ export interface TranscriptEntry {
   // extractToolCallMarkers. UI renders as a collapsed-by-default
   // ToolCallsBlock above the main bubble.
   toolCalls?: string[];
+  // 2026-06-30 (Plan 1): metadata for agent-stream entries — preserves
+  // the streaming text that was visible while the agent was thinking.
+  // Only present on role="agent-stream" entries.
+  streamingMeta?: {
+    startedAt: number;
+    lastTextAt: number;
+    toolCallCount: number;
+    totalSeconds: number;
+  };
 }
 
 export type SwarmPhase =
@@ -242,6 +245,7 @@ export interface RunSummary {
   // best-guess from preset+agentCount in that case).
   topology?: import("../../shared/src/topology").Topology;
   deliverables?: Array<{ path: string; status: "created" | "modified" }>;
+  startCommand?: string;
 }
 
 export interface BoardCountsDTO {

@@ -77,12 +77,6 @@ export interface SwarmStore {
     string,
     { startedAt: number; lastTextAt: number; status: "live" | "done"; endedAt?: number }
   >;
-  // 2026-04-26: per-agent segment split points captured by the
-  // streaming bubble's useSegmentSplitter. Copied onto the transcript
-  // entry on transcript_append so the finalized bubble can render with
-  // the same segment structure the user saw live (run b6d91d13 showed
-  // the structure disappearing on response finalization).
-  streamingSegmentPoints: Record<string, number[]>;
   todos: Record<string, Todo>;
   findings: Finding[];
   contract?: ExitContract;
@@ -138,11 +132,6 @@ export interface SwarmStore {
   // transcript_append takes over that DOM position naturally via
   // appendEntry's existing delete-from-streaming side effect.
   markStreamingEnded: (agentId: string) => void;
-  // 2026-04-26: streaming bubble pushes its computed split points
-  // here on every change. appendEntry copies the latest set onto the
-  // finalized transcript entry as `segmentSplitPoints` so the
-  // post-stream bubble can render with the same segment structure.
-  setSegmentPoints: (agentId: string, points: number[]) => void;
 
   upsertTodo: (t: Todo) => void;
   applyClaim: (todoId: string, claim: Claim) => void;
@@ -224,7 +213,6 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   transcript: [],
   streaming: {},
   streamingMeta: {},
-  streamingSegmentPoints: {},
   todos: {},
   findings: [],
   contract: undefined,
@@ -252,7 +240,6 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
           round,
           streaming: {},
           streamingMeta: {},
-          streamingSegmentPoints: {},
           agents: {},
         };
       }
@@ -282,26 +269,43 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       }
       const nextStreaming = { ...s.streaming };
       const nextMeta = { ...s.streamingMeta };
-      const nextSegPts = { ...s.streamingSegmentPoints };
-      // 2026-04-26: copy the streaming bubble's split points onto the
-      // transcript entry so the finalized bubble can render segments.
-      // Only when the entry doesn't already carry them (server might
-      // set them in the future too).
       let entryToAdd = e;
       if (e.agentId) {
-        const captured = s.streamingSegmentPoints[e.agentId];
-        if (captured && captured.length > 0 && !e.segmentSplitPoints) {
-          entryToAdd = { ...e, segmentSplitPoints: captured };
+        // Plan 1: Before deleting streaming, check if there's substantial
+        // text to preserve as a persistent transcript entry.
+        const streamingText = nextStreaming[e.agentId];
+        const meta = nextMeta[e.agentId];
+        if (streamingText && streamingText.length > 50) {
+          const streamEntry = {
+            id: `stream-${e.agentId}-${Date.now()}`,
+            role: "agent-stream" as const,
+            text: streamingText,
+            ts: meta?.startedAt ?? Date.now(),
+            agentId: e.agentId,
+            streamingMeta: {
+              startedAt: meta?.startedAt ?? Date.now(),
+              lastTextAt: meta?.lastTextAt ?? Date.now(),
+              toolCallCount: 0,
+              totalSeconds: meta ? Math.round((meta.lastTextAt - meta.startedAt) / 1000) : 0,
+            },
+          };
+          // Insert stream entry BEFORE the agent's final response
+          const newTranscript = [...s.transcript, streamEntry, entryToAdd];
+          delete nextStreaming[e.agentId];
+          delete nextMeta[e.agentId];
+          return {
+            transcript: newTranscript,
+            streaming: nextStreaming,
+            streamingMeta: nextMeta,
+          };
         }
         delete nextStreaming[e.agentId];
         delete nextMeta[e.agentId];
-        delete nextSegPts[e.agentId];
       }
       return {
         transcript: [...s.transcript, entryToAdd],
         streaming: nextStreaming,
         streamingMeta: nextMeta,
-        streamingSegmentPoints: nextSegPts,
       };
     }),
   setStreaming: (agentId, text) =>
@@ -343,25 +347,6 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         streamingMeta: {
           ...s.streamingMeta,
           [agentId]: { ...prior, status: "done", endedAt: Date.now() },
-        },
-      };
-    }),
-  // 2026-04-26: streaming-bubble pushes the latest split-points snapshot
-  // here. appendEntry copies them to the finalized transcript entry.
-  setSegmentPoints: (agentId, points) =>
-    set((s) => {
-      const prior = s.streamingSegmentPoints[agentId] ?? [];
-      // Only update if changed — avoids needless renders.
-      if (
-        prior.length === points.length &&
-        prior.every((p, i) => p === points[i])
-      ) {
-        return s;
-      }
-      return {
-        streamingSegmentPoints: {
-          ...s.streamingSegmentPoints,
-          [agentId]: [...points],
         },
       };
     }),
@@ -497,7 +482,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       round: 0,
       agents: {},
       transcript: [],
-      streaming: {}, streamingMeta: {}, streamingSegmentPoints: {},
+      streaming: {}, streamingMeta: {},
       todos: {},
       findings: [],
       contract: undefined,
@@ -561,7 +546,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       // divide yet, and it avoids the "first-paint shows a divider"
       // weirdness at run start.
       if (s.transcript.length === 0) {
-        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, conformance: [], drift: [], amendments: [], ...blackboardReset };
+        return { agents: {}, streaming: {}, streamingMeta: {}, latency: {}, conformance: [], drift: [], amendments: [], ...blackboardReset };
       }
       // Task #46 also: dedupe consecutive dividers. If the last entry
       // is already a run-start marker, don't stack a second one —
@@ -573,7 +558,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         (lastEntry.text === "— new run started —" ||
           lastEntry.text.startsWith("▸▸RUN-START▸▸"));
       if (isLastADivider) {
-        return { agents: {}, streaming: {}, streamingMeta: {}, streamingSegmentPoints: {}, latency: {}, conformance: [], drift: [], amendments: [], ...blackboardReset };
+        return { agents: {}, streaming: {}, streamingMeta: {}, latency: {}, conformance: [], drift: [], amendments: [], ...blackboardReset };
       }
       // Build the divider text. When metadata is supplied, prefix
       // with the sentinel + encode fields as a pipe-separated line
@@ -592,7 +577,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         : "— new run started —";
       return {
         agents: {},
-        streaming: {}, streamingMeta: {}, streamingSegmentPoints: {},
+        streaming: {}, streamingMeta: {},
         latency: {},
         conformance: [],
         drift: [],

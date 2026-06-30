@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSwarm } from "../state/store";
 import { StreamingDock } from "./transcript/StreamingDock";
 import { MessageBubble } from "./transcript/MessageBubble";
+import { StreamingTranscriptCard } from "./transcript/StreamingTranscriptCard";
 
 export function Transcript() {
   const transcript = useSwarm((s) => s.transcript);
@@ -98,7 +99,11 @@ export function Transcript() {
           <div className="text-ink-400 text-sm">Waiting for agents…</div>
         ) : null}
         {filteredTranscript.map((e) => (
-          <MessageBubble key={e.id} entry={e} />
+          e.role === "agent-stream" ? (
+            <StreamingTranscriptCard key={e.id} entry={e} />
+          ) : (
+            <MessageBubble key={e.id} entry={e} />
+          )
         ))}
         {/* Inline streaming entries — show as MessageBubble-style entries */}
         {Object.entries(streaming).map(([agentId, text]) => {
