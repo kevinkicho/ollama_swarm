@@ -82,6 +82,8 @@ import {
 } from "./stateSnapshot.js";
 import { StateSnapshotScheduler } from "./stateSnapshotScheduler.js";
 import { buildPerAgentStats as buildPerAgentStatsExtracted, type PerAgentCounters, writeRunSummary as writeRunSummaryExtracted } from "./runSummaryWriter.js";
+import { InteractionTracker } from "./brainOverseer/interactionTracker.js";
+import { ExceptionCollector } from "./brainOverseer/exceptionCollector.js";
 import { buildSummary, computeLatencyStats, type PerAgentStat, type RunSummary } from "./summary.js";
 import { applyHunks } from "./applyHunks.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
@@ -289,6 +291,9 @@ export class BlackboardRunner implements SwarmRunner {
   private replanPending = new Set<string>();
   private replanRunning = false;
   private replanTickTimer?: NodeJS.Timeout;
+  // Plan 4: brain system overseer — tracks interaction chains and exceptions
+  private interactionTracker = new InteractionTracker();
+  private exceptionCollector: ExceptionCollector | null = null;
   // Phase 7: hard-cap state. runStartedAt scopes wall-clock cap to worker loop.
   private runStartedAt?: number;
   // #124: lifetime token total at run-start for per-run token accounting.
@@ -754,6 +759,12 @@ export class BlackboardRunner implements SwarmRunner {
       setLocalOllamaTags: (v) => { this.localOllamaTags = v; },
       getOllamaBaseUrl: () => this.opts.ollamaBaseUrl,
     });
+  }
+
+  // Plan 4: initialize brain overseer components for this run
+  initBrainOverseer(runId: string): void {
+    this.exceptionCollector = new ExceptionCollector(runId);
+    this.interactionTracker = new InteractionTracker();
   }
 
   private buildFailoverConfig(): FailoverConfig {

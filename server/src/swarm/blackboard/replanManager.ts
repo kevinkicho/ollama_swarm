@@ -42,6 +42,9 @@ export interface ReplanContext {
   promptPlannerSafely: (agent: Agent, promptText: string, agentName?: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => Promise<{ response: string; agentUsed: Agent }>;
   checkAndApplyCaps: () => boolean;
   emit?: (e: unknown) => void;
+  // Plan 4: brain system overseer
+  recordInteraction: (type: string, todoId: string, agentId: string, reason: string) => void;
+  recordException: (type: string, agentId: string, todoId?: string, reason?: string) => void;
   /** Brain fallback: prompt an LLM to extract structured JSON from a
    *  failed parse. The promptFn signature matches promptWithFailover. */
   brainPromptFn?: (
@@ -213,6 +216,8 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
   if (parsed.action === "skip") {
     ctx.wrappers.skipTodoQ(todoId, `replanner decided to skip: ${parsed.reason}`);
     ctx.appendSystem(`Replanner skipped todo ${todoId}: ${parsed.reason}`);
+    ctx.recordInteraction("replanner_skip", todoId, planner.id, parsed.reason);
+    ctx.recordException("replanner_skip", planner.id, todoId, parsed.reason);
     return;
   }
 
@@ -234,6 +239,7 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
   ctx.appendSystem(
     `Replanned todo ${todoId} (attempt ${updated?.replanCount ?? 0}): "${truncate(updated?.description ?? parsed.description)}"`,
   );
+  ctx.recordInteraction("replanner_revise", todoId, planner.id, parsed.description);
 }
 
 export function startReplanWatcher(ctx: ReplanContext): NodeJS.Timeout {

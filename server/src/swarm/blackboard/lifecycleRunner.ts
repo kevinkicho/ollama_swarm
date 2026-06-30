@@ -153,6 +153,7 @@ export interface LifecycleContext {
   discoverLocalOllamaTags(): Promise<void>;
   clearStateSnapshotScheduler(): void;
   emit(ev: { type: string; [key: string]: unknown }): void;
+  initBrainOverseer(runId: string): void;
   excludeRunnerArtifacts(destPath: string): Promise<void>;
   buildSeed(clonePath: string, cfg: RunConfig): Promise<PlannerSeed>;
   spawnAgentNoOpencode(opts: { cwd: string; index: number; model: string }): Promise<Agent>;
@@ -283,6 +284,8 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
       `repoUrl=${cfg.repoUrl ?? ""}`,
     ].join("|");
     ctx.appendSystem(dividerText);
+    // Plan 4: initialize brain overseer components
+    ctx.initBrainOverseer(cfg.runId ?? "");
   }
   ctx.setStaleEventCount(0);
   ctx.getTurnsPerAgent().clear();

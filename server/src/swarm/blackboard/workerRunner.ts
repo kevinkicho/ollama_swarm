@@ -87,6 +87,9 @@ export interface WorkerContext {
   bumpCommitsPerAgent: (agentId: string) => void;
   addLinesPerAgent: (agentId: string, added: number, removed: number) => void;
   recordCriterionCommits: (todo: Todo, commitSha: string) => void;
+  // Plan 4: brain system overseer
+  recordInteraction: (type: string, todoId: string, agentId: string, reason: string) => void;
+  recordException: (type: string, agentId: string, todoId?: string, reason?: string) => void;
   bumpStigmergyFileCounts: (expectedFiles: readonly string[], commitSha: string) => void;
   // Build-todo specific: repos access for git status + commit
   gitStatus: (clonePath: string) => Promise<{ porcelain: string; changedFiles: number }>;
@@ -657,6 +660,8 @@ If the response is completely unparseable, return { "skip": "auditor could not i
     }
     ctx.getWrappers().failTodoQ(todo.id, `[v2] worker declined: ${parsed.skip}`, "declined");
     ctx.bumpRejectedAttempts(agent.id);
+    ctx.recordException("worker_declined", agent.id, todo.id, parsed.skip);
+    ctx.recordInteraction("worker_skip", todo.id, agent.id, parsed.skip);
     return "stale";
   }
 

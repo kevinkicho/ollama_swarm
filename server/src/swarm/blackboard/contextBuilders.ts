@@ -356,6 +356,13 @@ export function workerContext(r: BlackboardRunnerFields): WorkerContext {
     brainPromptFn: brainEnabled() ? r.brainPromptFn.bind(r) : undefined,
     updateAgentModel: (agentId: string, model: string) => { r.opts.manager.updateAgentModel(agentId, model); },
     getPlannerFallbackModel: () => r.active?.plannerFallbackModel,
+    // Plan 4: brain system overseer — wire tracker/collector to context
+    recordInteraction: (type: string, todoId: string, agentId: string, reason: string) => {
+      r.interactionTracker.record(type as any, todoId, agentId, reason);
+    },
+    recordException: (type: string, agentId: string, todoId?: string, reason?: string) => {
+      r.exceptionCollector?.record({ type: type as any, agentId, todoId, reason: reason ?? "" });
+    },
   } as unknown as WorkerContext;
 }
 
@@ -449,6 +456,13 @@ export function replanContext(r: BlackboardRunnerFields): ReplanContext {
     checkAndApplyCaps: () => r.checkAndApplyCaps(),
     emit: (e: unknown) => r.opts.emit(e as SwarmEvent),
     brainPromptFn: brainEnabled() ? r.brainPromptFn.bind(r) : undefined,
+    // Plan 4: brain system overseer — wire tracker/collector to replan context
+    recordInteraction: (type: string, todoId: string, agentId: string, reason: string) => {
+      r.interactionTracker.record(type as any, todoId, agentId, reason);
+    },
+    recordException: (type: string, agentId: string, todoId?: string, reason?: string) => {
+      r.exceptionCollector?.record({ type: type as any, agentId, todoId, reason: reason ?? "" });
+    },
   } as unknown as ReplanContext;
 }
 
