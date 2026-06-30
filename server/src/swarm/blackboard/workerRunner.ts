@@ -46,6 +46,7 @@ import { bumpAgentCounter } from "./runnerHelpers.js";
 import { pheromoneHeatmap } from "../pheromoneHeatmap.js";
 import { withSiblingRetry } from "./siblingRetry.js";
 import { verifyWorkerSkip } from "./auditorRunner.js";
+import { autoDetectAnchors } from "./autoAnchor.js";
 
 export interface WorkerContext {
   isStopping: () => boolean;
@@ -395,12 +396,26 @@ export async function executeWorkerTodo(
     return "stale";
   }
 
+  // Auto-anchor: when no anchors were declared but the file is large,
+  // detect likely section names from the todo description and inject them
+  // as anchors so windowFileWithAnchors shows the relevant region.
+  let effectiveAnchors = todo.expectedAnchors;
+  if (!effectiveAnchors || effectiveAnchors.length === 0) {
+    const autoAnchors = autoDetectAnchors(todo.description, contents, todo.expectedFiles);
+    if (autoAnchors.length > 0) {
+      effectiveAnchors = autoAnchors;
+      ctx.appendSystem(
+        `[auto-anchor] Detected ${autoAnchors.length} anchor(s) from description: ${autoAnchors.join(", ")}`,
+      );
+    }
+  }
+
   const seed: WorkerSeed = {
     todoId: todo.id,
     description: todo.description,
     expectedFiles: todo.expectedFiles,
     fileContents: contents,
-    expectedAnchors: todo.expectedAnchors,
+    expectedAnchors: effectiveAnchors,
     roleGuidance: ctx.getWorkerRoles().get(agent.id),
   };
 

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { extractJsonFromText as stripFences } from "../../extractJson.js";
 import { lenientPreprocess } from "./lenientParse.js";
+import { windowFileWithAnchors } from "../windowFile.js";
 
 // ---------------------------------------------------------------------------
 // Schema. The replanner is shown a stale TODO + current file state and must
@@ -167,6 +168,8 @@ export interface ReplannerSeed {
   // null = file does not exist on disk right now.
   fileContents: Record<string, string | null>;
   replanCount: number;
+  /** Auto-detected anchors from todo description (for large files) */
+  autoAnchors?: string[];
 }
 
 export function buildReplannerUserPrompt(seed: ReplannerSeed): string {
@@ -178,10 +181,24 @@ export function buildReplannerUserPrompt(seed: ReplannerSeed): string {
     `Prior replan attempts: ${seed.replanCount}`,
     "",
   ];
+  if (seed.autoAnchors && seed.autoAnchors.length > 0) {
+    parts.push(`Auto-detected anchors from description: ${seed.autoAnchors.join(", ")}`);
+    parts.push("(These sections exist in the file — use them as context for your revision)");
+    parts.push("");
+  }
   for (const f of seed.originalExpectedFiles) {
     const content = seed.fileContents[f];
     if (content === null || content === undefined) {
       parts.push(`=== ${f} (does not exist on disk right now) ===`);
+    } else if (seed.autoAnchors && seed.autoAnchors.length > 0 && content.length > 8000) {
+      // For large files with auto-anchors, use windowed view with anchors
+      const anchored = windowFileWithAnchors(content, seed.autoAnchors);
+      const reportSummary = anchored.anchorReports
+        .map((r) => `${JSON.stringify(r.anchor)}=${r.found === null ? "MISS" : `line ${r.found}`}`)
+        .join(", ");
+      parts.push(`=== Current contents of ${f} (${content.length} chars, ANCHORED) [anchors: ${reportSummary}] ===`);
+      parts.push(anchored.content);
+      parts.push(`=== end ${f} ===`);
     } else {
       parts.push(`=== Current contents of ${f} ===`);
       parts.push(content);

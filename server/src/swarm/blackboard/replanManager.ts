@@ -25,6 +25,7 @@ import {
   tryBrainFallback,
   type BrainFallbackEvent,
 } from "./prompts/brainIntegration.js";
+import { autoDetectAnchors } from "./autoAnchor.js";
 
 export interface ReplanContext {
   getReplanPending: () => Set<string>;
@@ -110,6 +111,19 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
     return;
   }
 
+  // Auto-anchor: when no anchors were declared but the file is large,
+  // detect likely section names from the todo description and inject them
+  // as anchors so windowFileWithAnchors shows the relevant region.
+  let autoAnchors: string[] | undefined;
+  if (!todo.expectedAnchors || todo.expectedAnchors.length === 0) {
+    autoAnchors = autoDetectAnchors(todo.description, contents, todo.expectedFiles);
+    if (autoAnchors.length > 0) {
+      ctx.appendSystem(
+        `[auto-anchor] Detected ${autoAnchors.length} anchor(s) from description: ${autoAnchors.join(", ")}`,
+      );
+    }
+  }
+
   const seed: ReplannerSeed = {
     todoId: todo.id,
     originalDescription: todo.description,
@@ -117,6 +131,7 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
     staleReason: todo.staleReason ?? "(unknown)",
     fileContents: contents,
     replanCount: todo.replanCount,
+    autoAnchors,
   };
 
   let response: string;

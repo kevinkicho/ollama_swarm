@@ -221,10 +221,11 @@ export function PlannerThinkingPanel() {
   const isThinking = plannerAgent?.status === "thinking" || plannerAgent?.status === "retrying";
   const hasStream = plannerText.length > 0;
 
-  // Show during planning OR when planner has an active stream. Hide once
-  // both conditions clear.
+  // Show whenever the planner is thinking OR has streaming text.
+  // Previously this also checked phase === "planning", but replanner calls
+  // during execution also use agent-1 and should be visible to the user.
   if (!plannerAgent) return null;
-  if (phase !== "planning" && !hasStream && !isThinking) return null;
+  if (!isThinking && !hasStream) return null;
 
   const chars = plannerText.length;
   const words = countWords(plannerText);
