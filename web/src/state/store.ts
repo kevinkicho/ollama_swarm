@@ -275,7 +275,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         // text to preserve as a persistent transcript entry.
         const streamingText = nextStreaming[e.agentId];
         const meta = nextMeta[e.agentId];
-        if (streamingText && streamingText.length > 50) {
+        if (streamingText && streamingText.length > 0) {
           const streamEntry = {
             id: `stream-${e.agentId}-${Date.now()}`,
             role: "agent-stream" as const,

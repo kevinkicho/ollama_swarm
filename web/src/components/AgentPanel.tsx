@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useSwarm } from "../state/store";
 import type { AgentState, LatencySample } from "../types";
 import { CopyChip } from "./CopyChip";
+import { hueForAgent, agentBubblePalette, statusGlowClass } from "./agentPalette";
 
 // Stable reference for "no samples yet". Returning a fresh `[]` from the
 // useSwarm selector on every render makes useSyncExternalStore see a
@@ -187,15 +188,19 @@ export function AgentPanel({
   const colorBorderCls = color && COLOR_BORDER_CLASS[color]
     ? `${COLOR_BORDER_CLASS[color]} border-l-4`
     : "border-l-ink-700";
+  const isBrain = agent.index === 0;
+  const hue = hueForAgent(agent.index);
+  const palette = agentBubblePalette(hue, agent.status === "stopped" || agent.status === "ready", isBrain);
+  const glowCls = isThinking ? (isBrain ? "glow-brain" : "glow-active") : agent.status === "retrying" ? "glow-stalled" : agent.status === "failed" ? "glow-error" : "";
   return (
-    <div className={`border border-ink-700 ${colorBorderCls} rounded-md p-3 bg-ink-800`}>
+    <div className={`border border-ink-700 ${colorBorderCls} rounded-md p-3 bg-ink-800 transition-all duration-300 ${glowCls}`}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 min-w-0 flex-wrap">
           <span
             className={`inline-block h-2 w-2 rounded-full ${dotColor} shrink-0`}
             title={agent.status === "stopped" && runCompletedCleanly ? "Exited cleanly when the run completed (not a crash)" : undefined}
           />
-          <span className="font-medium">Agent {agent.index}</span>
+          <span className="font-medium">{isBrain ? "🧠 Brain" : `Agent ${agent.index}`}</span>
           <span
             className={
               "text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 " +

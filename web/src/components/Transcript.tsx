@@ -55,7 +55,7 @@ export function Transcript() {
   const filteredTranscript = transcript.filter((e) => {
     if (filter === "all") return true;
     if (filter === "system") return e.role === "system";
-    if (filter === "agents") return e.role === "agent";
+    if (filter === "agents") return e.role === "agent" || e.role === "agent-stream";
     if (filter === "audit") {
       const text = e.text || "";
       return text.includes("audit") || text.includes("Audit") || text.includes("Gate");

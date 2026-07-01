@@ -83,7 +83,7 @@ export function ProgressBar() {
         )}
         <div className="flex-1 h-1.5 bg-ink-700 rounded-full overflow-hidden">
           <div
-            className={`h-full ${current.color} rounded-full transition-all duration-500`}
+            className={`h-full ${current.color} rounded-full transition-all duration-500 ${completed < total ? "shimmer" : ""}`}
             style={{ width: `${Math.min(100, (total > 0 ? completed / total : 0) * 100)}%` }}
           />
         </div>

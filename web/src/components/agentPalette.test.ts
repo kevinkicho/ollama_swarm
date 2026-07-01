@@ -20,9 +20,9 @@ describe("hueForAgent", () => {
     assert.equal(hueForAgent(undefined), 140);
   });
 
-  it("returns 200 as fallback for index 0 (negative array access)", () => {
-    // (0-1) = -1, AGENT_HUE[-1] is undefined, ?? 200
-    assert.equal(hueForAgent(0), 200);
+  it("returns 280 for index 0 (brain = purple)", () => {
+    // Agent 0 = brain, returns purple hue
+    assert.equal(hueForAgent(0), 280);
   });
 });
 

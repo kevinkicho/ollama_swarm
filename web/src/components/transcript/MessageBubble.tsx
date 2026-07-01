@@ -329,15 +329,16 @@ function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
 
 function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
   const hue = hueForAgent(entry.agentIndex);
-  const palette = agentBubblePalette(hue, false);
+  const isBrain = entry.agentIndex === 0;
+  const palette = agentBubblePalette(hue, false, isBrain);
   const header = (
     <div className="flex items-center gap-2 text-xs mb-1" style={{ color: palette.header }}>
       <AgentAvatar agentIndex={entry.agentIndex} size="sm" />
-      <span>Agent {entry.agentIndex} · {ts}</span>
+      <span>{isBrain ? "🧠 Brain" : `Agent ${entry.agentIndex}`} · {ts}</span>
     </div>
   );
   const style = { borderColor: palette.border, background: palette.background };
-  const className = "rounded-md p-3 border text-sm";
+  const className = "rounded-md p-3 border text-sm fade-in";
 
   // Unit 54: prefer the server-computed structured summary when present
   // (workers' parsed envelope). The server has the authoritative parser

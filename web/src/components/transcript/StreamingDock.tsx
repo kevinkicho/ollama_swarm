@@ -78,6 +78,7 @@ function PersistentStreamBubble({
   meta: { startedAt: number; lastTextAt: number; status: "live" | "done"; endedAt?: number } | undefined;
 }) {
   const hue = hueForAgent(agentIndex);
+  const isBrain = agentIndex === 0;
   const isDone = meta?.status === "done";
   const now = Date.now();
   const sinceLastText = meta ? Math.max(0, now - meta.lastTextAt) : 0;
@@ -85,7 +86,8 @@ function PersistentStreamBubble({
   const STALL_THRESHOLD_MS = 60_000;
   const isStalled = !isDone && sinceLastText > STALL_THRESHOLD_MS;
 
-  const palette = agentBubblePalette(hue, isStalled ? true : isDone);
+  const palette = agentBubblePalette(hue, isStalled ? true : isDone, isBrain);
+  const glowClass = isDone ? "" : isStalled ? "glow-stalled" : palette.glowClass;
 
   // 2026-04-27 evening (#231 follow-up 4): strip XML pseudo-tool-call
   // markers from the LIVE streaming text before segmenting. RCA: the
@@ -153,11 +155,11 @@ function PersistentStreamBubble({
 
   return (
     <div
-      className="rounded-md p-3 border text-sm relative transition-all duration-300"
+      className={`rounded-md p-3 border text-sm relative transition-all duration-300 ${glowClass}`}
       style={{ borderColor: palette.border, background: palette.background }}
     >
       <div className="flex items-center gap-2 text-xs mb-1" style={{ color: palette.header }}>
-        <span className="font-semibold">Agent {agentIndex}</span>
+        <span className="font-semibold">{isBrain ? "🧠 Brain" : `Agent ${agentIndex}`}</span>
         <span className="text-ink-500">{subtitle}</span>
         {/* #231 follow-up 4: surface the count of stripped pseudo-tool-
             calls so the user knows the model emitted them (and they
