@@ -75,7 +75,7 @@ export function TranscriptTimeline({ parentPath }: { parentPath?: string } = {})
     fetchCtrlRef.current = ctrl;
     (async () => {
       try {
-        const params = new URLSearchParams({ includeOtherParents: "true" });
+        const params = new URLSearchParams();
         if (parentPath) params.set("parentPath", parentPath);
         const res = await fetch(`/api/swarm/runs?${params}`, { signal: ctrl.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);

@@ -95,7 +95,7 @@ export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {})
     (async () => {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          const params = new URLSearchParams({ includeOtherParents: "true" });
+          const params = new URLSearchParams();
           if (parentPath) params.set("parentPath", parentPath);
           const r = await fetch(`/api/swarm/runs?${params}`, { signal: ctrl.signal });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
