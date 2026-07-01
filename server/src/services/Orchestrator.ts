@@ -267,10 +267,11 @@ export class Orchestrator {
     }
 
     // P6: Initialize brain service — persists across runs.
-    const { createBrainService } = require("../swarm/blackboard/brainOverseer/brainService.js");
-    this.brainService = createBrainService({
-      maxConcurrentRuns: this.opts.maxConcurrentRuns ?? 4,
-      getOrchestrator: () => this,
+    import("../swarm/blackboard/brainOverseer/brainService.js").then(({ createBrainService }) => {
+      this.brainService = createBrainService({
+        maxConcurrentRuns: this.opts.maxConcurrentRuns ?? 4,
+        getOrchestrator: () => this,
+      });
     });
   }
 
