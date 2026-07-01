@@ -225,6 +225,7 @@ export const AUDITOR_SYSTEM_PROMPT = [
   "9. `expectedFiles` entries are FILE paths, never directories. Do NOT emit `src/`, `__tests__/`, `docs/`, or any path ending in `/` or `\\`. If a todo or new criterion covers a whole directory, pick the specific files (e.g., `src/lib/a.ts`, `src/lib/b.ts`). Directory entries are rejected by the parser; the todo or criterion is dropped.",
   "10. If the current file state is WINDOWED (head + marker + tail), the middle region may contain evidence you can't see. Weight the visible head and tail heavily and prefer a specific consolidation/verification todo over a confident \"met\" when ambiguous.",
   "11. Unit 36: when the user prompt includes a `Live UI snapshot` block, that is PRIMARY EVIDENCE for any criterion framed as user-visible (\"renders\", \"displays\", \"button works\", \"page shows\", \"form submits\"). The snapshot is the accessibility tree of the actually-running app — if a criterion says \"home page shows a sign-up CTA\" and the snapshot shows no such element, the verdict is `unmet`, even if files were committed that ostensibly added it. Files are the SECONDARY evidence when a UI snapshot is present; they verify intent, the snapshot verifies delivery. When no UI snapshot is present, fall back to file-only evaluation (pre-Unit-36 behavior).",
+  "12. VERIFY BEFORE OVERRIDING — when a worker skips a todo claiming \"already exists\", use grep to verify BEFORE overriding. If grep confirms the component/import/entry exists in the file, the worker is correct — confirm the skip. Only override when grep proves the worker is wrong. This prevents the skip→override→re-skip loop.",
   "",
   "Paths must be repo-relative. Never use absolute paths or `..`.",
 ].join("\n");
@@ -360,11 +361,17 @@ export interface AuditorFileStateEntry {
 // caller (typically BlackboardRunner.readExpectedFiles).
 export function buildAuditorFileStates(
   fileContents: Record<string, string | null>,
+  fullFileMode?: boolean,
 ): Record<string, AuditorFileStateEntry> {
   const out: Record<string, AuditorFileStateEntry> = {};
   for (const [path, content] of Object.entries(fileContents)) {
     if (content === null) {
       out[path] = { exists: false, content: "", full: true, originalLength: 0 };
+      continue;
+    }
+    // In fullFileMode, show the entire file — no windowing.
+    if (fullFileMode) {
+      out[path] = { exists: true, content, full: true, originalLength: content.length };
       continue;
     }
     const view = windowFileForWorker(content);
@@ -420,6 +427,8 @@ export interface BuildAuditorSeedInput {
   // weight the snapshot as additional evidence.
   uiUrl?: string;
   uiSnapshot?: string;
+  // Plan 8: show full file content for large-context models.
+  fullFileMode?: boolean;
 }
 
 export async function buildAuditorSeedCore(
@@ -465,7 +474,7 @@ export async function buildAuditorSeedCore(
     new Set(unmetCriteria.flatMap((c) => c.expectedFiles)),
   );
   const fileContents = filesToRead.length > 0 ? await readFiles(filesToRead) : {};
-  const currentFileState = buildAuditorFileStates(fileContents);
+  const currentFileState = buildAuditorFileStates(fileContents, input.fullFileMode);
 
   return {
     missionStatement: contract.missionStatement,

@@ -294,6 +294,8 @@ export const PLANNER_SYSTEM_PROMPT = [
   "",
   "15. CONTEXT FILES — for TODOs that reference or depend on files NOT in expectedFiles, include an optional `contextFiles` array listing those files. The worker will see their content as read-only reference. Do NOT put files in contextFiles that you intend to modify — those go in expectedFiles. Max 3 context files per TODO. Example: if a TODO updates docs/PANELS.md but you need the worker to see config/dashboardPanels.js for reference, put config/dashboardPanels.js in contextFiles.",
   "",
+  "16. VERIFY BEFORE CREATING — before emitting a TODO, use grep/read to verify the work isn't already done. Common false positives: (a) a component is already imported and rendered but you didn't see it in the truncated file view, (b) a lineage entry already exists in config/dashboardPanels.js but you only saw part of the file. If grep shows the import/entry/rendering already exists, DO NOT emit the TODO — skip it and move to the next item. This prevents the worker→auditor→replanner skip loop.",
+  "",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",
 ].join("\n");
 

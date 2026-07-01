@@ -19,6 +19,7 @@
 import { AgentManager } from "../../services/AgentManager.js";
 import { config } from "../../config.js";
 import { toOpenCodeModelRef } from "../../../../shared/src/providers.js";
+import { getModelBudget } from "../modelContextBudget.js";
 import {
   buildAuditorSeedCore,
   type AuditorSeed,
@@ -82,6 +83,7 @@ export async function buildAuditorSeed(ctx: AuditorSeedContext): Promise<Auditor
     maxInvocations: ctx.maxInvocations,
     uiUrl,
     uiSnapshot,
+    fullFileMode: getModelBudget(ctx.model).fullFileMode,
   });
 }
 
