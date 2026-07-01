@@ -5,6 +5,7 @@ import { BoardView } from "./BoardView";
 import { BrainProposalsPanel } from "./BrainProposalsPanel";
 import { ContractPanel } from "./ContractPanel";
 import { SystemStatusPanel } from "./SystemStatusPanel";
+import { RunQueuePanel } from "./RunQueuePanel";
 import { Transcript } from "./Transcript";
 import { MetricsPanel } from "./MetricsPanel";
 import { PheromonePanel } from "./PheromonePanel";
@@ -321,6 +322,7 @@ export function SwarmView() {
             misleadingly empty after a finished run. */}
         {agentList.length === 0 ? <SidebarSummaryAgents /> : null}
         <SystemStatusPanel />
+        <RunQueuePanel />
         {brainProposals.length > 0 ? (
           <BrainProposalsPanel proposals={brainProposals} />
         ) : null}
