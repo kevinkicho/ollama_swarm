@@ -249,6 +249,17 @@ export async function tryPromoteNextTier(
     }
   }
   if (parsed.contract.criteria.length === 0) {
+    // In continuous mode (rounds=0), 0 criteria doesn't mean stop —
+    // the planner just couldn't find new work this cycle. Keep going
+    // by NOT incrementing tierUpFailures. The run continues with the
+    // existing contract and the auditor will keep evaluating.
+    if (active?.rounds === 0 || (active?.rounds ?? 0) >= 1_000_000) {
+      ctx.appendSystem(
+        `Tier ${nextTier} produced 0 criteria — planner saw nothing left to add. In continuous mode, keeping existing contract active.`,
+      );
+      // Don't promote, but don't fail either — just continue with current tier
+      return false;
+    }
     ctx.setTierUpFailures(ctx.getTierUpFailures() + 1);
     ctx.appendSystem(
       `Tier ${nextTier} produced 0 criteria — planner saw nothing left to do. Ratchet failure ${ctx.getTierUpFailures()}/3.`,
@@ -275,6 +286,13 @@ export async function tryPromoteNextTier(
     return !degeneratePatterns.some((p) => p.test(desc));
   });
   if (realCriteria.length === 0) {
+    // In continuous mode, degenerate criteria don't count as failures either
+    if (active?.rounds === 0 || (active?.rounds ?? 0) >= 1_000_000) {
+      ctx.appendSystem(
+        `Tier ${nextTier} produced ${parsed.contract.criteria.length} degenerate criterion(crite)ria (no real file targets) — in continuous mode, keeping existing contract active.`,
+      );
+      return false;
+    }
     ctx.setTierUpFailures(ctx.getTierUpFailures() + 1);
     ctx.appendSystem(
       `Tier ${nextTier} produced ${parsed.contract.criteria.length} degenerate criterion(crite)ria (no real file targets) — rejecting. Ratchet failure ${ctx.getTierUpFailures()}/3.`,
@@ -374,6 +392,15 @@ export async function runAuditedExecution(
           promoted,
         });
         if (promoted) {
+          continue;
+        }
+        // In continuous mode, don't stop when tier-up fails — keep going
+        // with the existing contract. The auditor will keep evaluating.
+        const activeCfg = ctx.getActive();
+        if (activeCfg?.rounds === 0 || (activeCfg?.rounds ?? 0) >= 1_000_000) {
+          ctx.appendSystem(
+            `Tier promotion failed in continuous mode — keeping existing contract active.`,
+          );
           continue;
         }
         ctx.setCompletionDetail(
