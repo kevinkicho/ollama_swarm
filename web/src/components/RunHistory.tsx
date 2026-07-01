@@ -153,16 +153,17 @@ export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {})
     <span className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        title="Show prior runs in this parent folder"
-        className="text-ink-400 hover:text-ink-100 hover:bg-ink-800/70 rounded px-2 py-0.5 border border-ink-700 hover:border-ink-600 transition"
+        title="Browse past runs — summary data from run summaries (fast, curated)"
+        className="text-[11px] uppercase tracking-wide px-2 py-1 rounded bg-emerald-900/40 hover:bg-emerald-800/50 text-emerald-300 border border-emerald-700/50 hover:border-emerald-600 transition"
       >
-        history {open ? "▴" : "▾"}
+        ▸ Runs{runs && runs.length > 0 ? ` (${runs.length})` : ""}
       </button>
       {open ? (
         <div className="absolute z-20 right-0 mt-1 w-[min(960px,calc(100vw-2rem))] rounded border border-ink-600 bg-ink-900 shadow-xl overflow-hidden">
           <div className="px-3 py-2 border-b border-ink-700 flex items-center justify-between text-[11px] text-ink-400">
             <span>
-              Prior runs in parent folder
+              <span className="text-emerald-400 font-semibold">Run Summaries</span>
+              <span className="ml-2 text-ink-500">— curated results from summary files</span>
               {runs && runs.length > 0 ? <span className="ml-2 text-ink-500">({runs.length})</span> : null}
               {/* Task #111: badge when viewing cached data (server unreachable). */}
               {fromCache ? (

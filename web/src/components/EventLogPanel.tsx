@@ -88,22 +88,21 @@ export function EventLogPanel() {
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="text-[11px] uppercase tracking-wide px-2 py-1 rounded bg-ink-800 hover:bg-ink-700 text-ink-300 border border-ink-600"
-        title="V2 Step 6b: per-run summaries derived from logs/current.jsonl via EventLogReaderV2"
+        className="text-[11px] uppercase tracking-wide px-2 py-1 rounded bg-amber-900/40 hover:bg-amber-800/50 text-amber-300 border border-amber-700/50 hover:border-amber-600 transition"
+        title="Raw event stream — all events from logs/current.jsonl (debug, detailed)"
       >
-        V2 event log
+        ▸ Event Log
       </button>
       {open ? (
         <div className="absolute right-0 top-full mt-1 z-20 w-[480px] max-h-[60vh] overflow-y-auto rounded border border-ink-600 bg-ink-900 shadow-xl shadow-black/50 p-3">
-          <div className="flex items-baseline gap-2 mb-2">
-            <div className="text-[11px] text-ink-500 font-mono break-all flex-1">
-              {data?.source ?? "loading…"}
-            </div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-[11px] text-amber-400 font-semibold">Raw Event Stream</span>
+            <span className="text-[10px] text-ink-500">— all events from logs/current.jsonl</span>
             <button
               onClick={() => setRefreshNonce((n) => n + 1)}
               disabled={loading}
-              className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-ink-800 hover:bg-ink-700 text-ink-400 hover:text-ink-200 disabled:opacity-50"
-              title="Re-fetch /api/v2/event-log/runs"
+              className="ml-auto text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-ink-800 hover:bg-ink-700 text-ink-400 hover:text-ink-200 disabled:opacity-50"
+              title="Re-fetch event log"
             >
               {loading ? "…" : "refresh"}
             </button>
