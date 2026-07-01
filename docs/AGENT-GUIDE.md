@@ -71,6 +71,22 @@ npm run dev            # starts both (from repo root)
 
 **Pre-commit check:** Always run `npm run build` before committing to catch TypeScript errors. Tests passing (`npm test`) does NOT mean the build passes — tests use tsx (lenient), build uses tsc (strict).
 
+### Ollama proxy (port 11533)
+
+The app runs a local HTTP proxy on port 11533 that sits between the app and the real Ollama server at 11434:
+
+```
+App (providers) → 127.0.0.1:11533 (proxy) → localhost:11434 (Ollama)
+```
+
+**Why:** The proxy captures token usage (`prompt_eval_count`/`eval_count`) from Ollama responses and detects quota exhaustion (429/503). Without it, token counts are unavailable and quota errors are silent.
+
+**Config:**
+- `OLLAMA_PROXY_PORT` — default `11533`. Set to `0` to disable (app connects directly to Ollama).
+- `OLLAMA_BASE_URL` — default `http://localhost:11434/v1`. Automatically rewritten to point at the proxy on startup.
+
+**Port 11533 is NOT Ollama itself.** Ollama is always at 11434. The proxy is a thin relay added by this app.
+
 ### Recommended monitors for debugging swarm runs
 
 When debugging a swarm run, these three monitors capture different layers and together provide full visibility:

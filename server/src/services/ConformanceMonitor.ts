@@ -44,6 +44,8 @@ export interface ConformanceMonitorOpts {
   excerptCharBudget?: number;
   /** Pull the live transcript at poll time. Must be cheap. */
   getTranscript: () => readonly TranscriptEntry[];
+  /** Get the current run phase. Used to skip polling during planning. */
+  getPhase?: () => string;
   /** Emit a SwarmEvent — typically routed through the broadcaster. */
   emit: (ev: SwarmEvent) => void;
   /** #295 fix: optional liveness check. When supplied, the monitor
@@ -98,14 +100,15 @@ export class ConformanceMonitor {
 
   private async poll(): Promise<void> {
     if (this.stopped || this.inflight) return;
-    // Self-stop when the run is no longer active. The orchestrator's
-    // start() returns BEFORE discussion runners' loops finish (`void
-    // this.loop()` fire-and-forget), so we can't tie our lifecycle
-    // to start()'s return. isActive() is bound to runner.isRunning()
-    // by the orchestrator — when the runner's loop ends naturally,
-    // we self-clean.
+    // Self-stop when the run is no longer active.
     if (this.opts.isActive && !this.opts.isActive()) {
       this.stop();
+      return;
+    }
+    // Don't poll during planning/seeding — no work to evaluate yet.
+    // Wait until workers have started committing.
+    const phase = this.opts.getPhase?.();
+    if (phase === "planning" || phase === "seeding" || phase === "cloning" || phase === "spawning") {
       return;
     }
     const transcript = this.opts.getTranscript();

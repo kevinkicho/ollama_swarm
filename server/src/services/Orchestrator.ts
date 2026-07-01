@@ -801,6 +801,7 @@ export class Orchestrator {
         ollamaBaseUrl: this.opts.ollamaBaseUrl,
         graderModel: cfg.model,
         getTranscript: () => activeRun.runner.status().transcript ?? [],
+        getPhase: () => activeRun.runner.status().phase ?? "idle",
         emit: this.opts.emit,
         isActive: () => activeRun.runner.isRunning(),
       });
