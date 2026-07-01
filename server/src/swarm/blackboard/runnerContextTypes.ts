@@ -132,6 +132,8 @@ export interface BlackboardRunnerFields {
   writeBlackboardDeliverable: any;
   writeCrashSnapshot: any;
   writeRunSummary: any;
+  interactionTracker: any;
+  exceptionCollector: any;
 }
 
 /** Properties accessed by adaptiveWatchdogContext(). 8 properties. */export interface AdaptiveWatchdogFields {

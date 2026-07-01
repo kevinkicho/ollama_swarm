@@ -13,6 +13,9 @@ import { formatCloneMessage } from "../cloneMessage.js";
 import { formatPortReleaseLine } from "../runSummary.js";
 import { readBlackboardStateSnapshot } from "./stateSnapshot.js";
 import { assignWorkerRole } from "./workerRoles.js";
+import { runBrainAnalysis } from "./brainOverseer/brainOverseer.js";
+import type { InteractionTracker } from "./brainOverseer/interactionTracker.js";
+import type { ExceptionCollector } from "./brainOverseer/exceptionCollector.js";
 import { shouldRunFinalAudit } from "./finalAudit.js";
 import { snapshotLifetimeTokens } from "../../services/ollamaProxy.js";
 import { createTickAccumulator, WALL_CLOCK_CAP_MS } from "./caps.js";
@@ -154,6 +157,8 @@ export interface LifecycleContext {
   clearStateSnapshotScheduler(): void;
   emit(ev: { type: string; [key: string]: unknown }): void;
   initBrainOverseer(runId: string): void;
+  getInteractionTracker(): InteractionTracker;
+  getExceptionCollector(): ExceptionCollector;
   excludeRunnerArtifacts(destPath: string): Promise<void>;
   buildSeed(clonePath: string, cfg: RunConfig): Promise<PlannerSeed>;
   spawnAgentNoOpencode(opts: { cwd: string; index: number; model: string }): Promise<Agent>;
@@ -741,6 +746,30 @@ export async function planAndExecute(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         ctx.appendSystem(`Design memory update failed: ${msg}`);
+      }
+    }
+    // Plan 4: brain system overseer — run post-run analysis after design memory.
+    // This analyzes interaction chains and exception patterns, then generates
+    // improvement proposals. Best-effort — never blocks the summary write.
+    if (
+      !errored &&
+      !userStoppedHard &&
+      hasOutput &&
+      !overWallClockCap
+    ) {
+      try {
+        const brainResult = await runBrainAnalysis(
+          ctx.getInteractionTracker(),
+          ctx.getExceptionCollector(),
+          ctx.getActive()?.localPath ?? "",
+          cfg.runId ?? "",
+        );
+        ctx.appendSystem(
+          `[brain-overseer] Analysis complete: ${brainResult.exceptions.totalExceptions} exceptions, ${brainResult.chains.length} interaction chains, ${brainResult.proposals.length} proposals.`,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.appendSystem(`Brain overseer analysis failed: ${msg}`);
       }
     }
     // Issue B: stop the reflection-cap watchdog now that all
