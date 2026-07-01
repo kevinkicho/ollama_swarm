@@ -26,6 +26,7 @@ interface ActiveRun {
   };
   startedAt: number;
   isRunning: boolean;
+  currentAgentIndex?: number;
 }
 
 interface ActiveRunsResponse {
@@ -127,6 +128,7 @@ export function ActiveRunsPanel() {
             <th style={{ padding: "2px 8px 2px 0" }}>Run</th>
             <th style={{ padding: "2px 8px" }}>Preset</th>
             <th style={{ padding: "2px 8px" }}>Agents</th>
+            <th style={{ padding: "2px 8px" }}>Progress</th>
             <th style={{ padding: "2px 8px" }}>Elapsed</th>
             <th style={{ padding: "2px 8px" }}>Status</th>
             <th style={{ padding: "2px 0" }}></th>
@@ -149,6 +151,11 @@ export function ActiveRunsPanel() {
                 <td style={{ padding: "2px 8px" }}>{run.runConfig.preset}</td>
                 <td style={{ padding: "2px 8px" }}>
                   {run.runConfig.agentCount ?? "?"}
+                </td>
+                <td style={{ padding: "2px 8px" }}>
+                  {run.currentAgentIndex != null
+                    ? `Agent ${run.currentAgentIndex}/${run.runConfig.agentCount ?? '?'}: thinking...`
+                    : "?"}
                 </td>
                 <td style={{ padding: "2px 8px" }}>{formatElapsed(elapsed)}</td>
                 <td style={{ padding: "2px 8px" }}>
