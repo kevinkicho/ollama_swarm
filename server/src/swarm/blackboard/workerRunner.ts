@@ -268,7 +268,7 @@ export async function runWorker(
     if (!queued) continue;
     const todo = v2QueueTodoToWireTodo(queued);
 
-    let outcome: "committed" | "stale" | "lost-race" | "aborted";
+    let outcome: "committed" | "stale" | "lost-race" | "aborted" | "pending-commit";
     if (todo.kind === "build") {
       outcome = await executeBuildTodo(ctx, agent, todo);
     } else {
@@ -284,7 +284,7 @@ export async function executeBuildTodo(
   ctx: WorkerContext,
   agent: Agent,
   todo: Todo,
-): Promise<"committed" | "stale" | "lost-race" | "aborted"> {
+): Promise<"committed" | "stale" | "lost-race" | "aborted" | "pending-commit"> {
   if (!todo.command || todo.command.trim().length === 0) {
     ctx.appendSystem(`[${agent.id}] build TODO ${todo.id.slice(0, 8)} has no command — marking stale.`);
     ctx.getWrappers().failTodoQ(todo.id, "build TODO missing command field");
@@ -388,7 +388,7 @@ export async function executeWorkerTodo(
   ctx: WorkerContext,
   agent: Agent,
   todo: Todo,
-): Promise<"committed" | "stale" | "lost-race" | "aborted"> {
+): Promise<"committed" | "stale" | "lost-race" | "aborted" | "pending-commit"> {
   const modelAtEntry = agent.model;
   let commitTier: import("./types.js").CommitTier | undefined;
   let contents: Record<string, string | null>;
@@ -785,105 +785,20 @@ If the response is completely unparseable, return { "skip": "auditor could not i
     verifyCommand && verifyCommand.length > 0
       ? realVerifyAdapter(clonePath, verifyCommand)
       : undefined;
-  let applyResult = await applyAndCommit({
-    todoId: todo.id,
-    workerId: agent.id,
-    expectedFiles: todo.expectedFiles,
-    hunks: hunksToCommit,
-    fs: fsAdapter,
-    git: gitAdapter,
-    ...(verifyAdapter ? { verify: verifyAdapter } : {}),
-    expectedAnchors: todo.expectedAnchors,
-  });
-
-  if (
-    !applyResult.ok &&
-    applyResult.failedHunkIndex !== undefined &&
-    !ctx.isStopping()
-  ) {
-    ctx.appendSystem(
-      `[${agent.id}] [v2] hunk-repair: apply failed (${applyResult.reason}); re-prompting worker with actual file content (one retry).`,
-    );
-    let freshContents: Record<string, string>;
-    try {
-      const raw = await ctx.readExpectedFiles(todo.expectedFiles);
-      freshContents = Object.fromEntries(
-        Object.entries(raw).map(([k, v]) => [k, v ?? ""]),
-      );
-    } catch (readErr) {
-      const msg = readErr instanceof Error ? (readErr as Error).message : String(readErr);
-      ctx.appendSystem(`[${agent.id}] [v2] hunk-repair: re-read failed (${msg}); falling through to replan.`);
-      ctx.getWrappers().failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`, "hunk-fail");
-      ctx.bumpRejectedAttempts(agent.id);
-      return "stale";
-    }
-    const repairPrompt = buildHunkRepairPrompt(
-      hunksToCommit.slice(),
-      applyResult.reason,
-      freshContents,
-    );
-    let repairResponse: string;
-    try {
-      repairResponse = await ctx.promptAgent(
-        agent,
-        `${WORKER_SYSTEM_PROMPT}\n\n${repairPrompt}`,
-        "swarm",
-        "json",
-        WORKER_HUNKS_JSON_SCHEMA,
-      );
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      ctx.appendSystem(`[${agent.id}] [v2] hunk-repair prompt failed (${msg}); falling through to replan.`);
-      ctx.getWrappers().failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`, "hunk-fail");
-      ctx.bumpRejectedAttempts(agent.id);
-      return "stale";
-    }
-    ctx.appendAgent(agent, repairResponse);
-    const repairParsed = parseWorkerResponse(repairResponse, todo.expectedFiles);
-    if (repairParsed.ok && repairParsed.hunks.length > 0 && !repairParsed.skip) {
-      applyResult = await applyAndCommit({
-        todoId: todo.id,
-        workerId: agent.id,
-        expectedFiles: todo.expectedFiles,
-        hunks: repairParsed.hunks,
-        fs: fsAdapter,
-        git: gitAdapter,
-        ...(verifyAdapter ? { verify: verifyAdapter } : {}),
-        expectedAnchors: todo.expectedAnchors,
-      });
-      if (applyResult.ok) {
-        commitTier = "hunk-repair";
-        ctx.appendSystem(
-          `[${agent.id}] [v2] ✓ hunk-repair retry succeeded on second attempt.`,
-        );
-      }
-    } else {
-      ctx.appendSystem(
-        `[${agent.id}] [v2] hunk-repair response empty or unparseable (${repairParsed.ok ? "skip/empty" : repairParsed.reason}); falling through to replan.`,
-      );
-    }
-  }
-  if (!applyResult.ok) {
-    ctx.getWrappers().failTodoQ(todo.id, `[v2] applyAndCommit failed: ${applyResult.reason}`, "hunk-fail");
+  // Auditor-gated commits: store hunks for auditor review instead of
+  // committing directly. The auditor will call applyAndCommit + completeTodoQ
+  // after approving the changes.
+  try {
+    ctx.getWrappers().proposeCommitQ(todo.id, hunksToCommit as readonly unknown[], todo.expectedFiles);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ctx.appendSystem(`[${agent.id}] proposeCommit failed: ${msg}`);
+    ctx.getWrappers().failTodoQ(todo.id, `proposeCommit failed: ${msg}`, "hunk-fail");
     ctx.bumpRejectedAttempts(agent.id);
     return "stale";
   }
-
-  try {
-  ctx.getWrappers().completeTodoQ(todo.id, commitTier);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    ctx.appendSystem(`[${agent.id}] commit lost race (todo reaped): ${msg}`);
-    return "lost-race";
-  }
-  ctx.maybeSettleHypothesisGroup(todo.id);
-  ctx.bumpCommitsPerAgent(agent.id);
-  ctx.addLinesPerAgent(agent.id, applyResult.linesAdded, applyResult.linesRemoved);
-  if (applyResult.commitSha) {
-    ctx.recordCriterionCommits(todo, applyResult.commitSha);
-  }
-  if (applyResult.commitSha) {
-    ctx.bumpStigmergyFileCounts(todo.expectedFiles, applyResult.commitSha);
-  }
-  return "committed";
+  ctx.appendSystem(
+    `[${agent.id}] ✓ proposed ${hunksToCommit.length} hunk(s) for todo ${todo.id.slice(0, 8)} — awaiting auditor approval`,
+  );
+  return "pending-commit";
 }

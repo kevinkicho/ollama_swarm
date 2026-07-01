@@ -60,6 +60,15 @@ export interface TodoQueueWrappers {
   /** Append a diagnostic finding (auditor / replanner notes). Emits
    *  finding_posted. */
   postFindingQ: (input: { agentId: string; text: string; createdAt: number }) => void;
+  /** Auditor-gated commits: mark in-progress → pending-commit with
+   *  proposed hunks. Emits todo_proposed. */
+  proposeCommitQ: (id: string, hunks: readonly unknown[], files: readonly string[]) => void;
+  /** Auditor-gated commits: approve pending-commit → completed.
+   *  Emits todo_committed + fires onTerminal. */
+  approveCommitQ: (id: string) => void;
+  /** Auditor-gated commits: reject pending-commit → in-progress with
+   *  reason. Emits todo_reverted. */
+  rejectCommitQ: (id: string, reason: string) => void;
 }
 
 export function makeTodoQueueWrappers(deps: TodoQueueWrapperDeps): TodoQueueWrappers {
@@ -142,6 +151,28 @@ export function makeTodoQueueWrappers(deps: TodoQueueWrapperDeps): TodoQueueWrap
     postFindingQ(input) {
       const f = findings.post(input);
       emit({ type: "finding_posted", finding: f });
+      scheduleStateWrite();
+    },
+
+    proposeCommitQ(id, hunks, files) {
+      todoQueue.proposeCommit(id, hunks, files);
+      const wire = v2QueueTodoToWireTodo(todoQueue.get(id)!);
+      emit({ type: "todo_proposed", todo: wire } as any);
+      scheduleStateWrite();
+    },
+
+    approveCommitQ(id) {
+      todoQueue.approveCommit(id);
+      const wire = v2QueueTodoToWireTodo(todoQueue.get(id)!);
+      emit({ type: "todo_committed", todoId: id } as any);
+      scheduleStateWrite();
+      onTerminal("committed", todoQueue.counts().pending);
+    },
+
+    rejectCommitQ(id, reason) {
+      todoQueue.rejectCommit(id, reason);
+      const wire = v2QueueTodoToWireTodo(todoQueue.get(id)!);
+      emit({ type: "todo_reverted", todoId: id, reason } as any);
       scheduleStateWrite();
     },
   };

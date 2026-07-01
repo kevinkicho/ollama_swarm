@@ -586,9 +586,9 @@ export class BlackboardRunner implements SwarmRunner {
 
   private async runWorkers(workers: Agent[]): Promise<void> { await runWorkersExtracted(this.workerContext(), workers); }
   private async runWorker(agent: Agent): Promise<void> { await runWorkerExtracted(this.workerContext(), agent); }
-  private async executeBuildTodo(agent: Agent, todo: Todo): Promise<"committed" | "stale" | "lost-race" | "aborted"> { return executeBuildTodoExtracted(this.workerContext(), agent, todo); }
+  private async executeBuildTodo(agent: Agent, todo: Todo): Promise<"committed" | "stale" | "lost-race" | "aborted" | "pending-commit"> { return executeBuildTodoExtracted(this.workerContext(), agent, todo); }
   private maybeSettleHypothesisGroup(todoId: string): void { maybeSettleHypothesisGroupExtracted(this.workerContext(), todoId); }
-  private async executeWorkerTodo(agent: Agent, todo: Todo): Promise<"committed" | "stale" | "lost-race" | "aborted"> { return executeWorkerTodoExtracted(this.workerContext(), agent, todo); }
+  private async executeWorkerTodo(agent: Agent, todo: Todo): Promise<"committed" | "stale" | "lost-race" | "aborted" | "pending-commit"> { return executeWorkerTodoExtracted(this.workerContext(), agent, todo); }
 
   private enqueueReplan(todoId: string): void { enqueueReplanExtracted(this.replanContext(), todoId); }
   private async processReplanQueue(): Promise<void> { await processReplanQueueExtracted(this.replanContext()); }
