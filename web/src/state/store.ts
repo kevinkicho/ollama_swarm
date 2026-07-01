@@ -121,6 +121,8 @@ export interface SwarmStore {
   mapperSlices: Record<string, string[]>;
   // Direction 1 Phase 1: outcome score from rubric grading at run end.
   outcome?: { score: number; verdict: string; dimensions: Array<{ id: string; label: string; score: number; note: string }> };
+  // P2: brain proposals from post-run analysis.
+  brainProposals: Array<{ title: string; description: string; affectedComponent: string; priority: "high" | "medium" | "low" }>;
 
   setPhase: (phase: SwarmPhase, round: number) => void;
   upsertAgent: (a: AgentState) => void;
@@ -164,6 +166,7 @@ export interface SwarmStore {
   upsertPheromone: (file: string, state: PheromoneEntry) => void;
   setMapperSlices: (slices: Record<string, string[]>) => void;
   setOutcome: (outcome: { score: number; verdict: string; dimensions: Array<{ id: string; label: string; score: number; note: string }> }) => void;
+  setBrainProposals: (proposals: Array<{ title: string; description: string; affectedComponent: string; priority: "high" | "medium" | "low" }>) => void;
 
   setError: (msg: string | undefined) => void;
   // Dismiss the topbar error banner (sets error → undefined).
@@ -230,6 +233,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   pheromones: {},
   mapperSlices: {},
   outcome: undefined,
+        brainProposals: [],
 
   setPhase: (phase, round) =>
     set((s) => {
@@ -468,6 +472,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
     set((s) => ({ pheromones: { ...s.pheromones, [file]: state } })),
   setMapperSlices: (slices) => set({ mapperSlices: { ...slices } }),
   setOutcome: (outcome) => set({ outcome }),
+  setBrainProposals: (proposals) => set({ brainProposals: proposals }),
 
   setError: (msg) =>
     set((s) =>
@@ -500,6 +505,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       pheromones: {},
       mapperSlices: {},
       outcome: undefined,
+        brainProposals: [],
     }),
   // Task #37 (partial): clear per-run state when a new run kicks off
   // WITHOUT blowing away transcript/findings/board — those are the
@@ -536,6 +542,8 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         // leak category; cleared on new-run boundary.
         mapperSlices: {},
         outcome: undefined,
+        brainProposals: [],
+        brainProposals: [],
         // Task #189: clear stale topbar error when a new run starts.
         // A failed prior run's "blackboard run failed: …" banner
         // shouldn't ride along into the new run's session — if the
