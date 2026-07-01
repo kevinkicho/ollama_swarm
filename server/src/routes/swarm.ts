@@ -720,53 +720,45 @@ export function swarmRouter(orch: Orchestrator): Router {
   // parent dir is unreadable — never throws.
   r.get("/runs", async (req: Request, res: Response) => {
     const status = orch.status();
-    // 2026-04-24: when idle (no active run, status.localPath
-    // undefined), fall back to the orchestrator's cached
-    // lastParentPath so the dropdown stays useful between runs.
-    // Without this fallback the dropdown was empty whenever the user
-    // wasn't mid-run — which is most of the time.
-    // 2026-06-30: also accept ?parentPath= from the frontend so the
-    // history works even when lastParentPath was never set (fresh
-    // server start, no run yet).
+    // Always respect explicit ?parentPath= from frontend.
+    // Fall back to active run's parent, then cached lastParentPath.
     const explicitParent = typeof req.query.parentPath === "string"
       ? req.query.parentPath
       : undefined;
-    const activeParent = status.localPath
-      ? path.dirname(path.resolve(status.localPath))
-      : explicitParent ?? orch.getLastParentPath();
-    // #238 (2026-04-28): when ?includeOtherParents=true, also scan
-    // every parent path the orchestrator has tracked. Lets the UI
-    // show prior runs even when the active parent is fresh (per the
-    // option-C UX: clone-scoped first + a footer link surfacing the
-    // global view).
+    const activeParent = explicitParent
+      ?? (status.localPath ? path.dirname(path.resolve(status.localPath)) : null)
+      ?? orch.getLastParentPath();
+    // #238: when ?includeOtherParents=true, also scan
+    // every parent path the orchestrator has tracked.
     const includeOtherParents =
       typeof req.query.includeOtherParents === "string" &&
       req.query.includeOtherParents.toLowerCase() === "true";
     const parentsToScan = new Set<string>();
     if (activeParent) parentsToScan.add(activeParent);
     // Also scan the project's logs/ directory and its subdirectories
-    // (runs are stored in logs/{runId}/)
+    // (runs are stored in logs/{runId}/). Use activeParent which respects
+    // the frontend's ?parentPath= even when no run is active.
     if (activeParent) {
-      const projectDir = status.localPath ? path.dirname(path.resolve(status.localPath)) : null;
-      if (projectDir) {
-        const logsDir = path.join(projectDir, "logs");
-        try {
-          const stat = await fs.stat(logsDir);
-          if (stat.isDirectory()) {
-            // Scan each logs/{runId}/ subdirectory
-            const logEntries = await fs.readdir(logsDir);
-            for (const entry of logEntries) {
-              const entryPath = path.join(logsDir, entry);
-              try {
-                const entryStat = await fs.stat(entryPath);
-                if (entryStat.isDirectory()) {
-                  parentsToScan.add(entryPath);
-                }
-              } catch { /* skip */ }
-            }
+      // activeParent may already be a logs/ dir (frontend sends logs/ path)
+      // or a project root. Check both.
+      const logsDir = activeParent.endsWith("/logs") || activeParent.endsWith("\\logs")
+        ? activeParent
+        : path.join(activeParent, "logs");
+      try {
+        const stat = await fs.stat(logsDir);
+        if (stat.isDirectory()) {
+          const logEntries = await fs.readdir(logsDir);
+          for (const entry of logEntries) {
+            const entryPath = path.join(logsDir, entry);
+            try {
+              const entryStat = await fs.stat(entryPath);
+              if (entryStat.isDirectory()) {
+                parentsToScan.add(entryPath);
+              }
+            } catch { /* skip */ }
           }
-        } catch { /* logs/ doesn't exist — fine */ }
-      }
+        }
+      } catch { /* logs/ doesn't exist — fine */ }
     }
     if (includeOtherParents) {
       for (const p of orch.getKnownParentPaths()) parentsToScan.add(p);
