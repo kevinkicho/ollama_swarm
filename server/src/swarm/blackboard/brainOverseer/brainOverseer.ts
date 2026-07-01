@@ -6,6 +6,7 @@
 
 import { readPatternCache, writePatternCache, updateCache, type PatternCacheData } from "./patternCache.js";
 import { readPatchCache, writePatchCache, computeContentHash, type PatchCacheData } from "./patchCache.js";
+import { readProposals, appendProposal, type PersistedProposal } from "./proposalStore.js";
 import type { InteractionTracker, InteractionChain } from "./interactionTracker.js";
 import type { ExceptionCollector, PatternSummary } from "./exceptionCollector.js";
 import { buildAnalysisPrompt } from "./prompt.js";
@@ -63,6 +64,11 @@ export async function runBrainAnalysis(
     }
   } else {
     proposals = generateProposals(exceptions, updatedCache);
+  }
+
+  // Persist proposals for cross-run memory
+  for (const proposal of proposals) {
+    await appendProposal(clonePath, proposal);
   }
 
   return {
