@@ -15,6 +15,7 @@ import { RunCompareReplayPanel } from "./components/RunCompareReplayPanel";
 import { ActiveRunsPanel } from "./components/ActiveRunsPanel";
 import { SwarmStoreProvider } from "./state/SwarmStoreProvider";
 import type { RunSummary } from "./types";
+import { PlanningTab } from "./components/PlanningTab";
 
 // Task #65 (2026-04-24): URL-based review mode. When the user opens a
 // past run from the history modal we set ?review=<runId>&path=<encoded>.
@@ -82,6 +83,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<AppMain />} />
       <Route path="/runs/:runId" element={<RunRouteWrapper />} />
+      <Route path="/planning" element={<PlanningTab />} />
     </Routes>
   );
 }
