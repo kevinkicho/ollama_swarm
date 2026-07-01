@@ -310,6 +310,11 @@ export class TodoQueue {
       t.retries += 1;
       return;
     }
+    if (t.status === "completed" || t.status === "skipped") {
+      // Already terminal — race between worker commit and replanner fail.
+      // Silently ignore; the work is done.
+      return;
+    }
     if (t.status !== "in-progress") {
       throw new Error(`Cannot fail todo ${id}: status=${t.status}`);
     }
