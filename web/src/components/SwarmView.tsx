@@ -262,7 +262,7 @@ export function SwarmView() {
   };
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex flex-col min-h-full">
       <CloneBanner />
       <IdentityStrip />
       <div className="flex-1 grid grid-cols-[280px_1fr] min-h-0">
