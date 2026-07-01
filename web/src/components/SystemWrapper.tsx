@@ -7,6 +7,10 @@ import { BrainProposalsPanel } from "./BrainProposalsPanel";
 import { BrainActivityPanel } from "./BrainActivityPanel";
 import { QuickNavPanel } from "./QuickNavPanel";
 import { useSwarm } from "../state/store";
+import { RunHistoryDropdown } from "./RunHistory";
+import { EventLogPanel } from "./EventLogPanel";
+import SystemHealthDashboard from "./SystemHealthDashboard";
+import { NotificationPreferences } from "./NotificationPreferences";
 
 interface RunSummary {
   runId: string;
@@ -90,6 +94,15 @@ export function SystemWrapper({ children }: { children: React.ReactNode }) {
             value={brainProposals.length > 0 ? `${brainProposals.length} prop` : "idle"}
             color={brainProposals.length > 0 ? "text-violet-400" : "text-ink-500"}
           />
+
+          {/* Separator */}
+          <span className="text-ink-700">|</span>
+
+          {/* History + Event Log + Health + Notifications */}
+          <RunHistoryDropdown />
+          <EventLogPanel />
+          <SystemHealthDashboard />
+          <NotificationPreferences />
         </div>
       </header>
 
