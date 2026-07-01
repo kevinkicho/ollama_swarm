@@ -5,6 +5,36 @@
 
 ---
 
+## Queued: Brain Implementation (see docs/ARCHITECTURE-VISION.md)
+
+### P2: Wire LLM Analysis (6-8 hr)
+- [ ] Call `prompt.ts` with real LLM in `brainOverseer.ts`
+- [ ] Wire `councilBrainAdapter.ts` for council-based analysis
+- [ ] Create `BrainProposalsPanel.tsx` UI component
+- [ ] Add proposals state to Zustand store
+
+### P3: Cross-Run Memory (3-4 hr)
+- [ ] Persist proposals to `.swarm-improvements/proposals.jsonl`
+- [ ] Track applied proposals in `.swarm-improvements/applied.jsonl`
+- [ ] Load prior proposals into planner seed
+
+### P4: Brain Provisions Runs (4-6 hr)
+- [ ] Brain generates RunConfig from proposals
+- [ ] Brain calls `orchestrator.start(cfg)`
+- [ ] Brain monitors run health in real-time
+
+### P5: Self-Upgrade (12-16 hr)
+- [ ] `selfUpgrader.ts` — applies patches to own code
+- [ ] `UpgradeMode.tsx` — terminal-style UI
+- [ ] Rollback mechanism with git tags
+
+### P6: Brain-as-OS (20-30 hr)
+- [ ] Brain as persistent service
+- [ ] Brain manages Orchestrator
+- [ ] Real-time system monitoring
+
+---
+
 ## Done recently
 
 ### 2026-06-26 (evening) — Council architecture refactor, AI decision gates
