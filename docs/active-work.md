@@ -39,6 +39,15 @@
 - [ ] Brain manages Orchestrator
 - [ ] Real-time system monitoring
 
+### P7: System Wrapper UI (15-20 hr)
+- [ ] P7.1: System status component (Ollama health, model, provider keys)
+- [ ] P7.2: Run queue component (active/queued/past runs with actions)
+- [ ] P7.3: Brain panel enhancement (wire Apply/Reject, health indicator)
+- [ ] P7.4: Quick navigation (sidebar with run switching)
+- [ ] P7.5: Layout restructure (persistent system sidebar)
+- [ ] P7.6: Cross-run metrics (total tokens, cost, success rate)
+- See `docs/plans/system-wrapper-ui.md` for detailed plan and UI sketch
+
 ---
 
 ## Done recently
