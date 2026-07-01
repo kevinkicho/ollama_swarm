@@ -650,15 +650,15 @@ export class Orchestrator {
     }
     this.startInProgress = true;
 
-    // T-Item-MultiTenant Phase 4 (2026-05-04): cap on concurrent runs.
-    await this.cleanupStaleRuns();
-    const cap = this.opts.maxConcurrentRuns ?? 4;
-    if (this.runs.size >= cap) {
-      this.startInProgress = false;
-      throw new Error(
-        `Concurrent-run cap reached (${this.runs.size}/${cap}). Stop a run before starting another.`,
-      );
-    }
+    try {
+      // T-Item-MultiTenant Phase 4 (2026-05-04): cap on concurrent runs.
+      await this.cleanupStaleRuns();
+      const cap = this.opts.maxConcurrentRuns ?? 4;
+      if (this.runs.size >= cap) {
+        throw new Error(
+          `Concurrent-run cap reached (${this.runs.size}/${cap}). Stop a run before starting another.`,
+        );
+      }
     // Drift check: validate prompt assertions before starting the run.
     // Non-blocking — drift warnings are informational. The run proceeds
     // regardless, but the user sees drift warnings in the system transcript.
@@ -896,6 +896,10 @@ export class Orchestrator {
       // by the time we get here the START phase is done.
       this.amendments.close(runId);
       this.startInProgress = false;
+    }
+    } catch (err) {
+      this.startInProgress = false;
+      throw err;
     }
   }
 
