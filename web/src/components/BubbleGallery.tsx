@@ -7,6 +7,7 @@
 // shared/src/transcriptEntrySummary.ts. Hand-crafting (not derived from
 // real run data) keeps the gallery deterministic and audit-friendly.
 
+import React, { useState } from "react";
 import type { TranscriptEntry, TranscriptEntrySummary } from "../types";
 import { MessageBubble } from "./transcript/MessageBubble";
 
@@ -434,6 +435,22 @@ const fixtures: Array<{ label: string; entries: TranscriptEntry[] }> = [
 ];
 
 export function BubbleGallery() {
+  const [searchTerm, setSearchTerm] = useState("");
+
+  function highlightText(text: string, term: string): React.ReactNode {
+    if (!term) return text;
+    const lower = text.toLowerCase();
+    const idx = lower.indexOf(term.toLowerCase());
+    if (idx === -1) return text;
+    return (
+      <>
+        {text.slice(0, idx)}
+        <mark className="bg-yellow-500/30 text-ink-100 rounded px-0.5">{text.slice(idx, idx + term.length)}</mark>
+        {text.slice(idx + term.length)}
+      </>
+    );
+  }
+
   return (
     <div className="min-h-full bg-ink-900 text-ink-100 p-6 overflow-y-auto">
       <header className="mb-6 pb-3 border-b border-ink-700">
@@ -441,15 +458,34 @@ export function BubbleGallery() {
         <p className="text-xs text-ink-400 mt-1 font-mono">
           {fixtures.length} fixtures · ?gallery=1 · 2026-04-27 · use for visual audit of each summary.kind variant
         </p>
+        <div className="mt-2">
+          <input
+            type="text"
+            placeholder="Search transcript entries..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full px-3 py-2 rounded bg-ink-700 text-ink-100 border border-ink-600 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+        </div>
       </header>
       <div className="space-y-6 max-w-4xl mx-auto">
         {fixtures.map((f) => (
           <section key={f.label} data-fixture-label={f.label} className="border border-ink-700/60 rounded-lg p-4 bg-ink-800/30">
             <h2 className="text-[11px] font-mono uppercase tracking-wide text-ink-400 mb-3 break-all">{f.label}</h2>
             <div className="space-y-2">
-              {f.entries.map((e) => (
-                <MessageBubble key={e.id} entry={e} />
-              ))}
+              {f.entries
+                .filter((e) => !searchTerm || e.text.toLowerCase().includes(searchTerm.toLowerCase()))
+                .map((e) => (
+                  searchTerm ? (
+                    <div key={e.id} className="p-2 rounded bg-ink-800/50">
+                      <p className="text-sm">
+                        {highlightText(e.text, searchTerm)}
+                      </p>
+                    </div>
+                  ) : (
+                    <MessageBubble key={e.id} entry={e} />
+                  )
+                ))}
             </div>
           </section>
         ))}
