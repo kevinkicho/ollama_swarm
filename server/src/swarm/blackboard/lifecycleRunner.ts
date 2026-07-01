@@ -762,7 +762,7 @@ export async function planAndExecute(
         // Create a prompt function that uses promptPlannerSafely
         const brainModel = ctx.getActive()?.model ?? "deepseek-v4-flash:cloud";
         const brainPromptFn = async (prompt: string, model: string, maxTokens: number, timeoutMs: number): Promise<string> => {
-          const plannerAgent: Agent = { id: "brain", index: 0, model, port: 0, sessionId: "brain", status: "thinking", cwd: ctx.getActive()?.localPath ?? "" };
+          const plannerAgent: Agent = { id: "brain", index: 0, model, port: 0, sessionId: "brain", cwd: ctx.getActive()?.localPath ?? "" };
           const { response } = await ctx.promptPlannerSafely(
             plannerAgent,
             prompt,

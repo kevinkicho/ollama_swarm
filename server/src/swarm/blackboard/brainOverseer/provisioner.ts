@@ -20,6 +20,10 @@ export interface RunProvisionerOpts {
   getOrchestrator: () => { start: (cfg: unknown) => Promise<{ runId?: string }>; status: () => { activeRuns: number } };
   /** Maximum concurrent runs. */
   maxConcurrentRuns: number;
+  /** Check if a run can be started. */
+  canStartRun: () => boolean;
+  /** Get the number of active runs. */
+  getActiveRunCount: () => number;
 }
 
 /**

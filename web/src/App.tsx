@@ -19,6 +19,7 @@ import { PlanningTab } from "./components/PlanningTab";
 import SystemHealthDashboard from "./components/SystemHealthDashboard";
 import { notificationService } from "./services/notificationService";
 import { NotificationPreferences } from "./components/NotificationPreferences";
+import { SystemWrapper } from "./components/SystemWrapper";
 
 // Task #65 (2026-04-24): URL-based review mode. When the user opens a
 // past run from the history modal we set ?review=<runId>&path=<encoded>.
@@ -166,52 +167,28 @@ function AppMain() {
   const showSetup = review === null && phase === "idle";
 
   return (
-    <div className="h-full flex flex-col">
-      <header className="px-6 py-3 border-b border-ink-700 flex items-center justify-between">
-        <div className="flex items-baseline gap-3">
-          <h1 className="text-lg font-semibold tracking-tight">ollama_swarm</h1>
-          {review ? (
-            <>
-              <span className="text-xs text-amber-300 font-mono px-2 py-0.5 rounded bg-amber-950/40 border border-amber-700/50">
-                REVIEW MODE · run {review.runId.slice(0, 8)}
-              </span>
-              {reviewedRunIsLive ? (
-                <ReviewActiveControls />
-              ) : null}
-            </>
-          ) : null}
+    <SystemWrapper>
+      {/* Review mode banner */}
+      {review ? (
+        <div className="px-4 py-1.5 bg-amber-950/40 border-b border-amber-700/50 flex items-center gap-2">
+          <span className="text-xs text-amber-300 font-mono">
+            REVIEW MODE · run {review.runId.slice(0, 8)}
+          </span>
+          {reviewedRunIsLive ? <ReviewActiveControls /> : null}
         </div>
-        <div className="flex items-center gap-3">
-          <RuntimeTicker />
-          <PhasePill />
-          {/* Task #125: token-usage widget. Shows rolling 1h/5h/24h/7d
-              consumption pulled from the Ollama proxy (#133). User
-              supplies their own caps — Ollama doesn't expose
-              subscription quotas via API. */}
-          <UsageWidget />
-          {/* Task #85: history dropdown lives in the App header so it's
-              accessible even before any run starts (SetupForm flash
-              page). The /api/swarm/runs route falls back to
-              lastParentPath when no run is active, so the dropdown
-              still loads recent history without a current run. */}
-          <RunHistoryDropdown parentPath={parentPath} />
-          {/* V2 Step 6b: read-only event-log viewer (logs/current.jsonl
-              parsed via EventLogReaderV2 + summarized server-side). */}
-          <EventLogPanel />
-          <SystemHealthDashboard />
-          <NotificationPreferences />
-        </div>
-      </header>
+      ) : null}
+
+      {/* Error banner */}
       {error ? <ErrorBanner error={error} /> : null}
-      {/* T-Item-MultiTenant Phase 7 (2026-05-04): server-wide active-
-          runs list. Renders nothing when ≤1 runs are active so single-
-          run users see no UI change. Doesn't depend on the SwarmView
-          (lives ABOVE main) so it shows on the SetupForm too. */}
+
+      {/* Active runs panel (when ≥2 runs) */}
       {review === null && <ActiveRunsPanel />}
-      <main className="flex-1 overflow-hidden">
+
+      {/* Main content: SetupForm or SwarmView */}
+      <div className="flex-1 overflow-hidden">
         {showSetup ? <SetupForm /> : <SwarmView />}
-      </main>
-    </div>
+      </div>
+    </SystemWrapper>
   );
 }
 

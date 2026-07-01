@@ -45,6 +45,8 @@ export function createBrainService(opts: BrainServiceOpts): BrainService {
   const provisioner = createRunProvisioner({
     getOrchestrator: opts.getOrchestrator,
     maxConcurrentRuns: opts.maxConcurrentRuns,
+    canStartRun: () => opts.getOrchestrator().status().activeRuns < opts.maxConcurrentRuns,
+    getActiveRunCount: () => opts.getOrchestrator().status().activeRuns,
   });
 
   const queue = createBrainQueue();

@@ -4,13 +4,6 @@ import { AgentPanel } from "./AgentPanel";
 import { BoardView } from "./BoardView";
 import { BrainProposalsPanel } from "./BrainProposalsPanel";
 import { ContractPanel } from "./ContractPanel";
-import { SystemStatusPanel } from "./SystemStatusPanel";
-import { RunQueuePanel } from "./RunQueuePanel";
-import { QuickNavPanel } from "./QuickNavPanel";
-import { MetricsOverviewPanel } from "./MetricsOverviewPanel";
-import { PatchMonitorPanel } from "./PatchMonitorPanel";
-import { PatchPreviewPanel } from "./PatchPreviewPanel";
-import { BrainActivityPanel } from "./BrainActivityPanel";
 import { Transcript } from "./Transcript";
 import { MetricsPanel } from "./MetricsPanel";
 import { PheromonePanel } from "./PheromonePanel";
@@ -21,12 +14,12 @@ import { OwSubtasksPanel } from "./OwSubtasksPanel";
 import { MemoryLogPanel } from "./MemoryLogPanel";
 import { CloneBanner } from "./CloneBanner";
 import { IdentityStrip } from "./IdentityStrip";
+import { ProgressBar } from "./ProgressBar";
+import { TranscriptTimeline } from "./TranscriptTimeline";
+import { PlanningTab } from "./PlanningTab";
 import { OutcomeChip } from "./OutcomeChip";
 import { fmtMs, roleForRow } from "./RunHistory";
 
-import { TranscriptTimeline } from "./TranscriptTimeline";
-import { PlanningTab } from "./PlanningTab";
-import { ProgressBar } from "./ProgressBar";
 
 type Tab =
   | "transcript"
@@ -326,15 +319,6 @@ export function SwarmView() {
             list sourced from summary.agents so the sidebar isn't
             misleadingly empty after a finished run. */}
         {agentList.length === 0 ? <SidebarSummaryAgents /> : null}
-        <SystemStatusPanel />
-        <RunQueuePanel />
-        <MetricsOverviewPanel />
-        <PatchMonitorPanel />
-        <BrainActivityPanel />
-        <QuickNavPanel activeRunId={activeRunId} />
-        {brainProposals.length > 0 ? (
-          <BrainProposalsPanel proposals={brainProposals} />
-        ) : null}
       </aside>
       <section className="flex flex-col overflow-hidden">
         <ProgressBar />

@@ -270,7 +270,7 @@ export class Orchestrator {
     import("../swarm/blackboard/brainOverseer/brainService.js").then(({ createBrainService }) => {
       this.brainService = createBrainService({
         maxConcurrentRuns: this.opts.maxConcurrentRuns ?? 4,
-        getOrchestrator: () => this,
+        getOrchestrator: () => this as any,
       });
     });
   }

@@ -543,7 +543,6 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         mapperSlices: {},
         outcome: undefined,
         brainProposals: [],
-        brainProposals: [],
         // Task #189: clear stale topbar error when a new run starts.
         // A failed prior run's "blackboard run failed: …" banner
         // shouldn't ride along into the new run's session — if the

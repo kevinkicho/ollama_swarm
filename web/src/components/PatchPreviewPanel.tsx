@@ -4,6 +4,7 @@ interface PatchHunk {
   file: string;
   search?: string;
   replace?: string;
+  content?: string;
   op: "replace" | "create" | "append" | "delete";
 }
 
