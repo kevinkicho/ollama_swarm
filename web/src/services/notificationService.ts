@@ -4,15 +4,33 @@ export interface NotificationPreferences {
   onFailure: boolean;
 }
 
+type NotificationEvent = 'run:completed' | 'run:failed';
+type NotificationCallback = (...args: any[]) => void;
+
 export class NotificationService {
   private preferences: NotificationPreferences = {
     enabled: true,
     onComplete: true,
     onFailure: true
   };
+  private listeners: Map<NotificationEvent, NotificationCallback[]> = new Map();
 
   setPreferences(prefs: Partial<NotificationPreferences>): void {
     this.preferences = { ...this.preferences, ...prefs };
+  }
+
+  on(event: NotificationEvent, callback: NotificationCallback): () => void {
+    const list = this.listeners.get(event) ?? [];
+    list.push(callback);
+    this.listeners.set(event, list);
+    return () => {
+      const idx = list.indexOf(callback);
+      if (idx >= 0) list.splice(idx, 1);
+    };
+  }
+
+  emit(event: NotificationEvent, ...args: any[]): void {
+    for (const cb of this.listeners.get(event) ?? []) cb(...args);
   }
 
   async requestPermission(): Promise<boolean> {
@@ -50,3 +68,6 @@ export class NotificationService {
     });
   }
 }
+
+// Singleton instance for convenience
+export const notificationService = new NotificationService();

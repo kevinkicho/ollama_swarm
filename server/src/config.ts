@@ -43,6 +43,9 @@ const Schema = z.object({
   // to disable the proxy entirely (legacy direct-to-Ollama mode —
   // token tracking will be empty).
   OLLAMA_PROXY_PORT: z.coerce.number().int().min(0).max(65_535).default(11533),
+  // Override log directory for concurrent server instances.
+  // Default: <repoRoot>/logs — each server writes to its own directory.
+  LOG_DIR: z.string().optional(),
   DEFAULT_MODEL: z.string().default("deepseek-v4-flash:cloud"),
   // Blackboard-only worker default. Workers do diff-generation and
   // benefit less from the planner's heavier reasoning model — gemma4

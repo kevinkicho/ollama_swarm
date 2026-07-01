@@ -4,7 +4,7 @@ import { useSwarm } from "./state/store";
 import { useSwarmSocket } from "./hooks/useSwarmSocket";
 import { SetupForm } from "./components/SetupForm";
 import { SwarmView } from "./components/SwarmView";
-import { RunHistoryDropdown, RunHistoryViewer } from "./components/RunHistory";
+import { RunHistoryDropdown } from "./components/RunHistory";
 import { EventLogPanel } from "./components/EventLogPanel";
 import { UsageWidget } from "./components/UsageWidget";
 import { ErrorBanner } from "./components/ErrorBanner";
@@ -16,7 +16,7 @@ import { ActiveRunsPanel } from "./components/ActiveRunsPanel";
 import { SwarmStoreProvider } from "./state/SwarmStoreProvider";
 import type { RunSummary } from "./types";
 import { PlanningTab } from "./components/PlanningTab";
-import { SystemHealthDashboard } from "./components/SystemHealthDashboard";
+import SystemHealthDashboard from "./components/SystemHealthDashboard";
 import { notificationService } from "./services/notificationService";
 import { NotificationPreferences } from "./components/NotificationPreferences";
 
@@ -87,7 +87,6 @@ export default function App() {
       <Route path="/" element={<AppMain />} />
       <Route path="/runs/:runId" element={<RunRouteWrapper />} />
       <Route path="/planning" element={<PlanningTab />} />
-      <Route path="/history" element={<RunHistoryViewer />} />
     </Routes>
   );
 }

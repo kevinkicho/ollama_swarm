@@ -86,7 +86,7 @@ server.on("upgrade", (req: IncomingMessage, socket: import("node:stream").Duplex
   if (!req.url?.startsWith("/ws")) { socket.destroy(); return; }
   wss.handleUpgrade(req, socket, head, (ws) => { wss.emit("connection", ws, req); });
 });
-const eventLogger = createEventLogger({ logDir: path.join(repoRoot, "logs") });
+const eventLogger = createEventLogger({ logDir: config.LOG_DIR ?? path.join(repoRoot, "logs") });
 const broadcaster = new Broadcaster(eventLogger);
 
 // Unit 38: shared PID tracker for orphan reclamation across dev-server
