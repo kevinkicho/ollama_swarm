@@ -787,6 +787,10 @@ export async function planAndExecute(
         for (const p of brainResult.proposals) {
           ctx.appendSystem(`[brain-overseer] Proposal: ${p.title} (${p.priority}) — ${p.affectedComponent}`);
         }
+        // Log summary analysis
+        ctx.appendSystem(
+          `[brain-overseer] Historical: ${brainResult.summaryAnalysis.totalRuns} runs, ${(brainResult.summaryAnalysis.successRate * 100).toFixed(0)}% success, trend: ${brainResult.summaryAnalysis.recentTrend}`,
+        );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         ctx.appendSystem(`Brain overseer analysis failed: ${msg}`);
