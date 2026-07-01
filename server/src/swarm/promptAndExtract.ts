@@ -19,7 +19,7 @@
 // per-runner watchdogs use.
 
 import type { Agent } from "../services/AgentManager.js";
-import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
+import { toOpenCodeModelRef } from "@ollama-swarm/shared/providers.js";
 import { chatOnce } from "./chatOnce.js";
 import {
   EMPTY_RESPONSE_RETRY_SUFFIX,

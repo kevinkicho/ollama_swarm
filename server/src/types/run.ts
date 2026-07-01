@@ -132,13 +132,13 @@ export interface SwarmStatusRunConfig {
   // (the `agentRole`/`agentModel` helpers in SwarmView were the third
   // copy of that logic). Optional during the rollout — older clients
   // and tests still work via the legacy fields.
-  topology?: import("../../shared/src/topology.js").Topology;
+  topology?: import("../../../shared/src/topology.js").Topology;
 }
 
 export interface SwarmStatusBoard {
-  todos: import("./swarm/blackboard/types.js").Todo[];
-  findings: import("./swarm/blackboard/types.js").Finding[];
-  counts: BoardCountsDTO;
+  todos: import("../swarm/blackboard/types.js").Todo[];
+  findings: import("../swarm/blackboard/types.js").Finding[];
+  counts: import("./events.js").BoardCountsDTO;
 }
 
 export interface SwarmStatusLatencySample {

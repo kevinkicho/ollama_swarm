@@ -12,7 +12,11 @@
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": false,
-    "sourceMap": true
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@ollama-swarm/shared/*": ["../shared/src/*"]
+    }
   },
   "include": ["src/**/*", "../shared/src/**/*"],
   "exclude": ["src/**/*.test*"]

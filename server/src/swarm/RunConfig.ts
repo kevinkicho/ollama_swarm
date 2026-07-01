@@ -347,7 +347,7 @@ export interface RunConfig {
    * - moaProposerModel: model used for the N proposers in Layer 1
    *   (cheap + fast, e.g. gemma4:31b-cloud)
    * - moaAggregatorModel: model used for the K aggregators in Layer 2
-   *   (slower + smarter, e.g. nemotron-3-super:cloud or sonnet)
+   *   (slower + smarter, e.g. deepseek-v4-flash:cloud or sonnet)
    *
    * Each falls back to cfg.model when absent — preserves single-model
    * behavior. MoA-only.
@@ -380,7 +380,7 @@ export interface RunConfig {
    * mid-lead tiers.
    *
    * Example:
-   *   orchestratorModel: "nemotron-3-super:cloud"  // strategy
+   *   orchestratorModel: "deepseek-v4-flash:cloud"  // strategy
    *   midLeadModel: "glm-5.1:cloud"                // tactics
    *   workerModel: "gemma4:31b-cloud"              // implementation
    *
@@ -727,8 +727,8 @@ export interface RunConfig {
    * uses cfg.model). Round-robin only.
    *
    * Example:
-   *   { critic: "nemotron-3-super:cloud",
-   *     "gap-finder": "nemotron-3-super:cloud",
+   *   { critic: "deepseek-v4-flash:cloud",
+   *     "gap-finder": "deepseek-v4-flash:cloud",
    *     synthesizer: "glm-5.1:cloud",
    *     builder: "gemma4:31b-cloud" }
    */

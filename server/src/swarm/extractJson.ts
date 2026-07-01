@@ -4,4 +4,4 @@
 // (`import { extractJsonFromText } from "../extractJson.js"`) keep
 // working without touching every prompt parser.
 
-export { extractJsonFromText, extractFirstBalanced } from "../../../shared/src/extractJson.js";
+export { extractJsonFromText, extractFirstBalanced } from "@ollama-swarm/shared/extractJson.js";

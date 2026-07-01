@@ -10,7 +10,7 @@ import {
   ANTHROPIC_MODELS,
   OPENAI_MODELS,
   stripProviderPrefix,
-} from "../../../shared/src/providers.js";
+} from "@ollama-swarm/shared/providers.js";
 
 test("costForUsage — ollama models cost $0", () => {
   assert.equal(

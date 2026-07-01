@@ -43,7 +43,7 @@ import { DiscussionRunnerBase } from "./DiscussionRunnerBase.js";
 import { extractText } from "./extractText.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { describeSdkError } from "./sdkError.js";
-import { stripAgentText } from "../../../shared/src/stripAgentText.js";
+import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
 import {
   detectConvergence,
   pickMostCentralAggregator,

@@ -45,6 +45,7 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         "@shared": path.resolve(__dirname, "..", "shared", "src"),
+        "@ollama-swarm/shared": path.resolve(__dirname, "..", "shared", "src"),
       },
     },
     define: {

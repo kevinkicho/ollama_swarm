@@ -30,7 +30,7 @@ function loadSrc(file: string): string {
 }
 
 const OPT_IN_RUNNERS: ReadonlyArray<{ files: string[]; presetName: string; minWiringSites: number }> = [
-  { files: ["CouncilRunner.ts"], presetName: "council", minWiringSites: 1 },
+  { files: ["CouncilRunner.ts", "councilDeliverable.ts"], presetName: "council", minWiringSites: 1 },
   { files: ["MoaRunner.ts", "moaDeliverableWriter.ts"], presetName: "moa", minWiringSites: 1 },
   { files: ["MapReduceRunner.ts", "mapReduceDeliverableWriter.ts"], presetName: "map-reduce", minWiringSites: 1 },
   { files: ["OrchestratorWorkerRunner.ts"], presetName: "orchestrator-worker", minWiringSites: 1 },

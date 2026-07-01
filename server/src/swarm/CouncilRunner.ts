@@ -3,13 +3,14 @@ import type { Agent } from "../services/AgentManager.js";
 
 import type {
   TranscriptEntry,
+  SwarmEvent,
 } from "../types.js";
 import type { RunConfig, RunnerOpts } from "./SwarmRunner.js";
 import { DiscussionRunnerBase } from "./DiscussionRunnerBase.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 
 import { buildSeedSummary } from "./runSummary.js";
-import { extractProviderText, parseJsonArrayFromResponse } from "./councilUtils.js";
+import { extractProviderText, parseJsonArrayFromResponse, createTimeoutController } from "./councilUtils.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 
@@ -78,12 +79,12 @@ export class CouncilRunner extends DiscussionRunnerBase {
     this.state = buildCouncilAdapterState(
       cfg,
       destPath,
-      this.opts.manager,
-      this.opts.repos,
+      this.opts.manager as any,
+      this.opts.repos as any,
       (msg) => this.appendSystem(msg),
-      (agent, text) => this.appendAgent(agent, text),
-      (e) => this.opts.emit(e),
-      (entry) => this.opts.logDiag?.(entry),
+      (agent, text) => { const entry: TranscriptEntry = { id: randomUUID(), role: "agent", agentId: agent.id, agentIndex: agent.index, text, ts: Date.now() }; this.transcript.push(entry); this.opts.emit({ type: "transcript_append", entry } as any); },
+      (e) => this.opts.emit(e as SwarmEvent),
+      (entry) => this.opts.logDiag?.(entry as any),
     );
 
     // Gather project context
@@ -266,10 +267,10 @@ export class CouncilRunner extends DiscussionRunnerBase {
             this.stats,
             this.runDiscussionAgent.bind(this),
             {
-              manager: this.opts.manager,
-              emit: this.opts.emit,
-              appendSystem: this.appendSystem.bind(this),
-              logDiag: this.opts.logDiag,
+              manager: this.opts.manager as any,
+              emit: this.opts.emit as any,
+              appendSystem: this.appendSystem.bind(this) as any,
+              logDiag: (this.opts.logDiag ?? (() => {})) as any,
             },
             this.state.committedFiles,
             this.state.currentTier,
@@ -288,10 +289,10 @@ export class CouncilRunner extends DiscussionRunnerBase {
             this.earlyStopDetail,
             undefined,
             {
-              manager: this.opts.manager,
-              repos: this.opts.repos,
-              emit: this.opts.emit,
-              appendSystem: this.appendSystem.bind(this),
+              manager: this.opts.manager as any,
+              repos: this.opts.repos as any,
+              emit: this.opts.emit as any,
+              appendSystem: this.appendSystem.bind(this) as any,
             },
           );
           await maybeRunWrapUpApply({
@@ -390,7 +391,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
       this.state.contract,
       this.state.committedFiles,
       {
-        manager: this.opts.manager,
+        manager: this.opts.manager as any,
         appendSystem: (msg) => this.appendSystem(msg),
         stopping: () => this.stopping,
       },
@@ -559,6 +560,7 @@ Max 6 items. Each todo must target specific files. Return ONLY the JSON array.`;
             this.state.todoQueue.post({
               description: todo.description,
               expectedFiles: todo.expectedFiles,
+              createdBy: "council",
             });
           }
         }
@@ -593,7 +595,7 @@ Max 6 items. Each todo must target specific files. Return ONLY the JSON array.`;
       enrichSummary: {
         kind: "council_draft",
         round: 1,
-        phase: "standup",
+        phase: "standup" as "draft",
       },
     });
   }

@@ -37,9 +37,11 @@ export function buildJudgePrompt(input: JudgePromptInput): string {
         for (const line of h.search.slice(0, 800).split("\n")) parts.push(`      ${line}`);
         parts.push(`    REPLACE:`);
         for (const line of h.replace.slice(0, 800).split("\n")) parts.push(`      ${line}`);
+      } else if (h.op === "delete") {
+        parts.push(`    (delete only — no content)`);
       } else {
         parts.push(`    CONTENT:`);
-        for (const line of h.content.slice(0, 800).split("\n")) parts.push(`      ${line}`);
+        for (const line of (h as { content: string }).content.slice(0, 800).split("\n")) parts.push(`      ${line}`);
       }
     }
   }

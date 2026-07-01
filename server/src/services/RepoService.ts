@@ -7,7 +7,7 @@ import {
   detectProvider,
   stripProviderPrefix,
   type Provider,
-} from "../../../shared/src/providers.js";
+} from "@ollama-swarm/shared/providers";
 
 export interface CloneOptions {
   url: string;

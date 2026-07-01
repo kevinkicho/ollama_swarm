@@ -59,32 +59,14 @@ interface ModelOpCost {
 }
 
 const modelCosts: Record<string, ModelOpCost> = {
-  "glm-5.1:cloud": {
-    name: "glm-5.1:cloud",
-    provider: "cloud",
-    costPerMInput: 0.02,
-    costPerMOutput: 0.05,
-    avgInputTokens: 8_000,   // large planner prompts with contract + file list
-    avgOutputTokens: 2_000,  // planner output ~2K tokens (todos array)
-    meanTurnS: 70,
-  },
-  "gemma4:31b-cloud": {
-    name: "gemma4:31b-cloud",
-    provider: "cloud",
-    costPerMInput: 0.02,
-    costPerMOutput: 0.05,
-    avgInputTokens: 4_000,   // worker prompts are smaller
-    avgOutputTokens: 1_500,  // hunk envelopes are compact
-    meanTurnS: 12,
-  },
-  "nemotron-3-super:cloud": {
-    name: "nemotron-3-super:cloud",
+  "deepseek-v4-flash:cloud": {
+    name: "deepseek-v4-flash:cloud",
     provider: "cloud",
     costPerMInput: 0.02,
     costPerMOutput: 0.05,
     avgInputTokens: 6_000,
-    avgOutputTokens: 2_500,
-    meanTurnS: 58,
+    avgOutputTokens: 2_000,
+    meanTurnS: 35,
   },
   // Local Ollama — "free" in marginal cost (electricity negligible)
   "ollama-local": {
@@ -114,18 +96,18 @@ const presets: Record<string, PresetProfile> = {
     plannerTurns: 5,    // initial contract + replans
     workerTurns: 40,    // ~40 todos per run, ~92% commit rate → ~37 committed
     auditTurns: 3,      // auditor fires ~3x per run
-    plannerModel: "glm-5.1:cloud",
-    workerModel: "gemma4:31b-cloud",
-    auditorModel: "nemotron-3-super:cloud",
+    plannerModel: "deepseek-v4-flash:cloud",
+    workerModel: "deepseek-v4-flash:cloud",
+    auditorModel: "deepseek-v4-flash:cloud",
   },
   "round-robin": {
     name: "round-robin",
     plannerTurns: 0,
     workerTurns: 0,
     auditTurns: 0,
-    plannerModel: "glm-5.1:cloud",
-    workerModel: "glm-5.1:cloud",
-    auditorModel: "glm-5.1:cloud",
+    plannerModel: "deepseek-v4-flash:cloud",
+    workerModel: "deepseek-v4-flash:cloud",
+    auditorModel: "deepseek-v4-flash:cloud",
   },
 };
 
@@ -268,7 +250,7 @@ for (const [key, m] of Object.entries(modelCosts)) {
 
 console.log("\n── Per-run cost ──");
 const bbCost = costPerBlackboardRun();
-const discCost = costPerDiscussionRun("glm-5.1:cloud");
+const discCost = costPerDiscussionRun("deepseek-v4-flash:cloud");
 console.log(`  Blackboard run:   ${(bbCost * 100).toFixed(1)}¢  (${presets.blackboard.plannerTurns}p + ${presets.blackboard.workerTurns}w + ${presets.blackboard.auditTurns}a turns)`);
 console.log(`  Discussion run:   ${(discCost * 100).toFixed(1)}¢  (${discussionTurnCount} turns)`);
 
@@ -317,7 +299,7 @@ console.log(`    Local is ${(localHardwareMonthly / Math.max(cloud30, 0.01)).toF
 
 // Model mix sensitivity
 console.log("\n── Sensitivity: model mix impact ──");
-const models_ = ["glm-5.1:cloud", "gemma4:31b-cloud", "nemotron-3-super:cloud"];
+const models_ = ["deepseek-v4-flash:cloud"];
 for (const m of models_) {
   const cost = costPerTurn(m);
   const mcfg = modelCosts[m];

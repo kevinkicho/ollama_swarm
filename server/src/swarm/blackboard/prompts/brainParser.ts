@@ -171,7 +171,7 @@ export function parseBrainOutput<T>(
 // Brain invoker (calls the LLM)
 // ---------------------------------------------------------------------------
 
-export type BrainPromptFn = (prompt: string, model: string, maxTokens: number, timeoutMs: number, agent?: import("../../services/AgentManager.js").Agent) => Promise<string>;
+export type BrainPromptFn = (prompt: string, model: string, maxTokens: number, timeoutMs: number, agent?: import("../../../services/AgentManager.js").Agent) => Promise<string>;
 
 /**
  * High-level brain fallback: given a raw failed output, a Zod schema,
@@ -187,7 +187,7 @@ export async function brainFallbackParse<T>(
   cfg: BrainConfig,
   promptFn: BrainPromptFn,
   onEvent: (event: BrainFallbackEvent) => void,
-  agent?: import("../../services/AgentManager.js").Agent,
+  agent?: import("../../../services/AgentManager.js").Agent,
 ): Promise<T | null> {
   const schemaDesc = SCHEMA_DESCRIPTIONS[parserName];
   if (!schemaDesc) return null;

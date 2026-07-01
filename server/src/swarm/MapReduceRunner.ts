@@ -14,7 +14,7 @@ import { DiscussionRunnerBase } from "./DiscussionRunnerBase.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { selectModelForRole } from "./dynamicModelRoute.js";
-import { defaultRoleForIndex } from "../../../shared/src/topology.js";
+import { defaultRoleForIndex } from "@ollama-swarm/shared/topology";
 import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
 import { writeMapReduceDeliverableImpl } from "./mapReduceDeliverableWriter.js";
 // T197 (2026-05-04): smart slicing by import graph (opt-in via cfg.importGraphSlicing).
@@ -32,8 +32,8 @@ import { retryEmptyResponse } from "./promptAndExtract.js";
 
 // runEndReflection moved into runFinallyHooks (Phase D).
 import { staggerStart } from "./staggerStart.js";
-import { stripAgentText } from "../../../shared/src/stripAgentText.js";
-import { getAgentAddendum } from "../../../shared/src/topology.js";
+import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import { describeSdkError } from "./sdkError.js";
 import {
   readDirective,

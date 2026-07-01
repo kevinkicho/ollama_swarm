@@ -66,7 +66,7 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST require verdicts exclude met/wont-do criteria (rule 3)",
       "prompt MUST require verdicts reference criterion IDs (c1, c2, ...)",
     ],
-    lastValidatedModel: "nemotron-3-super:cloud",
+    lastValidatedModel: "deepseek-v4-flash:cloud",
     lastValidatedAt: 0,
   },
   {

@@ -61,7 +61,7 @@ export async function runSynthesisPass(
   const prompt = buildCouncilSynthesisPrompt(cfg.rounds, transcript, cfg.userDirective, committedFiles, ambitionTier, cfg.localPath, repoFiles, codeContextExcerpts, cfg.model);
   const controller = new AbortController();
   const watchdog = startSseAwareTurnWatchdog({
-    manager: ctx.manager,
+    manager: ctx.manager as any,
     sessionId: lead.sessionId,
     controller,
     abortSession: async () => {},
@@ -72,7 +72,7 @@ export async function runSynthesisPass(
     const res = await promptWithFailoverAuto(lead, prompt, {
       onTokens,
       signal: controller.signal,
-      manager: ctx.manager,
+      manager: ctx.manager as any,
       agentName: "swarm-read",
       promptAddendum: "",
       describeError: describeSdkError,
@@ -112,7 +112,7 @@ export async function runSynthesisPass(
 
     trackPostRetryJunk(text, {
       agentId: lead.id,
-      recordJunkPostRetry: (id, j) => stats.recordJunkPostRetry(id, j),
+      recordJunkPostRetry: (id, j) => { stats.recordJunkPostRetry(id, j); return 0; },
       appendSystem: (msg) => ctx.appendSystem(msg),
     });
 
@@ -127,7 +127,7 @@ export async function runSynthesisPass(
         synthesis: text,
         proposals,
         criticAgent,
-        manager: ctx.manager,
+        manager: ctx.manager as any,
         appendSystem: (txt) => ctx.appendSystem(txt),
         stopping,
         runDiscussionAgent,
@@ -137,7 +137,7 @@ export async function runSynthesisPass(
       text = revised;
     }
 
-    const stripped = { finalText: text, thoughts: [] as string[], toolCalls: [] as unknown[] };
+    const stripped = { finalText: text, thoughts: [] as string[], toolCalls: [] as string[] };
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "agent",
@@ -147,10 +147,10 @@ export async function runSynthesisPass(
       ts: Date.now(),
       summary: isJunkSynthesis
         ? undefined
-        : { kind: "council_synthesis", rounds: cfg.rounds },
-      ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
+        : { kind: "council_synthesis", rounds: cfg.rounds } as any,
+      ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts.join("") } : {}),
       ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
-    };
+    } as TranscriptEntry;
     transcript.push(entry);
     ctx.emit({ type: "transcript_append", entry });
 

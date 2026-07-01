@@ -18,9 +18,7 @@ interface ModelPerf {
 }
 
 const models: Record<string, ModelPerf> = {
-  "glm-5.1:cloud": { name: "glm-5.1", meanTurnS: 70, p95TurnS: 300, inputTokens: 8000, outputTokens: 2000, parseFailRate: 0.25, hunkFailRate: 0.15 },
-  "gemma4:31b-cloud": { name: "gemma4:31b", meanTurnS: 12, p95TurnS: 47, inputTokens: 4000, outputTokens: 1500, parseFailRate: 0.18, hunkFailRate: 0.20 },
-  "nemotron-3-super:cloud": { name: "nemotron", meanTurnS: 58, p95TurnS: 457, inputTokens: 6000, outputTokens: 2500, parseFailRate: 0.22, hunkFailRate: 0.17 },
+  "deepseek-v4-flash:cloud": { name: "deepseek-v4-flash", meanTurnS: 35, p95TurnS: 120, inputTokens: 6000, outputTokens: 2000, parseFailRate: 0.15, hunkFailRate: 0.10 },
 };
 
 const CASCADE = { parseOk: 0.75, repairOk: 0.60, brainOk: 0.80, siblingOk: 0.55, hunkOk: 0.85 };

@@ -89,7 +89,7 @@ export function BlackboardModelOverrides({
           onChange={(v) => setPlannerModel(v.slice(0, 200))}
           placeholder={`(empty = uses main model)`}
           ariaLabel="Planner model override"
-          provider={provider}
+          provider={provider as "ollama" | "ollama-cloud" | "anthropic" | "openai" | "opencode"}
         />
       </Field>
       <Field
@@ -105,7 +105,7 @@ export function BlackboardModelOverrides({
           onChange={(v) => setWorkerModel(v.slice(0, 200))}
           placeholder={`(empty = uses main model)`}
           ariaLabel="Worker model override"
-          provider={provider}
+          provider={provider as "ollama" | "ollama-cloud" | "anthropic" | "openai" | "opencode"}
         />
       </Field>
     </div>
@@ -253,7 +253,7 @@ export function BlackboardAgentTopology({
           placeholder={`(empty = uses main model)`}
           ariaLabel="Auditor model override"
           className={`input font-mono ${!dedicatedAuditor ? "opacity-50 pointer-events-none" : ""}`}
-          provider={provider}
+          provider={provider as "ollama" | "ollama-cloud" | "anthropic" | "openai" | "opencode"}
         />
       </Field>
       <ToggleField

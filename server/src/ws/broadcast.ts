@@ -3,7 +3,7 @@ import type { IncomingMessage } from "node:http";
 import type { SwarmEvent } from "../types.js";
 import type { EventLogger } from "./eventLogger.js";
 import { decideSubscriberAction, type SubscriberAction } from "../swarm/subscriberPausePolicy.js";
-import { validateSwarmEvent } from "../../../shared/src/wsProtocol.js";
+import { validateSwarmEvent } from "@ollama-swarm/shared/wsProtocol";
 
 export interface SubscriberChange {
   runId: string;

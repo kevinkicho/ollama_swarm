@@ -54,19 +54,19 @@ describe("parseDiffAddedLines", () => {
 });
 
 describe("detectAntiPatterns", () => {
-  it("flags console.log as HIGH severity debug-print", () => {
+  it("flags console.log as LOW severity debug-print", () => {
     const findings = detectAntiPatterns(SAMPLE_DIFF);
     const consoleFinding = findings.find((f) => f.pattern === "debug-print");
     assert.ok(consoleFinding);
-    assert.equal(consoleFinding!.severity, "high");
+    assert.equal(consoleFinding!.severity, "low");
     assert.equal(consoleFinding!.file, "src/auth.ts");
   });
 
-  it("flags TODO comments as MEDIUM self-added-todo", () => {
+  it("flags TODO comments as LOW self-added-todo", () => {
     const findings = detectAntiPatterns(SAMPLE_DIFF);
     const todoFinding = findings.find((f) => f.pattern === "self-added-todo");
     assert.ok(todoFinding);
-    assert.equal(todoFinding!.severity, "medium");
+    assert.equal(todoFinding!.severity, "low");
   });
 
   it("flags empty test blocks in test files", () => {

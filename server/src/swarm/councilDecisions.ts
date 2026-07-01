@@ -42,7 +42,7 @@ Rules:
     const { controller, cleanup } = createTimeoutController();
     try {
       const raw = await promptWithFailoverAuto(lead, prompt, {
-        manager,
+        manager: manager as any,
         agentName: "swarm-read",
         signal: controller.signal,
       });
@@ -120,7 +120,7 @@ Rules:
     const { controller, cleanup } = createTimeoutController();
     try {
       const raw = await promptWithFailoverAuto(lead, prompt, {
-        manager,
+        manager: manager as any,
         agentName: "swarm-read",
         signal: controller.signal,
       });

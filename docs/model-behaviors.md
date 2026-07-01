@@ -14,12 +14,12 @@
 - **Empty responses on parallel fanout.** When multiple agents prompt simultaneously, resolves with `data.parts: []`, producing "(empty response)" in transcript. Not a real model refusal — timing artifact. (`project_run_patterns.md` Pattern 5)
 - **Context accumulation causes empty responses.** Reusing the planner's session for reflection passes after a full run causes empty output. Fix: use `chatOnce` for fresh sessions. (`reflectionPasses.ts:41-46`)
 - **Slow first-byte on large prompts.** Planner has hit the 300s headers timeout on audit prompts large enough that the model couldn't return headers in 5 minutes. Cold-start TTFB occasionally exceeds 90s. (`httpDispatcher.ts:23-26,38-45`)
-- **Sibling fallback → `nemotron-3-super:cloud`.** (`BlackboardRunnerConstants.ts:65`)
+- **Sibling fallback → `deepseek-v4-flash:cloud`.** (`BlackboardRunnerConstants.ts:65`)
 - **Few-shot hunk mistakes.** Non-unique `search` anchors in hunks caused by multi-line anchors matching the wrong block. Fixed with explicit few-shot examples in worker prompt. (`worker.ts:182-188`)
 
 ---
 
-## nemotron-3-super:cloud
+## deepseek-v4-flash:cloud
 
 **Role: Default auditor** (`config.ts` DEFAULT_AUDITOR_MODEL). Strongest reasoning in the fleet — chosen for cross-criterion synthesis. Higher latency but amortized across infrequent audit invocations.
 
@@ -70,7 +70,7 @@
 | Model | Role | Mean Turn | p95 | Max Observed |
 |---|---|---|---|---|
 | `glm-5.1:cloud` | Planner/Auditor | ~70s | — | >300s (header timeout) |
-| `nemotron-3-super:cloud` | Auditor/Council | ~58s (mixed) | — | 457s |
+| `deepseek-v4-flash:cloud` | Auditor/Council | ~58s (mixed) | — | 457s |
 | `gemma4:31b-cloud` | Worker | ~12s | 47s | — |
 
 ---

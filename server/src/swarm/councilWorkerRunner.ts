@@ -151,7 +151,7 @@ async function tryWorkerPrompt(
   try {
     const controller = new AbortController();
     const raw = await promptWithFailoverAuto(agent, basePrompt, {
-      manager: state.manager,
+      manager: state.manager as any,
       agentName: "swarm-builder",
       signal: controller.signal,
       intraStreamLoop: true,
@@ -191,7 +191,7 @@ async function tryWorkerPrompt(
         if (currentContent && fixedHunks.length > 0) {
           const repairPrompt = buildHunkRepairPrompt(fixedHunks, applyResult.reason, { [failedFile!]: currentContent });
           const repairRaw = await promptWithFailoverAuto(agent, `${WORKER_SYSTEM_PROMPT}\n\n${repairPrompt}`, {
-            manager: state.manager,
+            manager: state.manager as any,
             agentName: "swarm-builder",
             signal: new AbortController().signal,
           }, state.cfg.providerFailover);

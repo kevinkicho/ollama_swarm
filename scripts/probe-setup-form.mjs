@@ -508,12 +508,12 @@ await probe(page, {
     await modelInput.waitFor({ state: "visible", timeout: 2000 });
     await modelInput.click();
     await modelInput.fill("");
-    await modelInput.type("nemotron-3-super:cloud");
+    await modelInput.type("deepseek-v4-flash:cloud");
     await p.waitForTimeout(300);
   },
   expect: async (p) => {
     const v = await p.locator('label:has(div:text-is("Model")) input').first().inputValue();
-    return v === "nemotron-3-super:cloud";
+    return v === "deepseek-v4-flash:cloud";
   },
 });
 

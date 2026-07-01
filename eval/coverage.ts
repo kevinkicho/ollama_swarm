@@ -57,7 +57,7 @@ if (uncovered.length > 0) {
 // ── Model coverage ──
 console.log("\nModel coverage:");
 const modelsCovered = new Set<string>();
-const allModels = ["glm-5.1:cloud", "gemma4:31b-cloud", "nemotron-3-super:cloud", "deepseek-v4-pro:cloud"];
+const allModels = ["deepseek-v4-flash:cloud"];
 for (const m of allModels) {
   // The eval catalog doesn't directly specify models per task —
   // models are selected by the sweep script defaults.

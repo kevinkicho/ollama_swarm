@@ -28,8 +28,8 @@ import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
-import { stripAgentText } from "../../../shared/src/stripAgentText.js";
-import { getAgentAddendum } from "../../../shared/src/topology.js";
+import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import { describeSdkError } from "./sdkError.js";
 import { buildCheckpoint, writeCheckpoint } from "./checkpoint.js";
 import { discussionWriteSummary } from "./discussionWriteSummary.js";
@@ -261,10 +261,10 @@ export abstract class DiscussionRunnerBase {
     spawnOpts: CloneSpawnOpts,
   ): Promise<CloneSpawnResult> {
     this.setPhase("cloning");
-    let cloneResult: { destPath: string; alreadyPresent: boolean; priorCommits?: number; priorChangedFiles?: number; priorUntrackedFiles?: number };
+    let cloneResult: import("../services/RepoService.js").CloneResult;
     // Local folder path — skip clone, use the directory directly.
     if (!cfg.repoUrl.startsWith("http://") && !cfg.repoUrl.startsWith("https://")) {
-      cloneResult = { destPath: cfg.localPath, alreadyPresent: true };
+      cloneResult = { destPath: cfg.localPath, alreadyPresent: true, priorCommits: 0, priorChangedFiles: 0, priorUntrackedFiles: 0 };
     } else {
       cloneResult = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
     }
@@ -273,9 +273,9 @@ export abstract class DiscussionRunnerBase {
       type: "clone_state",
       alreadyPresent: cloneResult.alreadyPresent,
       clonePath: destPath,
-      priorCommits: cloneResult.priorCommits,
-      priorChangedFiles: cloneResult.priorChangedFiles,
-      priorUntrackedFiles: cloneResult.priorUntrackedFiles,
+      priorCommits: cloneResult.priorCommits ?? 0,
+      priorChangedFiles: cloneResult.priorChangedFiles ?? 0,
+      priorUntrackedFiles: cloneResult.priorUntrackedFiles ?? 0,
     });
     await this.opts.repos.excludeRunnerArtifacts(destPath);
     this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));

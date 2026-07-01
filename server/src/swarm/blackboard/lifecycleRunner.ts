@@ -762,7 +762,7 @@ export async function planAndExecute(
           ctx.getInteractionTracker(),
           ctx.getExceptionCollector(),
           ctx.getActive()?.localPath ?? "",
-          cfg.runId ?? "",
+          ctx.getActive()?.runId ?? "",
         );
         ctx.appendSystem(
           `[brain-overseer] Analysis complete: ${brainResult.exceptions.totalExceptions} exceptions, ${brainResult.chains.length} interaction chains, ${brainResult.proposals.length} proposals.`,

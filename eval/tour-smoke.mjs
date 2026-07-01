@@ -66,7 +66,7 @@ function buildConfigs(fixtureId, skipPaid) {
       taskId: fixtureTaskId,
       extra: [
         "--moa-proposer-model=gemma4:31b-cloud",
-        "--moa-aggregator-model=nemotron-3-super:cloud",
+        "--moa-aggregator-model=deepseek-v4-flash:cloud",
       ],
     },
   ];

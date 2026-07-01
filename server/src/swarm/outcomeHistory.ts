@@ -115,7 +115,7 @@ const SEED_DIRECTIVES: Array<{ pattern: RegExp; preset: PresetId; agentCount: nu
   { pattern: /\b(fix|repair|patch|resolve)\b.*\b(bug|issue|error|crash)\b/i, preset: "orchestrator-worker", agentCount: 3, rounds: 3 },
   { pattern: /\b(add|create|build|implement)\b.*\b(feature|function|endpoint|api)\b/i, preset: "orchestrator-worker", agentCount: 3, rounds: 3 },
   { pattern: /\b(refactor|rewrite|restructure|reorganize)\b/i, preset: "orchestrator-worker-deep", agentCount: 4, rounds: 4 },
-  { pattern: /\b(design|architect|plan)\b.*\b(system|architecture|layout)\b/i, preset: "council", agentCount: 4, rounds: 3 },
+  { pattern: /\b(design|architect|plan)\b.*\b(system|architecture|layout)\b/i, preset: "council", agentCount: 3, rounds: 3 },
   { pattern: /\b(debate|argue|pros?\s*cons|should\s+we)\b/i, preset: "debate-judge", agentCount: 3, rounds: 4 },
   { pattern: /\b(audit|find\s+all|list\s+every|comprehensive)\b/i, preset: "map-reduce", agentCount: 4, rounds: 3 },
   { pattern: /\b(explore|understand|what\s+does|how\s+does)\b/i, preset: "stigmergy", agentCount: 3, rounds: 3 },

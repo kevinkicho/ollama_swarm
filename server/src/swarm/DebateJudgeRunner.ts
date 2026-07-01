@@ -27,8 +27,8 @@ import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 
 // runEndReflection moved into runFinallyHooks (Phase D).
-import { stripAgentText } from "../../../shared/src/stripAgentText.js";
-import { getAgentAddendum } from "../../../shared/src/topology.js";
+import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import { describeSdkError } from "./sdkError.js";
 import { deriveProposition, type DerivedProposition } from "./propositionDerive.js";
 import { DebateStream } from "./DebateStream.js";

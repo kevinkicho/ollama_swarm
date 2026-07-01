@@ -12,7 +12,7 @@ import { DiscussionRunnerBase } from "./DiscussionRunnerBase.js";
 import { promptWithRetry } from "./promptWithRetry.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { selectModelForRole } from "./dynamicModelRoute.js";
-import { defaultRoleForIndex } from "../../../shared/src/topology.js";
+import { defaultRoleForIndex } from "@ollama-swarm/shared/topology";
 import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
 import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
@@ -28,8 +28,8 @@ import { runPostSynthesisCritique } from "./postSynthesisCritique.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { staggerStart } from "./staggerStart.js";
 // runEndReflection moved into runFinallyHooks (Phase D).
-import { stripAgentText } from "../../../shared/src/stripAgentText.js";
-import { getAgentAddendum } from "../../../shared/src/topology.js";
+import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import { describeSdkError } from "./sdkError.js";
 import {
   readDirective,

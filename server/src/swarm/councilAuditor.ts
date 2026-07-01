@@ -89,7 +89,7 @@ Return ONLY a JSON object:
     const { controller, cleanup } = createTimeoutController();
     try {
       const raw = await promptWithFailoverAuto(lead, prompt, {
-        manager: ctx.manager,
+        manager: ctx.manager as any,
         agentName: "swarm-read",
         signal: controller.signal,
       }, cfg.providerFailover);

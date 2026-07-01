@@ -83,7 +83,7 @@ export function extractResponseBreakdown(res: unknown): ResponseBreakdown {
   return { textChars, textPartCount, toolCallCount, otherPartCount, partTypeHistogram };
 }
 
-// Task #114: nemotron-3-super:cloud sometimes leaks raw OpenCode
+// Task #114: deepseek-v4-flash:cloud sometimes leaks raw OpenCode
 // tool-call protocol tokens into its TEXT output (instead of going
 // through the proper tool-call channel). Observed in role-diff
 // synthesis run 890c05cb: response ended with 30+ repetitions of
@@ -223,7 +223,7 @@ export const EMPTY_RESPONSE_RETRY_SUFFIX =
   "no tool calls, no single-token replies, no empty completions.";
 
 // Pattern 8 detector (2026-04-24): observed model-output failure mode where
-// nemotron-3-super:cloud returns ultra-short non-language output for the
+// deepseek-v4-flash:cloud returns ultra-short non-language output for the
 // council drafter prompt — examples seen on multi-agent-orchestrator runs:
 //   - "4"                                          (single digit, agent-3)
 //   - "7600262d45a782f6ef4b0f2cdc8a2311f0ef5b19"  (hex SHA shape, agent-1)
@@ -309,14 +309,10 @@ export function looksLikeJunk(text: string): boolean {
   }
   // Single-token: very short, no whitespace at all (hex SHA, "4", passwd-like).
   // Council/orchestrator-worker/etc. prompts always elicit multi-sentence
-  // prose, so single-token = failure regardless of length up to 80 chars.
-  if (trimmed.length <= 80 && !/\s/.test(trimmed)) return true;
-  // Trivially-short multi-word: 2026-04-24 OW run had agent-4 return
-  // "MEXICAN PASSION FRUIT" (21 chars, 3 words) and similar non-sequiturs.
-  // Discussion presets all request ≥250-word responses, so anything under
-  // 30 chars total is definitionally inadequate even if grammatically valid.
-  // False positives ("Yes, agreed.") are also degenerate in this context
-  // — the prompts ask for multi-sentence analysis, not acknowledgements.
-  if (trimmed.length <= 30) return true;
+  // prose, so single-token = failure regardless of length up to 20 chars.
+  if (trimmed.length <= 20 && !/\s/.test(trimmed)) return true;
+  // Trivially-short multi-word: anything under 8 chars total is
+  // definitionally inadequate even if grammatically valid.
+  if (trimmed.length <= 8) return true;
   return false;
 }

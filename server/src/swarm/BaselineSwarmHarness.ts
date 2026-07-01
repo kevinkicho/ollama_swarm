@@ -347,9 +347,8 @@ export class BaselineSwarmHarness implements SwarmRunner {
       role: "system",
       text,
       ts: Date.now(),
+      summary,
     };
-    if (summary)
-      (entry as TranscriptEntry & { summary: unknown }).summary = summary;
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
   }

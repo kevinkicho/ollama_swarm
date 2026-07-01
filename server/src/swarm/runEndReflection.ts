@@ -19,7 +19,7 @@
 // generous.
 
 import type { Agent } from "../services/AgentManager.js";
-import { toOpenCodeModelRef } from "../../../shared/src/providers.js";
+import { toOpenCodeModelRef } from "@ollama-swarm/shared/providers";
 import {
   appendMemoryEntry,
   type MemoryEntry,

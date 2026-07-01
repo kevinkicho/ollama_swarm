@@ -34,7 +34,7 @@ export interface ConformanceMonitorOpts {
   /** Ollama base URL — strip /v1 if present, we hit /api/chat. */
   ollamaBaseUrl: string;
   /** Model id to use as the grader. Cheap fast models work best
-   *  (gemma4:31b-cloud, nemotron-3-super:cloud). Defaults to whatever
+   *  (gemma4:31b-cloud, deepseek-v4-flash:cloud). Defaults to whatever
    *  the run's main model is. */
   graderModel: string;
   /** Poll interval in ms. Default 90_000. */

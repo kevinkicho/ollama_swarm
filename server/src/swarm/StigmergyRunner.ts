@@ -27,8 +27,8 @@ import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { checkBudgetGuards } from "./loopGuards.js";
 import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
-import { stripAgentText } from "../../../shared/src/stripAgentText.js";
-import { getAgentAddendum } from "../../../shared/src/topology.js";
+import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import {
   type AnnotationState,
   type ParsedAnnotation,

@@ -77,6 +77,7 @@ export interface TierHistoryEntry {
   criteriaWontDo: number;
   criteriaUnmet: number;
   wallClockMs: number;
+  wastedWallClockMs: number;
   startedAt: number;
   endedAt: number;
 }
@@ -153,6 +154,7 @@ export function recordTierCompletion(ctx: TierContext): void {
     criteriaWontDo: wontDo,
     criteriaUnmet: unmet,
     wallClockMs: Math.max(0, now - startedAt),
+    wastedWallClockMs: 0,
     startedAt,
     endedAt: now,
   });

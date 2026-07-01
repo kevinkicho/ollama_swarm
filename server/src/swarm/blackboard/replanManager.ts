@@ -188,15 +188,15 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
         ctx.appendSystem(`Replanner parse still failed after repair — trying brain fallback (${parsed.reason}).`);
         try {
           const brainResult = await tryBrainFallback(
+            "replanner",
             response,
             ReplannerResponseSchema,
-            "replanner",
             ctx.brainPromptFn,
             (e: BrainFallbackEvent) => { ctx.emit?.({ type: "brain-fallback", ...e }); },
             planner,
           );
           if (brainResult) {
-            parsed = brainResult as typeof parsed;
+            parsed = brainResult as unknown as typeof parsed;
             ctx.appendSystem(`Brain fallback succeeded — extracted replanner result.`);
           }
         } catch (err) {

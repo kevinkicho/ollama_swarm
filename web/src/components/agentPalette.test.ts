@@ -55,16 +55,9 @@ describe("agentBubblePalette", () => {
     assert.notEqual(done.background, active.background);
   });
 
-  it("shares segment colors between done and active", () => {
-    const done = agentBubblePalette(200, true);
-    const active = agentBubblePalette(200, false);
-    assert.equal(done.segmentBorder, active.segmentBorder);
-    assert.equal(done.segmentBackground, active.segmentBackground);
-  });
-
   it("has all required palette keys", () => {
     const palette = agentBubblePalette(140, false);
-    const keys = ["border", "background", "header", "accent", "segmentBorder", "segmentBackground"];
+    const keys = ["border", "background", "header", "accent"];
     for (const key of keys) {
       assert.ok(typeof (palette as unknown as Record<string, unknown>)[key] === "string");
     }

@@ -79,7 +79,7 @@ export class ExceptionCollector {
         recurringPatterns.push({
           pattern: fingerprint,
           count: data.count,
-          affectedTodos: [...new Set(data.events.map((e) => e.todoId).filter(Boolean))],
+          affectedTodos: [...new Set(data.events.map((e) => e.todoId).filter((id): id is string => id != null))],
           suggestedFix: "", // Brain fills this in during analysis
         });
       }

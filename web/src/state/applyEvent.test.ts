@@ -1,8 +1,8 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { createSwarmStore } from "./store.ts";
-import { applyEventToStore } from "./applyEvent.ts";
-import type { SwarmEvent, AgentState, Todo, Claim, Finding, ExitContract, RunSummary, BoardSnapshot, PheromoneEntry, TranscriptEntry } from "../types.ts";
+import { createSwarmStore } from "./store";
+import { applyEventToStore } from "./applyEvent";
+import type { SwarmEvent, AgentState, Todo, Claim, Finding, ExitContract, RunSummary, BoardSnapshot, PheromoneEntry, TranscriptEntry } from "../types";
 
 function freshStore() {
   return createSwarmStore();
@@ -625,7 +625,7 @@ describe("applyEventToStore", () => {
           agentId: "worker-1",
           agentIndex: 1,
           fromModel: "glm-5.1:cloud",
-          toModel: "nemotron-3-super:cloud",
+          toModel: "deepseek-v4-flash:cloud",
           reason: "network error",
           rawError: "ECONNREFUSED 127.0.0.1:11436",
         },

@@ -74,7 +74,7 @@ let MOA_AGGREGATOR_COUNT = 0;
 // 2026-05-02 (lever #2): LLM-as-judge for analysis-task quality scoring.
 // --quality-judge-ollama-url defaults to http://127.0.0.1:11434 (the
 // local Ollama daemon — same one the swarm hits). --quality-judge-model
-// defaults to nemotron-3-super:cloud (strongest reasoning that ships
+// defaults to deepseek-v4-flash:cloud (strongest reasoning that ships
 // free); override for cheaper-faster (gemma4) or higher-quality (paid).
 let QUALITY_JUDGE_OLLAMA_URL = "http://127.0.0.1:11434";
 let QUALITY_JUDGE_MODEL = "";

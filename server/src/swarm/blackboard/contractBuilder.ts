@@ -169,9 +169,9 @@ export async function runFirstPassContract(
         ctx.appendSystem(`Contract parse still failed after repair — trying brain fallback (${parsed.reason}).`);
         try {
           const brainResult = await tryBrainFallback(
+            "contract",
             firstResponse,
             ContractSchema,
-            "contract",
             ctx.brainPromptFn,
             (e: BrainFallbackEvent) => { ctx.emit({ type: "brain-fallback", ...e }); },
             agent,

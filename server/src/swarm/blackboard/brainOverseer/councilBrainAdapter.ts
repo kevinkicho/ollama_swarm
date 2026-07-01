@@ -3,7 +3,7 @@
 // cross-examination + synthesis cycle produces higher-quality proposals
 // than a single brain agent.
 
-import type { Agent } from "../../services/AgentManager.js";
+import type { Agent } from "../../../services/AgentManager.js";
 import type { InteractionChain } from "./interactionTracker.js";
 import type { PatternSummary, ExceptionEvent } from "./exceptionCollector.js";
 

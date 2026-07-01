@@ -1,7 +1,6 @@
-// 2026-04-27 tests: SSE-aware turn watchdog. Verifies that the
-// watchdog only aborts when SSE has truly been silent for the
-// configured idle threshold AND wall-clock has passed it — and that
-// the hard wall-clock ceiling fires regardless of SSE activity.
+// 2026-06-27: SSE-aware turn watchdog is now PASSIVE — never aborts.
+// Tests verify the passive contract: cancel is a no-op, getAbortReason
+// always returns null, controller is never aborted.
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -51,14 +50,13 @@ function harness(overrides: Partial<SseAwareTurnWatchdogOpts> = {}): {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-describe("startSseAwareTurnWatchdog", () => {
-  it("aborts when SSE idle exceeds cap AND elapsed exceeds cap", async () => {
+describe("startSseAwareTurnWatchdog (passive)", () => {
+  it("never aborts even when SSE idle exceeds cap", async () => {
     const { controller, watchdog } = harness({ sseIdleCapMs: 100, hardMaxMs: 5000 });
-    // Don't touchActivity — let it stay at turnStart so SSE-idle grows
     await sleep(200);
     watchdog.cancel();
-    assert.equal(controller.signal.aborted, true);
-    assert.match(watchdog.getAbortReason() ?? "", /SSE idle/);
+    assert.equal(controller.signal.aborted, false);
+    assert.equal(watchdog.getAbortReason(), null);
   });
 
   it("does NOT abort when SSE keeps touching activity", async () => {
@@ -73,7 +71,6 @@ describe("startSseAwareTurnWatchdog", () => {
       hardMaxMs: 5000,
       pollIntervalMs: 30,
     });
-    // Touch every 50ms — well within the 100ms cap
     const ticker = setInterval(() => fakeMgr.touchActivity("ses_test"), 50);
     await sleep(300);
     clearInterval(ticker);
@@ -82,7 +79,7 @@ describe("startSseAwareTurnWatchdog", () => {
     assert.equal(watchdog.getAbortReason(), null);
   });
 
-  it("hard wall-clock ceiling fires even if SSE keeps flowing", async () => {
+  it("never fires hard wall-clock ceiling", async () => {
     const fakeMgr = makeFakeManager();
     const controller = new AbortController();
     const watchdog = startSseAwareTurnWatchdog({
@@ -94,16 +91,15 @@ describe("startSseAwareTurnWatchdog", () => {
       hardMaxMs: 200,
       pollIntervalMs: 30,
     });
-    // Keep SSE alive — but hard cap should still fire
     const ticker = setInterval(() => fakeMgr.touchActivity("ses_test"), 30);
     await sleep(350);
     clearInterval(ticker);
     watchdog.cancel();
-    assert.equal(controller.signal.aborted, true);
-    assert.match(watchdog.getAbortReason() ?? "", /hard wall-clock/);
+    assert.equal(controller.signal.aborted, false);
+    assert.equal(watchdog.getAbortReason(), null);
   });
 
-  it("calls abortSession callback exactly once on abort", async () => {
+  it("never calls abortSession callback", async () => {
     const fakeMgr = makeFakeManager();
     const controller = new AbortController();
     let abortCalls = 0;
@@ -120,10 +116,10 @@ describe("startSseAwareTurnWatchdog", () => {
     });
     await sleep(250);
     watchdog.cancel();
-    assert.equal(abortCalls, 1);
+    assert.equal(abortCalls, 0);
   });
 
-  it("cancel before abort prevents future trips", async () => {
+  it("cancel is a no-op", async () => {
     const { controller, watchdog } = harness({ sseIdleCapMs: 100, hardMaxMs: 5000 });
     await sleep(50);
     watchdog.cancel();
@@ -131,9 +127,10 @@ describe("startSseAwareTurnWatchdog", () => {
     assert.equal(controller.signal.aborted, false);
   });
 
-  it("getAbortReason returns null until abort fires", () => {
+  it("getAbortReason always returns null", () => {
     const { watchdog } = harness();
     assert.equal(watchdog.getAbortReason(), null);
     watchdog.cancel();
+    assert.equal(watchdog.getAbortReason(), null);
   });
 });

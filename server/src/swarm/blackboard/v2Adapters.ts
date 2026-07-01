@@ -82,10 +82,10 @@ export function realVerifyAdapter(
         const timeout = setTimeout(() => {
           // Kill the entire process group — not just the shell.
           // On POSIX: cp.pid is the shell, but -cp.pid signals the group.
-          if (cp.pid) {
-            try { process.kill(-cp.pid, "SIGTERM"); } catch {}
+          if (cp.pid!) {
+            try { process.kill(-cp.pid!, "SIGTERM"); } catch {}
             setTimeout(() => {
-              try { process.kill(-cp.pid, "SIGKILL"); } catch {}
+              try { process.kill(-cp.pid!, "SIGKILL"); } catch {}
             }, 2000);
           }
         }, VERIFY_TIMEOUT_MS);

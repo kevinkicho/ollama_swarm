@@ -495,9 +495,9 @@ export async function executeWorkerTodo(
         ctx.appendSystem(`[${agent.id}] [v2] worker parse still failed after repair — trying brain fallback (${parsed.reason}).`);
         try {
           const brainResult = await tryBrainFallback(
+            "worker",
             response,
             WorkerResponseSchema,
-            "worker",
             ctx.brainPromptFn,
             (e: BrainFallbackEvent) => { ctx.emit({ type: "brain-fallback", ...e }); },
             agent,
@@ -510,7 +510,7 @@ export async function executeWorkerTodo(
             if (validHunks.length > 0 || (brainResult as { skip?: string }).skip) {
               parsed = {
                 ok: true as const,
-                hunks: validHunks as import("./prompts/worker.js").Hunk[],
+                hunks: validHunks as import("./applyHunks.js").Hunk[],
                 skip: (brainResult as { skip?: string }).skip,
               };
               commitTier = "brain";
@@ -553,7 +553,7 @@ If the response is completely unparseable, return { "skip": "auditor could not i
           const auditorParsed = parseWorkerResponse(auditorResponse, todo.expectedFiles);
           if (auditorParsed.ok && (auditorParsed.hunks.length > 0 || auditorParsed.skip)) {
             parsed = auditorParsed;
-            commitTier = "auditor-parse";
+            commitTier = "auditor-parse" as any;
             ctx.appendSystem(
               auditorParsed.skip
                 ? `[${agent.id}] [v2] auditor confirmed skip: ${auditorParsed.skip}`

@@ -19,7 +19,8 @@ export type PresetId =
 
 
 // Re-exported from RunConfig.ts for backward compatibility
-export type { RunConfig } from "./RunConfig.js";
+import type { RunConfig } from "./RunConfig.js";
+export type { RunConfig };
 
 
 export interface RunnerOpts {

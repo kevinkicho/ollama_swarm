@@ -14,7 +14,7 @@ import {
   detectProvider,
   stripProviderPrefix,
   type Provider,
-} from "../../../shared/src/providers.js";
+} from "@ollama-swarm/shared/providers";
 
 export const PRICING_AS_OF = "2026-04-29";
 

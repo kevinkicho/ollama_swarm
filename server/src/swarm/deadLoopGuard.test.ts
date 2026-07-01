@@ -32,15 +32,16 @@ describe("OutputEmptyDeadLoopGuard", () => {
     assert.equal(result.consecutive, 1);
   });
 
-  it("trips on the SECOND consecutive empty iteration (default threshold=2)", () => {
+  it("trips on the THIRD consecutive empty iteration (default threshold=3)", () => {
     const g = new OutputEmptyDeadLoopGuard({ roleLabel: "drafters", unit: "round" });
+    g.recordIteration([agentEntry("(empty response)")]);
     g.recordIteration([agentEntry("(empty response)")]);
     const result = g.recordIteration([agentEntry("(empty response)")]);
     assert.equal(result.tripped, true);
-    assert.equal(result.consecutive, 2);
+    assert.equal(result.consecutive, 3);
     assert.equal(
       result.earlyStopDetail,
-      "drafters-silenced (2 consecutive empty rounds)",
+      "drafters-silenced (3 consecutive empty rounds)",
     );
   });
 
@@ -66,10 +67,11 @@ describe("OutputEmptyDeadLoopGuard", () => {
   it("uses 'cycles' noun when unit='cycle' (mappers case)", () => {
     const g = new OutputEmptyDeadLoopGuard({ roleLabel: "mappers", unit: "cycle" });
     g.recordIteration([agentEntry("(empty response)")]);
+    g.recordIteration([agentEntry("(empty response)")]);
     const result = g.recordIteration([agentEntry("(empty response)")]);
     assert.equal(
       result.earlyStopDetail,
-      "mappers-silenced (2 consecutive empty cycles)",
+      "mappers-silenced (3 consecutive empty cycles)",
     );
   });
 
@@ -94,6 +96,7 @@ describe("OutputEmptyDeadLoopGuard", () => {
   it("treats junk text the same as '(empty response)'", () => {
     const g = new OutputEmptyDeadLoopGuard({ roleLabel: "drafters", unit: "round" });
     // Single short character is junk per looksLikeJunk
+    g.recordIteration([agentEntry(":")]);
     g.recordIteration([agentEntry(":")]);
     const result = g.recordIteration([agentEntry(":")]);
     assert.equal(result.tripped, true);
@@ -130,15 +133,16 @@ describe("PlanEmptyDeadLoopGuard", () => {
     assert.equal(result.consecutive, 1);
   });
 
-  it("trips on the SECOND consecutive empty plan", () => {
+  it("trips on the THIRD consecutive empty plan", () => {
     const g = new PlanEmptyDeadLoopGuard({ roleLabel: "lead" });
+    g.recordCycle([]);
     g.recordCycle([]);
     const result = g.recordCycle([]);
     assert.equal(result.tripped, true);
-    assert.equal(result.consecutive, 2);
+    assert.equal(result.consecutive, 3);
     assert.equal(
       result.earlyStopDetail,
-      "lead-silenced (2 consecutive empty plans)",
+      "lead-silenced (3 consecutive empty plans)",
     );
   });
 
@@ -154,10 +158,11 @@ describe("PlanEmptyDeadLoopGuard", () => {
   it("uses configured roleLabel in the message", () => {
     const g = new PlanEmptyDeadLoopGuard({ roleLabel: "orchestrator" });
     g.recordCycle([]);
+    g.recordCycle([]);
     const result = g.recordCycle([]);
     assert.equal(
       result.earlyStopDetail,
-      "orchestrator-silenced (2 consecutive empty plans)",
+      "orchestrator-silenced (3 consecutive empty plans)",
     );
   });
 

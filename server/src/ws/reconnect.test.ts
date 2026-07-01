@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Broadcaster } from "./broadcast.js";
 import type { SwarmEvent } from "../../types.js";
-import { SwarmEventSchema } from "../../../shared/src/wsProtocol.js";
+import { SwarmEventSchema } from "@ollama-swarm/shared/wsProtocol";
 
 // Minimal fake WebSocket that records payloads.
 interface FakeWS {

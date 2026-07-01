@@ -16,8 +16,6 @@ export interface AgentBubblePalette {
   background: string;
   header: string;
   accent: string;
-  segmentBorder: string;
-  segmentBackground: string;
 }
 
 export function agentBubblePalette(hue: number, isDone: boolean): AgentBubblePalette {
@@ -27,15 +25,11 @@ export function agentBubblePalette(hue: number, isDone: boolean): AgentBubblePal
         background: `hsl(${hue} 15% 10%)`,
         header: `hsl(${hue} 30% 70%)`,
         accent: `hsl(${hue} 60% 65%)`,
-        segmentBorder: `hsl(${hue} 25% 22%)`,
-        segmentBackground: `hsl(${hue} 25% 9%)`,
       }
     : {
         border: `hsl(${hue} 30% 30%)`,
         background: `hsl(${hue} 30% 12%)`,
         header: `hsl(${hue} 60% 70%)`,
         accent: `hsl(${hue} 70% 60%)`,
-        segmentBorder: `hsl(${hue} 25% 22%)`,
-        segmentBackground: `hsl(${hue} 25% 9%)`,
       };
 }

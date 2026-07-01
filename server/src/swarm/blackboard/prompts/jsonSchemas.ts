@@ -293,6 +293,15 @@ export const WORKER_HUNKS_JSON_SCHEMA = {
             },
             required: ["op", "file", "content"],
           },
+          // delete variant: { op: "delete", file }
+          {
+            type: "object",
+            properties: {
+              op: { type: "string", enum: ["delete"] },
+              file: { type: "string", minLength: 1, maxLength: 1000 },
+            },
+            required: ["op", "file"],
+          },
         ],
       },
     },

@@ -89,9 +89,9 @@ export function makeTodoQueueWrappers(deps: TodoQueueWrapperDeps): TodoQueueWrap
       todoQueue.complete(id);
       if (commitTier) {
         const t = todoQueue.get(id);
-        if (t) t.commitTier = commitTier;
+        if (t) (t as any).commitTier = commitTier;
       }
-      emit({ type: "todo_committed", todoId: id, commitTier });
+      emit({ type: "todo_committed", todoId: id, commitTier } as any);
       scheduleStateWrite();
       onTerminal("committed", todoQueue.counts().pending);
     },
@@ -100,7 +100,7 @@ export function makeTodoQueueWrappers(deps: TodoQueueWrapperDeps): TodoQueueWrap
       todoQueue.fail(id, reason);
       if (staleReason) {
         const t = todoQueue.get(id);
-        if (t) t.staleReason = staleReason;
+        if (t) (t as any).staleReason = staleReason;
       }
       const t2 = todoQueue.get(id);
       emit({
@@ -109,7 +109,7 @@ export function makeTodoQueueWrappers(deps: TodoQueueWrapperDeps): TodoQueueWrap
         reason,
         staleReason,
         replanCount: t2?.retries ?? 0,
-      });
+      } as any);
       scheduleStateWrite();
       onFailed(id);
     },

@@ -27,6 +27,7 @@ import type {
   SwarmPhase,
   SwarmStatus,
   TranscriptEntry,
+  TranscriptEntrySummary,
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
 import { extractText } from "./extractText.js";
@@ -419,9 +420,8 @@ export class BaselineRunner implements SwarmRunner {
     }
   }
 
-  private appendSystem(text: string, summary?: SwarmEvent extends { summary: infer S } ? S : never): void {
-    const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now() };
-    if (summary) (entry as TranscriptEntry & { summary: unknown }).summary = summary;
+  private appendSystem(text: string, summary?: TranscriptEntrySummary): void {
+    const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now(), summary };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
   }

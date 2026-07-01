@@ -108,10 +108,28 @@ export class EmbeddingDriftMonitor {
   }
 
   private async poll(): Promise<void> {
-    if (this.stopped || this.inflight || this.modelUnavailable) return;
+    if (this.stopped || this.inflight) return;
     if (this.opts.isActive && !this.opts.isActive()) {
       this.stop();
       return;
+    }
+    // Retry embedding the directive if it failed before (model may have
+    // been pulled after run start).
+    if (!this.directiveVec && !this.inflight) {
+      try {
+        this.directiveVec = await embedText({
+          text: this.opts.directive,
+          baseUrl: this.opts.ollamaBaseUrl,
+          model: this.opts.embeddingModel ?? DEFAULT_EMBEDDING_MODEL,
+          fetchImpl: this.opts.fetchImpl ?? fetch,
+        });
+        if (this.directiveVec && this.directiveVec.length > 0) {
+          this.modelUnavailable = false;
+        }
+      } catch {
+        // Still unavailable — try again next poll.
+        return;
+      }
     }
     if (!this.directiveVec) return;
 

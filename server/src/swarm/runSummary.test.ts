@@ -108,10 +108,10 @@ describe("writeRunSummary — on-disk shape", () => {
     try {
       const s = buildDiscussionSummary(base({ config: { ...base().config, localPath: tmp } }));
       const { perRunPath, latestPath } = await writeRunSummary(tmp, s);
-      // Latest pointer at the canonical path.
-      assert.equal(latestPath, path.join(tmp, "summary.json"));
+      // Latest pointer at the logs/ directory.
+      assert.equal(latestPath, path.join(tmp, "logs", "summary.json"));
       // Per-run sibling whose name encodes startedAt as ISO-with-dashes.
-      assert.equal(perRunPath, path.join(tmp, buildPerRunSummaryFileName(s.startedAt)));
+      assert.equal(perRunPath, path.join(tmp, "logs", buildPerRunSummaryFileName(s.startedAt)));
       assert.match(path.basename(perRunPath), /^summary-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/);
       // Both files have identical contents.
       const latest = JSON.parse(await fs.readFile(latestPath, "utf8"));
@@ -201,7 +201,7 @@ describe("findAndReadNewestPriorSummary", () => {
       // Delete the per-run file so only summary.json remains — simulates
       // a pre-Unit-49 clone.
       const perRunName = buildPerRunSummaryFileName(s.startedAt);
-      await fs.unlink(path.join(tmp, perRunName));
+      await fs.unlink(path.join(tmp, "logs", perRunName));
       const got = await findAndReadNewestPriorSummary(tmp);
       assert.ok(got);
       assert.equal(got!.agentCount, 2);

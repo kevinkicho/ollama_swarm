@@ -9,7 +9,7 @@ import { OllamaCloudProvider } from "./OllamaCloudProvider.js";
 import { AnthropicProvider } from "./AnthropicProvider.js";
 import { OpenAIProvider } from "./OpenAIProvider.js";
 import { OpenCodeProvider } from "./OpenCodeProvider.js";
-import { detectProvider, stripProviderPrefix } from "../../../shared/src/providers.js";
+import { detectProvider, stripProviderPrefix } from "@ollama-swarm/shared/providers";
 import { config } from "../config.js";
 
 let ollamaSingleton: OllamaProvider | null = null;

@@ -107,16 +107,16 @@ export async function runPlanner(
         };
         try {
           const brainResult = await tryBrainFallback(
+            "planner",
             firstResponse,
             PlannerResponseSchema,
-            "planner",
             ctx.brainPromptFn,
             brainEvent,
             agent,
           );
           if (brainResult) {
             const brainTodos = brainResult as unknown[];
-            parsed = { ok: true as const, todos: brainTodos, dropped: [] };
+            parsed = { ok: true as const, todos: brainTodos as any, dropped: [] };
             ctx.appendSystem(`Brain fallback succeeded — extracted ${brainTodos.length} todo(s).`);
           }
         } catch {

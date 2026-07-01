@@ -23,7 +23,8 @@
 export type Hunk =
   | { op: "replace"; file: string; search: string; replace: string }
   | { op: "create"; file: string; content: string }
-  | { op: "append"; file: string; content: string };
+  | { op: "append"; file: string; content: string }
+  | { op: "delete"; file: string };
 
 export type ApplyFileResult =
   | { ok: true; newText: string }
@@ -82,6 +83,9 @@ export function applyFileHunks(
       case "append":
         text = text + h.content;
         break;
+      case "delete":
+        // Delete the file — return empty string to signal deletion
+        return { ok: true, newText: "" };
       case "replace": {
         let search = h.search;
         let count = countOccurrences(text, search);
@@ -109,10 +113,30 @@ export function applyFileHunks(
           };
         }
         if (count > 1) {
-          return {
-            ok: false,
-            error: `hunk[${i}] op "replace": "search" text matches ${count} times — must be unique; add surrounding context`,
-          };
+          // Try longest unique substring fallback: find the longest
+          // substring of the search text that appears exactly once.
+          // This handles the common case where the model includes
+          // too little context and the search text matches multiple
+          // times. We try progressively shorter suffixes until we
+          // find a unique match.
+          const lines = search.split("\n");
+          let found = false;
+          for (let skipLines = 1; skipLines < lines.length && !found; skipLines++) {
+            const shorter = lines.slice(skipLines).join("\n");
+            if (shorter.length < 10) break;
+            const sc = countOccurrences(text, shorter);
+            if (sc === 1) {
+              search = shorter;
+              count = 1;
+              found = true;
+            }
+          }
+          if (!found) {
+            return {
+              ok: false,
+              error: `hunk[${i}] op "replace": "search" text matches ${count} times — must be unique; add surrounding context`,
+            };
+          }
         }
         const idx = text.indexOf(search);
         text = text.slice(0, idx) + h.replace + text.slice(idx + h.search.length);

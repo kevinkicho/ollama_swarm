@@ -193,11 +193,11 @@ test("WORKER_HUNKS_JSON_SCHEMA — skip-only response (no hunks beyond empty)", 
   assert.ok(!required.includes("skip"), "skip must be optional");
 });
 
-test("WORKER_HUNKS_JSON_SCHEMA — three variants in oneOf", () => {
+test("WORKER_HUNKS_JSON_SCHEMA — four variants in oneOf", () => {
   const variants = WORKER_HUNKS_JSON_SCHEMA.properties.hunks.items.oneOf;
-  assert.equal(variants.length, 3, "replace + create + append");
+  assert.equal(variants.length, 4, "replace + create + append + delete");
   const ops = variants.map((v) => ([...v.properties.op.enum] as string[])[0]);
-  assert.deepEqual([...ops].sort(), ["append", "create", "replace"]);
+  assert.deepEqual([...ops].sort(), ["append", "create", "delete", "replace"]);
 });
 
 test("REPLANNER_JSON_SCHEMA — revise variant parses + matches schema", () => {

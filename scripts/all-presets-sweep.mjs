@@ -76,13 +76,13 @@ const SWARM_PRESETS = onlyEnv.length > 0
 // batch). Same #231 finding from memory. Nemotron handles repeated
 // structured JSON cleanly.
 //
-//   PLANNER  nemotron-3-super:cloud  — JSON-stable structured output
+//   PLANNER  deepseek-v4-flash:cloud  — JSON-stable structured output
 //   WORKER   gemma4:31b-cloud        — fast + code-edit-friendly
-//   SYNTH    nemotron-3-super:cloud  — cross-criterion synthesis
+//   SYNTH    deepseek-v4-flash:cloud  — cross-criterion synthesis
 //   FALLBACK glm-5.1:cloud           — used in failover chain only
-const PLANNER = "nemotron-3-super:cloud";
+const PLANNER = "deepseek-v4-flash:cloud";
 const WORKER = "gemma4:31b-cloud";
-const SYNTH = "nemotron-3-super:cloud";
+const SYNTH = "deepseek-v4-flash:cloud";
 const PER_PRESET_MODELS = {
   // Blackboard splits per-role (route accepts plannerModel/
   // workerModel/auditorModel — all three are honored at the runner).

@@ -90,7 +90,7 @@ export async function promptAgent(
   providerFailover?: readonly string[],
 ): Promise<string> {
   const raw = await promptWithFailoverAuto(agent, prompt, {
-    manager,
+    manager: manager as any,
     agentName,
     signal: new AbortController().signal,
   }, providerFailover);
@@ -106,7 +106,7 @@ export async function promptPlannerSafely(
   providerFailover?: readonly string[],
 ): Promise<{ response: string; agentUsed: Agent }> {
   const raw = await promptWithFailoverAuto(agent, promptText, {
-    manager,
+    manager: manager as any,
     agentName: agentName ?? "swarm-read",
     signal: new AbortController().signal,
   }, providerFailover);

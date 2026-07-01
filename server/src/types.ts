@@ -15,12 +15,13 @@ import type { RunSummary } from "./swarm/blackboard/summary.js";
 // V2 Step 2b: TranscriptEntrySummary moved to shared/. Imported here
 // so the TranscriptEntry interface can reference it; re-exported so
 // existing server-side imports (`from "../types.js"`) keep working.
-import type { TranscriptEntrySummary } from "../../shared/src/transcriptEntrySummary.js";
+import type { TranscriptEntrySummary } from "@ollama-swarm/shared/transcriptEntrySummary";
 export type { TranscriptEntrySummary };
 
 
 // ── Events ──
-export type { TranscriptRole, TranscriptEntry, BoardCountsDTO, SwarmEventBody, SwarmEvent } from "./types/events.js";
+export type { TranscriptRole, TranscriptEntry, BoardCountsDTO, SwarmEventBody } from "./types/events.js";
+export type { SwarmEvent } from "./types/run.js";
 
 // ── Agents ──
 export type { AgentStatus, AgentState } from "./types/agents.js";

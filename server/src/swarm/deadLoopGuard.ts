@@ -15,7 +15,7 @@
 import { looksLikeJunk } from "./extractText.js";
 import type { TranscriptEntry } from "../types.js";
 
-const DEFAULT_THRESHOLD = 2;
+const DEFAULT_THRESHOLD = 3;
 
 export interface DeadLoopHit {
   /** True when consecutive count has reached the threshold. */

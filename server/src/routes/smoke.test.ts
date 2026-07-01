@@ -74,7 +74,7 @@ describe("Cross-layer smoke — static contract", () => {
     const defaults = {
       model: "glm-5.1:cloud",
       workerModel: "gemma4:31b-cloud",
-      auditorModel: "nemotron-3-super:cloud",
+      auditorModel: "deepseek-v4-flash:cloud",
       dedicatedAuditor: true,
     };
 
@@ -94,7 +94,7 @@ describe("Cross-layer smoke — static contract", () => {
       "Planner model must match user's model when no explicit override set");
     assert.equal(result.workerModel, "gemma4:31b-cloud",
       "Worker model should use the default");
-    assert.equal(result.auditorModel, "nemotron-3-super:cloud",
+    assert.equal(result.auditorModel, "deepseek-v4-flash:cloud",
       "Auditor model should use the default");
   });
 
@@ -104,7 +104,7 @@ describe("Cross-layer smoke — static contract", () => {
     const defaults = {
       model: "glm-5.1:cloud",
       workerModel: "gemma4:31b-cloud",
-      auditorModel: "nemotron-3-super:cloud",
+      auditorModel: "deepseek-v4-flash:cloud",
       dedicatedAuditor: true,
     };
 
@@ -128,7 +128,7 @@ describe("Cross-layer smoke — static contract", () => {
     const defaults = {
       model: "glm-5.1:cloud",
       workerModel: "gemma4:31b-cloud",
-      auditorModel: "nemotron-3-super:cloud",
+      auditorModel: "deepseek-v4-flash:cloud",
       dedicatedAuditor: true,
     };
 
@@ -144,7 +144,7 @@ describe("Cross-layer smoke — static contract", () => {
             { index: 1, role: "planner", removable: false, model: "glm-5.1:cloud" },
             { index: 2, role: "worker", removable: true },
             { index: 3, role: "worker", removable: true },
-            { index: 4, role: "auditor", removable: false, model: "nemotron-3-super:cloud" },
+            { index: 4, role: "auditor", removable: false, model: "deepseek-v4-flash:cloud" },
           ],
         },
       },
@@ -161,7 +161,7 @@ describe("Cross-layer smoke — static contract", () => {
     const defaults = {
       model: "glm-5.1:cloud",
       workerModel: "gemma4:31b-cloud",
-      auditorModel: "nemotron-3-super:cloud",
+      auditorModel: "deepseek-v4-flash:cloud",
       dedicatedAuditor: true,
     };
 
@@ -187,7 +187,7 @@ describe("Cross-layer smoke — static contract", () => {
     const defaults = {
       model: "glm-5.1:cloud",
       workerModel: "gemma4:31b-cloud",
-      auditorModel: "nemotron-3-super:cloud",
+      auditorModel: "deepseek-v4-flash:cloud",
       dedicatedAuditor: true,
     };
 
@@ -199,6 +199,6 @@ describe("Cross-layer smoke — static contract", () => {
     assert.equal(result.model, "glm-5.1:cloud");
     assert.equal(result.plannerModel, "glm-5.1:cloud");
     assert.equal(result.workerModel, "gemma4:31b-cloud");
-    assert.equal(result.auditorModel, "nemotron-3-super:cloud");
+    assert.equal(result.auditorModel, "deepseek-v4-flash:cloud");
   });
 });

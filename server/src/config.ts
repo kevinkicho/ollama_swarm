@@ -43,13 +43,13 @@ const Schema = z.object({
   // to disable the proxy entirely (legacy direct-to-Ollama mode —
   // token tracking will be empty).
   OLLAMA_PROXY_PORT: z.coerce.number().int().min(0).max(65_535).default(11533),
-  DEFAULT_MODEL: z.string().default("glm-5.1:cloud"),
+  DEFAULT_MODEL: z.string().default("deepseek-v4-flash:cloud"),
   // Blackboard-only worker default. Workers do diff-generation and
   // benefit less from the planner's heavier reasoning model — gemma4
   // gives ~3-4× the tokens-per-second at acceptable code-edit quality.
   // Applied at the route layer when cfg.workerModel is absent AND
   // preset === 'blackboard'. Other presets fan agents through `model`.
-  DEFAULT_WORKER_MODEL: z.string().default("gemma4:31b-cloud"),
+  DEFAULT_WORKER_MODEL: z.string().default("deepseek-v4-flash:cloud"),
   // Blackboard-only: default `dedicatedAuditor` to ON. Empirically
   // delegating audit to a separate agent (planner = pure planning,
   // auditor = pure auditing) improves overall teamwork — context
@@ -65,7 +65,7 @@ const Schema = z.object({
   // strongest reasoning matters most. Per the opencode-swarm pattern.
   // Per-run cfg.auditorModel still overrides. Applied at the route
   // layer when preset === 'blackboard' AND dedicatedAuditor is on.
-  DEFAULT_AUDITOR_MODEL: z.string().default("nemotron-3-super:cloud"),
+  DEFAULT_AUDITOR_MODEL: z.string().default("deepseek-v4-flash:cloud"),
   OPENCODE_BIN: z.string().default("opencode"),
   GITHUB_TOKEN: z.string().optional(),
   // Phase 1 of #314 (multi-provider): API keys for the paid SDKs.
@@ -323,7 +323,7 @@ const Schema = z.object({
   // Set to "" to disable brain fallback entirely.
   SWARM_BRAIN_MODEL: z
     .string()
-    .default("gemma4:31b-cloud")
+    .default("deepseek-v4-flash:cloud")
     .transform((v) => v.trim()),
   // Production: directory containing built web assets. When set, the
   // server serves these as static files at / and falls through to API

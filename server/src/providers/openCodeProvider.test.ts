@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { detectProvider, stripProviderPrefix } from "../../../shared/src/providers.js";
+import { detectProvider, stripProviderPrefix } from "@ollama-swarm/shared/providers";
 import { pickProvider, __resetProviderSingletons } from "./pickProvider.js";
 
 // ---------------------------------------------------------------------------

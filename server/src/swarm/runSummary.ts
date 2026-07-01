@@ -117,6 +117,7 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
     startedAt: input.startedAt,
     endedAt: input.endedAt,
     wallClockMs,
+    wastedWallClockMs: 0,
     stopReason,
     stopDetail,
     // Blackboard-only fields intentionally omitted. Comparison tooling
@@ -183,9 +184,10 @@ async function writeJsonAtomic(abs: string, contents: string): Promise<void> {
  *  Exported for tests and tooling that wants to know what file was
  *  written without re-deriving the rule.
  */
-export function buildPerRunSummaryFileName(startedAt: number): string {
+export function buildPerRunSummaryFileName(startedAt: number, runId?: string): string {
   const iso = new Date(startedAt).toISOString().replace(/[:.]/g, "-");
-  return `summary-${iso}.json`;
+  const runIdShort = runId ? `${runId.slice(0, 8)}-` : "";
+  return `summary-${runIdShort}${iso}.json`;
 }
 
 /** Unit 50: find and read the newest prior summary in a clone, for the
@@ -204,37 +206,40 @@ export function buildPerRunSummaryFileName(startedAt: number): string {
 export async function findAndReadNewestPriorSummary(
   clonePath: string,
 ): Promise<RunSummary | null> {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(clonePath);
-  } catch {
-    return null;
-  }
-  // Per-Unit-49 pattern matches AND the latest-pointer name. Lex sort
-  // descending so summary-2026-04-23T18.json beats summary-2026-04-22.
-  const perRunMatches = entries
-    .filter((e) => /^summary-.+\.json$/.test(e))
-    .sort()
-    .reverse();
-  // Try per-run files newest-first; if all are unparseable, fall back
-  // to the latest pointer.
-  const candidates = [...perRunMatches, "summary.json"];
-  for (const name of candidates) {
-    const abs = path.join(clonePath, name);
-    let raw: string;
+  // Search in both root and logs/ subdirectories
+  const searchDirs = [clonePath, path.join(clonePath, "logs")];
+
+  for (const searchDir of searchDirs) {
+    let entries: string[];
     try {
-      raw = await fs.readFile(abs, "utf8");
+      entries = await fs.readdir(searchDir);
     } catch {
       continue;
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      continue;
-    }
-    if (looksLikeRunSummary(parsed)) {
-      return parsed as RunSummary;
+
+    // Check for summary files directly in the search directory
+    const perRunMatches = entries
+      .filter((e) => /^summary-.+\.json$/.test(e))
+      .sort()
+      .reverse();
+    const candidates = [...perRunMatches, "summary.json"];
+    for (const name of candidates) {
+      const abs = path.join(searchDir, name);
+      let raw: string;
+      try {
+        raw = await fs.readFile(abs, "utf8");
+      } catch {
+        continue;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+      if (looksLikeRunSummary(parsed)) {
+        return parsed as RunSummary;
+      }
     }
   }
   return null;
@@ -280,8 +285,10 @@ export async function writeRunSummary(
   summary: RunSummary,
 ): Promise<{ perRunPath: string; latestPath: string }> {
   const json = JSON.stringify(summary, null, 2);
-  const perRunPath = path.join(clonePath, buildPerRunSummaryFileName(summary.startedAt));
-  const latestPath = path.join(clonePath, "summary.json");
+  const logsDir = path.join(clonePath, "logs");
+  await import("node:fs/promises").then((fs) => fs.mkdir(logsDir, { recursive: true })).catch(() => {});
+  const perRunPath = path.join(logsDir, buildPerRunSummaryFileName(summary.startedAt, summary.runId));
+  const latestPath = path.join(logsDir, "summary.json");
   // Per-run first: if the second write fails, we still have a stable
   // per-run record. The "latest" pointer can be reconstructed by
   // reading the newest per-run file.

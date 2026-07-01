@@ -246,8 +246,8 @@ only 0.3pp in overall success. The cascade is at an efficiency plateau.
 **Sibling model mapping** (from `BlackboardRunnerConstants.ts`):
 
 ```
-glm-5.1:cloud     ↔ nemotron-3-super:cloud  (mutual siblings)
-deepseek-v4-pro   → nemotron-3-super:cloud  (one-way — deepseek unstable)
+glm-5.1:cloud     ↔ deepseek-v4-flash:cloud  (mutual siblings)
+deepseek-v4-pro   → deepseek-v4-flash:cloud  (one-way — deepseek unstable)
 ```
 
 DeepSeek is never chosen as a sibling FOR any model — it's present only

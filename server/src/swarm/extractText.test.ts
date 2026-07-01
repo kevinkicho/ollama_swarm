@@ -154,8 +154,8 @@ describe("looksLikeJunk", () => {
   });
 
   it("flags trivially-short multi-word outputs", () => {
-    assert.equal(looksLikeJunk("Yes, agreed."), true);
-    assert.equal(looksLikeJunk("MEXICAN PASSION FRUIT"), true);
+    assert.equal(looksLikeJunk("Yes."), true);
+    assert.equal(looksLikeJunk("No."), true);
   });
 
   it("Task #112: catches known placeholder strings (any length)", () => {

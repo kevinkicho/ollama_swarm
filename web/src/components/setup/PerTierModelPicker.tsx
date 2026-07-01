@@ -58,7 +58,7 @@ export function PerTierModelPicker(props: PerTierModelPickerProps) {
                 onChange={t.setValue}
                 placeholder={`(fallback: ${props.fallbackModel})`}
                 ariaLabel={`${props.label} — ${t.name}`}
-                provider={props.provider}
+                provider={props.provider as "ollama" | "ollama-cloud" | "anthropic" | "openai" | "opencode"}
               />
             </div>
           </div>

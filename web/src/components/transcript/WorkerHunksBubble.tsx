@@ -62,16 +62,12 @@ export function WorkerHunksBubble({
   header,
   className,
   style,
-  segmentSplitPoints,
-  segmentHue,
 }: {
   summary: string;
   rawJson: string;
   header: React.ReactNode;
   className?: string;
   style?: React.CSSProperties;
-  segmentSplitPoints?: number[];
-  segmentHue?: number;
 }) {
   const [showRaw, setShowRaw] = useState(false);
   // 2026-04-27 (UI Phase 3 follow-up per Kevin): collapsed by default,
@@ -90,8 +86,6 @@ export function WorkerHunksBubble({
         header={header}
         summary={summary}
         json={rawJson}
-        segmentSplitPoints={segmentSplitPoints}
-        segmentHue={segmentHue}
       />
     );
   }

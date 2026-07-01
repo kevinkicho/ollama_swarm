@@ -10,7 +10,7 @@
 // Design:
 //   - Per-task rubric authored in catalog.json's `qualityRubric` field.
 //   - Judge model invoked via the SAME Ollama endpoint the swarm uses
-//     (defaults to nemotron-3-super:cloud — strongest reasoning that
+//     (defaults to deepseek-v4-flash:cloud — strongest reasoning that
 //     ships free). Configurable via --quality-judge-model on the CLI.
 //   - Judge sees: task description, rubric, the agent's final
 //     synthesis (last 3000 chars of transcript prefer the synthesis
@@ -23,7 +23,7 @@
 // This module is pure JS (.mjs) so the existing eval harness can
 // import without TS shenanigans. Pure builders are tested separately.
 
-const DEFAULT_JUDGE_MODEL = "nemotron-3-super:cloud";
+const DEFAULT_JUDGE_MODEL = "deepseek-v4-flash:cloud";
 const FINAL_SYNTHESIS_MAX_CHARS = 3000;
 
 /** Build the judge prompt. Pure — tested in isolation. */

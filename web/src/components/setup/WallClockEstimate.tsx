@@ -12,10 +12,7 @@ const MODEL_TURN_SECONDS: Record<string, number> = {
   // run 0254ca7c (single data point). Reverted from default 2026-04-27
   // afternoon due to Ollama serving congestion — kept here for the
   // estimator since users can still pick it explicitly.
-  "deepseek-v4-pro:cloud": 65,
-  "nemotron-3-super:cloud": 30,
-  "glm-5.1:cloud": 70,
-  "gemma4:31b-cloud": 30,
+  "deepseek-v4-flash:cloud": 35,
 };
 const DEFAULT_TURN_SECONDS = 60;
 

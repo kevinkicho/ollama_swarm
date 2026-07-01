@@ -68,8 +68,8 @@ describe("discussionWriteSummary", () => {
     assert.match(calls[0].text, /Run finished/i);  // banner
     assert.match(calls[1].text, /Wrote run summary/);
     assert.match(calls[1].text, /files=0/);
-    // summary.json should exist on disk
-    const exists = await fs.stat(path.join(cfg.localPath, "summary.json")).then(() => true).catch(() => false);
+    // summary.json should exist on disk in logs/
+    const exists = await fs.stat(path.join(cfg.localPath, "logs", "summary.json")).then(() => true).catch(() => false);
     assert.equal(exists, true);
     await fs.rm(cfg.localPath, { recursive: true, force: true });
   });
@@ -133,7 +133,7 @@ describe("discussionWriteSummary", () => {
       repos: fakeRepos(),
       appendSystem,
     });
-    const json = JSON.parse(await fs.readFile(path.join(cfg.localPath, "summary.json"), "utf8"));
+    const json = JSON.parse(await fs.readFile(path.join(cfg.localPath, "logs", "summary.json"), "utf8"));
     assert.equal(json.rounds, 2);
     await fs.rm(cfg.localPath, { recursive: true, force: true });
   });
@@ -153,7 +153,7 @@ describe("discussionWriteSummary", () => {
       repos: fakeRepos(),
       appendSystem,
     });
-    const json = JSON.parse(await fs.readFile(path.join(cfg.localPath, "summary.json"), "utf8"));
+    const json = JSON.parse(await fs.readFile(path.join(cfg.localPath, "logs", "summary.json"), "utf8"));
     assert.equal(json.stopReason, "early-stop");
     assert.equal(json.stopDetail, "judge-confidence-high after round 2/4");
     await fs.rm(cfg.localPath, { recursive: true, force: true });
@@ -175,7 +175,7 @@ describe("discussionWriteSummary", () => {
     });
     // Should still write summary, just with filesChanged=0 + empty porcelain
     assert.equal(calls.length, 2);
-    const json = JSON.parse(await fs.readFile(path.join(cfg.localPath, "summary.json"), "utf8"));
+    const json = JSON.parse(await fs.readFile(path.join(cfg.localPath, "logs", "summary.json"), "utf8"));
     assert.equal(json.filesChanged, 0);
     await fs.rm(cfg.localPath, { recursive: true, force: true });
   });

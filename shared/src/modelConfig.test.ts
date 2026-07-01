@@ -5,7 +5,7 @@ import { resolveModels, type ModelDefaults, type ModelResolutionInput } from "..
 const DEFAULTS: ModelDefaults = {
   model: "glm-5.1:cloud",
   workerModel: "gemma4:31b-cloud",
-  auditorModel: "nemotron-3-super:cloud",
+  auditorModel: "deepseek-v4-flash:cloud",
   dedicatedAuditor: true,
 };
 
@@ -18,7 +18,7 @@ describe("resolveModels", () => {
     assert.equal(result.model, "opencode-go/deepseek-v4-pro");
     assert.equal(result.plannerModel, "opencode-go/deepseek-v4-pro");
     assert.equal(result.workerModel, "gemma4:31b-cloud");
-    assert.equal(result.auditorModel, "nemotron-3-super:cloud");
+    assert.equal(result.auditorModel, "deepseek-v4-flash:cloud");
   });
 
   it("explicit plannerModel wins over model", () => {
@@ -41,7 +41,7 @@ describe("resolveModels", () => {
     assert.equal(result.model, "glm-5.1:cloud");
     assert.equal(result.plannerModel, "glm-5.1:cloud");
     assert.equal(result.workerModel, "gemma4:31b-cloud");
-    assert.equal(result.auditorModel, "nemotron-3-super:cloud");
+    assert.equal(result.auditorModel, "deepseek-v4-flash:cloud");
   });
 
   it("non-blackboard presets share model for all roles", () => {
@@ -94,7 +94,7 @@ describe("resolveModels", () => {
       { model: "opencode-go/deepseek-v4-pro", preset: "blackboard", dedicatedAuditor: true },
       DEFAULTS,
     );
-    assert.equal(result.auditorModel, "nemotron-3-super:cloud");
+    assert.equal(result.auditorModel, "deepseek-v4-flash:cloud");
   });
 
   it("auditor is same as model for non-blackboard", () => {

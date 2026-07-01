@@ -148,7 +148,9 @@ describe("writeDeliverable — on-disk roundtrip", () => {
       sections: [{ title: "S", body: "b" }],
     });
     assert.equal(result.ok, true);
-    const entries = readdirSync(workdir);
+    // Check for .tmp files in the deliverable directory
+    const deliverableDir = join(workdir, "logs", "r", "deliverable");
+    const entries = readdirSync(deliverableDir);
     assert.ok(!entries.some((f) => f.endsWith(".tmp")), "no .tmp file should remain");
     assert.ok(entries.some((f) => f === result.filename), "final file must be present");
   });
@@ -241,7 +243,7 @@ describe("writeDeliverable — on-disk roundtrip", () => {
     assert.equal(typeof result.nextActionsCount, "number");
     assert.ok(result.nextActionsCount! >= 2, "should extract the 2 high-priority actions");
 
-    const jsonPath = join(workdir, result.nextActionsFile!);
+    const jsonPath = join(workdir, "logs", "12345678", "next-actions", result.nextActionsFile!);
     assert.ok(existsSync(jsonPath));
     const parsed = JSON.parse(readFileSync(jsonPath, "utf8"));
     assert.equal(parsed.preset, "council");

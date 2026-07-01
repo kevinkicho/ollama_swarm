@@ -80,9 +80,11 @@ function hashHunks(hunks: readonly Hunk[]): string {
     if (h.op === "replace") {
       parts.push(`SEARCH=${normalizeHunkText(h.search)}`);
       parts.push(`REPLACE=${normalizeHunkText(h.replace)}`);
+    } else if (h.op === "delete") {
+      parts.push(`CONTENT=`);
     } else {
       // create / append both carry `content`
-      parts.push(`CONTENT=${normalizeHunkText(h.content)}`);
+      parts.push(`CONTENT=${normalizeHunkText((h as { content: string }).content)}`);
     }
     parts.push("---");
   }

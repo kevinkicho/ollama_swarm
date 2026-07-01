@@ -23,7 +23,7 @@
 // NEXT run.
 
 import type { RunSummary } from "../types";
-import { defaultRoleForIndex } from "../../../shared/src/topology";
+import { defaultRoleForIndex } from "@ollama-swarm/shared/topology";
 
 export interface AgentCostShare {
   agentIndex: number;
@@ -159,7 +159,7 @@ export interface AutoRouteRecommendation {
 /** Default coding-tier model. Matches DEFAULT_WORKER_MODEL on the
  *  server side so a "Apply" click yields the same default the env
  *  var would provide. */
-const CODING_TIER_DEFAULT_MODEL = "gemma4:31b-cloud";
+const CODING_TIER_DEFAULT_MODEL = "deepseek-v4-flash:cloud";
 
 export function computeAutoRouteRecommendation(
   breakdown: CostBreakdown,

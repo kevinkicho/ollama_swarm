@@ -159,7 +159,7 @@ function main(...sweepDirs) {
   lines.push("```bash");
   lines.push("# 1. Set ANTHROPIC_API_KEY (or OPENAI_API_KEY) in .env if comparing paid models");
   lines.push("# 2. Pull the Ollama models referenced in the matrix:");
-  lines.push("#    ollama pull glm-5.1:cloud gemma4:31b-cloud nemotron-3-super:cloud");
+  lines.push("#    ollama pull glm-5.1:cloud gemma4:31b-cloud deepseek-v4-flash:cloud");
   lines.push("# 3. Start the dev server: npm run dev");
   lines.push("# 4. Run the sweep (3 seeds × every preset × every task in catalog):");
   lines.push("node eval/run-eval.mjs --fixture-dir=eval/fixtures --seeds=3");
@@ -172,7 +172,7 @@ function main(...sweepDirs) {
   lines.push("```bash");
   lines.push("node eval/run-eval.mjs --fixture-dir=eval/fixtures --presets=moa --seeds=3 \\");
   lines.push("  --moa-proposer-model=gemma4:31b-cloud \\");
-  lines.push("  --moa-aggregator-model=nemotron-3-super:cloud \\");
+  lines.push("  --moa-aggregator-model=deepseek-v4-flash:cloud \\");
   lines.push("  --out=runs/_eval/scoreboard-E-moa-hetero");
   lines.push("```");
   lines.push("");

@@ -118,6 +118,8 @@ export interface RunSummary {
   startedAt: number;
   endedAt: number;
   wallClockMs: number;
+  /** Estimated wall-clock time lost to stale todos. */
+  wastedWallClockMs: number;
   stopReason: StopReason;
   stopDetail?: string;
   // Unit 33: blackboard-specific board stats are optional. Non-blackboard
@@ -210,6 +212,7 @@ export interface RunSummary {
   // compat with summaries written before this lands.
   rca?: import("../autoRca.js").RcaReport;
   healthScore?: import("../runHealthScore.js").RunHealthScore;
+  startCommand?: string;
   // Direction 1: run outcome scoring. Multi-dimensional rubric grade
   // appended at run-end by outcomeScorer. Optional for back-compat
   // with summaries written before this lands.
@@ -231,6 +234,8 @@ export interface SummaryConfig {
    *  it in the RunSummary output. Optional — builders that don't know
    *  it (tests, older call paths) just omit it. */
   runId?: string;
+  /** CLI command that started this run, for display in run history. */
+  startCommand?: string;
 }
 
 export interface SummaryCounts {
@@ -365,6 +370,7 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     healthScore: buildHealthScore({ input, wallClockMs }),
     // Deliverables: extract created/modified files from git porcelain.
     deliverables: input.deliverables ?? extractDeliverables(input.finalGitStatus),
+    startCommand: input.config.startCommand,
   };
 }
 

@@ -77,6 +77,7 @@ export interface SummaryContext {
     criteriaWontDo: number;
     criteriaUnmet: number;
     wallClockMs: number;
+    wastedWallClockMs: number;
     startedAt: number;
     endedAt: number;
   }>;

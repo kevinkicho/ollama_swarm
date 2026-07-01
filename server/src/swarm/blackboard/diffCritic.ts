@@ -46,7 +46,7 @@ const RULES: readonly PatternRule[] = [
   {
     pattern: "debug-print",
     match: /^\+\s*(?:console\.(?:log|debug)|print(?:ln)?\(|dbg!\(|fmt\.Println|System\.out\.println)/,
-    severity: "high",
+    severity: "low",
     message: "Debug print statement added — likely left over from development.",
     // Skip test files where console.log is sometimes legitimate
     exclude: /\b(test|spec|__tests__|fixture)/i,
@@ -54,7 +54,7 @@ const RULES: readonly PatternRule[] = [
   {
     pattern: "self-added-todo",
     match: /^\+.*\b(TODO|FIXME|XXX|HACK)\b[: ].*$/,
-    severity: "medium",
+    severity: "low",
     message: "TODO/FIXME/HACK comment added — the swarm flagged its own deferred work as a comment instead of doing it.",
   },
   {

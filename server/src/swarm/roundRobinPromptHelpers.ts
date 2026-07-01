@@ -11,7 +11,7 @@
 
 import type { TranscriptEntry } from "../types.js";
 import { roleForAgent, type SwarmRole } from "./roles.js";
-import type { Topology } from "../../../shared/src/topology.js";
+import type { Topology } from "@ollama-swarm/shared/topology";
 import {
   readDirective,
   buildDirectiveBlock,

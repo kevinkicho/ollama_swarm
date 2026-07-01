@@ -1,56 +1,51 @@
 # Session checkpoint
 
-> Last updated: 2026-05-18
-> Status: **in_progress**
-> Tier: 2 (Test Coverage)
-> Tier: 0 (Survey)
-> Tier: 1 (Stability) → 2 (Test Coverage)
+> Last updated: 2026-06-26 (evening)
+> Status: **active**
+> Tier: Implementation (council architecture refactor, AI decision gates, reliability fixes)
 
-## Task
-Autoresearch Tier 2–5 — ongoing autonomous improvement
+## Current Session (2026-06-26 evening)
+**Mode:** Full implementation session with user
+**Focus:** Council architecture refactor, AI decision gates, execution model
 
-## Done (this session — commit range: f6da841..e640ea5)
-- **Registered 4 orphaned web test files** (f6da841): +59 tests
-- **Registered orphaned shared providers.test.ts** (e640ea5): +12 tests
-- **New tests for 3 shared utils** (8d0cb26): stripAgentText (16), extractJson (23), topology (53)
-- **New tests for 2 web modules** (2ab3819): agentPalette (11), useSegmentSplitter (20)
-- **Dead code removal** (12579d3): subtaskPart.ts, StartConfirmModal.tsx
-- **Archive doc cleanup** (edbb364): deleted 10 archive docs
-- **Never-self-stop fix** (d6af835): skill says NEVER stop
-- **Dead barrel exports** (e2fab28): removed 4 unused exports
-- **void toOpenCodeModelRef hack** (28e5077): removed from BaselineRunner
-- **Startup health check** (15e876a): port conflict + disk space warnings
-- **Remove invisible model defaults** (877f111): no more hardcoded planner/worker/auditor
-- **Delete re-export shims** (3b51973): 3 thin web shims removed
-- **Consolidate duplicate imports** (1546647): 5 cases merged
-- **66 uncommitted prior-session changes committed** (3721b14..24c6b69): docs, model config, bug fixes, providers, web
-- **splitProseAndJson fallback** (38d1182): lenient JSON extraction + 14 tests
-- **Streaming dock stall fix** (e66d611): 90s timeout + stalled state
-- **Sweep results capture fix** (77fa783): retry loop for summary.json race
-- **Per-preset sweep caps** (f32b9dd): shorter caps for fast presets
-- **hunkJudgePrompt test expansion** (1715df1): 3→18 (+15)
-- **apiVersion test expansion** (571080b): 3→4
-- **loopGuards test expansion** (0cc511b): 2→7 (+5)
-- **External watchdog script** (ae52a92): cycle tracking, retries, timestamps
-- **Run-tests.mjs path typo** (fb4d934): leading spaces in modelConfig path (+10 tests)
+### Completed this session:
+1. **Council architecture refactor** — CouncilRunner.ts reduced from 1867 LOC to 499 LOC (73% reduction) by extracting to 6 new modules
+2. **AI decision gates:**
+   - Gate 1 (verifyTodo): AI verifies file paths exist before execution
+   - Gate 3 (resolveContradiction): AI reads actual git diffs to decide keep/merge/revert
+   - Gate 4 (recoverDeletedFiles): AI decides which deleted files to restore
+3. **Parallel execution model** — Agents work in parallel on different todos; `claimed` set prevents duplicate todo assignment; no file locking (collective workmanship)
+4. **Autonomous loop fixes:**
+   - Fixed `extractActionableTodos` passing real AgentManager (was causing `recordStreamingText` error)
+   - Fixed contradictions not creating resolution todos (was breaking autonomous loop)
+   - Added fallback todo creation for contradictions/partial work
+5. **Recovery mechanism** — Added filters to exclude `deliverable-*`, `next-actions-*`, `logs/*`, `summary-*` from recovery
+6. **Deliverable paths** — Fixed deliverable files being written to root instead of `logs/{runId}/deliverable/`
+7. **Skip fix** — When agent skips a todo, mark it done so other agents don't re-attempt
 
-## Test counts
-- Start: 2748
-- Current: **2965** (+217)
-- All passing, zero failures
+### File changes:
+- `CouncilRunner.ts` — 1867 → 499 LOC (extracted to modules)
+- `councilDecisions.ts` — 614 LOC (Gate 1-4, todo extraction)
+- `councilExecution.ts` — 207 LOC (parallel worker execution)
+- `councilAudit.ts` — 149 LOC (audit phase)
+- `councilSynthesis.ts` — 180 LOC (synthesis pass)
+- `councilDeliverable.ts` — 242 LOC (deliverable writing)
+- `councilVoteReconcile.ts` — 95 LOC (vote reconciliation)
 
-- Pre-flight model validation (complex)
-- Debug resolution panel (complex)
-- Hunk syntax highlighting (needs npm)
+### Test counts:
+- All passing: **3168** tests, 0 failures
 
-## Done (this session — commits: 323f4a4..15f3383)
-- **3 orphaned source-inspection tests rewritten** (323f4a4, 15f3383): 63 tests re-pass
-  - RunStatePersister: sibling-file path update, schema v2→v3
-  - RoundRobin: RUNNER_SRC→HELPERS_SRC redirect
-  - hunkRepair: RUNNER_SRC→WORKER_SRC rewrite
+### Known issues:
+- File claiming (Gate 2) was removed due to deadlocking — agents were blocking each other in circular chains
+- Recovery mechanism may still restore old deliverable files from git history
 
-## Watchdog
-| Cycle | Time | Duration | Result |
-|-------|------|----------|--------|
-| 1 | 13:53:36 | 0s | OK |
-
+### Key files modified:
+- `server/src/swarm/CouncilRunner.ts` — Main orchestration
+- `server/src/swarm/councilDecisions.ts` — AI decision gates
+- `server/src/swarm/councilExecution.ts` — Parallel execution
+- `server/src/swarm/councilAudit.ts` — Audit phase
+- `server/src/swarm/councilSynthesis.ts` — Synthesis pass
+- `server/src/swarm/councilDeliverable.ts` — Deliverable writing
+- `server/src/swarm/councilVoteReconcile.ts` — Vote reconciliation
+- `docs/STATUS.md` — Updated council architecture description
+- `docs/AGENT-GUIDE.md` — Added council architecture section

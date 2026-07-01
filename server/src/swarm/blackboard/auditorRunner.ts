@@ -205,15 +205,15 @@ export async function runAuditor(
         ctx.appendSystem(`Auditor parse still failed after repair — trying brain fallback (${parsed.reason}).`);
         try {
           const brainResult = await tryBrainFallback(
+            "auditor",
             firstResponse,
             AuditorResponseSchema,
-            "auditor",
             ctx.brainPromptFn,
             (e: BrainFallbackEvent) => { ctx.emit({ type: "brain-fallback", ...e }); },
             auditAgent,
           );
           if (brainResult) {
-            parsed = { ok: true as const, result: brainResult, dropped: [] };
+            parsed = { ok: true as const, result: brainResult as AuditorResult, dropped: [] };
             ctx.appendSystem(`Brain fallback succeeded — extracted auditor verdict.`);
           }
         } catch {
@@ -228,7 +228,7 @@ export async function runAuditor(
           modelAtEntry,
           logPrefix: `[${auditAgent.id}]`,
           updateAgentModel: ctx.updateAgentModel,
-          emit: ctx.emit,
+          emit: ctx.emit as any,
           getFallbackModel: () => ctx.getActive()?.plannerFallbackModel,
           reason: "sibling-retry: auditor JSON parse failed after repair",
         },

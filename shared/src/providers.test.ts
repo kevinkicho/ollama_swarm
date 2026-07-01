@@ -19,7 +19,7 @@ test("detectProvider — bare local model defaults to ollama", () => {
 test("detectProvider — :cloud suffix → ollama-cloud", () => {
   assert.equal(detectProvider("glm-5.1:cloud"), "ollama-cloud");
   assert.equal(detectProvider("gemma4:31b-cloud"), "ollama-cloud");
-  assert.equal(detectProvider("nemotron-3-super:cloud"), "ollama-cloud");
+  assert.equal(detectProvider("deepseek-v4-flash:cloud"), "ollama-cloud");
 });
 
 test("detectProvider — anthropic prefix", () => {

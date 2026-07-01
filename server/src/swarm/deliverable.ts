@@ -293,11 +293,13 @@ export function writeDeliverable(input: DeliverableInput): DeliverableResult {
   const isoSafe = new Date().toISOString().replace(/[:.]/g, "-");
   const runIdShort = input.runId.slice(0, 8);
   const filename = `deliverable-${input.preset}-${runIdShort}-${isoSafe}.md`;
-  const fullPath = path.join(input.clonePath, filename);
+  // Organize by run-id: logs/{run-id}/deliverable/
+  const runDir = path.join(input.clonePath, "logs", runIdShort, "deliverable");
+  const fullPath = path.join(runDir, filename);
   const tmpPath = `${fullPath}.tmp`;
   const md = buildDeliverableMarkdown(input);
   try {
-    mkdirSync(input.clonePath, { recursive: true });
+    mkdirSync(runDir, { recursive: true });
     writeFileSync(tmpPath, md, "utf8");
     renameSync(tmpPath, fullPath);
   } catch (err) {
@@ -411,7 +413,9 @@ export interface NextActionsJsonResult {
 
 export function writeNextActionsJson(input: NextActionsJsonInput): NextActionsJsonResult {
   const filename = `next-actions-${input.preset}-${input.runIdShort}-${input.isoSafe}.json`;
-  const fullPath = path.join(input.clonePath, filename);
+  // Organize by run-id: logs/{run-id}/next-actions/
+  const runDir = path.join(input.clonePath, "logs", input.runIdShort, "next-actions");
+  const fullPath = path.join(runDir, filename);
   const tmpPath = `${fullPath}.tmp`;
   const actions = extractNextActions(input.deliverableMarkdown);
   const payload = {
@@ -426,6 +430,7 @@ export function writeNextActionsJson(input: NextActionsJsonInput): NextActionsJs
     })),
   };
   try {
+    mkdirSync(runDir, { recursive: true });
     writeFileSync(tmpPath, JSON.stringify(payload, null, 2), "utf8");
     renameSync(tmpPath, fullPath);
     return { ok: true, filename, fullPath, count: actions.length };

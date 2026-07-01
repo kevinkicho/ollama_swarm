@@ -17,8 +17,6 @@ import { useMemo, useState } from "react";
 import type { TranscriptEntry } from "../../types";
 import { summarizeAgentJson } from "../../../../shared/src/summarizeAgentJson";
 import { agentBubblePalette, hueForAgent } from "../agentPalette";
-import { CollapsedSegment } from "./StreamingDock";
-import { segmentsFromSplitPoints } from "../useSegmentSplitter";
 import {
   AgentJsonBubble,
   CollapsibleBlock,
@@ -35,6 +33,10 @@ import { ToolCallsBlock } from "./ToolCallsBlock";
 import { ContractBubble } from "./ContractBubble";
 import { AuditorVerdictBubble } from "./AuditorVerdictBubble";
 import { TodosBubble } from "./TodosBubble";
+// New components for transcript UI improvements
+import { PhaseDivider, detectPhaseTransition } from "./PhaseDivider";
+import { AgentAvatar } from "./AgentAvatar";
+import { AuditReviewCard } from "./AuditReviewCard";
 
 export function MessageBubble({ entry }: { entry: TranscriptEntry }) {
   const ts = new Date(entry.ts).toLocaleTimeString();
@@ -88,6 +90,44 @@ function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
   if (entry.text.startsWith("▸▸RUN-START▸▸")) {
     return <RunStartDivider text={entry.text} ts={entry.ts} />;
   }
+
+  // Phase divider detection — render visual separators between phases
+  const phaseTransition = detectPhaseTransition(entry.text);
+  if (phaseTransition) {
+    return <PhaseDivider phase={phaseTransition.phase} ts={entry.ts} cycle={phaseTransition.cycle} />;
+  }
+
+  // Audit review detection — render structured audit review cards
+  // Server format: [audit] agent-N review (N chars):\n...
+  const auditReviewMatch = entry.text.match(/^\[audit\] agent-(\d+) review \(\d+ chars\):\n([\s\S]*)/);
+  if (auditReviewMatch) {
+    const agentIndex = parseInt(auditReviewMatch[1]);
+    const reviewText = auditReviewMatch[2];
+    return <AuditReviewCard text={reviewText} agentIndex={agentIndex} ts={entry.ts} />;
+  }
+
+  // Execution result detection — render compact execution status
+  // Server format: [execution] agent-N ✓ applied|skipped|working on ...
+  const executionMatch = entry.text.match(/^\[execution\] agent-(\d+) (✓ applied|skipped|✗|working on)/);
+  if (executionMatch) {
+    const agentIndex = parseInt(executionMatch[1]);
+    const status = executionMatch[2];
+    const isApply = status.includes("applied");
+    const isSkip = status.includes("skipped");
+    const isWork = status.includes("working");
+    const icon = isApply ? "✓" : isSkip ? "⏭" : isWork ? "⏳" : "✗";
+    const color = isApply ? "text-emerald-400" : isSkip ? "text-amber-400" : isWork ? "text-ink-400" : "text-rose-400";
+    const bg = isApply ? "bg-emerald-950/30" : isSkip ? "bg-amber-950/30" : isWork ? "bg-ink-800/30" : "bg-rose-950/30";
+    return (
+      <div className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs ${bg} border border-ink-700/30`}>
+        <AgentAvatar agentIndex={agentIndex} size="sm" />
+        <span className={color}>{icon}</span>
+        <span className="text-ink-300">{entry.text.slice(entry.text.indexOf("]") + 2)}</span>
+        <span className="text-ink-500 ml-auto">{ts}</span>
+      </div>
+    );
+  }
+
   // Task #72: dedicated grid renderers for structured system entries.
   if (entry.summary?.kind === "run_finished") {
     return <RunFinishedGrid summary={entry.summary} ts={entry.ts} />;
@@ -291,8 +331,9 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
   const hue = hueForAgent(entry.agentIndex);
   const palette = agentBubblePalette(hue, false);
   const header = (
-    <div className="text-xs mb-1" style={{ color: palette.header }}>
-      Agent {entry.agentIndex} · {ts}
+    <div className="flex items-center gap-2 text-xs mb-1" style={{ color: palette.header }}>
+      <AgentAvatar agentIndex={entry.agentIndex} size="sm" />
+      <span>Agent {entry.agentIndex} · {ts}</span>
     </div>
   );
   const style = { borderColor: palette.border, background: palette.background };
@@ -494,8 +535,6 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
         header={header}
         summary={oneLine}
         json={entry.text}
-        segmentSplitPoints={entry.segmentSplitPoints}
-        segmentHue={hue}
       />
     );
   }
@@ -536,8 +575,6 @@ function AgentClientFallback({
         header={header}
         summary={`${looseHunks.length} hunk${looseHunks.length === 1 ? "" : "s"}`}
         rawJson={entry.text}
-        segmentSplitPoints={entry.segmentSplitPoints}
-        segmentHue={hue}
       />
     );
   }
@@ -585,8 +622,6 @@ function AgentClientFallback({
         header={header}
         summary={clientSummary.summary}
         json={clientSummary.json}
-        segmentSplitPoints={entry.segmentSplitPoints}
-        segmentHue={hue}
       />
     );
   }
@@ -603,25 +638,6 @@ function AgentClientFallback({
         header={header}
         json={prettyJson}
       />
-    );
-  }
-  // 2026-04-26: prose response with preserved segment split points from
-  // streaming. 2026-05-01 fix: collapse ALL segments uniformly. Pre-fix
-  // showed segments 1..N-1 collapsed + segment N raw expanded — that
-  // worked for live streaming (latest segment visible as it grew) but
-  // looked broken on finalized bubbles where the last segment "escaped"
-  // the collapsible bracket and appeared as raw text below it.
-  if (entry.segmentSplitPoints && entry.segmentSplitPoints.length > 0) {
-    const segments = segmentsFromSplitPoints(entry.text, entry.segmentSplitPoints);
-    return (
-      <div className={className} style={style}>
-        {header}
-        <div className="space-y-1.5 mt-1">
-          {segments.map((seg, i) => (
-            <CollapsedSegment key={i} index={i} text={seg} hue={hue} />
-          ))}
-        </div>
-      </div>
     );
   }
   return <CollapsibleBlock className={className} style={style} header={header} text={entry.text} />;

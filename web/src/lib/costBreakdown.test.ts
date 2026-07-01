@@ -229,7 +229,7 @@ describe("computeAutoRouteRecommendation", () => {
     const rec = computeAutoRouteRecommendation(breakdown);
     assert.ok(rec);
     assert.equal(rec!.targetField, "workerModel");
-    assert.match(rec!.suggestedModel, /gemma4/);
+    assert.match(rec!.suggestedModel, /deepseek/);
     assert.equal(rec!.dominantAgentIndex, 2);
     assert.match(rec!.reason, /coding-tier/);
   });

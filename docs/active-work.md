@@ -7,6 +7,89 @@
 
 ## Done recently
 
+### 2026-06-26 (evening) — Council architecture refactor, AI decision gates
+
+**Council architecture refactor:**
+- CouncilRunner.ts reduced from 1867 LOC to 499 LOC (73% reduction)
+- Extracted to 6 new modules: councilDecisions.ts, councilExecution.ts, councilAudit.ts, councilSynthesis.ts, councilDeliverable.ts, councilVoteReconcile.ts
+
+**AI decision gates:**
+- Gate 1 (verifyTodo): AI verifies file paths exist before execution — catches bad paths from todo extraction
+- Gate 3 (resolveContradiction): AI reads actual git diffs to decide keep/merge/revert when agents conflict
+- Gate 4 (recoverDeletedFiles): AI decides which deleted files to restore vs. intentionally removed
+
+**Execution model:**
+- Parallel execution: agents work on different todos simultaneously; `claimed` set prevents duplicate assignment
+- No file locking (collective workmanship) — agents can work on different parts of same file
+- File claiming (Gate 2) was removed due to deadlocking — agents were blocking each other in circular chains
+
+**Autonomous loop fixes:**
+- Fixed `extractActionableTodos` passing real AgentManager (was causing `recordStreamingText` error)
+- Fixed contradictions not creating resolution todos (was breaking autonomous loop)
+- When contradictions/partial work detected, next synthesis cycle accounts for them naturally
+
+**Recovery mechanism:**
+- Added filters to exclude `deliverable-*`, `next-actions-*`, `logs/*`, `summary-*` from recovery
+- Deliverable files now written to `logs/{runId}/deliverable/` instead of project root
+
+**Documentation:**
+- Updated `docs/STATUS.md` with council architecture description
+- Added council preset architecture section to `docs/AGENT-GUIDE.md`
+
+### 2026-06-26 — Model change, council 3-phase cycle, reliability fixes
+
+**Model change:** All defaults switched from `glm-5.1:cloud` to `deepseek-v4-flash:cloud` across:
+- `.env` (DEFAULT_MODEL, SWARM_PROVIDER_FAILOVER)
+- `server/src/config.ts` (DEFAULT_MODEL, DEFAULT_WORKER_MODEL, DEFAULT_AUDITOR_MODEL, SWARM_BRAIN_MODEL)
+- `web/src/components/SetupForm.tsx` (MODEL_REASONING, MODEL_CODING)
+- `web/src/components/setup/BlackboardSettings.tsx` (BLACKBOARD_DEFAULT_*)
+- `web/src/lib/costBreakdown.ts` (CODING_TIER_DEFAULT_MODEL)
+- `web/src/components/setup/WallClockEstimate.tsx` (turn times)
+- `README.md`, `docs/STATUS.md`, `docs/active-work.md`
+
+**Council 3-phase cycle (CouncilRunner.ts):**
+- Rewrote `loop()` with clean phase transitions: Phase 1 (Analysis/discussion) → Phase 2 (Execution) → Phase 3 (Audit)
+- Phase 3: ALL N agents produce audit verdicts in parallel (git diff included)
+- Autonomous mode (`rounds: 0`): cycles repeat with 2s delay, 20 cycle cap
+- Execution: `realFilesystemAdapter(cfg.localPath)` fix (was called without path)
+- Execution: `extractProviderText()` helper for provider response object/string duality
+- Execution: `applyAndCommit` fix — added missing `expectedFiles`, `todoId`, `workerId`
+- Execution: retry-on-failure with error feedback (up to 2 retries per todo)
+- Execution: auto-detect file existence — tells agent to use replace/append instead of create
+- Audit: `execSync("git diff HEAD~1 --stat")` for real git diff
+- Display: fixed "applied undefined hunk(s)" → `filesWritten?.length`
+
+**JSON extraction (extractActionableTodos):**
+- `indexOf("[")` / `lastIndexOf("]")` to find JSON array in response (handles preamble, code fences)
+- Project tree + recent drafts context in extraction prompt
+
+**Reliability fixes:**
+- `promptRunner.ts`: stuck-early detector aborts at 120s (no SSE chunks) / 180s (slow chunks) instead of waiting 20min
+- `tierRunner.ts`: `resolvedMaxTiers` returns Infinity in autonomous mode
+- `tierRunner.ts`: `maxAuditInvocations` returns Infinity in autonomous mode
+- `tierRunner.ts`: Check D (all resolved partial) now tries tier promotion instead of terminating
+- `tierRunner.ts`: stuck-cycle detection handles 1M rounds value
+
+**UI fixes:**
+- `web/src/App.tsx`: removed hardcoded "glm-5.1:cloud · opencode" from topbar
+- `web/src/components/useSegmentSplitter.ts`: MAX_SEGMENTS = 50 cap prevents runaway DOM nodes
+- `web/src/types.ts`: added `startCommand` field to RunSummary
+- `web/src/components/RunHistory.tsx`: CLI command in run review modal
+
+**Auditor enhancements:**
+- `auditorRunner.ts`: new `verifyWorkerSkip()` with 3 verdicts (valid/invalid/hallucinated-todo)
+- `workerRunner.ts`: hook at skip — auditor verifies, re-opens todo if invalid
+- `workerRunner.ts`: `hallucinated-todo` verdict logs planner diagnostic
+
+**Parser relaxation:**
+- `workerRunner.ts`: auditor interpretation tier between brain fallback and sibling retry
+
+**Pre-existing fixes:**
+- `degradationFallback.ts`: re-exported `inferParamSize` (missing from R1-R17 refactor)
+- `failoverChain.ts`: `isCloudModel` fixed to use `detectProvider` (was broken for `:cloud` models)
+
+**Tests:** 3168 → 3168 (all passing, no new tests in this session)
+
 ### 2026-05-18 — Autoresearch Tier 2–3: test expansion, dead code, archive cleanup
 
 **Test coverage (+161 tests, 2748→2909):**
@@ -352,7 +435,7 @@ Tracing why run 66165913 used glm-5.1 instead of opencode-go required following 
 
 ### Remove invisible Advanced model defaults (2 hr, medium risk)
 
-The `plannerModel`/`workerModel`/`auditorModel` Advanced fields default to `glm-5.1:cloud`/`gemma4:31b-cloud`/`nemotron-3-super:cloud`. These defaults are invisible to users who don't open Advanced, yet they override the user's top-level model selection. This caused both the 77ec1450 and 66165913 bugs.
+The `plannerModel`/`workerModel`/`auditorModel` Advanced fields default to `glm-5.1:cloud`/`gemma4:31b-cloud`/`deepseek-v4-flash:cloud`. These defaults are invisible to users who don't open Advanced, yet they override the user's top-level model selection. This caused both the 77ec1450 and 66165913 bugs.
 
 **Do:** Remove the hardcoded defaults from `BlackboardSettings.tsx` and `SetupForm.tsx`. If user doesn't open Advanced, every agent uses the top-level `model`. If they explicitly set per-role overrides, those win. Placeholder text shows "Uses default model" instead of the hardcoded value.
 

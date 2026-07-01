@@ -14,8 +14,8 @@ import {
   plannerShouldFire,
   workersShouldClaim,
   runFinished,
-} from "../../../shared/src/runStateMachine.js";
-import type { RunContext, RunState } from "../../../shared/src/runStateMachine.js";
+} from "@ollama-swarm/shared/runStateMachine";
+import type { RunContext, RunState } from "@ollama-swarm/shared/runStateMachine";
 
 // Default ctx with no work, no audit cycles, single tier. Tests
 // override only the fields that matter for the transition under test.

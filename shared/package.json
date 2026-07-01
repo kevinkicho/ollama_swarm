@@ -1,12 +1,30 @@
 {
   "name": "@ollama-swarm/shared",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./extractJson": "./src/extractJson.ts"
+    "./extractJson": "./src/extractJson.ts",
+    "./extractThinkTags": "./src/extractThinkTags.ts",
+    "./extractToolCallMarkers": "./src/extractToolCallMarkers.ts",
+    "./formatServerSummary": "./src/formatServerSummary.ts",
+    "./modelConfig": "./src/modelConfig.ts",
+    "./providers": "./src/providers.ts",
+    "./runStateMachine": "./src/runStateMachine.ts",
+    "./stripAgentText": "./src/stripAgentText.ts",
+    "./summarizeAgentJson": "./src/summarizeAgentJson.ts",
+    "./topology": "./src/topology.ts",
+    "./transcriptEntrySummary": "./src/transcriptEntrySummary.ts",
+    "./wsProtocol": "./src/wsProtocol.ts",
+    "./workerHunks": "./src/workerHunks.ts"
+  },
+  "scripts": {
+    "test": "node --import tsx --test src/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.0",
+    "zod": "^3.23.8"
   }
 }

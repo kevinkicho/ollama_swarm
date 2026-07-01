@@ -23,7 +23,7 @@
 //
 // Pre-reqs:
 //   - dev server up at :8243 (npm run dev)
-//   - Ollama models pulled: glm-5.1:cloud, gemma4:31b-cloud, nemotron-3-super:cloud
+//   - Ollama models pulled: glm-5.1:cloud, gemma4:31b-cloud, deepseek-v4-flash:cloud
 //   - .env has ANTHROPIC_API_KEY (only when --with-claude)
 
 import { spawn } from "node:child_process";
@@ -81,7 +81,7 @@ const CONFIGS = [
     flags: [
       "--presets=moa",
       "--moa-proposer-model=gemma4:31b-cloud",
-      "--moa-aggregator-model=nemotron-3-super:cloud",
+      "--moa-aggregator-model=deepseek-v4-flash:cloud",
     ],
   },
 ];
