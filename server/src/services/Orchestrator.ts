@@ -226,6 +226,9 @@ export class Orchestrator {
   // the multi-tenant refactor unchanged.
   private readonly amendments = new AmendmentsBuffer();
 
+  // P6: Brain service — persistent across runs, provisions new runs.
+  private brainService: import("../swarm/blackboard/brainOverseer/brainService.js").BrainService | null = null;
+
   /** T-Item-MultiTenant Phase 3 (2026-05-04): resolve "the active
    *  run" for legacy single-arg APIs (status / stop / injectUser
    *  without runId). Picks the MOST-RECENTLY-INSERTED entry, which
@@ -262,6 +265,13 @@ export class Orchestrator {
     if (this.knownParentPaths.length > 0) {
       writePersistedKnownParents(this.knownParentPaths);
     }
+
+    // P6: Initialize brain service — persists across runs.
+    const { createBrainService } = require("../swarm/blackboard/brainOverseer/brainService.js");
+    this.brainService = createBrainService({
+      maxConcurrentRuns: this.opts.maxConcurrentRuns ?? 4,
+      getOrchestrator: () => this,
+    });
   }
 
   /** Cleanup any runs that have terminated naturally but weren't
@@ -519,6 +529,11 @@ export class Orchestrator {
   // parent is fresh. Most-recent first.
   getKnownParentPaths(): string[] {
     return [...this.knownParentPaths];
+  }
+
+  /** P6: Get the brain service for system-level operations. */
+  getBrainService() {
+    return this.brainService;
   }
 
   /** T-Item-Recovery (2026-05-04): scan known parent dirs for
