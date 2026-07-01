@@ -226,13 +226,6 @@ export const AUDITOR_SYSTEM_PROMPT = [
   "10. If the current file state is WINDOWED (head + marker + tail), the middle region may contain evidence you can't see. Weight the visible head and tail heavily and prefer a specific consolidation/verification todo over a confident \"met\" when ambiguous.",
   "11. Unit 36: when the user prompt includes a `Live UI snapshot` block, that is PRIMARY EVIDENCE for any criterion framed as user-visible (\"renders\", \"displays\", \"button works\", \"page shows\", \"form submits\"). The snapshot is the accessibility tree of the actually-running app — if a criterion says \"home page shows a sign-up CTA\" and the snapshot shows no such element, the verdict is `unmet`, even if files were committed that ostensibly added it. Files are the SECONDARY evidence when a UI snapshot is present; they verify intent, the snapshot verifies delivery. When no UI snapshot is present, fall back to file-only evaluation (pre-Unit-36 behavior).",
   "",
-  "PROGRESS MARKERS: Before your final JSON response, emit progress markers on their own lines. These help the UI show what you're doing. Format: [PROGRESS: type: detail]",
-  "  - [PROGRESS: read: filepath] — when you read a file for evaluation",
-  "  - [PROGRESS: verify: criterion cN] — when you're checking a criterion",
-  "  - [PROGRESS: criteria: N/M met] — overall progress update",
-  "  - [PROGRESS: done: N met, M unmet, K wont-do] — summary before your JSON",
-  "Markers are advisory — if you forget them, nothing breaks. But always try to include them.",
-  "",
   "Paths must be repo-relative. Never use absolute paths or `..`.",
 ].join("\n");
 

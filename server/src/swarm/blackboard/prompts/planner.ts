@@ -294,14 +294,6 @@ export const PLANNER_SYSTEM_PROMPT = [
   "",
   "15. CONTEXT FILES — for TODOs that reference or depend on files NOT in expectedFiles, include an optional `contextFiles` array listing those files. The worker will see their content as read-only reference. Do NOT put files in contextFiles that you intend to modify — those go in expectedFiles. Max 3 context files per TODO. Example: if a TODO updates docs/PANELS.md but you need the worker to see config/dashboardPanels.js for reference, put config/dashboardPanels.js in contextFiles.",
   "",
-  "PROGRESS MARKERS: Before your final JSON response, emit progress markers on their own lines. These help the UI show what you're doing. Format: [PROGRESS: type: detail]",
-  "  - [PROGRESS: read: filepath] — when you read a file",
-  "  - [PROGRESS: grep: query] — when you search for something",
-  "  - [PROGRESS: plan: step N/M] — when you're working through steps",
-  "  - [PROGRESS: criteria: N/M met] — progress on contract criteria",
-  "  - [PROGRESS: done: N TODOs] — summary before your JSON",
-  "Markers are advisory — if you forget them, nothing breaks. But always try to include them.",
-  "",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",
 ].join("\n");
 

@@ -1,34 +1,48 @@
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import { parseProgressMarkers, stripProgressMarkers, markerIcon, markerLabel, type ProgressMarker } from "../../lib/parseProgressMarkers";
 
 /**
- * ProgressTimeline — renders structured progress markers from streaming text.
+ * ProgressTimeline — renders streaming text from an agent.
  *
- * Parses [PROGRESS: type: detail] markers and displays them as a vertical
- * timeline with icons. Falls back to raw text when no markers are found.
- *
- * Used in StreamingDock and PlannerThinkingPanel.
+ * When [PROGRESS: ...] markers are present, renders them as a structured
+ * timeline. Otherwise renders raw text. No heuristic detection — that's
+ * the brain's job.
  */
 export function ProgressTimeline({
   text,
+  agentLabel,
   className = "",
 }: {
   text: string;
+  agentLabel?: string;
   className?: string;
 }) {
   const markers = useMemo(() => parseProgressMarkers(text), [text]);
   const cleanText = useMemo(() => stripProgressMarkers(text), [text]);
 
-  if (markers.length === 0) return null;
-
   return (
-    <div className={`space-y-0.5 ${className}`}>
-      {markers.map((m, i) => (
-        <MarkerRow key={i} marker={m} isLatest={i === markers.length - 1} />
-      ))}
+    <div className={`rounded border border-ink-700 bg-ink-900/80 p-2 space-y-0.5 ${className}`}>
+      {agentLabel && (
+        <div className="text-[10px] uppercase tracking-wider text-ink-500 mb-1">{agentLabel}</div>
+      )}
+      {markers.length > 0 ? (
+        markers.map((m, i) => (
+          <MarkerRow key={i} marker={m} isLatest={i === markers.length - 1} />
+        ))
+      ) : null}
       {cleanText.length > 0 && (
-        <div className="mt-1 text-[11px] text-ink-400 truncate max-w-full" title={cleanText}>
-          {cleanText.slice(-200)}
+        <div className={`${markers.length > 0 ? "mt-1.5 pt-1.5 border-t border-ink-700/50" : ""} text-[11px] text-ink-300 max-h-48 overflow-y-auto whitespace-pre-wrap break-words font-mono`}>
+          {cleanText}
+        </div>
+      )}
+      {text.length === 0 && (
+        <div className="text-[11px] text-ink-500 italic flex items-center gap-1.5">
+          <span className="inline-flex gap-0.5 items-end">
+            <Dot delay={0} />
+            <Dot delay={150} />
+            <Dot delay={300} />
+          </span>
+          Thinking…
         </div>
       )}
     </div>
@@ -47,9 +61,17 @@ function MarkerRow({ marker, isLatest }: { marker: ProgressMarker; isLatest: boo
   );
 }
 
+function Dot({ delay }: { delay: number }) {
+  return (
+    <span
+      className="inline-block w-1 h-1 rounded-full bg-emerald-400 animate-pulse"
+      style={{ animationDelay: `${delay}ms` }}
+    />
+  );
+}
+
 /**
  * CompactProgress — single-line summary of latest progress marker.
- * Used when space is tight (e.g., sidebar agent cards).
  */
 export function CompactProgress({ text }: { text: string }) {
   const markers = useMemo(() => parseProgressMarkers(text), [text]);

@@ -205,15 +205,6 @@ export const WORKER_SYSTEM_PROMPT = [
   "  - JSON requires escaped newlines (\\n) and quotes (\\\") inside string values. Do not paste literal newlines.",
   "  - Do NOT use op \"create\" if the file already has contents shown — that's an error, use \"replace\" instead.",
   "  - Do NOT include line numbers, file headers (===), or markdown fences in your output. JSON only.",
-  "",
-  "PROGRESS MARKERS: Before your final JSON response, emit progress markers on their own lines. These help the UI show what you're doing. Format: [PROGRESS: type: detail]",
-  "  - [PROGRESS: read: filepath] — when you read/consider a file",
-  "  - [PROGRESS: grep: query] — when you search for something",
-  "  - [PROGRESS: write: filepath] — when you create or modify a file",
-  "  - [PROGRESS: skip: reason] — when you skip a todo",
-  "  - [PROGRESS: done: N hunks, M files] — summary before your JSON",
-  "Example: [PROGRESS: read: src/App.jsx]\\n[PROGRESS: write: src/App.jsx]\\n[PROGRESS: done: 2 hunks, 1 file]\\n{\"hunks\": [...]}",
-  "Markers are advisory — if you forget them, nothing breaks. But always try to include them.",
 ].join("\n");
 
 export interface WorkerSeed {

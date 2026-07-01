@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { agentBubblePalette, hueForAgent } from "../agentPalette";
 import { useSwarm } from "../../state/store";
-import { MAX_BUBBLE_HEIGHT_PX } from "./JsonBubbles";
 import { extractThinkTags } from "../../../../shared/src/extractThinkTags";
 import { extractToolCallMarkers } from "../../../../shared/src/extractToolCallMarkers";
-import { ProgressTimeline, parseProgressMarkers, stripProgressMarkers } from "./ProgressTimeline";
+import { ProgressTimeline } from "./ProgressTimeline";
 
 // Task #173 + #176 Phase A+B: per-agent streaming dock. Each agent
 // gets a STABLE bubble that persists from first chunk through
@@ -180,22 +179,11 @@ function PersistentStreamBubble({
           </span>
         )}
       </div>
-      <div className="space-y-1.5">
-        {(() => {
-          const markers = parseProgressMarkers(cleanedText);
-          if (markers.length > 0) {
-            return <ProgressTimeline text={cleanedText} />;
-          }
-          return (
-            <div
-              className="whitespace-pre-wrap opacity-90 overflow-y-auto"
-              style={{ maxHeight: `${MAX_BUBBLE_HEIGHT_PX}px` }}
-            >
-              {cleanedText || " "}
-            </div>
-          );
-        })()}
-      </div>
+      <ProgressTimeline
+        text={cleanedText}
+        agentLabel={`Agent ${agentIndex}`}
+        className="max-h-48 overflow-y-auto"
+      />
     </div>
   );
 }
