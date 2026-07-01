@@ -16,6 +16,7 @@ import { ActiveRunsPanel } from "./components/ActiveRunsPanel";
 import { SwarmStoreProvider } from "./state/SwarmStoreProvider";
 import type { RunSummary } from "./types";
 import { PlanningTab } from "./components/PlanningTab";
+import { SystemHealthDashboard } from "./components/SystemHealthDashboard";
 
 // Task #65 (2026-04-24): URL-based review mode. When the user opens a
 // past run from the history modal we set ?review=<runId>&path=<encoded>.
@@ -181,6 +182,7 @@ function AppMain() {
           {/* V2 Step 6b: read-only event-log viewer (logs/current.jsonl
               parsed via EventLogReaderV2 + summarized server-side). */}
           <EventLogPanel />
+          <SystemHealthDashboard />
         </div>
       </header>
       {error ? <ErrorBanner error={error} /> : null}
