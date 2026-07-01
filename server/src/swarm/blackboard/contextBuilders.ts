@@ -359,9 +359,13 @@ export function workerContext(r: BlackboardRunnerFields): WorkerContext {
     brainPromptFn: brainEnabled() ? r.brainPromptFn.bind(r) : undefined,
     updateAgentModel: (agentId: string, model: string) => { r.opts.manager.updateAgentModel(agentId, model); },
     getPlannerFallbackModel: () => r.active?.plannerFallbackModel,
-    // Plan 4: brain system overseer — wire tracker/collector to context
+    // Plan 4: brain system overseer — wire tracker/collector to worker context
     recordInteraction: (type: string, todoId: string, agentId: string, reason: string) => {
-      r.interactionTracker.record(type as any, todoId, agentId, reason);
+      const tracker = r.interactionTracker;
+      if (type === "worker_skip") tracker.recordSkip(todoId, agentId, reason);
+      else if (type === "replanner_skip" || type === "replanner_revise") tracker.recordReplannerDecision(todoId, type === "replanner_skip" ? "skip" : "revise", reason, agentId);
+      else if (type === "auditor_override" || type === "auditor_accept") tracker.recordAuditorVerdict("", todoId, type === "auditor_accept" ? "met" : "unmet", reason, agentId);
+      else if (type === "worker_retry_success" || type === "worker_retry_fail") tracker.recordWorkerRetry(todoId, agentId, type === "worker_retry_success", reason);
     },
     recordException: (type: string, agentId: string, todoId?: string, reason?: string) => {
       r.exceptionCollector?.record({ type: type as any, agentId, todoId, reason: reason ?? "" });
@@ -461,7 +465,11 @@ export function replanContext(r: BlackboardRunnerFields): ReplanContext {
     brainPromptFn: brainEnabled() ? r.brainPromptFn.bind(r) : undefined,
     // Plan 4: brain system overseer — wire tracker/collector to replan context
     recordInteraction: (type: string, todoId: string, agentId: string, reason: string) => {
-      r.interactionTracker.record(type as any, todoId, agentId, reason);
+      const tracker = r.interactionTracker;
+      if (type === "worker_skip") tracker.recordSkip(todoId, agentId, reason);
+      else if (type === "replanner_skip" || type === "replanner_revise") tracker.recordReplannerDecision(todoId, type === "replanner_skip" ? "skip" : "revise", reason, agentId);
+      else if (type === "auditor_override" || type === "auditor_accept") tracker.recordAuditorVerdict("", todoId, type === "auditor_accept" ? "met" : "unmet", reason, agentId);
+      else if (type === "worker_retry_success" || type === "worker_retry_fail") tracker.recordWorkerRetry(todoId, agentId, type === "worker_retry_success", reason);
     },
     recordException: (type: string, agentId: string, todoId?: string, reason?: string) => {
       r.exceptionCollector?.record({ type: type as any, agentId, todoId, reason: reason ?? "" });
