@@ -88,16 +88,16 @@ export function EventLogPanel() {
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="text-[11px] uppercase tracking-wide px-2 py-1 rounded bg-amber-900/40 hover:bg-amber-800/50 text-amber-300 border border-amber-700/50 hover:border-amber-600 transition"
-        title="Raw event stream — all events from logs/current.jsonl (debug, detailed)"
+        className="text-[10px] uppercase tracking-wide px-2 py-1 rounded bg-ink-800/60 hover:bg-ink-700/60 text-ink-500 border border-ink-700/50 hover:border-ink-600/50 transition"
+        title="Developer debug: raw event stream from logs/current.jsonl (not curated)"
       >
-        ▸ Event Log
+        ⚙ Debug Log
       </button>
       {open ? (
         <div className="absolute right-0 top-full mt-1 z-20 w-[480px] max-h-[60vh] overflow-y-auto rounded border border-ink-600 bg-ink-900 shadow-xl shadow-black/50 p-3">
           <div className="flex items-center gap-2 mb-2">
-            <span className="text-[11px] text-amber-400 font-semibold">Raw Event Stream</span>
-            <span className="text-[10px] text-ink-500">— all events from logs/current.jsonl</span>
+            <span className="text-[11px] text-ink-400 font-semibold">⚙ Debug Log</span>
+            <span className="text-[10px] text-ink-500">— raw events (not curated like Runs)</span>
             <button
               onClick={() => setRefreshNonce((n) => n + 1)}
               disabled={loading}

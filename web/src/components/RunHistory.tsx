@@ -153,7 +153,7 @@ export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {})
     <span className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        title="Browse past runs — summary data from run summaries (fast, curated)"
+        title="Browse past runs — curated summary data (commits, todos, duration)"
         className="text-[11px] uppercase tracking-wide px-2 py-1 rounded bg-emerald-900/40 hover:bg-emerald-800/50 text-emerald-300 border border-emerald-700/50 hover:border-emerald-600 transition"
       >
         ▸ Runs{runs && runs.length > 0 ? ` (${runs.length})` : ""}
