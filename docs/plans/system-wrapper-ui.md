@@ -125,7 +125,22 @@ The main content area switches to SwarmView for that specific run:
 - [ ] Add average duration
 - [ ] Add success rate trends
 
-## Total Estimated Effort: 15-20 hr
+### P7.7: Patch Monitor (3-4 hr)
+- [ ] `PatchMonitorPanel.tsx` — shows patch lifecycle
+- [ ] Patch status: pending → preparing → applying → applied/failed
+- [ ] Patch preview: show diff before applying
+- [ ] Patch history: timeline of applied patches
+- [ ] Patch health: did patch cause issues? rollback status
+- [ ] Rollback button for failed patches
+
+### P7.8: Brain Activity Timeline (2-3 hr)
+- [ ] `BrainActivityPanel.tsx` — shows brain's actions over time
+- [ ] Timeline: analyzed → proposed → patched → verified
+- [ ] Brain health: model latency, success rate, error count
+- [ ] Proposal acceptance rate
+- [ ] System improvement score over time
+
+## Total Estimated Effort: 20-25 hr
 
 ## Priority
 
@@ -137,3 +152,94 @@ The main content area switches to SwarmView for that specific run:
 | P7.4 Quick Nav | Medium | 2-3 hr |
 | P7.5 Layout | High | 4-6 hr |
 | P7.6 Metrics | Low | 2-3 hr |
+| P7.7 Patch Monitor | High | 3-4 hr |
+| P7.8 Brain Activity | Medium | 2-3 hr |
+
+## Detailed Patch Monitor Design
+
+### What to Show
+
+| Section | Data | Why |
+|---------|------|-----|
+| **Patch Queue** | Patches waiting to be applied | User sees what's coming |
+| **Active Patch** | Currently applying patch | Progress indicator |
+| **Patch History** | Applied/rejected patches | Audit trail |
+| **Patch Preview** | Diff before applying | User approval |
+| **Patch Health** | Rollback status, error count | Safety monitoring |
+| **Brain Activity** | Analysis → Proposal → Patch flow | Transparency |
+
+### Patch Status Flow
+
+```
+┌─────────────────────────────────────────────────────┐
+│ PATCH LIFECYCLE                                      │
+│                                                      │
+│  Brain Analysis → Proposal Generated → Patch Ready   │
+│       ↓              ↓                  ↓            │
+│  [Analyzing]    [Proposed]         [Ready to Apply]  │
+│                                      ↓               │
+│                              User Approves?          │
+│                              ↓           ↓           │
+│                           [Yes]        [No]          │
+│                             ↓           ↓            │
+│                        [Applying]   [Rejected]       │
+│                             ↓                       │
+│                    ┌────────┴────────┐              │
+│                    ↓                 ↓              │
+│               [Applied]         [Failed]            │
+│                    ↓                 ↓              │
+│               [Verified]      [Rollback?]           │
+│                                 ↓       ↓           │
+│                            [Yes]     [No]           │
+│                               ↓       ↓             │
+│                          [Rolled]  [Broken]         │
+└─────────────────────────────────────────────────────┘
+```
+
+### Patch Preview Component
+
+```
+┌─────────────────────────────────────────────────────┐
+│ PATCH PREVIEW                                        │
+│                                                      │
+│ 🧠 Auto-anchor for worker file visibility            │
+│ Priority: HIGH                                       │
+│                                                      │
+│ File: workerRunner.ts                                │
+│ ─────────────────────────────────────────────────── │
+│ - import { autoDetectAnchors } from "./autoAnchor"; │
+│ + import { autoDetectAnchors } from "./autoAnchor.js"│
+│                                                      │
+│ File: autoAnchor.ts                                  │
+│ ─────────────────────────────────────────────────── │
+│ + export function extractSectionKeywords(...) { ... }│
+│                                                      │
+│ [Apply] [Reject] [Details]                           │
+└─────────────────────────────────────────────────────┘
+```
+
+### Brain Activity Timeline
+
+```
+┌─────────────────────────────────────────────────────┐
+│ BRAIN ACTIVITY                                       │
+│                                                      │
+│ ● 10:32 AM — Analyzed run 2634a11d                  │
+│   12 exceptions, 8 interaction chains                │
+│   Found 3 new patterns                              │
+│                                                      │
+│ ● 10:33 AM — Generated proposal                     │
+│   "Auto-anchor for worker file visibility"           │
+│   Priority: HIGH                                     │
+│                                                      │
+│ ○ 10:34 AM — Waiting for user approval               │
+│                                                      │
+│ ● 10:35 AM — Applied patch to workerRunner.ts        │
+│   Git commit: abc123                                 │
+│   Verified: ✓                                        │
+│                                                      │
+│ ● 10:36 AM — System health check                     │
+│   All patches applied successfully                   │
+│   System improvement score: +2.3%                    │
+└─────────────────────────────────────────────────────┘
+```
