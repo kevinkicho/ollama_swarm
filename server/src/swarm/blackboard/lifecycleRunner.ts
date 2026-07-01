@@ -159,6 +159,7 @@ export interface LifecycleContext {
   initBrainOverseer(runId: string): void;
   getInteractionTracker(): InteractionTracker;
   getExceptionCollector(): ExceptionCollector;
+  promptPlannerSafely(agent: Agent, prompt: string, name?: "swarm" | "swarm-read" | "swarm-builder", format?: "json" | Record<string, unknown>): Promise<{ response: string; agentUsed: Agent }>;
   excludeRunnerArtifacts(destPath: string): Promise<void>;
   buildSeed(clonePath: string, cfg: RunConfig): Promise<PlannerSeed>;
   spawnAgentNoOpencode(opts: { cwd: string; index: number; model: string }): Promise<Agent>;
@@ -758,15 +759,34 @@ export async function planAndExecute(
       !overWallClockCap
     ) {
       try {
+        // Create a prompt function that uses promptPlannerSafely
+        const brainModel = ctx.getActive()?.model ?? "deepseek-v4-flash:cloud";
+        const brainPromptFn = async (prompt: string, model: string, maxTokens: number, timeoutMs: number): Promise<string> => {
+          const plannerAgent: Agent = { id: "brain", index: 0, model, port: 0, sessionId: "brain", status: "thinking", cwd: ctx.getActive()?.localPath ?? "" };
+          const { response } = await ctx.promptPlannerSafely(
+            plannerAgent,
+            prompt,
+            "swarm-read",
+          );
+          return response;
+        };
+
         const brainResult = await runBrainAnalysis(
           ctx.getInteractionTracker(),
           ctx.getExceptionCollector(),
           ctx.getActive()?.localPath ?? "",
           ctx.getActive()?.runId ?? "",
+          [], // priorImprovements - empty for now
+          brainPromptFn,
+          brainModel,
         );
         ctx.appendSystem(
           `[brain-overseer] Analysis complete: ${brainResult.exceptions.totalExceptions} exceptions, ${brainResult.chains.length} interaction chains, ${brainResult.proposals.length} proposals.`,
         );
+        // Log proposals
+        for (const p of brainResult.proposals) {
+          ctx.appendSystem(`[brain-overseer] Proposal: ${p.title} (${p.priority}) — ${p.affectedComponent}`);
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         ctx.appendSystem(`Brain overseer analysis failed: ${msg}`);
