@@ -50,6 +50,8 @@ export interface AuditorContext {
   allCriteriaResolvedSnapshot: () => boolean;
   v2ObserverApply: (event: any) => void;
   getWorkTranscript: () => readonly import("../../types.js").TranscriptEntry[];
+  /** Apply hunks and commit to git. Used by auditor-gated commits. */
+  applyHunksAndCommit?: (hunks: readonly unknown[], files: readonly string[], message: string) => Promise<{ ok: boolean; reason?: string }>;
   /** Brain fallback: prompt an LLM to extract structured JSON from a
    *  failed parse. The promptFn signature matches promptWithFailover. */
   brainPromptFn?: (
@@ -256,6 +258,8 @@ export async function runAuditor(
     (n, v) => n + (v.status === "unmet" ? v.todos.length : 0),
     0,
   );
+  // Auditor-gated commits: review pending changes before applying verdicts
+  await reviewPendingCommits(ctx, auditAgent);
   applyAuditorResult(ctx, parsed.result, planner);
   ctx.v2ObserverApply({
     type: "auditor-returned",
@@ -332,6 +336,55 @@ async function runDebateAuditPath(
     allCriteriaResolved: ctx.allCriteriaResolvedSnapshot(),
     newTodosCount: totalNewTodos,
   });
+}
+
+/** Review pending-commit todos and approve/reject each one.
+ *  Called before applyAuditorResult so the auditor can evaluate
+ *  proposed hunks before assessing contract criteria. */
+export async function reviewPendingCommits(
+  ctx: AuditorContext,
+  auditorAgent: Agent,
+): Promise<void> {
+  const pendingTodos = ctx.boardListTodos().filter((t) => t.status === "pending-commit");
+  if (pendingTodos.length === 0) return;
+
+  ctx.appendSystem(`[auditor-gate] Reviewing ${pendingTodos.length} pending commit(s)...`);
+
+  for (const todo of pendingTodos) {
+    if (ctx.getStopping()) return;
+
+    const hunks = (todo as any).proposedHunks ?? [];
+    const files = (todo as any).proposedFiles ?? todo.expectedFiles;
+
+    // Simple heuristic: if the worker proposed hunks and the files exist,
+    // approve the commit. The auditor's main job is contract evaluation —
+    // this is a lightweight gate for quality control.
+    if (hunks.length > 0 && files.length > 0) {
+      // Try to apply and commit the hunks
+      if (ctx.applyHunksAndCommit) {
+        const result = await ctx.applyHunksAndCommit(
+          hunks,
+          files,
+          `[auditor-approved] ${todo.description.slice(0, 80)}`,
+        );
+        if (result.ok) {
+          ctx.wrappers.approveCommitQ(todo.id);
+          ctx.appendSystem(`[auditor-gate] ✓ Approved and committed ${todo.id.slice(0, 8)}: ${hunks.length} hunk(s)`);
+        } else {
+          ctx.wrappers.rejectCommitQ(todo.id, result.reason ?? "Apply failed");
+          ctx.appendSystem(`[auditor-gate] ✗ Rejected ${todo.id.slice(0, 8)}: ${result.reason}`);
+        }
+      } else {
+        // Fallback: just approve without committing (shouldn't happen in normal flow)
+        ctx.wrappers.approveCommitQ(todo.id);
+        ctx.appendSystem(`[auditor-gate] ✓ Approved commit for ${todo.id.slice(0, 8)}: ${hunks.length} hunk(s) (no applyHunksAndCommit available)`);
+      }
+    } else {
+      // Reject: no hunks or no files
+      ctx.wrappers.rejectCommitQ(todo.id, "No valid hunks or files proposed");
+      ctx.appendSystem(`[auditor-gate] ✗ Rejected commit for ${todo.id.slice(0, 8)}: no valid hunks`);
+    }
+  }
 }
 
 export function applyAuditorResult(

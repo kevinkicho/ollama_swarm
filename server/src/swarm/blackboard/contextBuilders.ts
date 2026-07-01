@@ -478,6 +478,24 @@ export function replanContext(r: BlackboardRunnerFields): ReplanContext {
 }
 
 export function auditorContext(r: BlackboardRunnerFields): AuditorContext {
+  // Create applyAndCommit wrapper for auditor-gated commits
+  const applyHunksAndCommit = async (hunks: readonly unknown[], files: readonly string[], message: string) => {
+    const { applyAndCommit } = await import("./WorkerPipeline.js");
+    const { realFilesystemAdapter, realGitAdapter } = await import("./v2Adapters.js");
+    const clonePath = r.active?.localPath ?? "";
+    const fs = realFilesystemAdapter(clonePath);
+    const git = realGitAdapter(clonePath);
+    const result = await applyAndCommit({
+      todoId: "auditor-approved",
+      workerId: "auditor",
+      expectedFiles: files,
+      hunks: hunks as any,
+      fs,
+      git,
+    });
+    return { ok: result.ok, reason: result.ok ? undefined : result.reason };
+  };
+
   return {
     getContract: () => r.contract,
     getAuditInvocations: () => r.auditInvocations,
@@ -500,6 +518,7 @@ export function auditorContext(r: BlackboardRunnerFields): AuditorContext {
     allCriteriaResolvedSnapshot: () => r.allCriteriaResolvedSnapshot(),
     v2ObserverApply: (event: SwarmEvent) => r.v2Observer.apply(event),
     getWorkTranscript: () => r.transcript,
+    applyHunksAndCommit,
     brainPromptFn: brainEnabled() ? r.brainPromptFn.bind(r) : undefined,
   } as unknown as AuditorContext;
 }

@@ -1,4 +1,4 @@
-export type TodoStatus = "open" | "claimed" | "committed" | "stale" | "skipped";
+export type TodoStatus = "open" | "claimed" | "committed" | "stale" | "skipped" | "pending-commit";
 
 /** Which tier of the parse cascade produced the committed hunk.
  *  Used for cascade efficiency diagnostics. */
