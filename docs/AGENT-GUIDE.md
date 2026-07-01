@@ -87,6 +87,30 @@ App (providers) → 127.0.0.1:11533 (proxy) → localhost:11434 (Ollama)
 
 **Port 11533 is NOT Ollama itself.** Ollama is always at 11434. The proxy is a thin relay added by this app.
 
+### Concurrent servers (multiple projects)
+
+Run two independent server instances on different ports for parallel projects:
+
+```bash
+# Server 1 (kyahoofinance — default log dir)
+SERVER_PORT=8243 WEB_PORT=8244 OLLAMA_PROXY_PORT=11533 node scripts/dev.mjs
+
+# Server 2 (ollama_swarm — separate log dir)
+SERVER_PORT=9243 WEB_PORT=9244 OLLAMA_PROXY_PORT=21533 LOG_DIR=/tmp/swarm2-logs node scripts/dev.mjs
+```
+
+**Each server needs its own:**
+- `SERVER_PORT` — backend API port
+- `WEB_PORT` — vite dev server port
+- `OLLAMA_PROXY_PORT` — proxy for token capture (separate = separate token tracking)
+- `LOG_DIR` — event log directory (separate = no mixed run data in UI)
+
+**UI URLs:**
+- Server 1: `http://localhost:8244`
+- Server 2: `http://localhost:9244`
+
+Both proxies forward to the same Ollama at 11434 — Ollama handles concurrent requests fine.
+
 ### Recommended monitors for debugging swarm runs
 
 When debugging a swarm run, these three monitors capture different layers and together provide full visibility:
