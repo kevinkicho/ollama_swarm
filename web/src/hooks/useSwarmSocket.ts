@@ -54,7 +54,13 @@ function connect(): void {
     reconnectTimer = null;
   }
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const socket = new WebSocket(`${proto}://${location.hostname}:${__BACKEND_PORT__}/ws`);
+  // T-Item-MultiTenant: filter WS events by current runId so concurrent
+  // runs on the same server don't mix events in the UI.
+  const runId = useSwarm.getState().runId;
+  const wsUrl = runId
+    ? `${proto}://${location.hostname}:${__BACKEND_PORT__}/ws?runId=${encodeURIComponent(runId)}`
+    : `${proto}://${location.hostname}:${__BACKEND_PORT__}/ws`;
+  const socket = new WebSocket(wsUrl);
   ws = socket;
 
   socket.onopen = () => {
@@ -161,12 +167,19 @@ async function hydrateFromSnapshot(): Promise<void> {
 export function useSwarmSocket(enabled = true): void {
   const perRunStore = useContext(SwarmStoreContext);
   const effectiveEnabled = enabled && perRunStore === null;
+  const runId = useSwarm((s) => s.runId);
   useEffect(() => {
     if (!effectiveEnabled) return;
     void hydrateFromSnapshot();
+    // T-Item-MultiTenant: reconnect socket when runId changes so the
+    // server-side per-runId filter is applied correctly.
+    if (ws) {
+      try { ws.close(); } catch {}
+      ws = null;
+    }
     connect();
     // No cleanup — the socket is a module-level singleton and is
     // reused across component remounts. The browser cleans it up
     // on page unload.
-  }, [effectiveEnabled]);
+  }, [effectiveEnabled, runId]);
 }
