@@ -8,7 +8,7 @@
 
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import type { ImprovementProposal } from "./brainOverseer.js";
 import { readAppliedProposals, recordApplied } from "./proposalStore.js";
@@ -103,10 +103,10 @@ export function createSelfUpgrader(opts: SelfUpgraderOpts) {
         // Git commit if enabled
         if (opts.autoCommit) {
           try {
-            execSync("git add -A", { cwd: opts.clonePath, timeout: 10_000 });
+            execFileSync("git", ["add", "-A"], { cwd: opts.clonePath, timeout: 10_000 });
             const commitMsg = `brain: ${proposal.title}`;
-            execSync(`git commit -m "${commitMsg}"`, { cwd: opts.clonePath, timeout: 10_000 });
-            const sha = execSync("git rev-parse HEAD", { cwd: opts.clonePath, timeout: 5_000 })
+            execFileSync("git", ["commit", "-m", commitMsg], { cwd: opts.clonePath, timeout: 10_000 });
+            const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: opts.clonePath, timeout: 5_000 })
               .toString()
               .trim();
             return { success: true, patchesApplied, commitSha: sha };
@@ -130,7 +130,7 @@ export function createSelfUpgrader(opts: SelfUpgraderOpts) {
      */
     createRollbackTag(tagName: string): string | null {
       try {
-        execSync(`git tag ${tagName}`, { cwd: opts.clonePath, timeout: 5_000 });
+        execFileSync("git", ["tag", tagName], { cwd: opts.clonePath, timeout: 5_000 });
         return tagName;
       } catch {
         return null;
@@ -142,7 +142,7 @@ export function createSelfUpgrader(opts: SelfUpgraderOpts) {
      */
     rollback(tagName: string): boolean {
       try {
-        execSync(`git reset --hard ${tagName}`, { cwd: opts.clonePath, timeout: 10_000 });
+        execFileSync("git", ["reset", "--hard", tagName], { cwd: opts.clonePath, timeout: 10_000 });
         return true;
       } catch {
         return false;

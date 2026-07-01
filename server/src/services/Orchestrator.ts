@@ -229,6 +229,9 @@ export class Orchestrator {
   // P6: Brain service — persistent across runs, provisions new runs.
   private brainService: import("../swarm/blackboard/brainOverseer/brainService.js").BrainService | null = null;
 
+  // Gate to prevent concurrent start() calls from bypassing the cap.
+  private startInProgress = false;
+
   /** T-Item-MultiTenant Phase 3 (2026-05-04): resolve "the active
    *  run" for legacy single-arg APIs (status / stop / injectUser
    *  without runId). Picks the MOST-RECENTLY-INSERTED entry, which
@@ -641,10 +644,17 @@ export class Orchestrator {
   }
 
   async start(cfg: RunConfig): Promise<void> {
+    // Gate: prevent concurrent start() calls from bypassing the cap.
+    if (this.startInProgress) {
+      throw new Error("A run is already being started. Wait for it to complete.");
+    }
+    this.startInProgress = true;
+
     // T-Item-MultiTenant Phase 4 (2026-05-04): cap on concurrent runs.
     await this.cleanupStaleRuns();
     const cap = this.opts.maxConcurrentRuns ?? 4;
     if (this.runs.size >= cap) {
+      this.startInProgress = false;
       throw new Error(
         `Concurrent-run cap reached (${this.runs.size}/${cap}). Stop a run before starting another.`,
       );
@@ -885,6 +895,7 @@ export class Orchestrator {
       // because amendments are only consumed at planner-tier prompts;
       // by the time we get here the START phase is done.
       this.amendments.close(runId);
+      this.startInProgress = false;
     }
   }
 
