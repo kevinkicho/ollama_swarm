@@ -300,6 +300,50 @@ Think of it like this:
 
 ---
 
+## Brain Coordination: System Work vs Project Work
+
+### The Problem
+
+The brain has two types of work:
+1. **System work** — patches, upgrades, configuration changes (modifies swarm code)
+2. **Project work** — runs implementing improvements (modifies project code)
+
+These can conflict if done simultaneously.
+
+### The Solution: Serialized Queue
+
+```
+Brain Queue:
+  ┌─────────────────────────────────────┐
+  │ 1. System patches (HIGH priority)   │ ← Serialized, one at a time
+  │ 2. Project runs (MEDIUM priority)   │ ← Can be parallel
+  │ 3. Analysis (LOW priority)          │ ← Background
+  └─────────────────────────────────────┘
+```
+
+### Rules
+
+1. **System work first** — Patches must complete before project runs start
+2. **Patches only when idle** — Patch application only happens when ALL runs are stopped
+3. **No concurrent system work** — Only one patch at a time
+4. **Project runs can parallel** — Multiple runs if no file conflicts
+
+### Why This Matters
+
+If the brain provisions a run AND applies a patch simultaneously:
+- Run modifies `config/dashboardPanels.js`
+- Patch modifies `workerRunner.ts`
+- No conflict (different files)
+
+But if both modify the same file:
+- Run modifies `workerRunner.ts`
+- Patch modifies `workerRunner.ts`
+- **CONFLICT**
+
+The queue prevents this by serializing system work.
+
+---
+
 ## Implementation Priority
 
 | Phase | Priority | Effort | Impact |
@@ -321,3 +365,5 @@ Think of it like this:
 3. **Proposals are first-class** — Brain proposals are stored, tracked, and can be applied
 4. **Self-upgrade is opt-in** — Brain must get user approval before patching code
 5. **Rollback is mandatory** — Every self-upgrade creates a git tag for rollback
+6. **System work before project work** — Patches must complete before runs start
+7. **Patches only when idle** — Patch application only happens when ALL runs are stopped

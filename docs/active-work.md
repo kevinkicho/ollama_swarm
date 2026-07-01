@@ -30,6 +30,9 @@
 - [ ] `selfUpgrader.ts` — applies patches to own code
 - [ ] `UpgradeMode.tsx` — terminal-style UI
 - [ ] Rollback mechanism with git tags
+- [ ] **Brain queue**: system work (patches) serialized before project runs
+- [ ] **Patch gating**: patches only apply when ALL runs are stopped
+- [ ] **Conflict prevention**: system work cannot run during project runs
 
 ### P6: Brain-as-OS (20-30 hr)
 - [ ] Brain as persistent service
