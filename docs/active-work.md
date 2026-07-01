@@ -14,6 +14,9 @@
 - [ ] Add proposals state to Zustand store
 
 ### P3: Cross-Run Memory (3-4 hr)
+- [ ] Read `current.jsonl` for real-time event patterns across runs
+- [ ] Read `logs/{runId}/summary.json` for per-run structured data
+- [ ] Read `logs/{runId}/crash-snapshot.json` for crash patterns
 - [ ] Persist proposals to `.swarm-improvements/proposals.jsonl`
 - [ ] Track applied proposals in `.swarm-improvements/applied.jsonl`
 - [ ] Load prior proposals into planner seed

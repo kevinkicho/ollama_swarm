@@ -7,14 +7,18 @@
 import { readPatternCache, writePatternCache, updateCache, type PatternCacheData } from "./patternCache.js";
 import { readPatchCache, writePatchCache, computeContentHash, type PatchCacheData } from "./patchCache.js";
 import { readProposals, appendProposal, type PersistedProposal } from "./proposalStore.js";
+import { readAllRunSummaries, analyzeSummaries, type RunSummary } from "./dataPipeline.js";
 import type { InteractionTracker, InteractionChain } from "./interactionTracker.js";
 import type { ExceptionCollector, PatternSummary } from "./exceptionCollector.js";
 import { buildAnalysisPrompt } from "./prompt.js";
+import path from "node:path";
 
 export interface BrainAnalysisResult {
   chains: InteractionChain[];
   exceptions: PatternSummary;
   proposals: ImprovementProposal[];
+  runSummaries: RunSummary[];
+  summaryAnalysis: ReturnType<typeof analyzeSummaries>;
 }
 
 export interface ImprovementProposal {
@@ -71,10 +75,17 @@ export async function runBrainAnalysis(
     await appendProposal(clonePath, proposal);
   }
 
+  // Read historical run summaries for context
+  const logsDir = path.join(clonePath, "logs");
+  const runSummaries = await readAllRunSummaries(logsDir);
+  const summaryAnalysis = analyzeSummaries(runSummaries);
+
   return {
     chains,
     exceptions,
     proposals,
+    runSummaries,
+    summaryAnalysis,
   };
 }
 
