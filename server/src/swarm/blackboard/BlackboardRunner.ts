@@ -671,6 +671,7 @@ export class BlackboardRunner implements SwarmRunner {
       runStartedAt: this.runStartedAt,
       tickAccumulatorActiveElapsedMs: this.tickAccumulator?.activeElapsedMs,
       stopping: this.isStopping(),
+      crashMessage,
       terminationReason: this.terminationReason,
       completionDetail: this.completionDetail,
       staleEventCount: this.staleEventCount,

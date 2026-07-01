@@ -62,6 +62,7 @@ export interface SummaryContext {
   runStartedAt: number | undefined;
   tickAccumulatorActiveElapsedMs: number | undefined;
   stopping: boolean;
+  crashMessage: string | undefined;
   terminationReason: string | undefined;
   completionDetail: string | undefined;
   staleEventCount: number;
@@ -104,12 +105,30 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
       preset: cfg.preset,
       model: cfg.model,
       runId: cfg.runId,
+      startCommand: [
+        "curl -X POST /api/swarm/start",
+        `-H 'Content-Type: application/json'`,
+        `-d '${JSON.stringify({
+          preset: cfg.preset,
+          model: cfg.model,
+          agentCount: cfg.agentCount,
+          rounds: cfg.rounds,
+          plannerModel: cfg.plannerModel,
+          workerModel: cfg.workerModel,
+          auditorModel: cfg.auditorModel,
+          dedicatedAuditor: cfg.dedicatedAuditor,
+          userDirective: cfg.userDirective?.slice(0, 200),
+          plannerTools: cfg.plannerTools,
+          specializedWorkers: cfg.specializedWorkers,
+          criticEnsemble: cfg.criticEnsemble,
+        }, null, 2)}'`,
+      ].join(" \\\n  "),
     },
     agentCount: cfg.agentCount,
     rounds: cfg.rounds,
     startedAt: ctx.runBootedAt,
     endedAt: Date.now(),
-    crashMessage: undefined,
+    crashMessage: ctx.crashMessage,
     terminationReason: ctx.terminationReason,
     stopping: ctx.stopping,
     completionDetail: ctx.completionDetail,
@@ -135,8 +154,11 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
   });
 
   const json = JSON.stringify(summary, null, 2);
-  const perRunPath = path.join(cfg.localPath, buildPerRunSummaryFileName(summary.startedAt));
-  const latestPath = path.join(cfg.localPath, "summary.json");
+  const runIdShort = summary.runId ? summary.runId.slice(0, 8) : "";
+  const logsDir = path.join(cfg.localPath, "logs", runIdShort || "unknown");
+  try { await import("node:fs/promises").then((fs) => fs.mkdir(logsDir, { recursive: true })); } catch {}
+  const perRunPath = path.join(logsDir, buildPerRunSummaryFileName(summary.startedAt, summary.runId));
+  const latestPath = path.join(logsDir, "summary.json");
   try {
     await writeFileAtomic(perRunPath, json);
     await writeFileAtomic(latestPath, json);
