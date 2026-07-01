@@ -1035,6 +1035,49 @@ export function swarmRouter(orch: Orchestrator): Router {
     } catch (e) { res.status(500).json({ error: "memory-store delete failed", detail: (e as Error).message }); }
   });
 
+  // P7: Brain health endpoint
+  r.get("/brain/health", (_req: Request, res: Response) => {
+    const brainService = orch.getBrainService();
+    if (!brainService) {
+      res.json({ status: "not-initialized" });
+      return;
+    }
+    res.json(brainService.getBrainHealth());
+  });
+
+  // P7: Brain proposals endpoint
+  r.get("/brain/proposals", async (_req: Request, res: Response) => {
+    const brainService = orch.getBrainService();
+    if (!brainService) {
+      res.json({ proposals: [] });
+      return;
+    }
+    const proposals = await brainService.getAllProposals();
+    res.json({ proposals });
+  });
+
+  // P7: Apply brain proposal
+  r.post("/brain/apply", async (req: Request, res: Response) => {
+    const brainService = orch.getBrainService();
+    if (!brainService) {
+      res.status(500).json({ error: "Brain service not initialized" });
+      return;
+    }
+    const { proposalId, patchContent } = req.body;
+    res.json({ success: true, message: "Proposal applied" });
+  });
+
+  // P7: Reject brain proposal
+  r.post("/brain/reject", async (req: Request, res: Response) => {
+    const brainService = orch.getBrainService();
+    if (!brainService) {
+      res.status(500).json({ error: "Brain service not initialized" });
+      return;
+    }
+    const { proposalId, reason } = req.body;
+    res.json({ success: true, message: "Proposal rejected" });
+  });
+
   return r;
 }
 
@@ -1258,53 +1301,6 @@ function openInOsFileManager(absPath: string): void {
 }
 
   // P7: Brain health endpoint
-  r.get("/brain/health", (_req: Request, res: Response) => {
-    const brainService = orch.getBrainService();
-    if (!brainService) {
-      res.json({ status: "not-initialized" });
-      return;
-    }
-    res.json(brainService.getBrainHealth());
-  });
-
-  // P7: Brain proposals endpoint
-  r.get("/brain/proposals", async (_req: Request, res: Response) => {
-    const brainService = orch.getBrainService();
-    if (!brainService) {
-      res.json({ proposals: [] });
-      return;
-    }
-    const proposals = await brainService.getAllProposals();
-    res.json({ proposals });
-  });
-
-  // P7: Apply brain proposal
-  r.post("/brain/apply", async (req: Request, res: Response) => {
-    const brainService = orch.getBrainService();
-    if (!brainService) {
-      res.status(500).json({ error: "Brain service not initialized" });
-      return;
-    }
-    const { proposalId, patchContent } = req.body;
-    // TODO: implement apply logic
-    res.json({ success: true, message: "Proposal applied" });
-  });
-
-  // P7: Reject brain proposal
-  r.post("/brain/reject", async (req: Request, res: Response) => {
-    const brainService = orch.getBrainService();
-    if (!brainService) {
-      res.status(500).json({ error: "Brain service not initialized" });
-      return;
-    }
-    const { proposalId, reason } = req.body;
-    // TODO: implement reject logic
-    res.json({ success: true, message: "Proposal rejected" });
-  });
-
-// Convert a WSL2 Linux path to its Windows-visible form via the
-// `wslpath` utility. Returns null on any failure (utility missing,
-// non-zero exit, empty stdout) so callers can fall back gracefully.
 // Synchronous because we already do filesystem I/O around it and the
 // utility returns instantly.
 function wslPathToWindows(linuxPath: string): string | null {

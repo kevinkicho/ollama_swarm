@@ -156,8 +156,11 @@ export function makeTodoQueueWrappers(deps: TodoQueueWrapperDeps): TodoQueueWrap
 
     proposeCommitQ(id, hunks, files) {
       todoQueue.proposeCommit(id, hunks, files);
-      const wire = v2QueueTodoToWireTodo(todoQueue.get(id)!);
-      emit({ type: "todo_proposed", todo: wire } as any);
+      const todo = todoQueue.get(id);
+      if (todo) {
+        const wire = v2QueueTodoToWireTodo(todo);
+        emit({ type: "todo_proposed", todo: wire } as any);
+      }
       scheduleStateWrite();
     },
 
