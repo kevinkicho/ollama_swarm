@@ -22,6 +22,10 @@ export interface BrainService {
   getProvisioner(): RunProvisioner;
   /** Get all proposals across all runs. */
   getAllProposals(): Promise<Array<{ title: string; description: string; affectedComponent: string; priority: "high" | "medium" | "low" }>>;
+  /** Track run health from events. */
+  trackRunHealth(event: { type: string; runId?: string; [key: string]: unknown }): void;
+  /** Get health summary for all tracked runs. */
+  getHealthSummary(): Map<string, { status: string; errors: number; lastUpdate: number }>;
 }
 
 export interface BrainServiceOpts {
@@ -39,6 +43,9 @@ export function createBrainService(opts: BrainServiceOpts): BrainService {
     getOrchestrator: opts.getOrchestrator,
     maxConcurrentRuns: opts.maxConcurrentRuns,
   });
+
+  // Track run health across all runs
+  const runHealth = new Map<string, { status: string; errors: number; lastUpdate: number }>();
 
   return {
     async analyzeRun(
@@ -69,6 +76,26 @@ export function createBrainService(opts: BrainServiceOpts): BrainService {
       // Read proposals from the current clone path
       // For now, return empty - will be implemented when we have a persistent clone path
       return [];
+    },
+
+    trackRunHealth(event) {
+      const runId = event.runId;
+      if (!runId) return;
+
+      const current = runHealth.get(runId) ?? { status: "unknown", errors: 0, lastUpdate: 0 };
+
+      if (event.type === "swarm_state") {
+        current.status = (event as any).phase ?? current.status;
+      } else if (event.type === "error") {
+        current.errors += 1;
+      }
+      current.lastUpdate = Date.now();
+
+      runHealth.set(runId, current);
+    },
+
+    getHealthSummary() {
+      return new Map(runHealth);
     },
   };
 }
