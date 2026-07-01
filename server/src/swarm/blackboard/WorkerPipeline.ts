@@ -136,7 +136,7 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
         anchorDiag = ` (${anchors.length} expectedAnchor(s) no longer found in file — file may have been modified by another worker)`;
       }
     }
-    const match = applied.error.match(/hunk (\d+)/i);
+    const match = applied.error.match(/hunk\[(\d+)\]/i);
     const idx = match ? Number.parseInt(match[1], 10) : undefined;
     return {
       ok: false,
