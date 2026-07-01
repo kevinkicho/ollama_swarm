@@ -9,6 +9,7 @@ import { RunQueuePanel } from "./RunQueuePanel";
 import { QuickNavPanel } from "./QuickNavPanel";
 import { MetricsOverviewPanel } from "./MetricsOverviewPanel";
 import { PatchMonitorPanel } from "./PatchMonitorPanel";
+import { BrainActivityPanel } from "./BrainActivityPanel";
 import { Transcript } from "./Transcript";
 import { MetricsPanel } from "./MetricsPanel";
 import { PheromonePanel } from "./PheromonePanel";
@@ -328,6 +329,7 @@ export function SwarmView() {
         <RunQueuePanel />
         <MetricsOverviewPanel />
         <PatchMonitorPanel />
+        <BrainActivityPanel />
         <QuickNavPanel activeRunId={activeRunId} />
         {brainProposals.length > 0 ? (
           <BrainProposalsPanel proposals={brainProposals} />
