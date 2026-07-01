@@ -136,7 +136,7 @@ function AppMain() {
   const clonePath = useSwarm((s) => s.runConfig?.clonePath);
   // Derive parentPath from clonePath so history endpoints can scan
   // even when no run is active (lastParentPath is empty).
-  const parentPath = review?.clonePath || clonePath?.replace(/[/\\][^/\\]+$/, "");
+  const parentPath = review?.clonePath || (clonePath ? `${clonePath}/logs` : undefined);
 
   // Subscribe to run completion/failure events for notifications
   useEffect(() => {

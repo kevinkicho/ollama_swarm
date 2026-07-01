@@ -402,7 +402,7 @@ export function SwarmView() {
           ) : tab === "planning" ? (
             <PlanningTab />
           ) : tab === "history" ? (
-            <TranscriptTimeline parentPath={cfg?.clonePath?.replace(/[/\\][^/\\]+$/, "")} />
+            <TranscriptTimeline parentPath={cfg?.clonePath ? `${cfg.clonePath}/logs` : undefined} />
           ) : (
             <Transcript />
           )}
