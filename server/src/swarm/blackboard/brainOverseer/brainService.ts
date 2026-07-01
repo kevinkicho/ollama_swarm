@@ -5,6 +5,7 @@
 
 import { runBrainAnalysis, type BrainAnalysisResult, type ImprovementProposal } from "./brainOverseer.js";
 import { createRunProvisioner, type RunProvisioner } from "./provisioner.js";
+import { createBrainQueue, type BrainQueue } from "./brainQueue.js";
 import type { InteractionTracker } from "./interactionTracker.js";
 import type { ExceptionCollector } from "./exceptionCollector.js";
 
@@ -20,6 +21,8 @@ export interface BrainService {
   ): Promise<BrainAnalysisResult>;
   /** Get the run provisioner for starting new runs. */
   getProvisioner(): RunProvisioner;
+  /** Get the brain queue for coordinating work. */
+  getQueue(): BrainQueue;
   /** Get all proposals across all runs. */
   getAllProposals(): Promise<Array<{ title: string; description: string; affectedComponent: string; priority: "high" | "medium" | "low" }>>;
   /** Track run health from events. */
@@ -43,6 +46,8 @@ export function createBrainService(opts: BrainServiceOpts): BrainService {
     getOrchestrator: opts.getOrchestrator,
     maxConcurrentRuns: opts.maxConcurrentRuns,
   });
+
+  const queue = createBrainQueue();
 
   // Track run health across all runs
   const runHealth = new Map<string, { status: string; errors: number; lastUpdate: number }>();
@@ -69,6 +74,10 @@ export function createBrainService(opts: BrainServiceOpts): BrainService {
 
     getProvisioner() {
       return provisioner;
+    },
+
+    getQueue() {
+      return queue;
     },
 
     async getAllProposals() {
