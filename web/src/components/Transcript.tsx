@@ -38,7 +38,12 @@ export function Transcript() {
   }, [transcript.length, streamingCount, stickyBottom]);
 
   // Track scroll position to flip sticky-bottom on/off.
+  // jumpLock prevents onScroll from overriding stickyBottom right after
+  // jumpToLatest() — the smooth scroll animation fires onScroll events
+  // before reaching the bottom, which would incorrectly flip sticky off.
+  const jumpLockRef = useRef(false);
   const onScroll = () => {
+    if (jumpLockRef.current) return;
     const el = scrollRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -47,8 +52,11 @@ export function Transcript() {
   };
 
   const jumpToLatest = () => {
+    jumpLockRef.current = true;
     setStickyBottom(true);
     endRef.current?.scrollIntoView({ behavior: "smooth" });
+    // Unlock after smooth scroll finishes (~500ms)
+    setTimeout(() => { jumpLockRef.current = false; }, 600);
   };
 
   // Filter transcript entries
