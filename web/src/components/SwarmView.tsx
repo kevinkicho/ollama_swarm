@@ -6,6 +6,7 @@ import { BrainProposalsPanel } from "./BrainProposalsPanel";
 import { ContractPanel } from "./ContractPanel";
 import { SystemStatusPanel } from "./SystemStatusPanel";
 import { RunQueuePanel } from "./RunQueuePanel";
+import { QuickNavPanel } from "./QuickNavPanel";
 import { Transcript } from "./Transcript";
 import { MetricsPanel } from "./MetricsPanel";
 import { PheromonePanel } from "./PheromonePanel";
@@ -323,6 +324,7 @@ export function SwarmView() {
         {agentList.length === 0 ? <SidebarSummaryAgents /> : null}
         <SystemStatusPanel />
         <RunQueuePanel />
+        <QuickNavPanel activeRunId={activeRunId} />
         {brainProposals.length > 0 ? (
           <BrainProposalsPanel proposals={brainProposals} />
         ) : null}
