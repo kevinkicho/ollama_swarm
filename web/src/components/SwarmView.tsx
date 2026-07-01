@@ -9,6 +9,7 @@ import { RunQueuePanel } from "./RunQueuePanel";
 import { QuickNavPanel } from "./QuickNavPanel";
 import { MetricsOverviewPanel } from "./MetricsOverviewPanel";
 import { PatchMonitorPanel } from "./PatchMonitorPanel";
+import { PatchPreviewPanel } from "./PatchPreviewPanel";
 import { BrainActivityPanel } from "./BrainActivityPanel";
 import { Transcript } from "./Transcript";
 import { MetricsPanel } from "./MetricsPanel";
