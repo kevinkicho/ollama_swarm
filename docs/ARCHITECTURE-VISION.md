@@ -367,3 +367,55 @@ The queue prevents this by serializing system work.
 5. **Rollback is mandatory** — Every self-upgrade creates a git tag for rollback
 6. **System work before project work** — Patches must complete before runs start
 7. **Patches only when idle** — Patch application only happens when ALL runs are stopped
+8. **Network layer is independent** — HTTP/WS server persists regardless of Orchestrator state
+
+---
+
+## Network Layer Architecture
+
+The network layer (HTTP, WebSocket, routes) must be independent of the Orchestrator:
+
+```
+┌─────────────────────────────────────────────────────┐
+│                 NETWORK LAYER                        │
+│  (persistent, independent of run lifecycle)          │
+│                                                      │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │
+│  │ HTTP Server │  │ WS Server   │  │ API Router  │  │
+│  │ (Express)   │  │ (WebSocket) │  │ (routes)    │  │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  │
+│         └────────────────┼────────────────┘         │
+│                          │                          │
+│              ┌───────────▼───────────┐              │
+│              │  Service Registry     │              │
+│              │  (routes to services) │              │
+│              └───────────┬───────────┘              │
+└──────────────────────────┼──────────────────────────┘
+                           │
+          ┌────────────────┼────────────────┐
+          ▼                ▼                ▼
+   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+   │ Orchestrator│  │ Brain       │  │ Other       │
+   │ (runs)      │  │ (oversight) │  │ Services    │
+   └─────────────┘  └─────────────┘  └─────────────┘
+```
+
+### Why This Matters
+
+| Scenario | Current | Desired |
+|----------|---------|---------|
+| Orchestrator crashes | Network layer affected | Network layer persists |
+| Brain crashes | No impact | No impact |
+| No runs active | Server still serves UI | Same |
+| Multiple runs | Shared state | Isolated per-run |
+
+### Implementation
+
+The network layer should:
+1. Create HTTP/WS servers independently
+2. Register services (Orchestrator, Brain) via dependency injection
+3. Route requests to the appropriate service
+4. Handle WebSocket connections per-run
+5. Persist across run lifecycles
+
+This is a future refactor (P8+) — current implementation works but is coupled.
