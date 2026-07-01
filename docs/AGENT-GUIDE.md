@@ -57,6 +57,20 @@ npm run dev -- --no-watch
 
 Health: `curl -s http://localhost:8243/api/health` should return `{"ok":true,...}`.
 
+### Server restart rules (CRITICAL)
+
+**NEVER use `setsid sh -c '...' &` to start servers.** This freezes opencode. Use `npm run dev` directly or `npx tsx src/index.ts` in the foreground.
+
+**After ANY code edit**, restart BOTH servers:
+```bash
+kill-port 8243 8244   # kill backend + frontend
+npm run dev            # starts both (from repo root)
+```
+
+**Why both ports:** 8243 = backend (tsx), 8244 = frontend (vite). They are separate processes.
+
+**Pre-commit check:** Always run `npm run build` before committing to catch TypeScript errors. Tests passing (`npm test`) does NOT mean the build passes — tests use tsx (lenient), build uses tsc (strict).
+
 ### Recommended monitors for debugging swarm runs
 
 When debugging a swarm run, these three monitors capture different layers and together provide full visibility:

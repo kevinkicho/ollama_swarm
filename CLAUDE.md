@@ -28,6 +28,12 @@ This file is auto-loaded into every session. Keep it short; link out for depth.
 
 - **Don't `npm install` from WSL.** It swaps esbuild binaries and breaks Kevin's next Windows dev-server. See `feedback_wsl_windows_esbuild` in memory.
 
+- **NEVER use `setsid sh -c '...' &` to start servers.** This freezes opencode. Use `npm run dev` directly.
+
+- **After ANY code edit, restart BOTH servers:** `kill-port 8243 8244 && npm run dev`. Port 8243 = backend, 8244 = frontend (vite).
+
+- **Pre-commit:** Run `npm run build` before committing. Tests passing does NOT mean build passes (tests use tsx/lenient, build uses tsc/strict).
+
 ## Where memory lives
 
 User-level memory at `~/.claude/projects/-mnt-c-Users-kevin-Desktop-ollama-swarm/memory/` is auto-loaded into context. The `MEMORY.md` index there is the table of contents.

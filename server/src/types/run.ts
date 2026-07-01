@@ -2,6 +2,11 @@
 // Import from "./types.js" for backward compatibility — this file
 // is re-exported from types.ts as a barrel.
 
+import type { SwarmEventBody, TranscriptEntry } from "./events.js";
+import type { AgentState } from "./agents.js";
+import type { RunSummary } from "../swarm/blackboard/summary.js";
+import type { ExitContract } from "../swarm/blackboard/types.js";
+
 export type SwarmEvent = SwarmEventBody & { runId?: string };
 
 export type SwarmPhase =

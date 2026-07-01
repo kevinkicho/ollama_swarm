@@ -2,6 +2,12 @@
 // Import from "./types.js" for backward compatibility — this file
 // is re-exported from types.ts as a barrel.
 
+import type { TranscriptEntrySummary } from "@ollama-swarm/shared/transcriptEntrySummary";
+import type { AgentState } from "./agents.js";
+import type { SwarmPhase } from "./run.js";
+import type { Todo, Claim, Finding, BoardSnapshot, ExitContract } from "../swarm/blackboard/types.js";
+import type { RunSummary } from "../swarm/blackboard/summary.js";
+
 export type TranscriptRole = "system" | "user" | "agent";
 
 export interface TranscriptEntry {
