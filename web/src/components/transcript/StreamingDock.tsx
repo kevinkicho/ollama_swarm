@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { agentBubblePalette, hueForAgent } from "../agentPalette";
-import { useSegmentSplitterWithPoints } from "../useSegmentSplitter";
 import { useSwarm } from "../../state/store";
 import { MAX_BUBBLE_HEIGHT_PX } from "./JsonBubbles";
 import { extractThinkTags } from "../../../../shared/src/extractThinkTags";
 import { extractToolCallMarkers } from "../../../../shared/src/extractToolCallMarkers";
+import { ProgressTimeline, parseProgressMarkers, stripProgressMarkers } from "./ProgressTimeline";
 
 // Task #173 + #176 Phase A+B: per-agent streaming dock. Each agent
 // gets a STABLE bubble that persists from first chunk through
@@ -111,37 +111,45 @@ function PersistentStreamBubble({
     () => extractToolCallMarkers(postThink),
     [postThink],
   );
-  const { segments, splitPoints } = useSegmentSplitterWithPoints(cleanedText);
-  // 2026-04-26: persist split points to the store so the finalized
-  // bubble can render the same segment structure after the response
-  // completes. Without this, the structure user saw live disappears.
-  const setSegmentPoints = useSwarm((s) => s.setSegmentPoints);
-  useEffect(() => {
-    setSegmentPoints(agentId, splitPoints);
-    // Use length+last as a cheap identity check — splitPoints is
-    // monotonically growing, so this catches every change.
-  }, [agentId, splitPoints.length, splitPoints[splitPoints.length - 1], setSegmentPoints]);
+
+  // Detect if the model is looping (same text repeating)
+  const isLooping = useMemo(() => {
+    if (text.length < 200) return false;
+    // Check for repeated identical blocks
+    const lines = text.split('\n').filter(Boolean);
+    if (lines.length < 3) return false;
+    const last3 = lines.slice(-3);
+    if (last3[0] === last3[1] && last3[1] === last3[2]) return true;
+    // Check for repeated suffix
+    for (let rLen = 20; rLen <= Math.min(200, text.length / 3); rLen++) {
+      const tail = text.slice(-rLen);
+      let count = 0, pos = text.length;
+      while (pos >= rLen && text.slice(pos - rLen, pos) === tail) { count++; pos -= rLen; }
+      if (count >= 3) return true;
+    }
+    return false;
+  }, [text]);
 
   // Subtitle changes based on activity recency:
   //   <2s since last text → "writing…"
   //   2-10s since last text → "thinking 4s…"
   //   >10s since last text → "deep reasoning 22s…" (longer pauses
   //     are usually mid-tool-call or chain-of-thought; not stuck)
-  //   done → "done · X chars · Ys total · N segment(s)"
-  const segCount = segments.filter((s) => s.length > 0).length;
-  const segSuffix = segCount > 1 ? ` · ${segCount} segments` : "";
+  //   done → "done · X chars · Ys total"
   let subtitle: string;
-  if (isDone) {
+  if (isLooping) {
+    subtitle = `⚠ looping (${toolCalls.length} pseudo-tool-calls)`;
+  } else if (isDone) {
     const totalSec = Math.round(sinceStart / 1000);
-    subtitle = `done · ${text.length.toLocaleString()} chars · ${totalSec}s total${segSuffix}`;
+    subtitle = `done · ${text.length.toLocaleString()} chars · ${totalSec}s total`;
   } else if (isStalled) {
-    subtitle = `⚠ stalled ${Math.round(sinceLastText / 1000)}s…${segSuffix}`;
+    subtitle = `⚠ stalled ${Math.round(sinceLastText / 1000)}s…`;
   } else if (sinceLastText < 2000) {
-    subtitle = `writing…${segSuffix}`;
+    subtitle = `writing…`;
   } else if (sinceLastText < 10_000) {
-    subtitle = `thinking ${Math.round(sinceLastText / 1000)}s…${segSuffix}`;
+    subtitle = `thinking ${Math.round(sinceLastText / 1000)}s…`;
   } else {
-    subtitle = `deep reasoning ${Math.round(sinceLastText / 1000)}s…${segSuffix}`;
+    subtitle = `deep reasoning ${Math.round(sinceLastText / 1000)}s…`;
   }
 
   return (
@@ -173,70 +181,21 @@ function PersistentStreamBubble({
         )}
       </div>
       <div className="space-y-1.5">
-        {segments.slice(0, -1).map((seg, i) => (
-          <CollapsedSegment key={i} index={i} text={seg} hue={hue} />
-        ))}
-        {segments.length > 0 ? (
-          <div
-            className="whitespace-pre-wrap opacity-90 overflow-y-auto"
-            style={{ maxHeight: `${MAX_BUBBLE_HEIGHT_PX}px` }}
-          >
-            {segments[segments.length - 1] || " "}
-          </div>
-        ) : null}
+        {(() => {
+          const markers = parseProgressMarkers(cleanedText);
+          if (markers.length > 0) {
+            return <ProgressTimeline text={cleanedText} />;
+          }
+          return (
+            <div
+              className="whitespace-pre-wrap opacity-90 overflow-y-auto"
+              style={{ maxHeight: `${MAX_BUBBLE_HEIGHT_PX}px` }}
+            >
+              {cleanedText || " "}
+            </div>
+          );
+        })()}
       </div>
-    </div>
-  );
-}
-
-// Task #178: collapsible past-segment. Default collapsed showing
-// "▸ N: first ~80 chars… (M chars)"; click to expand into a
-// scrollable preformatted block. Exported 2026-04-26 so the finalized
-// bubble can reuse it for the segment-preserved post-stream view.
-export function CollapsedSegment({
-  index,
-  text,
-  hue,
-}: {
-  index: number;
-  text: string;
-  hue: number;
-}) {
-  const [open, setOpen] = useState(false);
-  const charCount = text.length.toLocaleString();
-  const preview = text.replace(/\s+/g, " ").slice(0, 80);
-  const palette = agentBubblePalette(hue, true);
-  return (
-    <div
-      className="rounded border text-xs"
-      style={{
-        borderColor: palette.segmentBorder,
-        background: palette.segmentBackground,
-      }}
-    >
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full text-left px-2 py-1 flex items-center gap-1.5 hover:bg-black/20 transition"
-        style={{ color: palette.header }}
-      >
-        <span className="font-mono text-[10px]">{open ? "▾" : "▸"}</span>
-        <span className="font-semibold">Segment {index + 1}</span>
-        <span className="text-ink-500">·</span>
-        <span className="text-ink-500 flex-1 truncate" title={preview}>
-          {preview}
-          {text.length > 80 ? "…" : ""}
-        </span>
-        <span className="text-ink-500 shrink-0">{charCount} chars</span>
-      </button>
-      {open ? (
-        <div
-          className="whitespace-pre-wrap opacity-80 overflow-y-auto px-2 pb-2 text-sm"
-          style={{ maxHeight: `${MAX_BUBBLE_HEIGHT_PX}px` }}
-        >
-          {text}
-        </div>
-      ) : null}
     </div>
   );
 }

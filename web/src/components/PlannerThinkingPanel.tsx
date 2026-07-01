@@ -14,6 +14,8 @@
 
 import { useEffect, useState } from "react";
 import { useSwarm } from "../state/store";
+import { parseProgressMarkers } from "../lib/parseProgressMarkers";
+import { ProgressTimeline } from "./transcript/ProgressTimeline";
 
 // Task #162: cheap criterion counter. The planner's contract is a JSON
 // envelope `{"missionStatement": "...", "criteria": [{...}, {...}, ...]}`.
@@ -269,19 +271,23 @@ export function PlannerThinkingPanel() {
           </div>
         </div>
       ) : null}
-      {tail.length > 0 ? (
-        <div className="rounded bg-ink-900/80 border border-ink-700 p-2 font-mono text-[11px] text-ink-200 max-h-40 overflow-y-auto whitespace-pre-wrap break-words">
-          {tail.length < plannerText.length ? <span className="text-ink-600">…</span> : null}
-          {tail}
-          <span className="inline-block w-1.5 h-3 bg-emerald-400 ml-0.5 animate-pulse align-middle" aria-label="cursor" />
-        </div>
-      ) : (
-        <div className="text-ink-500 italic">
-          {isThinking
-            ? "Planner started but no streaming text yet (cold start or tool calls in flight)…"
-            : "Planning phase active but planner is idle."}
-        </div>
-      )}
+      {(() => {
+        const markers = parseProgressMarkers(plannerText);
+        if (markers.length > 0) {
+          return <ProgressTimeline text={plannerText} className="rounded bg-ink-900/80 border border-ink-700 p-2" />;
+        }
+        return tail.length > 0 ? (
+          <div className="rounded bg-ink-900/80 border border-ink-700 p-2 font-mono text-[11px] text-ink-200 max-h-40 overflow-y-auto whitespace-pre-wrap break-words">
+            {tail.length < plannerText.length ? <span className="text-ink-600">…</span> : null}
+            {tail}
+            <span className="inline-block w-1.5 h-3 bg-emerald-400 ml-0.5 animate-pulse align-middle" aria-label="cursor" />
+          </div>
+        ) : (
+          <div className="text-ink-500 italic">
+            Waiting for streaming text…
+          </div>
+        );
+      })()}
     </div>
   );
 }
