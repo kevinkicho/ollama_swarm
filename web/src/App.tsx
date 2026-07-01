@@ -17,6 +17,8 @@ import { SwarmStoreProvider } from "./state/SwarmStoreProvider";
 import type { RunSummary } from "./types";
 import { PlanningTab } from "./components/PlanningTab";
 import { SystemHealthDashboard } from "./components/SystemHealthDashboard";
+import { notificationService } from "./services/notificationService";
+import { NotificationPreferences } from "./components/NotificationPreferences";
 
 // Task #65 (2026-04-24): URL-based review mode. When the user opens a
 // past run from the history modal we set ?review=<runId>&path=<encoded>.
@@ -137,6 +139,20 @@ function AppMain() {
   // even when no run is active (lastParentPath is empty).
   const parentPath = review?.clonePath || clonePath?.replace(/[/\\][^/\\]+$/, "");
 
+  // Subscribe to run completion/failure events for notifications
+  useEffect(() => {
+    const unsubComplete = notificationService.on('run:completed', (runId: string) => {
+      // handle notification
+    });
+    const unsubFailed = notificationService.on('run:failed', (runId: string) => {
+      // handle notification
+    });
+    return () => {
+      unsubComplete();
+      unsubFailed();
+    };
+  }, []);
+
   // Task #163: when in review mode, poll /api/swarm/status to detect
   // whether the run being reviewed is ALSO the currently-live run. If
   // yes, surface "View Live" + "Stop" buttons next to the REVIEW MODE
@@ -184,6 +200,7 @@ function AppMain() {
               parsed via EventLogReaderV2 + summarized server-side). */}
           <EventLogPanel />
           <SystemHealthDashboard />
+          <NotificationPreferences />
         </div>
       </header>
       {error ? <ErrorBanner error={error} /> : null}
