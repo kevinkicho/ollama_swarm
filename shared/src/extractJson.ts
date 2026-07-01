@@ -19,14 +19,20 @@
 
 export function extractJsonFromText(raw: string): string | null {
   const s = raw.trim();
+  // Strip XML pseudo-tool-call markers before JSON extraction.
+  // Some models emit <read>, <list>, <grep> etc. as raw text which breaks JSON.parse.
+  const stripped = s
+    .replace(/<(?:read|list|grep|glob|edit|bash|propose_hunks)\b[^>]*\/>/g, "")
+    .replace(/<(?:read|list|grep|glob|edit|bash|propose_hunks)\b[^>]*>[\s\S]*?<\/(?:read|list|grep|glob|edit|bash|propose_hunks)>/g, "")
+    .trim();
   // Top-level fenced block.
-  const fenceMatch = s.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
+  const fenceMatch = stripped.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
   if (fenceMatch) return extractFirstBalanced(fenceMatch[1].trim()) ?? fenceMatch[1].trim();
   // Inner fenced block (preamble allowed before/after).
-  const innerFence = s.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
+  const innerFence = stripped.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
   if (innerFence) return extractFirstBalanced(innerFence[1].trim()) ?? innerFence[1].trim();
   // Raw braces fallback — find first balanced object/array.
-  return extractFirstBalanced(s);
+  return extractFirstBalanced(stripped);
 }
 
 // Find the first balanced JSON object or array in `s`. Returns the
