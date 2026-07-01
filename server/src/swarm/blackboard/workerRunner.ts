@@ -424,6 +424,7 @@ export async function executeWorkerTodo(
     todoId: todo.id,
     description: todo.description,
     expectedFiles: todo.expectedFiles,
+    contextFiles: todo.contextFiles,
     fileContents: contents,
     expectedAnchors: effectiveAnchors,
     roleGuidance: ctx.getWorkerRoles().get(agent.id),
