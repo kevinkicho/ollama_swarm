@@ -17,6 +17,7 @@
 export type TodoQueueStatus =
   | "pending" // queued, not yet dequeued
   | "in-progress" // dequeued by a worker, not yet completed/failed
+  | "pending-commit" // worker produced hunks, awaiting auditor approval
   | "completed" // worker finished + committed
   | "failed" // worker gave up after retry exhaustion
   | "skipped"; // worker declined (e.g., out of scope)
@@ -74,11 +75,18 @@ export interface QueuedTodo {
   /** Plan 2: optional files the worker needs to READ for context but
    *  NOT modify. Max 3 context files per TODO. */
   contextFiles?: readonly string[];
+  /** Auditor-gated commits: proposed hunks awaiting auditor approval.
+   *  Set when worker produces hunks but before commit. Cleared after
+   *  auditor approves/rejects. */
+  proposedHunks?: readonly unknown[];
+  /** Auditor-gated commits: files the proposed hunks target. */
+  proposedFiles?: readonly string[];
 }
 
 export interface TodoQueueCounts {
   pending: number;
   inProgress: number;
+  pendingCommit: number;
   completed: number;
   failed: number;
   skipped: number;
@@ -299,6 +307,46 @@ export class TodoQueue {
     t.reason = undefined;
   }
 
+  /** Auditor-gated commits: mark an in-progress todo as pending-commit
+   *  with proposed hunks awaiting auditor approval. */
+  proposeCommit(id: string, hunks: readonly unknown[], files: readonly string[], ts: number = Date.now()): void {
+    const t = this.findOrThrow(id);
+    if (t.status !== "in-progress") {
+      throw new Error(`Cannot propose commit for todo ${id}: status=${t.status}`);
+    }
+    t.status = "pending-commit";
+    t.proposedHunks = hunks;
+    t.proposedFiles = files;
+    t.startedAt = ts;
+  }
+
+  /** Auditor-gated commits: approve a pending-commit todo → completed. */
+  approveCommit(id: string, ts: number = Date.now()): void {
+    const t = this.findOrThrow(id);
+    if (t.status !== "pending-commit") {
+      throw new Error(`Cannot approve commit for todo ${id}: status=${t.status}`);
+    }
+    t.status = "completed";
+    t.endedAt = ts;
+    t.reason = undefined;
+    t.proposedHunks = undefined;
+    t.proposedFiles = undefined;
+  }
+
+  /** Auditor-gated commits: reject a pending-commit todo → in-progress
+   *  for worker to retry with auditor feedback. */
+  rejectCommit(id: string, reason: string, ts: number = Date.now()): void {
+    const t = this.findOrThrow(id);
+    if (t.status !== "pending-commit") {
+      throw new Error(`Cannot reject commit for todo ${id}: status=${t.status}`);
+    }
+    t.status = "in-progress";
+    t.reason = reason;
+    t.proposedHunks = undefined;
+    t.proposedFiles = undefined;
+    t.retries += 1;
+  }
+
   /** Mark an in-progress todo as failed. Increments retries.
    *  Caller decides whether to re-enqueue (via reset()) or leave failed.
    *  Idempotent on already-failed todos (second fail just updates reason). */
@@ -406,12 +454,14 @@ export class TodoQueue {
   counts(): TodoQueueCounts {
     let pending = 0,
       inProgress = 0,
+      pendingCommit = 0,
       completed = 0,
       failed = 0,
       skipped = 0;
     for (const t of this.todos) {
       if (t.status === "pending") pending++;
       else if (t.status === "in-progress") inProgress++;
+      else if (t.status === "pending-commit") pendingCommit++;
       else if (t.status === "completed") completed++;
       else if (t.status === "failed") failed++;
       else if (t.status === "skipped") skipped++;
@@ -419,6 +469,7 @@ export class TodoQueue {
     return {
       pending,
       inProgress,
+      pendingCommit,
       completed,
       failed,
       skipped,

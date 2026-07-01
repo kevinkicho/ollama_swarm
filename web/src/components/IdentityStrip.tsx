@@ -101,15 +101,12 @@ export function IdentityStrip() {
           Uppercase pill style is intentional: visually distinct from the
           monospace runId and the model chips. */}
       {cfg ? (
+        <PresetBadge preset={cfg.preset} />
+      ) : null}
+      {cfg ? (
         <>
-          <PresetBadge preset={cfg.preset} />
-          {cfg.plannerModel ? <RoleBadge role="planner" model={cfg.plannerModel} /> : null}
-          {cfg.workerModel ? <RoleBadge role="worker" model={cfg.workerModel} /> : null}
-          {cfg.auditorModel ? <RoleBadge role="auditor" model={cfg.auditorModel} /> : null}
           <span className="text-ink-600">·</span>
           <span className="text-ink-100 font-semibold">{runName}</span>
-        </>
-      ) : null}
           <span className="text-ink-600">·</span>
           <ConformanceGauge samples={conformance} drift={drift} />
           {runId && phase !== "idle" && phase !== "completed" && phase !== "stopped" ? (
@@ -367,30 +364,6 @@ function PresetBadge({ preset }: { preset: string }) {
       className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] uppercase tracking-wider font-semibold ${palette.bg} ${palette.fg} ${palette.border}`}
     >
       {preset}
-    </span>
-  );
-}
-
-// Role badge for agent roles in the run. Shows the role name and the model.
-function RoleBadge({ role, model }: { role: string; model: string }) {
-  const palette = ((): { bg: string; fg: string; border: string } => {
-    switch (role) {
-      case "planner":
-        return { bg: "bg-blue-900/40", fg: "text-blue-200", border: "border-blue-700" };
-      case "worker":
-        return { bg: "bg-purple-900/40", fg: "text-purple-200", border: "border-purple-700" };
-      case "auditor":
-        return { bg: "bg-rose-900/40", fg: "text-rose-200", border: "border-rose-700" };
-      default:
-        return { bg: "bg-gray-900/40", fg: "text-gray-200", border: "border-gray-700" };
-    }
-  })();
-  return (
-    <span
-      title={`Role: ${role} (model: ${model})`}
-      className={`inline-flex items-center px-1.5 py-0.5 rounded-full border text-[10px] uppercase tracking-wider font-medium ${palette.bg} ${palette.fg} ${palette.border}`}
-    >
-      {role}
     </span>
   );
 }

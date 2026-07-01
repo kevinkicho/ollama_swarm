@@ -116,7 +116,7 @@ export interface CandidateForConflict {
   /** Status — only "pending" candidates are eligible to dispatch.
    *  Other statuses (e.g. "in-progress") are tracked for conflict
    *  comparison but never dispatched. */
-  status: "pending" | "in-progress" | "completed" | "failed" | "skipped";
+  status: "pending" | "in-progress" | "pending-commit" | "completed" | "failed" | "skipped";
 }
 
 /** Decide whether a candidate is dispatch-eligible RIGHT NOW. Returns:
