@@ -58,7 +58,7 @@ export async function runSynthesisPass(
   stats.countTurn(lead.id);
   ctx.appendSystem(`Synthesizing council consensus (agent-${lead.index})…`);
 
-  const prompt = buildCouncilSynthesisPrompt(cfg.rounds, transcript, cfg.userDirective, committedFiles, ambitionTier, cfg.localPath, repoFiles, codeContextExcerpts);
+  const prompt = buildCouncilSynthesisPrompt(cfg.rounds, transcript, cfg.userDirective, committedFiles, ambitionTier, cfg.localPath, repoFiles, codeContextExcerpts, cfg.model);
   const controller = new AbortController();
   const watchdog = startSseAwareTurnWatchdog({
     manager: ctx.manager,

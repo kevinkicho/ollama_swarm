@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { PlannerSeed, PriorRunSummary } from "./planner.js";
 import { PRIOR_RATIONALE_MAX_CHARS } from "./planner.js";
 import { lenientPreprocess, softCap } from "./lenientParse.js";
+import { getModelBudget } from "../../modelContextBudget.js";
 
 // ---------------------------------------------------------------------------
 // Phase 11b: first-pass exit contract.
@@ -183,16 +184,18 @@ export const FIRST_PASS_CONTRACT_SYSTEM_PROMPT = [
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",
 ].join("\n");
 
-export function buildFirstPassContractUserPrompt(seed: PlannerSeed): string {
+export function buildFirstPassContractUserPrompt(seed: PlannerSeed, model?: string): string {
+  const budget = getModelBudget(model);
   const tree = seed.topLevel.length > 0 ? seed.topLevel.join(", ") : "(empty)";
   const readme = seed.readmeExcerpt
-    ? seed.readmeExcerpt.slice(0, 4000)
+    ? seed.readmeExcerpt.slice(0, budget.fullFileMode ? 20_000 : 4_000)
     : "(no README found at repo root)";
   // Grounding Unit 6a: shared with buildPlannerUserPrompt so contract criteria
   // name real paths the auditor can later check. Empty-state copy matches the
   // planner prompt verbatim to avoid two slightly-different fallback strings.
+  const maxRepoFiles = budget.fullFileMode ? 500 : 150;
   const fileList = seed.repoFiles.length > 0
-    ? seed.repoFiles.join("\n")
+    ? seed.repoFiles.slice(0, maxRepoFiles).join("\n") + (seed.repoFiles.length > maxRepoFiles ? `\n... and ${seed.repoFiles.length - maxRepoFiles} more` : "")
     : "(no files listed — clone may be unreadable; use top-level entries above as a weaker guide)";
   // Unit 25: if the user supplied a directive, put it FIRST in the user
   // prompt so the planner reads it before it reads the repo structure.

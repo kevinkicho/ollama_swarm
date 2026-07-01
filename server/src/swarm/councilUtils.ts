@@ -2,6 +2,7 @@
 
 import type { Agent } from "../services/AgentManager.js";
 import { execSync } from "node:child_process";
+import { extractJsonFromText } from "./extractJson.js";
 
 /** Extract text from a provider response that may be a string or a
  *  structured object like {data:{parts:[{type:"text",text:"..."}]}}. */
@@ -37,20 +38,23 @@ export function createTimeoutController(ms = 90_000): { controller: AbortControl
 /**
  * Parse a JSON array from AI response text.
  * Handles preamble text, code fences, and malformed JSON.
+ *
+ * Uses balanced extraction (not greedy first-[/last-]) to avoid merging
+ * separate JSON arrays when the model produces multiple array blocks.
  */
 export function parseJsonArrayFromResponse<T>(
   text: string,
   normalize: (item: any, i: number) => T
 ): T[] {
-  const start = text.indexOf("[");
-  const end = text.lastIndexOf("]");
-  const cleaned = (start !== -1 && end > start)
-    ? text.slice(start, end + 1)
-    : text.replace(/```(?:json)?\s*/gi, "").trim();
-  if (!cleaned.startsWith("[")) return [];
-  const parsed = JSON.parse(cleaned);
-  if (!Array.isArray(parsed)) return [];
-  return parsed.map(normalize);
+  const extracted = extractJsonFromText(text);
+  if (!extracted) return [];
+  try {
+    const parsed = JSON.parse(extracted);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalize);
+  } catch {
+    return [];
+  }
 }
 
 /**

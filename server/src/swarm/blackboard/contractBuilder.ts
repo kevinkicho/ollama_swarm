@@ -142,7 +142,7 @@ export async function runFirstPassContract(
 
   const { response: firstResponse, agentUsed: contractAgent } = await ctx.promptPlannerSafely(
     agent,
-    `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed)}`,
+    `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed, agent.model)}`,
     "swarm",
     CONTRACT_JSON_SCHEMA,
   );
@@ -156,7 +156,7 @@ export async function runFirstPassContract(
     );
     const { response: retryResponse, agentUsed: retryAgent } = await ctx.promptPlannerSafely(
       contractAgent,
-      `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed)}`,
+      `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed, contractAgent.model)}`,
       "swarm",
       CONTRACT_JSON_SCHEMA,
     );
@@ -262,6 +262,7 @@ export async function tryCouncilContract(
   const allAgents = [planner, ...workers];
   const draftPrompt = `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(
     seed,
+    planner.model,
   )}`;
 
   ctx.appendSystem(

@@ -443,10 +443,18 @@ function AmendButton({
     setBusy(true);
     setError(null);
     try {
+      // Fetch the active run ID from the server — this ensures the
+      // nudge targets the currently-running run, not a reviewed/stale one.
+      const statusRes = await fetch("/api/swarm/status");
+      if (!statusRes.ok) throw new Error(`Server status: HTTP ${statusRes.status}`);
+      const status = (await statusRes.json()) as { runId?: string };
+      const activeRunId = status.runId;
+      if (!activeRunId) throw new Error("No active run on server");
+
       const res = await fetch("/api/swarm/amend", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ runId, text: trimmed }),
+        body: JSON.stringify({ runId: activeRunId, text: trimmed }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };

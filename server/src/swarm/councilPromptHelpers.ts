@@ -4,6 +4,7 @@ import {
   buildDirectiveBlock,
 } from "./directivePromptHelpers.js";
 import { execSync } from "node:child_process";
+import { getModelBudget } from "./modelContextBudget.js";
 
 function buildProjectContext(localPath?: string): string {
   if (!localPath) return "";
@@ -34,7 +35,10 @@ export function buildCouncilSynthesisPrompt(
   localPath?: string,
   repoFiles?: string[],
   codeContextExcerpts?: ReadonlyArray<{ path: string; excerpt: string }>,
+  model?: string,
 ): string {
+  const budget = getModelBudget(model);
+  const maxRepoFiles = budget.fullFileMode ? 500 : 80;
   const transcriptText = transcript
     .map((e) => {
       if (e.role === "system") return `[SYSTEM] ${e.text}`;
@@ -59,7 +63,7 @@ export function buildCouncilSynthesisPrompt(
 
   const projectContext = buildProjectContext(localPath);
   const repoContext = repoFiles && repoFiles.length > 0
-    ? `\nProject files (${repoFiles.length} total):\n${repoFiles.slice(0, 80).join("\n")}${repoFiles.length > 80 ? `\n... and ${repoFiles.length - 80} more` : ""}`
+    ? `\nProject files (${repoFiles.length} total):\n${repoFiles.slice(0, maxRepoFiles).join("\n")}${repoFiles.length > maxRepoFiles ? `\n... and ${repoFiles.length - maxRepoFiles} more` : ""}`
     : "";
   const codeContext = codeContextExcerpts && codeContextExcerpts.length > 0
     ? `\nKey file excerpts:\n${codeContextExcerpts.map(({ path, excerpt }) => `--- ${path} ---\n${excerpt}`).join("\n\n")}`
@@ -103,7 +107,10 @@ export function buildCouncilPrompt(
   localPath?: string,
   repoFiles?: string[],
   codeContextExcerpts?: ReadonlyArray<{ path: string; excerpt: string }>,
+  model?: string,
 ): string {
+  const budget = getModelBudget(model);
+  const maxRepoFiles = budget.fullFileMode ? 500 : 80;
   const visible =
     round === 1 ? snapshot.filter((e) => e.role !== "agent") : snapshot;
 
@@ -123,7 +130,7 @@ export function buildCouncilPrompt(
 
   const projectContext = buildProjectContext(localPath);
   const repoContext = repoFiles && repoFiles.length > 0
-    ? `\nProject files (${repoFiles.length} total):\n${repoFiles.slice(0, 80).join("\n")}${repoFiles.length > 80 ? `\n... and ${repoFiles.length - 80} more` : ""}`
+    ? `\nProject files (${repoFiles.length} total):\n${repoFiles.slice(0, maxRepoFiles).join("\n")}${repoFiles.length > maxRepoFiles ? `\n... and ${repoFiles.length - maxRepoFiles} more` : ""}`
     : "";
   const codeContext = codeContextExcerpts && codeContextExcerpts.length > 0
     ? `\nKey file excerpts:\n${codeContextExcerpts.map(({ path, excerpt }) => `--- ${path} ---\n${excerpt}`).join("\n\n")}`
@@ -197,7 +204,10 @@ export function buildStandupPrompt(
   userDirective?: string,
   localPath?: string,
   repoFiles?: string[],
+  model?: string,
 ): string {
+  const budget = getModelBudget(model);
+  const maxRepoFiles = budget.fullFileMode ? 500 : 60;
   const criteriaBlock = contract.criteria.length > 0
     ? contract.criteria
       .map((c) => `  [${c.status === "met" ? "✓" : "○"}] ${c.description} — files: ${c.expectedFiles.join(", ") || "(none)"}`)
@@ -226,7 +236,7 @@ export function buildStandupPrompt(
   });
 
   const repoContext = repoFiles && repoFiles.length > 0
-    ? `\nProject files (${repoFiles.length} total):\n${repoFiles.slice(0, 60).join("\n")}${repoFiles.length > 60 ? `\n... and ${repoFiles.length - 60} more` : ""}`
+    ? `\nProject files (${repoFiles.length} total):\n${repoFiles.slice(0, maxRepoFiles).join("\n")}${repoFiles.length > maxRepoFiles ? `\n... and ${repoFiles.length - maxRepoFiles} more` : ""}`
     : "";
 
   return [

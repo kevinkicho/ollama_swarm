@@ -9,7 +9,7 @@ import { DiscussionRunnerBase } from "./DiscussionRunnerBase.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 
 import { buildSeedSummary } from "./runSummary.js";
-import { extractProviderText } from "./councilUtils.js";
+import { extractProviderText, parseJsonArrayFromResponse } from "./councilUtils.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 
@@ -455,12 +455,6 @@ export class CouncilRunner extends DiscussionRunnerBase {
     // Planner fallback
     if (newTodos.length === 0) {
       this.consecutiveEmptyCycles++;
-      // When all criteria are met, try tier promotion immediately
-      // instead of waiting for the planner fallback to fail.
-      if (unmetCount === 0) {
-        this.consecutiveEmptyCycles = 0;
-        return "retry";
-      }
       if (this.consecutiveEmptyCycles >= 2) {
         this.appendSystem(`[audit] No new todos for ${this.consecutiveEmptyCycles} cycles — trying planner fallback.`);
         const lead = this.opts.manager.list().find((a) => a.index === 1);
@@ -547,17 +541,32 @@ Output a JSON array of concrete todos:
 
 Max 6 items. Each todo must target specific files. Return ONLY the JSON array.`;
 
+    const controller = new AbortController();
     try {
       const raw = await promptWithFailoverAuto(lead, prompt, {
         manager: this.opts.manager,
         agentName: "swarm-read",
-        signal: new AbortController().signal,
+        signal: controller.signal,
       }, cfg.providerFailover);
       const text = extractProviderText(raw);
       if (text) {
-        this.appendSystem(`[Standup] Synthesized proposals into unified plan.`);
+        const todos = parseJsonArrayFromResponse(text, (item: any) => ({
+          description: String(item.description ?? ""),
+          expectedFiles: Array.isArray(item.expectedFiles) ? item.expectedFiles.map(String) : [],
+        }));
+        for (const todo of todos) {
+          if (todo.description) {
+            this.state.todoQueue.post({
+              description: todo.description,
+              expectedFiles: todo.expectedFiles,
+            });
+          }
+        }
+        this.appendSystem(`[Standup] Synthesized ${todos.length} proposals into unified plan.`);
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      this.appendSystem(`[council] Standup synthesis failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private async runStandupTurn(
@@ -575,6 +584,7 @@ Max 6 items. Each todo must target specific files. Return ONLY the JSON array.`;
       userDirective,
       this.active?.localPath,
       this.repoFiles,
+      agent.model,
     );
     await this.runDiscussionAgent(agent, prompt, {
       runnerName: "council",
@@ -605,6 +615,7 @@ Max 6 items. Each todo must target specific files. Return ONLY the JSON array.`;
       this.active?.localPath,
       this.repoFiles,
       this.codeContextExcerpts,
+      agent.model,
     );
     await this.runDiscussionAgent(agent, prompt, {
       runnerName: "council",

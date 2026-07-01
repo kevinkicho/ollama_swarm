@@ -3,6 +3,7 @@ import type { ExitContract, ExitCriterion, Finding, Todo } from "../types.js";
 import { windowFileForWorker } from "../windowFile.js";
 import { extractJsonFromText as stripFences } from "../../extractJson.js";
 import { lenientPreprocess, softCap } from "./lenientParse.js";
+import { getModelBudget } from "../../modelContextBudget.js";
 
 // ---------------------------------------------------------------------------
 // Phase 11c: auditor.
@@ -512,17 +513,20 @@ function truncateRationale(s: string | undefined): string {
   return trimmed.slice(0, AUDITOR_RATIONALE_MAX_CHARS - 3) + "...";
 }
 
-export function buildAuditorUserPrompt(seed: AuditorSeed): string {
+export function buildAuditorUserPrompt(seed: AuditorSeed, model?: string): string {
+  const budget = getModelBudget(model);
+  const maxContextItems = budget.fullFileMode ? 200 : 40;
+  const fileStateMaxChars = budget.fullFileMode ? 500_000 : 60_000;
   const committed = seed.committed
-    .slice(-MAX_CONTEXT_ITEMS)
+    .slice(-maxContextItems)
     .map((c) => `- [${c.todoId}] ${c.description} (files: ${c.expectedFiles.join(", ") || "none"})`)
     .join("\n");
   const skipped = seed.skipped
-    .slice(-MAX_CONTEXT_ITEMS)
+    .slice(-maxContextItems)
     .map((s) => `- [${s.todoId}] ${s.description}${s.skippedReason ? ` — ${s.skippedReason}` : ""}`)
     .join("\n");
   const findings = seed.findings
-    .slice(-MAX_CONTEXT_ITEMS)
+    .slice(-maxContextItems)
     .map((f) => `- [${f.agentId}] ${f.text}`)
     .join("\n");
   const resolved = seed.resolvedCriteria
@@ -565,7 +569,7 @@ export function buildAuditorUserPrompt(seed: AuditorSeed): string {
       block = `${header}\n${entry.content}\n--- end ${path} ---`;
     }
     // +2 for the "\n\n" separator between blocks (matches the .join below).
-    if (fileStateUsed + block.length + 2 > AUDITOR_FILE_STATE_MAX_CHARS && fileStateBlocks.length > 0) {
+    if (fileStateUsed + block.length + 2 > fileStateMaxChars && fileStateBlocks.length > 0) {
       fileStateDropped = fileStateEntries.length - fileStateBlocks.length;
       break;
     }
@@ -574,7 +578,7 @@ export function buildAuditorUserPrompt(seed: AuditorSeed): string {
   }
   if (fileStateDropped > 0) {
     fileStateBlocks.push(
-      `--- [${fileStateDropped} additional file(s) omitted — total file-state would exceed ${AUDITOR_FILE_STATE_MAX_CHARS}-char budget. Verdict on those criteria using the committed/skipped lists below as evidence.] ---`,
+      `--- [${fileStateDropped} additional file(s) omitted — total file-state would exceed ${fileStateMaxChars}-char budget. Verdict on those criteria using the committed/skipped lists below as evidence.] ---`,
     );
   }
   const fileStateBlock = fileStateBlocks.join("\n\n");

@@ -178,7 +178,7 @@ export async function runAuditor(
   const modelAtEntry = auditPrimary.model;
   const { response: firstResponse, agentUsed: auditAgent } = await ctx.promptPlannerSafely(
     auditPrimary,
-    `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorUserPrompt(seed)}`,
+    `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorUserPrompt(seed, auditPrimary.model)}`,
     "swarm-read",
     AUDITOR_VERDICT_JSON_SCHEMA,
   );

@@ -79,7 +79,7 @@ export async function runPlanner(
 
   const { response: firstResponse, agentUsed: planAgent } = await ctx.promptPlannerSafely(
     agent,
-    `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed, contractForPrompt)}`,
+    `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed, contractForPrompt, agent.model)}`,
     "swarm-read",
     PLANNER_TODOS_JSON_SCHEMA,
   );

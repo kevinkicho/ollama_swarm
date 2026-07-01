@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { lenientPreprocess, softCap } from "./lenientParse.js";
 import { registerParserSchema } from "./brainIntegration.js";
+import { getModelBudget } from "../../modelContextBudget.js";
 
 // ---------------------------------------------------------------------------
 // Schema: what we expect back from the planner. Kept tight on purpose — small
@@ -385,16 +386,18 @@ export interface PriorRunSummary {
 // 20 criteria × 400 chars = ~8 KB max for the prior block — bounded.
 export const PRIOR_RATIONALE_MAX_CHARS = 400;
 
-export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionStatement: string; criteria: Array<{ description: string; expectedFiles: string[] }> }): string {
+export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionStatement: string; criteria: Array<{ description: string; expectedFiles: string[] }> }, model?: string): string {
+  const budget = getModelBudget(model);
   const tree = seed.topLevel.length > 0 ? seed.topLevel.join(", ") : "(empty)";
   const readme = seed.readmeExcerpt
-    ? seed.readmeExcerpt.slice(0, 4000)
+    ? seed.readmeExcerpt.slice(0, budget.fullFileMode ? 20_000 : 4_000)
     : "(no README found at repo root)";
   // Grounding Unit 6a: show the real files. One path per line — less token-
   // efficient than comma-separated, but much easier for the model to scan
   // and quote verbatim into expectedFiles.
+  const maxRepoFiles = budget.fullFileMode ? 500 : 150;
   const fileList = seed.repoFiles.length > 0
-    ? seed.repoFiles.join("\n")
+    ? seed.repoFiles.slice(0, maxRepoFiles).join("\n") + (seed.repoFiles.length > maxRepoFiles ? `\n... and ${seed.repoFiles.length - maxRepoFiles} more` : "")
     : "(no files listed — clone may be unreadable; use top-level entries above as a weaker guide)";
   // Task #130: prepend persistent cross-run memory if present. Renderer
   // returns "" when there are no prior memories so this is a no-op on
