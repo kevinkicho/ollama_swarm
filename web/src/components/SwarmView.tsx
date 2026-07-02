@@ -262,11 +262,11 @@ export function SwarmView() {
   };
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col overflow-hidden">
       <CloneBanner />
       <IdentityStrip />
-      <div className="flex-1 grid grid-cols-[280px_1fr] min-h-0">
-      <aside className="border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800 sticky top-0 self-start max-h-[calc(100vh-120px)]">
+      <div className="flex-1 flex min-h-0">
+      <aside className="w-[280px] shrink-0 border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800">
         <div className="flex items-center justify-between mb-2">
           <div className="text-xs uppercase tracking-wide text-ink-400">
             Agents <span className="text-ink-500 font-mono normal-case">({agentList.length})</span>
@@ -320,7 +320,7 @@ export function SwarmView() {
             misleadingly empty after a finished run. */}
         {agentList.length === 0 ? <SidebarSummaryAgents /> : null}
       </aside>
-      <section className="flex flex-col overflow-y-auto">
+      <section className="flex-1 flex flex-col min-h-0 overflow-hidden">
         <ProgressBar />
         <div className="flex border-b border-ink-700 bg-ink-800 text-sm">
           <TabButton active={tab === "transcript"} onClick={() => setTab("transcript")}>
@@ -380,8 +380,7 @@ export function SwarmView() {
           </TabButton>
           <span className="ml-auto self-center px-2"><OutcomeChip /></span>
         </div>
-        <div className="flex-1 min-h-0 overflow-hidden">
-          <div className="h-full overflow-y-auto">
+        <div className="flex-1 min-h-0 overflow-y-auto">
           {tab === "transcript" ? (
             <Transcript />
           ) : tab === "metrics" ? (
@@ -409,9 +408,8 @@ export function SwarmView() {
           ) : (
             <Transcript />
           )}
-          </div>
         </div>
-        <form onSubmit={onSay} className="border-t border-ink-700 p-3 bg-ink-800 flex flex-col gap-2 sticky bottom-0 z-10">
+        <form onSubmit={onSay} className="border-t border-ink-700 p-3 bg-ink-800 flex flex-col gap-2 shrink-0">
           {/* 2026-05-02 (chat lever #2): intent buttons. Defaults to
               steer = current "actively reshape next turn" semantics.
               Suggest = low-pressure consideration; Ask = inline answer
