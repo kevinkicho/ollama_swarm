@@ -158,6 +158,7 @@ export const SwarmEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("todo_committed"), todoId: z.string() }),
   z.object({ type: z.literal("todo_failed"), todoId: z.string(), reason: z.string(), replanCount: z.number() }),
   z.object({ type: z.literal("todo_skipped"), todoId: z.string(), reason: z.string() }),
+  z.object({ type: z.literal("todo_proposed"), todo: z.any() }),
   z.object({
     type: z.literal("model_shift"),
     agentId: z.string(),
