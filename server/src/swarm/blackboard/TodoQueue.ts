@@ -358,9 +358,10 @@ export class TodoQueue {
       t.retries += 1;
       return;
     }
-    if (t.status === "completed" || t.status === "skipped") {
-      // Already terminal — race between worker commit and replanner fail.
-      // Silently ignore; the work is done.
+    if (t.status === "completed" || t.status === "skipped" || t.status === "pending-commit") {
+      // Already terminal or awaiting auditor — race between worker commit
+      // and replanner fail. Silently ignore; the work is done or will be
+      // handled by the auditor.
       return;
     }
     if (t.status !== "in-progress") {

@@ -411,7 +411,7 @@ export function SwarmView() {
           )}
           </div>
         </div>
-        <form onSubmit={onSay} className="border-t border-ink-700 p-3 bg-ink-800 flex flex-col gap-2">
+        <form onSubmit={onSay} className="border-t border-ink-700 p-3 bg-ink-800 flex flex-col gap-2 sticky bottom-0 z-10">
           {/* 2026-05-02 (chat lever #2): intent buttons. Defaults to
               steer = current "actively reshape next turn" semantics.
               Suggest = low-pressure consideration; Ask = inline answer
