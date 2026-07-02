@@ -6,16 +6,16 @@
 
 ---
 
-## Reading order
+## Reading order (for agents)
 
-1. **`docs/STATUS.md`** — what's true right now (preset list, V2 substrate state, file tree, active design constraints)
-2. **`docs/AGENT-GUIDE.md`** — this file (commands, conventions, gotchas)
-3. **`docs/active-work.md`** — what's queued/blocked/in-flight across sessions
-4. **`docs/decisions/`** — short ADRs for non-obvious "why this not that" choices
-5. **`docs/known-limitations.md`** — deliberate trade-offs + V2 mitigations
-6. **`server/src/swarm/blackboard/ARCHITECTURE.md`** — code-near design intent for the blackboard module (read before editing files in that dir)
+1. `docs/STATUS.md` (current high-level reality: Brain-OS, concurrent runs, layout, presets)
+2. `docs/active-work.md` (what has shipped recently + future items)
+3. `docs/ARCHITECTURE-VISION.md` (north-star; many phases realized)
+4. `docs/AGENT-GUIDE.md` (this file)
+5. `docs/known-limitations.md`
+6. `server/src/swarm/blackboard/ARCHITECTURE.md` (deep substrate)
 
-Memory (`~/.claude/projects/-mnt-c-Users-kevin-Desktop-ollama-swarm/memory/MEMORY.md`) is loaded into your context automatically — don't re-read it explicitly.
+Project state lives in the repo: read `docs/STATUS.md`, `docs/active-work.md`, and `docs/ARCHITECTURE-VISION.md`. Old Claude memory files have been removed.
 
 ---
 
@@ -47,7 +47,7 @@ cd web && npx vite build
 
 ### Start dev server
 
-`npm run dev` works from WSL or Windows. The only WSL hazard is `npm install` — it swaps esbuild binaries to Linux and breaks the Windows dev-server. See `feedback_wsl_windows_esbuild` memory.
+`npm run dev` works from WSL or Windows. The only WSL hazard is `npm install` — it swaps esbuild binaries to Linux and breaks the Windows dev-server. Never run npm install from WSL when the repo is on /mnt/c.
 
 For long validation runs where you want to avoid `/mnt/c` inotify SIGTERM flakes (the tsx watch occasionally killing the dev server after summary writes), append `--no-watch`:
 
@@ -230,7 +230,7 @@ EOF
 
 ### Don't
 
-- **Don't run `npm install` from WSL.** It swaps esbuild binaries to Linux; Kevin's next Windows dev-server boot then fails.
+- **Don't run `npm install` from WSL.** It swaps esbuild binaries to Linux and breaks the Windows dev server.
 - **Don't do `git config --global` for any reason.**
 - **Don't burn cloud quota for "preset tour" or "long-run validation" without explicit go-ahead.**
 - **Don't accept "pre-existing failures" uncritically.** Always investigate the root cause.

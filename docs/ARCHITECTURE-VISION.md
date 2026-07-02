@@ -1,5 +1,11 @@
 # Architecture Vision: Brain as Operating System
 
+> **Status (2026-07):** This is the original north-star vision document.
+> **Many phases are now implemented** (LLM analysis, cross-run memory, provisioning, self-upgrader, SystemWrapper UI, Brain panels, concurrent run management). 
+> Brain-as-OS components are real and wired under `server/src/swarm/blackboard/brainOverseer/`.
+> See `docs/STATUS.md` and `docs/active-work.md` for current shipped state.
+> This doc is kept for long-term direction. "Path Forward" sections below are historical plans.
+
 > This document describes the target architecture for ollama_swarm.
 > It serves as the north-star for all development work.
 
@@ -80,31 +86,21 @@ Think of it like this:
 
 ---
 
-## What Exists Today
+## Current Reality (as of 2026-07)
 
-### Brain Components (built but partially wired)
+Significant portions of the vision have shipped:
 
-| Component | File | Status |
-|-----------|------|--------|
-| Event chain tracker | `brainOverseer/interactionTracker.ts` | ✅ Built, wired into worker/replanner |
-| Exception collector | `brainOverseer/exceptionCollector.ts` | ✅ Built, wired into worker/replanner |
-| Pattern cache | `brainOverseer/patternCache.ts` | ✅ Built, disk-backed |
-| Patch cache | `brainOverseer/patchCache.ts` | ✅ Built, content hashing |
-| Brain orchestrator | `brainOverseer/brainOverseer.ts` | ⚠️ Rule-only proposals (no LLM) |
-| Analysis prompt | `brainOverseer/prompt.ts` | ✅ Built but **never called** |
-| Council adapter | `brainOverseer/councilBrainAdapter.ts` | ✅ Built but **never wired** |
-| Brain fallback parser | `prompts/brainParser.ts` | ✅ Working (JSON decoder) |
+- Full `brainOverseer/` module with interaction tracking, exception collection, pattern/patch caches, proposal store, queue, service, self-upgrader, and provisioner.
+- LLM analysis wired (brainOverseer calls prompts + provider).
+- Brain can propose, provision, and drive runs (including self-improvement runs).
+- Self-upgrader exists and applies patches (with safety gates).
+- System UI is live: `SystemWrapper.tsx` + `BrainProposalsPanel`, `BrainActivityPanel`, patch monitor, run queue, health.
+- Concurrent runs + per-run isolation are production (ActiveRunsPanel, `/runs/:runId`, max concurrent cap).
+- Brain is positioned as the system-level manager over the Orchestrator.
 
-### What's Missing
+See `active-work.md` (P2–P7 marked DONE) and `STATUS.md` for details.
 
-| Component | Status |
-|-----------|--------|
-| LLM-powered analysis | ❌ prompt.ts exists but never sent to LLM |
-| Cross-run proposal persistence | ❌ Cache exists but proposals not stored |
-| Real-time monitoring | ❌ Brain runs post-run only |
-| Run provisioning | ❌ Brain can't start runs |
-| Self-upgrade | ❌ Not started |
-| UI for proposals | ❌ Not started |
+### Remaining Aspirational Vision (original Path Forward kept below for reference)
 
 ---
 

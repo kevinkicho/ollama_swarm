@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-06-26 (council 3-phase cycle, model change to deepseek-v4-flash, reliability fixes)
+**Last updated:** 2026-07 (Brain as OS layer + major UI layout hardening + SystemWrapper)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -14,9 +14,17 @@
 
 ---
 
-## What ships today
+## What ships today (high level)
 
-**11 swarm presets** (one write-capable, nine discussion, one pipeline) + 1 baseline. **Phase 1 + Phase 2 (2026-05-04)** added opt-in write capability for all discussion presets:
+The app is a **Brain-as-OS for concurrent swarm orchestration**:
+
+- **Brain-as-OS layer** (under blackboard): real-time monitoring across runs, proposal generation from patterns/exceptions, self-upgrader that applies patches to the system, run provisioner, health tracking. Brain can queue and drive system improvements.
+- **Concurrent multi-swarm support**: multiple independent runs in parallel (`/runs/:runId` routing, ActiveRunsPanel, per-run WebSocket/REST, concurrency cap). Brain and UI manage them at system level.
+- **System UI**: `SystemWrapper` with persistent sidebar, BrainProposalsPanel, BrainActivityPanel, SystemStatus, PatchMonitor, RunQueue, topbar stats/health.
+- **Recent major UI work**: full viewport layout hardening, sticky elements, scrolling fixes.
+- **12 presets** with the existing write-mode story (blackboard native writes; others opt-in via `writeMode`).
+
+**12 swarm presets** (blackboard + 10 discussion/pipeline variants + baseline). Opt-in write capability for discussion presets:
 
 | Preset | Maturity | Write-capable? | Notes |
 |---|---|---|---|
@@ -52,6 +60,8 @@ Validation: tour v2 (2026-04-28) ran 9 sequentially with 8/9 self-terminating cl
 | Eval harness | preset×task scoreboard | `eval/run-eval.mjs` + `eval/catalog.json` |
 | Pre-commit verify gate | Worker hunks gated by user shell command (npm test, lint, etc.) | `WorkerPipeline.VerifyAdapter` |
 | HITL nudge channel | `/api/swarm/amend` + topbar textarea | `IdentityStrip.AmendButton` |
+| Brain-as-OS | proposals, self-upgrade patches, run provisioning, health monitoring | `brainOverseer/*`, SystemWrapper + panels |
+| Concurrent runs + Active Runs UI | multi-tenant, per-run routing, ActiveRunsPanel | Orchestrator + `/api/swarm/active-runs` + deep links |
 | V2 event log | `/api/v2/event-log/runs` + UI EventLogPanel; infra-only filter | `EventLogReaderV2` |
 | Run history (95+ runs) | History dropdown auto-scans `runs*/` at startup | `Orchestrator.scanForRunParents` |
 | Model autocomplete | `/api/models` proxies Ollama tags into datalist on every model field | `useAvailableModels` hook |
@@ -76,11 +86,13 @@ The V1 SDK loop (per-agent opencode subprocess + SSE chunked streaming) was reti
 | Event log reader | `server/src/swarm/blackboard/EventLogReaderV2.ts` | primary; backs `/api/v2/event-log/runs` |
 | `formatServerSummary` | `shared/src/formatServerSummary.ts` | shared between server + web |
 
-**Test totals:** 3,168 tests passing / 0 failing as of 2026-06-26. Run `npm test` from the repo root — no env prefix required, the runner shim sets it.
+**Test totals:** Run `npm test` from the repo root (the shim sets any required env). Current count is the source of truth in CI.
 
 ---
 
-## What landed 2026-05-04 (R1–R17 reliability layer, 4 commits)
+## Historical: What landed 2026-05 (R1–R17 reliability layer + multi-tenant)
+
+> Older detailed history. For current focus see the high-level section at top and `active-work.md`.
 
 A round of failure-mode resilience: 17 standalone pure helpers + three waves of wiring + six new env flags. Together they harden the swarm against quota walls, network blips, malformed JSON, disk pressure, memory pressure, browser disconnect, runaway loops, and unclean stops.
 
@@ -180,7 +192,7 @@ A long day. Headline categories:
 - **`189ca05`** — wall-clock 4-min "absolute turn cap" replaced with SSE-aware liveness watchdog (`sseAwareTurnWatchdog.ts`). Aborts on 90s SSE silence OR 30-min hard ceiling. Long-tail latency that's still producing tokens isn't killed.
 - **`cfee38d`** — `agents_ready` structured summary; expandable per-agent grid in UI showing port, role, model, sessionId, warmup elapsed.
 
-> **Strategic note (2026-05-01):** the project's value prop is **open-weights multi-agent parallelism** (N Ollama-served models in parallel against one repo, each playing a different role). Multi-provider abstractions stay — bug-fixes that improve paid paths still ship — but don't expand multi-provider feature work for its own sake. Future scoreboard work should compare Ollama models against each other across presets, not Claude vs baseline. See `project_value_prop_open_weights_first.md` in memory.
+> **Strategic note (2026-05-01):** the project's value prop is **open-weights multi-agent parallelism** (N Ollama-served models in parallel against one repo, each playing a different role). Multi-provider abstractions stay — bug-fixes that improve paid paths still ship — but don't expand multi-provider feature work for its own sake. Future scoreboard work should compare Ollama models against each other across presets, not Claude vs baseline. See historical project value prop notes (value is open-weights multi-agent parallelism).
 
 ---
 
@@ -225,6 +237,8 @@ server/src/
     councilReconcile.ts                      T-Item-CouncilRec: vote tally + parser for cfg.councilReconcile
     blackboard/
       BlackboardRunner.ts                    blackboard preset orchestration (~4,500 LOC; +T-Item-3 hypothesis groups, +T-Item-StigBb file commit counts, +T-Item-4 adaptive scaleUp/Down)
+      brainOverseer/                         Brain-as-OS layer (overseer, selfUpgrader, provisioner, proposalStore, interactionTracker, etc.)
+        brainService.ts, brainQueue.ts, selfUpgrader.ts, provisioner.ts ...
       plannerRunner.ts                       planner + replanner agent with sibling-retry
       contractBuilder.ts                     first-pass contract builder with sibling-retry
       auditorRunner.ts                        auditor agent with sibling-retry
@@ -252,7 +266,9 @@ web/src/
     useSwarmSocket.ts                        WS singleton; no-ops when SwarmStoreContext is mounted
     useRunScopedWebSocket.ts                 per-runId WS for components that want a scoped feed
   components/
+    SystemWrapper.tsx                        root wrapper with persistent brain/system sidebar + panels
     SwarmView.tsx, Transcript.tsx, BoardView.tsx, ...
+    BrainProposalsPanel.tsx, BrainActivityPanel.tsx, SystemStatusPanel.tsx ...
     ActiveRunsPanel.tsx                      polls /api/swarm/active-runs every 5s; per-row view+stop buttons
     transcript/
       MessageBubble.tsx                      per-entry render dispatcher (system/user/agent)
@@ -266,11 +282,11 @@ web/src/
 ## Active design constraints (don't accidentally break these)
 
 - **No more opencode subprocess.** E3 Phase 5 removed it. Every prompt goes through `pickProvider` → `chatOnce`. Don't reintroduce subprocess spawning without checking ADR 001 (which is now historical).
-- **Don't rotate the planner role.** Single-session context continuity matters — see `feedback_blackboard_planner_design.md` in memory.
+- **Don't rotate the planner role.** Single-session context continuity matters (see history in blackboard feedback notes).
 - **Workers return JSON envelopes only** (no tool grants). Planner/auditor get the in-process `ToolDispatcher` (read/grep/glob/list/bash) — not the legacy opencode permission system.
 - **Discussion presets are write-capable when `cfg.writeMode` is set.** Blackboard's workers commit natively; all others produce hunks when writeMode is `single` or `multi`. Only `stigmergy` remains read-only.
 - **`npm test` works from any shell, any cwd** as of `c27f857` (2026-05-01). The runner shim (`server/scripts/run-tests.mjs`) sets `OPENCODE_SERVER_PASSWORD=test-only` if not already set; `config.ts` still validates the env var even though no subprocess uses it.
-- **`/mnt/c` is the project root** (WSL → Windows). npm install hazards from WSL — see `feedback_wsl_windows_esbuild` in memory.
+- **`/mnt/c` is the project root** (WSL → Windows). npm install hazards from WSL (esbuild binary swap). See WSL notes in AGENT-GUIDE.
 
 ---
 
@@ -321,15 +337,14 @@ MessageBubble.tsx                → dispatches by entry.role + entry.summary.ki
 - Worker hunks collapsed by default to prevent visual overwhelm in busy runs
 - ID-based dedup prevents double-rendering on reconnect
 
-## Where to look next
+## Where to look next (current reading order for agents)
 
-- **Day-1 essentials for an agent picking up this repo:** `docs/AGENT-GUIDE.md`
-- **Persistent TODO list across sessions:** `docs/active-work.md` (queued / in-flight / recently shipped)
-- **Architecture decisions ("why this and not that"):** `docs/decisions/` (4 active ADRs: per-agent subprocess [historical], hunk format, write-capable preset boundary, V2 parallel-track rollout. ADR 005 [keep opencode] superseded 2026-04-29 by E3 Phases 1–5; superseded body retained for archaeology.)
-- **Code-near architecture for blackboard:** `server/src/swarm/blackboard/ARCHITECTURE.md`
-- **V2 rewrite roadmap + status:** `docs/ARCHITECTURE-V2.md`
-- **Per-preset design notes:** `docs/swarm-patterns.md`
-- **What's a deliberate trade-off vs. a bug:** `docs/known-limitations.md`
-- **Long-horizon north star:** `docs/autonomous-productivity.md`
-- **Detailed change history:** `git log` (the 206KB phase-journal is at `docs/archive/blackboard-changelog.md` — useful for narrative archaeology but git log is authoritative)
-- **Per-agent feedback / preferences:** `~/.claude/projects/-mnt-c-Users-kevin-Desktop-ollama-swarm/memory/MEMORY.md` (read first; it's loaded into every session's context)
+1. `docs/STATUS.md` — this file (current high-level + file map)
+2. `docs/active-work.md` — persistent cross-session TODOs + what Brain/OS work has shipped
+3. `docs/ARCHITECTURE-VISION.md` — original north-star (many phases now real)
+4. `docs/AGENT-GUIDE.md` — operational commands + gotchas
+5. `docs/known-limitations.md` — deliberate trade-offs
+6. `server/src/swarm/blackboard/ARCHITECTURE.md` — deep blackboard substrate
+7. `docs/decisions/` + git log for history
+
+**Key current concepts:** Brain-as-OS (monitoring + self-upgrade + provisioning), concurrent runs (`/runs/:runId`, ActiveRunsPanel), SystemWrapper UI, 12 presets.

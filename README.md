@@ -2,7 +2,7 @@
 
 > **For agents picking up this codebase**: read [`docs/STATUS.md`](docs/STATUS.md) first — it's the single "what's true right now" pointer + map. This README is the user-facing intro.
 
-A local web app that runs **N open-weights coding agents in parallel** against a single GitHub repo — they collaborate in one shared transcript, each potentially a different model (e.g. planner=`deepseek-v4-flash:cloud`, worker=`deepseek-v4-flash:cloud`, auditor=`deepseek-v4-flash:cloud`). The design point is **multi-model parallelism on your own hardware** — Claude Code does single-agent-Claude beautifully, but it can't run five different open-weights models reviewing the same code at the same time. That's what this is for.
+A local web app that runs **multiple concurrent swarms** of open-weights coding agents. A **Brain-as-OS layer** monitors runs, proposes self-upgrading patches to the system itself, provisions new runs, and manages at the system level. Agents collaborate (via shared transcript or blackboard) on GitHub repos using different roles/models. The goal is autonomous, self-improving multi-agent orchestration on local hardware.
 
 **Five providers** are wired in, surfaced as side-by-side tabs in the setup form:
 
@@ -55,7 +55,7 @@ Then open **http://localhost:8244/** (or the WSL guest IP if you're hitting it f
 
 ## Tour
 
-**1. Setup form.** Pick a repo, a parent folder to clone into, an agent count, and one of the **eleven patterns** (ten swarm presets + a single-agent baseline). The optional User Directive seeds the conformance gauge and is honored by every preset except `stigmergy`. The AI Provider section is a **5-tab** segmented control (Ollama / Ollama Cloud / OpenCode / Anthropic / OpenAI) with a model dropdown that filters per-provider. Council and Blackboard presets support autonomous mode (`rounds: 0`) for infinite improvement loops.
+**1. Setup form.** Pick a repo, a parent folder to clone into, an agent count, and one of the **12 presets** (blackboard + discussion/pipeline variants + baseline). The optional User Directive seeds the conformance gauge and is honored by every preset except `stigmergy`. The AI Provider section is a **5-tab** segmented control (Ollama / Ollama Cloud / OpenCode / Anthropic / OpenAI) with a model dropdown that filters per-provider. Council and Blackboard presets support autonomous mode (`rounds: 0`) for infinite improvement loops.
 
 ![Setup form — GitHub URL, parent folder, pattern picker, agents/rounds/model fields](docs/images/setup-form.png)
 
@@ -69,7 +69,7 @@ Then open **http://localhost:8244/** (or the WSL guest IP if you're hitting it f
 
 ## What it does
 
-You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. The agents spawn, clone the repo, and start collaborating — each running an open-weights model on your local Ollama (or, optionally, Ollama Cloud / Anthropic / OpenAI). **Eleven patterns** ship today (two write-capable, eight discussion, plus a single-agent baseline for evaluation):
+You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. The agents spawn, clone the repo, and start collaborating — each running an open-weights model on your local Ollama (or, optionally, Ollama Cloud / Anthropic / OpenAI). **12 presets** ship today (blackboard is primary production write-capable; council has full autonomous 3-phase cycles with self-improvement potential; others discussion or exploration with opt-in writes; baseline for comparison):
 
 - **Round-robin transcript** — N agents take turns on a shared transcript; each turn rotates through Critic / Synthesizer / Gap-finder / Builder dispositions, with the lead synthesizing a directive answer at the end. Discussion-only.
 - **Blackboard (optimistic + small units)** — planner posts atomic todos to a shared board; workers claim and commit in parallel, with CAS on file hashes catching stale plans. **The only write-capable preset** — workers actually modify the clone.
@@ -82,10 +82,16 @@ You fill in a GitHub URL, a local clone path, an agent count, and pick a **patte
 - **Stigmergy** — pheromone-table + per-file ranking pattern. Self-organizing exploration; agents pick the next file based on a shared annotation table. Discussion-only. (Doesn't honor the user directive — exploration is repo-driven.)
 - **Mixture of Agents (MoA)** — N proposers each draft independently (peer-hidden, parallel); one aggregator synthesizes their drafts. Reproducibly beats single-large-model on reasoning benchmarks using only small open-weights models. Discussion-only.
 - **Baseline** — single agent, single prompt, single apply step. The "thinnest honest comparison" the eval scoreboard uses to anchor "did the swarm beat doing it alone?" Code-modify capable; not surfaced in the form's normal preset list (eval-harness path).
+- **Pipeline** — chains sub-runs (e.g. explore → decompose → validate).
 
-A live transcript streams into the browser as it's generated — you see each agent type token-by-token, can inject your own message into the conversation at any time, and stop the whole thing with one click. The blackboard preset adds a **Board** tab showing todos in five columns (Open / Claimed / Committed / Stale / Skipped), plus a run summary card when the run terminates.
+**Beyond single runs:** A **Brain-as-OS layer** monitors activity, generates self-improvement proposals, applies patches via self-upgrader, and provisions runs. Multiple swarms run concurrently (Active Runs panel + `/runs/:runId`). A live transcript streams into the browser as it's generated — you see each agent type token-by-token, can inject your own message into the conversation at any time, and stop the whole thing with one click. The blackboard preset adds a **Board** tab showing todos in five columns (Open / Claimed / Committed / Stale / Skipped), plus a run summary card when the run terminates.
 
-### Recent observability + reliability features
+### Current system-level capabilities + observability
+- **Brain-as-OS** — monitoring, proposal generation from run patterns, self-upgrading patches, run provisioning.
+- **Concurrent swarms** — run multiple at once; manage via Active Runs UI and per-run deep links.
+- **System UI wrapper** — persistent sidebar, brain panels, health, patch monitor, cross-run metrics.
+
+### Observability + reliability features
 
 - **Conformance gauge** — during runs with a User Directive, a live LLM-as-judge polls the transcript every 90s and renders a colored sparkline + numeric score (0–100) in the topbar showing how on-topic the run stays. Hover for the smoothing-window math + grader metadata.
 - **Embedding-similarity drift** — independent second signal alongside the LLM-judge. Pull `nomic-embed-text` to enable; the tooltip shows agreement vs disagreement between the two signals.
@@ -99,7 +105,7 @@ A live transcript streams into the browser as it's generated — you see each ag
 - **Design memory directive alignment** — the post-run design memory update now injects the user directive into the roadmap prompt, preventing drift toward generic platform features.
 - **Model switch fallback removed** — `SIBLING_MODELS` map emptied; `withSiblingRetry` returns false immediately. Model switching for content issues (invalid JSON, empty response) was dead code — both models route through the same provider path and fail the same way. The real safety nets are stuck-cycle detection, planner fallback, and auditor re-fires.
 
-**Current architecture is V2 substrate** — the original opencode-SDK-streaming path was retired 2026-04-28; runs go through `OllamaClient` (direct `/api/chat`) + `WorkerPipelineV2` + `TodoQueue` + `RunStateObserver` + `EventLogReaderV2`. The Council preset now supports a 3-phase autonomous cycle (Analysis → Execution → Audit) with infinite improvement loops. See [`server/src/swarm/blackboard/ARCHITECTURE.md`](server/src/swarm/blackboard/ARCHITECTURE.md) for the deep dive.
+**Current architecture includes a Brain-as-OS layer** on top of the V2 substrate. The original opencode-SDK path was retired (E3 2026-04-29). Runs use direct providers + in-process ToolDispatcher. Multiple swarms run concurrently. The Brain (monitoring + proposals + self-upgrader + provisioner) sits above the Orchestrator and manages system-level work + self-improvement. See `docs/STATUS.md` and `server/src/swarm/blackboard/brainOverseer/`.
 
 ## Architecture
 
@@ -167,7 +173,7 @@ A phase-by-phase journal is archived at [`docs/archive/blackboard-changelog.md`]
 
 1. **GitHub URL** — a public repo URL, or a private one if `GITHUB_TOKEN` is set in `.env` (the token is spliced into the clone URL).
 2. **Parent folder** — an absolute path to a _parent_ directory. The server derives the repo name from the URL and clones into `<parentFolder>/<repo-name>` (e.g. parent `C:\...\runs` + URL ending in `/is-odd` → clone at `C:\...\runs\is-odd`). Parent is created if missing; the subfolder must be empty, absent, or already a matching git clone. The form shows a live preview of the resolved clone path under the field.
-3. **Pattern** — one of the nine presets at the top of this README. Selecting blackboard reveals collapsible help explaining CAS and stale-replan; each pattern's `<PresetAdvancedSettings>` panel shows pattern-specific knobs.
+3. **Pattern** — choose from 12 presets. Blackboard is the primary write-capable production preset. Council supports full autonomous 3-phase cycles. See STATUS.md for the current matrix.
 4. **Agents** — how many concurrent agents to spawn (2–8 for most presets). On blackboard, agent 1 is the planner and the remaining N−1 are workers. `debate-judge` requires exactly 3; `map-reduce` and `orchestrator-worker-deep` require ≥4.
 5. **Rounds** — for discussion presets: how many full passes through the agents. For blackboard: the maximum number of **auditor invocations** (plan → work → audit cycles) before the run stops even if unresolved criteria remain. Blackboard still stops earlier on the hard caps (per-run `wallClockCapMs` defaults to **8 hours** if not set, plus baked-in 200-commits / 300-todos backstops) or when every criterion is resolved. The cap is enforced by a 5s-tick watchdog (`#305`), so runs stop within ~5 seconds of the threshold rather than waiting for the next phase boundary. With non-blackboard presets, high values can mean hours of wall-clock and proportional cloud-token spend.
 6. **Model** — any model string the active provider can serve. For Ollama, this must be a model the local install can run (`ollama list`); the form's autocomplete reads `/api/models` for matches. For paid providers, prefix with the provider name: `anthropic/claude-opus-4-7`, `openai/gpt-5`, `opencode-go/deepseek-v4-pro`, etc. **Settings history** saves configurations across sessions for one-click reuse.
@@ -217,7 +223,7 @@ See [`docs/known-limitations.md`](docs/known-limitations.md) for the full list w
 
 - **All discussion presets have opt-in write capability** (`cfg.writeMode: "single"` / `"multi"`). Blackboard has native writes. Only `stigmergy` remains read-only.
 - **Worker hunks are search/replace, not patches.** Aider-style `{op: "replace", file, search, replace}` envelope. Falls back closed when the search anchor isn't unique.
-- **One swarm at a time.** Stop the current swarm before starting another (or pass `force: true` on `/api/swarm/start`).
+- **Concurrent runs supported.** Multiple swarms can run in parallel (default cap via `SWARM_MAX_CONCURRENT_RUNS`). Use the Active Runs panel and `/runs/:runId` deep links. Old global single-run assumption has been replaced by per-run isolation.
 - **In-memory transcript** — restarting the server loses live history. Per-run `summary.json` + per-event `logs/current.jsonl` are durable; the run-history dropdown reads the former.
 - **Localhost assumed.** No auth on the web app itself. Docker deployment available (`docker-compose up`).
 - **`/mnt/c` (WSL) flakiness.** tsx watch occasionally SIGTERMs the dev server when files in `/mnt/c` change rapidly; restart the dev server when this happens. Does not affect production. Don't `npm install` from WSL on a `/mnt/c` repo — it swaps esbuild's binary for Linux and breaks the next Windows-side dev server.

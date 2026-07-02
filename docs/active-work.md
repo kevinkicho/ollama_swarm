@@ -47,11 +47,11 @@
 
 ## Remaining Work
 
-### P7.5: Layout Restructure (4-6 hr)
-- [ ] Create `SystemWrapper.tsx` — wraps entire app
-- [ ] Persistent sidebar with system/brain/nav
-- [ ] Main content area for run-specific views
-- [ ] Header shows system status
+### P7.5: Layout Restructure — DONE
+- [x] Create `SystemWrapper.tsx` — wraps entire app (wired in App.tsx)
+- [x] Persistent sidebar with system/brain/nav
+- [x] Main content area for run-specific views
+- [x] Header shows system status + recent topbar/layout hardening
 
 ### Future Enhancements
 - [ ] UpgradeMode.tsx — terminal-style upgrade UI

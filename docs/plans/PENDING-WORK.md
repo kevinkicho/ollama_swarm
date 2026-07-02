@@ -1,10 +1,13 @@
-# Pending Work — Unfinished Items from Archived Plans
+# Pending Work — Historical (Archived Plans)
 
-Generated: 2026-06-30 (updated)
+> Most items from early archived plans have shipped. See `docs/active-work.md` for current queue.
+> This file is kept for archaeology only.
 
-## All Items Complete
+Generated: 2026-06-30 (historical)
 
-All pending work from the archived plans has been implemented:
+## Previously Completed Items
+
+Items from archived plans that were implemented:
 
 ### Context Window Utilization (Plan 4) — COMPLETE ✅
 - `planner.ts`: README limit scaled by model budget (4K→20K for 1M models)

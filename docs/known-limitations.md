@@ -65,6 +65,16 @@ Until any of those bite, one agent covers both roles.
 
 ---
 
+## Concurrent multi-run execution — resolved (2026-07-02)
+
+**Previous state:** A single global `AgentManager`, `wrappedEmit` getters, and global quota state made `SWARM_MAX_CONCURRENT_RUNS > 1` unsafe.
+
+**Current state:** Each `ActiveRun` owns its `AgentManager`; `wrappedEmit` binds `runId` at construction; WS + client `applyEvent` guards drop cross-run events; per-run quota in `tokenTracker.quotaByRun`; `POST /api/swarm/start` returns `runId` + `navigateTo`; `/runs/:runId` is the primary UI path.
+
+**Remaining edge:** Ollama-proxy quota detection without run attribution still sets `globalOllamaQuota` (informational). Run halt decisions use per-run maps when `runId` is known.
+
+---
+
 ## Multi-tenant token attribution — resolved (2026-05-09)
 
 `tokenTracker` now supports per-runId attribution. `UsageRecord` carries a
