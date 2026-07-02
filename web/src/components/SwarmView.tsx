@@ -266,7 +266,7 @@ export function SwarmView() {
       <CloneBanner />
       <IdentityStrip />
       <div className="flex-1 grid grid-cols-[280px_1fr] min-h-0">
-      <aside className="border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800">
+      <aside className="border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800 sticky top-0 self-start max-h-[calc(100vh-120px)]">
         <div className="flex items-center justify-between mb-2">
           <div className="text-xs uppercase tracking-wide text-ink-400">
             Agents <span className="text-ink-500 font-mono normal-case">({agentList.length})</span>
