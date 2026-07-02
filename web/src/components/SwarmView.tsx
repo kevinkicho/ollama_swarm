@@ -320,7 +320,7 @@ export function SwarmView() {
             misleadingly empty after a finished run. */}
         {agentList.length === 0 ? <SidebarSummaryAgents /> : null}
       </aside>
-      <section className="flex flex-col overflow-hidden">
+      <section className="flex flex-col overflow-y-auto">
         <ProgressBar />
         <div className="flex border-b border-ink-700 bg-ink-800 text-sm">
           <TabButton active={tab === "transcript"} onClick={() => setTab("transcript")}>

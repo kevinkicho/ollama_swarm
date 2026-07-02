@@ -185,7 +185,7 @@ function AppMain() {
       {review === null && <ActiveRunsPanel />}
 
       {/* Main content: SetupForm or SwarmView */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-y-auto">
         {showSetup ? <SetupForm /> : <SwarmView />}
       </div>
     </SystemWrapper>
