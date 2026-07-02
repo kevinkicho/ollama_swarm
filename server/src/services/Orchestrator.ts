@@ -294,6 +294,8 @@ export class Orchestrator {
         getActiveRunCount: () => this.runs.size,
         canStartRun: () => !this.startInProgress && this.runs.size < maxConcurrentRuns,
       });
+      // Start continuous monitoring so Brain acts as live management layer
+      this.brainService?.startBackgroundMonitoring(60000);
     });
   }
 

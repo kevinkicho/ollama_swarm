@@ -49,6 +49,9 @@ export interface BrainService {
   getRecentActivities(): BrainActivityEntry[];
   subscribeToEvents(eventHandler: (event: { type: string; [key: string]: unknown }) => void): () => void;
   getBrainHealth(): { status: string; lastAnalysis: number; proposalCount: number; errorCount: number };
+  /** Start continuous background monitoring for real-time Brain-OS management layer behavior. */
+  startBackgroundMonitoring(intervalMs?: number): void;
+  stopBackgroundMonitoring(): void;
 }
 
 export interface BrainServiceOpts {
@@ -89,10 +92,35 @@ export function createBrainService(opts: BrainServiceOpts): BrainService {
   const activities: BrainActivityEntry[] = [];
   let brainHealth = { status: "idle", lastAnalysis: 0, proposalCount: 0, errorCount: 0 };
   let lastClonePath: string | undefined;
+  let monitoringInterval: NodeJS.Timeout | null = null;
 
   const logActivity = (entry: Omit<BrainActivityEntry, "timestamp">) => {
     activities.unshift({ ...entry, timestamp: Date.now() });
     if (activities.length > MAX_ACTIVITIES) activities.length = MAX_ACTIVITIES;
+  };
+
+  // Iteration on Brain-OS as management layer: lightweight background ticker
+  // for real-time health aggregation across concurrent runs.
+  const _startBackgroundTicker = (intervalMs = 60000) => {
+    if (monitoringInterval) clearInterval(monitoringInterval);
+    monitoringInterval = setInterval(() => {
+      const pressure = tokenTracker.pressure ? tokenTracker.pressure() : null;
+      brainHealth.status = pressure?.atLimit ? "pressure" : "monitoring";
+
+      logActivity({
+        type: "health",
+        title: "Background health tick",
+        detail: `active runs: ${opts.getActiveRunCount()}, pressure: ${pressure ? pressure.recordCount : 'n/a'}`,
+        status: "success",
+      });
+
+      // Emit for UI / listeners
+      eventSubscribers.forEach(fn => {
+        try {
+          fn({ type: "brain_health_tick", pressure, activeRuns: opts.getActiveRunCount() });
+        } catch {}
+      });
+    }, intervalMs);
   };
 
   return {
@@ -272,10 +300,20 @@ export function createBrainService(opts: BrainServiceOpts): BrainService {
         ...brainHealth,
         activeRunHealth: Object.fromEntries(runHealth),
         pressure: { 
-          // lightweight system pressure
           trackedRuns: runHealth.size 
         }
       }; 
+    },
+
+    startBackgroundMonitoring(intervalMs = 60000) {
+      _startBackgroundTicker(intervalMs);
+    },
+
+    stopBackgroundMonitoring() {
+      if (monitoringInterval) {
+        clearInterval(monitoringInterval);
+        monitoringInterval = null;
+      }
     },
   };
 }

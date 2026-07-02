@@ -97,5 +97,6 @@
 - Dynamic agentCount: 8 (low pressure) / 4 (high) based on proxy pressure for max efficiency/stability.
 - Richer diff previews: unified diff-style in BrainProposalsPanel with search/replace snippets.
 - History panel: Recent Upgrades section in BrainActivityPanel from patch activities.
+- Brain-OS management layer iteration: added startBackgroundMonitoring() + ticker in BrainService (real-time health ticks every 60s, pressure-aware). Wired in Orchestrator so it runs continuously. Emits brain_health_tick events.
 - Docs: updated active-work.md, STATUS.md, etc.
 - Tests/build: proxy runId/bounded tests, build clean (tsc), brain/proxy tests pass (18/18 proxy, brainService ok). Full verification passed.
