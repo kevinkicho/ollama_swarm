@@ -166,7 +166,14 @@ export interface SwarmStore {
   upsertPheromone: (file: string, state: PheromoneEntry) => void;
   setMapperSlices: (slices: Record<string, string[]>) => void;
   setOutcome: (outcome: { score: number; verdict: string; dimensions: Array<{ id: string; label: string; score: number; note: string }> }) => void;
-  setBrainProposals: (proposals: Array<{ title: string; description: string; affectedComponent: string; priority: "high" | "medium" | "low" }>) => void;
+  setBrainProposals: (proposals: Array<{ 
+    id?: string; 
+    title: string; 
+    description: string; 
+    affectedComponent: string; 
+    priority: "high" | "medium" | "low";
+    suggestedHunks?: Array<{file: string; search: string; replace: string}>;
+  }>) => void;
 
   setError: (msg: string | undefined) => void;
   // Dismiss the topbar error banner (sets error → undefined).

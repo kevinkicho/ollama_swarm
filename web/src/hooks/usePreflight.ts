@@ -25,7 +25,18 @@ export interface UsePreflightResult {
   loading: boolean;
 }
 
-export function usePreflight(repoUrl: string, parentPath: string): UsePreflightResult {
+export interface PreflightModelParams {
+  model?: string;
+  plannerModel?: string;
+  workerModel?: string;
+  auditorModel?: string;
+}
+
+export function usePreflight(
+  repoUrl: string,
+  parentPath: string,
+  models: PreflightModelParams = {},
+): UsePreflightResult {
   const [state, setState] = useState<PreflightState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -43,6 +54,10 @@ export function usePreflight(repoUrl: string, parentPath: string): UsePreflightR
         repoUrl: repoUrl.trim() || "",
         parentPath: parentPath.trim(),
       });
+      for (const [key, value] of Object.entries(models)) {
+        const v = value?.trim();
+        if (v) params.set(key, v);
+      }
       let cancelled = false;
       (async () => {
         let lastErr: unknown;
@@ -85,7 +100,7 @@ export function usePreflight(repoUrl: string, parentPath: string): UsePreflightR
       clearTimeout(t);
       setLoading(false);
     };
-  }, [repoUrl, parentPath]);
+  }, [repoUrl, parentPath, models.model, models.plannerModel, models.workerModel, models.auditorModel]);
 
   return { state, error, loading };
 }

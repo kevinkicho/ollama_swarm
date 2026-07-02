@@ -7,6 +7,7 @@ import { TopologySchema, deriveLegacyFields, synthesizeTopology } from "@ollama-
 import { resolveModels, type ModelDefaults } from "@ollama-swarm/shared/modelConfig";
 import { config } from "../config.js";
 import { validateContinuousMode } from "./continuousMode.js";
+import { tokenTracker } from "../services/ollamaProxy.js";
 import {
   validate,
   MemoryStorePostBody,
@@ -21,6 +22,8 @@ import {
   TimelineParams,
   SayPerRunBody,
   RunsQuery,
+  BrainApplyBody,
+  BrainRejectBody,
 } from "./schemas.js";
 import type { Orchestrator } from "../services/Orchestrator.js";
 import { deriveCloneDir, RepoService } from "../services/RepoService.js";
@@ -29,6 +32,12 @@ import { preflightDiskCheck } from "../swarm/preflightDiskCheck.js";
 import { projectRunCost, exceedsBudget } from "../swarm/preflightCostProjector.js";
 import { decideStopAction } from "../swarm/drainStopPolicy.js";
 import { SwarmRoleSchema, StartBody, SayBody, OpenBody } from './schemas.js';
+import { missingProviderKeysForModels } from "../providers/providerKeyCheck.js";
+import {
+  healthSummariesForProviders,
+  probeWarningsForModels,
+  uniqueProvidersForModels,
+} from "../providers/providerHealth.js";
 
 // `parentPath` is the folder the user points at on the setup form; the repo
 // is cloned into `<parentPath>/<repo-name-from-URL>`. The older name
@@ -208,7 +217,14 @@ export function swarmRouter(orch: Orchestrator): Router {
   // "Destination is not empty and is not a git repo". If destPath
   // doesn't exist, alreadyPresent=false and a fresh clone would happen.
   r.get("/preflight", validate(PreflightQuery, "query"), async (req: Request, res: Response) => {
-    const { repoUrl, parentPath: rawParentPath } = req.query as unknown as z.infer<typeof PreflightQuery>;
+    const query = req.query as unknown as z.infer<typeof PreflightQuery>;
+    const { repoUrl, parentPath: rawParentPath } = query;
+    const preflightModels = [query.model, query.plannerModel, query.workerModel, query.auditorModel].filter(
+      (m): m is string => typeof m === "string" && m.trim().length > 0,
+    );
+    const providerWarnings = missingProviderKeysForModels(preflightModels);
+    const providerHealth = healthSummariesForProviders(uniqueProvidersForModels(preflightModels));
+    const providerProbeWarnings = probeWarningsForModels(preflightModels);
     // WSL ↔ Windows boundary: clients under /mnt/c send WSL-style
     // paths; on Windows we must re-spell them as <DRIVE>:\... or
     // path.resolve will create a parallel C:\mnt\c\... tree.
@@ -240,6 +256,9 @@ export function swarmRouter(orch: Orchestrator): Router {
         priorCommits: 0,
         priorChangedFiles: 0,
         priorUntrackedFiles: 0,
+        providerWarnings,
+        providerHealth,
+        providerProbeWarnings,
       });
       return;
     }
@@ -257,6 +276,9 @@ export function swarmRouter(orch: Orchestrator): Router {
         priorChangedFiles: 0,
         priorUntrackedFiles: 0,
         blocker: "not-git-repo",
+        providerWarnings,
+        providerHealth,
+        providerProbeWarnings,
       });
       return;
     }
@@ -269,6 +291,9 @@ export function swarmRouter(orch: Orchestrator): Router {
       priorCommits: stats.commits,
       priorChangedFiles: stats.changedFiles,
       priorUntrackedFiles: stats.untrackedFiles,
+      providerWarnings,
+      providerHealth,
+      providerProbeWarnings,
     });
   });
 
@@ -444,7 +469,7 @@ export function swarmRouter(orch: Orchestrator): Router {
           return;
         }
       }
-      await orch.start({
+      const newRunId = await orch.start({
         repoUrl: parsed.data.repoUrl,
         localPath,
         agentCount: effAgentCount,
@@ -573,7 +598,12 @@ export function swarmRouter(orch: Orchestrator): Router {
         rubricGrading: parsed.data.rubricGrading,
         checkpointing: parsed.data.checkpointing,
       });
-      res.json({ ok: true, status: orch.status() });
+      res.json({
+        ok: true,
+        runId: newRunId,
+        navigateTo: `/runs/${encodeURIComponent(newRunId)}`,
+        status: orch.statusForRun(newRunId) ?? orch.status(),
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: msg });
@@ -1042,7 +1072,21 @@ export function swarmRouter(orch: Orchestrator): Router {
       res.json({ status: "not-initialized" });
       return;
     }
-    res.json(brainService.getBrainHealth());
+    const health = brainService.getBrainHealth();
+    res.json({
+      ...health,
+      proxyPressure: (tokenTracker as any).pressure ? (tokenTracker as any).pressure() : null,
+    });
+  });
+
+  // P7: Brain activity timeline
+  r.get("/brain/activity", (_req: Request, res: Response) => {
+    const brainService = orch.getBrainService();
+    if (!brainService) {
+      res.json({ activities: [] });
+      return;
+    }
+    res.json({ activities: brainService.getRecentActivities() });
   });
 
   // P7: Brain proposals endpoint
@@ -1057,24 +1101,43 @@ export function swarmRouter(orch: Orchestrator): Router {
   });
 
   // P7: Apply brain proposal
-  r.post("/brain/apply", async (req: Request, res: Response) => {
+  r.post("/brain/apply", validate(BrainApplyBody, "body"), async (req: Request, res: Response) => {
     const brainService = orch.getBrainService();
     if (!brainService) {
       res.status(500).json({ error: "Brain service not initialized" });
       return;
     }
-    const { proposalId, patchContent } = req.body;
-    res.json({ success: true, message: "Proposal applied" });
+    const { proposalId, patchContent, clonePath } = req.body as z.infer<typeof BrainApplyBody>;
+    const hunks = patchContent.map((h) => ({
+      file: h.file,
+      search: h.search ?? "",
+      replace: h.replace ?? "",
+    }));
+    const result = await brainService.applyProposal(proposalId, hunks, clonePath);
+    if (!result.success) {
+      const status = result.error?.includes("runs are active") ? 409
+        : result.error === "Proposal not found" ? 404
+        : 400;
+      res.status(status).json({ success: false, error: result.error });
+      return;
+    }
+    res.json(result);
   });
 
   // P7: Reject brain proposal
-  r.post("/brain/reject", async (req: Request, res: Response) => {
+  r.post("/brain/reject", validate(BrainRejectBody, "body"), async (req: Request, res: Response) => {
     const brainService = orch.getBrainService();
     if (!brainService) {
       res.status(500).json({ error: "Brain service not initialized" });
       return;
     }
-    const { proposalId, reason } = req.body;
+    const { proposalId, reason, clonePath } = req.body as z.infer<typeof BrainRejectBody>;
+    const result = await brainService.rejectProposal(proposalId, reason, clonePath);
+    if (!result.success) {
+      const status = result.error === "Proposal not found" ? 404 : 400;
+      res.status(status).json({ success: false, error: result.error });
+      return;
+    }
     res.json({ success: true, message: "Proposal rejected" });
   });
 
@@ -1300,7 +1363,9 @@ function openInOsFileManager(absPath: string): void {
   child.unref();
 }
 
-  // P7: Brain health endpoint
+// Convert a WSL2 Linux path to its Windows-visible form via the
+// `wslpath` utility. Returns null on any failure (utility missing,
+// non-zero exit, empty stdout) so callers can fall back gracefully.
 // Synchronous because we already do filesystem I/O around it and the
 // utility returns instantly.
 function wslPathToWindows(linuxPath: string): string | null {

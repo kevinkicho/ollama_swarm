@@ -35,6 +35,15 @@ import {
   OLLAMA_CLOUD_MODELS,
   OPENCODE_GO_MODELS,
 } from "@ollama-swarm/shared/providers";
+import type { SwarmEvent } from "./types.js";
+import { providerGateway } from "./providers/ProviderGateway.js";
+import {
+  getProvidersApiResponse,
+  getProvidersStatusPayload,
+  probeProviders,
+  startProviderHealthScheduler,
+  stopProviderHealthScheduler,
+} from "./providers/providerHealth.js";
 import { decideAutoResume } from "./swarm/autoResumeDecision.js";
 import { loadSnapshot } from "./services/RunStatePersister.js";
 import { globalErrorHandler } from "./middleware/errorHandler.js";
@@ -89,41 +98,31 @@ server.on("upgrade", (req: IncomingMessage, socket: import("node:stream").Duplex
 const eventLogger = createEventLogger({ logDir: config.LOG_DIR ?? path.join(repoRoot, "logs") });
 const broadcaster = new Broadcaster(eventLogger);
 
-// Unit 38: shared PID tracker for orphan reclamation across dev-server
-// restarts. Writes to `<repoRoot>/logs/agent-pids.log`. AgentManager
-// appends per spawn + removes per clean exit; reclaimOrphans (below)
-// reads it on startup to kill untracked live PIDs from previous runs.
+// PID tracker for orphan process reclamation (across restarts).
 const pidTracker = new AgentPidTracker(repoRoot);
 
-const manager = new AgentManager(
-  (s) => broadcaster.broadcast({ type: "agent_state", agent: s }),
-  (e) => broadcaster.broadcast(e),
-  // Diagnostic-only sink: opencode stdout/stderr + raw SSE envelope records
-  // go straight to the JSONL log without hitting the WS stream.
-  (rec) => eventLogger.log(rec),
-  pidTracker,
-);
+function createAgentManager(runId: string): AgentManager {
+  return new AgentManager(
+    (s) => broadcaster.broadcast({ type: "agent_state", agent: s, runId }),
+    (e) => broadcaster.broadcast(e.runId === undefined ? { ...e, runId } : e),
+    // Diagnostic-only sink: opencode stdout/stderr + raw SSE envelope records
+    // go straight to the JSONL log without hitting the WS stream.
+    (rec) => eventLogger.log(rec),
+    pidTracker,
+  );
+}
 const repos = new RepoService();
 const orchestrator = new Orchestrator({
-  manager,
+  createManager: createAgentManager,
   repos,
   emit: (e) => broadcaster.broadcast(e),
-  // Unit 19: per-call timing telemetry from promptWithRetry lands here
-  // (alongside the AgentManager's diag records). Same logs/current.jsonl.
   logDiag: (rec) => eventLogger.log(rec),
   // V2 Step 1: Ollama base URL (proxy-aware) for the Ollama-direct
   // path. Strip /v1 suffix so OllamaClient can append /api/chat.
   ollamaBaseUrl: config.OLLAMA_BASE_URL.replace(/\/v1\/?$/, ""),
-  // T-Item-MultiTenant Phase 4 (2026-05-04): cap on concurrent runs.
   maxConcurrentRuns: config.SWARM_MAX_CONCURRENT_RUNS,
 });
 
-// R7 wiring (2026-05-04, W16 promotion 2026-05-04): pause-on-WS-
-// disconnect. When SWARM_PAUSE_ON_DISCONNECT is on, the listener
-// flips the matching runner's subscriberPaused flag so workers idle
-// without burning prompts when no browser is watching. Resumes on
-// first reconnect (orchestrator hook is a no-op for runners that
-// don't implement setSubscriberPaused — discussion-only presets).
 if (config.SWARM_PAUSE_ON_DISCONNECT) {
   broadcaster.setSubscriberChangeListener((change) => {
     if (change.action === "no-change") return;
@@ -143,21 +142,36 @@ broadcaster.attach(wss, (ws) => {
   const status = runIdFilter
     ? (orchestrator.statusForRun(runIdFilter) ?? orchestrator.status())
     : orchestrator.status();
-  broadcaster.send(ws, { type: "swarm_state", phase: status.phase, round: status.round });
-  for (const a of status.agents) broadcaster.send(ws, { type: "agent_state", agent: a });
-  for (const entry of status.transcript) broadcaster.send(ws, { type: "transcript_append", entry });
+  const hydrateRunId = runIdFilter ?? status.runId;
+  const stamp = <T extends SwarmEvent>(e: T): T =>
+    hydrateRunId && e.runId === undefined ? { ...e, runId: hydrateRunId } : e;
+  broadcaster.send(ws, stamp({ type: "swarm_state", phase: status.phase, round: status.round }));
+  for (const a of status.agents) broadcaster.send(ws, stamp({ type: "agent_state", agent: a }));
+  for (const entry of status.transcript) broadcaster.send(ws, stamp({ type: "transcript_append", entry }));
   // Replay contract + summary for reloads of a completed run. Both events only
   // fire once over the live socket, so without this a page refresh after a
   // terminal run would show empty Contract and Summary cards.
-  if (status.contract) broadcaster.send(ws, { type: "contract_updated", contract: status.contract });
-  if (status.summary) broadcaster.send(ws, { type: "run_summary", summary: status.summary });
+  if (status.contract) broadcaster.send(ws, stamp({ type: "contract_updated", contract: status.contract }));
+  if (status.summary) broadcaster.send(ws, stamp({ type: "run_summary", summary: status.summary }));
 });
 
 app.get("/api/health", (_req, res) => {
+  const ollamaProbe = getProvidersStatusPayload().providers.ollama;
+  const ollamaOk =
+    ollamaProbe.probeStatus === "ok" ||
+    ollamaProbe.probeStatus === "degraded" ||
+    ollamaProbe.probeStatus === "idle";
   res.json({
-    ok: true,
+    ok: ollamaOk,
     defaultModel: config.DEFAULT_MODEL,
     ollamaUrl: config.OLLAMA_BASE_URL,
+    ollamaProbe: {
+      status: ollamaProbe.probeStatus,
+      lastProbeAt: ollamaProbe.lastProbeAt,
+      lastProbeMs: ollamaProbe.lastProbeMs,
+      lastError: ollamaProbe.lastError,
+      modelCount: ollamaProbe.modelCount,
+    },
   });
 });
 
@@ -268,27 +282,28 @@ app.get("/api/models", async (req, res) => {
   }
 });
 
-// Task #133: token-usage endpoint backed by the Ollama proxy. Returns
+// Token usage endpoint (backed by Ollama proxy). Returns
 // per-window aggregates derived from prompt_eval_count + eval_count
 // captured on every Ollama response. Empty when proxy is disabled
 // (OLLAMA_PROXY_PORT=0).
-// Task #159: auto-clear transient quota flags after STALE_TRANSIENT_MS
+// Auto-clear transient quota flags after timeout
 // of no new wall observation. Concurrency-429s clear in seconds upstream;
 // keeping the flag set indefinitely misleads users into thinking they're
 // near a usage limit. Persistent walls (real plan/quota limit) stay set
 // until explicit clear (Orchestrator.start clears on each new run).
 const STALE_TRANSIENT_MS = 5 * 60_000;
-function maybeClearStaleTransient(): void {
-  const q = tokenTracker.getQuotaState();
+function maybeClearStaleTransient(runId?: string): void {
+  const q = tokenTracker.getQuotaState(runId);
   if (q && q.kind === "transient" && Date.now() - q.since > STALE_TRANSIENT_MS) {
-    tokenTracker.clearQuotaState();
+    if (runId) tokenTracker.clearQuotaState(runId);
+    else tokenTracker.clearQuotaState();
   }
 }
 
 app.get("/api/usage", (req, res) => {
-  // Task #159: opportunistic auto-clear on every poll (cheap).
-  maybeClearStaleTransient();
   const runId = typeof req.query.runId === "string" ? req.query.runId : undefined;
+  // Task #159: opportunistic auto-clear on every poll (cheap).
+  maybeClearStaleTransient(runId);
   res.json({
     last1h: tokenTracker.totalsInWindow(60 * 60_000, "1h", runId),
     last5h: tokenTracker.totalsInWindow(5 * 60 * 60_000, "5h", runId),
@@ -305,15 +320,19 @@ app.get("/api/usage", (req, res) => {
     // see the wall as soon as the proxy detects it. Null when no wall
     // observed since the last clearQuotaState() (i.e. since the
     // current run started).
-    quota: tokenTracker.getQuotaState(),
+    quota: tokenTracker.getQuotaState(runId),
+    globalQuota: tokenTracker.getGlobalQuotaState(),
+    proxyPressure: tokenTracker.pressure ? tokenTracker.pressure() : null,
   });
 });
 
 // Task #159: explicit dismiss endpoint. Lets the UI's "Dismiss" button
 // clear a stale flag without requiring a new run. Idempotent — clearing
 // when nothing's set is a no-op.
-app.post("/api/usage/clear-quota", (_req, res) => {
-  tokenTracker.clearQuotaState();
+app.post("/api/usage/clear-quota", (req, res) => {
+  const runId = typeof req.body?.runId === "string" ? req.body.runId : undefined;
+  if (runId) tokenTracker.clearQuotaState(runId);
+  else tokenTracker.clearQuotaState();
   res.json({ ok: true });
 });
 
@@ -331,23 +350,30 @@ app.post("/api/usage/clear-quota", (_req, res) => {
 // reflects whether OLLAMA_API_KEY env was set — informational only;
 // the "available" flag stays true regardless so users with local
 // auth-via-config can still pick the cloud tab.
+app.get("/api/providers/health", (_req, res) => {
+  const body = getProvidersApiResponse();
+  res.json(body.gateway);
+});
+
 app.get("/api/providers", (_req, res) => {
-  res.json({
-    ollama: { available: true, hasKey: true },
-    "ollama-cloud": { available: true, hasKey: !!(config.OLLAMA_CLOUD_API_KEY || config.OLLAMA_API_KEY) },
-    anthropic: {
-      available: !!config.ANTHROPIC_API_KEY,
-      hasKey: !!config.ANTHROPIC_API_KEY,
-    },
-    openai: {
-      available: !!config.OPENAI_API_KEY,
-      hasKey: !!config.OPENAI_API_KEY,
-    },
-    opencode: {
-      available: !!(config.OPENCODE_GO_API_KEY || config.OPENCODE_ZEN_API_KEY || config.OPENCODE_API_KEY),
-      hasKey: !!(config.OPENCODE_GO_API_KEY || config.OPENCODE_ZEN_API_KEY || config.OPENCODE_API_KEY),
-    },
-  });
+  res.json(getProvidersApiResponse());
+});
+
+app.post("/api/providers/probe", async (req, res) => {
+  const providers = Array.isArray(req.body?.providers)
+    ? (req.body.providers as string[]).filter((p): p is import("@ollama-swarm/shared/providers").Provider =>
+        ["ollama", "ollama-cloud", "anthropic", "openai", "opencode"].includes(p),
+      )
+    : undefined;
+  const force = req.body?.force === true;
+  try {
+    const payload = await probeProviders({ providers, force });
+    res.json(payload);
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 });
 
 // Rate limiting: /start is expensive (5/min); other POST writes (30/min).
@@ -389,6 +415,7 @@ const shutdown = async (signal: string) => {
       new Promise((_, reject) => setTimeout(() => reject(new Error("orchestrator.stop() timed out")), 20_000)),
     ]);
   } catch { /* ignore */ }
+  stopProviderHealthScheduler();
   eventLogger.close();
   try { await proxy?.stop(); } catch { /* ignore */ }
 
@@ -425,7 +452,7 @@ process.on("uncaughtException", (err) => {
   shutdown("uncaughtException").finally(() => process.exit(1));
 });
 
-// Task #133: start the Ollama proxy BEFORE listen so the rewritten
+// Start Ollama proxy before listen (rewritten URL)
 // OLLAMA_BASE_URL is in place before any agent spawns. The proxy
 // listens on OLLAMA_PROXY_PORT and forwards to the original Ollama
 // URL. We then mutate config.OLLAMA_BASE_URL in-memory so every
@@ -460,7 +487,7 @@ if (config.OLLAMA_PROXY_PORT > 0) {
   console.log(`  ollama proxy: ${proxyHost} → ${upstreamRoot} (token capture enabled)`);
 }
 
-// Unit 38: reclaim orphaned opencode subprocesses from prior server
+// Reclaim orphaned processes from prior runs (if any)
 // instances BEFORE we start accepting swarm-start requests. This
 // prevents the PortAllocator from handing out a port that a zombie
 // process still holds, and bounds cumulative resource leak across
@@ -508,6 +535,7 @@ void reclaimOrphans(repoRoot)
       console.warn("└──────────────────────────────────────────────────┘");
     }
     server.listen(config.SERVER_PORT, "0.0.0.0", () => {
+      startProviderHealthScheduler();
       console.log(`ollama_swarm server listening on http://127.0.0.1:${config.SERVER_PORT}`);
       console.log(`  ollama: ${config.OLLAMA_BASE_URL}`);
       console.log(`  default model: ${config.DEFAULT_MODEL}`);

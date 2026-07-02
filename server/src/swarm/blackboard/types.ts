@@ -69,6 +69,10 @@ export interface Todo {
   // modify. The planner declares these when a todo references or depends
   // on files not in expectedFiles. Max 3 context files per TODO.
   contextFiles?: string[];
+  /** Auditor-gated commits: proposed hunks awaiting approval. Present
+   *  only while status is pending-commit. */
+  proposedHunks?: readonly unknown[];
+  proposedFiles?: readonly string[];
 }
 
 export type ExitCriterionStatus = "unmet" | "met" | "wont-do";
@@ -143,4 +147,6 @@ export type BoardEvent =
       // the existing anchors are kept.
       expectedAnchors?: string[];
     }
-  | { type: "finding_posted"; finding: Finding };
+  | { type: "finding_posted"; finding: Finding }
+  | { type: "todo_proposed"; todo: Todo }
+  | { type: "todo_reverted"; todoId: string; reason: string };

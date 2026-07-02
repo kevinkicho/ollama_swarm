@@ -448,7 +448,12 @@ export function SetupForm() {
   // ("Resume run" when alreadyPresent) + disabled-ness (when blocker).
   // The previous focus-grabbing StartConfirmModal is gone — the
   // inline preview + button-label change ARE the confirmation gate.
-  const preflight = usePreflight(repoUrl, parentPath);
+  const preflight = usePreflight(repoUrl, parentPath, {
+    model,
+    plannerModel,
+    workerModel,
+    auditorModel,
+  });
   const preflightBlocked = preflight.state?.blocker === "not-git-repo";
   const isResume = preflight.state?.alreadyPresent === true && !preflightBlocked;
 
@@ -791,8 +796,8 @@ export function SetupForm() {
           ...presetSpecific,
         }),
       });
+      const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
         const msg = typeof body.error === "string" ? body.error
           : body.error?.formErrors?.[0] ?? body.error?.fieldErrors
           ? "Validation error — check browser console for details"
@@ -800,21 +805,12 @@ export function SetupForm() {
         console.error("Start failed:", body);
         throw new Error(msg);
       }
-      // T-Item-MultiTenant Phase 9 (2026-05-04): navigate to the new
-      // run's deep-link URL on successful start. /api/swarm/start
-      // responds with `{ ok, status }` where status carries runId.
-      // Falls back to staying on the current page if the response
-      // shape doesn't include runId (e.g. immediate failure).
-      try {
-        const body = await res.json().catch(() => ({}));
-        const newRunId =
-          (body?.status?.runId as string | undefined) ??
-          (body?.runId as string | undefined);
-        if (newRunId && newRunId.length > 0) {
-          navigate(`/runs/${encodeURIComponent(newRunId)}`);
-        }
-      } catch {
-        // best-effort — staying on / is the safe fallback
+      const navigateTo =
+        (typeof body.navigateTo === "string" ? body.navigateTo : undefined) ??
+        (body?.runId ? `/runs/${encodeURIComponent(body.runId)}` : undefined) ??
+        (body?.status?.runId ? `/runs/${encodeURIComponent(body.status.runId)}` : undefined);
+      if (navigateTo) {
+        navigate(navigateTo);
       }
       // 2026-05-03 (UX win #7): persist for the recently-used row.
       // Only fires on a successful POST (HTTP 200) so cancelled / failed

@@ -44,6 +44,8 @@ export interface BudgetGuardCheckOpts {
   /** Loop noun ("round" for council/RR/stigmergy/etc.; "cycle" for
    *  map-reduce/OW/OW-deep). */
   unit: LoopUnit;
+  /** Per-run quota attribution (PR-6). */
+  runId?: string;
 }
 
 export interface BudgetGuardResult {
@@ -78,8 +80,8 @@ export function checkBudgetGuards(opts: BudgetGuardCheckOpts): BudgetGuardResult
     };
   }
 
-  if (shouldHaltOnQuota()) {
-    const q = tokenTracker.getQuotaState();
+  if (shouldHaltOnQuota(opts.runId)) {
+    const q = tokenTracker.getQuotaState(opts.runId);
     const detail = `ollama-quota-exhausted (${q?.statusCode}: ${q?.reason.slice(0, 100)})`;
     return {
       halt: true,

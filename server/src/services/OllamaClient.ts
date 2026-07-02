@@ -82,6 +82,9 @@ export interface ChatOpts {
     top_p?: number;
     [key: string]: unknown;
   };
+
+  /** runId for per-run proxy attribution (sent as X-Swarm-Run-Id). */
+  runId?: string;
 }
 
 export interface ChatResult {
@@ -153,12 +156,17 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
 
   let response: Response;
   try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...(opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {}),
+    };
+    if (opts.runId) {
+      headers["x-swarm-run-id"] = opts.runId; // for proxy per-run isolation
+    }
+
     response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {}),
-      },
+      headers,
       body,
       signal: composed,
     });

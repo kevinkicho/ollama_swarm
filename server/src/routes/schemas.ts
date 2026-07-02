@@ -22,6 +22,9 @@ export const PreflightQuery = z.object({
   parentPath: z.string().min(1).max(500),
   preset: z.string().optional(),
   model: z.string().optional(),
+  plannerModel: z.string().optional(),
+  workerModel: z.string().optional(),
+  auditorModel: z.string().optional(),
   agentCount: z.coerce.number().int().min(1).max(16).optional(),
   topology: z.string().optional(),
   directive: z.string().max(4000).optional(),
@@ -66,6 +69,24 @@ export const SayPerRunBody = z.object({
 
 export const RunsQuery = z.object({
   includeOtherParents: z.coerce.boolean().optional(),
+});
+
+export const BrainPatchHunkSchema = z.object({
+  file: z.string().min(1).max(500),
+  search: z.string().max(50_000).optional(),
+  replace: z.string().max(50_000).optional(),
+});
+
+export const BrainApplyBody = z.object({
+  proposalId: z.string().min(1).max(200),
+  patchContent: z.array(BrainPatchHunkSchema).min(1).max(64),
+  clonePath: z.string().min(1).max(500).optional(),
+});
+
+export const BrainRejectBody = z.object({
+  proposalId: z.string().min(1).max(200),
+  reason: z.string().max(2000).optional(),
+  clonePath: z.string().min(1).max(500).optional(),
 });
 
 import type { Request, Response, NextFunction } from "express";

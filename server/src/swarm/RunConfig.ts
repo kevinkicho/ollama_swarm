@@ -8,13 +8,13 @@ export interface RunConfig {
   rounds: number;
   model: string;
   preset: PresetId;
-  // Unit 25: optional user-authored directive that steers the blackboard
+  // optional user-authored directive that steers the blackboard planner
   // planner's first-pass contract. Threaded into PlannerSeed.userDirective
   // and incorporated into the first-pass contract prompt so criteria are
   // shaped by user intent from turn 1. Silently ignored by non-blackboard
   // presets (no auto-contract to shape).
   userDirective?: string;
-  // Unit 32: per-preset knobs, surfaced by the Start-a-swarm form's
+  // per-preset knobs, surfaced by the Start-a-swarm form's Advanced section.
   // Advanced section. Each is ignored by presets that don't consume it:
   // only role-diff uses `roles`, only blackboard uses `councilContract`,
   // only debate-judge uses `proposition`.
@@ -71,9 +71,7 @@ export interface RunConfig {
    *
    * Use case: heavy-lift cloud model for planning + verification
    * (e.g. `glm-5.1:cloud`), cheaper / faster model for high-volume
-   * worker turns (e.g. `gemma4:31b-cloud`). The opencode.json the
-   * runner writes declares ALL distinct model names so opencode
-   * knows about every one before any session.create fires.
+   * worker turns (e.g. `gemma4:31b-cloud`).
    */
   plannerModel?: string;
   workerModel?: string;
@@ -116,6 +114,11 @@ export interface RunConfig {
    * stuck retry loop can burn tokens with little wall-clock movement).
    * Empty / undefined = no token cap (legacy behavior).
    */
+
+  /** Marker: this run was started by the Brain-as-OS for self-improvement. */
+  brainInitiated?: boolean;
+  /** If brain-initiated, the proposal id that triggered it (for traceability across concurrent runs). */
+  brainProposalId?: string;
   tokenBudget?: number;
   /**
    * When true, the planner agent uses the swarm-read profile (read/grep/

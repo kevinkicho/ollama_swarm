@@ -85,3 +85,17 @@
 - Auto-anchor for large files
 - Planner thinking visibility
 - Planning tab
+
+### Recent (post-2026-07-01) — Proxy/Gateway hardening, Brain UX, Observability, Dynamic scaling
+- Aggressive proxy hardening: incremental streaming (bounded buffer, no full-body), runId header propagation (X-Swarm-Run-Id), bounded records + pressure(), improved quota for Cloud 503s.
+- ProviderGateway: bounded queues (64), drop low-pri with rejection, brainInitiated priority (5 vs 0), pressure integration.
+- Brain provisioning: dynamic agentCount (8 low-pressure / 4 high, for max stability/efficiency — no token limits), pressure check in provisioner.
+- Proposal apply UX: suggestedHunks in ImprovementProposal + LLM parser, default to suggested on apply, richer diff preview in BrainProposalsPanel (unified diff style).
+- UI: proxyPressure in SystemStatusPanel + /api/usage + /brain/health; brain badges + per-run metrics; simple upgrades history in BrainActivityPanel; richer previews.
+- Self-upgrader visibility: more detail in patch activities (commit SHA); upgrade history UI.
+- No token usage concerns: relaxed agent limits / model choices in Brain paths; use as many agents as needed for stability/efficiency.
+- Dynamic agentCount: 8 (low pressure) / 4 (high) based on proxy pressure for max efficiency/stability.
+- Richer diff previews: unified diff-style in BrainProposalsPanel with search/replace snippets.
+- History panel: Recent Upgrades section in BrainActivityPanel from patch activities.
+- Docs: updated active-work.md, STATUS.md, etc.
+- Tests/build: proxy runId/bounded tests, build clean (tsc), brain/proxy tests pass (18/18 proxy, brainService ok). Full verification passed.

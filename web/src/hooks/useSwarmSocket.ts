@@ -7,6 +7,8 @@ import type { SwarmEvent, SwarmStatusSnapshot } from "../types";
 // open/close a socket mid-handshake (the source of the noisy
 // "closed before the connection is established" warning).
 let ws: WebSocket | null = null;
+/** runId the current socket was opened for (undefined = unfiltered). */
+let wsRunId: string | undefined = undefined;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let backoffMs = 500;
 // Unit 62: gate the page-refresh catch-up fetch so React StrictMode's
@@ -47,21 +49,42 @@ function applyEvent(ev: SwarmEvent): void {
   applyEventToStore(ev, useSwarm.getState());
 }
 
+function wsUrlForRunId(runId: string | undefined): string {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  return runId
+    ? `${proto}://${location.hostname}:${__BACKEND_PORT__}/ws?runId=${encodeURIComponent(runId)}`
+    : `${proto}://${location.hostname}:${__BACKEND_PORT__}/ws`;
+}
+
 function connect(): void {
-  if (ws) return;
+  // T-Item-MultiTenant: filter WS events by current runId so concurrent
+  // runs on the same server don't mix events in the UI.
+  const runId = useSwarm.getState().runId;
+  // React StrictMode double-mounts effects. Reuse an in-flight socket
+  // when the runId hasn't changed — closing here was the source of the
+  // noisy "closed before the connection is established" warning.
+  if (
+    ws &&
+    wsRunId === runId &&
+    (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
+  ) {
+    return;
+  }
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  // T-Item-MultiTenant: filter WS events by current runId so concurrent
-  // runs on the same server don't mix events in the UI.
-  const runId = useSwarm.getState().runId;
-  const wsUrl = runId
-    ? `${proto}://${location.hostname}:${__BACKEND_PORT__}/ws?runId=${encodeURIComponent(runId)}`
-    : `${proto}://${location.hostname}:${__BACKEND_PORT__}/ws`;
-  const socket = new WebSocket(wsUrl);
+  if (ws) {
+    try {
+      ws.close();
+    } catch {
+      // ignore close errors during reconnect
+    }
+    ws = null;
+  }
+  const socket = new WebSocket(wsUrlForRunId(runId));
   ws = socket;
+  wsRunId = runId;
 
   socket.onopen = () => {
     backoffMs = 500;
@@ -90,11 +113,18 @@ function connect(): void {
 // hits Ctrl-R, this restores the board / clone banner / runtime
 // ticker / latency sparkline without waiting for the next event tick
 // (which on a slow run could be minutes away).
+function statusUrlForRunId(runId: string | undefined): string {
+  return runId
+    ? `/api/swarm/runs/${encodeURIComponent(runId)}/status`
+    : "/api/swarm/status";
+}
+
 async function hydrateFromSnapshot(): Promise<void> {
   if (catchUpFetched) return;
   catchUpFetched = true;
   try {
-    const res = await fetch("/api/swarm/status");
+    const runId = useSwarm.getState().runId;
+    const res = await fetch(statusUrlForRunId(runId));
     if (!res.ok) return;
     const snap = (await res.json()) as SwarmStatusSnapshot;
     const s = useSwarm.getState();
@@ -171,12 +201,8 @@ export function useSwarmSocket(enabled = true): void {
   useEffect(() => {
     if (!effectiveEnabled) return;
     void hydrateFromSnapshot();
-    // T-Item-MultiTenant: reconnect socket when runId changes so the
-    // server-side per-runId filter is applied correctly.
-    if (ws) {
-      try { ws.close(); } catch {}
-      ws = null;
-    }
+    // connect() reconnects only when runId changes or the prior socket
+    // is no longer open/connecting — safe under StrictMode double-mount.
     connect();
     // No cleanup — the socket is a module-level singleton and is
     // reused across component remounts. The browser cleans it up

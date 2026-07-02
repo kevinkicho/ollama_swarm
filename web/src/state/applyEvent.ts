@@ -8,10 +8,21 @@
 import type { SwarmEvent } from "../types";
 import type { SwarmStore } from "./store";
 
+/** Events without a runId field (global lifecycle) always apply.
+ *  When the store has a runId, drop events stamped for another run. */
+function shouldApplyEvent(ev: SwarmEvent, s: SwarmStore): boolean {
+  const storeRunId = s.runId;
+  if (!storeRunId) return true;
+  const evRunId = (ev as { runId?: string }).runId;
+  if (evRunId === undefined) return true;
+  return evRunId === storeRunId;
+}
+
 /** Apply ONE event to the supplied store's actions. The store's
  *  actions mutate it via zustand's set() so every subscriber re-
  *  renders. Pure with respect to module-level state. */
 export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
+  if (!shouldApplyEvent(ev, s)) return;
   switch (ev.type) {
     case "transcript_append":
       s.appendEntry(ev.entry);

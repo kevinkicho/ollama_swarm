@@ -27,6 +27,8 @@ interface ActiveRun {
   startedAt: number;
   isRunning: boolean;
   currentAgentIndex?: number;
+  brainInitiated?: boolean;
+  brainProposalId?: string;
 }
 
 interface ActiveRunsResponse {
@@ -104,9 +106,8 @@ export function ActiveRunsPanel() {
     return () => clearInterval(interval);
   }, []);
 
-  // Don't render anything when 0 or 1 runs — keeps the legacy single-run
-  // UI shape intact for users not exercising multi-tenant.
-  if (runs.length <= 1) return null;
+  // Hide when no active runs.
+  if (runs.length < 1) return null;
 
   return (
     <div
@@ -147,6 +148,9 @@ export function ActiveRunsPanel() {
                   title={run.runId}
                 >
                   {shortRunId(run.runId)}
+                  {run.brainInitiated && (
+                    <span style={{ marginLeft: 4, fontSize: 10, background: "#6366f1", color: "white", padding: "0 3px", borderRadius: 2 }}>Brain</span>
+                  )}
                 </td>
                 <td style={{ padding: "2px 8px" }}>{run.runConfig.preset}</td>
                 <td style={{ padding: "2px 8px" }}>

@@ -128,8 +128,9 @@ export function checkAndApplyCaps(ctx: CapContext): boolean {
   )
     ? `cost-cap reached ($${ctx.getActive()?.maxCostUsd?.toFixed(2)} USD)`
     : null;
-  if (tokenBaseline !== undefined && shouldHaltOnQuota()) {
-    const quotaState = tokenTracker.getQuotaState();
+  const runId = ctx.getActive()?.runId;
+  if (tokenBaseline !== undefined && shouldHaltOnQuota(runId)) {
+    const quotaState = tokenTracker.getQuotaState(runId);
     enterPause(ctx, quotaState);
     return false;
   }
@@ -204,7 +205,7 @@ export async function runPauseProbe(ctx: CapContext): Promise<void> {
     ctx.setTotalPausedMs(totalSoFar);
     ctx.setPauseStartedAt(undefined);
     ctx.setPaused(false);
-    const q = tokenTracker.getQuotaState();
+    const q = tokenTracker.getQuotaState(ctx.getActive()?.runId);
     const detail = q ? `${q.statusCode}: ${q.reason.slice(0, 120)}` : "(no detail)";
     const reason = `ollama-quota-exhausted (${detail}) — pause cap exceeded after ${Math.round(totalSoFar / 60_000)} min`;
     ctx.setTerminationReason(reason);
@@ -237,12 +238,14 @@ export async function runPauseProbe(ctx: CapContext): Promise<void> {
     ctx.appendSystem(`[quota-probe] still walled (${msg.slice(0, 120)}). Next probe in ${nextDelayLabel}.`);
   }
   if (!ctx.getPaused() || ctx.isStopping()) return;
-  if (probeOk && !shouldHaltOnQuota()) {
-    tokenTracker.clearQuotaState();
+  const probeRunId = ctx.getActive()?.runId;
+  if (probeOk && !shouldHaltOnQuota(probeRunId)) {
+    if (probeRunId) tokenTracker.clearQuotaState(probeRunId);
+    else tokenTracker.clearQuotaState();
     exitPause(ctx);
     return;
   }
-  if (probeOk && shouldHaltOnQuota()) {
+  if (probeOk && shouldHaltOnQuota(probeRunId)) {
     ctx.appendSystem("[quota-probe] probe succeeded but proxy re-flagged quota mid-flight; staying paused.");
   }
   schedulePauseProbe(ctx);

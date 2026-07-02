@@ -34,6 +34,7 @@ export class OllamaProvider implements SessionProvider {
       options: opts.options,
       logDiag: opts.logDiag,
       agentId: opts.agentId,
+      runId: opts.runId,
       onTokens: (counts) => {
         usagePrompt = counts.promptTokens;
         usageResponse = counts.responseTokens;

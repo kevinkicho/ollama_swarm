@@ -318,6 +318,7 @@ export class MoaRunner extends DiscussionRunnerBase {
         tokenBudget: cfg.tokenBudget,
         round,
         totalRounds: rounds,
+        runId: cfg.runId,
         unit: "round",
       });
       if (guard.halt) {

@@ -19,6 +19,7 @@ test("Orchestrator: ActiveRun interface declared with required fields", () => {
   // we depend on (every per-run lifecycle hook reads from these).
   assert.match(SRC, /interface ActiveRun \{/);
   assert.match(SRC, /runner: SwarmRunner/);
+  assert.match(SRC, /manager: AgentManager/);
   assert.match(SRC, /runId: string/);
   assert.match(SRC, /runConfig: SwarmStatusRunConfig/);
   assert.match(SRC, /startedAt: number/);
@@ -77,6 +78,28 @@ test("Orchestrator: injectUserForRun + stopRun both 404 (return false) on unknow
     SRC,
     /async stopRun\(runId: string\): Promise<boolean> \{[\s\S]*?if \(!run\) return false/,
   );
+});
+
+test("Orchestrator: per-run AgentManager via createManager factory", () => {
+  assert.match(SRC, /createManager: \(runId: string\) => AgentManager/);
+  assert.match(SRC, /const manager = this\.opts\.createManager\(runId\)/);
+});
+
+test("Orchestrator: wrappedEmit binds runId + persister at build time", () => {
+  assert.match(SRC, /interface BuildRunnerContext/);
+  assert.match(
+    SRC,
+    /e\.runId === undefined \? \{ \.\.\.e, runId \} : e/,
+  );
+  assert.doesNotMatch(
+    SRC,
+    /e\.runId === undefined && this\.runId \? \{ \.\.\.e, runId: this\.runId \}/,
+  );
+});
+
+test("Orchestrator: amendments close on stopRun; start finally only clears gate", () => {
+  assert.match(SRC, /async stopRun\([\s\S]*?this\.amendments\.close\(runId\)/);
+  assert.match(SRC, /return runId;\s*\} finally \{\s*this\.startInProgress = false;/);
 });
 
 test("Orchestrator: stopRun cleans up monitors + persister + map entry", () => {

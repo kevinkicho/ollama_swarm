@@ -52,8 +52,25 @@ async function fetchProviders(): Promise<ProvidersState> {
         notify(next);
         return next;
       }
-      const body = (await r.json()) as ProvidersState["providers"];
-      const next: ProvidersState = { providers: body, loading: false, error: null };
+      const body = (await r.json()) as Record<string, unknown>;
+      const pick = (id: keyof NonNullable<ProvidersState["providers"]>): ProviderStatus => {
+        const entry = body[id] as ProviderStatus | undefined;
+        return {
+          available: entry?.available ?? false,
+          hasKey: entry?.hasKey ?? false,
+        };
+      };
+      const next: ProvidersState = {
+        providers: {
+          ollama: pick("ollama"),
+          "ollama-cloud": pick("ollama-cloud"),
+          opencode: pick("opencode"),
+          anthropic: pick("anthropic"),
+          openai: pick("openai"),
+        },
+        loading: false,
+        error: null,
+      };
       notify(next);
       return next;
     } catch (err) {

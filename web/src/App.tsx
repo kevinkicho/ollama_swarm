@@ -1,12 +1,9 @@
 import { useEffect, useState } from "react";
-import { Routes, Route, useParams } from "react-router-dom";
+import { Routes, Route, useParams, useNavigate } from "react-router-dom";
 import { useSwarm } from "./state/store";
 import { useSwarmSocket } from "./hooks/useSwarmSocket";
 import { SetupForm } from "./components/SetupForm";
 import { SwarmView } from "./components/SwarmView";
-import { RunHistoryDropdown } from "./components/RunHistory";
-import { EventLogPanel } from "./components/EventLogPanel";
-import { UsageWidget } from "./components/UsageWidget";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { BubbleGallery } from "./components/BubbleGallery";
 import { EventLogMirrorPanel } from "./components/EventLogMirrorPanel";
@@ -16,9 +13,7 @@ import { ActiveRunsPanel } from "./components/ActiveRunsPanel";
 import { SwarmStoreProvider } from "./state/SwarmStoreProvider";
 import type { RunSummary } from "./types";
 import { PlanningTab } from "./components/PlanningTab";
-import SystemHealthDashboard from "./components/SystemHealthDashboard";
 import { notificationService } from "./services/notificationService";
-import { NotificationPreferences } from "./components/NotificationPreferences";
 import { SystemWrapper } from "./components/SystemWrapper";
 
 // Task #65 (2026-04-24): URL-based review mode. When the user opens a
@@ -85,11 +80,42 @@ export default function App() {
   // scoped subscriptions.
   return (
     <Routes>
-      <Route path="/" element={<AppMain />} />
+      <Route path="/" element={<HomeRoute />} />
       <Route path="/runs/:runId" element={<RunRouteWrapper />} />
       <Route path="/planning" element={<PlanningTab />} />
     </Routes>
   );
+}
+
+/** Redirect legacy `/` to `/runs/:id` when an active run exists. */
+function HomeRoute() {
+  const navigate = useNavigate();
+  const phase = useSwarm((s) => s.phase);
+  const runId = useSwarm((s) => s.runId);
+  useEffect(() => {
+    if (runId && phase !== "idle") {
+      navigate(`/runs/${encodeURIComponent(runId)}`, { replace: true });
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/swarm/active-runs");
+        if (!res.ok || cancelled) return;
+        const body = (await res.json()) as { runs?: Array<{ runId: string }> };
+        const first = body.runs?.[0]?.runId;
+        if (first && !cancelled) {
+          navigate(`/runs/${encodeURIComponent(first)}`, { replace: true });
+        }
+      } catch {
+        // stay on legacy home
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate, runId, phase]);
+  return <AppMain />;
 }
 
 // T-Item-MultiTenant Phase 9 (2026-05-04): per-run route wrapper.
@@ -167,7 +193,7 @@ function AppMain() {
   const showSetup = review === null && phase === "idle";
 
   return (
-    <SystemWrapper>
+    <SystemWrapper parentPath={parentPath}>
       {/* Banners — fixed height, never shrink */}
       <div className="shrink-0">
         {/* Review mode banner */}
@@ -183,7 +209,7 @@ function AppMain() {
         {/* Error banner */}
         {error ? <ErrorBanner error={error} /> : null}
 
-        {/* Active runs panel (when ≥2 runs) */}
+        {/* Active runs panel (when ≥1 run) */}
         {review === null && <ActiveRunsPanel />}
       </div>
 
@@ -330,178 +356,4 @@ function useReviewHydration(review: { runId: string; clonePath: string } | null)
   }, [review?.runId, review?.clonePath]);
 }
 
-// Unit 52b: replaced the bare-phase pill with a composite signal —
-// "executing · 21/30 todos", "stopping · waiting on 3 agents", etc.
-// The full breakdown lives in the tooltip so the badge stays compact.
-function PhasePill() {
-  const phase = useSwarm((s) => s.phase);
-  const round = useSwarm((s) => s.round);
-  const todos = useSwarm((s) => s.todos);
-  const agents = useSwarm((s) => s.agents);
-  const contract = useSwarm((s) => s.contract);
-  const summary = useSwarm((s) => s.summary);
 
-  const color: Record<string, string> = {
-    idle: "bg-ink-600 text-ink-100",
-    cloning: "bg-blue-700 text-blue-100",
-    spawning: "bg-amber-700 text-amber-100",
-    seeding: "bg-amber-700 text-amber-100",
-    planning: "bg-amber-700 text-amber-100",
-    discussing: "bg-emerald-700 text-emerald-100",
-    executing: "bg-emerald-700 text-emerald-100",
-    stopping: "bg-red-700 text-red-100",
-    stopped: "bg-ink-600 text-ink-100",
-    failed: "bg-red-900 text-red-100",
-    completed: "bg-emerald-900 text-emerald-100",
-  };
-
-  // Derived board counts (mirrors BoardCounts on the server side).
-  const todoList = Object.values(todos);
-  const counts = {
-    open: 0,
-    claimed: 0,
-    committed: 0,
-    stale: 0,
-    skipped: 0,
-    total: todoList.length,
-  };
-  for (const t of todoList) {
-    if (t.status === "open") counts.open++;
-    else if (t.status === "claimed") counts.claimed++;
-    else if (t.status === "committed") counts.committed++;
-    else if (t.status === "stale") counts.stale++;
-    else if (t.status === "skipped") counts.skipped++;
-  }
-
-  // Agent vital signs.
-  const agentList = Object.values(agents);
-  const aliveAgents = agentList.filter((a) => a.status !== "stopped" && a.status !== "failed").length;
-  const thinkingAgents = agentList.filter((a) => a.status === "thinking").length;
-
-  // Phase → composite suffix. Empty string keeps the bare phase.
-  let suffix = "";
-  switch (phase) {
-    case "discussing":
-      suffix = ` · round ${round}`;
-      break;
-    case "spawning":
-      if (agentList.length > 0) suffix = ` · ${agentList.length} agents`;
-      break;
-    case "planning":
-      if (contract && contract.criteria.length > 0) {
-        suffix = ` · ${contract.criteria.length} criteria`;
-      }
-      break;
-    case "executing":
-      if (counts.total > 0) {
-        suffix = ` · ${counts.committed}/${counts.total} todos`;
-        if (thinkingAgents > 0) suffix += ` · ${thinkingAgents} thinking`;
-      }
-      break;
-    case "stopping":
-      if (aliveAgents > 0) suffix = ` · waiting on ${aliveAgents} agent${aliveAgents === 1 ? "" : "s"}`;
-      break;
-    case "completed":
-    case "stopped":
-    case "failed":
-      // Prefer the authoritative summary number once it lands.
-      const finalCommits = summary?.commits ?? counts.committed;
-      if (finalCommits > 0) suffix = ` · ${finalCommits} commits`;
-      break;
-  }
-
-  // Tooltip: full board + agent breakdown. Stays out of the badge
-  // text so the pill is glanceable.
-  const tooltip = buildTooltip({ phase, round, counts, agentList, contract });
-
-  return (
-    <span
-      className={`px-2 py-0.5 rounded text-xs font-mono whitespace-nowrap ${color[phase] ?? "bg-ink-600"}`}
-      title={tooltip}
-    >
-      {phase}
-      {suffix}
-    </span>
-  );
-}
-
-interface PillTooltipInput {
-  phase: string;
-  round: number;
-  counts: { open: number; claimed: number; committed: number; stale: number; skipped: number; total: number };
-  agentList: Array<{ id: string; status: string }>;
-  contract: { criteria: Array<{ status: string }> } | undefined;
-}
-function buildTooltip(input: PillTooltipInput): string {
-  const lines: string[] = [`Phase: ${input.phase}`];
-  if (input.round > 0) lines.push(`Round: ${input.round}`);
-  if (input.counts.total > 0) {
-    lines.push(
-      `Todos: ${input.counts.committed} committed · ${input.counts.open} open · ${input.counts.claimed} claimed · ${input.counts.stale} stale · ${input.counts.skipped} skipped (${input.counts.total} total)`,
-    );
-  }
-  if (input.agentList.length > 0) {
-    const byStatus: Record<string, number> = {};
-    for (const a of input.agentList) byStatus[a.status] = (byStatus[a.status] ?? 0) + 1;
-    const summary = Object.entries(byStatus)
-      .map(([s, n]) => `${n} ${s}`)
-      .join(", ");
-    lines.push(`Agents: ${summary}`);
-  }
-  if (input.contract && input.contract.criteria.length > 0) {
-    const met = input.contract.criteria.filter((c) => c.status === "met").length;
-    const wontDo = input.contract.criteria.filter((c) => c.status === "wont-do").length;
-    const unmet = input.contract.criteria.length - met - wontDo;
-    lines.push(`Criteria: ${met} met · ${unmet} unmet · ${wontDo} wont-do`);
-  }
-  return lines.join("\n");
-}
-
-// Unit 52a: wall-clock ticker anchored on the run_started event.
-// Ticks every 1s while the run is live; freezes on terminal phases
-// using the summary's wallClockMs (preferred) or final live delta.
-// Hidden when no run has started in this session yet.
-function RuntimeTicker() {
-  const startedAt = useSwarm((s) => s.runStartedAt);
-  const phase = useSwarm((s) => s.phase);
-  const summary = useSwarm((s) => s.summary);
-  const isTerminal = phase === "completed" || phase === "stopped" || phase === "failed";
-  // Live tick while running. Stop the interval on terminal phases so
-  // we don't burn CPU re-rendering the same frozen value every 1s.
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (isTerminal || startedAt === undefined) return;
-    const id = window.setInterval(() => setTick((n) => n + 1), 1000);
-    return () => window.clearInterval(id);
-  }, [isTerminal, startedAt]);
-  if (startedAt === undefined) return null;
-  // Prefer the summary's authoritative wallClockMs if the run is
-  // terminal AND a summary has landed. Falls back to live delta
-  // otherwise — covers the brief window between phase=completed and
-  // run_summary arriving, and the user-stop case where summary may
-  // not be written until after the kill cascade.
-  const elapsedMs = isTerminal && summary?.wallClockMs !== undefined
-    ? summary.wallClockMs
-    : Math.max(0, Date.now() - startedAt);
-  return (
-    <span
-      className={
-        "text-xs font-mono tabular-nums " +
-        (isTerminal ? "text-ink-400" : "text-ink-300")
-      }
-      title={`Run started ${new Date(startedAt).toLocaleString()}`}
-    >
-      {formatRuntime(elapsedMs)}
-    </span>
-  );
-}
-
-function formatRuntime(ms: number): string {
-  const secs = Math.floor(ms / 1000);
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = secs % 60;
-  if (h > 0) return `${h}h${m.toString().padStart(2, "0")}m${s.toString().padStart(2, "0")}s`;
-  if (m > 0) return `${m}m${s.toString().padStart(2, "0")}s`;
-  return `${s}s`;
-}

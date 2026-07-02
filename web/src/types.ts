@@ -259,10 +259,10 @@ export interface BoardCountsDTO {
 
 export type SwarmEvent =
   | { type: "transcript_append"; entry: TranscriptEntry }
-  | { type: "agent_state"; agent: AgentState }
-  | { type: "swarm_state"; phase: SwarmPhase; round: number }
-  | { type: "agent_streaming"; agentId: string; agentIndex: number; text: string }
-  | { type: "agent_streaming_end"; agentId: string }
+  | { type: "agent_state"; agent: AgentState; runId?: string }
+  | { type: "swarm_state"; phase: SwarmPhase; round: number; runId?: string }
+  | { type: "agent_streaming"; agentId: string; agentIndex: number; text: string; runId?: string }
+  | { type: "agent_streaming_end"; agentId: string; runId?: string }
   | { type: "error"; message: string }
   | { type: "todo_posted"; todo: Todo }
   | { type: "todo_claimed"; todoId: string; claim: Claim }
@@ -405,6 +405,36 @@ export type SwarmEvent =
 // inline PreflightPreview under the Parent folder field AND the
 // pre-Start confirmation modal (StartConfirmModal) that gates Start
 // when an existing clone is detected.
+export interface ProviderKeyWarning {
+  provider: string;
+  model: string;
+  envVar: string;
+  message: string;
+}
+
+export type ProviderProbeStatus =
+  | "unconfigured"
+  | "idle"
+  | "ok"
+  | "degraded"
+  | "rate_limited"
+  | "down";
+
+export interface ProviderHealthSummary {
+  hasKey: boolean;
+  probeStatus: ProviderProbeStatus;
+  lastError?: string;
+  lastProbeAt?: number;
+  lastProbeMs?: number;
+}
+
+export interface ProviderProbeWarning {
+  provider: string;
+  model: string;
+  probeStatus: ProviderProbeStatus;
+  message: string;
+}
+
 export interface PreflightState {
   destPath: string;
   exists: boolean;
@@ -414,6 +444,55 @@ export interface PreflightState {
   priorChangedFiles: number;
   priorUntrackedFiles: number;
   blocker?: "not-git-repo";
+  providerWarnings?: ProviderKeyWarning[];
+  providerHealth?: Record<string, ProviderHealthSummary>;
+  providerProbeWarnings?: ProviderProbeWarning[];
+}
+
+export interface ProviderProbeHealth {
+  probeStatus: ProviderProbeStatus;
+  probeStage: string;
+  lastProbeAt?: number;
+  lastProbeMs?: number;
+  lastError?: string;
+  modelCount?: number;
+  envVars: string[];
+  source: string;
+}
+
+export interface ProviderRuntimeHealth {
+  circuit: string;
+  headroom: number;
+  queueDepth: number;
+  failures: number;
+  gatewayEnabled: boolean;
+}
+
+export interface ProviderStatusEntry {
+  available: boolean;
+  hasKey: boolean;
+  health: ProviderProbeHealth;
+  runtime: ProviderRuntimeHealth;
+}
+
+export interface ProvidersApiResponse {
+  gateway?: {
+    gatewayEnabled: boolean;
+    fairScheduling: boolean;
+    totalQueueDepth: number;
+    providers?: Record<string, ProviderRuntimeHealth & { provider: string }>;
+  };
+  meta?: {
+    probedAt: number;
+    nextProbeAt: number;
+    schedulerRunning: boolean;
+    staleAfterMs: number;
+  };
+  ollama?: ProviderStatusEntry;
+  "ollama-cloud"?: ProviderStatusEntry;
+  anthropic?: ProviderStatusEntry;
+  openai?: ProviderStatusEntry;
+  opencode?: ProviderStatusEntry;
 }
 
 // Phase 2a (2026-04-24): stigmergy pheromone table entry — the shared

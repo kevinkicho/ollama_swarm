@@ -32,6 +32,9 @@ export function BrainActivityPanel({ activities = [], brainHealth }: BrainActivi
 
   const recent = activities.slice(0, expanded ? activities.length : 5);
 
+  // Group patch/upgrade activities for history view
+  const upgradeHistory = activities.filter(a => a.type === 'patch').slice(0, 5);
+
   return (
     <div className="rounded border border-violet-700/50 bg-violet-950/20 p-3 space-y-2">
       {/* Brain Health Header */}
@@ -49,6 +52,15 @@ export function BrainActivityPanel({ activities = [], brainHealth }: BrainActivi
           </button>
         )}
       </div>
+
+      {upgradeHistory.length > 0 && (
+        <div className="text-[9px] mt-1">
+          <div className="text-amber-400 font-medium mb-0.5">Recent Upgrades</div>
+          {upgradeHistory.map((u, i) => (
+            <div key={i} className="text-ink-400 truncate">• {u.title} {u.status === 'success' ? '✓' : ''}</div>
+          ))}
+        </div>
+      )}
 
       {/* Brain Health Summary */}
       {brainHealth && (

@@ -71,6 +71,25 @@ describe("boardBroadcaster — emit forwards events", () => {
       "finding_posted",
     ]);
   });
+
+  it("translates todo_proposed and todo_reverted (auditor-gated commits)", () => {
+    const { bb, events } = setup();
+    bb.bindSnapshotSource(makeSnapshot);
+    bb.emit({
+      type: "todo_proposed",
+      todo: {
+        id: "t9",
+        description: "patch",
+        expectedFiles: ["a.ts"],
+        createdBy: "p",
+        createdAt: 1,
+        status: "pending-commit",
+        replanCount: 0,
+      },
+    });
+    bb.emit({ type: "todo_reverted", todoId: "t9", reason: "bad hunk" });
+    assert.deepEqual(events.map((e) => e.type), ["todo_proposed", "todo_reverted"]);
+  });
 });
 
 describe("boardBroadcaster — debounced snapshot", () => {

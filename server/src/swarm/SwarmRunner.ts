@@ -44,6 +44,8 @@ export interface RunnerOpts {
   // their next prompt's context. Optional so older test rigs /
   // minimal harnesses can skip wiring it; default = no amendments.
   getAmendments?: () => Array<{ ts: number; text: string }>;
+  // P7: optional brain service for post-run analysis + oversight.
+  getBrainService?: () => import("./blackboard/brainOverseer/brainService.js").BrainService | null;
 }
 
 // Every preset implementation fulfills this contract so the top-level

@@ -806,6 +806,39 @@ describe("applyEventToStore", () => {
     });
   });
 
+  describe("runId guard", () => {
+    it("drops events for a different run when store has runId", () => {
+      store.getState().setRunId("run-A");
+      const agent: AgentState = {
+        id: "a1",
+        index: 0,
+        status: "ready",
+      };
+      applyEventToStore({ type: "agent_state", agent, runId: "run-B" }, store.getState());
+      assert.equal(Object.keys(store.getState().agents).length, 0);
+    });
+
+    it("applies events matching the store runId", () => {
+      store.getState().setRunId("run-A");
+      const agent: AgentState = {
+        id: "a1",
+        index: 0,
+        status: "ready",
+      };
+      applyEventToStore({ type: "agent_state", agent, runId: "run-A" }, store.getState());
+      assert.equal(store.getState().agents.a1.status, "ready");
+    });
+
+    it("allows events without runId when store has runId", () => {
+      store.getState().setRunId("run-A");
+      applyEventToStore(
+        { type: "swarm_state", phase: "planning", round: 1 },
+        store.getState(),
+      );
+      assert.equal(store.getState().phase, "planning");
+    });
+  });
+
   describe("unknown event type", () => {
     it("does nothing for unknown event types", () => {
       const before = { ...store.getState() };

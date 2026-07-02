@@ -1,6 +1,9 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "instructions": [".opencode/session-checkpoint.md"],
+  "instructions": [
+    ".opencode/session-checkpoint.md",
+    "## Read these first (in order)\n1. `.opencode/session-checkpoint.md` — what shipped last session, known remaining items, test counts. Always cross-reference against this before diagnosing any problem.\n2. `docs/STATUS.md` — what ships today; current V2 substrate status; recent fixes.\n3. `docs/AGENT-GUIDE.md` — day-1 essentials: common commands, commit conventions, where new code goes.\n4. `docs/active-work.md` — persistent TODO list across sessions.\n\n## Reference docs (reach for when needed)\n- `docs/known-limitations.md` — deliberate trade-offs vs. bugs.\n- `docs/model-behaviors.md` — model-specific quirks and role recommendations.\n- `docs/decisions.md` — ADRs covering non-obvious choices.\n- `docs/changelog.md` — all notable changes.\n- `server/src/swarm/blackboard/ARCHITECTURE.md` — code-near design doc for blackboard directory.\n\n## Git\n- Commit author: `git -c user.name='Kevin' -c user.email='kevinkicho@gmail.com' commit ...`\n- Stage ONLY relevant files. Avoid committing `.env`, `runs/`, `logs/`, or build artifacts.\n\n## Conventions\n- **Test command**: `npm test` from any shell, any cwd.\n- **Don't `npm install` from WSL** — swaps esbuild binaries and breaks Windows dev-server.\n- **NEVER use `setsid sh -c '...' &`** to start servers — freezes opencode. Use `npm run dev` directly.\n- **After ANY code edit, restart BOTH servers**: `kill-port 8243 8244 && npm run dev`. Port 8243 = backend, 8244 = frontend.\n- **Pre-commit**: Run `npm run build` before committing. Tests passing ≠ build passes.\n\n## Memory\nUser-level memory at `~/.claude/projects/-mnt-c-Users-kevin-Desktop-ollama-swarm/memory/` is auto-loaded.\n\n## Crash recovery\nSessions crash frequently. `.opencode/session-checkpoint.md` preserves in-progress state automatically via SessionCheckpointPlugin."
+  ],
   "compaction": { "auto": true, "tail_turns": 10, "reserved": 8000 },
   "permission": {
     "edit": "allow",

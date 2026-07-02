@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
 import type { AgentManager } from "./AgentManager.js";
 import type { RepoService } from "./RepoService.js";
-import type { SwarmEvent, SwarmPhase, SwarmStatus, SwarmStatusRunConfig } from "../types.js";
+import type { AgentState, SwarmEvent, SwarmPhase, SwarmStatus, SwarmStatusRunConfig } from "../types.js";
 import type { PresetId, RunConfig, RunnerOpts, SwarmRunner } from "../swarm/SwarmRunner.js";
 import { RoundRobinRunner } from "../swarm/RoundRobinRunner.js";
 import { BaselineRunner } from "../swarm/BaselineRunner.js";
@@ -19,15 +19,29 @@ import { RunStatePersister, findRecoverableRuns, isRecoverablePhase, loadSnapsho
 import { tryAcquireLock, releaseLock } from "../swarm/cloneLock.js";
 import { config } from "../config.js";
 
-export interface OrchestratorOpts extends RunnerOpts {
-  manager: AgentManager;
+export interface OrchestratorOpts {
+  /** Mint one AgentManager per run so concurrent runs don't share
+   *  agent ids, streaming buffers, or killAll() scope. */
+  createManager: (runId: string) => AgentManager;
   repos: RepoService;
   emit: (e: SwarmEvent) => void;
+  logDiag?: (record: unknown) => void;
+  ollamaBaseUrl?: string;
   /** T-Item-MultiTenant Phase 4 (2026-05-04): max concurrent runs.
    *  Default 4 (when unset). When the orchestrator's run map size
    *  hits this number, start() throws "cap reached". The route layer
    *  reads config.SWARM_MAX_CONCURRENT_RUNS to set this. */
   maxConcurrentRuns?: number;
+}
+
+/** Per-run context threaded into buildRunner so wrappedEmit and the
+ *  runner's AgentManager stay bound to one runId under concurrency. */
+interface BuildRunnerContext {
+  runId: string;
+  startedAt: number;
+  persister: RunStatePersister;
+  manager: AgentManager;
+  getRunner: () => SwarmRunner;
 }
 
 // Re-exported so callers (routes/swarm.ts, index.ts) don't have to reach into
@@ -161,6 +175,8 @@ export function scanForRunParents(cwd: string): string[] {
 // empty). Phase 4 relaxes the cap to N concurrent runs.
 interface ActiveRun {
   runner: SwarmRunner;
+  /** Scoped agent pool — isolated from other concurrent runs. */
+  manager: AgentManager;
   runId: string;
   runConfig: SwarmStatusRunConfig;
   startedAt: number;
@@ -271,9 +287,12 @@ export class Orchestrator {
 
     // P6: Initialize brain service — persists across runs.
     import("../swarm/blackboard/brainOverseer/brainService.js").then(({ createBrainService }) => {
+      const maxConcurrentRuns = this.opts.maxConcurrentRuns ?? 4;
       this.brainService = createBrainService({
-        maxConcurrentRuns: this.opts.maxConcurrentRuns ?? 4,
-        getOrchestrator: () => this as any,
+        maxConcurrentRuns,
+        getOrchestrator: () => ({ start: (cfg) => this.start(cfg as RunConfig) }),
+        getActiveRunCount: () => this.runs.size,
+        canStartRun: () => !this.startInProgress && this.runs.size < maxConcurrentRuns,
       });
     });
   }
@@ -293,9 +312,18 @@ export class Orchestrator {
         if (run.holdsCloneLock) {
           try { releaseLock({ clonePath: run.cfg.localPath, runId: run.runId }); } catch {}
         }
+        this.amendments.close(id);
         this.runs.delete(id);
       }
     }
+  }
+
+  private aggregateAgentStates(): AgentState[] {
+    const states: AgentState[] = [];
+    for (const run of this.runs.values()) {
+      states.push(...run.manager.toStates());
+    }
+    return states;
   }
 
   status(): SwarmStatus {
@@ -318,7 +346,7 @@ export class Orchestrator {
     return {
       phase: "idle",
       round: 0,
-      agents: this.opts.manager.toStates(),
+      agents: this.aggregateAgentStates(),
       transcript: [],
     };
   }
@@ -372,7 +400,7 @@ export class Orchestrator {
    *  tabs mirror the addition + the runner's next prompt picks it
    *  up via getAmendments(). */
   addAmendment(runId: string, text: string): Amendment | null {
-    if (!this.runId || this.runId !== runId) return null;
+    if (!this.runs.has(runId)) return null;
     const stored = this.amendments.add(runId, text);
     if (stored) {
       this.opts.emit({
@@ -408,6 +436,8 @@ export class Orchestrator {
     startedAt: number;
     isRunning: boolean;
     createdBy: string;
+    brainInitiated?: boolean;
+    brainProposalId?: string;
   }> {
     const out: Array<{
       runId: string;
@@ -415,6 +445,8 @@ export class Orchestrator {
       startedAt: number;
       isRunning: boolean;
       createdBy: string;
+      brainInitiated?: boolean;
+      brainProposalId?: string;
     }> = [];
     for (const r of this.runs.values()) {
       if (!r.runner.isRunning()) continue; // only truly active runs
@@ -424,7 +456,9 @@ export class Orchestrator {
         startedAt: r.startedAt,
         isRunning: r.runner.isRunning(),
         createdBy: r.cfg.createdBy ?? "default",
-      });
+        brainInitiated: !!r.cfg.brainInitiated,
+        brainProposalId: r.cfg.brainProposalId,
+      } as any);
     }
     return out;
   }
@@ -521,6 +555,7 @@ export class Orchestrator {
           console.warn('[Orchestrator] stopRun-release-lock-failed:', err instanceof Error ? err.message : String(err));
         }
       }
+      this.amendments.close(runId);
       this.runs.delete(runId);
     }
     return true;
@@ -605,11 +640,7 @@ export class Orchestrator {
     // Forward to start(); it mints a new runId + handles the cap +
     // wires monitors. The persister for the NEW run will overwrite
     // the snapshot file naturally as events fire.
-    await this.start(cfg);
-    const newRunId = this.runId;
-    if (!newRunId) {
-      throw new Error("recover: start() did not yield a runId");
-    }
+    const newRunId = await this.start(cfg);
     return {
       newRunId,
       priorTranscript: snap.transcript,
@@ -643,12 +674,15 @@ export class Orchestrator {
     }
   }
 
-  async start(cfg: RunConfig): Promise<void> {
+  async start(cfg: RunConfig): Promise<string> {
     // Gate: prevent concurrent start() calls from bypassing the cap.
     if (this.startInProgress) {
       throw new Error("A run is already being started. Wait for it to complete.");
     }
     this.startInProgress = true;
+
+    let amendmentsOpened = false;
+    let runId: string | undefined;
 
     try {
       // T-Item-MultiTenant Phase 4 (2026-05-04): cap on concurrent runs.
@@ -681,12 +715,13 @@ export class Orchestrator {
     // T-Item-MultiTenant Phase 3: mint runId FIRST so we can build the
     // ActiveRun atomically. 2026-05-02 (persistence lever #2): persister
     // construction moved into ActiveRun build below.
-    const runId = randomUUID();
+    runId = randomUUID();
     // Task #36: forward the minted runId into cfg so the runner can
     // include it in buildSummary → summary.json. Otherwise the runId
     // only lives in memory + the WS run_started event, never making
     // it to disk where the history dropdown reads digests from.
     cfg.runId = runId;
+    this.brainService?.registerClonePath(cfg.localPath);
     // R8 wiring (2026-05-04): acquire the cross-process clone lock.
     // If another server process (or another run on this server) is
     // already operating on this clone path, fail fast — concurrent
@@ -702,10 +737,18 @@ export class Orchestrator {
     }
     const holdsCloneLock = true;
     const persister = new RunStatePersister(cfg.localPath);
-    // buildRunner's wrappedEmit closure reads this.runStatePersister
-    // (= activeRun.persister via the getter) lazily, so it'll see the
-    // right persister once we insert the ActiveRun below.
-    const runner = await this.buildRunner(cfg.preset, cfg);
+    const startedAt = Date.now();
+    const manager = this.opts.createManager(runId);
+    const runHolder: { runner: SwarmRunner | null } = { runner: null };
+    const buildCtx: BuildRunnerContext = {
+      runId,
+      startedAt,
+      persister,
+      manager,
+      getRunner: () => runHolder.runner!,
+    };
+    const runner = await this.buildRunner(cfg.preset, cfg, buildCtx);
+    runHolder.runner = runner;
     // Task #125: tag every Ollama call made during this run with its
     // preset, so the usage dashboard can break down "blackboard ate
     // 60% of today's tokens" etc. Cleared in stop().
@@ -714,7 +757,7 @@ export class Orchestrator {
     // run gets to probe the wall fresh. If the rate window has
     // reset / the user upgraded their plan / etc., the new run finds
     // out by trying. The flag re-trips immediately if not.
-    tokenTracker.clearQuotaState();
+    tokenTracker.clearQuotaState(runId);
     // Unit 52a + 52c + 52d: anchor for the UI's runtime ticker,
     // identity strip, and identifiers row. Single source of truth
     // across all 7 runners. Fires BEFORE runner.start so a slow clone
@@ -740,7 +783,6 @@ export class Orchestrator {
         rolesForRunStarted.push(roleForAgent(i, catalog).name);
       }
     }
-    const startedAt = Date.now();
     // Pattern 9: build the runConfig snapshot once and reuse — same fields
     // go to the WS run_started event AND the REST status() snapshot.
     // Single source of truth so the two paths can't drift.
@@ -772,6 +814,7 @@ export class Orchestrator {
     // single-arg APIs until the run terminates.
     const activeRun: ActiveRun = {
       runner,
+      manager,
       runId,
       runConfig,
       startedAt,
@@ -805,6 +848,7 @@ export class Orchestrator {
     // #299: open the amendments buffer for this run. /api/swarm/amend
     // appends here; runners read via getAmendments(runId) on each turn.
     this.amendments.open(runId);
+    amendmentsOpened = true;
     // #295: spin up the conformance monitor when the run carries a
     // user directive. Polls Ollama every 90s with a "rate 0–100 how
     // on-topic is the recent transcript?" prompt. Skipped entirely
@@ -858,7 +902,7 @@ export class Orchestrator {
       // in a background task. Recursion guard: chainTo cleared on
       // the chained run.
       if (cfg.chainTo) {
-        void this.scheduleForwardChain(cfg, runId, cfg.chainTo);
+        void this.scheduleForwardChain(cfg, runId, runner, cfg.chainTo);
       }
     } catch (err) {
       // Runner's start threw partway through (e.g. clone failed, spawn timed out).
@@ -882,24 +926,13 @@ export class Orchestrator {
           console.warn('[Orchestrator] start-error-release-lock-failed:', err instanceof Error ? err.message : String(err));
         }
       }
+      this.amendments.close(runId);
       this.runs.delete(runId);
       throw err;
-    } finally {
-      // #295 fix: do NOT stop the conformance monitor here. Discussion
-      // runners' `runner.start()` returns before the actual run ends
-      // (fire-and-forget loop), so this finally{} fires too early.
-      // The monitor's own isActive() check (bound to runner.isRunning)
-      // self-stops it when the run truly ends. orchestrator.stop()
-      // also calls conformanceMonitor.stop() as a backstop.
-      // #299: close the amendments buffer for this run. Safe here
-      // because amendments are only consumed at planner-tier prompts;
-      // by the time we get here the START phase is done.
-      this.amendments.close(runId);
-      this.startInProgress = false;
     }
-    } catch (err) {
+    return runId;
+    } finally {
       this.startInProgress = false;
-      throw err;
     }
   }
 
@@ -944,6 +977,7 @@ export class Orchestrator {
           console.warn('[Orchestrator] stop-release-lock-failed:', err instanceof Error ? err.message : String(err));
         }
       }
+      this.amendments.close(active.runId);
       // Drop the ActiveRun from the map. The next start gets a fresh
       // slate rather than inheriting the previous runner's terminal phase.
       this.runs.delete(active.runId);
@@ -959,6 +993,7 @@ export class Orchestrator {
   private async scheduleForwardChain(
     originalCfg: RunConfig,
     originalRunId: string,
+    originalRunner: SwarmRunner,
     chainPreset: "blackboard" | "baseline",
   ): Promise<void> {
     // Poll until the original runner truly stops (terminal phase).
@@ -966,18 +1001,15 @@ export class Orchestrator {
     // forever; the caller (orchestrator.start) returned long ago.
     const POLL_MS = 5_000;
     const MAX_WAIT_MS = 4 * 60 * 60_000;
-    const startedAt = Date.now();
+    const waitStartedAt = Date.now();
     while (
-      this.runner &&
-      this.runId === originalRunId &&
-      this.runner.isRunning() &&
-      Date.now() - startedAt < MAX_WAIT_MS
+      originalRunner.isRunning() &&
+      Date.now() - waitStartedAt < MAX_WAIT_MS
     ) {
       await new Promise((r) => setTimeout(r, POLL_MS));
     }
-    // If the user kicked another run while we were waiting, our
-    // originalRunId no longer matches — abandon the chain silently.
-    if (this.runId !== originalRunId) return;
+    // Abandon if the run was stopped or cleaned up while we waited.
+    if (!this.runs.has(originalRunId)) return;
     // Read the top action from the next-actions JSON sibling. We
     // dynamically import the helper to keep the orchestrator's
     // import surface lean.
@@ -1009,7 +1041,7 @@ export class Orchestrator {
     // Stop the prior run cleanly so we get a fresh slate, then fire
     // the chained run. Recursion guard: chainTo cleared.
     try {
-      await this.stop();
+      await this.stopRun(originalRunId);
     } catch (err) {
       console.warn('[Orchestrator] forward-chain-stop-failed:', err instanceof Error ? err.message : String(err));
     }
@@ -1034,47 +1066,36 @@ export class Orchestrator {
     }
   }
 
-  private async buildRunner(preset: PresetId, cfg: RunConfig): Promise<SwarmRunner> {
+  private async buildRunner(
+    preset: PresetId,
+    cfg: RunConfig,
+    ctx: BuildRunnerContext,
+  ): Promise<SwarmRunner> {
+    const { runId, startedAt, persister, manager, getRunner } = ctx;
     // #299: thread getAmendments into runner opts so each runner can
-    // read live HITL nudges via this.opts.getAmendments(). The
-    // amendments buffer lives on the orchestrator; we bind it here
-    // (pre-bound to the active runId) so the runner doesn't need a
-    // direct reference to AmendmentsBuffer or the runId. Returns []
-    // safely when called before runId is minted (start-time race).
+    // read live HITL nudges. Bound to this run's id — safe under
+    // concurrent runs (no activeRun getter).
     // 2026-05-02 (persistence lever #2): wrap opts.emit so every
-    // SwarmEvent ALSO triggers a debounced snapshot. The persister
-    // collapses chunks within DEBOUNCE_MS into one fsync.
+    // SwarmEvent ALSO triggers a debounced snapshot.
     const baseEmit = this.opts.emit;
     const wrappedEmit = (e: SwarmEvent) => {
-      // T-Item-MultiTenant Phase 1 (2026-05-04): stamp the active
-      // runId onto every SwarmEvent before broadcast so the per-run
-      // WS subscriber filter (Phase 2) can route correctly. Variants
-      // that already carry a typed runId leave it untouched (it's
-      // already correct from the runner). Other variants pick up the
-      // orchestrator-level runId.
       const stamped: SwarmEvent =
-        e.runId === undefined && this.runId ? { ...e, runId: this.runId } : e;
+        e.runId === undefined ? { ...e, runId } : e;
       baseEmit(stamped);
-      // Best-effort snapshot. Persister never throws; a write failure
-      // is logged once + silenced for the run.
-      const persister = this.runStatePersister;
-      if (!persister || !this.runId || !this.runStartedAt) return;
-      const status = this.runner?.status();
-      // T-Item-Recover (2026-05-04): include cfg in snapshots so the
-      // recover endpoint can reconstruct a runnable config without
-      // asking the user to re-fill the SetupForm. The `extras`
-      // catch-all carries non-core RunConfig fields verbatim so
-      // preset-specific knobs survive the round-trip.
-      const { preset, repoUrl, localPath, agentCount, rounds, model, ...extras } = cfg;
+      this.brainService?.trackRunHealth(stamped);
+      const runner = getRunner();
+      if (!runner) return;
+      const status = runner.status();
+      const { preset: p, repoUrl, localPath, agentCount, rounds, model, ...extras } = cfg;
       persister.schedule({
-        runId: this.runId,
+        runId,
         preset: cfg.preset,
         phase: status?.phase ?? "unknown",
-        startedAt: this.runStartedAt,
+        startedAt,
         transcript: status?.transcript ?? [],
-        amendments: this.amendments.list(this.runId),
+        amendments: this.amendments.list(runId),
         runConfig: {
-          preset,
+          preset: p,
           repoUrl,
           localPath,
           agentCount,
@@ -1085,11 +1106,14 @@ export class Orchestrator {
         contract: status?.contract,
       });
     };
-    const opts = {
-      ...this.opts,
+    const opts: RunnerOpts = {
+      manager,
+      repos: this.opts.repos,
       emit: wrappedEmit,
-      getAmendments: () =>
-        this.runId ? this.amendments.list(this.runId) : [],
+      logDiag: this.opts.logDiag,
+      ollamaBaseUrl: this.opts.ollamaBaseUrl,
+      getAmendments: () => this.amendments.list(runId),
+      getBrainService: () => this.brainService,
     };
         const { heuristicPickPreset, createRunner } = await import("../swarm/presetRouter.js");
     switch (preset) {
@@ -1107,7 +1131,7 @@ export class Orchestrator {
       }
       // Special case: pipeline chains sub-runs
       case "pipeline": {
-        const factory = async (p: PresetId) => this.buildRunner(p, cfg);
+        const factory = async (p: PresetId) => this.buildRunner(p, cfg, ctx);
         return new PipelineRunner(opts, factory);
       }
       // Standard presets: delegate to factory

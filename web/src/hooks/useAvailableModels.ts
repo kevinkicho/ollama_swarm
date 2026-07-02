@@ -64,7 +64,7 @@ async function fetchModels(provider: Provider): Promise<ModelsState> {
       }
       const body = (await r.json()) as ModelsResponse;
       const next: ModelsState = {
-        models: body.models ?? [],
+        models: [...new Set(body.models ?? [])],
         loading: false,
         error: body.error ?? null,
         source: body.source ?? null,

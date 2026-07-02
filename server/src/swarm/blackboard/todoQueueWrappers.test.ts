@@ -181,6 +181,26 @@ describe("todoQueueWrappers — completeTodoQ", () => {
 });
 
 describe("todoQueueWrappers — failTodoQ", () => {
+  it("is a no-op on pending-commit — no stale event or replan enqueue", () => {
+    const { wrappers, todoQueue, rec } = setup();
+    const id = wrappers.postTodoQ({
+      description: "x",
+      expectedFiles: ["a.ts"],
+      createdBy: "p",
+      createdAt: 1,
+    });
+    wrappers.dequeueTodoQ("w");
+    wrappers.proposeCommitQ(id, [{ op: "replace" }], ["a.ts"]);
+    rec.emits.length = 0;
+    rec.stateWrites = 0;
+    rec.failed.length = 0;
+    wrappers.failTodoQ(id, "proposeCommit failed: broadcast crash", "hunk-fail");
+    assert.equal(todoQueue.get(id)?.status, "pending-commit");
+    assert.equal(rec.emits.length, 0);
+    assert.equal(rec.stateWrites, 0);
+    assert.deepEqual(rec.failed, []);
+  });
+
   it("transitions to failed, emits todo_stale with retries, fires onFailed", () => {
     const { wrappers, todoQueue, rec } = setup();
     const id = wrappers.postTodoQ({

@@ -102,68 +102,31 @@ const Schema = z.object({
   OPENCODE_API_KEY: z.string().optional(),
   // OpenCode Zen: pay-as-you-go access to curated models (GPT, Claude, open).
   // Falls back to OPENCODE_GO_API_KEY if this is unset (same key works for both).
-  // E3 Phase 5 cleanup pt 4 (2026-04-29): USE_SESSION_PROVIDER +
-  // USE_SESSION_NO_OPENCODE env flags REMOVED. The provider path is
-  // now the only path; the opencode subprocess fallback no longer
-  // exists in code. No escape hatch — if you hit a regression you
-  // file a bug, you don't toggle a flag.
-  // Unit 17: send a tiny "reply with: ok" prompt to each agent right
-  // after spawn so its first REAL prompt isn't a cold-start. Default
-  // on; set to "false"/"0"/"no" to disable (e.g. for unit-test rigs
-  // where the SDK is mocked).
+  // Historical: OPENCODE_* keys are still validated at load time for
+  // backward compat with old test/dev setups (see run-tests.mjs shim).
+  // The actual opencode subprocess path was removed in E3 (2026-04-29).
+  // AGENT_WARMUP_ENABLED: send a tiny warmup prompt after spawn (default on).
   AGENT_WARMUP_ENABLED: z
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("true")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
-  // Unit 26: Playwright MCP integration. When enabled, every
-  // synthesized opencode.json gains an `mcp.playwright` entry that
-  // spawns @playwright/mcp as a local subprocess, plus a new
-  // `swarm-ui` agent profile that can call browser_navigate /
-  // browser_snapshot / browser_click / etc. Default OFF so users
-  // who don't use UI inspection don't need @playwright/mcp on
-  // their box; opting in requires `npm install -g @playwright/mcp
-  // && npx playwright install` first.
+  // MCP_PLAYWRIGHT_ENABLED: opt-in for Playwright MCP in generated
+  // configs (historical integration point). Default off.
   MCP_PLAYWRIGHT_ENABLED: z
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
-  // Unit 30: council-style initial contract for the blackboard preset.
-  // When enabled, turn 0 runs a two-phase contract pass:
-  //   (a) DRAFT — all N agents independently produce a first-pass
-  //       contract from the same seed, in parallel (peer-hidden)
-  //   (b) MERGE — the planner sees every draft and produces a single
-  //       authoritative contract (union distinct outcomes, dedupe
-  //       synonyms, prefer grounded paths)
-  // Buys cognitive diversity on contract framing without changing the
-  // rest of the run (todos + audit still flow through agent-1 as
-  // planner, preserving session continuity). Default OFF so existing
-  // runs are unaffected; turn it on to A/B whether N-draft contracts
-  // catch anything agent-1-alone missed.
+  // Council-style initial contract for blackboard (optional diversity on first contract).
   COUNCIL_CONTRACT_ENABLED: z
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
-  // Unit 34: ambition ratchet. When enabled, a blackboard run that would
-  // otherwise terminate on "all contract criteria satisfied" instead
-  // promotes a TIER N+1 contract — the planner sees the prior tier's
-  // state + verdicts and produces a more ambitious next-tier contract.
-  // The run climbs tiers until a hard cap trips (wall-clock / commits /
-  // todos), max tiers reached, or tier-up prompts fail repeatedly.
-  // Task #126 (2026-04-25): default flipped from "false" to "true".
-  // The ratchet is what makes blackboard climb to harder problems
-  // after solving the initial contract — without it, blackboard runs
-  // top out at the first contract and don't push toward more
-  // ambitious goals. AMBITION_RATCHET_MAX_TIERS=5 keeps it bounded.
-  // Per-run `ambitionTiers` knob on RunConfig still wins.
+  // Ambition ratchet: allow blackboard to promote to harder contracts after satisfying the current one.
   AMBITION_RATCHET_ENABLED: z
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("true")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
-  // Unit 34: maximum number of tiers a single run can climb (belt-and-
-  // suspenders guard against an infinite-climb bug). Per-run
-  // `ambitionTiers` cap on RunConfig wins over this when set. 5 is a
-  // pragmatic default — the wall-clock/commits caps are the real stop,
-  // this is just a safety valve.
+  // Max tiers for ambition ratchet (safety cap). Per-run overrides win.
   AMBITION_RATCHET_MAX_TIERS: z
     .string()
     .default("5")
@@ -171,25 +134,12 @@ const Schema = z.object({
       const n = Number.parseInt(v, 10);
       return Number.isInteger(n) && n >= 1 && n <= 20 ? n : 5;
     }),
-  // Unit 35: critic agent at commit time. When enabled, a peer agent
-  // reviews every worker diff before it lands — reject verdict marks
-  // the todo stale so the replanner finds a different angle. Catches
-  // the specific busywork patterns the auditor's string-match verdict
-  // is too coarse to catch (duplicate-content test pyramids, rename-
-  // only reorgs, stub implementations labelled "done"). Default OFF
-  // because it adds one prompt per commit; flip on for long autonomous
-  // runs where the cost is worth the quality floor.
+  // Critic at commit: peer review of worker diffs before commit (rejects mark stale).
   CRITIC_ENABLED: z
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
-  // T-Item-MultiTenant Phase 4 (2026-05-04): max concurrent runs the
-  // orchestrator will accept. Default 4; set to 1 to preserve the
-  // pre-multi-tenant strict-single-run behavior. Capped at 16 as a
-  // safety valve against accidentally-spawned-loop-of-runs.
-  // Resource cost: each blackboard run pins ~4-5 Ollama agents; 4
-  // concurrent runs ≈ 16-20 agents × per-model GPU/RAM. The user
-  // is on the hook for sizing their host accordingly.
+  // Max concurrent runs (default 4, hard cap 16 for safety).
   SWARM_MAX_CONCURRENT_RUNS: z
     .string()
     .default("4")
@@ -197,12 +147,7 @@ const Schema = z.object({
       const n = Number.parseInt(v, 10);
       return Number.isInteger(n) && n >= 1 && n <= 16 ? n : 4;
     }),
-  // T-Item-Caps (2026-05-04): runtime cap overrides for the three
-  // hard caps in blackboard/caps.ts. Defaults are the baked-in
-  // values (8h wall, 200 commits, 300 todos). Set to override
-  // without rebuilding. Per-run overrides via cfg.wallClockCapMs
-  // still win over the env-derived default.
-  // Wall-clock cap: minutes (env) → ms internally.
+  // Runtime cap overrides (wall-clock in minutes, commits, todos). Per-run cfg wins.
   SWARM_WALL_CLOCK_CAP_MIN: z
     .string()
     .default("480")
@@ -229,57 +174,32 @@ const Schema = z.object({
       const n = Number.parseInt(v, 10);
       return Number.isInteger(n) && n >= 1 && n <= 10_000 ? n : 300;
     }),
-  // R6 wiring (2026-05-04): drain-by-default stop policy. When ON,
-  // the first /api/swarm/stop click drains (finish current turn);
-  // a second click within 5s hard-kills. Default OFF preserves the
-  // legacy single-click hard-kill behavior.
+  // Drain on first stop (finish turn); second within 5s kills. Default: immediate kill.
   SWARM_DRAIN_ON_STOP: z
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
-  // R5 wiring (2026-05-04): auto-resume on server startup. When ON,
-  // the server scans known parent dirs at boot and auto-resumes
-  // recoverable snapshots that meet the freshness/size policy.
-  // Default OFF — auto-restoring runs the user wanted abandoned is
-  // surprising; user opt-in only.
+  // Auto-resume recoverable runs on startup (opt-in).
   SWARM_AUTO_RESUME: z
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
-  // R13 wiring (2026-05-04): memory-pressure backpressure. When ON,
-  // BlackboardRunner samples heap on each cap-tick and flips a
-  // "memory-paused" flag when usage crosses 90% of heapTotal.
-  // Default OFF — the cap watchdog already handles wall-clock; this
-  // adds heap as an extra signal for very long runs.
+  // Memory pressure backpressure (pause at 90% heap).
   SWARM_MEMORY_BACKPRESSURE: z
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
-  // R9 wiring (2026-05-04): semantic loop detector. When ON, the
-  // runner evaluates Jaccard similarity over the last K agent turns
-  // after each turn; on detected loop, injects a "you're going in
-  // circles" amendment. Default OFF — false positives on tight
-  // technical discussion (where vocabulary repeats by design) are
-  // still a real risk; opt in once you've calibrated the threshold.
+  // Semantic loop detection (Jaccard on recent turns).
   SWARM_LOOP_DETECTION: z
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
-  // R7 wiring (2026-05-04): pause-on-WS-disconnect. When ON, the
-  // run pauses new dispatch when its last WS subscriber drops; on
-  // first reconnect, resumes (unless quota / user-paused). Default
-  // OFF — could break headless / cron callers that legitimately
-  // never connect a browser.
+  // Pause runs when last WS subscriber disconnects.
   SWARM_PAUSE_ON_DISCONNECT: z
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
-  // R1 wiring (2026-05-04): provider failover chain. Comma-separated
-  // model strings (provider-prefixed, e.g.
-  // "anthropic/claude-haiku-4-5,glm-5.1:cloud"). When the active
-  // model hits a quota / auth wall, the runner swaps to the next
-  // model in this list. Default empty (R1 disabled). Per-run
-  // cfg.providerFailover overrides this when set.
+  // Provider failover chain (comma-separated models).
   SWARM_PROVIDER_FAILOVER: z
     .string()
     .default("")
@@ -289,17 +209,12 @@ const Schema = z.object({
         .map((s) => s.trim())
         .filter((s) => s.length > 0),
     ),
-  // R3 wiring (2026-05-04): when the cloud failover chain is
-  // exhausted, fall back to a local Ollama model. Default OFF.
-  // Caller's job to ensure the local Ollama install has at least one
-  // model pulled (we discover via /api/tags at run-start).
+  // Fall back to local Ollama when cloud chain exhausted.
   SWARM_DEGRADATION_FALLBACK: z
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
-  // R3 wiring (2026-05-04): preferred local model order when
-  // degrading. Comma-separated. Empty → pickLocalFallback chooses by
-  // size (largest first). When set, first match wins.
+  // Preferred local models for degradation fallback (comma sep).
   SWARM_DEGRADATION_PREFERRED: z
     .string()
     .default("")
@@ -309,13 +224,7 @@ const Schema = z.object({
         .map((s) => s.trim())
         .filter((s) => s.length > 0),
     ),
-  // R10 wiring (2026-05-04): proactive model-health swap. When ON,
-  // before each prompt the runner evaluates the active model's
-  // recent success rate (sliding window of 10, threshold 50% over
-  // ≥5 samples). Degraded models are swapped pre-flight so we don't
-  // burn a turn re-confirming what the tracker already knows.
-  // Default OFF — only fires after enough samples have accumulated
-  // anyway; opt-in keeps the legacy "try-anyway" semantics by default.
+  // Proactive swap to healthier model when degraded.
   SWARM_MODEL_HEALTH_SWAP: z
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
@@ -354,6 +263,22 @@ const Schema = z.object({
     .enum(["true", "false", "1", "0", "yes", "no", "off"])
     .default("true")
     .transform((v) => v !== "false" && v !== "0" && v !== "no" && v !== "off"),
+  // PR-7: route LLM calls through ProviderGateway (rate limits + circuits).
+  PROVIDER_GATEWAY: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // PR-9: weighted-fair scheduling across concurrent runs (requires gateway).
+  SWARM_FAIR_SCHEDULING: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("true")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
+  PROVIDER_RATE_LIMIT_OLLAMA: z.coerce.number().positive().default(10),
+  PROVIDER_RATE_LIMIT_ANTHROPIC: z.coerce.number().positive().default(5),
+  PROVIDER_RATE_LIMIT_OPENAI: z.coerce.number().positive().default(5),
+  PROVIDER_RATE_LIMIT_OPENCODE: z.coerce.number().positive().default(5),
+  PROVIDER_CIRCUIT_BREAKER_THRESHOLD: z.coerce.number().int().min(1).default(3),
+  PROVIDER_CIRCUIT_BREAKER_COOLDOWN_MS: z.coerce.number().int().min(1000).default(60_000),
 });
 
 const parsed = Schema.parse(process.env);

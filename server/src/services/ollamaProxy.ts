@@ -1,27 +1,16 @@
-// Task #133: thin HTTP proxy in front of Ollama. Lets us capture
-// `prompt_eval_count` + `eval_count` from every Ollama response (which
-// the OpenCode SDK strips before returning to runners). Aggregates
-// per-window totals for the usage dashboard.
+// Thin HTTP proxy in front of Ollama (especially Ollama Cloud) for:
+// - Token usage capture (prompt_eval_count/eval_count or usage.*)
+// - Per-run attribution (critical for concurrent + Brain)
+// - Quota detection (429 + plan limits)
 //
-// Why a proxy instead of intercepting OpenCode's calls:
-//   - OpenCode's SDK sits on top of an HTTP layer we don't control.
-//   - Stripping happens before any callback we have.
-//   - The cleanest non-fork solution is to put ourselves between
-//     OpenCode and Ollama and snoop the responses.
+// Hardened for stability:
+// - Incremental streaming parsing (no full-body buffer for usage)
+// - Bounded in-memory records (ring-buffer style)
+// - runId propagated via X-Swarm-Run-Id header for clean isolation
+// - Best-effort, never breaks the actual request/response
 //
-// Streaming-aware: Ollama supports SSE for /v1/chat/completions and
-// JSONL for /api/generate stream=true. The proxy tee's the response
-// body to the client AND captures it for parsing. After end, we look
-// for usage in:
-//   - Top-level keys: prompt_eval_count + eval_count (Ollama-native)
-//   - usage.{prompt_tokens, completion_tokens} (OpenAI-compat)
-//   - In streamed payloads: typically only the LAST chunk includes
-//     usage (when stream_options.include_usage=true) — we scan all
-//     SSE / JSONL frames.
-//
-// Bounded memory: we keep the LATEST CACHE_LIMIT records. Older ones
-// drop. Window queries iterate in-memory; for a 7-day window with
-// ~1 call/sec that's 600k records ≈ 60MB, plenty of headroom.
+// Set OLLAMA_PROXY_PORT=0 to disable (only for pure local Ollama where you
+// don't need central tracking/quota).
 
 import { createServer, request as httpRequest } from "node:http";
 import { URL } from "node:url";
@@ -37,10 +26,7 @@ export interface UsageRecord {
   model?: string;
   /** path the proxy received (e.g. "/v1/chat/completions" or "/api/generate"). */
   path?: string;
-  /** Active preset at the time of the call. The app enforces single-run-
-   *  at-a-time, so every call during a run is attributable to that run's
-   *  preset; orchestrator pushes the current preset into the tracker on
-   *  run-start / run-end via setCurrentPreset(). Null between runs. */
+  /** Active preset at the time of the call (orchestrator pushes on run-start/end). */
   preset?: string;
   /** Run ID for per-run attribution. Null for calls outside a run. */
   runId?: string;
@@ -174,26 +160,37 @@ class TokenTracker {
   private records: UsageRecord[] = loadPersistedRecords();
   private currentPresets = new Map<string, string>();
   private currentPreset: string | undefined;
+  /** Legacy global flag — kept for callers without runId attribution. */
   private quota: QuotaState | null = null;
+  /** Per-run quota walls (PR-6). Run-scoped halt decisions use this map. */
+  private quotaByRun = new Map<string, QuotaState>();
+  /** Upstream-wide Ollama quota when proxy cannot attribute a runId. */
+  private globalOllamaQuota: QuotaState | null = null;
 
   add(r: UsageRecord, runId?: string): void {
     if (runId) r = { ...r, runId };
-    // Stamp current preset at insertion time; the orchestrator owns
-    // run-id mapping. If runId is provided, it takes priority.
     if (runId && this.currentPresets.has(runId)) {
-      if (!r.preset) {
-        r = { ...r, preset: this.currentPresets.get(runId) };
-      }
+      if (!r.preset) r = { ...r, preset: this.currentPresets.get(runId) };
     } else if (this.currentPreset && !r.preset) {
       r = { ...r, preset: this.currentPreset };
     }
     this.records.push(r);
+
     if (this.records.length > CACHE_LIMIT) {
-      this.records.splice(0, this.records.length - CACHE_LIMIT);
+      const overflow = this.records.length - CACHE_LIMIT;
+      this.records.splice(0, Math.max(1, Math.floor(overflow * 1.1)));
     }
-    // #239: persist to disk so data survives dev-server restarts.
-    // Best-effort — in-memory cache is the source of truth for queries.
+
     appendPersistedRecord(r);
+
+    // Occasional cleanup of very old per-run preset mappings (isolation hygiene)
+    if (this.records.length % 500 === 0 && this.currentPresets.size > 32) {
+      // Keep only presets for runs that have recent records
+      const recentRunIds = new Set(this.records.slice(-200).map(rec => rec.runId).filter(Boolean));
+      for (const [rid] of this.currentPresets) {
+        if (!recentRunIds.has(rid)) this.currentPresets.delete(rid);
+      }
+    }
   }
 
   /** Called from Orchestrator on run start / end. */
@@ -209,38 +206,70 @@ class TokenTracker {
 
   /** Task #137: proxy flips this when upstream Ollama returns a quota-
    *  shaped response. Runners poll between turns; UI surfaces the wall.
-   *  Task #149: now also tracks kind ("transient" concurrency vs
-   *  "persistent" plan-quota). Persistent walls win if both have been
-   *  observed in the same run — once a real quota is hit, downgrading
-   *  back to "transient" would be misleading. */
-  markQuotaExhausted(statusCode: number, reason: string, kind: "transient" | "persistent" = "persistent"): void {
-    if (this.quota) {
-      // Upgrade transient → persistent if we see a worse signal later.
-      if (this.quota.kind === "transient" && kind === "persistent") {
-        this.quota = { ...this.quota, statusCode, reason, kind };
+   *  Tracks kind ("transient" vs "persistent"). Persistent wins if seen. */
+  private upsertQuota(
+    existing: QuotaState | null | undefined,
+    statusCode: number,
+    reason: string,
+    kind: "transient" | "persistent",
+  ): QuotaState {
+    if (existing) {
+      if (existing.kind === "transient" && kind === "persistent") {
+        return { ...existing, statusCode, reason, kind };
       }
+      return existing;
+    }
+    return { since: Date.now(), reason, statusCode, kind };
+  }
+
+  markQuotaExhausted(
+    statusCode: number,
+    reason: string,
+    kind: "transient" | "persistent" = "persistent",
+    runId?: string,
+  ): void {
+    if (runId) {
+      const prev = this.quotaByRun.get(runId);
+      this.quotaByRun.set(runId, this.upsertQuota(prev, statusCode, reason, kind));
       return;
     }
-    this.quota = { since: Date.now(), reason, statusCode, kind };
+    this.globalOllamaQuota = this.upsertQuota(this.globalOllamaQuota, statusCode, reason, kind);
+    this.quota = this.globalOllamaQuota;
   }
 
-  /** Cleared on run-start so the next run can probe the wall fresh. */
-  clearQuotaState(): void {
-    this.quota = null;
+  /** Cleared on run-start (per runId) or all runs (undefined) on shutdown. */
+  clearQuotaState(runId?: string): void {
+    if (runId === undefined) {
+      this.quota = null;
+      this.quotaByRun.clear();
+      this.globalOllamaQuota = null;
+      return;
+    }
+    this.quotaByRun.delete(runId);
   }
 
-  isQuotaExhausted(): boolean {
-    return this.quota !== null;
+  isQuotaExhausted(runId?: string): boolean {
+    if (runId) return this.quotaByRun.has(runId);
+    return this.quota !== null || this.globalOllamaQuota !== null;
   }
 
-  /** Task #149: only returns true for persistent walls. Runners use this
-   *  for halt decisions; transient bursts shouldn't abort the run. */
-  shouldHaltOnQuota(): boolean {
-    return this.quota !== null && this.quota.kind === "persistent";
+  /** Returns true only for persistent quota walls (runners halt on this). */
+  shouldHaltOnQuota(runId?: string): boolean {
+    if (runId) {
+      const q = this.quotaByRun.get(runId);
+      return q !== undefined && q.kind === "persistent";
+    }
+    const g = this.globalOllamaQuota ?? this.quota;
+    return g !== null && g.kind === "persistent";
   }
 
-  getQuotaState(): QuotaState | null {
-    return this.quota;
+  getQuotaState(runId?: string): QuotaState | null {
+    if (runId) return this.quotaByRun.get(runId) ?? null;
+    return this.globalOllamaQuota ?? this.quota;
+  }
+
+  getGlobalQuotaState(): QuotaState | null {
+    return this.globalOllamaQuota ?? this.quota;
   }
 
   totalsInWindow(windowMs: number, label: string, runId?: string): UsageWindow {
@@ -287,6 +316,15 @@ class TokenTracker {
     return this.records.slice(-n);
   }
 
+  /** Simple pressure signal for stability dashboards / gateway. */
+  pressure(): { recordCount: number; atLimit: boolean; quotaActiveRuns: number } {
+    return {
+      recordCount: this.records.length,
+      atLimit: this.records.length >= CACHE_LIMIT,
+      quotaActiveRuns: this.quotaByRun.size,
+    };
+  }
+
   /** Total tokens since process start. Cheap "lifetime" counter for the
    *  status endpoint. */
   total(): { promptTokens: number; responseTokens: number; calls: number } {
@@ -299,11 +337,7 @@ class TokenTracker {
     return { promptTokens: p, responseTokens: r, calls: this.records.length };
   }
 
-  /** Task #169: lifetime totals including the same byModel + byPreset
-   *  breakdowns that totalsInWindow() produces, so the UI's usage
-   *  widget can offer an "All time" toggle next to the existing
-   *  "Last 24h" view. Iterates all in-memory records (capped at
-   *  CACHE_LIMIT = 100k — for our scale, equivalent to lifetime). */
+  /** Lifetime totals (byModel + byPreset) for UI "All time" view. */
   totalsAllTime(label: string = "lifetime"): UsageWindow {
     let p = 0;
     let r = 0;
@@ -382,16 +416,16 @@ export function tokenBudgetExceeded(baseline: number, budget: number | undefined
  *  transient and persistent walls. For halt decisions, runners should
  *  prefer shouldHaltOnQuota() (Task #149). isQuotaExhausted is kept
  *  for back-compat but flagged so callers think about the distinction. */
-export function isQuotaExhausted(): boolean {
-  return tokenTracker.isQuotaExhausted();
+export function isQuotaExhausted(runId?: string): boolean {
+  return tokenTracker.isQuotaExhausted(runId);
 }
 
 /** Task #149: runners should call this in cap-checks, not isQuotaExhausted.
  *  Only returns true for persistent walls (plan / usage / weekly limit).
  *  Transient concurrency-429s clear in seconds via SDK retry; halting
  *  on them aborts otherwise-healthy runs. */
-export function shouldHaltOnQuota(): boolean {
-  return tokenTracker.shouldHaltOnQuota();
+export function shouldHaltOnQuota(runId?: string): boolean {
+  return tokenTracker.shouldHaltOnQuota(runId);
 }
 
 /** Task #137: pure detector — exported for unit tests. Decides whether
@@ -399,50 +433,44 @@ export function shouldHaltOnQuota(): boolean {
  *  the account is at its rate / usage wall. Returns the reason string
  *  on detection; null otherwise. */
 export function detectQuotaExhausted(status: number, body: string): string | null {
-  // Status 429 is the textbook signal — Ollama Cloud uses it for
-  // rate-limit AND for plan-quota walls. 402/403 with quota body are
-  // rarer but seen in some upstream variants.
+  const safeBody = body.length > 8000 ? body.slice(0, 8000) : body; // cap for safety
+
   if (status === 429) {
-    return body.length > 0 ? `429 ${truncateForReason(body)}` : "429 Too Many Requests";
+    return safeBody.length > 0 ? `429 ${truncateForReason(safeBody)}` : "429 Too Many Requests";
   }
   if (status === 402 || status === 403) {
-    if (QUOTA_BODY_KEYWORDS.some((re) => re.test(body))) {
-      return `${status} ${truncateForReason(body)}`;
+    if (QUOTA_BODY_KEYWORDS.some((re) => re.test(safeBody))) {
+      return `${status} ${truncateForReason(safeBody)}`;
     }
   }
-  // 2026-04-27: HTTP 503 with quota-shaped body (typically "Server
-  // overloaded" from Ollama Cloud during capacity spikes). Transient —
-  // the run should pause + probe instead of crashing. See
-  // run 59c66144 crash post-mortem.
+  // 503 "overloaded" from Ollama Cloud during capacity (common for :cloud models).
+  // Treat as transient unless body strongly indicates persistent quota.
   if (status === 503) {
-    if (QUOTA_BODY_KEYWORDS.some((re) => re.test(body))) {
-      return `503 ${truncateForReason(body)}`;
+    const isPersistent = QUOTA_PERSISTENT_KEYWORDS.some((re) => re.test(safeBody));
+    if (isPersistent || QUOTA_BODY_KEYWORDS.some((re) => re.test(safeBody))) {
+      const kind = isPersistent ? "persistent" : "transient";
+      return `503${kind === "persistent" ? "-quota" : ""} ${truncateForReason(safeBody)}`;
     }
   }
-  // Some upstream variants return 200 with an error body (no usage
-  // counts, just an "error" field naming the quota). Catch those too —
-  // requires a JSON-shaped error field that mentions a quota keyword.
-  if (status === 200 && body.length < 4_000) {
+  if (status === 200 && safeBody.length < 4000) {
     try {
-      const parsed = JSON.parse(body);
+      const parsed = JSON.parse(safeBody);
       if (parsed && typeof parsed === "object") {
         const err = (parsed as { error?: unknown }).error;
         if (typeof err === "string" && QUOTA_BODY_KEYWORDS.some((re) => re.test(err))) {
           return `200-with-error: ${truncateForReason(err)}`;
         }
       }
-    } catch {
-      // body wasn't JSON; fine — fall through (probably a normal SSE chunk).
-    }
+    } catch {}
   }
   return null;
 }
 
-function detectAndMarkQuotaExhausted(status: number, body: string): void {
+function detectAndMarkQuotaExhausted(status: number, body: string, runId?: string): void {
   const reason = detectQuotaExhausted(status, body);
   if (reason) {
     const kind = classifyQuotaKind(body);
-    tokenTracker.markQuotaExhausted(status, reason, kind);
+    tokenTracker.markQuotaExhausted(status, reason, kind, runId);
   }
 }
 
@@ -472,6 +500,9 @@ export function startOllamaProxy(opts: ProxyOpts): { stop: () => Promise<void> }
     const headers = { ...req.headers };
     delete headers.host;
 
+    // Extract runId for clean per-run isolation (set by providers/gateway).
+    const incomingRunId = (req.headers["x-swarm-run-id"] as string | undefined) || undefined;
+
     const proxyReq = httpRequest(
       {
         hostname: upstreamHost,
@@ -481,33 +512,47 @@ export function startOllamaProxy(opts: ProxyOpts): { stop: () => Promise<void> }
         headers,
       },
       (proxyRes) => {
-        // Pass status + headers straight through.
         const status = proxyRes.statusCode ?? 200;
         res.writeHead(status, proxyRes.headers);
-        const chunks: Buffer[] = [];
+
+        // Hardened streaming: forward immediately for backpressure.
+        // Accumulate *only* a bounded last-payload window for usage extraction
+        // (no full response buffering for long generations).
+        const MAX_USAGE_BUF = 256 * 1024; // 256KB cap for usage parsing window
+        let usageBuf = Buffer.alloc(0);
+        let usageBufOver = false;
+
         proxyRes.on("data", (chunk: Buffer) => {
-          chunks.push(chunk);
-          res.write(chunk);
+          res.write(chunk); // forward immediately
+
+          // Incremental accumulation (bounded)
+          if (!usageBufOver) {
+            if (usageBuf.length + chunk.length > MAX_USAGE_BUF) {
+              // Keep the tail (likely contains final usage chunk for streams)
+              const keep = Math.min(64 * 1024, MAX_USAGE_BUF);
+              usageBuf = Buffer.concat([usageBuf.slice(-keep), chunk]).slice(-MAX_USAGE_BUF);
+              usageBufOver = true;
+            } else {
+              usageBuf = Buffer.concat([usageBuf, chunk]);
+            }
+          }
         });
+
         proxyRes.on("end", () => {
           res.end();
-          // Best-effort token capture — failures are silent so a parse
-          // glitch never breaks the actual proxied response.
+
+          // Best-effort, bounded parsing. Never blocks or throws to caller.
           try {
-            const body = Buffer.concat(chunks).toString("utf8");
-            // Task #137: scan for quota-exhausted signals BEFORE token
-            // recording so a 429-with-no-tokens correctly flips the
-            // wall flag. Cheap (regex scan on a string we'd parse
-            // anyway).
-            detectAndMarkQuotaExhausted(status, body);
-            recordTokensFromBody(body, {
+            const bodyForParse = usageBuf.toString("utf8");
+            detectAndMarkQuotaExhausted(status, bodyForParse, incomingRunId);
+            recordTokensFromBody(bodyForParse, {
               ts: Date.now(),
               durationMs: Date.now() - t0,
               path: reqPath,
-            });
+            }, incomingRunId);
           } catch (err) {
             if (process.env.NODE_ENV !== "production") {
-              console.warn("[proxy] token recording failed:", err instanceof Error ? err.message : String(err));
+              console.warn("[proxy] token/usage recording failed (best effort):", err instanceof Error ? err.message : String(err));
             }
           }
         });
@@ -547,21 +592,24 @@ interface RecordCtx {
 
 function recordTokensFromBody(body: string, ctx: RecordCtx, runId?: string): void {
   if (!body) return;
+
+  const addWithRun = (rec: UsageRecord | null) => {
+    if (rec) tokenTracker.add(rec, runId); // pass runId for clean per-run isolation
+  };
+
   // Strategy 1: single JSON response (non-streaming).
   const trimmed = body.trim();
   if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
     const parsed = tryParseJson(trimmed);
     if (parsed) {
-      const rec = extractTokens(parsed, ctx);
-      if (rec) tokenTracker.add(rec, undefined);
+      addWithRun(extractTokens(parsed, ctx));
       return;
     }
   }
-  // Strategy 2: SSE stream — lines beginning with "data:" carry JSON.
-  // Strategy 3: JSONL stream — newline-delimited JSON objects.
-  // Both handled by scanning every line that looks like JSON; we
-  // accumulate the LAST record with non-zero usage (Ollama emits
-  // usage in the final chunk only for OpenAI-compat / generate).
+
+  // Strategy 2/3: SSE ("data: ...") or JSONL. Scan lines.
+  // We keep only the *last* record that has usable token counts.
+  // This is safe for incremental bounded buffer above.
   let captured: UsageRecord | null = null;
   for (const rawLine of body.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -574,7 +622,7 @@ function recordTokensFromBody(body: string, ctx: RecordCtx, runId?: string): voi
     const rec = extractTokens(parsed, ctx);
     if (rec) captured = rec;
   }
-  if (captured) tokenTracker.add(captured, undefined);
+  addWithRun(captured);
 }
 
 function tryParseJson(s: string): unknown {

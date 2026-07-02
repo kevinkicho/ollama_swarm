@@ -24,7 +24,7 @@ export const SwarmPhaseSchema = z.enum([
 export type SwarmPhase = z.infer<typeof SwarmPhaseSchema>;
 
 export const TodoStatusSchema = z.enum([
-  "open", "claimed", "committed", "stale", "skipped",
+  "open", "claimed", "pending-commit", "committed", "stale", "skipped",
 ]);
 export type TodoStatus = z.infer<typeof TodoStatusSchema>;
 
@@ -148,17 +148,24 @@ export type Deliverable = z.infer<typeof DeliverableSchema>;
 
 export const SwarmEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("transcript_append"), entry: z.any() }),
-  z.object({ type: z.literal("agent_state"), agent: AgentStateSchema }),
-  z.object({ type: z.literal("swarm_state"), phase: SwarmPhaseSchema, round: z.number() }),
-  z.object({ type: z.literal("agent_streaming"), agentId: z.string(), agentIndex: z.number(), text: z.string() }),
-  z.object({ type: z.literal("agent_streaming_end"), agentId: z.string() }),
+  z.object({ type: z.literal("agent_state"), agent: AgentStateSchema, runId: z.string().optional() }),
+  z.object({ type: z.literal("swarm_state"), phase: SwarmPhaseSchema, round: z.number(), runId: z.string().optional() }),
+  z.object({
+    type: z.literal("agent_streaming"),
+    agentId: z.string(),
+    agentIndex: z.number(),
+    text: z.string(),
+    runId: z.string().optional(),
+  }),
+  z.object({ type: z.literal("agent_streaming_end"), agentId: z.string(), runId: z.string().optional() }),
   z.object({ type: z.literal("error"), message: z.string() }),
   z.object({ type: z.literal("todo_posted"), todo: TodoSchema }),
   z.object({ type: z.literal("todo_claimed"), todoId: z.string(), claim: ClaimSchema }),
   z.object({ type: z.literal("todo_committed"), todoId: z.string() }),
   z.object({ type: z.literal("todo_failed"), todoId: z.string(), reason: z.string(), replanCount: z.number() }),
   z.object({ type: z.literal("todo_skipped"), todoId: z.string(), reason: z.string() }),
-  z.object({ type: z.literal("todo_proposed"), todo: z.any() }),
+  z.object({ type: z.literal("todo_proposed"), todo: TodoSchema }),
+  z.object({ type: z.literal("todo_reverted"), todoId: z.string(), reason: z.string() }),
   z.object({
     type: z.literal("model_shift"),
     agentId: z.string(),

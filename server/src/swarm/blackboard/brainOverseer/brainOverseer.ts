@@ -26,6 +26,13 @@ export interface ImprovementProposal {
   description: string;
   affectedComponent: string;
   priority: "high" | "medium" | "low";
+  id?: string; // present on persisted proposals
+  // Real patch content for apply UX. Populated by LLM or rule-based generators.
+  suggestedHunks?: Array<{
+    file: string;
+    search: string;
+    replace: string;
+  }>;
 }
 
 /**
@@ -122,6 +129,9 @@ async function analyzeWithLLM(
       })
       .map((p: unknown) => {
         const obj = p as Record<string, unknown>;
+        const hunks = Array.isArray(obj.suggestedHunks) 
+          ? obj.suggestedHunks.filter((h: any) => h && typeof h.file === "string" && typeof h.search === "string" && typeof h.replace === "string")
+          : undefined;
         return {
           title: String(obj.title),
           description: String(obj.description),
@@ -129,6 +139,7 @@ async function analyzeWithLLM(
           priority: ["high", "medium", "low"].includes(String(obj.priority))
             ? (String(obj.priority) as "high" | "medium" | "low")
             : "medium",
+          ...(hunks && hunks.length ? { suggestedHunks: hunks } : {}),
         };
       });
   } catch (err) {
@@ -184,6 +195,11 @@ function generateProposalFromPattern(pattern: { pattern: string; count: number; 
         description: "Workers decline when target sections are in the omitted middle of large files. Add auto-anchor detection from todo description to show relevant regions.",
         affectedComponent: "workerRunner.ts + autoAnchor.ts",
         priority: "high",
+        suggestedHunks: [{
+          file: "server/src/swarm/blackboard/workerRunner.ts",
+          search: "// TODO: read relevant context",
+          replace: "// TODO: use auto-anchor to read relevant sections of large files\n// context = autoAnchor(todo, fileContent)",
+        }],
       };
     }
     if (reasonKey.includes("already exists")) {

@@ -90,109 +90,20 @@ The V1 SDK loop (per-agent opencode subprocess + SSE chunked streaming) was reti
 
 ---
 
-## Historical: What landed 2026-05 (R1–R17 reliability layer + multi-tenant)
+## Historical milestones (see git log for full detail)
 
-> Older detailed history. For current focus see the high-level section at top and `active-work.md`.
+> Long detailed history from 2026-05 and earlier has been condensed. 
+> Current high-level state is at the top of this file. `git log` + `docs/archive/` contain the archaeology.
 
-A round of failure-mode resilience: 17 standalone pure helpers + three waves of wiring + six new env flags. Together they harden the swarm against quota walls, network blips, malformed JSON, disk pressure, memory pressure, browser disconnect, runaway loops, and unclean stops.
+Key periods:
+- **2026-05 reliability layer (R1–R17)**: 17 pure helpers for failover, backoff, loop detection, memory pressure, repair, caps, health scores, etc. Many now wired with env flags (default OFF). Full list lives in `server/src/swarm/`.
+- **Multi-tenant / concurrent runs**: Per-run isolation, `ActiveRun` ownership, `/runs/:runId` routing, ActiveRunsPanel, concurrency cap. Shipped end-to-end.
+- **Preset write capability + directive honoring**: Most presets now support opt-in writes; nearly all honor user directives.
+- **E3 (Apr 29)**: Complete removal of per-agent opencode subprocesses.
 
-**The 17 helpers** (`server/src/swarm/`, all pure / synchronous):
+For the full narrative, use `git log --oneline` or the archived blackboard-changelog. Focus agents on the "What ships today" and active constraints sections above.
 
-| ID | Module | What it does |
-|---|---|---|
-| R1 | `providerFailover.ts` | `decideFailover(currentModel, classified, chain)` → swap / retry-same / give-up |
-| R2 | `quotaProbeBackoff.ts` | exponential 1/2/4/8/16/30 min cap (replaces fixed 5-min `PAUSE_PROBE_INTERVAL_MS`) |
-| R3 | `degradationFallback.ts` | `pickLocalFallback()` picks the largest local Ollama tag when cloud chain exhausts |
-| R4 | `preflightCostProjector.ts` | `projectRunCost()` quadratic-growth estimate; `exceedsBudget()` vs `cfg.maxCostUsd` |
-| R5 | `autoResumeDecision.ts` | auto-resume / notify-only / skip based on snapshot age + transcript length |
-| R6 | `drainStopPolicy.ts` | first stop = drain, second within 5s = kill |
-| R7 | `subscriberPausePolicy.ts` | pause when WS subscriber count drops to 0 |
-| R8 | `cloneLock.ts` | cross-process `.lock` at `runs/<name>/.lock` with PID+host |
-| R9 | `semanticLoopDetector.ts` | Jaccard pairwise sim over last K turns; halts after 3 consecutive detections |
-| R10 | `modelHealthTracker.ts` | sliding-window success rate; degraded when <50% over ≥5 samples |
-| R11 | `repairJson.ts` | strict → fence-strip → balanced-span → soft-repairs (trailing commas, smart quotes, missing braces) |
-| R12 | `preflightDiskCheck.ts` | `fs.statfs` wrapper; default refuses runs with <2 GB free |
-| R13 | `memoryPressure.ts` | heap-usage ratio → ok/throttle/pause |
-| R14 | `memoryStorePruner.ts` | bounded by age (90d) + count (200) |
-| R15 | `autoRca.ts` | primary cause + concrete recommendation per error category |
-| R16 | `runHealthScore.ts` | 0–100 score with green/yellow/red buckets |
-| R17 | `errorTaxonomy.ts` | 12-variant `ClassifiedError` (foundation for R1, R2, R10, R15) |
-
-**Wiring waves** (4 commits):
-
-- **Wave 1** — additive / replaces ad-hoc code, no flags: R11 swaps `transcriptSummary.tryParseJson` + `DebateJudgeRunner.parseLooseJson`; R2 wires the exponential probe into `BlackboardRunner`; R8 acquires `.lock` in `Orchestrator.start`, releases in every cleanup path; R12 + R4 preflight at `/api/swarm/start`; R14 prunes on every `appendMemoryEntry`; R15 + R16 populate new `RunSummary.rca` + `RunSummary.healthScore` fields.
-- **Wave 2** — gated by new env flags default OFF: R17 errorTracker accumulates per-run `ClassifiedError` records; R6 drain-on-stop; R5 auto-resume on startup; R13 memory backpressure; R9 loop detector; R7 pause-on-WS-disconnect.
-- **Wave 3** — provider-aware failover: new `promptWithFailover` wrapper layers R1 + R3 + R10. Drop-in for `promptWithRetry` with `FailoverState` + `FailoverConfig` parameters. Wired into `BlackboardRunner` with full per-run state + `/api/tags` discovery. Per-run `cfg.providerFailover` overrides env default.
-- **Wave 4 (post-deferred)** — promotion + coverage: R7 + R13 + R9 lifted from signal-only to actual intervention (workers idle on `subscriberPaused` / `memoryPaused`; loop detector halts after 3 consecutive detections); `promptWithFailoverAuto` thin wrapper extends the failover chain to all 9 non-blackboard runners + 4 helpers (RoundRobin, Council, OW, OW-Deep, DebateJudge, MapReduce, MoA, Stigmergy + dynamicRoleCatalog, propositionDerive, qualityPasses, rubricPrePass). BaselineRunner uses `provider.chat()` directly and is the one remaining uncovered call path.
-
-**New env flags** (`server/src/config.ts`, all default OFF):
-
-- `SWARM_DRAIN_ON_STOP` — first /stop drains, second within 5s kills
-- `SWARM_AUTO_RESUME` — scan + restart recoverable snapshots at startup
-- `SWARM_MEMORY_BACKPRESSURE` — pause workers when heap >90% of `heapTotal`
-- `SWARM_LOOP_DETECTION` — emit warnings + halt after 3 consecutive Jaccard-loop detections
-- `SWARM_PAUSE_ON_DISCONNECT` — pause workers when WS subscriber count drops to 0
-- `SWARM_PROVIDER_FAILOVER` — comma-separated chain (e.g. `"deepseek-v4-flash:cloud"`)`
-- `SWARM_DEGRADATION_FALLBACK` — when cloud chain exhausts, fall back to local Ollama tag
-- `SWARM_DEGRADATION_PREFERRED` — comma-separated local tag preferences
-- `SWARM_MODEL_HEALTH_SWAP` — proactive pre-flight swap when active model is degraded
-
-**Per-run override:** `RunConfig.providerFailover` (string[], max 8 entries) wins over the env default. Surfaced as a "Failover chain" input in `SetupForm.tsx`.
-
-**RunSummary additions:** every blackboard run now writes `rca: RcaReport` + `healthScore: RunHealthScore` fields. With all flags off and an empty failover chain, runtime behavior is unchanged.
-
----
-
-## What landed 2026-05-04 earlier (every prior "deferred" item shipped + multi-tenant + doc cleanup)
-
-A long session that closed every still-deferred item across the project. Net: **1209 → 1848 tests** (~+640), every preset's deferred lever shipped, multi-tenant runs end-to-end (server + client), 8 fully-shipped doc plans archived then deleted.
-
-- **All 4 originally-deferred heavy substrate items shipped.** Parallel-clone-to-K-subdirs baseline (`BaselineSwarmHarness`); parallel debate streams (K full debates with cross-stream judge synthesis via `DebateStream`); in-flight parallel hypothesis (TodoQueue groupId + per-group AbortController + per-criterion grouping + 5-min conflict-deferral timeout); real adaptive worker pool (`AgentManager.killAgent` + hysteresis-aware `scaleUp`/`scaleDown`).
-- **All secondary deferred items shipped.** Multi-language import graph (Rust + Go added to TS/JS+Python pipeline); test-scaffolding generator (Python pytest/unittest, Rust cargo-test, Go go-test added); blackboard auto-rollback verified already wired; MoA tool dispatch via `cfg.moaProposerTools`; map-reduce size-balanced LPT partition (`cfg.mapReducePartition`); council vote-reconcile policy (`cfg.councilReconcile`); stigmergy-on-blackboard worker dispatch (`cfg.stigmergyOnBlackboard`); recovery listing (`/api/swarm/recoverable-runs` + `findRecoverableRuns`); per-prompt model auto-routing (`cfg.dynamicModelRoute` + `dynamicModelRoute.ts` helpers); auto-route recommendations from cost breakdown; env-tunable runtime caps (`SWARM_WALL_CLOCK_CAP_MIN`, `SWARM_COMMITS_CAP`, `SWARM_TODOS_CAP`).
-- **Auto-resume of recovered runs.** Snapshot schema bumped v1 → v2 with embedded `runConfig`; `Orchestrator.recoverRun` + `POST /api/swarm/recover/:runId` reconstruct cfg + restart on the existing clone.
-- **Multi-tenant runs end-to-end.** Server: `SwarmEvent.runId` stamping + per-runId WS subscriber filter (`/ws?runId=X`) + `Map<runId, ActiveRun>` refactor + concurrency cap (`SWARM_MAX_CONCURRENT_RUNS` env, default 4) + per-run REST routes (`/api/swarm/runs/:id/{status,say,stop}`) + `/api/swarm/active-runs` listing. Client: react-router with `/runs/:runId` deep-link routes; `ActiveRunsPanel` polls `/api/swarm/active-runs` + lets the user navigate or stop any run; `useRunScopedWebSocket` for components that want a per-run WS feed; SwarmView's stop/say buttons target the per-run REST when `runId` is known.
-- **Per-run zustand factory.** `createSwarmStore()` returns a fresh store per `/runs/:runId` route; `SwarmStoreProvider` wraps the per-run subtree + opens its own per-run WS + REST hydration; the existing `useSwarm(selector)` hook reads from context-or-singleton so all 30+ components keep working unchanged. `useSwarmSocket` no-ops when a Provider is mounted to avoid double-dispatch.
-- **Doc cleanup pass.** 8 fully-shipped design plans archived then deleted (their content was duplicated by the actual code + git log); `subtask-migration-plan.md` renamed to `-postmortem.md` since "plan" misled; `ARCHITECTURE-V2.md` updated with "V2 IS the current architecture" preamble; `V2-STEP-6C.md` flipped to PAUSED; `SCOREBOARD-PUBLISHING-PLAN.md` retired (Kevin: laptop hardware too slow + no Anthropic budget). `eval/aggregate.mjs` now bakes methodology + caveats into every generated `RESULTS.md`. Doc tree: 29 → 20 .md files.
-
-## What landed 2026-05-03
-
-- **Ollama Cloud as a 4th distinct provider.** `shared/src/providers.ts` adds `"ollama-cloud"` to the Provider union with a `(?::|-)cloud$` regex detector that catches both `glm-5.1:cloud` and `gemma4:31b-cloud` shapes. The Provider Tab control renders four side-by-side tabs; selecting Ollama Cloud filters the model dropdown to a 21-entry catalog sourced from `ollama.com/search?c=cloud`. Runtime routing collapses `ollama-cloud` → `ollama` in `toOpenCodeModelRef` and `pickProvider` (the local install proxies `:cloud` models to ollama.com transparently). New `OLLAMA_API_KEY` env var is informational — Ollama Cloud is always usable when the local install has an account configured.
-- **Setup form UX overhaul.** Sticky Start CTA at the bottom (no scroll-to-find), first-time starter chips with a "Don't show again" dismiss, collapsed-by-default Topology grid with "Edit per-agent" reveal, inline DirectiveBadge (only renders for non-honored presets), auto-resize User directive textarea, recently-used runs chip row with localStorage persistence, inline preflight that detects existing clones and offers "Resume run." See `scripts/verify-setup-ux.mjs` for the Playwright probe that captures all 9 states.
-- **All 9 active discussion presets now honor user directives.** Round-robin rotates Critic/Synthesizer/Gap-finder/Builder dispositions framed around the directive; role-diff with a directive flips into a build team producing `deliverable.md`; map-reduce mappers find directive-relevant evidence; council's `MY POSITION` blocks anchor on the directive; OW/OW-Deep decompose the directive into worker subtasks; debate-judge auto-derives a debatable proposition from it. Only `stigmergy` ignores it (exploration is repo-driven).
-- **Multi-provider live model discovery.** `/api/models?provider=anthropic|openai` hits `/v1/models` directly with the API key, server-side cached for 24h. Ollama Cloud falls back to the curated catalog. The `ModelSelect` dropdown surfaces source provenance ("9 live models from Anthropic API" vs "21 models from the Ollama Cloud catalog").
-
-## What landed 2026-05-01 (31 commits)
-
-A long day. Headline categories:
-
-- **Two load-bearing bug fixes:** provider streaming chunk-drop (`eff8c4f`) — paid-provider responses were silently truncated to the first SSE batch; dotenv root-path (`4190afe`) — paid keys never loaded.
-- **5 features × 3 layers each:** constrained decoding (#86 → #91 → #96), self-consistency hunks (#87 → #92 → #97), Mixture of Agents preset (#88 → #93 → #98), time-travel replay UI (#90 → #94 → #99), SWE-Bench Lite integration (#89 → #95 → #100). Each shipped first-cut, deeper, then deepest.
-- **3 UI bug fixes:** stable streaming-bubble order (`f8ed703`), MoA emits agent_state (`f8ed703`), finalized chat bubble collapses all segments (`faa601f`).
-- **Scoreboard publishing prep:** plan doc (`db28481`), MoA per-layer model CLI flags + tour script (`96484e1`), catalog reframe with corrected MoA scope (`fb41336`).
-- **Doc-rot pass + memory cleanup:** ghost items pruned, scoreboard plan corrected for MoA discussion-only nature.
-
-## Recent fixes worth knowing about
-
-- **Model pipeline consolidation (2026-05-17)** — `shared/src/modelConfig.ts`: single `resolveModels()` pure function replaces 31 scattered model decision points across 15 files. Fallback chain: explicit → topology → role default → model → config default. Server route, topology overlay, and localStorage caching all now use the same resolution. OpenCode Go provider fixed: `stripProviderPrefix` was mangling `opencode-go/` prefix causing 401 auth errors; `response_format` JSON schema downgrade to json_object for Go endpoint compatibility.
-- **Zombie process prevention (2026-05-17)** — 4 fixes: proxy stop handle saved + properly awaited, shutdown fire-and-forget → 15s await, verify adapter process group kill on timeout, treeKill SIGKILL escalation. Clean shutdown verified (no port leaks, no zombie processes).
-- **"New swarm" button (2026-05-17)** — navigating back from historic run review now goes to `/` instead of getting stuck on "Waiting for agents..."
-- **Worker sibling-retry (2026-05-08)** — 4-tier parse cascade in `workerRunner.ts`: parse → repair prompt → brain fallback → sibling model retry. Model restored in `finally` via `withSiblingRetry()`. Matches planner/contract/auditor pattern. All 6 retry paths now share a single helper (`siblingRetry.ts`).
-- **Parser reliability (2026-05-08)** — Lenient extraction across all 7 parsers (truncate over-size fields instead of dropping). Brain fallback parser (gemma4 extracts JSON when rule-based parsing fails). Wont-do tier-up fix (allCriteriaMet gates tier promotion, not allCriteriaResolved).
-- **Static build + Docker (2026-05-08)** — `Dockerfile` (node:22-slim, two-stage), `docker-compose.yml`, SPA fallback static serving middleware. `npm run build` produces production artifacts.
-- **API hardening (2026-05-08)** — `X-API-Version: 1.0.0` header on all responses. CORS middleware (origin: true, credentials). Compression middleware (1KB threshold). WS authentication via cookie token. WS payload 1MB guard.
-- **Bus-factor remediation (2026-05-09)** — `BlackboardRunnerFields` typed (125-property generated interface). `DiscussionRunnerBase` consolidation (Council -117 LOC, RoundRobin -43 LOC, 7 runners use shared budget guard). `RunnerFactory` (Orchestrator -8 imports). `types.ts` split into domain files. Sibling-retry extraction (`withSiblingRetry()`). LifecycleState single source in `types.ts`. WSL esbuild guard.
-- **Observability (2026-05-09)** — `StaleReason` + `CommitTier` tracking in worker pipeline. Cascade stats endpoint (`/runs/:id/stats`). Multi-tenant token attribution (UsageRecord.runId). Wall-clock cost attribution (wastedWallClockMs in RunSummary). Region status API plumbed.
-- **Hunk quality (2026-05-09)** — Trailing-whitespace normalization in hunk search matching. Pre-commit large-deletion validation. Hunk quality as 5th eval scoring dimension. 6 fuzzy-matching regression tests.
-- **Sibling-retry model failover (2026-05-06)** — when planner, contract, or auditor JSON parsing fails after repair, the runner retries once with a sibling model via `siblingModelFor()` lookup. All five retry paths (3 planner, 1 contract, 1 auditor) emit reverse `model_shift` in `finally` blocks so the UI doesn't permanently show the fallback model.
-- **`eff8c4f` (2026-05-01)** — provider streaming chunk-drop bug in `AnthropicProvider` + `OpenAIProvider`. `Promise.race([reader.read(), timeout])` was abandoning in-flight reads on every 200ms tick; abandoned reads silently consumed subsequent chunks, truncating responses to whatever fit in the first SSE batch. Pre-fix: Claude Sonnet returned `"Here"` for `"Count from 1 to 10"` (28 tokens generated, 4 captured). Fix keeps one in-flight read across iterations. Regression test in `5c13b10` uses 250ms-delay async streams to surface the bug if reintroduced.
-- **`4190afe` (2026-05-01)** — latent dotenv path bug. `server/src/config.ts` did `import "dotenv/config"` which resolved relative to `process.cwd()`. `dev.mjs` runs the server with `cwd=server/`, so the canonical repo-root `.env` was silently ignored. Paid keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) would never load. Replaced with explicit `dotenv.config({ path: <repoRoot>/.env })`.
-- **`f3d0aeb` (2026-05-01)** — V2 Step 6c first thin slice: `GET /api/v2/event-log/runs/:runId` per-run record replay endpoint + 5 tests. Pure backend addition; unblocks every UI cutover step that follows. Full remaining cutover scoped in `docs/V2-STEP-6C.md`.
-- **`f8ed703` + `faa601f` (2026-05-01)** — three UI bugs: streaming bubbles violently swapped positions (sort-by-recency caused re-render thrash; fixed by sorting by stable agentIndex); MoA agent panel sidebar showed spawn-time state forever (MoaRunner had zero `emitAgentState` calls; the other 7 discussion runners had 9-13 each); finalized chat bubble's last segment "escaped" the collapsible bracket as raw prose (fixed by uniformly collapsing all segments).
-- **`bb0c509`** — proxy always terminates rewritten `OLLAMA_BASE_URL` with `/v1`. Pre-fix, env var without `/v1` silently broke every opencode prompt with empty responses (404 on `/chat/completions`).
-- **`189ca05`** — wall-clock 4-min "absolute turn cap" replaced with SSE-aware liveness watchdog (`sseAwareTurnWatchdog.ts`). Aborts on 90s SSE silence OR 30-min hard ceiling. Long-tail latency that's still producing tokens isn't killed.
-- **`cfee38d`** — `agents_ready` structured summary; expandable per-agent grid in UI showing port, role, model, sessionId, warmup elapsed.
-
-> **Strategic note (2026-05-01):** the project's value prop is **open-weights multi-agent parallelism** (N Ollama-served models in parallel against one repo, each playing a different role). Multi-provider abstractions stay — bug-fixes that improve paid paths still ship — but don't expand multi-provider feature work for its own sake. Future scoreboard work should compare Ollama models against each other across presets, not Claude vs baseline. See historical project value prop notes (value is open-weights multi-agent parallelism).
+> **Strategic note:** the project's value prop is **open-weights multi-agent parallelism** + Brain-as-OS on top. Multi-provider support exists for flexibility but is not the primary focus. See `active-work.md` for current Brain work.
 
 ---
 
@@ -231,35 +142,23 @@ server/src/
     sseAwareTurnWatchdog.ts                  V2 SSE-liveness-aware turn cap
     agentsReadySummary.ts                    helper for the agents_ready summary kind
     {RoundRobin,Council,RoleDiff,...}Runner.ts   one runner per preset
-    BaselineSwarmHarness.ts                  T-Item-1: K parallel BaselineRunners → winner-pick → promote (when cfg.baselineAttempts > 1)
-    DebateStream.ts                          T-Item-2: per-stream state container for parallel debate streams
-    dynamicModelRoute.ts                     T-Item-AutoRoute: role→model picker for cfg.dynamicModelRoute
-    councilReconcile.ts                      T-Item-CouncilRec: vote tally + parser for cfg.councilReconcile
+    BaselineSwarmHarness.ts                  (baseline attempts / parallel harness)
+    DebateStream.ts                          (parallel debate support)
+    dynamicModelRoute.ts                     (dynamic model routing per role)
+    councilReconcile.ts                      (council vote reconciliation)
     blackboard/
-      BlackboardRunner.ts                    blackboard preset orchestration (~4,500 LOC; +T-Item-3 hypothesis groups, +T-Item-StigBb file commit counts, +T-Item-4 adaptive scaleUp/Down)
-      brainOverseer/                         Brain-as-OS layer (overseer, selfUpgrader, provisioner, proposalStore, interactionTracker, etc.)
-        brainService.ts, brainQueue.ts, selfUpgrader.ts, provisioner.ts ...
-      plannerRunner.ts                       planner + replanner agent with sibling-retry
-      contractBuilder.ts                     first-pass contract builder with sibling-retry
-      auditorRunner.ts                        auditor agent with sibling-retry
-      contextBuilders.ts                      prompt/context assembly for all blackboard agents
-      BlackboardRunnerConstants.ts            sibling-model lookup + shared constants
-      TodoQueue.ts                           FIFO substrate + groupId/listGroup/markGroupSettled/dequeueByScore
-      WorkerPipeline.ts                      apply-and-commit pipeline
-      v2Adapters.ts                          real fs+git adapters
-      RunStateObserver.ts                    state-machine observer
-      EventLogReaderV2.ts                    JSONL event log parser
-      hypothesisGrouping.ts                  T-Item-3 + T-Item-HypTimeout: hypothesis-tag detection + conflict-detection deferral
-      summary.ts                             RunSummary type + buildSummary
-      ARCHITECTURE.md                        code-near design doc — read before editing this dir
-      prompts/                               planner / worker / replanner / auditor prompt builders + zod parsers
-      reflectionPasses.ts                    stretch-goal + memory-distillation post-passes
+      BlackboardRunner.ts                    blackboard preset orchestration (planner + workers + auditor)
+      brainOverseer/                         Brain-as-OS (analysis, proposals, selfUpgrader, provisioner, health)
+      plannerRunner.ts / auditorRunner.ts    planner + dedicated auditor with tools + sibling retry
+      WorkerPipeline.ts + v2Adapters.ts      hunk apply + CAS commit + verify gate
+      TodoQueue.ts + RunStateObserver.ts     core substrate for blackboard state machine
+      ... (see server/src/swarm/blackboard/ARCHITECTURE.md)
 
 web/src/
-  main.tsx                                   BrowserRouter wrapper (T-Item-PerRunStore)
-  App.tsx                                    Routes: / + /runs/:runId; AppMain renders the run view
+  main.tsx                                   BrowserRouter + per-run routing
+  App.tsx                                    Routes: / + /runs/:runId
   state/
-    store.ts                                 zustand factory + Context-aware useSwarm (T-Item-PerRunStore)
+    store.ts                                 zustand factory + per-run SwarmStoreProvider
     SwarmStoreProvider.tsx                   per-run Provider: fresh store + per-runId WS + REST hydration
     applyEvent.ts                            shared SwarmEvent → SwarmStore dispatcher (singleton + per-run reuse)
   hooks/

@@ -14,6 +14,7 @@ import { formatPortReleaseLine } from "../runSummary.js";
 import { readBlackboardStateSnapshot } from "./stateSnapshot.js";
 import { assignWorkerRole } from "./workerRoles.js";
 import { runBrainAnalysis } from "./brainOverseer/brainOverseer.js";
+import type { BrainService } from "./brainOverseer/brainService.js";
 import type { InteractionTracker } from "./brainOverseer/interactionTracker.js";
 import type { ExceptionCollector } from "./brainOverseer/exceptionCollector.js";
 import { shouldRunFinalAudit } from "./finalAudit.js";
@@ -157,6 +158,7 @@ export interface LifecycleContext {
   clearStateSnapshotScheduler(): void;
   emit(ev: { type: string; [key: string]: unknown }): void;
   initBrainOverseer(runId: string): void;
+  getBrainService(): BrainService | null;
   getInteractionTracker(): InteractionTracker;
   getExceptionCollector(): ExceptionCollector;
   promptPlannerSafely(agent: Agent, prompt: string, name?: "swarm" | "swarm-read" | "swarm-builder", format?: "json" | Record<string, unknown>): Promise<{ response: string; agentUsed: Agent }>;
@@ -771,15 +773,27 @@ export async function planAndExecute(
           return response;
         };
 
-        const brainResult = await runBrainAnalysis(
-          ctx.getInteractionTracker(),
-          ctx.getExceptionCollector(),
-          ctx.getActive()?.localPath ?? "",
-          ctx.getActive()?.runId ?? "",
-          [], // priorImprovements - empty for now
-          brainPromptFn,
-          brainModel,
-        );
+        const clonePath = ctx.getActive()?.localPath ?? "";
+        const activeRunId = ctx.getActive()?.runId ?? "";
+        const brainService = ctx.getBrainService();
+        const brainResult = brainService
+          ? await brainService.analyzeRun(
+              ctx.getInteractionTracker(),
+              ctx.getExceptionCollector(),
+              clonePath,
+              activeRunId,
+              brainPromptFn,
+              brainModel,
+            )
+          : await runBrainAnalysis(
+              ctx.getInteractionTracker(),
+              ctx.getExceptionCollector(),
+              clonePath,
+              activeRunId,
+              [],
+              brainPromptFn,
+              brainModel,
+            );
         ctx.appendSystem(
           `[brain-overseer] Analysis complete: ${brainResult.exceptions.totalExceptions} exceptions, ${brainResult.chains.length} interaction chains, ${brainResult.proposals.length} proposals.`,
         );

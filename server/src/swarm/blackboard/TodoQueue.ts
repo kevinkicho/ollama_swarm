@@ -350,19 +350,19 @@ export class TodoQueue {
   /** Mark an in-progress todo as failed. Increments retries.
    *  Caller decides whether to re-enqueue (via reset()) or leave failed.
    *  Idempotent on already-failed todos (second fail just updates reason). */
-  fail(id: string, reason: string, ts: number = Date.now()): void {
+  fail(id: string, reason: string, ts: number = Date.now()): boolean {
     const t = this.findOrThrow(id);
     if (t.status === "failed") {
       // Already failed — update reason and increment retries
       t.reason = reason;
       t.retries += 1;
-      return;
+      return false;
     }
     if (t.status === "completed" || t.status === "skipped" || t.status === "pending-commit") {
       // Already terminal or awaiting auditor — race between worker commit
       // and replanner fail. Silently ignore; the work is done or will be
       // handled by the auditor.
-      return;
+      return false;
     }
     if (t.status !== "in-progress") {
       throw new Error(`Cannot fail todo ${id}: status=${t.status}`);
@@ -371,6 +371,7 @@ export class TodoQueue {
     t.endedAt = ts;
     t.reason = reason;
     t.retries += 1;
+    return true;
   }
 
   /** Mark a todo as skipped (worker declined for legitimate reasons —

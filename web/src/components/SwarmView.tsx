@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useSwarm } from "../state/store";
 import { AgentPanel } from "./AgentPanel";
 import { BoardView } from "./BoardView";
-import { BrainProposalsPanel } from "./BrainProposalsPanel";
 import { ContractPanel } from "./ContractPanel";
 import { Transcript } from "./Transcript";
 import { MetricsPanel } from "./MetricsPanel";
@@ -38,7 +37,6 @@ type Tab =
 export function SwarmView() {
   const agents = useSwarm((s) => s.agents);
   const phase = useSwarm((s) => s.phase);
-  const brainProposals = useSwarm((s) => s.brainProposals);
   const setError = useSwarm((s) => s.setError);
   const [sayText, setSayText] = useState("");
   // 2026-05-02 (chat lever #2): tagged intent on chat submit. Default

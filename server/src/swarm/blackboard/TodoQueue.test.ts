@@ -111,6 +111,15 @@ describe("TodoQueue — terminal transitions", () => {
     assert.throws(() => q.fail(id, "x"), /status=pending/);
   });
 
+  it("fail is a no-op on pending-commit (auditor-gated race)", () => {
+    const q = new TodoQueue();
+    const id = q.post({ description: "x", expectedFiles: ["a.ts"], createdBy: "p" });
+    q.dequeue("w");
+    q.proposeCommit(id, [{ op: "replace" }], ["a.ts"]);
+    assert.equal(q.fail(id, "late failure"), false);
+    assert.equal(q.get(id)?.status, "pending-commit");
+  });
+
   it("skip is allowed from any non-terminal status (V2 cutover Phase 2c)", () => {
     // Was originally "throws if not in-progress" — widened to match
     // Board.skip semantics (replanner skips from failed state too).

@@ -196,6 +196,7 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
     stop: () => r.stop(),
     buildReflectionContext: (planner: Agent, abortSignal: AbortSignal) => r.buildReflectionContext(planner, abortSignal),
     initBrainOverseer: (runId: string) => r.initBrainOverseer(runId),
+    getBrainService: () => r.opts.getBrainService?.() ?? null,
     getInteractionTracker: () => r.interactionTracker,
     getExceptionCollector: () => r.exceptionCollector,
   } as unknown as LifecycleContext;

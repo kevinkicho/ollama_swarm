@@ -1,25 +1,14 @@
 # Swarm Pattern Catalog
 
-Design notes for the agentic-swarm patterns we plan to support in `ollama_swarm`.
-The long-term goal: expose each pattern as a selectable **preset** on the setup
-page (next to repo URL / agent count) so a user can run the same repo through
-different patterns and compare outcomes side-by-side.
+Design notes for the agentic-swarm patterns in `ollama_swarm`.
 
-Status legend:
-- `[ ]` not started
-- `[~]` in progress
-- `[x]` shipped as a selectable preset
-- `[=]` currently the only mode (pre-preset era, will be replaced or folded into a preset)
+All major patterns are now shipped as selectable presets (12 total). The focus has shifted from "add more presets" to **Brain-as-OS integration** (using patterns for self-improvement runs, proposal generation, and concurrent orchestration) and robustness of concurrent execution.
 
----
+Status legend (historical):
+- `[x]` shipped as a preset
+- Many "Unit X" references below are internal historical tracking from early 2026 development.
 
-## Current implementation (pre-preset)
-
-`[=]` **Round-robin shared-transcript.** N identical agents, one SSE-driven turn
-each per round, full transcript injected into every prompt. Lives in
-`server/src/services/Orchestrator.ts`. Works but suffers from echo-chamber
-behavior — each agent sees the previous replies before speaking, so later
-agents converge on earlier positions.
+See `STATUS.md` for the current preset matrix and `active-work.md` for Brain-related work.
 
 ---
 
@@ -90,6 +79,8 @@ Models through Multiagent Debate" (MIT, 2023).
 **Wins:** directly fixes the echo chamber that plagues round-robin.
 **Limits:** 2x the calls vs round-robin, no explicit reconcile step
 (so convergence is implicit — the user reads the final round).
+
+> Note: "Unit X" numbers and early development notes in this file are historical. Current implementation status is in STATUS.md.
 
 ### 4. Orchestrator–worker hierarchy `[x]` ← **shipped as `orchestrator-worker` preset (Unit 12)**
 Agent 1 is the LEAD: it produces a plan (`{assignments: [{agentIndex,
@@ -168,7 +159,7 @@ waiting their turn. Natural fit for 10+ agents.
 **Limits:** needs careful coordination rules (see sub-patterns below) —
 without them, concurrent edits stomp each other and stale plans ship.
 
-### 8. Stigmergy / pheromone trails `[x]` ← **shipped as `stigmergy` preset (Unit 15)**
+### 8. Stigmergy / pheromone trails `[x]` — shipped as `stigmergy` preset
 Self-organizing repo exploration. No planner, no role assignment. Each
 agent per turn reads the shared annotation table (file → `{visits,
 avgInterest, avgConfidence, latestNote}`), picks one file to inspect
@@ -177,7 +168,7 @@ the table before the next agent's turn.
 
 Shipped via `StigmergyRunner` (see
 `server/src/swarm/StigmergyRunner.ts`) as a **standalone preset** for
-repo exploration. The blackboard-layer variant **also shipped** 2026-05-04
+repo exploration. A blackboard-layer variant exists for stigmergy-on-blackboard use.
 via `cfg.stigmergyOnBlackboard`: when set, blackboard's `runWorker`
 dispatch picks pending todos via `dequeueByScore` with a stigmergy bias
 (`-touched` count of expectedFiles) so the swarm spreads commits across
@@ -333,13 +324,16 @@ concurrent worker slots regardless of pattern.
 - **Cross-preset transcript format.** The UI currently assumes one linear
   transcript. Blackboard wants a board view; map-reduce wants a tree view.
   We'll need a generic "event" stream and per-preset renderers.
-- **Metrics.** (Partially answered, Unit 33.) Every preset now writes
-  `<clone>/summary.json` at run end with a shared shape — wall-clock,
-  per-agent latency stats, attempts+retries, filesChanged. Blackboard
-  keeps its richer fields (commits, contract, staleEvents); other
-  presets simply omit those. `scripts/compare-runs.mjs` reads N
-  summaries and prints a side-by-side comparison. Still missing: a
-  quality proxy beyond `filesChanged` (test-file count, LOC changed
-  via `git diff --stat --numstat`, criteria-met rate for non-blackboard
-  presets). Token usage isn't exposed by the SDK path we use — same
-  nullness limitation as `summary.ts` documents.
+- **Metrics.** Every preset writes `<clone>/summary.json`. Blackboard has richer fields. Token attribution is now per-run.
+
+---
+
+## Current context (2026-07+)
+
+The pattern catalog is largely complete as presets. Active development focus has moved to:
+
+- Using patterns (especially blackboard + council) inside the **Brain-as-OS** for self-analysis and self-upgrade runs.
+- Robust support for **concurrent runs** of any pattern.
+- System-level UI (SystemWrapper, proposals, health) on top of the patterns.
+
+See `STATUS.md`, `active-work.md`, and `server/src/swarm/blackboard/brainOverseer/` for the current direction. Old "Unit X" and "T-Item" references in this file are historical.

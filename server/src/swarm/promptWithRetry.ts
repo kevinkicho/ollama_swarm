@@ -6,6 +6,7 @@ import {
 } from "./blackboard/retry.js";
 import { tokenTracker } from "../services/ollamaProxy.js";
 import { pickProvider } from "../providers/pickProvider.js";
+import { providerGateway } from "../providers/ProviderGateway.js";
 import { config } from "../config.js";
 import { ToolDispatcher, defaultToolsForProfile, type ProfileName } from "../tools/ToolDispatcher.js";
 import { createIntraStreamLoopDetector, type IntraStreamLoopDetectorOpts } from "./intraStreamLoopDetector.js";
@@ -124,6 +125,8 @@ export interface PromptWithRetryOptions {
     top_p?: number;
     [key: string]: unknown;
   };
+  // PR-6/7: per-run attribution for quota + gateway scheduling.
+  runId?: string;
   // T193 (2026-05-04): per-call model override. When set, replaces
   // agent.model for THIS prompt only. Used by round-robin's
   // disposition-tuned models lever (Critic/Gap-finder routed to
@@ -192,7 +195,6 @@ export async function promptWithRetry(
         // T193: prefer modelOverride when set (used by round-robin
         // disposition-tuned routing). Falls back to agent.model.
         const effectiveModel = opts.modelOverride ?? agent.model;
-        const { provider, modelId } = pickProvider(effectiveModel);
         // E3 Phase 4 part 2: bind tools to a dispatcher when the agent
         // has a clone-rooted cwd AND the profile (from agentName) grants
         // any tools. Workers ("swarm") get nothing; planner/auditor
@@ -212,23 +214,19 @@ export async function promptWithRetry(
         const loopDetector = opts.intraStreamLoop
           ? createIntraStreamLoopDetector(opts.intraStreamLoop === true ? undefined : opts.intraStreamLoop)
           : null;
-        const result = await provider.chat({
-          model: modelId,
-          messages: [{ role: "user", content: effectivePromptText }],
+        const chatOpts = {
+          modelString: effectiveModel,
+          runId: opts.runId,
+          messages: [{ role: "user" as const, content: effectivePromptText }],
           signal: opts.signal,
           agentId: agent.id,
           logDiag: opts.logDiag,
           ...(opts.ollamaOptions !== undefined ? { options: opts.ollamaOptions } : {}),
-          onChunk: (cumulativeText) => {
+          onChunk: (cumulativeText: string) => {
             opts.manager?.recordStreamingText(agent.id, agent.index, cumulativeText);
             if (loopDetector) {
               const loopResult = loopDetector.onChunk(cumulativeText);
               if (loopResult.detected) {
-                // Throw from the onChunk callback. This propagates as an
-                // error inside provider.chat(), causing it to reject.
-                // The promptWithRetry catch path then checks
-                // opts.signal.aborted — so we don't retry a loop-caught
-                // abort (the same-model retry would just loop again).
                 throw new Error(
                   `intra-stream loop detected: ${loopResult.reason}`,
                 );
@@ -237,29 +235,28 @@ export async function promptWithRetry(
           },
           ...(tools.length > 0 ? { tools } : {}),
           ...(dispatcher ? { dispatcher } : {}),
-          // E3 Phase 5 cleanup pt 4 left a gap: every callsite passing
-          // ollamaFormat (planner contract, tier-up, etc.) was silently
-          // dropping the constraint because the SDK + ollamaDirect
-          // branches that consumed it got deleted but the new provider
-          // path never added it. Closing the gap 2026-05-01 (#86): the
-          // pickProvider path forwards format down to OllamaProvider →
-          // OllamaClient.chat which has supported it since #233. Other
-          // providers ignore the field gracefully.
           ...(opts.ollamaFormat !== undefined ? { format: opts.ollamaFormat } : {}),
-        });
-        // Record token usage into tokenTracker so the cost cap +
-        // /api/usage widget keep working unchanged. Provider returns
-        // counts when the upstream API surfaced them.
-        if (result.usage) {
-          tokenTracker.add({
-            ts: Date.now(),
-            promptTokens: result.usage.promptTokens,
-            responseTokens: result.usage.responseTokens,
-            durationMs: Date.now() - t0Provider,
-            model: agent.model, // keep prefixed form so detectProvider works downstream
-            path: `/sdk-direct (${provider.id})`,
-          });
-        }
+        };
+        const result = config.PROVIDER_GATEWAY
+          ? await providerGateway.chat(chatOpts)
+          : await (async () => {
+              const { provider, modelId } = pickProvider(effectiveModel);
+              const r = await provider.chat({ ...chatOpts, model: modelId });
+              if (r.usage) {
+                tokenTracker.add(
+                  {
+                    ts: Date.now(),
+                    promptTokens: r.usage.promptTokens,
+                    responseTokens: r.usage.responseTokens,
+                    durationMs: Date.now() - t0Provider,
+                    model: agent.model,
+                    path: `/sdk-direct (${provider.id})`,
+                  },
+                  opts.runId,
+                );
+              }
+              return r;
+            })();
         // Surface streaming-end so the UI's PersistentStreamBubble flips to "done".
         opts.manager?.markStreamingDone(agent.id);
         // Adapt to the SDK-shaped {data: {parts}} return shape every

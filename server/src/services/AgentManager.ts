@@ -340,7 +340,7 @@ export class AgentManager {
     return agent;
   }
 
-  // E3 Phase 5 (2026-04-29): legacy SDK-spawning body removed. Every
+  // E3 (2026-04-29): legacy SDK spawning removed. Every
   // call now delegates to spawnAgentNoOpencode. Existing callers that
   // still use spawnAgent (and the conditional spawnFn pattern in the
   // 9 runners) keep working — both branches now do the same thing.

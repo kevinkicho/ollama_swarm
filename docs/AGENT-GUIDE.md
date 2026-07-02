@@ -59,7 +59,7 @@ Health: `curl -s http://localhost:8243/api/health` should return `{"ok":true,...
 
 ### Server restart rules (CRITICAL)
 
-**NEVER use `setsid sh -c '...' &` to start servers.** This freezes opencode. Use `npm run dev` directly or `npx tsx src/index.ts` in the foreground.
+**NEVER use `setsid sh -c '...' &` to start servers.** (historical note from opencode era). Use `npm run dev` directly.
 
 **After ANY code edit**, restart BOTH servers:
 ```bash

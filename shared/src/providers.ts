@@ -112,7 +112,6 @@ export const OLLAMA_CLOUD_MODELS = [
   "glm-5.1:cloud",
   "deepseek-v4-pro:cloud",
   "deepseek-v4-flash:cloud",
-  "deepseek-v4-flash:cloud",
   "nemotron-3-nano:cloud",
   "kimi-k2.6:cloud",
   "kimi-k2.5:cloud",

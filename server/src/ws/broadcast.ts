@@ -151,6 +151,10 @@ export class Broadcaster {
   }
 
   broadcast(event: SwarmEvent): void {
+    if (event == null || typeof event !== "object" || !("type" in event)) {
+      console.error("[ws] broadcast dropped: event is null or missing type");
+      return;
+    }
     // Validate event shape in dev/test mode. When validation is enabled,
     // malformed events are logged but still broadcast (best-effort) so
     // the system stays functional — the broadcast layer never drops events

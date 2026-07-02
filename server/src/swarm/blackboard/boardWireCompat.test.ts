@@ -76,6 +76,22 @@ describe("v2QueueTodoToWireTodo — status mapping", () => {
     assert.equal(wire.status, "skipped");
     assert.equal(wire.skippedReason, "out of scope");
   });
+
+  it("pending-commit → pending-commit (with proposed hunks/files)", () => {
+    const hunks = [{ op: "replace", path: "a.ts", search: "x", replace: "y" }];
+    const wire = v2QueueTodoToWireTodo(
+      makeQueued({
+        status: "pending-commit",
+        proposedHunks: hunks,
+        proposedFiles: ["a.ts"],
+        workerId: "agent-2",
+        startedAt: 4_000,
+      }),
+    );
+    assert.equal(wire.status, "pending-commit");
+    assert.deepEqual(wire.proposedHunks, hunks);
+    assert.deepEqual(wire.proposedFiles, ["a.ts"]);
+  });
 });
 
 describe("v2QueueTodoToWireTodo — extended fields pass through", () => {

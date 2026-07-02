@@ -74,7 +74,7 @@ export interface BoardCountsDTO {
 // runId still type-check + work; the orchestrator hydrates it.
 export type SwarmEventBody =
   | { type: "transcript_append"; entry: TranscriptEntry }
-  | { type: "agent_state"; agent: AgentState }
+  | { type: "agent_state"; agent: AgentState; runId?: string }
   | { type: "swarm_state"; phase: SwarmPhase; round: number }
   | { type: "agent_streaming"; agentId: string; agentIndex: number; text: string }
   | { type: "agent_streaming_end"; agentId: string }
@@ -84,6 +84,8 @@ export type SwarmEventBody =
   | { type: "todo_committed"; todoId: string }
   | { type: "todo_failed"; todoId: string; reason: string; replanCount: number }
   | { type: "todo_skipped"; todoId: string; reason: string }
+  | { type: "todo_proposed"; todo: Todo }
+  | { type: "todo_reverted"; todoId: string; reason: string }
   // W17: model shift event emitted when failover swaps an agent to a
   // different model. The UI renders these as distinct colored entries in
   // the transcript (amber "failover: X → Y" badges) so users can see

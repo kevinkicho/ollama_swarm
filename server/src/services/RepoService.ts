@@ -240,7 +240,7 @@ export class RepoService {
   // still shows our artifacts; not a run-breaking error.
   //
   // Patterns excluded:
-  //   opencode.json        — per-clone agent config (Unit 42)
+  //   (historical) per-clone config files no longer written post-E3
   //   blackboard-state.json — runtime snapshot (BlackboardRunner only)
   //   summary.json          — final run summary
   //   summary-*.json        — Unit 49's per-run summary file naming
@@ -296,7 +296,7 @@ export class RepoService {
   }
 
   // E3 Phase 5 (2026-04-29): writeOpencodeConfig DELETED. Prompts now
-  // route through SessionProvider directly; opencode.json is no longer
+  // route through SessionProvider directly (no more per-clone config files)
   // generated. The detectProvider/stripProviderPrefix imports above are
   // also dead but kept until the next round of import cleanup.
 

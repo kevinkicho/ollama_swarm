@@ -2,16 +2,18 @@ import { useState } from "react";
 import { useSwarm } from "../state/store";
 
 interface BrainProposal {
+  id?: string;
   title: string;
   description: string;
   affectedComponent: string;
   priority: "high" | "medium" | "low";
+  suggestedHunks?: Array<{file: string; search: string; replace: string}>;
 }
 
 interface BrainProposalsPanelProps {
   proposals: BrainProposal[];
-  onApply?: (index: number) => void;
-  onReject?: (index: number) => void;
+  onApply?: (proposal: BrainProposal, index: number) => void;
+  onReject?: (proposal: BrainProposal, index: number) => void;
 }
 
 const priorityColors = {
@@ -25,14 +27,14 @@ export function BrainProposalsPanel({ proposals, onApply, onReject }: BrainPropo
   const [applied, setApplied] = useState<Set<number>>(new Set());
   const [rejected, setRejected] = useState<Set<number>>(new Set());
 
-  const handleApply = (index: number) => {
+  const handleApply = (p: BrainProposal, index: number) => {
     setApplied((prev) => new Set([...prev, index]));
-    onApply?.(index);
+    onApply?.(p, index);
   };
 
-  const handleReject = (index: number) => {
+  const handleReject = (p: BrainProposal, index: number) => {
     setRejected((prev) => new Set([...prev, index]));
-    onReject?.(index);
+    onReject?.(p, index);
   };
 
   return (
@@ -71,16 +73,30 @@ export function BrainProposalsPanel({ proposals, onApply, onReject }: BrainPropo
                 </div>
                 <div className="text-[11px] text-ink-400 mb-1">{p.description}</div>
                 <div className="text-[10px] text-ink-500">Component: {p.affectedComponent}</div>
+                {p.suggestedHunks && p.suggestedHunks.length > 0 && (
+                  <div className="mt-1 text-[8px]">
+                    <div className="text-emerald-400/70 mb-0.5">Suggested patches ({p.suggestedHunks.length}):</div>
+                    {p.suggestedHunks.slice(0, 2).map((h, hi) => (
+                      <div key={hi} className="bg-ink-900/50 p-1 mb-0.5 font-mono overflow-hidden">
+                        <div className="text-amber-400">--- {h.file}</div>
+                        <div className="text-emerald-400">+++ {h.file}</div>
+                        <div className="text-rose-400 truncate">- {h.search?.slice(0,60)}{h.search && h.search.length>60?'...':''}</div>
+                        <div className="text-emerald-400 truncate">+ {h.replace?.slice(0,60)}{h.replace && h.replace.length>60?'...':''}</div>
+                      </div>
+                    ))}
+                    {p.suggestedHunks.length > 2 && <div className="text-ink-500">... +{p.suggestedHunks.length-2} more</div>}
+                  </div>
+                )}
                 {!isApplied && !isRejected && (
                   <div className="flex gap-2 mt-2">
                     <button
-                      onClick={() => handleApply(i)}
+                      onClick={() => handleApply(p, i)}
                       className="text-[10px] px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-emerald-100"
                     >
                       Apply
                     </button>
                     <button
-                      onClick={() => handleReject(i)}
+                      onClick={() => handleReject(p, i)}
                       className="text-[10px] px-2 py-0.5 rounded bg-ink-700 hover:bg-ink-600 text-ink-300"
                     >
                       Reject

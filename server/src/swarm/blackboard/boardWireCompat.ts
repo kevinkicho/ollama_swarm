@@ -26,6 +26,7 @@ export function v2QueueTodoToWireTodo(qt: QueuedTodo): Todo {
   const status =
     qt.status === "pending" ? "open"
       : qt.status === "in-progress" ? "claimed"
+      : qt.status === "pending-commit" ? "pending-commit"
       : qt.status === "completed" ? "committed"
       : qt.status === "failed" ? "stale"
       : "skipped";
@@ -58,6 +59,12 @@ export function v2QueueTodoToWireTodo(qt: QueuedTodo): Todo {
     ...(qt.preferredTag ? { preferredTag: qt.preferredTag } : {}),
     ...(qt.contextFiles && qt.contextFiles.length > 0
       ? { contextFiles: qt.contextFiles.slice() }
+      : {}),
+    ...(qt.status === "pending-commit" && qt.proposedHunks
+      ? { proposedHunks: qt.proposedHunks }
+      : {}),
+    ...(qt.status === "pending-commit" && qt.proposedFiles
+      ? { proposedFiles: qt.proposedFiles.slice() }
       : {}),
   };
 }

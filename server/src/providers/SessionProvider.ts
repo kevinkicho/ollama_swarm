@@ -64,6 +64,12 @@ export interface ChatOpts {
   /** Diagnostic callback fired for each tool invocation (name + result
    *  ok/error) so the UI can render tool-call timeline entries. */
   onTool?: (info: { tool: string; ok: boolean; preview: string }) => void;
+
+  /** runId for per-run isolation (proxy attribution, quota, usage, Brain). */
+  runId?: string;
+
+  /** Marker that this LLM call is part of a brain-initiated run (for scheduling/priority). */
+  brainInitiated?: boolean;
 }
 
 export type FinishReason = "done" | "aborted" | "idle-timeout" | "error";

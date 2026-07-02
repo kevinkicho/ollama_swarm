@@ -55,12 +55,12 @@ export function buildAnalysisPrompt(
     "1. Root causes for recurring skip/decline chains",
     "2. Which patterns are most impactful to fix",
     "3. Concrete improvement proposals with priority ranking",
-    "4. For each proposal: title, description, affected component, priority",
+    "4. For each proposal: title, description, affected component, priority, and optionally suggestedHunks (array of {file, search, replace} for direct apply)",
     "",
     "Focus on changes that would prevent the patterns from recurring.",
     "Do NOT propose changes to the project code — only to the swarm system.",
     "",
     "Output: JSON array of proposals.",
-    'Format: [{"title": "...", "description": "...", "affectedComponent": "...", "priority": "high|medium|low"}]',
+    'Format: [{"title": "...", "description": "...", "affectedComponent": "...", "priority": "high|medium|low", "suggestedHunks": [{"file":"...", "search":"...", "replace":"..."}]}]',
   ].join("\n");
 }

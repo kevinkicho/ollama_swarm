@@ -106,7 +106,8 @@ export function makeTodoQueueWrappers(deps: TodoQueueWrapperDeps): TodoQueueWrap
     },
 
     failTodoQ(id, reason, staleReason?) {
-      todoQueue.fail(id, reason);
+      const transitioned = todoQueue.fail(id, reason);
+      if (!transitioned) return;
       if (staleReason) {
         const t = todoQueue.get(id);
         if (t) (t as any).staleReason = staleReason;
@@ -159,7 +160,7 @@ export function makeTodoQueueWrappers(deps: TodoQueueWrapperDeps): TodoQueueWrap
       const todo = todoQueue.get(id);
       if (todo) {
         const wire = v2QueueTodoToWireTodo(todo);
-        emit({ type: "todo_proposed", todo: wire } as any);
+        emit({ type: "todo_proposed", todo: wire });
       }
       scheduleStateWrite();
     },
@@ -175,7 +176,7 @@ export function makeTodoQueueWrappers(deps: TodoQueueWrapperDeps): TodoQueueWrap
     rejectCommitQ(id, reason) {
       todoQueue.rejectCommit(id, reason);
       const wire = v2QueueTodoToWireTodo(todoQueue.get(id)!);
-      emit({ type: "todo_reverted", todoId: id, reason } as any);
+      emit({ type: "todo_reverted", todoId: id, reason });
       scheduleStateWrite();
     },
   };

@@ -25,25 +25,15 @@ per planning turn prevents context blow-up.
 
 ---
 
-## Discussion presets now have opt-in write capability (Phase 1 — 2026-05-04)
+## Discussion presets have opt-in write capability (2026-05+)
 
-**Previous limitation:** All discussion presets (round-robin, council, MoA, 
-map-reduce, etc.) were read-only. They could analyze and synthesize but 
-couldn't modify the cloned repo.
+**Current state:** Discussion presets support `cfg.writeMode: "single"` (synthesizer produces hunks after discussion). Blackboard has native concurrent writes. Council and others route through the same WorkerPipeline when writeMode is enabled.
 
-**Current state:** All discussion presets now support `cfg.writeMode: "single"`
-which enables a write phase after discussion completes. The synthesizer 
-(lead/aggregator/reducer/judge) produces hunks directly using the 
-`synthesizerHunks.ts` infrastructure.
+**What's still limited:**
+- True multi-writer during turns (`writeMode: "multi"`) is not the default path for most presets.
+- Conflict resolution for overlapping edits is basic (CAS in blackboard, vote reconciliation elsewhere).
 
-**What's still deferred (Phase 2+):**
-- `writeMode: "multi"` — each agent proposing hunks during their turn
-- Coordinated writes across N agents (conflict detection, reconciliation)
-- Preset-specific multi-writer strategies
-
-**When this would need revisiting:** When users want true parallel writes
-(multiple agents editing simultaneously) rather than single-writer 
-post-discussion synthesis.
+**When this would need revisiting:** If the product direction moves toward highly parallel editing agents rather than planner → workers or post-discussion synthesis. Brain proposals currently favor small, auditable changes.
 
 ---
 
@@ -142,3 +132,29 @@ present-day economics.
 
 **Revisit when:** Ollama Cloud prices increase, or latency becomes the
 binding constraint for experiment velocity.
+
+---
+
+## Brain self-upgrader and proposal application is gated (current focus area)
+
+**Current state:** `selfUpgrader.ts` + proposal store exist and are wired. Brain can analyze runs, generate proposals, and apply patches to its own code or the project. However, application is conservative (gating on stopped runs, confidence, etc.). Full autonomous "brain runs its own blackboard on itself" is still emerging.
+
+**Trade-off:** Safety over speed. We do not want the brain to brick the system during development.
+
+**Revisit when:** We have robust dry-run + approval UI + rollback for self-patches, or when users explicitly want more autonomous self-improvement loops.
+
+---
+
+## Concurrent runs still share some global resources
+
+**Current state:** Strong per-run isolation for AgentManager, events, transcripts, and most quota. However, the local Ollama proxy and some global rate-limiting / memory pressure signals are not yet fully per-run attributed in all code paths.
+
+**When this would need revisiting:** When running many large concurrent swarms on limited hardware; the current design assumes modest concurrency (default cap 4).
+
+---
+
+## SystemWrapper + Brain UI panels are relatively new
+
+**Current state:** `SystemWrapper`, BrainProposalsPanel, BrainActivityPanel, etc. provide the system-level view. Polish, real-time updates, and full integration with concurrent run switching are still maturing.
+
+**Revisit when:** Usage shows friction in managing multiple simultaneous runs or applying brain proposals.

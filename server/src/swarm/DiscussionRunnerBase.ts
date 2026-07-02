@@ -575,6 +575,7 @@ export abstract class DiscussionRunnerBase {
       tokenBudget: cfg.tokenBudget,
       round: r,
       totalRounds: cfg.rounds,
+      runId: cfg.runId,
       unit: (
         presetName.toLowerCase().includes("map") ||
         presetName.toLowerCase().includes("orchestrator") ||

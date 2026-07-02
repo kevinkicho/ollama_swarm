@@ -55,7 +55,8 @@ export function createBoardBroadcaster(
   };
 
   const emit = (ev: BoardEvent) => {
-    broadcast(toSwarmEvent(ev));
+    const swarmEv = toSwarmEvent(ev);
+    broadcast(swarmEv);
     scheduleSnapshot();
   };
 
@@ -117,5 +118,13 @@ function toSwarmEvent(ev: BoardEvent): SwarmEvent {
       };
     case "finding_posted":
       return { type: "finding_posted", finding: ev.finding };
+    case "todo_proposed":
+      return { type: "todo_proposed", todo: ev.todo };
+    case "todo_reverted":
+      return { type: "todo_reverted", todoId: ev.todoId, reason: ev.reason };
+    default: {
+      const _exhaustive: never = ev;
+      throw new Error(`Unhandled BoardEvent type: ${(_exhaustive as BoardEvent).type}`);
+    }
   }
 }

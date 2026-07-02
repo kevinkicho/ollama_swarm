@@ -98,6 +98,26 @@ test("broadcast — client with runId filter only sees matching runId events", (
   }
 });
 
+test("broadcast — filtered client does not receive other run's agent_state", () => {
+  const bc = new Broadcaster();
+  const ws = makeFakeWs();
+  seedClient(bc, ws, "run-A");
+  bc.broadcast({
+    type: "agent_state",
+    agent: { id: "agent-1", index: 0, status: "ready" },
+    runId: "run-A",
+  } as SwarmEvent);
+  bc.broadcast({
+    type: "agent_state",
+    agent: { id: "agent-1", index: 0, status: "thinking" },
+    runId: "run-B",
+  } as SwarmEvent);
+  assert.equal(ws.sent.length, 1);
+  const evt = JSON.parse(ws.sent[0]);
+  assert.equal(evt.runId, "run-A");
+  assert.equal(evt.agent.status, "ready");
+});
+
 test("broadcast — events with no runId always pass through to filtered clients", () => {
   // Global lifecycle events (clone_state, etc.) shouldn't be hidden
   // from per-run subscribers — they're not run-specific.
