@@ -168,21 +168,24 @@ function AppMain() {
 
   return (
     <SystemWrapper>
-      {/* Review mode banner */}
-      {review ? (
-        <div className="px-4 py-1.5 bg-amber-950/40 border-b border-amber-700/50 flex items-center gap-2">
-          <span className="text-xs text-amber-300 font-mono">
-            REVIEW MODE · run {review.runId.slice(0, 8)}
-          </span>
-          {reviewedRunIsLive ? <ReviewActiveControls /> : null}
-        </div>
-      ) : null}
+      {/* Banners — fixed height, never shrink */}
+      <div className="shrink-0">
+        {/* Review mode banner */}
+        {review ? (
+          <div className="px-4 py-1.5 bg-amber-950/40 border-b border-amber-700/50 flex items-center gap-2">
+            <span className="text-xs text-amber-300 font-mono">
+              REVIEW MODE · run {review.runId.slice(0, 8)}
+            </span>
+            {reviewedRunIsLive ? <ReviewActiveControls /> : null}
+          </div>
+        ) : null}
 
-      {/* Error banner */}
-      {error ? <ErrorBanner error={error} /> : null}
+        {/* Error banner */}
+        {error ? <ErrorBanner error={error} /> : null}
 
-      {/* Active runs panel (when ≥2 runs) */}
-      {review === null && <ActiveRunsPanel />}
+        {/* Active runs panel (when ≥2 runs) */}
+        {review === null && <ActiveRunsPanel />}
+      </div>
 
       {/* Main content: SetupForm or SwarmView */}
       <div className="flex-1 min-h-0 overflow-hidden">

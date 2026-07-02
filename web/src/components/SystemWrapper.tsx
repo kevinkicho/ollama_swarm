@@ -136,7 +136,7 @@ export function SystemWrapper({ children }: { children: React.ReactNode }) {
         </aside>
 
         {/* Main content — children handle their own scrolling */}
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
           {children}
         </main>
       </div>

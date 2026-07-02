@@ -76,9 +76,9 @@ export function Transcript() {
   });
 
   return (
-    <div className="h-full relative">
-      {/* Filter bar */}
-      <div className="flex items-center gap-2 px-4 py-2 bg-ink-800/50 border-b border-ink-700/50">
+    <div className="h-full flex flex-col relative">
+      {/* Filter bar — fixed, never scrolls */}
+      <div className="flex items-center gap-2 px-4 py-2 bg-ink-800/50 border-b border-ink-700/50 shrink-0">
         <span className="text-[10px] text-ink-500">Filter:</span>
         {(["all", "system", "agents", "audit", "issues"] as const).map((f) => (
           <button
@@ -101,7 +101,7 @@ export function Transcript() {
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="h-full overflow-y-auto p-4 space-y-3 bg-ink-900"
+        className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3 bg-ink-900"
       >
         {filteredTranscript.length === 0 && streamingCount === 0 ? (
           <div className="text-ink-400 text-sm">Waiting for agents…</div>
