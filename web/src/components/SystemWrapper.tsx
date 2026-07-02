@@ -101,8 +101,6 @@ export function SystemWrapper({ children }: { children: React.ReactNode }) {
           {/* History + Event Log + Health + Notifications */}
           <RunHistoryDropdown />
           <EventLogPanel />
-          <SystemHealthDashboard />
-          <NotificationPreferences />
         </div>
       </header>
 

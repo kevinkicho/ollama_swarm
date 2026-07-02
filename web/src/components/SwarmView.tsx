@@ -380,7 +380,8 @@ export function SwarmView() {
           </TabButton>
           <span className="ml-auto self-center px-2"><OutcomeChip /></span>
         </div>
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <div className="h-full overflow-y-auto">
           {tab === "transcript" ? (
             <Transcript />
           ) : tab === "metrics" ? (
@@ -408,6 +409,7 @@ export function SwarmView() {
           ) : (
             <Transcript />
           )}
+          </div>
         </div>
         <form onSubmit={onSay} className="border-t border-ink-700 p-3 bg-ink-800 flex flex-col gap-2">
           {/* 2026-05-02 (chat lever #2): intent buttons. Defaults to
