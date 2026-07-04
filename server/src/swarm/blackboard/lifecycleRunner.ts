@@ -33,6 +33,7 @@ import {
   DRAIN_DEADLINE_MS,
   DRAIN_WATCHER_INTERVAL_MS,
 } from "./BlackboardRunnerConstants.js";
+import { drain as doDrain, checkDrainComplete as doCheckDrainComplete, stop as doStop } from "./drain.js";
 
 // ---------------------------------------------------------------------------
 // LifecycleContext — everything the extracted lifecycle methods need
@@ -334,7 +335,12 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   // T-Item-HypTimeout (2026-05-04): clear deferral timestamps.
   ctx.getHypothesisDeferralTimestamps().clear();
 
-  ctx.setPhase("cloning");
+  // Skip the "cloning" phase (and actual clone op) when a local filepath was provided
+  // instead of a git URL. We still want clone_state for the UI banner, but no "cloning".
+  const isRemoteClone = !!(cfg.repoUrl && (cfg.repoUrl.startsWith("http://") || cfg.repoUrl.startsWith("https://")));
+  if (isRemoteClone) {
+    ctx.setPhase("cloning");
+  }
   const cloneResult = await ctx.clone({
     url: cfg.repoUrl,
     destPath: cfg.localPath,
@@ -459,11 +465,13 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
 
   ctx.setPhase("seeding");
   const seed = await ctx.buildSeed(destPath, cfg);
-  ctx.appendSystem(
-    `Seed: ${seed.topLevel.length} top-level entries, README ${
-      seed.readmeExcerpt ? `${seed.readmeExcerpt.length} chars` : "(missing)"
-    }.`,
-  );
+  if (cfg.suppressSeedMessages !== true) {
+    ctx.appendSystem(
+      `Seed: ${seed.topLevel.length} top-level entries, README ${
+        seed.readmeExcerpt ? `${seed.readmeExcerpt.length} chars` : "(missing)"
+      }.`,
+    );
+  }
 
   // Task #127 + direction-aware goal generation:
   // When a directive IS provided, run goal generation to ANALYZE the codebase
@@ -472,7 +480,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   // When NO directive is provided, goal generation proposes ambitious goals
   // as before (the top one becomes the directive).
   const shouldGenerateGoals = cfg.autoGenerateGoals !== false;
-  if (shouldGenerateGoals) {
+  if (shouldGenerateGoals && cfg.suppressSeedMessages !== true) {
     const generatedGoals = await runGoalGenerationPrePass(
       planner,
       seed,
@@ -485,20 +493,26 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
         // Append goals as context for the contract derivation.
         const goalsText = generatedGoals.map((g, i) => `${i + 1}. ${g}`).join("\n");
         seed.userDirective = `${seed.userDirective}\n\n=== CODEBASE ANALYSIS (concrete gaps found by goal-generation) ===\n${goalsText}\n=== Use these to produce grounded criteria that advance the directive ===`;
-        ctx.appendSystem(
-          `Goal-generation pre-pass: enriched directive with ${generatedGoals.length} code-grounded goal(s).`,
-        );
+        if (cfg.suppressSeedMessages !== true) {
+          ctx.appendSystem(
+            `Goal-generation pre-pass: enriched directive with ${generatedGoals.length} code-grounded goal(s).`,
+          );
+        }
       } else {
         // No directive — goal generation proposes the directive.
         seed.userDirective = generatedGoals[0];
-        ctx.appendSystem(
-          `Goal-generation pre-pass: directive set to "${generatedGoals[0].length > 200 ? generatedGoals[0].slice(0, 200) + "…" : generatedGoals[0]}"`,
-        );
+        if (cfg.suppressSeedMessages !== true) {
+          ctx.appendSystem(
+            `Goal-generation pre-pass: directive set to "${generatedGoals[0].length > 200 ? generatedGoals[0].slice(0, 200) + "…" : generatedGoals[0]}"`,
+          );
+        }
       }
     } else {
-      ctx.appendSystem(
-        `Goal-generation pre-pass: no usable goals returned — continuing without enrichment.`,
-      );
+      if (cfg.suppressSeedMessages !== true) {
+        ctx.appendSystem(
+          `Goal-generation pre-pass: no usable goals returned — continuing without enrichment.`,
+        );
+      }
     }
   }
 
@@ -905,37 +919,7 @@ export async function planAndExecute(
 // ---------------------------------------------------------------------------
 
 export async function drain(ctx: LifecycleContext): Promise<void> {
-  if (lifecycleIsStopping(ctx.getLifecycleState()) || lifecycleIsDraining(ctx.getLifecycleState())) return;
-  ctx.setLifecycleState("draining");
-  ctx.setDrainStartedAt(Date.now());
-  // Task #168: marker for the post-run gate — drained runs ARE
-  // allowed to fire memory distillation + stretch reflection (the
-  // user opted in to "finish work then stop", which is closer to
-  // a natural completion than to a hard abort).
-  ctx.setWasDrained(true);
-  // V2 Step 3b: feed drain event to the parallel reducer.
-  ctx.v2ObserverApply({ type: "drain-requested", ts: ctx.getDrainStartedAt()! });
-  ctx.setPhase("draining");
-  ctx.appendSystem(
-    `Drain & Stop requested. Workers will finish their current claim (${ctx.boardCounts().claimed} in-flight); no new claims. ` +
-      `Backstop ${DRAIN_DEADLINE_MS / 60_000} min before forced hard stop. ` +
-      `Press Stop to escalate immediately.`,
-  );
-  // Cancel pause probe (no point continuing to poll upstream
-  // during drain — we're committed to stopping).
-  if (ctx.getPauseProbeTimer()) {
-    clearTimeout(ctx.getPauseProbeTimer()!);
-    ctx.setPauseProbeTimer(undefined);
-  }
-  ctx.setPaused(false);
-  // Task #199: surface unhandled rejections so a single bad tick doesn't
-  // become a silent stream of unhandled errors firing every 2s.
-  ctx.setDrainWatcherTimer(setInterval(() => {
-    checkDrainComplete(ctx).catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      ctx.appendSystem(`Drain watcher tick failed: ${msg}`);
-    });
-  }, DRAIN_WATCHER_INTERVAL_MS));
+  return doDrain(ctx);
 }
 
 // ---------------------------------------------------------------------------
@@ -943,35 +927,7 @@ export async function drain(ctx: LifecycleContext): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function checkDrainComplete(ctx: LifecycleContext): Promise<void> {
-  if (lifecycleIsStopping(ctx.getLifecycleState()) || !lifecycleIsDraining(ctx.getLifecycleState())) {
-    if (ctx.getDrainWatcherTimer()) {
-      clearInterval(ctx.getDrainWatcherTimer()!);
-      ctx.setDrainWatcherTimer(undefined);
-    }
-    return;
-  }
-  const counts = ctx.boardCounts();
-  const elapsed = Date.now() - (ctx.getDrainStartedAt() ?? Date.now());
-  const overDeadline = elapsed >= DRAIN_DEADLINE_MS;
-  if (counts.claimed === 0 && ctx.getActiveAborts().size === 0) {
-    ctx.appendSystem(`Drain complete (${Math.round(elapsed / 1000)}s); escalating to hard stop.`);
-    if (ctx.getDrainWatcherTimer()) {
-      clearInterval(ctx.getDrainWatcherTimer()!);
-      ctx.setDrainWatcherTimer(undefined);
-    }
-    await ctx.stop();
-    return;
-  }
-  if (overDeadline) {
-    ctx.appendSystem(
-      `Drain deadline reached (${DRAIN_DEADLINE_MS / 60_000} min) with ${counts.claimed} claim(s) + ${ctx.getActiveAborts().size} prompt(s) still in-flight. Forcing hard stop.`,
-    );
-    if (ctx.getDrainWatcherTimer()) {
-      clearInterval(ctx.getDrainWatcherTimer()!);
-      ctx.setDrainWatcherTimer(undefined);
-    }
-    await ctx.stop();
-  }
+  return doCheckDrainComplete(ctx);
 }
 
 // ---------------------------------------------------------------------------
@@ -979,36 +935,5 @@ export async function checkDrainComplete(ctx: LifecycleContext): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function stop(ctx: LifecycleContext): Promise<void> {
-  ctx.setLifecycleState("stopping");
-  // V2 Step 3b: feed user-stop event to the parallel reducer.
-  ctx.v2ObserverApply({ type: "stop-requested", ts: Date.now() });
-  ctx.setPhase("stopping");
-  ctx.stopQueueReaper();
-  ctx.stopCapWatchdog();
-  ctx.stopReplanWatcher();
-  // Task #165: cancel any in-flight quota-pause probe so it doesn't
-  // try to resume a run that's being torn down.
-  if (ctx.getPauseProbeTimer()) {
-    clearTimeout(ctx.getPauseProbeTimer()!);
-    ctx.setPauseProbeTimer(undefined);
-  }
-  ctx.setPaused(false);
-  // Task #167: cancel drain watcher if soft-stop is being escalated
-  // to hard stop (either by completion or by user clicking Stop
-  // during drain).
-  if (ctx.getDrainWatcherTimer()) {
-    clearInterval(ctx.getDrainWatcherTimer()!);
-    ctx.setDrainWatcherTimer(undefined);
-  }
-  for (const ctrl of ctx.getActiveAborts()) {
-    try {
-      ctrl.abort(new Error("user stop"));
-    } catch (err) {
-      ctx.appendSystem(`⚠ lifecycle abortDuringStop: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  ctx.getActiveAborts().clear();
-  await ctx.killAll();
-  ctx.disposeBoardBroadcaster();
-  ctx.setPhase("stopped");
+  return doStop(ctx);
 }

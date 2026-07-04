@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 
 interface BrainActivity {
   timestamp: number;
@@ -25,7 +25,7 @@ const typeConfig: Record<string, { color: string; icon: string; bg: string }> = 
   provision: { color: "text-cyan-400", icon: "🚀", bg: "bg-cyan-900/30" },
 };
 
-export function BrainActivityPanel({ activities = [], brainHealth }: BrainActivityPanelProps) {
+export const BrainActivityPanel = memo(function BrainActivityPanel({ activities = [], brainHealth }: BrainActivityPanelProps) {
   const [globalExpanded, setGlobalExpanded] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
 
@@ -118,7 +118,7 @@ export function BrainActivityPanel({ activities = [], brainHealth }: BrainActivi
       )}
     </div>
   );
-}
+});
 
 function HealthBadge({ status }: { status: string }) {
   const config: Record<string, { color: string; label: string }> = {

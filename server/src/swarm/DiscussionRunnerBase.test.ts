@@ -222,6 +222,16 @@ describe("DiscussionRunnerBase — lifecycle methods", () => {
       runner.appendSystem("Applied hunks", summary);
       assert.ok(runner.getTranscript()[0].summary);
     });
+
+    it("appendSystemMessage delegates to appendSystem for brain suggestions", () => {
+      const { runner, events } = makeRunner();
+      const summary = { kind: "brain_suggestion" as const, title: "Test" };
+      runner.appendSystemMessage?.("Brain suggests X", summary);
+      assert.equal(runner.getTranscript().length, 1);
+      assert.equal(runner.getTranscript()[0].text, "Brain suggests X");
+      const ev = events.find((e: any) => e.type === "transcript_append");
+      assert.ok(ev);
+    });
   });
 
   describe("stop()", () => {

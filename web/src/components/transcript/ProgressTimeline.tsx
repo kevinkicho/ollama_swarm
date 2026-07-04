@@ -64,8 +64,7 @@ function MarkerRow({ marker, isLatest }: { marker: ProgressMarker; isLatest: boo
 function Dot({ delay }: { delay: number }) {
   return (
     <span
-      className="inline-block w-1 h-1 rounded-full bg-emerald-400 animate-pulse"
-      style={{ animationDelay: `${delay}ms` }}
+      className="inline-block w-1 h-1 rounded-full bg-emerald-400"
     />
   );
 }

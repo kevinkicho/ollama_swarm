@@ -17,6 +17,12 @@ const COLUMNS: { key: TodoStatus; label: string; accent: string; help: string }[
     help: "A worker is holding this todo. File SHAs are recorded for CAS at commit time.",
   },
   {
+    key: "pending-commit",
+    label: "Pending Commit",
+    accent: "border-violet-500/40 text-violet-300",
+    help: "Worker produced hunks/files; awaiting auditor approval before final commit to disk.",
+  },
+  {
     key: "committed",
     label: "Committed",
     accent: "border-emerald-500/40 text-emerald-300",
@@ -37,7 +43,7 @@ const COLUMNS: { key: TodoStatus; label: string; accent: string; help: string }[
   },
 ];
 
-export function BoardView() {
+export const BoardView = memo(function BoardView() {
   const todos = useSwarm((s) => s.todos);
   const findings = useSwarm((s) => s.findings);
   const agents = useSwarm((s) => s.agents);
@@ -48,6 +54,7 @@ export function BoardView() {
     const out: Record<TodoStatus, Todo[]> = {
       open: [],
       claimed: [],
+      "pending-commit": [],
       committed: [],
       stale: [],
       skipped: [],
@@ -65,6 +72,25 @@ export function BoardView() {
     return a ? `Agent ${a.index}` : agentId;
   };
 
+  // For claimed todos, only show a live ticking age while the assigned agent
+  // is actually in "thinking" state. This keeps the board attribution in sync
+  // with the sidebar status signals (green=ready vs blue thinking+timer).
+  // If the worker has finished its prompt (proposed hunks, now awaiting auditor)
+  // the agent will be ready and we suppress the growing "4m.." age even if the
+  // todo record in the client is momentarily stale.
+  const claimAge = (todo: Todo): string | null => {
+    if (todo.status !== "claimed" || !todo.claim) return null;
+    const a = agents[todo.claim.agentId];
+    if (a && a.status === "thinking" && a.thinkingSince) {
+      return formatAge(Date.now() - a.thinkingSince);
+    }
+    // Fall back to claim age only if very fresh (<30s) to avoid showing
+    // stale "Agent X · 5m17s" long after the agent went back to ready.
+    const ageMs = Date.now() - todo.claim.claimedAt;
+    if (ageMs < 30_000) return formatAge(ageMs);
+    return null;
+  };
+
   const hasTodos = Object.values(todos).length > 0;
   const showSummary =
     summary !== undefined &&
@@ -74,7 +100,7 @@ export function BoardView() {
     <div className="h-full overflow-hidden flex flex-col bg-ink-900">
       {showSummary ? <SummaryCard summary={summary} /> : null}
       <div className="flex-1 min-h-0 overflow-x-auto">
-        <div className="grid grid-cols-5 min-w-[900px] h-full">
+        <div className="grid grid-cols-6 min-w-[1080px] h-full">
           {COLUMNS.map((col) => (
             <Column
               key={col.key}
@@ -84,6 +110,7 @@ export function BoardView() {
               count={grouped[col.key].length}
               todos={grouped[col.key]}
               agentLabel={agentLabel}
+              claimAge={claimAge}
             />
           ))}
         </div>
@@ -96,7 +123,7 @@ export function BoardView() {
       <FindingsPane findings={findings} agentLabel={agentLabel} />
     </div>
   );
-}
+});
 
 interface ColumnProps {
   label: string;
@@ -105,9 +132,10 @@ interface ColumnProps {
   count: number;
   todos: Todo[];
   agentLabel: (agentId: string | undefined) => string;
+  claimAge: (todo: Todo) => string | null;
 }
 
-function Column({ label, accent, help, count, todos, agentLabel }: ColumnProps) {
+function Column({ label, accent, help, count, todos, agentLabel, claimAge }: ColumnProps) {
   return (
     <div className="flex flex-col border-r border-ink-700 last:border-r-0 min-h-0">
       <div
@@ -119,7 +147,7 @@ function Column({ label, accent, help, count, todos, agentLabel }: ColumnProps) 
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2">
         {todos.map((t) => (
-          <TodoCard key={t.id + ":" + t.status} todo={t} agentLabel={agentLabel} />
+          <TodoCard key={t.id + ":" + t.status} todo={t} agentLabel={agentLabel} claimAge={claimAge} />
         ))}
         {todos.length === 0 ? <div className="text-xs text-ink-500 italic p-2">empty</div> : null}
       </div>
@@ -130,10 +158,11 @@ function Column({ label, accent, help, count, todos, agentLabel }: ColumnProps) 
 interface TodoCardProps {
   todo: Todo;
   agentLabel: (agentId: string | undefined) => string;
+  claimAge: (todo: Todo) => string | null;
 }
 
-const TodoCard = memo(function TodoCard({ todo, agentLabel }: TodoCardProps) {
-  const ageMs = todo.claim ? Date.now() - todo.claim.claimedAt : undefined;
+const TodoCard = memo(function TodoCard({ todo, agentLabel, claimAge }: TodoCardProps) {
+  const liveClaimAge = claimAge(todo);
 
   return (
     <div className="rounded-md border border-ink-700 bg-ink-800 p-2 text-xs space-y-1.5">
@@ -159,13 +188,22 @@ const TodoCard = memo(function TodoCard({ todo, agentLabel }: TodoCardProps) {
           <>
             <span>·</span>
             <span className="text-amber-300">{agentLabel(todo.claim.agentId)}</span>
-            {ageMs !== undefined ? <span>· {formatAge(ageMs)}</span> : null}
+            {liveClaimAge ? <span>· {liveClaimAge}</span> : null}
           </>
         ) : null}
         {todo.status === "committed" && todo.committedAt ? (
           <>
             <span>·</span>
             <span>{new Date(todo.committedAt).toLocaleTimeString()}</span>
+          </>
+        ) : null}
+        {todo.status === "pending-commit" ? (
+          <>
+            <span>·</span>
+            <span className="text-violet-300">awaiting auditor</span>
+            {todo.proposedFiles && todo.proposedFiles.length > 0 ? (
+              <span className="font-mono text-violet-400">→ {todo.proposedFiles.join(", ")}</span>
+            ) : null}
           </>
         ) : null}
       </div>

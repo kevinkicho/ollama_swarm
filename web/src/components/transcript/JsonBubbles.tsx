@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { extractFirstBalanced } from "../../../../shared/src/extractJson";
 
 export const COLLAPSE_THRESHOLD = 600;
@@ -161,28 +161,16 @@ export function CollapsibleBlock({ text, header, className, style }: Collapsible
   const [expanded, setExpanded] = useState(false);
   const charLong = text.length > COLLAPSE_THRESHOLD;
   const shown = !charLong || expanded ? text : text.slice(0, COLLAPSE_THRESHOLD).trimEnd() + "…";
+  // Height is now predictable from initial render (char count + expanded state).
+  // Removed runtime DOM overflow detection + extra state + gradient (excess).
+  // This gives the virtualizer a stable first-paint size.
   const bodyStyle = expanded ? undefined : { maxHeight: MAX_BUBBLE_HEIGHT_PX, overflow: "hidden" as const };
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const [overflows, setOverflows] = useState(false);
-  useLayoutEffect(() => {
-    if (expanded) return;
-    const el = bodyRef.current;
-    if (!el) return;
-    const isOverflowing = el.scrollHeight - el.clientHeight > 1;
-    if (isOverflowing !== overflows) setOverflows(isOverflowing);
-  }, [shown, expanded, overflows]);
-  const hasMore = charLong || overflows;
+  const hasMore = charLong;
   return (
     <div className={className} style={style}>
       {header}
-      <div className="relative">
-        <div ref={bodyRef} className="whitespace-pre-wrap" style={bodyStyle}>{shown}</div>
-        {!expanded && hasMore ? (
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-ink-900 to-transparent"
-          />
-        ) : null}
+      <div>
+        <div className="whitespace-pre-wrap" style={bodyStyle}>{shown}</div>
       </div>
       {hasMore ? (
         !expanded ? (
@@ -190,7 +178,7 @@ export function CollapsibleBlock({ text, header, className, style }: Collapsible
             onClick={() => setExpanded(true)}
             className="mt-1 text-xs underline text-ink-400 hover:text-ink-200"
           >
-            Show more{charLong ? ` (${text.length - COLLAPSE_THRESHOLD} more chars)` : ""}
+            Show more ({text.length - COLLAPSE_THRESHOLD} more chars)
           </button>
         ) : (
           <button

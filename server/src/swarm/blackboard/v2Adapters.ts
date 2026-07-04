@@ -35,7 +35,7 @@ export function realFilesystemAdapter(clonePath: string): FilesystemAdapter {
     async write(relPath, content) {
       const abs = await resolveSafe(clonePath, relPath);
       if (content === "") {
-        // Delete op — remove the file if it exists
+        // Delete op (legacy path via write("")) — remove the file if it exists
         try {
           await fs.unlink(abs);
         } catch (err) {
@@ -48,6 +48,14 @@ export function realFilesystemAdapter(clonePath: string): FilesystemAdapter {
       // src/sub/foo.ts when src/sub/ wasn't there).
       await fs.mkdir(path.dirname(abs), { recursive: true });
       await writeFileAtomic(abs, content);
+    },
+    async delete(relPath) {
+      const abs = await resolveSafe(clonePath, relPath);
+      try {
+        await fs.unlink(abs);
+      } catch (err) {
+        // File may not exist — ignore (idempotent delete)
+      }
     },
   };
 }

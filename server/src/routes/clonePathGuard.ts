@@ -14,7 +14,14 @@ export function assertAllowedClonePath(
   const resolved = path.resolve(normalizeWslPath(clonePath));
 
   for (const tracked of orch.getTrackedClonePaths()) {
-    if (resolved === path.resolve(tracked)) {
+    const t = path.resolve(normalizeWslPath(tracked));
+    if (resolved === t) {
+      return { ok: true, resolved };
+    }
+    // Allow the clone root's subdirectories (logs/<runid>/ etc) and the logs dir itself.
+    // Covers review ?path= that point at per-run summary folders under the project clone.
+    const tLogs = path.join(t, "logs");
+    if (resolved.startsWith(t + path.sep) || resolved === tLogs || resolved.startsWith(tLogs + path.sep)) {
       return { ok: true, resolved };
     }
   }
@@ -26,7 +33,7 @@ export function assertAllowedClonePath(
 
   for (const knownParent of parentsToCheck) {
     const kp = path.resolve(normalizeWslPath(knownParent));
-    if (parent === kp) {
+    if (parent === kp || resolved === kp || resolved.startsWith(kp + path.sep)) {
       return { ok: true, resolved };
     }
     const logsDir = path.join(kp, "logs");

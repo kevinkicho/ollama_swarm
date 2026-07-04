@@ -22,7 +22,7 @@ export class Broadcaster {
   // events like clone_state aren't routed). When undefined, the
   // client receives ALL events (legacy "all events" behavior; the
   // existing single-page UI uses this).
-  private clients = new Map<WebSocket, { runIdFilter?: string }>();
+  private clients = new Map<WebSocket, { runIdFilter?: string; light?: boolean }>();
   // R7 wiring (2026-05-04): per-runId subscriber count + a listener
   // hook so callers (orchestrator, transcript appender) can react to
   // "last subscriber dropped" / "first subscriber arrived" events.
@@ -76,8 +76,11 @@ export class Broadcaster {
       // filter (legacy behavior). Malformed URLs → no filter (fail-
       // open is safe; client just sees all events).
       const filter = parseRunIdFromUpgrade(req);
-      const meta: { runIdFilter?: string; isAlive?: boolean } = filter ? { runIdFilter: filter, isAlive: true } : { isAlive: true };
-      this.clients.set(ws, meta as unknown as { runIdFilter?: string });
+      const light = parseLightFromUpgrade(req);
+      const meta: { runIdFilter?: string; light?: boolean; isAlive?: boolean } = filter 
+        ? { runIdFilter: filter, light, isAlive: true } 
+        : { light, isAlive: true };
+      this.clients.set(ws, meta as unknown as { runIdFilter?: string; light?: boolean });
       if (filter) this.bumpRunIdCount(filter, +1);
       ws.on("pong", () => { meta.isAlive = true; });
       ws.on("close", () => {
@@ -132,6 +135,10 @@ export class Broadcaster {
     return entry?.runIdFilter;
   }
 
+  isLightClient(ws: WebSocket): boolean {
+    return !!this.clients.get(ws)?.light;
+  }
+
   /** R7 wiring: read-only access to the current per-runId subscriber
    *  count, for diagnostics + tests. */
   getSubscriberCount(runId: string): number {
@@ -179,16 +186,32 @@ export class Broadcaster {
     }
     for (const [ws, meta] of this.clients) {
       if (ws.readyState !== ws.OPEN) continue;
-      // T-Item-MultiTenant Phase 2: per-runId filter check. When the
-      // client subscribed with ?runId=X, drop events whose runId
-      // doesn't match. Events with no runId field (global lifecycle
-      // events) ALWAYS pass through — they're not run-specific.
+      // T-Item-MultiTenant Phase 2: per-runId filter check.
+      // Tolerate short prefixes (UI often uses runId.slice(0,8) for display/links,
+      // but events use full UUID) so the run-layer WS binding works.
       if (
         meta.runIdFilter !== undefined &&
-        event.runId !== undefined &&
-        event.runId !== meta.runIdFilter
+        event.runId !== undefined
       ) {
-        continue;
+        const f = meta.runIdFilter;
+        const e = event.runId;
+        if (e !== f && !e.startsWith(f) && !f.startsWith(e)) {
+          continue;
+        }
+      }
+      // Light client mode: for heavy events, send only summary/kind if available.
+      // This provides a "light WS topic" for perf (external agents, monitoring).
+      if (meta.light) {
+        const type = (event as any).type;
+        if (type === 'transcript_append' || type === 'agent_streaming') {
+          const e = event as any;
+          if (e.entry?.summary) {
+            const lightEvent = { ...e, entry: { ...e.entry, text: e.entry.summary ? undefined : e.entry.text } };
+            try { ws.send(JSON.stringify(lightEvent)); } catch {}
+            continue;
+          }
+          continue;
+        }
       }
       try {
         ws.send(payload);
@@ -209,12 +232,24 @@ export class Broadcaster {
 export function parseRunIdFromUpgrade(req: IncomingMessage): string | null {
   if (!req.url) return null;
   try {
-    // The URL constructor needs an absolute base; the host doesn't
-    // matter for query parsing since we only read searchParams.
     const u = new URL(req.url, "http://localhost");
     const id = u.searchParams.get("runId");
     return id && id.length > 0 ? id : null;
   } catch {
     return null;
+  }
+}
+
+// Light mode: ?light=1 or ?light=true -> client gets only lightweight events
+// (no full transcript_append text, no agent_streaming). Useful for perf monitoring
+// or external agents that only care about high-level state.
+export function parseLightFromUpgrade(req: IncomingMessage): boolean {
+  if (!req.url) return false;
+  try {
+    const u = new URL(req.url, "http://localhost");
+    const light = u.searchParams.get("light");
+    return light === "1" || light === "true";
+  } catch {
+    return false;
   }
 }

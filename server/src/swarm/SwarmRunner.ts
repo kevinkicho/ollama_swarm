@@ -1,6 +1,6 @@
 import type { AgentManager } from "../services/AgentManager.js";
 import type { RepoService } from "../services/RepoService.js";
-import type { SwarmEvent, SwarmStatus } from "../types.js";
+import type { SwarmEvent, SwarmStatus, TranscriptEntrySummary } from "../types.js";
 import type { SwarmRole } from "./roles.js";
 
 export type PresetId =
@@ -69,4 +69,6 @@ export interface SwarmRunner {
     opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
   ): void;
   isRunning(): boolean;
+  // For Brain proactive suggestions during run
+  appendSystemMessage?(text: string, summary?: TranscriptEntrySummary): void;
 }

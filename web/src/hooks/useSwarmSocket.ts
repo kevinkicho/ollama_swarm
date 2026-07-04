@@ -42,6 +42,13 @@ function dispatch(ev: SwarmEvent): void {
     pendingEvents.push(ev);
     return;
   }
+  // Throttle high-frequency streaming updates to reduce store churn / re-renders
+  if (ev.type === 'agent_streaming') {
+    const key = `stream-${(ev as any).agentId || 'global'}`;
+    const now = Date.now();
+    if ((dispatch as any)._lastStream && now - (dispatch as any)._lastStream < 50) return; // ~20fps
+    (dispatch as any)._lastStream = now;
+  }
   applyEvent(ev);
 }
 
@@ -53,11 +60,15 @@ function applyEvent(ev: SwarmEvent): void {
   applyEventToStore(ev, useSwarm.getState());
 }
 
-function wsUrlForRunId(runId: string | undefined): string {
+export function wsUrlForRunId(runId: string | undefined, light = false): string {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  return runId
+  let url = runId
     ? `${proto}://${location.hostname}:${__BACKEND_PORT__}/ws?runId=${encodeURIComponent(runId)}`
     : `${proto}://${location.hostname}:${__BACKEND_PORT__}/ws`;
+  if (light) {
+    url += (url.includes('?') ? '&' : '?') + 'light=1';
+  }
+  return url;
 }
 
 function connect(): void {
@@ -86,7 +97,7 @@ function connect(): void {
     }
     ws = null;
   }
-  const socket = new WebSocket(wsUrlForRunId(runId));
+  const socket = new WebSocket(wsUrlForRunId(runId, /* light: for topic-filtered light clients set true e.g. monitoring */ false));
   ws = socket;
   wsRunId = runId;
 

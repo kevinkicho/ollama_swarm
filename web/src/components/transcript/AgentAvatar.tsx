@@ -1,6 +1,7 @@
 // AgentAvatar.tsx — Colored circle avatar with agent index number
 // Uses the centralized agentPalette for consistent coloring.
 
+import { memo } from "react";
 import { hueForAgent } from "../agentPalette";
 
 interface AgentAvatarProps {
@@ -14,7 +15,7 @@ const SIZE_CLASSES = {
   lg: "w-10 h-10 text-sm",
 };
 
-export function AgentAvatar({ agentIndex, size = "md" }: AgentAvatarProps) {
+export const AgentAvatar = memo(function AgentAvatar({ agentIndex, size = "md" }: AgentAvatarProps) {
   const hue = hueForAgent(agentIndex);
   const index = agentIndex ?? 0;
 
@@ -30,4 +31,4 @@ export function AgentAvatar({ agentIndex, size = "md" }: AgentAvatarProps) {
       {index}
     </div>
   );
-}
+});

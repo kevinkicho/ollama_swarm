@@ -337,3 +337,101 @@ The pattern catalog is largely complete as presets. Active development focus has
 - System-level UI (SystemWrapper, proposals, health) on top of the patterns.
 
 See `STATUS.md`, `active-work.md`, and `server/src/swarm/blackboard/brainOverseer/` for the current direction. Old "Unit X" and "T-Item" references in this file are historical.
+
+> **2026-07 update**: The Brain provisioner (`brainOverseer/provisioner.ts`) now auto-detects research-style insights and enables `webTools`, `plannerTools`, `useHybridPlanning` (council → blackboard) for follow-up runs.
+
+---
+
+## Research Workflows (webTools + plannerTools + Hybrid)
+
+For use cases that require external knowledge (scientific literature review, discovering common patterns across papers, proposing new hypotheses, governmental data endpoints, etc.), enable web access **only for planners**:
+
+```json
+{
+  "webTools": true,
+  "plannerTools": true
+}
+```
+
+This gives the planner `web_search` (DuckDuckGo-style) + `web_fetch`. Workers in blackboard-style execution remain local-only for safety.
+
+### Recommended Preset Combinations for Research
+
+| Preset / Mode                        | Strengths for Research                                                                 | When to Use |
+|--------------------------------------|----------------------------------------------------------------------------------------|-------------|
+| **Hybrid council → blackboard** (recommended starting point) | Council phase does deep debate + synthesis with web research and produces a research deliverable. Results pipe into blackboard for writing `findings.md`, `candidates.md`, experiment scaffolding, or reports. Auditor batch + single commit for safety. | Best overall for "think deeply (with internet) then produce artifacts" |
+| **Council (standalone)**             | Strong multi-agent debate + synthesis. Independent first round prevents echo chamber.   | Pure analysis / hypothesis generation / "what do these materials have in common?" |
+| **Map-reduce**                       | Mechanical slicing across many papers/docs + reducer synthesis. Guarantees coverage.    | Broad literature scan |
+| **MoA (Mixture of Agents)**          | Multiple proposers (parallel, hidden) → aggregator. Frequently beats single large model on complex reasoning. | High-quality final synthesis of findings |
+| **Role-diff**                        | Specialist roles (Researcher, Critic, Data-Extractor, Theorist, Devil's-advocate, etc.) | Structured multi-perspective analysis |
+| **Pipeline**                         | Chained sub-runs: Explore → Extract common properties → Generate candidates → Validate | Multi-stage scientific method |
+| **Orchestrator-worker(-deep)**       | Lead decomposes big research question → parallel workers investigate slices → lead synthesizes | Hierarchical or very large questions |
+| **Stigmergy**                        | Self-organizing exploration via pheromone table on files / documents                    | Open-ended discovery mode (read-only by design) |
+| **Blackboard (pure)**                | Use when you want the swarm to *write* a living research report or generate experiment code with full CAS + auditor safety | When mutations + audit trail on outputs are desired |
+
+**Notes**:
+- Hybrid planning (`useHybridPlanning: true`, `planningPreset: "council"`, `executionPreset: "blackboard"`) is especially powerful for research-then-artifact workflows.
+- `webTools` primarily benefits the planning / lead / research-profile agents.
+- For pure research without any file changes, prefer discussion presets (council, moa, map-reduce, role-diff, pipeline).
+- Add `systemMap` (lightweight repo overview) automatically in hybrid blackboard planning for better cross-cutting reasoning.
+
+### Concrete Example Configs
+
+**1. Hybrid research + write findings (recommended for complex scientific work)**
+
+```json
+{
+  "preset": "blackboard",
+  "useHybridPlanning": true,
+  "planningPreset": "council",
+  "executionPreset": "blackboard",
+  "webTools": true,
+  "plannerTools": true,
+  "auditorOnlyMutations": true,
+  "requireAuditorVerification": false,
+  "agentCount": 5,
+  "rounds": 0,
+  "userDirective": "Study the common structural and electronic properties of known high-temperature superconductors. Use web_search for recent papers and public datasets. Produce a detailed findings.md and a short list of candidate material families for room-temperature superconductivity."
+}
+```
+
+**2. Pure analysis with Council + web research**
+
+```json
+{
+  "preset": "council",
+  "webTools": true,
+  "plannerTools": true,
+  "agentCount": 4,
+  "rounds": 3,
+  "userDirective": "Debate and synthesize what the known room-temperature and near-room-temperature superconducting materials have in common. Focus on crystal structure, doping, and electronic features from public sources."
+}
+```
+
+**3. Broad literature scan with Map-Reduce**
+
+```json
+{
+  "preset": "map-reduce",
+  "webTools": true,
+  "agentCount": 6,
+  "rounds": 2,
+  "userDirective": "Scan a wide range of recent papers on superconductors. Map key properties across many sources and reduce to the most frequently reported commonalities and anomalies."
+}
+```
+
+**4. Multi-stage research pipeline**
+
+```json
+{
+  "preset": "pipeline",
+  "webTools": true,
+  "plannerTools": true,
+  "agentCount": 4,
+  "userDirective": "Research workflow: 1) Broad exploration of superconductor literature, 2) Extract common properties, 3) Generate testable candidate hypotheses, 4) Validate against known data."
+}
+```
+
+These configs work via the setup form (Topology card → Planning Phase), the CLI, or direct POST to `/api/swarm/start`.
+
+See also: `README.md` (Hybrid planning section), `docs/STATUS.md` (preset matrix), and `server/src/swarm/blackboard/brainOverseer/` for using the Brain to automatically launch follow-up research runs.

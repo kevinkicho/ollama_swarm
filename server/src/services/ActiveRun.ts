@@ -4,7 +4,7 @@ import type { ConformanceMonitor } from "./ConformanceMonitor.js";
 import type { EmbeddingDriftMonitor } from "./EmbeddingDriftMonitor.js";
 import type { AmendmentsBuffer } from "./AmendmentsBuffer.js";
 import type { RunConfig } from "../swarm/SwarmRunner.js";
-import type { SwarmStatusRunConfig } from "../types.js";
+import type { SwarmStatusRunConfig, SwarmPhase } from "../types.js";
 import type { SwarmRunner } from "../swarm/SwarmRunner.js";
 import { releaseLock } from "../swarm/cloneLock.js";
 import { createLogger } from "./logger.js";
@@ -108,5 +108,26 @@ export class ActiveRun {
 
   isRunning(): boolean {
     return this.runner.isRunning?.() ?? true;
+  }
+
+  /** Force a terminal snapshot write with the given phase and stopReason.
+   *  Used to guarantee terminal state even if last event was intermediate phase.
+   */
+  forceTerminalSnapshot(phase: SwarmPhase, stopReason: string) {
+    // The persister expects schedule with current runner status, but we override phase
+    const status = (this.runner.status ? this.runner.status() : { phase, transcript: [], agents: [] }) as any;
+    status.phase = phase;
+    this.persister.schedule({
+      runId: this.runId,
+      preset: this.cfg.preset,
+      phase,
+      startedAt: this.startedAt,
+      lastEventAt: Date.now(),
+      transcript: status.transcript || [],
+      amendments: [],
+      runConfig: this.runConfig,
+      contract: status.contract,
+    } as any);
+    this.persister.stop(); // flush immediately
   }
 }

@@ -491,13 +491,13 @@ export function auditorContext(r: BlackboardRunnerFields): AuditorContext {
     const forceVerify = r.active?.requireAuditorVerification || r.active?.auditorOnlyMutations;
     const verify = verifyCommand && verifyCommand.length > 0
       ? realVerifyAdapter(clonePath, verifyCommand)
-      : (forceVerify ? { async run() { return { ok: true }; } } as any : undefined); // if force but no cmd, pass-through (or throw in prod)
+      : (forceVerify ? { async run() { return { ok: true as const }; } } : undefined);
 
     const result = await applyAndCommit({
       todoId: "auditor-approved",
       workerId: "auditor",
       expectedFiles: files,
-      hunks: hunks as any,
+      hunks: hunks as import("./applyHunks.js").Hunk[],
       fs,
       git,
       verify,
@@ -507,8 +507,8 @@ export function auditorContext(r: BlackboardRunnerFields): AuditorContext {
     return { 
       ok: result.ok, 
       reason: result.ok ? undefined : result.reason,
-      verifyFailed: (result as any).verifyFailed,
-      filesWritten: (result as any).filesWritten 
+      verifyFailed: (result as { verifyFailed?: boolean }).verifyFailed,
+      filesWritten: (result as { filesWritten?: string[] }).filesWritten 
     };
   };
 
@@ -552,5 +552,6 @@ export function adaptiveWatchdogCtx(r: BlackboardRunnerFields): AdaptiveWatchdog
     getTodoQueue: () => r.todoQueue,
     isStopping: () => r.lifecycleState === "stopping",
     appendSystem: (msg: string) => r.appendSystem(msg),
+    getBrainService: () => r.opts.getBrainService?.() ?? null,
   } as unknown as AdaptiveWatchdogContext;
 }

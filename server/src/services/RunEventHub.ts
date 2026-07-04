@@ -2,6 +2,9 @@ import { createLogger, type LogContext } from "./logger.js";
 import type { SwarmEvent } from "../types/run.js";
 import fs from "node:fs";
 import path from "node:path";
+import { createGzip } from "node:zlib";
+import { pipeline } from "node:stream/promises";
+import { config } from "../config.js";
 
 /**
  * RunEventHub organizes the previously diverse event pipes by functionality.
@@ -157,18 +160,49 @@ export function createEventLoggerSink(logger: { log: (e: unknown) => void }): Ev
  * Simple debug sink: writes categorized events to a per-run debug file.
  * E.g. logs/<runId>/debug.jsonl
  * Useful for detailed debugging without flooding main event log.
+ *
+ * Includes basic size-based rotation (similar to the global current.jsonl)
+ * so a single very long autonomous run doesn't produce a 100MB+ debug file.
  */
+const DEBUG_MAX_BYTES = config.DEBUG_MAX_BYTES;
+const DEBUG_CHECK_INTERVAL = 100;
+
 export function createDebugSink(runId: string, baseLogDir: string = "logs"): EventSink {
   const dir = path.join(baseLogDir, runId);
   fs.mkdirSync(dir, { recursive: true });
-  const debugPath = path.join(dir, "debug.jsonl");
-  const stream = fs.createWriteStream(debugPath, { flags: "a", encoding: "utf8" });
+  let debugPath = path.join(dir, "debug.jsonl");
+  let stream = fs.createWriteStream(debugPath, { flags: "a", encoding: "utf8" });
+  let writeCount = 0;
+
+  function maybeRotateDebug() {
+    if (writeCount % DEBUG_CHECK_INTERVAL !== 0) return;
+    try {
+      const stat = fs.statSync(debugPath);
+      if (stat.size < DEBUG_MAX_BYTES) return;
+      const iso = new Date().toISOString().replace(/[:.]/g, "-");
+      const archived = path.join(dir, `debug-${iso}.jsonl`);
+      fs.renameSync(debugPath, archived);
+      // Compress archived debug log too (matching global log behavior)
+      const gzPath = `${archived}.gz`;
+      pipeline(fs.createReadStream(archived), createGzip(), fs.createWriteStream(gzPath))
+        .then(() => { try { fs.unlinkSync(archived); } catch {} })
+        .catch(() => {});
+      // reopen
+      try { stream.end(); } catch {}
+      debugPath = path.join(dir, "debug.jsonl");
+      stream = fs.createWriteStream(debugPath, { flags: "a", encoding: "utf8" });
+    } catch {
+      // ignore
+    }
+  }
 
   return {
     name: "debug",
     handle(event: SwarmEvent, category: EventCategory) {
       try {
         stream.write(JSON.stringify({ ts: Date.now(), category, event }) + "\n");
+        writeCount++;
+        maybeRotateDebug();
       } catch {
         // best effort
       }

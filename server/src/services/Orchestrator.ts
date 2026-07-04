@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
 import type { AgentManager } from "./AgentManager.js";
@@ -21,6 +21,8 @@ import { config } from "../config.js";
 import { createLogger, rootLogger } from "./logger.js";
 import { ActiveRun } from "./ActiveRun.js";
 import { RunEventHub } from "./RunEventHub.js";
+import { prepareResearchConfig, isResearchRun } from "../swarm/researchHelpers.js";
+import { BrainIntegration } from "./BrainIntegration.js";
 
 export interface OrchestratorOpts {
   /** Mint one AgentManager per run so concurrent runs don't share
@@ -199,6 +201,8 @@ export class Orchestrator {
   // statusForRun can fall back to the persister file on disk. Without
   // this, a page refresh after run completion would lose the contract.
   private runPaths = new Map<string, { clonePath: string; preset: string; startedAt: number }>();
+  // Deeper extracted brain integration slice (brain chat histories, service, ready gate, history writer).
+  private brain!: BrainIntegration;
   // 2026-04-24: parent dir of the last successfully-started run.
   // Survives stop() / completion (unlike runConfig + runId) so the
   // /api/swarm/runs route can keep showing historical runs from the
@@ -227,10 +231,6 @@ export class Orchestrator {
   // run end (success OR failure). Already runId-keyed so it survives
   // the multi-tenant refactor unchanged.
   private readonly amendments = new AmendmentsBuffer();
-
-  // P6: Brain service — persistent across runs, provisions new runs.
-  private brainService: import("../swarm/blackboard/brainOverseer/brainService.js").BrainService | null = null;
-  private readonly brainReady: Promise<void>;
 
   // Gate to prevent concurrent start() calls from bypassing the cap.
   private startInProgress = false;
@@ -272,29 +272,33 @@ export class Orchestrator {
       writePersistedKnownParents(this.knownParentPaths);
     }
 
-    // P6: Initialize brain service — persists across runs.
-    this.brainReady = import("../swarm/blackboard/brainOverseer/brainService.js").then(
-      ({ createBrainService }) => {
-        const maxConcurrentRuns = this.opts.maxConcurrentRuns ?? 4;
-        this.brainService = createBrainService({
-          maxConcurrentRuns,
-          getOrchestrator: () => ({ start: (cfg) => this.start(cfg as RunConfig) }),
-          getActiveRunCount: () => this.runs.size,
-          canStartRun: () => !this.startInProgress && this.runs.size < maxConcurrentRuns,
-          emit: (e, cat) => { if (this.activeRun?.hub) this.activeRun.hub.emit(e, (cat as any) || "brain"); },
-        });
-        this.brainService?.startBackgroundMonitoring(60000);
-      },
-    );
+    // Deeper slice: instantiate extracted BrainIntegration (replaces inline brain fields/methods).
+    this.brain = new BrainIntegration({
+      maxConcurrentRuns: this.opts.maxConcurrentRuns,
+      emit: (e: any, cat?: string) => { if (this.activeRun?.hub) this.activeRun.hub.emit(e, (cat as any) || "brain"); },
+      getRunsSize: () => this.runs.size,
+      getStartInProgress: () => this.startInProgress,
+      getActiveRun: () => this.activeRun,
+      getRunById: (id: string) => this.runs.get(id),
+      startRun: (cfg: RunConfig) => this.start(cfg),
+    });
   }
 
-  /** Await brain service initialization before serving brain routes. */
+  /** Await brain service initialization before serving brain routes. (delegated to deeper extracted slice) */
   async whenBrainReady(): Promise<void> {
-    await this.brainReady;
+    await this.brain.whenReady();
   }
 
   getActiveRunCount(): number {
     return this.runs.size;
+  }
+
+  setBrainChatHistory(runId: string, history: Array<{ role: string; content: string }>) {
+    this.brain.setChatHistory(runId, history);
+  }
+
+  getBrainChatHistory(runId: string): Array<{ role: string; content: string }> | undefined {
+    return this.brain.getChatHistory(runId);
   }
 
   /** Clone paths from active and recently completed runs. */
@@ -472,36 +476,165 @@ export class Orchestrator {
    *  in memory (completed + cleaned up). This ensures page refreshes
    *  after run completion still get the contract, summary, etc. */
   statusForRun(runId: string): SwarmStatus | null {
-    const run = this.runs.get(runId);
+    let run = this.runs.get(runId);
+    if (!run && runId) {
+      // tolerant lookup for short prefix (UI may pass 8-char slice)
+      for (const [k, v] of this.runs.entries()) {
+        if (k.startsWith(runId) || runId.startsWith(k)) { run = v; break; }
+      }
+    }
     if (run) {
       const status = run.runner.status();
       return {
         ...status,
-        runId,
+        runId: run.runId, // return canonical full
         runConfig: status.runConfig ?? run.runConfig,
         runStartedAt: status.runStartedAt ?? run.startedAt,
         regions: this.computeRegions(status),
       };
     }
     // Run no longer in memory — fall back to persister file on disk.
-    const pathInfo = this.runPaths.get(runId);
+    let pathInfo = this.runPaths.get(runId);
+    if (!pathInfo && runId) {
+      for (const [k, v] of this.runPaths.entries()) {
+        if (k.startsWith(runId) || runId.startsWith(k)) { pathInfo = v; break; }
+      }
+    }
     let stateFilePath: string | null = pathInfo ? `${pathInfo.clonePath}.run-state.json` : null;
     let snap = stateFilePath ? loadSnapshot(stateFilePath) : null;
+    if (snap && snap.runId && snap.runId !== runId && !(runId && (snap.runId.startsWith(runId) || runId.startsWith(snap.runId)))) {
+      snap = null; // wrong run's snapshot for this clone
+    }
     if (!snap) {
       // Fallback for completed/old runs not in runPaths (e.g. after server restart):
       // scan known parents for any snapshot containing this runId.
       const recoverable = findRecoverableRuns(this.knownParentPaths);
       for (const rec of recoverable) {
-        if (rec.runId === runId) {
+        if (rec.runId === runId || (runId && (rec.runId.startsWith(runId) || runId.startsWith(rec.runId)))) {
           snap = loadSnapshot(rec.stateFilePath);
           if (snap) break;
         }
       }
     }
+
+    // Summary-only fallback (no .run-state snapshot for *this* runId, e.g. blackboard
+    // "no-progress" finish + same-clone later run overwrote the sibling state file).
+    // runPaths still has the clonePath, so locate the summary written by PipelineRunner
+    // and synthesize a status. This makes /runs/:id/status and the WS on-connect for
+    // /runs/:id deliver correct phase/agents/transcript/summary instead of falling
+    // back to global idle/other-run and causing run-layer to show the start page.
+    if (!snap && pathInfo?.clonePath) {
+      const cp = pathInfo.clonePath;
+      try {
+        const logsDir = nodePath.join(cp, "logs");
+        let entries: string[] = [];
+        try { entries = readdirSync(logsDir); } catch {}
+        const candidates: string[] = [
+          ...entries.filter((e: string) => /^summary-.*\.json$/.test(e)).map((e: string) => nodePath.join(logsDir, e)),
+          nodePath.join(logsDir, "summary.json"),
+          nodePath.join(cp, "summary.json"),
+        ];
+        // Also descend into per-run subdirs under logs/ (e.g. logs/72b9d79d/summary.json)
+        try {
+          for (const sub of entries) {
+            const subDir = nodePath.join(logsDir, sub);
+            if (existsSync(subDir) && statSync(subDir).isDirectory()) {
+              try {
+                const subEnts = readdirSync(subDir);
+                for (const e of subEnts) {
+                  if (/^summary(?:-.*)?\.json$/.test(e)) {
+                    candidates.push(nodePath.join(subDir, e));
+                  }
+                }
+              } catch {}
+            }
+          }
+        } catch {}
+        // Sort by basename desc to prefer most recent timestamped summary (the final
+        // aggregated one) over older/partial per-phase summaries. Ensures history gets
+        // complete transcript + final run summary grid.
+        const sortedCandidates = [...candidates].sort((a, b) =>
+          nodePath.basename(b).localeCompare(nodePath.basename(a))
+        );
+        for (const cand of sortedCandidates) {
+          try {
+            if (!existsSync(cand)) continue;
+            const sumRaw = readFileSync(cand, "utf8");
+            const sum = JSON.parse(sumRaw);
+            if (sum && (!sum.runId || sum.runId === runId ||
+                (runId && (sum.runId.startsWith(runId) || runId.startsWith(sum.runId))))) {
+              const effPhase = (sum.stopReason === "completed" ? "completed" : "stopped") as SwarmPhase;
+              const rc = (sum as any).runConfig || { preset: sum.preset };
+              return {
+                phase: effPhase,
+                round: 0,
+                agents: Array.isArray(sum.agents) ? sum.agents : [],
+                transcript: (sum.transcript || []) as SwarmStatus["transcript"],
+                contract: sum.contract,
+                summary: sum,
+                runId,
+                runConfig: rc ? {
+                  ...rc,
+                  clonePath: rc.clonePath || rc.localPath || cp,
+                } as any : undefined,
+                runStartedAt: sum.startedAt,
+                wallClockMs: typeof sum.wallClockMs === "number" ? sum.wallClockMs : undefined,
+                endedAt: typeof sum.endedAt === "number" ? sum.endedAt : undefined,
+              } as any;
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+
     if (!snap) return null;
+
+    let effectivePhase = snap.phase as SwarmPhase;
+    // For finished runs the .run-state snapshot may contain a stale non-terminal
+    // phase (e.g. "executing" from continued blackboard work after PipelineRunner
+    // declared "completed", followed by hard kill with no final flush).
+    // If a summary written by writeRunSummary (with stopReason) is present
+    // under the clone's logs/ (or root), prefer the terminal phase derived from it.
+    // This ensures /status and per-run views report the real end state and hide
+    // ineffective stop/drain buttons.
+    try {
+      const rc = snap.runConfig as any;
+      const cp = rc?.clonePath || rc?.localPath || pathInfo?.clonePath;
+      if (cp) {
+        const logsDir = nodePath.join(cp, "logs");
+        // Scan for summary.json (latest) or timestamped summary-*.json like /run-summary does
+        let entries: string[] = [];
+        try { entries = readdirSync(logsDir); } catch {}
+        const candidates = [
+          ...entries.filter((e) => /^summary-.*\.json$/.test(e)).map(e => nodePath.join(logsDir, e)),
+          nodePath.join(logsDir, "summary.json"),
+          nodePath.join(cp, "summary.json"),
+        ];
+        for (const cand of candidates) {
+          try {
+            if (!existsSync(cand)) continue;
+            const sumRaw = readFileSync(cand, "utf8");
+            const sum = JSON.parse(sumRaw);
+            if (sum && sum.stopReason && (!sum.runId || sum.runId === runId ||
+                (runId && (sum.runId.startsWith(runId) || runId.startsWith(sum.runId))))) {
+              effectivePhase = (sum.stopReason === "completed" ? "completed" : "stopped") as SwarmPhase;
+              // also try to pull wallClock for ticker
+              if (typeof sum.wallClockMs === 'number') {
+                (snap as any).wallClockMs = sum.wallClockMs;
+              }
+              if (typeof sum.endedAt === 'number') {
+                (snap as any).endedAt = sum.endedAt;
+              }
+              break;
+            }
+          } catch {}
+        }
+      }
+    } catch {}
+
     const rc = snap.runConfig as any;
     return {
-      phase: snap.phase as SwarmPhase,
+      phase: effectivePhase,
       round: 0,
       agents: [],
       transcript: snap.transcript as SwarmStatus["transcript"],
@@ -550,14 +683,30 @@ export class Orchestrator {
    *  Returns true on success, false when runId isn't active. Mirrors
    *  the legacy stop() cleanup but scoped to one entry. */
   async stopRun(runId: string): Promise<boolean> {
-    const run = this.runs.get(runId);
-    if (!run) return false;
+    let run = this.runs.get(runId);
+    if (!run && runId) {
+      // tolerant prefix match (UI sometimes passes short id)
+      for (const [k, v] of this.runs.entries()) {
+        if (k.startsWith(runId) || runId.startsWith(k)) { run = v; break; }
+      }
+    }
+    if (!run) {
+      // Already terminated (known from runPaths or recoverable snapshot).
+      // Treat stop as successful no-op so clients don't get spurious errors
+      // and UI state stays consistent.
+      const known = this.runPaths.get(runId) ||
+        (runId && [...this.runPaths.keys()].some(k => k.startsWith(runId) || runId.startsWith(k)));
+      if (known) return true;
+      return false;
+    }
 
     // Clearing tokenTracker...
     tokenTracker.setCurrentPreset(undefined, run.runId);
 
     await run.stop();
-    this.runs.delete(runId);
+    // Guarantee terminal snapshot
+    run.forceTerminalSnapshot("stopped", "user-stop");
+    this.runs.delete(run.runId);
     return true;
   }
 
@@ -570,9 +719,9 @@ export class Orchestrator {
     return [...this.knownParentPaths];
   }
 
-  /** P6: Get the brain service for system-level operations. */
+  /** P6: Get the brain service for system-level operations. (delegated) */
   getBrainService() {
-    return this.brainService;
+    return this.brain.getService();
   }
 
   /** T-Item-Recovery (2026-05-04): scan known parent dirs for
@@ -607,6 +756,7 @@ export class Orchestrator {
     newRunId: string;
     priorTranscript: unknown[];
     priorAmendments: Array<{ ts: number; text: string }>;
+    priorBrainChatHistory?: Array<{ role: string; content: string }>;
   }> {
     const all = findRecoverableRuns(this.knownParentPaths);
     const target = all.find((r) => r.runId === originalRunId);
@@ -645,6 +795,7 @@ export class Orchestrator {
       newRunId,
       priorTranscript: snap.transcript,
       priorAmendments: snap.amendments,
+      priorBrainChatHistory: snap.brainChatHistory,
     };
   }
 
@@ -724,7 +875,15 @@ export class Orchestrator {
     // only lives in memory + the WS run_started event, never making
     // it to disk where the history dropdown reads digests from.
     cfg.runId = runId;
-    this.brainService?.registerClonePath(cfg.localPath);
+    this.brain.registerClonePath(cfg.localPath);
+    // Prevent concurrent runs on same clone even in same process (in-memory)
+    for (const [otherId, otherRun] of this.runs.entries()) {
+      if (otherRun.cfg.localPath === cfg.localPath) {
+        throw new Error(
+          `Another run ${otherId} is already active on this clone path ${cfg.localPath}. Stop it first.`,
+        );
+      }
+    }
     // R8 wiring (2026-05-04): acquire the cross-process clone lock.
     // If another server process (or another run on this server) is
     // already operating on this clone path, fail fast — concurrent
@@ -815,24 +974,7 @@ export class Orchestrator {
       wallClockCapMin: cfg.wallClockCapMs ? Math.round(cfg.wallClockCapMs / 60000).toString() : undefined,
       ambitionTiers: cfg.ambitionTiers !== undefined ? String(cfg.ambitionTiers) : undefined,
     };
-    // T-Item-MultiTenant Phase 3: build + insert the ActiveRun. Any
-    // monitor wiring below mutates this entry's fields. Insertion-
-    // order Map → activeRun getter resolves to this for legacy
-    // single-arg APIs until the run terminates.
-    const activeRun = new ActiveRun(
-      runId,
-      startedAt,
-      cfg,
-      runConfig,
-      runner,
-      manager,
-      persister,
-      undefined,
-      undefined,
-      this.amendments,
-      holdsCloneLock,
-      runHub,  // pass the hub
-    );
+    const activeRun = this.createActiveRun(runId, startedAt, cfg, runConfig, runner, manager, persister, holdsCloneLock, runHub);
     this.runs.set(runId, activeRun);
     this.runPaths.set(runId, {
       clonePath: cfg.localPath,
@@ -866,52 +1008,10 @@ export class Orchestrator {
     // for runs without a directive (nothing to grade against) and
     // when CONFORMANCE_MONITOR=off in the env (escape hatch).
     const trimmedDirective = cfg.userDirective?.trim();
-    if (
-      trimmedDirective &&
-      trimmedDirective.length > 0 &&
-      config.CONFORMANCE_MONITOR &&
-      this.opts.ollamaBaseUrl
-    ) {
-      // #295 fix: monitor lives on the ActiveRun record so its
-      // lifecycle is decoupled from runner.start()'s return.
-      // Discussion runners fire-and-forget their loop, so runner.start
-      // resolves quickly even for long runs.
-      const monitor = new ConformanceMonitor({
-        runId,
-        directive: trimmedDirective,
-        ollamaBaseUrl: this.opts.ollamaBaseUrl,
-        graderModel: cfg.model,
-        getTranscript: () => activeRun.runner.status().transcript ?? [],
-        getPhase: () => activeRun.runner.status().phase ?? "idle",
-        emit: this.opts.emit,
-        isActive: () => activeRun.runner.isRunning(),
-      });
-      activeRun.attachMonitors(monitor);
-      monitor.start();
-
-      // #302 Phase B: independent embedding-similarity signal.
-      // Async-start because it embeds the directive once before the
-      // poll loop kicks off. No-ops silently when the embedding
-      // model isn't pulled (typical fresh-Ollama install).
-      const drift = new EmbeddingDriftMonitor({
-        runId,
-        directive: trimmedDirective,
-        ollamaBaseUrl: this.opts.ollamaBaseUrl,
-        getTranscript: () => activeRun.runner.status().transcript ?? [],
-        emit: this.opts.emit,
-        isActive: () => activeRun.runner.isRunning(),
-      });
-      activeRun.attachMonitors(undefined, drift);
-      void drift.start();
-    }
+    this.setupConformanceAndDriftMonitors(activeRun, runId, trimmedDirective, cfg);
     try {
       await runner.start(cfg);
-      // T192 (2026-05-04): forward chain. When cfg.chainTo is set,
-      // schedule a follow-up run that fires after this run truly
-      // completes. Runners use void this.loop() (fire-and-forget),
-      // so we can't await completion here — instead, poll isRunning()
-      // in a background task. Recursion guard: chainTo cleared on
-      // the chained run.
+      // Extracted post-start (chain scheduling etc) — placeholder for larger slice refactor.
       if (cfg.chainTo) {
         void this.scheduleForwardChain(cfg, runId, runner, cfg.chainTo);
       }
@@ -944,8 +1044,18 @@ export class Orchestrator {
 
   /** Per-run soft stop. Returns false when runId isn't active. */
   async drainRun(runId: string): Promise<boolean> {
-    const run = this.runs.get(runId);
-    if (!run) return false;
+    let run = this.runs.get(runId);
+    if (!run && runId) {
+      for (const [k, v] of this.runs.entries()) {
+        if (k.startsWith(runId) || runId.startsWith(k)) { run = v; break; }
+      }
+    }
+    if (!run) {
+      const known = this.runPaths.get(runId) ||
+        (runId && [...this.runPaths.keys()].some(k => k.startsWith(runId) || runId.startsWith(k)));
+      if (known) return true;
+      return false;
+    }
     if (typeof run.runner.drain === "function") {
       await run.runner.drain();
       return true;
@@ -1079,25 +1189,105 @@ export class Orchestrator {
     }
   }
 
-  private async buildRunner(
-    preset: PresetId,
+  /**
+   * Extracted monitor setup (conformance + drift) for cleaner start().
+   * Monitors are attached to ActiveRun for proper RAII lifecycle.
+   */
+  private createActiveRun(
+    runId: string,
+    startedAt: number,
     cfg: RunConfig,
-    ctx: BuildRunnerContext,
-  ): Promise<SwarmRunner> {
-    const { runId, startedAt, persister, manager, getRunner } = ctx;
-    // #299: thread getAmendments into runner opts so each runner can
-    // read live HITL nudges. Bound to this run's id — safe under
-    // concurrent runs (no activeRun getter).
-    // 2026-05-02 (persistence lever #2): wrap opts.emit so every
-    // SwarmEvent ALSO triggers a debounced snapshot.
+    runConfig: SwarmStatusRunConfig,
+    runner: SwarmRunner,
+    manager: AgentManager,
+    persister: RunStatePersister,
+    holdsCloneLock: boolean,
+    runHub: RunEventHub,
+  ): ActiveRun {
+    return new ActiveRun(
+      runId,
+      startedAt,
+      cfg,
+      runConfig,
+      runner,
+      manager,
+      persister,
+      undefined,
+      undefined,
+      this.amendments,
+      holdsCloneLock,
+      runHub,
+    );
+  }
+
+  private setupConformanceAndDriftMonitors(
+    activeRun: ActiveRun,
+    runId: string,
+    trimmedDirective: string | undefined,
+    cfg: RunConfig,
+  ): void {
+    if (
+      trimmedDirective &&
+      trimmedDirective.length > 0 &&
+      config.CONFORMANCE_MONITOR &&
+      this.opts.ollamaBaseUrl
+    ) {
+      // #295 fix: monitor lives on the ActiveRun record so its
+      // lifecycle is decoupled from runner.start()'s return.
+      const monitor = new ConformanceMonitor({
+        runId,
+        directive: trimmedDirective,
+        ollamaBaseUrl: this.opts.ollamaBaseUrl,
+        graderModel: cfg.model,
+        getTranscript: () => activeRun.runner.status().transcript ?? [],
+        getPhase: () => activeRun.runner.status().phase ?? "idle",
+        emit: this.opts.emit,
+        isActive: () => activeRun.runner.isRunning(),
+      });
+      activeRun.attachMonitors(monitor);
+      monitor.start();
+
+      // #302 Phase B: independent embedding-similarity signal.
+      const drift = new EmbeddingDriftMonitor({
+        runId,
+        directive: trimmedDirective,
+        ollamaBaseUrl: this.opts.ollamaBaseUrl,
+        getTranscript: () => activeRun.runner.status().transcript ?? [],
+        emit: this.opts.emit,
+        isActive: () => activeRun.runner.isRunning(),
+      });
+      activeRun.attachMonitors(undefined, drift);
+      void drift.start();
+    }
+  }
+
+  /**
+   * Deeper extracted slice: creates the wrapped emit that:
+   * - stamps runId
+   * - routes via hub
+   * - calls base emit
+   * - tracks health for brain
+   * - schedules persistence snapshot
+   *
+   * This was previously inline in buildRunner; extracting it is a step toward
+   * separating "event lifecycle + durability" from runner construction.
+   */
+  private createWrappedEmit(params: {
+    runId: string;
+    startedAt: number;
+    cfg: RunConfig;
+    persister: RunStatePersister;
+    hub?: RunEventHub;
+    getRunner: () => SwarmRunner;
+  }): (e: SwarmEvent) => void {
+    const { runId, startedAt, cfg, persister, hub, getRunner } = params;
     const baseEmit = this.opts.emit;
-    const wrappedEmit = (e: SwarmEvent) => {
+    return (e: SwarmEvent) => {
       const stamped: SwarmEvent =
         e.runId === undefined ? { ...e, runId } : e;
-      // Route through hub for unified logging / future sinks (realtime, history, debug)
-      if (ctx.hub) ctx.hub.emit(stamped as any, "lifecycle");
+      if (hub) hub.emit(stamped as any, "lifecycle");
       baseEmit(stamped);
-      this.brainService?.trackRunHealth(stamped);
+      this.brain.trackRunHealth(stamped);
       const runner = getRunner();
       if (!runner) return;
       const status = runner.status();
@@ -1109,6 +1299,7 @@ export class Orchestrator {
         startedAt,
         transcript: status?.transcript ?? [],
         amendments: this.amendments.list(runId),
+        brainChatHistory: this.brain.getChatHistory(runId),
         runConfig: {
           preset: p,
           repoUrl,
@@ -1121,6 +1312,29 @@ export class Orchestrator {
         contract: status?.contract,
       });
     };
+  }
+
+  private async buildRunner(
+    preset: PresetId,
+    cfg: RunConfig,
+    ctx: BuildRunnerContext,
+  ): Promise<SwarmRunner> {
+    // Carved research helper: normalize for scientific/internet use cases
+    cfg = prepareResearchConfig(cfg);
+    const { runId, startedAt, persister, manager, getRunner } = ctx;
+    // #299: thread getAmendments into runner opts so each runner can
+    // read live HITL nudges. Bound to this run's id — safe under
+    // concurrent runs (no activeRun getter).
+    // Deeper extract: the event wrapping + persistence scheduling is now its own method.
+    // This keeps buildRunner smaller and makes the "emit + snapshot" lifecycle easier to test/refactor.
+    const wrappedEmit = this.createWrappedEmit({
+      runId,
+      startedAt,
+      cfg,
+      persister,
+      hub: ctx.hub,
+      getRunner,
+    });
     const opts: RunnerOpts = {
       manager,
       repos: this.opts.repos,
@@ -1128,7 +1342,7 @@ export class Orchestrator {
       logDiag: this.opts.logDiag,
       ollamaBaseUrl: this.opts.ollamaBaseUrl,
       getAmendments: () => this.amendments.list(runId),
-      getBrainService: () => this.brainService,
+      getBrainService: () => this.brain.getService(),
     };
 
     const { createRunner } = await import("../swarm/presetRouter.js");

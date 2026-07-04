@@ -48,6 +48,8 @@ export interface BrainService {
   /** Start continuous background monitoring. */
   startBackgroundMonitoring(intervalMs?: number): void;
   stopBackgroundMonitoring(): void;
+  /** Prototype: allow Brain to inject a suggestion as system transcript entry for the active run */
+  injectSuggestion?(runId: string, suggestion: { title: string; text: string; category?: string }): void;
 }
 
 export interface BrainServiceOpts {
@@ -57,6 +59,8 @@ export interface BrainServiceOpts {
   canStartRun: () => boolean;
   /** Optional hub or emit for integrating with RunEventHub for organized events */
   emit?: (e: any, category?: string) => void;
+  /** For wiring injectSuggestion to actual runner append */
+  getRunnerForRun?: (runId: string) => { appendSystemMessage?: (text: string, summary?: any) => void } | null;
 }
 
 const MAX_ACTIVITIES = 50;
@@ -120,6 +124,40 @@ export function createBrainService(opts: BrainServiceOpts): BrainService {
         } catch {}
       });
     }, intervalMs);
+  };
+
+  const injectSuggestion = (runId: string, suggestion: { title: string; text: string; category?: string }) => {
+    const ev = { type: 'brain_suggestion', runId, ...suggestion };
+    eventSubscribers.forEach(fn => { try { fn(ev); } catch {} });
+    if (opts.emit) opts.emit(ev, 'brain');
+
+    const summary = { kind: 'brain_suggestion', title: suggestion.title, category: suggestion.category } as any;
+    const fullText = `[🧠 Brain Suggestion] ${suggestion.title}\n${suggestion.text}`;
+
+    // Primary: use runner's appendSystemMessage (adds to transcript + emits transcript_append)
+    if (opts.getRunnerForRun) {
+      const runner = opts.getRunnerForRun(runId);
+      if (runner && runner.appendSystemMessage) {
+        runner.appendSystemMessage(fullText, summary);
+        return;
+      }
+    }
+
+    // Robust fallback: directly emit a transcript_append so the suggestion appears
+    // in the UI transcript even for runner wrappers (e.g. PipelineRunner before support)
+    // or other cases where the method isn't exposed on the top-level runner.
+    if (opts.emit) {
+      const entry = {
+        id: (globalThis as any).crypto?.randomUUID?.() || `sug-${Date.now()}`,
+        role: "system",
+        text: fullText,
+        ts: Date.now(),
+        summary,
+      };
+      opts.emit({ type: "transcript_append", entry }, "brain");
+    } else {
+      console.log('[brain] suggestion for', runId, suggestion.title);
+    }
   };
 
   return {
@@ -255,6 +293,8 @@ export function createBrainService(opts: BrainServiceOpts): BrainService {
         monitoringInterval = null;
       }
     },
+
+    injectSuggestion,
   };
 }
 

@@ -5,7 +5,7 @@
 // This is a viewer, not a replacement for the WS-state UI yet. Step 6c
 // would replace the WS-snapshot mirror with this stream-derived state.
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 interface DerivedRunState {
   runId?: string;
@@ -45,7 +45,7 @@ function isInfraOnly(s: EventLogResponse["runs"][number]): boolean {
   );
 }
 
-export function EventLogPanel() {
+export const EventLogPanel = memo(function EventLogPanel() {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<EventLogResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -117,6 +117,9 @@ export function EventLogPanel() {
             (() => {
               const infraCount = data.runs.filter(isInfraOnly).length;
               const visible = showInfra ? data.runs : data.runs.filter((r) => !isInfraOnly(r));
+              // Latest first (newest runs at top of listview, as expected for debug log).
+              const getTime = (d: any) => d.finishedAt ?? d.startedAt ?? 0;
+              const display = [...visible].sort((a, b) => getTime(b.derived) - getTime(a.derived));
               return (
                 <>
                   <div className="text-[10px] text-ink-500 mb-2 flex items-center gap-2">
@@ -135,8 +138,8 @@ export function EventLogPanel() {
                     ) : null}
                   </div>
                   <ul className="space-y-1.5">
-                    {visible.map((r, i) => (
-                      <RunRow key={i} run={r} />
+                    {display.map((r, i) => (
+                      <RunRow key={r.derived.runId || `idx-${i}`} run={r} />
                     ))}
                   </ul>
                 </>
@@ -147,20 +150,25 @@ export function EventLogPanel() {
       ) : null}
     </div>
   );
-}
+});
 
-function RunRow({
+const RunRow = memo(function RunRow({
   run,
 }: {
   run: EventLogResponse["runs"][number];
 }) {
   const d = run.derived;
   const startedStr = d.startedAt ? new Date(d.startedAt).toLocaleTimeString() : "—";
-  const phase = d.finalPhase ?? "?";
+  let phase = d.finalPhase ?? "?";
+  // if we have a summary, the run is not still running even if last logged phase was executing
+  if (d.hasSummary && phase === "executing") {
+    phase = "completed";
+  }
   const phaseColor =
     phase === "completed" ? "text-emerald-300"
     : phase === "failed" ? "text-rose-300"
     : phase === "stopped" ? "text-amber-300"
+    : phase === "executing" ? "text-blue-300"
     : "text-ink-300";
   return (
     <li className="rounded border border-ink-700 bg-ink-800/60 p-2 text-[11px]">
@@ -190,4 +198,4 @@ function RunRow({
       ) : null}
     </li>
   );
-}
+});

@@ -24,8 +24,13 @@ export interface FilesystemAdapter {
   /** Read a file's text. Returns null when the file doesn't exist
    *  (NOT an error — applyHunks treats this as "create allowed"). */
   read: (path: string) => Promise<string | null>;
-  /** Write file text atomically. Throws on filesystem failure. */
+  /** Write file text atomically. Throws on filesystem failure.
+   *  Special case: writing the empty string is treated as delete by the
+   *  real adapter (for backward compat). Prefer explicit .delete when available. */
   write: (path: string, content: string) => Promise<void>;
+  /** Optional explicit delete (preferred for op:"delete" hunks).
+   *  When present, the pipeline will call this instead of write(""). */
+  delete?: (path: string) => Promise<void>;
 }
 
 export interface GitAdapter {
@@ -166,18 +171,23 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
   //    no-op writes saves I/O AND keeps the commit's tree clean —
   //    git status would otherwise show every "touched" file even if
   //    its content matched what was on disk.
-  //    For delete ops (newText === ""), delete the file instead of writing.
+  //
+  //    Delete ops (applyHunks "delete" produces newText==="") are handled
+  //    via explicit .delete() when the adapter provides it (preferred);
+  //    otherwise fall back to write("") (the real adapter converts "" to unlink).
   const filesWritten: string[] = [];
   let linesAdded = 0;
   let linesRemoved = 0;
   for (const [file, newText] of Object.entries(applied.newTextsByFile)) {
     const before = contents[file];
     if (newText === "") {
-      // Delete op — remove the file
+      // Delete op
       try {
-        await input.fs.write(file, ""); // Write empty then let git handle deletion
-        // Actually, we need to delete the file. Since our fs adapter may not support delete,
-        // we'll write empty content and let the caller handle it.
+        if (typeof input.fs.delete === "function") {
+          await input.fs.delete(file);
+        } else {
+          await input.fs.write(file, "");
+        }
       } catch (err) {
         // Ignore — file may not exist
       }
@@ -227,11 +237,11 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
     const v = await input.verify.run();
     if (!v.ok) {
       // Revert: write each modified file back to its pre-hunk content.
-      // Files we created (beforeContent === null) get removed by
-      // writing an empty string isn't right — we don't have a delete
-      // adapter, so we leave newly-created files in place but log
-      // them in the reason. The git working-tree will still be
-      // dirty, but the next dequeue will re-clone OR hit git status.
+      // For files that were newly created (before === null) we intentionally
+      // leave them (no "undo create").
+      // For deletes (newText==="", before was original content), the loop below
+      // will restore the file by writing `before`.
+      // The git working-tree may be dirty; the next dequeue will re-clone or hit git status.
       for (const file of filesWritten) {
         const before = contents[file];
         if (before === null) continue; // created file, leave it

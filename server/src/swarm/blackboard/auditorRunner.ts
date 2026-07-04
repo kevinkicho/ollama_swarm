@@ -448,7 +448,9 @@ export async function reviewPendingCommits(
       return;
     }
 
-    // Write the final texts (one pass)
+    // Write the final texts (one pass).
+    // Note: the realFilesystemAdapter treats write("") as delete (unlink).
+    // This keeps auditor batch consistent with the main WorkerPipeline delete path.
     const filesWritten: string[] = [];
     for (const [file, newText] of Object.entries(applied.newTextsByFile)) {
       try {

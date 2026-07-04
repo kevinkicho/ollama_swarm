@@ -90,7 +90,7 @@ export type SwarmPhase =
   | "completed"
   | "failed";
 
-export type TodoStatus = "open" | "claimed" | "committed" | "stale" | "skipped";
+export type TodoStatus = "open" | "claimed" | "committed" | "stale" | "skipped" | "pending-commit";
 
 export interface Claim {
   todoId: string;
@@ -113,6 +113,8 @@ export interface Todo {
   claim?: Claim;
   committedAt?: number;
   criterionId?: string;
+  proposedFiles?: string[];
+  proposedHunks?: any;
   // Unit 44b: planner-declared anchor strings. Server uses these to
   // inject ±25 lines of context around each match into the worker
   // prompt, so workers can edit middle-region rows of large files.
@@ -212,6 +214,8 @@ export interface RunSummary {
   finalGitStatusTruncated: boolean;
   agents: PerAgentStat[];
   contract?: ExitContract;
+  // Brain chat history persisted for recovery/FAB continuity (per-run).
+  brainChatHistory?: Array<{ role: string; content: string }>;
   // Task #65 (2026-04-24): persisted transcript snapshot at run-end.
   // Optional — older summaries don't have it. Capped server-side at
   // TRANSCRIPT_MAX_ENTRIES; transcriptTruncated=true when capped.
@@ -269,6 +273,8 @@ export type SwarmEvent =
   | { type: "todo_committed"; todoId: string }
   | { type: "todo_failed"; todoId: string; reason: string; replanCount: number }
   | { type: "todo_skipped"; todoId: string; reason: string }
+  | { type: "todo_proposed"; todo: Todo }
+  | { type: "todo_reverted"; todoId: string; reason: string }
   // W17: model shift event for failover visibility in UI
   | {
       type: "model_shift";

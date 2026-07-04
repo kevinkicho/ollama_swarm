@@ -42,6 +42,7 @@ describe("RunStatePersister — write side", () => {
       startedAt: 1234567890,
       transcript: [{ id: "t1", role: "system", text: "hi", ts: 1234567891 }],
       amendments: [{ ts: 1234567892, text: "focus on retry" }],
+      brainChatHistory: [],
       ...overrides,
     };
   }
@@ -122,6 +123,14 @@ describe("RunStatePersister — write side", () => {
     bad.flush();
     // Test passes if we got here without throwing.
     assert.equal(bad.getWriteCount(), 0, "no successful writes against an invalid path");
+  });
+
+  it("persists brainChatHistory alongside transcript and amendments", () => {
+    const history = [{ role: "user", content: "help" }, { role: "assistant", content: "ok" }];
+    persister.schedule(fixtureSnap({ brainChatHistory: history }));
+    persister.flush();
+    const loaded = loadSnapshot(`${workdir}.run-state.json`);
+    assert.deepEqual(loaded?.brainChatHistory, history);
   });
 });
 
@@ -257,6 +266,25 @@ describe("isRecoverablePhase", () => {
 
   it("returns true for unknown phases (fail-open: surface to user)", () => {
     assert.equal(isRecoverablePhase("some-future-phase"), true);
+  });
+});
+
+// Dedicated per-run brain history file (logs/<runId>/brain-chat.json) for FAB + recovery
+describe("dedicated brain history file", () => {
+  it("writes and reads brain-chat.json (e2e path for FAB chat history)", () => {
+    const runId = "fab-dedicated-test-" + Date.now();
+    const logDir = join(tmpdir(), "brain-hist-test", runId);
+    mkdirSync(logDir, { recursive: true });
+    const history = [
+      { role: "user", content: "how is the board?" },
+      { role: "assistant", content: "3 open todos, phase executing." },
+    ];
+    const fpath = join(logDir, "brain-chat.json");
+    writeFileSync(fpath, JSON.stringify(history, null, 2), "utf8");
+    const loaded = JSON.parse(readFileSync(fpath, "utf8"));
+    assert.deepEqual(loaded, history);
+    // cleanup
+    rmSync(join(tmpdir(), "brain-hist-test"), { recursive: true, force: true });
   });
 });
 

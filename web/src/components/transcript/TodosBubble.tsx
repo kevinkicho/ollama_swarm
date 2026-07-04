@@ -8,7 +8,7 @@
 //
 // Theme: emerald (sibling to the contract; "actionable next steps").
 
-import { useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 
 interface TodosEnvelope {
   todos: Array<{ description: string; expectedFiles: string[] }>;
@@ -20,7 +20,7 @@ function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s;
 }
 
-export function TodosBubble({
+export const TodosBubble = memo(function TodosBubble({
   envelope,
   header,
   className = "",
@@ -34,7 +34,7 @@ export function TodosBubble({
   const [view, setView] = useState<"summary" | "full" | "json">("summary");
   const n = envelope.todos.length;
 
-  const tabBtnBase = "px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition";
+  const tabBtnBase = "px-2 py-0.5 text-[10px] uppercase tracking-wide rounded";
   const activeCls = "bg-emerald-900/50 text-emerald-200 border border-emerald-700/60";
   const inactiveCls = "text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60";
 
@@ -107,4 +107,4 @@ export function TodosBubble({
       )}
     </div>
   );
-}
+});

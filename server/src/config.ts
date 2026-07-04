@@ -46,6 +46,11 @@ const Schema = z.object({
   // Override log directory for concurrent server instances.
   // Default: <repoRoot>/logs — each server writes to its own directory.
   LOG_DIR: z.string().optional(),
+  // Log rotation limits for current.jsonl and per-run debug.jsonl.
+  // Helps prevent 150MB+ files. Defaults match previous hardcodes.
+  LOG_MAX_BYTES: z.coerce.number().positive().default(50 * 1024 * 1024),
+  LOG_ROTATE_CHECK_INTERVAL: z.coerce.number().positive().default(50),
+  DEBUG_MAX_BYTES: z.coerce.number().positive().default(25 * 1024 * 1024),
   DEFAULT_MODEL: z.string().default("deepseek-v4-flash:cloud"),
   // Blackboard-only worker default. Workers do diff-generation and
   // benefit less from the planner's heavier reasoning model — gemma4

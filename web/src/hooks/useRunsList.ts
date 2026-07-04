@@ -17,6 +17,9 @@ export function useRunsList(parentPath?: string) {
       try {
         const params = new URLSearchParams();
         if (parentPath) params.set("parentPath", parentPath);
+        // Include other known parents so "runs" lists and sidebars see
+        // yesterday's runs even without an active run in the exact parent.
+        params.set("includeOtherParents", "true");
         const qs = params.toString();
         const res = await fetch(`/api/swarm/runs${qs ? `?${qs}` : ""}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);

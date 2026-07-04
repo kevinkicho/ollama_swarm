@@ -26,7 +26,7 @@ export interface BrainAnalysisResult {
 export interface RunInsight {
   title: string;
   description: string;
-  category?: "summary" | "lesson" | "recommendation" | "followup";
+  category?: "summary" | "lesson" | "recommendation" | "followup" | "research";
   priority: "high" | "medium" | "low";
   id?: string;
   // No more suggestedHunks for patching the swarm platform.
@@ -125,7 +125,7 @@ async function analyzeWithLLM(
       })
       .map((p: unknown) => {
         const obj = p as Record<string, unknown>;
-        const category = ["summary", "lesson", "recommendation", "followup"].includes(String(obj.category))
+        const category = ["summary", "lesson", "recommendation", "followup", "research"].includes(String(obj.category))
           ? (String(obj.category) as any)
           : undefined;
         return {
@@ -174,6 +174,16 @@ function generateInsights(
       description: `${exceptions.totalExceptions} exceptions. Patterns may indicate task complexity or directive clarity issues.`,
       category: "lesson",
       priority: "medium",
+    });
+  }
+
+  // Research-oriented template (leveraged for scientific / web-heavy runs)
+  if (insights.length === 0) {
+    insights.push({
+      title: "Research follow-up opportunity",
+      description: "Consider a follow-up run with webTools + hybrid council planning to deepen analysis or synthesize literature findings.",
+      category: "research",
+      priority: "low",
     });
   }
 

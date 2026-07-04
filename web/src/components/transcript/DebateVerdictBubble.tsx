@@ -1,9 +1,10 @@
+import { memo } from "react";
 import type { TranscriptEntrySummary } from "../../types";
 
 // Task #81 (2026-04-25): scorecard renderer for the JUDGE's structured
 // verdict. Two-column grid (PRO / CON) with strongest + weakest per
 // side, then a footer strip with the decisive call + next action.
-export function DebateVerdictBubble({
+export const DebateVerdictBubble = memo(function DebateVerdictBubble({
   verdict: v,
   header,
   ts,
@@ -69,4 +70,4 @@ export function DebateVerdictBubble({
       ) : null}
     </div>
   );
-}
+});

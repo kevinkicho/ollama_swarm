@@ -2,7 +2,7 @@
 // renderer for the auditor's {verdicts, newCriteria?} envelope.
 // Same 3-tab pattern as ContractBubble.
 
-import { useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 
 interface AuditorEnvelope {
   verdicts: Array<{
@@ -27,7 +27,7 @@ function statusColor(status: string): string {
   return "text-rose-300";
 }
 
-export function AuditorVerdictBubble({
+export const AuditorVerdictBubble = memo(function AuditorVerdictBubble({
   envelope,
   header,
   className = "",
@@ -45,13 +45,13 @@ export function AuditorVerdictBubble({
   const unmet = envelope.verdicts.filter((v) => v.status === "unmet").length;
   const wontDo = envelope.verdicts.filter((v) => v.status === "wont-do").length;
 
-  const tabBtnBase = "px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition";
+  const tabBtnBase = "px-2 py-0.5 text-[10px] uppercase tracking-wide rounded";
   const activeCls = "bg-violet-900/50 text-violet-200 border border-violet-700/60";
   const inactiveCls = "text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60";
 
   return (
     <div
-      className={`rounded border-2 border-violet-700/50 bg-violet-950/15 p-3 my-2 text-sm ${className}`}
+      className={`rounded border-2 border-violet-700/50 bg-violet-950/15 p-3 text-sm ${className}`}
       style={style}
     >
       {header}
@@ -136,4 +136,4 @@ export function AuditorVerdictBubble({
       )}
     </div>
   );
-}
+});

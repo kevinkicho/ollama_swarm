@@ -16,6 +16,7 @@ import type {
   Todo,
   TranscriptEntry,
 } from "../types";
+import type { ChatMessage } from "../components/BrainStartChat";
 
 // Unit 40: cap per-agent rolling window. 20 samples is enough for a
 // sparkline to show "is the current wait unusually long vs. recent
@@ -95,6 +96,9 @@ export interface SwarmStore {
   // #299: user-submitted mid-run directive amendments for the
   // active run. Cleared on reset/resetForNewRun.
   amendments: DirectiveAmendment[];
+  // Brain chat history, persisted per-run in the per-run store.
+  brainChatHistory: ChatMessage[];
+  useCaseFilters: string[];
   // Unit 47: latest clone_state event for the current run, or
   // undefined before the runner emits it. UI uses this to show the
   // "you're resuming an existing clone" banner.
@@ -129,6 +133,7 @@ export interface SwarmStore {
   setPhase: (phase: SwarmPhase, round: number) => void;
   upsertAgent: (a: AgentState) => void;
   appendEntry: (e: TranscriptEntry) => void;
+  clearTranscript: () => void;
   setStreaming: (agentId: string, text: string) => void;
   clearStreaming: (agentId: string) => void;
   // Task #176 Phase A: agent_streaming_end now marks the entry as
@@ -164,7 +169,13 @@ export interface SwarmStore {
   dismissCloneBanner: () => void;
   setRunStartedAt: (ts: number) => void;
   setRunConfig: (c: RunConfigSnapshot) => void;
+  // Brain chat (FAB + per-run history + suggest injection)
+  setBrainChatHistory: (history: ChatMessage[]) => void;
+  appendBrainChatMessage: (msg: ChatMessage) => void;
   setRunId: (id: string) => void;
+
+  setUseCaseFilters: (filters: string[]) => void;
+
   upsertPheromone: (file: string, state: PheromoneEntry) => void;
   setMapperSlices: (slices: Record<string, string[]>) => void;
   setOutcome: (outcome: { score: number; verdict: string; dimensions: Array<{ id: string; label: string; score: number; note: string }> }) => void;
@@ -236,6 +247,8 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   pheromones: {},
   mapperSlices: {},
   outcome: undefined,
+  brainChatHistory: [],
+  useCaseFilters: [],
 
   setPhase: (phase, round) =>
     set((s) => {
@@ -249,9 +262,24 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
           agents: {},
         };
       }
+      if (phase === "idle") {
+        // Step 3: clear transcript on idle for clean state when no run underway.
+        // Prevents virtual list from being active with stale data (source of
+        // autonomous scroll shifts/movement).
+        return {
+          phase,
+          round,
+          transcript: [],
+          streaming: {},
+          streamingMeta: {},
+          agents: {},
+        };
+      }
       return { phase, round };
     }),
   upsertAgent: (a) => set((s) => ({ agents: { ...s.agents, [a.id]: a } })),
+  clearTranscript: () => set({ transcript: [] }),
+
   appendEntry: (e) =>
     set((s) => {
       if (s.transcript.some((t) => t.id === e.id)) return s;
@@ -261,16 +289,47 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       // even when transcript starts empty. When BOTH fire (cross-run +
       // server-side), we get duplicate "New run" cards. Skip the second.
       if (e.role === "system" && e.text.startsWith("▸▸RUN-START▸▸")) {
-        const last = s.transcript[s.transcript.length - 1];
-        if (
-          last &&
-          last.role === "system" &&
-          last.text.startsWith("▸▸RUN-START▸▸")
-        ) {
-          // Extract runId from both for safety: only dedup if same run.
-          const lastRunId = (last.text.match(/runId=([^|]+)/) ?? [])[1] ?? "";
-          const newRunId = (e.text.match(/runId=([^|]+)/) ?? [])[1] ?? "";
-          if (lastRunId === newRunId) return s;
+        // In hybrid/pipeline runs (multiple phases under same runId, different sub-presets),
+        // each phase emits its own RUN-START divider. Dedup to keep only the first.
+        const already = s.transcript.some((t) =>
+          t.role === "system" &&
+          t.text.startsWith("▸▸RUN-START▸▸") &&
+          (t.text.match(/runId=([^|]+)/) ?? [])[1] === (e.text.match(/runId=([^|]+)/) ?? [])[1]
+        );
+        if (already) return s;
+      }
+      // Dedup duplicate terminal run-finished banners/grids + deliverable cards.
+      // Can occur from multiple write* paths (finally + drain/stop + rehydrate from /status + /run-summary).
+      // Server appends use randomUUID so id dedup doesn't help; check by kind (and for deliverable by filename if present).
+      if (e.summary?.kind === "run_finished") {
+        if (s.transcript.some((t) => t.summary?.kind === "run_finished")) return s;
+      }
+      if (e.summary?.kind === "deliverable") {
+        const fname = (e.summary as any)?.filename;
+        if (s.transcript.some((t) => {
+          if (t.summary?.kind !== "deliverable") return false;
+          if (fname && (t.summary as any)?.filename === fname) return true;
+          // fallback: same text prefix
+          return t.text.startsWith("Deliverable saved →");
+        })) return s;
+      }
+
+      // Dedup the repeated "starting" / seeding messages (memory, design-memory, seed, goal-gen pre-pass).
+      // In hybrid/pipeline (council as planner etc), each phase's buildSeed re-emits the clone-level
+      // ones; we keep only the first occurrence. (Server also suppresses for i>0 phases.)
+      const seedPrefixes = [
+        "Memory: surfaced",
+        "Design memory: surfaced",
+        "Seed: ",
+        "Goal-generation pre-pass:",
+      ];
+      if (e.role === "system") {
+        for (const prefix of seedPrefixes) {
+          if (e.text.startsWith(prefix)) {
+            const already = s.transcript.some((t) => t.role === "system" && t.text.startsWith(prefix));
+            if (already) return s;
+            break;
+          }
         }
       }
       const nextStreaming = { ...s.streaming };
@@ -308,11 +367,18 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         delete nextStreaming[e.agentId];
         delete nextMeta[e.agentId];
       }
-      return {
+      let finalState = {
         transcript: [...s.transcript, entryToAdd],
         streaming: nextStreaming,
         streamingMeta: nextMeta,
       };
+      if (entryToAdd.summary?.kind === "run_finished") {
+        // Force clear streaming when a final summary is appended (covers cases where
+        // phase update or previous clears missed in-flight streams from the last turn).
+        finalState.streaming = {};
+        finalState.streamingMeta = {};
+      }
+      return finalState;
     }),
   setStreaming: (agentId, text) =>
     set((s) => {
@@ -470,6 +536,13 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   setRunStartedAt: (ts) => set({ runStartedAt: ts }),
   setRunConfig: (c) => set({ runConfig: c }),
   setRunId: (id) => set({ runId: id }),
+  // Brain chat history per-run
+  setBrainChatHistory: (history: ChatMessage[]) => set({ brainChatHistory: history }),
+  appendBrainChatMessage: (msg: ChatMessage) =>
+    set((s) => ({ brainChatHistory: [...s.brainChatHistory, msg] })),
+
+  // Use-case filters for Swarm Mode card (interactive from Brain chat tables)
+  setUseCaseFilters: (filters: string[]) => set({ useCaseFilters: filters }),
   upsertPheromone: (file, state) =>
     set((s) => ({ pheromones: { ...s.pheromones, [file]: state } })),
   setMapperSlices: (slices) => set({ mapperSlices: { ...slices } }),
@@ -524,6 +597,9 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   // is supplied (test rigs, future callers that lack the fields).
   resetForNewRun: (info) =>
     set((s) => {
+      // Step 3: clear prior transcript on new run start for clean data lifetime.
+      // (Previous policy kept history in the live transcript; now we start fresh
+      // for the new run's output. History is available via review mode / run history.)
       // Fix 2026-04-24 (Kevin caught stigmergy run showing a prior
       // blackboard contract): resetForNewRun must ALSO clear the
       // blackboard-specific panels' data (contract + todos + findings
@@ -549,29 +625,12 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         // shouldn't ride along into the new run's session — if the
         // new run hits its own error, the server will set a fresh one.
         error: undefined,
+        brainChatHistory: [],
+        useCaseFilters: [],
+        transcript: [],  // explicit clear for step 3
       };
-      // Skip the divider entirely on an empty transcript — nothing to
-      // divide yet, and it avoids the "first-paint shows a divider"
-      // weirdness at run start.
-      if (s.transcript.length === 0) {
-        return { agents: {}, streaming: {}, streamingMeta: {}, latency: {}, conformance: [], drift: [], amendments: [], ...blackboardReset };
-      }
-      // Task #46 also: dedupe consecutive dividers. If the last entry
-      // is already a run-start marker, don't stack a second one —
-      // fixes the "— new run started — / — new run started —" stack
-      // that Kevin flagged during UI testing.
-      const lastEntry = s.transcript[s.transcript.length - 1];
-      const isLastADivider =
-        lastEntry?.role === "system" &&
-        (lastEntry.text === "— new run started —" ||
-          lastEntry.text.startsWith("▸▸RUN-START▸▸"));
-      if (isLastADivider) {
-        return { agents: {}, streaming: {}, streamingMeta: {}, latency: {}, conformance: [], drift: [], amendments: [], ...blackboardReset };
-      }
-      // Build the divider text. When metadata is supplied, prefix
-      // with the sentinel + encode fields as a pipe-separated line
-      // the renderer can parse. Otherwise fall back to the old
-      // plain-text format.
+      // Build the divider text. Since we cleared transcript above for clean
+      // data lifetime (step 3), this will be the first entry for the new run.
       const text = info
         ? [
             "▸▸RUN-START▸▸",
@@ -592,7 +651,6 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         amendments: [],
         ...blackboardReset,
         transcript: [
-          ...s.transcript,
           {
             id: `divider-${Date.now()}`,
             role: "system" as const,

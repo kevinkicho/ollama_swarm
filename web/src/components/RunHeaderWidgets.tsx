@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSwarm } from "../state/store";
 
 // Unit 52b: composite phase signal for the topbar.
@@ -174,18 +174,50 @@ export function RuntimeTicker() {
   const startedAt = useSwarm((s) => s.runStartedAt);
   const phase = useSwarm((s) => s.phase);
   const summary = useSwarm((s) => s.summary);
-  const isTerminal = phase === "completed" || phase === "stopped" || phase === "failed";
+  const hasTerminalSummary = !!summary && (!!summary.stopReason || typeof summary.endedAt === 'number' || typeof summary.wallClockMs === 'number');
+  const isTerminal = hasTerminalSummary || phase === "completed" || phase === "stopped" || phase === "failed";
   const [, setTick] = useState(0);
+
+  // Capture a frozen elapsed value the first time we become terminal, so it doesn't
+  // keep advancing on re-renders (even without the setInterval).
+  const frozenElapsedRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (isTerminal && startedAt !== undefined && frozenElapsedRef.current === null) {
+      if (summary?.wallClockMs !== undefined) {
+        frozenElapsedRef.current = summary.wallClockMs;
+      } else if (summary?.endedAt && startedAt) {
+        frozenElapsedRef.current = Math.max(0, summary.endedAt - startedAt);
+      } else {
+        frozenElapsedRef.current = Math.max(0, Date.now() - startedAt);
+      }
+    }
+  }, [isTerminal, startedAt, summary?.wallClockMs, summary?.endedAt]);
+
   useEffect(() => {
     if (isTerminal || startedAt === undefined) return;
     const id = window.setInterval(() => setTick((n) => n + 1), 1000);
     return () => window.clearInterval(id);
   }, [isTerminal, startedAt]);
+
   if (startedAt === undefined) return null;
 
-  const elapsedMs = isTerminal && summary?.wallClockMs !== undefined
-    ? summary.wallClockMs
-    : Math.max(0, Date.now() - startedAt);
+  let elapsedMs: number;
+  if (isTerminal || hasTerminalSummary) {
+    if (frozenElapsedRef.current !== null) {
+      elapsedMs = frozenElapsedRef.current;
+    } else if (summary?.endedAt && startedAt) {
+      // Prefer real startedAt (from run event in store) + summary's endedAt for accurate fixed duration.
+      elapsedMs = Math.max(0, summary.endedAt - startedAt);
+    } else if (summary?.wallClockMs !== undefined) {
+      elapsedMs = summary.wallClockMs;
+    } else {
+      elapsedMs = Math.max(0, Date.now() - startedAt);
+    }
+  } else {
+    elapsedMs = Math.max(0, Date.now() - startedAt);
+    // reset freeze if somehow becomes non-terminal again
+    if (frozenElapsedRef.current !== null) frozenElapsedRef.current = null;
+  }
 
   return (
     <span className="inline-flex items-center gap-2">

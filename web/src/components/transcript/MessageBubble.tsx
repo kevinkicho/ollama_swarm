@@ -13,7 +13,7 @@
 // role_diff_synthesis, next_action_phase) into one component
 // parameterized by hue + label.
 
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { TranscriptEntry } from "../../types";
 import { summarizeAgentJson } from "../../../../shared/src/summarizeAgentJson";
 import { agentBubblePalette, hueForAgent } from "../agentPalette";
@@ -38,7 +38,7 @@ import { PhaseDivider, detectPhaseTransition } from "./PhaseDivider";
 import { AgentAvatar } from "./AgentAvatar";
 import { AuditReviewCard } from "./AuditReviewCard";
 
-export function MessageBubble({ entry }: { entry: TranscriptEntry }) {
+export const MessageBubble = memo(function MessageBubble({ entry }: { entry: TranscriptEntry }) {
   const ts = new Date(entry.ts).toLocaleTimeString();
   // Wrap every entry in a stable div so Playwright + other DOM
   // inspectors can address each transcript entry without relying on
@@ -49,6 +49,8 @@ export function MessageBubble({ entry }: { entry: TranscriptEntry }) {
     <div
       data-entry-id={entry.id}
       data-entry-role={entry.role}
+      className="transcript-bubble box-border"
+      style={{ margin: 0, padding: 0 }} /* ensure no extra margins leak into measured height */
       {...(entry.summary?.kind ? { "data-summary-kind": entry.summary.kind } : {})}
       {...(typeof entry.agentIndex === "number" ? { "data-agent-index": entry.agentIndex } : {})}
       {...(entry.thoughts ? { "data-has-thoughts": "true" } : {})}
@@ -82,7 +84,7 @@ export function MessageBubble({ entry }: { entry: TranscriptEntry }) {
       )}
     </div>
   );
-}
+});
 
 function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
   // Task #46: detect the structured run-start divider and render it as
@@ -242,6 +244,19 @@ function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
   if (entry.summary?.kind === "agents_ready") {
     return <AgentsReadyBubble summary={entry.summary} fallbackText={entry.text} ts={ts} />;
   }
+
+  // Prototype for proactive Brain suggestions (injected via brainService.injectSuggestion + transcript_append)
+  if (entry.summary?.kind === "brain_suggestion" || (entry.text && entry.text.includes('[brain suggestion]'))) {
+    return (
+      <div className="rounded-md border-2 border-violet-700/60 bg-violet-950/20 px-3 py-2 text-xs">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="inline-block bg-violet-900/60 text-violet-200 font-mono uppercase tracking-wider px-1.5 py-0.5 rounded text-[10px]">🧠 Brain suggestion</span>
+          <span className="text-ink-400">{ts}</span>
+        </div>
+        <div className="text-violet-100">{entry.text}</div>
+      </div>
+    );
+  }
   // 2026-04-26 fix: distinct visual style for transient parser/repair
   // recovery messages. These are normal recovery (system caught a bad
   // response and is retrying) — they're not real errors but they LOOK
@@ -318,10 +333,12 @@ function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
       </div>
     );
   }
+  // Low-salience default for routine system chatter to reduce bombardment.
+  // Important kinds are already intercepted above with stronger visuals.
   return (
     <CollapsibleBlock
-      className="border-l-2 border-ink-500 pl-3 py-1 text-xs text-ink-400 font-mono"
-      header={<div className="text-ink-500 mb-0.5">system · {ts}</div>}
+      className="border-l border-ink-700/50 pl-2 py-0.5 text-[11px] text-ink-500/90 font-mono opacity-80"
+      header={<div className="text-ink-600 text-[10px] mb-0.5">system · {ts}</div>}
       text={entry.text}
     />
   );
@@ -338,7 +355,7 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
     </div>
   );
   const style = { borderColor: palette.border, background: palette.background };
-  const className = "rounded-md p-3 border text-sm fade-in";
+  const className = "rounded-md p-3 border text-sm";
 
   // Unit 54: prefer the server-computed structured summary when present
   // (workers' parsed envelope). The server has the authoritative parser
@@ -521,12 +538,38 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
         />
       );
     }
-    // Other server-summary kinds (ow_assignments / worker_skip) are JSON
-    // envelopes — AgentJsonBubble is correct. Unknown future kinds get
-    // a console.warn so they surface immediately during development.
+    // Other server-summary kinds (worker_skip) are JSON envelopes — AgentJsonBubble.
+    // ow_assignments gets a nicer list render.
     const oneLine = formatServerSummary(entry.summary);
-    const knownJsonKinds = new Set(["worker_skip", "ow_assignments"]);
-    if (!knownJsonKinds.has(entry.summary.kind)) {
+    if (entry.summary.kind === "ow_assignments") {
+      const s = entry.summary;
+      return (
+        <CollapsibleBlock
+          className={className}
+          style={style}
+          header={
+            <div>
+              {header}
+              <div className="text-[10px] uppercase tracking-wider font-semibold text-sky-300 mb-1">
+                ═ Orchestrator assignments · {s.subtaskCount} subtasks ═
+              </div>
+            </div>
+          }
+          text={entry.text}
+        />
+      );
+    }
+    if (entry.summary.kind === "worker_skip") {
+      const s = entry.summary;
+      return (
+        <div className="rounded-md p-3 border border-amber-700/60 bg-amber-950/20 text-sm">
+          {header}
+          <div className="text-amber-300 font-mono text-xs">⏭ Worker skip: {s.reason}</div>
+          <div className="text-ink-400 text-xs mt-1 whitespace-pre-wrap">{entry.text}</div>
+        </div>
+      );
+    }
+    if (!["worker_skip", "ow_assignments"].includes(entry.summary.kind)) {
       console.warn(`[MessageBubble] Unhandled agent summary kind: "${entry.summary.kind}" — add an AgentBubble branch`);
     }
     return (

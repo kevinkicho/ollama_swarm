@@ -1,0 +1,107 @@
+{
+  "diag": {
+    "results": [
+      {
+        "idx": 0,
+        "start": 0,
+        "allocated": 84,
+        "actualContent": 80
+      },
+      {
+        "idx": 1,
+        "start": 84,
+        "allocated": 144,
+        "actualContent": 140
+      },
+      {
+        "idx": 2,
+        "start": 228,
+        "allocated": 324,
+        "actualContent": 320
+      },
+      {
+        "idx": 3,
+        "start": 552,
+        "allocated": 99,
+        "actualContent": 95
+      },
+      {
+        "idx": 4,
+        "start": 651,
+        "allocated": 59,
+        "actualContent": 55
+      },
+      {
+        "idx": 5,
+        "start": 710,
+        "allocated": 204,
+        "actualContent": 200
+      },
+      {
+        "idx": 6,
+        "start": 914,
+        "allocated": 74,
+        "actualContent": 70
+      }
+    ],
+    "total": 988
+  },
+  "computed": [
+    {
+      "i": 0,
+      "top": 17,
+      "h": 102,
+      "gap": 0,
+      "text": "agent short (h=80)content lines..."
+    },
+    {
+      "i": 1,
+      "top": 101,
+      "h": 162,
+      "gap": -18,
+      "text": "agent med text (h=140)content lines..."
+    },
+    {
+      "i": 2,
+      "top": 245,
+      "h": 342,
+      "gap": -18,
+      "text": "run_finished tall grid (6 agents) (h=320"
+    },
+    {
+      "i": 3,
+      "top": 569,
+      "h": 117,
+      "gap": -18,
+      "text": "deliverable (h=95)content lines..."
+    },
+    {
+      "i": 4,
+      "top": 668,
+      "h": 77,
+      "gap": -18,
+      "text": "system (h=55)content lines..."
+    },
+    {
+      "i": 5,
+      "top": 727,
+      "h": 222,
+      "gap": -18,
+      "text": "agent long response (h=200)content lines"
+    },
+    {
+      "i": 6,
+      "top": 931,
+      "h": 92,
+      "gap": -18,
+      "text": "agent (h=70)content lines..."
+    }
+  ],
+  "stats": {
+    "min": -18,
+    "max": -18,
+    "avg": -18,
+    "varying": true,
+    "overlaps": true
+  }
+}

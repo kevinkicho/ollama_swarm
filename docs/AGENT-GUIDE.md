@@ -8,14 +8,14 @@
 
 ## Reading order (for agents)
 
-1. `docs/STATUS.md` (current high-level reality: Brain-OS, concurrent runs, layout, presets)
+1. `docs/STATUS.md` (current high-level reality: Brain-OS + FAB chat, concurrent runs, layout, presets, /brain/* routes)
 2. `docs/active-work.md` (what has shipped recently + future items)
 3. `docs/ARCHITECTURE-VISION.md` (north-star; many phases realized)
 4. `docs/AGENT-GUIDE.md` (this file)
 5. `docs/known-limitations.md`
 6. `server/src/swarm/blackboard/ARCHITECTURE.md` (deep substrate)
 
-Project state lives in the repo: read `docs/STATUS.md`, `docs/active-work.md`, and `docs/ARCHITECTURE-VISION.md`. Old Claude memory files have been removed.
+Project state lives in the repo: read `docs/STATUS.md`, `docs/active-work.md`, and `docs/ARCHITECTURE-VISION.md`. Legacy `.opencode/` checkpoints and old Claude/opencode memory files have been consolidated/removed; see STATUS for notes.
 
 ---
 
@@ -89,7 +89,7 @@ The only tools they can call (via in-process `ToolDispatcher`) are:
 - MCP (GitHub tools in `mcps/grok_com_github/`, Playwright) is not generally available to swarm agents.
 - Special case: when `MCP_PLAYWRIGHT_ENABLED=true`, the auditor can get browser snapshots for UI criteria.
 
-Directives that require "live web research" will only get the model's training-cutoff knowledge. Use the hybrid planning flow + `systemMap` + planner `swarm-read` for better broad understanding of the *target repo*.
+Directives that require "live web research" (scientific literature, data endpoints, superconductor studies, etc.) should set `webTools: true` + `plannerTools: true`. Use hybrid planning (council → blackboard) or pure council/map-reduce/moa for research. See `docs/swarm-patterns.md` Research Workflows section for configs and patterns. Local-only workers remain sandboxed.
 
 Relevant code:
 - `server/src/tools/ToolDispatcher.ts`
@@ -180,7 +180,7 @@ curl -s -X POST http://localhost:8243/api/swarm/start \
 
 ## Council preset architecture
 
-The council preset is the most complex preset. Here's how it works:
+The council preset is the most complex preset. Here's how it works (see also `docs/STATUS.md` and `server/src/swarm/CouncilRunner.ts` + extracted modules):
 
 ### 3-phase autonomous cycle
 
@@ -190,25 +190,21 @@ The council preset is the most complex preset. Here's how it works:
 
 3. **Phase 3 (Audit):** All agents inspect the changes. Detects contradictions (agents undid each other's work) and partial work (incomplete items). Creates follow-up todos for the next cycle.
 
-### AI-driven decision gates
+### Todo extraction (current)
 
-- **Gate 1 (verifyTodo):** Before executing a todo, AI verifies the expected files exist on disk. Catches bad file paths from todo extraction.
+Todo extraction lives in `councilDecisions.ts` (`extractActionableTodos`, `extractTodosFromAudit`). Legacy AI "decision gates" (Gate 1 verifyTodo, Gate 3 resolveContradiction, Gate 4 recoverDeletedFiles) were removed; path validation and simple extraction are used instead. See `councilDecisions.ts` header comment.
 
-- **Gate 3 (resolveContradiction):** When audit detects contradictions, AI reads the actual git diffs and decides: keep-first, keep-second, merge, or revert-both. Falls back to generic extraction if AI can't determine resolution.
-
-- **Gate 4 (recoverDeletedFiles):** When contradictions involve deleted files, AI decides which should be restored vs. intentionally removed.
-
-### File structure
+### File structure (post-refactor)
 
 ```
 server/src/swarm/
-├── CouncilRunner.ts      (499 LOC) — Main orchestration, loop, seed
-├── councilDecisions.ts   (707 LOC) — Gate 1-4, todo extraction
-├── councilExecution.ts   (207 LOC) — Parallel worker execution
-├── councilAudit.ts       (149 LOC) — Audit phase
-├── councilSynthesis.ts   (180 LOC) — Synthesis pass
-├── councilDeliverable.ts (242 LOC) — Deliverable writing
-└── councilVoteReconcile.ts (95 LOC) — Vote reconciliation
+├── CouncilRunner.ts       — Main orchestration + 3-phase loop (reduced from ~1867 LOC via extraction)
+├── councilDecisions.ts    — Todo extraction logic
+├── councilExecution.ts    — Parallel worker execution
+├── councilAudit.ts        — Audit phase
+├── councilSynthesis.ts    — Synthesis pass
+├── councilDeliverable.ts  — Deliverable writing
+└── councilVoteReconcile.ts — Vote reconciliation
 ```
 
 ### Autonomous loop
@@ -219,7 +215,9 @@ When `rounds: 0` (infinite mode), the council cycles through all 3 phases repeat
 - Cycle cap: 20 planning cycles maximum
 - Execution-audit sub-cycle cap: 8 cycles for fixing incomplete work
 
-Contradictions and partial work are logged; the next synthesis accounts for them naturally. No fallback todos needed.
+Contradictions and partial work are logged; the next synthesis accounts for them naturally.
+
+**Historical note (2026-06):** Prior council refactor extracted modules for maintainability; old session checkpoints describing gate counts/LOCs are superseded. All active agent guidance consolidated here and in STATUS.md.
 
 ---
 

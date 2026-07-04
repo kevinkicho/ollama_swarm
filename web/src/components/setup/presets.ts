@@ -50,6 +50,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommendedModel: MODEL_REASONING,
     status: "active",
     directive: "honored",
+    useCases: ["analysis", "deliberation"],
   },
   {
     id: "blackboard",
@@ -63,6 +64,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommendedModel: MODEL_REASONING,
     status: "active",
     directive: "honored",
+    useCases: ["code-writing", "research", "audit"],
   },
   {
     id: "role-diff",
@@ -79,6 +81,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommendedModel: MODEL_REASONING,
     status: "active",
     directive: "honored",
+    useCases: ["analysis", "multi-perspective", "research"],
   },
   {
     id: "map-reduce",
@@ -101,6 +104,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommendedModel: MODEL_REASONING,
     status: "active",
     directive: "honored",
+    useCases: ["literature-scan", "research", "coverage"],
   },
   {
     id: "council",
@@ -120,6 +124,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommendedModel: MODEL_REASONING,
     status: "active",
     directive: "honored",
+    useCases: ["research", "analysis", "debate", "synthesis"],
   },
   {
     id: "orchestrator-worker",
@@ -138,6 +143,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommendedModel: MODEL_REASONING,
     status: "active",
     directive: "honored",
+    useCases: ["hierarchical", "research"],
   },
   {
     id: "orchestrator-worker-deep",
@@ -157,6 +163,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommendedModel: MODEL_REASONING,
     status: "active",
     directive: "honored",
+    useCases: ["hierarchical", "large-scale"],
   },
   {
     id: "debate-judge",
@@ -176,6 +183,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommendedModel: MODEL_REASONING,
     status: "active",
     directive: "honored",
+    useCases: ["debate", "analysis"],
   },
   {
     id: "stigmergy",
@@ -190,6 +198,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommendedModel: MODEL_CODING,
     status: "active",
     directive: "ignored",
+    useCases: ["exploration"],
   },
   {
     id: "moa",
@@ -201,6 +210,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommendedModel: MODEL_REASONING,
     status: "active",
     directive: "honored",
+    useCases: ["synthesis", "research"],
   },
   {
     id: "pipeline",
@@ -212,6 +222,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommendedModel: MODEL_REASONING,
     status: "active",
     directive: "honored",
+    useCases: ["multi-stage", "research", "pipeline"],
   },
 ];
 

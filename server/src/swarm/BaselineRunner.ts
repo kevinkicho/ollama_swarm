@@ -138,7 +138,10 @@ export class BaselineRunner implements SwarmRunner {
   }
 
   private async loop(cfg: RunConfig): Promise<void> {
-    this.setPhase("cloning");
+    const isRemoteClone = !!(cfg.repoUrl && (cfg.repoUrl.startsWith("http://") || cfg.repoUrl.startsWith("https://")));
+    if (isRemoteClone) {
+      this.setPhase("cloning");
+    }
     const cloneResult = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
     const { destPath } = cloneResult;
     this.opts.emit({
@@ -424,6 +427,10 @@ export class BaselineRunner implements SwarmRunner {
     const entry: TranscriptEntry = { id: randomUUID(), role: "system", text, ts: Date.now(), summary };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
+  }
+
+  appendSystemMessage(text: string, summary?: TranscriptEntrySummary): void {
+    this.appendSystem(text, summary);
   }
 }
 

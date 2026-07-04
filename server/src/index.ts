@@ -187,9 +187,21 @@ broadcaster.attach(wss, (ws) => {
   // subscribed with ?runId=X. Without this, multi-tenant runs show the
   // active runner's contract/summary instead of the requested run's.
   const runIdFilter = broadcaster.getRunIdFilter(ws);
-  const status = runIdFilter
-    ? (orchestrator.statusForRun(runIdFilter) ?? orchestrator.status())
-    : orchestrator.status();
+  const liveStatus = runIdFilter ? orchestrator.statusForRun(runIdFilter) : null;
+  const status = liveStatus || {
+    // For a specific historical run (e.g. finished blackboard with no live .run-state
+    // snapshot for that exact runId because same-clone runs overwrite it), do NOT
+    // fall back to the global active status() — that would stamp the wrong run's
+    // phase/agents into the per-run WS view and make /runs/:id show the setup page.
+    // Send a minimal placeholder; the client's per-run hydrate (summary fallback)
+    // + transcript replay will populate real data. (Now statusForRun summary synth
+    // usually supplies a real one before we get here.)
+    phase: "idle" as any,
+    round: 0,
+    agents: [],
+    transcript: [],
+    runId: runIdFilter || undefined,
+  } as any;
   const hydrateRunId = runIdFilter ?? status.runId;
   const stamp = <T extends SwarmEvent>(e: T): T =>
     hydrateRunId && e.runId === undefined ? { ...e, runId: hydrateRunId } : e;

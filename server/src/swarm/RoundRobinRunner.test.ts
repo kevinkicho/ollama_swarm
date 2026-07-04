@@ -18,6 +18,32 @@ import type { TranscriptEntry } from "../types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RUNNER_SRC = readFileSync(join(__dirname, "RoundRobinRunner.ts"), "utf8");
+
+/**
+ * Robustly extract a preset object block from source by id.
+ * Much more reliable than fixed-length [\s\S]{0,N} when comments or fields grow.
+ */
+function extractPresetBlock(source: string, id: string): string | null {
+  const start = source.indexOf(`id: "${id}"`);
+  if (start === -1) return null;
+  let depth = 0;
+  let i = start;
+  let inObject = false;
+  for (; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '{') {
+      depth++;
+      inObject = true;
+    } else if (ch === '}') {
+      depth--;
+      if (inObject && depth === 0) {
+        // include the closing }
+        return source.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
+}
 const HELPERS_SRC = readFileSync(join(__dirname, "roundRobinPromptHelpers.ts"), "utf8");
 
 describe("DISPOSITIONS — structured deliberation lenses", () => {
@@ -323,11 +349,10 @@ test("(#5) web preset spec marks round-robin as directive: 'honored'", () => {
     _join(__dirname, "../../../web/src/components/setup/presets.ts"),
     "utf8",
   );
-  // Find the round-robin preset block + assert directive: "honored"
-  const roundRobinBlock = presetsSrc.match(/id:\s*"round-robin"[\s\S]{0,2000}?\},/);
+  const roundRobinBlock = extractPresetBlock(presetsSrc, "round-robin");
   assert.ok(roundRobinBlock, "round-robin preset block must exist");
   assert.match(
-    roundRobinBlock![0],
+    roundRobinBlock,
     /directive:\s*"honored"/,
     "round-robin must be 'honored' (improvement #5)",
   );
@@ -476,10 +501,10 @@ test("(role-diff #2+#4) web preset spec marks role-diff as directive: 'honored'"
     _join(__dirname, "../../../web/src/components/setup/presets.ts"),
     "utf8",
   );
-  const roleDiffBlock = presets.match(/id:\s*"role-diff"[\s\S]{0,2000}?\},/);
+  const roleDiffBlock = extractPresetBlock(presets, "role-diff");
   assert.ok(roleDiffBlock, "role-diff preset block must exist");
   assert.match(
-    roleDiffBlock![0],
+    roleDiffBlock,
     /directive:\s*"honored"/,
     "role-diff must be 'honored' after improvement #2",
   );

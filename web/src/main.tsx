@@ -15,9 +15,17 @@ if (import.meta.env.DEV) {
   if (wantScan) {
     void import("react-scan").then(({ scan }) => {
       scan({ enabled: true });
-      console.info("[perf] react-scan enabled — overlay shows re-render frequencies");
+      console.info("[perf] react-scan enabled — overlay shows re-render frequencies. Use on live runs via ?scan=1");
     });
   }
+  // Always expose for live-run measurements without reload: window.enableReactScan()
+  (window as any).enableReactScan = () => {
+    void import("react-scan").then(({ scan }) => {
+      scan({ enabled: true });
+      console.info("[perf] react-scan enabled at runtime for this live run.");
+    });
+  };
+  console.debug("[perf] react-scan helper ready: call window.enableReactScan() or append ?scan=1");
 }
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

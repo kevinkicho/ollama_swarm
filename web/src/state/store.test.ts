@@ -4,6 +4,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createSwarmStore, useSwarm, SwarmStoreContext } from "./store";
+import { buildRunContext } from "../components/BrainStartChat";
 
 describe("createSwarmStore", () => {
   it("returns a fresh store with the expected initial shape", () => {
@@ -39,6 +40,19 @@ describe("createSwarmStore", () => {
     assert.notEqual(a, b);
     assert.notEqual(a.getState, b.getState);
   });
+
+  it("brainChatHistory initializes empty and supports set/append (per-run FAB chat)", () => {
+    const store = createSwarmStore();
+    const s0 = store.getState();
+    assert.deepEqual(s0.brainChatHistory, []);
+    const msg = { role: "user" as const, content: "how are we doing?" };
+    s0.setBrainChatHistory([msg]);
+    assert.deepEqual(store.getState().brainChatHistory, [msg]);
+    const msg2 = { role: "assistant" as const, content: "Good, 3 todos open." };
+    store.getState().appendBrainChatMessage(msg2);
+    assert.equal(store.getState().brainChatHistory.length, 2);
+    assert.equal(store.getState().brainChatHistory[1].content, msg2.content);
+  });
 });
 
 describe("useSwarm singleton API back-compat", () => {
@@ -67,5 +81,28 @@ describe("SwarmStoreContext", () => {
     // so just assert the export exists + is constructed correctly.
     assert.ok(SwarmStoreContext);
     assert.equal(typeof SwarmStoreContext.Provider, "object");
+  });
+});
+
+describe("buildRunContext (FAB / BrainStartChat during-run context)", () => {
+  it("builds capped context with recent transcript summaries + board info", () => {
+    const transcript = [
+      { id: "e1", role: "system", text: "run started", summary: { kind: "run_start" } },
+      { id: "e2", role: "agent", text: "synthesized consensus on approach", summary: { kind: "council_synthesis" } },
+    ];
+    const ctx = buildRunContext("r-123", { transcript, phase: "executing", runConfig: { preset: "council" }, agents: {} }, { counts: { open: 2 }, todos: [{ id: "t1" }] });
+    assert.equal(ctx.runId, "r-123");
+    assert.equal(ctx.phase, "executing");
+    assert.ok(ctx.recentTranscript);
+    assert.ok(ctx.boardCounts);
+    assert.equal(ctx.boardCounts?.open, 2);
+    assert.ok(Array.isArray(ctx.recentTranscript));
+  });
+
+  it("handles empty transcript gracefully", () => {
+    const ctx = buildRunContext("r-empty", { transcript: [], phase: "idle" });
+    assert.equal(ctx.runId, "r-empty");
+    assert.ok(Array.isArray(ctx.recentTranscript));
+    assert.equal((ctx.recentTranscript || []).length, 0);
   });
 });

@@ -139,3 +139,35 @@ describe("resolveSafe — symlink checks", () => {
     }
   });
 });
+
+describe("resolveSafe — Windows / cross-platform path robustness", () => {
+  it("handles mixed separators (backslashes) in relPath on any platform", async () => {
+    const abs = await resolveSafe(clone, "src\\ok.ts");
+    assert.equal(abs, path.join(cloneReal, "src", "ok.ts"));
+  });
+
+  it("handles Windows-style drive letter paths gracefully (should reject absolute)", async () => {
+    // On Windows this is absolute; on other platforms the lexical check will still catch it
+    await assert.rejects(
+      resolveSafe(clone, "C:\\Users\\someone\\evil.txt"),
+      /absolute path not allowed/
+    );
+  });
+
+  it("accepts relative path with backslashes that stays inside clone", async () => {
+    const abs = await resolveSafe(clone, "src\\new\\file.ts");
+    assert.equal(abs, path.join(cloneReal, "src", "new", "file.ts"));
+  });
+
+  it("handles UNC-like paths gracefully (rejects as absolute if looks absolute)", async () => {
+    await assert.rejects(
+      resolveSafe(clone, "\\\\server\\share\\evil.txt"),
+      /absolute path not allowed/
+    );
+  });
+
+  it("normalizes mixed separators in deep relative paths on Windows-like input", async () => {
+    const abs = await resolveSafe(clone, "src/new\\subdir\\file.ts");
+    assert.equal(abs, path.join(cloneReal, "src", "new", "subdir", "file.ts"));
+  });
+});

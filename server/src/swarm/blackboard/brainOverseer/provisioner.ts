@@ -5,6 +5,7 @@
 // different preset, etc). No longer tied to system code patches.
 
 import type { RunInsight } from "./brainOverseer.js";
+import { prepareResearchConfig } from "../../researchHelpers.js";
 
 export interface RunProvisioner {
   /** Start a run suggested by a brain insight (e.g. followup). */
@@ -76,20 +77,33 @@ export function createRunProvisioner(opts: RunProvisionerOpts): RunProvisioner {
 function generateRunConfig(insight: RunInsight, clonePath: string, agentCount: number): Record<string, unknown> | null {
   const directive = `Follow-up based on prior run analysis: ${insight.title}. ${insight.description}`;
 
-  return {
+  // Research-friendly defaults when the insight suggests external knowledge work
+  const isResearch = (insight.category && String(insight.category).includes("research")) ||
+    /research|literature|scientific|web|internet|paper|study|superconductor/i.test(directive);
+
+  const base = {
     preset: "blackboard",
     localPath: clonePath,
     repoUrl: "",
     agentCount,
-    rounds: 2,
+    rounds: isResearch ? 1 : 2,
     continuous: false,
     userDirective: directive,
     autoGenerateGoals: true,
-    writeMode: "multi",
+    writeMode: isResearch ? "single" : "multi",
     conflictPolicy: "merge",
     plannerModel: "deepseek-v4-flash:cloud",
     workerModel: "deepseek-v4-flash:cloud",
+    webTools: isResearch,
+    plannerTools: isResearch,
+    useHybridPlanning: isResearch,
+    planningPreset: isResearch ? "council" : undefined,
+    executionPreset: isResearch ? "blackboard" : undefined,
     brainInitiated: true,
     brainProposalId: (insight as any).id,
   };
+
+  // Use the shared research helper for consistency with Orchestrator
+  const prepared = prepareResearchConfig(base as any);
+  return prepared as unknown as Record<string, unknown>;
 }

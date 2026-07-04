@@ -11,7 +11,7 @@
 // When fewer than 2 runs are active OR the cap is 1, the panel
 // renders nothing — single-run users keep the existing UI shape.
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 interface ActiveRun {
@@ -73,12 +73,94 @@ async function stopRun(runId: string): Promise<boolean> {
   }
 }
 
-export function ActiveRunsPanel() {
+const ActiveRunRow = memo(function ActiveRunRow({
+  run,
+  now,
+  stoppingId,
+  onNavigate,
+  onStop,
+}: {
+  run: ActiveRun;
+  now: number;
+  stoppingId: string | null;
+  onNavigate: (runId: string) => void;
+  onStop: (runId: string) => void;
+}) {
+  const elapsed = now - run.startedAt;
+  return (
+    <tr>
+      <td
+        style={{
+          padding: "2px 8px 2px 0",
+          fontFamily: "monospace",
+        }}
+        title={run.runId}
+      >
+        {shortRunId(run.runId)}
+        {run.brainInitiated && (
+          <span style={{ marginLeft: 4, fontSize: 10, background: "#6366f1", color: "white", padding: "0 3px", borderRadius: 2 }}>Brain</span>
+        )}
+      </td>
+      <td style={{ padding: "2px 8px" }}>{run.runConfig.preset}</td>
+      <td style={{ padding: "2px 8px" }}>
+        {run.runConfig.agentCount ?? "?"}
+      </td>
+      <td style={{ padding: "2px 8px" }}>
+        {run.currentAgentIndex != null
+          ? `Agent ${run.currentAgentIndex}/${run.runConfig.agentCount ?? '?'}: thinking...`
+          : "?"}
+      </td>
+      <td style={{ padding: "2px 8px" }}>{formatElapsed(elapsed)}</td>
+      <td style={{ padding: "2px 8px" }}>
+        {run.isRunning ? "running" : "terminated"}
+      </td>
+      <td style={{ padding: "2px 0", display: "flex", gap: 4 }}>
+        <button
+          type="button"
+          onClick={() => onNavigate(run.runId)}
+          style={{ fontSize: 11, padding: "1px 6px", cursor: "pointer" }}
+        >
+          view
+        </button>
+        {run.isRunning && (
+          <button
+            type="button"
+            disabled={stoppingId === run.runId}
+            onClick={() => onStop(run.runId)}
+            style={{
+              fontSize: 11,
+              padding: "1px 6px",
+              cursor: stoppingId === run.runId ? "wait" : "pointer",
+            }}
+          >
+            {stoppingId === run.runId ? "stopping…" : "stop"}
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+});
+
+export const ActiveRunsPanel = memo(function ActiveRunsPanel() {
   const navigate = useNavigate();
   const [runs, setRuns] = useState<ActiveRun[]>([]);
   const [now, setNow] = useState(Date.now());
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const pollRef = useRef<AbortController | null>(null);
+
+  const onNavigate = useCallback((runId: string) => {
+    navigate(`/runs/${encodeURIComponent(runId)}`);
+  }, [navigate]);
+
+  const handleStop = useCallback(async (runId: string) => {
+    setStoppingId(runId);
+    await stopRun(runId);
+    // Refetch so the row's status updates without
+    // waiting for the next 5s poll.
+    const next = await fetchActiveRuns(pollRef.current?.signal);
+    setRuns(next);
+    setStoppingId(null);
+  }, []);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -136,73 +218,18 @@ export function ActiveRunsPanel() {
           </tr>
         </thead>
         <tbody>
-          {runs.map((run) => {
-            const elapsed = now - run.startedAt;
-            return (
-              <tr key={run.runId}>
-                <td
-                  style={{
-                    padding: "2px 8px 2px 0",
-                    fontFamily: "monospace",
-                  }}
-                  title={run.runId}
-                >
-                  {shortRunId(run.runId)}
-                  {run.brainInitiated && (
-                    <span style={{ marginLeft: 4, fontSize: 10, background: "#6366f1", color: "white", padding: "0 3px", borderRadius: 2 }}>Brain</span>
-                  )}
-                </td>
-                <td style={{ padding: "2px 8px" }}>{run.runConfig.preset}</td>
-                <td style={{ padding: "2px 8px" }}>
-                  {run.runConfig.agentCount ?? "?"}
-                </td>
-                <td style={{ padding: "2px 8px" }}>
-                  {run.currentAgentIndex != null
-                    ? `Agent ${run.currentAgentIndex}/${run.runConfig.agentCount ?? '?'}: thinking...`
-                    : "?"}
-                </td>
-                <td style={{ padding: "2px 8px" }}>{formatElapsed(elapsed)}</td>
-                <td style={{ padding: "2px 8px" }}>
-                  {run.isRunning ? "running" : "terminated"}
-                </td>
-                <td style={{ padding: "2px 0", display: "flex", gap: 4 }}>
-                  {/* T-Item-MultiTenant Phase 9 (2026-05-04): deep-
-                      link to the per-run URL. */}
-                  <button
-                    type="button"
-                    onClick={() => navigate(`/runs/${encodeURIComponent(run.runId)}`)}
-                    style={{ fontSize: 11, padding: "1px 6px", cursor: "pointer" }}
-                  >
-                    view
-                  </button>
-                  {run.isRunning && (
-                    <button
-                      type="button"
-                      disabled={stoppingId === run.runId}
-                      onClick={async () => {
-                        setStoppingId(run.runId);
-                        await stopRun(run.runId);
-                        // Refetch so the row's status updates without
-                        // waiting for the next 5s poll.
-                        const next = await fetchActiveRuns(pollRef.current?.signal);
-                        setRuns(next);
-                        setStoppingId(null);
-                      }}
-                      style={{
-                        fontSize: 11,
-                        padding: "1px 6px",
-                        cursor: stoppingId === run.runId ? "wait" : "pointer",
-                      }}
-                    >
-                      {stoppingId === run.runId ? "stopping…" : "stop"}
-                    </button>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
+          {runs.map((run) => (
+            <ActiveRunRow
+              key={run.runId}
+              run={run}
+              now={now}
+              stoppingId={stoppingId}
+              onNavigate={onNavigate}
+              onStop={handleStop}
+            />
+          ))}
         </tbody>
       </table>
     </div>
   );
-}
+});

@@ -77,7 +77,7 @@ test("Orchestrator: injectUserForRun + stopRun both 404 (return false) on unknow
   );
   assert.match(
     SRC,
-    /async stopRun\(runId: string\): Promise<boolean> \{[\s\S]*?if \(!run\) return false/,
+    /async stopRun\(runId: string\): Promise<boolean> \{[\s\S]*?if \(!run\) \{[\s\S]*?return false/,
   );
 });
 
@@ -109,7 +109,7 @@ test("Orchestrator: stopRun cleans up via ActiveRun + deletes from map", () => {
   // This keeps per-run isolation without leaks.
   assert.match(
     SRC,
-    /async stopRun\([\s\S]*?await run\.stop\(\)[\s\S]*?this\.runs\.delete\(runId\)/,
+    /async stopRun\([\s\S]*?await run\.stop\(\)[\s\S]*?this\.runs\.delete\(run\.runId\)/,
   );
 });
 

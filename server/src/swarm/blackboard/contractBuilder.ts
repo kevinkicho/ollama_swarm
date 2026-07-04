@@ -484,7 +484,7 @@ export async function buildSeed(
       const recent = await readRecentMemory(clonePath);
       const rendered = renderMemoryForSeed(recent);
       priorMemoryRendered = rendered.length > 0 ? rendered : undefined;
-      if (recent.length > 0) {
+      if (recent.length > 0 && cfg.suppressSeedMessages !== true) {
         ctx.appendSystem(
           `Memory: surfaced ${recent.length} prior-run lesson entry(ies) from .swarm-memory.jsonl into the planner seed.`,
         );
@@ -500,7 +500,7 @@ export async function buildSeed(
     try {
       const dm = await readDesignMemory(clonePath);
       priorDesignMemoryRendered = renderDesignMemoryForSeed(dm);
-      if (priorDesignMemoryRendered) {
+      if (priorDesignMemoryRendered && cfg.suppressSeedMessages !== true) {
         const parts: string[] = [];
         if (dm.northStar) parts.push("north-star");
         if (dm.roadmap.length > 0) parts.push(`roadmap (${dm.roadmap.length})`);

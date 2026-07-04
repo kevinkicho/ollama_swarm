@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 // BrainProposalsPanel / BrainInsightsPanel has been removed.
 //
 // Per requirements: the Brain layer no longer maintains infrastructure for
@@ -14,6 +16,6 @@
 //
 // Analysis may still happen server-side for run records, but there is no
 // dedicated UI panel for brain-generated "proposals" or "insights".
-export function BrainProposalsPanel() {
+export const BrainProposalsPanel = memo(function BrainProposalsPanel() {
   return null;
-}
+});

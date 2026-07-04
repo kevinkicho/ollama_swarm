@@ -13,7 +13,7 @@
 // component owns its own view-mode state, renders the entry-wrapper
 // data attrs are applied by the parent MessageBubble.
 
-import { useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 
 interface ContractEnvelope {
   missionStatement: string;
@@ -27,7 +27,7 @@ function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s;
 }
 
-export function ContractBubble({
+export const ContractBubble = memo(function ContractBubble({
   envelope,
   header,
   className = "",
@@ -41,13 +41,13 @@ export function ContractBubble({
   const [view, setView] = useState<"summary" | "full" | "json">("summary");
   const n = envelope.criteria.length;
 
-  const tabBtnBase = "px-2 py-0.5 text-[10px] uppercase tracking-wide rounded transition";
+  const tabBtnBase = "px-2 py-0.5 text-[10px] uppercase tracking-wide rounded";
   const activeCls = "bg-emerald-900/50 text-emerald-200 border border-emerald-700/60";
   const inactiveCls = "text-ink-400 hover:text-ink-200 border border-transparent hover:border-ink-600/60";
 
   return (
     <div
-      className={`rounded border-2 border-emerald-700/50 bg-emerald-950/15 p-3 my-2 text-sm ${className}`}
+      className={`rounded border-2 border-emerald-700/50 bg-emerald-950/15 p-3 text-sm ${className}`}
       style={style}
     >
       {header}
@@ -107,4 +107,4 @@ export function ContractBubble({
       )}
     </div>
   );
-}
+});

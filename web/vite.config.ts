@@ -56,6 +56,11 @@ export default defineConfig(({ mode }) => {
       strictPort: false,
       proxy: {
         "/api": { target, changeOrigin: true },
+        "/ws": {
+          target,
+          ws: true,
+          changeOrigin: true,
+        },
       },
       fs: {
         allow: [path.resolve(__dirname, "..")],

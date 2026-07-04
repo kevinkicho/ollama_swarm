@@ -15,11 +15,11 @@
 // expanding this block. Dropping silently makes debugging the planner
 // much harder when its output looks wrong.
 
-import { useState } from "react";
+import { memo, useState } from "react";
 
 const MAX_OPEN_HEIGHT_PX = 300;
 
-export function ToolCallsBlock({ markers }: { markers: string[] }) {
+export const ToolCallsBlock = memo(function ToolCallsBlock({ markers }: { markers: string[] }) {
   const [open, setOpen] = useState(false);
   const n = markers.length;
   return (
@@ -31,9 +31,6 @@ export function ToolCallsBlock({ markers }: { markers: string[] }) {
       <summary className="cursor-pointer select-none px-2 py-1 text-amber-400/80 hover:text-amber-200 flex items-center gap-2 list-none">
         <span aria-hidden="true">{open ? "▼" : "▶"}</span>
         <span>🔧 {n} pseudo-tool-call{n === 1 ? "" : "s"} (model emitted as text)</span>
-        <span className="ml-auto text-ink-600 italic">
-          {open ? "click to collapse" : "click to expand"}
-        </span>
       </summary>
       <div
         className="px-3 py-2 border-t border-amber-700/40 overflow-y-auto font-mono text-amber-300/80"
@@ -48,4 +45,4 @@ export function ToolCallsBlock({ markers }: { markers: string[] }) {
       </div>
     </details>
   );
-}
+});

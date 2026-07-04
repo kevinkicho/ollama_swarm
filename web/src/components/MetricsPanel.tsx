@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { useSwarm } from "../state/store";
 import type { AgentState, LatencySample, PerAgentStat } from "../types";
 
@@ -19,7 +20,7 @@ import type { AgentState, LatencySample, PerAgentStat } from "../types";
 // Replaces the need to manually correlate the sidebar cards for
 // latency asymmetry stories ("agent-3 and agent-4 are 5x slower than
 // agent-1 this run").
-export function MetricsPanel() {
+export const MetricsPanel = memo(function MetricsPanel() {
   const agents = useSwarm((s) => s.agents);
   const latency = useSwarm((s) => s.latency);
   const cfg = useSwarm((s) => s.runConfig);
@@ -85,7 +86,7 @@ export function MetricsPanel() {
       </div>
     </div>
   );
-}
+});
 
 // 2026-04-25: post-run fallback rendering. Same column shape as the
 // live MetricsRow but sourced from summary.agents (PerAgentStat) so
@@ -93,7 +94,7 @@ export function MetricsPanel() {
 // Latency stats come from the summary's per-agent meanLatencyMs / p50 /
 // p95 (which the runner computed over successful attempts only — same
 // semantics as the live window).
-function MetricsFromSummary({ summary }: { summary: import("../types").RunSummary }) {
+const MetricsFromSummary = memo(function MetricsFromSummary({ summary }: { summary: import("../types").RunSummary }) {
   return (
     <div className="h-full overflow-auto p-4">
       <div className="text-xs text-ink-500 mb-2">
@@ -124,9 +125,9 @@ function MetricsFromSummary({ summary }: { summary: import("../types").RunSummar
       </table>
     </div>
   );
-}
+});
 
-function SummaryMetricsRow({ a }: { a: PerAgentStat }) {
+const SummaryMetricsRow = memo(function SummaryMetricsRow({ a }: { a: PerAgentStat }) {
   const lines = (a.linesAdded ?? 0) + (a.linesRemoved ?? 0);
   return (
     <tr className="border-b border-ink-800/60 hover:bg-ink-800/40">
@@ -142,9 +143,9 @@ function SummaryMetricsRow({ a }: { a: PerAgentStat }) {
       <td className={`py-1 px-2 text-right ${(a.rejectedAttempts ?? 0) > 0 ? "text-rose-300" : "text-ink-300"}`}>{a.rejectedAttempts ?? "—"}</td>
     </tr>
   );
-}
+});
 
-function MetricsRow({
+const MetricsRow = memo(function MetricsRow({
   agent,
   samples,
   model,
@@ -178,7 +179,7 @@ function MetricsRow({
       <td className="py-1 px-2 text-ink-400 truncate max-w-xs">{model ?? "—"}</td>
     </tr>
   );
-}
+});
 
 function computeStats(samples: readonly LatencySample[]): {
   count: number;

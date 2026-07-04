@@ -9,13 +9,17 @@ import type { SwarmEvent } from "../types";
 import type { SwarmStore } from "./store";
 
 /** Events without a runId field (global lifecycle) always apply.
- *  When the store has a runId, drop events stamped for another run. */
+ *  When the store has a runId, drop events stamped for another run.
+ *  Tolerate short prefixes (e.g. "2ba626d5" vs full UUID) for run-layer binding
+ *  since UI often displays/copies short slices but events use canonical full IDs. */
 function shouldApplyEvent(ev: SwarmEvent, s: SwarmStore): boolean {
   const storeRunId = s.runId;
   if (!storeRunId) return true;
   const evRunId = (ev as { runId?: string }).runId;
   if (evRunId === undefined) return true;
-  return evRunId === storeRunId;
+  if (evRunId === storeRunId) return true;
+  // prefix match (short in URL vs full in events, or vice versa)
+  return evRunId.startsWith(storeRunId) || storeRunId.startsWith(evRunId);
 }
 
 /** Apply ONE event to the supplied store's actions. The store's
@@ -65,6 +69,13 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
         ev.replanCount,
         ev.expectedAnchors,
       );
+      break;
+    case "todo_proposed":
+      if (ev.todo) s.upsertTodo(ev.todo);
+      break;
+    case "todo_reverted":
+      // Authoritative update arrives via subsequent queue_state snapshot.
+      // (We could optimistically adjust if we had prior claim info.)
       break;
     case "finding_posted":
       s.appendFinding(ev.finding);

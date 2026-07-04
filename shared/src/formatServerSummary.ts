@@ -97,17 +97,23 @@ export function formatServerSummary(s: TranscriptEntrySummary): string {
     return `Saved deliverable → ${s.filename} (${sectionsLabel}, ${s.bytes.toLocaleString()} bytes)`;
   }
   // worker_hunks (only kind remaining after all the if-returns above)
-  const opParts: string[] = [];
-  if (s.ops.replace > 0) opParts.push(`${s.ops.replace} replace`);
-  if (s.ops.create > 0) opParts.push(`${s.ops.create} create`);
-  if (s.ops.append > 0) opParts.push(`${s.ops.append} append`);
-  const opSummary = opParts.length === 1 ? opParts[0] : opParts.join(", ");
-  const hunkLabel = s.hunkCount === 1 ? "1 hunk" : `${s.hunkCount} hunks`;
-  const where = s.multipleFiles
-    ? `across multiple files`
-    : s.firstFile
-      ? `in ${s.firstFile}`
-      : `(no file)`;
-  const charsSuffix = s.totalChars > 0 ? ` (${s.totalChars.toLocaleString()} chars)` : "";
-  return `Wrote ${hunkLabel} (${opSummary}) ${where}${charsSuffix}`;
+  if (s.kind === 'worker_hunks') {
+    const opParts: string[] = [];
+    if (s.ops.replace > 0) opParts.push(`${s.ops.replace} replace`);
+    if (s.ops.create > 0) opParts.push(`${s.ops.create} create`);
+    if (s.ops.append > 0) opParts.push(`${s.ops.append} append`);
+    const opSummary = opParts.length === 1 ? opParts[0] : opParts.join(", ");
+    const hunkLabel = s.hunkCount === 1 ? "1 hunk" : `${s.hunkCount} hunks`;
+    const where = s.multipleFiles
+      ? `across multiple files`
+      : s.firstFile
+        ? `in ${s.firstFile}`
+        : `(no file)`;
+    const charsSuffix = s.totalChars > 0 ? ` (${s.totalChars.toLocaleString()} chars)` : "";
+    return `Wrote ${hunkLabel} (${opSummary}) ${where}${charsSuffix}`;
+  }
+  if (s.kind === 'brain_suggestion') {
+    return `Brain suggestion: ${s.title}`;
+  }
+  return `Unknown summary kind`;
 }

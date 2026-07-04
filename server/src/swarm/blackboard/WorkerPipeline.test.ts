@@ -29,7 +29,14 @@ function makeFakeFs(initial: Record<string, string> = {}): {
         return state.files.has(path) ? (state.files.get(path) as string) : null;
       },
       async write(path, content) {
-        state.files.set(path, content);
+        if (content === "") {
+          state.files.delete(path);
+        } else {
+          state.files.set(path, content);
+        }
+      },
+      async delete(path) {
+        state.files.delete(path);
       },
     },
   };
@@ -407,8 +414,8 @@ describe("applyAndCommit — verification gate (#296)", () => {
     assert.equal(out.ok, false);
     if (out.ok) return;
     assert.equal(out.verifyFailed, true);
-    // The newly-created file remains; we don't have a delete adapter.
-    // The next worker turn will see it and either modify or skip.
+    // Newly-created files on verify-fail revert are intentionally left behind
+    // (no "undo create" semantics in this path). The next worker can modify or skip.
     assert.equal(fsState.files.get("new.ts"), "freshly created");
   });
 
@@ -426,6 +433,37 @@ describe("applyAndCommit — verification gate (#296)", () => {
     assert.equal(gitState.commits.length, 1);
   });
 
+  it("delete op removes the file and counts linesRemoved", async () => {
+    const { fs, state: fsState } = makeFakeFs({ "legacy.ts": "line1\nline2\nline3\n" });
+    const { git } = makeFakeGit();
+    const out = await applyAndCommit({
+      todoId: "t-del", workerId: "worker", expectedFiles: ["legacy.ts"],
+      hunks: [{ op: "delete", file: "legacy.ts" }],
+      fs, git,
+    });
+    assert.equal(out.ok, true);
+    assert.equal(fsState.files.has("legacy.ts"), false, "file should be deleted from fs");
+    assert.equal(out.filesWritten.includes("legacy.ts"), true);
+    assert.ok(out.linesRemoved >= 3, "should count removed lines");
+    assert.equal(out.linesAdded, 0);
+  });
+
+  it("delete + verify fail restores the original file content", async () => {
+    const original = "important\ncode\nhere\n";
+    const { fs, state: fsState } = makeFakeFs({ "critical.ts": original });
+    const { git } = makeFakeGit();
+    const out = await applyAndCommit({
+      todoId: "t-del", workerId: "w", expectedFiles: ["critical.ts"],
+      hunks: [{ op: "delete", file: "critical.ts" }],
+      fs, git,
+      verify: { async run() { return { ok: false, reason: "tests failed after delete" }; } },
+    });
+    assert.equal(out.ok, false);
+    assert.equal(out.verifyFailed, true);
+    // Should have restored because before was the original content
+    assert.equal(fsState.files.get("critical.ts"), original, "delete should be reverted on verify failure");
+  });
+
   it("NEW: blocks mutation unless auditorApproved when auditorOnlyMutations would be active (guard sketch)", async () => {
     const { fs } = makeFakeFs({ "a.ts": "old" });
     const { git } = makeFakeGit();
@@ -438,7 +476,75 @@ describe("applyAndCommit — verification gate (#296)", () => {
     });
     // In current guard, we don't hard block yet (workers use propose), but test the path
     // For demo, we allow; real enforcement is via propose path + auditor call with flag.
-    // Here we just verify the call succeeds without the flag (as before).
+    // Here we just verify the call succeeds without the flag (as before). 
+  });
+
+  it("mixed delete + replace in one applyAndCommit", async () => {
+    const { fs, state: fsState } = makeFakeFs({
+      "keep.ts": "keep this\nand this",
+      "remove.ts": "delete\nme\nentirely"
+    });
+    const { git } = makeFakeGit();
+    const out = await applyAndCommit({
+      todoId: "t-mix", workerId: "w", expectedFiles: ["keep.ts", "remove.ts"],
+      hunks: [
+        { op: "replace", file: "keep.ts", search: "keep this", replace: "KEPT" },
+        { op: "delete", file: "remove.ts" }
+      ],
+      fs, git,
+    });
     assert.equal(out.ok, true);
+    assert.equal(fsState.files.get("keep.ts"), "KEPT\nand this");
+    assert.equal(fsState.files.has("remove.ts"), false);
+    assert.ok(out.linesRemoved > 0);
+  });
+
+  it("delete op works through auditorApproved batch path (simulates auditor batch delete)", async () => {
+    const original = "to-be-deleted\ncontent\nhere\n";
+    const { fs, state: fsState } = makeFakeFs({ "old-module.ts": original });
+    const { git } = makeFakeGit();
+    const out = await applyAndCommit({
+      todoId: "auditor-del", workerId: "auditor", expectedFiles: ["old-module.ts"],
+      hunks: [{ op: "delete", file: "old-module.ts" }],
+      fs, git,
+      auditorApproved: true,
+    });
+    assert.equal(out.ok, true);
+    assert.equal(fsState.files.has("old-module.ts"), false);
+    // Auditor batch typically uses skipCommit, but the delete should still have happened
+  });
+
+  it("auditor batch delete + verify success path (research workflow simulation)", async () => {
+    const { fs, state: fsState } = makeFakeFs({ "deprecated.ts": "old code\n" });
+    const { git } = makeFakeGit();
+    const out = await applyAndCommit({
+      todoId: "research-cleanup", workerId: "auditor", expectedFiles: ["deprecated.ts"],
+      hunks: [{ op: "delete", file: "deprecated.ts" }],
+      fs, git,
+      auditorApproved: true,
+      verify: { async run() { return { ok: true }; } },
+    });
+    assert.equal(out.ok, true);
+    assert.equal(fsState.files.has("deprecated.ts"), false);
+  });
+
+  it("research-style mixed ops (delete deprecated + update findings) with auditor flag", async () => {
+    const { fs, state: fsState } = makeFakeFs({
+      "findings.md": "# Initial findings",
+      "old-analysis.ts": "legacy"
+    });
+    const { git } = makeFakeGit();
+    const out = await applyAndCommit({
+      todoId: "research-update", workerId: "auditor", expectedFiles: ["findings.md", "old-analysis.ts"],
+      hunks: [
+        { op: "append", file: "findings.md", content: "\n\n## Update: new common property found" },
+        { op: "delete", file: "old-analysis.ts" }
+      ],
+      fs, git,
+      auditorApproved: true,
+    });
+    assert.equal(out.ok, true);
+    assert.ok(fsState.files.get("findings.md")?.includes("new common property"));
+    assert.equal(fsState.files.has("old-analysis.ts"), false);
   });
 });

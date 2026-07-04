@@ -775,8 +775,10 @@ describe("applyEventToStore", () => {
         store.getState(),
       );
 
-      assert.ok(store.getState().transcript.length >= 2);
-      const divider = store.getState().transcript[store.getState().transcript.length - 1];
+      // resetForNewRun intentionally clears prior-run transcript for clean per-run lifetime;
+      // the divider becomes the (first and only) entry for the new run.
+      assert.equal(store.getState().transcript.length, 1);
+      const divider = store.getState().transcript[0];
       assert.equal(divider.role, "system");
       assert.ok(divider.text.includes("RUN-START"));
     });

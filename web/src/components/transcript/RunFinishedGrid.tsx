@@ -5,6 +5,11 @@ import type { TranscriptEntrySummary } from "../../types";
 // Replaces the plaintext "═══ Run finished ═══" wall-of-text with a
 // proper table — header strip with the headline stats, then a per-
 // agent table with one row per agent and columns for every metric.
+//
+// Phase 4 stability: structure is fixed at render (no late async content).
+// Dynamic parts (n agents, conditional tiles) are accounted in estimateSize.
+// Internal vertical spacing kept minimal (no excess mb- that would vary measured height).
+// SeedAnnounceGrid preview is count-based for initial height predictability.
 export function RunFinishedGrid({
   summary: s,
   ts,
@@ -22,7 +27,7 @@ export function RunFinishedGrid({
   // for no-progress / cap-trips; ink for user-stop; rose for crashes.
   const palette = paletteForStopReason(s.stopReason);
   return (
-    <div className={`rounded border ${palette.border} ${palette.bg} p-3 my-2`}>
+    <div className={`rounded border ${palette.border} ${palette.bg} p-3`}>
       <div className="flex items-baseline justify-between gap-2 mb-2">
         <div className={`${palette.title} font-semibold tracking-wide text-xs uppercase`}>
           ═ Run finished — {s.stopReason} in {wallClock} ═
@@ -81,7 +86,7 @@ export function RunFinishedGrid({
         ) : null}
       </div>
       {/* Per-agent grid */}
-      <div className="text-[10px] uppercase tracking-wider text-ink-500 font-semibold mb-1">
+      <div className="text-[10px] uppercase tracking-wider text-ink-500 font-semibold">
         Per-agent ({s.agents.length})
       </div>
       <div className="overflow-x-auto rounded border border-ink-700/60">
@@ -210,14 +215,14 @@ export function SeedAnnounceGrid({
   const shown = expanded ? s.topLevel : s.topLevel.slice(0, PREVIEW_COUNT);
   const hidden = s.topLevel.length - shown.length;
   return (
-    <div className="rounded border border-sky-700/40 bg-sky-950/20 p-3 my-2">
+    <div className="rounded border border-sky-700/40 bg-sky-950/20 p-3">
       <div className="flex items-baseline justify-between gap-2 mb-2">
         <div className="text-sky-300 font-semibold tracking-wide text-xs uppercase">
           ⤓ Project seed
         </div>
         <div className="text-[10px] text-ink-500 font-mono">{tsStr}</div>
       </div>
-      <div className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-xs font-mono mb-2">
+      <div className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-xs font-mono">
         <div className="text-ink-500">Repo</div>
         <div className="text-ink-200 break-all">
           <a href={s.repoUrl} target="_blank" rel="noopener noreferrer" className="text-sky-300 hover:text-sky-200 underline">{s.repoUrl}</a>
@@ -227,7 +232,7 @@ export function SeedAnnounceGrid({
         <div className="text-ink-500">Top-level</div>
         <div className="text-ink-200">{s.topLevel.length} entries</div>
       </div>
-      <div className="flex flex-wrap gap-1 mb-2">
+      <div className="flex flex-wrap gap-1">
         {shown.map((name) => (
           <span
             key={name}
@@ -252,7 +257,7 @@ export function SeedAnnounceGrid({
           show less
         </button>
       ) : null}
-      <div className="text-[10px] text-ink-500 italic mt-2">
+      <div className="text-[10px] text-ink-500 italic">
         Use file-read / grep / find tools to inspect this repo — start with README.md if present.
       </div>
     </div>

@@ -35,7 +35,7 @@ function initGitRepo(dir: string): void {
   execSync('git add README.md && git -c user.email=t@test.com -c user.name=t commit -m init', {
     cwd: dir,
     stdio: "ignore",
-    shell: "/bin/bash",
+    // cross-platform: omit shell override so cmd.exe works on Windows; && chaining supported
   });
 }
 

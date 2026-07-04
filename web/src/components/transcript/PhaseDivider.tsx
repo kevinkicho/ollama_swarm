@@ -1,6 +1,8 @@
 // PhaseDivider.tsx — Visual separator between council phases and cycles
 // Renders a styled horizontal rule with phase name, icon, and cycle number.
 
+import { memo } from "react";
+
 interface PhaseDividerProps {
   phase: string;
   ts: number;
@@ -16,20 +18,20 @@ const PHASE_CONFIG: Record<string, { icon: string; label: string; color: string 
   cycle: { icon: "🔄", label: "Cycle", color: "border-cyan-500/50 bg-cyan-950/20" },
 };
 
-export function PhaseDivider({ phase, ts, cycle }: PhaseDividerProps) {
+export const PhaseDivider = memo(function PhaseDivider({ phase, ts, cycle }: PhaseDividerProps) {
   const config = PHASE_CONFIG[phase] ?? { icon: "▶", label: phase, color: "border-ink-600 bg-ink-800/40" };
   const time = new Date(ts).toLocaleTimeString();
   const cycleLabel = cycle ? ` · Cycle ${cycle}` : "";
 
   return (
-    <div className={`flex items-center gap-3 my-4 px-3 py-2 rounded-md border ${config.color}`}>
+    <div className={`flex items-center gap-3 mt-4 px-3 py-2 rounded-md border ${config.color}`}>
       <span className="text-lg">{config.icon}</span>
       <span className="text-sm font-medium text-ink-200">{config.label}{cycleLabel}</span>
       <span className="text-xs text-ink-500">· {time}</span>
       <div className="flex-1 border-t border-ink-700/50" />
     </div>
   );
-}
+});
 
 /**
  * Detect phase transitions from system messages.

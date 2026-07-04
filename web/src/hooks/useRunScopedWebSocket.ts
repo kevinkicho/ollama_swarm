@@ -30,6 +30,10 @@ export interface UseRunScopedWebSocketOptions {
   /** Called when the socket transitions states. Optional — useful
    *  for surfacing connection status in the UI. */
   onStateChange?: (state: "connecting" | "open" | "closed") => void;
+  /** Light client: requests server-side light topic filtering (?light=1)
+   *  so heavy events like full transcript_append / agent_streaming are
+   *  dropped or summarized. Great for external monitors / perf. */
+  light?: boolean;
 }
 
 export function useRunScopedWebSocket(opts: UseRunScopedWebSocketOptions): void {
@@ -37,10 +41,12 @@ export function useRunScopedWebSocket(opts: UseRunScopedWebSocketOptions): void 
   // doesn't tear down the socket. Only runId changes do.
   const onEventRef = useRef(opts.onEvent);
   const onStateChangeRef = useRef(opts.onStateChange);
+  const lightRef = useRef(opts.light);
   useEffect(() => {
     onEventRef.current = opts.onEvent;
     onStateChangeRef.current = opts.onStateChange;
-  }, [opts.onEvent, opts.onStateChange]);
+    lightRef.current = opts.light;
+  }, [opts.onEvent, opts.onStateChange, opts.light]);
 
   useEffect(() => {
     const runId = opts.runId?.trim();
@@ -53,7 +59,8 @@ export function useRunScopedWebSocket(opts: UseRunScopedWebSocketOptions): void 
     const open = () => {
       if (cancelled) return;
       const proto = location.protocol === "https:" ? "wss" : "ws";
-      const url = `${proto}://${location.hostname}:${__BACKEND_PORT__}/ws?runId=${encodeURIComponent(runId)}`;
+      let url = `${proto}://${location.hostname}:${__BACKEND_PORT__}/ws?runId=${encodeURIComponent(runId)}`;
+      if (lightRef.current) url += '&light=1';
       onStateChangeRef.current?.("connecting");
       const sock = new WebSocket(url);
       socket = sock;

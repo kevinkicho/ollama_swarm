@@ -8,11 +8,16 @@ import path from "node:path";
 
 export async function resolveSafe(clone: string, relPath: string): Promise<string> {
   if (!clone) throw new Error("no active clone path");
-  if (path.isAbsolute(relPath)) throw new Error(`absolute path not allowed: ${relPath}`);
+
+  // Normalize separators early for robustness on Windows (mixed / and \ are common
+  // from WSL, user input, prompts, etc.). This helps lexical checks.
+  const normalizedRel = relPath.replace(/\\/g, "/");
+
+  if (path.isAbsolute(normalizedRel)) throw new Error(`absolute path not allowed: ${relPath}`);
 
   // Lexical check first — cheap, and catches the obvious `../` cases without
   // touching the filesystem.
-  const abs = path.resolve(clone, relPath);
+  const abs = path.resolve(clone, normalizedRel);
   const lexRel = path.relative(clone, abs);
   if (lexRel.startsWith("..") || path.isAbsolute(lexRel)) {
     throw new Error(`path escapes clone: ${relPath}`);

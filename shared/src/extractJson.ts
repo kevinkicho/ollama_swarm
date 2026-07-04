@@ -85,3 +85,23 @@ export function extractFirstBalanced(s: string): string | null {
 
 // Convenience alias matching the web-side name.
 export const extractFirstBalancedJson = extractFirstBalanced;
+
+/**
+ * Extract a labeled JSON block, e.g. "RECOMMENDATION: { ... }" or
+ * "CONFIG: { ... }". Uses the shared balanced extractor for robustness.
+ * Returns the parsed object or null.
+ */
+export function extractLabeledJson(text: string, label: string): any | null {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`${escaped}\\s*[:\\-]?\\s*(\\{[\\s\\S]*?\\})`, 'i');
+  const match = text.match(re);
+  if (!match) return null;
+  const raw = match[1];
+  const extracted = extractJsonFromText(raw);
+  if (!extracted) return null;
+  try {
+    return JSON.parse(extracted);
+  } catch {
+    return null;
+  }
+}

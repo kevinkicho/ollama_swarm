@@ -106,7 +106,7 @@ export function AuditReviewCard({ text, agentIndex, ts }: AuditReviewCardProps) 
       {/* Header with expand/collapse toggle */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 bg-ink-800/50 border-b border-ink-700/30 hover:bg-ink-700/50 transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 bg-ink-800/50 border-b border-ink-700/30 hover:bg-ink-700/50"
       >
         <span className="text-sm">🔍</span>
         <span className="text-xs font-medium text-ink-300">

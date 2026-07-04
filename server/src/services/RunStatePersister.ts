@@ -73,6 +73,8 @@ export interface PersistedRunState {
   transcript: unknown[];
   /** Active amendments buffer for this run. */
   amendments: Array<{ ts: number; text: string }>;
+  /** Brain chat history persisted alongside run for continuity across restarts. */
+  brainChatHistory?: Array<{ role: string; content: string }>;
   /** T-Item-Recover (2026-05-04): cfg snapshot for resume. Optional
    *  for back-compat with v1 snapshots; absent → not resumable. */
   runConfig?: PersistedRunConfig;
@@ -89,6 +91,8 @@ export interface SnapshotInput {
   startedAt: number;
   transcript: unknown[];
   amendments: Array<{ ts: number; text: string }>;
+  /** Brain chat history to persist with the run summary. */
+  brainChatHistory?: Array<{ role: string; content: string }>;
   /** T-Item-Recover (2026-05-04): include the cfg so the snapshot
    *  is resumable. Optional — the orchestrator passes it; the
    *  persister forwards it as-is. */
@@ -147,6 +151,7 @@ export class RunStatePersister {
       lastEventAt: Date.now(),
       transcript: snap.transcript,
       amendments: snap.amendments,
+      ...(snap.brainChatHistory ? { brainChatHistory: snap.brainChatHistory } : {}),
       ...(snap.runConfig ? { runConfig: snap.runConfig } : {}),
       ...(snap.contract ? { contract: snap.contract } : {}),
     };

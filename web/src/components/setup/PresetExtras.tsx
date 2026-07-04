@@ -57,6 +57,8 @@ export interface SwarmPreset {
   recommendedModel: string;
   status: PresetStatus;
   directive: DirectiveBehavior;
+  /** Use-case tags (from docs/swarm-patterns.md research table + STATUS preset matrix). Enables the filter in Swarm Mode card. */
+  useCases?: string[];
 }
 
 // Unit 63: one-click "Multi-hour autonomous" preset. Single source of

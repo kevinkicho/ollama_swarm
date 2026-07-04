@@ -7,12 +7,7 @@ import { ProgressTimeline } from "./ProgressTimeline";
 
 // Task #173 + #176 Phase A+B: per-agent streaming dock. Each agent
 // gets a STABLE bubble that persists from first chunk through
-// completion — no DOM swap on session.idle. Phase A: bubble stays
-// visible after agent_streaming_end (visual transitions to ✓ +
-// neutral border) until transcript_append for the same agent
-// removes it via store-level dedup. Phase B: "thinking N.Ns…"
-// subtitle uses lastTextAt to show the model is alive even during
-// long pauses with no text emit.
+// completion (animations removed from transcript area).
 export function StreamingDock({
   streaming,
   streamingMeta,
@@ -87,7 +82,7 @@ function PersistentStreamBubble({
   const isStalled = !isDone && sinceLastText > STALL_THRESHOLD_MS;
 
   const palette = agentBubblePalette(hue, isStalled ? true : isDone, isBrain);
-  const glowClass = isDone ? "" : isStalled ? "glow-stalled" : palette.glowClass;
+  const glowClass = ""; // animations removed from transcript
 
   // 2026-04-27 evening (#231 follow-up 4): strip XML pseudo-tool-call
   // markers from the LIVE streaming text before segmenting. RCA: the
@@ -155,7 +150,7 @@ function PersistentStreamBubble({
 
   return (
     <div
-      className={`rounded-md p-3 border text-sm relative transition-all duration-300 ${glowClass}`}
+      className="rounded-md p-3 border text-sm relative"
       style={{ borderColor: palette.border, background: palette.background }}
     >
       <div className="flex items-center gap-2 text-xs mb-1" style={{ color: palette.header }}>
@@ -194,8 +189,8 @@ function Dot({ hue, delay }: { hue: number; delay: number }) {
   const palette = agentBubblePalette(hue, false);
   return (
     <span
-      className="inline-block w-1 h-1 rounded-full animate-pulse"
-      style={{ background: palette.accent, animationDelay: `${delay}ms` }}
+      className="inline-block w-1 h-1 rounded-full"
+      style={{ background: palette.accent }}
     />
   );
 }

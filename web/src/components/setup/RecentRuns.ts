@@ -35,6 +35,9 @@ export interface RecentRun {
   /** Persisted caps/tiers so refill restores the exact advanced settings. */
   wallClockCapMin?: string;
   ambitionTiers?: string;
+  /** The runId returned by the server on successful start (full UUID).
+   *  Used to load full summary and deep-link to /runs/:runId. */
+  runId?: string;
 }
 
 export function loadRecentRuns(): RecentRun[] {
@@ -59,6 +62,7 @@ export function saveRecentRun(input: {
   directive: string;
   wallClockCapMin?: string;
   ambitionTiers?: string;
+  runId?: string;
 }): RecentRun[] {
   try {
     const existing = loadRecentRuns();
@@ -77,6 +81,7 @@ export function saveRecentRun(input: {
       startedAt: Date.now(),
       wallClockCapMin: input.wallClockCapMin,
       ambitionTiers: input.ambitionTiers,
+      runId: input.runId,
     };
     // Dedupe: drop any prior entry with the same (repoUrl + presetId).
     const deduped = existing.filter(

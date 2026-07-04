@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { useSwarm } from "../state/store";
 import type { PheromoneEntry } from "../types";
 
@@ -20,7 +20,7 @@ import type { PheromoneEntry } from "../types";
 // flip by column.
 type SortKey = "file" | "visits" | "interest" | "confidence" | "score";
 
-export function PheromonePanel() {
+export const PheromonePanel = memo(function PheromonePanel() {
   const pheromones = useSwarm((s) => s.pheromones);
   const [sortKey, setSortKey] = useState<SortKey>("score");
   const [sortAsc, setSortAsc] = useState(false);
@@ -109,7 +109,7 @@ export function PheromonePanel() {
       </div>
     </div>
   );
-}
+});
 
 function rowValue(
   r: PheromoneEntry & { file: string; score: number },

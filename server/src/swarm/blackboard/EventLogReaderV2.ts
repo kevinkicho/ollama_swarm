@@ -173,6 +173,14 @@ export function deriveRunState(slice: RunSlice): DerivedRunState {
       case "run_summary":
         state.hasSummary = true;
         state.finishedAt = r.ts;
+        const stopReason = (ev as any)?.summary?.stopReason;
+        if (stopReason === "completed") {
+          state.finalPhase = "completed";
+        } else if (stopReason) {
+          state.finalPhase = "stopped";
+        } else if (!state.finalPhase || !["completed", "stopped", "failed"].includes(state.finalPhase)) {
+          state.finalPhase = "completed";
+        }
         break;
       default:
         // Unknown / future event type — silently skip. The reader

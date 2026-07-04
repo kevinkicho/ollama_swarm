@@ -20,8 +20,8 @@ import type { ConformanceSample, DriftSample } from "../state/store";
 // Truncate-from-LEFT (per Kevin's Unit 52c spec preference): the
 // distinguishing tail of a path is the run-name + repo-name, not the
 // shared `/mnt/c/Users/...` prefix.
-export function truncateLeft(s: string, maxLen: number): string {
-  if (s.length <= maxLen) return s;
+export function truncateLeft(s: string | undefined | null, maxLen: number): string {
+  if (!s || s.length <= maxLen) return s || "";
   return "…" + s.slice(s.length - maxLen + 1);
 }
 
@@ -52,7 +52,7 @@ export function IdentityStrip() {
   // shift when this strip appears.
   const history = null;
   if (!cfg && !runId) return null;
-  const runName = cfg ? deriveRunName(cfg.clonePath) : "(unnamed run)";
+  const runName = deriveRunName(cfg?.clonePath);
   const onOpen = async () => {
     if (!cfg) return;
     // Task #45: retry on TypeError: Failed to fetch (tsx-watch restart
@@ -112,13 +112,15 @@ export function IdentityStrip() {
           {runId && phase !== "idle" && phase !== "completed" && phase !== "stopped" ? (
             <AmendButton runId={runId} amendmentCount={amendments.length} />
           ) : null}
-          <button
-            onClick={onOpen}
-            title={`Open in OS file manager — ${cfg.clonePath}`}
-            className="text-ink-400 hover:text-ink-100 hover:underline truncate max-w-md inline-block align-bottom ml-auto"
-          >
-            {truncateLeft(cfg.clonePath, 60)}
-          </button>
+          {cfg.clonePath ? (
+            <button
+              onClick={onOpen}
+              title={`Open in OS file manager — ${cfg.clonePath}`}
+              className="text-ink-400 hover:text-ink-100 hover:underline truncate max-w-md inline-block align-bottom ml-auto"
+            >
+              {truncateLeft(cfg.clonePath, 60)}
+            </button>
+          ) : null}
         </>
       ) : null}
       {history}
@@ -521,7 +523,8 @@ function AmendButton({
 
 // Run name = basename of the clone path. Falls back to a placeholder
 // if the path lacks a meaningful tail (defensive).
-function deriveRunName(clonePath: string): string {
+function deriveRunName(clonePath?: string): string {
+  if (!clonePath || typeof clonePath !== "string") return "(unnamed run)";
   // Cross-platform basename: split on either separator and grab the
   // non-empty tail. Path module on web is overkill for this.
   const parts = clonePath.split(/[\\/]/).filter((p) => p.length > 0);

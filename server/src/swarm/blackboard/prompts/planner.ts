@@ -490,16 +490,20 @@ export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionSt
     codeContextBlock,
     seed.systemMap ? `=== SYSTEM MAP (lightweight broad view for systemic planning) ===\n${seed.systemMap}\n=== end SYSTEM MAP ===\n\n` : "",
     // When webTools or mcpServers enabled, the research profile provides web_search + web_fetch + any MCP tools.
-    // Encourage their use for external data discovery (gov APIs etc).
-    "=== AVAILABLE TOOLS NOTE ===",
+    // Enhanced for research use cases (scientific literature, materials science, data discovery).
+    "=== AVAILABLE TOOLS NOTE (RESEARCH MODE) ===",
     "You have access to web_search (DuckDuckGo results) and web_fetch (fetch page content from URL) in addition to local file tools.",
     "If mcpServers configured (e.g. fetch=..., search=...), you can use namespaced MCP tools like 'fetch:fetch' or the tool names from the MCP server.",
-    "For directives involving 'governmental', 'data endpoints', 'internet search', 'APIs from web':",
-    "1. Use web_search with targeted queries (include site:.gov .eu data.gov etc for official sources).",
-    "2. Review results for relevant endpoints.",
-    "3. Use web_fetch on the most promising URLs to extract exact API details, base URLs, docs links.",
-    "4. Cite the sources in your output and TODO descriptions.",
-    "Always verify URLs look official before using in code.",
+    "",
+    "For research / scientific / literature / materials discovery directives:",
+    "1. Perform multiple targeted web_search queries. Use site: operators (arxiv.org, nature.com, science.org, .gov, data.gov, worldbank, oecd, eurostat, imf, wikipedia for background).",
+    "2. Prioritize primary sources, recent papers (2020+), and official datasets.",
+    "3. The web_search results are now structured (Title, URL, Snippet, RelevanceScore, Official/Gov source). Use the RelevanceScore and source type to prioritize.",
+    "4. Use web_fetch on the top 2-4 most promising URLs per search. web_fetch now returns structured Title + cleaned Content for easier analysis.",
+    "5. In your final output and any generated deliverables/TODOs, cite sources with URLs and key excerpts.",
+    "6. Look for common patterns across sources (e.g. crystal structures, doping methods, transition temperatures for superconductors).",
+    "7. Note limitations, contradictions, or open questions in the literature.",
+    "Always prefer verifiable, citable information over speculation. Extract and summarize key data points (numbers, methods, conclusions).",
     "=== end TOOLS NOTE ===\n\n",
     // T198h (2026-05-04): test-driven todo expansion. When opt-in,
     // the planner is asked to surface a verification step per todo

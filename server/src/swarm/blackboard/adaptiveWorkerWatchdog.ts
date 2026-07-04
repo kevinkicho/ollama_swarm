@@ -29,6 +29,7 @@ export interface AdaptiveWatchdogContext {
   getTodoQueue: () => TodoQueue;
   isStopping: () => boolean;
   appendSystem: (msg: string) => void;
+  getBrainService?: () => any; // optional for proactive brain inject
 }
 
 export function startAdaptiveWorkerWatchdog(
@@ -121,6 +122,18 @@ export async function scaleUpAdaptive(
   ctx.appendSystem(
     `[T-Item-4 adaptive workers] sustained backlog ≥${ADAPTIVE_SUSTAINED_POLLS} polls; scaling up by ${recommendedAdd} worker(s) (current=${currentWorkers.length}, max=${opts.max}).`,
   );
+  // Proactive trigger: on worker stall/backlog, auto-inject suggestion to Brain for transcript
+  if (ctx.getBrainService) {
+    const brain = ctx.getBrainService();
+    if (brain && brain.injectSuggestion) {
+      const runId = ctx.getActive()?.runId || 'unknown';
+      brain.injectSuggestion(runId, {
+        title: 'Worker stall detected - consider amend',
+        text: `Sustained backlog. Suggestion: amend directive or increase agents. Current workers: ${currentWorkers.length}`,
+        category: 'recommendation',
+      });
+    }
+  }
   const baseIdx = currentWorkers.length + 2;
   for (let i = 0; i < recommendedAdd; i++) {
     try {

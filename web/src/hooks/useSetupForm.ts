@@ -12,11 +12,23 @@ import { loadRecentRuns, saveRecentRun, type RecentRun } from "../components/set
 // Full logic can be expanded here later.
 
 export function useSetupForm(navigate: (path: string) => void) {
-  const [repoUrl, setRepoUrl] = useState("");
-  const [parentPath, setParentPath] = useState("C:\\Users\\you\\projects\\my-repo");
-  const [presetId, _setPresetId] = useState<string>("round-robin");
+  // Initial values may come from URL query params (e.g. from history "start on clone" links)
+  const initialFromUrl = (() => {
+    if (typeof window === "undefined") return { parentPath: "", repoUrl: "", preset: "", model: "" };
+    const sp = new URLSearchParams(window.location.search);
+    return {
+      parentPath: sp.get("parentPath") || "",
+      repoUrl: sp.get("repoUrl") || "",
+      preset: sp.get("preset") || "",
+      model: sp.get("model") || "",
+    };
+  })();
+
+  const [repoUrl, setRepoUrl] = useState(initialFromUrl.repoUrl);
+  const [parentPath, setParentPath] = useState(initialFromUrl.parentPath); // user must set a real local workspace/clone dir before start
+  const [presetId, _setPresetId] = useState<string>(initialFromUrl.preset || "round-robin");
   const [agentCount, setAgentCount] = useState(3);
-  const [model, setModel] = useState(PRESETS[0].recommendedModel);
+  const [model, setModel] = useState(initialFromUrl.model || PRESETS[0].recommendedModel);
   const [provider, setProvider] = useState<Provider>(() => detectProvider(PRESETS[0].recommendedModel));
   const [plannerModel, setPlannerModel] = useState("");
   const [workerModel, setWorkerModel] = useState("");
@@ -47,6 +59,31 @@ export function useSetupForm(navigate: (path: string) => void) {
     });  // fresh synthesize for this preset
     setTopology(newTopo);
   }, [plannerModel, workerModel, auditorModel, model]);
+
+  // Apply URL-driven prefill for preset (and related) from "start on clone" links in history.
+  // Runs once after mount. Uses the initialFromUrl captured at first render.
+  useEffect(() => {
+    if (initialFromUrl.preset) {
+      // setPresetId will trigger topology/agent count reset for that preset
+      setPresetId(initialFromUrl.preset);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clean up the query params we consumed for prefill (so refresh doesn't re-trigger etc.)
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.has("parentPath") || sp.has("preset") || sp.has("autoStart") || sp.has("repoUrl") || sp.has("model")) {
+        // remove only the setup-related ones we handled
+        ["parentPath", "repoUrl", "preset", "model"].forEach(k => sp.delete(k));
+        // leave autoStart for the auto-start effect to consume on this mount
+        const clean = sp.toString();
+        const newUrl = window.location.pathname + (clean ? "?" + clean : "") + window.location.hash;
+        window.history.replaceState({}, "", newUrl);
+      }
+    }
+  }, []);
+
   const [roundsInput, setRoundsInput] = useState(0);
   const [userDirective, setUserDirective] = useState("");
   const [useHybridPlanning, setUseHybridPlanning] = useState(true);
@@ -87,7 +124,7 @@ export function useSetupForm(navigate: (path: string) => void) {
       if (ambitionTiers === undefined || ambitionTiers.trim() === "") {
         setAmbitionTiers("0");
       }
-      setUseHybridPlanning(true);
+      setUseHybridPlanning(false); // direct BlackboardRunner for pure blackboard
       setWebTools(true);
     } else if (["round-robin", "role-diff", "council", "debate-judge", "orchestrator-worker", "map-reduce", "stigmergy"].includes(preset.id)) {
       if (!wallClockCapMin || wallClockCapMin.trim() === "") {
@@ -134,15 +171,36 @@ export function useSetupForm(navigate: (path: string) => void) {
 
   const startSwarmDirectlyFromBrain = async (cfg: BrainConfigPatch) => {
     setBusy(true);
-    // minimal implementation - in real it builds payload and posts
-    setTimeout(() => setBusy(false), 500);
+    try {
+      // Harden the stub: apply config from structured Brain response,
+      // then delegate to the real performStart (which has path validation guards).
+      if (cfg.preset) setPresetId(cfg.preset);
+      if (cfg.model) setModel(cfg.model);
+      const cp = (cfg as any).parentPath || (cfg as any).clonePath || (cfg as any).localPath;
+      if (cp && typeof cp === "string") setParentPath(cp);
+      if ((cfg as any).userDirective) setUserDirective((cfg as any).userDirective);
+      if ((cfg as any).agentCount != null) setAgentCount(Number((cfg as any).agentCount));
+      if ((cfg as any).rounds != null) setRoundsInput(Number((cfg as any).rounds));
+      // Trigger real start flow (validates workspace path etc.)
+      await performStart();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const performStart = async () => {
     setBusy(true);
 
-    if (!parentPath || parentPath.trim().length < 3 || parentPath.includes("you\\projects") || parentPath.includes("you/projects")) {
+    if (!parentPath || parentPath.trim().length < 3) {
       setError("Please set a real 'Project folder (workspace)' path (the local directory to use/clone into).");
+      setBusy(false);
+      return;
+    }
+    // catch common template placeholders
+    if (parentPath.includes("you\\projects") || parentPath.includes("you/projects") || parentPath.includes("my-repo")) {
+      setError("Please set a real 'Project folder (workspace)' path — replace the placeholder with your actual local directory.");
       setBusy(false);
       return;
     }
@@ -208,6 +266,7 @@ export function useSetupForm(navigate: (path: string) => void) {
           directive: userDirective,
           wallClockCapMin: wallClockCapMin || undefined,
           ambitionTiers: ambitionTiers || undefined,
+          runId: body.runId,
         });
         setRecentRuns(saved);
         navigate(`/runs/${encodeURIComponent(body.runId)}`);
@@ -218,6 +277,19 @@ export function useSetupForm(navigate: (path: string) => void) {
       setBusy(false);
     }
   };
+
+  // Support ?autoStart=1 from history "Start new swarm on this clone" links.
+  // After URL prefill settles, auto-trigger the start (with small delay for preflight).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get("autoStart") === "1" && parentPath && parentPath.trim().length >= 3 && !busy) {
+      const t = setTimeout(() => {
+        performStart();
+      }, 250);
+      return () => clearTimeout(t);
+    }
+  }, [parentPath, busy, performStart]);
 
   return {
     repoUrl, setRepoUrl,

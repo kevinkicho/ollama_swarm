@@ -11,9 +11,13 @@ export function resolveLegacyActiveRunId(
 ): LegacyRunResolveResult {
   if (runId) {
     const active = orch.listActiveRuns();
-    if (!active.some((r) => r.runId === runId)) {
-      return { ok: false, status: 404, error: "runId not active" };
+    const match = active.find((r) => r.runId === runId || (runId && (r.runId.startsWith(runId) || runId.startsWith(r.runId))));
+    if (match) {
+      return { ok: true, runId: match.runId };
     }
+    // Explicit runId provided (e.g. from a /runs/<id> view of a just-finished run).
+    // Pass it through; the downstream drain/stopRun will succeed (idempotent)
+    // for known-finished runs or 404 for completely unknown.
     return { ok: true, runId };
   }
 

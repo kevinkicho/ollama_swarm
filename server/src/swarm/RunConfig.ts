@@ -820,6 +820,16 @@ export interface RunConfig {
    * the phases sequentially. Absent → DEFAULT_PIPELINE used.
    */
   pipeline?: import("./pipelinePhases.js").PipelineConfig;
+
+  /**
+   * Internal: set by PipelineRunner for phases after the first (i>0).
+   * When true, sub-phases skip re-emitting the clone-level seed messages
+   * (Memory surfaced, Design memory, Seed:, Goal-gen pre-pass) because
+   * those describe the shared clone and were already emitted by phase 0.
+   * The sub-phase still receives the piped directive + prior transcript.
+   */
+  suppressSeedMessages?: boolean;
+
   /**
    * Task #102 + T2.2 (2026-05-04): opt-in wrap-up apply phase.
    *

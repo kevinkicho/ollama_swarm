@@ -1,11 +1,11 @@
 import type { RunConfig, RunnerOpts, SwarmRunner, PresetId } from "./SwarmRunner.js";
-import type { SwarmStatus, SwarmPhase, TranscriptEntry } from "../types.js";
+import type { SwarmStatus, SwarmPhase, TranscriptEntry, TranscriptEntrySummary } from "../types.js";
 import type { PipelineConfig } from "./pipelinePhases.js";
 import { buildPipedDirective, DEFAULT_PIPELINE } from "./pipelinePhases.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { writeRunSummary, formatPortReleaseLine } from "./runSummary.js";
+import { writeRunSummary, formatPortReleaseLine, formatRunFinishedBanner, buildRunFinishedSummary } from "./runSummary.js";
 
 export type RunnerFactory = (preset: PresetId) => Promise<SwarmRunner>;
 
@@ -87,6 +87,7 @@ export class PipelineRunner implements SwarmRunner {
         agentCount: phase.agentCount ?? cfg.agentCount,
         model: phase.model ?? cfg.model,
         userDirective: pipedDirective || cfg.userDirective,
+        suppressSeedMessages: i > 0,
       };
       const phaseConfig: RunConfig = phaseConfigRest as RunConfig;
 
@@ -102,8 +103,16 @@ export class PipelineRunner implements SwarmRunner {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         this.appendSystem(
-          `[Pipeline] Phase ${i + 1} (${phase.preset}) failed: ${msg.slice(0, 200)}. Continuing to next phase.`,
+          `[Pipeline] Phase ${i + 1} (${phase.preset}) failed: ${msg.slice(0, 200)}.`,
         );
+        // For hybrid planning (first phase), treat planning failure as run failure instead of continuing.
+        // This matches expectation that if planning (e.g. council) can't produce usable output, the execution shouldn't proceed as "completed".
+        if (i === 0) {
+          this.running = false;
+          this.setPhase("failed");
+          throw err;  // propagate so orchestrator/ActiveRun sees failure
+        }
+        this.appendSystem("Continuing to next phase.");
       }
 
       const runnerStatus = runner.status();
@@ -139,11 +148,16 @@ export class PipelineRunner implements SwarmRunner {
     } catch {}
     if (this.active?.localPath && this.active?.runId) {
       try {
+        const now = Date.now();
+        const startedAt = this.phaseResults.length > 0 
+          ? (this.phaseResults[0].transcript?.[0]?.ts || now - 200000) 
+          : now - 200000;
         const summary = {
           runId: this.active.runId,
           preset: this.active.preset,
-          startedAt: Date.now() - 200000,
-          endedAt: Date.now(),
+          startedAt,
+          endedAt: now,
+          wallClockMs: Math.max(0, now - startedAt),
           stopReason: this.stopping ? "user-stop" : "completed",
           model: this.active.model,
           agentCount: this.active.agentCount || 0,
@@ -155,7 +169,25 @@ export class PipelineRunner implements SwarmRunner {
           agents: [],
           clonePath: this.active.localPath,
         } as any;
-        await writeRunSummary(this.active.localPath, summary);
+
+        // Ensure the persisted transcript for this runId always contains a run_finished
+        // entry (with the banner + structured summary) so the history /runs/:id view
+        // reliably shows the final grid + agent stats. Sub-phases or early no-progress
+        // may not have emitted one, or it may have been deduped. Append if missing
+        // (this also makes it part of the transcript we write).
+        const hasRunFinished = this.transcript.some((e: any) => e.summary?.kind === "run_finished");
+        if (!hasRunFinished) {
+          this.transcript.push({
+            id: `run-finished-${summary.runId || Date.now()}`,
+            role: "system",
+            text: formatRunFinishedBanner(summary),
+            ts: now,
+            summary: buildRunFinishedSummary(summary),
+          } as any);
+        }
+
+        const finalSummary = { ...summary, transcript: this.transcript };
+        await writeRunSummary(this.active.localPath, finalSummary);
       } catch {}
     }
   }
@@ -184,11 +216,16 @@ export class PipelineRunner implements SwarmRunner {
     // preset.
     if (this.active?.localPath && this.active?.runId) {
       try {
+        const now = Date.now();
+        const startedAt = this.phaseResults.length > 0 
+          ? (this.phaseResults[0].transcript?.[0]?.ts || now - 200000) 
+          : now - 200000;
         const summary = {
           runId: this.active.runId,
           preset: this.active.preset,
-          startedAt: Date.now() - 200000,
-          endedAt: Date.now(),
+          startedAt,
+          endedAt: now,
+          wallClockMs: Math.max(0, now - startedAt),
           stopReason: "user-stop",
           model: this.active.model,
           agentCount: this.active.agentCount || 0,
@@ -200,7 +237,20 @@ export class PipelineRunner implements SwarmRunner {
           agents: this.opts.manager.toStates ? this.opts.manager.toStates() : [],
           clonePath: this.active.localPath,
         } as any;
-        await writeRunSummary(this.active.localPath, summary);
+
+        // Same guarantee as natural completion: ensure run_finished entry for history grid.
+        const hasRunFinished = this.transcript.some((e: any) => e.summary?.kind === "run_finished");
+        if (!hasRunFinished) {
+          this.transcript.push({
+            id: `run-finished-${summary.runId || Date.now()}`,
+            role: "system",
+            text: formatRunFinishedBanner(summary),
+            ts: now,
+            summary: buildRunFinishedSummary(summary),
+          } as any);
+        }
+        const finalSummary = { ...summary, transcript: this.transcript };
+        await writeRunSummary(this.active.localPath, finalSummary);
         this.appendSystem("Wrote run summary on stop (hybrid pipeline).");
       } catch (e) {
         this.appendSystem(`[Pipeline] Failed to force summary write on stop: ${e}`);
@@ -208,15 +258,20 @@ export class PipelineRunner implements SwarmRunner {
     }
   }
 
-  private appendSystem(text: string): void {
+  private appendSystem(text: string, summary?: TranscriptEntrySummary): void {
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "system",
       text,
       ts: Date.now(),
-    };
+      ...(summary ? { summary } : {}),
+    } as TranscriptEntry;
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
+  }
+
+  appendSystemMessage(text: string, summary?: TranscriptEntrySummary): void {
+    this.appendSystem(text, summary);
   }
 
   private setPhase(phase: SwarmPhase): void {

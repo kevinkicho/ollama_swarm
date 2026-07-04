@@ -151,7 +151,10 @@ export class MoaRunner extends DiscussionRunnerBase {
   }
 
   private async loopBody(cfg: RunConfig): Promise<void> {
-    this.setPhase("cloning");
+    const isRemoteClone = !!(cfg.repoUrl && (cfg.repoUrl.startsWith("http://") || cfg.repoUrl.startsWith("https://")));
+    if (isRemoteClone) {
+      this.setPhase("cloning");
+    }
     const cloneResult = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
     const { destPath } = cloneResult;
     this.opts.emit({

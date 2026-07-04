@@ -163,10 +163,20 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
   try {
     await writeFileAtomic(perRunPath, json);
     await writeFileAtomic(latestPath, json);
-    ctx.appendSystem(formatRunFinishedBanner(summary), buildRunFinishedSummary(summary));
-    ctx.appendSystem(
-      `Wrote run summary to ${perRunPath} + ${latestPath} (stopReason=${summary.stopReason}, commits=${summary.commits}, files=${summary.filesChanged}).`,
+
+    // Guard against duplicate "Run finished" banners + summary grids in transcript.
+    // writeRunSummary can be reached via both the planAndExecute finally *and*
+    // explicit calls from drain()/stop() for early termination. The banner append
+    // (which renders the big RunFinishedGrid) must happen only once.
+    const alreadyHasRunFinished = ctx.transcript.some(
+      (e) => e.summary?.kind === "run_finished"
     );
+    if (!alreadyHasRunFinished) {
+      ctx.appendSystem(formatRunFinishedBanner(summary), buildRunFinishedSummary(summary));
+      ctx.appendSystem(
+        `Wrote run summary to ${perRunPath} + ${latestPath} (stopReason=${summary.stopReason}, commits=${summary.commits}, files=${summary.filesChanged}).`,
+      );
+    }
   } catch (writeErr) {
     const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
     ctx.appendSystem(`Failed to write run summary (${msg})`);
@@ -174,32 +184,36 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
   ctx.lastSummarySetter(summary);
   ctx.emit({ type: "run_summary", summary });
 
-  // Canonical project-level copy (suggestion): always write to logs/<full-runId>/summary.json
-  // independent of the clone. This ensures artifacts survive even if clone logs are missing/pruned.
-  // Uses full runId for easy lookup (matching debug.jsonl layout).
-  try {
-    const projectLogsDir = path.join(process.cwd(), "logs", summary.runId || "unknown");
-    await import("node:fs/promises").then((fs) => fs.mkdir(projectLogsDir, { recursive: true }));
-    const projPath = path.join(projectLogsDir, "summary.json");
-    await writeFileAtomic(projPath, json);
-    ctx.appendSystem(`Canonical project-level summary also written to ${projPath}`);
-
-    // Compact index record (suggestion)
+  // Guard the project-level copy + append too (in case writeRunSummary called from multiple stop paths).
+  const alreadyHasRunFinished = ctx.transcript.some((e) => e.summary?.kind === "run_finished");
+  if (!alreadyHasRunFinished) {
+    // Canonical project-level copy (suggestion): always write to logs/<full-runId>/summary.json
+    // independent of the clone. This ensures artifacts survive even if clone logs are missing/pruned.
+    // Uses full runId for easy lookup (matching debug.jsonl layout).
     try {
-      const indexEntry = {
-        runId: summary.runId,
-        startedAt: summary.startedAt,
-        endedAt: summary.endedAt ?? Date.now(),
-        stopReason: summary.stopReason,
-        preset: summary.preset,
-        commits: summary.commits ?? 0,
-        filesChanged: summary.filesChanged ?? 0,
-        wallClockMs: summary.wallClockMs,
-      };
-      const indexPath = path.join(process.cwd(), "logs", "runs-index.jsonl");
-      await import("node:fs/promises").then((fs) => fs.appendFile(indexPath, JSON.stringify(indexEntry) + "\n", "utf8"));
-    } catch {}
-  } catch (e) {
-    // best effort only
+      const projectLogsDir = path.join(process.cwd(), "logs", summary.runId || "unknown");
+      await import("node:fs/promises").then((fs) => fs.mkdir(projectLogsDir, { recursive: true }));
+      const projPath = path.join(projectLogsDir, "summary.json");
+      await writeFileAtomic(projPath, json);
+      ctx.appendSystem(`Canonical project-level summary also written to ${projPath}`);
+
+      // Compact index record (suggestion)
+      try {
+        const indexEntry = {
+          runId: summary.runId,
+          startedAt: summary.startedAt,
+          endedAt: summary.endedAt ?? Date.now(),
+          stopReason: summary.stopReason,
+          preset: summary.preset,
+          commits: summary.commits ?? 0,
+          filesChanged: summary.filesChanged ?? 0,
+          wallClockMs: summary.wallClockMs,
+        };
+        const indexPath = path.join(process.cwd(), "logs", "runs-index.jsonl");
+        await import("node:fs/promises").then((fs) => fs.appendFile(indexPath, JSON.stringify(indexEntry) + "\n", "utf8"));
+      } catch {}
+    } catch (e) {
+      // best effort only
+    }
   }
 }

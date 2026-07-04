@@ -266,4 +266,10 @@ export type TranscriptEntrySummary =
       bytes: number;
       /** Section titles in order, for the bubble's collapsed preview. */
       sectionTitles: readonly string[];
+    }
+  // Prototype: proactive suggestions from Brain during run (injected to help user)
+  | {
+      kind: "brain_suggestion";
+      title: string;
+      category?: string;
     };

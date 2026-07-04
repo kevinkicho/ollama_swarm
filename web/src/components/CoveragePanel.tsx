@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { useSwarm } from "../state/store";
 
 // Phase 2d (2026-04-24): map-reduce coverage map. Shows which mapper
@@ -12,7 +12,7 @@ import { useSwarm } from "../state/store";
 // row, but the component tolerates overlap defensively.
 const AGENT_HUE = [140, 200, 260, 30, 320, 70, 180, 240];
 
-export function CoveragePanel() {
+export const CoveragePanel = memo(function CoveragePanel() {
   const slices = useSwarm((s) => s.mapperSlices);
   const agents = useSwarm((s) => s.agents);
 
@@ -134,4 +134,4 @@ export function CoveragePanel() {
       </div>
     </div>
   );
-}
+});

@@ -18,7 +18,10 @@
     "cli": "node bin/ollama-swarm.mjs",
     "test": "npm -w shared run test && npm -w server run test",
     "test:shared": "npm -w shared run test",
-    "typecheck": "npm -w shared run typecheck && npm -w server run typecheck && npm -w web run typecheck"
+    "typecheck": "npm -w shared run typecheck && npm -w server run typecheck && npm -w web run typecheck",
+    "verify-ci": "node scripts/verify-ci.mjs",
+    "setup-git-hooks": "node scripts/install-git-hooks.mjs",
+    "prepare": "node scripts/install-git-hooks.mjs || echo 'Git hook setup skipped (no .git or non-fatal error)'"
   },
   "devDependencies": {
     "playwright": "^1.59.1"

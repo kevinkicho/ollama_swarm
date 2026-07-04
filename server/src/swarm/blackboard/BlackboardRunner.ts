@@ -844,6 +844,10 @@ export class BlackboardRunner implements SwarmRunner {
     this.opts.emit({ type: "transcript_append", entry });
   }
 
+  appendSystemMessage(text: string, summary?: TranscriptEntrySummary): void {
+    this.appendSystem(text, summary);
+  }
+
   private recordError(err: unknown, opts: { causeHint?: ErrorCategory; statusCode?: number } = {}): ClassifiedError {
     return recordErrorExtracted({ errorTracker: this.errorTracker, maxTrackedErrors: BlackboardRunner.MAX_TRACKED_ERRORS }, err, opts);
   }

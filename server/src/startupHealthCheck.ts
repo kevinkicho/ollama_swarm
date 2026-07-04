@@ -39,26 +39,59 @@ export async function startupHealthCheck(
     probe.listen(serverPort, "0.0.0.0");
   });
 
-  // 2. Disk space check.
+  // 2. Disk space check (cross-platform).
   try {
-    const output = execSync("df -B 1 .", { encoding: "utf8", timeout: 3000 });
-    const lines = output.trim().split("\n");
-    if (lines.length >= 2) {
-      const cols = lines[1].split(/\s+/);
-      const available = parseInt(cols[3], 10);
-      if (!isNaN(available)) {
-        const gb = (available / 1_073_741_824).toFixed(1);
-        if (available < 2_147_483_648) {
-          warnings.push(
-            `Disk space low: ${gb} GB available. Runs may fail if disk fills up.`,
-          );
-        } else {
-          console.log(`  disk: ${gb} GB available`);
+    let available: number | null = null;
+    if (process.platform === "win32") {
+      // Windows: use wmic (widely available) or fall back to PowerShell.
+      try {
+        const out = execSync(
+          'wmic logicaldisk get size,freespace,caption /format:csv',
+          { encoding: "utf8", timeout: 3000 },
+        );
+        // CSV has header + rows; pick the first non-empty drive's freespace (usually C:)
+        const lines = out.trim().split(/\r?\n/).filter(Boolean);
+        for (let i = 1; i < lines.length; i++) {
+          const parts = lines[i].split(",");
+          if (parts.length >= 4) {
+            const free = parseInt(parts[parts.length - 2], 10); // freespace column
+            if (!isNaN(free) && free > 0) {
+              available = free;
+              break;
+            }
+          }
         }
+      } catch {
+        // Try PowerShell as fallback
+        const ps = execSync(
+          'powershell -NoProfile -Command "Get-CimInstance Win32_LogicalDisk | Where-Object {$_.DriveType -eq 3} | Select-Object -First 1 -ExpandProperty FreeSpace"',
+          { encoding: "utf8", timeout: 3000 },
+        );
+        const val = parseInt(ps.trim(), 10);
+        if (!isNaN(val)) available = val;
+      }
+    } else {
+      const output = execSync("df -B 1 .", { encoding: "utf8", timeout: 3000 });
+      const lines = output.trim().split("\n");
+      if (lines.length >= 2) {
+        const cols = lines[1].split(/\s+/);
+        const val = parseInt(cols[3], 10);
+        if (!isNaN(val)) available = val;
+      }
+    }
+
+    if (available !== null) {
+      const gb = (available / 1_073_741_824).toFixed(1);
+      if (available < 2_147_483_648) {
+        warnings.push(
+          `Disk space low: ${gb} GB available. Runs may fail if disk fills up.`,
+        );
+      } else {
+        console.log(`  disk: ${gb} GB available`);
       }
     }
   } catch {
-    // df not available or timed out — non-critical, skip.
+    // Disk check not available or failed — non-critical, skip.
   }
 
   // 3. Logs directory size check — warn if too many run directories.

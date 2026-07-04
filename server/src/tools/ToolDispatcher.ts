@@ -261,6 +261,9 @@ async function bashTool(clone: string, args: Record<string, unknown>): Promise<T
   // clone path so working-dir-relative paths in the command resolve
   // safely. Combined with the metachar block above, the command can't
   // escape into the broader filesystem via cd /; rm or similar.
+  // Note: uses shell exec (via execAsync). For stricter safety a future
+  // change could switch to spawn + argv parsing, but that requires
+  // careful command tokenization for the allowlisted tools.
   try {
     const r = await execAsync(command, {
       cwd: clone,
@@ -334,19 +337,49 @@ async function webFetchTool(args: Record<string, unknown>): Promise<ToolResult> 
     }
 
     const contentType = res.headers.get("content-type") || "";
-    let text: string;
+    let rawText: string;
     if (contentType.includes("application/json")) {
       const json = await res.json();
-      text = JSON.stringify(json, null, 2);
+      rawText = JSON.stringify(json, null, 2);
     } else {
-      text = await res.text();
+      rawText = await res.text();
     }
 
-    if (text.length > WEB_OUTPUT_CAP) {
-      text = text.slice(0, WEB_OUTPUT_CAP) + "\n…(truncated)";
+    if (rawText.length > WEB_OUTPUT_CAP) {
+      rawText = rawText.slice(0, WEB_OUTPUT_CAP) + "\n…(truncated)";
     }
-    const prefix = isGov ? "[GOV SOURCE] " : "";
-    return { ok: true, output: `${prefix}[${res.url}]\n${text}` };
+
+    // Improved structured output for research use cases.
+    let title = "";
+    const titleMatch = rawText.match(/<title[^>]*>([^<]+)<\/title>/i);
+    if (titleMatch) title = titleMatch[1].trim().slice(0, 150);
+
+    // Better main content extraction for HTML: try <main>, <article>, or first substantial text block.
+    let mainContent = rawText;
+    if (!contentType.includes("application/json") && !contentType.includes("text/plain")) {
+      // Prefer <main> or <article>
+      const mainMatch = rawText.match(/<main[^>]*>([\s\S]*?)<\/main>/i) || rawText.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
+      if (mainMatch) {
+        mainContent = mainMatch[1];
+      } else {
+        // Fallback: remove scripts/styles/nav, take body or first 4k chars of text.
+        mainContent = rawText.replace(/<script[\s\S]*?<\/script>/gi, "")
+          .replace(/<style[\s\S]*?<\/style>/gi, "")
+          .replace(/<nav[\s\S]*?<\/nav>/gi, "")
+          .replace(/<header[\s\S]*?<\/header>/gi, "")
+          .replace(/<footer[\s\S]*?<\/footer>/gi, "");
+      }
+      mainContent = mainContent.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 6000);
+    } else {
+      mainContent = rawText.slice(0, 6000);
+    }
+
+    const prefix = isGov ? "[GOV / OFFICIAL SOURCE] " : "";
+    let structured = `${prefix}URL: ${res.url}\n`;
+    if (title) structured += `Title: ${title}\n`;
+    structured += `Content:\n${mainContent}`;
+
+    return { ok: true, output: structured };
   } catch (err: any) {
     const msg = err?.name === "AbortError" ? "timeout" : (err?.message || String(err));
     return { ok: false, error: `web_fetch failed: ${msg}` };
@@ -436,9 +469,13 @@ async function webSearchTool(args: Record<string, unknown>): Promise<ToolResult>
     }
 
     for (const r of filteredLinks.slice(0, 10)) {
-      let line = `- ${r.title}\n  URL: ${r.url}`;
-      if (r.snippet) line += `\n  ${r.snippet}`;
-      results.push(line);
+      let entry = `Result:\n  Title: ${r.title}\n  URL: ${r.url}`;
+      if (r.snippet) entry += `\n  Snippet: ${r.snippet}`;
+      entry += `\n  RelevanceScore: ${r.score}`;
+      if (GOV_DOMAINS.some(d => r.url.toLowerCase().includes(d)) || r.url.toLowerCase().includes('.gov') || r.url.toLowerCase().includes('.eu')) {
+        entry += ` (Official/Gov source)`;
+      }
+      results.push(entry);
     }
 
     if (results.length === 0) {
@@ -447,7 +484,7 @@ async function webSearchTool(args: Record<string, unknown>): Promise<ToolResult>
 
     return {
       ok: true,
-      output: `Web search results for: ${query}\n\n${results.join("\n\n")}`,
+      output: `Web search results for: ${query}\n\n${results.join("\n\n")}\n\nTip for research: Use web_fetch on the most relevant URLs above to get full details.`,
     };
   } catch (err: any) {
     const msg = err?.name === "AbortError" ? "timeout" : (err?.message || String(err));

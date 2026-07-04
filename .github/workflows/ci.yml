@@ -4,6 +4,16 @@
 # reloads stale code, or when a subtle import path break only
 # surfaces in a fresh checkout).
 #
+# IMPORTANT FOR RELIABILITY:
+#   Run `npm run verify-ci` (or the exact steps below) locally before every push.
+#   This script lives in scripts/verify-ci.mjs and mirrors this workflow 1:1.
+#   Common footguns that still break CI:
+#     * New .ts/.tsx files that were never `git add`ed (→ "Cannot find module")
+#     * Moving code (SetupForm → hooks/presets, etc.) without updating all
+#       fs.readFileSync greps in *Runner.test.ts files
+#     * Adding implicit `any` parameters on callbacks or new Brain/pipeline cfg
+#   The verify script now also fails fast on untracked *.ts *.tsx.
+#
 # Tests run with OPENCODE_SERVER_PASSWORD=test-only because the
 # zod config schema in server/src/config.ts requires the env var to
 # be set at module-load (see reference_test_command_password.md
@@ -63,3 +73,6 @@ jobs:
 
       - name: Verify production build succeeds
         run: npm run build
+
+      - name: Electron stub test (prior data + flags)
+        run: node electron/test-stub.cjs

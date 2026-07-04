@@ -73,3 +73,28 @@ body {
 .flash {
   animation: subtle-flash 1.5s ease-in-out infinite;
 }
+
+/* Transcript virtual list stabilization (step 4) */
+.transcript-scroll,
+.transcript-scroll * {
+  /* Remove ALL css animations from transcript per request (helps eliminate jitter, perceived movement, snaps) */
+  animation: none !important;
+  transition: none !important;
+  animation-delay: 0ms !important;
+}
+
+.transcript-scroll {
+  overflow-anchor: none; /* full manual scroll control for finished transcripts; prevents browser "helping" that causes upward pushes when virtual sizes settle */
+  contain: layout style; /* reduce reflows */
+  scroll-behavior: auto; /* no easing on any native scrolls */
+}
+
+.virtual-item {
+  contain: layout style paint;
+}
+
+.transcript-bubble {
+  margin-bottom: 0 !important; /* controlled by virtual wrapper paddingBottom for consistent gap */
+  box-sizing: border-box;
+  contain: layout style;
+}

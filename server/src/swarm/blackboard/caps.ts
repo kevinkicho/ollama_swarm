@@ -5,11 +5,13 @@
 //
 // T-Item-Caps (2026-05-04): the three caps are now env-overridable via
 // SWARM_WALL_CLOCK_CAP_MIN, SWARM_COMMITS_CAP, SWARM_TODOS_CAP (read
-// from config). The exports below are MUTABLE re-evaluations of those
-// env values, evaluated at module-import time. Per-run overrides via
-// RunConfig.wallClockCapMs still win over the env-derived default.
-// (Pre-T-Item-Caps the constants were baked-in at compile time —
-// users had to edit caps.ts + rebuild to change a cap.)
+// from config). The exports below are re-evaluations of those env values at
+// module-import time. Per-run overrides (RunConfig.wallClockCapMs) win in
+// checkCaps. Commits/todos caps are currently global backstops.
+//
+// Review note (2026-07): for stricter isolation, future work should compute
+// all three caps strictly from per-run config and remove direct use of the
+// module-level exports outside of defaults.
 import { config } from "../../config.js";
 export const WALL_CLOCK_CAP_MS = config.SWARM_WALL_CLOCK_CAP_MIN * 60_000;
 export const COMMITS_CAP = config.SWARM_COMMITS_CAP;

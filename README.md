@@ -2,6 +2,8 @@
 
 > **For agents picking up this codebase**: read [`docs/STATUS.md`](docs/STATUS.md) first — it's the single "what's true right now" pointer + map. This README is the user-facing intro.
 
+> **Before pushing code**: read [`docs/CI-RELIABILITY.md`](docs/CI-RELIABILITY.md). It documents the exact process and tooling (`npm run verify-ci` + git hooks) that prevents the classic "worked locally, red on CI" cycle.
+
 A local web app that runs **multiple concurrent swarms** of open-weights coding agents. A **Brain-as-OS layer** monitors runs, proposes self-upgrading patches to the system itself, provisions new runs, and manages at the system level. Agents collaborate (via shared transcript or blackboard) on GitHub repos using different roles/models. The goal is autonomous, self-improving multi-agent orchestration on local hardware.
 
 **Five providers** are wired in, surfaced as side-by-side tabs in the setup form:
@@ -57,6 +59,25 @@ Then open **http://localhost:8244/** (or the WSL guest IP if you're hitting it f
 
 The project now ships a real `ollama-swarm` CLI so that Brain (or any agent) can start runs by running a command instead of just printing instructions.
 
+**Expanded for full Brain-OS agent loops** (recommend → start → status → amend → stop):
+
+```bash
+# Get a data-driven recommendation with real numbers from past runs
+ollama-swarm recommend --directive "analyze papers on superconductors and synthesize common features"
+
+# Start (supports --json for agents)
+ollama-swarm start --directive "..." --preset council --web-tools true
+
+# Monitor / steer
+ollama-swarm status --run-id <id>
+ollama-swarm amend --run-id <id> --text "focus on crystal structure"
+ollama-swarm stop --run-id <id>
+```
+
+See `bin/ollama-swarm.mjs --help`, `examples/brain-agent-loop.mjs`, and [`docs/BRAIN-OS-FOR-EXTERNAL-AGENTS.md`](docs/BRAIN-OS-FOR-EXTERNAL-AGENTS.md) for full details on using Brain as an OS from external agents/scripts.
+
+The Brain chat (`/api/swarm/brain/chat`) now proactively uses the outcome recommender + stats and references the use-case tables from `docs/swarm-patterns.md` + `STATUS.md`. It can suggest UI filters and supports `?structured=true`.
+
 ```bash
 # After you have the server running (npm run dev)
 ollama-swarm start --config swarm_config.json
@@ -85,7 +106,7 @@ You can also do `npm run cli start -- --help`.
 
 ![Setup form — GitHub URL, parent folder, pattern picker, agents/rounds/model fields](docs/images/setup-form.png)
 
-**2. Live transcript.** Per-agent panels on the left show status (`spawning` → `ready` → `thinking` → `ready`). Each agent's reply streams in token-by-token; you can inject a `[HUMAN]` line into the shared transcript at any time. The topbar shows elapsed time, idle/active state, and a token-usage popover.
+**2. Live transcript + Brain.** Per-agent panels on the left show status (`spawning` → `ready` → `thinking` → `ready`). Each agent's reply streams in token-by-token; you can inject a `[HUMAN]` line into the shared transcript at any time. Transcript filter defaults to high-signal "key" entries. During active runs a persistent floating 🧠 **Brain** button (bottom-right) opens a chat modal with live run context (board + recent transcript summary). Brain suggestions can be proactively injected into the transcript. The topbar shows elapsed time, idle/active state, brain health, and a token-usage popover.
 
 ![Live transcript with five agents collaborating on a shared discussion](docs/images/transcript.png)
 
@@ -95,7 +116,11 @@ You can also do `npm run cli start -- --help`.
 
 ## What it does
 
-You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. The agents spawn, clone the repo, and start collaborating — each running an open-weights model on your local Ollama (or, optionally, Ollama Cloud / Anthropic / OpenAI). **12 presets** ship today (blackboard is primary production write-capable; council has full autonomous 3-phase cycles with self-improvement potential; others discussion or exploration with opt-in writes; baseline for comparison):
+You fill in a GitHub URL, a local clone path, an agent count, and pick a **pattern**. The agents spawn, clone the repo, and start collaborating — each running an open-weights model on your local Ollama (or, optionally, Ollama Cloud / Anthropic / OpenAI). **12 presets** ship today (blackboard is primary production write-capable; council has full autonomous 3-phase cycles with self-improvement potential; others discussion or exploration with opt-in writes; baseline for comparison). 
+
+A **Brain-as-OS** layer provides analysis, cross-run memory, provisioning help, and during-run conversational assistance (persistent FAB + `/brain/chat`, `/brain/suggest`, history persistence). See `docs/STATUS.md` for current features including FAB Brain chat, proactive suggestion injection into transcripts, and per-run persistence.
+
+See `docs/swarm-patterns.md` for the full catalog, including a **Research Workflows** section with webTools + hybrid configs for scientific research and literature work.
 
 - **Round-robin transcript** — N agents take turns on a shared transcript; each turn rotates through Critic / Synthesizer / Gap-finder / Builder dispositions, with the lead synthesizing a directive answer at the end. Discussion-only.
 - **Blackboard (optimistic + small units)** — planner posts atomic todos to a shared board; workers claim and commit in parallel, with CAS on file hashes catching stale plans. **The only write-capable preset** — workers actually modify the clone.
@@ -109,6 +134,16 @@ You fill in a GitHub URL, a local clone path, an agent count, and pick a **patte
 - **Mixture of Agents (MoA)** — N proposers each draft independently (peer-hidden, parallel); one aggregator synthesizes their drafts. Reproducibly beats single-large-model on reasoning benchmarks using only small open-weights models. Discussion-only.
 - **Baseline** — single agent, single prompt, single apply step. The "thinnest honest comparison" the eval scoreboard uses to anchor "did the swarm beat doing it alone?" Code-modify capable; not surfaced in the form's normal preset list (eval-harness path).
 - **Pipeline** — chains sub-runs (e.g. explore → decompose → validate).
+
+### Using for Scientific Research & Internet Work
+For research use cases (e.g., analyzing common properties of materials like superconductors, discovering data endpoints, literature synthesis):
+
+- Enable `webTools: true` + `plannerTools: true` (gives planners `web_search` + `web_fetch` with gov/academic bias).
+- Recommended: `useHybridPlanning: true`, `planningPreset: "council"`, `executionPreset: "blackboard"` (or pure `council`, `map-reduce`, `moa`, `role-diff` for analysis-only).
+- Use the "swarm-research" profile for broader tool access.
+- See the full guidance + copy-paste configs in [`docs/swarm-patterns.md`](docs/swarm-patterns.md#research-workflows-webtools--plannertools--hybrid).
+
+Web results are now returned in structured format (Title, URL, Snippet, RelevanceScore, source type) to help the planner synthesize findings reliably.
 
 **Beyond single runs:** A **Brain-as-OS layer** monitors activity, generates self-improvement proposals, applies patches via self-upgrader, and provisions runs. Multiple swarms run concurrently (Active Runs panel + `/runs/:runId`). A live transcript streams into the browser as it's generated — you see each agent type token-by-token, can inject your own message into the conversation at any time, and stop the whole thing with one click. The blackboard preset adds a **Board** tab showing todos in five columns (Open / Claimed / Committed / Stale / Skipped), plus a run summary card when the run terminates.
 
@@ -291,6 +326,21 @@ Three npm workspaces:
 - **`.swarm-design/`** — design memory (north-star, decisions, roadmap)
 
 Each run gets its own folder under `logs/` to keep files organized. Filenames already include the preset name (e.g., `deliverable-council-...`, `deliverable-blackboard-...`) so no need to organize by preset. All files in the `logs/` folder are gitignored by default.
+
+## Desktop / Electron (performance + packaging)
+
+The web UI can be packaged as a desktop app with Electron for better resource headroom on long-running or heavy swarms (large transcripts, many agents, Brain context work).
+
+See `electron/main.js` (stub with recommended Chromium flags for memory/JS heap, no throttling, etc.) and `electron/preload.js`.
+
+**Useful flags** (in main process before creating window):
+- `--max-old-space-size=8192` (or higher) for heap.
+- Disable background throttling for autonomous runs.
+- Electron gives dedicated renderer (more RAM/CPU than a browser tab) + native I/O for logs.
+
+Core perf wins (virtualization, workers, narrow selectors, WS throttle) benefit both web and Electron equally. Electron mainly helps with limits and packaging.
+
+To run: `electron .` (after building web or in dev mode pointing to localhost:8244). Adjust in your Electron wrapper.
 
 For the current per-file map (with V2 substrate files, route mounts, and per-component layout) see the **Where things live** section in [`docs/STATUS.md`](docs/STATUS.md). For per-function detail, the code is the source of truth — open the file.
 

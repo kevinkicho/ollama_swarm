@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { memo } from "react";
 import { useSwarm } from "../state/store";
 import type { AgentState, LatencySample } from "../types";
 import { CopyChip } from "./CopyChip";
@@ -117,7 +118,7 @@ const COLOR_BORDER_CLASS: Record<string, string> = {
   lime: "border-l-lime-500",
 };
 
-export function AgentPanel({
+export const AgentPanel = memo(function AgentPanel({
   agent,
   role,
   model,
@@ -286,7 +287,7 @@ export function AgentPanel({
       {agent.error ? <div className="mt-2 text-xs text-red-300">{agent.error}</div> : null}
     </div>
   );
-}
+});
 
 // Role-badge style + tooltip per preset-specific role. Fixed roles
 // get hard-coded colors; any other string (role-diff catalog names

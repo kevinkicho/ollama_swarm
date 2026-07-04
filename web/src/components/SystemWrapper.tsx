@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { memo, useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { SystemStatusPanel } from "./SystemStatusPanel";
 import { RunQueuePanel } from "./RunQueuePanel";
@@ -14,6 +14,7 @@ import { UsageWidget } from "./UsageWidget";
 import { PhasePill, RuntimeTicker } from "./RunHeaderWidgets";
 import type { RunSummaryDigest } from "../types";
 import { useRunsList } from "../hooks/useRunsList";
+import { BrainStartChat, buildRunContext, getChatContext, type RunBrainContext } from "./BrainStartChat";
 
 interface BrainHealth {
   status: string;
@@ -44,6 +45,7 @@ export function SystemWrapper({
   const [systemHealthy, setSystemHealthy] = useState(true);
   const [brainHealth, setBrainHealth] = useState<BrainHealth | undefined>();
   const [brainActivities, setBrainActivities] = useState<BrainActivity[]>([]);
+  const [historyOpenSignal, setHistoryOpenSignal] = useState(0);
 
   useEffect(() => {
     const fetchHealth = async () => {
@@ -89,6 +91,19 @@ export function SystemWrapper({
 
   const navigate = useNavigate();
 
+  const handleSwitchRun = (id: string) => {
+    if (id === "history") {
+      setHistoryOpenSignal((n) => n + 1);
+    } else if (id) {
+      // treat as runId to view
+      navigate(`/runs/${encodeURIComponent(id)}`);
+    }
+  };
+
+  const handleNewRun = () => {
+    navigate("/");
+  };
+
   const activeRuns = runs.filter((r) => r.isActive).length;
   const totalRuns = runs.length;
   const completedRuns = runs.filter((r) => !r.isActive && r.stopReason === "completed").length;
@@ -121,13 +136,89 @@ export function SystemWrapper({
     }
   };
 
+  // FAB + modal state for during-run Brain chat (persistent across views)
+  const [brainChatOpen, setBrainChatOpen] = useState(false);
+  const activeRunIdForChat = useSwarm((s) => s.runId);
+  const phaseForChat = useSwarm((s) => s.phase);
+  const transcriptForChat = useSwarm((s) => s.transcript);
+  const agentsForChat = useSwarm((s) => s.agents);
+  const cfgForChat = useSwarm((s) => s.runConfig);
+
+  // Real board state from per-run store (todos for blackboard)
+  const todosForChat = useSwarm((s: any) => s.todos || {});
+  const boardCountsForChat = useMemo(() => {
+    const ts = Object.values(todosForChat || {});
+    return {
+      open: ts.filter((t: any) => t.status === 'open').length,
+      claimed: ts.filter((t: any) => t.status === 'claimed').length,
+      committed: ts.filter((t: any) => t.status === 'committed').length,
+      stale: ts.filter((t: any) => t.status === 'stale').length,
+    };
+  }, [todosForChat]);
+
+  const [brainContext, setBrainContext] = useState<RunBrainContext | undefined>(undefined);
+
+  // Build context using worker for perf (full integration)
+  const loadChatContext = async () => {
+    if (!activeRunIdForChat) return;
+    const boardState = {
+      counts: boardCountsForChat,
+      todos: Object.values(todosForChat).slice(0, 5),
+    };
+    try {
+      // Full worker offload via getChatContext for perf (heavy slicing/summary)
+      const ctx = await getChatContext(activeRunIdForChat, {
+        transcript: transcriptForChat,
+        phase: phaseForChat,
+        runConfig: cfgForChat,
+        agents: agentsForChat,
+      }, boardState);
+      setBrainContext(ctx);
+    } catch {
+      // fallback sync
+      const ctx = buildRunContext(activeRunIdForChat, { // note: import fallback if needed
+        transcript: transcriptForChat,
+        phase: phaseForChat,
+        runConfig: cfgForChat,
+        agents: agentsForChat,
+      }, boardState);
+      setBrainContext(ctx);
+    }
+  };
+
+  const handleOpenBrainChat = async () => {
+    if (activeRunIdForChat) {
+      await loadChatContext();
+      setBrainChatOpen(true);
+    } else {
+      alert('Brain chat during run requires an active run. Use setup page for new runs.');
+    }
+  };
+
   return (
     <div className="h-full flex flex-col">
       <header className="px-4 py-2 border-b border-ink-700 flex items-center justify-between bg-ink-900">
         <div className="flex items-center gap-3">
-          <span className="text-sm font-semibold text-ink-200">ollama_swarm</span>
+          <button
+            type="button"
+            onClick={() => navigate('/')}
+            className="text-sm font-semibold text-ink-200 hover:text-ink-100 transition-colors focus:outline-none focus:ring-1 focus:ring-ink-600 rounded px-0.5 -mx-0.5"
+            title="Return to home / setup"
+          >
+            ollama_swarm
+          </button>
           <RuntimeTicker />
           <PhasePill />
+          {/* Dev perf: react-scan for live run re-render measurements. Call window.enableReactScan() or ?scan=1 */}
+          {typeof window !== 'undefined' && (import.meta as any)?.env?.DEV && (
+            <button
+              onClick={() => (window as any).enableReactScan?.()}
+              className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/60 text-amber-300 border border-amber-700/50 hover:bg-amber-800"
+              title="Enable react-scan overlay to measure component re-renders on this live run"
+            >
+              scan
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-3 text-[10px]">
           <StatusDot healthy={systemHealthy} />
@@ -169,10 +260,22 @@ export function SystemWrapper({
           <span className="text-ink-700">|</span>
 
           <UsageWidget />
-          <RunHistoryDropdown parentPath={parentPath} />
+          <RunHistoryDropdown parentPath={parentPath} forceOpenSignal={historyOpenSignal} />
           <EventLogPanel />
         </div>
       </header>
+
+      {/* True floating pill (fixed) for Brain chat, persists across views */}
+      {activeRunIdForChat && phaseForChat !== 'idle' && (
+        <button
+          onClick={handleOpenBrainChat}
+          className="fixed bottom-4 right-4 z-40 px-4 py-2 rounded-full bg-violet-700 hover:bg-violet-600 text-white shadow-lg flex items-center gap-2 text-sm font-medium border border-violet-500"
+          title="Talk to Brain about this run (persistent)"
+        >
+          <span>🧠</span>
+          <span>Brain</span>
+        </button>
+      )}
 
       <div className="flex-1 flex min-h-0">
         <aside
@@ -193,7 +296,7 @@ export function SystemWrapper({
               <RunQueuePanel parentPath={parentPath} onViewRun={handleViewRun} onStopRun={handleStopRun} />
               <MetricsOverviewPanel parentPath={parentPath} />
               <BrainActivityPanel brainHealth={brainHealth} activities={brainActivities} />
-              <QuickNavPanel activeRunId={activeRunId} />
+              <QuickNavPanel activeRunId={activeRunId} onSwitchRun={handleSwitchRun} onNewRun={handleNewRun} />
               <SystemHealthDashboard />
               <NotificationPreferences />
             </div>
@@ -204,6 +307,39 @@ export function SystemWrapper({
           {children}
         </main>
       </div>
+
+      {/* Brain Chat Modal - prototype for persistent during-run access */}
+      {brainChatOpen && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setBrainChatOpen(false)}>
+          <div 
+            className="bg-ink-900 border border-violet-700 rounded-xl max-w-lg w-full max-h-[80vh] overflow-hidden flex flex-col"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-3 border-b border-ink-700">
+              <div className="flex items-center gap-2">
+                <span className="text-violet-400">🧠</span>
+                <span className="font-semibold">Brain Assistant {activeRunIdForChat ? `(run ${activeRunIdForChat.slice(0,8)})` : ''}</span>
+                <button
+                  type="button"
+                  className="ml-1 text-[10px] leading-none text-ink-500 hover:text-violet-400 transition-opacity opacity-50 hover:opacity-100 px-0.5"
+                  title="Context includes run state, recent transcript summary, board info (if available). Ask about current progress, amendments, research insights, etc."
+                  aria-label="Chat context info"
+                >
+                  ⓘ
+                </button>
+              </div>
+              <button onClick={() => setBrainChatOpen(false)} className="text-ink-400 hover:text-white">✕</button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              <BrainStartChat 
+                onApplyConfig={() => {}} 
+                onStartNow={() => {}}
+                runContext={brainContext}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

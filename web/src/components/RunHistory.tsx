@@ -3,6 +3,7 @@ import type { PerAgentStat, RunSummary, RunSummaryDigest } from "../types";
 import type { AgentRole, Topology } from "../../../shared/src/topology";
 import { copyText } from "../utils/copyText";
 import { truncateLeft } from "./IdentityStrip";
+import { loadRecentRuns, type RecentRun } from "./setup/RecentRuns";
 
 // Unit 56: IdentifiersRow has been deleted as a separate row.
 // - run uuid moved into IdentityStrip's leading chip
@@ -68,7 +69,7 @@ function cachedRunSummary(clonePath: string, runId: string | undefined): RunSumm
   return tryReadCache<RunSummary>(`${CACHE_RUN_SUMMARY_PREFIX}${id}`);
 }
 
-export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {}) {
+export function RunHistoryDropdown({ parentPath, forceOpenSignal }: { parentPath?: string; forceOpenSignal?: number } = {}) {
   const [open, setOpen] = useState(false);
   const [runs, setRuns] = useState<RunSummaryDigest[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -77,6 +78,9 @@ export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {})
   // (server unreachable) so the dropdown can render a "[cached]" badge.
   const [fromCache, setFromCache] = useState(false);
   const [selected, setSelected] = useState<RunSummaryDigest | null>(null);
+  // New: optional merge of client-side "Recent runs" (localStorage) into the server list
+  const [includeLocalRecent, setIncludeLocalRecent] = useState(false);
+  const [localRecent, setLocalRecent] = useState<RecentRun[]>([]);
 
   // Refetch on open so the list reflects any sibling runs that
   // appeared since the previous open. Cheap — directory listing.
@@ -86,10 +90,18 @@ export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {})
   // localStorage cache so users can still browse prior runs even
   // when the dev server is offline.
   useEffect(() => {
+    if (forceOpenSignal !== undefined) {
+      setOpen(true);
+    }
+  }, [forceOpenSignal]);
+
+  useEffect(() => {
     if (!open) return;
     setLoading(true);
     setError(null);
     setFromCache(false);
+    // Load local recent (client cache) so we can optionally merge
+    setLocalRecent(loadRecentRuns());
     let cancelled = false;
     const ctrl = new AbortController();
     (async () => {
@@ -97,6 +109,10 @@ export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {})
         try {
           const params = new URLSearchParams();
           if (parentPath) params.set("parentPath", parentPath);
+          // Always include other parents for the topbar "Runs" dropdown so it
+          // discovers runs from yesterday / other workspaces (recent runs card
+          // uses localStorage; this uses server FS scan of summaries).
+          params.set("includeOtherParents", "true");
           const r = await fetch(`/api/swarm/runs?${params}`, { signal: ctrl.signal });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           const body = await r.json();
@@ -133,6 +149,39 @@ export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {})
     };
   }, [open, parentPath]);
 
+  // Merge server runs + optional local recent runs (mapped to digest shape for display)
+  const displayedRuns: RunSummaryDigest[] = React.useMemo(() => {
+    const server = runs || [];
+    if (!includeLocalRecent || localRecent.length === 0) return server;
+    const localMapped: RunSummaryDigest[] = localRecent.map((r) => ({
+      name: r.repoUrl?.split(/[/\\]/).pop() || 'recent',
+      clonePath: r.parentPath || r.clonePath || '',
+      preset: r.presetId || 'unknown',
+      model: (r as any).model || '',
+      startedAt: r.startedAt || Date.now(),
+      endedAt: r.endedAt || 0,
+      wallClockMs: (r as any).wallClockMs || 0,
+      stopReason: (r as any).stopReason,
+      commits: 0,
+      totalTodos: 0,
+      hasContract: false,
+      isActive: false,
+      runId: r.runId,
+      topology: (r as any).topology,
+    } as RunSummaryDigest));
+    // dedupe by runId or clonePath+startedAt
+    const seen = new Set<string>();
+    const merged: RunSummaryDigest[] = [];
+    for (const d of [...server, ...localMapped]) {
+      const key = d.runId || `${d.clonePath}:${d.startedAt}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push(d);
+      }
+    }
+    return merged.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
+  }, [runs, includeLocalRecent, localRecent]);
+
   const onOpenFolder = async (clonePath: string) => {
     try {
       const res = await fetch("/api/swarm/open", {
@@ -156,7 +205,7 @@ export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {})
         title="Browse past runs — curated summary data (commits, todos, duration)"
         className="text-[11px] uppercase tracking-wide px-2 py-1 rounded bg-emerald-900/40 hover:bg-emerald-800/50 text-emerald-300 border border-emerald-700/50 hover:border-emerald-600 transition"
       >
-        ▸ Runs{runs && runs.length > 0 ? ` (${runs.length})` : ""}
+        ▸ Runs{displayedRuns.length > 0 ? ` (${displayedRuns.length})` : ""}
       </button>
       {open ? (
         <div className="absolute z-20 right-0 mt-1 w-[min(960px,calc(100vw-2rem))] rounded border border-ink-600 bg-ink-900 shadow-xl overflow-hidden">
@@ -164,7 +213,7 @@ export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {})
             <span>
               <span className="text-emerald-400 font-semibold">Run Summaries</span>
               <span className="ml-2 text-ink-500">— curated results from summary files</span>
-              {runs && runs.length > 0 ? <span className="ml-2 text-ink-500">({runs.length})</span> : null}
+              {displayedRuns.length > 0 ? <span className="ml-2 text-ink-500">({displayedRuns.length})</span> : null}
               {/* Task #111: badge when viewing cached data (server unreachable). */}
               {fromCache ? (
                 <span
@@ -174,6 +223,14 @@ export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {})
                   cached · server offline
                 </span>
               ) : null}
+              <button
+                type="button"
+                onClick={() => setIncludeLocalRecent(v => !v)}
+                className={`ml-2 text-[10px] px-1.5 py-0.5 rounded border transition ${includeLocalRecent ? 'bg-emerald-900/50 border-emerald-700 text-emerald-200' : 'bg-ink-800 border-ink-700 text-ink-400 hover:text-ink-200'}`}
+                title="Merge client-side Recent Runs (from localStorage in the setup form) into this server-scanned list"
+              >
+                {includeLocalRecent ? '✓ recent' : '+ recent'}
+              </button>
             </span>
             <button
               onClick={() => setOpen(false)}
@@ -188,9 +245,9 @@ export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {})
               <div className="p-3 text-ink-400">Loading…</div>
             ) : error ? (
               <div className="p-3 text-red-300">Failed to load: {error}</div>
-            ) : runs && runs.length === 0 ? (
+            ) : displayedRuns.length === 0 ? (
               <div className="p-3 text-ink-400 italic">
-                No sibling runs found in this parent folder.
+                No run summaries found. (Recent runs in setup use local cache; server scan looks for summary-*.json under parent/logs.)
               </div>
             ) : runs ? (
               <>
@@ -224,7 +281,7 @@ export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {})
                   </tr>
                 </thead>
                 <tbody>
-                  {runs.map((r) => (
+                  {displayedRuns.map((r) => (
                     <tr
                       key={`${r.clonePath}-${r.runId ?? r.startedAt}`}
                       className={
@@ -308,21 +365,7 @@ export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {})
                         >
                           open
                         </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const cp = r.clonePath;
-                            const ru = ""; // digest doesn't have, modal will have more
-                            const ps = r.preset;
-                            const parent = cp.replace(/[/\\][^/\\]*$/, "");
-                            const params = new URLSearchParams({ parentPath: parent, preset: ps });
-                            window.location.href = `/?${params.toString()}`;
-                          }}
-                          title="Start a new swarm reusing this clone's files"
-                          className="text-[10px] ml-1 text-emerald-400 hover:text-emerald-300 underline"
-                        >
-                          start
-                        </button>
+
                       </td>
                     </tr>
                   ))}
@@ -443,6 +486,11 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
         });
         const r = await fetch(`/api/swarm/run-summary?${params.toString()}`);
         if (!r.ok) {
+          if (r.status === 404) {
+            // No full summary file yet (run in progress or very recent); fall back to digest info.
+            if (!cancelled) setLoading(false);
+            return;
+          }
           // Task #111: HTTP-error fallback to cache (e.g. server up but
           // file missing — rarer case, but cache may still have it).
           if (!cancelled) {
@@ -874,8 +922,9 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
               if (ru) params.set("repoUrl", ru);
               params.set("preset", ps);
               if (md) params.set("model", md);
-              // Navigate to start page prefilled; server will reuse the clone dir if it exists.
-              // User can edit directive/caps/etc before starting.
+              params.set("autoStart", "1");
+              // Direct start (with prefill) reusing the clone. The autoStart param triggers
+              // immediate performStart after form hydrate. Server reuses existing clone dir.
               window.location.href = `/?${params.toString()}`;
               onClose();
             }}

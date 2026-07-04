@@ -2,7 +2,9 @@
 // plain "— new run started —" system entry. Parses the sentinel
 // pipe-encoded text emitted by store.resetForNewRun when it has run
 // metadata. Falls back to a minimal divider if parsing fails.
-export function RunStartDivider({ text, ts }: { text: string; ts: number }) {
+import { memo } from "react";
+
+export const RunStartDivider = memo(function RunStartDivider({ text, ts }: { text: string; ts: number }) {
   const parsed = parseRunStartDividerText(text);
   const dateStr = new Date(ts).toLocaleString();
   const runIdShort = parsed.runId ? parsed.runId.slice(0, 8) : null;
@@ -54,7 +56,7 @@ export function RunStartDivider({ text, ts }: { text: string; ts: number }) {
       </div>
     </div>
   );
-}
+});
 
 function parseRunStartDividerText(text: string): {
   runId?: string;

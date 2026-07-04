@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { AgentJsonBubble, MAX_BUBBLE_HEIGHT_PX } from "./JsonBubbles";
 import { extractFirstBalancedJson } from "../../../../shared/src/extractJson";
 
@@ -56,7 +56,7 @@ export function tryParseWorkerHunks(rawJson: string): ParsedHunk[] | null {
   }
   return out.length > 0 ? out : null;
 }
-export function WorkerHunksBubble({
+export const WorkerHunksBubble = memo(function WorkerHunksBubble({
   summary,
   rawJson,
   header,
@@ -139,8 +139,8 @@ export function WorkerHunksBubble({
       ) : null}
     </div>
   );
-}
-function HunkBlock({ hunk: h, index }: { hunk: ParsedHunk; index: number }) {
+});
+const HunkBlock = memo(function HunkBlock({ hunk: h, index }: { hunk: ParsedHunk; index: number }) {
   const opColor = h.op === "replace" ? "text-amber-300" : h.op === "create" ? "text-emerald-300" : "text-sky-300";
   const counts = countHunkLines(h);
   return (
@@ -172,7 +172,7 @@ function HunkBlock({ hunk: h, index }: { hunk: ParsedHunk; index: number }) {
       )}
     </div>
   );
-}
+});
 
 // Count line-equivalents in a hunk's text. Mirrors the server-side
 // countNewlines() so the UI's +N/-M badges match the per-agent
@@ -189,7 +189,7 @@ function countHunkLines(h: ParsedHunk): { added: number; removed: number } {
   }
   return { added: countLines(h.content ?? ""), removed: 0 };
 }
-function DiffPane({ label, text, accent }: { label: string; text: string; accent: string }) {
+const DiffPane = memo(function DiffPane({ label, text, accent }: { label: string; text: string; accent: string }) {
   const [expanded, setExpanded] = useState(false);
   const PREVIEW_LINES = 12;
   const lines = text.split("\n");
@@ -209,4 +209,4 @@ function DiffPane({ label, text, accent }: { label: string; text: string; accent
       ) : null}
     </div>
   );
-}
+});

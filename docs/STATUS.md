@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-07 (Brain as OS layer + major UI layout hardening + SystemWrapper)
+**Last updated:** 2026-07-04 (Brain-as-OS + persistent FAB Brain chat + per-run brain history + /brain/suggest + transcript injection + docs consolidation)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -11,6 +11,8 @@
 > path are all gone. `OPENCODE_SERVER_PASSWORD` is still required at
 > config-load time so existing `npm test` setups don't break, but it's
 > otherwise unused.
+>
+> **2026-07 — Legacy agent memory consolidated:** `.opencode/session-checkpoint.md` (and `.opencode/`) superseded and removed after consolidation of historical notes (council refactor, test snapshots, old LOCs) into `docs/STATUS.md`, `docs/AGENT-GUIDE.md`, and `README.md`. `opencode.json` now points at current docs. Old `terminals/*.txt` are runtime logs (not guidance).
 
 ---
 
@@ -19,9 +21,10 @@
 The app is a **Brain-as-OS for concurrent swarm orchestration**:
 
 - **Brain-as-OS layer** (under blackboard): real-time monitoring, run analysis & final reports, cross-run knowledge (librarian), run provisioning, health tracking. Brain acts as master-admin for initializing, starting, finishing, reviewing records and analyzing runs. System self-patching / self-upgrader removed.
+- **Brain during live runs (FAB + chat + suggest)**: Floating fixed 🧠 "Brain" pill (bottom-right in SystemWrapper, shown for active runs) opens modal running `BrainStartChat` with runContext (transcript summary via formatServerSummary + board todos + phase + cfg). Chat uses `/brain/chat` (with runContext prompt augmentation). History saved per-run via store + `/brain/chat-history` + RunStatePersister + summary recovery. `/brain/suggest` calls `brainService.injectSuggestion` which appends system + emits `brain_suggestion` transcript kind (rendered in MessageBubble). Proactive inject wired in Council stuck cycles + adaptive watchdog stalls.
 - **Concurrent multi-swarm support**: multiple independent runs in parallel (`/runs/:runId` routing, ActiveRunsPanel, per-run WebSocket/REST, concurrency cap). Brain and UI manage them at system level.
-- **System UI**: `SystemWrapper` with persistent sidebar, BrainProposalsPanel, BrainActivityPanel, SystemStatus, PatchMonitor, RunQueue, topbar stats/health.
-- **Recent major UI work**: full viewport layout hardening, sticky elements, scrolling fixes.
+- **System UI**: `SystemWrapper` with persistent sidebar, floating Brain FAB, BrainProposalsPanel, BrainActivityPanel, SystemStatus, PatchMonitor, RunQueue, topbar stats/health. Transcript filter defaults to "key" (avoids information bombardment).
+- **Recent major UI work**: full viewport layout hardening, sticky elements, scrolling fixes; dedicated Brain chat + suggest flow.
 - **12 presets** with the existing write-mode story (blackboard native writes; others opt-in via `writeMode`).
 
 **12 swarm presets** (blackboard + 10 discussion/pipeline variants + baseline). Opt-in write capability for discussion presets:
@@ -43,6 +46,8 @@ The app is a **Brain-as-OS for concurrent swarm orchestration**:
 
 All presets honor the user directive except `stigmergy` (exploration is repo-driven by design).
 
+**Research / internet-heavy use cases**: Prefer `webTools: true` + `plannerTools: true` with council, map-reduce, moa, role-diff, pipeline, or hybrid council→blackboard. See `docs/swarm-patterns.md` "Research Workflows" for recommended combinations and concrete configs (e.g. superconductor literature analysis).
+
 **Legend:** ✅ native write support | ⚡ opt-in via `cfg.writeMode: "single" | "multi"` + `cfg.writeModel` | ❌ no write support
 
 Validation: tour v2 (2026-04-28) ran 9 sequentially with 8/9 self-terminating cleanly. MoA shipped 2026-05-01 with three layers of depth (initial → convergence detection → heterogeneous models per layer). Blackboard caps tightened by #304 (git committer identity) + #305 (cap watchdog 5s tick).
@@ -60,7 +65,7 @@ Validation: tour v2 (2026-04-28) ran 9 sequentially with 8/9 self-terminating cl
 | Eval harness | preset×task scoreboard | `eval/run-eval.mjs` + `eval/catalog.json` |
 | Pre-commit verify gate | Worker hunks gated by user shell command (npm test, lint, etc.) | `WorkerPipeline.VerifyAdapter` |
 | HITL nudge channel | `/api/swarm/amend` + topbar textarea | `IdentityStrip.AmendButton` |
-| Brain-as-OS | proposals, self-upgrade patches, run provisioning, health monitoring | `brainOverseer/*`, SystemWrapper + panels |
+| Brain-as-OS | proposals, analysis, run provisioning, health monitoring, during-run chat (FAB), proactive suggestions via injectSuggestion | `brainOverseer/*`, `brainService.ts`, `/brain/*` routes, SystemWrapper + BrainStartChat + transcript MessageBubble (brain_suggestion kind) |
 | Concurrent runs + Active Runs UI | multi-tenant, per-run routing, ActiveRunsPanel | Orchestrator + `/api/swarm/active-runs` + deep links |
 | V2 event log | `/api/v2/event-log/runs` + UI EventLogPanel; infra-only filter | `EventLogReaderV2` |
 | Run history (95+ runs) | History dropdown auto-scans `runs*/` at startup | `Orchestrator.scanForRunParents` |
@@ -68,6 +73,7 @@ Validation: tour v2 (2026-04-28) ran 9 sequentially with 8/9 self-terminating cl
 | Agent tools | Local-only (read/grep/glob/list + restricted bash). No web/internet tools for agents. | `ToolDispatcher`, profiles in `promptWithRetry` / `roles.ts` |
 | Cap watchdog (5s tick) | Wall-clock + commits + todos caps fire promptly during any phase | `BlackboardRunner.startCapWatchdog` (#305) |
 | `runs/` retention | `node scripts/prune-runs.mjs --apply` keeps last N + last 7 days | `scripts/prune-runs.mjs` |
+| `logs/` retention | `node scripts/prune-logs.mjs --apply` (current.jsonl rotations + per-run debug*.jsonl) | `scripts/prune-logs.mjs` (new) |
 | CI | GitHub Actions runs npm test + type-check on push/PR | `.github/workflows/ci.yml` |
 
 ---

@@ -28,6 +28,7 @@ import type { StoreApi } from "zustand";
 import type { SwarmStore } from "./store";
 import { applyEventToStore } from "./applyEvent";
 import type { SwarmEvent, SwarmStatusSnapshot } from "../types";
+import { wsUrlForRunId } from "../hooks/useSwarmSocket";
 
 interface SwarmStoreProviderProps {
   /** Run id to subscribe to. */
@@ -58,59 +59,69 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
     let backoffMs = 500;
     const ctrl = new AbortController();
 
+    const isFake = runId.startsWith('fake-') || runId.includes('fake');
+
     // Hydrate from REST snapshot first so the store is non-empty
     // before the live socket starts streaming. Best-effort — a
     // failed snapshot just means the UI is sparser until events
-    // start landing.
+    // start landing. Skip network request for fake review entries.
     const hydrate = async () => {
+      if (isFake) return;
       try {
         const res = await fetch(
           `/api/swarm/runs/${encodeURIComponent(runId)}/status`,
           { signal: ctrl.signal },
         );
-        if (!res.ok) return;
-        const snap = (await res.json()) as SwarmStatusSnapshot;
-        if (cancelled) return;
-        const s = storeRef.current.getState();
-        s.setPhase(snap.phase, snap.round);
-        for (const a of snap.agents) s.upsertAgent(a);
-        for (const e of snap.transcript) s.appendEntry(e);
-        if (snap.summary) s.setSummary(snap.summary);
-        if (snap.contract) s.setContract(snap.contract);
-        if (snap.cloneState) s.setCloneState(snap.cloneState);
-        if (snap.runConfig) s.setRunConfig(snap.runConfig);
-        if (snap.runId) s.setRunId(snap.runId);
-        if (snap.runStartedAt) s.setRunStartedAt(snap.runStartedAt);
-        if (snap.board) {
-          s.replaceBoard({
-            todos: snap.board.todos,
-            findings: snap.board.findings,
-          });
-        }
-        if (snap.latency) {
-          for (const [agentId, samples] of Object.entries(snap.latency)) {
-            for (const sample of samples) s.pushLatencySample(agentId, sample);
+        if (res.ok) {
+          const snap = (await res.json()) as SwarmStatusSnapshot;
+          if (cancelled) return;
+          const s = storeRef.current.getState();
+          // Set phase from snap (server's statusForRun now corrects terminal phase
+          // using summary.stopReason so snap is authoritative for both live and finished).
+          if (snap.phase != null) {
+            s.setPhase(snap.phase as any, (snap as any).round ?? 0);
           }
-        }
-        if (snap.streaming) {
-          for (const [agentId, entry] of Object.entries(snap.streaming)) {
-            s.setStreaming(agentId, entry.text);
+          for (const a of snap.agents) s.upsertAgent(a);
+          for (const e of snap.transcript) s.appendEntry(e);
+          if (snap.summary) s.setSummary(snap.summary);
+          if (snap.contract) s.setContract(snap.contract);
+          if (snap.cloneState) s.setCloneState(snap.cloneState);
+          if (snap.runConfig) s.setRunConfig(snap.runConfig);
+          if (snap.runId) s.setRunId(snap.runId);
+          if (snap.runStartedAt) s.setRunStartedAt(snap.runStartedAt);
+          if (snap.board) {
+            s.replaceBoard({
+              todos: snap.board.todos,
+              findings: snap.board.findings,
+            });
           }
-        }
-        if (snap.pheromones) {
-          for (const [file, state] of Object.entries(snap.pheromones)) {
-            s.upsertPheromone(file, state);
+          if (snap.latency) {
+            for (const [agentId, samples] of Object.entries(snap.latency)) {
+              for (const sample of samples) s.pushLatencySample(agentId, sample);
+            }
           }
-        }
-        if (
-          snap.mapperSlices &&
-          Object.keys(snap.mapperSlices).length > 0
-        ) {
-          s.setMapperSlices(snap.mapperSlices);
+          if (snap.streaming) {
+            for (const [agentId, entry] of Object.entries(snap.streaming)) {
+              s.setStreaming(agentId, entry.text);
+            }
+          }
+          if (snap.pheromones) {
+            for (const [file, state] of Object.entries(snap.pheromones)) {
+              s.upsertPheromone(file, state);
+            }
+          }
+          if (
+            snap.mapperSlices &&
+            Object.keys(snap.mapperSlices).length > 0
+          ) {
+            s.setMapperSlices(snap.mapperSlices);
+          }
         }
       } catch {
         // best-effort
       }
+
+      const hadTranscriptFromStatus = storeRef.current.getState().transcript.length > 0;
 
       // Fallback for past runs where /status 404s (no runPaths entry for snapshot):
       // discover the clonePath via broad /runs list, then load run-summary
@@ -120,14 +131,14 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
           const listRes = await fetch(`/api/swarm/runs`, { signal: ctrl.signal });
           if (listRes.ok) {
             const listBody = await listRes.json();
-            const match = (listBody.runs || []).find((r: any) => r.runId === runId);
+            const match = (listBody.runs || []).find((r: any) => r.runId === runId || (runId && (r.runId.startsWith(runId) || runId.startsWith(r.runId))));
+            const s = storeRef.current.getState();
+            s.setRunId(runId);
             if (match && match.clonePath) {
               const params = new URLSearchParams({ clonePath: match.clonePath, runId });
               const sumRes = await fetch(`/api/swarm/run-summary?${params.toString()}`, { signal: ctrl.signal });
               if (sumRes.ok) {
                 const summary = await sumRes.json();
-                const s = storeRef.current.getState();
-                s.setRunId(runId);
                 const cp = summary.localPath || match.clonePath;
                 if (cp) {
                   s.setRunConfig({
@@ -139,15 +150,54 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
                 }
                 if (summary.startedAt) s.setRunStartedAt(summary.startedAt);
                 if (summary.transcript) {
+                  // Always attempt to merge from /run-summary (the main aggregated for hybrid/pipeline).
+                  // id-based dedup in appendEntry will skip exact dups; extra/more-complete
+                  // entries (e.g. from final Pipeline write vs partial status synthesis) will be added.
+                  // This ensures review/history gets the full agent bubbles + final run summary.
                   for (const e of summary.transcript) s.appendEntry(e);
                 }
+                if (summary) s.setSummary(summary);
                 if (summary.contract) s.setContract(summary.contract);
-                if (summary.summary) s.setSummary(summary.summary);
+                // Authoritative terminal phase from summary (stopReason) — set it BEFORE
+                // upserting agents so the terminal setPhase's agents:{} clear doesn't wipe them.
+                if (summary.stopReason) {
+                  const phase = summary.stopReason === "completed" ? "completed"
+                    : summary.stopReason === "user" || summary.stopReason === "crash" ? "stopped"
+                    : summary.stopReason === "no-progress" || summary.stopReason === "partial-progress" ? "stopped"
+                    : "stopped";
+                  s.setPhase(phase as any, 0);
+                } else if (summary.endedAt != null || (summary as any).wallClockMs != null || summary.stopReason != null) {
+                  // For summaries that lack explicit stopReason but have end time (some pipeline/hybrid/no-progress cases),
+                  // still mark as stopped so we don't fall back to setup form. Sparse view is better than reset to idle/setup.
+                  s.setPhase("stopped", 0);
+                }
+                // Load agents from summary for finished runs (the /status snap for finished returns empty agents list).
+                // This fixes the "No agents yet." / "Waiting for agents..." appearance in per-run views of completed runs.
+                if (summary.agents && Array.isArray(summary.agents)) {
+                  for (const a of summary.agents) {
+                    s.upsertAgent(a);
+                  }
+                }
+              } else {
+                // Even if run-summary 404s or fails, since the run appeared in /runs list (user selected it),
+                // treat as finished so we don't kick back to setup form.
+                s.setPhase("stopped", 0);
               }
+            } else {
+              // Run in list but no clonePath match? Still mark stopped to avoid reset.
+              s.setPhase("stopped", 0);
             }
+          } else {
+            // /runs list failed but we have runId from route — mark stopped.
+            const s = storeRef.current.getState();
+            s.setRunId(runId);
+            s.setPhase("stopped", 0);
           }
         } catch {
-          // best effort
+          // best effort — at least set the runId and terminal phase so we don't reset to setup.
+          const s = storeRef.current.getState();
+          s.setRunId(runId);
+          s.setPhase("stopped", 0);
         }
       }
     };
@@ -155,8 +205,10 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
 
     const open = () => {
       if (cancelled) return;
-      const proto = location.protocol === "https:" ? "wss" : "ws";
-      const url = `${proto}://${location.host}/ws?runId=${encodeURIComponent(runId)}`;
+      // Reuse the same WS URL builder as the main socket hook. This ensures the
+      // per-run scoped WS (for /runs/:id views) connects to the correct backend
+      // (using __BACKEND_PORT__ in dev, where vite may serve the page on a different port).
+      const url = wsUrlForRunId(runId);
       const sock = new WebSocket(url);
       socket = sock;
       sock.onopen = () => {

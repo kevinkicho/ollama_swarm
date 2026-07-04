@@ -233,7 +233,14 @@ function makeFakeFs(initial: Record<string, string> = {}): {
         return state.files.has(path) ? (state.files.get(path) as string) : null;
       },
       async write(path, content) {
-        state.files.set(path, content);
+        if (content === "") {
+          state.files.delete(path);
+        } else {
+          state.files.set(path, content);
+        }
+      },
+      async delete(path) {
+        state.files.delete(path);
       },
     },
   };

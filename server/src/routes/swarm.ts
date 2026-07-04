@@ -5,6 +5,7 @@ import { promises as fs, readFileSync } from "node:fs";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { TopologySchema, deriveLegacyFields, synthesizeTopology } from "@ollama-swarm/shared/topology";
+import type { Todo } from "../swarm/blackboard/types.js";
 import { resolveModels, type ModelDefaults } from "@ollama-swarm/shared/modelConfig";
 import { config } from "../config.js";
 import { validateContinuousMode } from "./continuousMode.js";
@@ -30,6 +31,7 @@ import {
 } from "./schemas.js";
 import { assertAllowedClonePath } from "./clonePathGuard.js";
 import { resolveLegacyActiveRunId } from "./legacyRunResolve.js";
+import { scanForRunDigests } from "../services/RunsScanner.js";
 import type { Orchestrator } from "../services/Orchestrator.js";
 import { pickProvider } from "../providers/pickProvider.js";
 import { deriveCloneDir, RepoService } from "../services/RepoService.js";
@@ -38,6 +40,8 @@ import { preflightDiskCheck } from "../swarm/preflightDiskCheck.js";
 import { projectRunCost, exceedsBudget } from "../swarm/preflightCostProjector.js";
 import { decideStopAction } from "../swarm/drainStopPolicy.js";
 import { SwarmRoleSchema, StartBody, SayBody, OpenBody } from "./schemas.js";
+import { buildPresetGuideString, buildOptionsTable } from "../swarm/presetGuide.js";
+import { extractJsonFromText, extractLabeledJson } from "../../../shared/src/extractJson.js";
 
 function guardClonePath(
   orch: Orchestrator,
@@ -173,9 +177,9 @@ export function swarmRouter(orch: Orchestrator): Router {
 
     const staleness: Record<string, number> = {};
     const commits: Record<string, number> = {};
-    for (const t of todos) {
-      if ((t as any).staleReason) staleness[(t as any).staleReason] = (staleness[(t as any).staleReason] ?? 0) + 1;
-      if ((t as any).commitTier) commits[(t as any).commitTier] = (commits[(t as any).commitTier] ?? 0) + 1;
+    for (const t of todos as Todo[]) {
+      if (t.staleReason) staleness[t.staleReason] = (staleness[t.staleReason] ?? 0) + 1;
+      if (t.commitTier) commits[t.commitTier] = (commits[t.commitTier] ?? 0) + 1;
     }
 
     const totalTodos = (counts?.committed ?? 0) + (counts?.stale ?? 0) + (counts?.skipped ?? 0);
@@ -424,6 +428,21 @@ export function swarmRouter(orch: Orchestrator): Router {
     // + 1 mid-lead + 2 workers = 4 agents to add coverage over flat OW.
     // Below that, the topology degenerates (mid-lead gets 0-1 workers
     // and the deep tier is just extra latency). Match map-reduce's
+
+    // Server-side guard for /start (including from Brain structured CONFIG).
+    // Prevents placeholder paths from structured recs or bad UI state.
+    const candidatePath = parsed.data.parentPath || "";
+    if (candidatePath && (
+      candidatePath.includes("you\\projects") ||
+      candidatePath.includes("you/projects") ||
+      candidatePath.includes("my-repo") ||
+      candidatePath.trim().length < 4
+    )) {
+      res.status(400).json({
+        error: "Please set a real 'Project folder (workspace)' path (the local directory to use/clone into).",
+      });
+      return;
+    }
     // policy: reject at the route layer with a clear message.
     if (parsed.data.preset === "orchestrator-worker-deep" && effAgentCount < 4) {
       res.status(400).json({
@@ -862,8 +881,6 @@ export function swarmRouter(orch: Orchestrator): Router {
     // (runs are stored in logs/{runId}/). Use activeParent which respects
     // the frontend's ?parentPath= even when no run is active.
     if (activeParent) {
-      // activeParent may already be a logs/ dir (frontend sends logs/ path)
-      // or a project root. Check both.
       const logsDir = activeParent.endsWith("/logs") || activeParent.endsWith("\\logs")
         ? activeParent
         : path.join(activeParent, "logs");
@@ -908,100 +925,27 @@ export function swarmRouter(orch: Orchestrator): Router {
       for (const p of orch.getKnownParentPaths()) parentsToScan.add(p);
     }
     if (parentsToScan.size === 0) {
-      res.json({ runs: [], parents: [] });
-      return;
+      // Broader default when nothing is known (e.g. fresh start, no active run, no ?parentPath):
+      // scan cwd + its logs/ + any known parents from the orchestrator.
+      const cwd = process.cwd();
+      parentsToScan.add(cwd);
+      const cwdLogs = path.join(cwd, 'logs');
+      parentsToScan.add(cwdLogs);
+      for (const p of orch.getKnownParentPaths()) parentsToScan.add(p);
+      const last = orch.getLastParentPath();
+      if (last) parentsToScan.add(last);
     }
     const activeClone = status.localPath ? path.resolve(status.localPath) : null;
     const activeRunId = status.runConfig?.preset
       ? status.runId ?? null
       : null;
-    const collected: RunSummaryDigest[] = [];
-    const parentsScanned: string[] = [];
-    for (const parent of parentsToScan) {
-      let entries: string[];
-      try {
-        entries = await fs.readdir(parent);
-      } catch (err) {
-        console.warn('[swarm] readdir-parent-failed:', err instanceof Error ? err.message : String(err));
-        continue;
-      }
-      parentsScanned.push(parent);
-      for (const name of entries) {
-        const cloneDir = path.join(parent, name);
-        let stat: import("node:fs").Stats;
-        try {
-          stat = await fs.stat(cloneDir);
-        } catch (err) {
-          console.warn('[swarm] stat-cloneDir-failed:', err instanceof Error ? err.message : String(err));
-          continue;
-        }
-        if (!stat.isDirectory()) continue;
 
-        // Heuristic to avoid probing every sibling folder when activeParent
-        // resolves to a broad "workspace" or "projects" root that contains
-        // many unrelated repos. We only fully scan dirs that look like they
-        // have run history (logs/ subdir or summary files). This greatly
-        // reduces log spam on ENOENT for non-run directories.
-        let looksPromising = false;
-        try {
-          const childEntries = await fs.readdir(cloneDir);
-          looksPromising = childEntries.some(
-            (e) => /^summary.*\.json$/.test(e) || e === "logs" || e === "run-state.json"
-          );
-        } catch {
-          // unreadable child — skip
-          continue;
-        }
-        if (!looksPromising) continue;
+    // Delegated to extracted RunsScanner service (deeper refactor of parent-scanning logic)
+    const { runs, parentsScanned } = await scanForRunDigests(parentsToScan, {
+      activeClone,
+      activeRunId,
+    });
 
-        // 2026-04-24: surface EVERY per-run summary (summary-<iso>.json),
-        // not just the latest. A target run 8 times now contributes 8
-        // dropdown rows instead of 1.
-        const digests = await readAllRunDigests(cloneDir, name);
-        for (const d of digests) {
-          // Active = the run whose clonePath matches AND whose runId
-          // matches the orchestrator's current runId. Without the runId
-          // check, every prior run on the active target's clone dir
-          // would falsely flag as "active".
-          d.isActive = activeClone !== null && cloneDir === activeClone && d.runId !== undefined && d.runId === activeRunId;
-          // #238: tag each digest with its parent so the UI can group
-          // by parent in the cross-parent view.
-          (d as RunSummaryDigest & { parentPath?: string }).parentPath = parent;
-          collected.push(d);
-        }
-      }
-
-      // Also treat the current 'parent' itself as a potential clone dir containing
-      // summary files directly. This handles the logs/<runshort>/ case where
-      // parentPath led us to add runshort dirs (which contain summary-*.json
-      // directly inside, not in further sub-clone-dirs).
-      //
-      // Guard: only do this when the parent itself appears to be (or contain)
-      // run material. Prevents direct summary.json probes (and their ENOENT
-      // noise) against broad workspace roots.
-      const parentLooksPromising = entries.some(
-        (e) => /^summary.*\.json$/.test(e) || e === "logs" || e === "run-state.json"
-      );
-      if (parentLooksPromising) {
-        const directDigests = await readAllRunDigests(parent, path.basename(parent));
-        for (const d of directDigests) {
-          d.isActive = activeClone !== null && parent === activeClone && d.runId !== undefined && d.runId === activeRunId;
-          (d as RunSummaryDigest & { parentPath?: string }).parentPath = parent;
-          collected.push(d);
-        }
-      }
-    }
-    // Newest first by startedAt (descending). Falls back to dir name
-    // when startedAt is missing (shouldn't happen with a real
-    // summary, but defensive).
-    // dedupe (in case multiple scan paths hit the same summary)
-    const byKey = new Map<string, RunSummaryDigest>();
-    for (const d of collected) {
-      const k = d.runId || `t:${d.startedAt}`;
-      if (!byKey.has(k)) byKey.set(k, d);
-    }
-    const runs = Array.from(byKey.values());
-    runs.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
     res.json({ runs, parents: parentsScanned });
   });
 
@@ -1018,7 +962,9 @@ export function swarmRouter(orch: Orchestrator): Router {
     const { clonePath, runId } = req.query as unknown as z.infer<typeof RunSummaryQuery>;
     const resolvedClone = guardClonePath(orch, res, clonePath);
     if (!resolvedClone) return;
-    let entries: string[];
+    // Look for summaries in the clone root (legacy) or under logs/ (current write location).
+    let summaryBase = resolvedClone;
+    let entries: string[] = [];
     try {
       entries = await fs.readdir(resolvedClone);
     } catch (err) {
@@ -1026,15 +972,66 @@ export function swarmRouter(orch: Orchestrator): Router {
       res.status(404).json({ error: "clonePath not readable" });
       return;
     }
+    // Prefer files under logs/ if present (where writeRunSummary puts them).
+    const logsPath = path.join(resolvedClone, "logs");
+    const summaryFilePaths: string[] = [];
+    try {
+      const logsEntries = await fs.readdir(logsPath);
+      if (logsEntries.some((e) => /^summary/.test(e))) {
+        summaryBase = logsPath;
+        entries = logsEntries;
+      }
+      // Collect direct summary files
+      for (const e of entries) {
+        if (/^summary(?:-.*)?\.json$/.test(e)) {
+          summaryFilePaths.push(path.join(summaryBase, e));
+        }
+      }
+      // Also search inside per-run subdirs under logs/ e.g. logs/<run-short-id>/
+      // where actual per-run summaries live for this clone.
+      for (const sub of logsEntries) {
+        const subDir = path.join(logsPath, sub);
+        try {
+          const subStat = await fs.stat(subDir);
+          if (subStat.isDirectory()) {
+            const subEnts = await fs.readdir(subDir);
+            for (const e of subEnts) {
+              if (/^summary(?:-.*)?\.json$/.test(e)) {
+                summaryFilePaths.push(path.join(subDir, e));
+              }
+            }
+          }
+        } catch {}
+      }
+    } catch {
+      // no logs/ dir or unreadable — fall back to root
+    }
+    // Also direct root summaries
+    try {
+      for (const e of entries) {
+        if (/^summary(?:-.*)?\.json$/.test(e)) {
+          const p = path.join(resolvedClone, e);
+          if (!summaryFilePaths.includes(p)) summaryFilePaths.push(p);
+        }
+      }
+      const rootSum = path.join(resolvedClone, "summary.json");
+      // will be checked via read
+    } catch {}
     // Try per-run files first (canonical), then summary.json fallback.
-    const candidates = [
-      ...entries.filter((e) => /^summary-.+\.json$/.test(e)),
-      "summary.json",
-    ];
+    // Use full paths we collected. Sort by basename descending so we prefer
+    // the most recently written timestamped summary (the final aggregated one
+    // from PipelineRunner/hybrid) over older per-phase ones. This ensures
+    // the history view gets the most complete transcript + final run summary.
+    let candidates = summaryFilePaths.length > 0 ? [...summaryFilePaths] : ["summary.json"];
+    candidates = candidates.sort((a, b) =>
+      path.basename(b).localeCompare(path.basename(a))
+    );
     for (const e of candidates) {
       let raw: string;
       try {
-        raw = await fs.readFile(path.join(resolvedClone, e), "utf8");
+        // e may be basename (relative to summaryBase) or already a full path from subdir scan
+        const filePath = path.isAbsolute(e) ? e : path.join(summaryBase, e);
+        raw = await fs.readFile(filePath, "utf8");
       } catch (err) {
         console.warn('[swarm] read-summary-file-failed:', err instanceof Error ? err.message : String(err));
         continue;
@@ -1050,10 +1047,106 @@ export function swarmRouter(orch: Orchestrator): Router {
       }
       // If runId requested, only return the matching summary. If not
       // requested, return the first parseable (typically the latest).
-      if (runId && parsed.runId !== runId) continue;
+      // Tolerant of short vs full runId.
+      if (runId && parsed.runId !== runId &&
+          !(typeof parsed.runId === 'string' && (parsed.runId.startsWith(runId) || runId.startsWith(parsed.runId)))) {
+        continue;
+      }
+      // Load brain chat history from sibling state snapshot if available
+      try {
+        const statePath = path.join(resolvedClone, '..', `${parsed.runId || path.basename(resolvedClone)}.run-state.json`); // approx
+        // Note: for promises fs, use sync for exists in this context or adjust
+        const fsSync = require('node:fs');
+        if (fsSync.existsSync(statePath)) {
+          const stateRaw = await fs.readFile(statePath, 'utf8');
+          const state = JSON.parse(stateRaw);
+          if (state.brainChatHistory) {
+            parsed.brainChatHistory = state.brainChatHistory;
+          }
+        }
+      } catch {}
+      // Dedicated per-run brain history file (preferred if present)
+      try {
+        const fsSync = require('node:fs');
+        const dedicatedPath = path.join(process.cwd(), 'logs', String(parsed.runId || ''), 'brain-chat.json');
+        if (fsSync.existsSync(dedicatedPath)) {
+          const rawHist = await fs.readFile(dedicatedPath, 'utf8');
+          const hist = JSON.parse(rawHist);
+          if (Array.isArray(hist)) parsed.brainChatHistory = hist;
+        }
+      } catch {}
       res.json(parsed);
       return;
     }
+
+    // Fallback when a parentPath (or workspace) was passed as clonePath but runId is known:
+    // walk immediate subdirectories (the project clones) and their logs/ for a summary
+    // matching the runId. This makes review links generated from recent-runs (which
+    // sometimes store parentPath) or stale caches still work without 404.
+    if (runId) {
+      try {
+        let subEntries: string[] = [];
+        try { subEntries = await fs.readdir(resolvedClone); } catch {}
+        for (const sub of subEntries) {
+          const subDir = path.join(resolvedClone, sub);
+          let st: any;
+          try { st = await fs.stat(subDir); } catch { continue; }
+          if (!st.isDirectory()) continue;
+          // Check sub/logs/ or the sub itself for summaries. Also descend one more level
+          // for logs/<runid>/summary files.
+          const candidatesDirs = [subDir, path.join(subDir, "logs")];
+          for (const base of candidatesDirs) {
+            let ents: string[] = [];
+            try { ents = await fs.readdir(base); } catch { continue; }
+            for (const e of ents) {
+              const full = path.join(base, e);
+              if (/^summary(?:-.*)?\.json$/.test(e)) {
+                // direct summary file
+                try {
+                  const raw = await fs.readFile(full, "utf8");
+                  const p = JSON.parse(raw);
+                  if (p && typeof p === "object" && (!p.runId || p.runId === runId ||
+                      (typeof p.runId === "string" && (p.runId.startsWith(runId) || runId.startsWith(p.runId))))) {
+                    // re-apply ...
+                    try {
+                      const fsSync = require("node:fs");
+                      const dedicatedPath = path.join(process.cwd(), "logs", String(p.runId || ""), "brain-chat.json");
+                      if (fsSync.existsSync(dedicatedPath)) {
+                        const rawHist = await fs.readFile(dedicatedPath, "utf8");
+                        const hist = JSON.parse(rawHist);
+                        if (Array.isArray(hist)) p.brainChatHistory = hist;
+                      }
+                    } catch {}
+                    res.json(p);
+                    return;
+                  }
+                } catch {}
+              } else {
+                // perhaps a subdir like <runid>, check inside it for summary
+                try {
+                  const subSt = await fs.stat(full);
+                  if (subSt.isDirectory()) {
+                    const subEnts = await fs.readdir(full);
+                    for (const se of subEnts) {
+                      if (/^summary(?:-.*)?\.json$/.test(se)) {
+                        try {
+                          const raw = await fs.readFile(path.join(full, se), "utf8");
+                          const p = JSON.parse(raw);
+                          if (p && typeof p === "object" && (!p.runId || p.runId === runId || (typeof p.runId==='string' && (p.runId.startsWith(runId)||runId.startsWith(p.runId))))) {
+                            res.json(p); return;
+                          }
+                        } catch {}
+                      }
+                    }
+                  }
+                } catch {}
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+
     res.status(404).json({ error: "no matching summary found" });
   });
 
@@ -1247,6 +1340,15 @@ export function swarmRouter(orch: Orchestrator): Router {
     } catch (e) { res.status(500).json({ error: "memory-store delete failed", detail: (e as Error).message }); }
   });
 
+  // Extracted: Brain routes (P7 + FAB chat/suggest/history + during-run support).
+  // Deeper extraction step: shrinks main swarmRouter by ~180 lines of brain surface.
+  // Further: could move to server/src/routes/brainRoutes.ts exporting registerBrainRoutes.
+  registerBrainRoutes(r, orch);
+
+  return r;
+}
+
+function registerBrainRoutes(r: Router, orch: Orchestrator) {
   // P7: Brain health endpoint
   r.get("/brain/health", async (_req: Request, res: Response) => {
     await orch.whenBrainReady();
@@ -1316,23 +1418,103 @@ export function swarmRouter(orch: Orchestrator): Router {
     res.json({ success: true, message: "Proposal rejected" });
   });
 
+  // Persist brain chat history to disk (alongside run summary via snapshot)
+  r.post("/brain/chat-history", (req: Request, res: Response) => {
+    const { runId, history } = req.body || {};
+    if (runId && Array.isArray(history)) {
+      (orch as any).setBrainChatHistory?.(runId, history);
+      res.json({ ok: true });
+    } else {
+      res.status(400).json({ error: "runId and history array required" });
+    }
+  });
+
+  // Real /brain/suggest route that calls injectSuggestion for proactive Brain suggestions
+  r.post("/brain/suggest", async (req: Request, res: Response) => {
+    await orch.whenBrainReady();
+    const brainService = orch.getBrainService();
+    if (!brainService) {
+      return res.status(500).json({ error: "Brain service not initialized" });
+    }
+    const { runId, title, text, category } = req.body || {};
+    if (!runId || !title || !text) {
+      return res.status(400).json({ error: "runId, title, and text are required" });
+    }
+    if (brainService.injectSuggestion) {
+      brainService.injectSuggestion(runId, { title, text, category });
+      res.json({ success: true, message: "Suggestion injected" });
+    } else {
+      res.status(501).json({ error: "injectSuggestion not available" });
+    }
+  });
+
   // Brain chat: conversational interface to configure and start swarms.
   // The Brain (librarian/master-admin) helps via natural language.
+  // Supports ?structured=true or body {structured:true} for machine-friendly output
+  // (includes parsed config + recommendation object).
   r.post("/brain/chat", async (req: Request, res: Response) => {
     try {
-      const { messages = [] } = req.body || {};
+      const body = req.body || {};
+      const { messages = [], runContext, clonePath, structured } = body;
+      const wantsStructured = structured === true || req.query.structured === 'true' || req.query.explain === 'options';
       if (!Array.isArray(messages) || messages.length === 0) {
         return res.status(400).json({ error: "messages array required" });
       }
 
-      const systemPrompt = `You are Brain, the master-admin and librarian for ollama_swarm.
+      // Ground recommendations using the real preset recommender (outcome history + seeds + heuristics).
+      // Proactively quote real numbers from /outcome/stats when possible.
+      let recommenderHint = "";
+      try {
+        const { recommendPreset, readOutcomeHistory, computeStats } = await import("../swarm/outcomeHistory.js");
+        let outcomes: any[] = [];
+        if (clonePath) {
+          const resolved = guardClonePath(orch, res, clonePath);
+          if (resolved) outcomes = await readOutcomeHistory(resolved).catch(() => []);
+        }
+        const lastUserMsg = [...messages].reverse().find((m: any) => m.role === "user")?.content || messages[messages.length-1]?.content || "";
+        if (lastUserMsg && lastUserMsg.length > 5) {
+          const rec = recommendPreset(lastUserMsg, outcomes);
+          let statsLine = "";
+          if (outcomes.length >= 3) {
+            const stats = computeStats(outcomes);
+            const s = stats.get(rec.preset as any);
+            if (s) {
+              statsLine = `\nReal performance: ${rec.preset} has median score ${(s.medianScore * 10).toFixed(1)}/10 (avg ${(s.avgScore * 10).toFixed(1)}/10) over ${s.sampleSize} similar runs.`;
+            }
+          }
+          recommenderHint = `\n\nSYSTEM RECOMMENDER SUGGESTION (incorporate this for accuracy):\n- Best preset: ${rec.preset}\n- Rationale: ${rec.rationale}${statsLine}\n- Suggested: agentCount=${rec.agentCount}, rounds=${rec.rounds}, confidence=${rec.confidence.toFixed(2)} (source: ${rec.source})\n\nYou may use or refine this after reading the user's full description. Always provide your own supporting analysis referencing the user's words and any numbers above.`;
+
+          // Support "explain all options" mode
+          if (/explain all|all options|compare (all|options|presets)|show me the options/i.test(lastUserMsg)) {
+            const table = buildOptionsTable(lastUserMsg);
+            recommenderHint += `\n\nOPTIONS TABLE FOR THIS GOAL:\n${table}\n\nPresent the top 3 matches with a short table in your reply.`;
+          }
+        }
+      } catch (e) {
+        // recommender optional; prompt guide is still excellent
+      }
+
+      // Use shared module for the preset decision guide (avoids duplication).
+      // The guide is built from docs/swarm-patterns.md and STATUS.md tables.
+      const presetGuide = buildPresetGuideString();
+
+      let systemPrompt = `You are Brain, the master-admin and librarian for ollama_swarm.
 
 Your job is to help the user configure and START a swarm run using natural language. The user may be using the web UI **or** talking to you from a terminal / agent loop that can execute commands.
 
+${presetGuide}
+${recommenderHint}
+
 Key rules:
 - For local folders without a Git repo: use "parentPath" + "repoUrl": "".
-- For editing tasks: prefer "preset": "blackboard", "rounds": 0.
-- Default: model "deepseek-v4-flash:cloud", agentCount 5.
+- Default: model "deepseek-v4-flash:cloud", agentCount 5. For research-heavy tasks prefer enabling webTools + plannerTools.
+- When user describes their *goal or use-case* (e.g. "I need to analyze many papers and find common patterns", "add gov data panels to my finance app", "debate pros and cons of migrating", "explore this repo and understand its structure"), analyze it against the guide above and recommend the SINGLE best preset.
+
+CRITICAL: When the user does not know which "swarm mode" / preset to pick:
+- Clearly state: "Recommended Preset: council (or blackboard, map-reduce, etc.)"
+- Give a short supporting analysis: "Because your goal sounds like X (quote user), and council excels at Y while map-reduce is better for Z."
+- Suggest the matching UI filter if relevant: e.g. "Try the Research filter in the Swarm Mode card — it will highlight council + map-reduce + moa."
+- Then output the full config JSON (including any webTools: true, useHybridPlanning, etc. that fit the analysis).
 
 When the user gives enough details, output the config **and** a ready-to-run command:
 
@@ -1344,7 +1526,8 @@ When the user gives enough details, output the config **and** a ready-to-run com
   "preset": "blackboard",
   "agentCount": 5,
   "rounds": 0,
-  "model": "deepseek-v4-flash:cloud"
+  "model": "deepseek-v4-flash:cloud",
+  "webTools": true
 }
 \`\`\`
 
@@ -1363,14 +1546,32 @@ CRITICAL BEHAVIOR:
 - When the user says "yes", "start", "go", "launch", "do it", etc., re-emit the JSON block + tell them to run the \`ollama-swarm start\` command (or if they are in the web UI, the UI can auto-start).
 - The real CLI is now \`ollama-swarm\` (provided by this project). It talks to the running server.
 - Never invent fake commands.
-- Be concise and actionable.`;
+- Be concise and actionable.
+- Always ground your preset recommendation in the user's described use-case + the guide above. Provide supporting analysis.`;
 
+      if (runContext && typeof runContext === 'object') {
+        systemPrompt += `
 
+You are now in DURING-RUN assistance mode for an active swarm.
+
+Current run context (use this to give real-time help, suggestions, analysis, or draft amendments):
+${JSON.stringify(runContext, null, 2)}
+
+Focus on helping the user understand the current state, suggest mid-run adjustments (amends, say messages), interpret progress, or recommend actions. Do not suggest new run starts unless explicitly asked. Be helpful and concise.`;
+      }
 
 
 
       const modelStr = "deepseek-v4-flash:cloud";
       const { provider, modelId } = pickProvider(modelStr);
+
+      // For structured mode, instruct LLM to output parseable sections
+      if (wantsStructured) {
+        systemPrompt += `\n\nSTRUCTURED OUTPUT MODE: After your normal reply, also output exactly:
+RECOMMENDATION: { "preset": "...", "confidence": 0.8, "rationale": "..." }
+CONFIG: { the json config }
+Use the tables and recommender data.`;
+      }
 
       const chatMessages = [
         { role: "system" as const, content: systemPrompt },
@@ -1386,163 +1587,35 @@ CRITICAL BEHAVIOR:
         signal: AbortSignal.timeout(90_000),
       });
 
-      res.json({ reply: result.text, model: modelStr });
+      const text = result.text;
+      let structuredData = null;
+      if (wantsStructured) {
+        // Use dedicated labeled extractor + shared balanced parser for robustness.
+        // This is significantly better than naive regex (handles fences, strings, first-balanced, etc.).
+        const rec = extractLabeledJson(text, 'RECOMMENDATION');
+        const cfg = extractLabeledJson(text, 'CONFIG');
+        structuredData = {
+          recommendation: rec,
+          config: cfg,
+        };
+      }
+
+      if (wantsStructured && structuredData) {
+        res.json({ reply: text, model: modelStr, structured: structuredData });
+      } else {
+        res.json({ reply: text, model: modelStr });
+      }
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
-
-  return r;
 }
 
 // Unit 52e: thin digest of a run's summary for the history dropdown.
-// Strict subset of RunSummary's surface — anything bigger goes via a
-// follow-up modal fetch (or we just open the folder).
-interface RunSummaryDigest {
-  name: string;
-  clonePath: string;
-  preset: string;
-  model: string;
-  startedAt: number;
-  endedAt: number;
-  wallClockMs: number;
-  stopReason?: string;
-  commits?: number;
-  totalTodos?: number;
-  hasContract: boolean;
-  isActive: boolean;
-  // Task #36: runId from summary.json (absent on pre-task-36 writes).
-  // Enables click-to-copy in the dropdown that matches the live
-  // IdentityStrip chip so transcript references like "run 7302..."
-  // can be located in the history list.
-  runId?: string;
-  // Phase 4a of #243: topology surfaced in the dropdown row so users
-  // can scan agent specs at a glance. Optional — older summaries
-  // don't have it, in which case the row shows "—".
-  topology?: import("../../../shared/src/topology.js").Topology;
-}
+// (type now sourced from the extracted RunsScanner service)
+import type { RunSummaryDigest } from "../services/RunsScanner.js";
 
-function parseSummaryToDigest(
-  raw: string,
-  cloneDir: string,
-  name: string,
-): RunSummaryDigest | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    console.warn('[swarm] parse-summary-digest-failed:', err instanceof Error ? err.message : String(err));
-    return null;
-  }
-  if (typeof parsed !== "object" || parsed === null) return null;
-  const obj = parsed as Record<string, unknown>;
-  if (typeof obj.preset !== "string" || typeof obj.startedAt !== "number") return null;
-  const contract = obj.contract as Record<string, unknown> | undefined;
-  // Phase 4a of #243: parse topology from summary.json if present.
-  // Permissive — a malformed topology doesn't fail the digest, just
-  // skips the field. The schema would catch it if we re-validated,
-  // but since the dropdown can fall back to "—" we just trust it.
-  const topology =
-    obj.topology &&
-    typeof obj.topology === "object" &&
-    Array.isArray((obj.topology as { agents?: unknown }).agents)
-      ? (obj.topology as RunSummaryDigest["topology"])
-      : undefined;
-  return {
-    name,
-    clonePath: cloneDir,
-    preset: obj.preset,
-    model: typeof obj.model === "string" ? obj.model : "(unknown)",
-    startedAt: obj.startedAt,
-    endedAt: typeof obj.endedAt === "number" ? obj.endedAt : 0,
-    wallClockMs: typeof obj.wallClockMs === "number" ? obj.wallClockMs : 0,
-    stopReason: typeof obj.stopReason === "string" ? obj.stopReason : undefined,
-    commits: typeof obj.commits === "number" ? obj.commits : undefined,
-    totalTodos: typeof obj.totalTodos === "number" ? obj.totalTodos : undefined,
-    hasContract: contract !== undefined && Array.isArray(contract.criteria),
-    isActive: false,
-    runId: typeof obj.runId === "string" ? obj.runId : undefined,
-    topology,
-  };
-}
-
-// 2026-04-24: returns one digest per RUN in this cloneDir, not just
-// per cloneDir. Reads every `summary-<iso>.json` (per-run, never
-// overwritten — Unit 49) and falls back to bare `summary.json`
-// (latest pointer) only when no per-run file exists. Dedups by
-// (runId || startedAt) so a legacy clone whose latest pointer
-// happens to match a per-run file isn't counted twice.
-//
-// Previously the route only returned ONE digest per cloneDir (the
-// latest), so a target run 8 times appeared as a single dropdown
-// row with the most recent stats. Surfacing all per-run summaries
-// gives the user true historical visibility into the framework's
-// behavior across multiple iterations on the same target.
-async function readAllRunDigests(
-  cloneDir: string,
-  name: string,
-): Promise<RunSummaryDigest[]> {
-  const digests: RunSummaryDigest[] = [];
-  const seen = new Set<string>();
-  const dedupKey = (d: RunSummaryDigest) => d.runId ?? `t:${d.startedAt}`;
-
-  // Per-run files first — these are the source of truth, written once
-  // at run-end and never touched again.
-  let perRun: string[] = [];
-  try {
-    const all = await fs.readdir(cloneDir);
-    perRun = all.filter((e) => /^summary-.+\.json$/.test(e));
-  } catch (err) {
-    console.warn('[swarm] readdir-cloneDir-digests-failed:', err instanceof Error ? err.message : String(err));
-    // unreadable cloneDir — return empty
-    return [];
-  }
-  for (const e of perRun) {
-    let raw: string;
-    try {
-      raw = await fs.readFile(path.join(cloneDir, e), "utf8");
-    } catch (err) {
-      console.warn('[swarm] read-perRun-summary-failed:', err instanceof Error ? err.message : String(err));
-      continue;
-    }
-    const d = parseSummaryToDigest(raw, cloneDir, name);
-    if (!d) continue;
-    const k = dedupKey(d);
-    if (seen.has(k)) continue;
-    seen.add(k);
-    digests.push(d);
-  }
-
-  // Fallback: bare summary.json (the latest pointer). On modern
-  // clones this duplicates one of the per-run files above and the
-  // dedup catches it. On legacy clones with no per-run files, this
-  // is the only way to see the run at all.
-  let latestRaw: string | null = null;
-  try {
-    latestRaw = await fs.readFile(path.join(cloneDir, "summary.json"), "utf8");
-  } catch (err: any) {
-    // ENOENT is completely normal — most directories we probe during
-    // broad parent/workspace scans are not run clones (or use the new
-    // per-run summary-*.json files inside logs/<id>/ instead of a
-    // top-level legacy pointer). Only warn on real I/O problems.
-    if (err?.code !== 'ENOENT') {
-      console.warn('[swarm] read-summary-pointer-failed:', err instanceof Error ? err.message : String(err));
-    }
-    // no latest pointer — fine
-  }
-  if (latestRaw !== null) {
-    const d = parseSummaryToDigest(latestRaw, cloneDir, name);
-    if (d) {
-      const k = dedupKey(d);
-      if (!seen.has(k)) {
-        seen.add(k);
-        digests.push(d);
-      }
-    }
-  }
-
-  return digests;
-}
+// (moved to RunsScanner service for deeper extraction of parent-scanning logic)
 
 // True iff this Node process is running inside WSL2 — Linux uname,
 // but the kernel string includes "microsoft". We treat WSL2 as a

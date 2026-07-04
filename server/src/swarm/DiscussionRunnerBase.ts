@@ -175,6 +175,10 @@ export abstract class DiscussionRunnerBase {
     this.opts.emit({ type: "transcript_append", entry });
   }
 
+  appendSystemMessage(text: string, summary?: TranscriptEntrySummary): void {
+    this.appendSystem(text, summary);
+  }
+
   setPhase(phase: SwarmPhase): void {
     this.phase = phase;
     this.opts.emit({ type: "swarm_state", phase, round: this.round });
@@ -260,7 +264,11 @@ export abstract class DiscussionRunnerBase {
     cfg: RunConfig,
     spawnOpts: CloneSpawnOpts,
   ): Promise<CloneSpawnResult> {
-    this.setPhase("cloning");
+    // Skip "cloning" phase for direct local paths (no git clone will occur).
+    const isRemoteClone = !!(cfg.repoUrl && (cfg.repoUrl.startsWith("http://") || cfg.repoUrl.startsWith("https://")));
+    if (isRemoteClone) {
+      this.setPhase("cloning");
+    }
     let cloneResult: import("../services/RepoService.js").CloneResult;
     // Local folder path — skip clone, use the directory directly.
     if (!cfg.repoUrl.startsWith("http://") && !cfg.repoUrl.startsWith("https://")) {

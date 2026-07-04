@@ -410,6 +410,19 @@ export class CouncilRunner extends DiscussionRunnerBase {
       this.appendSystem(`[audit] Same ${sameUnmet} criteria unmet for ${this.stuckCycleCount} cycle(s).`);
       if (this.stuckCycleCount >= 3) {
         this.appendSystem(`[audit] Stuck for ${this.stuckCycleCount} cycles — stopping.`);
+        // Council-specific proactive path: trigger brain suggestion (clean opts access)
+        const getBrain = this.opts.getBrainService;
+        if (getBrain) {
+          const brain = getBrain();
+          if (brain && brain.injectSuggestion) {
+            const rid = this.active?.runId || 'current-run';
+            brain.injectSuggestion(rid, {
+              title: `Council stuck after ${this.stuckCycleCount} cycles`,
+              text: 'Suggestion: consider amending directive or using hybrid planning for this run.',
+              category: 'recommendation',
+            });
+          }
+        }
         return "stop";
       }
     } else {

@@ -234,6 +234,11 @@ function useReviewedRunIsLive(review: { runId: string; clonePath: string } | nul
       setIsLive(false);
       return;
     }
+    // Fakes and review-only entries never become "live" runs; avoid 404 spam on /status.
+    if (review.runId.startsWith('fake-') || review.runId.includes('fake')) {
+      setIsLive(false);
+      return;
+    }
     let cancelled = false;
     const ctrl = new AbortController();
     async function check() {
@@ -309,6 +314,7 @@ function useReviewHydration(review: { runId: string; clonePath: string } | null)
   const appendEntry = useSwarm((s) => s.appendEntry);
   const setError = useSwarm((s) => s.setError);
   const setPhase = useSwarm((s) => s.setPhase);
+  const setBrainChatHistory = useSwarm((s: any) => s.setBrainChatHistory);
 
   useEffect(() => {
     if (!review) return;
@@ -334,8 +340,8 @@ function useReviewHydration(review: { runId: string; clonePath: string } | null)
           auditorModel: summary.model,
           dedicatedAuditor: false,
           repoUrl: summary.repoUrl,
-          clonePath: summary.localPath,
-          agentCount: summary.agents.length,
+          clonePath: summary.localPath || review.clonePath,
+          agentCount: Array.isArray(summary.agents) ? summary.agents.length : ((summary as any).agentCount || 0),
           rounds: 0,
           wallClockCapMin: (summary as any).wallClockCapMin,
           ambitionTiers: (summary as any).ambitionTiers,
@@ -347,6 +353,10 @@ function useReviewHydration(review: { runId: string; clonePath: string } | null)
         // looking at a snapshot.
         if (summary.transcript) {
           for (const e of summary.transcript) appendEntry(e);
+        }
+        // Load prior brain chat history on review/recovery
+        if (summary.brainChatHistory && Array.isArray(summary.brainChatHistory)) {
+          setBrainChatHistory(summary.brainChatHistory);
         }
         // Phase is whatever the run terminated as; map stopReason →
         // a display phase that makes the PhasePill render sensibly.

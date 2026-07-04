@@ -18,11 +18,11 @@
 //  - Max-height on the open content prevents a 50KB thought from
 //    pushing the rest of the transcript way down.
 
-import { useState } from "react";
+import { memo, useState } from "react";
 
 const MAX_OPEN_HEIGHT_PX = 400;
 
-export function ThoughtsBlock({ text }: { text: string }) {
+export const ThoughtsBlock = memo(function ThoughtsBlock({ text }: { text: string }) {
   // useState mirroring the <details> open attribute — lets the
   // summary label react to the toggle (e.g. "expand" vs "collapse").
   const [open, setOpen] = useState(false);
@@ -36,9 +36,6 @@ export function ThoughtsBlock({ text }: { text: string }) {
       <summary className="cursor-pointer select-none px-2 py-1 text-ink-400 hover:text-ink-200 flex items-center gap-2 list-none">
         <span aria-hidden="true">{open ? "▼" : "▶"}</span>
         <span>💭 thinking · {charCount.toLocaleString()} chars</span>
-        <span className="ml-auto text-ink-600 italic">
-          {open ? "click to collapse" : "click to expand"}
-        </span>
       </summary>
       <div
         className="px-3 py-2 border-t border-ink-700/60 whitespace-pre-wrap text-ink-300 overflow-y-auto"
@@ -48,4 +45,4 @@ export function ThoughtsBlock({ text }: { text: string }) {
       </div>
     </details>
   );
-}
+});

@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { PreflightPreview } from "./PreflightPreview";
 import { BrainStartChat, type BrainConfigPatch } from "./BrainStartChat";
@@ -8,6 +9,7 @@ import { PlanningPhaseControl, BlackboardWallClockCap, BlackboardAmbitionTiers }
 import { Field } from "./setup/SharedFields";
 import { InfoTip } from "./setup/InfoTip";
 import { estimateWallClockSeconds, formatDurationSeconds } from "./setup/WallClockEstimate";
+import { useSwarm } from "../state/store";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -27,6 +29,28 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 export function SetupForm() {
   const navigate = useNavigate();
   const form = useSetupForm(navigate);
+
+  // Use global store for filters so Brain chat chips can control it live
+  const useCaseFilters = useSwarm((s) => s.useCaseFilters);
+  const setUseCaseFilters = useSwarm((s) => s.setUseCaseFilters);
+
+  const USE_CASE_OPTIONS = [
+    { tag: "research", label: "Research" },
+    { tag: "analysis", label: "Analysis/Debate" },
+    { tag: "code-writing", label: "Code Writing" },
+    { tag: "literature-scan", label: "Literature Scan" },
+    { tag: "synthesis", label: "Synthesis" },
+    { tag: "exploration", label: "Exploration" },
+    { tag: "hierarchical", label: "Hierarchical" },
+    { tag: "multi-stage", label: "Multi-stage" },
+  ];
+
+  const filteredPresets = useMemo(() =>
+    useCaseFilters.length === 0
+      ? PRESETS
+      : PRESETS.filter(p => p.useCases?.some(uc => useCaseFilters.includes(uc))),
+    [useCaseFilters]
+  );
 
   // Derived for the action bar
   const canStart = !form.busy && !!form.isActive && !form.preflightBlocked;
@@ -85,6 +109,11 @@ export function SetupForm() {
           onApplyConfig={(cfg: BrainConfigPatch) => {
             if (cfg.preset) form.setPresetId(cfg.preset);
             if (cfg.model) form.setModel(cfg.model);
+            // Apply workspace path from structured Brain recommendation if provided
+            // (CONFIG from /brain/chat often includes "parentPath")
+            if ((cfg as any).parentPath && typeof (cfg as any).parentPath === 'string') {
+              form.setParentPath((cfg as any).parentPath);
+            }
             // other fields are synced inside the hook when possible
           }}
           onStartNow={(cfg: BrainConfigPatch) => form.startSwarmDirectlyFromBrain(cfg)}
@@ -99,9 +128,21 @@ export function SetupForm() {
                   type="button"
                   onClick={() => form.refillFromRecent(r)}
                   className="text-left bg-ink-900 hover:bg-ink-700 border border-ink-700 rounded p-2 max-w-[280px] transition-colors text-xs"
-                  title={`${r.presetId || 'preset'} • ${r.parentPath}`}
+                  title={`${r.presetId || 'preset'} • ${r.parentPath}${r.runId ? ` • run ${r.runId}` : ''}`}
                 >
                   {r.repoUrl.split("/").pop()} <span className="text-ink-500">· {r.presetId}</span>
+                  {r.runId && (
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/runs/${encodeURIComponent(r.runId)}`);
+                      }}
+                      className="ml-1 text-[9px] px-1 bg-ink-700 hover:bg-ink-600 rounded text-ink-400 cursor-pointer"
+                      title={`View run ${r.runId}`}
+                    >
+                      view
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
@@ -110,8 +151,46 @@ export function SetupForm() {
 
         <Section title="Swarm Mode">
           <div className="text-xs text-ink-400 mb-1">Choose the swarm coordination pattern (topology / preset). This sets roles, parallelism, and deliverables.</div>
+
+          {/* Use-case filter, powered by tables in docs/swarm-patterns.md (Recommended Preset Combinations for Research) and STATUS.md preset matrix */}
+          <div className="mb-2">
+            <div className="flex items-center gap-1 flex-wrap text-[10px]">
+              <span className="text-ink-400">Filter by use-case:</span>
+              {USE_CASE_OPTIONS.map(opt => {
+                const active = useCaseFilters.includes(opt.tag);
+                return (
+                  <button
+                    key={opt.tag}
+                    type="button"
+                    onClick={() => {
+                      setUseCaseFilters(active
+                        ? useCaseFilters.filter(t => t !== opt.tag)
+                        : [...useCaseFilters, opt.tag]
+                      );
+                    }}
+                    className={`px-1.5 py-px rounded border transition text-[10px] ${active ? "bg-violet-700 border-violet-500 text-white" : "bg-ink-800 border-ink-600 hover:bg-ink-700 text-ink-300"}`}
+                    title={`Show presets for ${opt.label} (from research/use-case tables)`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+              {useCaseFilters.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setUseCaseFilters([])}
+                  className="px-1 text-ink-400 hover:text-ink-200"
+                  title="Clear use-case filter"
+                >
+                  clear
+                </button>
+              )}
+              <span className="text-ink-500 ml-1">({filteredPresets.length} shown)</span>
+            </div>
+          </div>
+
           <div className="space-y-1">
-            {PRESETS.map((p) => {
+            {filteredPresets.map((p) => {
               const isActive = p.status === "active";
               const isSelected = form.preset.id === p.id;
               return (
@@ -128,13 +207,20 @@ export function SetupForm() {
                     <span className="text-[10px] text-ink-500">{p.min}–{p.max} agents (rec {p.recommended})</span>
                   </div>
                   <div className="text-[10px] text-ink-400 mt-0.5 line-clamp-2">{p.summary}</div>
+                  {p.useCases && p.useCases.length > 0 && (
+                    <div className="text-[9px] text-violet-400 mt-0.5">use: {p.useCases.join(", ")}</div>
+                  )}
                 </button>
               );
             })}
+            {filteredPresets.length === 0 && (
+              <div className="text-[10px] text-ink-400 italic px-2">No presets match the selected use-cases. Clear filter to see all.</div>
+            )}
           </div>
           <div className="text-[10px] text-ink-500 mt-1">
             Directive handling: {form.preset.directive}. Changing mode resets agent count + topology to the preset's recommended shape (you can tweak after).
           </div>
+          <div className="text-[9px] text-ink-500 mt-0.5">Use-case filters based on tables in <code>docs/swarm-patterns.md</code> (research workflows) and <code>STATUS.md</code>.</div>
         </Section>
 
         <Section title="User Directive">
@@ -170,9 +256,9 @@ export function SetupForm() {
             <Field label="Project folder (workspace)" labelAccessory={<InfoTip>When GitHub URL is empty, this folder IS the repo.</InfoTip>}>
               <input
                 value={form.parentPath}
+                placeholder="C:\\Users\\yourname\\workspace\\my-project"
                 onChange={(e) => form.setParentPath(e.target.value)}
                 className="input font-mono"
-                placeholder="C:\\Users\\you\\projects\\my-repo"
               />
             </Field>
           </div>

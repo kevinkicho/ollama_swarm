@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState, Fragment } from "react";
 import { useSwarm } from "../state/store";
 import { AgentPanel } from "./AgentPanel";
 import { BoardView } from "./BoardView";
@@ -34,7 +34,7 @@ type Tab =
   | "memory"
   | "history";
 
-export function SwarmView() {
+export const SwarmView = memo(function SwarmView() {
   const agents = useSwarm((s) => s.agents);
   const phase = useSwarm((s) => s.phase);
   const setError = useSwarm((s) => s.setError);
@@ -46,6 +46,22 @@ export function SwarmView() {
   const [sayIntent, setSayIntent] = useState<"suggest" | "steer" | "ask">("steer");
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<Tab>("transcript");
+
+  // React-scan auto in key live-run tabs (transcript, metrics, board) when ?scan=1 or #scan or window enable called.
+  // Helps diagnose re-renders during hybrid/blackboard runs without manual button every time.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const wantScan = params.get('scan') === '1' || window.location.hash === '#scan' || (window as any).__scanAuto;
+    const isLiveTab = tab === 'transcript' || tab === 'metrics' || tab === 'board' || tab === 'planning';
+    if (wantScan && isLiveTab && (import.meta as any)?.env?.DEV) {
+      (window as any).__scanAuto = true;
+      void import('react-scan').then(({ scan }) => {
+        scan({ enabled: true });
+        console.info('[perf] react-scan auto-enabled for live tab:', tab);
+      }).catch(() => {});
+    }
+  }, [tab]);
 
   const reset = useSwarm((s) => s.reset);
   const cfg = useSwarm((s) => s.runConfig);
@@ -63,7 +79,9 @@ export function SwarmView() {
     ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/say`
     : "/api/swarm/say";
   const agentList = Object.values(agents).sort((a, b) => a.index - b.index);
-  const isTerminal = phase === "completed" || phase === "stopped" || phase === "failed";
+  const summary = useSwarm((s) => s.summary);
+  const hasTerminalSummary = !!summary && (!!summary.stopReason || typeof summary.endedAt === 'number');
+  const isTerminal = hasTerminalSummary || phase === "completed" || phase === "stopped" || phase === "failed";
   // Board + Contract are blackboard-specific surfaces. Show the tabs
   // only for blackboard runs (including pre-start when the preset is
   // selected but no run config exists yet — default to showing them
@@ -110,10 +128,11 @@ export function SwarmView() {
     setBusy(true);
     try {
       const res = await fetch(stopUrl, { method: "POST" });
+      // Always force terminal in UI for immediate feedback (stop may be async on backend, rehydrate will sync summary etc.)
+      const s = useSwarm.getState();
+      s.setPhase("stopped", s.round || 0);
       if (!res.ok) {
-        // already stopped or not active in backend — force UI to terminal
-        const s = useSwarm.getState();
-        s.setPhase("stopped", s.round || 0);
+        // already stopped or not active in backend
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -129,8 +148,12 @@ export function SwarmView() {
       fetch(statusUrl).then(r => r.ok ? r.json() : null).then(snap => {
         if (snap) {
           const s = useSwarm.getState();
-          s.setPhase(snap.phase, snap.round);
+          s.setPhase(snap.phase || "stopped", snap.round || 0);
           if (snap.agents) snap.agents.forEach((a: any) => s.upsertAgent(a));
+          if (snap.summary) s.setSummary(snap.summary);
+          if (snap.transcript && Array.isArray(snap.transcript)) {
+            snap.transcript.forEach((e: any) => s.appendEntry(e));
+          }
         }
       }).catch(() => {});
     }
@@ -170,8 +193,12 @@ export function SwarmView() {
       fetch(statusUrl).then(r => r.ok ? r.json() : null).then(snap => {
         if (snap) {
           const s = useSwarm.getState();
-          s.setPhase(snap.phase, snap.round);
+          s.setPhase(snap.phase || "stopped", snap.round || 0);
           if (snap.agents) snap.agents.forEach((a: any) => s.upsertAgent(a));
+          if (snap.summary) s.setSummary(snap.summary);
+          if (snap.transcript && Array.isArray(snap.transcript)) {
+            snap.transcript.forEach((e: any) => s.appendEntry(e));
+          }
         }
       }).catch(() => {});
     }
@@ -213,7 +240,7 @@ export function SwarmView() {
     }
   };
 
-  const canStop = phase !== "stopping" && phase !== "stopped" && phase !== "failed" && phase !== "completed";
+  const canStop = !hasTerminalSummary && phase !== "stopping" && phase !== "stopped" && phase !== "failed" && phase !== "completed";
 
   // Per-preset role labels. Each preset has its own spawn contract:
   //   - blackboard: agent-1=planner, mid=workers, N+1=auditor (Unit 58)
@@ -423,7 +450,7 @@ export function SwarmView() {
           </TabButton>
           <span className="ml-auto self-center px-2"><OutcomeChip /></span>
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className={`flex-1 min-h-0 ${tab === "transcript" ? "overflow-hidden" : "overflow-y-auto"}`}>
           {tab === "transcript" ? (
             <Transcript />
           ) : tab === "metrics" ? (
@@ -509,7 +536,7 @@ export function SwarmView() {
       </div>
     </div>
   );
-}
+});
 
 // Unit 56: CopyChip moved to its own file (./CopyChip.tsx) so AgentPanel
 // can import it too.
@@ -537,23 +564,23 @@ function SidebarSummaryAgents() {
       <div className="text-[10px] uppercase tracking-wider text-ink-500 font-semibold mt-2 mb-1">
         Final agent stats
       </div>
-      {summary.agents.map((a) => {
+      {summary.agents.map((a, idx) => {
         const role = cfg ? roleForRow(cfg.preset, a.agentIndex, summary.agents.length) : "agent";
         const lines = (a.linesAdded ?? 0) + (a.linesRemoved ?? 0);
         return (
-          <div key={a.agentId} className="rounded border border-ink-700 bg-ink-800/50 p-2 text-xs">
+          <div key={a.agentId || `agent-${a.agentIndex || idx}`} className="rounded border border-ink-700 bg-ink-800/50 p-2 text-xs">
             <div className="flex items-baseline justify-between gap-2 mb-1">
               <span className="text-ink-100 font-semibold">agent-{a.agentIndex}</span>
               <span className="text-[10px] text-ink-400 font-mono">{role}</span>
             </div>
             <div className="text-[10px] font-mono text-ink-300 grid grid-cols-2 gap-x-2 gap-y-0.5">
               <span className="text-ink-500">turns</span><span className="text-right">{a.turnsTaken}</span>
-              {a.totalAttempts !== undefined ? <><span className="text-ink-500">attempts</span><span className="text-right">{a.totalAttempts}</span></> : null}
-              {a.totalRetries !== undefined && a.totalRetries > 0 ? <><span className="text-ink-500">retries</span><span className="text-right text-amber-300">{a.totalRetries}</span></> : null}
-              {a.meanLatencyMs ? <><span className="text-ink-500">mean</span><span className="text-right">{fmtMs(a.meanLatencyMs)}</span></> : null}
-              {a.commits !== undefined && a.commits > 0 ? <><span className="text-ink-500">commits</span><span className="text-right text-emerald-300">{a.commits}</span></> : null}
-              {lines > 0 ? <><span className="text-ink-500">lines</span><span className="text-right"><span className="text-emerald-300">+{a.linesAdded ?? 0}</span> <span className="text-rose-300">−{a.linesRemoved ?? 0}</span></span></> : null}
-              {a.rejectedAttempts !== undefined && a.rejectedAttempts > 0 ? <><span className="text-ink-500">rejected</span><span className="text-right text-rose-300">{a.rejectedAttempts}</span></> : null}
+              {a.totalAttempts !== undefined ? <Fragment key="attempts"><span className="text-ink-500">attempts</span><span className="text-right">{a.totalAttempts}</span></Fragment> : null}
+              {a.totalRetries !== undefined && a.totalRetries > 0 ? <Fragment key="retries"><span className="text-ink-500">retries</span><span className="text-right text-amber-300">{a.totalRetries}</span></Fragment> : null}
+              {a.meanLatencyMs ? <Fragment key="mean"><span className="text-ink-500">mean</span><span className="text-right">{fmtMs(a.meanLatencyMs)}</span></Fragment> : null}
+              {a.commits !== undefined && a.commits > 0 ? <Fragment key="commits"><span className="text-ink-500">commits</span><span className="text-right text-emerald-300">{a.commits}</span></Fragment> : null}
+              {lines > 0 ? <Fragment key="lines"><span className="text-ink-500">lines</span><span className="text-right"><span className="text-emerald-300">+{a.linesAdded ?? 0}</span> <span className="text-rose-300">−{a.linesRemoved ?? 0}</span></span></Fragment> : null}
+              {a.rejectedAttempts !== undefined && a.rejectedAttempts > 0 ? <Fragment key="rejected"><span className="text-ink-500">rejected</span><span className="text-right text-rose-300">{a.rejectedAttempts}</span></Fragment> : null}
             </div>
           </div>
         );

@@ -242,6 +242,20 @@ import { readFileSync as _read } from "node:fs";
 import { join as _join, dirname as _dirname } from "node:path";
 import { fileURLToPath as _fileURLToPath } from "node:url";
 
+/** Robust preset block extractor */
+function extractPresetBlock(source: string, id: string): string | null {
+  const start = source.indexOf(`id: "${id}"`);
+  if (start === -1) return null;
+  let depth = 0;
+  let inObject = false;
+  for (let i = start; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '{') { depth++; inObject = true; }
+    else if (ch === '}') { depth--; if (inObject && depth === 0) return source.slice(start, i + 1); }
+  }
+  return null;
+}
+
 const _here = _dirname(_fileURLToPath(import.meta.url));
 const DEEP_SRC = _read(_join(_here, "OrchestratorWorkerDeepRunner.ts"), "utf8");
 const DEEP_PROMPT_SRC = _read(_join(_here, "orchestratorWorkerDeepPromptHelpers.ts"), "utf8");
@@ -311,8 +325,8 @@ describe("OW-Deep form spec", () => {
       _join(_here, "../../../web/src/components/setup/presets.ts"),
       "utf8",
     );
-    const block = presetsSrc.match(/id:\s*"orchestrator-worker-deep"[\s\S]{0,2000}?\},/);
+    const block = extractPresetBlock(presetsSrc, "orchestrator-worker-deep");
     assert.ok(block, "orchestrator-worker-deep preset block must exist");
-    assert.match(block![0], /directive:\s*"honored"/);
+    assert.match(block, /directive:\s*"honored"/);
   });
 });
