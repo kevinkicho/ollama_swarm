@@ -219,7 +219,7 @@ export function contractContext(r: BlackboardRunnerFields): ContractContext {
     getPlannerFallbackModel: () => r.active?.plannerFallbackModel,
     updateAgentModel: (agentId: string, model: string) => { r.opts.manager.updateAgentModel(agentId, model); },
     promptPlannerSafely: (primaryAgent: Agent, promptText: string, agentName?: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => r.promptPlannerSafely(primaryAgent, promptText, agentName ?? "swarm", ollamaFormat),
-    promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => r.promptAgent(agent, prompt, agentName, formatExpect, ollamaFormat),
+    promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => r.promptAgent(agent, prompt, agentName, formatExpect, ollamaFormat),
     emit: (e: unknown) => r.opts.emit(e as SwarmEvent),
     scheduleStateWrite: () => r.scheduleStateWrite(),
     v2ObserverApply: (event: SwarmEvent) => r.v2Observer.apply(event),
@@ -251,7 +251,7 @@ export function tierContext(r: BlackboardRunnerFields): TierContext {
     setConsecutiveStuckCycles: (n: number) => { r.consecutiveStuckCycles = n; },
     appendSystem: (msg: string) => r.appendSystem(msg),
     appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
-    promptPlannerSafely: (agent: Agent, promptText: string, agentName: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => r.promptPlannerSafely(agent, promptText, agentName, ollamaFormat),
+    promptPlannerSafely: (agent: Agent, promptText: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", ollamaFormat?: "json" | Record<string, unknown>) => r.promptPlannerSafely(agent, promptText, agentName, ollamaFormat),
     emit: (e: SwarmEvent) => r.opts.emit(e),
     scheduleStateWrite: () => r.scheduleStateWrite(),
     cloneContract: (c: ExitContract) => r.cloneContract(c),
@@ -280,7 +280,7 @@ export function plannerContext(r: BlackboardRunnerFields): PlannerContext {
     emit: (e: SwarmEvent) => r.opts.emit(e),
     appendSystem: (msg: string) => r.appendSystem(msg),
     appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
-    promptPlannerSafely: (agent: Agent, promptText: string, agentName: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => r.promptPlannerSafely(agent, promptText, agentName, ollamaFormat),
+    promptPlannerSafely: (agent: Agent, promptText: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", ollamaFormat?: "json" | Record<string, unknown>) => r.promptPlannerSafely(agent, promptText, agentName, ollamaFormat),
     wrappers: r.wrappers,
     findingsPost: (entry: { agentId: string; text: string; createdAt: number }) => r.findings.post(entry),
     v2ObserverApply: (event: SwarmEvent) => r.v2Observer.apply(event),
@@ -315,7 +315,7 @@ export function workerContext(r: BlackboardRunnerFields): WorkerContext {
     getAuditor: () => r.auditor,
     appendSystem: (msg: string) => r.appendSystem(msg),
     appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
-    promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => r.promptAgent(agent, prompt, agentName, formatExpect, ollamaFormat),
+    promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => r.promptAgent(agent, prompt, agentName, formatExpect, ollamaFormat),
     emitAgentState: (s: AgentState) => r.emitAgentState(s),
     readExpectedFiles: (files: string[]) => r.readExpectedFiles(files),
     sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -480,12 +480,19 @@ export function replanContext(r: BlackboardRunnerFields): ReplanContext {
 
 export function auditorContext(r: BlackboardRunnerFields): AuditorContext {
   // Create applyAndCommit wrapper for auditor-gated commits
-  const applyHunksAndCommit = async (hunks: readonly unknown[], files: readonly string[], message: string) => {
+  const applyHunksAndCommit = async (hunks: readonly unknown[], files: readonly string[], message: string, options?: { skipCommit?: boolean }) => {
     const { applyAndCommit } = await import("./WorkerPipeline.js");
-    const { realFilesystemAdapter, realGitAdapter } = await import("./v2Adapters.js");
+    const { realFilesystemAdapter, realGitAdapter, realVerifyAdapter } = await import("./v2Adapters.js");
     const clonePath = r.active?.localPath ?? "";
     const fs = realFilesystemAdapter(clonePath);
     const git = realGitAdapter(clonePath);
+
+    const verifyCommand = r.active?.verifyCommand?.trim();
+    const forceVerify = r.active?.requireAuditorVerification || r.active?.auditorOnlyMutations;
+    const verify = verifyCommand && verifyCommand.length > 0
+      ? realVerifyAdapter(clonePath, verifyCommand)
+      : (forceVerify ? { async run() { return { ok: true }; } } as any : undefined); // if force but no cmd, pass-through (or throw in prod)
+
     const result = await applyAndCommit({
       todoId: "auditor-approved",
       workerId: "auditor",
@@ -493,8 +500,16 @@ export function auditorContext(r: BlackboardRunnerFields): AuditorContext {
       hunks: hunks as any,
       fs,
       git,
+      verify,
+      auditorApproved: true,
+      skipCommit: options?.skipCommit,
     });
-    return { ok: result.ok, reason: result.ok ? undefined : result.reason };
+    return { 
+      ok: result.ok, 
+      reason: result.ok ? undefined : result.reason,
+      verifyFailed: (result as any).verifyFailed,
+      filesWritten: (result as any).filesWritten 
+    };
   };
 
   return {

@@ -773,38 +773,48 @@ export async function planAndExecute(
           return response;
         };
 
-        const clonePath = ctx.getActive()?.localPath ?? "";
-        const activeRunId = ctx.getActive()?.runId ?? "";
+        const activeCfg = ctx.getActive();
+        const clonePath = activeCfg?.localPath ?? "";
+        const activeRunId = activeCfg?.runId ?? "";
+        const enableBrain = activeCfg?.enableBrainAnalysis !== false;
         const brainService = ctx.getBrainService();
-        const brainResult = brainService
-          ? await brainService.analyzeRun(
-              ctx.getInteractionTracker(),
-              ctx.getExceptionCollector(),
-              clonePath,
-              activeRunId,
-              brainPromptFn,
-              brainModel,
-            )
-          : await runBrainAnalysis(
-              ctx.getInteractionTracker(),
-              ctx.getExceptionCollector(),
-              clonePath,
-              activeRunId,
-              [],
-              brainPromptFn,
-              brainModel,
-            );
-        ctx.appendSystem(
-          `[brain-overseer] Analysis complete: ${brainResult.exceptions.totalExceptions} exceptions, ${brainResult.chains.length} interaction chains, ${brainResult.proposals.length} proposals.`,
-        );
-        // Log proposals
-        for (const p of brainResult.proposals) {
-          ctx.appendSystem(`[brain-overseer] Proposal: ${p.title} (${p.priority}) — ${p.affectedComponent}`);
+        let brainResult: any = null;
+        if (enableBrain && activeCfg) {
+          brainResult = brainService
+            ? await brainService.analyzeRun(
+                ctx.getInteractionTracker(),
+                ctx.getExceptionCollector(),
+                clonePath,
+                activeRunId,
+                brainPromptFn,
+                brainModel,
+              )
+            : await runBrainAnalysis(
+                ctx.getInteractionTracker(),
+                ctx.getExceptionCollector(),
+                clonePath,
+                activeRunId,
+                [],
+                brainPromptFn,
+                brainModel,
+              );
         }
-        // Log summary analysis
-        ctx.appendSystem(
-          `[brain-overseer] Historical: ${brainResult.summaryAnalysis.totalRuns} runs, ${(brainResult.summaryAnalysis.successRate * 100).toFixed(0)}% success, trend: ${brainResult.summaryAnalysis.recentTrend}`,
-        );
+        if (brainResult) {
+          const insightCount = brainResult.insights?.length ?? 0;
+          ctx.appendSystem(
+            `[brain-overseer] Analysis complete: ${brainResult.exceptions.totalExceptions} exceptions, ${brainResult.chains.length} chains, ${insightCount} insights.`,
+          );
+          // Log insights (librarian final analysis)
+          for (const p of (brainResult.insights || [])) {
+            ctx.appendSystem(`[brain-overseer] Insight: ${p.title} (${p.priority}${p.category ? " / " + p.category : ""})`);
+          }
+          // Log summary analysis
+          ctx.appendSystem(
+            `[brain-overseer] Historical: ${brainResult.summaryAnalysis.totalRuns} runs, ${(brainResult.summaryAnalysis.successRate * 100).toFixed(0)}% success, trend: ${brainResult.summaryAnalysis.recentTrend}`,
+          );
+        } else {
+          ctx.appendSystem(`[brain-overseer] Analysis skipped (enableBrainAnalysis=false).`);
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         ctx.appendSystem(`Brain overseer analysis failed: ${msg}`);
@@ -838,13 +848,13 @@ export async function planAndExecute(
     // markdown deliverable with PR-shaped output, diff-aware critic,
     // and coverage-gap detection. Best-effort — never blocks the
     // summary write below.
-    if (!errored) {
-      try {
-        await ctx.writeBlackboardDeliverable();
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        ctx.appendSystem(`Deliverable write failed (best-effort): ${msg}`);
-      }
+    // Always attempt (even on early stop or error) so deliverable + next-actions
+    // are generated from final transcript/contract state.
+    try {
+      await ctx.writeBlackboardDeliverable();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.appendSystem(`Deliverable write failed (best-effort): ${msg}`);
     }
     // Phase 9: always try to write a summary, regardless of how we got
     // here (completed / stopped / failed / cap). Awaited so the file and

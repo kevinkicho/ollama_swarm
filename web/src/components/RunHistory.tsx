@@ -131,7 +131,7 @@ export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {})
       cancelled = true;
       ctrl.abort();
     };
-  }, [open]);
+  }, [open, parentPath]);
 
   const onOpenFolder = async (clonePath: string) => {
     try {
@@ -307,6 +307,21 @@ export function RunHistoryDropdown({ parentPath }: { parentPath?: string } = {})
                           className="text-[10px] text-ink-400 hover:text-ink-100 underline"
                         >
                           open
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const cp = r.clonePath;
+                            const ru = ""; // digest doesn't have, modal will have more
+                            const ps = r.preset;
+                            const parent = cp.replace(/[/\\][^/\\]*$/, "");
+                            const params = new URLSearchParams({ parentPath: parent, preset: ps });
+                            window.location.href = `/?${params.toString()}`;
+                          }}
+                          title="Start a new swarm reusing this clone's files"
+                          className="text-[10px] ml-1 text-emerald-400 hover:text-emerald-300 underline"
+                        >
+                          start
                         </button>
                       </td>
                     </tr>
@@ -844,6 +859,30 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
             className="text-xs px-3 py-1.5 rounded bg-ink-700 hover:bg-ink-600 text-ink-100 border border-ink-600"
           >
             Open folder
+          </button>
+          <button
+            onClick={() => {
+              const cp = digest.clonePath;
+              const ru = summary?.repoUrl || "";
+              const ps = digest.preset;
+              const md = digest.model || "";
+              const parent = ru
+                ? cp.replace(/[/\\][^/\\]*$/, "")
+                : cp;
+              const params = new URLSearchParams();
+              params.set("parentPath", parent);
+              if (ru) params.set("repoUrl", ru);
+              params.set("preset", ps);
+              if (md) params.set("model", md);
+              // Navigate to start page prefilled; server will reuse the clone dir if it exists.
+              // User can edit directive/caps/etc before starting.
+              window.location.href = `/?${params.toString()}`;
+              onClose();
+            }}
+            className="text-xs px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-emerald-100 border border-emerald-600"
+            title="Start a new swarm run reusing this clone's directory and current files"
+          >
+            Start new swarm on this clone
           </button>
           <button
             onClick={onClose}

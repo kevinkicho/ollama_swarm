@@ -161,9 +161,11 @@ function AppMain() {
   const phase = useSwarm((s) => s.phase);
   const error = useSwarm((s) => s.error);
   const clonePath = useSwarm((s) => s.runConfig?.clonePath);
-  // Derive parentPath from clonePath so history endpoints can scan
-  // even when no run is active (lastParentPath is empty).
-  const parentPath = review?.clonePath || (clonePath ? `${clonePath}/logs` : undefined);
+  // Derive parentPath from clonePath (the clone dir's parent) so history
+  // endpoints scan broadly for sibling runs (including under logs/ subdirs
+  // for per-run summaries). This makes the runs dropdown show more relevant
+  // history when viewing a specific run.
+  const parentPath = review?.clonePath || (clonePath ? clonePath.replace(/[/\\][^/\\]*$/, '') : undefined);
 
   // Subscribe to run completion/failure events for notifications
   useEffect(() => {
@@ -236,10 +238,20 @@ function useReviewedRunIsLive(review: { runId: string; clonePath: string } | nul
     const ctrl = new AbortController();
     async function check() {
       try {
-        const r = await fetch("/api/swarm/status", { signal: ctrl.signal });
+        const r = await fetch(
+          `/api/swarm/runs/${encodeURIComponent(review!.runId)}/status`,
+          { signal: ctrl.signal },
+        );
         if (!r.ok) return;
-        const body = (await r.json()) as { runId?: string };
-        if (!cancelled) setIsLive(body.runId === review!.runId);
+        const body = (await r.json()) as { runId?: string; phase?: string };
+        if (!cancelled) {
+          const live =
+            body.runId === review!.runId &&
+            body.phase !== "completed" &&
+            body.phase !== "stopped" &&
+            body.phase !== "failed";
+          setIsLive(live);
+        }
       } catch {
         // ignore — next tick will retry
       }
@@ -325,6 +337,8 @@ function useReviewHydration(review: { runId: string; clonePath: string } | null)
           clonePath: summary.localPath,
           agentCount: summary.agents.length,
           rounds: 0,
+          wallClockCapMin: (summary as any).wallClockCapMin,
+          ambitionTiers: (summary as any).ambitionTiers,
         });
         setSummary(summary);
         if (summary.contract) setContract(summary.contract);

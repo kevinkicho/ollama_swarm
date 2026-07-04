@@ -42,6 +42,8 @@ export interface ChatOnceOpts {
    *  no JSON repair retries. Pass `"json"` for free-form JSON, pass a
    *  JSON Schema object for strict shape enforcement. */
   format?: "json" | Record<string, unknown>;
+  /** runId for correlation and per-run attribution. */
+  runId?: string;
 }
 
 // Mirrors what `agent.client.session.prompt` returns so callers don't
@@ -65,7 +67,7 @@ export async function chatOnce(
     // E3 Phase 4 part 2: bind tools to the dispatcher when clonePath
     // is supplied AND the agent profile grants any tools.
     const profileForTools: ProfileName | null =
-      opts.agentName === "swarm" || opts.agentName === "swarm-read" || opts.agentName === "swarm-builder"
+      opts.agentName === "swarm" || opts.agentName === "swarm-read" || opts.agentName === "swarm-builder" || opts.agentName === "swarm-research"
         ? (opts.agentName as ProfileName)
         : opts.agentName === "swarm-ui"
           ? "swarm-read" // swarm-ui inherits read-side tools
@@ -75,8 +77,9 @@ export async function chatOnce(
     // explicitly. Override via opts.clonePath when needed.
     const clonePath = opts.clonePath ?? agent.cwd;
     const tools = clonePath && profileForTools ? defaultToolsForProfile(profileForTools) : [];
+    const mcp = (opts as any).mcpServers || undefined;
     const dispatcher = clonePath && profileForTools && tools.length > 0
-      ? new ToolDispatcher(profileForTools, clonePath)
+      ? new ToolDispatcher(profileForTools, clonePath, mcp)
       : undefined;
     const result = await provider.chat({
       model: modelId,
@@ -84,6 +87,7 @@ export async function chatOnce(
       signal,
       agentId: agent.id,
       logDiag: opts.logDiag,
+      runId: opts.runId,
       ...(opts.onChunk ? { onChunk: opts.onChunk } : {}),
       ...(tools.length > 0 ? { tools } : {}),
       ...(dispatcher ? { dispatcher } : {}),

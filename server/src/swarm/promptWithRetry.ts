@@ -142,6 +142,8 @@ export interface PromptWithRetryOptions {
   // 132 identical chunks before the 90s watchdog caught it). Default OFF;
   // BlackboardRunner and discussion runners opt in.
   intraStreamLoop?: IntraStreamLoopDetectorOpts | true;
+  /** MCP servers string (e.g. "fetch=..." or "search=...") for tool-augmented profiles. Forwarded via any-cast in impl. */
+  mcpServers?: string;
 }
 
 export interface RetryInfo {
@@ -204,12 +206,13 @@ export async function promptWithRetry(
         // discussion presets but harmful for the planner that needs to
         // grep before posting TODOs.
         const profileForTools: ProfileName | null =
-          agentName === "swarm" || agentName === "swarm-read" || agentName === "swarm-builder"
+          agentName === "swarm" || agentName === "swarm-read" || agentName === "swarm-builder" || agentName === "swarm-research"
             ? (agentName as ProfileName)
             : null;
         const tools = profileForTools && agent.cwd ? defaultToolsForProfile(profileForTools) : [];
+        const mcp = (opts as any).mcpServers || undefined;
         const dispatcher = tools.length > 0 && profileForTools && agent.cwd
-          ? new ToolDispatcher(profileForTools, agent.cwd)
+          ? new ToolDispatcher(profileForTools, agent.cwd, mcp)
           : undefined;
         const loopDetector = opts.intraStreamLoop
           ? createIntraStreamLoopDetector(opts.intraStreamLoop === true ? undefined : opts.intraStreamLoop)

@@ -45,7 +45,7 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
 
   // Refs hold the latest store so socket callbacks don't capture
   // stale references across React StrictMode double-invokes.
-  const storeRef = useRef(store);
+  const storeRef = useRef<StoreApi<SwarmStore>>(store);
   useEffect(() => {
     storeRef.current = store;
   }, [store]);
@@ -111,13 +111,52 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
       } catch {
         // best-effort
       }
+
+      // Fallback for past runs where /status 404s (no runPaths entry for snapshot):
+      // discover the clonePath via broad /runs list, then load run-summary
+      // (which has the transcript/summary for completed runs).
+      if (!cancelled) {
+        try {
+          const listRes = await fetch(`/api/swarm/runs`, { signal: ctrl.signal });
+          if (listRes.ok) {
+            const listBody = await listRes.json();
+            const match = (listBody.runs || []).find((r: any) => r.runId === runId);
+            if (match && match.clonePath) {
+              const params = new URLSearchParams({ clonePath: match.clonePath, runId });
+              const sumRes = await fetch(`/api/swarm/run-summary?${params.toString()}`, { signal: ctrl.signal });
+              if (sumRes.ok) {
+                const summary = await sumRes.json();
+                const s = storeRef.current.getState();
+                s.setRunId(runId);
+                const cp = summary.localPath || match.clonePath;
+                if (cp) {
+                  s.setRunConfig({
+                    ...(s.runConfig || {}),
+                    clonePath: cp,
+                    preset: summary.preset || match.preset,
+                    model: summary.model || match.model,
+                  } as any);
+                }
+                if (summary.startedAt) s.setRunStartedAt(summary.startedAt);
+                if (summary.transcript) {
+                  for (const e of summary.transcript) s.appendEntry(e);
+                }
+                if (summary.contract) s.setContract(summary.contract);
+                if (summary.summary) s.setSummary(summary.summary);
+              }
+            }
+          }
+        } catch {
+          // best effort
+        }
+      }
     };
     void hydrate();
 
     const open = () => {
       if (cancelled) return;
       const proto = location.protocol === "https:" ? "wss" : "ws";
-      const url = `${proto}://127.0.0.1:${__BACKEND_PORT__}/ws?runId=${encodeURIComponent(runId)}`;
+      const url = `${proto}://${location.host}/ws?runId=${encodeURIComponent(runId)}`;
       const sock = new WebSocket(url);
       socket = sock;
       sock.onopen = () => {

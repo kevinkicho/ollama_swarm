@@ -55,6 +55,40 @@ Until any of those bite, one agent covers both roles.
 
 ---
 
+## Agents have no general internet / web search tools
+
+**Current state (as of 2026-07):** The only tools agents can invoke are local
+to the cloned repository via the in-process `ToolDispatcher`:
+
+- `swarm` (default workers in blackboard): **no tools**. Must return clean
+  JSON (hunks / answers).
+- `swarm-read` (planners, many discussion roles, auditors): `read | grep | glob | list`.
+  Limited reads per turn in planning to prevent context explosion.
+- `swarm-builder` (build / test roles): above + restricted `bash` (only
+  allowlisted commands: npm test, tsc, eslint, etc. No network, no `curl`,
+  cwd-bound + allowlist).
+
+**No web tools exist** for agents: no `web_search`, `browse`, `fetch_url`,
+general HTTP, or external API access. The GitHub MCP definitions in
+`mcps/grok_com_github/` and the opt-in `MCP_PLAYWRIGHT_ENABLED` (auditor
+browser automation) are not wired into the general agent tool dispatch loop.
+
+Directives containing "do a websearch", "find current governmental data
+endpoints", "research latest best practices online" etc. are answered
+only from the model's frozen training knowledge. The hybrid planning +
+`systemMap` + `swarm-read` planner tools give "broad view" *within the repo*
+without giving live internet.
+
+**See also:**
+- `server/src/tools/ToolDispatcher.ts`
+- `server/src/swarm/promptWithRetry.ts` + `roles.ts` (profile assignment)
+- Auditor prompts that explicitly document the lack of external tooling.
+
+This is a deliberate security / blast-radius choice. Adding live web access
+would require new allowlisting, rate-limiting, and safety work.
+
+---
+
 ## Concurrent multi-run execution — resolved (2026-07-02)
 
 **Previous state:** A single global `AgentManager`, `wrappedEmit` getters, and global quota state made `SWARM_MAX_CONCURRENT_RUNS > 1` unsafe.
@@ -82,6 +116,14 @@ filter is approximate for very short runs.
 `loopBody()` and `runOne()` instead of using `initCloneAndSpawn()` and
 `runDiscussionAgent()` from `DiscussionRunnerBase`. This is the only
 subclass that diverges from the base pipeline.
+
+## Web / external research tools (new)
+
+Set `webTools: true` (and `plannerTools: true`) in the run config to give the
+planner `web_search` + `web_fetch` tools (implemented directly + MCP SDK
+installed for future stdio MCP servers). This directly supports directives
+that require discovering governmental or other public data endpoints via
+internet searches.
 
 **Why:** MoA needs heterogeneous model selection (different models for
 proposers vs aggregators, per-proposer model cycling). The base
@@ -135,13 +177,15 @@ binding constraint for experiment velocity.
 
 ---
 
-## Brain self-upgrader and proposal application is gated (current focus area)
+## Brain self-upgrader removed
 
-**Current state:** `selfUpgrader.ts` + proposal store exist and are wired. Brain can analyze runs, generate proposals, and apply patches to its own code or the project. However, application is conservative (gating on stopped runs, confidence, etc.). Full autonomous "brain runs its own blackboard on itself" is still emerging.
+System patching / self-upgrade of the swarm platform has been removed. The Brain now operates strictly as a librarian/master-admin focused on:
+- initializing from run history
+- starting and finishing runs
+- reviewing run records
+- producing final run analysis and cross-run insights.
 
-**Trade-off:** Safety over speed. We do not want the brain to brick the system during development.
-
-**Revisit when:** We have robust dry-run + approval UI + rollback for self-patches, or when users explicitly want more autonomous self-improvement loops.
+Self-modification of source code is no longer part of its responsibilities.
 
 ---
 

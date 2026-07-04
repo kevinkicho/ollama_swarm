@@ -173,4 +173,33 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
   }
   ctx.lastSummarySetter(summary);
   ctx.emit({ type: "run_summary", summary });
+
+  // Canonical project-level copy (suggestion): always write to logs/<full-runId>/summary.json
+  // independent of the clone. This ensures artifacts survive even if clone logs are missing/pruned.
+  // Uses full runId for easy lookup (matching debug.jsonl layout).
+  try {
+    const projectLogsDir = path.join(process.cwd(), "logs", summary.runId || "unknown");
+    await import("node:fs/promises").then((fs) => fs.mkdir(projectLogsDir, { recursive: true }));
+    const projPath = path.join(projectLogsDir, "summary.json");
+    await writeFileAtomic(projPath, json);
+    ctx.appendSystem(`Canonical project-level summary also written to ${projPath}`);
+
+    // Compact index record (suggestion)
+    try {
+      const indexEntry = {
+        runId: summary.runId,
+        startedAt: summary.startedAt,
+        endedAt: summary.endedAt ?? Date.now(),
+        stopReason: summary.stopReason,
+        preset: summary.preset,
+        commits: summary.commits ?? 0,
+        filesChanged: summary.filesChanged ?? 0,
+        wallClockMs: summary.wallClockMs,
+      };
+      const indexPath = path.join(process.cwd(), "logs", "runs-index.jsonl");
+      await import("node:fs/promises").then((fs) => fs.appendFile(indexPath, JSON.stringify(indexEntry) + "\n", "utf8"));
+    } catch {}
+  } catch (e) {
+    // best effort only
+  }
 }

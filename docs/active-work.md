@@ -23,10 +23,8 @@
 - [x] Brain calls `orchestrator.start(cfg)`
 - [x] Run provisioner created
 
-### P5: Self-Upgrade ✅ DONE
-- [x] `selfUpgrader.ts` — applies patches to own code
-- [x] `brainQueue.ts` — system work serialized before project runs
-- [x] Patch gating: only when ALL runs stopped
+### P5: Self-Upgrade — REMOVED
+Brain no longer performs self-patching of the platform. Focus shifted to librarian/admin role for run records and analysis.
 
 ### P6: Brain-as-OS ✅ DONE
 - [x] Brain service created

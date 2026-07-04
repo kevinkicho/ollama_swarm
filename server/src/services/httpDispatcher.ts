@@ -52,12 +52,24 @@ export const HEADERS_TIMEOUT_MS = 600_000;
 export const DISPATCHER_OPTIONS = {
   headersTimeout: HEADERS_TIMEOUT_MS,
   bodyTimeout: 0,
+  // For reuse: keep connections alive longer for reliability
+  keepAliveTimeout: 60_000,
+  keepAliveMaxTimeout: 300_000,
 } as const;
 
-let installed = false;
+const dispatchers = new Map<string, any>(); // per provider id
 
-export function configureHttpDispatcher(): void {
-  if (installed) return;
+let globalInstalled = false;
+
+export function configureHttpDispatcher(providerId?: string): any {
+  if (providerId) {
+    if (!dispatchers.has(providerId)) {
+      const agent = new Agent(DISPATCHER_OPTIONS);
+      dispatchers.set(providerId, agent);
+    }
+    return dispatchers.get(providerId);
+  }
+  if (globalInstalled) return;
   setGlobalDispatcher(new Agent(DISPATCHER_OPTIONS));
-  installed = true;
+  globalInstalled = true;
 }

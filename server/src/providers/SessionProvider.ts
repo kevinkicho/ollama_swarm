@@ -56,7 +56,7 @@ export interface ChatOpts {
    *  loop, dispatching tool calls through `dispatcher.dispatch(...)`
    *  and feeding results back to the model until it emits a text-only
    *  response (or hits a 10-turn safety cap). */
-  tools?: ReadonlyArray<"read" | "grep" | "glob" | "list" | "bash" | "propose_hunks">;
+  tools?: ReadonlyArray<"read" | "grep" | "glob" | "list" | "bash" | "propose_hunks" | "web_fetch" | "web_search">;
   /** Required when `tools` is set. Owns the security-gated execution
    *  of each tool (profile permission table, path safety, allowlist
    *  for bash). See server/src/tools/ToolDispatcher.ts. */
@@ -67,6 +67,8 @@ export interface ChatOpts {
 
   /** runId for per-run isolation (proxy attribution, quota, usage, Brain). */
   runId?: string;
+  /** Per-provider undici dispatcher for connection reuse and isolation. */
+  httpDispatcher?: any;
 
   /** Marker that this LLM call is part of a brain-initiated run (for scheduling/priority). */
   brainInitiated?: boolean;

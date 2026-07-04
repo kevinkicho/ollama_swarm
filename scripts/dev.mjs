@@ -69,8 +69,9 @@ for (const [label, p] of [["tsx", tsxCli], ["vite", viteCli]]) {
   try {
     let name = "";
     let email = "";
-    try { name = execSync("git config user.name", { encoding: "utf8", windowsHide: true }).trim(); } catch {}
-    try { email = execSync("git config user.email", { encoding: "utf8", windowsHide: true }).trim(); } catch {}
+    const execOpts = { encoding: "utf8", windowsHide: true, stdio: ["pipe", "pipe", "ignore"] };
+    try { name = execSync("git config user.name", execOpts).trim(); } catch {}
+    try { email = execSync("git config user.email", execOpts).trim(); } catch {}
     if (!name || !email) {
       console.warn(
         `[dev] git identity not configured (user.name="${name || '<unset>'}" user.email="${email || '<unset>'}").\n` +
@@ -149,6 +150,35 @@ function launch(name, cwd, args, color) {
   return child;
 }
 
+/**
+ * Wait until the backend TCP port is accepting connections.
+ * Prevents Vite dev server + initial browser fetches from spamming
+ * "http proxy error: ECONNREFUSED" while the (slower) tsx server boots.
+ * Falls back after timeout so dev doesn't hang if something is wrong.
+ */
+async function waitForBackend(port, host = "127.0.0.1", timeoutMs = 25000) {
+  const start = Date.now();
+  let lastErr = null;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      await new Promise((resolve, reject) => {
+        const socket = net.connect({ host, port, timeout: 800 }, () => {
+          socket.end();
+          resolve(true);
+        });
+        socket.on("error", (e) => { lastErr = e; socket.destroy(); reject(e); });
+        socket.on("timeout", () => { socket.destroy(); reject(new Error("connect timeout")); });
+      });
+      console.log(`[dev] backend ready on :${port}`);
+      return;
+    } catch {
+      // brief backoff
+      await new Promise((r) => setTimeout(r, 180));
+    }
+  }
+  console.warn(`[dev] backend :${port} not reachable after ~${Math.round(timeoutMs/1000)}s (last error: ${lastErr?.message ?? "unknown"}). Starting web anyway — initial proxy requests may fail until it finishes booting.`);
+}
+
 function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -182,4 +212,5 @@ const serverArgs = noWatch
   : [tsxCli, "watch", "src/index.ts"];
 if (noWatch) console.log("[dev] server running WITHOUT tsx watch (--no-watch). Code edits won't auto-restart.");
 launch("server", path.join(root, "server"), serverArgs, "36");
+await waitForBackend(port);
 launch("web", path.join(root, "web"), [viteCli, "--port", String(webPort), "--strictPort", "--host"], "35");

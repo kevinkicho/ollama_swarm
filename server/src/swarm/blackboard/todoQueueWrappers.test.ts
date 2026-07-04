@@ -313,3 +313,35 @@ describe("todoQueueWrappers — postFindingQ", () => {
     assert.equal(rec.emits.length, 0, "no event on failed post");
   });
 });
+
+// NEW tests for auditor improvements
+import { reviewProposedHunks } from "./auditorRunner.js";
+import type { AuditorContext, Todo } from "./auditorRunner.js";
+
+describe("reviewProposedHunks (new auditor hunk review)", () => {
+  function makeMockCtx(approve: boolean) {
+    return {
+      getContract: () => ({ criteria: [] }),
+      promptPlannerSafely: async () => ({
+        response: JSON.stringify({ approve, reason: approve ? "looks good" : "bad change" }),
+        agentUsed: { id: "auditor", index: 99, model: "test" } as any,
+      }),
+      appendSystem: () => {},
+    } as unknown as AuditorContext;
+  }
+
+  it("approves when auditor says yes", async () => {
+    const ctx = makeMockCtx(true);
+    const todo = { id: "t1", description: "add panel", expectedFiles: ["a.tsx"] } as Todo;
+    const res = await reviewProposedHunks(ctx, { id: "a", index: 99, model: "m" } as any, todo, [{ op: "create", file: "a.tsx" }], ["a.tsx"]);
+    assert.equal(res.approve, true);
+    assert.ok(res.reason.includes("looks good"));
+  });
+
+  it("rejects when auditor says no", async () => {
+    const ctx = makeMockCtx(false);
+    const todo = { id: "t2", description: "bad", expectedFiles: ["b.tsx"] } as Todo;
+    const res = await reviewProposedHunks(ctx, { id: "a", index: 99, model: "m" } as any, todo, [], ["b.tsx"]);
+    assert.equal(res.approve, false);
+  });
+});

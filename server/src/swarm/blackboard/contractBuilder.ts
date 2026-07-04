@@ -73,13 +73,13 @@ export interface ContractContext {
   promptPlannerSafely: (
     primaryAgent: Agent,
     promptText: string,
-    agentName?: "swarm" | "swarm-read" | "swarm-builder",
+    agentName?: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research",
     ollamaFormat?: "json" | Record<string, unknown>,
   ) => Promise<{ response: string; agentUsed: Agent }>;
   promptAgent: (
     agent: Agent,
     prompt: string,
-    agentName: "swarm" | "swarm-read" | "swarm-builder",
+    agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research",
     formatExpect: "json" | "free",
     ollamaFormat?: "json" | Record<string, unknown>,
   ) => Promise<string>;
@@ -140,10 +140,15 @@ export async function runFirstPassContract(
 ): Promise<void> {
   const modelAtEntry = agent.model;
 
+  // Always use swarm-research for the first-pass contract building so the planner
+  // can use web_search + web_fetch for directives involving external/governmental data.
+  // (local read tools are also included in the research profile).
+  const plannerProfile: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research" = "swarm-research";
+
   const { response: firstResponse, agentUsed: contractAgent } = await ctx.promptPlannerSafely(
     agent,
     `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed, agent.model)}`,
-    "swarm",
+    plannerProfile,
     CONTRACT_JSON_SCHEMA,
   );
   if (ctx.getStopping()) return;
@@ -157,7 +162,7 @@ export async function runFirstPassContract(
     const { response: retryResponse, agentUsed: retryAgent } = await ctx.promptPlannerSafely(
       contractAgent,
       `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed, contractAgent.model)}`,
-      "swarm",
+      "swarm-research",
       CONTRACT_JSON_SCHEMA,
     );
     if (ctx.getStopping()) return;
@@ -529,6 +534,13 @@ export async function buildSeed(
     // best-effort — gather failure shouldn't block the planner
   }
 
+  // Ambitious idea: simple system map for broad understanding (Context Oracle / system map)
+  const systemMap = `System overview for ${cfg.userDirective || 'the project'}:
+- Top level dirs: ${topLevel.slice(0,5).join(', ')}
+- Key files (sample): ${repoFiles.slice(0,10).join(', ')}
+- README summary: ${readmeExcerpt ? readmeExcerpt.slice(0,200) : 'N/A'}
+This is a lightweight map to help with systemic planning without full repo dump.`;
+
   return {
     repoUrl: cfg.repoUrl,
     clonePath,
@@ -543,5 +555,6 @@ export async function buildSeed(
     ...(codeContextExcerpts ? { codeContextExcerpts } : {}),
     ...(cfg.testDrivenTodos ? { testDrivenTodos: true } : {}),
     ...(cfg.parallelHypothesis ? { parallelHypothesis: true } : {}),
+    systemMap,  // for planner to use for broad view
   };
 }

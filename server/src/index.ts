@@ -24,6 +24,8 @@ import { Orchestrator } from "./services/Orchestrator.js";
 import { startOllamaProxy, tokenTracker } from "./services/ollamaProxy.js";
 import { Broadcaster } from "./ws/broadcast.js";
 import { createEventLogger } from "./ws/eventLogger.js";
+import { rootLogger } from "./services/logger.js";
+import { RunEventHub, createBroadcasterSink, createEventLoggerSink, createDebugSink } from "./services/RunEventHub.js";
 import { swarmRouter } from "./routes/swarm.js";
 import { devRouter } from "./routes/dev.js";
 import { v2Router } from "./routes/v2.js";
@@ -90,23 +92,68 @@ server.on("error", (err: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 
-// WS auth — intercept upgrade. Localhost bypass for dev.
+function parseCookieValue(header: string | undefined, name: string): string | undefined {
+  if (!header) return undefined;
+  for (const part of header.split(";")) {
+    const trimmed = part.trim();
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) continue;
+    if (trimmed.slice(0, eq) === name) {
+      return decodeURIComponent(trimmed.slice(eq + 1));
+    }
+  }
+  return undefined;
+}
+
+function isLocalWsClient(req: IncomingMessage): boolean {
+  const addr = req.socket.remoteAddress ?? "";
+  return (
+    addr === "127.0.0.1" ||
+    addr === "::1" ||
+    addr === "::ffff:127.0.0.1"
+  );
+}
+
+// WS auth — validate ws_token cookie (localhost clients may omit it).
 server.on("upgrade", (req: IncomingMessage, socket: import("node:stream").Duplex, head: Buffer) => {
   if (!req.url?.startsWith("/ws")) { socket.destroy(); return; }
+  if (!isLocalWsClient(req)) {
+    const token = parseCookieValue(req.headers.cookie, "ws_token");
+    if (token !== wsToken) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+  }
   wss.handleUpgrade(req, socket, head, (ws) => { wss.emit("connection", ws, req); });
 });
 const eventLogger = createEventLogger({ logDir: config.LOG_DIR ?? path.join(repoRoot, "logs") });
 const broadcaster = new Broadcaster(eventLogger);
 
+// Logging / history / debug pipes (organized by functionality):
+// - Broadcaster + WS: real-time live updates to connected UIs (per-run filtered for multi-tenant)
+// - EventLogger (JSONL): persistent audit + cross-session history for /api/v2/event-log and UI history panels
+// - Transcript + status snapshots: in-memory + persister for UI hydrate and recovery
+// - logDiag: diagnostic records (token, errors, etc) routed to event log
+// - rootLogger / structured logs: server-side debug with runId/reqId correlation
+// Goal: reduce ad-hoc console.* and unify emission points by category (lifecycle, agent, brain, diag, usage).
+
 // PID tracker for orphan process reclamation (across restarts).
 const pidTracker = new AgentPidTracker(repoRoot);
 
 function createAgentManager(runId: string): AgentManager {
+  // Per-run hub to organize pipes (realtime, persistent history, debug).
+  // This replaces direct broadcaster + eventLogger calls for better organization.
+  const hub = new RunEventHub({ runId });
+  hub.registerSink(createBroadcasterSink(broadcaster));
+  hub.registerSink(createEventLoggerSink(eventLogger));
+  // Debug sink for per-run categorized debug file
+  hub.registerSink(createDebugSink(runId, config.LOG_DIR ?? path.join(repoRoot, "logs")));
+
   return new AgentManager(
-    (s) => broadcaster.broadcast({ type: "agent_state", agent: s, runId }),
-    (e) => broadcaster.broadcast(e.runId === undefined ? { ...e, runId } : e),
-    // Diagnostic-only sink: opencode stdout/stderr + raw SSE envelope records
-    // go straight to the JSONL log without hitting the WS stream.
+    (s) => hub.emitAgent({ type: "agent_state", agent: s }),
+    (e) => hub.emit({ ...(e.runId === undefined ? { ...e, runId } : e) }),
+    // Diagnostic records still go to persistent log (via hub or direct for now).
     (rec) => eventLogger.log(rec),
     pidTracker,
   );
@@ -115,6 +162,7 @@ const repos = new RepoService();
 const orchestrator = new Orchestrator({
   createManager: createAgentManager,
   repos,
+  // Emit now goes through per-run hubs created in createAgentManager for unified pipes.
   emit: (e) => broadcaster.broadcast(e),
   logDiag: (rec) => eventLogger.log(rec),
   // V2 Step 1: Ollama base URL (proxy-aware) for the Ollama-direct
@@ -395,7 +443,7 @@ const staticDir = config.STATIC_DIR && config.STATIC_DIR !== "none"
   : path.join(repoRoot, "web", "dist");
 if (fs.existsSync(staticDir)) {
   app.use(staticServing(staticDir));
-  console.log(`  static: serving web frontend from ${staticDir}`);
+  rootLogger.info(`static: serving web frontend from ${staticDir}`);
 }
 // Global error handler — must be after all routes.
 app.use(globalErrorHandler);
@@ -405,14 +453,14 @@ let shuttingDown = false;
 const shutdown = async (signal: string) => {
   if (shuttingDown) return; // guard against re-entrant signals
   shuttingDown = true;
-  console.log(`\n${signal} received — shutting down swarm`);
+  rootLogger.info(`${signal} received — shutting down swarm`);
   try { broadcaster.detach(); } catch { /* ignore */ }
   // orchestrator.stop() can hang if a runner is mid-flight. Race it
   // against a 20 s timeout so graceful shutdown doesn't block forever.
   try {
     await Promise.race([
-      orchestrator.stop(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("orchestrator.stop() timed out")), 20_000)),
+      orchestrator.stopAll(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("orchestrator.stopAll() timed out")), 20_000)),
     ]);
   } catch { /* ignore */ }
   stopProviderHealthScheduler();
@@ -525,6 +573,7 @@ void reclaimOrphans(repoRoot)
   .finally(async () => {
     // Pre-flight health check — warns if port is in use or disk is low.
     const logsDir = path.join(repoRoot, "logs");
+    await orchestrator.whenBrainReady();
     const health = await startupHealthCheck(config.SERVER_PORT, logsDir);
     if (health.warnings.length > 0) {
       console.warn("┌──────────────────────────────────────────────────┐");

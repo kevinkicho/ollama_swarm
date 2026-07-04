@@ -7,8 +7,29 @@ import type { RunConfig } from "./SwarmRunner.js";
 import type { TranscriptEntry } from "../types.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractProviderText, createTimeoutController, parseJsonArrayFromResponse, gatherProjectContext, type RealManager } from "./councilUtils.js";
+import path from "node:path";
 import { classifyExpectedFiles } from "./blackboard/prompts/pathValidation.js";
-import { execSync } from "node:child_process";
+import { resolveSafe } from "./blackboard/resolveSafe.js";
+import { promises as fs } from "node:fs";
+
+async function listSourceFiles(root: string): Promise<string[]> {
+  const out: string[] = [];
+  const exts = new Set([".ts", ".tsx", ".js", ".jsx"]);
+  async function walk(dir: string, rel = ""): Promise<void> {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.name === "node_modules" || e.name === ".git") continue;
+      const relPath = rel ? `${rel}/${e.name}` : e.name;
+      const abs = path.join(dir, e.name);
+      if (e.isDirectory()) await walk(abs, relPath);
+      else if (exts.has(path.extname(e.name))) {
+        out.push(relPath.replace(/\\/g, "/"));
+      }
+    }
+  }
+  await walk(root);
+  return out;
+}
 
 export { extractProviderText, createTimeoutController, parseJsonArrayFromResponse, gatherProjectContext, type RealManager } from "./councilUtils.js";
 
@@ -141,17 +162,13 @@ Rules:
       }
 
       // Post-process: verify file paths exist and check for placeholder content
-      let fileList = "";
+      let repoFiles: string[] = [];
       try {
-        fileList = execSync(
-          'find . -type f \\( -name "*.tsx" -o -name "*.ts" -o -name "*.js" -o -name "*.jsx" \\) | grep -v node_modules | grep -v .git',
-          { cwd: cfg.localPath, encoding: "utf8", timeout: 10000 }
-        ).trim();
+        repoFiles = await listSourceFiles(cfg.localPath);
       } catch { /* ignore */ }
 
-      const repoFiles = fileList.split("\n").filter(Boolean);
-
-      const verified = result.map((t) => {
+      const verified: typeof result = [];
+      for (const t of result) {
         const desc = t.description.toLowerCase();
         const isCreate = desc.includes("create") || desc.includes("new") || desc.includes("add");
 
@@ -160,23 +177,26 @@ Rules:
           appendSystem(`[path grounding] Dropped ${rejected.length} invalid path(s) from "${t.description}": ${rejected.map(r => r.path).join(", ")}`);
         }
 
-        const filesWithRealContent = accepted.filter((f) => {
+        const filesWithRealContent: string[] = [];
+        for (const f of accepted) {
           try {
-            const content = execSync(`head -20 "${cfg.localPath}/${f}" 2>/dev/null || echo ""`, {
-              timeout: 1000, encoding: "utf8",
-            }).trim();
-            if (!content || content.length < 20) return false;
+            const abs = await resolveSafe(cfg.localPath, f);
+            const raw = await fs.readFile(abs, "utf8");
+            const content = raw.split("\n").slice(0, 20).join("\n").trim();
+            if (!content || content.length < 20) continue;
             const lower = content.toLowerCase();
-            if (lower.includes("todo") || lower.includes("placeholder") || lower.includes("mock") || lower.includes("fixme")) return false;
-            return true;
+            if (lower.includes("todo") || lower.includes("placeholder") || lower.includes("mock") || lower.includes("fixme")) {
+              continue;
+            }
+            filesWithRealContent.push(f);
           } catch {
-            return false;
+            // skip unreadable or escaping paths
           }
-        });
+        }
 
         if (isCreate && accepted.length > 0 && filesWithRealContent.length === accepted.length) {
           appendSystem(`[dedup] Skipping "${t.description}" — files already exist with real content.`);
-          return null;
+          continue;
         }
 
         if (isCreate && accepted.length > 0 && filesWithRealContent.length < accepted.length) {
@@ -186,8 +206,10 @@ Rules:
           }
         }
 
-        return { ...t, expectedFiles: accepted };
-      }).filter((t): t is NonNullable<typeof t> => t !== null && t.expectedFiles.length > 0);
+        if (accepted.length > 0) {
+          verified.push({ ...t, expectedFiles: accepted });
+        }
+      }
 
       appendSystem(`[extractActionableTodos] extracted ${verified.length} todo(s).`);
       return verified;

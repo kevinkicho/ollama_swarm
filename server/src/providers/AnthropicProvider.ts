@@ -26,7 +26,7 @@ const MAX_TOOL_TURNS = 10;
 // OpenAIProvider can share them. Mirror the args ToolDispatcher's
 // handlers actually consume.
 export const TOOL_SCHEMAS: Record<
-  "read" | "grep" | "glob" | "list" | "bash" | "propose_hunks",
+  "read" | "grep" | "glob" | "list" | "bash" | "propose_hunks" | "web_fetch" | "web_search",
   { description: string; input_schema: Record<string, unknown> }
 > = {
   read: {
@@ -78,6 +78,26 @@ export const TOOL_SCHEMAS: Record<
       properties: {
         hint: { type: "string", description: "optional hint about the hunks you'll propose" },
       },
+    },
+  },
+  web_fetch: {
+    description: "Fetch the text content of a public URL (HTML, JSON, or plain text). Use for following links from search results or directly accessing known data endpoints. Output is truncated.",
+    input_schema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Full http or https URL to fetch" },
+      },
+      required: ["url"],
+    },
+  },
+  web_search: {
+    description: "Perform an internet search (DuckDuckGo). Returns top results with titles, URLs and snippets. Prefer .gov, .eu, data.gov, worldbank, oecd, eurostat, imf etc for governmental/intra-governmental. Use to discover data endpoints, then web_fetch specific URLs.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "search query, e.g. 'US government open data APIs economic financial labor housing production site:.gov' or 'Eurostat OECD data endpoints'" },
+      },
+      required: ["query"],
     },
   },
 };
@@ -231,7 +251,7 @@ export class AnthropicProvider implements SessionProvider {
       const toolResults: unknown[] = [];
       for (const t of toolUses) {
         const dispatchResult = await opts.dispatcher!.dispatch({
-          tool: t.name as "read" | "grep" | "glob" | "list" | "bash",
+          tool: t.name as "read" | "grep" | "glob" | "list" | "bash" | "web_fetch" | "web_search",
           args: t.input,
         });
         const preview = dispatchResult.ok

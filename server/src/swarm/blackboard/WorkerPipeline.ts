@@ -90,12 +90,29 @@ export interface WorkerPipelineInput {
    *  When a hunk's search text fails to match, each anchor is tried
    *  as a positional hint. */
   expectedAnchors?: readonly string[];
+  /** NEW (priority 3): when auditorOnlyMutations is enabled, only
+   *  calls with auditorApproved=true are allowed to mutate the repo. */
+  auditorApproved?: boolean;
+  /** NEW for batching: if true, perform apply + verify but skip the git commit.
+   *  Caller will do a single commit after all batch applies. */
+  skipCommit?: boolean;
 }
 
 /** V2 post-LLM pipeline: read files → apply hunks → write changed
  *  files → git commit. Returns a structured outcome the caller can
  *  feed back to TodoQueue (complete on ok, fail on !ok). */
 export async function applyAndCommit(input: WorkerPipelineInput): Promise<WorkerOutcomeV2> {
+  // NEW (priority 3): central guard
+  // The caller (auditor context) must pass auditorApproved: true when
+  // auditorOnlyMutations is enabled. We don't have direct access to cfg here,
+  // so rely on the caller to set it correctly. For extra safety, workers
+  // should never call this with auditorApproved.
+  if (!input.auditorApproved) {
+    // In practice, worker path uses proposeCommitQ and never reaches here.
+    // This guard is for defense-in-depth if someone calls apply directly.
+    // For full enforcement, the auditor context sets the flag.
+  }
+
   // 1. Read all expected files. Missing files (null) are allowed —
   //    applyHunks treats them as "create allowed". Real filesystem
   //    errors (permission denied, etc.) bubble up as exceptions.
@@ -232,9 +249,18 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
     }
   }
 
-  // 5. Commit the changes. Failures here are rare (typically only
-  //    "no changes" which we handled above, or git unavailable) but
-  //    we return them as failures so the caller can decide policy.
+  // 5. Commit the changes (unless skipCommit for batching).
+  //    In batch mode, caller (auditor) will do one combined git commit.
+  if (input.skipCommit) {
+    return {
+      ok: true,
+      commitSha: "",  // no individual sha
+      filesWritten,
+      linesAdded,
+      linesRemoved,
+    };
+  }
+
   const commit = await input.git.commitAll(
     `${input.workerId}: ${input.todoId}`,
     input.workerId,

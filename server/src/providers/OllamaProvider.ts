@@ -7,11 +7,15 @@
 import { chat as ollamaChat } from "../services/OllamaClient.js";
 import type { ChatOpts, ChatResult, SessionProvider } from "./SessionProvider.js";
 import { config } from "../config.js";
+import { configureHttpDispatcher } from "../services/httpDispatcher.js";
 
 export class OllamaProvider implements SessionProvider {
   readonly id = "ollama" as const;
 
-  constructor(private readonly baseUrl: string = config.OLLAMA_BASE_URL) {}
+  constructor(private readonly baseUrl: string = config.OLLAMA_BASE_URL) {
+    // Per-provider agent for connection reuse and isolation
+    configureHttpDispatcher(this.id);
+  }
 
   async chat(opts: ChatOpts): Promise<ChatResult> {
     // Fold `system` (if present) into messages as the leading
@@ -35,7 +39,8 @@ export class OllamaProvider implements SessionProvider {
       logDiag: opts.logDiag,
       agentId: opts.agentId,
       runId: opts.runId,
-      onTokens: (counts) => {
+      httpDispatcher: (opts as any).httpDispatcher || configureHttpDispatcher(this.id),
+      onTokens: (counts: any) => {
         usagePrompt = counts.promptTokens;
         usageResponse = counts.responseTokens;
       },

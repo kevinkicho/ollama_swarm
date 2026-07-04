@@ -13,17 +13,18 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(__dirname, "Orchestrator.ts"), "utf8");
+const ACTIVE_RUN_SRC = readFileSync(join(__dirname, "ActiveRun.ts"), "utf8");
 
-test("Orchestrator: ActiveRun interface declared with required fields", () => {
-  // Structural: keeps refactor honest if a future edit drops a field
-  // we depend on (every per-run lifecycle hook reads from these).
-  assert.match(SRC, /interface ActiveRun \{/);
-  assert.match(SRC, /runner: SwarmRunner/);
-  assert.match(SRC, /manager: AgentManager/);
-  assert.match(SRC, /runId: string/);
-  assert.match(SRC, /runConfig: SwarmStatusRunConfig/);
-  assert.match(SRC, /startedAt: number/);
-  assert.match(SRC, /persister: RunStatePersister/);
+test("Orchestrator: ActiveRun class declared with required fields", () => {
+  // Structural: keeps refactor honest if a future edit drops a field.
+  // Note: now a class in ActiveRun.ts (was interface in Orchestrator).
+  assert.match(ACTIVE_RUN_SRC, /export class ActiveRun/);
+  assert.match(ACTIVE_RUN_SRC, /runner: SwarmRunner/);
+  assert.match(ACTIVE_RUN_SRC, /manager: AgentManager/);
+  assert.match(ACTIVE_RUN_SRC, /runId: string/);
+  assert.match(ACTIVE_RUN_SRC, /runConfig: SwarmStatusRunConfig/);
+  assert.match(ACTIVE_RUN_SRC, /startedAt: number/);
+  assert.match(ACTIVE_RUN_SRC, /persister: RunStatePersister/);
 });
 
 test("Orchestrator: runs map replaces the singleton runner field", () => {
@@ -53,7 +54,7 @@ test("Orchestrator: terminal-phase runs are reaped before cap check", () => {
   // user who runs 4 then never explicitly stops would be stuck).
   assert.match(
     SRC,
-    /for \(const \[id, run\] of \[\.\.\.this\.runs\.entries\(\)\]\) \{[\s\S]*?if \(!run\.runner\.isRunning\(\)\)/,
+    /for \(const \[id, run\] of \[\.\.\.this\.runs\.entries\(\)\]\) \{[\s\S]*?if \(!run\.isRunning\(\)\)/,
   );
 });
 
@@ -98,16 +99,17 @@ test("Orchestrator: wrappedEmit binds runId + persister at build time", () => {
 });
 
 test("Orchestrator: amendments close on stopRun; start finally only clears gate", () => {
-  assert.match(SRC, /async stopRun\([\s\S]*?this\.amendments\.close\(runId\)/);
+  // Amendments close is now inside ActiveRun.stop() called by stopRun.
+  assert.match(SRC, /async stopRun\([\s\S]*?await run\.stop\(\)/);
   assert.match(SRC, /return runId;\s*\} finally \{\s*this\.startInProgress = false;/);
 });
 
-test("Orchestrator: stopRun cleans up monitors + persister + map entry", () => {
-  // The cleanup mirrors stop() — important so per-run stops don't
-  // leak monitors that keep firing after the runner is gone.
+test("Orchestrator: stopRun cleans up via ActiveRun + deletes from map", () => {
+  // Cleanup is now delegated to ActiveRun.stop() (which stops monitors + persister).
+  // This keeps per-run isolation without leaks.
   assert.match(
     SRC,
-    /async stopRun\([\s\S]*?run\.conformanceMonitor\?\.stop\(\)[\s\S]*?run\.embeddingDriftMonitor\?\.stop\(\)[\s\S]*?run\.persister\.stop\(\)[\s\S]*?this\.runs\.delete\(runId\)/,
+    /async stopRun\([\s\S]*?await run\.stop\(\)[\s\S]*?this\.runs\.delete\(runId\)/,
   );
 });
 

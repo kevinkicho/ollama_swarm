@@ -32,6 +32,9 @@ export interface RecentRun {
   directive: string;
   /** Posix timestamp (ms) for sort + display ("2 min ago"). */
   startedAt: number;
+  /** Persisted caps/tiers so refill restores the exact advanced settings. */
+  wallClockCapMin?: string;
+  ambitionTiers?: string;
 }
 
 export function loadRecentRuns(): RecentRun[] {
@@ -54,6 +57,8 @@ export function saveRecentRun(input: {
   parentPath: string;
   presetId: string;
   directive: string;
+  wallClockCapMin?: string;
+  ambitionTiers?: string;
 }): RecentRun[] {
   try {
     const existing = loadRecentRuns();
@@ -70,6 +75,8 @@ export function saveRecentRun(input: {
       directiveSnippet: snippet,
       directive: directiveTrimmed,
       startedAt: Date.now(),
+      wallClockCapMin: input.wallClockCapMin,
+      ambitionTiers: input.ambitionTiers,
     };
     // Dedupe: drop any prior entry with the same (repoUrl + presetId).
     const deduped = existing.filter(

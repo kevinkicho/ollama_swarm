@@ -366,6 +366,8 @@ export interface PlannerSeed {
    *  examining commit landed). Optional — absent → planner behaves
    *  as before. */
   parallelHypothesis?: boolean;
+  // Ambitious idea: lightweight system map for broad understanding (like Context Oracle)
+  systemMap?: string;
 }
 
 // Unit 50: slim, capped distillation of the previous run's summary.json
@@ -486,6 +488,19 @@ export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionSt
     "=== end README ===",
     "",
     codeContextBlock,
+    seed.systemMap ? `=== SYSTEM MAP (lightweight broad view for systemic planning) ===\n${seed.systemMap}\n=== end SYSTEM MAP ===\n\n` : "",
+    // When webTools or mcpServers enabled, the research profile provides web_search + web_fetch + any MCP tools.
+    // Encourage their use for external data discovery (gov APIs etc).
+    "=== AVAILABLE TOOLS NOTE ===",
+    "You have access to web_search (DuckDuckGo results) and web_fetch (fetch page content from URL) in addition to local file tools.",
+    "If mcpServers configured (e.g. fetch=..., search=...), you can use namespaced MCP tools like 'fetch:fetch' or the tool names from the MCP server.",
+    "For directives involving 'governmental', 'data endpoints', 'internet search', 'APIs from web':",
+    "1. Use web_search with targeted queries (include site:.gov .eu data.gov etc for official sources).",
+    "2. Review results for relevant endpoints.",
+    "3. Use web_fetch on the most promising URLs to extract exact API details, base URLs, docs links.",
+    "4. Cite the sources in your output and TODO descriptions.",
+    "Always verify URLs look official before using in code.",
+    "=== end TOOLS NOTE ===\n\n",
     // T198h (2026-05-04): test-driven todo expansion. When opt-in,
     // the planner is asked to surface a verification step per todo
     // so the worker's commit gets a measurable signal beyond

@@ -23,6 +23,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { isProcessAlive as treeKillIsProcessAlive } from "../services/treeKill.js";
 
 export const LOCK_FILE_NAME = ".lock";
 
@@ -132,22 +133,13 @@ export function reclaimStaleLocks(parentPaths: string[], isPidAlive: (pid: numbe
   return reclaimed;
 }
 
-/** Default PID-liveness check using `process.kill(pid, 0)`. Returns
- *  true if signalling the process succeeds, false if it ESRCH's. */
+/** Default PID-liveness check. Delegates to the cross-platform
+ *  isProcessAlive (tasklist on Windows, process.kill(pid,0) on POSIX).
+ *  This fixes the previous POSIX-only assumption. */
 export function defaultIsPidAlive(pid: number): boolean {
   if (!Number.isFinite(pid) || pid <= 0) return false;
   if (pid === process.pid) return true;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ESRCH") return false;
-    // EPERM = process exists but we lack permission to signal it.
-    // Treat as alive — better safe than reclaiming a foreign PID.
-    if (code === "EPERM") return true;
-    return false;
-  }
+  return treeKillIsProcessAlive(pid);
 }
 
 /** Attempt to acquire the lock at <clonePath>.lock (sibling file).

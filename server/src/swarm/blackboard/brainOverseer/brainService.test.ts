@@ -56,25 +56,13 @@ describe("brainService", () => {
     const remaining = await service.getAllProposals(rejectDir);
     assert.equal(remaining.length, 0);
     const activities = service.getRecentActivities();
-    assert.ok(activities.some((a) => a.title.includes("Rejected")));
+    assert.ok(activities.some((a) => a.title.includes("Dismissed insight")));
   });
 
-  it("applyProposal refuses when runs are active", async () => {
-    const applyDir = path.join(tmpDir, "apply-case");
-    await fs.mkdir(applyDir, { recursive: true });
-    const service = makeService(1);
-    service.registerClonePath(applyDir);
-    const persisted = await appendProposal(applyDir, {
-      title: "Patch auth",
-      description: "Harden route",
-      affectedComponent: "routes",
-      priority: "medium",
-    });
-    const result = await service.applyProposal(persisted.id, [
-      { file: "README.md", search: "missing-anchor", replace: "patched" },
-    ]);
-    assert.equal(result.success, false);
-    assert.match(result.error ?? "", /runs are active/i);
+  // applyProposal was removed (Brain no longer does system self-patching).
+  // Test kept as skipped documentation of historical behavior.
+  it.skip("applyProposal refuses when runs are active (removed feature)", async () => {
+    // intentionally skipped
   });
 
   it("tracks activities and exposes them via getRecentActivities", async () => {

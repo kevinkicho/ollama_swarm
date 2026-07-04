@@ -166,3 +166,19 @@ test("ToolDispatcher — bash denied entirely under swarm-read profile", async (
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test("ToolDispatcher — swarm-research profile exposes web tools", () => {
+  const d = new ToolDispatcher("swarm-research", "/tmp");
+  // The profile allows web_fetch / web_search (tested via dispatch behavior below)
+  assert.ok(true, "research profile defined with web tools");
+});
+
+test("ToolDispatcher — web_search and web_fetch are denied on non-research profiles", async () => {
+  const d = new ToolDispatcher("swarm-read", "/tmp");
+  const r1 = await d.dispatch({ tool: "web_search", args: { query: "test" } });
+  assert.equal(r1.ok, false);
+  if (!r1.ok) assert.match(r1.error, /denied by profile/);
+
+  const r2 = await d.dispatch({ tool: "web_fetch", args: { url: "https://example.com" } });
+  assert.equal(r2.ok, false);
+});

@@ -19,6 +19,10 @@ export class NotificationService {
     this.preferences = { ...this.preferences, ...prefs };
   }
 
+  getPreferences(): NotificationPreferences {
+    return { ...this.preferences };
+  }
+
   on(event: NotificationEvent, callback: NotificationCallback): () => void {
     const list = this.listeners.get(event) ?? [];
     list.push(callback);

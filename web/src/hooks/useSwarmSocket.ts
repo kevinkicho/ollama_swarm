@@ -3,6 +3,10 @@ import { useSwarm, SwarmStoreContext } from "../state/store";
 import { applyEventToStore } from "../state/applyEvent";
 import type { SwarmEvent, SwarmStatusSnapshot } from "../types";
 
+// Legacy singleton WS hook for the primary SwarmStore. Per-run views
+// should prefer `useRunScopedWebSocket` to avoid mixing events when
+// multiple runs are active. This hook already scopes by store.runId.
+//
 // Singleton so React StrictMode's double-invoked effect doesn't
 // open/close a socket mid-handshake (the source of the noisy
 // "closed before the connection is established" warning).

@@ -433,6 +433,16 @@ export function writeNextActionsJson(input: NextActionsJsonInput): NextActionsJs
     mkdirSync(runDir, { recursive: true });
     writeFileSync(tmpPath, JSON.stringify(payload, null, 2), "utf8");
     renameSync(tmpPath, fullPath);
+
+    // Canonical project-level next-actions (suggestion)
+    try {
+      const pLogs = path.join(process.cwd(), "logs", input.runId);
+      const pDir = path.join(pLogs, "next-actions");
+      mkdirSync(pDir, { recursive: true });
+      const pPath = path.join(pDir, filename);
+      writeFileSync(pPath, JSON.stringify(payload, null, 2), "utf8");
+    } catch {}
+
     return { ok: true, filename, fullPath, count: actions.length };
   } catch (err) {
     return {

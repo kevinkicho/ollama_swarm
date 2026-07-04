@@ -72,7 +72,7 @@ export interface WorkerContext {
   getAuditor: () => Agent | undefined;
   appendSystem: (msg: string) => void;
   appendAgent: (agent: Agent, text: string) => void;
-  promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => Promise<string>;
+  promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => Promise<string>;
   emitAgentState: (s: AgentState) => void;
   readExpectedFiles: (files: string[]) => Promise<Record<string, string | null>>;
   sleep: (ms: number) => Promise<void>;

@@ -159,6 +159,8 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
         agentCount: ev.agentCount,
         rounds: ev.rounds,
         topology: ev.topology,
+        wallClockCapMin: ev.wallClockCapMin,
+        ambitionTiers: ev.ambitionTiers,
       });
       break;
     case "outcome_scored":

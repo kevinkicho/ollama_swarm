@@ -18,7 +18,7 @@
 
 The app is a **Brain-as-OS for concurrent swarm orchestration**:
 
-- **Brain-as-OS layer** (under blackboard): real-time monitoring across runs, proposal generation from patterns/exceptions, self-upgrader that applies patches to the system, run provisioner, health tracking. Brain can queue and drive system improvements.
+- **Brain-as-OS layer** (under blackboard): real-time monitoring, run analysis & final reports, cross-run knowledge (librarian), run provisioning, health tracking. Brain acts as master-admin for initializing, starting, finishing, reviewing records and analyzing runs. System self-patching / self-upgrader removed.
 - **Concurrent multi-swarm support**: multiple independent runs in parallel (`/runs/:runId` routing, ActiveRunsPanel, per-run WebSocket/REST, concurrency cap). Brain and UI manage them at system level.
 - **System UI**: `SystemWrapper` with persistent sidebar, BrainProposalsPanel, BrainActivityPanel, SystemStatus, PatchMonitor, RunQueue, topbar stats/health.
 - **Recent major UI work**: full viewport layout hardening, sticky elements, scrolling fixes.
@@ -30,7 +30,7 @@ The app is a **Brain-as-OS for concurrent swarm orchestration**:
 |---|---|---|---|
 | `blackboard` | production | ✅ (native) | planner + workers + auditor; tier ratchet; Aider-style hunks; pre-commit verify gate (`verifyCommand`). Most tested preset with deepest maturity. |
 | `round-robin` | production | ⚡ (opt-in) | Rotating Critic/Synthesizer/Gap-finder/Builder dispositions framed around directive. `cfg.writeMode: "single"` → synthesizer produces hunks; `"multi"` → vote reconciliation. |
-| `council` | production | ✅ (native) | **3-phase autonomous cycle:** Phase 1 (Analysis): N agents debate and synthesize consensus. Phase 2 (Execution): ALL agents become workers, produce hunks via pipeline. Phase 3 (Audit): ALL agents inspect changes. Cycles repeat in autonomous mode (`rounds: 0`). Retry-on-failure with error feedback. **AI-driven decision gates:** Gate 1 (verifyTodo) verifies file paths exist before execution. Gate 3 (resolveContradiction) reads actual git diffs to decide keep/merge/revert when agents conflict. Gate 4 (recoverDeletedFiles) decides which deleted files to restore. **Architecture:** CouncilRunner.ts (499 LOC) orchestrates; councilDecisions.ts (707 LOC) contains Gate 1-4 logic; councilExecution.ts handles parallel worker execution; councilAudit.ts handles audit phase; councilSynthesis.ts handles synthesis; councilDeliverable.ts handles deliverables; councilVoteReconcile.ts handles vote reconciliation. **Blackboard infrastructure:** Uses TodoQueue, ExitContract, hunk-based editing, replanner, path grounding, and tier ratchet. |
+| `council` | production | ✅ (native) | **3-phase autonomous cycle:** Phase 1 (Analysis): N agents debate and synthesize consensus. Phase 2 (Execution): ALL agents become workers, produce hunks via pipeline. Phase 3 (Audit): ALL agents inspect changes. Cycles repeat in autonomous mode (`rounds: 0`). Retry-on-failure with error feedback. **Architecture:** `CouncilRunner.ts` orchestrates; `councilDecisions.ts` handles todo extraction (`extractActionableTodos`, `extractTodosFromAudit`) with path grounding — legacy Gate 1/3/4 decision helpers were removed. `councilExecution.ts` handles parallel worker execution; `councilAudit.ts` handles audit phase; `councilSynthesis.ts` handles synthesis; `councilDeliverable.ts` handles deliverables; `councilVoteReconcile.ts` handles vote reconciliation. **Blackboard infrastructure:** Uses TodoQueue, ExitContract, hunk-based editing, replanner, path grounding, and tier ratchet. |
 | `orchestrator-worker` (flat) | production | ⚡ (opt-in) | Lead decomposes directive into subtasks for workers. Phase 1: lead synthesis; Phase 2: sequential reconciliation (CAS on file hashes). |
 | `role-diff` | beta | ⚡ (opt-in) | Specialist role assignment per agent with diff-based deliverable. Phase 1: specialist synthesis; Phase 2: vote reconciliation. |
 | `debate-judge` | beta | ⚡ (opt-in) | PRO/CON/JUDGE debate structure. Phase 1: judge verdict produces hunks; Phase 2: judge picks winner's hunks. |
@@ -65,6 +65,7 @@ Validation: tour v2 (2026-04-28) ran 9 sequentially with 8/9 self-terminating cl
 | V2 event log | `/api/v2/event-log/runs` + UI EventLogPanel; infra-only filter | `EventLogReaderV2` |
 | Run history (95+ runs) | History dropdown auto-scans `runs*/` at startup | `Orchestrator.scanForRunParents` |
 | Model autocomplete | `/api/models` proxies Ollama tags into datalist on every model field | `useAvailableModels` hook |
+| Agent tools | Local-only (read/grep/glob/list + restricted bash). No web/internet tools for agents. | `ToolDispatcher`, profiles in `promptWithRetry` / `roles.ts` |
 | Cap watchdog (5s tick) | Wall-clock + commits + todos caps fire promptly during any phase | `BlackboardRunner.startCapWatchdog` (#305) |
 | `runs/` retention | `node scripts/prune-runs.mjs --apply` keeps last N + last 7 days | `scripts/prune-runs.mjs` |
 | CI | GitHub Actions runs npm test + type-check on push/PR | `.github/workflows/ci.yml` |

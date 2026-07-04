@@ -2,7 +2,7 @@ import { useState } from "react";
 
 interface BrainActivity {
   timestamp: number;
-  type: "analysis" | "proposal" | "patch" | "health" | "error" | "provision";
+  type: "analysis" | "proposal" | "health" | "error" | "provision"; // "proposal" here means run insight / analysis record
   title: string;
   detail?: string;
   status?: "success" | "pending" | "failed";
@@ -13,7 +13,6 @@ interface BrainActivityPanelProps {
   brainHealth?: {
     status: string;
     lastAnalysis: number;
-    proposalCount: number;
     errorCount: number;
   };
 }
@@ -21,19 +20,26 @@ interface BrainActivityPanelProps {
 const typeConfig: Record<string, { color: string; icon: string; bg: string }> = {
   analysis: { color: "text-violet-400", icon: "🧠", bg: "bg-violet-900/30" },
   proposal: { color: "text-blue-400", icon: "📝", bg: "bg-blue-900/30" },
-  patch: { color: "text-amber-400", icon: "⚙", bg: "bg-amber-900/30" },
   health: { color: "text-emerald-400", icon: "💚", bg: "bg-emerald-900/30" },
   error: { color: "text-red-400", icon: "⚠", bg: "bg-red-900/30" },
   provision: { color: "text-cyan-400", icon: "🚀", bg: "bg-cyan-900/30" },
 };
 
 export function BrainActivityPanel({ activities = [], brainHealth }: BrainActivityPanelProps) {
-  const [expanded, setExpanded] = useState(false);
+  const [globalExpanded, setGlobalExpanded] = useState(false);
+  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
 
-  const recent = activities.slice(0, expanded ? activities.length : 5);
+  const visibleCount = globalExpanded ? activities.length : 5;
+  const recent = activities.slice(0, visibleCount);
 
-  // Group patch/upgrade activities for history view
-  const upgradeHistory = activities.filter(a => a.type === 'patch').slice(0, 5);
+  const toggleRow = (idx: number) => {
+    setExpandedRows(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
 
   return (
     <div className="rounded border border-violet-700/50 bg-violet-950/20 p-3 space-y-2">
@@ -45,30 +51,17 @@ export function BrainActivityPanel({ activities = [], brainHealth }: BrainActivi
         </div>
         {activities.length > 5 && (
           <button
-            onClick={() => setExpanded(!expanded)}
+            onClick={() => setGlobalExpanded(!globalExpanded)}
             className="text-[10px] text-ink-500 hover:text-ink-300"
           >
-            {expanded ? "show less" : `+${activities.length - 5} more`}
+            {globalExpanded ? "show less" : `+${activities.length - 5} more`}
           </button>
         )}
       </div>
 
-      {upgradeHistory.length > 0 && (
-        <div className="text-[9px] mt-1">
-          <div className="text-amber-400 font-medium mb-0.5">Recent Upgrades</div>
-          {upgradeHistory.map((u, i) => (
-            <div key={i} className="text-ink-400 truncate">• {u.title} {u.status === 'success' ? '✓' : ''}</div>
-          ))}
-        </div>
-      )}
-
       {/* Brain Health Summary */}
       {brainHealth && (
-        <div className="grid grid-cols-3 gap-1 text-[10px]">
-          <div className="text-center">
-            <div className="text-ink-400">Proposals</div>
-            <div className="text-violet-300 font-mono">{brainHealth.proposalCount}</div>
-          </div>
+        <div className="grid grid-cols-2 gap-1 text-[10px]">
           <div className="text-center">
             <div className="text-ink-400">Errors</div>
             <div className={`font-mono ${brainHealth.errorCount > 0 ? "text-red-400" : "text-emerald-400"}`}>
@@ -76,7 +69,7 @@ export function BrainActivityPanel({ activities = [], brainHealth }: BrainActivi
             </div>
           </div>
           <div className="text-center">
-            <div className="text-ink-400">Last</div>
+            <div className="text-ink-400">Last Analysis</div>
             <div className="text-ink-300 font-mono">
               {brainHealth.lastAnalysis ? formatTime(brainHealth.lastAnalysis) : "—"}
             </div>
@@ -88,10 +81,39 @@ export function BrainActivityPanel({ activities = [], brainHealth }: BrainActivi
       {activities.length === 0 ? (
         <div className="text-ink-500 text-[11px]">No brain activity recorded.</div>
       ) : (
-        <div className="space-y-1.5">
-          {recent.map((a, i) => (
-            <ActivityRow key={i} activity={a} />
-          ))}
+        <div className="space-y-1.5 max-h-[180px] overflow-y-auto pr-1">
+          {globalExpanded ? (
+            // Group by type when showing everything
+            Object.entries(
+              recent.reduce((acc, a, i) => {
+                (acc[a.type] ||= []).push({ a, i });
+                return acc;
+              }, {} as Record<string, Array<{a: BrainActivity, i: number}>>)
+            ).map(([type, items]) => (
+              <div key={type} className="space-y-0.5">
+                <div className="text-[9px] uppercase tracking-wider text-ink-500 pl-1">{type}</div>
+                {items.map(({a, i}) => (
+                  <ActivityRow
+                    key={i}
+                    activity={a}
+                    index={i}
+                    isExpanded={expandedRows.has(i)}
+                    onToggle={() => toggleRow(i)}
+                  />
+                ))}
+              </div>
+            ))
+          ) : (
+            recent.map((a, i) => (
+              <ActivityRow
+                key={i}
+                activity={a}
+                index={i}
+                isExpanded={expandedRows.has(i)}
+                onToggle={() => toggleRow(i)}
+              />
+            ))
+          )}
         </div>
       )}
     </div>
@@ -113,18 +135,48 @@ function HealthBadge({ status }: { status: string }) {
   );
 }
 
-function ActivityRow({ activity }: { activity: BrainActivity }) {
+function ActivityRow({
+  activity,
+  index,
+  isExpanded,
+  onToggle,
+}: {
+  activity: BrainActivity;
+  index: number;
+  isExpanded: boolean;
+  onToggle: () => void;
+}) {
   const config = typeConfig[activity.type] ?? typeConfig.analysis;
   const time = formatTime(activity.timestamp);
+  const hasDetail = !!activity.detail;
+  const detailLong = hasDetail && activity.detail!.length > 70;
+  const showDetailFull = isExpanded || !detailLong;
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (activity.detail) {
+      navigator.clipboard.writeText(activity.detail);
+    }
+  };
+
+  const handleRowClick = () => {
+    if (detailLong) onToggle();
+  };
 
   return (
-    <div className={`flex items-start gap-2 text-xs p-1.5 rounded ${config.bg}`}>
+    <div
+      className={`flex items-start gap-2 text-xs p-1.5 rounded ${config.bg} ${detailLong ? 'cursor-pointer hover:brightness-110' : ''}`}
+      onClick={handleRowClick}
+      title={activity.title}
+    >
       <span className="text-sm mt-0.5">{config.icon}</span>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className={`${config.color} font-medium`}>{activity.title}</span>
+          <span className={`${config.color} font-medium truncate`}>
+            {activity.title.length > 55 ? activity.title.slice(0, 52) + '…' : activity.title}
+          </span>
           {activity.status && (
-            <span className={`text-[10px] ${
+            <span className={`text-[10px] shrink-0 ${
               activity.status === "success" ? "text-emerald-400" :
               activity.status === "failed" ? "text-red-400" :
               "text-ink-500"
@@ -132,12 +184,34 @@ function ActivityRow({ activity }: { activity: BrainActivity }) {
               {activity.status === "success" ? "✓" : activity.status === "failed" ? "✗" : "○"}
             </span>
           )}
+          {detailLong && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onToggle(); }}
+              className="text-[9px] px-1 py-0 text-ink-500 hover:text-ink-300"
+              title={showDetailFull ? "Collapse" : "Expand full message"}
+            >
+              {showDetailFull ? "▴" : "▾"}
+            </button>
+          )}
         </div>
-        {activity.detail && (
-          <div className="text-[10px] text-ink-500 truncate">{activity.detail}</div>
+        {hasDetail && (
+          <div
+            className={`text-[10px] text-ink-500 mt-0.5 ${showDetailFull ? 'whitespace-pre-wrap break-words' : 'line-clamp-2'}`}
+          >
+            {showDetailFull ? activity.detail : activity.detail!.slice(0, 80) + '…'}
+            {showDetailFull && detailLong && (
+              <button
+                onClick={handleCopy}
+                className="ml-2 text-[9px] text-emerald-400 hover:text-emerald-300 underline"
+                title="Copy full detail to clipboard"
+              >
+                copy
+              </button>
+            )}
+          </div>
         )}
       </div>
-      <span className="text-[10px] text-ink-600 shrink-0">{time}</span>
+      <span className="text-[10px] text-ink-600 shrink-0 mt-0.5">{time}</span>
     </div>
   );
 }

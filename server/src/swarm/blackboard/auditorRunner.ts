@@ -38,20 +38,34 @@ export interface AuditorContext {
   boardListTodos: () => Todo[];
   getFindingsList: () => readonly { id: string; agentId: string; text: string; createdAt: number }[];
   readExpectedFiles: (paths: string[]) => Promise<Record<string, string | null>>;
-  getActive: () => { uiUrl?: string; model?: string; localPath?: string; rounds?: number; debateAudit?: boolean; debateAuditRounds?: number; userDirective?: string; plannerFallbackModel?: string } | undefined;
+  getActive: () => { 
+    uiUrl?: string; 
+    model?: string; 
+    localPath?: string; 
+    rounds?: number; 
+    debateAudit?: boolean; 
+    debateAuditRounds?: number; 
+    userDirective?: string; 
+    plannerFallbackModel?: string;
+    verifyCommand?: string;
+    requireAuditorVerification?: boolean;
+    auditorOnlyMutations?: boolean;
+  } | undefined;
   cloneContract: (c: ExitContract) => ExitContract;
   emitContractUpdated: (contract: ExitContract) => void;
   appendSystem: (msg: string) => void;
   appendAgent: (agent: Agent, text: string) => void;
   emit: (e: SwarmEvent) => void;
   updateAgentModel: (agentId: string, model: string) => void;
-  promptPlannerSafely: (agent: Agent, promptText: string, agentName?: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => Promise<{ response: string; agentUsed: Agent }>;
+  promptPlannerSafely: (agent: Agent, promptText: string, agentName?: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", ollamaFormat?: "json" | Record<string, unknown>) => Promise<{ response: string; agentUsed: Agent }>;
   wrappers: TodoQueueWrappers;
   allCriteriaResolvedSnapshot: () => boolean;
   v2ObserverApply: (event: any) => void;
   getWorkTranscript: () => readonly import("../../types.js").TranscriptEntry[];
-  /** Apply hunks and commit to git. Used by auditor-gated commits. */
-  applyHunksAndCommit?: (hunks: readonly unknown[], files: readonly string[], message: string) => Promise<{ ok: boolean; reason?: string }>;
+  /** Apply hunks and commit to git. Used by auditor-gated commits.
+   *  options.skipCommit: for batching, apply changes but let caller do one git commit.
+   */
+  applyHunksAndCommit?: (hunks: readonly unknown[], files: readonly string[], message: string, options?: { skipCommit?: boolean }) => Promise<{ ok: boolean; reason?: string; verifyFailed?: boolean; filesWritten?: string[] }>;
   /** Brain fallback: prompt an LLM to extract structured JSON from a
    *  failed parse. The promptFn signature matches promptWithFailover. */
   brainPromptFn?: (
@@ -96,7 +110,7 @@ const SKIP_VERIFICATION_SCHEMA = {
 
 export async function verifyWorkerSkip(
   input: SkipVerificationInput,
-  promptAgent: (agent: import("../../services/AgentManager.js").Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder", formatExpect: "json" | "free") => Promise<string>,
+  promptAgent: (agent: import("../../services/AgentManager.js").Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", formatExpect: "json" | "free") => Promise<string>,
   auditor: import("../../services/AgentManager.js").Agent,
 ): Promise<SkipVerificationOutput> {
   const filesSection = input.expectedFiles.length > 0
@@ -350,40 +364,201 @@ export async function reviewPendingCommits(
 
   ctx.appendSystem(`[auditor-gate] Reviewing ${pendingTodos.length} pending commit(s)...`);
 
+  const approved: Array<{ todo: Todo; hunks: any[]; files: string[]; message: string }> = [];
+
   for (const todo of pendingTodos) {
     if (ctx.getStopping()) return;
 
     const hunks = (todo as any).proposedHunks ?? [];
     const files = (todo as any).proposedFiles ?? todo.expectedFiles;
 
-    // Simple heuristic: if the worker proposed hunks and the files exist,
-    // approve the commit. The auditor's main job is contract evaluation —
-    // this is a lightweight gate for quality control.
-    if (hunks.length > 0 && files.length > 0) {
-      // Try to apply and commit the hunks
-      if (ctx.applyHunksAndCommit) {
-        const result = await ctx.applyHunksAndCommit(
-          hunks,
-          files,
-          `[auditor-approved] ${todo.description.slice(0, 80)}`,
-        );
-        if (result.ok) {
-          ctx.wrappers.approveCommitQ(todo.id);
-          ctx.appendSystem(`[auditor-gate] ✓ Approved and committed ${todo.id.slice(0, 8)}: ${hunks.length} hunk(s)`);
-        } else {
-          ctx.wrappers.rejectCommitQ(todo.id, result.reason ?? "Apply failed");
-          ctx.appendSystem(`[auditor-gate] ✗ Rejected ${todo.id.slice(0, 8)}: ${result.reason}`);
-        }
-      } else {
-        // Fallback: just approve without committing (shouldn't happen in normal flow)
-        ctx.wrappers.approveCommitQ(todo.id);
-        ctx.appendSystem(`[auditor-gate] ✓ Approved commit for ${todo.id.slice(0, 8)}: ${hunks.length} hunk(s) (no applyHunksAndCommit available)`);
+    // explicit hunk review step
+    let approval = { approve: true, reason: "" };
+    if (hunks.length > 0 && files.length > 0 && auditorAgent) {
+      try {
+        approval = await reviewProposedHunks(ctx, auditorAgent, todo, hunks as any, files);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        ctx.appendSystem(`[auditor-gate] hunk review prompt failed: ${msg}`);
+        approval = { approve: false, reason: msg };
       }
+    }
+
+    if (!approval.approve) {
+      ctx.wrappers.rejectCommitQ(todo.id, approval.reason || "Auditor rejected the proposed hunks");
+      ctx.appendSystem(`[auditor-gate] ✗ Rejected commit for ${todo.id.slice(0, 8)}: ${approval.reason}`);
+      continue;
+    }
+
+    if (hunks.length > 0 && files.length > 0) {
+      approved.push({
+        todo,
+        hunks: hunks as any[],
+        files: files as string[],
+        message: `[auditor-approved] ${todo.description.slice(0, 80)}`,
+      });
     } else {
-      // Reject: no hunks or no files
       ctx.wrappers.rejectCommitQ(todo.id, "No valid hunks or files proposed");
       ctx.appendSystem(`[auditor-gate] ✗ Rejected commit for ${todo.id.slice(0, 8)}: no valid hunks`);
     }
+  }
+
+  // FULL IN-MEMORY BATCHING: collect all hunks, apply in memory using pure applyHunks,
+  // write the final state once, run verify once, then ONE git commit.
+  if (approved.length > 0) {
+    ctx.appendSystem(`[auditor-gate] Collecting ${approved.length} approved changes for single in-memory apply + commit...`);
+
+    const { applyHunks } = await import("./applyHunks.js");
+    const { realFilesystemAdapter, realGitAdapter } = await import("./v2Adapters.js");
+    const clonePath = ctx.getActive()?.localPath ?? "";
+    const fs = realFilesystemAdapter(clonePath);
+    const git = realGitAdapter(clonePath);
+
+    // Collect unique files and all hunks
+    const allFiles = new Set<string>();
+    const allHunks: any[] = [];
+    const todoMessages: string[] = [];
+    const todoIds: string[] = [];
+
+    for (const item of approved) {
+      item.files.forEach(f => allFiles.add(f));
+      allHunks.push(...item.hunks);
+      todoMessages.push(item.message);
+      todoIds.push(item.todo.id);
+    }
+
+    // Read current contents for all files (in mem)
+    const currentTexts: Record<string, string | null> = {};
+    for (const file of allFiles) {
+      try {
+        currentTexts[file] = await fs.read(file);
+      } catch {
+        currentTexts[file] = null;
+      }
+    }
+
+    // Pure in-memory apply
+    const applied = applyHunks(currentTexts, allHunks as any);
+    if (!applied.ok) {
+      // Reject all on failure
+      for (const id of todoIds) {
+        ctx.wrappers.rejectCommitQ(id, `batch apply failed: ${applied.error}`);
+      }
+      ctx.appendSystem(`[auditor-gate] ✗ Batch apply failed: ${applied.error}`);
+      return;
+    }
+
+    // Write the final texts (one pass)
+    const filesWritten: string[] = [];
+    for (const [file, newText] of Object.entries(applied.newTextsByFile)) {
+      try {
+        await fs.write(file, newText);
+        filesWritten.push(file);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        for (const id of todoIds) ctx.wrappers.rejectCommitQ(id, `write failed: ${msg}`);
+        ctx.appendSystem(`[auditor-gate] ✗ Batch write failed: ${msg}`);
+        return;
+      }
+    }
+
+    // Run verify once for the whole batch if configured
+    const verifyCommand = ctx.getActive()?.verifyCommand?.trim();
+    const forceVerify = ctx.getActive()?.requireAuditorVerification || ctx.getActive()?.auditorOnlyMutations;
+    let verifyOk = true;
+    let verifyReason = "";
+
+    if ((verifyCommand && verifyCommand.length > 0) || forceVerify) {
+      const verify = (verifyCommand && verifyCommand.length > 0)
+        ? (await import("./v2Adapters.js")).realVerifyAdapter(clonePath, verifyCommand)
+        : { async run() { return { ok: true }; } };
+
+      const v = await verify.run();
+      if (!v.ok) {
+        verifyOk = false;
+        verifyReason = (v as any).reason || "verify failed";
+      }
+    }
+
+    if (verifyOk) {
+      // ONE git commit for the entire batch
+      const batchMessage = `auditor batch approval (one commit):\n${todoMessages.map(m => `- ${m}`).join('\n')}`;
+      const commitRes = await git.commitAll(batchMessage, "auditor");
+      if (commitRes.ok) {
+        for (const id of todoIds) {
+          ctx.wrappers.approveCommitQ(id);
+        }
+        ctx.appendSystem(`[auditor-gate] ✓ Single git commit ${(commitRes as any).sha || 'ok'} for batch of ${approved.length} todos (files: ${filesWritten.length})`);
+      } else {
+        for (const id of todoIds) {
+          ctx.wrappers.rejectCommitQ(id, `batch commit failed: ${(commitRes as any).reason || 'unknown'}`);
+        }
+        ctx.appendSystem(`[auditor-gate] ✗ Batch commit failed: ${(commitRes as any).reason || 'unknown'}`);
+      }
+    } else {
+      // Revert on verify fail (best effort)
+      for (const [file, oldText] of Object.entries(currentTexts)) {
+        if (oldText !== null) {
+          try { await fs.write(file, oldText); } catch {}
+        }
+      }
+      for (const id of todoIds) {
+        ctx.wrappers.rejectCommitQ(id, `verify failed: ${verifyReason}`);
+      }
+      ctx.appendSystem(`[auditor-gate] ✗ Batch verify failed: ${verifyReason}`);
+    }
+  }
+}
+
+/**
+ * NEW (priority 2): Explicit hunk review step.
+ * Prompts the auditor to review the *specific* proposed hunks against the todo
+ * and relevant criterion before any mutation is applied.
+ * Returns { approve: boolean, reason: string }
+ */
+export async function reviewProposedHunks(
+  ctx: AuditorContext,
+  auditorAgent: Agent,
+  todo: Todo,
+  hunks: readonly any[],
+  files: readonly string[],
+): Promise<{ approve: boolean; reason: string }> {
+  const criterion = (ctx.getContract()?.criteria || []).find(c => 
+    files.some(f => (c as any).expectedFiles?.includes?.(f) || (c as any).description?.includes(todo.description))
+  );
+
+  const reviewPrompt = [
+    `You are the auditor reviewing a worker's proposed code change.`,
+    `Todo ID: ${todo.id}`,
+    `Description: ${todo.description}`,
+    `Target files: ${files.join(", ")}`,
+    ``,
+    `Proposed hunks:`,
+    JSON.stringify(hunks, null, 2),
+    ``,
+    criterion ? `Related criterion: ${criterion.description}` : "",
+    ``,
+    `Decide whether to allow these exact changes to be committed.`,
+    `Respond with EXACT JSON only:`,
+    `{ "approve": true | false, "reason": "<concise 1-2 sentence justification>" }`,
+  ].join("\n");
+
+  try {
+    const { response } = await ctx.promptPlannerSafely(
+      auditorAgent,
+      reviewPrompt,
+      "swarm-read",
+      { type: "object", properties: { approve: { type: "boolean" }, reason: { type: "string" } }, required: ["approve", "reason"] }
+    );
+    const parsed = JSON.parse(response);
+    return {
+      approve: !!parsed.approve,
+      reason: parsed.reason || (parsed.approve ? "Approved by auditor review" : "Rejected by auditor review"),
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    ctx.appendSystem(`[hunk-review] failed: ${msg}`);
+    return { approve: false, reason: "Auditor review failed to parse — rejecting for safety" };
   }
 }
 

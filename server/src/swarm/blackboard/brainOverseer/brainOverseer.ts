@@ -5,7 +5,6 @@
 // patterns, then generates improvement proposals for the swarm system.
 
 import { readPatternCache, writePatternCache, updateCache, type PatternCacheData } from "./patternCache.js";
-import { readPatchCache, writePatchCache, computeContentHash, type PatchCacheData } from "./patchCache.js";
 import { readProposals, appendProposal, type PersistedProposal } from "./proposalStore.js";
 import { readAllRunSummaries, analyzeSummaries, type RunSummary } from "./dataPipeline.js";
 import type { InteractionTracker, InteractionChain } from "./interactionTracker.js";
@@ -13,27 +12,27 @@ import type { ExceptionCollector, PatternSummary } from "./exceptionCollector.js
 import { buildAnalysisPrompt } from "./prompt.js";
 import path from "node:path";
 
+// NOTE: Brain no longer generates system patches or scans its own source.
+// It acts as librarian/master-admin focused on run records and analysis.
+
 export interface BrainAnalysisResult {
   chains: InteractionChain[];
   exceptions: PatternSummary;
-  proposals: ImprovementProposal[];
+  insights: RunInsight[];           // Renamed from "proposals" — final run analysis insights
   runSummaries: RunSummary[];
   summaryAnalysis: ReturnType<typeof analyzeSummaries>;
 }
 
-export interface ImprovementProposal {
+export interface RunInsight {
   title: string;
   description: string;
-  affectedComponent: string;
+  category?: "summary" | "lesson" | "recommendation" | "followup";
   priority: "high" | "medium" | "low";
-  id?: string; // present on persisted proposals
-  // Real patch content for apply UX. Populated by LLM or rule-based generators.
-  suggestedHunks?: Array<{
-    file: string;
-    search: string;
-    replace: string;
-  }>;
+  id?: string;
+  // No more suggestedHunks for patching the swarm platform.
 }
+
+export interface ImprovementProposal extends RunInsight {} // legacy alias for minimal breakage in some places
 
 /**
  * Run the brain overseer analysis for a completed run.
@@ -65,24 +64,24 @@ export async function runBrainAnalysis(
   await writePatternCache(clonePath, updatedCache);
 
   // Try LLM analysis first, fall back to rule-based
-  let proposals: ImprovementProposal[];
+  let insights: RunInsight[];
   if (promptFn && model) {
     try {
-      proposals = await analyzeWithLLM(chains, exceptions, priorImprovements, promptFn, model);
+      insights = await analyzeWithLLM(chains, exceptions, priorImprovements, promptFn, model);
     } catch (err) {
       console.warn(`[brain-overseer] LLM analysis failed, falling back to rules: ${err instanceof Error ? err.message : err}`);
-      proposals = generateProposals(exceptions, updatedCache);
+      insights = generateInsights(exceptions, updatedCache);
     }
   } else {
-    proposals = generateProposals(exceptions, updatedCache);
+    insights = generateInsights(exceptions, updatedCache);
   }
 
-  // Persist proposals for cross-run memory
-  for (const proposal of proposals) {
-    await appendProposal(clonePath, proposal);
+  // Persist insights (as before, using the proposals store for run knowledge)
+  for (const insight of insights) {
+    await appendProposal(clonePath, insight);
   }
 
-  // Read historical run summaries for context
+  // Read historical run summaries for context (librarian role)
   const logsDir = path.join(clonePath, "logs");
   const runSummaries = await readAllRunSummaries(logsDir);
   const summaryAnalysis = analyzeSummaries(runSummaries);
@@ -90,7 +89,7 @@ export async function runBrainAnalysis(
   return {
     chains,
     exceptions,
-    proposals,
+    insights,
     runSummaries,
     summaryAnalysis,
   };
@@ -105,13 +104,11 @@ async function analyzeWithLLM(
   priorImprovements: string[],
   promptFn: (prompt: string, model: string, maxTokens: number, timeoutMs: number) => Promise<string>,
   model: string,
-): Promise<ImprovementProposal[]> {
+): Promise<RunInsight[]> {
   const prompt = buildAnalysisPrompt(chains, exceptions, priorImprovements);
   const response = await promptFn(prompt, model, 4096, 60_000);
 
-  // Parse JSON array from response
   try {
-    // Try to extract JSON array from the response
     const jsonMatch = response.match(/\[[\s\S]*\]/);
     if (!jsonMatch) {
       throw new Error("No JSON array found in response");
@@ -121,7 +118,6 @@ async function analyzeWithLLM(
       throw new Error("Response is not an array");
     }
 
-    // Validate and normalize each proposal
     return parsed
       .filter((p: unknown) => {
         const obj = p as Record<string, unknown>;
@@ -129,17 +125,16 @@ async function analyzeWithLLM(
       })
       .map((p: unknown) => {
         const obj = p as Record<string, unknown>;
-        const hunks = Array.isArray(obj.suggestedHunks) 
-          ? obj.suggestedHunks.filter((h: any) => h && typeof h.file === "string" && typeof h.search === "string" && typeof h.replace === "string")
+        const category = ["summary", "lesson", "recommendation", "followup"].includes(String(obj.category))
+          ? (String(obj.category) as any)
           : undefined;
         return {
           title: String(obj.title),
           description: String(obj.description),
-          affectedComponent: String(obj.affectedComponent || "unknown"),
+          category,
           priority: ["high", "medium", "low"].includes(String(obj.priority))
             ? (String(obj.priority) as "high" | "medium" | "low")
             : "medium",
-          ...(hunks && hunks.length ? { suggestedHunks: hunks } : {}),
         };
       });
   } catch (err) {
@@ -148,89 +143,71 @@ async function analyzeWithLLM(
 }
 
 /**
- * Generate improvement proposals from exception patterns.
- * Uses cached patterns to avoid re-analyzing known issues.
+ * Generate run insights from patterns (rule-based fallback).
+ * Focus: lessons and recommendations about the *task run*, never platform code edits.
  */
-function generateProposals(
+function generateInsights(
   exceptions: PatternSummary,
   cache: PatternCacheData,
-): ImprovementProposal[] {
-  const proposals: ImprovementProposal[] = [];
+): RunInsight[] {
+  const insights: RunInsight[] = [];
 
   for (const pattern of exceptions.recurringPatterns) {
     const cached = cache.patterns[pattern.pattern];
-
-    // Skip if already analyzed with high confidence
     if (cached && cached.confidence >= 0.8 && cached.proposal) {
-      proposals.push(cached.proposal);
+      insights.push({
+        title: cached.proposal.title,
+        description: cached.proposal.description,
+        category: "lesson",
+        priority: cached.proposal.priority || "medium",
+      });
       continue;
     }
 
-    // Generate proposal based on pattern type
-    const proposal = generateProposalFromPattern(pattern);
-    if (proposal) {
-      proposals.push(proposal);
-      // Update cache with the new proposal
-      if (cached) {
-        cached.proposal = proposal;
-        cached.confidence = 0.7; // Initial confidence
-        cached.rootCause = proposal.description;
-      }
-    }
+    const insight = generateInsightFromPattern(pattern);
+    if (insight) insights.push(insight);
   }
 
-  return proposals;
+  if (exceptions.totalExceptions > 0 && insights.length === 0) {
+    insights.push({
+      title: "Run had recurring execution issues",
+      description: `${exceptions.totalExceptions} exceptions. Patterns may indicate task complexity or directive clarity issues.`,
+      category: "lesson",
+      priority: "medium",
+    });
+  }
+
+  return insights;
 }
 
-/**
- * Generate a single proposal from a pattern.
- */
-function generateProposalFromPattern(pattern: { pattern: string; count: number; suggestedFix: string }): ImprovementProposal | null {
+function generateInsightFromPattern(pattern: { pattern: string; count: number; suggestedFix: string }): RunInsight | null {
   const [type, reasonKey] = pattern.pattern.split("|");
 
   if (type === "worker_declined") {
-    if (reasonKey.includes("not visible") || reasonKey.includes("omitted middle")) {
-      return {
-        title: "Auto-anchor for worker file visibility",
-        description: "Workers decline when target sections are in the omitted middle of large files. Add auto-anchor detection from todo description to show relevant regions.",
-        affectedComponent: "workerRunner.ts + autoAnchor.ts",
-        priority: "high",
-        suggestedHunks: [{
-          file: "server/src/swarm/blackboard/workerRunner.ts",
-          search: "// TODO: read relevant context",
-          replace: "// TODO: use auto-anchor to read relevant sections of large files\n// context = autoAnchor(todo, fileContent)",
-        }],
-      };
-    }
-    if (reasonKey.includes("already exists")) {
-      return {
-        title: "Pre-check existing files before posting TODOs",
-        description: "Workers decline because the file already exists. The planner should check for existing files before posting TODOs.",
-        affectedComponent: "planner.ts",
-        priority: "medium",
-      };
-    }
+    return {
+      title: `Frequent worker declines (${pattern.count}x)`,
+      description: pattern.suggestedFix || `Common pattern "${reasonKey}". Consider more explicit file anchors or smaller todos for this type of task.`,
+      category: "lesson",
+      priority: pattern.count > 4 ? "high" : "medium",
+    };
   }
 
   if (type === "replanner_skip") {
-    if (reasonKey.includes("reorganized") || reasonKey.includes("moved")) {
-      return {
-        title: "Auto-anchor for replanner on file reorganization",
-        description: "Replanner skips when sections are renamed/moved. Add auto-anchor detection and strengthen skip prompt to prefer revising over skipping.",
-        affectedComponent: "replanManager.ts + replanner.ts",
-        priority: "high",
-      };
-    }
-  }
-
-  if (type === "empty_response") {
     return {
-      title: "Improve empty response handling",
-      description: "Model produces empty output during thinking. Consider increasing timeout or adding retry with different prompt.",
-      affectedComponent: "promptRunner.ts",
+      title: `Replanner frequently skipped (${pattern.count}x)`,
+      description: pattern.suggestedFix || "Consider lower ambition or more granular planning for complex repos.",
+      category: "recommendation",
       priority: "medium",
     };
   }
 
+  if (pattern.suggestedFix) {
+    return {
+      title: `Observed pattern: ${type}`,
+      description: pattern.suggestedFix,
+      category: "lesson",
+      priority: "low",
+    };
+  }
   return null;
 }

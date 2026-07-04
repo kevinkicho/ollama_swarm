@@ -13,6 +13,8 @@ import { spawn } from "node:child_process";
 import simpleGit from "simple-git";
 import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
+import { checkBuildCommand } from "./buildCommandAllowlist.js";
+import { killByPid } from "../../services/treeKill.js";
 import type { FilesystemAdapter, GitAdapter, VerifyAdapter } from "./WorkerPipeline.js";
 
 /** Real filesystem adapter scoped to a clone. Reads return null on
@@ -61,12 +63,21 @@ export function realVerifyAdapter(
   clonePath: string,
   command: string,
 ): VerifyAdapter {
+  const allow = checkBuildCommand(command);
+  if (!allow.ok) {
+    return {
+      async run() {
+        return { ok: false, reason: allow.reason ?? "verify command not allowed" };
+      },
+    };
+  }
+
   return {
     async run() {
       try {
-        // Use spawn with options.detached so we can kill the entire process
-        // group on timeout — execFile's timeout only kills the shell process,
-        // leaving its grandchildren (build/test subprocesses) orphaned.
+        // Use spawn with options.detached + cross-platform tree kill (via killByPid)
+        // so the entire process group is terminated on timeout.
+        // This works on Windows (taskkill /T) and POSIX.
         const cp = spawn(command, [], {
           shell: true,
           cwd: clonePath,
@@ -80,12 +91,13 @@ export function realVerifyAdapter(
         cp.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
 
         const timeout = setTimeout(() => {
-          // Kill the entire process group — not just the shell.
-          // On POSIX: cp.pid is the shell, but -cp.pid signals the group.
-          if (cp.pid!) {
-            try { process.kill(-cp.pid!, "SIGTERM"); } catch {}
+          // Cross-platform process tree kill.
+          // Uses taskkill /T /F on Windows, SIGTERM+SIGKILL on POSIX.
+          // This replaces the previous POSIX-only `process.kill(-pid)`.
+          if (cp.pid) {
+            try { killByPid(cp.pid); } catch {}
             setTimeout(() => {
-              try { process.kill(-cp.pid!, "SIGKILL"); } catch {}
+              if (cp.pid) try { killByPid(cp.pid); } catch {}
             }, 2000);
           }
         }, VERIFY_TIMEOUT_MS);

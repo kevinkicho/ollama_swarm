@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { rootLogger } from "../services/logger.js";
 
 // Cross-session append-only log of every SwarmEvent we broadcast.
 //
@@ -56,7 +57,7 @@ export function createEventLogger(opts: EventLoggerOpts): EventLogger {
   const stream = fs.createWriteStream(logPath, { flags: "a", encoding: "utf8" });
   stream.on("error", (err) => {
     // Swallow — logging is best-effort, never the primary failure surface.
-    console.error(`[eventLogger] stream error: ${err.message}`);
+    rootLogger.error("eventLogger stream error", { error: err.message });
   });
 
   // Stamp a session-started marker so consumers can tell where one

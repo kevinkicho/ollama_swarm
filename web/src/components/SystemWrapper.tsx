@@ -1,9 +1,8 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { SystemStatusPanel } from "./SystemStatusPanel";
 import { RunQueuePanel } from "./RunQueuePanel";
 import { MetricsOverviewPanel } from "./MetricsOverviewPanel";
-import { PatchMonitorPanel } from "./PatchMonitorPanel";
-import { BrainProposalsPanel } from "./BrainProposalsPanel";
 import { BrainActivityPanel } from "./BrainActivityPanel";
 import { QuickNavPanel } from "./QuickNavPanel";
 import { useSwarm } from "../state/store";
@@ -14,20 +13,21 @@ import { NotificationPreferences } from "./NotificationPreferences";
 import { UsageWidget } from "./UsageWidget";
 import { PhasePill, RuntimeTicker } from "./RunHeaderWidgets";
 import type { RunSummaryDigest } from "../types";
+import { useRunsList } from "../hooks/useRunsList";
 
 interface BrainHealth {
   status: string;
   lastAnalysis: number;
-  proposalCount: number;
   errorCount: number;
 }
 
 interface BrainActivity {
   timestamp: number;
-  type: "analysis" | "proposal" | "patch" | "health" | "error" | "provision";
+  type: "analysis" | "proposal" | "health" | "error" | "provision";
   title: string;
   detail?: string;
   status?: "success" | "pending" | "failed";
+  // Note: "patch" type was removed when self-upgrader was retired.
 }
 
 export function SystemWrapper({
@@ -38,30 +38,12 @@ export function SystemWrapper({
   parentPath?: string;
 }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const brainProposals = useSwarm((s) => s.brainProposals);
   const activeRunId = useSwarm((s) => s.runId);
   const phase = useSwarm((s) => s.phase);
-  const [runs, setRuns] = useState<RunSummaryDigest[]>([]);
+  const { runs } = useRunsList(parentPath);
   const [systemHealthy, setSystemHealthy] = useState(true);
   const [brainHealth, setBrainHealth] = useState<BrainHealth | undefined>();
   const [brainActivities, setBrainActivities] = useState<BrainActivity[]>([]);
-
-  useEffect(() => {
-    const fetchRuns = async () => {
-      try {
-        const params = new URLSearchParams();
-        if (parentPath) params.set("parentPath", parentPath);
-        const qs = params.toString();
-        const res = await fetch(`/api/swarm/runs${qs ? `?${qs}` : ""}`);
-        const data = await res.json();
-        const list = Array.isArray(data.runs) ? (data.runs as RunSummaryDigest[]) : [];
-        setRuns(list);
-      } catch { /* ignore */ }
-    };
-    fetchRuns();
-    const interval = setInterval(fetchRuns, 30_000);
-    return () => clearInterval(interval);
-  }, [parentPath]);
 
   useEffect(() => {
     const fetchHealth = async () => {
@@ -105,11 +87,39 @@ export function SystemWrapper({
     return () => clearInterval(interval);
   }, []);
 
+  const navigate = useNavigate();
+
   const activeRuns = runs.filter((r) => r.isActive).length;
   const totalRuns = runs.length;
   const completedRuns = runs.filter((r) => !r.isActive && r.stopReason === "completed").length;
   const terminalRuns = runs.filter((r) => !r.isActive).length;
   const successRate = terminalRuns > 0 ? Math.round((completedRuns / terminalRuns) * 100) : 0;
+
+  const handleViewRun = (run: RunSummaryDigest) => {
+    const rid = run.runId || "";
+    if (!rid) return;
+    if (run.isActive || !run.endedAt) {
+      navigate(`/runs/${encodeURIComponent(rid)}`);
+    } else if (run.clonePath) {
+      // Historical run → review mode (matches RunHistory + parseReviewParams)
+      window.location.href = `/?review=${encodeURIComponent(rid)}&path=${encodeURIComponent(run.clonePath)}`;
+    } else {
+      navigate(`/runs/${encodeURIComponent(rid)}`);
+    }
+  };
+
+  const handleStopRun = async (runId: string) => {
+    if (!runId) return;
+    try {
+      const res = await fetch(`/api/swarm/runs/${encodeURIComponent(runId)}/stop`, { method: "POST" });
+      if (!res.ok) {
+        // force terminal in any per-run context
+        // (this is global-ish wrapper, but helps)
+      }
+    } catch {
+      // ignore; next poll will reflect
+    }
+  };
 
   return (
     <div className="h-full flex flex-col">
@@ -152,8 +162,8 @@ export function SystemWrapper({
 
           <TopbarStat
             icon="🧠"
-            value={brainProposals.length > 0 ? `${brainProposals.length} prop` : (brainHealth?.status ?? "idle")}
-            color={brainProposals.length > 0 ? "text-violet-400" : "text-ink-500"}
+            value={brainHealth?.status ?? "idle"}
+            color="text-violet-400"
           />
 
           <span className="text-ink-700">|</span>
@@ -180,38 +190,8 @@ export function SystemWrapper({
           {!sidebarCollapsed && (
             <div className="p-2 space-y-3">
               <SystemStatusPanel />
-              <RunQueuePanel />
-              <MetricsOverviewPanel />
-              <PatchMonitorPanel />
-              {brainProposals.length > 0 && (
-                <BrainProposalsPanel
-                  proposals={brainProposals}
-                  onApply={async (p) => {
-                    if (!p.id) return alert("No proposal id");
-                    const hunks = p.suggestedHunks || [];
-                    try {
-                      await fetch("/api/brain/apply", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ 
-                          proposalId: p.id, 
-                          patchContent: hunks.map(h => ({ file: h.file, search: h.search, replace: h.replace })),
-                          clonePath: undefined // backend resolves
-                        }),
-                      });
-                      // TODO: refresh proposals list after apply
-                    } catch (e) { console.error(e); }
-                  }}
-                  onReject={async (p) => {
-                    if (!p.id) return;
-                    await fetch("/api/brain/reject", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ proposalId: p.id }),
-                    });
-                  }}
-                />
-              )}
+              <RunQueuePanel parentPath={parentPath} onViewRun={handleViewRun} onStopRun={handleStopRun} />
+              <MetricsOverviewPanel parentPath={parentPath} />
               <BrainActivityPanel brainHealth={brainHealth} activities={brainActivities} />
               <QuickNavPanel activeRunId={activeRunId} />
               <SystemHealthDashboard />

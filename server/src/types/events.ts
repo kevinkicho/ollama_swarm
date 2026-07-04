@@ -246,6 +246,9 @@ export type SwarmEventBody =
       clonePath: string;
       agentCount: number;
       rounds: number;
+      // Caps carried in run_started for immediate UI hydration (bar, advanced panels).
+      wallClockCapMin?: string;
+      ambitionTiers?: string;
     }
   // Direction 1 Phase 1: emitted after outcome scoring completes at run-end.
   | {

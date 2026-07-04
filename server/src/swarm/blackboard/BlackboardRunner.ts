@@ -809,9 +809,9 @@ export class BlackboardRunner implements SwarmRunner {
 
   private stopCapWatchdog(): void { stopCapWatchdogExtracted(this.capContext()); }
 
-  private async promptPlannerSafely(primaryAgent: Agent, promptText: string, agentName: "swarm" | "swarm-read" | "swarm-builder" = "swarm", ollamaFormat?: "json" | Record<string, unknown>): Promise<{ response: string; agentUsed: Agent }> { return promptPlannerSafelyExtracted(this.promptContext(), primaryAgent, promptText, agentName, ollamaFormat); }
+  private async promptPlannerSafely(primaryAgent: Agent, promptText: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research" = "swarm", ollamaFormat?: "json" | Record<string, unknown>): Promise<{ response: string; agentUsed: Agent }> { return promptPlannerSafelyExtracted(this.promptContext(), primaryAgent, promptText, agentName, ollamaFormat); }
 
-  private async promptAgent(agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" = "swarm", formatExpect: "json" | "free" = "json", ollamaFormat?: "json" | Record<string, unknown>): Promise<string> { return promptAgentExtracted(this.promptContext(), agent, prompt, agentName, formatExpect, ollamaFormat); }
+  private async promptAgent(agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research" = "swarm", formatExpect: "json" | "free" = "json", ollamaFormat?: "json" | Record<string, unknown>): Promise<string> { return promptAgentExtracted(this.promptContext(), agent, prompt, agentName, formatExpect, ollamaFormat); }
 
   /** Brain fallback prompt function. Uses the passed agent (the caller's
    *  agent) for model, tools, and session context. Falls back to a

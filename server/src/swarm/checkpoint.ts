@@ -103,12 +103,32 @@ export async function listCheckpoints(
   return checkpoints;
 }
 
+function sanitizeCheckpointFileName(fileName: string): string | null {
+  if (fileName.includes("..") || fileName.includes("/") || fileName.includes("\\")) {
+    return null;
+  }
+  const base = path.basename(fileName);
+  if (base !== fileName || base.length === 0) return null;
+  return base;
+}
+
 export async function readCheckpoint(
   clonePath: string,
   runId: string,
   fileName: string,
 ): Promise<RunCheckpoint | null> {
-  const filePath = path.join(checkpointDir(clonePath, runId), fileName);
+  const safeName = sanitizeCheckpointFileName(fileName);
+  if (!safeName) return null;
+  const dir = checkpointDir(clonePath, runId);
+  const filePath = path.join(dir, safeName);
+  const resolvedDir = path.resolve(dir);
+  const resolvedFile = path.resolve(filePath);
+  if (
+    resolvedFile !== resolvedDir &&
+    !resolvedFile.startsWith(resolvedDir + path.sep)
+  ) {
+    return null;
+  }
   try {
     const raw = await fs.readFile(filePath, "utf8");
     const parsed = JSON.parse(raw);

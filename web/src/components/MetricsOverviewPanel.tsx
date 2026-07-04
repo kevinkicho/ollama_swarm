@@ -1,38 +1,13 @@
-import { useEffect, useState } from "react";
-
-interface RunSummary {
-  runId: string;
-  preset: string;
-  startedAt: number;
-  endedAt?: number;
-  stopReason?: string;
-  wallClockMs?: number;
-}
+import type { RunSummaryDigest } from "../types";
+import { useRunsList } from "../hooks/useRunsList";
 
 interface MetricsOverviewPanelProps {
   className?: string;
+  parentPath?: string;
 }
 
-export function MetricsOverviewPanel({ className = "" }: MetricsOverviewPanelProps) {
-  const [runs, setRuns] = useState<RunSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchRuns = async () => {
-      try {
-        const res = await fetch("/api/swarm/runs");
-        const data = await res.json();
-        setRuns(data.runs ?? []);
-      } catch {
-        setRuns([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchRuns();
-    const interval = setInterval(fetchRuns, 60_000);
-    return () => clearInterval(interval);
-  }, []);
+export function MetricsOverviewPanel({ className = "", parentPath }: MetricsOverviewPanelProps) {
+  const { runs, loading } = useRunsList(parentPath);
 
   const metrics = computeMetrics(runs);
 
@@ -76,14 +51,15 @@ function MetricCard({
   );
 }
 
-function computeMetrics(runs: RunSummary[]) {
+function computeMetrics(runs: RunSummaryDigest[]) {
   if (runs.length === 0) {
     return { totalRuns: 0, successRate: 0, avgDuration: "—", recentRuns: 0 };
   }
 
   const totalRuns = runs.length;
-  const completed = runs.filter((r) => r.stopReason === "completed").length;
-  const successRate = totalRuns > 0 ? Math.round((completed / totalRuns) * 100) : 0;
+  const terminal = runs.filter((r) => !r.isActive && r.endedAt);
+  const completed = terminal.filter((r) => r.stopReason === "completed").length;
+  const successRate = terminal.length > 0 ? Math.round((completed / terminal.length) * 100) : 0;
 
   const totalDuration = runs.reduce((sum, r) => sum + (r.wallClockMs ?? 0), 0);
   const avgMs = totalRuns > 0 ? totalDuration / totalRuns : 0;

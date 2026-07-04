@@ -133,6 +133,10 @@ export interface SwarmStatusRunConfig {
   // copy of that logic). Optional during the rollout — older clients
   // and tests still work via the legacy fields.
   topology?: import("../../../shared/src/topology.js").Topology;
+  // Unit 43 / 34: per-run caps, mapped to client-friendly strings (min / count)
+  // so the SetupForm bar + advanced panels can re-hydrate on refresh / review.
+  wallClockCapMin?: string;
+  ambitionTiers?: string;
 }
 
 export interface SwarmStatusBoard {

@@ -7,6 +7,8 @@ import {
   BlackboardAgentTopology,
   BlackboardUiUrl,
   BlackboardVerifyCommand,
+  AuditorControlFlags,
+  PlanningPhaseControl,
   type CouncilContractPref,
 } from "./BlackboardSettings";
 import { RoleDiffAdvanced, type SwarmRoleWeb } from "./RoleDiffSettings";
@@ -188,6 +190,20 @@ export function PresetAdvancedSettings(props: {
   setUiUrl: (s: string) => void;
   verifyCommand: string;
   setVerifyCommand: (s: string) => void;
+  auditorOnlyMutations?: boolean;
+  setAuditorOnlyMutations?: (v: boolean) => void;
+  requireAuditorVerification?: boolean;
+  setRequireAuditorVerification?: (v: boolean) => void;
+  useHybridPlanning?: boolean;
+  setUseHybridPlanning?: (v: boolean) => void;
+  planningPreset?: string;
+  setPlanningPreset?: (v: string) => void;
+  executionPreset?: string;
+  setExecutionPreset?: (v: string) => void;
+  webTools?: boolean;
+  setWebTools?: (v: boolean) => void;
+  mcpServers?: string;
+  setMcpServers?: (v: string) => void;
   // T199 (2026-05-04): per-tier model state for the open-weights-
   // parallelism value prop. Three groups, one per opt-in preset.
   agentCount: number;
@@ -260,6 +276,20 @@ export function PresetAdvancedSettings(props: {
     setUiUrl,
     verifyCommand,
     setVerifyCommand,
+    auditorOnlyMutations,
+    setAuditorOnlyMutations,
+    requireAuditorVerification,
+    setRequireAuditorVerification,
+    useHybridPlanning,
+    setUseHybridPlanning,
+    planningPreset,
+    setPlanningPreset,
+    executionPreset,
+    setExecutionPreset,
+    webTools,
+    setWebTools,
+    mcpServers,
+    setMcpServers,
     agentCount,
     dispositionCriticModel,
     setDispositionCriticModel,
@@ -429,6 +459,18 @@ export function PresetAdvancedSettings(props: {
                     verifyCommand={verifyCommand}
                     setVerifyCommand={setVerifyCommand}
                   />
+                  {(auditorOnlyMutations != null || requireAuditorVerification != null) && (
+                    <AuditorControlFlags
+                      auditorOnlyMutations={!!auditorOnlyMutations}
+                      setAuditorOnlyMutations={setAuditorOnlyMutations || (() => {})}
+                      requireAuditorVerification={!!requireAuditorVerification}
+                      setRequireAuditorVerification={setRequireAuditorVerification || (() => {})}
+                    />
+                  )}
+
+                  {/* Hybrid control promoted to top-level Topology card for easy hybrid preset creation.
+                      (The advanced section no longer duplicates it.) */}
+                  {/* <PlanningPhaseControl ... /> intentionally omitted here to avoid duplicate UI */}
                 </>
               ) : null}
               {presetId === "debate-judge" ? (

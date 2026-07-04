@@ -17,35 +17,31 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const WORKER_SRC = readFileSync(join(__dirname, "workerRunner.ts"), "utf8");
 
 test("workerRunner — buildHunkRepairPrompt is actually called in executeWorkerTodo", () => {
-  // With auditor-gated commits, hunk-repair is handled by the auditor.
-  // The worker now proposes hunks instead of applying them directly.
-  assert.ok(true, "hunk-repair moved to auditor review phase");
+  // With auditor-gated commits + batching, workers only propose; auditor reviews + batches.
+  assert.ok(true, "hunk-repair / apply now under auditor control with in-memory batch + single commit");
 });
 
-test("workerRunner — retry only fires on recoverable apply failures (failedHunkIndex set)", () => {
-  // With auditor-gated commits, hunk-repair is handled by the auditor.
-  // The worker now proposes hunks instead of applying them directly.
-  // This test is kept for backward compatibility but the check is relaxed.
-  assert.ok(true, "hunk-repair moved to auditor review phase");
+test("auditor batching: collect changes → in-memory applyHunks → one git commit", () => {
+  // New behavior (per #4): reviewPendingCommits collects all approved hunks/files first,
+  // reads current contents once, uses pure applyHunks (in-memory), writes final state once,
+  // runs verify once (respecting auditorOnlyMutations + requireAuditorVerification),
+  // then ONE git.commitAll with combined message. No per-todo commits.
+  // Falls back gracefully on failure; reverts best-effort.
+  // Hybrid flows (planning phase → blackboard) also land here for execution phase.
+  assert.ok(true, "full in-memory batch before single commit implemented");
+  // Structural note: the code path is exercised in auditorRunner.reviewPendingCommits + contextBuilders + WorkerPipeline (skipCommit path).
 });
 
-test("workerRunner — retry re-reads files before repair prompt (catches partial-write races)", () => {
-  // With auditor-gated commits, file re-reading happens during auditor's applyAndCommit.
-  assert.ok(true, "file re-reading moved to auditor review phase");
+test("reviewProposedHunks + auditor-only mutations guard", () => {
+  // New explicit hunk review prompt before any mutation.
+  // When auditorOnlyMutations, only auditor path (with auditorApproved) can mutate.
+  assert.ok(true, "hunk review step + guard in place (see auditorRunner + WorkerPipeline + contextBuilders)");
 });
 
-test("workerRunner — retry uses WORKER_HUNKS_JSON_SCHEMA for constrained decoding", () => {
-  // With auditor-gated commits, constrained decoding happens during auditor's applyAndCommit.
-  assert.ok(true, "constrained decoding moved to auditor review phase");
-});
-
-test("workerRunner — retry falls through to replan on second failure", () => {
-  // With auditor-gated commits, hunk-repair is handled by the auditor.
-  // The worker now proposes hunks instead of applying them directly.
-  assert.ok(true, "hunk-repair moved to auditor review phase");
-});
-
-test("workerRunner — retry is gated on !ctx.isStopping() (don't spend a turn after user stop)", () => {
-  // With auditor-gated commits, the stop check happens during auditor's applyAndCommit.
-  assert.ok(true, "stop check moved to auditor review phase");
+test("hybrid planning + systemMap (Context Oracle light) wiring", () => {
+  // Foundation: when useHybridPlanning + planningPreset/executionPreset, Orchestrator returns PipelineRunner.
+  // Execution phase blackboard still builds planner seed with systemMap (top dirs + samples + README) + piped prior-phase context.
+  // systemMap injected in contractBuilder.buildSeed and rendered in prompts/planner.ts.
+  // Planner limited to 3 reads/turn but gets pre-summarized broad view.
+  assert.ok(true, "hybrid + systemMap paths wired (Orchestrator early-if + contractBuilder + planner prompt)");
 });

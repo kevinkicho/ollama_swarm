@@ -1,40 +1,16 @@
-import { useEffect, useState } from "react";
-
-interface RunSummary {
-  runId: string;
-  preset: string;
-  startedAt: number;
-  endedAt?: number;
-  stopReason?: string;
-  commits?: number;
-  totalTodos?: number;
-}
+import type { RunSummaryDigest } from "../types";
+import { useRunsList } from "../hooks/useRunsList";
+import { useSwarm } from "../state/store";
 
 interface RunQueuePanelProps {
-  onViewRun?: (runId: string) => void;
+  parentPath?: string;
+  onViewRun?: (run: RunSummaryDigest) => void;
   onStopRun?: (runId: string) => void;
 }
 
-export function RunQueuePanel({ onViewRun, onStopRun }: RunQueuePanelProps) {
-  const [runs, setRuns] = useState<RunSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchRuns = async () => {
-      try {
-        const res = await fetch("/api/swarm/runs");
-        const data = await res.json();
-        setRuns(data.runs ?? []);
-      } catch {
-        setRuns([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchRuns();
-    const interval = setInterval(fetchRuns, 30_000);
-    return () => clearInterval(interval);
-  }, []);
+export function RunQueuePanel({ parentPath, onViewRun, onStopRun }: RunQueuePanelProps) {
+  const { runs, loading } = useRunsList(parentPath);
+  const currentRunId = useSwarm((s) => s.runId);
 
   return (
     <div className="rounded border border-ink-700 bg-ink-800 p-3 space-y-2">
@@ -47,12 +23,16 @@ export function RunQueuePanel({ onViewRun, onStopRun }: RunQueuePanelProps) {
         <div className="text-ink-500 text-xs">No runs yet</div>
       ) : (
         <div className="space-y-1">
-          {runs.slice(0, 5).map((run) => (
+          {[...runs]
+            .sort((a, b) => (b.isActive ? 1 : 0) - (a.isActive ? 1 : 0) || (b.startedAt ?? 0) - (a.startedAt ?? 0))
+            .slice(0, 5)
+            .map((run) => (
             <RunRow
-              key={run.runId}
+              key={run.runId ?? run.startedAt}
               run={run}
-              onView={() => onViewRun?.(run.runId)}
-              onStop={() => onStopRun?.(run.runId)}
+              isCurrent={!!run.runId && run.runId === currentRunId}
+              onView={() => onViewRun?.(run)}
+              onStop={() => onStopRun?.(run.runId ?? "")}
             />
           ))}
           {runs.length > 5 && (
@@ -68,14 +48,16 @@ export function RunQueuePanel({ onViewRun, onStopRun }: RunQueuePanelProps) {
 
 function RunRow({
   run,
+  isCurrent,
   onView,
   onStop,
 }: {
-  run: RunSummary;
+  run: RunSummaryDigest;
+  isCurrent?: boolean;
   onView: () => void;
   onStop: () => void;
 }) {
-  const isActive = !run.endedAt;
+  const isActive = run.isActive || !run.endedAt;
   const statusColor = run.stopReason === "completed"
     ? "text-emerald-400"
     : run.stopReason === "user" || run.stopReason === "crash"
@@ -83,9 +65,9 @@ function RunRow({
     : "text-ink-400";
 
   return (
-    <div className="flex items-center gap-2 text-xs py-1 border-b border-ink-700/50 last:border-0">
+    <div className={`flex items-center gap-2 text-xs py-1 border-b border-ink-700/50 last:border-0 ${isCurrent ? "bg-ink-900/60 rounded" : ""}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-blue-400 animate-pulse" : "bg-ink-500"}`} />
-      <span className="font-mono text-ink-300 truncate w-16">{run.runId.slice(0, 8)}</span>
+      <span className="font-mono text-ink-300 truncate w-16">{(run.runId || "—").slice(0, 8)}</span>
       <span className="text-ink-500 truncate w-16">{run.preset}</span>
       <span className={`${statusColor} truncate`}>
         {run.stopReason ?? (isActive ? "active" : "?")}

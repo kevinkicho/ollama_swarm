@@ -2,7 +2,10 @@
   "name": "ollama-swarm",
   "version": "0.1.0",
   "private": true,
-  "description": "Web app that spawns a swarm of OpenCode agents (Ollama-backed) to collaboratively analyze a GitHub repo.",
+  "description": "Local multi-agent swarm system (Ollama + other providers) with Brain-as-OS for analyzing and editing codebases.",
+  "bin": {
+    "ollama-swarm": "./bin/ollama-swarm.mjs"
+  },
   "workspaces": [
     "shared",
     "server",
@@ -12,7 +15,8 @@
     "dev": "node scripts/dev.mjs",
     "build": "npm -w server run build && npm -w web run build",
     "start": "npm -w server run start",
-    "test": "npm -w server run test",
+    "cli": "node bin/ollama-swarm.mjs",
+    "test": "npm -w shared run test && npm -w server run test",
     "test:shared": "npm -w shared run test",
     "typecheck": "npm -w shared run typecheck && npm -w server run typecheck && npm -w web run typecheck"
   },

@@ -93,6 +93,8 @@ export interface PromptWithRetryOptions {
   };
   modelOverride?: string;
   intraStreamLoop?: IntraStreamLoopDetectorOpts | true;
+  /** MCP servers string (e.g. "fetch=..." or "search=...") for tool-augmented profiles. Passed through even if not declared on every path. */
+  mcpServers?: string;
 }
 
 export interface RetryInfo {

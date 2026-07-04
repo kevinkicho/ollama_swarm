@@ -6,6 +6,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
+import { isGitAvailable } from "../testHelpers/gitAvailable.js";
 import { Broadcaster } from "../ws/broadcast.js";
 import type { SwarmEvent } from "../types.js";
 import { tokenTracker } from "./ollamaProxy.js";
@@ -77,7 +78,7 @@ test("concurrent — per-run quota walls are isolated", () => {
   assert.equal(tokenTracker.shouldHaltOnQuota("run-A"), false);
 });
 
-test("concurrent — distinct clone paths can be prepared for overlapping runs", () => {
+test("concurrent — distinct clone paths can be prepared for overlapping runs", { skip: !isGitAvailable() ? "git not on PATH" : false }, () => {
   const root = mkdtempSync(join(tmpdir(), "swarm-concurrent-"));
   try {
     const cloneA = join(root, "swarm-test-a");

@@ -1,7 +1,9 @@
-// Brain overseer prompt for system-level analysis.
+// Brain librarian / master-admin prompt.
 //
-// This prompt is used by the brain to analyze interaction chains and
-// exception patterns, then propose concrete improvements to the swarm system.
+// The Brain acts as the central librarian and administrator for swarm runs.
+// It reviews run records, provides final analysis, helps with initialization,
+// starting/finishing runs, and extracting cross-run knowledge.
+// It does NOT modify or propose patches to the swarm system's own code.
 
 import type { PatternSummary } from "./exceptionCollector.js";
 import type { InteractionChain } from "./interactionTracker.js";
@@ -12,7 +14,7 @@ export function buildAnalysisPrompt(
   priorImprovements: string[],
 ): string {
   const chainText = chains
-    .slice(0, 20) // Limit to most recent 20 chains
+    .slice(0, 20)
     .map((chain) => {
       const events = chain.events.map((e) => `  - ${e.type}: ${e.reason}`).join("\n");
       return `Chain for todo ${chain.todoId}:\n${events}`;
@@ -29,17 +31,24 @@ export function buildAnalysisPrompt(
 
   const priorText = priorImprovements.length > 0
     ? priorImprovements.map((p) => `- ${p}`).join("\n")
-    : "(no prior improvements)";
+    : "(no prior run analyses)";
 
   return [
-    "You are the SYSTEM OVERSEER for a coding-agent swarm. Your job is to analyze",
-    "failure patterns and propose improvements to the system itself — not to the",
-    "project code.",
+    "You are the BRAIN LIBRARIAN / MASTER-ADMIN for ollama_swarm.",
+    "Your role is to manage run lifecycle knowledge:",
+    "- Review completed run records (transcripts, todos, exceptions, outcomes).",
+    "- Provide clear FINAL RUN ANALYSIS: what was achieved, key findings, metrics, lessons.",
+    "- Help initialize context and suggest good run parameters based on history.",
+    "- Assist starting and finishing runs by recording insights.",
+    "- Review historical run records and surface cross-run patterns for the user.",
     "",
-    "=== INTERACTION CHAINS (this run) ===",
+    "You NEVER propose changes to the swarm platform code itself.",
+    "All analysis is about the target task and the specific run's results.",
+    "",
+    "=== THIS RUN'S INTERACTION CHAINS ===",
     chainText || "(no interaction chains recorded)",
     "",
-    "=== EXCEPTION PATTERNS ===",
+    "=== EXCEPTION PATTERNS IN THIS RUN ===",
     `Total exceptions: ${exceptions.totalExceptions}`,
     "By type:",
     typeBreakdown,
@@ -47,20 +56,19 @@ export function buildAnalysisPrompt(
     "Recurring patterns:",
     patternText || "(no recurring patterns)",
     "",
-    "=== PRIOR IMPROVEMENTS ===",
+    "=== PRIOR RUN ANALYSES ===",
     priorText,
     "",
     "=== YOUR TASK ===",
-    "Analyze these interaction chains and exception patterns. Produce:",
-    "1. Root causes for recurring skip/decline chains",
-    "2. Which patterns are most impactful to fix",
-    "3. Concrete improvement proposals with priority ranking",
-    "4. For each proposal: title, description, affected component, priority, and optionally suggestedHunks (array of {file, search, replace} for direct apply)",
+    "Produce a final run analysis as an array of insights/recommendations:",
+    "1. High-level summary of what the run accomplished.",
+    "2. Key successes and failures with evidence from the transcript/todos.",
+    "3. Actionable lessons or patterns for future similar tasks.",
+    "4. Suggestions for follow-up runs (different preset, more agents, better directive, etc.).",
     "",
-    "Focus on changes that would prevent the patterns from recurring.",
-    "Do NOT propose changes to the project code — only to the swarm system.",
+    "For each item output: title, description, category (summary|lesson|recommendation|followup), priority (high|medium|low).",
     "",
-    "Output: JSON array of proposals.",
-    'Format: [{"title": "...", "description": "...", "affectedComponent": "...", "priority": "high|medium|low", "suggestedHunks": [{"file":"...", "search":"...", "replace":"..."}]}]',
+    "Output ONLY valid JSON:",
+    '[{"title": "...", "description": "...", "category": "summary|lesson|recommendation|followup", "priority": "high|medium|low"}]',
   ].join("\n");
 }

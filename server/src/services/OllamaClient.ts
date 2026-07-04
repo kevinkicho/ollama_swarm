@@ -98,7 +98,26 @@ export interface ChatResult {
   finishReason: "done" | "aborted" | "idle-timeout";
 }
 
-export async function chat(opts: ChatOpts): Promise<ChatResult> {
+function createOllamaTimeoutController(
+  idleMs: number,
+  firstChunkMs: number,
+  isFirstSeen: () => boolean,
+  getLastByteAt: () => number,
+) {
+  const controller = new AbortController();
+  const timer = setInterval(() => {
+    const cap = isFirstSeen() ? idleMs : firstChunkMs;
+    if (Date.now() - getLastByteAt() > cap) {
+      controller.abort(new Error(`Ollama idle timeout: no body data for ${cap}ms`));
+    }
+  }, 1000);
+  return {
+    controller,
+    cleanup: () => clearInterval(timer),
+  };
+}
+
+export async function chat(opts: any): Promise<ChatResult> {
   const t0 = Date.now();
   const idleTimeoutMs = opts.idleTimeoutMs ?? 60_000;
   const firstChunkTimeoutMs = opts.firstChunkTimeoutMs ?? 180_000;
@@ -110,7 +129,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
     type: "_ollama_direct_call",
     agentId: opts.agentId,
     model: opts.model,
-    promptChars: opts.messages.reduce((n, m) => n + m.content.length, 0),
+    promptChars: opts.messages.reduce((n: number, m: any) => n + m.content.length, 0),
     idleTimeoutMs,
     firstChunkTimeoutMs,
     ts: t0,
@@ -133,23 +152,16 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
       : {}),
   });
 
-  // Compose the caller's signal with our idle-timeout signal so the
-  // fetch aborts on whichever fires first. Two-phase timeout: until
-  // the first chunk arrives, allow firstChunkTimeoutMs (default 180s
-  // for cold-start tolerance — heavy cloud models need it). Once we've
-  // seen any body, switch to idleTimeoutMs (default 60s steady-state).
-  const idleAbort = new AbortController();
+  // Two-phase timeout: firstChunk for cold starts, idle after first byte.
+  // Extracted helper below for reuse across providers.
   let lastByteAt = Date.now();
   let firstChunkSeen = false;
-  const idleTimer = setInterval(() => {
-    const cap = firstChunkSeen ? idleTimeoutMs : firstChunkTimeoutMs;
-    if (Date.now() - lastByteAt > cap) {
-      const phase = firstChunkSeen ? "steady-state" : "cold-start";
-      idleAbort.abort(
-        new Error(`Ollama idle timeout: no body data for ${cap}ms (${phase})`),
-      );
-    }
-  }, 1_000);
+  const { controller: idleAbort, cleanup: clearIdleTimer } = createOllamaTimeoutController(
+    idleTimeoutMs,
+    firstChunkTimeoutMs,
+    () => firstChunkSeen,
+    () => lastByteAt,
+  );
 
   const composed = AbortSignal.any([opts.signal, idleAbort.signal]);
   let finishReason: ChatResult["finishReason"] = "done";
@@ -164,26 +176,30 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
       headers["x-swarm-run-id"] = opts.runId; // for proxy per-run isolation
     }
 
-    response = await fetch(url, {
+    const fetchOpts: any = {
       method: "POST",
       headers,
       body,
       signal: composed,
-    });
+    };
+    if (opts.httpDispatcher) {
+      fetchOpts.dispatcher = opts.httpDispatcher;
+    }
+    response = await fetch(url, fetchOpts);
   } catch (err) {
-    clearInterval(idleTimer);
+    clearIdleTimer();
     if (opts.signal.aborted) finishReason = "aborted";
     else if (idleAbort.signal.aborted) finishReason = "idle-timeout";
     throw err;
   }
 
   if (!response.ok) {
-    clearInterval(idleTimer);
+    clearIdleTimer();
     const errText = await response.text().catch(() => "");
     throw new Error(`Ollama HTTP ${response.status}: ${errText.slice(0, 200)}`);
   }
   if (!response.body) {
-    clearInterval(idleTimer);
+    clearIdleTimer();
     throw new Error("Ollama returned no body");
   }
 
@@ -242,7 +258,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
       }
     }
   } finally {
-    clearInterval(idleTimer);
+    clearIdleTimer();
     try {
       reader.releaseLock();
     } catch {

@@ -15,6 +15,14 @@ export interface SwarmSettings {
   plannerModel: string;
   workerModel: string;
   auditorModel: string;
+  // Auditor + hybrid wiring (history persistence for #2)
+  auditorOnlyMutations?: boolean;
+  requireAuditorVerification?: boolean;
+  useHybridPlanning?: boolean;
+  planningPreset?: string;
+  executionPreset?: string;
+  webTools?: boolean;
+  mcpServers?: string;
   createdAt: number;
   lastUsedAt: number;
   useCount: number;

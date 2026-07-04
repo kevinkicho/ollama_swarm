@@ -27,7 +27,7 @@ function resolveServerPort(): number {
   } catch {
     // fall through
   }
-  return 5174;
+  return 8243;
 }
 
 const Schema = z.object({
@@ -116,6 +116,11 @@ const Schema = z.object({
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // Experimental: comma or space separated MCP server specs for auto-spawn/connect
+  // on run start (e.g. "websearch=npx -y @modelcontextprotocol/server-brave-search").
+  // Full stdio MCP client (listTools/callTool) + proxy into ToolDispatcher is work in progress.
+  // The native web_search/web_fetch are the current implementation.
+  MCP_SERVERS: z.string().trim().optional(),
   // Council-style initial contract for blackboard (optional diversity on first contract).
   COUNCIL_CONTRACT_ENABLED: z
     .enum(["true", "false", "1", "0", "yes", "no"])
@@ -288,7 +293,13 @@ export const config = {
   SERVER_PORT: resolveServerPort(),
 };
 
-export function basicAuthHeader(): string {
-  const raw = `${config.OPENCODE_SERVER_USERNAME}:${config.OPENCODE_SERVER_PASSWORD}`;
+export function basicAuthHeader(): string | null {
+  // Only generate if a non-default password is configured (legacy opencode auth).
+  // Makes OPENCODE_SERVER_PASSWORD truly optional for modern direct providers.
+  const pass = config.OPENCODE_SERVER_PASSWORD;
+  if (!pass || pass === "test-only" || pass === "") {
+    return null;
+  }
+  const raw = `${config.OPENCODE_SERVER_USERNAME}:${pass}`;
   return "Basic " + Buffer.from(raw, "utf8").toString("base64");
 }

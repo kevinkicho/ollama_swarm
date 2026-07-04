@@ -1,14 +1,14 @@
-// Brain provisioner — creates runs on demand from proposals.
+// Brain provisioner — librarian/master-admin support for starting runs.
 //
-// The brain analyzes patterns and generates proposals. When a proposal
-// is ready to implement, the provisioner generates a RunConfig and
-// starts a run via the Orchestrator.
+// The brain produces run insights and recommendations. The provisioner
+// can turn a "followup" insight into a new run configuration (new directive,
+// different preset, etc). No longer tied to system code patches.
 
-import type { ImprovementProposal, BrainAnalysisResult } from "./brainOverseer.js";
+import type { RunInsight } from "./brainOverseer.js";
 
 export interface RunProvisioner {
-  /** Start a run for a specific proposal. */
-  startRunForProposal(proposal: ImprovementProposal, clonePath: string): Promise<string | null>;
+  /** Start a run suggested by a brain insight (e.g. followup). */
+  startRunForProposal(insight: RunInsight, clonePath: string): Promise<string | null>;
   /** Get the number of active runs. */
   getActiveRunCount(): number;
   /** Check if the system can start a new run. */
@@ -20,9 +20,8 @@ export interface RunProvisionerOpts {
   maxConcurrentRuns: number;
   canStartRun: () => boolean;
   getActiveRunCount: () => number;
-  /** Optional: called when a brain-initiated run is provisioned (for events/UI). */
-  onProvision?: (runId: string | null, proposal: ImprovementProposal) => void;
-  /** System pressure signal (from proxy or other) to decide on provisioning for stability. */
+  /** Optional: called when a brain-initiated run is provisioned. */
+  onProvision?: (runId: string | null, insight: RunInsight) => void;
   getSystemPressure?: () => { recordCount: number; atLimit: boolean };
 }
 
@@ -31,7 +30,7 @@ export interface RunProvisionerOpts {
  */
 export function createRunProvisioner(opts: RunProvisionerOpts): RunProvisioner {
   return {
-    async startRunForProposal(proposal: ImprovementProposal, clonePath: string): Promise<string | null> {
+    async startRunForProposal(insight: RunInsight, clonePath: string): Promise<string | null> {
       if (!opts.canStartRun()) {
         console.log(`[brain-provisioner] Cannot start run: at capacity (${opts.getActiveRunCount()}/${opts.maxConcurrentRuns})`);
         return null;
@@ -39,23 +38,21 @@ export function createRunProvisioner(opts: RunProvisionerOpts): RunProvisioner {
 
       const pressure = opts.getSystemPressure?.();
       if (pressure?.atLimit) {
-        console.log(`[brain-provisioner] High system pressure (records at limit), delaying brain run for stability: ${proposal.title}`);
-        // Still allow for efficiency/stability, but log; in future could queue.
+        console.log(`[brain-provisioner] High pressure, delaying brain run: ${insight.title}`);
       }
 
-      const agentCount = (pressure && pressure.atLimit) ? 4 : 8;
-      const cfg = generateRunConfig(proposal, clonePath, agentCount);
+      const agentCount = (pressure && pressure.atLimit) ? 4 : 6;
+      const cfg = generateRunConfig(insight, clonePath, agentCount);
       if (!cfg) {
-        console.log(`[brain-provisioner] Cannot generate RunConfig for proposal: ${proposal.title}`);
+        console.log(`[brain-provisioner] Cannot generate config for insight: ${insight.title}`);
         return null;
       }
 
       try {
         const orch = opts.getOrchestrator();
-        await orch.start(cfg);
-        const runId = (cfg as any).runId ?? null;
-        console.log(`[brain-provisioner] Started brain run for proposal: ${proposal.title} → ${runId ?? "unknown"}`);
-        opts.onProvision?.(runId, { ...proposal, id: (proposal as any).id });
+        const runId = await orch.start(cfg);
+        console.log(`[brain-provisioner] Brain provisioned run: ${insight.title} → ${runId ?? "unknown"}`);
+        opts.onProvision?.(runId, insight);
         return runId;
       } catch (err) {
         console.error(`[brain-provisioner] Failed to start run: ${err instanceof Error ? err.message : err}`);
@@ -74,28 +71,25 @@ export function createRunProvisioner(opts: RunProvisionerOpts): RunProvisioner {
 }
 
 /**
- * Generate a RunConfig from a proposal.
+ * Generate a RunConfig from a run insight (followup recommendation from librarian brain).
  */
-function generateRunConfig(proposal: ImprovementProposal, clonePath: string, agentCount: number): Record<string, unknown> | null {
-  // Determine the directive based on the proposal
-  const directive = `Implement the following improvement: ${proposal.title}. ${proposal.description}. Target component: ${proposal.affectedComponent}.`;
+function generateRunConfig(insight: RunInsight, clonePath: string, agentCount: number): Record<string, unknown> | null {
+  const directive = `Follow-up based on prior run analysis: ${insight.title}. ${insight.description}`;
 
   return {
     preset: "blackboard",
     localPath: clonePath,
     repoUrl: "",
     agentCount,
-    rounds: 0,
+    rounds: 2,
     continuous: false,
     userDirective: directive,
     autoGenerateGoals: true,
     writeMode: "multi",
     conflictPolicy: "merge",
-    // Use the default high-quality model for Brain-OS work.
     plannerModel: "deepseek-v4-flash:cloud",
     workerModel: "deepseek-v4-flash:cloud",
-    // Marker for system awareness (UI badges, filtering concurrent runs, etc.)
     brainInitiated: true,
-    brainProposalId: proposal.id,
+    brainProposalId: (insight as any).id,
   };
 }

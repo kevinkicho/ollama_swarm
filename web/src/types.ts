@@ -386,7 +386,10 @@ export type SwarmEvent =
       clonePath: string;
       agentCount: number;
       rounds: number;
-  topology?: import("../../shared/src/topology").Topology;
+      topology?: import("../../shared/src/topology").Topology;
+      // Caps from run_started for setup bar / review hydration.
+      wallClockCapMin?: string;
+      ambitionTiers?: string;
   // Deliverables: files created or meaningfully changed by this run.
   // Created = new file; Modified = existing file edited. Empty for
   // discussion presets (no code changes). Optional for back-compat.
@@ -544,6 +547,9 @@ export interface RunConfigSnapshot {
   // to color the AgentPanel cards in topology row order with the
   // exact role + per-row model. Optional during rollout.
   topology?: import("../../shared/src/topology").Topology;
+  // Caps synced from setup form for blackboard/advanced runs
+  wallClockCapMin?: string;
+  ambitionTiers?: string;
 }
 
 // Unit 52e: digest returned by GET /api/runs for the run-history

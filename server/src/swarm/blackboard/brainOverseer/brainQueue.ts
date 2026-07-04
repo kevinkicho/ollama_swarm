@@ -2,7 +2,7 @@
 //
 // Rules:
 // 1. System work (patches) must complete before project runs start
-// 2. Patches only apply when ALL runs are stopped
+// Brain queue serializes system-level work (analysis, provisioning). No patching.
 // 3. No concurrent system work
 // 4. Project runs can parallel (if no file conflicts)
 

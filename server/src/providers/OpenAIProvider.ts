@@ -194,7 +194,7 @@ export class OpenAIProvider implements SessionProvider {
         let parsedArgs: Record<string, unknown> = {};
         try { parsedArgs = c.argsJson ? JSON.parse(c.argsJson) : {}; } catch { /* leave empty */ }
         const dispatchResult = await opts.dispatcher!.dispatch({
-          tool: c.name as "read" | "grep" | "glob" | "list" | "bash",
+          tool: c.name as "read" | "grep" | "glob" | "list" | "bash" | "web_fetch" | "web_search",
           args: parsedArgs,
         });
         const preview = dispatchResult.ok

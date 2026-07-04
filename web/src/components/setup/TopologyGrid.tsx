@@ -103,6 +103,7 @@ interface TopologyGridProps {
     id: string;
     min: number;
     max: number;
+    recommended?: number;
   };
   topology: Topology;
   setTopology: (t: Topology) => void;
@@ -208,6 +209,28 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel, prov
   const addableRole = nextAddableRole(preset.id);
   const canAdd = !atMax && addableRole !== null;
 
+  // Safety: if the passed topology doesn't match this preset's role structure
+  // (e.g. after a preset switch the parent state was stale), re-synthesize
+  // with correct roles for this preset (keeping current count if valid).
+  useEffect(() => {
+    if (!topology.agents.length) return;
+    const firstRole = topology.agents[0].role;
+    const expectedFirst = defaultRoleForIndex(preset.id, 1, topology.agents.length);
+    if (firstRole !== expectedFirst) {
+      // mismatch (e.g. stale topo from previous preset) -> reset to recommended count + correct roles for this preset
+      const count = preset.recommended ?? (preset.min === preset.max ? preset.min : Math.max(preset.min, Math.min(topology.agents.length, preset.max)));
+      const fresh = synthesizeTopology(preset.id, count);
+      // Preserve per-agent model overrides (the "AI provider") for agents whose role stayed the same.
+      const old = topology.agents;
+      setTopology({
+        agents: fresh.agents.map((a, idx) => {
+          const prior = old[idx];
+          return prior && prior.role === a.role && prior.model ? { ...a, model: prior.model } : a;
+        }),
+      });
+    }
+  }, [preset.id]);
+
   // Phase 3: auto-save last-used topology on every change so the
   // user's preferred shape survives dev-server restarts and the
   // next "switch back to this preset" recovers their setup.
@@ -282,7 +305,8 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel, prov
     setSavedList(updated);
   };
   const onResetToDefaults = () => {
-    setTopology(synthesizeTopology(preset.id, preset.min === preset.max ? preset.min : (topology.agents.length || preset.min)));
+    const target = preset.recommended ?? (preset.min === preset.max ? preset.min : (topology.agents.length || preset.min));
+    setTopology(synthesizeTopology(preset.id, target));
   };
 
   const renumber = (agents: AgentSpec[]): AgentSpec[] => {

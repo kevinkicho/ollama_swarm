@@ -1,6 +1,7 @@
 // Extracted from BlackboardRunner.ts — self-contained deliverable writer.
 // Takes a narrow context object instead of referencing `this.*`.
 
+import path from "node:path";
 import type { Agent } from "../../services/AgentManager.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { ExitContract, Todo } from "./types.js";
@@ -165,6 +166,19 @@ export async function writeBlackboardDeliverable(ctx: DeliverableContext): Promi
       bytes: result.bytes,
       sectionTitles: sections.map((s) => s.title),
     });
+
+    // Canonical project-level copy using full runId (suggestion)
+    try {
+      const projectLogsDir = path.join(process.cwd(), "logs", ctx.cfg.runId);
+      await import("node:fs/promises").then((fs) => fs.mkdir(projectLogsDir, { recursive: true }));
+      const projDelivDir = path.join(projectLogsDir, "deliverable");
+      await import("node:fs/promises").then((fs) => fs.mkdir(projDelivDir, { recursive: true }));
+      const projPath = path.join(projDelivDir, result.filename);
+      await import("node:fs/promises").then((fs) => fs.copyFile(result.fullPath, projPath));
+      ctx.appendSystem(`Canonical project deliverable copied to ${projPath}`);
+    } catch (e) {
+      // best effort
+    }
   } else {
     ctx.appendSystem(`Failed to write deliverable (${result.reason})`);
   }

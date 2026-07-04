@@ -9,12 +9,11 @@ import {
   appendProposal,
   type PersistedProposal,
 } from "./proposalStore.js";
-import { createSelfUpgrader, type UpgradeResult } from "./selfUpgrader.js";
 import { tokenTracker } from "../../../services/ollamaProxy.js";
 
 export interface BrainActivityEntry {
   timestamp: number;
-  type: "analysis" | "proposal" | "patch" | "health" | "error" | "provision";
+  type: "analysis" | "proposal" | "health" | "error" | "provision"; // removed "patch" — no more system patching
   title: string;
   detail?: string;
   status?: "success" | "pending" | "failed";
@@ -33,12 +32,9 @@ export interface BrainService {
   getQueue(): BrainQueue;
   getClonePath(): string | undefined;
   registerClonePath(clonePath: string): void;
-  getAllProposals(clonePath?: string): Promise<PersistedProposal[]>;
-  applyProposal(
-    proposalId: string,
-    patchContent: { file: string; search: string; replace: string }[],
-    clonePath?: string,
-  ): Promise<UpgradeResult>;
+  getAllProposals(clonePath?: string): Promise<PersistedProposal[]>; // run insights / analyses (librarian role; no system code review)
+  // applyProposal removed — Brain no longer performs system patching.
+  // rejectProposal kept for dismissing an analysis insight.
   rejectProposal(
     proposalId: string,
     reason?: string,
@@ -49,7 +45,7 @@ export interface BrainService {
   getRecentActivities(): BrainActivityEntry[];
   subscribeToEvents(eventHandler: (event: { type: string; [key: string]: unknown }) => void): () => void;
   getBrainHealth(): { status: string; lastAnalysis: number; proposalCount: number; errorCount: number };
-  /** Start continuous background monitoring for real-time Brain-OS management layer behavior. */
+  /** Start continuous background monitoring. */
   startBackgroundMonitoring(intervalMs?: number): void;
   stopBackgroundMonitoring(): void;
 }
@@ -59,6 +55,8 @@ export interface BrainServiceOpts {
   getOrchestrator: () => { start: (cfg: unknown) => Promise<string> };
   getActiveRunCount: () => number;
   canStartRun: () => boolean;
+  /** Optional hub or emit for integrating with RunEventHub for organized events */
+  emit?: (e: any, category?: string) => void;
 }
 
 const MAX_ACTIVITIES = 50;
@@ -76,9 +74,10 @@ export function createBrainService(opts: BrainServiceOpts): BrainService {
         detail: `${proposal.title} → ${runId ?? "unknown"}`,
         status: "success",
       });
-      // Emit to subscribers so UI / listeners get brain-provisioned-run event
+      // Emit to subscribers and hub if provided
       const ev = { type: "brain_provisioned", runId, proposalId: proposal.id ?? null, title: proposal.title };
       eventSubscribers.forEach(fn => { try { fn(ev); } catch {} });
+      if (opts.emit) opts.emit(ev, "brain");
     },
     getSystemPressure: () => {
       // Proxy pressure for stability (record load under concurrent/Brain activity)
@@ -144,19 +143,20 @@ export function createBrainService(opts: BrainServiceOpts): BrainService {
           promptFn,
           model,
         );
-        brainHealth.proposalCount += result.proposals.length;
+        const insightCount = result.insights?.length ?? 0;
+        brainHealth.proposalCount += insightCount;
         brainHealth.status = "idle";
         logActivity({
           type: "analysis",
           title: "Run analysis complete",
-          detail: `${result.proposals.length} proposals, ${result.exceptions.totalExceptions} exceptions`,
+          detail: `${insightCount} insights, ${result.exceptions.totalExceptions} exceptions`,
           status: "success",
         });
-        for (const p of result.proposals) {
+        for (const p of result.insights || []) {
           logActivity({
-            type: "proposal",
+            type: "proposal", // keeping type for UI compat; represents "insight"
             title: p.title,
-            detail: `${p.priority} · ${p.affectedComponent}`,
+            detail: `${p.category || p.priority}`,
             status: "pending",
           });
         }
@@ -190,59 +190,8 @@ export function createBrainService(opts: BrainServiceOpts): BrainService {
       return proposals.filter((p) => p.status === "pending");
     },
 
-    async applyProposal(proposalId, patchContent, clonePath) {
-      const path = clonePath ?? lastClonePath;
-      if (!path) {
-        return { success: false, patchesApplied: 0, error: "No clone path configured" };
-      }
-
-      const proposals = await readProposals(path);
-      const proposal = proposals.find((p) => p.id === proposalId);
-      if (!proposal) {
-        return { success: false, patchesApplied: 0, error: "Proposal not found" };
-      }
-      if (proposal.status !== "pending") {
-        return { success: false, patchesApplied: 0, error: `Proposal already ${proposal.status}` };
-      }
-
-      // Polish UX: if caller didn't provide patches, fall back to suggestedHunks from proposal
-      const effectiveHunks = patchContent.length > 0 
-        ? patchContent 
-        : (proposal.suggestedHunks || []).map(h => ({ file: h.file, search: h.search, replace: h.replace }));
-
-      const upgrader = createSelfUpgrader({
-        getActiveRunCount: opts.getActiveRunCount,
-        clonePath: path,
-        autoCommit: true,
-      });
-
-      if (!upgrader.canApplyPatches()) {
-        return {
-          success: false,
-          patchesApplied: 0,
-          error: "Cannot apply patches while runs are active",
-        };
-      }
-
-      const result = await upgrader.applyPatch(proposal, effectiveHunks);
-      if (result.success) {
-        await updateProposalStatus(path, proposalId, "applied");
-        logActivity({
-          type: "patch",
-          title: `Applied: ${proposal.title}`,
-          detail: `${result.patchesApplied} patch(es)${result.commitSha ? ` (commit ${result.commitSha.slice(0,7)})` : ''}`,
-          status: "success",
-        });
-      } else {
-        logActivity({
-          type: "patch",
-          title: `Apply failed: ${proposal.title}`,
-          detail: result.error,
-          status: "failed",
-        });
-      }
-      return result;
-    },
+    // applyProposal (system patching) has been removed.
+    // Brain now focuses on run analysis insights only.
 
     async rejectProposal(proposalId, reason, clonePath) {
       const path = clonePath ?? lastClonePath;
@@ -250,20 +199,11 @@ export function createBrainService(opts: BrainServiceOpts): BrainService {
         return { success: false, error: "No clone path configured" };
       }
 
-      const proposals = await readProposals(path);
-      const proposal = proposals.find((p) => p.id === proposalId);
-      if (!proposal) {
-        return { success: false, error: "Proposal not found" };
-      }
-      if (proposal.status !== "pending") {
-        return { success: false, error: `Proposal already ${proposal.status}` };
-      }
-
       await updateProposalStatus(path, proposalId, "rejected", reason);
       logActivity({
         type: "proposal",
-        title: `Rejected: ${proposal.title}`,
-        detail: reason,
+        title: `Dismissed insight ${proposalId}`,
+        detail: reason || "",
         status: "failed",
       });
       return { success: true };

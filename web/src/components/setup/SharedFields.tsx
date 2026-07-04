@@ -32,11 +32,14 @@ export function Field({
 export function ToggleField({
   label,
   hint,
+  labelAccessory,
   checked,
   onChange,
 }: {
   label: string;
   hint?: string;
+  /** Optional element rendered on the right side of the label row (e.g. InfoTip). */
+  labelAccessory?: React.ReactNode;
   checked: boolean;
   onChange: (v: boolean) => void;
 }) {
@@ -50,6 +53,7 @@ export function ToggleField({
           className="h-4 w-4 accent-emerald-500"
         />
         <span className="text-xs uppercase tracking-wide text-ink-400">{label}</span>
+        {labelAccessory}
       </div>
       {hint ? <div className="text-xs text-ink-400 mt-1">{hint}</div> : null}
     </label>

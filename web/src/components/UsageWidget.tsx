@@ -144,6 +144,7 @@ export function UsageWidget() {
   const [quota, setQuota] = useState<QuotaState | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollAbortRef = useRef<AbortController | null>(null);
+  const containerRef = useRef<HTMLSpanElement>(null);
 
   const fetchUsage = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -176,6 +177,18 @@ export function UsageWidget() {
       ctrl.abort();
     };
   }, [open, fetchUsage]);
+
+  // Close the dropdown when clicking outside (makes the "tokens dropdown" behave like one)
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
 
   const setCap = useCallback((key: WindowKey, value: number | null) => {
     writeCap(key, value);
@@ -216,7 +229,7 @@ export function UsageWidget() {
   }, []);
 
   return (
-    <span className="relative">
+    <span className="relative" ref={containerRef}>
       <button
         onClick={() => setOpen((v) => !v)}
         title={chipTitle}

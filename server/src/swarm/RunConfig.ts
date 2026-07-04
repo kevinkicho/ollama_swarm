@@ -104,6 +104,27 @@ export interface RunConfig {
    * failed on non-zero exit, otherwise commit.
    */
   verifyCommand?: string;
+
+  /**
+   * NEW (priority 3): When true, workers are forbidden from directly
+   * mutating the repo. All filesystem writes and git commits must go
+   * through the auditor (via pending-commit + approve path).
+   * This is the "auditor is the only one allowed to mutate the repo" guard.
+   */
+  auditorOnlyMutations?: boolean;
+
+  /**
+   * NEW: When true (or when auditorOnlyMutations is true), the auditor's
+   * commit path will always run verifyCommand (if configured) and will
+   * reject the commit on verify failure.
+   */
+  requireAuditorVerification?: boolean;
+
+  // Hybrid planning + execution support
+  useHybridPlanning?: boolean;
+  planningPreset?: string;
+  executionPreset?: string;
+
   /**
    * Task #124: optional per-run hard cap on total tokens consumed
    * (prompt + response). When set, the runner polls the proxy-backed
@@ -128,10 +149,36 @@ export interface RunConfig {
    * The planner is limited to 3 file reads per turn when enabled.
    */
   plannerTools?: boolean;
+
+  /**
+   * When true (or when plannerTools is true), the planner (and research-oriented
+   * agents) gain access to web tools: web_search + web_fetch.
+   * This enables directives that require live external research
+   * (e.g. "find governmental data endpoints via internet searches").
+   * Tools are provided via the same ToolDispatcher (opt-in "swarm-research" profile).
+   * Use with care — results are truncated and subject to the model's ability
+   * to follow up with specific URLs.
+   */
+  webTools?: boolean;
+  /**
+   * Experimental: MCP server specs (e.g. for full dynamic tool connection).
+   * Currently the native web tools provide the capability; full MCP client
+   * proxy (using @modelcontextprotocol/sdk) is the next layer.
+   */
+  mcpServers?: string;
   /** Local Ollama mode: strips :cloud from all model refs. */
   useLocal?: boolean;
   /** Multi-user: identifies who started this run. Default "default". */
   createdBy?: string;
+
+  /** Correlation ID from the HTTP request that started this run. */
+  reqId?: string;
+
+  /**
+   * When explicitly false, skip Brain run analysis (final run analysis,
+   * insights for librarian role). Makes runs lighter. Defaults to true.
+   */
+  enableBrainAnalysis?: boolean;
   /**
    * Phase 2 of #314 (multi-provider cost cap): per-run dollar ceiling
    * for paid providers (Anthropic, OpenAI). Same 5-second cap-tick

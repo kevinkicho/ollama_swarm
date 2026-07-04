@@ -9,6 +9,9 @@ import { execSync } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
 import { realFilesystemAdapter, realGitAdapter } from "./v2Adapters.js";
+import { isGitAvailable } from "../../testHelpers/gitAvailable.js";
+
+const gitOk = isGitAvailable();
 
 let tmpRoot: string;
 
@@ -31,7 +34,7 @@ async function freshRepo(name: string): Promise<string> {
   return repo;
 }
 
-describe("realFilesystemAdapter", () => {
+describe("realFilesystemAdapter", { skip: !gitOk ? "git not on PATH" : false }, () => {
   it("read returns content for existing file", async () => {
     const repo = await freshRepo("fs-read-existing");
     const fsAdapter = realFilesystemAdapter(repo);
@@ -77,7 +80,7 @@ describe("realFilesystemAdapter", () => {
   });
 });
 
-describe("realGitAdapter", () => {
+describe("realGitAdapter", { skip: !gitOk ? "git not on PATH" : false }, () => {
   it("commitAll stages + commits + returns SHA", async () => {
     const repo = await freshRepo("git-commit-basic");
     await fs.writeFile(path.join(repo, "added.txt"), "new file\n", "utf8");
@@ -156,7 +159,7 @@ describe("realGitAdapter", () => {
   });
 });
 
-describe("v2Adapters — end-to-end with WorkerPipeline", () => {
+describe("v2Adapters — end-to-end with WorkerPipeline", { skip: !gitOk ? "git not on PATH" : false }, () => {
   it("applyAndCommit against real adapters: hunks → file change → commit", async () => {
     const { applyAndCommit } = await import("./WorkerPipeline.js");
     const repo = await freshRepo("e2e-pipeline");

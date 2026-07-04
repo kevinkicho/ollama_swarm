@@ -105,11 +105,8 @@ export function PreflightPreview({
       {probeBanner}
       <div className="rounded border border-sky-700/50 bg-sky-950/30 text-xs text-sky-100 p-3 space-y-1">
         <div>
-          <span className="text-sky-300 font-semibold uppercase tracking-wider text-[10px]">↻ resume</span>{" "}
-          Found existing clone — will NOT re-clone.{" "}
-          <span className="text-sky-200/70">
-            (Start button below will say <strong className="text-sky-100">Resume run</strong> — clicking it confirms.)
-          </span>
+          <span className="text-sky-300 font-semibold uppercase tracking-wider text-[10px]">existing workspace</span>{" "}
+          Found existing clone — will reuse current files (no re-clone).
         </div>
         <div className="font-mono text-sky-200/80 text-[11px] break-all">{state.destPath}</div>
         <div className="text-sky-200/90">{detail}</div>

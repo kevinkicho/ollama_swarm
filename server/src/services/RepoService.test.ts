@@ -446,6 +446,9 @@ test("excludeRunnerArtifacts — handles existing exclude file without trailing 
 // ---------------------------------------------------------------------------
 
 import { execSync } from "node:child_process";
+import { isGitAvailable } from "../testHelpers/gitAvailable.js";
+
+const gitOk = isGitAvailable();
 
 async function makeTmpGitRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-clonestats-"));
@@ -457,7 +460,7 @@ async function makeTmpGitRepo(): Promise<string> {
   return root;
 }
 
-test("cloneStats — returns commits=1 / clean tree on a fresh single-commit repo", async () => {
+test("cloneStats — returns commits=1 / clean tree on a fresh single-commit repo", { skip: !gitOk ? "git not on PATH" : false }, async () => {
   const root = await makeTmpGitRepo();
   try {
     await fs.writeFile(path.join(root, "README.md"), "# Hello\n");
@@ -472,7 +475,7 @@ test("cloneStats — returns commits=1 / clean tree on a fresh single-commit rep
   }
 });
 
-test("cloneStats — counts modified + untracked files separately", async () => {
+test("cloneStats — counts modified + untracked files separately", { skip: !gitOk ? "git not on PATH" : false }, async () => {
   const root = await makeTmpGitRepo();
   try {
     await fs.writeFile(path.join(root, "tracked.md"), "v1\n");
@@ -491,7 +494,7 @@ test("cloneStats — counts modified + untracked files separately", async () => 
   }
 });
 
-test("cloneStats — counts multiple commits in history", async () => {
+test("cloneStats — counts multiple commits in history", { skip: !gitOk ? "git not on PATH" : false }, async () => {
   const root = await makeTmpGitRepo();
   try {
     await fs.writeFile(path.join(root, "a.md"), "1\n");
