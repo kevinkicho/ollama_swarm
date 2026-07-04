@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { PreflightPreview } from "./PreflightPreview";
-import { BrainStartChat } from "./BrainStartChat";
+import { BrainStartChat, type BrainConfigPatch } from "./BrainStartChat";
 import { useSetupForm } from "../hooks/useSetupForm";
 import { PRESETS } from "./setup/presets";
 import { TopologyGrid } from "./setup/TopologyGrid";
@@ -82,12 +82,12 @@ export function SetupForm() {
         className="w-full max-w-4xl space-y-4"
       >
         <BrainStartChat
-          onApplyConfig={(cfg: any) => {
+          onApplyConfig={(cfg: BrainConfigPatch) => {
             if (cfg.preset) form.setPresetId(cfg.preset);
             if (cfg.model) form.setModel(cfg.model);
             // other fields are synced inside the hook when possible
           }}
-          onStartNow={(cfg: any) => form.startSwarmDirectlyFromBrain(cfg)}
+          onStartNow={(cfg: BrainConfigPatch) => form.startSwarmDirectlyFromBrain(cfg)}
         />
 
         {form.recentRuns.length > 0 && (

@@ -5,16 +5,21 @@ interface ChatMessage {
   content: string;
 }
 
-export function BrainStartChat({ onApplyConfig, onStartNow }: { onApplyConfig: (cfg: any) => void; onStartNow?: (cfg: any) => void }) {
+export type BrainConfigPatch = Record<string, unknown> & {
+  preset?: string;
+  model?: string;
+};
+
+export function BrainStartChat({ onApplyConfig, onStartNow }: { onApplyConfig: (cfg: BrainConfigPatch) => void; onStartNow?: (cfg: BrainConfigPatch) => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: "assistant", content: "Hi! I'm Brain, the swarm librarian. Tell me what you want to do (e.g. 'run blackboard on my local kyahoofinance folder with directive to add gov data panels to fx and credit tabs, use 5 agents, rounds 0'). I can give you the exact JSON + a working `ollama-swarm start` command." },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [lastConfig, setLastConfig] = useState<any>(null);
+  const [lastConfig, setLastConfig] = useState<BrainConfigPatch | null>(null);
   const [starting, setStarting] = useState(false);
 
-  const extractConfig = (text: string): any | null => {
+  const extractConfig = (text: string): BrainConfigPatch | null => {
     const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
     if (!jsonMatch) return null;
     try {
@@ -40,7 +45,7 @@ export function BrainStartChat({ onApplyConfig, onStartNow }: { onApplyConfig: (
 
     // Fast path: if user just said "yes/start" and we already have a config, start immediately
     // without an extra roundtrip (the LLM response can still come for UX).
-    if (userWantsToStart && onStartNow) {
+    if (userWantsToStart && onStartNow && lastConfig) {
       setStarting(true);
       onStartNow(lastConfig);
       // Still let the LLM reply in background for the transcript feel
@@ -67,9 +72,9 @@ export function BrainStartChat({ onApplyConfig, onStartNow }: { onApplyConfig: (
 
         // If assistant signals launch after we had a config
         const assistantWantsStart = cfg && /launching|starting now|begin|swarm is being launched/i.test(data.reply);
-        if ((userWantsToStart || assistantWantsStart) && (cfg || lastConfig) && onStartNow) {
+        if ((userWantsToStart || assistantWantsStart) && onStartNow) {
           const toStart = cfg || lastConfig;
-          onStartNow(toStart);
+          if (toStart) onStartNow(toStart);
         }
       }
     } catch (e) {

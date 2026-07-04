@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import type { BrainConfigPatch } from "../components/BrainStartChat";
 import { useSwarm } from "../state/store";
 import { usePreflight } from "../hooks/usePreflight";
 import { PRESETS } from "../components/setup/presets";
@@ -131,7 +132,7 @@ export function useSetupForm(navigate: (path: string) => void) {
     if ((r as any).ambitionTiers) setAmbitionTiers((r as any).ambitionTiers);
   };
 
-  const startSwarmDirectlyFromBrain = async (cfg: any) => {
+  const startSwarmDirectlyFromBrain = async (cfg: BrainConfigPatch) => {
     setBusy(true);
     // minimal implementation - in real it builds payload and posts
     setTimeout(() => setBusy(false), 500);
