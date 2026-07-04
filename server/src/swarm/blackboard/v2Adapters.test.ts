@@ -20,7 +20,9 @@ before(async () => {
 });
 
 after(async () => {
-  await fs.rm(tmpRoot, { recursive: true, force: true });
+  if (tmpRoot) {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
 });
 
 async function freshRepo(name: string): Promise<string> {

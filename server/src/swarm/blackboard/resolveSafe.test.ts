@@ -24,7 +24,9 @@ before(async () => {
 });
 
 after(async () => {
-  await fs.rm(tmpRoot, { recursive: true, force: true });
+  if (tmpRoot) {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
 });
 
 // Windows file-symlink creation requires admin/developer mode, so several

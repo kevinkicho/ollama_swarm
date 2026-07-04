@@ -340,11 +340,11 @@ describe("OrchestratorWorkerRunner — directive plumbing (structural, post Phas
 
 describe("OW form spec", () => {
   it("orchestrator-worker is now directive: 'honored'", () => {
-    const setup = _read(
-      _join(_here, "../../../web/src/components/SetupForm.tsx"),
+    const presetsSrc = _read(
+      _join(_here, "../../../web/src/components/setup/presets.ts"),
       "utf8",
     );
-    const block = setup.match(/id:\s*"orchestrator-worker"[\s\S]{0,1500}?\},/);
+    const block = presetsSrc.match(/id:\s*"orchestrator-worker"[\s\S]{0,2000}?\},/);
     assert.ok(block, "orchestrator-worker preset block must exist");
     assert.match(block![0], /directive:\s*"honored"/);
   });

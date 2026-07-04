@@ -319,12 +319,12 @@ import { readFileSync as _read } from "node:fs";
 import { join as _join } from "node:path";
 
 test("(#5) web preset spec marks round-robin as directive: 'honored'", () => {
-  const setup = _read(
-    _join(__dirname, "../../../web/src/components/SetupForm.tsx"),
+  const presetsSrc = _read(
+    _join(__dirname, "../../../web/src/components/setup/presets.ts"),
     "utf8",
   );
   // Find the round-robin preset block + assert directive: "honored"
-  const roundRobinBlock = setup.match(/id:\s*"round-robin"[\s\S]{0,800}?\},/);
+  const roundRobinBlock = presetsSrc.match(/id:\s*"round-robin"[\s\S]{0,2000}?\},/);
   assert.ok(roundRobinBlock, "round-robin preset block must exist");
   assert.match(
     roundRobinBlock![0],
@@ -472,11 +472,11 @@ test("(role-diff #2) Orchestrator uses selectRoleCatalog for both runner instant
 });
 
 test("(role-diff #2+#4) web preset spec marks role-diff as directive: 'honored'", () => {
-  const setup = _read(
-    _join(__dirname, "../../../web/src/components/SetupForm.tsx"),
+  const presets = _read(
+    _join(__dirname, "../../../web/src/components/setup/presets.ts"),
     "utf8",
   );
-  const roleDiffBlock = setup.match(/id:\s*"role-diff"[\s\S]{0,800}?\},/);
+  const roleDiffBlock = presets.match(/id:\s*"role-diff"[\s\S]{0,2000}?\},/);
   assert.ok(roleDiffBlock, "role-diff preset block must exist");
   assert.match(
     roleDiffBlock![0],

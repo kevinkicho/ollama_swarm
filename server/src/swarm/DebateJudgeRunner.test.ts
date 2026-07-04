@@ -415,11 +415,11 @@ describe("DebateJudgeRunner — directive plumbing (structural)", () => {
 
 describe("Debate-judge form spec", () => {
   it("debate-judge is now directive: 'honored'", () => {
-    const setup = readFileSync(
-      join(__dirname, "../../../web/src/components/SetupForm.tsx"),
+    const presetsSrc = readFileSync(
+      join(__dirname, "../../../web/src/components/setup/presets.ts"),
       "utf8",
     );
-    const block = setup.match(/id:\s*"debate-judge"[\s\S]{0,1500}?\},/);
+    const block = presetsSrc.match(/id:\s*"debate-judge"[\s\S]{0,2000}?\},/);
     assert.ok(block, "debate-judge preset block must exist");
     assert.match(block![0], /directive:\s*"honored"/);
   });

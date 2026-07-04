@@ -82,12 +82,12 @@ export function SetupForm() {
         className="w-full max-w-4xl space-y-4"
       >
         <BrainStartChat
-          onApplyConfig={(cfg) => {
+          onApplyConfig={(cfg: any) => {
             if (cfg.preset) form.setPresetId(cfg.preset);
             if (cfg.model) form.setModel(cfg.model);
             // other fields are synced inside the hook when possible
           }}
-          onStartNow={(cfg) => form.startSwarmDirectlyFromBrain(cfg)}
+          onStartNow={(cfg: any) => form.startSwarmDirectlyFromBrain(cfg)}
         />
 
         {form.recentRuns.length > 0 && (

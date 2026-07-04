@@ -351,12 +351,12 @@ describe("MapReduceRunner — directive plumbing (structural, post Phase A)", ()
 });
 
 describe("Map-reduce form spec", () => {
-  it("(#1) marks map-reduce as directive: 'honored' in SetupForm.tsx", () => {
-    const setup = _read(
-      _join(_here, "../../../web/src/components/SetupForm.tsx"),
+  it("(#1) marks map-reduce as directive: 'honored'", () => {
+    const presetsSrc = _read(
+      _join(_here, "../../../web/src/components/setup/presets.ts"),
       "utf8",
     );
-    const block = setup.match(/id:\s*"map-reduce"[\s\S]{0,1200}?\},/);
+    const block = presetsSrc.match(/id:\s*"map-reduce"[\s\S]{0,2000}?\},/);
     assert.ok(block, "map-reduce preset block must exist");
     assert.match(block![0], /directive:\s*"honored"/);
   });
