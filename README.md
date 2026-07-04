@@ -53,6 +53,32 @@ Then open **http://localhost:8244/** (or the WSL guest IP if you're hitting it f
 
 > **Heads-up:** `npm run start` runs *only* the backend (Express + WS at `:8243`); it does **not** serve the SPA. Use `npm run dev` for local use. If you previously ran with the older default ports (52243 / 52244), those moved on 2026-04-27 to dodge Windows' Hyper-V reserved range — new defaults are 8243 / 8244.
 
+## CLI (for agents / Brain / terminal)
+
+The project now ships a real `ollama-swarm` CLI so that Brain (or any agent) can start runs by running a command instead of just printing instructions.
+
+```bash
+# After you have the server running (npm run dev)
+ollama-swarm start --config swarm_config.json
+
+# Or pass everything on the command line (great for LLMs/agents)
+ollama-swarm start \
+  --parent-path "C:\Users\you\workspace\my-project" \
+  --directive "add more data panels using gov endpoints..." \
+  --preset blackboard \
+  --agent-count 5 \
+  --rounds 0 \
+  --model deepseek-v4-flash:cloud
+
+# Dry run (see exactly what would be sent)
+ollama-swarm start --parent-path "..." --directive "..." --dry-run
+```
+
+The CLI talks to the running server at http://localhost:8243 (override with `--server` or `OLLAMA_SWARM_SERVER_URL`).
+
+You can also do `npm run cli start -- --help`.
+
+
 ## Tour
 
 **1. Setup form.** Pick a repo, a parent folder to clone into, an agent count, and one of the **12 presets** (blackboard + discussion/pipeline variants + baseline). The optional User Directive seeds the conformance gauge and is honored by every preset except `stigmergy`. The AI Provider section is a **5-tab** segmented control (Ollama / Ollama Cloud / OpenCode / Anthropic / OpenAI) with a model dropdown that filters per-provider. Council and Blackboard presets support autonomous mode (`rounds: 0`) for infinite improvement loops.
@@ -98,6 +124,43 @@ You fill in a GitHub URL, a local clone path, an agent count, and pick a **patte
 - **Mid-run nudge** — submit a directive amendment without restarting; the planner picks it up at the next cycle.
 - **Cost-share breakdown** — per-agent token shares + savings hint when one role dominates with a coding-tier-suitable model.
 - **Pre-commit verify gate (blackboard)** — set `verifyCommand` (e.g. `npm test`) to gate worker hunks; failures revert the writes and mark the todo for replan.
+- **Auditor-controlled mutations** (new): `auditorOnlyMutations: true` + `requireAuditorVerification` (blackboard only). Workers only propose hunks (pending-commit). The auditor:
+  - Runs a dedicated "hunk review" prompt on the exact proposed changes.
+  - Collects **all** approved changes in memory (using pure `applyHunks`).
+  - Writes final state once.
+  - Runs verify **once** (if required).
+  - Creates **one single git commit** for the whole batch.
+  This is the recommended high-safety mode — the auditor is the only entity that mutates the repo. Exposed in the web form under Blackboard advanced settings.
+- **Hybrid planning (council → blackboard etc.)**: `useHybridPlanning: true`, `planningPreset: "council"`, `executionPreset: "blackboard"`, `webTools: true`. Planning phase (debate/synthesis) builds broad understanding + deliverable; results are automatically piped as `userDirective` + transcript snippets into the blackboard execution phase. Blackboard planner additionally receives a lightweight `systemMap` (top-level dirs + sample files + README excerpt) for cross-cutting reasoning without violating its read caps. `webTools` gives the planner `web_search` + `web_fetch` (MCP-style external tools). Gives "god-mode discreetly" in planning while keeping blackboard's robust gated execution + batch auditor commit intact. Toggle + dropdowns (including web research) live in the Topology card → "🧭 Planning Phase".
+
+**Example hybrid config** (via form under blackboard advanced, or direct POST to /api/swarm/start, or Brain chat):
+
+```json
+{
+  "preset": "blackboard",
+  "useHybridPlanning": true,
+  "planningPreset": "council",
+  "executionPreset": "blackboard",
+  "webTools": true,
+  "userDirective": "please use existing data endpoints and governmental & non-governmental data endpoints (find through websearch) to put down more panels...",
+  "auditorOnlyMutations": true,
+  "requireAuditorVerification": true,
+  "verifyCommand": "npm test"
+}
+```
+
+Expected transcript flow (simplified):
+- [Pipeline] Starting phase 1/2: council ...
+- (Council debate/synthesis produces broad plan + deliverable with systemic insights)
+- [Pipeline] Starting phase 2/2: blackboard ...
+- Piped: ## Prior Phase Output (deliverable) + transcript snippets injected as directive/context.
+- Planner uses the rich piped context + systemMap for grounded TODOs.
+- Workers propose (pending-commit).
+- Auditor: explicit reviewProposedHunks + batch.
+- [auditor-gate] Batching N approved changes...
+- In-memory applyHunks → one commit: auditor batch approval (one commit): ...
+- Final summary/deliverable with "hybrid" notes.
+
 - **Cost cap (paid providers)** — every run on Anthropic/OpenAI checks cumulative spend against `maxCostUsd` every 5 seconds; stops cleanly with `cap:cost` when the ceiling is reached. Ollama runs ignore the cap (every record costs $0).
 - **Eval harness + scoreboard** — `node eval/run-eval.mjs --repo=<url> --seeds=5` runs every preset against the catalog, then `node eval/aggregate.mjs runs/_eval/<ts>` writes `eval/RESULTS.md` with median + IQR per cell. See [`eval/fixtures/README.md`](eval/fixtures/README.md) for the self-contained fixture pattern.
 - **Infinite run tier progression** — the ambition ratchet now retries after tier promotion failure instead of stopping immediately (3-attempt cap). Degenerate contracts (e.g., "read the repo files") are filtered out before they waste worker cycles.
@@ -106,6 +169,20 @@ You fill in a GitHub URL, a local clone path, an agent count, and pick a **patte
 - **Model switch fallback removed** — `SIBLING_MODELS` map emptied; `withSiblingRetry` returns false immediately. Model switching for content issues (invalid JSON, empty response) was dead code — both models route through the same provider path and fail the same way. The real safety nets are stuck-cycle detection, planner fallback, and auditor re-fires.
 
 **Current architecture includes a Brain-as-OS layer** on top of the V2 substrate. The original opencode-SDK path was retired (E3 2026-04-29). Runs use direct providers + in-process ToolDispatcher. Multiple swarms run concurrently. The Brain (monitoring + proposals + self-upgrader + provisioner) sits above the Orchestrator and manages system-level work + self-improvement. See `docs/STATUS.md` and `server/src/swarm/blackboard/brainOverseer/`.
+
+### Agent tools (what workers / planners can actually do)
+
+Agents do **not** have general internet access. The only tools exposed via `ToolDispatcher` are local to the cloned repo:
+
+- **Default ("swarm")**: no tools — workers return pure structured JSON.
+- **"swarm-read"** (planners, many roles): `read`, `grep`, `glob`, `list` (files inside the clone only). Planners are often limited to a small number of reads per turn.
+- **"swarm-builder"** (selected build roles): the above + a **very restricted** `bash` (only allowlisted build/test commands like `npm test`, `tsc --noEmit`; no `curl`, no arbitrary net, cwd-bound).
+
+There are **no** `web_search`, `browse_page`, HTTP fetch, or external tooling tools for agents. GitHub MCP definitions exist under `mcps/` and Playwright is opt-in for the auditor (`MCP_PLAYWRIGHT_ENABLED`), but they are not part of the general agent loop.
+
+When `webTools: true` (and plannerTools), the planner gets `web_search` + `web_fetch`. Otherwise, the model answers from training data only.
+
+See `server/src/tools/ToolDispatcher.ts`, `promptWithRetry.ts`, and `docs/known-limitations.md`.
 
 ## Architecture
 
@@ -186,7 +263,7 @@ Hit the **+ nudge** button next to the conformance gauge to submit a mid-run dir
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `OPENCODE_SERVER_PASSWORD` | **yes (at config-load time)** | Historical opencode HTTP-basic-auth secret. The opencode subprocess is gone (E3 Phase 5) but the env var is still validated by `config.ts` so existing `npm test` / `npm run dev` setups don't break. Set to any non-empty string. Production runs ignore it. |
+| `OPENCODE_SERVER_PASSWORD` | no (defaults to `test-only`) | Historical opencode HTTP-basic-auth secret. The opencode subprocess is gone (E3 Phase 5). `config.ts` defaults this to `test-only` when unset so local dev works without a `.env`; set any non-empty string in `.env` for explicit configuration. Production runs ignore the value. |
 | `OLLAMA_BASE_URL` | no (defaults to `http://localhost:11434/v1`) | Ollama base URL. The provider stack normalizes a trailing `/v1` defensively (so legacy values still work). |
 | `OLLAMA_API_KEY` | no (Ollama Cloud is always usable; key is informational) | Per [docs.ollama.com/cloud](https://docs.ollama.com/cloud). The Ollama Cloud tab is always selectable — the local Ollama install proxies `:cloud` models to ollama.com when an account is configured locally. Setting this key surfaces a "live key configured" hint in the tab tooltip. |
 | `ANTHROPIC_API_KEY` | no (only when using Anthropic provider) | Read by the in-process `AnthropicProvider` via `process.env`. The setup form's Anthropic tab is disabled when unset. |

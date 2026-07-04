@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { createLogger } from "../services/logger.js";
 import path from "node:path";
 import { promises as fs, readFileSync } from "node:fs";
 import { Router, type Request, type Response } from "express";
@@ -24,14 +25,32 @@ import {
   RunsQuery,
   BrainApplyBody,
   BrainRejectBody,
+  StatusQuery,
+  LegacyRunBody,
 } from "./schemas.js";
+import { assertAllowedClonePath } from "./clonePathGuard.js";
+import { resolveLegacyActiveRunId } from "./legacyRunResolve.js";
 import type { Orchestrator } from "../services/Orchestrator.js";
+import { pickProvider } from "../providers/pickProvider.js";
 import { deriveCloneDir, RepoService } from "../services/RepoService.js";
 import { normalizeWslPath } from "../services/pathNormalize.js";
 import { preflightDiskCheck } from "../swarm/preflightDiskCheck.js";
 import { projectRunCost, exceedsBudget } from "../swarm/preflightCostProjector.js";
 import { decideStopAction } from "../swarm/drainStopPolicy.js";
-import { SwarmRoleSchema, StartBody, SayBody, OpenBody } from './schemas.js';
+import { SwarmRoleSchema, StartBody, SayBody, OpenBody } from "./schemas.js";
+
+function guardClonePath(
+  orch: Orchestrator,
+  res: Response,
+  clonePath: string,
+): string | null {
+  const guard = assertAllowedClonePath(orch, clonePath);
+  if (!guard.ok) {
+    res.status(guard.status).json({ error: guard.error });
+    return null;
+  }
+  return guard.resolved;
+}
 import { missingProviderKeysForModels } from "../providers/providerKeyCheck.js";
 import {
   healthSummariesForProviders,
@@ -49,6 +68,7 @@ import {
 // Max 16 roles (DEFAULT_ROLES has 7; we give headroom without letting the
 // user stuff an unbounded transcript of guidance into every prompt).
 export function swarmRouter(orch: Orchestrator): Router {
+  const log = createLogger();
   const r = Router();
   // Stateless helper — RepoService methods we use here (dirExists,
   // cloneStats) don't touch orchestrator state, so a fresh instance is
@@ -60,8 +80,28 @@ export function swarmRouter(orch: Orchestrator): Router {
   // bounded to the router's lifetime.
   let lastStopClickAt: number | null = null;
 
-  r.get("/status", (_req: Request, res: Response) => {
-    res.json(orch.status());
+  r.get("/status", validate(StatusQuery, "query"), (req: Request, res: Response) => {
+    const { runId } = req.query as unknown as z.infer<typeof StatusQuery>;
+    if (runId) {
+      const status = orch.statusForRun(runId);
+      if (!status) {
+        res.status(404).json({ error: "runId not found" });
+        return;
+      }
+      res.json(status);
+      return;
+    }
+    const resolved = resolveLegacyActiveRunId(orch);
+    if (!resolved.ok) {
+      if (resolved.status === 409) {
+        res.status(409).json({ error: resolved.error, runIds: resolved.runIds });
+        return;
+      }
+      res.json(orch.status());
+      return;
+    }
+    const status = orch.statusForRun(resolved.runId);
+    res.json(status ?? orch.status());
   });
 
   // T-Item-MultiTenant Phase 4 (2026-05-04): list all currently active
@@ -307,6 +347,12 @@ export function swarmRouter(orch: Orchestrator): Router {
       res.status(400).json({ error: msg || "invalid request body", _detail: flat });
       return;
     }
+
+    const reqId = (req as any).reqId;
+    const startLog = log.withContext({ reqId });
+
+    // Attach for correlation in run hub / logger
+    (parsed.data as any).reqId = reqId;
     // Task #147: force-restart path. When the caller sets force=true, we
     // pre-emptively stop any existing runner so the new start always gets
     // a clean slot. Recovers from the "stuck-orchestrator" state observed
@@ -317,9 +363,9 @@ export function swarmRouter(orch: Orchestrator): Router {
     // surface its own error if the orchestrator is truly broken.
     if (parsed.data.force === true) {
       try {
-        await orch.stop();
+        await orch.stopAll();
       } catch (err) {
-        console.warn('[swarm] force-stop-ignored:', err instanceof Error ? err.message : String(err));
+        startLog.warn('force-stop-ignored', { error: err instanceof Error ? err.message : String(err) });
       }
     }
     // ModelConfig consolidation (2026-05-17): replace scattered ?? chains
@@ -476,6 +522,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         rounds: effectiveRounds,
         model: resolvedModels.model,
         preset: parsed.data.preset,
+        reqId: (parsed.data as any).reqId, // for correlation in RunEventHub and logs
         // Unit 25: pass user directive through. Already trimmed + 4000-cap-
         // validated by zod. Empty string → undefined already (zod strips).
         userDirective: parsed.data.userDirective && parsed.data.userDirective.length > 0
@@ -509,7 +556,14 @@ export function swarmRouter(orch: Orchestrator): Router {
         // so BlackboardRunner.executeWorkerTodoV2 can construct the
         // verify adapter when present. Other presets ignore.
         verifyCommand: parsed.data.verifyCommand,
+        auditorOnlyMutations: parsed.data.auditorOnlyMutations,
+        requireAuditorVerification: parsed.data.requireAuditorVerification,
         plannerTools: parsed.data.plannerTools,
+        webTools: parsed.data.webTools,
+        mcpServers: parsed.data.mcpServers,
+        planningPreset: parsed.data.planningPreset,
+        executionPreset: parsed.data.executionPreset,
+        useHybridPlanning: parsed.data.useHybridPlanning,
         useLocal: parsed.data.useLocal,
         createdBy: parsed.data.createdBy,
         resumeContract: parsed.data.resumeContract,
@@ -615,7 +669,17 @@ export function swarmRouter(orch: Orchestrator): Router {
   // within 5s hard-kills. Tracked at module scope per-process — a
   // single user clicking Stop twice is the canonical case. With the
   // flag OFF (default), every click hard-kills as before.
-  r.post("/stop", async (_req: Request, res: Response) => {
+  r.post("/stop", async (req: Request, res: Response) => {
+    const bodyParsed = LegacyRunBody.safeParse(req.body ?? {});
+    const runId = bodyParsed.success ? bodyParsed.data.runId : undefined;
+    const resolved = resolveLegacyActiveRunId(orch, runId);
+    if (!resolved.ok) {
+      res.status(resolved.status).json({
+        error: resolved.error,
+        ...(resolved.runIds ? { runIds: resolved.runIds } : {}),
+      });
+      return;
+    }
     try {
       if (config.SWARM_DRAIN_ON_STOP) {
         const decision = decideStopAction({
@@ -624,12 +688,20 @@ export function swarmRouter(orch: Orchestrator): Router {
         });
         lastStopClickAt = Date.now();
         if (decision.action === "drain") {
-          await orch.drain();
+          const ok = await orch.drainRun(resolved.runId);
+          if (!ok) {
+            res.status(404).json({ error: "runId not active" });
+            return;
+          }
           res.json({ ok: true, action: "drain", reason: decision.reason });
           return;
         }
       }
-      await orch.stop();
+      const ok = await orch.stopRun(resolved.runId);
+      if (!ok) {
+        res.status(404).json({ error: "runId not active" });
+        return;
+      }
       res.json({ ok: true, action: "kill" });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -668,9 +740,23 @@ export function swarmRouter(orch: Orchestrator): Router {
   // to hard stop. Backstopped at 3 min — user can press hard /stop
   // to escalate immediately. For non-blackboard presets, falls
   // through to hard /stop (orchestrator handles the dispatch).
-  r.post("/drain", async (_req: Request, res: Response) => {
+  r.post("/drain", async (req: Request, res: Response) => {
+    const bodyParsed = LegacyRunBody.safeParse(req.body ?? {});
+    const runId = bodyParsed.success ? bodyParsed.data.runId : undefined;
+    const resolved = resolveLegacyActiveRunId(orch, runId);
+    if (!resolved.ok) {
+      res.status(resolved.status).json({
+        error: resolved.error,
+        ...(resolved.runIds ? { runIds: resolved.runIds } : {}),
+      });
+      return;
+    }
     try {
-      await orch.drain();
+      const ok = await orch.drainRun(resolved.runId);
+      if (!ok) {
+        res.status(404).json({ error: "runId not active" });
+        return;
+      }
       res.json({ ok: true });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -684,10 +770,22 @@ export function swarmRouter(orch: Orchestrator): Router {
       res.status(400).json({ error: parsed.error.flatten() });
       return;
     }
-    orch.injectUser(parsed.data.text, {
+    const resolved = resolveLegacyActiveRunId(orch, parsed.data.runId);
+    if (!resolved.ok) {
+      res.status(resolved.status).json({
+        error: resolved.error,
+        ...(resolved.runIds ? { runIds: resolved.runIds } : {}),
+      });
+      return;
+    }
+    const ok = orch.injectUserForRun(resolved.runId, parsed.data.text, {
       intent: parsed.data.intent ?? "steer",
       ...(parsed.data.targetAgent ? { targetAgent: parsed.data.targetAgent } : {}),
     });
+    if (!ok) {
+      res.status(404).json({ error: "runId not active" });
+      return;
+    }
     res.json({ ok: true });
   });
 
@@ -748,21 +846,16 @@ export function swarmRouter(orch: Orchestrator): Router {
   // so the UI dropdown + modal can render without further fetches.
   // Returns 200 with an empty list when no run is active or the
   // parent dir is unreadable — never throws.
-  r.get("/runs", async (req: Request, res: Response) => {
+  r.get("/runs", validate(RunsQuery, "query"), async (req: Request, res: Response) => {
+    const query = req.query as unknown as z.infer<typeof RunsQuery>;
     const status = orch.status();
     // Always respect explicit ?parentPath= from frontend.
     // Fall back to active run's parent, then cached lastParentPath.
-    const explicitParent = typeof req.query.parentPath === "string"
-      ? req.query.parentPath
-      : undefined;
-    const activeParent = explicitParent
-      ?? (status.localPath ? path.dirname(path.resolve(status.localPath)) : null)
-      ?? orch.getLastParentPath();
-    // #238: when ?includeOtherParents=true, also scan
-    // every parent path the orchestrator has tracked.
-    const includeOtherParents =
-      typeof req.query.includeOtherParents === "string" &&
-      req.query.includeOtherParents.toLowerCase() === "true";
+    const activeParent = query.parentPath
+      ? normalizeWslPath(query.parentPath)
+      : (status.localPath ? path.dirname(path.resolve(status.localPath)) : null)
+        ?? orch.getLastParentPath();
+    const includeOtherParents = query.includeOtherParents === true;
     const parentsToScan = new Set<string>();
     if (activeParent) parentsToScan.add(activeParent);
     // Also scan the project's logs/ directory and its subdirectories
@@ -790,6 +883,27 @@ export function swarmRouter(orch: Orchestrator): Router {
         }
       } catch { /* logs/ doesn't exist — fine */ }
     }
+
+    // For any clone-like dirs under the scanned parents, also scan their
+    // internal logs/ subdirs for per-run summary locations (logs/<runshort>/).
+    // This ensures we discover summaries even when parentPath points to
+    // a project root or clone parent (not just directly to a clone's logs).
+    const initialParents = [...parentsToScan];
+    for (const p of initialParents) {
+      const clogs = path.join(p, "logs");
+      try {
+        const st = await fs.stat(clogs);
+        if (st.isDirectory()) {
+          const subs = await fs.readdir(clogs);
+          for (const s of subs) {
+            const sp = path.join(clogs, s);
+            try {
+              if ((await fs.stat(sp)).isDirectory()) parentsToScan.add(sp);
+            } catch {}
+          }
+        }
+      } catch {}
+    }
     if (includeOtherParents) {
       for (const p of orch.getKnownParentPaths()) parentsToScan.add(p);
     }
@@ -801,7 +915,7 @@ export function swarmRouter(orch: Orchestrator): Router {
     const activeRunId = status.runConfig?.preset
       ? status.runId ?? null
       : null;
-    const runs: RunSummaryDigest[] = [];
+    const collected: RunSummaryDigest[] = [];
     const parentsScanned: string[] = [];
     for (const parent of parentsToScan) {
       let entries: string[];
@@ -822,6 +936,24 @@ export function swarmRouter(orch: Orchestrator): Router {
           continue;
         }
         if (!stat.isDirectory()) continue;
+
+        // Heuristic to avoid probing every sibling folder when activeParent
+        // resolves to a broad "workspace" or "projects" root that contains
+        // many unrelated repos. We only fully scan dirs that look like they
+        // have run history (logs/ subdir or summary files). This greatly
+        // reduces log spam on ENOENT for non-run directories.
+        let looksPromising = false;
+        try {
+          const childEntries = await fs.readdir(cloneDir);
+          looksPromising = childEntries.some(
+            (e) => /^summary.*\.json$/.test(e) || e === "logs" || e === "run-state.json"
+          );
+        } catch {
+          // unreadable child — skip
+          continue;
+        }
+        if (!looksPromising) continue;
+
         // 2026-04-24: surface EVERY per-run summary (summary-<iso>.json),
         // not just the latest. A target run 8 times now contributes 8
         // dropdown rows instead of 1.
@@ -835,13 +967,40 @@ export function swarmRouter(orch: Orchestrator): Router {
           // #238: tag each digest with its parent so the UI can group
           // by parent in the cross-parent view.
           (d as RunSummaryDigest & { parentPath?: string }).parentPath = parent;
-          runs.push(d);
+          collected.push(d);
+        }
+      }
+
+      // Also treat the current 'parent' itself as a potential clone dir containing
+      // summary files directly. This handles the logs/<runshort>/ case where
+      // parentPath led us to add runshort dirs (which contain summary-*.json
+      // directly inside, not in further sub-clone-dirs).
+      //
+      // Guard: only do this when the parent itself appears to be (or contain)
+      // run material. Prevents direct summary.json probes (and their ENOENT
+      // noise) against broad workspace roots.
+      const parentLooksPromising = entries.some(
+        (e) => /^summary.*\.json$/.test(e) || e === "logs" || e === "run-state.json"
+      );
+      if (parentLooksPromising) {
+        const directDigests = await readAllRunDigests(parent, path.basename(parent));
+        for (const d of directDigests) {
+          d.isActive = activeClone !== null && parent === activeClone && d.runId !== undefined && d.runId === activeRunId;
+          (d as RunSummaryDigest & { parentPath?: string }).parentPath = parent;
+          collected.push(d);
         }
       }
     }
     // Newest first by startedAt (descending). Falls back to dir name
     // when startedAt is missing (shouldn't happen with a real
     // summary, but defensive).
+    // dedupe (in case multiple scan paths hit the same summary)
+    const byKey = new Map<string, RunSummaryDigest>();
+    for (const d of collected) {
+      const k = d.runId || `t:${d.startedAt}`;
+      if (!byKey.has(k)) byKey.set(k, d);
+    }
+    const runs = Array.from(byKey.values());
     runs.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
     res.json({ runs, parents: parentsScanned });
   });
@@ -857,9 +1016,11 @@ export function swarmRouter(orch: Orchestrator): Router {
   // requested runId, 500 on unexpected I/O.
   r.get("/run-summary", validate(RunSummaryQuery, "query"), async (req: Request, res: Response) => {
     const { clonePath, runId } = req.query as unknown as z.infer<typeof RunSummaryQuery>;
+    const resolvedClone = guardClonePath(orch, res, clonePath);
+    if (!resolvedClone) return;
     let entries: string[];
     try {
-      entries = await fs.readdir(clonePath);
+      entries = await fs.readdir(resolvedClone);
     } catch (err) {
       console.warn('[swarm] readdir-clonePath-failed:', err instanceof Error ? err.message : String(err));
       res.status(404).json({ error: "clonePath not readable" });
@@ -873,7 +1034,7 @@ export function swarmRouter(orch: Orchestrator): Router {
     for (const e of candidates) {
       let raw: string;
       try {
-        raw = await fs.readFile(path.join(clonePath, e), "utf8");
+        raw = await fs.readFile(path.join(resolvedClone, e), "utf8");
       } catch (err) {
         console.warn('[swarm] read-summary-file-failed:', err instanceof Error ? err.message : String(err));
         continue;
@@ -902,12 +1063,14 @@ export function swarmRouter(orch: Orchestrator): Router {
   // log sidebar to surface lessons learned across prior runs.
   r.get("/memory", validate(ClonePathQuery, "query"), async (req: Request, res: Response) => {
     const { clonePath, includeOtherParents: includeOther } = req.query as unknown as z.infer<typeof ClonePathQuery>;
+    const resolvedClone = guardClonePath(orch, res, clonePath);
+    if (!resolvedClone) return;
     const includeOtherParents = includeOther === true;
-    const clonesToScan: string[] = [clonePath];
+    const clonesToScan: string[] = [resolvedClone];
     const otherClones: string[] = [];
     if (includeOtherParents) {
-      const cloneName = path.basename(clonePath);
-      const activeParent = path.dirname(path.resolve(clonePath));
+      const cloneName = path.basename(resolvedClone);
+      const activeParent = path.dirname(path.resolve(resolvedClone));
       for (const parent of orch.getKnownParentPaths()) {
         if (parent === activeParent) continue;
         // Look for the same target clone name under each other parent.
@@ -935,7 +1098,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
         // Other read errors on a SECONDARY clone shouldn't fail the
         // whole request — primary clone errors propagate as before.
-        if (dir !== clonePath) continue;
+        if (dir !== resolvedClone) continue;
         res.status(500).json({ error: (err as Error).message });
         return;
       }
@@ -946,7 +1109,7 @@ export function swarmRouter(orch: Orchestrator): Router {
           const obj = JSON.parse(t);
           if (obj && typeof obj === "object") {
             entries.push({ ...obj, _sourceClone: dir });
-            if (dir === clonePath) primaryEntries++;
+            if (dir === resolvedClone) primaryEntries++;
             else otherParentEntries++;
           }
         } catch (err) {
@@ -969,8 +1132,10 @@ export function swarmRouter(orch: Orchestrator): Router {
   r.get("/outcome/stats", validate(OutcomeStatsQuery, "query"), async (req: Request, res: Response) => {
     try {
     const { clonePath } = req.query as unknown as z.infer<typeof OutcomeStatsQuery>;
+    const resolvedClone = guardClonePath(orch, res, clonePath);
+    if (!resolvedClone) return;
     const { readOutcomeHistory: readHistory, computeStats: computeOutcomeStats } = await import("../swarm/outcomeHistory.js");
-    const outcomes = await readHistory(clonePath);
+    const outcomes = await readHistory(resolvedClone);
     const stats = computeOutcomeStats(outcomes);
     const result: Record<string, unknown> = {};
     for (const [preset, stat] of stats) {
@@ -985,7 +1150,12 @@ export function swarmRouter(orch: Orchestrator): Router {
     const { directive, clonePath } = req.query as unknown as z.infer<typeof OutcomeRecommendQuery>;
     const { recommendPreset: recommend, readOutcomeHistory: readHistory } = await import("../swarm/outcomeHistory.js");
     const { suggestAdaptiveParams } = await import("../swarm/adaptiveParams.js");
-    const outcomes = clonePath ? await readHistory(clonePath) : [];
+    let outcomes: Awaited<ReturnType<typeof readHistory>> = [];
+    if (clonePath) {
+      const resolvedClone = guardClonePath(orch, res, clonePath);
+      if (!resolvedClone) return;
+      outcomes = await readHistory(resolvedClone);
+    }
     const recommendation = recommend(directive, outcomes);
     const adaptive = suggestAdaptiveParams(recommendation.preset as import("../swarm/SwarmRunner.js").PresetId, outcomes);
     res.json({ ...recommendation, adaptiveParams: adaptive });
@@ -997,8 +1167,10 @@ export function swarmRouter(orch: Orchestrator): Router {
     try {
     const { runId } = req.params as unknown as z.infer<typeof CheckpointsParams>;
     const { clonePath } = req.query as unknown as z.infer<typeof ClonePathQuery>;
+    const resolvedClone = guardClonePath(orch, res, clonePath);
+    if (!resolvedClone) return;
     const { listCheckpoints } = await import("../swarm/checkpoint.js");
-    const checkpoints = await listCheckpoints(clonePath, runId);
+    const checkpoints = await listCheckpoints(resolvedClone, runId);
     res.json({ runId, checkpoints });
     } catch (e) { res.status(500).json({ error: "checkpoints unavailable", detail: (e as Error).message }); }
   });
@@ -1007,8 +1179,10 @@ export function swarmRouter(orch: Orchestrator): Router {
     try {
     const { runId, fileName } = req.params as unknown as z.infer<typeof CheckpointFileParams>;
     const { clonePath } = req.query as unknown as z.infer<typeof ClonePathQuery>;
+    const resolvedClone = guardClonePath(orch, res, clonePath);
+    if (!resolvedClone) return;
     const { readCheckpoint } = await import("../swarm/checkpoint.js");
-    const checkpoint = await readCheckpoint(clonePath, runId, fileName);
+    const checkpoint = await readCheckpoint(resolvedClone, runId, fileName);
     if (!checkpoint) {
       res.status(404).json({ error: "Checkpoint not found" });
       return;
@@ -1022,8 +1196,10 @@ export function swarmRouter(orch: Orchestrator): Router {
     try {
     const { runId } = req.params as unknown as z.infer<typeof TimelineParams>;
     const { clonePath } = req.query as unknown as z.infer<typeof ClonePathQuery>;
+    const resolvedClone = guardClonePath(orch, res, clonePath);
+    if (!resolvedClone) return;
     const { getTimeline } = await import("../swarm/timeline.js");
-    const timeline = await getTimeline(clonePath, runId);
+    const timeline = await getTimeline(resolvedClone, runId);
     if (!timeline) {
       res.status(404).json({ error: "No event log found for this run" });
       return;
@@ -1036,8 +1212,10 @@ export function swarmRouter(orch: Orchestrator): Router {
   r.get("/memory-store", validate(ClonePathQuery, "query"), async (req: Request, res: Response) => {
     try {
     const { clonePath } = req.query as unknown as z.infer<typeof ClonePathQuery>;
+    const resolvedClone = guardClonePath(orch, res, clonePath);
+    if (!resolvedClone) return;
     const { loadMemoryStore } = await import("../memory/MemoryStore.js");
-    const store = await loadMemoryStore(clonePath);
+    const store = await loadMemoryStore(resolvedClone);
     res.json({ entries: store.snapshot() });
     } catch (e) { res.status(500).json({ error: "memory-store unavailable", detail: (e as Error).message }); }
   });
@@ -1045,8 +1223,10 @@ export function swarmRouter(orch: Orchestrator): Router {
   r.post("/memory-store", validate(MemoryStorePostBody, "body"), async (req: Request, res: Response) => {
     try {
     const { key, value, tags, clonePath } = req.body as unknown as z.infer<typeof MemoryStorePostBody>;
+    const resolvedClone = guardClonePath(orch, res, clonePath);
+    if (!resolvedClone) return;
     const { loadMemoryStore } = await import("../memory/MemoryStore.js");
-    const store = await loadMemoryStore(clonePath);
+    const store = await loadMemoryStore(resolvedClone);
     store.store(key, value, tags, "user");
     await store.flush();
     res.json({ ok: true, key });
@@ -1057,8 +1237,10 @@ export function swarmRouter(orch: Orchestrator): Router {
     try {
     const { key } = req.params as unknown as z.infer<typeof MemoryStoreDeleteParams>;
     const { clonePath } = req.query as unknown as z.infer<typeof ClonePathQuery>;
+    const resolvedClone = guardClonePath(orch, res, clonePath);
+    if (!resolvedClone) return;
     const { loadMemoryStore } = await import("../memory/MemoryStore.js");
-    const store = await loadMemoryStore(clonePath);
+    const store = await loadMemoryStore(resolvedClone);
     const deleted = store.forget(key);
     await store.flush();
     res.json({ ok: true, deleted });
@@ -1066,7 +1248,8 @@ export function swarmRouter(orch: Orchestrator): Router {
   });
 
   // P7: Brain health endpoint
-  r.get("/brain/health", (_req: Request, res: Response) => {
+  r.get("/brain/health", async (_req: Request, res: Response) => {
+    await orch.whenBrainReady();
     const brainService = orch.getBrainService();
     if (!brainService) {
       res.json({ status: "not-initialized" });
@@ -1089,7 +1272,7 @@ export function swarmRouter(orch: Orchestrator): Router {
     res.json({ activities: brainService.getRecentActivities() });
   });
 
-  // P7: Brain proposals endpoint
+  // P7: Brain run insights / analyses (formerly "proposals")
   r.get("/brain/proposals", async (_req: Request, res: Response) => {
     const brainService = orch.getBrainService();
     if (!brainService) {
@@ -1100,45 +1283,113 @@ export function swarmRouter(orch: Orchestrator): Router {
     res.json({ proposals });
   });
 
-  // P7: Apply brain proposal
-  r.post("/brain/apply", validate(BrainApplyBody, "body"), async (req: Request, res: Response) => {
-    const brainService = orch.getBrainService();
-    if (!brainService) {
-      res.status(500).json({ error: "Brain service not initialized" });
-      return;
-    }
-    const { proposalId, patchContent, clonePath } = req.body as z.infer<typeof BrainApplyBody>;
-    const hunks = patchContent.map((h) => ({
-      file: h.file,
-      search: h.search ?? "",
-      replace: h.replace ?? "",
-    }));
-    const result = await brainService.applyProposal(proposalId, hunks, clonePath);
-    if (!result.success) {
-      const status = result.error?.includes("runs are active") ? 409
-        : result.error === "Proposal not found" ? 404
-        : 400;
-      res.status(status).json({ success: false, error: result.error });
-      return;
-    }
-    res.json(result);
+  // P7: Apply brain proposal — SYSTEM PATCHING DISABLED.
+  // Brain now serves as librarian/master-admin for run analysis only.
+  r.post("/brain/apply", validate(BrainApplyBody, "body"), async (_req: Request, res: Response) => {
+    res.status(410).json({
+      success: false,
+      error: "System patching has been removed. Brain now provides run analysis and librarian functions only (initialize/start/finish/review/analyze runs).",
+    });
   });
 
   // P7: Reject brain proposal
   r.post("/brain/reject", validate(BrainRejectBody, "body"), async (req: Request, res: Response) => {
+    await orch.whenBrainReady();
     const brainService = orch.getBrainService();
     if (!brainService) {
       res.status(500).json({ error: "Brain service not initialized" });
       return;
     }
     const { proposalId, reason, clonePath } = req.body as z.infer<typeof BrainRejectBody>;
-    const result = await brainService.rejectProposal(proposalId, reason, clonePath);
+    let resolvedClone: string | undefined;
+    if (clonePath) {
+      const guarded = guardClonePath(orch, res, clonePath);
+      if (!guarded) return;
+      resolvedClone = guarded;
+    }
+    const result = await brainService.rejectProposal(proposalId, reason, resolvedClone);
     if (!result.success) {
       const status = result.error === "Proposal not found" ? 404 : 400;
       res.status(status).json({ success: false, error: result.error });
       return;
     }
     res.json({ success: true, message: "Proposal rejected" });
+  });
+
+  // Brain chat: conversational interface to configure and start swarms.
+  // The Brain (librarian/master-admin) helps via natural language.
+  r.post("/brain/chat", async (req: Request, res: Response) => {
+    try {
+      const { messages = [] } = req.body || {};
+      if (!Array.isArray(messages) || messages.length === 0) {
+        return res.status(400).json({ error: "messages array required" });
+      }
+
+      const systemPrompt = `You are Brain, the master-admin and librarian for ollama_swarm.
+
+Your job is to help the user configure and START a swarm run using natural language. The user may be using the web UI **or** talking to you from a terminal / agent loop that can execute commands.
+
+Key rules:
+- For local folders without a Git repo: use "parentPath" + "repoUrl": "".
+- For editing tasks: prefer "preset": "blackboard", "rounds": 0.
+- Default: model "deepseek-v4-flash:cloud", agentCount 5.
+
+When the user gives enough details, output the config **and** a ready-to-run command:
+
+\`\`\`json
+{
+  "parentPath": "C:\\Users\\ysile\\Downloads\\workspace\\kyahoofinance032926",
+  "repoUrl": "",
+  "userDirective": "the full directive here",
+  "preset": "blackboard",
+  "agentCount": 5,
+  "rounds": 0,
+  "model": "deepseek-v4-flash:cloud"
+}
+\`\`\`
+
+Then say:
+
+"Ready to start this swarm?  
+Run this in your terminal:
+
+\`\`\`bash
+ollama-swarm start --config swarm_config.json
+\`\`\`
+
+(You can also paste flags directly: ollama-swarm start --parent-path \"...\" --directive \"...\")"
+
+CRITICAL BEHAVIOR:
+- When the user says "yes", "start", "go", "launch", "do it", etc., re-emit the JSON block + tell them to run the \`ollama-swarm start\` command (or if they are in the web UI, the UI can auto-start).
+- The real CLI is now \`ollama-swarm\` (provided by this project). It talks to the running server.
+- Never invent fake commands.
+- Be concise and actionable.`;
+
+
+
+
+
+      const modelStr = "deepseek-v4-flash:cloud";
+      const { provider, modelId } = pickProvider(modelStr);
+
+      const chatMessages = [
+        { role: "system" as const, content: systemPrompt },
+        ...messages.map((m: any) => ({
+          role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
+          content: String(m.content || ""),
+        })),
+      ];
+
+      const result = await provider.chat({
+        model: modelId,
+        messages: chatMessages,
+        signal: AbortSignal.timeout(90_000),
+      });
+
+      res.json({ reply: result.text, model: modelStr });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   return r;
@@ -1269,8 +1520,14 @@ async function readAllRunDigests(
   let latestRaw: string | null = null;
   try {
     latestRaw = await fs.readFile(path.join(cloneDir, "summary.json"), "utf8");
-  } catch (err) {
-    console.warn('[swarm] read-summary-pointer-failed:', err instanceof Error ? err.message : String(err));
+  } catch (err: any) {
+    // ENOENT is completely normal — most directories we probe during
+    // broad parent/workspace scans are not run clones (or use the new
+    // per-run summary-*.json files inside logs/<id>/ instead of a
+    // top-level legacy pointer). Only warn on real I/O problems.
+    if (err?.code !== 'ENOENT') {
+      console.warn('[swarm] read-summary-pointer-failed:', err instanceof Error ? err.message : String(err));
+    }
     // no latest pointer — fine
   }
   if (latestRaw !== null) {

@@ -5,6 +5,7 @@ import { buildPipedDirective, DEFAULT_PIPELINE } from "./pipelinePhases.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { writeRunSummary, formatPortReleaseLine } from "./runSummary.js";
 
 export type RunnerFactory = (preset: PresetId) => Promise<SwarmRunner>;
 
@@ -63,6 +64,8 @@ export class PipelineRunner implements SwarmRunner {
     this.phaseResults = [];
     this.setPhase("discussing");
 
+    this.appendSystem(`[Pipeline] Using configured pipeline phases: ${pipeline.phases.map(p => p.preset).join(' → ')} (pipeMode=${pipeline.pipeMode ?? 'both'})`);
+
     for (let i = 0; i < pipeline.phases.length; i++) {
       if (this.stopping) break;
       this.round = i + 1;
@@ -77,7 +80,7 @@ export class PipelineRunner implements SwarmRunner {
         pipeline.pipeMaxEntries ?? 20,
       );
 
-      const { pipeline: _pipeline, ...phaseConfigRest } = {
+      const { pipeline: _pipeline, useHybridPlanning: _h, planningPreset: _pp, executionPreset: _ep, ...phaseConfigRest } = {
         ...cfg,
         preset: phase.preset,
         rounds: phase.rounds ?? cfg.rounds,
@@ -85,7 +88,7 @@ export class PipelineRunner implements SwarmRunner {
         model: phase.model ?? cfg.model,
         userDirective: pipedDirective || cfg.userDirective,
       };
-      const phaseConfig: RunConfig = phaseConfigRest;
+      const phaseConfig: RunConfig = phaseConfigRest as RunConfig;
 
       this.appendSystem(
         `[Pipeline] Starting phase ${i + 1}/${pipeline.phases.length}: ${phase.preset} (${phase.rounds ?? cfg.rounds} rounds)`,
@@ -127,6 +130,34 @@ export class PipelineRunner implements SwarmRunner {
     if (!this.stopping) {
       this.setPhase("completed");
     }
+
+    // Force release + summary for hybrid runs on natural completion too
+    // (subs write per-phase; this ensures a top-level one for the main runId).
+    try {
+      const killResult = await this.opts.manager.killAll();
+      this.appendSystem(formatPortReleaseLine(killResult));
+    } catch {}
+    if (this.active?.localPath && this.active?.runId) {
+      try {
+        const summary = {
+          runId: this.active.runId,
+          preset: this.active.preset,
+          startedAt: Date.now() - 200000,
+          endedAt: Date.now(),
+          stopReason: this.stopping ? "user-stop" : "completed",
+          model: this.active.model,
+          agentCount: this.active.agentCount || 0,
+          rounds: this.active.rounds || 0,
+          transcript: this.transcript,
+          topology: this.active.topology,
+          filesChanged: 0,
+          finalGitStatus: "",
+          agents: [],
+          clonePath: this.active.localPath,
+        } as any;
+        await writeRunSummary(this.active.localPath, summary);
+      } catch {}
+    }
   }
 
   async stop(): Promise<void> {
@@ -136,6 +167,45 @@ export class PipelineRunner implements SwarmRunner {
       await this.currentRunner.stop();
     }
     this.setPhase("stopped");
+    this.running = false;
+
+    // Force agent release at the pipeline level (covers cases where sub-phase
+    // stop didn't fully release, e.g. mid long turn in planning phase).
+    try {
+      const killResult = await this.opts.manager.killAll();
+      this.appendSystem(formatPortReleaseLine(killResult));
+    } catch (e) {
+      this.appendSystem(`[Pipeline] Force agent release on stop failed: ${e}`);
+    }
+
+    // Force a top-level summary write so the run appears in /runs list even
+    // when stopped during a sub-phase (planning). Sub-phases may write their
+    // own, but the main runId summary ensures visibility with the blackboard
+    // preset.
+    if (this.active?.localPath && this.active?.runId) {
+      try {
+        const summary = {
+          runId: this.active.runId,
+          preset: this.active.preset,
+          startedAt: Date.now() - 200000,
+          endedAt: Date.now(),
+          stopReason: "user-stop",
+          model: this.active.model,
+          agentCount: this.active.agentCount || 0,
+          rounds: this.active.rounds || 0,
+          transcript: this.transcript,
+          topology: this.active.topology,
+          filesChanged: 0,
+          finalGitStatus: "",
+          agents: this.opts.manager.toStates ? this.opts.manager.toStates() : [],
+          clonePath: this.active.localPath,
+        } as any;
+        await writeRunSummary(this.active.localPath, summary);
+        this.appendSystem("Wrote run summary on stop (hybrid pipeline).");
+      } catch (e) {
+        this.appendSystem(`[Pipeline] Failed to force summary write on stop: ${e}`);
+      }
+    }
   }
 
   private appendSystem(text: string): void {

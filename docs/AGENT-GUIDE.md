@@ -71,6 +71,32 @@ npm run dev            # starts both (from repo root)
 
 **Pre-commit check:** Always run `npm run build` before committing to catch TypeScript errors. Tests passing (`npm test`) does NOT mean the build passes — tests use tsx (lenient), build uses tsc (strict).
 
+### Agent tools & internet access
+
+**Short answer:** Workers and most agents have **no internet access**.
+
+The only tools they can call (via in-process `ToolDispatcher`) are:
+
+| Profile         | Tools                                      | Typical users                  | Internet? |
+|-----------------|--------------------------------------------|--------------------------------|-----------|
+| `swarm`         | none (must emit clean JSON)                | Blackboard workers             | No        |
+| `swarm-read`    | `read`, `grep`, `glob`, `list`             | Planners, auditors, discussion roles | No (local FS only) |
+| `swarm-builder` | above + restricted `bash`                  | Build / test roles             | No (allowlisted build cmds only, no curl) |
+| `swarm-write`   | read family + `propose_hunks`              | Some write-mode flows          | No        |
+
+- No `web_search`, `browse`, `fetch`, or external APIs.
+- Bash is heavily gated (see `buildCommandAllowlist.ts`).
+- MCP (GitHub tools in `mcps/grok_com_github/`, Playwright) is not generally available to swarm agents.
+- Special case: when `MCP_PLAYWRIGHT_ENABLED=true`, the auditor can get browser snapshots for UI criteria.
+
+Directives that require "live web research" will only get the model's training-cutoff knowledge. Use the hybrid planning flow + `systemMap` + planner `swarm-read` for better broad understanding of the *target repo*.
+
+Relevant code:
+- `server/src/tools/ToolDispatcher.ts`
+- `server/src/swarm/promptWithRetry.ts` (how `agentName` becomes a profile + dispatcher)
+- `server/src/swarm/roles.ts`
+- `RunConfig.plannerTools`
+
 ### Ollama proxy (port 11533)
 
 The app runs a local HTTP proxy on port 11533 that sits between the app and the real Ollama server at 11434:
@@ -217,6 +243,8 @@ EOF
 
 - **Logic shared between server and web** → `shared/src/` (single source of truth)
 - **New blackboard substrate** → `server/src/swarm/blackboard/`
+  - Auditor now supports `auditorOnlyMutations` + in-memory batch + single commit (see README for flags).
+  - Hybrid: `useHybridPlanning` + planning/execution presets + lightweight `systemMap` (Context Oracle style) injected into blackboard planner seed/prompt for broad systemic view.
 - **Tests** → next to the file under test as `X.test.ts`; add the path to the explicit list in `server/scripts/run-tests.mjs` (enumerated, not glob-based)
 - **Routes** → `server/src/routes/` named after the API surface
 - **Per-runner specialization** → one runner class per preset under `server/src/swarm/`

@@ -18,6 +18,9 @@ import { AmendmentsBuffer, type Amendment } from "./AmendmentsBuffer.js";
 import { RunStatePersister, findRecoverableRuns, isRecoverablePhase, loadSnapshot, type RecoverableRun } from "./RunStatePersister.js";
 import { tryAcquireLock, releaseLock } from "../swarm/cloneLock.js";
 import { config } from "../config.js";
+import { createLogger, rootLogger } from "./logger.js";
+import { ActiveRun } from "./ActiveRun.js";
+import { RunEventHub } from "./RunEventHub.js";
 
 export interface OrchestratorOpts {
   /** Mint one AgentManager per run so concurrent runs don't share
@@ -42,6 +45,7 @@ interface BuildRunnerContext {
   persister: RunStatePersister;
   manager: AgentManager;
   getRunner: () => SwarmRunner;
+  hub?: RunEventHub;
 }
 
 // Re-exported so callers (routes/swarm.ts, index.ts) don't have to reach into
@@ -57,7 +61,7 @@ function readPersistedLastParent(): string | undefined {
     const v = readFileSync(LAST_PARENT_FILE, "utf8").trim();
     return v.length > 0 ? v : undefined;
   } catch (err) {
-    console.warn('[Orchestrator] read-persisted-last-parent-failed:', err instanceof Error ? err.message : String(err));
+    rootLogger.warn('read-persisted-last-parent-failed', { error: err instanceof Error ? err.message : String(err) });
     return undefined;
   }
 }
@@ -65,7 +69,7 @@ function writePersistedLastParent(p: string): void {
   try {
     writeFileSync(LAST_PARENT_FILE, p, "utf8");
   } catch (err) {
-    console.warn('[Orchestrator] write-persisted-last-parent-failed:', err instanceof Error ? err.message : String(err));
+    rootLogger.warn('write-persisted-last-parent-failed', { error: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -82,7 +86,7 @@ function readPersistedKnownParents(): string[] {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === "string") : [];
   } catch (err) {
-    console.warn('[Orchestrator] read-persisted-known-parents-failed:', err instanceof Error ? err.message : String(err));
+    rootLogger.warn('read-persisted-known-parents-failed', { error: err instanceof Error ? err.message : String(err) });
     return [];
   }
 }
@@ -90,7 +94,7 @@ function writePersistedKnownParents(paths: string[]): void {
   try {
     writeFileSync(KNOWN_PARENTS_FILE, JSON.stringify(paths.slice(0, KNOWN_PARENTS_MAX)), "utf8");
   } catch (err) {
-    console.warn('[Orchestrator] write-persisted-known-parents-failed:', err instanceof Error ? err.message : String(err));
+    rootLogger.warn('write-persisted-known-parents-failed', { error: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -173,36 +177,18 @@ export function scanForRunParents(cwd: string): string[] {
 //
 // Phase 3 keeps the cap at 1 (start() rejects when the map is non-
 // empty). Phase 4 relaxes the cap to N concurrent runs.
-interface ActiveRun {
-  runner: SwarmRunner;
-  /** Scoped agent pool — isolated from other concurrent runs. */
-  manager: AgentManager;
-  runId: string;
-  runConfig: SwarmStatusRunConfig;
-  startedAt: number;
-  /** The full RunConfig the runner was started with. Stashed so
-   *  scheduleForwardChain can derive the chained run's cfg. */
-  cfg: RunConfig;
-  /** The persister (constructed in start()) tied to this run's
-   *  clone path. Closed on stop/completion so a write failure
-   *  doesn't leak into the next run. */
-  persister: RunStatePersister;
-  /** Optional monitors — present only when cfg.userDirective is set
-   *  AND the relevant model is available. */
-  conformanceMonitor?: ConformanceMonitor;
-  embeddingDriftMonitor?: EmbeddingDriftMonitor;
-  /** R8 wiring (2026-05-04): true when this run holds a .lock at the
-   *  clone path. stopRun + start (cleanup) call releaseLock() to
-   *  drop it. Best-effort: a missing lock just means the OS reaped
-   *  it (e.g. server crash); release becomes a no-op. */
-  holdsCloneLock: boolean;
-}
+// interface ActiveRun has been moved to ActiveRun.ts for RAII
+// type ActiveRun = import("./ActiveRun.js").ActiveRun;
+// Per-run state is now managed by the ActiveRun class (see ActiveRun.ts)
+// for centralized RAII cleanup. The map below holds instances of it.
 
 // Thin preset dispatcher. Holds the active runs (Phase 3: max 1 by
 // design; Phase 4 will relax to N) and delegates the public surface
 // to whichever run the caller targets. State per run lives on the
 // runner + the ActiveRun record.
 export class Orchestrator {
+  private readonly log = createLogger();
+
   // T-Item-MultiTenant Phase 3 (2026-05-04): runs keyed by runId.
   // Insertion order is most-recent-LAST so legacy single-arg APIs
   // (status() / stop() / injectUser without runId) can resolve to
@@ -244,6 +230,7 @@ export class Orchestrator {
 
   // P6: Brain service — persistent across runs, provisions new runs.
   private brainService: import("../swarm/blackboard/brainOverseer/brainService.js").BrainService | null = null;
+  private readonly brainReady: Promise<void>;
 
   // Gate to prevent concurrent start() calls from bypassing the cap.
   private startInProgress = false;
@@ -286,17 +273,40 @@ export class Orchestrator {
     }
 
     // P6: Initialize brain service — persists across runs.
-    import("../swarm/blackboard/brainOverseer/brainService.js").then(({ createBrainService }) => {
-      const maxConcurrentRuns = this.opts.maxConcurrentRuns ?? 4;
-      this.brainService = createBrainService({
-        maxConcurrentRuns,
-        getOrchestrator: () => ({ start: (cfg) => this.start(cfg as RunConfig) }),
-        getActiveRunCount: () => this.runs.size,
-        canStartRun: () => !this.startInProgress && this.runs.size < maxConcurrentRuns,
-      });
-      // Start continuous monitoring so Brain acts as live management layer
-      this.brainService?.startBackgroundMonitoring(60000);
-    });
+    this.brainReady = import("../swarm/blackboard/brainOverseer/brainService.js").then(
+      ({ createBrainService }) => {
+        const maxConcurrentRuns = this.opts.maxConcurrentRuns ?? 4;
+        this.brainService = createBrainService({
+          maxConcurrentRuns,
+          getOrchestrator: () => ({ start: (cfg) => this.start(cfg as RunConfig) }),
+          getActiveRunCount: () => this.runs.size,
+          canStartRun: () => !this.startInProgress && this.runs.size < maxConcurrentRuns,
+          emit: (e, cat) => { if (this.activeRun?.hub) this.activeRun.hub.emit(e, (cat as any) || "brain"); },
+        });
+        this.brainService?.startBackgroundMonitoring(60000);
+      },
+    );
+  }
+
+  /** Await brain service initialization before serving brain routes. */
+  async whenBrainReady(): Promise<void> {
+    await this.brainReady;
+  }
+
+  getActiveRunCount(): number {
+    return this.runs.size;
+  }
+
+  /** Clone paths from active and recently completed runs. */
+  getTrackedClonePaths(): string[] {
+    const paths = new Set<string>();
+    for (const run of this.runs.values()) {
+      if (run.cfg.localPath) paths.add(nodePath.resolve(run.cfg.localPath));
+    }
+    for (const info of this.runPaths.values()) {
+      paths.add(nodePath.resolve(info.clonePath));
+    }
+    return [...paths];
   }
 
   /** Cleanup any runs that have terminated naturally but weren't
@@ -304,17 +314,8 @@ export class Orchestrator {
    *  the concurrent-run cap. */
   private async cleanupStaleRuns(): Promise<void> {
     for (const [id, run] of [...this.runs.entries()]) {
-      if (!run.runner.isRunning()) {
-        try { await run.runner.stop(); } catch (err) {
-          console.warn('cleanupStaleRuns stop failed:', err instanceof Error ? err.message : String(err));
-        }
-        run.conformanceMonitor?.stop();
-        run.embeddingDriftMonitor?.stop();
-        run.persister.stop();
-        if (run.holdsCloneLock) {
-          try { releaseLock({ clonePath: run.cfg.localPath, runId: run.runId }); } catch {}
-        }
-        this.amendments.close(id);
+      if (!run.isRunning()) {
+        await run.stop();
         this.runs.delete(id);
       }
     }
@@ -484,10 +485,21 @@ export class Orchestrator {
     }
     // Run no longer in memory — fall back to persister file on disk.
     const pathInfo = this.runPaths.get(runId);
-    if (!pathInfo) return null;
-    const stateFilePath = `${pathInfo.clonePath}.run-state.json`;
-    const snap = loadSnapshot(stateFilePath);
+    let stateFilePath: string | null = pathInfo ? `${pathInfo.clonePath}.run-state.json` : null;
+    let snap = stateFilePath ? loadSnapshot(stateFilePath) : null;
+    if (!snap) {
+      // Fallback for completed/old runs not in runPaths (e.g. after server restart):
+      // scan known parents for any snapshot containing this runId.
+      const recoverable = findRecoverableRuns(this.knownParentPaths);
+      for (const rec of recoverable) {
+        if (rec.runId === runId) {
+          snap = loadSnapshot(rec.stateFilePath);
+          if (snap) break;
+        }
+      }
+    }
     if (!snap) return null;
+    const rc = snap.runConfig as any;
     return {
       phase: snap.phase as SwarmPhase,
       round: 0,
@@ -495,7 +507,10 @@ export class Orchestrator {
       transcript: snap.transcript as SwarmStatus["transcript"],
       contract: snap.contract as SwarmStatus["contract"] | undefined,
       runId,
-      runConfig: snap.runConfig as SwarmStatusRunConfig | undefined,
+      runConfig: rc ? {
+        ...rc,
+        clonePath: rc.clonePath || rc.localPath,
+      } as SwarmStatusRunConfig : undefined,
       runStartedAt: snap.startedAt,
     };
   }
@@ -537,29 +552,12 @@ export class Orchestrator {
   async stopRun(runId: string): Promise<boolean> {
     const run = this.runs.get(runId);
     if (!run) return false;
-    try {
-      await run.runner.stop();
-    } finally {
-      run.conformanceMonitor?.stop();
-      run.embeddingDriftMonitor?.stop();
-      // Clearing tokenTracker.setCurrentPreset is a no-op when other
-      // runs are still tagged; we accept the small attribution
-      // imprecision here — multi-tenant cost attribution is a known
-      // gap (the global tokenTracker can't bucket usage per active
-      // runId today; cross-cutting refactor needed for full fidelity).
-      tokenTracker.setCurrentPreset(undefined, run.runId);
-      run.persister.stop();
-      // R8 wiring: release the clone lock so the path is reusable.
-      if (run.holdsCloneLock) {
-        try {
-          releaseLock({ clonePath: run.cfg.localPath, runId: run.runId });
-        } catch (err) {
-          console.warn('[Orchestrator] stopRun-release-lock-failed:', err instanceof Error ? err.message : String(err));
-        }
-      }
-      this.amendments.close(runId);
-      this.runs.delete(runId);
-    }
+
+    // Clearing tokenTracker...
+    tokenTracker.setCurrentPreset(undefined, run.runId);
+
+    await run.stop();
+    this.runs.delete(runId);
     return true;
   }
 
@@ -704,10 +702,12 @@ export class Orchestrator {
         const drift = await checkPromptDrift();
         if (!drift.ok) {
           const names = [...new Set(drift.failures.map((f) => f.prompt))].join(", ");
-          console.warn(
-            `[drift-guard] ${drift.failedAssertions}/${drift.totalAssertions} prompt assertions failed across: ${names}. ` +
-            `Run will start but prompt behavior may differ from expected. Run 'npx tsx eval/drift-check.ts' for details.`,
-          );
+          this.log.warn('prompt drift detected', {
+            failed: drift.failedAssertions,
+            total: drift.totalAssertions,
+            names,
+            runId,
+          });
         }
       } catch {
         // Drift check is best-effort. If the registry module can't be loaded
@@ -718,6 +718,7 @@ export class Orchestrator {
     // ActiveRun atomically. 2026-05-02 (persistence lever #2): persister
     // construction moved into ActiveRun build below.
     runId = randomUUID();
+    const runHub = new RunEventHub({ runId, reqId: cfg.reqId });
     // Task #36: forward the minted runId into cfg so the runner can
     // include it in buildSummary → summary.json. Otherwise the runId
     // only lives in memory + the WS run_started event, never making
@@ -748,6 +749,7 @@ export class Orchestrator {
       persister,
       manager,
       getRunner: () => runHolder.runner!,
+      hub: runHub,
     };
     const runner = await this.buildRunner(cfg.preset, cfg, buildCtx);
     runHolder.runner = runner;
@@ -809,21 +811,28 @@ export class Orchestrator {
       // by the route layer (synthesized from legacy fields when client
       // didn't post one).
       topology: cfg.topology,
+      // Map server cfg caps to client strings for run events / status.
+      wallClockCapMin: cfg.wallClockCapMs ? Math.round(cfg.wallClockCapMs / 60000).toString() : undefined,
+      ambitionTiers: cfg.ambitionTiers !== undefined ? String(cfg.ambitionTiers) : undefined,
     };
     // T-Item-MultiTenant Phase 3: build + insert the ActiveRun. Any
     // monitor wiring below mutates this entry's fields. Insertion-
     // order Map → activeRun getter resolves to this for legacy
     // single-arg APIs until the run terminates.
-    const activeRun: ActiveRun = {
-      runner,
-      manager,
+    const activeRun = new ActiveRun(
       runId,
-      runConfig,
       startedAt,
       cfg,
+      runConfig,
+      runner,
+      manager,
       persister,
+      undefined,
+      undefined,
+      this.amendments,
       holdsCloneLock,
-    };
+      runHub,  // pass the hub
+    );
     this.runs.set(runId, activeRun);
     this.runPaths.set(runId, {
       clonePath: cfg.localPath,
@@ -877,7 +886,7 @@ export class Orchestrator {
         emit: this.opts.emit,
         isActive: () => activeRun.runner.isRunning(),
       });
-      activeRun.conformanceMonitor = monitor;
+      activeRun.attachMonitors(monitor);
       monitor.start();
 
       // #302 Phase B: independent embedding-similarity signal.
@@ -892,7 +901,7 @@ export class Orchestrator {
         emit: this.opts.emit,
         isActive: () => activeRun.runner.isRunning(),
       });
-      activeRun.embeddingDriftMonitor = drift;
+      activeRun.attachMonitors(undefined, drift);
       void drift.start();
     }
     try {
@@ -908,28 +917,11 @@ export class Orchestrator {
       }
     } catch (err) {
       // Runner's start threw partway through (e.g. clone failed, spawn timed out).
-      // Clean up anything it managed to create and remove the ActiveRun
-      // entry from the map — otherwise the dispatcher stays pinned to a
-      // stuck runner and the next start call false-positives as "already running".
-      try {
-        await runner.stop();
-      } catch (err) {
-        console.warn('[Orchestrator] start-error-runner-stop-failed:', err instanceof Error ? err.message : String(err));
-      }
-      // T-Item-MultiTenant Phase 3: cleanup the ActiveRun entry. Stop
-      // monitors + persister, then remove from the map.
-      activeRun.conformanceMonitor?.stop();
-      activeRun.embeddingDriftMonitor?.stop();
-      activeRun.persister.stop();
-      if (activeRun.holdsCloneLock) {
-        try {
-          releaseLock({ clonePath: activeRun.cfg.localPath, runId: activeRun.runId });
-        } catch (err) {
-          console.warn('[Orchestrator] start-error-release-lock-failed:', err instanceof Error ? err.message : String(err));
-        }
-      }
-      this.amendments.close(runId);
-      this.runs.delete(runId);
+      // Use the ActiveRun's stop() for consistent RAII cleanup.
+      const rid = (typeof runId === 'string' ? runId : 'unknown');
+      this.log.warn('start partial failure, cleaning up ActiveRun', { runId: rid, error: err instanceof Error ? err.message : String(err) });
+      await activeRun.stop();
+      this.runs.delete(rid);
       throw err;
     }
     return runId;
@@ -948,6 +940,25 @@ export class Orchestrator {
       return;
     }
     await this.stop();
+  }
+
+  /** Per-run soft stop. Returns false when runId isn't active. */
+  async drainRun(runId: string): Promise<boolean> {
+    const run = this.runs.get(runId);
+    if (!run) return false;
+    if (typeof run.runner.drain === "function") {
+      await run.runner.drain();
+      return true;
+    }
+    return this.stopRun(runId);
+  }
+
+  /** Stop every active run (used by force-restart and shutdown). */
+  async stopAll(): Promise<void> {
+    const ids = [...this.runs.keys()];
+    for (const id of ids) {
+      await this.stopRun(id);
+    }
   }
 
   async stop(): Promise<void> {
@@ -976,7 +987,7 @@ export class Orchestrator {
         try {
           releaseLock({ clonePath: active.cfg.localPath, runId: active.runId });
         } catch (err) {
-          console.warn('[Orchestrator] stop-release-lock-failed:', err instanceof Error ? err.message : String(err));
+          this.log.warn('stop-release-lock-failed', { error: err instanceof Error ? err.message : String(err), runId: active.runId });
         }
       }
       this.amendments.close(active.runId);
@@ -1045,7 +1056,7 @@ export class Orchestrator {
     try {
       await this.stopRun(originalRunId);
     } catch (err) {
-      console.warn('[Orchestrator] forward-chain-stop-failed:', err instanceof Error ? err.message : String(err));
+      this.log.warn('forward-chain-stop-failed', { error: err instanceof Error ? err.message : String(err) });
     }
     const chainedCfg: RunConfig = {
       ...originalCfg,
@@ -1083,6 +1094,8 @@ export class Orchestrator {
     const wrappedEmit = (e: SwarmEvent) => {
       const stamped: SwarmEvent =
         e.runId === undefined ? { ...e, runId } : e;
+      // Route through hub for unified logging / future sinks (realtime, history, debug)
+      if (ctx.hub) ctx.hub.emit(stamped as any, "lifecycle");
       baseEmit(stamped);
       this.brainService?.trackRunHealth(stamped);
       const runner = getRunner();
@@ -1117,7 +1130,51 @@ export class Orchestrator {
       getAmendments: () => this.amendments.list(runId),
       getBrainService: () => this.brainService,
     };
-        const { heuristicPickPreset, createRunner } = await import("../swarm/presetRouter.js");
+
+    const { createRunner } = await import("../swarm/presetRouter.js");
+
+    // NEW: Hybrid planning + execution (#1, #3)
+    if (cfg.useHybridPlanning && cfg.planningPreset && cfg.executionPreset) {
+      const hybridPipeline = {
+        phases: [
+          {
+            preset: cfg.planningPreset as PresetId,
+            rounds: cfg.rounds ?? 3,
+            agentCount: cfg.agentCount ?? 5,
+            model: cfg.model,
+          },
+          {
+            preset: cfg.executionPreset as PresetId,
+            rounds: 0,
+            agentCount: cfg.agentCount ?? 5,
+            model: cfg.model,
+          },
+        ],
+        pipeMode: "both" as const,
+        pipeMaxEntries: 30,
+      };
+      // Attach the constructed pipeline to cfg so that the top-level PipelineRunner
+      // (which does `cfg.pipeline ?? DEFAULT_PIPELINE`) will use our hybrid config
+      // instead of silently falling back to the default (which starts with stigmergy).
+      // This ensures the user's chosen planningPreset (e.g. council) is respected.
+      cfg.pipeline = hybridPipeline;
+      cfg.useHybridPlanning = false;
+      cfg.planningPreset = undefined;
+      cfg.executionPreset = undefined;
+
+      // Strip hybrid flags for sub-phase builds so the early-if does not re-trigger
+      // inside PipelineRunner's phase loops (prevents recursion/wrong nesting).
+      const makePhaseCfg = (base: any) => ({
+        ...base,
+        pipeline: hybridPipeline,
+        useHybridPlanning: false,
+        planningPreset: undefined,
+        executionPreset: undefined,
+      });
+      const factory = async (p: PresetId) => this.buildRunner(p, makePhaseCfg(cfg), ctx);
+      return new PipelineRunner(opts, factory);
+    }
+
     switch (preset) {
       // Special cases: role-diff → RoundRobin with custom roles
       case "role-diff": {

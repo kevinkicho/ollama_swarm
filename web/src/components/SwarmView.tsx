@@ -109,11 +109,30 @@ export function SwarmView() {
     if (!confirm("Stop the swarm IMMEDIATELY? All spawned opencode processes will be terminated and any worker mid-commit will lose its work.")) return;
     setBusy(true);
     try {
-      await fetch(stopUrl, { method: "POST" });
+      const res = await fetch(stopUrl, { method: "POST" });
+      if (!res.ok) {
+        // already stopped or not active in backend — force UI to terminal
+        const s = useSwarm.getState();
+        s.setPhase("stopped", s.round || 0);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      const s = useSwarm.getState();
+      s.setPhase("stopped", s.round || 0);
     } finally {
       setBusy(false);
+      // re-hydrate status so UI reflects backend (especially useful for
+      // review/per-run views where phase might be stale)
+      const statusUrl = activeRunId
+        ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/status`
+        : "/api/swarm/status";
+      fetch(statusUrl).then(r => r.ok ? r.json() : null).then(snap => {
+        if (snap) {
+          const s = useSwarm.getState();
+          s.setPhase(snap.phase, snap.round);
+          if (snap.agents) snap.agents.forEach((a: any) => s.upsertAgent(a));
+        }
+      }).catch(() => {});
     }
   };
 
@@ -124,11 +143,37 @@ export function SwarmView() {
     if (!confirm("Drain & Stop: workers will finish their current claim (no new claims), then the swarm exits. Up to 3 minutes. OK to proceed?")) return;
     setBusy(true);
     try {
-      await fetch("/api/swarm/drain", { method: "POST" });
+      const drainUrl = activeRunId
+        ? `/api/swarm/drain`
+        : "/api/swarm/drain";
+      const body = activeRunId ? JSON.stringify({ runId: activeRunId }) : undefined;
+      const res = await fetch(drainUrl, {
+        method: "POST",
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body,
+      });
+      if (!res.ok) {
+        const s = useSwarm.getState();
+        s.setPhase("stopped", s.round || 0);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      const s = useSwarm.getState();
+      s.setPhase("stopped", s.round || 0);
     } finally {
       setBusy(false);
+      // re-hydrate status so UI reflects backend (especially useful for
+      // review/per-run views where phase might be stale)
+      const statusUrl = activeRunId
+        ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/status`
+        : "/api/swarm/status";
+      fetch(statusUrl).then(r => r.ok ? r.json() : null).then(snap => {
+        if (snap) {
+          const s = useSwarm.getState();
+          s.setPhase(snap.phase, snap.round);
+          if (snap.agents) snap.agents.forEach((a: any) => s.upsertAgent(a));
+        }
+      }).catch(() => {});
     }
   };
 

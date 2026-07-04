@@ -50,7 +50,14 @@ export const CheckpointsParams = z.object({
 
 export const CheckpointFileParams = z.object({
   runId: z.string().min(1).max(100),
-  fileName: z.string().min(1).max(200),
+  fileName: z
+    .string()
+    .min(1)
+    .max(200)
+    .refine(
+      (n) => !n.includes("..") && !n.includes("/") && !n.includes("\\"),
+      "fileName must be a bare filename",
+    ),
 });
 
 export const TimelineParams = z.object({
@@ -69,6 +76,15 @@ export const SayPerRunBody = z.object({
 
 export const RunsQuery = z.object({
   includeOtherParents: z.coerce.boolean().optional(),
+  parentPath: z.string().min(1).max(500).optional(),
+});
+
+export const StatusQuery = z.object({
+  runId: z.string().min(1).max(100).optional(),
+});
+
+export const LegacyRunBody = z.object({
+  runId: z.string().min(1).max(100).optional(),
 });
 
 export const BrainPatchHunkSchema = z.object({
@@ -150,13 +166,13 @@ export const StartBody = z.object({
   // resolver.
   plannerModel: z.string().trim().min(1).max(200).optional(),
   workerModel: z.string().trim().min(1).max(200).optional(),
-  // Unit 43: per-run wall-clock cap override (ms). Bounded
-  // [60_000, 8 * 60 * 60_000] = 1 min … 8 h, matching the baked-in
-  // default's range. Anything outside is a config bug, not a feature.
+  // Unit 43: per-run wall-clock cap override (ms). 0 or absent = use server
+  // default (no hard override; blackboard etc. may run until other caps).
+  // When >0: bounded [60_000, 8h]. 0 explicitly allowed from UI to mean "disabled".
   wallClockCapMs: z
     .number()
     .int()
-    .min(60_000)
+    .min(0)
     .max(8 * 60 * 60_000)
     .optional(),
   // #296 (2026-04-28): pre-commit verify command (e.g. "npm test").
@@ -168,6 +184,13 @@ export const StartBody = z.object({
   // Default false — backward compatible, avoids context blow-up.
   // Planner is limited to 3 file reads per turn when enabled.
   plannerTools: z.boolean().optional(),
+  // Opt-in web tools (web_search + web_fetch) for research-oriented runs.
+  // When true, planner/research agents can perform internet searches
+  // (e.g. governmental data endpoints). Uses DuckDuckGo + fetch under
+  // the hood, results are truncated. Pair with plannerTools for best effect.
+  webTools: z.boolean().optional(),
+  // Experimental MCP servers (future full dynamic connection).
+  mcpServers: z.string().trim().optional(),
   // Local Ollama: strips :cloud suffix from all model refs.
   // Routes all prompts through local Ollama instead of Ollama Cloud.
   useLocal: z.boolean().optional(),
@@ -183,6 +206,11 @@ export const StartBody = z.object({
   // unchanged). Blackboard-only.
   dedicatedAuditor: z.boolean().optional(),
   auditorModel: z.string().trim().min(1).max(200).optional(),
+
+  // NEW: auditorOnlyMutations - workers propose only, auditor commits.
+  auditorOnlyMutations: z.boolean().optional(),
+  // NEW: force verification in auditor path.
+  requireAuditorVerification: z.boolean().optional(),
   // Unit 59 (59a): per-worker role bias (correctness / simplicity /
   // consistency cycling). Blackboard-only.
   specializedWorkers: z.boolean().optional(),
@@ -203,6 +231,13 @@ export const StartBody = z.object({
   // value prop "N small + 1 big > 1 big alone" cleanly. MoA-only.
   moaProposerModel: z.string().trim().min(1).max(200).optional(),
   moaAggregatorModel: z.string().trim().min(1).max(200).optional(),
+
+  // Hybrid planning + execution (suggestion #1 and #3)
+  // Use a broad-understanding preset (e.g. council) for initial planning,
+  // then pipe the deliverable/plan into blackboard for safe execution.
+  planningPreset: z.string().optional(), // e.g. "council"
+  executionPreset: z.string().optional(), // e.g. "blackboard"
+  useHybridPlanning: z.boolean().optional(),
   // T196 + T199 (2026-05-04): per-tier model arrays + extras for the
   // open-weights-parallelism value prop. Each is opt-in, falls back
   // to cfg.model when absent.
@@ -362,6 +397,7 @@ export const SayBody = z.object({
   text: z.string().min(1),
   intent: z.enum(["suggest", "steer", "ask"]).optional(),
   targetAgent: z.string().min(1).max(64).optional(),
+  runId: z.string().min(1).max(100).optional(),
 });
 
 // Unit 52c: open-clone request body. Path is the absolute path of the

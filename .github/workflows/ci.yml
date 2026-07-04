@@ -48,15 +48,12 @@ jobs:
         run: npm install
 
       - name: Type-check (server + web + shared)
-        continue-on-error: true
-        run: |
-          npx tsc --noEmit -p server/tsconfig.json
-          npx tsc --noEmit -p web/tsconfig.json
+        run: npm run typecheck
 
-      - name: Run server test suite
+      - name: Run test suite (shared + server)
         env:
           OPENCODE_SERVER_PASSWORD: test-only
-        run: npm test --workspace=server
+        run: npm test
 
       - name: Verify BlackboardRunner field discovery is current
         run: npx tsx server/scripts/discover-runner-fields.ts --check
@@ -65,5 +62,4 @@ jobs:
         run: npx tsx eval/drift-check.ts
 
       - name: Verify production build succeeds
-        continue-on-error: true
         run: npm run build
