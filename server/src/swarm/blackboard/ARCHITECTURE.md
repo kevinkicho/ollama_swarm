@@ -117,6 +117,8 @@ Plus terminal phases (see summary.ts classifyStopReason + statusForRun abrupt de
 - **failed** — runner exception (crashMessage), or abrupt hard kill / server death / SIGKILL (detected at load via non-terminal snap or stale sub-phase "completed" for hybrid).
 - **crashed** (stopReason) — alias for hard abrupt cases, maps to phase "failed".
 
+**Hybrid (post Phase 9/10):** Hybrid runs (e.g. council → blackboard) are plain PipelineRunner sequencing under one runId. All phase state emitters, guards, tagging (currentPhase/phases/phaseIndex/hybridContext), and UI special cases removed. Transcript/agents/status are shown transparently (concatenated). No phase-granular brain disable etc. Legacy summaries may still surface old fields for historical review. See hybrid-design.md.
+
 Scenarios / triggering conditions:
 - Clean blackboard loop end + all-met or no more work: "completed"
 - UI Stop button (hard) or graceful shutdown: "user" → stopped

@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useSwarm } from "../state/store";
+// Transcript renders the full accumulated log. Filtering is client-side and optional ("all" is normal full view).
 import { StreamingDock } from "./transcript/StreamingDock";
 import { MessageBubble } from "./transcript/MessageBubble";
 import { StreamingTranscriptCard } from "./transcript/StreamingTranscriptCard";
@@ -13,13 +14,7 @@ export const Transcript = memo(function Transcript() {
   const agents = useSwarm((s) => s.agents);
   const runId = useSwarm((s) => s.runId);
   const phase = useSwarm((s) => s.phase);
-  const cfgForHybrid = useSwarm((s) => s.runConfig);
-  const allTx = [...(transcript || []), ...(((useSwarm.getState().summary as any)?.transcript) || [])];
-  const transcriptHasHybridMarker = allTx.some((e: any) => {
-    const t = String(e?.text || e || "");
-    return /council\s*→\s*blackboard/i.test(t) || (/council/i.test(t) && /blackboard/i.test(t) && /phase/i.test(t));
-  });
-  const isHybrid = !!(cfgForHybrid?.useHybridPlanning || cfgForHybrid?.planningPreset || (cfgForHybrid as any)?.pipeline || transcriptHasHybridMarker);
+  // Full transcript passed from store; UI filter controls visibility.
   const [suggesting, setSuggesting] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -28,19 +23,11 @@ export const Transcript = memo(function Transcript() {
   const prevLenRef = useRef(0);
   const prevStreamingCountRef = useRef(0);
   const [stickyBottom, setStickyBottom] = useState(false);
-  const [filter, setFilter] = useState<"all" | "key" | "system" | "agents" | "audit" | "issues">(() => {
-    // Initial: for review/finished (terminal phase or summary with stopReason), default to "all" so review views and finished transcripts are not empty.
-    const st = useSwarm.getState();
-    const terminal = st.phase === "completed" || st.phase === "stopped" || st.phase === "failed" || !!st.summary?.stopReason;
-    return terminal ? "all" : "key";
-  });
-  // Auto switch to "all" if it becomes terminal later (e.g. live run finishes while viewing).
-  useEffect(() => {
-    const terminal = phase === "completed" || phase === "stopped" || phase === "failed" || !!useSwarm.getState().summary?.stopReason;
-    if (terminal && filter === "key") {
-      setFilter("all");
-    }
-  }, [phase]);
+  // Phase 10 + transcript normal view: default to "all" so the transcript shows the full unfiltered log
+  // (planning + execution content, system messages, agent output, brain activity, etc.) like a normal chat.
+  // "key" is still available via the bar for users who want high-signal only (avoids bombardment).
+  // No more default "key" guard that hid most activity on live runs (including hybrid planning chatter).
+  const [filter, setFilter] = useState<"all" | "key" | "system" | "agents" | "audit" | "issues">("all");
 
   // Single source for inter-item gap (used only in virtual wrapper for stability).
   // All child components must not introduce their own outer vertical margins.
@@ -165,21 +152,9 @@ export const Transcript = memo(function Transcript() {
     setTimeout(() => { jumpLockRef.current = false; }, 50);
   };
 
-  // Filter transcript entries.
-  // Stability note (Phase 4): "key" filter selects mostly high-signal structured entries
-  // (synthesis, run_finished, deliverable, etc.) which have taller fixed estimates.
-  // Result: lower item count but higher average height per item vs "all".
-  // Combined with kind-specific estimates + one-time measures on filter, this keeps
-  // virtual layout solid without pop or stagger on toggle.
+  // Filter transcript entries (client-side only; all data is in the store).
+  // "all" is the normal full view. "key" etc are optional to cut noise.
   const filteredTranscript = useMemo(() => transcript.filter((e) => {
-    // For hybrid runs (moa/council planning + exec), suppress brain (index 0) and any agent-0
-    // bubbles that leak from planning sub-phases. Sidebar already filters these; transcript should too
-    // so user never sees "agent 0".
-    if (isHybrid) {
-      const idx = (e as any).agentIndex ?? (e as any).index ?? (e as any).agent?.index;
-      const aid = (e as any).agentId || (e as any).id || '';
-      if (idx === 0 || aid === 'brain' || /^agent-0$/.test(String(aid))) return false;
-    }
     if (filter === "all") return true;
     if (filter === "system") return e.role === "system";
     if (filter === "agents") {
@@ -198,31 +173,47 @@ export const Transcript = memo(function Transcript() {
       return text.includes("CONTRADICTION") || text.includes("PARTIAL") || text.includes("error") || text.includes("failed");
     }
     if (filter === "key") {
-      // High-signal only: synthesis, verdicts, run events, hunks (high level), web results, major board actions.
-      // Also include blackboard early progress and system housekeeping for visibility.
+      // High-signal only (optional): synthesis, verdicts, run events, hunks, web results, major board actions.
       const k = e.summary?.kind;
-      // Transcript UI fix: explicitly drop worker_skip (repetitive "already present" etc.)
-      // from the clean "key" view. These were polluting the transcript even on non-"all" filters.
       if (k === "worker_skip") return false;
       const text = (e.text || "").toLowerCase();
       const isKey = ["council_synthesis", "mapreduce_synthesis", "role_diff_synthesis", "stigmergy_report", "debate_verdict", "run_finished", "deliverable", "stretch_goals", "worker_hunks", "contract", "goals", "seed_announce", "agents_ready", "run_start"].includes(k || "") ||
         text.includes("synthesis") || text.includes("verdict") || text.includes("web_search") || text.includes("web_fetch") ||
         text.includes("findings") || text.includes("deliverable") || (k === "verifier_verdict");
       if (isKey) return true;
-      // Include key blackboard startup and progress system messages even in "key" filter
+      // For "key" (optional reduced view): system messages with certain keywords + long streams + known key kinds.
       if (e.role === "system") {
         return text.includes("resuming") || text.includes("ready") || text.includes("seed") || text.includes("goal-generation") ||
           text.includes("contract") || text.includes("planner") || text.includes("memory") || text.includes("design memory") ||
           text.includes("directive") || text.includes("halted") || text.includes("failed") || text.includes("finished") ||
           text.includes("pipeline") || text.includes("council") || text.includes("blackboard") || text.includes("agents ready");
       }
-      // Keep substantial agent-stream entries (the persisted streamed plan/hunk outputs) visible even in "key" so they
-      // do not disappear after streaming_end when live dock clears. Long outputs from council planning or blackboard execution are high signal.
       if (e.role === "agent-stream" && (e.text || "").length > 80) return true;
       return false;
     }
     return true;
   }), [transcript, filter]);
+
+  // Force re-measure to combat drawing issues (items not rendered until resize/scroll).
+  useEffect(() => {
+    const v = virtualizerRef.current;
+    if (v) {
+      requestAnimationFrame(() => {
+        try {
+          v.measure();
+        } catch (e) {}
+        // Force measure on known mounted items too
+        mountedItemsRef.current.forEach((el, idx) => {
+          if (el && el.isConnected) {
+            try {
+              // @ts-ignore if method exists
+              if (typeof v.measureElement === 'function') v.measureElement(el, idx);
+            } catch {}
+          }
+        });
+      });
+    }
+  }, [filteredTranscript.length, filter]);
 
   // Virtualization for the *entire* filtered transcript list.
   // We virtualize everything uniformly (no more prefix/tail split) to ensure
@@ -249,10 +240,7 @@ export const Transcript = memo(function Transcript() {
   // - Streaming inline + StreamingDock + endRef: rendered *after* the virtual list in flow.
   //   They affect total scroll height but are "live" additions, not part of the transcript list.
   //   Auto-scroll targets endRef (after everything) when appropriate.
-  // - Why no tail split anymore: The previous hybrid (virtual prefix + flow tail for last 20)
-  //   led to inconsistent rendering paths (absolute vs flow), height mismatches when
-  //   virtual sizes updated, and contributed to spacing changes and "movement".
-  //   Uniform virtual + good measurement + step 1 scroll logic should suffice.
+  // Uniform virtualization of the filtered list (no prefix/tail splits).
   // - getScrollElement: passed to virtualizer for scroll measurements.
   //
   // This keeps the list performant for long transcripts while making layout/spacing
@@ -647,7 +635,7 @@ export const Transcript = memo(function Transcript() {
                 ? "bg-ink-600 text-ink-200"
                 : "text-ink-400 hover:text-ink-200 hover:bg-ink-700"
             }`}
-            title={f === "key" ? "High-signal items only (synthesis, verdicts, run events, web results, major actions)" : undefined}
+            title={f === "key" ? "Optional: high-signal items only" : undefined}
           >
             {f === "key" ? "Key" : f.charAt(0).toUpperCase() + f.slice(1)}
           </button>
@@ -655,7 +643,7 @@ export const Transcript = memo(function Transcript() {
         <span className="text-[10px] text-ink-500 ml-auto">
           {filteredTranscript.length} / {transcript.length} entries
         </span>
-        {runId && phase !== "completed" && phase !== "stopped" && phase !== "failed" && !isHybrid && (
+        {runId && phase !== "completed" && phase !== "stopped" && phase !== "failed" && (
           <button
             onClick={async () => {
               setSuggesting(true);

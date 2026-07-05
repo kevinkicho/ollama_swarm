@@ -28,3 +28,12 @@ perf-reports/*lighthouse*/
 perf-reports/C*
 *.run-state.json
 blackboard-state.json
+
+# Runtime / one-time operational artifacts (not part of source or docs)
+.last_rid.txt
+.swarm-memory.jsonl
+.swarm-design/
+.swarm-improvements/
+*.rid.txt
+scripts/capture-*-debug.mjs
+scripts/capture-*-debug.js

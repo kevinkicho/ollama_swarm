@@ -424,3 +424,20 @@ describe("extractDeliverables", () => {
     assert.equal(extractDeliverables("\n\n"), undefined);
   });
 });
+
+// Phase 10: phase data (currentPhase/phases) emitters removed; buildSummary no longer special-cases.
+// Pass-through of legacy keys on input is tolerated for old data.
+describe("buildSummary — Phase 10 (no phase state population)", () => {
+  it("builds summary without requiring phase data", () => {
+    const s = buildSummary(baseInput({ preset: "blackboard" as any }));
+    assert.ok(s);
+  });
+
+  it("tolerates legacy phase keys on transcript (pass-through)", () => {
+    const transcript = [
+      { id: "e1", role: "system" as const, text: "note", ts: 1, phaseIndex: 0, phasePreset: "council" },
+    ];
+    const s = buildSummary(baseInput({ transcript }));
+    assert.equal(s.transcript[0].phaseIndex, 0);
+  });
+});

@@ -91,7 +91,7 @@ The only tools they can call (via in-process `ToolDispatcher`) are:
 - MCP (GitHub tools in `mcps/grok_com_github/`, Playwright) is not generally available to swarm agents.
 - Special case: when `MCP_PLAYWRIGHT_ENABLED=true`, the auditor can get browser snapshots for UI criteria.
 
-Directives that require "live web research" (scientific literature, data endpoints, superconductor studies, etc.) should set `webTools: true` + `plannerTools: true`. Use hybrid planning (council → blackboard) or pure council/map-reduce/moa for research. See `docs/swarm-patterns.md` Research Workflows section for configs and patterns. Local-only workers remain sandboxed.
+Directives that require "live web research" (scientific literature, data endpoints, superconductor studies, etc.) should set `webTools: true` + `plannerTools: true`. Use hybrid planning (council → blackboard) or pure council/map-reduce/moa for research. See README "Using for Scientific Research & Internet Work" and STATUS preset matrix for current patterns and configs. Local-only workers remain sandboxed.
 
 Relevant code:
 - `server/src/tools/ToolDispatcher.ts`
@@ -196,89 +196,4 @@ The council preset is the most complex preset. Here's how it works (see also `do
 
 Todo extraction lives in `councilDecisions.ts` (`extractActionableTodos`, `extractTodosFromAudit`). Legacy AI "decision gates" (Gate 1 verifyTodo, Gate 3 resolveContradiction, Gate 4 recoverDeletedFiles) were removed; path validation and simple extraction are used instead. See `councilDecisions.ts` header comment.
 
-### File structure (post-refactor)
-
-```
-server/src/swarm/
-├── CouncilRunner.ts       — Main orchestration + 3-phase loop (reduced from ~1867 LOC via extraction)
-├── councilDecisions.ts    — Todo extraction logic
-├── councilExecution.ts    — Parallel worker execution
-├── councilAudit.ts        — Audit phase
-├── councilSynthesis.ts    — Synthesis pass
-├── councilDeliverable.ts  — Deliverable writing
-└── councilVoteReconcile.ts — Vote reconciliation
-```
-
-### Autonomous loop
-
-When `rounds: 0` (infinite mode), the council cycles through all 3 phases repeatedly:
-- Cycle 1: Full discussion → execution → audit
-- Cycle 2+: Uses carry-forward todos from audit, or re-plans from scratch
-- Cycle cap: 20 planning cycles maximum
-- Execution-audit sub-cycle cap: 8 cycles for fixing incomplete work
-
-Contradictions and partial work are logged; the next synthesis accounts for them naturally.
-
-**Historical note (2026-06):** Prior council refactor extracted modules for maintainability; old session checkpoints describing gate counts/LOCs are superseded. All active agent guidance consolidated here and in STATUS.md.
-
----
-
-## Conventions
-
-### Commit style
-
-Use HEREDOC for multi-line messages so formatting survives. Always with the explicit identity flag:
-
-```bash
-git -c user.name='Kevin' -c user.email='kevinkicho@gmail.com' commit -m "$(cat <<'EOF'
-short one-line subject
-
-Optional body explaining the WHY (not the WHAT — the diff shows what).
-Reference task IDs / commits / RCAs by their short hash.
-EOF
-)"
-```
-
-### Where new code goes
-
-- **Logic shared between server and web** → `shared/src/` (single source of truth)
-- **New blackboard substrate** → `server/src/swarm/blackboard/`
-  - Auditor now supports `auditorOnlyMutations` + in-memory batch + single commit (see README for flags).
-  - Hybrid: `useHybridPlanning` + planning/execution presets + lightweight `systemMap` (Context Oracle style) injected into blackboard planner seed/prompt for broad systemic view.
-- **Tests** → next to the file under test as `X.test.ts`; add the path to the explicit list in `server/scripts/run-tests.mjs` (enumerated, not glob-based)
-- **Routes** → `server/src/routes/` named after the API surface
-- **Per-runner specialization** → one runner class per preset under `server/src/swarm/`
-- **Docs** → `docs/` for cross-cutting concerns; co-locate code-near design notes as `ARCHITECTURE.md` next to the module
-
-### When making behavior changes
-
-- **Default OFF** for risky / experimental behavior. Add an env flag or a `cfg.X?: boolean` opt-in.
-- **Tests before integration.** Substrate gets unit tests + an integration test; that lets the integration step be confident.
-- **Document RCA in the commit body.** For non-trivial bug fixes, include enough detail that future-you can understand WHY without re-discovering the symptom.
-
-### Don't
-
-- **Don't run `npm install` from WSL.** It swaps esbuild binaries to Linux and breaks the Windows dev server.
-- **Don't do `git config --global` for any reason.**
-- **Don't burn cloud quota for "preset tour" or "long-run validation" without explicit go-ahead.**
-- **Don't accept "pre-existing failures" uncritically.** Always investigate the root cause.
-- **Don't pile up background tasks.** When restarting the dev server, clean up the previous one first.
-
----
-
-## Operational hazards
-
-### `/mnt/c` (WSL) flakiness
-
-- tsx watch occasionally SIGTERMs the dev server after summary writes. Just restart.
-- `npm install` from WSL swaps esbuild binaries — never do it from Linux.
-- File-change events on `/mnt/c` need polling-based watchers.
-
-### Cloud quota
-
-- Quota walls (HTTP 429/503) trigger blackboard's `enterPause()` with 5-min probe loop, capped at 2h total pause before halting. Other presets fail-fast.
-- Token tracker captures via local proxy at `:11533`.
-
-### Background process management
-
-Agents are in-process records (no subprocesses since E3 Phase 5 for cloud models; the server node itself drives everything). The only OS-level processes are the ones `npm run dev` spawns (tsx server + vite web). Ctrl-C should now stop them reliably (with taskkill + port fallback on Windows). If a zombie still persists after Ctrl-C: `npx kill-port 8243 8244` or the Get-NetTCPConnection + Stop-Process PowerShell commands.
+(Additional details on the council refactor live in the source and in `docs/STATUS.md`.)

@@ -34,7 +34,7 @@ export class PipelineRunner implements SwarmRunner {
 
   status(): SwarmStatus {
     const currentStatus = this.currentRunner?.status();
-    return {
+    const base = {
       phase: this.phase,
       round: this.round,
       repoUrl: this.active?.repoUrl,
@@ -43,7 +43,9 @@ export class PipelineRunner implements SwarmRunner {
       agents: currentStatus?.agents ?? this.opts.manager.toStates(),
       transcript: [...this.transcript],
       streaming: currentStatus?.streaming,
-    };
+      // Phase 10: no currentPhase/phases exposed for hybrid or any.
+    } as SwarmStatus;
+    return base;
   }
 
   injectUser(
@@ -63,6 +65,7 @@ export class PipelineRunner implements SwarmRunner {
     this.running = true;
     this.transcript = [];
     this.phaseResults = [];
+
     this.setPhase("discussing");
 
     this.appendSystem(`[Pipeline] Using configured pipeline phases: ${pipeline.phases.map(p => p.preset).join(' → ')} (pipeMode=${pipeline.pipeMode ?? 'both'})`);
@@ -81,7 +84,12 @@ export class PipelineRunner implements SwarmRunner {
         pipeline.pipeMaxEntries ?? 20,
       );
 
-      const { pipeline: _pipeline, useHybridPlanning: _h, planningPreset: _pp, executionPreset: _ep, ...phaseConfigRest } = {
+      // Hybrid sequencing uses useHybridPlanning + planning/executionPreset on top cfg.
+      const isLastPhase = i === pipeline.phases.length - 1;
+
+      // Phase 10: no phase state tracking or emitters. Just sequence the subs.
+      // Phase 2: forward hybridContext (minimal).
+      const phaseConfig: RunConfig = {
         ...cfg,
         preset: phase.preset,
         rounds: phase.rounds ?? cfg.rounds,
@@ -89,13 +97,13 @@ export class PipelineRunner implements SwarmRunner {
         model: phase.model ?? cfg.model,
         userDirective: pipedDirective || cfg.userDirective,
         suppressSeedMessages: i > 0,
-      };
-      const phaseConfig: RunConfig = phaseConfigRest as RunConfig;
+      } as RunConfig;
 
       this.appendSystem(
         `[Pipeline] Starting phase ${i + 1}/${pipeline.phases.length}: ${phase.preset} (${phase.rounds ?? cfg.rounds} rounds)`,
       );
 
+      this.opts.logDiag?.({ type: 'hybrid-sub-factory', i, phasePreset: phase.preset, runId: this.active?.runId });
       const runner = await this.factory(phase.preset);
       this.currentRunner = runner;
 
@@ -103,6 +111,7 @@ export class PipelineRunner implements SwarmRunner {
         await runner.start(phaseConfig);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        this.opts.logDiag?.({ type: 'hybrid-phase-failure', i, preset: phase.preset, error: msg, runId: this.active?.runId });
         this.appendSystem(
           `[Pipeline] Phase ${i + 1} (${phase.preset}) failed: ${msg.slice(0, 200)}.`,
         );
@@ -128,8 +137,12 @@ export class PipelineRunner implements SwarmRunner {
       });
 
       for (const entry of runnerStatus.transcript) {
+        // Phase 10 removal: transcript entries are concatenated transparently.
+        // No phaseIndex/phasePreset tagging (phase state emitters removed).
         this.transcript.push(entry);
       }
+
+      // Phase 10: no currentPhase/phases state updates on the composite (emitters removed).
 
       this.appendSystem(
         `[Pipeline] Completed phase ${i + 1}/${pipeline.phases.length}: ${phase.preset}`,
@@ -140,21 +153,16 @@ export class PipelineRunner implements SwarmRunner {
     this.running = false;
 
     const lastPhaseCfg = pipeline.phases[pipeline.phases.length - 1];
-    const lastWasAutonomousExec = !!(lastPhaseCfg && (
-      lastPhaseCfg.rounds === 0 ||
-      String(lastPhaseCfg.preset) === 'blackboard'
-    ));
+    // Phase 10: autonomous exec detection is now purely based on rounds===0 for the last phase
+    // (the blackboard exec phase uses rounds=0 so its own runner manages terminal state).
+    const lastWasAutonomousExec = !!(lastPhaseCfg && lastPhaseCfg.rounds === 0);
 
-    // Do not force "completed" + kill + run_finished here for autonomous exec phase (blackboard rounds=0 in hybrid).
-    // The exec runner starts its work in background after start() resolves (post-spawn); forcing here kills agents
-    // prematurely and emits the run summary banner before any real execution output streams arrive.
-    // Let the blackboard lifecycle drive its own terminal phase, killAll, run_finished append, and summary write.
     if (!this.stopping && !lastWasAutonomousExec) {
       this.setPhase("completed");
     }
 
     if (!lastWasAutonomousExec) {
-      // Force release + summary only for finite discussion phases. Hybrid exec manages its lifetime.
+      // Force release + summary only for finite discussion phases. Exec phase (rounds=0) manages its own.
       try {
         const killResult = await this.opts.manager.killAll();
         this.appendSystem(formatPortReleaseLine(killResult));
@@ -166,7 +174,7 @@ export class PipelineRunner implements SwarmRunner {
         const startedAt = this.phaseResults.length > 0 
           ? (this.phaseResults[0].transcript?.[0]?.ts || now - 200000) 
           : now - 200000;
-        const summary = {
+        const summary: any = {
           runId: this.active.runId,
           preset: this.active.preset,
           startedAt,
@@ -180,14 +188,16 @@ export class PipelineRunner implements SwarmRunner {
           topology: this.active.topology,
           filesChanged: 0,
           finalGitStatus: "",
+          finalGitStatusTruncated: "",
+          repoUrl: this.active.repoUrl || "",
+          localPath: this.active.localPath || "",
+          wastedWallClockMs: 0,
           agents: (this.phaseResults.length > 0 && this.phaseResults[this.phaseResults.length-1].agents) 
             ? this.phaseResults[this.phaseResults.length-1].agents 
             : (this.opts.manager.toStates ? this.opts.manager.toStates() : []),
           clonePath: this.active.localPath,
-          // Preserve hybrid flags so ?review mode can detect isHybrid and render council planner box + execution agents.
-          useHybridPlanning: (this.active as any).useHybridPlanning,
-          planningPreset: (this.active as any).planningPreset,
-        } as any;
+          // Phase 10: no hybrid phase state in summary for new runs (emitters removed)
+        };
 
         // Ensure the persisted transcript for this runId always contains a run_finished
         // entry (with the banner + structured summary) so the history /runs/:id view
@@ -205,8 +215,8 @@ export class PipelineRunner implements SwarmRunner {
           } as any);
         }
 
-        const finalSummary = { ...summary, transcript: this.transcript };
-        await writeRunSummary(this.active.localPath, finalSummary);
+        const finalSummary = { ...summary, transcript: this.transcript } as any;
+        await writeRunSummary(this.active.localPath, finalSummary as any);
       } catch {}
     }
   }
@@ -239,7 +249,7 @@ export class PipelineRunner implements SwarmRunner {
         const startedAt = this.phaseResults.length > 0 
           ? (this.phaseResults[0].transcript?.[0]?.ts || now - 200000) 
           : now - 200000;
-        const summary = {
+        const summary: any = {
           runId: this.active.runId,
           preset: this.active.preset,
           startedAt,
@@ -253,14 +263,16 @@ export class PipelineRunner implements SwarmRunner {
           topology: this.active.topology,
           filesChanged: 0,
           finalGitStatus: "",
+          finalGitStatusTruncated: "",
+          repoUrl: this.active.repoUrl || "",
+          localPath: this.active.localPath || "",
+          wastedWallClockMs: 0,
           agents: (this.phaseResults.length > 0 && this.phaseResults[this.phaseResults.length-1].agents) 
             ? this.phaseResults[this.phaseResults.length-1].agents 
             : (this.opts.manager.toStates ? this.opts.manager.toStates() : []),
           clonePath: this.active.localPath,
-          // Preserve hybrid flags so ?review mode can detect isHybrid and render council planner box + execution agents.
-          useHybridPlanning: (this.active as any).useHybridPlanning,
-          planningPreset: (this.active as any).planningPreset,
-        } as any;
+          // Phase 10: no phase state emitters
+        };
 
         // Same guarantee as natural completion: ensure run_finished entry for history grid.
         const hasRunFinished = this.transcript.some((e: any) => e.summary?.kind === "run_finished");
@@ -273,8 +285,8 @@ export class PipelineRunner implements SwarmRunner {
             summary: buildRunFinishedSummary(summary),
           } as any);
         }
-        const finalSummary = { ...summary, transcript: this.transcript };
-        await writeRunSummary(this.active.localPath, finalSummary);
+        const finalSummary = { ...summary, transcript: this.transcript } as any;
+        await writeRunSummary(this.active.localPath, finalSummary as any);
         this.appendSystem("Wrote run summary on stop (hybrid pipeline).");
       } catch (e) {
         this.appendSystem(`[Pipeline] Failed to force summary write on stop: ${e}`);

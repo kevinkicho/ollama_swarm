@@ -120,7 +120,9 @@ export interface RunConfig {
    */
   requireAuditorVerification?: boolean;
 
-  // Hybrid planning + execution support
+  // Hybrid planning + execution support (orchestrated via PipelineRunner)
+  // useHybridPlanning + planningPreset + executionPreset trigger council -> blackboard sequencing.
+  // No hybridPhase / currentPhase / phases state on config (emitters removed Phase 9/10).
   useHybridPlanning?: boolean;
   planningPreset?: string;
   executionPreset?: string;

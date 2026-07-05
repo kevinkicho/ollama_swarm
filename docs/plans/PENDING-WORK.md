@@ -1,27 +1,28 @@
-# Pending Work — Historical (Archived Plans)
+# Pending Work
 
-> Most items from early archived plans have shipped. See `docs/active-work.md` for current queue.
-> This file is kept for archaeology only.
+See `docs/active-work.md` and `docs/STATUS.md` for the live prioritized list.
 
-Generated: 2026-06-30 (historical)
+This file contains longer-term or lower-priority items that are not currently in active development.
 
-## Previously Completed Items
+## Brain / System Level
 
-Items from archived plans that were implemented:
+- Full autonomous self-upgrader (currently recording-only by design)
+- More sophisticated cross-run librarian queries
+- Automatic model recommendation that factors in cost + quality trade-offs at runtime
 
-### Context Window Utilization (Plan 4) — COMPLETE ✅
-- `planner.ts`: README limit scaled by model budget (4K→20K for 1M models)
-- `auditor.ts`: file state + transcript limits scaled by model budget
-- `councilPromptHelpers.ts`: repo file limits scaled by model budget
-- `firstPassContract.ts`: README + repo file limits scaled by model budget
+## UI / UX
 
-### Council Bug Fixes (Plan 5) — COMPLETE ✅
-- `synthesizeStandup`: now parses output and posts todos to queue
-- `synthesizeStandup`: fix leaked AbortController
-- `synthesizeStandup`: log errors instead of silently swallowing
-- Deleted dead `tryBrainFallbackWorker` function
-- Removed unreachable `unmetCount === 0` check
-- `parseJsonArrayFromResponse`: use balanced extraction instead of greedy
+- Better visualization of multi-run timelines
+- First-class support for reviewing historical Brain proposals
 
-### Nudge Fix (Plan 6) — COMPLETE ✅
-- `AmendButton` fetches active runId from `/api/swarm/status` before posting
+## Reliability
+
+- Further hardening of hybrid execution phase lifetime guarantees
+- Additional watchdog layers for paid-provider quota edge cases
+
+## Presets & Patterns
+
+- Evaluate whether MoA should become a first-class write-capable path (currently discussion-only)
+- Additional research-oriented patterns using the new webTools surface
+
+Most day-to-day work is tracked in `docs/active-work.md`.

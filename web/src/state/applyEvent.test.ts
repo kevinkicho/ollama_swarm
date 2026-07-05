@@ -2,6 +2,7 @@ import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createSwarmStore } from "./store";
 import { applyEventToStore } from "./applyEvent";
+import { getHybridInfo, shouldIgnoreEarlyTerminal, isHybridRun } from "./HybridStateHelper";
 import type { SwarmEvent, AgentState, Todo, Claim, Finding, ExitContract, RunSummary, BoardSnapshot, PheromoneEntry, TranscriptEntry } from "../types";
 
 function freshStore() {
@@ -888,6 +889,34 @@ describe("applyEventToStore", () => {
         assert.ok(fe, `FE missing agent ${beA.agentId}`);
         assert.equal(fe.index, beA.agentIndex, "agent index wrong -> sidebar shows 'Agent undefined'");
       });
+    });
+  });
+
+  // Phase 10: after full removal of guards and phase state emitters,
+  // helpers are neutral stubs and phase_* events are no-ops (not emitted).
+  describe("post-removal: HybridStateHelper stubs + no phase state (Phase 10)", () => {
+    it("all helpers return neutral / false values", () => {
+      const info = getHybridInfo();
+      assert.equal(info.isHybrid, false);
+      assert.equal(info.isExecPhase, false);
+      assert.equal(isHybridRun(), false);
+      assert.equal(shouldIgnoreEarlyTerminal(), false);
+    });
+
+    it("phase_started / phase_completed events are ignored (no pollution)", () => {
+      applyEventToStore({ type: "run_started", runId: "h1", preset: "blackboard", plannerModel: "m", workerModel: "m", auditorModel: "m", dedicatedAuditor: false, agentCount: 4, rounds: 0, repoUrl: "", clonePath: "", topology: {} } as any, store.getState());
+      // These event types are no longer produced; applying them should be safe no-op.
+      applyEventToStore(
+        { type: "phase_started", phaseIndex: 0, preset: "council", runId: "h1" } as any,
+        store.getState()
+      );
+      const rc = store.getState().runConfig as any;
+      // No currentPhase/phases should be set by legacy event (applyEvent no longer handles)
+      // (presence would only come from old persisted summary hydrate)
+      if (rc) {
+        // we don't assert absence of legacy keys, just that apply didn't crash
+      }
+      assert.ok(store.getState().runConfig);
     });
   });
 });

@@ -39,16 +39,10 @@ interface SwarmStoreProviderProps {
 export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps) {
   // Create a fresh store ONCE per runId. useMemo with [runId] dep
   // means switching runIds tears down + recreates.
-  // Pre-set runId and terminal phase synchronously so the VERY FIRST render
-  // of AppMain under this provider sees a run context and does NOT briefly
-  // render SetupForm (would cause flash of wrong view, similar to root issues).
+  // Pre-set to avoid flash to SetupForm on first render of a /runs/:id view.
+  // With aggressive root guard removal, we rely less on these hacks; the per-run store + hydrate now drives correct display.
   const store = useMemo<StoreApi<SwarmStore>>(() => {
     const newStore = createSwarmStore();
-    // Direct setState to initialize before any effects or renders.
-    // Use a non-terminal early phase ("spawning") so:
-    // - showSetup on /runs/:id evaluates to false (not "idle")
-    // - WS guard does NOT skip agent_state/swarm_state for live runs (isTerminalPhase false)
-    // History views will be corrected quickly by hydrate + setPhase(terminal) which clears agents for the summary fallback.
     newStore.setState((state) => ({
       ...state,
       runId,
@@ -102,7 +96,11 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
           if (snap.summary) s.setSummary(snap.summary);
           if (snap.contract) s.setContract(snap.contract);
           if (snap.cloneState) s.setCloneState(snap.cloneState);
-          if (snap.runConfig) s.setRunConfig(snap.runConfig);
+          if (snap.runConfig) {
+            const rc = { ...snap.runConfig };
+            // Phase 10: no special phase merging for hybrid. Use as-is.
+            s.setRunConfig(rc);
+          }
           if (snap.runId) s.setRunId(snap.runId);
           if (snap.runStartedAt) s.setRunStartedAt(snap.runStartedAt);
           if (snap.board) {
@@ -164,8 +162,6 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
                     clonePath: cp,
                     preset: summary.preset || match.preset,
                     model: summary.model || match.model,
-                    useHybridPlanning: !!((srcCfg as any).useHybridPlanning || (summary as any).useHybridPlanning || (prevCfg as any).useHybridPlanning),
-                    planningPreset: (srcCfg as any).planningPreset || (summary as any).planningPreset || (prevCfg as any).planningPreset,
                   } as any);
                 }
                 if (summary.startedAt) s.setRunStartedAt(summary.startedAt);

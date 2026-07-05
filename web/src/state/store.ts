@@ -298,8 +298,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       // even when transcript starts empty. When BOTH fire (cross-run +
       // server-side), we get duplicate "New run" cards. Skip the second.
       if (e.role === "system" && e.text.startsWith("▸▸RUN-START▸▸")) {
-        // In hybrid/pipeline runs (multiple phases under same runId, different sub-presets),
-        // each phase emits its own RUN-START divider. Dedup to keep only the first.
+        // Dedup RUN-START dividers (hybrid concatenates multiple subs under same runId).
         const already = s.transcript.some((t) =>
           t.role === "system" &&
           t.text.startsWith("▸▸RUN-START▸▸") &&

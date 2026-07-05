@@ -107,15 +107,10 @@ export interface WorkerPipelineInput {
  *  files → git commit. Returns a structured outcome the caller can
  *  feed back to TodoQueue (complete on ok, fail on !ok). */
 export async function applyAndCommit(input: WorkerPipelineInput): Promise<WorkerOutcomeV2> {
-  // NEW (priority 3): central guard
-  // The caller (auditor context) must pass auditorApproved: true when
-  // auditorOnlyMutations is enabled. We don't have direct access to cfg here,
-  // so rely on the caller to set it correctly. For extra safety, workers
-  // should never call this with auditorApproved.
-  if (!input.auditorApproved) {
-    // In practice, worker path uses proposeCommitQ and never reaches here.
-    // This guard is for defense-in-depth if someone calls apply directly.
-    // For full enforcement, the auditor context sets the flag.
+  // Unified guard: auditor-only mutations path requires explicit approval.
+  // Workers always go through proposeCommitQ. Auditor calls set auditorApproved: true.
+  if (input.auditorApproved === false) {
+    return { ok: false, reason: "auditorApproved required for mutation under auditorOnlyMutations" };
   }
 
   // 1. Read all expected files. Missing files (null) are allowed —

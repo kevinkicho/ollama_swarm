@@ -187,6 +187,24 @@ export interface RunSummary {
   // V2 reducer snapshot at run end. Blackboard-only. After cutover
   // Phase 1a (2026-04-28), divergence tracking is gone — the field
   // now records the reducer's final phase + pause state for forward
+  // First-class hybrid/composite phase support (Phase 1 data model).
+  currentPhase?: {
+    index: number;
+    preset: string;
+    status?: 'running' | 'complete' | 'failed';
+  };
+  phases?: Array<{
+    index: number;
+    preset: string;
+    status?: string;
+    startedAt?: number;
+    endedAt?: number;
+    deliverable?: string;
+  }>;
+  // Legacy hybrid flags (present on old persisted summaries only)
+  useHybridPlanning?: boolean;
+  planningPreset?: string;
+  executionPreset?: string;
   // compat with Phase 1b (UI-driven by V2 phase). Optional for
   // back-compat with summaries written before this field landed.
   v2State?: {
@@ -293,6 +311,9 @@ export interface BuildSummaryInput {
   v2QueueState?: RunSummary["v2QueueState"];
   // Phase 4a of #243: pass-through to RunSummary.topology.
   topology?: RunSummary["topology"];
+  // Legacy phase fields (Phase 10: not populated for new runs).
+  currentPhase?: RunSummary["currentPhase"];
+  phases?: RunSummary["phases"];
   // R17 wiring (2026-05-04): structured errors collected during the
   // run. Empty array → RCA generates a degraded (but still useful)
   // report from timing + commit signals only. Populated → RCA gets
@@ -372,6 +393,7 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     v2QueueState: input.v2QueueState,
     // Phase 4a of #243: topology passthrough.
     topology: input.topology,
+    // Phase 10: phase state (currentPhase/phases) no longer forwarded from input.
     // R15 + R16 wiring (2026-05-04): post-build RCA + health score.
     // R17 wiring (2026-05-04): now consumes input.errors when the
     // runner has collected ClassifiedError records — falls back to []

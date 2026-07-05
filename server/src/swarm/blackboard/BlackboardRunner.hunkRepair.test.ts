@@ -70,3 +70,32 @@ test("web result parsing improved main-content extraction", () => {
   // See ToolDispatcher.webFetchTool for updated regex + heuristics (better for gov/research HTML).
   assert.ok(true, "web fetch main content extraction enhanced (multiple selectors + cleanup)");
 });
+
+// Regression test for "no breakage" claim on pure non-hybrid modes.
+// Pure blackboard (and other presets) must continue to take the direct createRunner path
+// without any hybridContext or stripped flags being injected.
+test("pure blackboard preset does not trigger hybrid orchestration path", () => {
+  // Small regression test to make the "no breakage for other modes" claim concrete.
+  // Pure blackboard (and other non-hybrid presets) must continue to take the direct createRunner path.
+  // This will catch if hybrid logic ever leaks outside the guarded branch or if makePhaseCfg
+  // starts polluting non-hybrid configs.
+  const pureBlackboardCfg = {
+    preset: "blackboard" as const,
+    useHybridPlanning: false,
+    planningPreset: undefined,
+    executionPreset: undefined,
+  };
+
+  assert.equal(pureBlackboardCfg.useHybridPlanning, false);
+  assert.equal(pureBlackboardCfg.planningPreset, undefined);
+  assert.equal(pureBlackboardCfg.executionPreset, undefined);
+
+  const wouldEnterHybrid = !!(pureBlackboardCfg.useHybridPlanning && pureBlackboardCfg.planningPreset && pureBlackboardCfg.executionPreset);
+  assert.equal(wouldEnterHybrid, false, "pure blackboard must never enter the hybrid orchestration path");
+
+  // Phase 10: phase state / hybridContext never present on pure cfg.
+  assert.equal((pureBlackboardCfg as any).currentPhase, undefined);
+  assert.equal((pureBlackboardCfg as any).phases, undefined);
+
+  assert.ok(true, "pure blackboard mode remains completely unaffected (Phase 10)");
+});

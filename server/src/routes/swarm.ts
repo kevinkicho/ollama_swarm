@@ -357,6 +357,12 @@ export function swarmRouter(orch: Orchestrator): Router {
 
     // Attach for correlation in run hub / logger
     (parsed.data as any).reqId = reqId;
+    startLog.info('start request received', {
+      preset: parsed.data.preset,
+      useHybridPlanning: parsed.data.useHybridPlanning,
+      planningPreset: parsed.data.planningPreset,
+      executionPreset: parsed.data.executionPreset,
+    });
     // Task #147: force-restart path. When the caller sets force=true, we
     // pre-emptively stop any existing runner so the new start always gets
     // a clean slot. Recovers from the "stuck-orchestrator" state observed

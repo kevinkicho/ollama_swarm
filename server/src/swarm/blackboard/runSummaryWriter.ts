@@ -125,6 +125,7 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
         }, null, 2)}'`,
       ].join(" \\\n  "),
     },
+    // Phase 10: no currentPhase/phases forwarded (emitters removed).
     agentCount: cfg.agentCount,
     rounds: cfg.rounds,
     startedAt: ctx.runBootedAt,

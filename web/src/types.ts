@@ -43,6 +43,9 @@ export interface TranscriptEntry {
   agentIndex?: number;
   text: string;
   ts: number;
+  // Phase 4 scoping: tags for composite/hybrid pipeline entries (additive).
+  phaseIndex?: number;
+  phasePreset?: string;
   // Unit 54: server-computed structured summary of the agent's
   // response when it parsed as a known envelope. Web prefers this
   // over its own client-side summarizer because the server has the
@@ -264,8 +267,8 @@ export interface BoardCountsDTO {
 
 export type SwarmEvent =
   | { type: "transcript_append"; entry: TranscriptEntry }
-  | { type: "agent_state"; agent: AgentState; runId?: string }
-  | { type: "swarm_state"; phase: SwarmPhase; round: number; runId?: string }
+  | { type: "agent_state"; agent: AgentState; runId?: string; phaseIndex?: number; phasePreset?: string }
+  | { type: "swarm_state"; phase: SwarmPhase; round: number; runId?: string; phaseIndex?: number; phasePreset?: string }
   | { type: "agent_streaming"; agentId: string; agentIndex: number; text: string; runId?: string }
   | { type: "agent_streaming_end"; agentId: string; runId?: string }
   | { type: "error"; message: string }
@@ -397,6 +400,10 @@ export type SwarmEvent =
       // Caps from run_started for setup bar / review hydration.
       wallClockCapMin?: string;
       ambitionTiers?: string;
+      // Hybrid sequencing flags only (phase state removed).
+      useHybridPlanning?: boolean;
+      planningPreset?: string;
+      executionPreset?: string;
   // Deliverables: files created or meaningfully changed by this run.
   // Created = new file; Modified = existing file edited. Empty for
   // discussion presets (no code changes). Optional for back-compat.
@@ -410,6 +417,8 @@ export type SwarmEvent =
       verdict: "ship-quality" | "needs-revision" | "fundamentally-flawed";
       dimensions: Array<{ id: string; label: string; score: number; note: string }>;
     }
+  // Phase 10: phase_started / phase_completed removed completely.
+  // No explicit phase state emitters for hybrid.
 
 // Shared shape returned by GET /api/swarm/preflight. Drives both the
 // inline PreflightPreview under the Parent folder field AND the
@@ -557,7 +566,7 @@ export interface RunConfigSnapshot {
   // Caps synced from setup form for blackboard/advanced runs
   wallClockCapMin?: string;
   ambitionTiers?: string;
-  // Hybrid planner support (council etc as planner group for blackboard)
+  // Hybrid planner support (transparent orchestration, no phase state).
   useHybridPlanning?: boolean;
   planningPreset?: string;
   executionPreset?: string;

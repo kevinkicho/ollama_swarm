@@ -564,13 +564,11 @@ export class Orchestrator {
                 const raw = readFileSync(cand, "utf8");
                 const sum = JSON.parse(raw);
                 if (sum && (sum.runId === runId || (runId && (sum.runId?.startsWith(runId) || runId.startsWith(sum.runId))))) {
-                  const effPhase = (sum.stopReason === "completed" ? (sum.preset === 'blackboard' && sum.transcript && sum.transcript.some((e: any) => e.text && e.text.includes('council') && !sum.transcript.some((e: any) => e.text && e.text.includes('blackboard') && e.text.includes('phase'))) ? "failed" : "completed") :
+                  // Phase 10: use summary as-is. No phase synthesis or injection.
+                  const effPhase = (sum.stopReason === "completed" ? "completed" :
                                    (sum.stopReason === "crash" || sum.stopReason === "crashed" ? "failed" : "stopped")) as SwarmPhase;
                   const rc = (sum as any).runConfig || { preset: sum.preset };
                   const cp = sum.localPath || sum.clonePath || candidateDir;
-                  // Shape agents as AgentState (id/index/status) so traditional sidebar
-                  // (Object.values(agents).map AgentPanel) gets proper data for historical runs
-                  // without falling to stats fallback. This brings the original sidebar path alive.
                   const shapedAgents = Array.isArray(sum.agents)
                     ? sum.agents.map((pa: any) => ({ id: pa.agentId, index: pa.agentIndex, status: "stopped" as const, model: pa.model }))
                     : [];
@@ -641,7 +639,8 @@ export class Orchestrator {
             const sum = JSON.parse(sumRaw);
             if (sum && (!sum.runId || sum.runId === runId ||
                 (runId && (sum.runId.startsWith(runId) || runId.startsWith(sum.runId))))) {
-              const effPhase = (sum.stopReason === "completed" ? (sum.preset === 'blackboard' && sum.transcript && sum.transcript.some((e: any) => e.text && e.text.includes('council') && !sum.transcript.some((e: any) => e.text && e.text.includes('blackboard') && e.text.includes('phase'))) ? "failed" : "completed") :
+              // Phase 10: no migration synthesis of phases. Use summary fields directly if present (legacy only).
+              const effPhase = (sum.stopReason === "completed" ? "completed" :
                                (sum.stopReason === "crash" || sum.stopReason === "crashed" ? "failed" : "stopped")) as SwarmPhase;
               const rc = (sum as any).runConfig || { preset: sum.preset };
               const shapedAgents = Array.isArray(sum.agents)
@@ -715,14 +714,7 @@ export class Orchestrator {
             if (sum && sum.stopReason && (!sum.runId || sum.runId === runId ||
                 (runId && (sum.runId.startsWith(runId) || runId.startsWith(sum.runId))))) {
               if (sum.stopReason === "completed") {
-                // For hybrid, if only planning phase completed (no blackboard execution marker in transcript), treat as crashed (user killed server due to UI bugs).
-                const isHybridSum = sum.preset === 'blackboard' && sum.transcript && sum.transcript.some((e: any) => e.text && e.text.includes('council'));
-                const hasExecution = sum.transcript && sum.transcript.some((e: any) => e.text && e.text.includes('blackboard') && e.text.includes('phase'));
-                if (isHybridSum && !hasExecution) {
-                  effectivePhase = "failed";
-                } else {
-                  effectivePhase = "completed";
-                }
+                effectivePhase = "completed";
               } else if (sum.stopReason === "crash" || sum.stopReason === "crashed") {
                 effectivePhase = "failed";
               } else {
@@ -1035,13 +1027,11 @@ export class Orchestrator {
       getRunner: () => runHolder.runner!,
       hub: runHub,
     };
-    // Capture hybrid intent BEFORE buildRunner (which intentionally strips the flags
-    // on the cfg object to avoid re-triggering inside phase factory). We preserve the
-    // original values in the client-visible runConfig so UI correctly detects isHybrid,
-    // shows council-as-planner boxed group in sidebar, etc.
-    const capturedUseHybrid = cfg.useHybridPlanning;
-    const capturedPlanningPreset = cfg.planningPreset;
-    const capturedExecutionPreset = cfg.executionPreset;
+    const isHybridRequest = !!(cfg.useHybridPlanning && cfg.planningPreset && cfg.executionPreset);
+    this.log.info('buildRunner called', { runId, preset: cfg.preset, isHybridRequest, planningPreset: cfg.planningPreset, executionPreset: cfg.executionPreset });
+    if (isHybridRequest) {
+      this.log.info('hybrid top level detected, will use PipelineRunner');
+    }
     const runner = await this.buildRunner(cfg.preset, cfg, buildCtx);
     runHolder.runner = runner;
     // Task #125: tag every Ollama call made during this run with its
@@ -1105,9 +1095,6 @@ export class Orchestrator {
       // Map server cfg caps to client strings for run events / status.
       wallClockCapMin: cfg.wallClockCapMs ? Math.round(cfg.wallClockCapMs / 60000).toString() : undefined,
       ambitionTiers: cfg.ambitionTiers !== undefined ? String(cfg.ambitionTiers) : undefined,
-      useHybridPlanning: capturedUseHybrid,
-      planningPreset: capturedPlanningPreset,
-      executionPreset: capturedExecutionPreset,
     };
     const activeRun = this.createActiveRun(runId, startedAt, cfg, runConfig, runner, manager, persister, holdsCloneLock, runHub);
     this.runs.set(runId, activeRun);
@@ -1156,9 +1143,24 @@ export class Orchestrator {
         }
       } catch (err) {
         const rid = (typeof runId === 'string' ? runId : 'unknown');
-        this.log.warn('start partial failure, cleaning up ActiveRun', { runId: rid, error: err instanceof Error ? err.message : String(err) });
-        await activeRun.stop();
+        this.log.error('start inner failure for hybrid or run', {
+          runId: rid,
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+          isHybrid: !!(cfg.useHybridPlanning && cfg.planningPreset && cfg.executionPreset),
+        });
+        try {
+          await activeRun.stop();
+        } catch (stopErr) {
+          this.log.warn('stop after failure failed', { error: stopErr });
+        }
         this.runs.delete(rid);
+        // emit error to client if possible
+        try {
+          this.opts.emit({ type: 'error', message: `Start failed: ${err instanceof Error ? err.message : String(err)}`, runId: rid } as any);
+        } catch (emitErr) {
+          this.log.warn('failed to emit start error', { error: emitErr });
+        }
         // rethrow not needed since fire-and-forget
       }
     })();
@@ -1421,8 +1423,11 @@ export class Orchestrator {
     const { runId, startedAt, cfg, persister, hub, getRunner } = params;
     const baseEmit = this.opts.emit;
     return (e: SwarmEvent) => {
-      const stamped: SwarmEvent =
+      let stamped: SwarmEvent =
         e.runId === undefined ? { ...e, runId } : e;
+
+      // Phase 10: no phase tagging on events (phase state emitters removed completely).
+
       if (hub) hub.emit(stamped as any, "lifecycle");
       baseEmit(stamped);
       this.brain.trackRunHealth(stamped);
@@ -1478,8 +1483,7 @@ export class Orchestrator {
 
     const { createRunner } = await import("../swarm/presetRouter.js");
 
-    // NEW: Hybrid planning + execution (#1, #3)
-    // Extracted to keep buildRunner focused; hybrid logic is now a dedicated slice.
+    // Hybrid planning + execution via dedicated pipeline (sequencing only; no phase guards).
     if (cfg.useHybridPlanning && cfg.planningPreset && cfg.executionPreset) {
       return this.createHybridPipelineRunner(cfg, originalCfg, opts, ctx);
     }
@@ -1509,9 +1513,9 @@ export class Orchestrator {
   }
 
   /**
-   * Extracted hybrid planning+execution builder (refactor slice).
-   * Keeps the main buildRunner lean; all hybrid-specific wiring (pipeline attach,
-   * flag stripping for subs, brain disable, summary preservation) lives here.
+   * Hybrid planning+execution via PipelineRunner sequencing.
+   * planningPreset (e.g. council) then executionPreset (e.g. blackboard, rounds=0).
+   * Phase state/guards removed (Phase 9/10); hybrid is transparent orchestration.
    */
   private createHybridPipelineRunner(
     cfg: RunConfig,
@@ -1519,6 +1523,13 @@ export class Orchestrator {
     opts: RunnerOpts,
     ctx: BuildRunnerContext
   ) {
+    this.log.info('creating hybrid PipelineRunner', {
+      runId: ctx.runId,
+      planningPreset: cfg.planningPreset,
+      executionPreset: cfg.executionPreset,
+      topPreset: cfg.preset,
+    });
+
     const hybridPipeline = {
       phases: [
         {
@@ -1541,14 +1552,11 @@ export class Orchestrator {
     originalCfg.pipeline = hybridPipeline;
     cfg.pipeline = hybridPipeline;
 
+    // Subs get plain config + the pipeline def. No extra hybridContext or phase state.
     const makePhaseCfg = (base: any, phasePreset: PresetId) => ({
       ...base,
       preset: phasePreset,
       pipeline: hybridPipeline,
-      useHybridPlanning: false,
-      planningPreset: undefined,
-      executionPreset: undefined,
-      enableBrainAnalysis: false,
     });
     const factory = async (p: PresetId) => this.buildRunner(p, makePhaseCfg(cfg, p), ctx);
     return new PipelineRunner(opts, factory);
@@ -1572,7 +1580,10 @@ export class Orchestrator {
       logDiag: this.opts.logDiag,
       ollamaBaseUrl: this.opts.ollamaBaseUrl,
       getAmendments: () => this.amendments.list(runId),
-      getBrainService: cfg.enableBrainAnalysis === false ? () => null : () => this.brain.getService(),
+      // Brain enablement controlled only by enableBrainAnalysis (no hybrid phase guards).
+      getBrainService: (cfg.enableBrainAnalysis === false)
+        ? () => null
+        : () => this.brain.getService(),
     };
   }
 }

@@ -252,12 +252,14 @@ export function useSetupForm(navigate: (path: string) => void) {
         body: JSON.stringify(payload),
       });
       const body = await res.json().catch(() => ({}));
+      console.log('[DEBUG-START] /start response', { ok: res.ok, status: res.status, body });
       if (!res.ok) {
         const msg = body?.error || (body?._detail ? JSON.stringify(body._detail) : `HTTP ${res.status}`);
         setError(msg);
         return;
       }
       if (body.runId) {
+        console.log('[DEBUG-START] got runId, navigating', body.runId);
         // persist including caps/tiers for refill
         const saved = saveRecentRun({
           repoUrl,
@@ -270,6 +272,8 @@ export function useSetupForm(navigate: (path: string) => void) {
         });
         setRecentRuns(saved);
         navigate(`/runs/${encodeURIComponent(body.runId)}`);
+      } else {
+        console.warn('[DEBUG-START] no runId in response', body);
       }
     } catch (e) {
       setError(String(e));

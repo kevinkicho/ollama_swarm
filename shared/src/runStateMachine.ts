@@ -1,5 +1,8 @@
 // V2 Step 3a: explicit run state machine.
 //
+// Phase 10 note: state machine is per-runner. Hybrid is transparent sequencing in PipelineRunner;
+// no outer currentPhase/phases state is used or emitted.
+//
 // Replaces the implicit coordination across {phase, board.counts.open,
 // board.counts.claimed, board.counts.stale, replanPending.size,
 // replanRunning, draining, paused, stopping} in BlackboardRunner.

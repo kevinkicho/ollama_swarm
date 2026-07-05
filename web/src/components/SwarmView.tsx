@@ -1,5 +1,6 @@
 import { memo, useEffect, useState, Fragment } from "react";
 import { useSwarm } from "../state/store";
+// Phase 10: all hybrid guards removed. No more special hybrid UI logic.
 import { AgentPanel } from "./AgentPanel";
 import { useNavigate } from "react-router-dom";
 import { BoardView } from "./BoardView";
@@ -19,6 +20,7 @@ import { TranscriptTimeline } from "./TranscriptTimeline";
 import { PlanningTab } from "./PlanningTab";
 import { OutcomeChip } from "./OutcomeChip";
 import { fmtMs, roleForRow } from "./RunHistory";
+import { getSidebarAgentTitle } from "../state/HybridStateHelper";
 
 
 type Tab =
@@ -89,43 +91,25 @@ export const SwarmView = memo(function SwarmView() {
     : "/api/swarm/say";
   const summary = useSwarm((s) => s.summary);
   const transcript = useSwarm((s) => s.transcript);
-  const cfgForHybrid = useSwarm((s) => s.runConfig);
-  // Robust hybrid detection: prefer explicit flags from runConfig.
-  // Also fall back to pipeline marker in live transcript or summary (for runs where hydrate only partially restored flags).
-  const allTx = [...(transcript || []), ...((summary as any)?.transcript || [])];
-  const transcriptHasHybridMarker = allTx.some((e: any) => {
-    const t = String(e?.text || e || "");
-    return /council\s*→\s*blackboard/i.test(t) || (/council/i.test(t) && /blackboard/i.test(t) && /phase/i.test(t));
-  });
-  const isHybrid = !!(cfgForHybrid?.useHybridPlanning || cfgForHybrid?.planningPreset || (cfgForHybrid as any)?.pipeline || transcriptHasHybridMarker);
   const agentList = Object.values(agents).sort((a, b) => a.index - b.index);
-  // For hybrid (council as planner group + blackboard execution): 
-  // - hide brain, bogus index 0, and blackboard's index-1 "planner" (replaced by council group)
-  // - this makes the "other" agents the correct execution ones (3 workers + 1 auditor etc, based on user-provided agentCount at start)
-  const displayAgents = isHybrid 
-    ? agentList.filter(a => !(a.id === 'brain' || (a.index || 0) === 0 || (a.index || 0) === 1))
-    : agentList;
-  const showAsPlannerGroup = isHybrid; // always highlight/box for hybrid to show the council-as-planner group + execution agents
-  const hasTerminalSummary = !!summary && (!!summary.stopReason || typeof summary.endedAt === 'number');
+
+  // Transcript (and everything) shows the full run content. No special hybrid or phase suppression.
+  const hasTerminalSummary = !!summary && (
+    !!summary.stopReason ||
+    typeof summary.endedAt === 'number' ||
+    typeof summary.wallClockMs === 'number' ||
+    (Array.isArray((summary as any).agents) && (summary as any).agents.length > 0)
+  );
   const hasRunFinishedEntry = transcript.some((e: any) => e.summary?.kind === 'run_finished' || (e.text || '').includes('Run finished'));
-  // For hybrid/pipeline runs, rely primarily on phase; hasTerminalSummary can be set
-  // by sub-phase summaries and would incorrectly hide stop/drain buttons during active execution.
-  const hasExecution = isHybrid && allTx.some((e: any) => /blackboard.*phase|phase.*blackboard/i.test(String(e.text || '')));
-  // isTerminal (for UI) based on real finished signal from summary OR explicit finished entry in transcript.
-  // This ensures finished hybrid runs switch to final stats (hiding synthetic ready/pending) even if top-level summary not populated.
-  // Guard: ignore early run_finished (from planning sub or old pipeline logic) while hybrid exec phase is active.
   const terminalPhase = ['completed','stopped','failed'].includes(phase);
-  const prematureHybridFinished = hasRunFinishedEntry && isHybrid && hasExecution && !terminalPhase;
-  const isTerminal = !prematureHybridFinished && (hasTerminalSummary || hasRunFinishedEntry || terminalPhase);
-  // Board + Contract are blackboard-specific surfaces. Show the tabs
-  // only for blackboard runs (including pre-start when the preset is
-  // selected but no run config exists yet — default to showing them
-  // since the SetupForm is open).
-  const showBlackboardTabs = !cfg || cfg.preset === "blackboard";
-  // Task #152: memory-log tab. .swarm-memory.jsonl is blackboard-only
-  // today (only blackboard runs write entries via #130); show the tab
-  // for blackboard runs and pre-start (when SetupForm is open).
-  const showMemoryTab = !cfg || cfg.preset === "blackboard";
+  const isTerminal = (hasTerminalSummary || hasRunFinishedEntry || terminalPhase);
+
+  // Always show all agents. No hybrid filtering.
+  const displayAgents = agentList;
+  // Capability-driven tabs: only based on preset or actual data presence. No hybrid special case.
+  const hasBoardCapability = !cfg || cfg.preset === "blackboard" || !!(summary as any)?.board || (Array.isArray((summary as any)?.todos) && (summary as any).todos.length > 0);
+  const showBlackboardTabs = hasBoardCapability;
+  const showMemoryTab = hasBoardCapability;
   // Phase 2 preset-specific primary-signal tabs. Each only appears
   // for its matching preset; tabs from earlier presets in the same
   // session disappear when the user switches.
@@ -292,10 +276,8 @@ export const SwarmView = memo(function SwarmView() {
     }
   };
 
-  // Simpler + more robust for hybrid: show stop/drain controls for any run that has not yet reached a terminal phase.
-  // This prevents "buttons disappeared" when sub-summaries or phase lag make isTerminal true too early.
-  // Also guard against premature run_finished from planning subs in hybrid.
-  const canStop = phase !== "stopping" && phase !== "stopped" && phase !== "failed" && phase !== "completed" && !prematureHybridFinished;
+  // Show stop/drain controls for any run that has not yet reached a terminal phase.
+  const canStop = phase !== "stopping" && phase !== "stopped" && phase !== "failed" && phase !== "completed";
 
   // Per-preset role labels. Each preset has its own spawn contract:
   //   - blackboard: agent-1=planner, mid=workers, N+1=auditor (Unit 58)
@@ -394,7 +376,7 @@ export const SwarmView = memo(function SwarmView() {
       <aside className="w-[280px] shrink-0 border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800">
         <div className="flex items-center justify-between mb-2">
           <div className="text-xs uppercase tracking-wide text-ink-400">
-            {showAsPlannerGroup && !isTerminal ? 'Planners (council group)' : 'Agents'} <span className="text-ink-500 font-mono normal-case">({(isTerminal && summary?.agents?.length) || agentList.length})</span>
+            {getSidebarAgentTitle(false, isTerminal, summary?.agents?.length || 0, agentList.length)}
           </div>
           {isTerminal ? (
             <button
@@ -429,26 +411,7 @@ export const SwarmView = memo(function SwarmView() {
             </div>
           )}
         </div>
-        {isHybrid && !isTerminal && (
-          <>
-            {/* Show the council as planner boxed for hybrid only while active (replaces blackboard planner).
-                On terminal runs we show final stats instead (see below). */}
-            <div className="border border-violet-600/60 rounded p-1 mb-2 bg-ink-900/30">
-              <div className="text-[9px] uppercase tracking-wider text-violet-300 mb-1 px-1">planner (council 3 agents collectively)</div>
-              {(() => {
-                const plannerCount = Math.max(3, Math.min(3, (cfgForHybrid?.agentCount || 3)));
-                return Array.from({length: plannerCount}, (_, k) => k + 1).map(idx => (
-                  <AgentPanel
-                    key={`planner-${idx}`}
-                    agent={{ id: `planner-${idx}`, index: idx, status: 'ready', model: 'council' } as any}
-                    role="planner"
-                  />
-                ));
-              })()}
-            </div>
-          </>
-        )}
-        {/* Execution agents from blackboard phase */}
+        {/* Phase 10: no hybrid guards. Always render the agents from the run (full list, no synthetic planner/exec boxes). */}
         {displayAgents.map((a) => (
           <AgentPanel
             key={a.id}
@@ -459,34 +422,9 @@ export const SwarmView = memo(function SwarmView() {
             tag={agentTag(a.index)}
           />
         ))}
-        {/* If hybrid and no live execution agents yet (e.g. still in planning phase or early), show synthetic execution agents based on the user-provided agentCount at start.
-            This ensures the sidebar always shows the full team: 3 (or N) planners boxed + the expected workers + auditor.
-            Shown only for active runs. For finished, SidebarSummaryAgents below shows the real final stats. */}
-        {isHybrid && !isTerminal && displayAgents.length === 0 && (() => {
-          // Show synthetic execution agents when live ones not yet populated (e.g. still in planning phase).
-          // Number based on user-provided agentCount at start + dedicatedAuditor.
-          // E.g. agentCount=4 + dedicated => execCount ~4 (3 workers +1 auditor)
-          const baseCount = cfgForHybrid?.agentCount || 4;
-          const dedicated = !!cfgForHybrid?.dedicatedAuditor;
-          const execCount = baseCount + (dedicated ? 1 : 0) - 1; // total for bb exec minus the replaced planner slot; e.g. 4+1-1=4 for 3w+1a
-          return Array.from({length: execCount}, (_, k) => {
-            const idx = 4 + k;
-            const isAuditor = dedicated && k === execCount - 1;
-            return (
-              <div key={`exec-${idx}`} className="rounded border border-ink-700 bg-ink-800/50 p-2 text-xs mb-1">
-                <div className="flex items-baseline justify-between gap-2 mb-1">
-                  <span className="text-ink-100 font-semibold">agent-{idx}</span>
-                  <span className="text-[10px] text-ink-400 font-mono">{isAuditor ? 'auditor' : 'worker'}</span>
-                </div>
-                <div className="text-ink-400">blackboard execution (pending)</div>
-              </div>
-            );
-          });
-        })()}
-        {/* For finished runs show real final stats from summary (hybrid groups council 1-3 under "planner").
-            The guard below prevents showing summary during active hybrid (live list can be 0 due to filter/synthetics). */}
+        {/* Always show summary for finished or empty agent list. No hybrid special casing. */}
         {(() => {
-          const showSummary = (hasTerminalSummary || agentList.length === 0) && !(isHybrid && !hasTerminalSummary);
+          const showSummary = (hasTerminalSummary || agentList.length === 0);
           return showSummary ? <SidebarSummaryAgents /> : null;
         })()}
       </aside>
@@ -656,7 +594,7 @@ interface TabButtonProps {
 function SidebarSummaryAgents() {
   const summary = useSwarm((s) => s.summary);
   const cfg = useSwarm((s) => s.runConfig);
-  const isHybridFinished = !!(cfg?.useHybridPlanning || cfg?.planningPreset);
+  // Phase 10: no hybridInfo. No special finished hybrid remapping.
   if (!summary || summary.agents.length === 0) {
     return <div className="text-xs text-ink-400">No agents yet.</div>;
   }
@@ -667,11 +605,7 @@ function SidebarSummaryAgents() {
       </div>
       {summary.agents.map((a, idx) => {
         let role = cfg ? roleForRow(cfg.preset, a.agentIndex, summary.agents.length) : "agent";
-        // For finished hybrid: council planning agents (typically indices 1-3) should show as grouped "planner"
-        // not as individual "drafter" from the council preset phase.
-        if (isHybridFinished && (a.agentIndex || 0) >= 1 && (a.agentIndex || 0) <= 3) {
-          role = "planner";
-        }
+        // Phase 10: no hybrid remapping of roles.
         const lines = (a.linesAdded ?? 0) + (a.linesRemoved ?? 0);
         return (
           <div key={a.agentId || `agent-${a.agentIndex || idx}`} className="rounded border border-ink-700 bg-ink-800/50 p-2 text-xs">

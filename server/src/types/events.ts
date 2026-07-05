@@ -17,6 +17,12 @@ export interface TranscriptEntry {
   agentIndex?: number;
   text: string;
   ts: number;
+  // Phase 4 scoping: when emitted inside a composite/hybrid pipeline, these tag
+  // the entry to its originating phase. Additive; old entries and pure runs omit them.
+  // Legacy phase attribution (on transcript entries / some events from old hybrid runs).
+  // No longer emitted for new runs (Phase 10 removal).
+  phaseIndex?: number;
+  phasePreset?: string;
   // Unit 54: optional structured summary for agent responses that
   // parse as a known JSON envelope (worker hunks/skip, planner todo
   // list, auditor verdict, etc.). The UI uses this to render a
@@ -74,8 +80,8 @@ export interface BoardCountsDTO {
 // runId still type-check + work; the orchestrator hydrates it.
 export type SwarmEventBody =
   | { type: "transcript_append"; entry: TranscriptEntry }
-  | { type: "agent_state"; agent: AgentState; runId?: string }
-  | { type: "swarm_state"; phase: SwarmPhase; round: number }
+  | { type: "agent_state"; agent: AgentState; runId?: string; phaseIndex?: number; phasePreset?: string }
+  | { type: "swarm_state"; phase: SwarmPhase; round: number; phaseIndex?: number; phasePreset?: string }
   | { type: "agent_streaming"; agentId: string; agentIndex: number; text: string }
   | { type: "agent_streaming_end"; agentId: string }
   | { type: "error"; message: string }
@@ -249,6 +255,10 @@ export type SwarmEventBody =
       // Caps carried in run_started for immediate UI hydration (bar, advanced panels).
       wallClockCapMin?: string;
       ambitionTiers?: string;
+      // Hybrid flags only (no phase state / hybridContext in events).
+      useHybridPlanning?: boolean;
+      planningPreset?: string;
+      executionPreset?: string;
     }
   // Direction 1 Phase 1: emitted after outcome scoring completes at run-end.
   | {
@@ -282,6 +292,8 @@ export type SwarmEventBody =
       promoted: boolean;
       reason: string;
     }
+  // Phase 10: phase_started / phase_completed emitters removed completely.
+  // No more explicit phase state for hybrid/composite runs.
 
 // T-Item-MultiTenant Phase 1 (2026-05-04): the public SwarmEvent type
 // intersects every variant with `{ runId?: string }` so consumers can

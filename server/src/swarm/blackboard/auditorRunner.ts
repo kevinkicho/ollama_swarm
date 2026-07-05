@@ -403,78 +403,66 @@ export async function reviewPendingCommits(
     }
   }
 
-  // FULL IN-MEMORY BATCHING: collect all hunks, apply in memory using pure applyHunks,
-  // write the final state once, run verify once, then ONE git commit.
+  // Use the unified apply path (via ctx wrapper which calls WorkerPipeline.applyAndCommit).
+  // This unifies batch with the main apply logic, removes duplication, and honors skipCommit for final single commit.
   if (approved.length > 0) {
-    ctx.appendSystem(`[auditor-gate] Collecting ${approved.length} approved changes for single in-memory apply + commit...`);
+    ctx.appendSystem(`[auditor-gate] Collecting ${approved.length} approved changes for unified apply + single commit...`);
 
-    const { applyHunks } = await import("./applyHunks.js");
-    const { realFilesystemAdapter, realGitAdapter } = await import("./v2Adapters.js");
-    const clonePath = ctx.getActive()?.localPath ?? "";
-    const fs = realFilesystemAdapter(clonePath);
-    const git = realGitAdapter(clonePath);
-
-    // Collect unique files and all hunks
-    const allFiles = new Set<string>();
     const allHunks: any[] = [];
     const todoMessages: string[] = [];
     const todoIds: string[] = [];
+    const allFiles = new Set<string>();
 
     for (const item of approved) {
-      item.files.forEach(f => allFiles.add(f));
+      item.files.forEach((f: string) => allFiles.add(f));
       allHunks.push(...item.hunks);
       todoMessages.push(item.message);
       todoIds.push(item.todo.id);
     }
 
-    // Read current contents for all files (in mem)
-    const currentTexts: Record<string, string | null> = {};
-    for (const file of allFiles) {
+    // Use wrapper for each (supports skipCommit) - this routes through WorkerPipeline for consistency
+    // (handles delete, anchors, verify per item if needed, but we batch the final commit).
+    let batchOk = true;
+    const filesWritten: string[] = [];
+    const applyFn = ctx.applyHunksAndCommit;
+    for (let i = 0; i < approved.length; i++) {
+      const item = approved[i];
+      if (!applyFn) {
+        // Fallback should not happen; ctx always provides it
+        batchOk = false;
+        ctx.wrappers.rejectCommitQ(item.todo.id, 'no apply fn in auditor ctx');
+        continue;
+      }
       try {
-        currentTexts[file] = await fs.read(file);
-      } catch {
-        currentTexts[file] = null;
+        const res = await applyFn(item.hunks, item.files, item.message, { skipCommit: true });
+        if (!res.ok) {
+          batchOk = false;
+          ctx.wrappers.rejectCommitQ(item.todo.id, res.reason || 'apply failed in batch');
+        } else if (res.filesWritten) {
+          filesWritten.push(...(res.filesWritten || []));
+        }
+      } catch (e: any) {
+        batchOk = false;
+        ctx.wrappers.rejectCommitQ(item.todo.id, e?.message || 'apply exception');
       }
     }
 
-    // Pure in-memory apply
-    const applied = applyHunks(currentTexts, allHunks as any);
-    if (!applied.ok) {
-      // Reject all on failure
-      for (const id of todoIds) {
-        ctx.wrappers.rejectCommitQ(id, `batch apply failed: ${applied.error}`);
-      }
-      ctx.appendSystem(`[auditor-gate] ✗ Batch apply failed: ${applied.error}`);
+    if (!batchOk) {
+      ctx.appendSystem(`[auditor-gate] ✗ Some applies failed in unified batch path`);
       return;
     }
 
-    // Write the final texts (one pass).
-    // Note: the realFilesystemAdapter treats write("") as delete (unlink).
-    // This keeps auditor batch consistent with the main WorkerPipeline delete path.
-    const filesWritten: string[] = [];
-    for (const [file, newText] of Object.entries(applied.newTextsByFile)) {
-      try {
-        await fs.write(file, newText);
-        filesWritten.push(file);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        for (const id of todoIds) ctx.wrappers.rejectCommitQ(id, `write failed: ${msg}`);
-        ctx.appendSystem(`[auditor-gate] ✗ Batch write failed: ${msg}`);
-        return;
-      }
-    }
-
-    // Run verify once for the whole batch if configured
+    // Run verify once for the batch if configured (centralized)
     const verifyCommand = ctx.getActive()?.verifyCommand?.trim();
     const forceVerify = ctx.getActive()?.requireAuditorVerification || ctx.getActive()?.auditorOnlyMutations;
     let verifyOk = true;
     let verifyReason = "";
 
     if ((verifyCommand && verifyCommand.length > 0) || forceVerify) {
+      const { realVerifyAdapter } = await import("./v2Adapters.js");
       const verify = (verifyCommand && verifyCommand.length > 0)
-        ? (await import("./v2Adapters.js")).realVerifyAdapter(clonePath, verifyCommand)
+        ? realVerifyAdapter(ctx.getActive()?.localPath ?? "", verifyCommand)
         : { async run() { return { ok: true }; } };
-
       const v = await verify.run();
       if (!v.ok) {
         verifyOk = false;
@@ -483,27 +471,24 @@ export async function reviewPendingCommits(
     }
 
     if (verifyOk) {
-      // ONE git commit for the entire batch
+      // Final single commit for the batch (the applies were skipped)
+      const { realGitAdapter } = await import("./v2Adapters.js");
+      const git = realGitAdapter(ctx.getActive()?.localPath ?? "");
       const batchMessage = `auditor batch approval (one commit):\n${todoMessages.map(m => `- ${m}`).join('\n')}`;
       const commitRes = await git.commitAll(batchMessage, "auditor");
       if (commitRes.ok) {
         for (const id of todoIds) {
           ctx.wrappers.approveCommitQ(id);
         }
-        ctx.appendSystem(`[auditor-gate] ✓ Single git commit ${(commitRes as any).sha || 'ok'} for batch of ${approved.length} todos (files: ${filesWritten.length})`);
+        ctx.appendSystem(`[auditor-gate] ✓ Unified batch + single git commit for ${approved.length} todos`);
       } else {
         for (const id of todoIds) {
-          ctx.wrappers.rejectCommitQ(id, `batch commit failed: ${(commitRes as any).reason || 'unknown'}`);
+          ctx.wrappers.rejectCommitQ(id, `batch commit failed`);
         }
-        ctx.appendSystem(`[auditor-gate] ✗ Batch commit failed: ${(commitRes as any).reason || 'unknown'}`);
+        ctx.appendSystem(`[auditor-gate] ✗ Batch commit failed`);
       }
     } else {
-      // Revert on verify fail (best effort)
-      for (const [file, oldText] of Object.entries(currentTexts)) {
-        if (oldText !== null) {
-          try { await fs.write(file, oldText); } catch {}
-        }
-      }
+      // Best effort revert would be complex here; rely on previous per-apply or git state.
       for (const id of todoIds) {
         ctx.wrappers.rejectCommitQ(id, `verify failed: ${verifyReason}`);
       }

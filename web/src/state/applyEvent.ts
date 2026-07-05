@@ -174,6 +174,7 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
         ambitionTiers: ev.ambitionTiers,
       });
       break;
+
     case "outcome_scored":
       s.setOutcome({ score: ev.score, verdict: ev.verdict, dimensions: ev.dimensions });
       s.appendEntry({

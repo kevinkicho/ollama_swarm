@@ -77,6 +77,11 @@ export interface SwarmStatus {
   // Phase 2a: stigmergy pheromone table keyed by file path. Only
   // populated for stigmergy runs; other presets omit it.
   pheromones?: Record<string, SwarmStatusPheromoneEntry>;
+  // Legacy phase fields (may appear in old persisted run summaries/status snapshots).
+  // Not emitted or used for new runs (Phase 9/10 full removal of guards + emitters).
+  currentPhase?: any;
+  phases?: any[];
+
   // Phase 2d: map-reduce mapper assignments (agentIndex → slice of
   // top-level repo entries). Only populated for map-reduce runs.
   mapperSlices?: Record<string, string[]>;
@@ -137,7 +142,8 @@ export interface SwarmStatusRunConfig {
   // so the SetupForm bar + advanced panels can re-hydrate on refresh / review.
   wallClockCapMin?: string;
   ambitionTiers?: string;
-  // Hybrid: council etc as planner group for blackboard execution.
+  // Hybrid planning/execution (orchestrated transparently via PipelineRunner).
+  // No phase state (currentPhase/phases/hybridContext) on config anymore.
   useHybridPlanning?: boolean;
   planningPreset?: string;
   executionPreset?: string;
