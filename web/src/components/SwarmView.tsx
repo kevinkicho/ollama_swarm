@@ -110,10 +110,10 @@ export const SwarmView = memo(function SwarmView() {
   // For hybrid/pipeline runs, rely primarily on phase; hasTerminalSummary can be set
   // by sub-phase summaries and would incorrectly hide stop/drain buttons during active execution.
   const hasExecution = isHybrid && allTx.some((e: any) => /blackboard.*phase|phase.*blackboard/i.test(String(e.text || '')));
-  // Bug1 fix: stronger guard. For hybrid, do not treat as terminal (hiding Stop/Drain buttons) just because
-  // a sub-phase summary exists or phase lags. Only hide controls for explicit terminal phases once execution started or not hybrid.
-  const isExplicitTerminalPhase = phase === "completed" || phase === "stopped" || phase === "failed";
-  const isTerminal = isExplicitTerminalPhase && !(isHybrid && (phase === 'discussing' || !hasExecution));
+  // Stronger for bug1: show stop/drain controls unless we have a real terminal summary (endedAt or stopReason).
+  // This keeps the buttons available during active hybrid even if the local phase flips to completed early
+  // or after server restart rehydration brings in an old summary.
+  const isTerminal = hasTerminalSummary || (phase === "completed" || phase === "stopped" || phase === "failed");
   // Board + Contract are blackboard-specific surfaces. Show the tabs
   // only for blackboard runs (including pre-start when the preset is
   // selected but no run config exists yet — default to showing them
