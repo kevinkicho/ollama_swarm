@@ -147,7 +147,9 @@ describe("resolveSafe — Windows / cross-platform path robustness", () => {
   });
 
   it("handles Windows-style drive letter paths gracefully (should reject absolute)", async () => {
-    // On Windows this is absolute; on other platforms the lexical check will still catch it
+    // Must reject on *all* platforms. Models/prompts and user input can emit
+    // Windows-style absolutes even when the server runs on Linux (CI).
+    // Early guard + cross-platform checks (not just path.isAbsolute after \->/).
     await assert.rejects(
       resolveSafe(clone, "C:\\Users\\someone\\evil.txt"),
       /absolute path not allowed/

@@ -13,7 +13,15 @@ export async function resolveSafe(clone: string, relPath: string): Promise<strin
   // from WSL, user input, prompts, etc.). This helps lexical checks.
   const normalizedRel = relPath.replace(/\\/g, "/");
 
-  if (path.isAbsolute(normalizedRel)) throw new Error(`absolute path not allowed: ${relPath}`);
+  // Cross-platform absolute detection:
+  // - Native path.isAbsolute (covers / on POSIX, C:\ or C:/ on Windows)
+  // - Windows drive letters (C:foo etc.) even when running on Linux CI
+  // - UNC paths (\\server or //server) — models may emit host-OS paths
+  const isWinDrive = /^[a-zA-Z]:[\/\\]/.test(relPath) || /^[a-zA-Z]:[\/]/.test(normalizedRel);
+  const isUNC = relPath.startsWith("\\\\") || normalizedRel.startsWith("//");
+  if (path.isAbsolute(normalizedRel) || isWinDrive || isUNC) {
+    throw new Error(`absolute path not allowed: ${relPath}`);
+  }
 
   // Lexical check first — cheap, and catches the obvious `../` cases without
   // touching the filesystem.
