@@ -65,6 +65,13 @@ export const SwarmView = memo(function SwarmView() {
 
   const reset = useSwarm((s) => s.reset);
   const cfg = useSwarm((s) => s.runConfig);
+  // Use hook actions (not .getState()) so they target the per-run scoped store when
+  // inside <SwarmStoreProvider> for /runs/:id (prevents writing to singleton while
+  // provider hydrates the review store -- major source of missing data / races).
+  const setPhaseScoped = useSwarm((s) => s.setPhase);
+  const upsertAgentScoped = useSwarm((s) => s.upsertAgent);
+  const setSummaryScoped = useSwarm((s) => s.setSummary);
+  const appendEntryScoped = useSwarm((s) => s.appendEntry);
   // T-Item-MultiTenant Phase 8 (2026-05-04): when the active runId is
   // known, target the per-run REST routes so stop/say affect THIS run
   // even when other runs are concurrently active. Falls back to the
@@ -129,15 +136,13 @@ export const SwarmView = memo(function SwarmView() {
     try {
       const res = await fetch(stopUrl, { method: "POST" });
       // Always force terminal in UI for immediate feedback (stop may be async on backend, rehydrate will sync summary etc.)
-      const s = useSwarm.getState();
-      s.setPhase("stopped", s.round || 0);
+      setPhaseScoped("stopped", (useSwarm.getState().round || 0) as any);
       if (!res.ok) {
         // already stopped or not active in backend
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      const s = useSwarm.getState();
-      s.setPhase("stopped", s.round || 0);
+      setPhaseScoped("stopped", (useSwarm.getState().round || 0) as any);
     } finally {
       setBusy(false);
       // re-hydrate status so UI reflects backend (especially useful for
@@ -147,12 +152,22 @@ export const SwarmView = memo(function SwarmView() {
         : "/api/swarm/status";
       fetch(statusUrl).then(r => r.ok ? r.json() : null).then(snap => {
         if (snap) {
-          const s = useSwarm.getState();
-          s.setPhase(snap.phase || "stopped", snap.round || 0);
-          if (snap.agents) snap.agents.forEach((a: any) => s.upsertAgent(a));
-          if (snap.summary) s.setSummary(snap.summary);
+          // Extra root guard – do not let stop/drain rehydrate paths pollute the
+          // singleton when we're on the setup root (prevents the recurring flash).
+          if (typeof window !== 'undefined' && window.location.pathname === '/') return;
+
+          setPhaseScoped(snap.phase || "stopped", snap.round || 0);
+          const hasCompletedSummary = !!(snap.summary && (snap.summary.stopReason || snap.summary.endedAt != null));
+          if (snap.agents && !hasCompletedSummary) {
+            snap.agents.forEach((a: any) => {
+              const idx = a.index ?? a.agentIndex ?? 0;
+              const id = a.id || a.agentId || `agent-${idx}`;
+              upsertAgentScoped({ id, index: idx, status: a.status || "stopped", model: a.model } as any);
+            });
+          }
+          if (snap.summary) setSummaryScoped(snap.summary);
           if (snap.transcript && Array.isArray(snap.transcript)) {
-            snap.transcript.forEach((e: any) => s.appendEntry(e));
+            snap.transcript.forEach((e: any) => appendEntryScoped(e));
           }
         }
       }).catch(() => {});
@@ -181,8 +196,7 @@ export const SwarmView = memo(function SwarmView() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      const s = useSwarm.getState();
-      s.setPhase("stopped", s.round || 0);
+      setPhaseScoped("stopped", (useSwarm.getState().round || 0) as any);
     } finally {
       setBusy(false);
       // re-hydrate status so UI reflects backend (especially useful for
@@ -192,12 +206,22 @@ export const SwarmView = memo(function SwarmView() {
         : "/api/swarm/status";
       fetch(statusUrl).then(r => r.ok ? r.json() : null).then(snap => {
         if (snap) {
-          const s = useSwarm.getState();
-          s.setPhase(snap.phase || "stopped", snap.round || 0);
-          if (snap.agents) snap.agents.forEach((a: any) => s.upsertAgent(a));
-          if (snap.summary) s.setSummary(snap.summary);
+          // Extra root guard – do not let stop/drain rehydrate paths pollute the
+          // singleton when we're on the setup root (prevents the recurring flash).
+          if (typeof window !== 'undefined' && window.location.pathname === '/') return;
+
+          setPhaseScoped(snap.phase || "stopped", snap.round || 0);
+          const hasCompletedSummary = !!(snap.summary && (snap.summary.stopReason || snap.summary.endedAt != null));
+          if (snap.agents && !hasCompletedSummary) {
+            snap.agents.forEach((a: any) => {
+              const idx = a.index ?? a.agentIndex ?? 0;
+              const id = a.id || a.agentId || `agent-${idx}`;
+              upsertAgentScoped({ id, index: idx, status: a.status || "stopped", model: a.model } as any);
+            });
+          }
+          if (snap.summary) setSummaryScoped(snap.summary);
           if (snap.transcript && Array.isArray(snap.transcript)) {
-            snap.transcript.forEach((e: any) => s.appendEntry(e));
+            snap.transcript.forEach((e: any) => appendEntryScoped(e));
           }
         }
       }).catch(() => {});

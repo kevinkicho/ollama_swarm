@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { Routes, Route, useParams, useNavigate } from "react-router-dom";
 import { useSwarm } from "./state/store";
 import { useSwarmSocket } from "./hooks/useSwarmSocket";
@@ -87,34 +87,54 @@ export default function App() {
   );
 }
 
-/** Redirect legacy `/` to `/runs/:id` when an active run exists. */
+/** Redirect legacy `/` to `/runs/:id` when an active run exists.
+ *  If no active run, reset any lingering singleton state (e.g. previous runId,
+ *  runConfig, transcript, summary) so we reliably show the clean "Start a swarm"
+ *  / SetupForm instead of a stale blackboard run view.
+ */
 function HomeRoute() {
   const navigate = useNavigate();
   const phase = useSwarm((s) => s.phase);
   const runId = useSwarm((s) => s.runId);
-  useEffect(() => {
-    if (runId && phase !== "idle") {
-      navigate(`/runs/${encodeURIComponent(runId)}`, { replace: true });
-      return;
+  const reset = useSwarm((s) => s.reset);
+
+  // Sync clean on root mount (before first paint) to prevent stale blackboard
+  // view from previous singleton state (similar to sidebar flash race we fixed).
+  // If server later says there's an active run, we'll navigate away.
+  useLayoutEffect(() => {
+    if (typeof window !== "undefined" && window.location.pathname === "/") {
+      const st = useSwarm.getState();
+      if (st.runId || st.phase !== "idle" || st.summary || st.transcript.length > 0) {
+        reset();
+      }
     }
+  }, [reset]);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const res = await fetch("/api/swarm/active-runs");
-        if (!res.ok || cancelled) return;
+        if (!res.ok || cancelled) {
+          reset();
+          return;
+        }
         const body = (await res.json()) as { runs?: Array<{ runId: string }> };
         const first = body.runs?.[0]?.runId;
         if (first && !cancelled) {
           navigate(`/runs/${encodeURIComponent(first)}`, { replace: true });
+        } else if (!cancelled) {
+          // no active run on root -> clean state for fresh "start a swarm"
+          reset();
         }
       } catch {
-        // stay on legacy home
+        if (!cancelled) reset();
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [navigate, runId, phase]);
+  }, [navigate, reset]);
   return <AppMain />;
 }
 
@@ -155,12 +175,25 @@ function RunRouteWrapper() {
 
 function AppMain() {
   const review = parseReviewParams();
-  // Skip the live WS in review mode; the saved summary is the source.
-  useSwarmSocket(review === null);
+  const pathname = typeof window !== "undefined" ? window.location.pathname : "/";
+  const isOnRoot = pathname === "/";
+
+  // We do NOT mutate state during render. The layoutEffect in HomeRoute
+  // + the guard inside hydrateFromSnapshot + disabling the socket on root
+  // are the safe mechanisms.
+
+  // NEVER enable the main run socket/hydrate on pure root path.
+  // This is the central guard against the recurring singleton pollution race
+  // (lingering runId → hydrate → setSummary/setPhase/setRunId → showSetup becomes false → empty SwarmView).
+  // The pattern has now appeared in at least two places (agents sidebar + root setup view).
+  useSwarmSocket(review === null && !isOnRoot);
   useReviewHydration(review);
   const phase = useSwarm((s) => s.phase);
   const error = useSwarm((s) => s.error);
   const clonePath = useSwarm((s) => s.runConfig?.clonePath);
+  const storeRunId = useSwarm((s) => s.runId);
+  const hasSummary = useSwarm((s) => !!s.summary);
+  const txLen = useSwarm((s) => s.transcript.length);
   // Derive parentPath from clonePath (the clone dir's parent) so history
   // endpoints scan broadly for sibling runs (including under logs/ subdirs
   // for per-run summaries). This makes the runs dropdown show more relevant
@@ -192,7 +225,24 @@ function AppMain() {
   // completes or they hit Stop — they need to read the transcript. They return
   // to setup only via the explicit "Start new swarm" button (which resets).
   // In review mode we always show SwarmView (never the setup form).
-  const showSetup = review === null && phase === "idle";
+  //
+  // For /runs/:runId deep links (historical or live), if the provider has set a
+  // runId (or we have summary/transcript data), do NOT flip to SetupForm even if
+  // a late "idle" swarm_state arrives over the per-run WS (common after server
+  // restart when statusForRun returns null for finished runs).
+  // On the legacy root path ("/"), ignore a lingering storeRunId (from a previous
+  // run in the singleton store) so we show the clean SetupForm / "start a swarm"
+  // instead of a stale blackboard run view. The HomeRoute effect will have reset
+  // any such state when there are no active runs.
+  // Root path MUST show SetupForm in almost all cases.
+  // Only suppress on root if we have an explicitly non-idle phase *and* a runId.
+  // This, plus the layout reset and hydrate guard, kills the recurring singleton pollution.
+  const showSetup = review === null &&
+    (isOnRoot
+      ? !(phase !== "idle" && storeRunId)   // on root, only suppress for a live run
+      : (phase === "idle" && !hasSummary && txLen === 0 && !storeRunId));
+
+  const effectiveShowSetup = showSetup;
 
   return (
     <SystemWrapper parentPath={parentPath}>
@@ -217,7 +267,7 @@ function AppMain() {
 
       {/* Main content: SetupForm or SwarmView */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {showSetup ? <SetupForm /> : <SwarmView />}
+        {effectiveShowSetup ? <SetupForm /> : <SwarmView />}
       </div>
     </SystemWrapper>
   );

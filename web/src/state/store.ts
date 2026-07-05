@@ -277,7 +277,16 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       }
       return { phase, round };
     }),
-  upsertAgent: (a) => set((s) => ({ agents: { ...s.agents, [a.id]: a } })),
+  upsertAgent: (a: any) => set((s) => {
+    // Defense-in-depth for review hydration: summary.agents use agentId/agentIndex (PerAgentStat),
+    // live use id/index (AgentState). Normalize so sidebar never shows "Agent undefined" and index is always number.
+    const norm = {
+      ...a,
+      id: a.id || a.agentId || `agent-${a.index ?? a.agentIndex ?? 0}`,
+      index: (a.index ?? a.agentIndex ?? 0) as number,
+    };
+    return { agents: { ...s.agents, [norm.id]: norm } };
+  }),
   clearTranscript: () => set({ transcript: [] }),
 
   appendEntry: (e) =>
@@ -330,6 +339,21 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
             if (already) return s;
             break;
           }
+        }
+      }
+
+      // Transcript UI fix: aggressively dedup repeated worker_skip messages.
+      // These (e.g. "The import and mount for X are already present...") often repeat
+      // across agents for the same file/check and pollute the transcript view.
+      // Keep only the first occurrence of an identical skip reason.
+      if (e.summary?.kind === "worker_skip") {
+        const skipReason = (e.summary as any)?.reason?.trim() || e.text?.trim() || "";
+        if (skipReason) {
+          const alreadySkip = s.transcript.some((t) =>
+            t.summary?.kind === "worker_skip" &&
+            ((t.summary as any)?.reason?.trim() || t.text?.trim() || "") === skipReason
+          );
+          if (alreadySkip) return s;
         }
       }
       const nextStreaming = { ...s.streaming };

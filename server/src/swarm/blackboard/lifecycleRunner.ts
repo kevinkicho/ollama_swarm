@@ -493,26 +493,20 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
         // Append goals as context for the contract derivation.
         const goalsText = generatedGoals.map((g, i) => `${i + 1}. ${g}`).join("\n");
         seed.userDirective = `${seed.userDirective}\n\n=== CODEBASE ANALYSIS (concrete gaps found by goal-generation) ===\n${goalsText}\n=== Use these to produce grounded criteria that advance the directive ===`;
-        if (cfg.suppressSeedMessages !== true) {
-          ctx.appendSystem(
-            `Goal-generation pre-pass: enriched directive with ${generatedGoals.length} code-grounded goal(s).`,
-          );
-        }
+        ctx.appendSystem(
+          `Goal-generation pre-pass: enriched directive with ${generatedGoals.length} code-grounded goal(s).`,
+        );
       } else {
         // No directive — goal generation proposes the directive.
         seed.userDirective = generatedGoals[0];
-        if (cfg.suppressSeedMessages !== true) {
-          ctx.appendSystem(
-            `Goal-generation pre-pass: directive set to "${generatedGoals[0].length > 200 ? generatedGoals[0].slice(0, 200) + "…" : generatedGoals[0]}"`,
-          );
-        }
-      }
-    } else {
-      if (cfg.suppressSeedMessages !== true) {
         ctx.appendSystem(
-          `Goal-generation pre-pass: no usable goals returned — continuing without enrichment.`,
+          `Goal-generation pre-pass: directive set to "${generatedGoals[0].length > 200 ? generatedGoals[0].slice(0, 200) + "…" : generatedGoals[0]}"`,
         );
       }
+    } else {
+      ctx.appendSystem(
+        `Goal-generation pre-pass: no usable goals returned — continuing without enrichment.`,
+      );
     }
   }
 

@@ -137,13 +137,33 @@ function statusUrlForRunId(runId: string | undefined): string {
 async function hydrateFromSnapshot(): Promise<void> {
   if (catchUpFetched) return;
   catchUpFetched = true;
+
+  // HARD GUARD against the recurring "stale run state on root" race.
+  // On pure root path we must never hydrate a run-specific snapshot into
+  // the singleton. This is the exact same pattern that caused the agents
+  // sidebar to flash from fallback → cards, and the "empty blackboard run"
+  // view on /.  We check both the URL and the current store shape.
+  const isRoot = typeof window !== 'undefined' && window.location.pathname === '/';
+  const current = useSwarm.getState();
+  if (isRoot && (!current.runId || current.phase === 'idle')) {
+    // Clean setup mode – do not pull any run data.
+    isHydrating = false;
+    return;
+  }
+
   try {
     const runId = useSwarm.getState().runId;
     const res = await fetch(statusUrlForRunId(runId));
     if (!res.ok) return;
     const snap = (await res.json()) as SwarmStatusSnapshot;
+
+    // Re-check after fetch in case we navigated or reset during the request.
+    if (typeof window !== 'undefined' && window.location.pathname === '/' && !useSwarm.getState().runId) {
+      isHydrating = false;
+      return;
+    }
+
     const s = useSwarm.getState();
-    // Phase + round drive the topbar; safe to set even at idle (no-op).
     s.setPhase(snap.phase, snap.round);
     for (const a of snap.agents) s.upsertAgent(a);
     for (const e of snap.transcript) s.appendEntry(e);
@@ -161,37 +181,22 @@ async function hydrateFromSnapshot(): Promise<void> {
         for (const sample of samples) s.pushLatencySample(agentId, sample);
       }
     }
-    // Task #39: restore mid-stream agent turns from the server-side
-    // partial-stream buffer. Without this, Ctrl-R mid-stream lost the
-    // partial text entirely — only finalized transcript entries
-    // survived. Each entry becomes a setStreaming call so the
-    // existing StreamingBubble renders correctly.
     if (snap.streaming) {
       for (const [agentId, entry] of Object.entries(snap.streaming)) {
         s.setStreaming(agentId, entry.text);
       }
     }
-    // Phase 2a: hydrate pheromone table from the REST catch-up.
     if (snap.pheromones) {
       for (const [file, state] of Object.entries(snap.pheromones)) {
         s.upsertPheromone(file, state);
       }
     }
-    // Phase 2d: hydrate mapper slice assignments.
     if (snap.mapperSlices && Object.keys(snap.mapperSlices).length > 0) {
       s.setMapperSlices(snap.mapperSlices);
     }
   } catch {
-    // Catch-up is best-effort. WS events still fill in the store as
-    // the run progresses — a failed snapshot just means the
-    // immediately-post-refresh UI is sparser until the next event.
+    // best-effort
   } finally {
-    // Task #120: open the gate AFTER snapshot is loaded, then drain
-    // any WS events that arrived during the fetch. They're applied
-    // in their original arrival order — appendEntry's id-based dedup
-    // ensures snapshot entries that overlap with buffered events
-    // don't double-insert. Run in finally so a snapshot fetch error
-    // still releases the queue (sparser UI is better than wedged UI).
     isHydrating = false;
     while (pendingEvents.length > 0) {
       const next = pendingEvents.shift();

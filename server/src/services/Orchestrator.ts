@@ -517,6 +517,83 @@ export class Orchestrator {
       }
     }
 
+    // Broader last-ditch for direct /runs/:runId deep links after full server restart:
+    // runPaths is empty, but /api/swarm/runs (via RunsScanner) can still find the
+    // summary on disk. Here we scan known parents + cwd/logs to locate a matching
+    // summary by runId and synthesize a proper terminal status. This prevents
+    // /runs/:id/status 404 + WS initial "idle" that kicks the UI back to SetupForm.
+    if (!snap && !pathInfo) {
+      const parents = new Set<string>(this.knownParentPaths || []);
+      try { parents.add(process.cwd()); } catch {}
+      try { parents.add(nodePath.join(process.cwd(), "logs")); } catch {}
+      const last = this.getLastParentPath();
+      if (last) parents.add(last);
+      for (const p of parents) {
+        if (!p) continue;
+        try {
+          const entries = readdirSync(p);
+          for (const e of entries) {
+            const candidateDir = nodePath.join(p, e);
+            try {
+              if (!statSync(candidateDir).isDirectory()) continue;
+            } catch { continue; }
+            // Check direct summary files + logs/ subdir + per-run subdirs
+            const cands: string[] = [];
+            try {
+              const ents = readdirSync(candidateDir);
+              for (const ee of ents) {
+                if (/^summary(?:-.*)?\.json$/.test(ee)) cands.push(nodePath.join(candidateDir, ee));
+              }
+              const logsD = nodePath.join(candidateDir, "logs");
+              if (existsSync(logsD) && statSync(logsD).isDirectory()) {
+                const le = readdirSync(logsD);
+                for (const ll of le) {
+                  if (/^summary(?:-.*)?\.json$/.test(ll)) cands.push(nodePath.join(logsD, ll));
+                  const sub = nodePath.join(logsD, ll);
+                  if (existsSync(sub) && statSync(sub).isDirectory()) {
+                    for (const sse of readdirSync(sub)) {
+                      if (/^summary(?:-.*)?\.json$/.test(sse)) cands.push(nodePath.join(sub, sse));
+                    }
+                  }
+                }
+              }
+            } catch {}
+            for (const cand of cands) {
+              try {
+                if (!existsSync(cand)) continue;
+                const raw = readFileSync(cand, "utf8");
+                const sum = JSON.parse(raw);
+                if (sum && (sum.runId === runId || (runId && (sum.runId?.startsWith(runId) || runId.startsWith(sum.runId))))) {
+                  const effPhase = (sum.stopReason === "completed" ? "completed" : "stopped") as SwarmPhase;
+                  const rc = (sum as any).runConfig || { preset: sum.preset };
+                  const cp = sum.localPath || sum.clonePath || candidateDir;
+                  // Shape agents as AgentState (id/index/status) so traditional sidebar
+                  // (Object.values(agents).map AgentPanel) gets proper data for historical runs
+                  // without falling to stats fallback. This brings the original sidebar path alive.
+                  const shapedAgents = Array.isArray(sum.agents)
+                    ? sum.agents.map((pa: any) => ({ id: pa.agentId, index: pa.agentIndex, status: "stopped" as const, model: pa.model }))
+                    : [];
+                  return {
+                    phase: effPhase,
+                    round: 0,
+                    agents: shapedAgents,
+                    transcript: (sum.transcript || []) as SwarmStatus["transcript"],
+                    contract: sum.contract,
+                    summary: sum,
+                    runId,
+                    runConfig: rc ? { ...rc, clonePath: cp } as any : undefined,
+                    runStartedAt: sum.startedAt,
+                    wallClockMs: typeof sum.wallClockMs === "number" ? sum.wallClockMs : undefined,
+                    endedAt: typeof sum.endedAt === "number" ? sum.endedAt : undefined,
+                  } as any;
+                }
+              } catch {}
+            }
+          }
+        } catch {}
+      }
+    }
+
     // Summary-only fallback (no .run-state snapshot for *this* runId, e.g. blackboard
     // "no-progress" finish + same-clone later run overwrote the sibling state file).
     // runPaths still has the clonePath, so locate the summary written by PipelineRunner
@@ -565,10 +642,13 @@ export class Orchestrator {
                 (runId && (sum.runId.startsWith(runId) || runId.startsWith(sum.runId))))) {
               const effPhase = (sum.stopReason === "completed" ? "completed" : "stopped") as SwarmPhase;
               const rc = (sum as any).runConfig || { preset: sum.preset };
+              const shapedAgents = Array.isArray(sum.agents)
+                ? sum.agents.map((pa: any) => ({ id: pa.agentId, index: pa.agentIndex, status: "stopped" as const, model: pa.model }))
+                : [];
               return {
                 phase: effPhase,
                 round: 0,
-                agents: Array.isArray(sum.agents) ? sum.agents : [],
+                agents: shapedAgents,
                 transcript: (sum.transcript || []) as SwarmStatus["transcript"],
                 contract: sum.contract,
                 summary: sum,

@@ -193,10 +193,11 @@ broadcaster.attach(wss, (ws) => {
     // snapshot for that exact runId because same-clone runs overwrite it), do NOT
     // fall back to the global active status() — that would stamp the wrong run's
     // phase/agents into the per-run WS view and make /runs/:id show the setup page.
-    // Send a minimal placeholder; the client's per-run hydrate (summary fallback)
-    // + transcript replay will populate real data. (Now statusForRun summary synth
-    // usually supplies a real one before we get here.)
-    phase: "idle" as any,
+    // Send a minimal terminal placeholder (not "idle") so the route-based /runs/:id
+    // view stays on SwarmView instead of flipping to the "start a swarm" SetupForm.
+    // The client's per-run hydrate (via /runs list + /run-summary) + transcript replay
+    // will populate the real data (agents, full transcript, summary grid).
+    phase: "stopped" as any,
     round: 0,
     agents: [],
     transcript: [],

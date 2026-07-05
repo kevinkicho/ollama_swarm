@@ -139,7 +139,13 @@ export const Transcript = memo(function Transcript() {
   const filteredTranscript = useMemo(() => transcript.filter((e) => {
     if (filter === "all") return true;
     if (filter === "system") return e.role === "system";
-    if (filter === "agents") return e.role === "agent" || e.role === "agent-stream";
+    if (filter === "agents") {
+      // Transcript UI fix: hide "Worker skip" noise from the Agents view.
+      // Skips are low-signal (usually "already present / no change") and were
+      // flooding the transcript. They can still be seen under "All".
+      if (e.summary?.kind === "worker_skip") return false;
+      return e.role === "agent" || e.role === "agent-stream";
+    }
     if (filter === "audit") {
       const text = e.text || "";
       return text.includes("audit") || text.includes("Audit") || text.includes("Gate");
@@ -152,6 +158,9 @@ export const Transcript = memo(function Transcript() {
       // High-signal only: synthesis, verdicts, run events, hunks (high level), web results, major board actions.
       // Also include blackboard early progress and system housekeeping for visibility.
       const k = e.summary?.kind;
+      // Transcript UI fix: explicitly drop worker_skip (repetitive "already present" etc.)
+      // from the clean "key" view. These were polluting the transcript even on non-"all" filters.
+      if (k === "worker_skip") return false;
       const text = (e.text || "").toLowerCase();
       const isKey = ["council_synthesis", "mapreduce_synthesis", "role_diff_synthesis", "stigmergy_report", "debate_verdict", "run_finished", "deliverable", "stretch_goals", "worker_hunks", "contract", "goals"].includes(k || "") ||
         text.includes("synthesis") || text.includes("verdict") || text.includes("web_search") || text.includes("web_fetch") ||
@@ -240,9 +249,9 @@ export const Transcript = memo(function Transcript() {
       // structured kinds with explicit estimates, leading to different avg height distribution).
       if (e.thoughts && e.thoughts.length > 0) size += 28; // closed summary + mb-1.5
       if (e.toolCalls && e.toolCalls.length > 0) size += 28;
-      return size;
+      return size + ITEM_GAP_PX; // include inter-item gap in estimate to avoid initial gaps/stagger before measure
     }
-    return 52;  // tight default
+    return 52 + ITEM_GAP_PX;  // tight default + gap
   }, [filteredTranscript]);
 
   const virtualizer = useVirtualizer({
@@ -275,6 +284,15 @@ export const Transcript = memo(function Transcript() {
 
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, []);
+
+  // Re-measure when filter changes (different subset of items with potentially different
+  // height profiles; prevents stale size cache causing gaps or staggered layout in agents/key filters).
+  useEffect(() => {
+    const v = virtualizerRef.current;
+    if (v) {
+      requestAnimationFrame(() => v.measure());
+    }
+  }, [filter]);
 
   // One-time post-layout computation of actual atBottom (handles initial top position for
   // finished transcripts + short content cases). Avoids stale initial state/ref.

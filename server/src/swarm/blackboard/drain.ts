@@ -117,7 +117,7 @@ export async function stop(ctx: LifecycleContext): Promise<void> {
     ctx.appendSystem(`Deliverable write on stop failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
   }
   try {
-    await ctx.writeRunSummary();
+    await ctx.writeRunSummary(undefined);
   } catch (err) {
     ctx.appendSystem(`Summary write on stop failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
   }

@@ -139,7 +139,7 @@ export function BrainStartChat({
 
   const rawMessages = runContext && storeHistory && storeHistory.length > 0 ? storeHistory : localMessages;
   // Light dedupe of consecutive identical messages (defensive for old persisted history or edge re-sends)
-  const messages = rawMessages.reduce((acc: ChatMessage[], m, idx) => {
+  const messages = rawMessages.reduce((acc: ChatMessage[], m: ChatMessage, idx: number) => {
     const prev = acc[acc.length - 1];
     if (!prev || prev.role !== m.role || prev.content !== m.content) acc.push(m);
     return acc;

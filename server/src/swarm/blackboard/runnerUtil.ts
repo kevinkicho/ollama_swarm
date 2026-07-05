@@ -147,6 +147,25 @@ export function appendAgent(
 ): void {
   const { finalText, thoughts, toolCalls } = stripAgentText(text);
   const summary = summarizeAgentResponse(finalText);
+
+  // Transcript UI fix: suppress noisy no-op worker skips from the transcript.
+  // These ("already present", "no changes needed", import already mounted, etc.)
+  // were flooding the view with near-identical bubbles (see 2026-07-04 screenshot).
+  // Skips are still recorded for auditor / interaction tracking / summary.
+  // Only emit to transcript if the skip reason looks substantive.
+  if (summary?.kind === "worker_skip") {
+    const r = (summary as any).reason || "";
+    const isNoisySkip = /already present|no changes? needed|already (done|exist|import|mount)|no.?op|nothing to do/i.test(r);
+    if (isNoisySkip) {
+      // Still push a minimal marker internally if desired, but skip user-facing transcript entry.
+      // (Auditor etc. see skips via other paths.)
+      if (appConfig.SWARM_LOOP_DETECTION) {
+        maybeEmitLoopWarning(ctx);
+      }
+      return;
+    }
+  }
+
   const entry: TranscriptEntry = {
     id: randomUUID(),
     role: "agent",

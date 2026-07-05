@@ -155,11 +155,11 @@ export function RunHistoryDropdown({ parentPath, forceOpenSignal }: { parentPath
     if (!includeLocalRecent || localRecent.length === 0) return server;
     const localMapped: RunSummaryDigest[] = localRecent.map((r) => ({
       name: r.repoUrl?.split(/[/\\]/).pop() || 'recent',
-      clonePath: r.parentPath || r.clonePath || '',
+      clonePath: r.parentPath || (r as any).clonePath || '',
       preset: r.presetId || 'unknown',
       model: (r as any).model || '',
       startedAt: r.startedAt || Date.now(),
-      endedAt: r.endedAt || 0,
+      endedAt: (r as any).endedAt || 0,
       wallClockMs: (r as any).wallClockMs || 0,
       stopReason: (r as any).stopReason,
       commits: 0,
@@ -181,22 +181,6 @@ export function RunHistoryDropdown({ parentPath, forceOpenSignal }: { parentPath
     }
     return merged.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
   }, [runs, includeLocalRecent, localRecent]);
-
-  const onOpenFolder = async (clonePath: string) => {
-    try {
-      const res = await fetch("/api/swarm/open", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: clonePath }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        console.warn("open prior run path failed:", body.error ?? res.status);
-      }
-    } catch (err) {
-      console.warn("open prior run path failed:", err);
-    }
-  };
 
   return (
     <span className="relative">
@@ -277,7 +261,6 @@ export function RunHistoryDropdown({ parentPath, forceOpenSignal }: { parentPath
                     <th className="px-2 py-1.5 font-semibold text-right">Todos</th>
                     <th className="px-2 py-1.5 font-semibold text-right">Wall</th>
                     <th className="px-2 py-1.5 font-semibold">Path</th>
-                    <th className="px-2 py-1.5 font-semibold"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -353,19 +336,6 @@ export function RunHistoryDropdown({ parentPath, forceOpenSignal }: { parentPath
                       </td>
                       <td className="px-2 py-1 text-ink-500 truncate max-w-[260px]" title={r.clonePath}>
                         {truncateLeft(r.clonePath, 36)}
-                      </td>
-                      <td className="px-2 py-1 text-right">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void onOpenFolder(r.clonePath);
-                          }}
-                          title="Open clone folder in OS file manager"
-                          className="text-[10px] text-ink-400 hover:text-ink-100 underline"
-                        >
-                          open
-                        </button>
-
                       </td>
                     </tr>
                   ))}

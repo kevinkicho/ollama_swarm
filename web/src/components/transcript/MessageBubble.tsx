@@ -561,11 +561,12 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
     }
     if (entry.summary.kind === "worker_skip") {
       const s = entry.summary;
+      // Transcript UI fix: render worker skips more subtly (compact, low-contrast)
+      // so repetitive "already present / no-op" messages don't dominate the view.
       return (
-        <div className="rounded-md p-3 border border-amber-700/60 bg-amber-950/20 text-sm">
+        <div className="rounded px-2 py-1 text-[11px] text-ink-500 border-l-2 border-amber-900/40 bg-amber-950/10 ml-2">
           {header}
-          <div className="text-amber-300 font-mono text-xs">⏭ Worker skip: {s.reason}</div>
-          <div className="text-ink-400 text-xs mt-1 whitespace-pre-wrap">{entry.text}</div>
+          <span className="font-mono">⏭ skip:</span> {s.reason}
         </div>
       );
     }

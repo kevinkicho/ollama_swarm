@@ -254,3 +254,45 @@ MessageBubble.tsx                → dispatches by entry.role + entry.summary.ki
 7. `docs/decisions/` + git log for history
 
 **Key current concepts:** Brain-as-OS (monitoring + self-upgrade + provisioning), concurrent runs (`/runs/:runId`, ActiveRunsPanel), SystemWrapper UI, 12 presets.
+
+## UI State Management & Flashing Races — Lessons (2026-07-04)
+
+**Recurring root cause pattern (now heavily guarded):**
+- Singleton store (legacy root `/` + some global hooks) vs per-run scoped stores (via `SwarmStoreProvider` for `/runs/:runId`).
+- Initial render sees "clean" state (phase=idle, no runId, no summary/transcript/agents).
+- Async side-effects ( `useSwarmSocket` + `hydrateFromSnapshot`, per-run WS attach + initial `swarm_state`/`agent_state` payloads, re-hydrate in `SwarmView.onStop/onDrain`, provider status/summary fetches) run *after* first paint.
+- These mutate singleton or per-run state (`setPhase`, `setRunId`, `setSummary`, `appendEntry`, `upsertAgent`).
+- UI decisions flip: `showSetup` (phase==="idle" && !storeRunId && !hasSummary && txLen===0) becomes false → renders `SwarmView` instead of `SetupForm`.
+- Or in history: `agents.length===0` shows `SidebarSummaryAgents` (detailed stats) → agents populated → switches to `AgentPanel` cards.
+- `setPhase(terminal)` clears `agents:{}` and `streaming` (intended for live cleanup, but races with history loads).
+- WS initial from server (synthetic status when no live run) + client re-checks using stale `runId` from singleton.
+- `HomeRoute` active-runs fetch + redirect is async; first render wins the race.
+- Direct `useSwarm.getState()` (bypasses context) + unconditional effects exacerbate it.
+- Seen in: root `/` (empty blackboard view instead of start-a-swarm), run-review sidebar agents, potential in planning tab/header if stale leaks.
+
+**Affected flows (fixed):**
+- Root `/` (singleton): `HomeRoute` + `AppMain.showSetup` + `useSwarmSocket`.
+- History `/runs/:id` (provider): `SwarmStoreProvider` hydrate + WS onmessage.
+- Live run stop/drain re-hydrates in `SwarmView`.
+- Lingering state after restart/hard-refresh or navigation between root <-> runs.
+
+**Mitigations added (review these for future work):**
+- `App.tsx`: `useLayoutEffect` reset on root; `isOnRoot` guards; `useSwarmSocket(enabled && !isOnRoot)`; `showSetup` prefers root; early reset in no-active case.
+- `useSwarmSocket.ts`: `hydrateFromSnapshot` early-bails on root + no-runId; post-fetch re-check.
+- `SwarmStoreProvider.tsx`: pre-set `runId` + terminal phase in `useMemo` (first render correct); WS guard skips `agent_state`/`swarm_state` for history/terminal (keeps agents empty for fallback); agents from summary loaded *before* setPhase; explicit "no agents pop for history" in status branch.
+- `SwarmView.tsx`: root guards in re-hydrate callbacks; scoped actions preferred over `getState()`.
+- `store.ts`: `setPhase` terminal no longer blindly clears if agents present (kept for history in some paths); normalization in `upsertAgent`.
+- `HomeRoute`: always consult server active-runs; reset() when none (cleans singleton for SetupForm).
+
+**Positive outcome guidance for agents:**
+- Always check `isOnRoot` / pathname before any run-state mutation or hydrate.
+- Prefer `useSwarm(selector)` over `getState()` (respects `SwarmStoreContext`).
+- Pre-initialize per-run stores in `useMemo` before first render.
+- Guard WS `onmessage` and effects for "history/terminal" vs "live" (skip phase/agent updates that flip desired views).
+- Call `reset()` explicitly on root when server says no active run.
+- For history: load summary data *before* terminal `setPhase`; use provider guards to protect fallback rendering.
+- Test: hard-refresh `/`, server restart + revisit history, navigate root↔run↔history, stop while viewing.
+- The pattern is now documented and centrally guarded — extend the `isOnRoot` + "skip for terminal/history" pattern to new views (e.g. future /planning or brain review pages).
+- See also: `SwarmStoreProvider` comments, App.tsx guards, provider WS onmessage, hydrateFromSnapshot.
+
+This ensures agents (and humans) can work without UI surprises. When adding features that touch run state, audit against this pattern first.

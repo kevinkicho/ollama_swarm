@@ -11,6 +11,7 @@ import type { InteractionTracker, InteractionChain } from "./interactionTracker.
 import type { ExceptionCollector, PatternSummary } from "./exceptionCollector.js";
 import { buildAnalysisPrompt } from "./prompt.js";
 import path from "node:path";
+import { createSelfUpgrader } from "./selfUpgrader.js";
 
 // NOTE: Brain no longer generates system patches or scans its own source.
 // It acts as librarian/master-admin focused on run records and analysis.
@@ -85,6 +86,19 @@ export async function runBrainAnalysis(
   const logsDir = path.join(clonePath, "logs");
   const runSummaries = await readAllRunSummaries(logsDir);
   const summaryAnalysis = analyzeSummaries(runSummaries);
+
+  // Work on upgrade: record any "system" insights via self-upgrader (safe mode)
+  // so the brain can track self-improvement proposals.
+  try {
+    const upgrader = createSelfUpgrader({ clonePath, enabled: true });
+    for (const ins of insights) {
+      if (ins.category === "recommendation" || ins.title.toLowerCase().includes("system") || ins.title.toLowerCase().includes("prompt")) {
+        await upgrader.applyPatch({ title: ins.title, description: ins.description });
+      }
+    }
+  } catch (e) {
+    // non-fatal
+  }
 
   return {
     chains,

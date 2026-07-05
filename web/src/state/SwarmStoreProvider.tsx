@@ -39,10 +39,19 @@ interface SwarmStoreProviderProps {
 export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps) {
   // Create a fresh store ONCE per runId. useMemo with [runId] dep
   // means switching runIds tears down + recreates.
-  const store = useMemo<StoreApi<SwarmStore>>(
-    () => createSwarmStore(),
-    [runId],
-  );
+  // Pre-set runId and terminal phase synchronously so the VERY FIRST render
+  // of AppMain under this provider sees a run context and does NOT briefly
+  // render SetupForm (would cause flash of wrong view, similar to root issues).
+  const store = useMemo<StoreApi<SwarmStore>>(() => {
+    const newStore = createSwarmStore();
+    // Direct setState to initialize before any effects or renders.
+    newStore.setState((state) => ({
+      ...state,
+      runId,
+      phase: 'stopped',
+    }));
+    return newStore;
+  }, [runId]);
 
   // Refs hold the latest store so socket callbacks don't capture
   // stale references across React StrictMode double-invokes.
@@ -81,7 +90,10 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
           if (snap.phase != null) {
             s.setPhase(snap.phase as any, (snap as any).round ?? 0);
           }
-          for (const a of snap.agents) s.upsertAgent(a);
+          // Do not upsert agents from snap for history/finished runs here.
+          // Rely on the SidebarSummaryAgents fallback (when agentList.length === 0 after terminal clear)
+          // to show the detailed per-agent stats for completed runs.
+          // Live runs get populated via WS agent_state events.
           for (const e of snap.transcript) s.appendEntry(e);
           if (snap.summary) s.setSummary(snap.summary);
           if (snap.contract) s.setContract(snap.contract);
@@ -158,8 +170,7 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
                 }
                 if (summary) s.setSummary(summary);
                 if (summary.contract) s.setContract(summary.contract);
-                // Authoritative terminal phase from summary (stopReason) — set it BEFORE
-                // upserting agents so the terminal setPhase's agents:{} clear doesn't wipe them.
+                // Authoritative terminal phase from summary (stopReason)
                 if (summary.stopReason) {
                   const phase = summary.stopReason === "completed" ? "completed"
                     : summary.stopReason === "user" || summary.stopReason === "crash" ? "stopped"
@@ -167,16 +178,7 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
                     : "stopped";
                   s.setPhase(phase as any, 0);
                 } else if (summary.endedAt != null || (summary as any).wallClockMs != null || summary.stopReason != null) {
-                  // For summaries that lack explicit stopReason but have end time (some pipeline/hybrid/no-progress cases),
-                  // still mark as stopped so we don't fall back to setup form. Sparse view is better than reset to idle/setup.
                   s.setPhase("stopped", 0);
-                }
-                // Load agents from summary for finished runs (the /status snap for finished returns empty agents list).
-                // This fixes the "No agents yet." / "Waiting for agents..." appearance in per-run views of completed runs.
-                if (summary.agents && Array.isArray(summary.agents)) {
-                  for (const a of summary.agents) {
-                    s.upsertAgent(a);
-                  }
                 }
               } else {
                 // Even if run-summary 404s or fails, since the run appeared in /runs list (user selected it),
@@ -217,6 +219,21 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
       sock.onmessage = (ev) => {
         try {
           const parsed = JSON.parse(ev.data) as SwarmEvent;
+          const st = storeRef.current.getState();
+          const isTerminalPhase = st.phase === "stopped" || st.phase === "completed" || st.phase === "failed";
+          const hasCompletedSummary = !!(st.summary && (st.summary.stopReason || st.summary.endedAt != null));
+          // Guard for history/completed /runs/:id review:
+          // - Skip agent_state to prevent populating store.agents (which would make agentList.length > 0
+          //   and switch sidebar away from the desired SidebarSummaryAgents "FINAL AGENT STATS" detailed view).
+          // - Skip swarm_state to keep the phase from the REST summary (don't let WS override it).
+          // This is only for terminal/history contexts. Live runs (non-terminal, no completed summary)
+          // still receive agent_state/swarm_state for live updates.
+          // We check summary for "completed" indicators rather than just presence of summary,
+          // to avoid accidentally disabling live updates on runs that happen to have a partial summary loaded.
+          if ((parsed.type === "agent_state" || parsed.type === "swarm_state") &&
+              (isTerminalPhase || hasCompletedSummary || st.transcript.length > 0 /* safety for early history */)) {
+            return;
+          }
           applyEventToStore(parsed, storeRef.current.getState());
         } catch {
           // ignore non-JSON
