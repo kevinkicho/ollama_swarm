@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-07-04 (Brain-as-OS + persistent FAB Brain chat + per-run brain history + /brain/suggest + transcript injection + docs consolidation)
+**Last updated:** 2026-07-04 (UI state race fixes + singleton vs provider guards + self-upgrader safe recording + comprehensive agent lessons in STATUS; full pre-commit verify + push)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -20,7 +20,7 @@
 
 The app is a **Brain-as-OS for concurrent swarm orchestration**:
 
-- **Brain-as-OS layer** (under blackboard): real-time monitoring, run analysis & final reports, cross-run knowledge (librarian), run provisioning, health tracking. Brain acts as master-admin for initializing, starting, finishing, reviewing records and analyzing runs. System self-patching / self-upgrader removed.
+- **Brain-as-OS layer** (under blackboard): real-time monitoring, run analysis & final reports, cross-run knowledge (librarian), run provisioning, health tracking. Brain acts as master-admin for initializing, starting, finishing, reviewing records and analyzing runs. Self-upgrader is present in *safe recording mode only* (logs system/prompt improvement proposals from insights into `logs/upgrades.jsonl`; never auto-applies platform patches — manual git review required). See `brainOverseer/selfUpgrader.ts` + wiring in `runBrainAnalysis`.
 - **Brain during live runs (FAB + chat + suggest)**: Floating fixed 🧠 "Brain" pill (bottom-right in SystemWrapper, shown for active runs) opens modal running `BrainStartChat` with runContext (transcript summary via formatServerSummary + board todos + phase + cfg). Chat uses `/brain/chat` (with runContext prompt augmentation). History saved per-run via store + `/brain/chat-history` + RunStatePersister + summary recovery. `/brain/suggest` calls `brainService.injectSuggestion` which appends system + emits `brain_suggestion` transcript kind (rendered in MessageBubble). Proactive inject wired in Council stuck cycles + adaptive watchdog stalls.
 - **Concurrent multi-swarm support**: multiple independent runs in parallel (`/runs/:runId` routing, ActiveRunsPanel, per-run WebSocket/REST, concurrency cap). Brain and UI manage them at system level.
 - **System UI**: `SystemWrapper` with persistent sidebar, floating Brain FAB, BrainProposalsPanel, BrainActivityPanel, SystemStatus, PatchMonitor, RunQueue, topbar stats/health. Transcript filter defaults to "key" (avoids information bombardment).
@@ -287,12 +287,17 @@ MessageBubble.tsx                → dispatches by entry.role + entry.summary.ki
 **Positive outcome guidance for agents:**
 - Always check `isOnRoot` / pathname before any run-state mutation or hydrate.
 - Prefer `useSwarm(selector)` over `getState()` (respects `SwarmStoreContext`).
-- Pre-initialize per-run stores in `useMemo` before first render.
-- Guard WS `onmessage` and effects for "history/terminal" vs "live" (skip phase/agent updates that flip desired views).
-- Call `reset()` explicitly on root when server says no active run.
-- For history: load summary data *before* terminal `setPhase`; use provider guards to protect fallback rendering.
-- Test: hard-refresh `/`, server restart + revisit history, navigate root↔run↔history, stop while viewing.
+- Pre-initialize per-run stores in `useMemo` before first render (e.g. `runId` + `phase="stopped"` or terminal early).
+- Guard WS `onmessage` and effects for "history/terminal" vs "live": e.g. `if ((agent_state || swarm_state) && (terminalPhase || hasCompletedSummary || transcript.length > 0)) return;` — still allow append transcript/summary.
+- Call `reset()` explicitly on root when server says no active run (HomeRoute).
+- For history: hydrate summary agents *before* any setPhase; protect fallback "Final agent stats" rendering.
+- Test: hard-refresh `/`, server restart + revisit history, navigate root↔run↔history, stop while viewing, review completed hybrid runs (e.g. council→blackboard).
 - The pattern is now documented and centrally guarded — extend the `isOnRoot` + "skip for terminal/history" pattern to new views (e.g. future /planning or brain review pages).
-- See also: `SwarmStoreProvider` comments, App.tsx guards, provider WS onmessage, hydrateFromSnapshot.
+- See also: `SwarmStoreProvider` comments, App.tsx guards (showSetup, useLayoutEffect), provider WS onmessage, `hydrateFromSnapshot`, `store.ts` upsertAgent + setPhase.
 
-This ensures agents (and humans) can work without UI surprises. When adding features that touch run state, audit against this pattern first.
+**Self-upgrader findings (safe mode):**
+- Always use recording-only path: `createSelfUpgrader({clonePath, enabled:true})` logs to `logs/upgrades.jsonl` (title/desc) but returns `patchesApplied:0`.
+- Never enable full auto-apply on platform code. Route "recommendation"/"system"/"prompt" insights only through it for observability.
+- See `selfUpgrader.ts`, `runBrainAnalysis` (try/catch non-fatal), and note in `brainOverseer.ts`: "Brain no longer generates system patches".
+
+This ensures agents (and humans) can work without UI surprises. When adding features that touch run state or Brain/OS self-analysis, audit against these patterns first.
