@@ -27,7 +27,7 @@ per planning turn prevents context blow-up.
 
 ## Discussion presets have opt-in write capability (2026-05+)
 
-**Current state:** Discussion presets support `cfg.writeMode: "single"` (synthesizer produces hunks after discussion). Blackboard has native concurrent writes. Council and others route through the same WorkerPipeline when writeMode is enabled.
+**Current state:** Discussion presets support `cfg.writeMode: "single"` (synthesizer produces hunks after discussion). Blackboard has native concurrent writes. Council and others route through the same WorkerPipeline when writeMode is enabled. Hybrid (planning → blackboard exec) now reliably runs full autonomous blackboard phase without premature termination from PipelineRunner.
 
 **What's still limited:**
 - True multi-writer during turns (`writeMode: "multi"`) is not the default path for most presets.
