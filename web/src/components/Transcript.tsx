@@ -13,6 +13,13 @@ export const Transcript = memo(function Transcript() {
   const agents = useSwarm((s) => s.agents);
   const runId = useSwarm((s) => s.runId);
   const phase = useSwarm((s) => s.phase);
+  const cfgForHybrid = useSwarm((s) => s.runConfig);
+  const allTx = [...(transcript || []), ...(((useSwarm.getState().summary as any)?.transcript) || [])];
+  const transcriptHasHybridMarker = allTx.some((e: any) => {
+    const t = String(e?.text || e || "");
+    return /council\s*→\s*blackboard/i.test(t) || (/council/i.test(t) && /blackboard/i.test(t) && /phase/i.test(t));
+  });
+  const isHybrid = !!(cfgForHybrid?.useHybridPlanning || cfgForHybrid?.planningPreset || (cfgForHybrid as any)?.pipeline || transcriptHasHybridMarker);
   const [suggesting, setSuggesting] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -21,11 +28,24 @@ export const Transcript = memo(function Transcript() {
   const prevLenRef = useRef(0);
   const prevStreamingCountRef = useRef(0);
   const [stickyBottom, setStickyBottom] = useState(false);
-  const [filter, setFilter] = useState<"all" | "key" | "system" | "agents" | "audit" | "issues">("key"); // Default to "key" to avoid initial bombardment
+  const [filter, setFilter] = useState<"all" | "key" | "system" | "agents" | "audit" | "issues">(() => {
+    // Initial: for review/finished (terminal phase or summary with stopReason), default to "all" so review views and finished transcripts are not empty.
+    const st = useSwarm.getState();
+    const terminal = st.phase === "completed" || st.phase === "stopped" || st.phase === "failed" || !!st.summary?.stopReason;
+    return terminal ? "all" : "key";
+  });
+  // Auto switch to "all" if it becomes terminal later (e.g. live run finishes while viewing).
+  useEffect(() => {
+    const terminal = phase === "completed" || phase === "stopped" || phase === "failed" || !!useSwarm.getState().summary?.stopReason;
+    if (terminal && filter === "key") {
+      setFilter("all");
+    }
+  }, [phase]);
 
   // Single source for inter-item gap (used only in virtual wrapper for stability).
   // All child components must not introduce their own outer vertical margins.
-  const ITEM_GAP_PX = 4;
+  // Very tight to prevent "crazy big" gaps over time. Separation comes from bubble internals.
+  const ITEM_GAP_PX = 0;
 
   const streamingCount = useSwarm((s) => Object.keys(s.streaming).length);
   const streamingMeta = useSwarm((s) => s.streamingMeta);
@@ -79,7 +99,11 @@ export const Transcript = memo(function Transcript() {
     const el = scrollRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const atBottom = distanceFromBottom < 80;
+    const v = virtualizerRef.current;
+    const virtualH = v ? v.getTotalSize() : el.scrollHeight;
+    // Robust: at end of messages (virtualH) or full bottom.
+    const atMessagesBottom = el.scrollTop + el.clientHeight >= virtualH - 30;
+    const atBottom = distanceFromBottom < 80 || atMessagesBottom;
     isAtBottomRef.current = atBottom;
 
     // Track active user scrolling to skip compensation during gesture.
@@ -112,15 +136,22 @@ export const Transcript = memo(function Transcript() {
     jumpLockRef.current = true;
     isAtBottomRef.current = true;
     setStickyBottom(true);
-    // Instant jump ('auto') - no easing.
-    endRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+    const el = scrollRef.current;
+    // Force to end of transcript messages (endRef now right after virtual list).
+    if (el) {
+      endRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+      requestAnimationFrame(() => {
+        if (el) {
+          el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+        }
+        // Explicitly enable sticky after jump, even if no scroll event.
+        isAtBottomRef.current = true;
+        setStickyBottom(true);
+      });
+    }
 
-    // On historical views, after an explicit jump, briefly treat as "user scrolling" and
-    // force-settled so stray post-jump measures (from ROs on items now in view) don't
-    // cause a visible jitter or push. The user asked for Latest to just work.
     if (!isLiveRef.current) {
       userScrollingRef.current = true;
-      // Force settled (if not already) so no further auto-measures fight the position.
       initialSizeSettledRef.current = true;
       setTimeout(() => {
         userScrollingRef.current = false;
@@ -162,7 +193,7 @@ export const Transcript = memo(function Transcript() {
       // from the clean "key" view. These were polluting the transcript even on non-"all" filters.
       if (k === "worker_skip") return false;
       const text = (e.text || "").toLowerCase();
-      const isKey = ["council_synthesis", "mapreduce_synthesis", "role_diff_synthesis", "stigmergy_report", "debate_verdict", "run_finished", "deliverable", "stretch_goals", "worker_hunks", "contract", "goals"].includes(k || "") ||
+      const isKey = ["council_synthesis", "mapreduce_synthesis", "role_diff_synthesis", "stigmergy_report", "debate_verdict", "run_finished", "deliverable", "stretch_goals", "worker_hunks", "contract", "goals", "seed_announce", "agents_ready", "run_start"].includes(k || "") ||
         text.includes("synthesis") || text.includes("verdict") || text.includes("web_search") || text.includes("web_fetch") ||
         text.includes("findings") || text.includes("deliverable") || (k === "verifier_verdict");
       if (isKey) return true;
@@ -170,8 +201,12 @@ export const Transcript = memo(function Transcript() {
       if (e.role === "system") {
         return text.includes("resuming") || text.includes("ready") || text.includes("seed") || text.includes("goal-generation") ||
           text.includes("contract") || text.includes("planner") || text.includes("memory") || text.includes("design memory") ||
-          text.includes("directive") || text.includes("halted") || text.includes("failed") || text.includes("finished");
+          text.includes("directive") || text.includes("halted") || text.includes("failed") || text.includes("finished") ||
+          text.includes("pipeline") || text.includes("council") || text.includes("blackboard") || text.includes("agents ready");
       }
+      // Keep substantial agent-stream entries (the persisted streamed plan/hunk outputs) visible even in "key" so they
+      // do not disappear after streaming_end when live dock clears. Long outputs from council planning or blackboard execution are high signal.
+      if (e.role === "agent-stream" && (e.text || "").length > 80) return true;
       return false;
     }
     return true;
@@ -216,42 +251,42 @@ export const Transcript = memo(function Transcript() {
   const estimateSize = useCallback((index: number) => {
     const e = filteredTranscript[index];
     if (!e) return 60;
-    if (e.role === "agent-stream") return 35;
+    // Much more generous estimates for streaming/agent outputs and large JSON hunks/plans to prevent
+    // under-estimate (causing layout shift, jitter on growth, and apparent massive gaps after measure or on long content).
+    if (e.role === "agent-stream") {
+      const tlen = (e.text || '').length;
+      // agent-stream bubbles render full content (often large JSON diffs/hunks/plan from council or blackboard); generous
+      const lines = Math.max(3, Math.ceil(tlen / 28));
+      return 55 + lines * 14 + (tlen > 1500 ? 320 : 0) + (tlen > 4000 ? 650 : 0) + (tlen > 8000 ? 800 : 0);
+    }
     const kind = e.summary?.kind || '';
-    if (kind === "worker_hunks") return 140;
-    if (kind.includes("synthesis") || kind === "stretch_goals") return 160;
-    if (kind === "deliverable") return 110;
+    if (kind === "worker_hunks") return 240;
+    if (kind.includes("synthesis") || kind === "stretch_goals") return 240;
+    if (kind === "deliverable") return 170;
     if (kind === "run_finished") {
       const n = (e.summary as any)?.agents?.length ?? 4;
       const hasExtra = !!(e.summary as any)?.totalPromptTokens || !!(e.summary as any)?.totalResponseTokens;
-      // Tuned estimate for RunFinishedGrid internals: header + identity + tiles grid + table.
-      // Base accounts for n agents rows. +extra for token tiles when present.
-      // Helps virtualizer initial layout before measure, reducing stagger on filter.
-      return 520 + n * 28 + (hasExtra ? 40 : 0);
+      return 620 + n * 32 + (hasExtra ? 60 : 0);
     }
     if (kind === "seed_announce") {
-      // SeedAnnounceGrid: preview pills + optional expand. Count-based for stability.
       const count = (e.summary as any)?.topLevel?.length ?? 12;
-      return 180 + Math.min(count, 12) * 18;
+      return 200 + Math.min(count, 12) * 20;
     }
-    if (kind === ("run_start" as any)) return 110;
+    if (kind === ("run_start" as any)) return 130;
 
     const textLen = (e.text || '').length;
     if (textLen > 0) {
-      // Slightly more generous base to reduce delta on first real measurement for historical views.
-      // (Late growth of items above the current scroll position is what causes "pushed upward".)
-      const lines = Math.max(1, Math.ceil(textLen / 58));
-      const base = e.role === 'system' ? 32 : 40;
-      let size = base + lines * 16;
-      // Account for prepended variable blocks (ThoughtsBlock + ToolCallsBlock) that sit above
-      // the main bubble for many agent entries. These add predictable closed-state height.
-      // Improves estimate accuracy especially for "all"/"agents" filters (key filter mostly uses
-      // structured kinds with explicit estimates, leading to different avg height distribution).
-      if (e.thoughts && e.thoughts.length > 0) size += 28; // closed summary + mb-1.5
-      if (e.toolCalls && e.toolCalls.length > 0) size += 28;
-      return size + ITEM_GAP_PX; // include inter-item gap in estimate to avoid initial gaps/stagger before measure
+      const lines = Math.max(1, Math.ceil(textLen / 28));
+      const base = e.role === 'system' ? 36 : 46;
+      let size = base + lines * 15;
+      if (e.thoughts && e.thoughts.length > 0) size += 40;
+      if (e.toolCalls && e.toolCalls.length > 0) size += 40;
+      if (textLen > 1500) size += 280;
+      if (textLen > 3000) size += 550;
+      if (textLen > 7000) size += 950;
+      return size;
     }
-    return 52 + ITEM_GAP_PX;  // tight default + gap
+    return 60;
   }, [filteredTranscript]);
 
   const virtualizer = useVirtualizer({
@@ -301,7 +336,10 @@ export const Transcript = memo(function Transcript() {
     if (!el) return;
     const compute = () => {
       const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
-      const atB = dist < 80;
+      const v2 = virtualizerRef.current;
+      const vH = v2 ? v2.getTotalSize() : el.scrollHeight;
+      const atMsg = el.scrollTop + el.clientHeight >= vH - 30;
+      const atB = dist < 80 || atMsg;
       isAtBottomRef.current = atB;
       if (atB !== stickyBottom) setStickyBottom(atB);
     };
@@ -411,6 +449,12 @@ export const Transcript = memo(function Transcript() {
       });
     }
 
+    // Always re-measure on new content for live to prevent estimate error accumulation over time
+    // (which causes big gaps or staggering/stacking as more messages arrive).
+    if (live && v) {
+      requestAnimationFrame(() => v.measure());
+    }
+
     // Use the ref for at-bottom check (updated live in onScroll without causing re-renders).
     // This prevents the effect from reacting to sticky state changes during scroll.
     if (!isAtBottomRef.current) return;
@@ -474,7 +518,7 @@ export const Transcript = memo(function Transcript() {
         <span className="text-[10px] text-ink-500 ml-auto">
           {filteredTranscript.length} / {transcript.length} entries
         </span>
-        {runId && phase !== "completed" && phase !== "stopped" && phase !== "failed" && (
+        {runId && phase !== "completed" && phase !== "stopped" && phase !== "failed" && !isHybrid && (
           <button
             onClick={async () => {
               setSuggesting(true);
@@ -508,7 +552,7 @@ export const Transcript = memo(function Transcript() {
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="flex-1 min-h-0 overflow-y-auto p-4 bg-ink-900 transcript-scroll"
+        className="flex-1 min-h-0 overflow-y-auto p-2 bg-ink-900 transcript-scroll"
       >
         {transcript.length === 0 && streamingCount === 0 && phase !== "completed" && phase !== "stopped" && phase !== "failed" ? (
           <div className="text-ink-400 text-sm">Waiting for agents…</div>
@@ -550,7 +594,7 @@ export const Transcript = memo(function Transcript() {
                   className="virtual-item"
                   style={{ 
                     margin: 0,
-                    paddingBottom: `${ITEM_GAP_PX}px`,
+                    paddingBottom: `1px`,
                     boxSizing: 'border-box',
                     contain: 'layout style',
                     minHeight: '20px',
@@ -567,31 +611,16 @@ export const Transcript = memo(function Transcript() {
           })}
         </div>
 
-        {/* Inline streaming entries — show as MessageBubble-style entries (kept outside virtual for live) */}
-        {Object.entries(streaming).map(([agentId, text]) => {
-          if (!text || text.length === 0) return null;
-          const meta = streamingMeta[agentId];
-          const elapsed = meta ? ((Date.now() - meta.startedAt) / 1000).toFixed(1) : "?";
-          return (
-            <div key={`streaming-${agentId}`} className="flex items-start gap-2 px-2 py-1 rounded bg-ink-800/50 border border-ink-700/50">
-              <span className="text-[10px] font-mono text-ink-400 shrink-0 mt-0.5">
-                {agentId}
-              </span>
-              <span className="text-[10px] text-ink-500 shrink-0">thinking {elapsed}s…</span>
-              <span className="text-xs text-ink-300 truncate flex-1">{text.slice(-200)}</span>
-            </div>
-          );
-        })}
+        <div ref={endRef} />
 
         {/* Task #173: per-agent streaming dock with collapse-by-default
-            + smooth fade-out on completion. Replaces the previous
-            "render N inline bubbles, snap-disappear on end" pattern. */}
+            + smooth fade-out on completion. The authoritative live UI.
+            Removed previous duplicate inline map (tiny divs) that contributed to jitter/growth during massive streaming. */}
         <StreamingDock
           streaming={streaming}
           streamingMeta={streamingMeta}
           agents={agents}
         />
-        <div ref={endRef} />
       </div>
       {!stickyBottom ? (
         <button

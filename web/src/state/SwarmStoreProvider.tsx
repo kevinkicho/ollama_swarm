@@ -45,10 +45,14 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
   const store = useMemo<StoreApi<SwarmStore>>(() => {
     const newStore = createSwarmStore();
     // Direct setState to initialize before any effects or renders.
+    // Use a non-terminal early phase ("spawning") so:
+    // - showSetup on /runs/:id evaluates to false (not "idle")
+    // - WS guard does NOT skip agent_state/swarm_state for live runs (isTerminalPhase false)
+    // History views will be corrected quickly by hydrate + setPhase(terminal) which clears agents for the summary fallback.
     newStore.setState((state) => ({
       ...state,
       runId,
-      phase: 'stopped',
+      phase: 'spawning',
     }));
     return newStore;
   }, [runId]);
@@ -153,11 +157,15 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
                 const summary = await sumRes.json();
                 const cp = summary.localPath || match.clonePath;
                 if (cp) {
+                  const srcCfg = (summary as any).runConfig || summary;
+                  const prevCfg = s.runConfig || {};
                   s.setRunConfig({
-                    ...(s.runConfig || {}),
+                    ...prevCfg,
                     clonePath: cp,
                     preset: summary.preset || match.preset,
                     model: summary.model || match.model,
+                    useHybridPlanning: !!((srcCfg as any).useHybridPlanning || (summary as any).useHybridPlanning || (prevCfg as any).useHybridPlanning),
+                    planningPreset: (srcCfg as any).planningPreset || (summary as any).planningPreset || (prevCfg as any).planningPreset,
                   } as any);
                 }
                 if (summary.startedAt) s.setRunStartedAt(summary.startedAt);
@@ -227,11 +235,11 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
           //   and switch sidebar away from the desired SidebarSummaryAgents "FINAL AGENT STATS" detailed view).
           // - Skip swarm_state to keep the phase from the REST summary (don't let WS override it).
           // This is only for terminal/history contexts. Live runs (non-terminal, no completed summary)
-          // still receive agent_state/swarm_state for live updates.
+          // still receive agent_state/swarm_state for live updates, even after transcript starts (tx.length >0 is normal for live).
           // We check summary for "completed" indicators rather than just presence of summary,
           // to avoid accidentally disabling live updates on runs that happen to have a partial summary loaded.
           if ((parsed.type === "agent_state" || parsed.type === "swarm_state") &&
-              (isTerminalPhase || hasCompletedSummary || st.transcript.length > 0 /* safety for early history */)) {
+              (isTerminalPhase || hasCompletedSummary)) {
             return;
           }
           applyEventToStore(parsed, storeRef.current.getState());

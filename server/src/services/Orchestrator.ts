@@ -564,7 +564,8 @@ export class Orchestrator {
                 const raw = readFileSync(cand, "utf8");
                 const sum = JSON.parse(raw);
                 if (sum && (sum.runId === runId || (runId && (sum.runId?.startsWith(runId) || runId.startsWith(sum.runId))))) {
-                  const effPhase = (sum.stopReason === "completed" ? "completed" : "stopped") as SwarmPhase;
+                  const effPhase = (sum.stopReason === "completed" ? (sum.preset === 'blackboard' && sum.transcript && sum.transcript.some((e: any) => e.text && e.text.includes('council') && !sum.transcript.some((e: any) => e.text && e.text.includes('blackboard') && e.text.includes('phase'))) ? "failed" : "completed") :
+                                   (sum.stopReason === "crash" || sum.stopReason === "crashed" ? "failed" : "stopped")) as SwarmPhase;
                   const rc = (sum as any).runConfig || { preset: sum.preset };
                   const cp = sum.localPath || sum.clonePath || candidateDir;
                   // Shape agents as AgentState (id/index/status) so traditional sidebar
@@ -640,7 +641,8 @@ export class Orchestrator {
             const sum = JSON.parse(sumRaw);
             if (sum && (!sum.runId || sum.runId === runId ||
                 (runId && (sum.runId.startsWith(runId) || runId.startsWith(sum.runId))))) {
-              const effPhase = (sum.stopReason === "completed" ? "completed" : "stopped") as SwarmPhase;
+              const effPhase = (sum.stopReason === "completed" ? (sum.preset === 'blackboard' && sum.transcript && sum.transcript.some((e: any) => e.text && e.text.includes('council') && !sum.transcript.some((e: any) => e.text && e.text.includes('blackboard') && e.text.includes('phase'))) ? "failed" : "completed") :
+                               (sum.stopReason === "crash" || sum.stopReason === "crashed" ? "failed" : "stopped")) as SwarmPhase;
               const rc = (sum as any).runConfig || { preset: sum.preset };
               const shapedAgents = Array.isArray(sum.agents)
                 ? sum.agents.map((pa: any) => ({ id: pa.agentId, index: pa.agentIndex, status: "stopped" as const, model: pa.model }))
@@ -675,6 +677,21 @@ export class Orchestrator {
     // declared "completed", followed by hard kill with no final flush).
     // If a summary written by writeRunSummary (with stopReason) is present
     // under the clone's logs/ (or root), prefer the terminal phase derived from it.
+    //
+    // Abrupt termination (user hard-killed server because UI stop buttons were
+    // missing due to sidebar bug, or process crash/SIGKILL) must NEVER be labeled
+    // "completed". We detect:
+    // - crash sum.stopReason → failed
+    // - non-terminal last snap + no clean terminal sum → "failed" / "crashed"
+    // Scenarios:
+    //   - clean end of all phases + no error + !stopping → completed
+    //   - user Stop/Drain → user / stopped
+    //   - exception in runner (caught) → crash / failed
+    //   - cap hit → cap:xxx (terminal but not failed)
+    //   - no-progress / partial → stopped with detail
+    //   - hard kill / server death mid-run (no finally) → crashed / failed
+    //   - hybrid planning phase fail → failed (explicit in PipelineRunner)
+    //   - sub phase in pipeline interrupted → crashed if no final main summary
     // This ensures /status and per-run views report the real end state and hide
     // ineffective stop/drain buttons.
     try {
@@ -697,7 +714,20 @@ export class Orchestrator {
             const sum = JSON.parse(sumRaw);
             if (sum && sum.stopReason && (!sum.runId || sum.runId === runId ||
                 (runId && (sum.runId.startsWith(runId) || runId.startsWith(sum.runId))))) {
-              effectivePhase = (sum.stopReason === "completed" ? "completed" : "stopped") as SwarmPhase;
+              if (sum.stopReason === "completed") {
+                // For hybrid, if only planning phase completed (no blackboard execution marker in transcript), treat as crashed (user killed server due to UI bugs).
+                const isHybridSum = sum.preset === 'blackboard' && sum.transcript && sum.transcript.some((e: any) => e.text && e.text.includes('council'));
+                const hasExecution = sum.transcript && sum.transcript.some((e: any) => e.text && e.text.includes('blackboard') && e.text.includes('phase'));
+                if (isHybridSum && !hasExecution) {
+                  effectivePhase = "failed";
+                } else {
+                  effectivePhase = "completed";
+                }
+              } else if (sum.stopReason === "crash" || sum.stopReason === "crashed") {
+                effectivePhase = "failed";
+              } else {
+                effectivePhase = "stopped";
+              }
               // also try to pull wallClock for ticker
               if (typeof sum.wallClockMs === 'number') {
                 (snap as any).wallClockMs = sum.wallClockMs;
@@ -711,6 +741,21 @@ export class Orchestrator {
         }
       }
     } catch {}
+
+    // Post-sum abrupt termination detection for hard kills (no graceful stop/catch/finally).
+    // If after all recovery we still have a non-terminal phase for a run that is not
+    // currently active in memory, it means the process died (e.g. user killed server
+    // to stop a stuck hybrid run when UI stop buttons were missing).
+    // Never let it stay "completed" or a mid-phase like "executing"/"planning".
+    const terminalPhases = ["completed", "stopped", "failed"];
+    if (!terminalPhases.includes(effectivePhase as any)) {
+      effectivePhase = "failed";
+    } else if (effectivePhase === "completed" && snap && !terminalPhases.includes(snap.phase as any)) {
+      // Spurious "completed" from a sub-phase summary (e.g. planning phase in hybrid wrote
+      // its "completed", but main execution was hard-killed before final write).
+      // Last snap shows non-terminal → treat as crashed/failed.
+      effectivePhase = "failed";
+    }
 
     const rc = snap.runConfig as any;
     return {
@@ -990,6 +1035,13 @@ export class Orchestrator {
       getRunner: () => runHolder.runner!,
       hub: runHub,
     };
+    // Capture hybrid intent BEFORE buildRunner (which intentionally strips the flags
+    // on the cfg object to avoid re-triggering inside phase factory). We preserve the
+    // original values in the client-visible runConfig so UI correctly detects isHybrid,
+    // shows council-as-planner boxed group in sidebar, etc.
+    const capturedUseHybrid = cfg.useHybridPlanning;
+    const capturedPlanningPreset = cfg.planningPreset;
+    const capturedExecutionPreset = cfg.executionPreset;
     const runner = await this.buildRunner(cfg.preset, cfg, buildCtx);
     runHolder.runner = runner;
     // Task #125: tag every Ollama call made during this run with its
@@ -1053,6 +1105,9 @@ export class Orchestrator {
       // Map server cfg caps to client strings for run events / status.
       wallClockCapMin: cfg.wallClockCapMs ? Math.round(cfg.wallClockCapMs / 60000).toString() : undefined,
       ambitionTiers: cfg.ambitionTiers !== undefined ? String(cfg.ambitionTiers) : undefined,
+      useHybridPlanning: capturedUseHybrid,
+      planningPreset: capturedPlanningPreset,
+      executionPreset: capturedExecutionPreset,
     };
     const activeRun = this.createActiveRun(runId, startedAt, cfg, runConfig, runner, manager, persister, holdsCloneLock, runHub);
     this.runs.set(runId, activeRun);
@@ -1089,21 +1144,24 @@ export class Orchestrator {
     // when CONFORMANCE_MONITOR=off in the env (escape hatch).
     const trimmedDirective = cfg.userDirective?.trim();
     this.setupConformanceAndDriftMonitors(activeRun, runId, trimmedDirective, cfg);
-    try {
-      await runner.start(cfg);
-      // Extracted post-start (chain scheduling etc) — placeholder for larger slice refactor.
-      if (cfg.chainTo) {
-        void this.scheduleForwardChain(cfg, runId, runner, cfg.chainTo);
+    // Start the runner asynchronously (fire-and-forget) so the /start response returns the runId
+    // immediately. This fixes long delays (30s+) for hybrid/council planning before the view switches
+    // to run-layer. The run executes in background; completion/errors handled inside runner (finally, catch).
+    // For hybrid, this means the client sees the run page right away while council planning + blackboard proceeds.
+    void (async () => {
+      try {
+        await runner.start(cfg);
+        if (cfg.chainTo) {
+          void this.scheduleForwardChain(cfg, runId, runner, cfg.chainTo);
+        }
+      } catch (err) {
+        const rid = (typeof runId === 'string' ? runId : 'unknown');
+        this.log.warn('start partial failure, cleaning up ActiveRun', { runId: rid, error: err instanceof Error ? err.message : String(err) });
+        await activeRun.stop();
+        this.runs.delete(rid);
+        // rethrow not needed since fire-and-forget
       }
-    } catch (err) {
-      // Runner's start threw partway through (e.g. clone failed, spawn timed out).
-      // Use the ActiveRun's stop() for consistent RAII cleanup.
-      const rid = (typeof runId === 'string' ? runId : 'unknown');
-      this.log.warn('start partial failure, cleaning up ActiveRun', { runId: rid, error: err instanceof Error ? err.message : String(err) });
-      await activeRun.stop();
-      this.runs.delete(rid);
-      throw err;
-    }
+    })();
     return runId;
     } finally {
       this.startInProgress = false;
@@ -1399,6 +1457,7 @@ export class Orchestrator {
     cfg: RunConfig,
     ctx: BuildRunnerContext,
   ): Promise<SwarmRunner> {
+    const originalCfg = cfg;
     // Carved research helper: normalize for scientific/internet use cases
     cfg = prepareResearchConfig(cfg);
     const { runId, startedAt, persister, manager, getRunner } = ctx;
@@ -1422,51 +1481,15 @@ export class Orchestrator {
       logDiag: this.opts.logDiag,
       ollamaBaseUrl: this.opts.ollamaBaseUrl,
       getAmendments: () => this.amendments.list(runId),
-      getBrainService: () => this.brain.getService(),
+      getBrainService: cfg.enableBrainAnalysis === false ? () => null : () => this.brain.getService(),
     };
 
     const { createRunner } = await import("../swarm/presetRouter.js");
 
     // NEW: Hybrid planning + execution (#1, #3)
+    // Extracted to keep buildRunner focused; hybrid logic is now a dedicated slice.
     if (cfg.useHybridPlanning && cfg.planningPreset && cfg.executionPreset) {
-      const hybridPipeline = {
-        phases: [
-          {
-            preset: cfg.planningPreset as PresetId,
-            rounds: cfg.rounds ?? 3,
-            agentCount: cfg.agentCount ?? 5,
-            model: cfg.model,
-          },
-          {
-            preset: cfg.executionPreset as PresetId,
-            rounds: 0,
-            agentCount: cfg.agentCount ?? 5,
-            model: cfg.model,
-          },
-        ],
-        pipeMode: "both" as const,
-        pipeMaxEntries: 30,
-      };
-      // Attach the constructed pipeline to cfg so that the top-level PipelineRunner
-      // (which does `cfg.pipeline ?? DEFAULT_PIPELINE`) will use our hybrid config
-      // instead of silently falling back to the default (which starts with stigmergy).
-      // This ensures the user's chosen planningPreset (e.g. council) is respected.
-      cfg.pipeline = hybridPipeline;
-      cfg.useHybridPlanning = false;
-      cfg.planningPreset = undefined;
-      cfg.executionPreset = undefined;
-
-      // Strip hybrid flags for sub-phase builds so the early-if does not re-trigger
-      // inside PipelineRunner's phase loops (prevents recursion/wrong nesting).
-      const makePhaseCfg = (base: any) => ({
-        ...base,
-        pipeline: hybridPipeline,
-        useHybridPlanning: false,
-        planningPreset: undefined,
-        executionPreset: undefined,
-      });
-      const factory = async (p: PresetId) => this.buildRunner(p, makePhaseCfg(cfg), ctx);
-      return new PipelineRunner(opts, factory);
+      return this.createHybridPipelineRunner(cfg, originalCfg, opts, ctx);
     }
 
     switch (preset) {
@@ -1491,5 +1514,51 @@ export class Orchestrator {
       default:
         return createRunner(cfg, opts);
     }
+  }
+
+  /**
+   * Extracted hybrid planning+execution builder (refactor slice).
+   * Keeps the main buildRunner lean; all hybrid-specific wiring (pipeline attach,
+   * flag stripping for subs, brain disable, summary preservation) lives here.
+   */
+  private createHybridPipelineRunner(
+    cfg: RunConfig,
+    originalCfg: RunConfig,
+    opts: RunnerOpts,
+    ctx: BuildRunnerContext
+  ) {
+    const hybridPipeline = {
+      phases: [
+        {
+          preset: cfg.planningPreset as PresetId,
+          rounds: cfg.rounds ?? 3,
+          agentCount: cfg.agentCount ?? 5,
+          model: cfg.model,
+        },
+        {
+          preset: cfg.executionPreset as PresetId,
+          rounds: 0,
+          agentCount: cfg.agentCount ?? 5,
+          model: cfg.model,
+        },
+      ],
+      pipeMode: "both" as const,
+      pipeMaxEntries: 30,
+    };
+    // Attach pipeline to both cfgs for the top-level runner.start.
+    originalCfg.pipeline = hybridPipeline;
+    cfg.pipeline = hybridPipeline;
+
+    const makePhaseCfg = (base: any, phasePreset: PresetId) => ({
+      ...base,
+      preset: phasePreset,
+      pipeline: hybridPipeline,
+      useHybridPlanning: false,
+      planningPreset: undefined,
+      executionPreset: undefined,
+      enableBrainAnalysis: false,
+    });
+    const factory = async (p: PresetId) => this.buildRunner(p, makePhaseCfg(cfg, p), ctx);
+    return new PipelineRunner(opts, factory);
   }
 }

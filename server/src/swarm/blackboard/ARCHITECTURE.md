@@ -111,13 +111,25 @@ Three hard caps, whichever fires first:
 - **Commits** — 200 (hard-coded `WALL_CLOCK_CAP_MS`-style sibling).
 - **Todos** — 300 total posted (not committed).
 
-Plus terminal phases:
-- **completed** — auditor signaled all-met OR drain-exit on no-work.
-- **stopped** — user pressed Stop.
-- **failed** — runner threw mid-loop.
+Plus terminal phases (see summary.ts classifyStopReason + statusForRun abrupt detection):
+- **completed** — clean success (criteria met, natural end, !stopping, !crash, useful work).
+- **stopped** — user Stop/Drain, or caps/no-progress/partial (with stopReason detail).
+- **failed** — runner exception (crashMessage), or abrupt hard kill / server death / SIGKILL (detected at load via non-terminal snap or stale sub-phase "completed" for hybrid).
+- **crashed** (stopReason) — alias for hard abrupt cases, maps to phase "failed".
 
-`stopReason` + `stopDetail` land on the run summary so the modal
-+ banner can explain WHY the run ended.
+Scenarios / triggering conditions:
+- Clean blackboard loop end + all-met or no more work: "completed"
+- UI Stop button (hard) or graceful shutdown: "user" → stopped
+- Drain & Stop: "user" (or drain detail)
+- Any cap (wall/commits/todos/quota): "cap:xxx"
+- 0 activity + unmet criteria: "no-progress"
+- Mixed met + wont-do: "partial-progress"
+- Uncaught throw in lifecycle (catch in BlackboardRunner): "crash" + crash snapshot + phase failed
+- Hard kill of server (user forced because sidebar stop buttons missing, or OOM, power off): no catch/finally runs. On next statusForRun: if snap.phase non-terminal or only sub-phase "completed" sum, force "failed" / treat "crashed". Never "completed".
+- Hybrid Pipeline first (planning) phase throws: explicit "failed" + rethrow
+- Hybrid killed mid-execution phase: sub-planning may have "completed" sum, but snap non-terminal or no final main write → "failed"
+
+`stopReason` + `stopDetail` + phase land on summary/status so UI (history, /runs/:id, RunFinishedGrid) labels correctly. All fallbacks in Orchestrator now pipe "crashed"/"crash" → "failed", non-completed non-crash → "stopped".
 
 ## Persistence
 

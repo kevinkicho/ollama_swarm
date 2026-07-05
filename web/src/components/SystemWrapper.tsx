@@ -47,6 +47,10 @@ export function SystemWrapper({
   const [brainActivities, setBrainActivities] = useState<BrainActivity[]>([]);
   const [historyOpenSignal, setHistoryOpenSignal] = useState(0);
 
+  // Hybrid detection early (before effects) so brain effect can guard and never involve brain-os for hybrid runs.
+  const cfgForHybrid = useSwarm((s) => s.runConfig);
+  const isHybridRun = !!(cfgForHybrid?.useHybridPlanning || cfgForHybrid?.planningPreset);
+
   useEffect(() => {
     const fetchHealth = async () => {
       try {
@@ -63,6 +67,11 @@ export function SystemWrapper({
   }, []);
 
   useEffect(() => {
+    if (isHybridRun) {
+      setBrainHealth(undefined);
+      setBrainActivities([]);
+      return;
+    }
     const fetchBrainState = async () => {
       try {
         const [healthRes, activityRes] = await Promise.all([
@@ -87,7 +96,7 @@ export function SystemWrapper({
     fetchBrainState();
     const interval = setInterval(fetchBrainState, 15_000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isHybridRun]);
 
   const navigate = useNavigate();
 
@@ -140,9 +149,43 @@ export function SystemWrapper({
   const [brainChatOpen, setBrainChatOpen] = useState(false);
   const activeRunIdForChat = useSwarm((s) => s.runId);
   const phaseForChat = useSwarm((s) => s.phase);
+  const cfg = useSwarm((s) => s.runConfig);
   const transcriptForChat = useSwarm((s) => s.transcript);
   const agentsForChat = useSwarm((s) => s.agents);
   const cfgForChat = useSwarm((s) => s.runConfig);
+
+  // Brain state effect - skip entirely for hybrid runs (never involve brain-os inside the run)
+  useEffect(() => {
+    if (isHybridRun) {
+      setBrainHealth(undefined);
+      setBrainActivities([]);
+      return;
+    }
+    const fetchBrainState = async () => {
+      try {
+        const [healthRes, activityRes] = await Promise.all([
+          fetch("/api/swarm/brain/health"),
+          fetch("/api/swarm/brain/activity"),
+        ]);
+        const healthData = await healthRes.json();
+        if (healthData.status === "not-initialized") {
+          setBrainHealth(undefined);
+        } else {
+          setBrainHealth(healthData as BrainHealth);
+        }
+        const activityData = await activityRes.json();
+        setBrainActivities(
+          Array.isArray(activityData.activities) ? activityData.activities as BrainActivity[] : [],
+        );
+      } catch {
+        setBrainHealth(undefined);
+        setBrainActivities([]);
+      }
+    };
+    fetchBrainState();
+    const interval = setInterval(fetchBrainState, 15_000);
+    return () => clearInterval(interval);
+  }, [isHybridRun]);
 
   // Real board state from per-run store (todos for blackboard)
   const todosForChat = useSwarm((s: any) => s.todos || {});
@@ -251,11 +294,13 @@ export function SystemWrapper({
 
           <span className="text-ink-700">|</span>
 
-          <TopbarStat
-            icon="🧠"
-            value={brainHealth?.status ?? "idle"}
-            color="text-violet-400"
-          />
+          {!isHybridRun && (
+            <TopbarStat
+              icon="🧠"
+              value={brainHealth?.status ?? "idle"}
+              color="text-violet-400"
+            />
+          )}
 
           <span className="text-ink-700">|</span>
 
@@ -266,7 +311,8 @@ export function SystemWrapper({
       </header>
 
       {/* True floating pill (fixed) for Brain chat, persists across views */}
-      {activeRunIdForChat && phaseForChat !== 'idle' && (
+      {/* Never involve brain-os inside runs (esp. hybrid planner); user directive: no brain inside the run. */}
+      {activeRunIdForChat && phaseForChat !== 'idle' && !isHybridRun && (
         <button
           onClick={handleOpenBrainChat}
           className="fixed bottom-4 right-4 z-40 px-4 py-2 rounded-full bg-violet-700 hover:bg-violet-600 text-white shadow-lg flex items-center gap-2 text-sm font-medium border border-violet-500"

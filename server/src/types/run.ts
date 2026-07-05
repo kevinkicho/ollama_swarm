@@ -137,6 +137,10 @@ export interface SwarmStatusRunConfig {
   // so the SetupForm bar + advanced panels can re-hydrate on refresh / review.
   wallClockCapMin?: string;
   ambitionTiers?: string;
+  // Hybrid: council etc as planner group for blackboard execution.
+  useHybridPlanning?: boolean;
+  planningPreset?: string;
+  executionPreset?: string;
 }
 
 export interface SwarmStatusBoard {

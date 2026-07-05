@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState } from "react";
-import { Routes, Route, useParams, useNavigate } from "react-router-dom";
+import { Routes, Route, useParams, useNavigate, useLocation } from "react-router-dom";
 import { useSwarm } from "./state/store";
 import { useSwarmSocket } from "./hooks/useSwarmSocket";
 import { SetupForm } from "./components/SetupForm";
@@ -103,9 +103,13 @@ function HomeRoute() {
   // If server later says there's an active run, we'll navigate away.
   useLayoutEffect(() => {
     if (typeof window !== "undefined" && window.location.pathname === "/") {
-      const st = useSwarm.getState();
-      if (st.runId || st.phase !== "idle" || st.summary || st.transcript.length > 0) {
-        reset();
+      // Do not reset for review links (?review=...) — they need the hydrated data to render SwarmView.
+      const hasReview = new URLSearchParams(window.location.search).has("review");
+      if (!hasReview) {
+        const st = useSwarm.getState();
+        if (st.runId || st.phase !== "idle" || st.summary || st.transcript.length > 0) {
+          reset();
+        }
       }
     }
   }, [reset]);
@@ -114,17 +118,19 @@ function HomeRoute() {
     let cancelled = false;
     (async () => {
       try {
+        // Skip reset for review mode so useReviewHydration can populate the store.
+        if (typeof window !== "undefined") {
+          const sp = new URLSearchParams(window.location.search);
+          if (sp.has("review")) return;
+        }
         const res = await fetch("/api/swarm/active-runs");
         if (!res.ok || cancelled) {
           reset();
           return;
         }
-        const body = (await res.json()) as { runs?: Array<{ runId: string }> };
-        const first = body.runs?.[0]?.runId;
-        if (first && !cancelled) {
-          navigate(`/runs/${encodeURIComponent(first)}`, { replace: true });
-        } else if (!cancelled) {
-          // no active run on root -> clean state for fresh "start a swarm"
+        // Do not auto-redirect to run if active; root / is for starting new swarm (multi-run support).
+        // Active runs are visible in ActiveRunsPanel. Reset state for clean setup form.
+        if (!cancelled) {
           reset();
         }
       } catch {
@@ -134,7 +140,7 @@ function HomeRoute() {
     return () => {
       cancelled = true;
     };
-  }, [navigate, reset]);
+  }, [reset]);
   return <AppMain />;
 }
 
@@ -175,8 +181,21 @@ function RunRouteWrapper() {
 
 function AppMain() {
   const review = parseReviewParams();
-  const pathname = typeof window !== "undefined" ? window.location.pathname : "/";
+  const location = useLocation();
+  const pathname = location.pathname;
   const isOnRoot = pathname === "/";
+
+  if (isOnRoot) {
+    // For ?review=... on root, do not reset — review hydration populates the data for SwarmView.
+    const hasReview = !!review;
+    if (!hasReview) {
+      const st = useSwarm.getState();
+      if (st.runId || st.phase !== "idle" || st.summary || st.transcript.length > 0) {
+        // force reset singleton for clean setup when directly navigating to root
+        useSwarm.getState().reset();
+      }
+    }
+  }
 
   // We do NOT mutate state during render. The layoutEffect in HomeRoute
   // + the guard inside hydrateFromSnapshot + disabling the socket on root
@@ -234,13 +253,13 @@ function AppMain() {
   // run in the singleton store) so we show the clean SetupForm / "start a swarm"
   // instead of a stale blackboard run view. The HomeRoute effect will have reset
   // any such state when there are no active runs.
-  // Root path MUST show SetupForm in almost all cases.
-  // Only suppress on root if we have an explicitly non-idle phase *and* a runId.
-  // This, plus the layout reset and hydrate guard, kills the recurring singleton pollution.
+  // Root path MUST show SetupForm ("start a swarm") when no active run.
+  // On /runs/:runId routes we ALWAYS render SwarmView (the per-run provider + its guards
+  // + hydrate ensure correct data or graceful fallbacks). This prevents the recurring
+  // "stuck on setup after start / kicked back on history load" races.
   const showSetup = review === null &&
-    (isOnRoot
-      ? !(phase !== "idle" && storeRunId)   // on root, only suppress for a live run
-      : (phase === "idle" && !hasSummary && txLen === 0 && !storeRunId));
+    isOnRoot &&
+    !(phase !== "idle" && storeRunId);
 
   const effectiveShowSetup = showSetup;
 
@@ -261,8 +280,11 @@ function AppMain() {
         {/* Error banner */}
         {error ? <ErrorBanner error={error} /> : null}
 
-        {/* Active runs panel (when ≥1 run) */}
-        {review === null && <ActiveRunsPanel />}
+        {/* Active runs panel (when ≥1 run).
+            Only show when not on root setup (isOnRoot) to prevent the "run window" from topbar/area
+            "keeping opening" and polluting clean views/screenshots of SetupForm or pure SwarmView.
+            On run views, it surfaces other concurrent runs for switching/stopping. */}
+        {review === null && !isOnRoot && <ActiveRunsPanel />}
       </div>
 
       {/* Main content: SetupForm or SwarmView */}
@@ -365,6 +387,7 @@ function useReviewHydration(review: { runId: string; clonePath: string } | null)
   const setError = useSwarm((s) => s.setError);
   const setPhase = useSwarm((s) => s.setPhase);
   const setBrainChatHistory = useSwarm((s: any) => s.setBrainChatHistory);
+  const upsertAgent = useSwarm((s) => s.upsertAgent);
 
   useEffect(() => {
     if (!review) return;
@@ -383,6 +406,18 @@ function useReviewHydration(review: { runId: string; clonePath: string } | null)
         // Hydrate identity + ticker + topbar.
         setRunId(review.runId);
         setRunStartedAt(summary.startedAt);
+        const srcCfg: any = (summary as any).runConfig || summary;
+        let uh = !!(srcCfg.useHybridPlanning || (summary as any).useHybridPlanning);
+        let pp = srcCfg.planningPreset || (summary as any).planningPreset;
+        if (!uh && !pp) {
+          // Fallback for old hybrid runs where flags weren't written into the summary JSON (pre-fix stripping).
+          const tx = summary.transcript || [];
+          const hasHybridMarker = tx.some((e: any) => /council\s*→\s*blackboard|Pipeline.*council|blackboard.*phase/i.test(String(e.text || e || '')));
+          if (hasHybridMarker) {
+            uh = true;
+            pp = 'council';
+          }
+        }
         setRunConfig({
           preset: summary.preset,
           plannerModel: summary.model,
@@ -395,6 +430,8 @@ function useReviewHydration(review: { runId: string; clonePath: string } | null)
           rounds: 0,
           wallClockCapMin: (summary as any).wallClockCapMin,
           ambitionTiers: (summary as any).ambitionTiers,
+          useHybridPlanning: uh,
+          planningPreset: pp,
         });
         setSummary(summary);
         if (summary.contract) setContract(summary.contract);

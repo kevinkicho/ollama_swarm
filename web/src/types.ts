@@ -155,6 +155,7 @@ export type StopReason =
   | "completed"
   | "user"
   | "crash"
+  | "crashed"  // abrupt kill / server death (maps to failed phase)
   | "cap:wall-clock"
   | "cap:commits"
   | "cap:todos"
@@ -556,6 +557,10 @@ export interface RunConfigSnapshot {
   // Caps synced from setup form for blackboard/advanced runs
   wallClockCapMin?: string;
   ambitionTiers?: string;
+  // Hybrid planner support (council etc as planner group for blackboard)
+  useHybridPlanning?: boolean;
+  planningPreset?: string;
+  executionPreset?: string;
 }
 
 // Unit 52e: digest returned by GET /api/runs for the run-history

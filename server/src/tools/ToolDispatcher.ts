@@ -354,24 +354,41 @@ async function webFetchTool(args: Record<string, unknown>): Promise<ToolResult> 
     const titleMatch = rawText.match(/<title[^>]*>([^<]+)<\/title>/i);
     if (titleMatch) title = titleMatch[1].trim().slice(0, 150);
 
-    // Better main content extraction for HTML: try <main>, <article>, or first substantial text block.
+    // Better main content extraction for HTML: try multiple high-signal containers,
+    // prefer content-like IDs/classes, fall back to body text heuristics.
+    // This improves signal for research/gov data pages that bury main content.
     let mainContent = rawText;
     if (!contentType.includes("application/json") && !contentType.includes("text/plain")) {
-      // Prefer <main> or <article>
-      const mainMatch = rawText.match(/<main[^>]*>([\s\S]*?)<\/main>/i) || rawText.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
-      if (mainMatch) {
-        mainContent = mainMatch[1];
+      // Try several preferred containers in priority order. Enhanced for better research page extraction.
+      const containerMatch =
+        rawText.match(/<main[^>]*>([\s\S]*?)<\/main>/i) ||
+        rawText.match(/<article[^>]*>([\s\S]*?)<\/article>/i) ||
+        rawText.match(/<div[^>]*\b(id|class)=["'][^"']*(content|main-content|article|post|entry|primary|main|app-content|page-content) [^"']*["'][^>]*>([\s\S]*?)<\/div>/i) ||
+        rawText.match(/<section[^>]*\b(id|class)=["'][^"']*(content|main|article|primary) [^"']*["'][^>]*>([\s\S]*?)<\/section>/i) ||
+        rawText.match(/<div[^>]*\b(id|class)=["'][^"']*main[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+
+      if (containerMatch) {
+        mainContent = containerMatch[1] || containerMatch[3] || containerMatch[4] || containerMatch[0];
       } else {
-        // Fallback: remove scripts/styles/nav, take body or first 4k chars of text.
+        // Fallback: strip noise tags, try to grab body content.
         mainContent = rawText.replace(/<script[\s\S]*?<\/script>/gi, "")
           .replace(/<style[\s\S]*?<\/style>/gi, "")
           .replace(/<nav[\s\S]*?<\/nav>/gi, "")
           .replace(/<header[\s\S]*?<\/header>/gi, "")
-          .replace(/<footer[\s\S]*?<\/footer>/gi, "");
+          .replace(/<footer[\s\S]*?<\/footer>/gi, "")
+          .replace(/<aside[\s\S]*?<\/aside>/gi, "");
+        // Try to extract from <body> if present.
+        const bodyMatch = mainContent.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+        if (bodyMatch) mainContent = bodyMatch[1];
       }
-      mainContent = mainContent.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 6000);
+
+      // Strip remaining tags, normalize whitespace, cap.
+      mainContent = mainContent.replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 8000);  // slightly larger cap for richer research pages
     } else {
-      mainContent = rawText.slice(0, 6000);
+      mainContent = rawText.slice(0, 8000);
     }
 
     const prefix = isGov ? "[GOV / OFFICIAL SOURCE] " : "";

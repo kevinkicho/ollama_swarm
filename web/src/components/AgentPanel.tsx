@@ -131,6 +131,9 @@ export const AgentPanel = memo(function AgentPanel({
   color?: string;
   tag?: string;
 }) {
+  if (!agent || typeof agent.index !== 'number') {
+    return <div className="text-[10px] text-ink-500">agent (invalid)</div>;
+  }
   const elapsed = useElapsedTicker(agent.thinkingSince, agent.status === "thinking");
   const samples = useSwarm((s) => s.latency[agent.id] ?? EMPTY_SAMPLES);
   const phase = useSwarm((s) => s.phase);

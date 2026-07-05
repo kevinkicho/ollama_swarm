@@ -1,6 +1,7 @@
 import { memo, useEffect, useState, Fragment } from "react";
 import { useSwarm } from "../state/store";
 import { AgentPanel } from "./AgentPanel";
+import { useNavigate } from "react-router-dom";
 import { BoardView } from "./BoardView";
 import { ContractPanel } from "./ContractPanel";
 import { Transcript } from "./Transcript";
@@ -79,16 +80,40 @@ export const SwarmView = memo(function SwarmView() {
   // not yet set — happens during the brief window between
   // /api/swarm/start returning and the first run_started event landing.
   const activeRunId = useSwarm((s) => s.runId);
+  const navigate = useNavigate();
   const stopUrl = activeRunId
     ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/stop`
     : "/api/swarm/stop";
   const sayUrl = activeRunId
     ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/say`
     : "/api/swarm/say";
-  const agentList = Object.values(agents).sort((a, b) => a.index - b.index);
   const summary = useSwarm((s) => s.summary);
+  const transcript = useSwarm((s) => s.transcript);
+  const cfgForHybrid = useSwarm((s) => s.runConfig);
+  // Robust hybrid detection: prefer explicit flags from runConfig.
+  // Also fall back to pipeline marker in live transcript or summary (for runs where hydrate only partially restored flags).
+  const allTx = [...(transcript || []), ...((summary as any)?.transcript || [])];
+  const transcriptHasHybridMarker = allTx.some((e: any) => {
+    const t = String(e?.text || e || "");
+    return /council\s*→\s*blackboard/i.test(t) || (/council/i.test(t) && /blackboard/i.test(t) && /phase/i.test(t));
+  });
+  const isHybrid = !!(cfgForHybrid?.useHybridPlanning || cfgForHybrid?.planningPreset || (cfgForHybrid as any)?.pipeline || transcriptHasHybridMarker);
+  const agentList = Object.values(agents).sort((a, b) => a.index - b.index);
+  // For hybrid (council as planner group + blackboard execution): 
+  // - hide brain, bogus index 0, and blackboard's index-1 "planner" (replaced by council group)
+  // - this makes the "other" agents the correct execution ones (3 workers + 1 auditor etc, based on user-provided agentCount at start)
+  const displayAgents = isHybrid 
+    ? agentList.filter(a => !(a.id === 'brain' || (a.index || 0) === 0 || (a.index || 0) === 1))
+    : agentList;
+  const showAsPlannerGroup = isHybrid; // always highlight/box for hybrid to show the council-as-planner group + execution agents
   const hasTerminalSummary = !!summary && (!!summary.stopReason || typeof summary.endedAt === 'number');
-  const isTerminal = hasTerminalSummary || phase === "completed" || phase === "stopped" || phase === "failed";
+  // For hybrid/pipeline runs, rely primarily on phase; hasTerminalSummary can be set
+  // by sub-phase summaries and would incorrectly hide stop/drain buttons during active execution.
+  const hasExecution = isHybrid && allTx.some((e: any) => /blackboard.*phase|phase.*blackboard/i.test(String(e.text || '')));
+  // Bug1 fix: stronger guard. For hybrid, do not treat as terminal (hiding Stop/Drain buttons) just because
+  // a sub-phase summary exists or phase lags. Only hide controls for explicit terminal phases once execution started or not hybrid.
+  const isExplicitTerminalPhase = phase === "completed" || phase === "stopped" || phase === "failed";
+  const isTerminal = isExplicitTerminalPhase && !(isHybrid && (phase === 'discussing' || !hasExecution));
   // Board + Contract are blackboard-specific surfaces. Show the tabs
   // only for blackboard runs (including pre-start when the preset is
   // selected but no run config exists yet — default to showing them
@@ -230,7 +255,7 @@ export const SwarmView = memo(function SwarmView() {
 
   const onNewSwarm = () => {
     reset();
-    window.location.replace("/");
+    navigate("/");
   };
 
   // 2026-05-02: parse @mention prefix to honor lever #3's per-agent
@@ -264,7 +289,9 @@ export const SwarmView = memo(function SwarmView() {
     }
   };
 
-  const canStop = !hasTerminalSummary && phase !== "stopping" && phase !== "stopped" && phase !== "failed" && phase !== "completed";
+  // Simpler + more robust for hybrid: show stop/drain controls for any run that has not yet reached a terminal phase.
+  // This prevents "buttons disappeared" when sub-summaries or phase lag make isTerminal true too early.
+  const canStop = phase !== "stopping" && phase !== "stopped" && phase !== "failed" && phase !== "completed";
 
   // Per-preset role labels. Each preset has its own spawn contract:
   //   - blackboard: agent-1=planner, mid=workers, N+1=auditor (Unit 58)
@@ -363,7 +390,7 @@ export const SwarmView = memo(function SwarmView() {
       <aside className="w-[280px] shrink-0 border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800">
         <div className="flex items-center justify-between mb-2">
           <div className="text-xs uppercase tracking-wide text-ink-400">
-            Agents <span className="text-ink-500 font-mono normal-case">({agentList.length})</span>
+            {showAsPlannerGroup ? 'Planners (council group)' : 'Agents'} <span className="text-ink-500 font-mono normal-case">({agentList.length})</span>
           </div>
           {isTerminal ? (
             <button
@@ -398,7 +425,29 @@ export const SwarmView = memo(function SwarmView() {
             </div>
           )}
         </div>
-        {agentList.map((a) => (
+        {isHybrid && (
+          <>
+            {/* Always show the council as planner boxed for hybrid (replaces blackboard planner).
+                Number (typically 3 for council) made dependent on user-provided agentCount param at swarm start (min 3, or from config).
+                Always use synthetic here (real planning agents may not persist into exec phase; avoid picking blackboard's index-1 as "planner").
+                This ensures correct 3 boxed 'planner' + the execution agents (workers+auditor) shown in displayAgents. */}
+            <div className="border border-violet-600/60 rounded p-1 mb-2 bg-ink-900/30">
+              <div className="text-[9px] uppercase tracking-wider text-violet-300 mb-1 px-1">planner (council 3 agents collectively)</div>
+              {(() => {
+                const plannerCount = Math.max(3, Math.min(3, (cfgForHybrid?.agentCount || 3)));
+                return Array.from({length: plannerCount}, (_, k) => k + 1).map(idx => (
+                  <AgentPanel
+                    key={`planner-${idx}`}
+                    agent={{ id: `planner-${idx}`, index: idx, status: 'ready', model: 'council' } as any}
+                    role="planner"
+                  />
+                ));
+              })()}
+            </div>
+          </>
+        )}
+        {/* Execution agents from blackboard phase */}
+        {displayAgents.map((a) => (
           <AgentPanel
             key={a.id}
             agent={a}
@@ -408,11 +457,41 @@ export const SwarmView = memo(function SwarmView() {
             tag={agentTag(a.index)}
           />
         ))}
-        {/* 2026-04-25: when the live agents map is empty (run completed
-            and killAll cleared the roster), fall back to a compact
-            list sourced from summary.agents so the sidebar isn't
-            misleadingly empty after a finished run. */}
-        {agentList.length === 0 ? <SidebarSummaryAgents /> : null}
+        {/* If hybrid and no live execution agents yet (e.g. still in planning phase or early), show synthetic execution agents based on the user-provided agentCount at start.
+            This ensures the sidebar always shows the full team: 3 (or N) planners boxed + the expected workers + auditor.
+            When execution agents populate via WS/status, displayAgents will show the real ones instead. */}
+        {isHybrid && displayAgents.length === 0 && (() => {
+          // Show synthetic execution agents when live ones not yet populated (e.g. still in planning phase).
+          // Number based on user-provided agentCount at start + dedicatedAuditor.
+          // E.g. agentCount=4 + dedicated => execCount ~4 (3 workers +1 auditor)
+          const baseCount = cfgForHybrid?.agentCount || 4;
+          const dedicated = !!cfgForHybrid?.dedicatedAuditor;
+          const execCount = baseCount + (dedicated ? 1 : 0) - 1; // total for bb exec minus the replaced planner slot; e.g. 4+1-1=4 for 3w+1a
+          return Array.from({length: execCount}, (_, k) => {
+            const idx = 4 + k;
+            const isAuditor = dedicated && k === execCount - 1;
+            return (
+              <div key={`exec-${idx}`} className="rounded border border-ink-700 bg-ink-800/50 p-2 text-xs mb-1">
+                <div className="flex items-baseline justify-between gap-2 mb-1">
+                  <span className="text-ink-100 font-semibold">agent-{idx}</span>
+                  <span className="text-[10px] text-ink-400 font-mono">{isAuditor ? 'auditor' : 'worker'}</span>
+                </div>
+                <div className="text-ink-400">blackboard execution (pending)</div>
+              </div>
+            );
+          });
+        })()}
+        {/* For finished runs (length==0 after kill), show summary for stats.
+            For hybrid, also show summary on terminal so execution agents' details (runs/fails, commits, lines etc) are shown, even if live length==0.
+            This prevents "No agents yet." inappropriately during hybrid runtime or finished without live list. */}
+        {(() => {
+          const showSummary = agentList.length === 0 && !(isHybrid && !hasTerminalSummary && displayAgents.length === 0);
+          return showSummary ? <SidebarSummaryAgents /> : null;
+        })()}
+        {/* Note: removed duplicate synthetic block for finished hybrid (length==0 case).
+            The main isHybrid boxed above already covers synthetic 3 council planners for finished runs.
+            When finished, SidebarSummaryAgents (below) will show the execution agents' detailed stats (runs/fails, commits, lines +/- etc).
+            This prevents duplicate/wrong agents like extra 3 planners + only 3 finished instead of 4. */}
       </aside>
       <section className="flex-1 flex flex-col min-h-0 overflow-hidden">
         <ProgressBar />

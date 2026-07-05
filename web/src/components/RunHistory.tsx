@@ -89,9 +89,16 @@ export function RunHistoryDropdown({ parentPath, forceOpenSignal }: { parentPath
   // Task #111: on network failure after retries, fall back to the
   // localStorage cache so users can still browse prior runs even
   // when the dev server is offline.
+  // Only force-open when the signal is explicitly incremented (e.g. from QuickNav "History" button).
+  // Do NOT open on initial value (0) or every render — that was causing the dropdown
+  // to auto-appear without user click, blocking views and screenshots.
+  const prevForceRef = React.useRef<number | undefined>(undefined);
   useEffect(() => {
-    if (forceOpenSignal !== undefined) {
-      setOpen(true);
+    if (forceOpenSignal !== undefined && forceOpenSignal !== prevForceRef.current) {
+      if (forceOpenSignal > 0) {
+        setOpen(true);
+      }
+      prevForceRef.current = forceOpenSignal;
     }
   }, [forceOpenSignal]);
 

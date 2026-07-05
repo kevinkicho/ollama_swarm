@@ -763,7 +763,11 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   // Plan 4: initialize brain overseer components for this run
+  // Guard for hybrid: when enableBrainAnalysis===false we do not create brain overseer state
+  // (prevents "brain" agent from jumping into runs).
   initBrainOverseer(runId: string): void {
+    const enable = (this.active as any)?.enableBrainAnalysis !== false;
+    if (!enable) return;
     this.exceptionCollector = new ExceptionCollector(runId);
     this.interactionTracker = new InteractionTracker();
   }
@@ -817,6 +821,12 @@ export class BlackboardRunner implements SwarmRunner {
    *  agent) for model, tools, and session context. Falls back to a
    *  dedicated brain agent when no caller agent is provided. */
   private async brainPromptFn(prompt: string, _model: string, maxTokens: number, _timeoutMs: number, callerAgent?: Agent): Promise<string> {
+    const enable = (this.active as any)?.enableBrainAnalysis !== false;
+    if (!enable) {
+      // In hybrid council+blackboard planning/exec we intentionally disable brain.
+      // Return a minimal rejection so callers fall through to sibling/repair instead of creating a brain agent.
+      throw new Error("brain disabled for this phase (hybrid)");
+    }
     // Use the caller's agent when provided — this gives the brain real
     // model context, tools, and session instead of a fake agent.
     const agent: Agent = callerAgent ?? {

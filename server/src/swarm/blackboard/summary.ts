@@ -8,14 +8,23 @@
 //   1. crashMessage set            → "crash"
 //   2. terminationReason set       → "cap:<type>" (wall-clock | commits | todos)
 //   3. stopping flag set (no cap)  → "user"
-//   4. zero-progress detector      → "no-progress" (board has 0 commits + 0 todos
-//                                    AND contract has at least one criterion still
-//                                    unmet — i.e. planner failed to produce
-//                                    actionable work; the run did nothing useful
-//                                    even though it didn't crash or get stopped)
-//   5. else                        → "completed" (with optional completionDetail
-//                                    e.g. "all contract criteria satisfied" or
-//                                    "auditor cap reached")
+//   4. zero-progress detector      → "no-progress"
+//   5. partial                       → "partial-progress"
+//   6. else (incl. load-time abrupt) → "completed" or "crashed" (set at load for
+//                                    hard kills where no crashMessage was written
+//                                    because process died before catch/finally)
+//
+// Use-cases / scenarios:
+// - Clean finish (criteria met or natural end, !stopping, !crash, progress): "completed"
+// - User Stop/Drain button: "user" → phase "stopped"
+// - Exception in runner loop (uncaught): "crash" → phase "failed" + crash snapshot
+// - Hard server kill / SIGKILL / user killed node while run active (no shutdown handler):
+//   detected at statusForRun load via non-terminal snap or stale "completed" sub-phase sum
+//   → phase "failed", treat as "crashed"
+// - Cap (wall etc): "cap:xxx" (terminal, not failed)
+// - Planner gave up (0 activity + unmet): "no-progress"
+// - Hybrid first-phase (planning) fail: explicit "failed" in PipelineRunner
+// - Sub-phase interrupt in pipeline without final main write: load-time "failed" / "crashed"
 //
 // finalGitStatus is capped at FINAL_GIT_STATUS_MAX chars so a pathological
 // git state (thousands of untracked files) can't blow out the artifact.
@@ -37,6 +46,7 @@ export type StopReason =
   | "completed"
   | "user"
   | "crash"
+  | "crashed"   // abrupt process/server kill, hard SIGKILL, no graceful shutdown (no exception caught)
   | "cap:wall-clock"
   | "cap:commits"
   | "cap:todos"
@@ -407,11 +417,11 @@ function buildRca(args: {
   const { input, stopReason, wallClockMs } = args;
   // Map StopReason → finalPhase for the RCA generator. Crashes /
   // caps surface as "failed"; user stops as "stopped"; clean done
-  // as "completed".
+  // as "completed". "crashed" for hard kills same as crash.
   let finalPhase: string;
   if (stopReason === "completed") finalPhase = "completed";
   else if (stopReason === "user") finalPhase = "stopped";
-  else if (stopReason === "crash") finalPhase = "failed";
+  else if (stopReason === "crash" || stopReason === "crashed") finalPhase = "failed";
   else finalPhase = "failed";
   return generateRca({
     finalPhase,

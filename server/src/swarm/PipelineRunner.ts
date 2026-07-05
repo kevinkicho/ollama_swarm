@@ -22,6 +22,7 @@ export class PipelineRunner implements SwarmRunner {
     status: string;
     transcript: TranscriptEntry[];
     deliverable: string | undefined;
+    agents?: any[];
   }> = [];
   private currentRunner: SwarmRunner | null = null;
   private factory: RunnerFactory;
@@ -123,6 +124,7 @@ export class PipelineRunner implements SwarmRunner {
         status: this.stopping ? "stopped" : "completed",
         transcript: runnerStatus.transcript,
         deliverable,
+        agents: runnerStatus.agents || [],
       });
 
       for (const entry of runnerStatus.transcript) {
@@ -166,8 +168,13 @@ export class PipelineRunner implements SwarmRunner {
           topology: this.active.topology,
           filesChanged: 0,
           finalGitStatus: "",
-          agents: [],
+          agents: (this.phaseResults.length > 0 && this.phaseResults[this.phaseResults.length-1].agents) 
+            ? this.phaseResults[this.phaseResults.length-1].agents 
+            : (this.opts.manager.toStates ? this.opts.manager.toStates() : []),
           clonePath: this.active.localPath,
+          // Preserve hybrid flags so ?review mode can detect isHybrid and render council planner box + execution agents.
+          useHybridPlanning: (this.active as any).useHybridPlanning,
+          planningPreset: (this.active as any).planningPreset,
         } as any;
 
         // Ensure the persisted transcript for this runId always contains a run_finished
@@ -234,8 +241,13 @@ export class PipelineRunner implements SwarmRunner {
           topology: this.active.topology,
           filesChanged: 0,
           finalGitStatus: "",
-          agents: this.opts.manager.toStates ? this.opts.manager.toStates() : [],
+          agents: (this.phaseResults.length > 0 && this.phaseResults[this.phaseResults.length-1].agents) 
+            ? this.phaseResults[this.phaseResults.length-1].agents 
+            : (this.opts.manager.toStates ? this.opts.manager.toStates() : []),
           clonePath: this.active.localPath,
+          // Preserve hybrid flags so ?review mode can detect isHybrid and render council planner box + execution agents.
+          useHybridPlanning: (this.active as any).useHybridPlanning,
+          planningPreset: (this.active as any).planningPreset,
         } as any;
 
         // Same guarantee as natural completion: ensure run_finished entry for history grid.

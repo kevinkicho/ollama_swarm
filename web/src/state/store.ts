@@ -439,7 +439,35 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
     set((s) => {
       if (!(agentId in s.streamingMeta)) return s;
       const prior = s.streamingMeta[agentId];
+      const lastText = s.streaming[agentId];
+      let extra: any = {};
+      // Bug2 fix: on streaming_end, if we have the final streamed text and no transcript entry will arrive for this work
+      // (common for blackboard hunk JSONs and council plan outputs), snapshot it into transcript as a permanent
+      // agent-stream entry. This prevents the chat bubble from disappearing after diff/hunk finishes.
+      if (lastText && lastText.length > 10) {
+        const streamId = `stream-final-${agentId}-${Date.now()}`;
+        // Only append if not already present (dedup guard)
+        const already = s.transcript.some((t: any) => t.id === streamId || (t.agentId === agentId && t.role === 'agent-stream' && (t.text || '').slice(0,100) === lastText.slice(0,100)));
+        if (!already) {
+          const streamEntry = {
+            id: streamId,
+            role: "agent-stream" as const,
+            text: lastText,
+            ts: prior?.startedAt ?? Date.now(),
+            agentId,
+            agentIndex: (s.agents[agentId]?.index ?? undefined) as any,
+            streamingMeta: {
+              startedAt: prior?.startedAt ?? Date.now(),
+              lastTextAt: prior?.lastTextAt ?? Date.now(),
+              totalSeconds: prior ? Math.round(((prior.lastTextAt || Date.now()) - (prior.startedAt || Date.now())) / 1000) : 0,
+            },
+            summary: { kind: "worker_hunks" } as any, // helps estimate + key filter
+          };
+          extra = { transcript: [...s.transcript, streamEntry] };
+        }
+      }
       return {
+        ...extra,
         streamingMeta: {
           ...s.streamingMeta,
           [agentId]: { ...prior, status: "done", endedAt: Date.now() },

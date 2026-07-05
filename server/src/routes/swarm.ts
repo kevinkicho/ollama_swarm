@@ -1026,6 +1026,9 @@ export function swarmRouter(orch: Orchestrator): Router {
     candidates = candidates.sort((a, b) =>
       path.basename(b).localeCompare(path.basename(a))
     );
+    // For hybrid reviews, prefer the outer blackboard summary (has full transcript + execution agents)
+    // over sub-phase summaries (e.g. council-only with fewer agents).
+    let best: { file: string; parsed: any; score: number } | null = null;
     for (const e of candidates) {
       let raw: string;
       try {
@@ -1052,6 +1055,7 @@ export function swarmRouter(orch: Orchestrator): Router {
           !(typeof parsed.runId === 'string' && (parsed.runId.startsWith(runId) || runId.startsWith(parsed.runId)))) {
         continue;
       }
+      // Load brain chat history from sibling state snapshot if available (original behavior)
       // Load brain chat history from sibling state snapshot if available
       try {
         const statePath = path.join(resolvedClone, '..', `${parsed.runId || path.basename(resolvedClone)}.run-state.json`); // approx
