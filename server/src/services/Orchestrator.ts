@@ -1474,15 +1474,7 @@ export class Orchestrator {
       hub: ctx.hub,
       getRunner,
     });
-    const opts: RunnerOpts = {
-      manager,
-      repos: this.opts.repos,
-      emit: wrappedEmit,
-      logDiag: this.opts.logDiag,
-      ollamaBaseUrl: this.opts.ollamaBaseUrl,
-      getAmendments: () => this.amendments.list(runId),
-      getBrainService: cfg.enableBrainAnalysis === false ? () => null : () => this.brain.getService(),
-    };
+    const opts: RunnerOpts = this.createRunnerOpts(runId, manager, wrappedEmit, cfg);
 
     const { createRunner } = await import("../swarm/presetRouter.js");
 
@@ -1560,5 +1552,27 @@ export class Orchestrator {
     });
     const factory = async (p: PresetId) => this.buildRunner(p, makePhaseCfg(cfg, p), ctx);
     return new PipelineRunner(opts, factory);
+  }
+
+  /**
+   * Extracted runner opts builder (deeper refactor slice for orchestrator).
+   * Centralizes common wiring (amendments, brain guard, logging) so buildRunner
+   * and callers stay lean. Supports future per-preset overrides.
+   */
+  private createRunnerOpts(
+    runId: string,
+    manager: any,
+    wrappedEmit: any,
+    cfg: RunConfig
+  ): RunnerOpts {
+    return {
+      manager,
+      repos: this.opts.repos,
+      emit: wrappedEmit,
+      logDiag: this.opts.logDiag,
+      ollamaBaseUrl: this.opts.ollamaBaseUrl,
+      getAmendments: () => this.amendments.list(runId),
+      getBrainService: cfg.enableBrainAnalysis === false ? () => null : () => this.brain.getService(),
+    };
   }
 }

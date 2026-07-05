@@ -91,10 +91,12 @@ body {
 
 .virtual-item {
   contain: layout style paint;
+  transform: translateZ(0); /* force GPU layer to reduce draw flicker/stutter on resize/scroll updates */
 }
 
 .transcript-bubble {
-  margin-bottom: 0 !important; /* controlled by virtual wrapper paddingBottom for consistent gap */
+  margin-bottom: 0 !important; /* inter-bubble gap is controlled exclusively by virtual wrapper's paddingBottom (ITEM_GAP_PX) */
   box-sizing: border-box;
   contain: layout style;
+  transform: translateZ(0);
 }

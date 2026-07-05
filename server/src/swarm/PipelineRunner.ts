@@ -138,17 +138,29 @@ export class PipelineRunner implements SwarmRunner {
 
     this.currentRunner = null;
     this.running = false;
-    if (!this.stopping) {
+
+    const lastPhaseCfg = pipeline.phases[pipeline.phases.length - 1];
+    const lastWasAutonomousExec = !!(lastPhaseCfg && (
+      lastPhaseCfg.rounds === 0 ||
+      String(lastPhaseCfg.preset) === 'blackboard'
+    ));
+
+    // Do not force "completed" + kill + run_finished here for autonomous exec phase (blackboard rounds=0 in hybrid).
+    // The exec runner starts its work in background after start() resolves (post-spawn); forcing here kills agents
+    // prematurely and emits the run summary banner before any real execution output streams arrive.
+    // Let the blackboard lifecycle drive its own terminal phase, killAll, run_finished append, and summary write.
+    if (!this.stopping && !lastWasAutonomousExec) {
       this.setPhase("completed");
     }
 
-    // Force release + summary for hybrid runs on natural completion too
-    // (subs write per-phase; this ensures a top-level one for the main runId).
-    try {
-      const killResult = await this.opts.manager.killAll();
-      this.appendSystem(formatPortReleaseLine(killResult));
-    } catch {}
-    if (this.active?.localPath && this.active?.runId) {
+    if (!lastWasAutonomousExec) {
+      // Force release + summary only for finite discussion phases. Hybrid exec manages its lifetime.
+      try {
+        const killResult = await this.opts.manager.killAll();
+        this.appendSystem(formatPortReleaseLine(killResult));
+      } catch {}
+    }
+    if (this.active?.localPath && this.active?.runId && !lastWasAutonomousExec) {
       try {
         const now = Date.now();
         const startedAt = this.phaseResults.length > 0 

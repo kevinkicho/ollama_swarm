@@ -12,7 +12,7 @@ fs.mkdirSync(out, { recursive: true });
   const page = await ctx.newPage();
 
   console.log("Loading run", rid);
-  await page.goto(`http://localhost:8244/runs/${rid}`, { waitUntil: "networkidle", timeout: 20000 }).catch(e => console.log("goto warn", e.message));
+  const port = process.env.PORT || '8243'; await page.goto(`http://localhost:${port}/runs/${rid}`, { waitUntil: "networkidle", timeout: 20000 }).catch(e => console.log("goto warn", e.message));
   await page.waitForTimeout(1200);
 
   // Aggressively close any top dropdown / run summaries

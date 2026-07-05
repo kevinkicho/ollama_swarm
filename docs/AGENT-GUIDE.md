@@ -63,8 +63,10 @@ Health: `curl -s http://localhost:8243/api/health` should return `{"ok":true,...
 
 **After ANY code edit**, restart BOTH servers:
 ```bash
-kill-port 8243 8244   # kill backend + frontend
+kill-port 8243 8244   # kill backend + frontend (manual escape hatch)
 npm run dev            # starts both (from repo root)
+# Ctrl-C in the terminal should cleanly stop both (Windows: readline SIGINT fallback + taskkill /T /F + kill-port safety net in scripts/dev.mjs).
+# If a zombie lingers (rare after fixes), use `npx kill-port 8243 8244` or PowerShell Stop-Process.
 ```
 
 **Why both ports:** 8243 = backend (tsx), 8244 = frontend (vite). They are separate processes.
@@ -279,4 +281,4 @@ EOF
 
 ### Background process management
 
-Agents are in-process records (no subprocesses since E3 Phase 5). The only OS-level processes are the ones `npm run dev` spawns. If a dev server zombie persists (port still bound after Ctrl-C), find by port: `Get-NetTCPConnection -LocalPort 8243,8244,11533 -State Listen` in PowerShell, then `Stop-Process -Id <pid> -Force`.
+Agents are in-process records (no subprocesses since E3 Phase 5 for cloud models; the server node itself drives everything). The only OS-level processes are the ones `npm run dev` spawns (tsx server + vite web). Ctrl-C should now stop them reliably (with taskkill + port fallback on Windows). If a zombie still persists after Ctrl-C: `npx kill-port 8243 8244` or the Get-NetTCPConnection + Stop-Process PowerShell commands.

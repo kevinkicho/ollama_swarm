@@ -44,8 +44,8 @@ export const Transcript = memo(function Transcript() {
 
   // Single source for inter-item gap (used only in virtual wrapper for stability).
   // All child components must not introduce their own outer vertical margins.
-  // Very tight to prevent "crazy big" gaps over time. Separation comes from bubble internals.
-  const ITEM_GAP_PX = 0;
+  // Small consistent 6px gap for comfortable readability without feeling cramped or "massive".
+  const ITEM_GAP_PX = 6;
 
   const streamingCount = useSwarm((s) => Object.keys(s.streaming).length);
   const streamingMeta = useSwarm((s) => s.streamingMeta);
@@ -89,6 +89,10 @@ export const Transcript = memo(function Transcript() {
   const userScrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isLiveRef = useRef(true);
   const initialSizeSettledRef = useRef(false);
+  // Track all mounted item elements so we can force re-measure on updates/resize
+  // to ensure no items stay "hidden" due to stale estimates. This helps with
+  // the "not drawn until resize" symptom.
+  const mountedItemsRef = useRef(new Map<number, HTMLElement>());
 
   // compensateOrReanchor removed: all scroll compensation now inlined with live guards only.
   // For finished/historical transcripts we avoid ANY programmatic scrollTop changes or scrollIntoView
@@ -168,6 +172,14 @@ export const Transcript = memo(function Transcript() {
   // Combined with kind-specific estimates + one-time measures on filter, this keeps
   // virtual layout solid without pop or stagger on toggle.
   const filteredTranscript = useMemo(() => transcript.filter((e) => {
+    // For hybrid runs (moa/council planning + exec), suppress brain (index 0) and any agent-0
+    // bubbles that leak from planning sub-phases. Sidebar already filters these; transcript should too
+    // so user never sees "agent 0".
+    if (isHybrid) {
+      const idx = (e as any).agentIndex ?? (e as any).index ?? (e as any).agent?.index;
+      const aid = (e as any).agentId || (e as any).id || '';
+      if (idx === 0 || aid === 'brain' || /^agent-0$/.test(String(aid))) return false;
+    }
     if (filter === "all") return true;
     if (filter === "system") return e.role === "system";
     if (filter === "agents") {
@@ -250,43 +262,66 @@ export const Transcript = memo(function Transcript() {
   const getItemKey = useCallback((index: number) => filteredTranscript[index]?.id ?? index, [filteredTranscript]);
   const estimateSize = useCallback((index: number) => {
     const e = filteredTranscript[index];
-    if (!e) return 60;
-    // Much more generous estimates for streaming/agent outputs and large JSON hunks/plans to prevent
-    // under-estimate (causing layout shift, jitter on growth, and apparent massive gaps after measure or on long content).
+    if (!e) return 80;
+    // Over-estimate more aggressively to avoid initial under-placement that causes
+    // overlap/stagger (items placed too high, stacking on previous). Measure will tighten.
+    // This reduces "completely stacked" and subsequent jitter from fixes.
+    // Gaps appear "massive" if under; over + measure keeps tight after settle.
     if (e.role === "agent-stream") {
       const tlen = (e.text || '').length;
-      // agent-stream bubbles render full content (often large JSON diffs/hunks/plan from council or blackboard); generous
-      const lines = Math.max(3, Math.ceil(tlen / 28));
-      return 55 + lines * 14 + (tlen > 1500 ? 320 : 0) + (tlen > 4000 ? 650 : 0) + (tlen > 8000 ? 800 : 0);
+      const lines = Math.max(4, Math.ceil(tlen / 24));
+      return 100 + lines * 18 + (tlen > 1000 ? 500 : 0) + (tlen > 3000 ? 800 : 0) + (tlen > 6000 ? 1100 : 0);
     }
     const kind = e.summary?.kind || '';
-    if (kind === "worker_hunks") return 240;
-    if (kind.includes("synthesis") || kind === "stretch_goals") return 240;
-    if (kind === "deliverable") return 170;
+    if (kind === "agents_ready") {
+      // Agents ready can be small (closed) or tall (details table open). Over-estimate to avoid hiding/stagger.
+      const n = (e.summary as any)?.agents?.length ?? 5;
+      return 120 + n * 30;
+    }
+    if (kind === "worker_hunks") {
+      // Hunks can be very tall when diffs shown; over-estimate to prevent overlap.
+      const numHunks = (e.summary as any)?.hunks?.length ?? 3;
+      return 400 + numHunks * 220;
+    }
+    if (kind.includes("synthesis") || kind === "stretch_goals") return 350;
+    if (kind === "deliverable") return 280;
     if (kind === "run_finished") {
       const n = (e.summary as any)?.agents?.length ?? 4;
       const hasExtra = !!(e.summary as any)?.totalPromptTokens || !!(e.summary as any)?.totalResponseTokens;
-      return 620 + n * 32 + (hasExtra ? 60 : 0);
+      return 850 + n * 45 + (hasExtra ? 100 : 0);
     }
     if (kind === "seed_announce") {
       const count = (e.summary as any)?.topLevel?.length ?? 12;
-      return 200 + Math.min(count, 12) * 20;
+      return 320 + Math.min(count, 12) * 32;
     }
-    if (kind === ("run_start" as any)) return 130;
+    if (kind === ("run_start" as any)) return 220;
 
     const textLen = (e.text || '').length;
     if (textLen > 0) {
-      const lines = Math.max(1, Math.ceil(textLen / 28));
-      const base = e.role === 'system' ? 36 : 46;
-      let size = base + lines * 15;
+      // Special tight estimate for system messages (the ones the user sees "hiding" in blanks:
+      // "5/5 agents ready...", "deriving tier 1 contract from directive...", pipeline details, etc.).
+      // These use very compact styling: border-l + py-0.5 + text-[11px] mono + small header.
+      // A long line typically renders as 2-4 lines tall (~30-60px).
+      // Using full or high estimate causes cumulative start positions to be wrong for following items,
+      // pushing them out of the rendered virtual range (they never get into the DOM = "hiding" / blanks).
+      // Resize triggers re-calc + measure, revealing them temporarily.
+      // Conservative small estimate here + immediate measure() keeps positions accurate and items drawn.
+      if (e.role === 'system') {
+        // Slightly more generous for system to avoid under-estimate causing stagger/overlap on long wrapped lines.
+        const approxLines = Math.min(8, Math.max(1, Math.ceil(textLen / 45)));
+        return 30 + approxLines * 14;
+      }
+      const lines = Math.max(2, Math.ceil(textLen / 22));
+      const base = 55;
+      let size = base + lines * 18;
       if (e.thoughts && e.thoughts.length > 0) size += 40;
       if (e.toolCalls && e.toolCalls.length > 0) size += 40;
-      if (textLen > 1500) size += 280;
-      if (textLen > 3000) size += 550;
-      if (textLen > 7000) size += 950;
+      if (textLen > 800) size += 200;
+      if (textLen > 2500) size += 400;
+      if (textLen > 5000) size += 700;
       return size;
     }
-    return 60;
+    return 70;
   }, [filteredTranscript]);
 
   const virtualizer = useVirtualizer({
@@ -294,7 +329,37 @@ export const Transcript = memo(function Transcript() {
     getScrollElement,
     getItemKey,
     estimateSize,
-    overscan: 80,
+    overscan: 150,
+    // Force a much wider render range around the current view.
+    // This guarantees that items whose positions are temporarily off (due to estimate variance on dynamic content)
+    // are still rendered in the DOM instead of being culled as "offscreen".
+    // Combined with the direct measure calls, this stops messages from "hiding" in blanks until a resize.
+    rangeExtractor: (range) => {
+      // Aggressively include items around the computed range + around the actual scroll position (using rough avg size)
+      // + last N items. This guarantees "in between" messages get their DOM nodes created and measured,
+      // even if estimates are temporarily wrong (causing library range to miss them).
+      // This is the main fix for "not drawn until resize" (resize changes scroll/client dims, forcing re-calc that includes them).
+      const extra = 200;
+      let start = Math.max(0, range.startIndex - extra);
+      let end = Math.min(filteredTranscript.length - 1, range.endIndex + extra);
+
+      // Approximate visible indices from current scroll (to catch cases where estimate error made the library's range wrong).
+      const sc = scrollRef.current;
+      const avg = 50; // rough avg item height
+      if (sc) {
+        const approxStart = Math.max(0, Math.floor(sc.scrollTop / avg) - 100);
+        const approxEnd = Math.min(filteredTranscript.length - 1, Math.floor((sc.scrollTop + sc.clientHeight) / avg) + 100);
+        start = Math.min(start, approxStart);
+        end = Math.max(end, approxEnd);
+      }
+
+      // Always include the most recent items (live chat growth, new system messages, hunks).
+      const tail = Math.max(0, filteredTranscript.length - 50);
+      start = Math.min(start, tail);
+      end = Math.max(end, filteredTranscript.length - 1);
+
+      return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+    },
   });
   virtualizerRef.current = virtualizer;
 
@@ -312,10 +377,19 @@ export const Transcript = memo(function Transcript() {
     };
 
     requestAnimationFrame(doMeasure);
-    // Multiple passes help complex cards (RunFinishedGrid, collapsibles, long synthesis) settle.
-    const t1 = setTimeout(doMeasure, 80);
-    const t2 = setTimeout(doMeasure, 220);
-    const t3 = setTimeout(doMeasure, 480);
+    // Multiple passes + force on any already-mounted items (in case of dynamic appends during initial load).
+    const t1 = setTimeout(() => {
+      doMeasure();
+      mountedItemsRef.current.forEach((el) => virtualizer.measureElement(el));
+    }, 80);
+    const t2 = setTimeout(() => {
+      doMeasure();
+      mountedItemsRef.current.forEach((el) => virtualizer.measureElement(el));
+    }, 220);
+    const t3 = setTimeout(() => {
+      doMeasure();
+      mountedItemsRef.current.forEach((el) => virtualizer.measureElement(el));
+    }, 480);
 
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, []);
@@ -326,6 +400,12 @@ export const Transcript = memo(function Transcript() {
     const v = virtualizerRef.current;
     if (v) {
       requestAnimationFrame(() => v.measure());
+      mountedItemsRef.current.forEach((el) => v.measureElement(el));
+      // Re-measure twice for filter (different items may have very different heights).
+      setTimeout(() => {
+        v.measure();
+        mountedItemsRef.current.forEach((el) => v.measureElement(el));
+      }, 50);
     }
   }, [filter]);
 
@@ -357,7 +437,11 @@ export const Transcript = memo(function Transcript() {
   // (items above viewport get re-measured → virtual translateY of lower items shift → at fixed
   // scrollTop the viewport shows earlier content).
   const makeItemRef = useCallback((vItem: any) => (el: HTMLElement | null) => {
-    if (!el) return;
+    if (!el) {
+      mountedItemsRef.current.delete(vItem.index);
+      return;
+    }
+    mountedItemsRef.current.set(vItem.index, el);
     // For historical: measureElement only the first time this item mounts.
     // Repeated calls on re-renders (caused by sticky state, etc.) would otherwise keep
     // updating the size cache and potentially shifting positions of other virtual items.
@@ -451,8 +535,29 @@ export const Transcript = memo(function Transcript() {
 
     // Always re-measure on new content for live to prevent estimate error accumulation over time
     // (which causes big gaps or staggering/stacking as more messages arrive).
+    // Extra passes + timeouts to force measurement of items that might otherwise stay "hidden"
+    // due to initial estimate error (revealed only on resize/redraw).
     if (live && v) {
+      // Force broad measurement on live content changes (appends from streaming, new system messages, hunks).
+      // Multiple passes because complex content (JSON diffs, tables, wrapped text) takes time to lay out.
       requestAnimationFrame(() => v.measure());
+      mountedItemsRef.current.forEach((el) => {
+        v.measureElement(el);
+        requestAnimationFrame(() => v.measureElement(el));
+      });
+      // Extra delayed passes to catch reflows.
+      setTimeout(() => {
+        v.measure();
+        mountedItemsRef.current.forEach((el) => v.measureElement(el));
+      }, 30);
+      setTimeout(() => {
+        v.measure();
+        mountedItemsRef.current.forEach((el) => v.measureElement(el));
+      }, 120);
+      setTimeout(() => {
+        v.measure();
+        mountedItemsRef.current.forEach((el) => v.measureElement(el));
+      }, 350);
     }
 
     // Use the ref for at-bottom check (updated live in onScroll without causing re-renders).
@@ -495,6 +600,38 @@ export const Transcript = memo(function Transcript() {
     });
     return () => cancelAnimationFrame(raf);
   }, [filter, virtualizer]);
+
+  // Resize handler + container RO: force re-measure when viewport size changes.
+  // Critical for the "hiding until resize" symptom: when browser width changes, wrapped text in system/agent bubbles
+  // changes height; without immediate measure the virtual positions stay wrong and items stay out of rendered range.
+  useEffect(() => {
+    let t: any;
+    const doMeasure = () => {
+      const v = virtualizerRef.current;
+      if (v) {
+        v.measure();
+        // Force all mounted items on resize (width change affects wrap heights in code/JSON/system text).
+        mountedItemsRef.current.forEach((el) => v.measureElement(el));
+        requestAnimationFrame(() => v.measure());
+        setTimeout(() => v.measure(), 40);
+      }
+    };
+    const onResize = () => {
+      clearTimeout(t);
+      t = setTimeout(doMeasure, 80);
+    };
+    window.addEventListener('resize', onResize);
+
+    // Direct observer on the scroller catches size changes even if window event is delayed or not fired in some embeds.
+    const ro = new ResizeObserver(doMeasure);
+    if (scrollRef.current) ro.observe(scrollRef.current);
+
+    return () => {
+      window.removeEventListener('resize', onResize);
+      ro.disconnect();
+      clearTimeout(t);
+    };
+  }, []);
 
   return (
     <div className="h-full flex flex-col relative">
@@ -552,7 +689,7 @@ export const Transcript = memo(function Transcript() {
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="flex-1 min-h-0 overflow-y-auto p-2 bg-ink-900 transcript-scroll"
+        className="flex-1 min-h-0 overflow-y-auto p-1 bg-ink-900 transcript-scroll"
       >
         {transcript.length === 0 && streamingCount === 0 && phase !== "completed" && phase !== "stopped" && phase !== "failed" ? (
           <div className="text-ink-400 text-sm">Waiting for agents…</div>
@@ -561,7 +698,7 @@ export const Transcript = memo(function Transcript() {
         {/* Fully virtualized list of transcript entries (uniform, no prefix/tail split).
            All items use the same rendering path for consistent spacing.
            The paddingBottom (ITEM_GAP_PX) on the measured inner wrapper provides the
-           sole inter-item gap for predictable heights across filters.
+           sole inter-item gap for predictable heights across filters. 6px for subtle comfortable separation.
            - estimateSize (heuristic) + measureElement + per-item ResizeObserver
              keep the virtualizer's size cache accurate for variable bubble heights.
            - Live UI (inline streams + StreamingDock) is rendered after the virtual
@@ -594,7 +731,7 @@ export const Transcript = memo(function Transcript() {
                   className="virtual-item"
                   style={{ 
                     margin: 0,
-                    paddingBottom: `1px`,
+                    paddingBottom: `${ITEM_GAP_PX}px`,
                     boxSizing: 'border-box',
                     contain: 'layout style',
                     minHeight: '20px',

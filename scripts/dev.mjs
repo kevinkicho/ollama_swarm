@@ -1,4 +1,4 @@
-import { spawn, execSync } from "node:child_process";
+import { spawn, spawnSync, execSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -89,15 +89,20 @@ const children = [];
 let shuttingDown = false;
 
 // On Windows, `child.kill("SIGTERM")` only terminates the direct child —
-// our server process — while grandchildren like opencode.exe workers keep
-// running and holding their ports. `taskkill /T /F` walks the process tree
-// and force-terminates everything. On POSIX we keep the signal path because
-// Node's signal forwarding is reliable there.
+// our server process — while any tree keeps running and holding ports
+// (or in the cloud case, the single server node itself is the entire
+// runtime for autonomous runs). `taskkill /PID <pid> /T /F` walks the
+// process tree and force-kills. We also fall back to port-based kill.
+// The direct node processes for tsx/vite are the ones we must nuke so
+// that in-flight hybrid/blackboard runs (and their WS transcript streams)
+// actually stop.
 function treeKill(child, signal) {
   if (!child || child.pid === undefined) return;
   if (child.killed || child.exitCode !== null) return;
   if (process.platform === "win32") {
     try {
+      // Use sync in the critical shutdown path too (see force version below).
+      // Fire-and-forget here for the general case.
       const k = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
@@ -111,6 +116,16 @@ function treeKill(child, signal) {
     return;
   }
   try { child.kill(signal ?? "SIGTERM"); } catch {}
+}
+
+function forceKillWinPid(pid) {
+  if (!pid) return;
+  try {
+    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+  } catch {}
 }
 
 function prefix(tag, color) {
@@ -182,18 +197,42 @@ async function waitForBackend(port, host = "127.0.0.1", timeoutMs = 25000) {
 function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+  console.log("[dev] shutdown: killing children + ports");
+
+  const pids = children.map(c => c.child?.pid).filter(Boolean);
+
   for (const { child } of children) {
     treeKill(child, "SIGTERM");
   }
-  // hard-kill any leftovers after 4s (on Windows `taskkill /F` is already
-  // the strongest kill; the second call re-issues it in case the first
-  // taskkill couldn't find/reach the tree)
+
+  if (process.platform === "win32") {
+    // Belt-and-suspenders for Windows + npm + PowerShell:
+    // 1. Force tree-kill the direct pids (tsx node + vite node).
+    for (const pid of pids) forceKillWinPid(pid);
+
+    // 2. Kill the dev ports themselves. This catches the case where the
+    //    SIGINT never quite made it to the dev.mjs handler (very common
+    //    under `npm run dev` on Win) or a child survived as orphan.
+    //    Uses the kill-port already present in root deps.
+    for (const p of [port, webPort]) {
+      try {
+        spawnSync("npx", ["kill-port", String(p)], {
+          stdio: "ignore",
+          windowsHide: true,
+          timeout: 4000,
+        });
+      } catch {}
+    }
+  }
+
+  // hard-kill any leftovers after a short grace (reduced from 4s).
   setTimeout(() => {
     for (const { child } of children) {
-      treeKill(child, "SIGKILL");
+      if (process.platform === "win32" && child?.pid) forceKillWinPid(child.pid);
+      else treeKill(child, "SIGKILL");
     }
     process.exit(0);
-  }, 4000).unref();
+  }, 2500).unref();
 }
 
 process.on("SIGINT", () => {
@@ -201,6 +240,23 @@ process.on("SIGINT", () => {
   shutdown();
 });
 process.on("SIGTERM", shutdown);
+process.on("SIGBREAK", shutdown); // Windows (some terminals / Ctrl+Break variant)
+
+// Extra Windows robustness: under `npm run dev` + PowerShell/cmd the normal
+// SIGINT emulation is often swallowed by the npm shim or the console group
+// and never reaches our process.on('SIGINT'). The readline interface gives
+// us a second chance to observe Ctrl+C even with piped stdio / windowsHide.
+if (process.platform === "win32") {
+  import("node:readline").then(({ createInterface }) => {
+    try {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      rl.on("SIGINT", () => {
+        console.log("\n[dev] readline SIGINT (win32 fallback)");
+        shutdown();
+      });
+    } catch {}
+  }).catch(() => {});
+}
 
 // 2026-04-27: --no-watch / NO_WATCH=1 disables tsx watch on the server.
 // Use during long validation runs to dodge the WSL inotify SIGTERM-after-

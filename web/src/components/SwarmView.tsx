@@ -107,13 +107,16 @@ export const SwarmView = memo(function SwarmView() {
     : agentList;
   const showAsPlannerGroup = isHybrid; // always highlight/box for hybrid to show the council-as-planner group + execution agents
   const hasTerminalSummary = !!summary && (!!summary.stopReason || typeof summary.endedAt === 'number');
+  const hasRunFinishedEntry = transcript.some((e: any) => e.summary?.kind === 'run_finished' || (e.text || '').includes('Run finished'));
   // For hybrid/pipeline runs, rely primarily on phase; hasTerminalSummary can be set
   // by sub-phase summaries and would incorrectly hide stop/drain buttons during active execution.
   const hasExecution = isHybrid && allTx.some((e: any) => /blackboard.*phase|phase.*blackboard/i.test(String(e.text || '')));
-  // Stronger for bug1: show stop/drain controls unless we have a real terminal summary (endedAt or stopReason).
-  // This keeps the buttons available during active hybrid even if the local phase flips to completed early
-  // or after server restart rehydration brings in an old summary.
-  const isTerminal = hasTerminalSummary || (phase === "completed" || phase === "stopped" || phase === "failed");
+  // isTerminal (for UI) based on real finished signal from summary OR explicit finished entry in transcript.
+  // This ensures finished hybrid runs switch to final stats (hiding synthetic ready/pending) even if top-level summary not populated.
+  // Guard: ignore early run_finished (from planning sub or old pipeline logic) while hybrid exec phase is active.
+  const terminalPhase = ['completed','stopped','failed'].includes(phase);
+  const prematureHybridFinished = hasRunFinishedEntry && isHybrid && hasExecution && !terminalPhase;
+  const isTerminal = !prematureHybridFinished && (hasTerminalSummary || hasRunFinishedEntry || terminalPhase);
   // Board + Contract are blackboard-specific surfaces. Show the tabs
   // only for blackboard runs (including pre-start when the preset is
   // selected but no run config exists yet — default to showing them
@@ -291,7 +294,8 @@ export const SwarmView = memo(function SwarmView() {
 
   // Simpler + more robust for hybrid: show stop/drain controls for any run that has not yet reached a terminal phase.
   // This prevents "buttons disappeared" when sub-summaries or phase lag make isTerminal true too early.
-  const canStop = phase !== "stopping" && phase !== "stopped" && phase !== "failed" && phase !== "completed";
+  // Also guard against premature run_finished from planning subs in hybrid.
+  const canStop = phase !== "stopping" && phase !== "stopped" && phase !== "failed" && phase !== "completed" && !prematureHybridFinished;
 
   // Per-preset role labels. Each preset has its own spawn contract:
   //   - blackboard: agent-1=planner, mid=workers, N+1=auditor (Unit 58)
@@ -390,7 +394,7 @@ export const SwarmView = memo(function SwarmView() {
       <aside className="w-[280px] shrink-0 border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800">
         <div className="flex items-center justify-between mb-2">
           <div className="text-xs uppercase tracking-wide text-ink-400">
-            {showAsPlannerGroup ? 'Planners (council group)' : 'Agents'} <span className="text-ink-500 font-mono normal-case">({agentList.length})</span>
+            {showAsPlannerGroup && !isTerminal ? 'Planners (council group)' : 'Agents'} <span className="text-ink-500 font-mono normal-case">({(isTerminal && summary?.agents?.length) || agentList.length})</span>
           </div>
           {isTerminal ? (
             <button
@@ -409,7 +413,7 @@ export const SwarmView = memo(function SwarmView() {
               <button
                 onClick={onDrain}
                 disabled={busy || !canStop}
-                className="text-xs px-2 py-1 rounded bg-amber-700 hover:bg-amber-600 disabled:bg-ink-600 disabled:cursor-not-allowed"
+                className="text-xs px-2 py-1 rounded bg-amber-700 hover:bg-amber-600 text-amber-100 font-medium transition-colors disabled:bg-ink-600 disabled:text-ink-300 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-ink-800"
                 title="Soft stop: workers finish their current claim, then swarm exits. Up to 3 min. Preserves in-flight commits. (Discussion presets: same as Stop — no in-flight work to preserve.)"
               >
                 Drain & Stop
@@ -417,7 +421,7 @@ export const SwarmView = memo(function SwarmView() {
               <button
                 onClick={onStop}
                 disabled={busy || !canStop}
-                className="text-xs px-2 py-1 rounded bg-red-700 hover:bg-red-600 disabled:bg-ink-600 disabled:cursor-not-allowed"
+                className="text-xs px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-red-100 font-medium transition-colors disabled:bg-ink-600 disabled:text-ink-300 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-ink-800"
                 title="Hard stop: aborts every in-flight prompt immediately and kills all opencode processes. Worker mid-commit loses its work. Use to escalate during a stuck Drain."
               >
                 Stop
@@ -425,12 +429,10 @@ export const SwarmView = memo(function SwarmView() {
             </div>
           )}
         </div>
-        {isHybrid && (
+        {isHybrid && !isTerminal && (
           <>
-            {/* Always show the council as planner boxed for hybrid (replaces blackboard planner).
-                Number (typically 3 for council) made dependent on user-provided agentCount param at swarm start (min 3, or from config).
-                Always use synthetic here (real planning agents may not persist into exec phase; avoid picking blackboard's index-1 as "planner").
-                This ensures correct 3 boxed 'planner' + the execution agents (workers+auditor) shown in displayAgents. */}
+            {/* Show the council as planner boxed for hybrid only while active (replaces blackboard planner).
+                On terminal runs we show final stats instead (see below). */}
             <div className="border border-violet-600/60 rounded p-1 mb-2 bg-ink-900/30">
               <div className="text-[9px] uppercase tracking-wider text-violet-300 mb-1 px-1">planner (council 3 agents collectively)</div>
               {(() => {
@@ -459,8 +461,8 @@ export const SwarmView = memo(function SwarmView() {
         ))}
         {/* If hybrid and no live execution agents yet (e.g. still in planning phase or early), show synthetic execution agents based on the user-provided agentCount at start.
             This ensures the sidebar always shows the full team: 3 (or N) planners boxed + the expected workers + auditor.
-            When execution agents populate via WS/status, displayAgents will show the real ones instead. */}
-        {isHybrid && displayAgents.length === 0 && (() => {
+            Shown only for active runs. For finished, SidebarSummaryAgents below shows the real final stats. */}
+        {isHybrid && !isTerminal && displayAgents.length === 0 && (() => {
           // Show synthetic execution agents when live ones not yet populated (e.g. still in planning phase).
           // Number based on user-provided agentCount at start + dedicatedAuditor.
           // E.g. agentCount=4 + dedicated => execCount ~4 (3 workers +1 auditor)
@@ -481,17 +483,12 @@ export const SwarmView = memo(function SwarmView() {
             );
           });
         })()}
-        {/* For finished runs (length==0 after kill), show summary for stats.
-            For hybrid, also show summary on terminal so execution agents' details (runs/fails, commits, lines etc) are shown, even if live length==0.
-            This prevents "No agents yet." inappropriately during hybrid runtime or finished without live list. */}
+        {/* For finished runs show real final stats from summary (hybrid groups council 1-3 under "planner").
+            The guard below prevents showing summary during active hybrid (live list can be 0 due to filter/synthetics). */}
         {(() => {
-          const showSummary = agentList.length === 0 && !(isHybrid && !hasTerminalSummary && displayAgents.length === 0);
+          const showSummary = (hasTerminalSummary || agentList.length === 0) && !(isHybrid && !hasTerminalSummary);
           return showSummary ? <SidebarSummaryAgents /> : null;
         })()}
-        {/* Note: removed duplicate synthetic block for finished hybrid (length==0 case).
-            The main isHybrid boxed above already covers synthetic 3 council planners for finished runs.
-            When finished, SidebarSummaryAgents (below) will show the execution agents' detailed stats (runs/fails, commits, lines +/- etc).
-            This prevents duplicate/wrong agents like extra 3 planners + only 3 finished instead of 4. */}
       </aside>
       <section className="flex-1 flex flex-col min-h-0 overflow-hidden">
         <ProgressBar />
@@ -659,6 +656,7 @@ interface TabButtonProps {
 function SidebarSummaryAgents() {
   const summary = useSwarm((s) => s.summary);
   const cfg = useSwarm((s) => s.runConfig);
+  const isHybridFinished = !!(cfg?.useHybridPlanning || cfg?.planningPreset);
   if (!summary || summary.agents.length === 0) {
     return <div className="text-xs text-ink-400">No agents yet.</div>;
   }
@@ -668,7 +666,12 @@ function SidebarSummaryAgents() {
         Final agent stats
       </div>
       {summary.agents.map((a, idx) => {
-        const role = cfg ? roleForRow(cfg.preset, a.agentIndex, summary.agents.length) : "agent";
+        let role = cfg ? roleForRow(cfg.preset, a.agentIndex, summary.agents.length) : "agent";
+        // For finished hybrid: council planning agents (typically indices 1-3) should show as grouped "planner"
+        // not as individual "drafter" from the council preset phase.
+        if (isHybridFinished && (a.agentIndex || 0) >= 1 && (a.agentIndex || 0) <= 3) {
+          role = "planner";
+        }
         const lines = (a.linesAdded ?? 0) + (a.linesRemoved ?? 0);
         return (
           <div key={a.agentId || `agent-${a.agentIndex || idx}`} className="rounded border border-ink-700 bg-ink-800/50 p-2 text-xs">

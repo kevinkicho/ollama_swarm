@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-07-04 (UI state race fixes + singleton vs provider guards + self-upgrader safe recording + comprehensive agent lessons in STATUS; full pre-commit verify + push)
+**Last updated:** 2026-07-05 (hybrid autonomous exec reliability + Windows dev Ctrl+C shutdown + refined hybrid UI guards + stop button styles + transcript fixes; full verify-ci + pre-push clean)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -24,7 +24,10 @@ The app is a **Brain-as-OS for concurrent swarm orchestration**:
 - **Brain during live runs (FAB + chat + suggest)**: Floating fixed 🧠 "Brain" pill (bottom-right in SystemWrapper, shown for active runs) opens modal running `BrainStartChat` with runContext (transcript summary via formatServerSummary + board todos + phase + cfg). Chat uses `/brain/chat` (with runContext prompt augmentation). History saved per-run via store + `/brain/chat-history` + RunStatePersister + summary recovery. `/brain/suggest` calls `brainService.injectSuggestion` which appends system + emits `brain_suggestion` transcript kind (rendered in MessageBubble). Proactive inject wired in Council stuck cycles + adaptive watchdog stalls.
 - **Concurrent multi-swarm support**: multiple independent runs in parallel (`/runs/:runId` routing, ActiveRunsPanel, per-run WebSocket/REST, concurrency cap). Brain and UI manage them at system level.
 - **System UI**: `SystemWrapper` with persistent sidebar, floating Brain FAB, BrainProposalsPanel, BrainActivityPanel, SystemStatus, PatchMonitor, RunQueue, topbar stats/health. Transcript filter defaults to "key" (avoids information bombardment).
-- **Recent major UI work**: full viewport layout hardening, sticky elements, scrolling fixes; dedicated Brain chat + suggest flow.
+- **Recent major UI work**: full viewport layout hardening, sticky elements, scrolling fixes; dedicated Brain chat + suggest flow. 
+  - Hybrid: PipelineRunner no longer forces premature "completed" + kill + run_finished for blackboard rounds=0 exec phase (lets autonomous blackboard drive terminal + summary). Client `prematureHybridFinished` guard + transcript agent-0 filter keep stop buttons, planner box, and execution agents correct during live hybrid. Drain/Stop buttons now have explicit text colors, `font-medium`, `transition-colors`, focus rings.
+  - Windows dev: `npm run dev` Ctrl+C now reliable (readline fallback for npm/PowerShell, sync taskkill, explicit kill-port on 8243/8244).
+  - Transcript: virtual list now reliably draws all items (rangeExtractor with scroll+tail, mounted force-measure, tuned estimates + ITEM_GAP_PX=6).
 - **12 presets** with the existing write-mode story (blackboard native writes; others opt-in via `writeMode`).
 
 **12 swarm presets** (blackboard + 10 discussion/pipeline variants + baseline). Opt-in write capability for discussion presets:
