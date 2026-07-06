@@ -580,7 +580,10 @@ export class Orchestrator {
                     contract: sum.contract,
                     summary: sum,
                     runId,
-                    runConfig: rc ? { ...rc, clonePath: cp } as any : undefined,
+                    runConfig: rc ? { 
+                      ...rc, 
+                      clonePath: cp,
+                    } as any : undefined,
                     runStartedAt: sum.startedAt,
                     wallClockMs: typeof sum.wallClockMs === "number" ? sum.wallClockMs : undefined,
                     endedAt: typeof sum.endedAt === "number" ? sum.endedAt : undefined,
@@ -689,7 +692,7 @@ export class Orchestrator {
     //   - cap hit → cap:xxx (terminal but not failed)
     //   - no-progress / partial → stopped with detail
     //   - hard kill / server death mid-run (no finally) → crashed / failed
-    //   - hybrid planning phase fail → failed (explicit in PipelineRunner)
+    //   - planning phase fail → failed
     //   - sub phase in pipeline interrupted → crashed if no final main summary
     // This ensures /status and per-run views report the real end state and hide
     // ineffective stop/drain buttons.
@@ -737,13 +740,13 @@ export class Orchestrator {
     // Post-sum abrupt termination detection for hard kills (no graceful stop/catch/finally).
     // If after all recovery we still have a non-terminal phase for a run that is not
     // currently active in memory, it means the process died (e.g. user killed server
-    // to stop a stuck hybrid run when UI stop buttons were missing).
+    // to stop a stuck run when UI stop buttons were missing).
     // Never let it stay "completed" or a mid-phase like "executing"/"planning".
     const terminalPhases = ["completed", "stopped", "failed"];
     if (!terminalPhases.includes(effectivePhase as any)) {
       effectivePhase = "failed";
     } else if (effectivePhase === "completed" && snap && !terminalPhases.includes(snap.phase as any)) {
-      // Spurious "completed" from a sub-phase summary (e.g. planning phase in hybrid wrote
+      // Spurious "completed" from a sub-phase summary (e.g. planning phase wrote
       // its "completed", but main execution was hard-killed before final write).
       // Last snap shows non-terminal → treat as crashed/failed.
       effectivePhase = "failed";
@@ -1027,11 +1030,6 @@ export class Orchestrator {
       getRunner: () => runHolder.runner!,
       hub: runHub,
     };
-    const isHybridRequest = !!(cfg.useHybridPlanning && cfg.planningPreset && cfg.executionPreset);
-    this.log.info('buildRunner called', { runId, preset: cfg.preset, isHybridRequest, planningPreset: cfg.planningPreset, executionPreset: cfg.executionPreset });
-    if (isHybridRequest) {
-      this.log.info('hybrid top level detected, will use PipelineRunner');
-    }
     const runner = await this.buildRunner(cfg.preset, cfg, buildCtx);
     runHolder.runner = runner;
     // Task #125: tag every Ollama call made during this run with its
@@ -1132,9 +1130,7 @@ export class Orchestrator {
     const trimmedDirective = cfg.userDirective?.trim();
     this.setupConformanceAndDriftMonitors(activeRun, runId, trimmedDirective, cfg);
     // Start the runner asynchronously (fire-and-forget) so the /start response returns the runId
-    // immediately. This fixes long delays (30s+) for hybrid/council planning before the view switches
-    // to run-layer. The run executes in background; completion/errors handled inside runner (finally, catch).
-    // For hybrid, this means the client sees the run page right away while council planning + blackboard proceeds.
+    // immediately. The run executes in background; completion/errors handled inside runner (finally, catch).
     void (async () => {
       try {
         await runner.start(cfg);
@@ -1143,11 +1139,10 @@ export class Orchestrator {
         }
       } catch (err) {
         const rid = (typeof runId === 'string' ? runId : 'unknown');
-        this.log.error('start inner failure for hybrid or run', {
+        this.log.error('start inner failure for run', {
           runId: rid,
           error: err instanceof Error ? err.message : String(err),
           stack: err instanceof Error ? err.stack : undefined,
-          isHybrid: !!(cfg.useHybridPlanning && cfg.planningPreset && cfg.executionPreset),
         });
         try {
           await activeRun.stop();
@@ -1483,11 +1478,6 @@ export class Orchestrator {
 
     const { createRunner } = await import("../swarm/presetRouter.js");
 
-    // Hybrid planning + execution via dedicated pipeline (sequencing only; no phase guards).
-    if (cfg.useHybridPlanning && cfg.planningPreset && cfg.executionPreset) {
-      return this.createHybridPipelineRunner(cfg, originalCfg, opts, ctx);
-    }
-
     switch (preset) {
       // Special cases: role-diff → RoundRobin with custom roles
       case "role-diff": {
@@ -1513,56 +1503,6 @@ export class Orchestrator {
   }
 
   /**
-   * Hybrid planning+execution via PipelineRunner sequencing.
-   * planningPreset (e.g. council) then executionPreset (e.g. blackboard, rounds=0).
-   * Phase state/guards removed (Phase 9/10); hybrid is transparent orchestration.
-   */
-  private createHybridPipelineRunner(
-    cfg: RunConfig,
-    originalCfg: RunConfig,
-    opts: RunnerOpts,
-    ctx: BuildRunnerContext
-  ) {
-    this.log.info('creating hybrid PipelineRunner', {
-      runId: ctx.runId,
-      planningPreset: cfg.planningPreset,
-      executionPreset: cfg.executionPreset,
-      topPreset: cfg.preset,
-    });
-
-    const hybridPipeline = {
-      phases: [
-        {
-          preset: cfg.planningPreset as PresetId,
-          rounds: cfg.rounds ?? 3,
-          agentCount: cfg.agentCount ?? 5,
-          model: cfg.model,
-        },
-        {
-          preset: cfg.executionPreset as PresetId,
-          rounds: 0,
-          agentCount: cfg.agentCount ?? 5,
-          model: cfg.model,
-        },
-      ],
-      pipeMode: "both" as const,
-      pipeMaxEntries: 30,
-    };
-    // Attach pipeline to both cfgs for the top-level runner.start.
-    originalCfg.pipeline = hybridPipeline;
-    cfg.pipeline = hybridPipeline;
-
-    // Subs get plain config + the pipeline def. No extra hybridContext or phase state.
-    const makePhaseCfg = (base: any, phasePreset: PresetId) => ({
-      ...base,
-      preset: phasePreset,
-      pipeline: hybridPipeline,
-    });
-    const factory = async (p: PresetId) => this.buildRunner(p, makePhaseCfg(cfg, p), ctx);
-    return new PipelineRunner(opts, factory);
-  }
-
-  /**
    * Extracted runner opts builder (deeper refactor slice for orchestrator).
    * Centralizes common wiring (amendments, brain guard, logging) so buildRunner
    * and callers stay lean. Supports future per-preset overrides.
@@ -1580,7 +1520,7 @@ export class Orchestrator {
       logDiag: this.opts.logDiag,
       ollamaBaseUrl: this.opts.ollamaBaseUrl,
       getAmendments: () => this.amendments.list(runId),
-      // Brain enablement controlled only by enableBrainAnalysis (no hybrid phase guards).
+      // Brain enablement controlled only by enableBrainAnalysis.
       getBrainService: (cfg.enableBrainAnalysis === false)
         ? () => null
         : () => this.brain.getService(),

@@ -232,12 +232,6 @@ export const StartBody = z.object({
   moaProposerModel: z.string().trim().min(1).max(200).optional(),
   moaAggregatorModel: z.string().trim().min(1).max(200).optional(),
 
-  // Hybrid planning + execution (suggestion #1 and #3)
-  // Use a broad-understanding preset (e.g. council) for initial planning,
-  // then pipe the deliverable/plan into blackboard for safe execution.
-  planningPreset: z.string().optional(), // e.g. "council"
-  executionPreset: z.string().optional(), // e.g. "blackboard"
-  useHybridPlanning: z.boolean().optional(),
   // T196 + T199 (2026-05-04): per-tier model arrays + extras for the
   // open-weights-parallelism value prop. Each is opt-in, falls back
   // to cfg.model when absent.

@@ -23,7 +23,7 @@
 //   → phase "failed", treat as "crashed"
 // - Cap (wall etc): "cap:xxx" (terminal, not failed)
 // - Planner gave up (0 activity + unmet): "no-progress"
-// - Hybrid first-phase (planning) fail: explicit "failed" in PipelineRunner
+// - First-phase fail in composite runs: explicit "failed" in PipelineRunner
 // - Sub-phase interrupt in pipeline without final main write: load-time "failed" / "crashed"
 //
 // finalGitStatus is capped at FINAL_GIT_STATUS_MAX chars so a pathological
@@ -187,7 +187,7 @@ export interface RunSummary {
   // V2 reducer snapshot at run end. Blackboard-only. After cutover
   // Phase 1a (2026-04-28), divergence tracking is gone — the field
   // now records the reducer's final phase + pause state for forward
-  // First-class hybrid/composite phase support (Phase 1 data model).
+  // Composite phase support notes (legacy).
   currentPhase?: {
     index: number;
     preset: string;
@@ -201,10 +201,6 @@ export interface RunSummary {
     endedAt?: number;
     deliverable?: string;
   }>;
-  // Legacy hybrid flags (present on old persisted summaries only)
-  useHybridPlanning?: boolean;
-  planningPreset?: string;
-  executionPreset?: string;
   // compat with Phase 1b (UI-driven by V2 phase). Optional for
   // back-compat with summaries written before this field landed.
   v2State?: {

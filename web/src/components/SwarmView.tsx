@@ -1,6 +1,6 @@
-import { memo, useEffect, useState, Fragment } from "react";
+import { memo, useEffect, useState, useMemo, Fragment } from "react";
 import { useSwarm } from "../state/store";
-// Phase 10: all hybrid guards removed. No more special hybrid UI logic.
+// Phase 10: previous special composite/phase guards removed.
 import { AgentPanel } from "./AgentPanel";
 import { useNavigate } from "react-router-dom";
 import { BoardView } from "./BoardView";
@@ -20,7 +20,6 @@ import { TranscriptTimeline } from "./TranscriptTimeline";
 import { PlanningTab } from "./PlanningTab";
 import { OutcomeChip } from "./OutcomeChip";
 import { fmtMs, roleForRow } from "./RunHistory";
-import { getSidebarAgentTitle } from "../state/HybridStateHelper";
 
 
 type Tab =
@@ -51,7 +50,7 @@ export const SwarmView = memo(function SwarmView() {
   const [tab, setTab] = useState<Tab>("transcript");
 
   // React-scan auto in key live-run tabs (transcript, metrics, board) when ?scan=1 or #scan or window enable called.
-  // Helps diagnose re-renders during hybrid/blackboard runs without manual button every time.
+  // Helps diagnose re-renders during long runs (e.g. blackboard) without manual button every time.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
@@ -91,22 +90,32 @@ export const SwarmView = memo(function SwarmView() {
     : "/api/swarm/say";
   const summary = useSwarm((s) => s.summary);
   const transcript = useSwarm((s) => s.transcript);
+  const streamingCount = useSwarm((s) => Object.keys(s.streaming).length);
   const agentList = Object.values(agents).sort((a, b) => a.index - b.index);
 
-  // Transcript (and everything) shows the full run content. No special hybrid or phase suppression.
-  const hasTerminalSummary = !!summary && (
-    !!summary.stopReason ||
-    typeof summary.endedAt === 'number' ||
-    typeof summary.wallClockMs === 'number' ||
-    (Array.isArray((summary as any).agents) && (summary as any).agents.length > 0)
-  );
-  const hasRunFinishedEntry = transcript.some((e: any) => e.summary?.kind === 'run_finished' || (e.text || '').includes('Run finished'));
+  // Transcript (and everything) shows the full run content.
+  const hasTerminalRunFinished = (() => {
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      const e = transcript[i];
+      const isFin = e.summary?.kind === 'run_finished' || (e.text || '').includes('Run finished');
+      if (isFin) {
+        const after = transcript.slice(i + 1);
+        const hasLaterPhaseStart = after.some(l => /\[Pipeline\].*Starting phase|Starting phase \d+/i.test(l.text || ''));
+        return !hasLaterPhaseStart;
+      }
+    }
+    return false;
+  })();
+  const hasTerminalSummary = !!summary && !!summary.stopReason;
   const terminalPhase = ['completed','stopped','failed'].includes(phase);
-  const isTerminal = (hasTerminalSummary || hasRunFinishedEntry || terminalPhase);
+  const isLiveActivity = streamingCount > 0 || (phase !== 'idle' && phase !== 'stopped' && phase !== 'completed' && phase !== 'failed');
+  const isTerminal = hasTerminalSummary || hasTerminalRunFinished || (terminalPhase && !isLiveActivity);
 
-  // Always show all agents. No hybrid filtering.
+  // Always show the agents reported by the active runner (delegated by PipelineRunner for composite presets).
+  // Transparent sequencing means the current phase's runner (council or blackboard) provides the agent list.
+  // No blanket index-0 filter (prevents incorrect hiding of brain during exec phase or wrong agents during planning).
   const displayAgents = agentList;
-  // Capability-driven tabs: only based on preset or actual data presence. No hybrid special case.
+  // Capability-driven tabs: only based on preset or actual data presence.
   const hasBoardCapability = !cfg || cfg.preset === "blackboard" || !!(summary as any)?.board || (Array.isArray((summary as any)?.todos) && (summary as any).todos.length > 0);
   const showBlackboardTabs = hasBoardCapability;
   const showMemoryTab = hasBoardCapability;
@@ -277,7 +286,8 @@ export const SwarmView = memo(function SwarmView() {
   };
 
   // Show stop/drain controls for any run that has not yet reached a terminal phase.
-  const canStop = phase !== "stopping" && phase !== "stopped" && phase !== "failed" && phase !== "completed";
+  // isTerminal logic accounts for composite runs with sub phases.
+  const canStop = !isTerminal && phase !== "stopping";
 
   // Per-preset role labels. Each preset has its own spawn contract:
   //   - blackboard: agent-1=planner, mid=workers, N+1=auditor (Unit 58)
@@ -376,7 +386,7 @@ export const SwarmView = memo(function SwarmView() {
       <aside className="w-[280px] shrink-0 border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800">
         <div className="flex items-center justify-between mb-2">
           <div className="text-xs uppercase tracking-wide text-ink-400">
-            {getSidebarAgentTitle(false, isTerminal, summary?.agents?.length || 0, agentList.length)}
+            Agents ({agentList.length})
           </div>
           {isTerminal ? (
             <button
@@ -411,7 +421,8 @@ export const SwarmView = memo(function SwarmView() {
             </div>
           )}
         </div>
-        {/* Phase 10: no hybrid guards. Always render the agents from the run (full list, no synthetic planner/exec boxes). */}
+        {/* Always render live agents (populated via agent_state events from current runner).
+            For just-started runs before first spawn, list may be empty temporarily. */}
         {displayAgents.map((a) => (
           <AgentPanel
             key={a.id}
@@ -422,11 +433,9 @@ export const SwarmView = memo(function SwarmView() {
             tag={agentTag(a.index)}
           />
         ))}
-        {/* Always show summary for finished or empty agent list. No hybrid special casing. */}
-        {(() => {
-          const showSummary = (hasTerminalSummary || agentList.length === 0);
-          return showSummary ? <SidebarSummaryAgents /> : null;
-        })()}
+        {/* Only show historical summary agents for truly finished runs (has summary with stopReason etc).
+            Do not hide live agent area just because list temporarily empty. */}
+        {hasTerminalSummary ? <SidebarSummaryAgents /> : null}
       </aside>
       <section className="flex-1 flex flex-col min-h-0 overflow-hidden">
         <ProgressBar />
@@ -594,7 +603,7 @@ interface TabButtonProps {
 function SidebarSummaryAgents() {
   const summary = useSwarm((s) => s.summary);
   const cfg = useSwarm((s) => s.runConfig);
-  // Phase 10: no hybridInfo. No special finished hybrid remapping.
+  // Phase 10: no special finished remapping.
   if (!summary || summary.agents.length === 0) {
     return <div className="text-xs text-ink-400">No agents yet.</div>;
   }
@@ -605,7 +614,7 @@ function SidebarSummaryAgents() {
       </div>
       {summary.agents.map((a, idx) => {
         let role = cfg ? roleForRow(cfg.preset, a.agentIndex, summary.agents.length) : "agent";
-        // Phase 10: no hybrid remapping of roles.
+        // Phase 10: no special remapping of roles.
         const lines = (a.linesAdded ?? 0) + (a.linesRemoved ?? 0);
         return (
           <div key={a.agentId || `agent-${a.agentIndex || idx}`} className="rounded border border-ink-700 bg-ink-800/50 p-2 text-xs">

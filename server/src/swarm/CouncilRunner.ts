@@ -418,7 +418,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
             const rid = this.active?.runId || 'current-run';
             brain.injectSuggestion(rid, {
               title: `Council stuck after ${this.stuckCycleCount} cycles`,
-              text: 'Suggestion: consider amending directive or using hybrid planning for this run.',
+              text: 'Suggestion: consider amending directive or trying a different preset (e.g. pipeline for chaining).',
               category: 'recommendation',
             });
           }

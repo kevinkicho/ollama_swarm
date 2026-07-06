@@ -142,11 +142,6 @@ export interface SwarmStatusRunConfig {
   // so the SetupForm bar + advanced panels can re-hydrate on refresh / review.
   wallClockCapMin?: string;
   ambitionTiers?: string;
-  // Hybrid planning/execution (orchestrated transparently via PipelineRunner).
-  // No phase state (currentPhase/phases/hybridContext) on config anymore.
-  useHybridPlanning?: boolean;
-  planningPreset?: string;
-  executionPreset?: string;
 }
 
 export interface SwarmStatusBoard {

@@ -26,7 +26,7 @@ export const Transcript = memo(function Transcript() {
   // Phase 10 + transcript normal view: default to "all" so the transcript shows the full unfiltered log
   // (planning + execution content, system messages, agent output, brain activity, etc.) like a normal chat.
   // "key" is still available via the bar for users who want high-signal only (avoids bombardment).
-  // No more default "key" guard that hid most activity on live runs (including hybrid planning chatter).
+  // No more default "key" guard that hid most activity on live runs (including planning chatter).
   const [filter, setFilter] = useState<"all" | "key" | "system" | "agents" | "audit" | "issues">("all");
 
   // Single source for inter-item gap (used only in virtual wrapper for stability).
@@ -76,6 +76,7 @@ export const Transcript = memo(function Transcript() {
   const userScrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isLiveRef = useRef(true);
   const initialSizeSettledRef = useRef(false);
+  const lastMeasureRef = useRef(0);
   // Track all mounted item elements so we can force re-measure on updates/resize
   // to ensure no items stay "hidden" due to stale estimates. This helps with
   // the "not drawn until resize" symptom.
@@ -261,6 +262,11 @@ export const Transcript = memo(function Transcript() {
       return 100 + lines * 18 + (tlen > 1000 ? 500 : 0) + (tlen > 3000 ? 800 : 0) + (tlen > 6000 ? 1100 : 0);
     }
     const kind = e.summary?.kind || '';
+    if (e.text && e.text.startsWith('▸▸RUN-START▸▸')) {
+      // The rich divider renders multiple lines (New run + meta row + models + repo).
+      // Over-estimate a bit so following items don't get shifted into wrong virtual range (wide gaps).
+      return 140;
+    }
     if (kind === "agents_ready") {
       // Agents ready can be small (closed) or tall (details table open). Over-estimate to avoid hiding/stagger.
       const n = (e.summary as any)?.agents?.length ?? 5;
@@ -296,8 +302,10 @@ export const Transcript = memo(function Transcript() {
       // Conservative small estimate here + immediate measure() keeps positions accurate and items drawn.
       if (e.role === 'system') {
         // Slightly more generous for system to avoid under-estimate causing stagger/overlap on long wrapped lines.
-        const approxLines = Math.min(8, Math.max(1, Math.ceil(textLen / 45)));
-        return 30 + approxLines * 14;
+        // RUN-START divider and short [Pipeline] lines are ~1-3 lines; give headroom so following items' positions
+        // don't start too low (source of "wide gaps" where content exists but virtual items are placed off-range).
+        const approxLines = Math.min(6, Math.max(1, Math.ceil(textLen / 38)));
+        return 36 + approxLines * 15;
       }
       const lines = Math.max(2, Math.ceil(textLen / 22));
       const base = 55;
@@ -317,7 +325,7 @@ export const Transcript = memo(function Transcript() {
     getScrollElement,
     getItemKey,
     estimateSize,
-    overscan: 150,
+    overscan: 300,
     // Force a much wider render range around the current view.
     // This guarantees that items whose positions are temporarily off (due to estimate variance on dynamic content)
     // are still rendered in the DOM instead of being culled as "offscreen".
@@ -327,22 +335,27 @@ export const Transcript = memo(function Transcript() {
       // + last N items. This guarantees "in between" messages get their DOM nodes created and measured,
       // even if estimates are temporarily wrong (causing library range to miss them).
       // This is the main fix for "not drawn until resize" (resize changes scroll/client dims, forcing re-calc that includes them).
-      const extra = 200;
+      const extra = 400;
       let start = Math.max(0, range.startIndex - extra);
       let end = Math.min(filteredTranscript.length - 1, range.endIndex + extra);
 
-      // Approximate visible indices from current scroll (to catch cases where estimate error made the library's range wrong).
       const sc = scrollRef.current;
-      const avg = 50; // rough avg item height
+      const avg = 42; // rough avg item height tuned lower for system/agent short lines
       if (sc) {
-        const approxStart = Math.max(0, Math.floor(sc.scrollTop / avg) - 100);
-        const approxEnd = Math.min(filteredTranscript.length - 1, Math.floor((sc.scrollTop + sc.clientHeight) / avg) + 100);
+        const approxStart = Math.max(0, Math.floor(sc.scrollTop / avg) - 150);
+        const approxEnd = Math.min(filteredTranscript.length - 1, Math.floor((sc.scrollTop + sc.clientHeight) / avg) + 150);
         start = Math.min(start, approxStart);
         end = Math.max(end, approxEnd);
       }
 
+      // If near the top of transcript (common for seeing start message + early content), force-include from 0
+      // so early system msgs (RUN-START, [Pipeline]...) and first agent outputs are never dropped by estimate drift.
+      if (sc && sc.scrollTop < 400) {
+        start = 0;
+      }
+
       // Always include the most recent items (live chat growth, new system messages, hunks).
-      const tail = Math.max(0, filteredTranscript.length - 50);
+      const tail = Math.max(0, filteredTranscript.length - 80);
       start = Math.min(start, tail);
       end = Math.max(end, filteredTranscript.length - 1);
 
@@ -369,18 +382,23 @@ export const Transcript = memo(function Transcript() {
     const t1 = setTimeout(() => {
       doMeasure();
       mountedItemsRef.current.forEach((el) => virtualizer.measureElement(el));
-    }, 80);
+      // Force top items specifically so RUN-START + first pipeline msg get correct size immediately.
+      for (let i = 0; i < Math.min(6, filteredTranscript.length); i++) {
+        const el = mountedItemsRef.current.get(i);
+        if (el) try { virtualizer.measureElement(el); } catch {}
+      }
+    }, 60);
     const t2 = setTimeout(() => {
       doMeasure();
       mountedItemsRef.current.forEach((el) => virtualizer.measureElement(el));
-    }, 220);
+    }, 160);
     const t3 = setTimeout(() => {
       doMeasure();
       mountedItemsRef.current.forEach((el) => virtualizer.measureElement(el));
-    }, 480);
+    }, 380);
 
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
-  }, []);
+  }, [filteredTranscript.length]);
 
   // Re-measure when filter changes (different subset of items with potentially different
   // height profiles; prevents stale size cache causing gaps or staggered layout in agents/key filters).
@@ -521,31 +539,37 @@ export const Transcript = memo(function Transcript() {
       });
     }
 
-    // Always re-measure on new content for live to prevent estimate error accumulation over time
-    // (which causes big gaps or staggering/stacking as more messages arrive).
-    // Extra passes + timeouts to force measurement of items that might otherwise stay "hidden"
-    // due to initial estimate error (revealed only on resize/redraw).
+    // Re-measure on new content for live, but throttled to reduce flicker/jitter from
+    // over-measuring on every single append (common in council and long runs with high message volume).
     if (live && v) {
-      // Force broad measurement on live content changes (appends from streaming, new system messages, hunks).
-      // Multiple passes because complex content (JSON diffs, tables, wrapped text) takes time to lay out.
+      const now = Date.now();
+      if (now - (lastMeasureRef.current || 0) > 60) {  // tighter throttle for faster correction of gaps on bursty runs
+        lastMeasureRef.current = now;
+        requestAnimationFrame(() => v.measure());
+        mountedItemsRef.current.forEach((el) => v.measureElement(el));
+      }
+    }
+
+    // Explicitly force-measure the first few items on every length change. This keeps the
+    // top-of-transcript (RUN-START divider, first [Pipeline] and early agent msgs) heights accurate
+    // so subsequent virtual positions don't drift and create wide gaps hiding later content.
+    if (v) {
+      const topN = Math.min(10, filteredTranscript.length);
+      for (let i = 0; i < topN; i++) {
+        const el = mountedItemsRef.current.get(i);
+        if (el && el.isConnected) {
+          try { v.measureElement(el); } catch {}
+        }
+      }
+      // Also a full measure pass (cheap after topN)
       requestAnimationFrame(() => v.measure());
-      mountedItemsRef.current.forEach((el) => {
-        v.measureElement(el);
-        requestAnimationFrame(() => v.measureElement(el));
-      });
-      // Extra delayed passes to catch reflows.
-      setTimeout(() => {
-        v.measure();
-        mountedItemsRef.current.forEach((el) => v.measureElement(el));
-      }, 30);
-      setTimeout(() => {
-        v.measure();
-        mountedItemsRef.current.forEach((el) => v.measureElement(el));
-      }, 120);
-      setTimeout(() => {
-        v.measure();
-        mountedItemsRef.current.forEach((el) => v.measureElement(el));
-      }, 350);
+      // Extra for heavy transcripts: measure a few more items to reduce gaps in middle.
+      for (let i = topN; i < Math.min(topN + 5, filteredTranscript.length); i++) {
+        const el = mountedItemsRef.current.get(i);
+        if (el && el.isConnected) {
+          try { v.measureElement(el); } catch {}
+        }
+      }
     }
 
     // Use the ref for at-bottom check (updated live in onScroll without causing re-renders).
@@ -563,7 +587,7 @@ export const Transcript = memo(function Transcript() {
         endRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
       });
     }
-  }, [filteredTranscript.length, streamingCount, phase]);
+  }, [filteredTranscript.length, streamingCount]);
 
   // After filter change re-measure for the new set of items (different heights).
   // This is user-initiated so a one-time layout adjustment on filter is acceptable.

@@ -120,13 +120,6 @@ export interface RunConfig {
    */
   requireAuditorVerification?: boolean;
 
-  // Hybrid planning + execution support (orchestrated via PipelineRunner)
-  // useHybridPlanning + planningPreset + executionPreset trigger council -> blackboard sequencing.
-  // No hybridPhase / currentPhase / phases state on config (emitters removed Phase 9/10).
-  useHybridPlanning?: boolean;
-  planningPreset?: string;
-  executionPreset?: string;
-
   /**
    * Task #124: optional per-run hard cap on total tokens consumed
    * (prompt + response). When set, the runner polls the proxy-backed

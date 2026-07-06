@@ -470,10 +470,7 @@ export function buildRunFinishedSummary(summary: RunSummary): TranscriptEntrySum
     // Phase 1: carry composite phase data (additive)
     ...( (summary as any).currentPhase ? { currentPhase: (summary as any).currentPhase } : {} ),
     ...( (summary as any).phases ? { phases: (summary as any).phases } : {} ),
-    ...( (summary as any).useHybridPlanning !== undefined ? { useHybridPlanning: (summary as any).useHybridPlanning } : {} ),
-    ...( (summary as any).planningPreset ? { planningPreset: (summary as any).planningPreset } : {} ),
-    ...( (summary as any).executionPreset ? { executionPreset: (summary as any).executionPreset } : {} ),
-    // hybridPhase removed in Phase 9; old summaries migrated via other fields
+    // composite/legacy phase fields removed; old summaries may have extra data
     agents: summary.agents.map((a) => ({
       agentIndex: a.agentIndex,
       role: roleForAgent(summary.preset, a.agentIndex, N),

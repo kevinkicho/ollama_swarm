@@ -2,7 +2,7 @@ import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createSwarmStore } from "./store";
 import { applyEventToStore } from "./applyEvent";
-import { getHybridInfo, shouldIgnoreEarlyTerminal, isHybridRun } from "./HybridStateHelper";
+import { getHybridInfo, shouldIgnoreEarlyTerminal } from "./HybridStateHelper";
 import type { SwarmEvent, AgentState, Todo, Claim, Finding, ExitContract, RunSummary, BoardSnapshot, PheromoneEntry, TranscriptEntry } from "../types";
 
 function freshStore() {
@@ -776,9 +776,10 @@ describe("applyEventToStore", () => {
         store.getState(),
       );
 
-      // resetForNewRun intentionally clears prior-run transcript for clean per-run lifetime;
-      // the divider becomes the (first and only) entry for the new run.
-      assert.equal(store.getState().transcript.length, 1);
+      // Current lighter resetForNewRun (Task #37) keeps prior transcript history
+      // and prepends the divider so the start message is visible at top.
+      // Previous entries + new divider.
+      assert.ok(store.getState().transcript.length >= 2);
       const divider = store.getState().transcript[0];
       assert.equal(divider.role, "system");
       assert.ok(divider.text.includes("RUN-START"));
@@ -899,7 +900,6 @@ describe("applyEventToStore", () => {
       const info = getHybridInfo();
       assert.equal(info.isHybrid, false);
       assert.equal(info.isExecPhase, false);
-      assert.equal(isHybridRun(), false);
       assert.equal(shouldIgnoreEarlyTerminal(), false);
     });
 

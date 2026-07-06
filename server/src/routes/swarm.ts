@@ -359,9 +359,6 @@ export function swarmRouter(orch: Orchestrator): Router {
     (parsed.data as any).reqId = reqId;
     startLog.info('start request received', {
       preset: parsed.data.preset,
-      useHybridPlanning: parsed.data.useHybridPlanning,
-      planningPreset: parsed.data.planningPreset,
-      executionPreset: parsed.data.executionPreset,
     });
     // Task #147: force-restart path. When the caller sets force=true, we
     // pre-emptively stop any existing runner so the new start always gets
@@ -586,9 +583,6 @@ export function swarmRouter(orch: Orchestrator): Router {
         plannerTools: parsed.data.plannerTools,
         webTools: parsed.data.webTools,
         mcpServers: parsed.data.mcpServers,
-        planningPreset: parsed.data.planningPreset,
-        executionPreset: parsed.data.executionPreset,
-        useHybridPlanning: parsed.data.useHybridPlanning,
         useLocal: parsed.data.useLocal,
         createdBy: parsed.data.createdBy,
         resumeContract: parsed.data.resumeContract,
@@ -1026,13 +1020,13 @@ export function swarmRouter(orch: Orchestrator): Router {
     // Try per-run files first (canonical), then summary.json fallback.
     // Use full paths we collected. Sort by basename descending so we prefer
     // the most recently written timestamped summary (the final aggregated one
-    // from PipelineRunner/hybrid) over older per-phase ones. This ensures
+    // from PipelineRunner) over older per-phase ones. This ensures
     // the history view gets the most complete transcript + final run summary.
     let candidates = summaryFilePaths.length > 0 ? [...summaryFilePaths] : ["summary.json"];
     candidates = candidates.sort((a, b) =>
       path.basename(b).localeCompare(path.basename(a))
     );
-    // For hybrid reviews, prefer the outer blackboard summary (has full transcript + execution agents)
+    // Prefer the outer summary (has full transcript + agents)
     // over sub-phase summaries (e.g. council-only with fewer agents).
     let best: { file: string; parsed: any; score: number } | null = null;
     for (const e of candidates) {
@@ -1524,7 +1518,7 @@ CRITICAL: When the user does not know which "swarm mode" / preset to pick:
 - Clearly state: "Recommended Preset: council (or blackboard, map-reduce, etc.)"
 - Give a short supporting analysis: "Because your goal sounds like X (quote user), and council excels at Y while map-reduce is better for Z."
 - Suggest the matching UI filter if relevant: e.g. "Try the Research filter in the Swarm Mode card — it will highlight council + map-reduce + moa."
-- Then output the full config JSON (including any webTools: true, useHybridPlanning, etc. that fit the analysis).
+- Then output the full config JSON (including any webTools: true, etc. that fit the analysis).
 
 When the user gives enough details, output the config **and** a ready-to-run command:
 

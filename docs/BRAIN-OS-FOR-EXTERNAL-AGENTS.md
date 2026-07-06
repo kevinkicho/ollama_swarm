@@ -21,10 +21,10 @@ Brain acts as a librarian / master-admin: it understands use-cases from the tabl
 
 ## Use-Case Tables (source of truth for Brain)
 
-See the hybrid + webTools guidance in README ("Using for Scientific Research & Internet Work") and the full preset matrix in `STATUS.md`. Brain's prompt is built from the shared `server/src/swarm/presetGuide.ts` (no duplication).
+See the webTools guidance in README ("Using for Scientific Research & Internet Work") and the full preset matrix in `STATUS.md`. Brain's prompt is built from the shared `server/src/swarm/presetGuide.ts` (no duplication).
 
 Examples:
-- Research + write artifacts → hybrid council → blackboard + `webTools: true`
+- Research + write artifacts → council (or pipeline preset) + blackboard + `webTools: true`
 - Broad literature scan → `map-reduce`
 - Debate / "should we" → `debate-judge` or `council`
 - Exploration → `stigmergy`

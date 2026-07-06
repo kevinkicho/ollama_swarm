@@ -192,7 +192,10 @@ export const AgentPanel = memo(function AgentPanel({
   const colorBorderCls = color && COLOR_BORDER_CLASS[color]
     ? `${COLOR_BORDER_CLASS[color]} border-l-4`
     : "border-l-ink-700";
-  const isBrain = agent.index === 0;
+  const runConfig = useSwarm((s) => s.runConfig);
+  // Data-driven isBrain: only when the entry explicitly identifies as brain (id/kind/text).
+  const isBrain = agent.id === 'brain' || (agent as any).agentId === 'brain' ||
+    !!(agent as any).isBrain || /brain/i.test((agent.model || '') + ' ' + ((agent as any).role || ''));
   const hue = hueForAgent(agent.index);
   const palette = agentBubblePalette(hue, agent.status === "stopped" || agent.status === "ready", isBrain);
   const glowCls = isThinking ? (isBrain ? "glow-brain" : "glow-active") : agent.status === "retrying" ? "glow-stalled" : agent.status === "failed" ? "glow-error" : "";

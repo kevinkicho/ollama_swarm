@@ -298,7 +298,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       // even when transcript starts empty. When BOTH fire (cross-run +
       // server-side), we get duplicate "New run" cards. Skip the second.
       if (e.role === "system" && e.text.startsWith("▸▸RUN-START▸▸")) {
-        // Dedup RUN-START dividers (hybrid concatenates multiple subs under same runId).
+        // Dedup RUN-START dividers (pipeline concatenates subs under same runId).
         const already = s.transcript.some((t) =>
           t.role === "system" &&
           t.text.startsWith("▸▸RUN-START▸▸") &&
@@ -323,7 +323,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       }
 
       // Dedup the repeated "starting" / seeding messages (memory, design-memory, seed, goal-gen pre-pass).
-      // In hybrid/pipeline (council as planner etc), each phase's buildSeed re-emits the clone-level
+      // In pipeline runs, each phase's buildSeed re-emits the clone-level
       // ones; we keep only the first occurrence. (Server also suppresses for i>0 phases.)
       const seedPrefixes = [
         "Memory: surfaced",
@@ -390,8 +390,18 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         delete nextStreaming[e.agentId];
         delete nextMeta[e.agentId];
       }
-      let finalState = {
-        transcript: [...s.transcript, entryToAdd],
+      let finalTranscript = [...s.transcript, entryToAdd];
+      // Ensure any RUN-START divider is always the very first entry in transcript.
+      // This fixes races where hydrate + WS transcript_append + resetForNewRun + server emit
+      // can cause the divider to land after the initial [Pipeline] message
+      // or other early system lines. The visual "run start message on top" must be guaranteed.
+      const dividerIdx = finalTranscript.findIndex(t => t.role === 'system' && t.text && t.text.startsWith('▸▸RUN-START▸▸'));
+      if (dividerIdx > 0) {
+        const div = finalTranscript[dividerIdx];
+        finalTranscript = [div, ...finalTranscript.filter((_, i) => i !== dividerIdx)];
+      }
+      const finalState: any = {
+        transcript: finalTranscript,
         streaming: nextStreaming,
         streamingMeta: nextMeta,
       };
@@ -648,40 +658,24 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   // is supplied (test rigs, future callers that lack the fields).
   resetForNewRun: (info) =>
     set((s) => {
-      // Step 3: clear prior transcript on new run start for clean data lifetime.
-      // (Previous policy kept history in the live transcript; now we start fresh
-      // for the new run's output. History is available via review mode / run history.)
-      // Fix 2026-04-24 (Kevin caught stigmergy run showing a prior
-      // blackboard contract): resetForNewRun must ALSO clear the
-      // blackboard-specific panels' data (contract + todos + findings
-      // + summary). Otherwise they cross-contaminate — a non-blackboard
-      // run inherits the previous blackboard run's contract, making
-      // the Contract tab show misleading stale data. Cross-run history
-      // lives in the run-history dropdown (task #36), not in the
-      // live tabs.
+      // Lighter reset (Task #37): drop per-run live state (agents, streaming, latency,
+      // blackboard panels, etc.) on run boundary so we don't leak from prior run.
+      // DO NOT clear transcript: preserve hydrated/early messages. Prepend the
+      // RUN-START divider (idempotent via dedup in append) so the start message
+      // is visible at top even on WS re-delivery for live runs.
+      // This fixes lost initial messages and "start run message not showing".
       const blackboardReset: Partial<SwarmStore> = {
         contract: undefined,
         todos: {},
         findings: [],
         summary: undefined,
-        // Phase 2a: stigmergy pheromone table is also preset-specific
-        // state that shouldn't leak across runs. Cleared here too.
         pheromones: {},
-        // Phase 2d: map-reduce slice assignments — same cross-run
-        // leak category; cleared on new-run boundary.
         mapperSlices: {},
         outcome: undefined,
-        // Task #189: clear stale topbar error when a new run starts.
-        // A failed prior run's "blackboard run failed: …" banner
-        // shouldn't ride along into the new run's session — if the
-        // new run hits its own error, the server will set a fresh one.
         error: undefined,
         brainChatHistory: [],
         useCaseFilters: [],
-        transcript: [],  // explicit clear for step 3
       };
-      // Build the divider text. Since we cleared transcript above for clean
-      // data lifetime (step 3), this will be the first entry for the new run.
       const text = info
         ? [
             "▸▸RUN-START▸▸",
@@ -693,6 +687,23 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
             `repoUrl=${info.repoUrl ?? ""}`,
           ].join("|")
         : "— new run started —";
+      const divider = {
+        id: `divider-${Date.now()}`,
+        role: "system" as const,
+        text,
+        ts: Date.now(),
+      };
+      // Prepend only if not already starting with a divider for this runId (dedup similar to append).
+      const first = s.transcript[0];
+      const already = first && first.text && first.text.startsWith("▸▸RUN-START▸▸") &&
+        (first.text.match(/runId=([^|]+)/) ?? [])[1] === (text.match(/runId=([^|]+)/) ?? [])[1];
+      let newTranscript = already ? s.transcript : [divider, ...s.transcript];
+      // Extra safety: if a divider exists anywhere (from prior appends), move the first one to position 0.
+      const dIdx = newTranscript.findIndex((t: any) => t.text && t.text.startsWith("▸▸RUN-START▸▸"));
+      if (dIdx > 0) {
+        const d = newTranscript[dIdx];
+        newTranscript = [d, ...newTranscript.filter((_: any, i: number) => i !== dIdx)];
+      }
       return {
         agents: {},
         streaming: {}, streamingMeta: {},
@@ -701,14 +712,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         drift: [],
         amendments: [],
         ...blackboardReset,
-        transcript: [
-          {
-            id: `divider-${Date.now()}`,
-            role: "system" as const,
-            text,
-            ts: Date.now(),
-          },
-        ],
+        transcript: newTranscript,
       };
     }),
 });

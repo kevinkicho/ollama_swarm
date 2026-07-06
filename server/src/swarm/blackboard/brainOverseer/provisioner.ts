@@ -96,9 +96,6 @@ function generateRunConfig(insight: RunInsight, clonePath: string, agentCount: n
     workerModel: "deepseek-v4-flash:cloud",
     webTools: isResearch,
     plannerTools: isResearch,
-    useHybridPlanning: isResearch,
-    planningPreset: isResearch ? "council" : undefined,
-    executionPreset: isResearch ? "blackboard" : undefined,
     brainInitiated: true,
     brainProposalId: (insight as any).id,
   };

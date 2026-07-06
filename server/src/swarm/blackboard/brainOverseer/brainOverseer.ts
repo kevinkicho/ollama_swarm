@@ -195,7 +195,7 @@ function generateInsights(
   if (insights.length === 0) {
     insights.push({
       title: "Research follow-up opportunity",
-      description: "Consider a follow-up run with webTools + hybrid council planning to deepen analysis or synthesize literature findings.",
+      description: "Consider a follow-up run with webTools + council or pipeline preset to deepen analysis or synthesize literature findings.",
       category: "research",
       priority: "low",
     });

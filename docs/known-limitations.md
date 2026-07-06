@@ -27,7 +27,7 @@ per planning turn prevents context blow-up.
 
 ## Discussion presets have opt-in write capability (2026-05+)
 
-**Current state:** Discussion presets support `cfg.writeMode: "single"` (synthesizer produces hunks after discussion). Blackboard has native concurrent writes. Council and others route through the same WorkerPipeline when writeMode is enabled. Hybrid (planning → blackboard exec) now reliably runs full autonomous blackboard phase without premature termination from PipelineRunner.
+**Current state:** Discussion presets support `cfg.writeMode: "single"` (synthesizer produces hunks after discussion). Blackboard has native concurrent writes. Council and others route through the same WorkerPipeline when writeMode is enabled. The pipeline preset reliably chains phases.
 
 **What's still limited:**
 - True multi-writer during turns (`writeMode: "multi"`) is not the default path for most presets.
@@ -75,7 +75,7 @@ browser automation) are not wired into the general agent tool dispatch loop.
 
 Directives containing "do a websearch", "find current governmental data
 endpoints", "research latest best practices online" etc. are answered
-only from the model's frozen training knowledge. The hybrid planning +
+only from the model's frozen training knowledge. Planning with web tools +
 `systemMap` + `swarm-read` planner tools give "broad view" *within the repo*
 without giving live internet.
 

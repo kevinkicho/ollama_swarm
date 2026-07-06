@@ -137,7 +137,7 @@ function AppMain() {
   const pathname = location.pathname;
   const isOnRoot = pathname === "/";
 
-  // Phase 10: no reliance on hybrid phase state or helper. Transparent runs.
+  // No reliance on removed composite phase state or helper.
 
   useSwarmSocket(review === null);
   useReviewHydration(review);

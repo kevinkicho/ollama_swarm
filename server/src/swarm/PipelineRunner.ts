@@ -43,7 +43,7 @@ export class PipelineRunner implements SwarmRunner {
       agents: currentStatus?.agents ?? this.opts.manager.toStates(),
       transcript: [...this.transcript],
       streaming: currentStatus?.streaming,
-      // Phase 10: no currentPhase/phases exposed for hybrid or any.
+      // Phase 10: no currentPhase/phases exposed.
     } as SwarmStatus;
     return base;
   }
@@ -68,6 +68,25 @@ export class PipelineRunner implements SwarmRunner {
 
     this.setPhase("discussing");
 
+    // Emit the structured RUN-START sentinel FIRST (as the very first transcript entry)
+    // so pipeline runs (and blackboard) have the run start message at top.
+    // This goes into the live transcript, persisted summary transcript, /status, and /run-summary.
+    // Client-side prepends (resetForNewRun / hydrate) will dedup by runId.
+    if (cfg.runId) {
+      const plannerM = cfg.plannerModel ?? cfg.model ?? '';
+      const workerM = cfg.workerModel ?? cfg.model ?? '';
+      const dividerText = [
+        "▸▸RUN-START▸▸",
+        `runId=${cfg.runId}`,
+        `preset=${cfg.preset ?? ''}`,
+        `plannerModel=${plannerM}`,
+        `workerModel=${workerM}`,
+        `agentCount=${cfg.agentCount ?? ''}`,
+        `repoUrl=${cfg.repoUrl ?? ''}`,
+      ].join("|");
+      this.appendSystem(dividerText);
+    }
+
     this.appendSystem(`[Pipeline] Using configured pipeline phases: ${pipeline.phases.map(p => p.preset).join(' → ')} (pipeMode=${pipeline.pipeMode ?? 'both'})`);
 
     for (let i = 0; i < pipeline.phases.length; i++) {
@@ -84,11 +103,9 @@ export class PipelineRunner implements SwarmRunner {
         pipeline.pipeMaxEntries ?? 20,
       );
 
-      // Hybrid sequencing uses useHybridPlanning + planning/executionPreset on top cfg.
       const isLastPhase = i === pipeline.phases.length - 1;
 
       // Phase 10: no phase state tracking or emitters. Just sequence the subs.
-      // Phase 2: forward hybridContext (minimal).
       const phaseConfig: RunConfig = {
         ...cfg,
         preset: phase.preset,
@@ -103,7 +120,7 @@ export class PipelineRunner implements SwarmRunner {
         `[Pipeline] Starting phase ${i + 1}/${pipeline.phases.length}: ${phase.preset} (${phase.rounds ?? cfg.rounds} rounds)`,
       );
 
-      this.opts.logDiag?.({ type: 'hybrid-sub-factory', i, phasePreset: phase.preset, runId: this.active?.runId });
+      this.opts.logDiag?.({ type: 'pipeline-sub-factory', i, phasePreset: phase.preset, runId: this.active?.runId });
       const runner = await this.factory(phase.preset);
       this.currentRunner = runner;
 
@@ -111,11 +128,11 @@ export class PipelineRunner implements SwarmRunner {
         await runner.start(phaseConfig);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        this.opts.logDiag?.({ type: 'hybrid-phase-failure', i, preset: phase.preset, error: msg, runId: this.active?.runId });
+        this.opts.logDiag?.({ type: 'pipeline-phase-failure', i, preset: phase.preset, error: msg, runId: this.active?.runId });
         this.appendSystem(
           `[Pipeline] Phase ${i + 1} (${phase.preset}) failed: ${msg.slice(0, 200)}.`,
         );
-        // For hybrid planning (first phase), treat planning failure as run failure instead of continuing.
+        // For first phase, treat planning failure as run failure instead of continuing.
         // This matches expectation that if planning (e.g. council) can't produce usable output, the execution shouldn't proceed as "completed".
         if (i === 0) {
           this.running = false;
@@ -196,7 +213,7 @@ export class PipelineRunner implements SwarmRunner {
             ? this.phaseResults[this.phaseResults.length-1].agents 
             : (this.opts.manager.toStates ? this.opts.manager.toStates() : []),
           clonePath: this.active.localPath,
-          // Phase 10: no hybrid phase state in summary for new runs (emitters removed)
+          // Phase 10: no phase state in summary for new runs (emitters removed)
         };
 
         // Ensure the persisted transcript for this runId always contains a run_finished
@@ -287,7 +304,7 @@ export class PipelineRunner implements SwarmRunner {
         }
         const finalSummary = { ...summary, transcript: this.transcript } as any;
         await writeRunSummary(this.active.localPath, finalSummary as any);
-        this.appendSystem("Wrote run summary on stop (hybrid pipeline).");
+        this.appendSystem("Wrote run summary on stop (pipeline).");
       } catch (e) {
         this.appendSystem(`[Pipeline] Failed to force summary write on stop: ${e}`);
       }

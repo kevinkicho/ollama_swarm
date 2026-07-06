@@ -346,7 +346,14 @@ function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
 
 function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
   const hue = hueForAgent(entry.agentIndex);
-  const isBrain = entry.agentIndex === 0;
+  // Only label as Brain for actual brain entries (suggestions or explicit brain agentId/index-0 brain),
+  // not normal agents that happen to have low index in council planning.
+  const isBrain = entry.agentIndex === 0 && (
+    entry.agentId === 'brain' ||
+    entry.summary?.kind === 'brain_suggestion' ||
+    /brain/i.test(entry.text || '') ||
+    (entry.id || '').includes('brain')
+  );
   const palette = agentBubblePalette(hue, false, isBrain);
   const header = (
     <div className="flex items-center gap-2 text-xs mb-1" style={{ color: palette.header }}>

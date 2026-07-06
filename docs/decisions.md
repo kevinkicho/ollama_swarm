@@ -13,9 +13,11 @@ This document records major architectural and product decisions with their ratio
 
 **Status:** Shipped. `OPENCODE_SERVER_PASSWORD` remains only for config validation backward compat.
 
-## 2026-05: Hybrid planning + execution
+## 2026-05: Hybrid planning + execution (later removed)
 
-**Decision:** Support `useHybridPlanning` with separate `planningPreset` and `executionPreset`, defaulting to council → blackboard.
+**Decision (later superseded):** Support `useHybridPlanning` with separate `planningPreset` and `executionPreset`, defaulting to council → blackboard.
+
+**Update 2026-07:** Hybrid mode fully removed from the app. Use `pipeline` preset for similar chaining needs.
 
 **Rationale:**
 - Planning phase (debate/synthesis) builds rich context and deliverable.

@@ -100,7 +100,7 @@ Especially dangerous operations:
 - Moving code between `web/`, `server/`, and `shared/`
 - Extracting components (SetupForm → hooks + subcomponents)
 - Renaming preset files or moving data definitions
-- Adding dynamic config (Brain, hybrid pipeline, etc.)
+- Adding dynamic config (Brain, pipeline preset, etc.)
 
 Run `npm run typecheck` after each logical chunk of the refactor.
 

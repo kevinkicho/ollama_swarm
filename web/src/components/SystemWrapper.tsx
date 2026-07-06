@@ -6,7 +6,7 @@ import { MetricsOverviewPanel } from "./MetricsOverviewPanel";
 import { BrainActivityPanel } from "./BrainActivityPanel";
 import { QuickNavPanel } from "./QuickNavPanel";
 import { useSwarm } from "../state/store";
-// Phase 10: hybrid brain disable removed. Brain always available (unless other config).
+// Phase 10: brain always available (unless other config).
 import { RunHistoryDropdown } from "./RunHistory";
 import { EventLogPanel } from "./EventLogPanel";
 import SystemHealthDashboard from "./SystemHealthDashboard";
@@ -48,7 +48,7 @@ export function SystemWrapper({
   const [brainActivities, setBrainActivities] = useState<BrainActivity[]>([]);
   const [historyOpenSignal, setHistoryOpenSignal] = useState(0);
 
-  // Phase 10: brain always enabled for active runs (no hybrid guards/disable).
+  // Phase 10: brain always enabled for active runs.
 
   useEffect(() => {
     const fetchHealth = async () => {
@@ -121,7 +121,7 @@ export function SystemWrapper({
   const agentsForChat = useSwarm((s) => s.agents);
   const cfgForChat = useSwarm((s) => s.runConfig);
 
-  // Brain state effect (always for active runs; Phase 10 removed all hybrid conditionals).
+  // Brain state effect (always for active runs).
   useEffect(() => {
     const fetchBrainState = async () => {
       try {

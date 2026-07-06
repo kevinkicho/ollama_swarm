@@ -6,7 +6,7 @@
 
 A local web app that runs **multiple concurrent swarms** of open-weights coding agents. A **Brain-as-OS layer** monitors runs, proposes self-improving changes, provisions new runs, and manages at the system level. Agents collaborate (via shared transcript or blackboard) on GitHub repos using different roles/models.
 
-**Current focus (as of 2026-07):** Stable hybrid planning + execution, reliable Windows development experience, polished live UI (transcript + sidebar), and Brain-as-OS features.
+**Current focus (as of 2026-07):** Reliable Windows development experience, polished live UI (transcript + sidebar), Brain-as-OS features, and support for composite "pipeline" preset runs. Hybrid planning mode has been removed.
 
 **Five providers** are wired in, surfaced as side-by-side tabs in the setup form:
 
@@ -114,7 +114,7 @@ You fill in a GitHub URL, a local clone path, an agent count, and pick a **patte
 
 A **Brain-as-OS** layer provides analysis, cross-run memory, provisioning help, and during-run conversational assistance (persistent FAB + `/brain/chat`, `/brain/suggest`, history persistence). See `docs/STATUS.md` for current features including FAB Brain chat, proactive suggestion injection into transcripts, and per-run persistence.
 
-See `docs/swarm-patterns.md` for the full pattern catalog. Research / internet-heavy usage (webTools + hybrid council→blackboard) is documented in the "Using for Scientific Research & Internet Work" section below and in STATUS.md.
+See `docs/swarm-patterns.md` for the full pattern catalog. Research / internet-heavy usage (webTools + council or pipeline preset) is documented in the "Using for Scientific Research & Internet Work" section below and in STATUS.md.
 
 - **Round-robin transcript** — N agents take turns on a shared transcript; each turn rotates through Critic / Synthesizer / Gap-finder / Builder dispositions, with the lead synthesizing a directive answer at the end. Discussion-only.
 - **Blackboard (optimistic + small units)** — planner posts atomic todos to a shared board; workers claim and commit in parallel, with CAS on file hashes catching stale plans. **The only write-capable preset** — workers actually modify the clone.
@@ -134,9 +134,9 @@ See `docs/swarm-patterns.md` for the full pattern catalog. Research / internet-h
 For research use cases (e.g., analyzing common properties of materials like superconductors, discovering data endpoints, literature synthesis):
 
 - Enable `webTools: true` + `plannerTools: true` (gives planners `web_search` + `web_fetch` with gov/academic bias).
-- Recommended: `useHybridPlanning: true`, `planningPreset: "council"`, `executionPreset: "blackboard"` (or pure `council`, `map-reduce`, `moa`, `role-diff` for analysis-only).
+- Recommended: pure `council` (or `map-reduce`, `moa`, `role-diff`) for analysis, or the `pipeline` preset to chain presets (e.g. council exploration → blackboard execution). Hybrid mode has been removed.
 - Use the "swarm-research" profile for broader tool access.
-- See the full guidance + example config in the "Using for Scientific Research & Internet Work" section above (and STATUS.md for the preset matrix).
+- See the full guidance in `docs/swarm-patterns.md` and STATUS.md for the preset matrix.
 
 Web results are now returned in structured format (Title, URL, Snippet, RelevanceScore, source type) to help the planner synthesize findings reliably.
 
@@ -162,35 +162,7 @@ Web results are now returned in structured format (Title, URL, Snippet, Relevanc
   - Runs verify **once** (if required).
   - Creates **one single git commit** for the whole batch.
   This is the recommended high-safety mode — the auditor is the only entity that mutates the repo. Exposed in the web form under Blackboard advanced settings.
-- **Hybrid planning (council → blackboard etc.)**: `useHybridPlanning: true`, `planningPreset: "council"`, `executionPreset: "blackboard"`, `webTools: true`. Planning phase (debate/synthesis) builds broad understanding + deliverable; results are automatically piped as `userDirective` + transcript snippets into the blackboard execution phase. Blackboard planner additionally receives a lightweight `systemMap` (top-level dirs + sample files + README excerpt) for cross-cutting reasoning without violating its read caps. `webTools` gives the planner `web_search` + `web_fetch` (MCP-style external tools). Gives "god-mode discreetly" in planning while keeping blackboard's robust gated execution + batch auditor commit intact. Toggle + dropdowns (including web research) live in the Topology card → "🧭 Planning Phase".
-
-**Example hybrid config** (via form under blackboard advanced, or direct POST to /api/swarm/start, or Brain chat):
-
-```json
-{
-  "preset": "blackboard",
-  "useHybridPlanning": true,
-  "planningPreset": "council",
-  "executionPreset": "blackboard",
-  "webTools": true,
-  "userDirective": "please use existing data endpoints and governmental & non-governmental data endpoints (find through websearch) to put down more panels...",
-  "auditorOnlyMutations": true,
-  "requireAuditorVerification": true,
-  "verifyCommand": "npm test"
-}
-```
-
-Expected transcript flow (simplified):
-- [Pipeline] Starting phase 1/2: council ...
-- (Council debate/synthesis produces broad plan + deliverable with systemic insights)
-- [Pipeline] Starting phase 2/2: blackboard ...
-- Piped: ## Prior Phase Output (deliverable) + transcript snippets injected as directive/context.
-- Planner uses the rich piped context + systemMap for grounded TODOs.
-- Workers propose (pending-commit).
-- Auditor: explicit reviewProposedHunks + batch.
-- [auditor-gate] Batching N approved changes...
-- In-memory applyHunks → one commit: auditor batch approval (one commit): ...
-- Final summary/deliverable with "hybrid" notes.
+- **Pipeline preset**: chains sub-runs (e.g. council for analysis → blackboard for execution with auditor gates). Use for planning-then-execution workflows without dedicated hybrid mode.
 
 - **Cost cap (paid providers)** — every run on Anthropic/OpenAI checks cumulative spend against `maxCostUsd` every 5 seconds; stops cleanly with `cap:cost` when the ceiling is reached. Ollama runs ignore the cap (every record costs $0).
 - **Eval harness + scoreboard** — `node eval/run-eval.mjs --repo=<url> --seeds=5` runs every preset against the catalog, then `node eval/aggregate.mjs runs/_eval/<ts>` writes `eval/RESULTS.md` with median + IQR per cell. See [`eval/fixtures/README.md`](eval/fixtures/README.md) for the self-contained fixture pattern.

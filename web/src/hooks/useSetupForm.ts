@@ -86,9 +86,6 @@ export function useSetupForm(navigate: (path: string) => void) {
 
   const [roundsInput, setRoundsInput] = useState(0);
   const [userDirective, setUserDirective] = useState("");
-  const [useHybridPlanning, setUseHybridPlanning] = useState(true);
-  const [planningPreset, setPlanningPreset] = useState("council");
-  const [executionPreset, setExecutionPreset] = useState("blackboard");
   const [webTools, setWebTools] = useState(true);
   const [mcpServers, setMcpServers] = useState("");
   const [wallClockCapMin, setWallClockCapMin] = useState("0");
@@ -124,7 +121,6 @@ export function useSetupForm(navigate: (path: string) => void) {
       if (ambitionTiers === undefined || ambitionTiers.trim() === "") {
         setAmbitionTiers("0");
       }
-      setUseHybridPlanning(false); // direct BlackboardRunner for pure blackboard
       setWebTools(true);
     } else if (["round-robin", "role-diff", "council", "debate-judge", "orchestrator-worker", "map-reduce", "stigmergy"].includes(preset.id)) {
       if (!wallClockCapMin || wallClockCapMin.trim() === "") {
@@ -224,9 +220,6 @@ export function useSetupForm(navigate: (path: string) => void) {
         agentCount,
         rounds: roundsInput,
         userDirective,
-        useHybridPlanning,
-        planningPreset,
-        executionPreset,
         webTools,
         mcpServers,
         // Per-agent model declarations (from the Topology grid). This is
@@ -308,9 +301,6 @@ export function useSetupForm(navigate: (path: string) => void) {
     auditorModel, setAuditorModel,
     roundsInput, setRoundsInput,
     userDirective, setUserDirective,
-    useHybridPlanning, setUseHybridPlanning,
-    planningPreset, setPlanningPreset,
-    executionPreset, setExecutionPreset,
     webTools, setWebTools,
     mcpServers, setMcpServers,
     wallClockCapMin, setWallClockCapMin,

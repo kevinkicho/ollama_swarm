@@ -763,7 +763,7 @@ export class BlackboardRunner implements SwarmRunner {
   }
 
   // Plan 4: initialize brain overseer components for this run.
-  // Phase 10: brain enablement is solely via enableBrainAnalysis flag (no hybrid phase guards).
+  // Phase 10: brain enablement is solely via enableBrainAnalysis flag.
   initBrainOverseer(runId: string): void {
     const cfg = this.active as any;
     if (cfg?.enableBrainAnalysis === false) return;

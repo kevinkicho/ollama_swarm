@@ -5,7 +5,7 @@ import { BrainStartChat, type BrainConfigPatch } from "./BrainStartChat";
 import { useSetupForm } from "../hooks/useSetupForm";
 import { PRESETS } from "./setup/presets";
 import { TopologyGrid } from "./setup/TopologyGrid";
-import { PlanningPhaseControl, BlackboardWallClockCap, BlackboardAmbitionTiers } from "./setup/BlackboardSettings";
+import { BlackboardWallClockCap, BlackboardAmbitionTiers } from "./setup/BlackboardSettings";
 import { Field } from "./setup/SharedFields";
 import { InfoTip } from "./setup/InfoTip";
 import { estimateWallClockSeconds, formatDurationSeconds } from "./setup/WallClockEstimate";
@@ -277,20 +277,6 @@ export function SetupForm() {
             provider={form.provider}
           />
 
-          {form.preset.id === "blackboard" && (
-            <PlanningPhaseControl
-              useHybridPlanning={form.useHybridPlanning}
-              setUseHybridPlanning={form.setUseHybridPlanning}
-              planningPreset={form.planningPreset}
-              setPlanningPreset={form.setPlanningPreset}
-              executionPreset={form.executionPreset}
-              setExecutionPreset={form.setExecutionPreset}
-              webTools={form.webTools}
-              setWebTools={form.setWebTools}
-              mcpServers={form.mcpServers}
-              setMcpServers={form.setMcpServers}
-            />
-          )}
           {/* Explicit mcpServers surface for research */}
           {form.preset.id === "blackboard" && (
             <div className="mt-2 text-xs">
@@ -369,7 +355,7 @@ export function SetupForm() {
           </div>
         </Section>
 
-        {/* Advanced settings delegated to Topology (for blackboard: full WallClockCap + AmbitionTiers with warnings) and PlanningPhaseControl */}
+        {/* Advanced settings delegated to Topology (for blackboard: full WallClockCap + AmbitionTiers with warnings) */}
 
         {/* Sticky-within-scroll action bar.
             - Sticks to the bottom of the viewport once scrolled past (part of the form flow).

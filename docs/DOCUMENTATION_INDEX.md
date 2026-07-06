@@ -24,7 +24,7 @@ This is the structured index of all relevant, tracked documentation for the olla
   Honest trade-offs and deliberate limitations of the current system.
 
 - **docs/swarm-patterns.md**  
-  Recommended usage patterns by preset and use case (full catalog of the 12 presets). Research/hybrid + webTools guidance lives in README and STATUS.md.
+  Recommended usage patterns by preset and use case (full catalog of the presets). Research/webTools guidance lives in README and STATUS.md. (Hybrid mode removed 2026-07.)
 
 ## Architecture & Vision
 
@@ -81,10 +81,11 @@ These are deliberately excluded from version control (see `.gitignore`):
 
 Only the documentation listed above (and actual source code) is kept in the repository.
 
-## Hybrid / Research Quick Links
+## Research Quick Links
 
-- README.md → "Using for Scientific Research & Internet Work" (webTools + `useHybridPlanning`, planner vs execution presets, example config).
+- README.md → "Using for Scientific Research & Internet Work" (webTools guidance).
 - STATUS.md → research paragraph + full preset table (maturity, write capability).
+- Note: Hybrid mode removed 2026-07 (no `useHybridPlanning` etc.). Use `pipeline` preset for chaining.
 - `server/src/swarm/presetGuide.ts` — source of truth for preset descriptions fed to Brain.
 
 ## Key Implementation Locations (for agents + developers)
@@ -107,7 +108,7 @@ For a new person or agent:
 3. docs/AGENT-GUIDE.md
 4. docs/CI-RELIABILITY.md
 5. docs/known-limitations.md
-6. README "Using for Scientific Research" + STATUS preset table (for hybrid/research work)
+6. README "Using for Scientific Research" + STATUS preset table (for research work)
 7. Dive into architecture docs + blackboard/ source as needed.
 
 Last updated: 2026-07-05 (post doc hygiene + Research Workflows reference cleanup)

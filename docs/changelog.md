@@ -3,6 +3,16 @@
 All notable changes to ollama_swarm. Reverse chronological order.
 The git log is the authoritative record; this summarizes user-facing changes.
 
+## 2026-07-05 — Complete removal of hybrid mode
+
+**Hybrid mode fully removed** from the app (per user request due to persistent issues with flickering, agent status signals showing "ready" while working, transcript gaps, sidebar agents, stop buttons, etc.).
+
+- Removed all `useHybridPlanning`, `planningPreset`, `executionPreset` fields, schema support, UI toggles (PlanningPhaseControl), special logic in Orchestrator (createHybridPipelineRunner, buildRunner branch), PipelineRunner hybrid stripping, SwarmView sidebar/terminal/role logic, store/provider isHybrid checks, types, etc.
+- Frontend and backend cleaned; no more hybrid-specific orchestration or guards.
+- For similar workflows: use the `pipeline` preset (explicit chaining) or run pure presets (council then blackboard) separately.
+- All docs updated to reflect removal. No functional references remain in code.
+- Typechecks pass. Pre-existing presets (blackboard, council, pipeline, etc.) unaffected.
+
 ## 2026-05-18 — Import path fix + rate limiter isolation + express import
 
 **Cross-package import fix.** Commit `3b51973` deleted 3 web shim files and redirected their callers directly to `shared/src/`, but the callers in `components/transcript/` are one directory deeper than the old shims. `../../../` from that depth reaches `web/`, not the project root — off by one `../`. Fixed the 3 affected imports: `../../../shared/` → `../../../../shared/`.

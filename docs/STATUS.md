@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-07-05 (Phase 9/10: COMPLETE removal of ALL guards + phase state emitters; hybrid now transparent orchestration only)
+**Last updated:** 2026-07-05 (Phase 9/10: COMPLETE removal of hybrid mode; all hybrid references, fields, UI, and orchestration logic removed from the app. Use "pipeline" preset for chaining or pure presets.)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -25,7 +25,7 @@ The app is a **Brain-as-OS for concurrent swarm orchestration**:
 - **Concurrent multi-swarm support**: multiple independent runs in parallel (`/runs/:runId` routing, ActiveRunsPanel, per-run WebSocket/REST, concurrency cap). Brain and UI manage them at system level.
 - **System UI**: `SystemWrapper` with persistent sidebar, floating Brain FAB, BrainProposalsPanel, BrainActivityPanel, SystemStatus, PatchMonitor, RunQueue, topbar stats/health. Transcript defaults to full "all" view (normal unfiltered log of everything). Optional "key"/other filters available in the bar to reduce noise if desired.
 - **Recent major UI work**: full viewport layout hardening, sticky elements, scrolling fixes; dedicated Brain chat + suggest flow. 
-  - Hybrid: transparent via PipelineRunner sequencing only (council → blackboard). All guards (isHybrid*, brain phase disables, synthetic boxes, filters) + emitters (currentPhase/phases, phase_* events, phaseIndex tagging, hybridContext state) removed in Phase 9/10. UI and backend treat hybrid runs exactly like any other. Avoids early over-restriction.
+  - Hybrid mode fully removed (no more special orchestration, fields, or UI). Composite chaining available via the explicit "pipeline" preset.
   - Windows dev: `npm run dev` Ctrl+C now reliable (readline fallback for npm/PowerShell, sync taskkill, explicit kill-port on 8243/8244).
   - Transcript: virtual list now reliably draws all items (rangeExtractor with scroll+tail, mounted force-measure, tuned estimates + ITEM_GAP_PX=6).
 - **12 presets** with the existing write-mode story (blackboard native writes; others opt-in via `writeMode`).
@@ -49,7 +49,7 @@ The app is a **Brain-as-OS for concurrent swarm orchestration**:
 
 All presets honor the user directive except `stigmergy` (exploration is repo-driven by design).
 
-**Research / internet-heavy use cases**: Prefer `webTools: true` + `plannerTools: true` with council, map-reduce, moa, role-diff, pipeline, or hybrid council→blackboard. See the hybrid planning example + webTools section in README.md and the preset matrix above for recommended combinations (e.g. council planning + blackboard execution for research).
+**Research / internet-heavy use cases**: Prefer `webTools: true` + `plannerTools: true` with council, map-reduce, moa, role-diff, or pipeline (for chaining analysis → execution). See README.md and the preset matrix for recommended combinations.
 
 **Legend:** ✅ native write support | ⚡ opt-in via `cfg.writeMode: "single" | "multi"` + `cfg.writeModel` | ❌ no write support
 

@@ -91,7 +91,7 @@ The only tools they can call (via in-process `ToolDispatcher`) are:
 - MCP (GitHub tools in `mcps/grok_com_github/`, Playwright) is not generally available to swarm agents.
 - Special case: when `MCP_PLAYWRIGHT_ENABLED=true`, the auditor can get browser snapshots for UI criteria.
 
-Directives that require "live web research" (scientific literature, data endpoints, superconductor studies, etc.) should set `webTools: true` + `plannerTools: true`. Use hybrid planning (council → blackboard) or pure council/map-reduce/moa for research. See README "Using for Scientific Research & Internet Work" and STATUS preset matrix for current patterns and configs. Local-only workers remain sandboxed.
+Directives that require "live web research" (scientific literature, data endpoints, superconductor studies, etc.) should set `webTools: true` + `plannerTools: true`. Use pure council/map-reduce/moa or the pipeline preset for research. See README "Using for Scientific Research & Internet Work" and STATUS preset matrix for current patterns and configs. Local-only workers remain sandboxed.
 
 Relevant code:
 - `server/src/tools/ToolDispatcher.ts`

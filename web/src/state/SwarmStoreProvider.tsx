@@ -88,17 +88,47 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
           if (snap.phase != null) {
             s.setPhase(snap.phase as any, (snap as any).round ?? 0);
           }
-          // Do not upsert agents from snap for history/finished runs here.
-          // Rely on the SidebarSummaryAgents fallback (when agentList.length === 0 after terminal clear)
-          // to show the detailed per-agent stats for completed runs.
-          // Live runs get populated via WS agent_state events.
+          // For live runs, upsert agents from snap so sidebar populates immediately (even before WS events).
+          // For history/finished, rely on SidebarSummaryAgents.
+          const hasSnapCompleted = !!(snap.summary && snap.summary.stopReason != null);
+          if (snap.agents && Array.isArray(snap.agents) && !hasSnapCompleted) {
+            snap.agents.forEach((a: any) => {
+              const idx = a.index ?? a.agentIndex ?? 0;
+              const id = a.id || a.agentId || `agent-${idx}`;
+              s.upsertAgent({ id, index: idx, status: a.status || "ready", model: a.model } as any);
+            });
+          }
+          if (snap.runConfig) {
+            const rc = { ...snap.runConfig };
+            s.setRunConfig(rc);
+          }
           for (const e of snap.transcript) s.appendEntry(e);
+          // Ensure start run message (divider) is present and at the very top even on reload/live runs.
+          // Handle races where WS deliveries interleave with /status hydrate (divider may land not at [0]).
+          let currentTx = storeRef.current.getState().transcript || [];
+          const hasDiv = currentTx.some((t: any) => t.text && t.text.startsWith("▸▸RUN-START▸▸"));
+          if (hasDiv) {
+            const dIdx = currentTx.findIndex((t: any) => t.text && t.text.startsWith("▸▸RUN-START▸▸"));
+            if (dIdx > 0) {
+              const d = currentTx[dIdx];
+              currentTx = [d, ...currentTx.filter((_: any, i: number) => i !== dIdx)];
+              storeRef.current.setState({ transcript: currentTx });
+            }
+          } else if (!currentTx.length || !currentTx[0]?.text?.startsWith("▸▸RUN-START▸▸")) {
+            const divider = {
+              id: `divider-hydrate-${Date.now()}`,
+              role: "system" as const,
+              text: `▸▸RUN-START▸▸|runId=${runId}|preset=${(snap as any).preset || snap.runConfig?.preset || ''}|plannerModel=${snap.runConfig?.plannerModel || ''}|workerModel=${snap.runConfig?.workerModel || ''}|agentCount=${snap.runConfig?.agentCount || ''}|repoUrl=${snap.runConfig?.repoUrl || ''}`,
+              ts: Date.now(),
+            };
+            storeRef.current.setState({ transcript: [divider, ...currentTx] });
+          }
           if (snap.summary) s.setSummary(snap.summary);
           if (snap.contract) s.setContract(snap.contract);
           if (snap.cloneState) s.setCloneState(snap.cloneState);
           if (snap.runConfig) {
             const rc = { ...snap.runConfig };
-            // Phase 10: no special phase merging for hybrid. Use as-is.
+            // Phase 10: no special phase merging. Use as-is.
             s.setRunConfig(rc);
           }
           if (snap.runId) s.setRunId(snap.runId);
@@ -166,11 +196,30 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
                 }
                 if (summary.startedAt) s.setRunStartedAt(summary.startedAt);
                 if (summary.transcript) {
-                  // Always attempt to merge from /run-summary (the main aggregated for hybrid/pipeline).
+                  // Always attempt to merge from /run-summary (the main aggregated for pipeline runs).
                   // id-based dedup in appendEntry will skip exact dups; extra/more-complete
                   // entries (e.g. from final Pipeline write vs partial status synthesis) will be added.
                   // This ensures review/history gets the full agent bubbles + final run summary.
                   for (const e of summary.transcript) s.appendEntry(e);
+                }
+                // Ensure divider in fallback path too (for cases where /status didn't provide or failed).
+                let currentTx2 = storeRef.current.getState().transcript || [];
+                const hasDiv2 = currentTx2.some((t: any) => t.text && t.text.startsWith("▸▸RUN-START▸▸"));
+                if (hasDiv2) {
+                  const dIdx = currentTx2.findIndex((t: any) => t.text && t.text.startsWith("▸▸RUN-START▸▸"));
+                  if (dIdx > 0) {
+                    const d = currentTx2[dIdx];
+                    currentTx2 = [d, ...currentTx2.filter((_: any, i: number) => i !== dIdx)];
+                    storeRef.current.setState({ transcript: currentTx2 });
+                  }
+                } else if (!currentTx2.length || !currentTx2[0]?.text?.startsWith("▸▸RUN-START▸▸")) {
+                  const divider = {
+                    id: `divider-fallback-${Date.now()}`,
+                    role: "system" as const,
+                    text: `▸▸RUN-START▸▸|runId=${runId}|preset=${summary.preset || (match as any)?.preset || ''}|plannerModel=${summary.runConfig?.plannerModel || ''}|workerModel=${summary.runConfig?.workerModel || ''}|agentCount=${summary.runConfig?.agentCount || ''}|repoUrl=${summary.runConfig?.repoUrl || ''}`,
+                    ts: Date.now(),
+                  };
+                  storeRef.current.setState({ transcript: [divider, ...currentTx2] });
                 }
                 if (summary) s.setSummary(summary);
                 if (summary.contract) s.setContract(summary.contract);
@@ -225,17 +274,15 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
           const parsed = JSON.parse(ev.data) as SwarmEvent;
           const st = storeRef.current.getState();
           const isTerminalPhase = st.phase === "stopped" || st.phase === "completed" || st.phase === "failed";
-          const hasCompletedSummary = !!(st.summary && (st.summary.stopReason || st.summary.endedAt != null));
+          const hasCompletedSummary = !!(st.summary && st.summary.stopReason != null);
           // Guard for history/completed /runs/:id review:
           // - Skip agent_state to prevent populating store.agents (which would make agentList.length > 0
           //   and switch sidebar away from the desired SidebarSummaryAgents "FINAL AGENT STATS" detailed view).
           // - Skip swarm_state to keep the phase from the REST summary (don't let WS override it).
           // This is only for terminal/history contexts. Live runs (non-terminal, no completed summary)
-          // still receive agent_state/swarm_state for live updates, even after transcript starts (tx.length >0 is normal for live).
-          // We check summary for "completed" indicators rather than just presence of summary,
-          // to avoid accidentally disabling live updates on runs that happen to have a partial summary loaded.
+          // still receive agent_state/swarm_state for live updates.
           if ((parsed.type === "agent_state" || parsed.type === "swarm_state") &&
-              (isTerminalPhase || hasCompletedSummary)) {
+              ( isTerminalPhase || hasCompletedSummary )) {
             return;
           }
           applyEventToStore(parsed, storeRef.current.getState());

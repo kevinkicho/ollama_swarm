@@ -15,12 +15,12 @@ export const PRESETS_GUIDE = SHARED_PRESETS_GUIDE;
 
 export const RESEARCH_USE_CASE_GUIDANCE = `
 RESEARCH / USE-CASE GUIDANCE:
-- User wants to "think deeply + produce reports/findings/code" → Hybrid council→blackboard + webTools + plannerTools.
+- User wants to "think deeply + produce reports/findings/code" → Council + webTools + plannerTools, or pipeline preset.
 - Pure analysis / "what do these have in common" / hypothesis → council (standalone) or moa.
 - Broad scan of many sources/papers → map-reduce.
 - Need external knowledge (papers, gov data, recent info) → always suggest webTools: true + plannerTools: true.
 - No file changes, just understanding → discussion presets (council, map-reduce, moa, role-diff, pipeline, stigmergy).
-- Needs safe writes + audit trail → blackboard (or hybrid).
+- Needs safe writes + audit trail → blackboard.
 - User describes "debate", "pros cons", "should we" → debate-judge or council.
 - Open discovery without clear goal → stigmergy.
 `;
@@ -40,8 +40,8 @@ export function buildPresetGuideString(): string {
   lines.push("");
   lines.push(
     "When user is unsure what 'swarm mode' / preset to use, analyze their described goal:\n" +
-      "1. Does it require writing/editing files with safety? → blackboard or hybrid.\n" +
-      "2. Is it research/literature/analysis/synthesis? → council, map-reduce, moa, role-diff, hybrid.\n" +
+      "1. Does it require writing/editing files with safety? → blackboard.\n" +
+      "2. Is it research/literature/analysis/synthesis? → council, map-reduce, moa, role-diff, pipeline.\n" +
       "3. Exploration / 'tell me about'? → stigmergy or map-reduce.\n" +
       "4. Decision / debate? → debate-judge / council.\n" +
       "Always explain your choice with 2-3 concrete reasons referencing the user's words and the preset strengths above."

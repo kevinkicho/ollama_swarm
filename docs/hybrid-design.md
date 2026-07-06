@@ -1,16 +1,16 @@
-# Hybrid Swarm Mode - Comprehensive Design & Refactor Plan
+# Hybrid Swarm Mode - Historical Design Document
 
-**Date:** 2026-07-05
-**Status:** **Phase 9/10 COMPLETE** — ALL hybrid guards and phase state emitters removed across the app (per user request). 
+**Note (2026-07-05):** Hybrid mode (useHybridPlanning / planningPreset / executionPreset + dedicated UI and orchestration) has been **completely removed** from the app per user request due to persistent issues (flickering, incorrect agent status signals, transcript gaps, sidebar problems, etc.).
 
-- Hybrid still works via `Orchestrator.createHybridPipelineRunner` + `PipelineRunner` sequencing (planningPreset → executionPreset under single runId).
-- **No** currentPhase/phases, **no** phase_started/phase_completed, **no** hybridContext for state/guards, **no** isHybrid / isExecPhase / should* filters, **no** synthetic boxes, **no** brain phase disables.
-- UI is fully transparent: all entries/agents shown as-is.
-- Brain controlled only by enableBrainAnalysis.
-- Legacy data may contain old fields (tolerated for review of historical runs); new runs emit none.
-- This was done because early guards caused over-restriction and bugs as the project evolves.
+- Use the explicit `pipeline` preset for chaining presets (e.g. council for planning/analysis → blackboard for execution).
+- Or run pure presets separately.
+- All special hybrid fields, guards, UI toggles, sub-runner special cases, and references have been excised from frontend, backend, types, and runtime.
+- This document is kept for historical reference only.
 
-**Core kept:** transparent orchestration only. App free to grow without phase UI/state coupling.
+**Date of removal:** 2026-07-05
+**Status:** Hybrid mode fully excised.
+
+(The content below is the original design history.)
 
 ## Vision
 Hybrid runs (planning phase → execution phase, e.g. council → blackboard) should be natively supported as a **composite workflow** under one runId.

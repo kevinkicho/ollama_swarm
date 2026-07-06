@@ -1,15 +1,7 @@
-/**
- * HybridStateHelper — Phase 10 FULL REMOVAL.
- * All guards and phase state logic removed. Hybrid is transparent.
- * These are no-op stubs kept only to avoid import breakage in tests/old code.
- * All functions return neutral values; no special hybrid behavior.
- */
-
-export function getSidebarAgentTitle(_showAsPlanner: boolean, _isTerminal: boolean, summaryLen: number, agentLen: number): string {
-  return `Agents (${( _isTerminal && summaryLen) || agentLen})`;
+// (Hybrid mode removed 2026-07). No-op stubs kept only for test compatibility.
+export function getSidebarAgentTitle(): string {
+  return 'Agents';
 }
-
-// Legacy stubs (always neutral)
 export const isHybridRun = () => false;
 export const isExecPhase = () => false;
 export const shouldFilterAgentForHybridDisplay = () => false;

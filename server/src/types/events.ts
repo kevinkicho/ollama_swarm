@@ -17,9 +17,9 @@ export interface TranscriptEntry {
   agentIndex?: number;
   text: string;
   ts: number;
-  // Phase 4 scoping: when emitted inside a composite/hybrid pipeline, these tag
+  // Phase 4 scoping: when emitted inside a composite/pipeline run, these tag
   // the entry to its originating phase. Additive; old entries and pure runs omit them.
-  // Legacy phase attribution (on transcript entries / some events from old hybrid runs).
+  // Legacy phase attribution (on transcript entries / some events from old composite runs).
   // No longer emitted for new runs (Phase 10 removal).
   phaseIndex?: number;
   phasePreset?: string;
@@ -255,10 +255,6 @@ export type SwarmEventBody =
       // Caps carried in run_started for immediate UI hydration (bar, advanced panels).
       wallClockCapMin?: string;
       ambitionTiers?: string;
-      // Hybrid flags only (no phase state / hybridContext in events).
-      useHybridPlanning?: boolean;
-      planningPreset?: string;
-      executionPreset?: string;
     }
   // Direction 1 Phase 1: emitted after outcome scoring completes at run-end.
   | {
@@ -293,7 +289,7 @@ export type SwarmEventBody =
       reason: string;
     }
   // Phase 10: phase_started / phase_completed emitters removed completely.
-  // No more explicit phase state for hybrid/composite runs.
+  // No more explicit phase state for composite runs.
 
 // T-Item-MultiTenant Phase 1 (2026-05-04): the public SwarmEvent type
 // intersects every variant with `{ runId?: string }` so consumers can

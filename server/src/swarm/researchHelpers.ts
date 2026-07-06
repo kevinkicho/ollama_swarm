@@ -11,7 +11,6 @@ export interface ResearchConfigOptions {
 /**
  * Prepares a RunConfig for research use cases.
  * - Enables webTools + plannerTools if not set.
- * - Suggests hybrid council planning for complex research.
  * Used by Brain provisioner and Orchestrator startup.
  */
 export function prepareResearchConfig(cfg: RunConfig, opts: ResearchConfigOptions = {}): RunConfig {
@@ -22,14 +21,6 @@ export function prepareResearchConfig(cfg: RunConfig, opts: ResearchConfigOption
   if (looksResearch || opts.enableWebByDefault) {
     if (out.webTools === undefined) out.webTools = true;
     if (out.plannerTools === undefined) out.plannerTools = true;
-  }
-
-  // For hybrid research flows, ensure sensible defaults if user set useHybridPlanning
-  if (out.useHybridPlanning && !out.planningPreset) {
-    out.planningPreset = "council";
-  }
-  if (out.useHybridPlanning && !out.executionPreset) {
-    out.executionPreset = "blackboard";
   }
 
   return out;

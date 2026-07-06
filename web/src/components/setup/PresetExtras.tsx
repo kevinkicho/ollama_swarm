@@ -8,7 +8,6 @@ import {
   BlackboardUiUrl,
   BlackboardVerifyCommand,
   AuditorControlFlags,
-  PlanningPhaseControl,
   type CouncilContractPref,
 } from "./BlackboardSettings";
 import { RoleDiffAdvanced, type SwarmRoleWeb } from "./RoleDiffSettings";
@@ -196,12 +195,6 @@ export function PresetAdvancedSettings(props: {
   setAuditorOnlyMutations?: (v: boolean) => void;
   requireAuditorVerification?: boolean;
   setRequireAuditorVerification?: (v: boolean) => void;
-  useHybridPlanning?: boolean;
-  setUseHybridPlanning?: (v: boolean) => void;
-  planningPreset?: string;
-  setPlanningPreset?: (v: string) => void;
-  executionPreset?: string;
-  setExecutionPreset?: (v: string) => void;
   webTools?: boolean;
   setWebTools?: (v: boolean) => void;
   mcpServers?: string;
@@ -282,12 +275,6 @@ export function PresetAdvancedSettings(props: {
     setAuditorOnlyMutations,
     requireAuditorVerification,
     setRequireAuditorVerification,
-    useHybridPlanning,
-    setUseHybridPlanning,
-    planningPreset,
-    setPlanningPreset,
-    executionPreset,
-    setExecutionPreset,
     webTools,
     setWebTools,
     mcpServers,
@@ -470,9 +457,8 @@ export function PresetAdvancedSettings(props: {
                     />
                   )}
 
-                  {/* Hybrid control promoted to top-level Topology card for easy hybrid preset creation.
+                  {/* (Hybrid UI removed; planning features now via pipeline preset or direct council/blackboard)
                       (The advanced section no longer duplicates it.) */}
-                  {/* <PlanningPhaseControl ... /> intentionally omitted here to avoid duplicate UI */}
                 </>
               ) : null}
               {presetId === "debate-judge" ? (

@@ -17,7 +17,7 @@ This file contains longer-term or lower-priority items that are not currently in
 
 ## Reliability
 
-- Further hardening of hybrid execution phase lifetime guarantees
+- (Hybrid mode removed; no pending hybrid items)
 - Additional watchdog layers for paid-provider quota edge cases
 
 ## Presets & Patterns
