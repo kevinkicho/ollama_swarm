@@ -17,15 +17,20 @@ export function StreamingDock({
   streamingMeta: Record<string, { startedAt: number; lastTextAt: number; status: "live" | "done"; endedAt?: number }>;
   agents: Record<string, { id: string; index: number }>;
 }) {
-  // Tick once per second so "thinking N.Ns" updates even when no
-  // SSE event arrives. Cheap — only renders if dock has content.
+  // Tick once per second so live "thinking Ns…" subtitles update even
+  // when no SSE event arrives. Stop ticking once every slot is "done"
+  // so frozen totals (endedAt − startedAt) don't keep climbing.
   const [, setTickN] = useState(0);
   const ids = Object.keys(streaming);
+  const hasLive = useMemo(
+    () => ids.some((id) => streamingMeta[id]?.status === "live"),
+    [ids, streamingMeta],
+  );
   useEffect(() => {
-    if (ids.length === 0) return;
+    if (ids.length === 0 || !hasLive) return;
     const t = setInterval(() => setTickN((n) => n + 1), 1000);
     return () => clearInterval(t);
-  }, [ids.length]);
+  }, [ids.length, hasLive]);
 
   if (ids.length === 0) return null;
 
@@ -77,7 +82,6 @@ function PersistentStreamBubble({
   const isDone = meta?.status === "done";
   const now = Date.now();
   const sinceLastText = meta ? Math.max(0, now - meta.lastTextAt) : 0;
-  const sinceStart = meta ? Math.max(0, now - meta.startedAt) : 0;
   const STALL_THRESHOLD_MS = 60_000;
   const isStalled = !isDone && sinceLastText > STALL_THRESHOLD_MS;
 
@@ -136,7 +140,8 @@ function PersistentStreamBubble({
   if (isLooping) {
     subtitle = `⚠ looping (${toolCalls.length} pseudo-tool-calls)`;
   } else if (isDone) {
-    const totalSec = Math.round(sinceStart / 1000);
+    const endAt = meta?.endedAt ?? meta?.lastTextAt ?? now;
+    const totalSec = Math.round(Math.max(0, endAt - (meta?.startedAt ?? endAt)) / 1000);
     subtitle = `done · ${text.length.toLocaleString()} chars · ${totalSec}s total`;
   } else if (isStalled) {
     subtitle = `⚠ stalled ${Math.round(sinceLastText / 1000)}s…`;
