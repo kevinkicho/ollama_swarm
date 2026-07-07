@@ -65,6 +65,8 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
     setLifecycleState: (v: LifecycleState) => { r.lifecycleState = v; },
     getWasDrained: () => r._wasDrained,
     setWasDrained: (v: boolean) => { r._wasDrained = v; },
+    getStartupCrashMessage: () => r._startupCrashMessage,
+    setStartupCrashMessage: (v: string | undefined) => { r._startupCrashMessage = v; },
     getPaused: () => r.paused,
     setPaused: (v: boolean) => { r.paused = v; },
     getRound: () => r.round,
@@ -482,10 +484,11 @@ export function auditorContext(r: BlackboardRunnerFields): AuditorContext {
   // Create applyAndCommit wrapper for auditor-gated commits
   const applyHunksAndCommit = async (hunks: readonly unknown[], files: readonly string[], message: string, options?: { skipCommit?: boolean }) => {
     const { applyAndCommit } = await import("./WorkerPipeline.js");
-    const { realFilesystemAdapter, realGitAdapter, realVerifyAdapter } = await import("./v2Adapters.js");
+    const { realFilesystemAdapter, realGitAdapter, realVerifyAdapter, isGitRepository } = await import("./v2Adapters.js");
     const clonePath = r.active?.localPath ?? "";
     const fs = realFilesystemAdapter(clonePath);
     const git = realGitAdapter(clonePath);
+    const gitCommitOptional = !(await isGitRepository(clonePath));
 
     const verifyCommand = r.active?.verifyCommand?.trim();
     const forceVerify = r.active?.requireAuditorVerification || r.active?.auditorOnlyMutations;
@@ -503,6 +506,7 @@ export function auditorContext(r: BlackboardRunnerFields): AuditorContext {
       verify,
       auditorApproved: true,
       skipCommit: options?.skipCommit,
+      gitCommitOptional,
     });
     return { 
       ok: result.ok, 

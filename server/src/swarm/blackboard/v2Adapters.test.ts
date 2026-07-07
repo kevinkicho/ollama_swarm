@@ -161,6 +161,27 @@ describe("realGitAdapter", { skip: !gitOk ? "git not on PATH" : false }, () => {
   });
 });
 
+describe("v2Adapters — non-git local workspaces", () => {
+  it("isGitRepository is false for a plain directory", async () => {
+    const dir = path.join(tmpRoot, "plain-dir");
+    await fs.mkdir(dir, { recursive: true });
+    const { isGitRepository } = await import("./v2Adapters.js");
+    assert.equal(await isGitRepository(dir), false);
+  });
+
+  it("finalizeAuditorBatchCommit skips git on non-repo paths", async () => {
+    const dir = path.join(tmpRoot, "plain-batch");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "state_migration.py"), "x = 1\n", "utf8");
+    const { finalizeAuditorBatchCommit } = await import("./v2Adapters.js");
+    const result = await finalizeAuditorBatchCommit(dir, "auditor batch");
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.skippedGit, true);
+    assert.equal(result.sha, undefined);
+  });
+});
+
 describe("v2Adapters — end-to-end with WorkerPipeline", { skip: !gitOk ? "git not on PATH" : false }, () => {
   it("applyAndCommit against real adapters: hunks → file change → commit", async () => {
     const { applyAndCommit } = await import("./WorkerPipeline.js");

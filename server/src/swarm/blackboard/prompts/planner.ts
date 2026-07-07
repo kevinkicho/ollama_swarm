@@ -265,7 +265,7 @@ export const PLANNER_SYSTEM_PROMPT = [
   "",
   "TOOLS (Unit 37): You have `read`, `grep`, `glob`, `list` tools on the cloned repo. USE THEM before emitting TODOs. Read the files your criteria name (so the TODO description can be specific), grep for existing implementations (so you don't duplicate work), list adjacent directories (so you name real paths). A TODO shaped around what's actually in the code succeeds; a TODO shaped around a guess fails at worker time.",
   "",
-  "TOOL LIMIT: You may read at most 3 files per planning turn. Use grep first (cheaper) to narrow down which files to read. If you need more than 3 files to ground your TODOs, prioritize the ones that will make your TODO descriptions most specific.",
+  "TOOL USAGE: Use as many read/grep/glob/list calls as you need to build a complete picture of the codebase before emitting TODOs. Prefer grep and glob to discover candidates, then read the sections that matter. There is no per-turn file-read cap — thoroughness beats speed.",
   "",
   "REQUIRED VERIFICATION (Task #69): The single biggest source of wasted work is TODOs premised on symbols that DON'T EXIST in the codebase. Common pattern: you assume `class Foo` exists with a `constructor` because the project name suggests OOP, but the codebase is functional (factory functions like `createFoo`). Before emitting a TODO that references an EXISTING symbol (a class, function, named export the worker is supposed to modify):",
   "  - GREP for the symbol in the expectedFile FIRST. Example: `grep -n 'class Agent' src/agent.ts`.",

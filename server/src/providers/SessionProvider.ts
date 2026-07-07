@@ -61,6 +61,9 @@ export interface ChatOpts {
    *  of each tool (profile permission table, path safety, allowlist
    *  for bash). See server/src/tools/ToolDispatcher.ts. */
   dispatcher?: import("../tools/ToolDispatcher.js").ToolDispatcher;
+  /** Maximum model/tool round trips for this call. Defaults to 10;
+   * Number.POSITIVE_INFINITY permits exploration until abort/timeout. */
+  maxToolTurns?: number;
   /** Diagnostic callback fired for each tool invocation (name + result
    *  ok/error) so the UI can render tool-call timeline entries. */
   onTool?: (info: { tool: string; ok: boolean; preview: string }) => void;

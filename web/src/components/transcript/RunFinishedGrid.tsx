@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { runOutcomeHeadline } from "@ollama-swarm/shared/formatServerSummary";
 import type { TranscriptEntrySummary } from "../../types";
 
 // Task #72 (2026-04-25): grid renderer for the end-of-run banner.
@@ -26,11 +27,12 @@ export function RunFinishedGrid({
   // Color now follows stopReason — emerald only for true completed; amber
   // for no-progress / cap-trips; ink for user-stop; rose for crashes.
   const palette = paletteForStopReason(s.stopReason);
+  const headline = runOutcomeHeadline(s.stopReason);
   return (
     <div className={`rounded border ${palette.border} ${palette.bg} p-3`}>
       <div className="flex items-baseline justify-between gap-2 mb-2">
         <div className={`${palette.title} font-semibold tracking-wide text-xs uppercase`}>
-          ═ Run finished — {s.stopReason} in {wallClock} ═
+          ═ {headline} — {s.stopReason} in {wallClock} ═
         </div>
         <div className="text-[10px] text-ink-500 font-mono">{tsStr}</div>
       </div>
@@ -60,7 +62,12 @@ export function RunFinishedGrid({
         <div className="text-ink-500">Duration</div>
         <div className="text-ink-200">{wallClock}</div>
         <div className="text-ink-500">Stop reason</div>
-        <div className={s.stopReason === "completed" ? "text-emerald-300" : s.stopReason === "user" ? "text-ink-200" : "text-amber-300"}>
+        <div className={
+          s.stopReason === "completed" ? "text-emerald-300"
+            : s.stopReason === "crash" || s.stopReason === "crashed" ? "text-rose-300"
+            : s.stopReason === "user" ? "text-ink-200"
+            : "text-amber-300"
+        }>
           {s.stopReason}
           {s.stopDetail ? <span className="text-ink-400 italic"> — {s.stopDetail}</span> : null}
         </div>
@@ -177,6 +184,7 @@ function paletteForStopReason(reason: string): { border: string; bg: string; tit
         title: "text-ink-200",
       };
     case "crash":
+    case "crashed":
     case "cap:quota":
       return {
         border: "border-rose-700/50",

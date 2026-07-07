@@ -248,7 +248,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
       if (cycle === 1) {
         // ── CYCLE 1: Full discussion (3 rounds) ──
         this.setPhase("discussing");
-        this.appendSystem(`[Phase 1] Analysis — 3 round(s)`);
+        this.appendSystem(`Analysis — 3 round(s)`);
 
         for (let r = 1; r <= 3; r++) {
           if (this.stopping) break;

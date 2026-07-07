@@ -8,6 +8,7 @@
  *  125 properties discovered across 11 contexts. */
 export interface BlackboardRunnerFields {
   _wasDrained: any;
+  _startupCrashMessage?: string;
   active: any;
   activeAborts: any;
   adaptiveHysteresis: any;
@@ -217,6 +218,7 @@ export interface BlackboardRunnerFields {
 
 /** Properties accessed by lifecycleContext(). 92 properties. */export interface LifecycleFields {
   _wasDrained: any;
+  _startupCrashMessage?: string;
   active: any;
   activeAborts: any;
   agentRoster: any;

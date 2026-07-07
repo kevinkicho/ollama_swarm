@@ -218,6 +218,27 @@ describe("formatServerSummary — system entries", () => {
     assert.equal(out, "Run finished — user-stop");
   });
 
+  it("run_finished crash uses failed headline", () => {
+    const out = formatServerSummary({
+      kind: "run_finished",
+      preset: "blackboard",
+      model: "glm-5.1:cloud",
+      repoUrl: "",
+      clonePath: "/tmp/repo",
+      startedAt: 0,
+      endedAt: 200,
+      stopReason: "crash",
+      stopDetail: "aborted during startup",
+      commits: 0,
+      filesChanged: 0,
+      wallClockMs: 200,
+      linesAdded: 0,
+      linesRemoved: 0,
+      agents: [],
+    });
+    assert.equal(out, "Run failed — crash");
+  });
+
   it("seed_announce", () => {
     const out = formatServerSummary({
       kind: "seed_announce",

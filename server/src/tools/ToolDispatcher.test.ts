@@ -30,6 +30,19 @@ test("PROFILES — swarm-read allows read/grep/glob/list, denies edit/write/bash
   assert.equal(PROFILES["swarm-read"].bash, "deny");
 });
 
+test("PROFILES — swarm-planner can inspect files but cannot mutate or execute", () => {
+  assert.deepEqual(
+    ["read", "grep", "glob", "list"].map((tool) => PROFILES["swarm-planner"][tool as keyof typeof PROFILES["swarm-planner"]]),
+    ["allow", "allow", "allow", "allow"],
+  );
+  assert.equal(PROFILES["swarm-planner"].bash, "deny");
+  assert.equal(PROFILES["swarm-planner"].write, "deny");
+  assert.equal(PROFILES["swarm-planner"].edit, "deny");
+  assert.equal(PROFILES["swarm-planner"].propose_hunks, "deny");
+  assert.equal(PROFILES["swarm-planner"].web_fetch, "allow");
+  assert.equal(PROFILES["swarm-planner"].web_search, "allow");
+});
+
 test("ToolDispatcher — denies tools not in profile", async () => {
   const root = await makeFixtureClone();
   try {

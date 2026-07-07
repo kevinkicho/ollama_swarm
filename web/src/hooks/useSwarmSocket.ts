@@ -166,7 +166,7 @@ async function hydrateFromSnapshot(): Promise<void> {
     const s = useSwarm.getState();
     s.setPhase(snap.phase, snap.round);
     for (const a of snap.agents) s.upsertAgent(a);
-    for (const e of snap.transcript) s.appendEntry(e);
+    if (snap.transcript?.length) s.hydrateTranscriptEntries(snap.transcript);
     if (snap.summary) s.setSummary(snap.summary);
     if (snap.contract) s.setContract(snap.contract);
     if (snap.cloneState) s.setCloneState(snap.cloneState);

@@ -39,7 +39,7 @@ export interface ReplanContext {
   wrappers: TodoQueueWrappers;
   appendSystem: (msg: string) => void;
   appendAgent: (agent: Agent, text: string) => void;
-  promptPlannerSafely: (agent: Agent, promptText: string, agentName?: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => Promise<{ response: string; agentUsed: Agent }>;
+  promptPlannerSafely: (agent: Agent, promptText: string, agentName?: "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => Promise<{ response: string; agentUsed: Agent }>;
   checkAndApplyCaps: () => boolean;
   emit?: (e: unknown) => void;
   // Plan 4: brain system overseer
@@ -143,7 +143,7 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
     const r = await ctx.promptPlannerSafely(
       planner,
       `${REPLANNER_SYSTEM_PROMPT}\n\n${buildReplannerUserPrompt(seed)}`,
-      undefined,
+      "swarm-planner",
       REPLANNER_JSON_SCHEMA,
     );
     response = r.response;
@@ -168,7 +168,7 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
       const r = await ctx.promptPlannerSafely(
         replanAgent,
         `${REPLANNER_SYSTEM_PROMPT}\n\n${buildReplannerRepairPrompt(response, parsed.reason)}`,
-        undefined,
+        "swarm-planner",
         REPLANNER_JSON_SCHEMA,
       );
       repair = r.response;

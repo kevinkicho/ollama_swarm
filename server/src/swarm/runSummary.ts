@@ -21,6 +21,7 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { runOutcomeHeadline } from "@ollama-swarm/shared/formatServerSummary";
 
 import {
   FINAL_GIT_STATUS_MAX,
@@ -363,7 +364,8 @@ function roleForAgent(preset: string, idx: number, totalAgents: number): string 
 
 export function formatRunFinishedBanner(summary: RunSummary): string {
   const lines: string[] = [];
-  lines.push(`═══ Run finished — ${summary.stopReason} in ${fmtRuntime(summary.wallClockMs)} ═══`);
+  const headline = runOutcomeHeadline(summary.stopReason);
+  lines.push(`═══ ${headline} — ${summary.stopReason} in ${fmtRuntime(summary.wallClockMs)} ═══`);
 
   // Top-level totals. Always show the core 3 (files, commits, lines);
   // todo counters only when applicable (blackboard).

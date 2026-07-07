@@ -262,6 +262,28 @@ describe("applyAndCommit — failure modes", () => {
     assert.match(out.reason, /git commit failed/);
     assert.match(out.reason, /git index locked/);
   });
+
+  it("gitCommitOptional treats commit failure as success (non-git workspaces)", async () => {
+    const { fs, state: fsState } = makeFakeFs({ "a.ts": "hello" });
+    const { git, state: gitState } = makeFakeGit({ failReason: "not a git repository" });
+    const hunks: Hunk[] = [
+      { op: "replace", file: "a.ts", search: "hello", replace: "world" },
+    ];
+    const out = await applyAndCommit({
+      todoId: "t1",
+      workerId: "worker-2",
+      expectedFiles: ["a.ts"],
+      hunks,
+      fs,
+      git,
+      gitCommitOptional: true,
+    });
+    assert.equal(out.ok, true);
+    if (!out.ok) return;
+    assert.equal(out.commitSha, "");
+    assert.equal(fsState.files.get("a.ts"), "world");
+    assert.equal(gitState.commits.length, 0);
+  });
 });
 
 describe("applyAndCommit — no-op + empty cases", () => {

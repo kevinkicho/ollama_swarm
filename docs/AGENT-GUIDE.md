@@ -31,6 +31,28 @@ Works from the repo root, any shell. The runner shim
 (`server/scripts/run-tests.mjs`) sets `OPENCODE_SERVER_PASSWORD=test-only`
 on the spawned process if not already set.
 
+### Local stack validation (`run-test`)
+
+```bash
+npm run run-test
+```
+
+Runs unit tests, boots (or reuses) the dev server, probes `/api/health`, and
+Playwright-smokes the setup page — **no API keys or LLM required**.
+
+Optional run-start regression (real `POST /api/swarm/start`, needs a configured
+provider and `RUN_TEST_LIVE=1`):
+
+```bash
+RUN_TEST_LIVE=1 npm run run-test -- --live-smoke
+# or
+RUN_TEST_LIVE=1 npm run run-test:live
+```
+
+Knobs: `RUN_TEST_PRESET` (default `baseline`), `RUN_TEST_START_TIMEOUT_MS`
+(default `30000`). Artifacts land in `runs/_run-test-<timestamp>/` including
+`logs/live-smoke.json` and `playwright/screenshots/03-run-started.png`.
+
 ### Type-check (no emit)
 
 ```bash

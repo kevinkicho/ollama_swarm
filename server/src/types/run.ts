@@ -142,6 +142,28 @@ export interface SwarmStatusRunConfig {
   // so the SetupForm bar + advanced panels can re-hydrate on refresh / review.
   wallClockCapMin?: string;
   ambitionTiers?: string;
+  // User directive — threaded into runners and needed for Resume fidelity.
+  userDirective?: string;
+  plannerTools?: boolean;
+  webTools?: boolean;
+}
+
+/** Lift userDirective / tool flags from persisted run-state extras. */
+export function normalizeSwarmStatusRunConfig(
+  rc: SwarmStatusRunConfig & { localPath?: string; extras?: Record<string, unknown> },
+): SwarmStatusRunConfig {
+  const extras = rc.extras ?? {};
+  const userDirective =
+    (typeof rc.userDirective === "string" && rc.userDirective.trim())
+    || (typeof extras.userDirective === "string" && extras.userDirective.trim())
+    || undefined;
+  return {
+    ...rc,
+    clonePath: rc.clonePath || rc.localPath || "",
+    ...(userDirective ? { userDirective } : {}),
+    plannerTools: rc.plannerTools ?? (extras.plannerTools as boolean | undefined),
+    webTools: rc.webTools ?? (extras.webTools as boolean | undefined),
+  };
 }
 
 export interface SwarmStatusBoard {

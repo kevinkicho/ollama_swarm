@@ -46,6 +46,8 @@ export interface LifecycleContext {
   setLifecycleState(v: LifecycleState): void;
   getWasDrained(): boolean;
   setWasDrained(v: boolean): void;
+  getStartupCrashMessage(): string | undefined;
+  setStartupCrashMessage(v: string | undefined): void;
   getPaused(): boolean;
   setPaused(v: boolean): void;
 
@@ -242,6 +244,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   // Task #168: clear the drain-marker so this fresh run defaults
   // to "stop = hard user-stop" classification unless drain() fires.
   ctx.setWasDrained(false);
+  ctx.setStartupCrashMessage(undefined);
   ctx.setTerminationReason(undefined);
   // 2026-05-04 (W7/W13/W14/W15 wiring): clear per-run trackers.
   ctx.getErrorTracker().length = 0;
@@ -335,6 +338,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   // T-Item-HypTimeout (2026-05-04): clear deferral timestamps.
   ctx.getHypothesisDeferralTimestamps().clear();
 
+  try {
   // Skip the "cloning" phase (and actual clone op) when a local filepath was provided
   // instead of a git URL. We still want clone_state for the UI banner, but no "cloning".
   const isRemoteClone = !!(cfg.repoUrl && (cfg.repoUrl.startsWith("http://") || cfg.repoUrl.startsWith("https://")));
@@ -466,6 +470,18 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   ctx.setPhase("seeding");
   const seed = await ctx.buildSeed(destPath, cfg);
   if (cfg.suppressSeedMessages !== true) {
+    const directiveTrimmed = (cfg.userDirective ?? "").trim();
+    if (directiveTrimmed.length > 0) {
+      const preview =
+        directiveTrimmed.length > 200
+          ? `${directiveTrimmed.slice(0, 200)}…`
+          : directiveTrimmed;
+      ctx.appendSystem(`User directive: "${preview}"`);
+    } else {
+      ctx.appendSystem(
+        "No user directive — planner will propose goals from the codebase.",
+      );
+    }
     ctx.appendSystem(
       `Seed: ${seed.topLevel.length} top-level entries, README ${
         seed.readmeExcerpt ? `${seed.readmeExcerpt.length} chars` : "(missing)"
@@ -532,6 +548,12 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
       ctx.appendSystem(`⚠ lifecycle stopAfterAbort: ${err instanceof Error ? err.message : String(err)}`);
     });
   });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ctx.setStartupCrashMessage(msg);
+    ctx.appendSystem(`Run failed during startup: ${msg}`);
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------

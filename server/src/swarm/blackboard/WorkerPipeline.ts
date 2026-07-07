@@ -101,6 +101,9 @@ export interface WorkerPipelineInput {
   /** NEW for batching: if true, perform apply + verify but skip the git commit.
    *  Caller will do a single commit after all batch applies. */
   skipCommit?: boolean;
+  /** When true, a failed git commit after a successful apply is treated as success
+   *  (non-git local workspaces). */
+  gitCommitOptional?: boolean;
 }
 
 /** V2 post-LLM pipeline: read files → apply hunks → write changed
@@ -271,6 +274,15 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
     input.workerId,
   );
   if (!commit.ok) {
+    if (input.gitCommitOptional) {
+      return {
+        ok: true,
+        commitSha: "",
+        filesWritten,
+        linesAdded,
+        linesRemoved,
+      };
+    }
     return { ok: false, reason: `git commit failed: ${commit.reason}` };
   }
   return {

@@ -34,7 +34,7 @@ import { ContractBubble } from "./ContractBubble";
 import { AuditorVerdictBubble } from "./AuditorVerdictBubble";
 import { TodosBubble } from "./TodosBubble";
 // New components for transcript UI improvements
-import { PhaseDivider, detectPhaseTransition } from "./PhaseDivider";
+
 import { AgentAvatar } from "./AgentAvatar";
 import { AuditReviewCard } from "./AuditReviewCard";
 
@@ -91,12 +91,6 @@ function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
   // a horizontal-rule block with the run's metadata.
   if (entry.text.startsWith("▸▸RUN-START▸▸")) {
     return <RunStartDivider text={entry.text} ts={entry.ts} />;
-  }
-
-  // Phase divider detection — render visual separators between phases
-  const phaseTransition = detectPhaseTransition(entry.text);
-  if (phaseTransition) {
-    return <PhaseDivider phase={phaseTransition.phase} ts={entry.ts} cycle={phaseTransition.cycle} />;
   }
 
   // Audit review detection — render structured audit review cards

@@ -5,6 +5,17 @@
 
 ---
 
+## Queued: Run-start stability (P1)
+
+See **`docs/plans/run-start-stability.md`** for full PR breakdown.
+
+- [x] **PR1** — Unified `mergeTranscriptEntry` helper (hydrate + append dedup parity)
+- [x] **PR2** — `SwarmStoreProvider` WS buffer + gate history fallback (fix false `stopped` phase)
+- [x] **PR3** — `run-test --live-smoke` automated regression
+- [x] **PR4** — Transcript virtualizer tuning (overscan/range + plain list under 50 entries)
+
+---
+
 ## Queued: Brain Implementation (see docs/ARCHITECTURE-VISION.md)
 
 ### P2: Wire LLM Analysis ✅ DONE

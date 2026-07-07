@@ -5,6 +5,18 @@ import { useSwarm } from "../state/store";
 import { StreamingDock } from "./transcript/StreamingDock";
 import { MessageBubble } from "./transcript/MessageBubble";
 import { StreamingTranscriptCard } from "./transcript/StreamingTranscriptCard";
+import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
+
+/** Virtualization disabled — estimate drift caused hidden rows and wide gaps on stop. */
+const ENABLE_TRANSCRIPT_VIRTUALIZATION = false;
+const VIRTUALIZE_MIN_COUNT = 500;
+const VIRTUAL_OVERSCAN = 40;
+const VIRTUAL_OVERSCAN_HISTORY = 200;
+const VIRTUAL_RANGE_EXTRA = 80;
+const VIRTUAL_RANGE_EXTRA_HISTORY = 200;
+const VIRTUAL_RANGE_SCROLL_PAD = 80;
+const VIRTUAL_RANGE_SCROLL_PAD_HISTORY = 150;
+const VIRTUAL_TOP_MEASURE_COUNT = 12;
 
 export const Transcript = memo(function Transcript() {
   // Ultra-narrow selectors where possible (perf: avoid re-renders on unrelated store changes).
@@ -14,6 +26,8 @@ export const Transcript = memo(function Transcript() {
   const agents = useSwarm((s) => s.agents);
   const runId = useSwarm((s) => s.runId);
   const phase = useSwarm((s) => s.phase);
+  const plainListLatched = useSwarm((s) => s.transcriptPlainListLatched);
+  const latchPlainList = useSwarm((s) => s.latchTranscriptPlainList);
   // Full transcript passed from store; UI filter controls visibility.
   const [suggesting, setSuggesting] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -53,7 +67,14 @@ export const Transcript = memo(function Transcript() {
   }, [streamingMeta, clearStreaming]);
 
   // Live vs historical for scroll behavior guards. We keep a ref for closures (RO, RAFs).
-  const isLiveActivity = streamingCount > 0 || (phase !== 'idle' && phase !== 'stopped' && phase !== 'completed' && phase !== 'failed');
+  const isLiveActivity = streamingCount > 0 || isActiveSwarmPhase(phase);
+  const isTerminalPhase = isTerminalSwarmPhase(phase);
+  // Latch in store (survives remounts / Strict Mode) before paint when live.
+  useLayoutEffect(() => {
+    if (isLiveActivity) {
+      latchPlainList();
+    }
+  }, [isLiveActivity, latchPlainList]);
   useEffect(() => {
     isLiveRef.current = isLiveActivity;
     // When becoming live (or on fresh data), allow future measurements again.
@@ -77,10 +98,67 @@ export const Transcript = memo(function Transcript() {
   const isLiveRef = useRef(true);
   const initialSizeSettledRef = useRef(false);
   const lastMeasureRef = useRef(0);
-  // Track all mounted item elements so we can force re-measure on updates/resize
-  // to ensure no items stay "hidden" due to stale estimates. This helps with
-  // the "not drawn until resize" symptom.
-  const mountedItemsRef = useRef(new Map<number, HTMLElement>());
+  const measureRafRef = useRef<number | null>(null);
+  const scrollRafRef = useRef<number | null>(null);
+  const lastScrollAtRef = useRef(0);
+  const prevFirstEntryIdRef = useRef<string | undefined>(undefined);
+  const scrollHeightBeforePrependRef = useRef(0);
+  const shouldVirtualizeRef = useRef(true);
+  const filteredTranscriptRef = useRef<typeof transcript>([]);
+  // Key by entry id (not index) so prepend/reorder at run start doesn't map
+  // stale DOM nodes to wrong virtual positions.
+  const mountedItemsRef = useRef(new Map<string, HTMLElement>());
+
+  const scheduleMeasure = useCallback(() => {
+    if (!shouldVirtualizeRef.current) return;
+    if (measureRafRef.current != null) return;
+    measureRafRef.current = requestAnimationFrame(() => {
+      measureRafRef.current = null;
+      const v = virtualizerRef.current;
+      if (!v) return;
+      const oldTotal = prevTotalSizeRef.current;
+      mountedItemsRef.current.forEach((el) => {
+        if (el.isConnected) {
+          try { v.measureElement(el); } catch {}
+        }
+      });
+      // Re-measure leading items so RUN-START / early pipeline lines don't drift
+      // cumulative starts and push later items out of the rendered virtual range.
+      const list = filteredTranscriptRef.current;
+      const topN = Math.min(VIRTUAL_TOP_MEASURE_COUNT, list.length);
+      for (let i = 0; i < topN; i++) {
+        const entryId = list[i]?.id ?? `idx-${i}`;
+        const el = mountedItemsRef.current.get(entryId);
+        if (el?.isConnected) {
+          try { v.measureElement(el); } catch {}
+        }
+      }
+      v.measure();
+      const newTotal = v.getTotalSize();
+      const el = scrollRef.current;
+      if (
+        el && isLiveRef.current && !isAtBottomRef.current &&
+        !userScrollingRef.current && oldTotal > 0 && newTotal < oldTotal
+      ) {
+        el.scrollTop = Math.max(0, el.scrollTop - (oldTotal - newTotal));
+      }
+      prevTotalSizeRef.current = newTotal;
+      if (!isLiveRef.current && prevLenRef.current > 0) {
+        initialSizeSettledRef.current = true;
+      }
+    });
+  }, []);
+
+  const scheduleScrollToEnd = useCallback(() => {
+    const now = Date.now();
+    if (now - lastScrollAtRef.current < 150) return;
+    if (scrollRafRef.current != null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      lastScrollAtRef.current = Date.now();
+      endRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+    });
+  }, []);
 
   // compensateOrReanchor removed: all scroll compensation now inlined with live guards only.
   // For finished/historical transcripts we avoid ANY programmatic scrollTop changes or scrollIntoView
@@ -195,26 +273,45 @@ export const Transcript = memo(function Transcript() {
     return true;
   }), [transcript, filter]);
 
-  // Force re-measure to combat drawing issues (items not rendered until resize/scroll).
-  useEffect(() => {
-    const v = virtualizerRef.current;
-    if (v) {
-      requestAnimationFrame(() => {
-        try {
-          v.measure();
-        } catch (e) {}
-        // Force measure on known mounted items too
-        mountedItemsRef.current.forEach((el, idx) => {
-          if (el && el.isConnected) {
-            try {
-              // @ts-ignore if method exists
-              if (typeof v.measureElement === 'function') v.measureElement(el, idx);
-            } catch {}
-          }
-        });
-      });
+  filteredTranscriptRef.current = filteredTranscript;
+  const shouldVirtualize =
+    ENABLE_TRANSCRIPT_VIRTUALIZATION &&
+    !plainListLatched &&
+    !isLiveActivity &&
+    !isTerminalPhase &&
+    filteredTranscript.length >= VIRTUALIZE_MIN_COUNT;
+  shouldVirtualizeRef.current = shouldVirtualize;
+  const virtualOverscan = isLiveActivity ? VIRTUAL_OVERSCAN : VIRTUAL_OVERSCAN_HISTORY;
+  const virtualRangeExtra = isLiveActivity ? VIRTUAL_RANGE_EXTRA : VIRTUAL_RANGE_EXTRA_HISTORY;
+  const virtualRangeScrollPad = isLiveActivity
+    ? VIRTUAL_RANGE_SCROLL_PAD
+    : VIRTUAL_RANGE_SCROLL_PAD_HISTORY;
+
+  // RUN-START divider prepends shift indices — drop stale DOM refs and preserve
+  // scroll anchor when the user has scrolled up (not pinned to bottom).
+  useLayoutEffect(() => {
+    const firstId = filteredTranscript[0]?.id;
+    const prevFirst = prevFirstEntryIdRef.current;
+    const el = scrollRef.current;
+    if (prevFirst && firstId && prevFirst !== firstId) {
+      mountedItemsRef.current.clear();
+      if (
+        el &&
+        !isAtBottomRef.current &&
+        !userScrollingRef.current &&
+        scrollHeightBeforePrependRef.current > 0
+      ) {
+        const delta = el.scrollHeight - scrollHeightBeforePrependRef.current;
+        if (delta > 0) el.scrollTop += delta;
+      }
     }
-  }, [filteredTranscript.length, filter]);
+    prevFirstEntryIdRef.current = firstId;
+    if (el) scrollHeightBeforePrependRef.current = el.scrollHeight;
+  }, [filteredTranscript]);
+
+  useEffect(() => {
+    scheduleMeasure();
+  }, [filteredTranscript.length, filter, scheduleMeasure]);
 
   // Virtualization for the *entire* filtered transcript list.
   // We virtualize everything uniformly (no more prefix/tail split) to ensure
@@ -225,7 +322,7 @@ export const Transcript = memo(function Transcript() {
   //   - count (full filtered length)
   //   - getItemKey (by stable id to preserve size cache across filters/reorders)
   //   - estimateSize (heuristic per kind + text length; improved over time but still approx)
-  //   - overscan (50 for pre-measuring upcoming items)
+  //   - overscan (40 — tuned down from 300 to cut DOM churn at run start)
   //   - measureElement (on the inner content div to get accurate rendered height)
   // - makeItemRef + ResizeObserver: attached to each item's content wrapper.
   //   Observes post-mount resizes (e.g. long text wrap, tables in run_finished, collapsibles)
@@ -325,37 +422,30 @@ export const Transcript = memo(function Transcript() {
     getScrollElement,
     getItemKey,
     estimateSize,
-    overscan: 300,
-    // Force a much wider render range around the current view.
-    // This guarantees that items whose positions are temporarily off (due to estimate variance on dynamic content)
-    // are still rendered in the DOM instead of being culled as "offscreen".
-    // Combined with the direct measure calls, this stops messages from "hiding" in blanks until a resize.
+    overscan: virtualOverscan,
+    // Wider range on historical views prevents "hidden until resize" when estimates drift.
+    // Live runs use the plain list (shouldVirtualize=false) so these values rarely apply live.
     rangeExtractor: (range) => {
-      // Aggressively include items around the computed range + around the actual scroll position (using rough avg size)
-      // + last N items. This guarantees "in between" messages get their DOM nodes created and measured,
-      // even if estimates are temporarily wrong (causing library range to miss them).
-      // This is the main fix for "not drawn until resize" (resize changes scroll/client dims, forcing re-calc that includes them).
-      const extra = 400;
-      let start = Math.max(0, range.startIndex - extra);
-      let end = Math.min(filteredTranscript.length - 1, range.endIndex + extra);
+      let start = Math.max(0, range.startIndex - virtualRangeExtra);
+      let end = Math.min(filteredTranscript.length - 1, range.endIndex + virtualRangeExtra);
 
       const sc = scrollRef.current;
-      const avg = 42; // rough avg item height tuned lower for system/agent short lines
+      const avg = 42;
       if (sc) {
-        const approxStart = Math.max(0, Math.floor(sc.scrollTop / avg) - 150);
-        const approxEnd = Math.min(filteredTranscript.length - 1, Math.floor((sc.scrollTop + sc.clientHeight) / avg) + 150);
+        const approxStart = Math.max(0, Math.floor(sc.scrollTop / avg) - virtualRangeScrollPad);
+        const approxEnd = Math.min(
+          filteredTranscript.length - 1,
+          Math.floor((sc.scrollTop + sc.clientHeight) / avg) + virtualRangeScrollPad,
+        );
         start = Math.min(start, approxStart);
         end = Math.max(end, approxEnd);
       }
 
-      // If near the top of transcript (common for seeing start message + early content), force-include from 0
-      // so early system msgs (RUN-START, [Pipeline]...) and first agent outputs are never dropped by estimate drift.
       if (sc && sc.scrollTop < 400) {
         start = 0;
       }
 
-      // Always include the most recent items (live chat growth, new system messages, hunks).
-      const tail = Math.max(0, filteredTranscript.length - 80);
+      const tail = Math.max(0, filteredTranscript.length - virtualRangeExtra);
       start = Math.min(start, tail);
       end = Math.max(end, filteredTranscript.length - 1);
 
@@ -364,56 +454,16 @@ export const Transcript = memo(function Transcript() {
   });
   virtualizerRef.current = virtualizer;
 
-  // Force early measurement on mount (and after hydration populates) to get accurate sizes quickly.
-  // For historical/finished runs we want this to happen *before* or while the user starts scrolling,
-  // and then we freeze (see initialSizeSettledRef + guards in other effects).
-  // No scrollTop writes here.
+  // Settle sizes after hydration / run-start burst (single coalesced pass).
   useEffect(() => {
-    const v = virtualizerRef.current;
-    if (!v) return;
+    scheduleMeasure();
+    const t = setTimeout(scheduleMeasure, 80);
+    return () => clearTimeout(t);
+  }, [filteredTranscript.length, scheduleMeasure]);
 
-    const doMeasure = () => {
-      v.measure();
-      prevTotalSizeRef.current = v.getTotalSize();
-    };
-
-    requestAnimationFrame(doMeasure);
-    // Multiple passes + force on any already-mounted items (in case of dynamic appends during initial load).
-    const t1 = setTimeout(() => {
-      doMeasure();
-      mountedItemsRef.current.forEach((el) => virtualizer.measureElement(el));
-      // Force top items specifically so RUN-START + first pipeline msg get correct size immediately.
-      for (let i = 0; i < Math.min(6, filteredTranscript.length); i++) {
-        const el = mountedItemsRef.current.get(i);
-        if (el) try { virtualizer.measureElement(el); } catch {}
-      }
-    }, 60);
-    const t2 = setTimeout(() => {
-      doMeasure();
-      mountedItemsRef.current.forEach((el) => virtualizer.measureElement(el));
-    }, 160);
-    const t3 = setTimeout(() => {
-      doMeasure();
-      mountedItemsRef.current.forEach((el) => virtualizer.measureElement(el));
-    }, 380);
-
-    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
-  }, [filteredTranscript.length]);
-
-  // Re-measure when filter changes (different subset of items with potentially different
-  // height profiles; prevents stale size cache causing gaps or staggered layout in agents/key filters).
   useEffect(() => {
-    const v = virtualizerRef.current;
-    if (v) {
-      requestAnimationFrame(() => v.measure());
-      mountedItemsRef.current.forEach((el) => v.measureElement(el));
-      // Re-measure twice for filter (different items may have very different heights).
-      setTimeout(() => {
-        v.measure();
-        mountedItemsRef.current.forEach((el) => v.measureElement(el));
-      }, 50);
-    }
-  }, [filter]);
+    scheduleMeasure();
+  }, [filter, scheduleMeasure]);
 
   // One-time post-layout computation of actual atBottom (handles initial top position for
   // finished transcripts + short content cases). Avoids stale initial state/ref.
@@ -442,43 +492,40 @@ export const Transcript = memo(function Transcript() {
   // user is manually scrolling or has scrolled*, which was causing the "pushed upward" effect
   // (items above viewport get re-measured → virtual translateY of lower items shift → at fixed
   // scrollTop the viewport shows earlier content).
+  const renderEntry = useCallback((e: (typeof filteredTranscript)[number]) => {
+    if (e.role === "agent-stream") {
+      return <StreamingTranscriptCard entry={e} />;
+    }
+    return <MessageBubble entry={e} />;
+  }, []);
+
   const makeItemRef = useCallback((vItem: any) => (el: HTMLElement | null) => {
+    if (!shouldVirtualizeRef.current) return;
+    const entryId = filteredTranscript[vItem.index]?.id ?? `idx-${vItem.index}`;
     if (!el) {
-      mountedItemsRef.current.delete(vItem.index);
+      mountedItemsRef.current.delete(entryId);
       return;
     }
-    mountedItemsRef.current.set(vItem.index, el);
-    // For historical: measureElement only the first time this item mounts.
-    // Repeated calls on re-renders (caused by sticky state, etc.) would otherwise keep
-    // updating the size cache and potentially shifting positions of other virtual items.
+    mountedItemsRef.current.set(entryId, el);
     const already = (el as any)._measured;
     if (!already) {
       virtualizer.measureElement(el);
       (el as any)._measured = true;
     }
-    // Only attach live observers for active runs.
     if (!isLiveRef.current) return;
     if (!(el as any)._ro) {
+      let roTimer: ReturnType<typeof setTimeout> | null = null;
       const ro = new ResizeObserver(() => {
-        const v = virtualizerRef.current;
-        if (v) {
-          const oldTotal = prevTotalSizeRef.current;
-          requestAnimationFrame(() => {
-            v.measure();
-            const newTotal = v.getTotalSize();
-            const sc = scrollRef.current;
-            if (sc && isLiveRef.current && !isAtBottomRef.current && !userScrollingRef.current && oldTotal > 0 && newTotal < oldTotal) {
-              const delta = oldTotal - newTotal;
-              sc.scrollTop = Math.max(0, sc.scrollTop - delta);
-            }
-            prevTotalSizeRef.current = newTotal;
-          });
-        }
+        if (roTimer) return;
+        roTimer = setTimeout(() => {
+          roTimer = null;
+          scheduleMeasure();
+        }, 80);
       });
       ro.observe(el);
       (el as any)._ro = ro;
     }
-  }, [virtualizer]);
+  }, [virtualizer, filteredTranscript, scheduleMeasure]);
 
   // Auto-scroll / sticky-bottom logic.
   // 
@@ -506,136 +553,43 @@ export const Transcript = memo(function Transcript() {
     const currentStream = streamingCount;
 
     const hadNewContent = currentLen > prevLenRef.current || currentStream > prevStreamingCountRef.current;
-    // If transcript was cleared (new run), allow re-settling sizes.
-    if (currentLen === 0) initialSizeSettledRef.current = false;
+    if (currentLen === 0) {
+      initialSizeSettledRef.current = false;
+      mountedItemsRef.current.clear();
+    }
     prevLenRef.current = currentLen;
     prevStreamingCountRef.current = currentStream;
 
-    const v = virtualizerRef.current;
-    const el = scrollRef.current;
-
     const live = isLiveRef.current;
-
-    // Only measure dynamically on live runs, or during the very first population of a
-    // historical transcript (while initialSizeSettledRef is false). After that, freeze
-    // sizes to give the user completely free manual scrolling with no app-driven layout shifts.
-    if (v && (live || !initialSizeSettledRef.current)) {
-      requestAnimationFrame(() => {
-        const oldTotal = prevTotalSizeRef.current;
-        v.measure();
-        const newTotal = v.getTotalSize();
-        // Compensation *only* for live; historical never adjusts scrollTop here.
-        if (el && live && !isAtBottomRef.current && !userScrollingRef.current && oldTotal > 0 && newTotal < oldTotal) {
-          const delta = oldTotal - newTotal;
-          el.scrollTop = Math.max(0, el.scrollTop - delta);
-        }
-        prevTotalSizeRef.current = newTotal;
-
-        // For historical: after we have real content and have measured at least once,
-        // mark settled so future appends (if any) or re-renders don't trigger more measures.
-        if (!live && currentLen > 0) {
-          initialSizeSettledRef.current = true;
-        }
-      });
-    }
-
-    // Re-measure on new content for live, but throttled to reduce flicker/jitter from
-    // over-measuring on every single append (common in council and long runs with high message volume).
-    if (live && v) {
+    if (live || !initialSizeSettledRef.current) {
       const now = Date.now();
-      if (now - (lastMeasureRef.current || 0) > 60) {  // tighter throttle for faster correction of gaps on bursty runs
+      if (now - (lastMeasureRef.current || 0) > 80) {
         lastMeasureRef.current = now;
-        requestAnimationFrame(() => v.measure());
-        mountedItemsRef.current.forEach((el) => v.measureElement(el));
+        scheduleMeasure();
       }
     }
 
-    // Explicitly force-measure the first few items on every length change. This keeps the
-    // top-of-transcript (RUN-START divider, first [Pipeline] and early agent msgs) heights accurate
-    // so subsequent virtual positions don't drift and create wide gaps hiding later content.
-    if (v) {
-      const topN = Math.min(10, filteredTranscript.length);
-      for (let i = 0; i < topN; i++) {
-        const el = mountedItemsRef.current.get(i);
-        if (el && el.isConnected) {
-          try { v.measureElement(el); } catch {}
-        }
-      }
-      // Also a full measure pass (cheap after topN)
-      requestAnimationFrame(() => v.measure());
-      // Extra for heavy transcripts: measure a few more items to reduce gaps in middle.
-      for (let i = topN; i < Math.min(topN + 5, filteredTranscript.length); i++) {
-        const el = mountedItemsRef.current.get(i);
-        if (el && el.isConnected) {
-          try { v.measureElement(el); } catch {}
-        }
-      }
-    }
+    if (!isAtBottomRef.current || !live || !hadNewContent) return;
+    scheduleScrollToEnd();
+  }, [filteredTranscript.length, streamingCount, scheduleMeasure, scheduleScrollToEnd]);
 
-    // Use the ref for at-bottom check (updated live in onScroll without causing re-renders).
-    // This prevents the effect from reacting to sticky state changes during scroll.
-    if (!isAtBottomRef.current) return;
-
-    // Only auto-scroll to bottom for live activity.
-    // For finished/history views (like /runs/:id), completely suppress.
-    // Full manual control; "Latest" for explicit end jump only.
-    if (!live) return;
-
-    // For live: follow on new content (hadNewContent will be true for arrivals)
-    if (hadNewContent) {
-      requestAnimationFrame(() => {
-        endRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-      });
-    }
-  }, [filteredTranscript.length, streamingCount]);
-
-  // After filter change re-measure for the new set of items (different heights).
-  // This is user-initiated so a one-time layout adjustment on filter is acceptable.
-  // No scrollToOffset. We still avoid it on passive length changes for history.
-  useEffect(() => {
-    const t = setTimeout(() => {
-      const v = virtualizerRef.current;
-      if (v) {
-        v.measure();
-        requestAnimationFrame(() => v.measure());
-      }
-    }, 40);
-    return () => clearTimeout(t);
-  }, [filter]);
-
-  // Re-measure on filter for layout accuracy (no scroll side effects).
-  // Filter change is explicit user action, so measuring the new arrangement is fine.
   useLayoutEffect(() => {
-    const raf = requestAnimationFrame(() => {
-      virtualizer.measure();
-      requestAnimationFrame(() => virtualizer.measure());
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [filter, virtualizer]);
+    scheduleMeasure();
+  }, [filter, scheduleMeasure]);
 
   // Resize handler + container RO: force re-measure when viewport size changes.
   // Critical for the "hiding until resize" symptom: when browser width changes, wrapped text in system/agent bubbles
   // changes height; without immediate measure the virtual positions stay wrong and items stay out of rendered range.
   useEffect(() => {
-    let t: any;
-    const doMeasure = () => {
-      const v = virtualizerRef.current;
-      if (v) {
-        v.measure();
-        // Force all mounted items on resize (width change affects wrap heights in code/JSON/system text).
-        mountedItemsRef.current.forEach((el) => v.measureElement(el));
-        requestAnimationFrame(() => v.measure());
-        setTimeout(() => v.measure(), 40);
-      }
-    };
+    let t: ReturnType<typeof setTimeout> | undefined;
     const onResize = () => {
       clearTimeout(t);
-      t = setTimeout(doMeasure, 80);
+      t = setTimeout(scheduleMeasure, 100);
     };
     window.addEventListener('resize', onResize);
 
     // Direct observer on the scroller catches size changes even if window event is delayed or not fired in some embeds.
-    const ro = new ResizeObserver(doMeasure);
+    const ro = new ResizeObserver(() => scheduleMeasure());
     if (scrollRef.current) ro.observe(scrollRef.current);
 
     return () => {
@@ -643,7 +597,7 @@ export const Transcript = memo(function Transcript() {
       ro.disconnect();
       clearTimeout(t);
     };
-  }, []);
+  }, [scheduleMeasure]);
 
   return (
     <div className="h-full flex flex-col relative">
@@ -715,50 +669,63 @@ export const Transcript = memo(function Transcript() {
              keep the virtualizer's size cache accurate for variable bubble heights.
            - Live UI (inline streams + StreamingDock) is rendered after the virtual
              container; endRef after that is the "true bottom" target for auto-scroll. */}
-        <div
-          style={{
-            height: `${virtualizer.getTotalSize()}px`,
-            width: '100%',
-            position: 'relative',
-          }}
-        >
-          {virtualizer.getVirtualItems().map((virtualItem) => {
-            const e = filteredTranscript[virtualItem.index];
-            if (!e) return null;
-            return (
-              <div
-                key={e.id}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  transform: `translateY(${virtualItem.start}px)`,
-                  willChange: 'transform',
-                }}
-              >
+        {shouldVirtualize ? (
+          <div
+            style={{
+              height: `${virtualizer.getTotalSize()}px`,
+              width: "100%",
+              position: "relative",
+            }}
+          >
+            {virtualizer.getVirtualItems().map((virtualItem) => {
+              const e = filteredTranscript[virtualItem.index];
+              if (!e) return null;
+              return (
                 <div
-                  ref={makeItemRef(virtualItem)}
-                  data-index={virtualItem.index}
-                  className="virtual-item"
-                  style={{ 
-                    margin: 0,
-                    paddingBottom: `${ITEM_GAP_PX}px`,
-                    boxSizing: 'border-box',
-                    contain: 'layout style',
-                    minHeight: '20px',
+                  key={e.id}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualItem.start}px)`,
                   }}
                 >
-                  {e.role === "agent-stream" ? (
-                    <StreamingTranscriptCard entry={e} />
-                  ) : (
-                    <MessageBubble entry={e} />
-                  )}
+                  <div
+                    ref={makeItemRef(virtualItem)}
+                    data-index={virtualItem.index}
+                    className="virtual-item"
+                    style={{
+                      margin: 0,
+                      paddingBottom: `${ITEM_GAP_PX}px`,
+                      boxSizing: "border-box",
+                      contain: "layout style",
+                      minHeight: "20px",
+                    }}
+                  >
+                    {renderEntry(e)}
+                  </div>
                 </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="transcript-plain-list">
+            {filteredTranscript.map((e) => (
+              <div
+                key={e.id}
+                className="virtual-item"
+                style={{
+                  margin: 0,
+                  paddingBottom: `${ITEM_GAP_PX}px`,
+                  boxSizing: "border-box",
+                }}
+              >
+                {renderEntry(e)}
               </div>
-            );
-          })}
-        </div>
+            ))}
+          </div>
+        )}
 
         <div ref={endRef} />
 

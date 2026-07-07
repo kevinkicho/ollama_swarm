@@ -438,6 +438,19 @@ test("excludeRunnerArtifacts — handles existing exclude file without trailing 
   }
 });
 
+test("clone — empty repoUrl uses local destPath without git clone", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-clone-local-"));
+  try {
+    const repos = new RepoService();
+    const result = await repos.clone({ url: "", destPath: root });
+    assert.equal(result.destPath, path.resolve(root));
+    assert.equal(result.alreadyPresent, true);
+    assert.equal(result.priorCommits, 0);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Unit 47: cloneStats — used by clone() to populate the extended
 // CloneResult so the runner can emit the clone_state SwarmEvent. We
@@ -459,6 +472,20 @@ async function makeTmpGitRepo(): Promise<string> {
   execSync("git config user.name Test", { cwd: root });
   return root;
 }
+
+test("clone — empty repoUrl on existing local git repo returns alreadyPresent", { skip: !gitOk ? "git not on PATH" : false }, async () => {
+  const root = await makeTmpGitRepo();
+  try {
+    await fs.writeFile(path.join(root, "README.md"), "# hi\n");
+    execSync("git add README.md && git commit -q -m initial", { cwd: root });
+    const repos = new RepoService();
+    const result = await repos.clone({ url: "", destPath: root });
+    assert.equal(result.alreadyPresent, true);
+    assert.equal(result.priorCommits, 1);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 test("cloneStats — returns commits=1 / clean tree on a fresh single-commit repo", { skip: !gitOk ? "git not on PATH" : false }, async () => {
   const root = await makeTmpGitRepo();

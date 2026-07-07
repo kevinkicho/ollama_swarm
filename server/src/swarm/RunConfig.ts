@@ -137,11 +137,9 @@ export interface RunConfig {
   brainProposalId?: string;
   tokenBudget?: number;
   /**
-   * When true, the planner agent uses the swarm-read profile (read/grep/
-   * glob tools) instead of the default swarm profile (no tools). This lets
-   * the planner inspect actual repo files when building the contract.
-   * Default false — backward compatible, avoids context blow-up risk.
-   * The planner is limited to 3 file reads per turn when enabled.
+   * Legacy compatibility flag. Blackboard planners now always use the
+   * read-only swarm-planner profile and may inspect repository files as
+   * needed. This flag is retained for saved-run/config compatibility.
    */
   plannerTools?: boolean;
 

@@ -212,6 +212,7 @@ export function useSetupForm(navigate: (path: string) => void) {
 
     // the real long logic lives here or can be expanded
     try {
+      const directiveTrimmed = userDirective.trim();
       const payload = {
         repoUrl,
         parentPath,
@@ -219,7 +220,7 @@ export function useSetupForm(navigate: (path: string) => void) {
         model,
         agentCount,
         rounds: roundsInput,
-        userDirective,
+        ...(directiveTrimmed ? { userDirective: directiveTrimmed } : {}),
         webTools,
         mcpServers,
         // Per-agent model declarations (from the Topology grid). This is
@@ -258,7 +259,7 @@ export function useSetupForm(navigate: (path: string) => void) {
           repoUrl,
           parentPath,
           presetId: preset.id,
-          directive: userDirective,
+          directive: directiveTrimmed,
           wallClockCapMin: wallClockCapMin || undefined,
           ambitionTiers: ambitionTiers || undefined,
           runId: body.runId,

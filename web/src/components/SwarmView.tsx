@@ -15,11 +15,13 @@ import { OwSubtasksPanel } from "./OwSubtasksPanel";
 import { MemoryLogPanel } from "./MemoryLogPanel";
 import { CloneBanner } from "./CloneBanner";
 import { IdentityStrip } from "./IdentityStrip";
-import { ProgressBar } from "./ProgressBar";
+
 import { TranscriptTimeline } from "./TranscriptTimeline";
 import { PlanningTab } from "./PlanningTab";
 import { OutcomeChip } from "./OutcomeChip";
 import { fmtMs, roleForRow } from "./RunHistory";
+import { buildResumeStartPayload } from "../lib/resumeRun";
+import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
 
 
 type Tab =
@@ -65,7 +67,6 @@ export const SwarmView = memo(function SwarmView() {
     }
   }, [tab]);
 
-  const reset = useSwarm((s) => s.reset);
   const cfg = useSwarm((s) => s.runConfig);
   // Use hook actions (not .getState()) so they target the per-run scoped store when
   // inside <SwarmStoreProvider> for /runs/:id (prevents writing to singleton while
@@ -73,7 +74,7 @@ export const SwarmView = memo(function SwarmView() {
   const setPhaseScoped = useSwarm((s) => s.setPhase);
   const upsertAgentScoped = useSwarm((s) => s.upsertAgent);
   const setSummaryScoped = useSwarm((s) => s.setSummary);
-  const appendEntryScoped = useSwarm((s) => s.appendEntry);
+  const hydrateTranscriptScoped = useSwarm((s) => s.hydrateTranscriptEntries);
   // T-Item-MultiTenant Phase 8 (2026-05-04): when the active runId is
   // known, target the per-run REST routes so stop/say affect THIS run
   // even when other runs are concurrently active. Falls back to the
@@ -97,7 +98,10 @@ export const SwarmView = memo(function SwarmView() {
   const hasTerminalRunFinished = (() => {
     for (let i = transcript.length - 1; i >= 0; i--) {
       const e = transcript[i];
-      const isFin = e.summary?.kind === 'run_finished' || (e.text || '').includes('Run finished');
+      const isFin = e.summary?.kind === 'run_finished'
+        || (e.text || '').includes('Run finished')
+        || (e.text || '').includes('Run failed')
+        || (e.text || '').includes('Run stopped');
       if (isFin) {
         const after = transcript.slice(i + 1);
         const hasLaterPhaseStart = after.some(l => /\[Pipeline\].*Starting phase|Starting phase \d+/i.test(l.text || ''));
@@ -106,10 +110,11 @@ export const SwarmView = memo(function SwarmView() {
     }
     return false;
   })();
-  const hasTerminalSummary = !!summary && !!summary.stopReason;
-  const terminalPhase = ['completed','stopped','failed'].includes(phase);
-  const isLiveActivity = streamingCount > 0 || (phase !== 'idle' && phase !== 'stopped' && phase !== 'completed' && phase !== 'failed');
-  const isTerminal = hasTerminalSummary || hasTerminalRunFinished || (terminalPhase && !isLiveActivity);
+  const hasTerminalSummary =
+    !!(summary?.stopReason)
+    || (isTerminalSwarmPhase(phase) && Array.isArray(summary?.agents) && summary.agents.length > 0);
+  const isLiveActivity = streamingCount > 0 || isActiveSwarmPhase(phase);
+  const isTerminal = hasTerminalSummary || hasTerminalRunFinished || (isTerminalSwarmPhase(phase) && !isLiveActivity);
 
   // Always show the agents reported by the active runner (delegated by PipelineRunner for composite presets).
   // Transparent sequencing means the current phase's runner (council or blackboard) provides the agent list.
@@ -188,7 +193,11 @@ export const SwarmView = memo(function SwarmView() {
           }
           if (snap.summary) setSummaryScoped(snap.summary);
           if (snap.transcript && Array.isArray(snap.transcript)) {
-            snap.transcript.forEach((e: any) => appendEntryScoped(e));
+            const curLen = useSwarm.getState().transcript.length;
+            const serverLen = snap.transcript.length;
+            if (!hasCompletedSummary || curLen < serverLen) {
+              hydrateTranscriptScoped(snap.transcript);
+            }
           }
         }
       }).catch(() => {});
@@ -242,16 +251,52 @@ export const SwarmView = memo(function SwarmView() {
           }
           if (snap.summary) setSummaryScoped(snap.summary);
           if (snap.transcript && Array.isArray(snap.transcript)) {
-            snap.transcript.forEach((e: any) => appendEntryScoped(e));
+            const curLen = useSwarm.getState().transcript.length;
+            const serverLen = snap.transcript.length;
+            if (!hasCompletedSummary || curLen < serverLen) {
+              hydrateTranscriptScoped(snap.transcript);
+            }
           }
         }
       }).catch(() => {});
     }
   };
 
-  const onNewSwarm = () => {
-    reset();
-    navigate("/");
+  const onResume = async () => {
+    const payload = buildResumeStartPayload({ runConfig: cfg, summary });
+    if (!payload) {
+      setError("Cannot resume: missing workspace path or run configuration.");
+      return;
+    }
+    if (!payload.userDirective) {
+      const proceed = window.confirm(
+        "No user directive found for this run. The swarm will auto-generate goals "
+        + "from the codebase instead of following your prior directive. Resume anyway?",
+      );
+      if (!proceed) return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch("/api/swarm/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body?.error || `Resume failed (HTTP ${res.status})`);
+        return;
+      }
+      if (body.runId) {
+        navigate(`/runs/${encodeURIComponent(body.runId)}`);
+      } else {
+        setError("Resume failed: server did not return a run id.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
   };
 
   // 2026-05-02: parse @mention prefix to honor lever #3's per-agent
@@ -390,11 +435,12 @@ export const SwarmView = memo(function SwarmView() {
           </div>
           {isTerminal ? (
             <button
-              onClick={onNewSwarm}
-              className="text-xs px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500"
-              title="Reset the UI to the setup form. Doesn't affect the just-finished run's saved summary."
+              onClick={onResume}
+              disabled={busy}
+              className="text-xs px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Start a new run with the same workspace, preset, models, and agent topology"
             >
-              New swarm
+              {busy ? "Starting…" : "Resume"}
             </button>
           ) : (
             <div className="flex gap-1">
@@ -421,24 +467,22 @@ export const SwarmView = memo(function SwarmView() {
             </div>
           )}
         </div>
-        {/* Always render live agents (populated via agent_state events from current runner).
-            For just-started runs before first spawn, list may be empty temporarily. */}
-        {displayAgents.map((a) => (
-          <AgentPanel
-            key={a.id}
-            agent={a}
-            role={agentRole(a.index)}
-            model={agentModel(a.index)}
-            color={agentColor(a.index)}
-            tag={agentTag(a.index)}
-          />
-        ))}
-        {/* Only show historical summary agents for truly finished runs (has summary with stopReason etc).
-            Do not hide live agent area just because list temporarily empty. */}
+        {/* Live agent cards while the run is active; terminal runs use Final agent stats below. */}
+        {!hasTerminalSummary
+          ? displayAgents.map((a) => (
+              <AgentPanel
+                key={a.id}
+                agent={a}
+                role={agentRole(a.index)}
+                model={agentModel(a.index)}
+                color={agentColor(a.index)}
+                tag={agentTag(a.index)}
+              />
+            ))
+          : null}
         {hasTerminalSummary ? <SidebarSummaryAgents /> : null}
       </aside>
       <section className="flex-1 flex flex-col min-h-0 overflow-hidden">
-        <ProgressBar />
         <div className="flex border-b border-ink-700 bg-ink-800 text-sm">
           <TabButton active={tab === "transcript"} onClick={() => setTab("transcript")}>
             Transcript

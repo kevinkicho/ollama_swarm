@@ -255,6 +255,10 @@ export type SwarmEventBody =
       // Caps carried in run_started for immediate UI hydration (bar, advanced panels).
       wallClockCapMin?: string;
       ambitionTiers?: string;
+      // User directive + tool flags — Resume and identity strip read these.
+      userDirective?: string;
+      plannerTools?: boolean;
+      webTools?: boolean;
     }
   // Direction 1 Phase 1: emitted after outcome scoring completes at run-end.
   | {

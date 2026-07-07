@@ -146,6 +146,36 @@ export function realVerifyAdapter(
   };
 }
 
+/** True when clonePath has a .git directory or gitfile (worktree). */
+export async function isGitRepository(clonePath: string): Promise<boolean> {
+  try {
+    await fs.access(path.join(clonePath, ".git"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export type BatchGitCommitResult =
+  | { ok: true; sha?: string; skippedGit: boolean }
+  | { ok: false; reason: string };
+
+/** Single batch commit after auditor-gated applies (skipCommit per todo).
+ *  Non-git local workspaces skip commit but still succeed — files are already on disk. */
+export async function finalizeAuditorBatchCommit(
+  clonePath: string,
+  message: string,
+): Promise<BatchGitCommitResult> {
+  if (!(await isGitRepository(clonePath))) {
+    return { ok: true, skippedGit: true };
+  }
+  const commitRes = await realGitAdapter(clonePath).commitAll(message, "auditor");
+  if (commitRes.ok) {
+    return { ok: true, sha: commitRes.sha, skippedGit: false };
+  }
+  return { ok: false, reason: commitRes.reason };
+}
+
 /** Real git adapter scoped to a clone. commitAll: stage all changes
  *  + commit with the supplied message and author. Returns the new
  *  commit's SHA. Failures (typically "nothing to commit") surface

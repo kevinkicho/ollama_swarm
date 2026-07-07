@@ -31,7 +31,7 @@ const BASH_TIMEOUT_MS = 60_000;
 const BASH_OUTPUT_CAP = 200 * 1024;
 
 export type ToolName = "read" | "grep" | "glob" | "list" | "bash" | "write" | "edit" | "propose_hunks" | "web_fetch" | "web_search";
-export type ProfileName = "swarm" | "swarm-read" | "swarm-builder" | "swarm-write" | "swarm-research";
+export type ProfileName = "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder" | "swarm-write" | "swarm-research";
 export type Permission = "allow" | "deny";
 
 // Default tools list to advertise to the model per profile. Mirrors
@@ -46,6 +46,8 @@ export function defaultToolsForProfile(
       return [];
     case "swarm-read":
       return ["read", "grep", "glob", "list"];
+    case "swarm-planner":
+      return ["read", "grep", "glob", "list", "web_fetch", "web_search"];
     case "swarm-builder":
       return ["read", "grep", "glob", "list", "bash"];
     case "swarm-write":
@@ -79,6 +81,21 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     propose_hunks: "deny",
     web_fetch: "deny",
     web_search: "deny",
+  },
+  // Blackboard planners may inspect as many repository files as needed.
+  // The profile remains strictly read-only and clone-scoped; its larger
+  // provider tool-turn allowance is wired by promptWithRetry.
+  "swarm-planner": {
+    read: "allow",
+    grep: "allow",
+    glob: "allow",
+    list: "allow",
+    bash: "deny",
+    write: "deny",
+    edit: "deny",
+    propose_hunks: "deny",
+    web_fetch: "allow",
+    web_search: "allow",
   },
   "swarm-builder": {
     read: "allow",
@@ -132,7 +149,7 @@ export type ToolResult =
 // Per-tool handlers.
 // ---------------------------------------------------------------------------
 
-async function readTool(clone: string, args: Record<string, unknown>): Promise<ToolResult> {
+async function readTool(clone: string, args: Record<string, unknown>, unrestricted = false): Promise<ToolResult> {
   const p = String(args.path ?? "");
   if (!p) return { ok: false, error: "read: missing `path` arg" };
   try {
@@ -140,6 +157,7 @@ async function readTool(clone: string, args: Record<string, unknown>): Promise<T
     const text = await fs.readFile(abs, "utf8");
     // Cap output at 200 KB so a misclick doesn't dump a giant file
     // into the model's context.
+    if (unrestricted) return { ok: true, output: text };
     const CAP = 200 * 1024;
     return { ok: true, output: text.length > CAP ? text.slice(0, CAP) + "\n…(truncated)" : text };
   } catch (err) {
@@ -161,7 +179,7 @@ async function listTool(clone: string, args: Record<string, unknown>): Promise<T
   }
 }
 
-async function globTool(clone: string, args: Record<string, unknown>): Promise<ToolResult> {
+async function globTool(clone: string, args: Record<string, unknown>, unrestricted = false): Promise<ToolResult> {
   const pattern = String(args.pattern ?? "");
   if (!pattern) return { ok: false, error: "glob: missing `pattern` arg" };
   // Bounded recursive walk — same shape as RepoService.listRepoFiles.
@@ -173,11 +191,11 @@ async function globTool(clone: string, args: Record<string, unknown>): Promise<T
       const abs = rel === "" ? clone : await resolveSafe(clone, rel);
       const entries = await fs.readdir(abs, { withFileTypes: true });
       for (const e of entries) {
-        if (e.name.startsWith(".git") || e.name === "node_modules") continue;
+        if (e.name.startsWith(".git") || (!unrestricted && e.name === "node_modules")) continue;
         const childRel = rel === "" ? e.name : `${rel}/${e.name}`;
         if (e.isDirectory()) await walk(childRel);
         else if (matchesGlob(childRel, pattern)) matches.push(childRel);
-        if (matches.length >= 500) return;
+        if (!unrestricted && matches.length >= 500) return;
       }
     };
     await walk("");
@@ -199,7 +217,7 @@ function matchesGlob(filePath: string, pattern: string): boolean {
 
 const MAX_GREP_PATTERN_LEN = 200;
 
-async function grepTool(clone: string, args: Record<string, unknown>): Promise<ToolResult> {
+async function grepTool(clone: string, args: Record<string, unknown>, unrestricted = false): Promise<ToolResult> {
   const pattern = String(args.pattern ?? "");
   if (!pattern) return { ok: false, error: "grep: missing `pattern` arg" };
   if (pattern.length > MAX_GREP_PATTERN_LEN) {
@@ -218,7 +236,7 @@ async function grepTool(clone: string, args: Record<string, unknown>): Promise<T
     const walk = async (dir: string): Promise<void> => {
       const entries = await fs.readdir(dir, { withFileTypes: true });
       for (const e of entries) {
-        if (e.name.startsWith(".git") || e.name === "node_modules") continue;
+        if (e.name.startsWith(".git") || (!unrestricted && e.name === "node_modules")) continue;
         const abs = path.join(dir, e.name);
         if (e.isDirectory()) await walk(abs);
         else if (e.isFile()) {
@@ -229,7 +247,7 @@ async function grepTool(clone: string, args: Record<string, unknown>): Promise<T
               if (re.test(lines[i])) {
                 const rel = path.relative(clone, abs).replace(/\\/g, "/");
                 hits.push(`${rel}:${i + 1}: ${lines[i].slice(0, 200)}`);
-                if (hits.length >= 200) return;
+                if (!unrestricted && hits.length >= 200) return;
               }
             }
           } catch {
@@ -614,13 +632,13 @@ export class ToolDispatcher {
     }
     switch (call.tool) {
       case "read":
-        return readTool(this.clonePath, call.args);
+        return readTool(this.clonePath, call.args, this.profile === "swarm-planner");
       case "list":
         return listTool(this.clonePath, call.args);
       case "glob":
-        return globTool(this.clonePath, call.args);
+        return globTool(this.clonePath, call.args, this.profile === "swarm-planner");
       case "grep":
-        return grepTool(this.clonePath, call.args);
+        return grepTool(this.clonePath, call.args, this.profile === "swarm-planner");
       case "bash":
         return bashTool(this.clonePath, call.args);
       case "propose_hunks":

@@ -5,6 +5,7 @@ import * as nodePath from "node:path";
 import type { AgentManager } from "./AgentManager.js";
 import type { RepoService } from "./RepoService.js";
 import type { AgentState, SwarmEvent, SwarmPhase, SwarmStatus, SwarmStatusRunConfig } from "../types.js";
+import { normalizeSwarmStatusRunConfig } from "../types/run.js";
 import type { PresetId, RunConfig, RunnerOpts, SwarmRunner } from "../swarm/SwarmRunner.js";
 import { RoundRobinRunner } from "../swarm/RoundRobinRunner.js";
 import { BaselineRunner } from "../swarm/BaselineRunner.js";
@@ -16,6 +17,11 @@ import { EmbeddingDriftMonitor } from "./EmbeddingDriftMonitor.js";
 import { tokenTracker } from "./ollamaProxy.js";
 import { AmendmentsBuffer, type Amendment } from "./AmendmentsBuffer.js";
 import { RunStatePersister, findRecoverableRuns, isRecoverablePhase, loadSnapshot, type RecoverableRun } from "./RunStatePersister.js";
+import {
+  loadRunSummaryForRunId,
+  shapeAgentsFromSummary,
+  terminalPhaseFromStopReason,
+} from "./runSummaryDiscovery.js";
 import { tryAcquireLock, releaseLock } from "../swarm/cloneLock.js";
 import { config } from "../config.js";
 import { createLogger, rootLogger } from "./logger.js";
@@ -753,19 +759,26 @@ export class Orchestrator {
     }
 
     const rc = snap.runConfig as any;
+    const cp = rc?.clonePath || rc?.localPath || pathInfo?.clonePath;
+    const terminalSum = cp ? loadRunSummaryForRunId(cp, runId) : null;
+    if (terminalSum?.stopReason) {
+      effectivePhase = terminalPhaseFromStopReason(terminalSum.stopReason) as SwarmPhase;
+    }
+    const shapedAgents = terminalSum ? shapeAgentsFromSummary(terminalSum) : [];
     return {
       phase: effectivePhase,
       round: 0,
-      agents: [],
+      agents: shapedAgents,
       transcript: snap.transcript as SwarmStatus["transcript"],
-      contract: snap.contract as SwarmStatus["contract"] | undefined,
+      contract: (snap.contract as SwarmStatus["contract"] | undefined)
+        ?? (terminalSum?.contract as SwarmStatus["contract"] | undefined),
+      summary: terminalSum ?? undefined,
       runId,
-      runConfig: rc ? {
-        ...rc,
-        clonePath: rc.clonePath || rc.localPath,
-      } as SwarmStatusRunConfig : undefined,
+      runConfig: rc ? normalizeSwarmStatusRunConfig(rc as SwarmStatusRunConfig & { localPath?: string; extras?: Record<string, unknown> }) : undefined,
       runStartedAt: snap.startedAt,
-    };
+      wallClockMs: typeof terminalSum?.wallClockMs === "number" ? terminalSum.wallClockMs : undefined,
+      endedAt: typeof terminalSum?.endedAt === "number" ? terminalSum.endedAt : undefined,
+    } as SwarmStatus;
   }
 
   /** T-Item-MultiTenant Phase 5 (2026-05-04): inject for ONE run.
@@ -1093,6 +1106,11 @@ export class Orchestrator {
       // Map server cfg caps to client strings for run events / status.
       wallClockCapMin: cfg.wallClockCapMs ? Math.round(cfg.wallClockCapMs / 60000).toString() : undefined,
       ambitionTiers: cfg.ambitionTiers !== undefined ? String(cfg.ambitionTiers) : undefined,
+      ...(cfg.userDirective?.trim()
+        ? { userDirective: cfg.userDirective.trim() }
+        : {}),
+      ...(cfg.plannerTools !== undefined ? { plannerTools: cfg.plannerTools } : {}),
+      ...(cfg.webTools !== undefined ? { webTools: cfg.webTools } : {}),
     };
     const activeRun = this.createActiveRun(runId, startedAt, cfg, runConfig, runner, manager, persister, holdsCloneLock, runHub);
     this.runs.set(runId, activeRun);
@@ -1104,12 +1122,18 @@ export class Orchestrator {
     // Cache parent dir so /api/swarm/runs can keep showing historical
     // runs in this folder even after this run terminates. Persisted
     // to /tmp so a dev-server restart doesn't lose it.
-    this.lastParentPath = nodePath.dirname(nodePath.resolve(cfg.localPath));
+    const resolvedLocal = nodePath.resolve(cfg.localPath);
+    const parentOfLocal = nodePath.dirname(resolvedLocal);
+    this.lastParentPath = parentOfLocal;
     writePersistedLastParent(this.lastParentPath);
     // #238 + #240: append to known-parents list (LRU on duplicates).
+    // Track both the clone parent and the project root itself so
+    // /api/swarm/runs?includeOtherParents discovers direct-workspace
+    // runs whose summaries live under <project>/logs/<runId>/.
+    const parentsToRemember = [parentOfLocal, resolvedLocal];
     this.knownParentPaths = [
-      this.lastParentPath,
-      ...this.knownParentPaths.filter((p) => p !== this.lastParentPath),
+      ...parentsToRemember,
+      ...this.knownParentPaths.filter((p) => !parentsToRemember.includes(p)),
     ].slice(0, 32);
     writePersistedKnownParents(this.knownParentPaths);
     this.opts.emit({

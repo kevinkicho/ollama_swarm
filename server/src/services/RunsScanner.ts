@@ -105,6 +105,56 @@ export async function scanForRunDigests(
   return { runs, parentsScanned };
 }
 
+function dedupKey(d: RunSummaryDigest): string {
+  return d.runId ?? `t:${d.startedAt}`;
+}
+
+/** Read summary-*.json + summary.json from a single directory. */
+async function readSummariesInDir(
+  readDir: string,
+  name: string,
+  seen: Set<string>,
+  out: RunSummaryDigest[],
+): Promise<void> {
+  let perRun: string[] = [];
+  try {
+    const all = await fs.readdir(readDir);
+    perRun = all.filter((e) => /^summary-.+\.json$/.test(e));
+  } catch (err) {
+    console.warn('[swarm] readdir-cloneDir-digests-failed:', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  for (const e of perRun) {
+    let raw: string;
+    try {
+      raw = await fs.readFile(path.join(readDir, e), "utf8");
+    } catch (err) {
+      console.warn('[swarm] read-perRun-summary-failed:', err instanceof Error ? err.message : String(err));
+      continue;
+    }
+    const d = parseSummaryToDigest(raw, readDir, name);
+    if (!d) continue;
+    const k = dedupKey(d);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(d);
+  }
+
+  try {
+    const raw = await fs.readFile(path.join(readDir, "summary.json"), "utf8");
+    const d = parseSummaryToDigest(raw, readDir, name);
+    if (d) {
+      const k = dedupKey(d);
+      if (!seen.has(k)) {
+        seen.add(k);
+        out.push(d);
+      }
+    }
+  } catch {
+    // no summary.json — fine
+  }
+}
+
 // (moved from routes/swarm.ts)
 async function readAllRunDigests(
   cloneDir: string,
@@ -112,47 +162,25 @@ async function readAllRunDigests(
 ): Promise<RunSummaryDigest[]> {
   const digests: RunSummaryDigest[] = [];
   const seen = new Set<string>();
-  const dedupKey = (d: RunSummaryDigest) => d.runId ?? `t:${d.startedAt}`;
 
-  let perRun: string[] = [];
+  await readSummariesInDir(cloneDir, name, seen, digests);
+
+  // Blackboard writes per-run artifacts under logs/<runId>/ — scan those
+  // when summaries are not at the clone root (common for direct-workspace runs).
+  const logsDir = path.join(cloneDir, "logs");
   try {
-    const all = await fs.readdir(cloneDir);
-    perRun = all.filter((e) => /^summary-.+\.json$/.test(e));
-  } catch (err) {
-    console.warn('[swarm] readdir-cloneDir-digests-failed:', err instanceof Error ? err.message : String(err));
-    return [];
-  }
-  for (const e of perRun) {
-    let raw: string;
-    try {
-      raw = await fs.readFile(path.join(cloneDir, e), "utf8");
-    } catch (err) {
-      console.warn('[swarm] read-perRun-summary-failed:', err instanceof Error ? err.message : String(err));
-      continue;
-    }
-    const d = parseSummaryToDigest(raw, cloneDir, name);
-    if (!d) continue;
-    const k = dedupKey(d);
-    if (seen.has(k)) continue;
-    seen.add(k);
-    digests.push(d);
-  }
-
-  // fallback bare summary.json
-  if (digests.length === 0) {
-    try {
-      const raw = await fs.readFile(path.join(cloneDir, "summary.json"), "utf8");
-      const d = parseSummaryToDigest(raw, cloneDir, name);
-      if (d) {
-        const k = dedupKey(d);
-        if (!seen.has(k)) {
-          seen.add(k);
-          digests.push(d);
-        }
+    const logEntries = await fs.readdir(logsDir);
+    for (const entry of logEntries) {
+      const subPath = path.join(logsDir, entry);
+      try {
+        if (!(await fs.stat(subPath)).isDirectory()) continue;
+      } catch {
+        continue;
       }
-    } catch {
-      // no summary.json — fine
+      await readSummariesInDir(subPath, entry, seen, digests);
     }
+  } catch {
+    // no logs/ — fine
   }
 
   return digests;

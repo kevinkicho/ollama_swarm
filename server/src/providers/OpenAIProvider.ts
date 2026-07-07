@@ -111,7 +111,8 @@ export class OpenAIProvider implements SessionProvider {
     let cumulativePrompt = 0;
     let cumulativeResponse = 0;
 
-    for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+    const maxToolTurns = opts.maxToolTurns ?? MAX_TOOL_TURNS;
+    for (let turn = 0; turn < maxToolTurns; turn++) {
       const body = JSON.stringify({
         model: opts.model,
         messages,
@@ -213,7 +214,7 @@ export class OpenAIProvider implements SessionProvider {
       text: cumulativeText,
       elapsedMs: Date.now() - t0,
       finishReason: "error",
-      errorMessage: `OpenAI tool loop exceeded ${MAX_TOOL_TURNS} turns`,
+      errorMessage: `OpenAI tool loop exceeded ${maxToolTurns} turns`,
       ...(cumulativePrompt + cumulativeResponse > 0
         ? { usage: { promptTokens: cumulativePrompt, responseTokens: cumulativeResponse } }
         : {}),

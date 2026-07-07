@@ -43,9 +43,7 @@ export interface TranscriptEntry {
   agentIndex?: number;
   text: string;
   ts: number;
-  // Phase 4 scoping: tags for composite/pipeline entries (additive).
-  phaseIndex?: number;
-  phasePreset?: string;
+
   // Unit 54: server-computed structured summary of the agent's
   // response when it parsed as a known envelope. Web prefers this
   // over its own client-side summarizer because the server has the
@@ -199,10 +197,13 @@ export interface PerAgentStat {
 }
 
 export interface RunSummary {
+  runId?: string;
   repoUrl: string;
   localPath: string;
   preset: string;
   model: string;
+  agentCount?: number;
+  rounds?: number;
   startedAt: number;
   endedAt: number;
   wallClockMs: number;
@@ -254,6 +255,9 @@ export interface RunSummary {
   topology?: import("../../shared/src/topology").Topology;
   deliverables?: Array<{ path: string; status: "created" | "modified" }>;
   startCommand?: string;
+  userDirective?: string;
+  plannerTools?: boolean;
+  webTools?: boolean;
 }
 
 export interface BoardCountsDTO {
@@ -267,8 +271,8 @@ export interface BoardCountsDTO {
 
 export type SwarmEvent =
   | { type: "transcript_append"; entry: TranscriptEntry }
-  | { type: "agent_state"; agent: AgentState; runId?: string; phaseIndex?: number; phasePreset?: string }
-  | { type: "swarm_state"; phase: SwarmPhase; round: number; runId?: string; phaseIndex?: number; phasePreset?: string }
+  | { type: "agent_state"; agent: AgentState; runId?: string }
+  | { type: "swarm_state"; phase: SwarmPhase; round: number; runId?: string }
   | { type: "agent_streaming"; agentId: string; agentIndex: number; text: string; runId?: string }
   | { type: "agent_streaming_end"; agentId: string; runId?: string }
   | { type: "error"; message: string }
@@ -400,6 +404,9 @@ export type SwarmEvent =
       // Caps from run_started for setup bar / review hydration.
       wallClockCapMin?: string;
       ambitionTiers?: string;
+      userDirective?: string;
+      plannerTools?: boolean;
+      webTools?: boolean;
   // Deliverables: files created or meaningfully changed by this run.
   // Created = new file; Modified = existing file edited. Empty for
   // discussion presets (no code changes). Optional for back-compat.
@@ -562,6 +569,9 @@ export interface RunConfigSnapshot {
   // Caps synced from setup form for blackboard/advanced runs
   wallClockCapMin?: string;
   ambitionTiers?: string;
+  userDirective?: string;
+  plannerTools?: boolean;
+  webTools?: boolean;
 }
 
 // Unit 52e: digest returned by GET /api/runs for the run-history

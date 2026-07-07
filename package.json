@@ -17,6 +17,8 @@
     "start": "npm -w server run start",
     "cli": "node bin/ollama-swarm.mjs",
     "test": "npm -w shared run test && npm -w server run test",
+    "run-test": "node scripts/run-test.mjs",
+    "run-test:live": "node scripts/run-test.mjs --live-smoke",
     "test:shared": "npm -w shared run test",
     "typecheck": "npm -w shared run typecheck && npm -w server run typecheck && npm -w web run typecheck",
     "verify-ci": "node scripts/verify-ci.mjs",

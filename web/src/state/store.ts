@@ -17,6 +17,10 @@ import type {
   TranscriptEntry,
 } from "../types";
 import type { ChatMessage } from "../components/BrainStartChat";
+import { mergeTranscriptEntry } from "./transcriptMerge.js";
+
+export { mergeTranscriptEntry } from "./transcriptMerge.js";
+export type { TranscriptMergeSlice } from "./transcriptMerge.js";
 
 // Unit 40: cap per-agent rolling window. 20 samples is enough for a
 // sparkline to show "is the current wait unusually long vs. recent
@@ -129,10 +133,19 @@ export interface SwarmStore {
   mapperSlices: Record<string, string[]>;
   // Direction 1 Phase 1: outcome score from rubric grading at run end.
   outcome?: { score: number; verdict: string; dimensions: Array<{ id: string; label: string; score: number; note: string }> };
+  /**
+   * When true, Transcript renders a plain DOM list (no virtualization).
+   * Set on live runs and kept through stop/terminal so phase changes
+   * cannot flip to virtual mid-session (source of hidden/gapped messages).
+   */
+  transcriptPlainListLatched: boolean;
 
   setPhase: (phase: SwarmPhase, round: number) => void;
+  latchTranscriptPlainList: () => void;
   upsertAgent: (a: AgentState) => void;
   appendEntry: (e: TranscriptEntry) => void;
+  /** Batch-load transcript from REST hydrate — one set() to avoid virtual-list flicker. */
+  hydrateTranscriptEntries: (entries: TranscriptEntry[]) => void;
   clearTranscript: () => void;
   setStreaming: (agentId: string, text: string) => void;
   clearStreaming: (agentId: string) => void;
@@ -249,17 +262,23 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   outcome: undefined,
   brainChatHistory: [],
   useCaseFilters: [],
+  transcriptPlainListLatched: false,
+
+  latchTranscriptPlainList: () =>
+    set((s) => (s.transcriptPlainListLatched ? s : { transcriptPlainListLatched: true })),
 
   setPhase: (phase, round) =>
     set((s) => {
       const isTerminal = phase === "completed" || phase === "stopped" || phase === "failed";
+      const latchLive = !isTerminal && phase !== "idle";
       if (isTerminal) {
         return {
           phase,
           round,
           streaming: {},
           streamingMeta: {},
-          agents: {},
+          // Keep plain list latched through stop — do not flip to virtual.
+          transcriptPlainListLatched: s.transcriptPlainListLatched || latchLive,
         };
       }
       if (phase === "idle") {
@@ -275,7 +294,11 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
           agents: {},
         };
       }
-      return { phase, round };
+      return {
+        phase,
+        round,
+        ...(latchLive ? { transcriptPlainListLatched: true } : {}),
+      };
     }),
   upsertAgent: (a: any) => set((s) => {
     // Defense-in-depth for review hydration: summary.agents use agentId/agentIndex (PerAgentStat),
@@ -291,127 +314,41 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
 
   appendEntry: (e) =>
     set((s) => {
-      if (s.transcript.some((t) => t.id === e.id)) return s;
-      // 2026-04-26: dedup consecutive RUN-START dividers. The store-side
-      // resetForNewRun emits one for cross-run transitions; the server
-      // also emits one (commit 33e397e) so fresh page loads see a divider
-      // even when transcript starts empty. When BOTH fire (cross-run +
-      // server-side), we get duplicate "New run" cards. Skip the second.
-      if (e.role === "system" && e.text.startsWith("▸▸RUN-START▸▸")) {
-        // Dedup RUN-START dividers (pipeline concatenates subs under same runId).
-        const already = s.transcript.some((t) =>
-          t.role === "system" &&
-          t.text.startsWith("▸▸RUN-START▸▸") &&
-          (t.text.match(/runId=([^|]+)/) ?? [])[1] === (e.text.match(/runId=([^|]+)/) ?? [])[1]
-        );
-        if (already) return s;
-      }
-      // Dedup duplicate terminal run-finished banners/grids + deliverable cards.
-      // Can occur from multiple write* paths (finally + drain/stop + rehydrate from /status + /run-summary).
-      // Server appends use randomUUID so id dedup doesn't help; check by kind (and for deliverable by filename if present).
-      if (e.summary?.kind === "run_finished") {
-        if (s.transcript.some((t) => t.summary?.kind === "run_finished")) return s;
-      }
-      if (e.summary?.kind === "deliverable") {
-        const fname = (e.summary as any)?.filename;
-        if (s.transcript.some((t) => {
-          if (t.summary?.kind !== "deliverable") return false;
-          if (fname && (t.summary as any)?.filename === fname) return true;
-          // fallback: same text prefix
-          return t.text.startsWith("Deliverable saved →");
-        })) return s;
-      }
-
-      // Dedup the repeated "starting" / seeding messages (memory, design-memory, seed, goal-gen pre-pass).
-      // In pipeline runs, each phase's buildSeed re-emits the clone-level
-      // ones; we keep only the first occurrence. (Server also suppresses for i>0 phases.)
-      const seedPrefixes = [
-        "Memory: surfaced",
-        "Design memory: surfaced",
-        "Seed: ",
-        "Goal-generation pre-pass:",
-      ];
-      if (e.role === "system") {
-        for (const prefix of seedPrefixes) {
-          if (e.text.startsWith(prefix)) {
-            const already = s.transcript.some((t) => t.role === "system" && t.text.startsWith(prefix));
-            if (already) return s;
-            break;
-          }
-        }
-      }
-
-      // Transcript UI fix: aggressively dedup repeated worker_skip messages.
-      // These (e.g. "The import and mount for X are already present...") often repeat
-      // across agents for the same file/check and pollute the transcript view.
-      // Keep only the first occurrence of an identical skip reason.
-      if (e.summary?.kind === "worker_skip") {
-        const skipReason = (e.summary as any)?.reason?.trim() || e.text?.trim() || "";
-        if (skipReason) {
-          const alreadySkip = s.transcript.some((t) =>
-            t.summary?.kind === "worker_skip" &&
-            ((t.summary as any)?.reason?.trim() || t.text?.trim() || "") === skipReason
-          );
-          if (alreadySkip) return s;
-        }
-      }
-      const nextStreaming = { ...s.streaming };
-      const nextMeta = { ...s.streamingMeta };
-      let entryToAdd = e;
-      if (e.agentId) {
-        // Plan 1: Before deleting streaming, check if there's substantial
-        // text to preserve as a persistent transcript entry.
-        const streamingText = nextStreaming[e.agentId];
-        const meta = nextMeta[e.agentId];
-        if (streamingText && streamingText.length > 0) {
-          const streamEntry = {
-            id: `stream-${e.agentId}-${Date.now()}`,
-            role: "agent-stream" as const,
-            text: streamingText,
-            ts: meta?.startedAt ?? Date.now(),
-            agentId: e.agentId,
-            streamingMeta: {
-              startedAt: meta?.startedAt ?? Date.now(),
-              lastTextAt: meta?.lastTextAt ?? Date.now(),
-              toolCallCount: 0,
-              totalSeconds: meta ? Math.round((meta.lastTextAt - meta.startedAt) / 1000) : 0,
-            },
-          };
-          // Insert stream entry BEFORE the agent's final response
-          const newTranscript = [...s.transcript, streamEntry, entryToAdd];
-          delete nextStreaming[e.agentId];
-          delete nextMeta[e.agentId];
-          return {
-            transcript: newTranscript,
-            streaming: nextStreaming,
-            streamingMeta: nextMeta,
-          };
-        }
-        delete nextStreaming[e.agentId];
-        delete nextMeta[e.agentId];
-      }
-      let finalTranscript = [...s.transcript, entryToAdd];
-      // Ensure any RUN-START divider is always the very first entry in transcript.
-      // This fixes races where hydrate + WS transcript_append + resetForNewRun + server emit
-      // can cause the divider to land after the initial [Pipeline] message
-      // or other early system lines. The visual "run start message on top" must be guaranteed.
-      const dividerIdx = finalTranscript.findIndex(t => t.role === 'system' && t.text && t.text.startsWith('▸▸RUN-START▸▸'));
-      if (dividerIdx > 0) {
-        const div = finalTranscript[dividerIdx];
-        finalTranscript = [div, ...finalTranscript.filter((_, i) => i !== dividerIdx)];
-      }
-      const finalState: any = {
-        transcript: finalTranscript,
-        streaming: nextStreaming,
-        streamingMeta: nextMeta,
+      const merged = mergeTranscriptEntry(
+        {
+          transcript: s.transcript,
+          streaming: s.streaming,
+          streamingMeta: s.streamingMeta,
+        },
+        e,
+      );
+      if (!merged) return s;
+      return {
+        ...merged,
+        transcriptPlainListLatched: true,
       };
-      if (entryToAdd.summary?.kind === "run_finished") {
-        // Force clear streaming when a final summary is appended (covers cases where
-        // phase update or previous clears missed in-flight streams from the last turn).
-        finalState.streaming = {};
-        finalState.streamingMeta = {};
+    }),
+  hydrateTranscriptEntries: (entries) =>
+    set((s) => {
+      if (!entries.length) return s;
+      let slice = {
+        transcript: s.transcript,
+        streaming: s.streaming,
+        streamingMeta: s.streamingMeta,
+      };
+      let changed = false;
+      for (const e of entries) {
+        const next = mergeTranscriptEntry(slice, e);
+        if (next) {
+          slice = next;
+          changed = true;
+        }
       }
-      return finalState;
+      if (!changed) return s;
+      return {
+        ...slice,
+        transcriptPlainListLatched: s.transcriptPlainListLatched || slice.transcript.length > 0,
+      };
     }),
   setStreaming: (agentId, text) =>
     set((s) => {
@@ -642,6 +579,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       pheromones: {},
       mapperSlices: {},
       outcome: undefined,
+      transcriptPlainListLatched: false,
     }),
   // Task #37 (partial): clear per-run state when a new run kicks off
   // WITHOUT blowing away transcript/findings/board — those are the
@@ -713,6 +651,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         amendments: [],
         ...blackboardReset,
         transcript: newTranscript,
+        transcriptPlainListLatched: true,
       };
     }),
 });

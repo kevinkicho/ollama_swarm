@@ -127,6 +127,30 @@ function isArtifactFile(fileName: string): boolean {
 export class RepoService {
   async clone(opts: CloneOptions): Promise<CloneResult> {
     const abs = path.resolve(opts.destPath);
+    const url = (opts.url ?? "").trim();
+    const isRemoteUrl = url.startsWith("http://") || url.startsWith("https://");
+
+    // Local workspace mode (no GitHub URL): use destPath directly — never
+    // call git.clone. Empty repoUrl previously fell through to
+    // `git clone ''` and failed with "fatal: repository '' does not exist".
+    if (!isRemoteUrl) {
+      const exists = await this.dirExists(abs);
+      if (!exists) {
+        await fs.mkdir(abs, { recursive: true });
+      }
+      const isRepo = await this.dirExists(path.join(abs, ".git"));
+      const stats = isRepo
+        ? await this.cloneStats(abs)
+        : { commits: 0, changedFiles: 0, untrackedFiles: 0 };
+      return {
+        destPath: abs,
+        alreadyPresent: exists,
+        priorCommits: stats.commits,
+        priorChangedFiles: stats.changedFiles,
+        priorUntrackedFiles: stats.untrackedFiles,
+      };
+    }
+
     const exists = await this.dirExists(abs);
 
     if (exists) {

@@ -1,125 +1,64 @@
 import { useEffect, useRef, useState } from "react";
 import { useSwarm } from "../state/store";
+import { displaySwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
 
-// Unit 52b: composite phase signal for the topbar.
+// Simplified run status for the topbar (no granular planning/executing/discussing labels).
 export function PhasePill() {
   const phase = useSwarm((s) => s.phase);
   const round = useSwarm((s) => s.round);
   const todos = useSwarm((s) => s.todos);
   const agents = useSwarm((s) => s.agents);
-  const contract = useSwarm((s) => s.contract);
   const summary = useSwarm((s) => s.summary);
+
+  const label = displaySwarmPhase(phase);
 
   const color: Record<string, string> = {
     idle: "bg-ink-600 text-ink-100",
-    cloning: "bg-blue-700 text-blue-100",
-    spawning: "bg-amber-700 text-amber-100",
-    seeding: "bg-amber-700 text-amber-100",
-    planning: "bg-amber-700 text-amber-100",
-    discussing: "bg-emerald-700 text-emerald-100",
-    executing: "bg-emerald-700 text-emerald-100",
-    stopping: "bg-red-700 text-red-100",
+    running: "bg-emerald-700 text-emerald-100",
     stopped: "bg-ink-600 text-ink-100",
     failed: "bg-red-900 text-red-100",
     completed: "bg-emerald-900 text-emerald-100",
   };
 
   const todoList = Object.values(todos);
-  const counts = {
-    open: 0,
-    claimed: 0,
-    committed: 0,
-    stale: 0,
-    skipped: 0,
-    total: todoList.length,
-  };
+  let committed = 0;
+  let total = todoList.length;
   for (const t of todoList) {
-    if (t.status === "open") counts.open++;
-    else if (t.status === "claimed") counts.claimed++;
-    else if (t.status === "committed") counts.committed++;
-    else if (t.status === "stale") counts.stale++;
-    else if (t.status === "skipped") counts.skipped++;
+    if (t.status === "committed") committed++;
   }
 
   const agentList = Object.values(agents);
-  const aliveAgents = agentList.filter((a) => a.status !== "stopped" && a.status !== "failed").length;
   const thinkingAgents = agentList.filter((a) => a.status === "thinking").length;
 
   let suffix = "";
-  switch (phase) {
-    case "discussing":
-      suffix = ` · round ${round}`;
-      break;
-    case "spawning":
-      if (agentList.length > 0) suffix = ` · ${agentList.length} agents`;
-      break;
-    case "planning":
-      if (contract && contract.criteria.length > 0) {
-        suffix = ` · ${contract.criteria.length} criteria`;
-      }
-      break;
-    case "executing":
-      if (counts.total > 0) {
-        suffix = ` · ${counts.committed}/${counts.total} todos`;
-        if (thinkingAgents > 0) suffix += ` · ${thinkingAgents} thinking`;
-      }
-      break;
-    case "stopping":
-      if (aliveAgents > 0) suffix = ` · waiting on ${aliveAgents} agent${aliveAgents === 1 ? "" : "s"}`;
-      break;
-    case "completed":
-    case "stopped":
-    case "failed": {
-      const finalCommits = summary?.commits ?? counts.committed;
-      if (finalCommits > 0) suffix = ` · ${finalCommits} commits`;
-      break;
-    }
+  if (label === "running") {
+    const parts: string[] = [];
+    if (round > 0) parts.push(`round ${round}`);
+    if (total > 0) parts.push(`${committed}/${total} todos`);
+    if (thinkingAgents > 0) parts.push(`${thinkingAgents} thinking`);
+    if (parts.length > 0) suffix = ` · ${parts.join(" · ")}`;
+  } else if (isTerminalSwarmPhase(phase)) {
+    const finalCommits = summary?.commits ?? committed;
+    if (finalCommits > 0) suffix = ` · ${finalCommits} commits`;
   }
 
-  const tooltip = buildTooltip({ phase, round, counts, agentList, contract });
+  const tooltip = [
+    `Status: ${label}`,
+    phase !== label ? `Runner phase: ${phase}` : null,
+    round > 0 ? `Round: ${round}` : null,
+    total > 0 ? `Todos: ${committed}/${total} committed` : null,
+    agentList.length > 0 ? `Agents: ${agentList.length}` : null,
+  ].filter(Boolean).join("\n");
 
   return (
     <span
-      className={`px-2 py-0.5 rounded text-xs font-mono whitespace-nowrap ${color[phase] ?? "bg-ink-600"}`}
+      className={`px-2 py-0.5 rounded text-xs font-mono whitespace-nowrap ${color[label] ?? "bg-ink-600"}`}
       title={tooltip}
     >
-      {phase}
+      {label}
       {suffix}
     </span>
   );
-}
-
-interface PillTooltipInput {
-  phase: string;
-  round: number;
-  counts: { open: number; claimed: number; committed: number; stale: number; skipped: number; total: number };
-  agentList: Array<{ id: string; status: string }>;
-  contract: { criteria: Array<{ status: string }> } | undefined;
-}
-
-function buildTooltip(input: PillTooltipInput): string {
-  const lines: string[] = [`Phase: ${input.phase}`];
-  if (input.round > 0) lines.push(`Round: ${input.round}`);
-  if (input.counts.total > 0) {
-    lines.push(
-      `Todos: ${input.counts.committed} committed · ${input.counts.open} open · ${input.counts.claimed} claimed · ${input.counts.stale} stale · ${input.counts.skipped} skipped (${input.counts.total} total)`,
-    );
-  }
-  if (input.agentList.length > 0) {
-    const byStatus: Record<string, number> = {};
-    for (const a of input.agentList) byStatus[a.status] = (byStatus[a.status] ?? 0) + 1;
-    const summary = Object.entries(byStatus)
-      .map(([s, n]) => `${n} ${s}`)
-      .join(", ");
-    lines.push(`Agents: ${summary}`);
-  }
-  if (input.contract && input.contract.criteria.length > 0) {
-    const met = input.contract.criteria.filter((c) => c.status === "met").length;
-    const wontDo = input.contract.criteria.filter((c) => c.status === "wont-do").length;
-    const unmet = input.contract.criteria.length - met - wontDo;
-    lines.push(`Criteria: ${met} met · ${unmet} unmet · ${wontDo} wont-do`);
-  }
-  return lines.join("\n");
 }
 
 // Unit 52a: wall-clock ticker anchored on run_started.
@@ -175,11 +114,9 @@ export function RuntimeTicker() {
   const phase = useSwarm((s) => s.phase);
   const summary = useSwarm((s) => s.summary);
   const hasTerminalSummary = !!summary && (!!summary.stopReason || typeof summary.endedAt === 'number' || typeof summary.wallClockMs === 'number');
-  const isTerminal = hasTerminalSummary || phase === "completed" || phase === "stopped" || phase === "failed";
+  const isTerminal = hasTerminalSummary || isTerminalSwarmPhase(phase);
   const [, setTick] = useState(0);
 
-  // Capture a frozen elapsed value the first time we become terminal, so it doesn't
-  // keep advancing on re-renders (even without the setInterval).
   const frozenElapsedRef = useRef<number | null>(null);
   useEffect(() => {
     if (isTerminal && startedAt !== undefined && frozenElapsedRef.current === null) {
@@ -206,7 +143,6 @@ export function RuntimeTicker() {
     if (frozenElapsedRef.current !== null) {
       elapsedMs = frozenElapsedRef.current;
     } else if (summary?.endedAt && startedAt) {
-      // Prefer real startedAt (from run event in store) + summary's endedAt for accurate fixed duration.
       elapsedMs = Math.max(0, summary.endedAt - startedAt);
     } else if (summary?.wallClockMs !== undefined) {
       elapsedMs = summary.wallClockMs;
@@ -215,7 +151,6 @@ export function RuntimeTicker() {
     }
   } else {
     elapsedMs = Math.max(0, Date.now() - startedAt);
-    // reset freeze if somehow becomes non-terminal again
     if (frozenElapsedRef.current !== null) frozenElapsedRef.current = null;
   }
 

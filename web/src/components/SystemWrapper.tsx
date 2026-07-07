@@ -13,6 +13,7 @@ import SystemHealthDashboard from "./SystemHealthDashboard";
 import { NotificationPreferences } from "./NotificationPreferences";
 import { UsageWidget } from "./UsageWidget";
 import { PhasePill, RuntimeTicker } from "./RunHeaderWidgets";
+import { displaySwarmPhase } from "../lib/swarmPhase";
 import type { RunSummaryDigest } from "../types";
 import { useRunsList } from "../hooks/useRunsList";
 import { BrainStartChat, buildRunContext, getChatContext, type RunBrainContext } from "./BrainStartChat";
@@ -228,7 +229,7 @@ export function SystemWrapper({
         <div className="flex items-center gap-3 text-[10px]">
           <StatusDot healthy={systemHealthy} />
           <span className="text-ink-400">
-            {phase === "idle" ? "Ready" : phase}
+            {phase === "idle" ? "Ready" : displaySwarmPhase(phase)}
           </span>
           {activeRunId && (
             <span className="text-ink-500 font-mono">

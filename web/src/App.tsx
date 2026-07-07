@@ -352,7 +352,8 @@ function useReviewHydration(review: { runId: string; clonePath: string } | null)
         // Phase is whatever the run terminated as; map stopReason →
         // a display phase that makes the PhasePill render sensibly.
         const phase = summary.stopReason === "completed" ? "completed"
-          : summary.stopReason === "user" || summary.stopReason === "crash" ? "stopped"
+          : summary.stopReason === "crash" || summary.stopReason === "crashed" ? "failed"
+          : summary.stopReason === "user" ? "stopped"
           : summary.stopReason === "no-progress" || summary.stopReason === "partial-progress" ? "stopped"
           : "stopped";
         setPhase(phase, 0);

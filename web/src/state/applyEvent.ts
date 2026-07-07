@@ -172,6 +172,9 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
         topology: ev.topology,
         wallClockCapMin: ev.wallClockCapMin,
         ambitionTiers: ev.ambitionTiers,
+        userDirective: ev.userDirective,
+        plannerTools: ev.plannerTools,
+        webTools: ev.webTools,
       });
       break;
 

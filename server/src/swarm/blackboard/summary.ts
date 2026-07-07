@@ -7,7 +7,8 @@
 // stopReason discriminator priority (same as caps.ts — first match wins):
 //   1. crashMessage set            → "crash"
 //   2. terminationReason set       → "cap:<type>" (wall-clock | commits | todos)
-//   3. stopping flag set (no cap)  → "user"
+//   3. stopping flag set (no cap)  → "user", unless startup-abort detector
+//      fires (fast death + zero board/agent work) → "crash"
 //   4. zero-progress detector      → "no-progress"
 //   5. partial                       → "partial-progress"
 //   6. else (incl. load-time abrupt) → "completed" or "crashed" (set at load for
@@ -247,6 +248,10 @@ export interface RunSummary {
   // Empty for discussion presets (no code changes). Optional for
   // back-compat with summaries written before this lands.
   deliverables?: Array<{ path: string; status: "created" | "modified" }>;
+  /** User directive from setup / start payload. Enables Resume to replay intent. */
+  userDirective?: string;
+  plannerTools?: boolean;
+  webTools?: boolean;
 }
 
 export interface SummaryConfig {
@@ -260,6 +265,10 @@ export interface SummaryConfig {
   runId?: string;
   /** CLI command that started this run, for display in run history. */
   startCommand?: string;
+  /** User directive from setup / start payload (resume fidelity). */
+  userDirective?: string;
+  plannerTools?: boolean;
+  webTools?: boolean;
 }
 
 export interface SummaryCounts {
@@ -399,6 +408,9 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     // Deliverables: extract created/modified files from git porcelain.
     deliverables: input.deliverables ?? extractDeliverables(input.finalGitStatus),
     startCommand: input.config.startCommand,
+    ...(input.config.userDirective ? { userDirective: input.config.userDirective } : {}),
+    ...(input.config.plannerTools !== undefined ? { plannerTools: input.config.plannerTools } : {}),
+    ...(input.config.webTools !== undefined ? { webTools: input.config.webTools } : {}),
   };
 }
 
@@ -494,10 +506,39 @@ function cloneContract(c: ExitContract): ExitContract {
   };
 }
 
+/** Align with autoRca FAST_DEATH_MS — sub-threshold runs with zero work are failures. */
+export const STARTUP_ABORT_MAX_MS = 30_000;
+
+export function isStartupAbort(
+  input: Pick<
+    BuildSummaryInput,
+    "startedAt" | "endedAt" | "stopping" | "terminationReason" | "board" | "agents"
+  >,
+): boolean {
+  if (!input.stopping || input.terminationReason) return false;
+  const wallClockMs = Math.max(0, input.endedAt - input.startedAt);
+  if (wallClockMs >= STARTUP_ABORT_MAX_MS) return false;
+  const noBoard =
+    (input.board?.total ?? 0) === 0 && (input.board?.committed ?? 0) === 0;
+  if (!noBoard) return false;
+  return (
+    input.agents.length === 0 ||
+    input.agents.every((a) => (a.turnsTaken ?? 0) === 0)
+  );
+}
+
 function classifyStopReason(
   input: Pick<
     BuildSummaryInput,
-    "crashMessage" | "terminationReason" | "stopping" | "completionDetail" | "board" | "contract"
+    | "startedAt"
+    | "endedAt"
+    | "crashMessage"
+    | "terminationReason"
+    | "stopping"
+    | "completionDetail"
+    | "board"
+    | "contract"
+    | "agents"
   >,
 ): { stopReason: StopReason; stopDetail?: string } {
   if (input.crashMessage) {
@@ -508,6 +549,13 @@ function classifyStopReason(
     return { stopReason: capType, stopDetail: input.terminationReason };
   }
   if (input.stopping) {
+    if (isStartupAbort(input)) {
+      return {
+        stopReason: "crash",
+        stopDetail:
+          "ended during startup with zero progress (no agent turns, no commits)",
+      };
+    }
     return { stopReason: "user" };
   }
   // Zero-progress detector — see top-of-file priority list. Catches the

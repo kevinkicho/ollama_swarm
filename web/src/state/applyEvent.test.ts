@@ -2,7 +2,7 @@ import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createSwarmStore } from "./store";
 import { applyEventToStore } from "./applyEvent";
-import { getHybridInfo, shouldIgnoreEarlyTerminal } from "./HybridStateHelper";
+
 import type { SwarmEvent, AgentState, Todo, Claim, Finding, ExitContract, RunSummary, BoardSnapshot, PheromoneEntry, TranscriptEntry } from "../types";
 
 function freshStore() {
@@ -102,7 +102,7 @@ describe("applyEventToStore", () => {
       assert.equal(store.getState().round, 1);
     });
 
-    it("clears agents and streaming on terminal phase", () => {
+    it("clears streaming on terminal phase but keeps agents for sidebar display", () => {
       const agent: AgentState = {
         id: "a1",
         index: 0,
@@ -118,7 +118,7 @@ describe("applyEventToStore", () => {
         store.getState(),
       );
       assert.equal(store.getState().phase, "completed");
-      assert.equal(Object.keys(store.getState().agents).length, 0);
+      assert.ok(store.getState().agents.a1);
       assert.equal(Object.keys(store.getState().streaming).length, 0);
     });
   });
@@ -871,8 +871,8 @@ describe("applyEventToStore", () => {
         { agentId: "agent-3", agentIndex: 3, turnsTaken: 1 },
       ];
 
-      // Replay as done in SwarmStoreProvider hydrate + applyEventToStore
-      beTranscript.forEach(e => applyEventToStore({ type: "transcript_append", entry: e }, store.getState()));
+      // Replay as done in SwarmStoreProvider hydrate (batch) + live WS append
+      store.getState().hydrateTranscriptEntries(beTranscript);
       beAgents.forEach((a: any) => {
         const converted = { id: a.agentId, index: a.agentIndex, status: "stopped" as const };
         store.getState().upsertAgent(converted as any);
@@ -893,17 +893,8 @@ describe("applyEventToStore", () => {
     });
   });
 
-  // Phase 10: after full removal of guards and phase state emitters,
-  // helpers are neutral stubs and phase_* events are no-ops (not emitted).
-  describe("post-removal: HybridStateHelper stubs + no phase state (Phase 10)", () => {
-    it("all helpers return neutral / false values", () => {
-      const info = getHybridInfo();
-      assert.equal(info.isHybrid, false);
-      assert.equal(info.isExecPhase, false);
-      assert.equal(shouldIgnoreEarlyTerminal(), false);
-    });
-
-    it("phase_started / phase_completed events are ignored (no pollution)", () => {
+  describe("legacy phase_* events are ignored", () => {
+    it("phase_started / phase_completed events are no-ops (not emitted)", () => {
       applyEventToStore({ type: "run_started", runId: "h1", preset: "blackboard", plannerModel: "m", workerModel: "m", auditorModel: "m", dedicatedAuditor: false, agentCount: 4, rounds: 0, repoUrl: "", clonePath: "", topology: {} } as any, store.getState());
       // These event types are no longer produced; applying them should be safe no-op.
       applyEventToStore(

@@ -73,13 +73,13 @@ export interface ContractContext {
   promptPlannerSafely: (
     primaryAgent: Agent,
     promptText: string,
-    agentName?: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research",
+    agentName?: "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder" | "swarm-research",
     ollamaFormat?: "json" | Record<string, unknown>,
   ) => Promise<{ response: string; agentUsed: Agent }>;
   promptAgent: (
     agent: Agent,
     prompt: string,
-    agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research",
+    agentName: "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder" | "swarm-research",
     formatExpect: "json" | "free",
     ollamaFormat?: "json" | Record<string, unknown>,
   ) => Promise<string>;
@@ -143,7 +143,7 @@ export async function runFirstPassContract(
   // Always use swarm-research for the first-pass contract building so the planner
   // can use web_search + web_fetch for directives involving external/governmental data.
   // (local read tools are also included in the research profile).
-  const plannerProfile: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research" = "swarm-research";
+  const plannerProfile = "swarm-planner" as const;
 
   const { response: firstResponse, agentUsed: contractAgent } = await ctx.promptPlannerSafely(
     agent,
@@ -162,7 +162,7 @@ export async function runFirstPassContract(
     const { response: retryResponse, agentUsed: retryAgent } = await ctx.promptPlannerSafely(
       contractAgent,
       `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed, contractAgent.model)}`,
-      "swarm-research",
+      "swarm-planner",
       CONTRACT_JSON_SCHEMA,
     );
     if (ctx.getStopping()) return;
@@ -323,7 +323,7 @@ export async function tryCouncilContract(
   );
   const mergePrompt = buildCouncilContractMergePrompt(seed, drafts);
   const { response: mergeResponse, agentUsed: mergeAgent } =
-    await ctx.promptPlannerSafely(planner, mergePrompt, undefined, CONTRACT_JSON_SCHEMA);
+    await ctx.promptPlannerSafely(planner, mergePrompt, "swarm-planner", CONTRACT_JSON_SCHEMA);
   if (ctx.getStopping()) return null;
   ctx.appendAgent(mergeAgent, mergeResponse);
 
@@ -339,7 +339,7 @@ export async function tryCouncilContract(
           mergeResponse,
           mergeParsed.reason,
         )}`,
-        undefined,
+        "swarm-planner",
         CONTRACT_JSON_SCHEMA,
       );
     if (ctx.getStopping()) return null;

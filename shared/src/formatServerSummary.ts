@@ -12,6 +12,25 @@
 
 import type { TranscriptEntrySummary } from "./transcriptEntrySummary.js";
 
+/** Human headline for run-outcome banners (transcript grid + plaintext). */
+export function runOutcomeHeadline(stopReason: string): string {
+  switch (stopReason) {
+    case "completed":
+      return "Run finished";
+    case "crash":
+    case "crashed":
+      return "Run failed";
+    case "user":
+      return "Run stopped";
+    case "no-progress":
+    case "partial-progress":
+    case "early-stop":
+      return "Run ended";
+    default:
+      return "Run finished";
+  }
+}
+
 export function formatServerSummary(s: TranscriptEntrySummary): string {
   if (s.kind === "worker_skip") {
     return `Declined: ${s.reason}`;
@@ -44,7 +63,7 @@ export function formatServerSummary(s: TranscriptEntrySummary): string {
   // demands exhaustiveness. Return a one-line descriptor for safety
   // (e.g. if future code paths render them as plain text).
   if (s.kind === "run_finished") {
-    return `Run finished — ${s.stopReason}`;
+    return `${runOutcomeHeadline(s.stopReason)} — ${s.stopReason}`;
   }
   if (s.kind === "seed_announce") {
     return `Project seed — ${s.topLevel.length} top-level entries`;

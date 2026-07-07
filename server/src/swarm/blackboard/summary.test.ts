@@ -5,6 +5,7 @@ import {
   computeLatencyStats,
   extractDeliverables,
   FINAL_GIT_STATUS_MAX,
+  isStartupAbort,
   type BuildSummaryInput,
   type PerAgentStat,
 } from "./summary.js";
@@ -50,6 +51,33 @@ describe("buildSummary — stopReason classification", () => {
     const s = buildSummary(baseInput({ stopping: true }));
     assert.equal(s.stopReason, "user");
     assert.equal(s.stopDetail, undefined);
+  });
+
+  it("reports 'crash' when user-stopped during startup with zero progress", () => {
+    const input = baseInput({
+      startedAt: 1_000,
+      endedAt: 1_224,
+      stopping: true,
+      board: { committed: 0, skipped: 0, total: 0 },
+      agents: [],
+    });
+    assert.equal(isStartupAbort(input), true);
+    const s = buildSummary(input);
+    assert.equal(s.stopReason, "crash");
+    assert.match(s.stopDetail ?? "", /during startup with zero progress/);
+  });
+
+  it("reports 'user' when stopped quickly but agents had turns", () => {
+    const s = buildSummary(
+      baseInput({
+        startedAt: 1_000,
+        endedAt: 1_500,
+        stopping: true,
+        board: { committed: 0, skipped: 0, total: 0 },
+        agents: [agent(1, 2)],
+      }),
+    );
+    assert.equal(s.stopReason, "user");
   });
 
   it("reports 'cap:wall-clock' and preserves detail when wall-clock cap tripped", () => {

@@ -471,21 +471,27 @@ export async function reviewPendingCommits(
     }
 
     if (verifyOk) {
-      // Final single commit for the batch (the applies were skipped)
-      const { realGitAdapter } = await import("./v2Adapters.js");
-      const git = realGitAdapter(ctx.getActive()?.localPath ?? "");
+      // Final single commit for the batch (per-todo applies used skipCommit).
+      const localPath = ctx.getActive()?.localPath ?? "";
       const batchMessage = `auditor batch approval (one commit):\n${todoMessages.map(m => `- ${m}`).join('\n')}`;
-      const commitRes = await git.commitAll(batchMessage, "auditor");
+      const { finalizeAuditorBatchCommit } = await import("./v2Adapters.js");
+      const commitRes = await finalizeAuditorBatchCommit(localPath, batchMessage);
       if (commitRes.ok) {
         for (const id of todoIds) {
           ctx.wrappers.approveCommitQ(id);
         }
-        ctx.appendSystem(`[auditor-gate] ✓ Unified batch + single git commit for ${approved.length} todos`);
+        if (commitRes.skippedGit) {
+          ctx.appendSystem(
+            `[auditor-gate] ✓ Batch applied for ${approved.length} todo(s) (no git repo at ${localPath} — commit skipped)`,
+          );
+        } else {
+          ctx.appendSystem(`[auditor-gate] ✓ Unified batch + single git commit for ${approved.length} todos`);
+        }
       } else {
         for (const id of todoIds) {
-          ctx.wrappers.rejectCommitQ(id, `batch commit failed`);
+          ctx.wrappers.rejectCommitQ(id, `batch commit failed: ${commitRes.reason}`);
         }
-        ctx.appendSystem(`[auditor-gate] ✗ Batch commit failed`);
+        ctx.appendSystem(`[auditor-gate] ✗ Batch commit failed: ${commitRes.reason}`);
       }
     } else {
       // Best effort revert would be complex here; rely on previous per-apply or git state.

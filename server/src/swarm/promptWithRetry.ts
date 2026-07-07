@@ -206,7 +206,7 @@ export async function promptWithRetry(
         // discussion presets but harmful for the planner that needs to
         // grep before posting TODOs.
         const profileForTools: ProfileName | null =
-          agentName === "swarm" || agentName === "swarm-read" || agentName === "swarm-builder" || agentName === "swarm-research"
+          agentName === "swarm" || agentName === "swarm-read" || agentName === "swarm-planner" || agentName === "swarm-builder" || agentName === "swarm-research"
             ? (agentName as ProfileName)
             : null;
         const tools = profileForTools && agent.cwd ? defaultToolsForProfile(profileForTools) : [];
@@ -238,6 +238,10 @@ export async function promptWithRetry(
           },
           ...(tools.length > 0 ? { tools } : {}),
           ...(dispatcher ? { dispatcher } : {}),
+          // The blackboard planner is intentionally allowed to keep
+          // exploring until it decides it has enough evidence or the
+          // enclosing prompt is aborted/times out.
+          ...(agentName === "swarm-planner" ? { maxToolTurns: Number.POSITIVE_INFINITY } : {}),
           ...(opts.ollamaFormat !== undefined ? { format: opts.ollamaFormat } : {}),
         };
         const result = config.PROVIDER_GATEWAY

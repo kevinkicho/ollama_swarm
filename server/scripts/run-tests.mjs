@@ -237,6 +237,8 @@ const TEST_FILES = [
   "../web/src/hooks/useReplayState.test.ts",
   "../web/src/lib/costBreakdown.test.ts",
   "../web/src/state/store.test.ts",
+  "../web/src/state/transcriptMerge.test.ts",
+  "../web/src/state/swarmStoreHydrate.test.ts",
   "../web/src/components/agentPalette.test.ts",
   "../web/src/components/useSegmentSplitter.test.ts",
   "../web/src/components/transcript/JsonBubbles.test.ts",
@@ -249,6 +251,8 @@ const TEST_FILES = [
   "src/swarm/blackboard/runnerHelpers.test.ts",
   // 2026-05-18: registered after verifying pass (22 + 26 + 7 = 55 tests).
   "src/services/RunStatePersister.test.ts",
+  "src/services/RunsScanner.test.ts",
+  "src/services/runSummaryDiscovery.test.ts",
   "src/swarm/RoundRobinRunner.test.ts",
   "src/swarm/blackboard/BlackboardRunner.hunkRepair.test.ts",
 

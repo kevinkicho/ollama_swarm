@@ -40,7 +40,7 @@ export interface PlannerContext {
   promptPlannerSafely: (
     agent: Agent,
     promptText: string,
-    agentName?: "swarm" | "swarm-read" | "swarm-builder",
+    agentName?: "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder",
     ollamaFormat?: "json" | Record<string, unknown>,
   ) => Promise<{ response: string; agentUsed: Agent }>;
   /** Brain fallback: prompt an LLM to extract structured JSON from a
@@ -80,7 +80,7 @@ export async function runPlanner(
   const { response: firstResponse, agentUsed: planAgent } = await ctx.promptPlannerSafely(
     agent,
     `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed, contractForPrompt, agent.model)}`,
-    "swarm-read",
+    "swarm-planner",
     PLANNER_TODOS_JSON_SCHEMA,
   );
   if (ctx.isStopping()) return;
@@ -92,7 +92,7 @@ export async function runPlanner(
     const { response: repairResponse, agentUsed: repairAgent } = await ctx.promptPlannerSafely(
       planAgent,
       `${PLANNER_SYSTEM_PROMPT}\n\n${buildRepairPrompt(firstResponse, parsed.reason)}`,
-      "swarm-read",
+      "swarm-planner",
       PLANNER_TODOS_JSON_SCHEMA,
     );
     if (ctx.isStopping()) return;

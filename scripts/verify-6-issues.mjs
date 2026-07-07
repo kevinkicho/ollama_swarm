@@ -1,18 +1,25 @@
 #!/usr/bin/env node
 /**
- * Real verification script for the ~6 issues using live running server + Playwright.
+ * Legacy manual verification script for historical UI issues (live server + Playwright).
  * Must be run while `npm run dev` is serving on :8244.
+ *
+ * NOTE (2026-07): Hybrid planning mode was removed. Issue #5 (hybrid sidebar) is
+ * obsolete — do not use this script to validate hybrid layout.
+ *
+ * For automated run-start regression (issues #2 and #4), prefer:
+ *   RUN_TEST_LIVE=1 npm run run-test -- --live-smoke
+ * or:
+ *   RUN_TEST_LIVE=1 npm run run-test:live
  *
  * Issues covered:
  * 1. root nav from runview shows setup (no refresh)
- * 2. immediate post-start switch to /runs/:id run-layer (no 30s delay)
+ * 2. immediate post-start switch to /runs/:id run-layer → see run-test --live-smoke
  * 3. working sticky bottom / "Latest" button
- * 4. no growing gaps / stagger / stacking in transcript (virtualizer)
- * 5. sidebar for hybrid: 3 boxed "planner (council 3 agents collectively)" + remaining agents, NO brain
+ * 4. transcript layout at run start → see run-test --live-smoke
+ * 5. OBSOLETE — hybrid sidebar (hybrid mode removed 2026-07)
  * 6. status shows proper (failed/stopped) not spurious "completed" on abrupt kill
  *
  * Produces screenshots/verify-*.png evidence.
- * Also attempts to start a real hybrid (council planning + blackboard) run via UI/API.
  */
 
 import { chromium } from "playwright";
@@ -27,7 +34,9 @@ const OUT_DIR = path.join(ROOT, "screenshots", "verify-" + Date.now());
 const WEB = "http://localhost:8244";
 
 async function main() {
-  console.log("[verify] Starting 20-min style real verification run. Server must be live.");
+  console.log("[verify] Legacy verification run. Server must be live.");
+  console.log("[verify] For run-start regression use: RUN_TEST_LIVE=1 npm run run-test -- --live-smoke");
+  console.log("[verify] Issue #5 (hybrid sidebar) is OBSOLETE — hybrid mode removed 2026-07.");
   console.log("[verify] Output dir:", OUT_DIR);
   await mkdir(OUT_DIR, { recursive: true });
 
@@ -111,10 +120,8 @@ async function main() {
   console.log("[verify] After start attempt, current URL:", currentUrl);
   await page.screenshot({ path: path.join(OUT_DIR, "04-after-start-attempt-runlayer.png"), fullPage: true });
 
-  // === 4+5. Hybrid sidebar + transcript verification ===
-  // To ensure we test the hybrid sidebar (3 planners boxed), inject a hybrid-style fake into store via evaluate + navigate.
-  // Or load a deep link and override via page eval to simulate hybrid runConfig.
-  console.log("[verify] 4. Force a hybrid run view (planningPreset=council) to screenshot sidebar 3-planner + agents + transcript layout");
+  // === 4+5. Transcript layout (hybrid sidebar #5 is obsolete) ===
+  console.log("[verify] 4. Screenshot run view transcript layout (hybrid sidebar #5 skipped — mode removed)");
   const hybridRunId = "hybrid-verify-" + Date.now().toString(36);
   await page.goto(WEB + `/runs/${hybridRunId}`, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(600);
@@ -209,7 +216,7 @@ async function main() {
   console.log("[verify] Please inspect the pngs for the 6 issues:");
   console.log("  - 01/03/10 : root shows clean SetupForm after navs");
   console.log("  - 04 : run layer visible quickly after start");
-  console.log("  - 05/06/07 : sidebar with planners, transcript no huge gaps, sticky/Latest works");
+  console.log("  - 05/06/07 : transcript layout, sticky/Latest works (#5 hybrid sidebar obsolete)");
   console.log("  - 08/09 : status after kill is stopped/failed not completed");
   console.log("[verify] (20 min session spirit followed by real server + playwright calls)");
 }

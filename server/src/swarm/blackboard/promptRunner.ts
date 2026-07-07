@@ -69,7 +69,7 @@ export async function promptPlannerSafely(
   ctx: PromptContext,
   primaryAgent: Agent,
   promptText: string,
-  agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research" = "swarm",
+  agentName: "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder" | "swarm-research" = "swarm",
   ollamaFormat?: "json" | Record<string, unknown>,
 ): Promise<{ response: string; agentUsed: Agent }> {
   const response = await promptAgent(ctx, primaryAgent, promptText, agentName, "json", ollamaFormat);
@@ -80,7 +80,7 @@ export async function promptAgent(
   ctx: PromptContext,
   agent: Agent,
   prompt: string,
-  agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research" = "swarm",
+  agentName: "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder" | "swarm-research" = "swarm",
   formatExpect: "json" | "free" = "json",
   ollamaFormat?: "json" | Record<string, unknown>,
 ): Promise<string> {

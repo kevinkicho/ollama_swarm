@@ -180,9 +180,9 @@ export const StartBody = z.object({
   // route. Trimmed; empty string → undefined → skip the gate
   // entirely (legacy behavior). Blackboard-only.
   verifyCommand: z.string().trim().min(1).max(500).optional(),
-  // Opt-in: grant planner read/grep/glob tools (swarm-read profile).
-  // Default false — backward compatible, avoids context blow-up.
-  // Planner is limited to 3 file reads per turn when enabled.
+  // Legacy compatibility flag. Blackboard planners always use the
+  // swarm-planner profile (unlimited tool turns). Retained for saved-run
+  // config and research-oriented preset pairing with webTools.
   plannerTools: z.boolean().optional(),
   // Opt-in web tools (web_search + web_fetch) for research-oriented runs.
   // When true, planner/research agents can perform internet searches

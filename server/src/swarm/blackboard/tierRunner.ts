@@ -49,7 +49,7 @@ export interface TierContext {
   promptPlannerSafely: (
     primaryAgent: Agent,
     promptText: string,
-    agentName?: "swarm" | "swarm-read" | "swarm-builder",
+    agentName?: "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder",
     ollamaFormat?: "json" | Record<string, unknown>,
   ) => Promise<{ response: string; agentUsed: Agent }>;
   emit: (e: unknown) => void;
@@ -216,7 +216,7 @@ export async function tryPromoteNextTier(
   const { response, agentUsed } = await ctx.promptPlannerSafely(
     planner,
     prompt,
-    undefined,
+    "swarm-planner",
     CONTRACT_JSON_SCHEMA,
   );
   if (ctx.getStopping()) return false;
@@ -234,7 +234,7 @@ export async function tryPromoteNextTier(
       await ctx.promptPlannerSafely(
         agentUsed,
         prompt,
-        undefined,
+        "swarm-planner",
         CONTRACT_JSON_SCHEMA,
       );
     if (ctx.getStopping()) return false;
