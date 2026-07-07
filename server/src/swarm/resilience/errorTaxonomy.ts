@@ -122,6 +122,9 @@ export function classifyError(input: {
   if (/\b(cap.*reached|wall.?clock|commits cap|todos cap)\b/i.test(lower)) {
     return makeRecord("cap", raw);
   }
+  if (/\bintra-stream loop\b/i.test(lower)) {
+    return makeRecord("model-output", raw);
+  }
   if (/\b(empty response|malformed json|invalid json|parse|junk|model.*silence)\b/i.test(lower)) {
     return makeRecord("model-output", raw);
   }

@@ -18,7 +18,10 @@ import { isWebToolsEnabled, resolveToolProfile } from "./toolProfiles.js";
 import { effectiveToolProfileId } from "../../../shared/src/toolProfiles.js";
 import { makeWebToolHandler } from "./toolCallTranscript.js";
 import { withSiblingRetry } from "./blackboard/siblingRetry.js";
-import { siblingModelFor } from "./blackboard/BlackboardRunnerConstants.js";
+import {
+  councilWorkerFallbackModel,
+  summarizeWorkerFailureReason,
+} from "./councilWorkerFallback.js";
 import { TodoQueue, type QueuedTodo } from "./blackboard/TodoQueue.js";
 import type { CouncilAdapterState } from "./councilAdapter.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
@@ -41,6 +44,13 @@ type TodoExecuteResult =
   | { outcome: "completed" }
   | { outcome: "skipped"; reason: string }
   | { outcome: "failed"; error: string };
+
+type WorkerRetryResult = { outcome: "retry"; reason: string };
+type WorkerAttemptResult = TodoExecuteResult | WorkerRetryResult;
+
+function isWorkerRetry(r: WorkerAttemptResult): r is WorkerRetryResult {
+  return r.outcome === "retry";
+}
 
 async function runCouncilLiteratureResearch(
   state: CouncilAdapterState,
@@ -267,35 +277,64 @@ async function executeTodoWithRetryChain(
 
   // Stage 1: Primary prompt
   const primaryResult = await tryWorkerPrompt(agent, todo, expectedFiles, state, fsAdapter, gitAdapter, ctx);
-  if (primaryResult !== "retry") return primaryResult;
+  if (!isWorkerRetry(primaryResult)) return primaryResult;
+  const primaryReason = summarizeWorkerFailureReason(primaryResult.reason);
 
   // Stage 2: Repair prompt (same agent, same model)
-  ctx.appendSystem(`[execution] ${agent.id} parse failed — trying repair prompt.`);
+  ctx.appendSystem(
+    `[execution] ${agent.id} primary failed (${primaryReason}) — trying repair prompt.`,
+  );
   const repairResult = await tryWorkerPrompt(agent, todo, expectedFiles, state, fsAdapter, gitAdapter, ctx);
-  if (repairResult !== "retry") return repairResult;
+  if (!isWorkerRetry(repairResult)) return repairResult;
+  const repairReason = summarizeWorkerFailureReason(repairResult.reason);
 
-  // Stage 3: Sibling retry (swap model, re-prompt)
-  ctx.appendSystem(`[execution] ${agent.id} repair failed — trying sibling retry.`);
+  // Stage 3: Failover model retry (providerFailover chain or SIBLING_MODELS)
   const modelAtEntry = agent.model;
-  let siblingResult: TodoExecuteResult | "retry" = "retry";
-  await withSiblingRetry(
+  const fallbackModel = councilWorkerFallbackModel(modelAtEntry, state.cfg.providerFailover);
+  if (!fallbackModel) {
+    return {
+      outcome: "failed",
+      error: `all retries exhausted (last: ${repairReason}); no failover model in chain`,
+    };
+  }
+
+  ctx.appendSystem(
+    `[execution] ${agent.id} repair failed (${repairReason}) — trying failover model ${fallbackModel}.`,
+  );
+  let siblingResult: WorkerAttemptResult = { outcome: "retry", reason: repairReason };
+  const didSwap = await withSiblingRetry(
     {
       agent,
       modelAtEntry,
       logPrefix: `[${agent.id}]`,
-      updateAgentModel: (id, model) => { agent.model = model; },
-      emit: () => {},
-      getFallbackModel: () => siblingModelFor(agent.model),
-      reason: "sibling-retry: worker failed after repair",
+      updateAgentModel: (id, model) => {
+        agent.model = model;
+        (state.manager as { updateAgentModel?: (aid: string, m: string) => void }).updateAgentModel?.(
+          id,
+          model,
+        );
+      },
+      emit: (ev) => { state.emit(ev); },
+      getFallbackModel: () => fallbackModel,
+      reason: "council-worker-failover: worker failed after repair",
     },
     async () => {
       siblingResult = await tryWorkerPrompt(agent, todo, expectedFiles, state, fsAdapter, gitAdapter, ctx);
     },
   );
 
-  if (siblingResult !== "retry") return siblingResult;
+  if (!didSwap) {
+    return {
+      outcome: "failed",
+      error: `all retries exhausted (last: ${repairReason}); failover swap unavailable`,
+    };
+  }
+  if (!isWorkerRetry(siblingResult)) return siblingResult;
 
-  return { outcome: "failed", error: "all retries exhausted" };
+  return {
+    outcome: "failed",
+    error: `all retries exhausted (last: ${summarizeWorkerFailureReason(siblingResult.reason)})`,
+  };
 }
 
 async function tryWorkerPrompt(
@@ -306,7 +345,7 @@ async function tryWorkerPrompt(
   fsAdapter: ReturnType<typeof realFilesystemAdapter>,
   gitAdapter: ReturnType<typeof realGitAdapter>,
   ctx: WorkerRunnerContext,
-): Promise<TodoExecuteResult | "retry"> {
+): Promise<WorkerAttemptResult> {
   if (ctx.stopping()) return { outcome: "skipped", reason: "run stopping" };
   // Re-read file contents fresh each attempt (avoids stale content on retry)
   const fileContents = await readExpectedFiles(state.clonePath, expectedFiles);
@@ -349,7 +388,9 @@ async function tryWorkerPrompt(
     }, state.cfg.providerFailover);
 
     const res = extractProviderText(raw);
-    if (res === null) return "retry";
+    if (res === null) {
+      return { outcome: "retry", reason: "empty provider response" };
+    }
 
     // Mirror blackboard workerRunner: persist the model JSON so refresh/hydrate
     // can render WorkerHunksBubble (live StreamingDock alone is ephemeral).
@@ -411,19 +452,31 @@ async function tryWorkerPrompt(
           }
         }
       }
-    } else if (parsed.ok && parsed.skip) {
+      return {
+        outcome: "retry",
+        reason: applyResult.reason || "hunks could not be applied to the working tree",
+      };
+    }
+    if (!parsed.ok) {
+      return { outcome: "retry", reason: parsed.reason };
+    }
+    if (parsed.ok && parsed.skip) {
       ctx.appendSystem(`[execution] ${agent.id} skipped: ${parsed.skip}`);
       return { outcome: "skipped", reason: parsed.skip };
     }
+    if (parsed.ok && parsed.hunks.length === 0) {
+      return { outcome: "retry", reason: "worker returned no hunks" };
+    }
 
-    return "retry";
+    return { outcome: "retry", reason: "worker response could not be committed" };
     } finally {
       ctx.promptSignal?.removeEventListener("abort", onPromptAbort);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (ctx.stopping()) return { outcome: "skipped", reason: "run stopping" };
-    ctx.appendSystem(`[execution] ${agent.id} error: ${msg.slice(0, 300)}`);
-    return "retry";
+    const reason = summarizeWorkerFailureReason(msg);
+    ctx.appendSystem(`[execution] ${agent.id} error: ${reason}`);
+    return { outcome: "retry", reason: msg };
   }
 }

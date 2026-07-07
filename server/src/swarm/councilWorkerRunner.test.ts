@@ -34,3 +34,16 @@ test("councilWorkerRunner — persists worker JSON to transcript via appendAgent
   assert.match(SRC, /state\.appendAgent\(agent, res\)/, "must append primary worker response");
   assert.match(SRC, /state\.appendAgent\(agent, repairText\)/, "must append hunk-repair response");
 });
+
+test("councilWorkerRunner — retry messages include real failure reasons", () => {
+  assert.doesNotMatch(SRC, /parse failed — trying repair/, "must not use generic parse-failed label");
+  assert.match(SRC, /primary failed \(\$\{primaryReason\}\) — trying repair prompt/, "stage 2 names primary failure");
+  assert.match(SRC, /repair failed \(\$\{repairReason\}\) — trying failover model/, "stage 3 names repair failure");
+  assert.match(SRC, /summarizeWorkerFailureReason/, "must summarize reasons for transcript");
+});
+
+test("councilWorkerRunner — stage-3 failover uses providerFailover chain", () => {
+  assert.match(SRC, /councilWorkerFallbackModel/, "must resolve fallback from failover chain");
+  assert.match(SRC, /state\.cfg\.providerFailover/, "must pass per-run providerFailover");
+  assert.match(SRC, /withSiblingRetry/, "must swap model for failover attempt");
+});
