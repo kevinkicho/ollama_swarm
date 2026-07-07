@@ -351,6 +351,10 @@ async function tryWorkerPrompt(
     const res = extractProviderText(raw);
     if (res === null) return "retry";
 
+    // Mirror blackboard workerRunner: persist the model JSON so refresh/hydrate
+    // can render WorkerHunksBubble (live StreamingDock alone is ephemeral).
+    state.appendAgent(agent, res);
+
     const parsed = parseWorkerResponse(res, expectedFiles);
     if (parsed.ok && parsed.hunks.length > 0 && !parsed.skip) {
       const fixedHunks = parsed.hunks.map((h) => {
@@ -388,6 +392,7 @@ async function tryWorkerPrompt(
           }, state.cfg.providerFailover);
           const repairText = extractProviderText(repairRaw);
           if (repairText) {
+            state.appendAgent(agent, repairText);
             const repairParsed = parseWorkerResponse(repairText, expectedFiles);
             if (repairParsed.ok && repairParsed.hunks.length > 0 && !repairParsed.skip) {
               const repairResult = await applyAndCommit({

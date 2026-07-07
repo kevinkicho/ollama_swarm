@@ -57,10 +57,9 @@ describe("applyEventToStore", () => {
       };
       applyEventToStore({ type: "transcript_append", entry }, store.getState());
       assert.equal(store.getState().streaming.a1, undefined);
-      // Streaming text "partial text" is now preserved as agent-stream entry
-      assert.equal(store.getState().transcript.length, 2);
-      assert.equal(store.getState().transcript[0].role, "agent-stream");
-      assert.equal(store.getState().transcript[1].role, "agent");
+      assert.equal(store.getState().transcript.length, 1);
+      assert.equal(store.getState().transcript[0].role, "agent");
+      assert.equal(store.getState().transcript[0].streamSnapshot?.text, "partial text");
     });
   });
 

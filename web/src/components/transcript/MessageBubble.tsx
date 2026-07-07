@@ -39,6 +39,7 @@ import { AgentAvatar } from "./AgentAvatar";
 import { AuditReviewCard } from "./AuditReviewCard";
 import { tryRenderCouncilMarkers } from "./CouncilCycleDivider";
 import { ExecutionStatusBubble } from "./ExecutionStatusBubble";
+import { CouncilDraftBubble } from "./CouncilDraftBubble";
 
 export const MessageBubble = memo(function MessageBubble({ entry }: { entry: TranscriptEntry }) {
   const ts = new Date(entry.ts).toLocaleTimeString();
@@ -358,12 +359,25 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
     // the body behind "View JSON" which incorrectly buries the actual
     // draft / debate-turn content. Render the prose directly with the
     // structural label as a small header chip instead.
-    if (entry.summary.kind === "council_draft" || entry.summary.kind === "debate_turn") {
+    if (entry.summary.kind === "council_draft") {
       const label = formatServerSummary(entry.summary);
       const chipColor =
-        entry.summary.kind === "council_draft"
-          ? entry.summary.phase === "draft" ? "text-sky-300" : "text-emerald-300"
-          : entry.summary.role === "judge" ? "text-amber-300" : entry.summary.role === "pro" ? "text-emerald-300" : "text-rose-300";
+        entry.summary.phase === "draft" ? "text-sky-300" : "text-emerald-300";
+      return (
+        <CouncilDraftBubble
+          entry={entry}
+          header={header}
+          chipLabel={label}
+          chipColor={chipColor}
+          className={className}
+          style={style}
+        />
+      );
+    }
+    if (entry.summary.kind === "debate_turn") {
+      const label = formatServerSummary(entry.summary);
+      const chipColor =
+        entry.summary.role === "judge" ? "text-amber-300" : entry.summary.role === "pro" ? "text-emerald-300" : "text-rose-300";
       const chipHeader = (
         <div>
           {header}

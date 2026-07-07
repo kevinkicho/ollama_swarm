@@ -29,3 +29,8 @@ test("councilWorkerRunner — routes build todos through executeCouncilBuildTodo
   assert.match(SRC, /todo\.kind === "build"/, "must branch on build kind");
   assert.match(SRC, /checkBuildCommand/, "must enforce build command allowlist");
 });
+
+test("councilWorkerRunner — persists worker JSON to transcript via appendAgent", () => {
+  assert.match(SRC, /state\.appendAgent\(agent, res\)/, "must append primary worker response");
+  assert.match(SRC, /state\.appendAgent\(agent, repairText\)/, "must append hunk-repair response");
+});

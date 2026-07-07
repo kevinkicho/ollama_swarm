@@ -5,6 +5,7 @@ import type {
   TranscriptEntry,
   SwarmEvent,
 } from "../types.js";
+import { summarizeAgentResponse } from "./blackboard/transcriptSummary.js";
 import type { RunConfig, RunnerOpts } from "./SwarmRunner.js";
 import { DiscussionRunnerBase } from "./DiscussionRunnerBase.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
@@ -73,6 +74,25 @@ export class CouncilRunner extends DiscussionRunnerBase {
     super(opts);
   }
 
+  /** Persist worker / drafter JSON to the server transcript (survives refresh). */
+  private appendCouncilAgent(agent: Agent, text: string): void {
+    const { finalText, thoughts, toolCalls } = stripAgentText(text);
+    const summary = summarizeAgentResponse(finalText);
+    const entry: TranscriptEntry = {
+      id: randomUUID(),
+      role: "agent",
+      agentId: agent.id,
+      agentIndex: agent.index,
+      text: finalText || "(empty response)",
+      ts: Date.now(),
+      ...(summary ? { summary } : {}),
+      ...(thoughts.length > 0 ? { thoughts } : {}),
+      ...(toolCalls.length > 0 ? { toolCalls } : {}),
+    };
+    this.transcript.push(entry);
+    this.opts.emit({ type: "transcript_append", entry });
+  }
+
   async start(cfg: RunConfig): Promise<void> {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
     this.resetState(cfg);
@@ -89,7 +109,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
       this.opts.manager as any,
       this.opts.repos as any,
       (msg) => this.appendSystem(msg),
-      (agent, text) => { const entry: TranscriptEntry = { id: randomUUID(), role: "agent", agentId: agent.id, agentIndex: agent.index, text, ts: Date.now() }; this.transcript.push(entry); this.opts.emit({ type: "transcript_append", entry } as any); },
+      (agent, text) => this.appendCouncilAgent(agent, text),
       (e) => this.opts.emit(e as SwarmEvent),
       (entry) => this.opts.logDiag?.(entry as any),
     );

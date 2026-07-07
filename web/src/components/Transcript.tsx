@@ -6,6 +6,7 @@ import { StreamingDock } from "./transcript/StreamingDock";
 import { MessageBubble } from "./transcript/MessageBubble";
 import { StreamingTranscriptCard } from "./transcript/StreamingTranscriptCard";
 import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
+import { prepareTranscriptForDisplay } from "../state/transcriptDisplayFilter";
 
 /** Virtualization disabled — estimate drift caused hidden rows and wide gaps on stop. */
 const ENABLE_TRANSCRIPT_VIRTUALIZATION = false;
@@ -240,7 +241,12 @@ export const Transcript = memo(function Transcript() {
 
   // Filter transcript entries (client-side only; all data is in the store).
   // "all" is the normal full view. "key" etc are optional to cut noise.
-  const filteredTranscript = useMemo(() => transcript.filter((e) => {
+  const displayTranscript = useMemo(
+    () => prepareTranscriptForDisplay(transcript),
+    [transcript],
+  );
+
+  const filteredTranscript = useMemo(() => displayTranscript.filter((e) => {
     if (filter === "all") return true;
     if (filter === "system") return e.role === "system";
     if (filter === "agents") {
@@ -278,7 +284,7 @@ export const Transcript = memo(function Transcript() {
       return false;
     }
     return true;
-  }), [transcript, filter]);
+  }), [displayTranscript, filter]);
 
   filteredTranscriptRef.current = filteredTranscript;
   const shouldVirtualize =

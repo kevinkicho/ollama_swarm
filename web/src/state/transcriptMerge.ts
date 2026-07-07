@@ -1,3 +1,4 @@
+import { extractJsonFromText } from "@ollama-swarm/shared/extractJson";
 import type { TranscriptEntry } from "../types";
 
 export type StreamingMetaEntry = {
@@ -23,6 +24,51 @@ const SEED_PREFIXES = [
 
 function runIdFromDividerText(text: string): string | undefined {
   return (text.match(/runId=([^|]+)/) ?? [])[1];
+}
+
+function canonicalAgentText(text: string): string {
+  const trimmed = text.trim();
+  const extracted = extractJsonFromText(trimmed);
+  const candidate = extracted ?? trimmed;
+  try {
+    return JSON.stringify(JSON.parse(candidate));
+  } catch {
+    return trimmed;
+  }
+}
+
+/** True when a flushed stream snapshot duplicates the final agent text. */
+export function textsAreRedundantStream(streamed: string, final: string): boolean {
+  const s = streamed.trim();
+  const f = final.trim();
+  if (!s || !f) return false;
+  if (s === f) return true;
+  const cs = canonicalAgentText(s);
+  const cf = canonicalAgentText(f);
+  if (cs === cf) return true;
+  if (cf.startsWith(cs) && cs.length >= 40) return true;
+  if (f.startsWith(s) && s.length >= 40) return true;
+  return false;
+}
+
+function pruneAgentStreamsForAgent(
+  transcript: TranscriptEntry[],
+  agentId: string,
+  finalText: string,
+): { transcript: TranscriptEntry[]; folded?: TranscriptEntry["streamSnapshot"] } {
+  let folded: TranscriptEntry["streamSnapshot"] | undefined;
+  const next = transcript.filter((t) => {
+    if (t.role !== "agent-stream" || t.agentId !== agentId) return true;
+    if (textsAreRedundantStream(t.text, finalText)) return false;
+    if (!folded) {
+      folded = {
+        text: t.text,
+        streamingMeta: t.streamingMeta,
+      };
+    }
+    return false;
+  });
+  return { transcript: next, folded };
 }
 
 function moveDividerToFront(transcript: TranscriptEntry[]): TranscriptEntry[] {
@@ -101,26 +147,27 @@ export function mergeTranscriptEntry(
 
   const nextStreaming = { ...slice.streaming };
   const nextMeta = { ...slice.streamingMeta };
-  const entryToAdd = e;
+  let entryToAdd = e;
+
+  let workingTranscript = slice.transcript;
+  if (e.agentId && e.role === "agent") {
+    const pruned = pruneAgentStreamsForAgent(workingTranscript, e.agentId, e.text ?? "");
+    workingTranscript = pruned.transcript;
+    if (pruned.folded && !entryToAdd.streamSnapshot) {
+      entryToAdd = { ...entryToAdd, streamSnapshot: pruned.folded };
+    }
+  }
 
   if (e.agentId) {
     const streamingText = nextStreaming[e.agentId];
     const meta = nextMeta[e.agentId];
     if (streamingText && streamingText.length > 0) {
       const finalText = (e.text ?? "").trim();
-      const streamedText = streamingText.trim();
-      // When the streamed buffer matches the final entry (common for audit JSON /
-      // structured outputs), skip the redundant agent-stream snapshot.
-      const isRedundantStream = finalText.length > 0 && streamedText === finalText;
+      const isRedundantStream = finalText.length > 0 && textsAreRedundantStream(streamingText, finalText);
 
-      if (!isRedundantStream) {
-        const streamEntry: TranscriptEntry = {
-          id: `stream-${e.agentId}-${Date.now()}`,
-          role: "agent-stream",
+      if (!isRedundantStream && e.role === "agent") {
+        const snapshot = {
           text: streamingText,
-          ts: meta?.startedAt ?? Date.now(),
-          agentId: e.agentId,
-          ...(typeof e.agentIndex === "number" ? { agentIndex: e.agentIndex } : {}),
           streamingMeta: {
             startedAt: meta?.startedAt ?? Date.now(),
             lastTextAt: meta?.lastTextAt ?? Date.now(),
@@ -128,12 +175,9 @@ export function mergeTranscriptEntry(
             totalSeconds: meta ? Math.round((meta.lastTextAt - meta.startedAt) / 1000) : 0,
           },
         };
-        delete nextStreaming[e.agentId];
-        delete nextMeta[e.agentId];
-        return {
-          transcript: moveDividerToFront([...slice.transcript, streamEntry, entryToAdd]),
-          streaming: nextStreaming,
-          streamingMeta: nextMeta,
+        entryToAdd = {
+          ...entryToAdd,
+          streamSnapshot: entryToAdd.streamSnapshot ?? snapshot,
         };
       }
     }
@@ -141,7 +185,7 @@ export function mergeTranscriptEntry(
     delete nextMeta[e.agentId];
   }
 
-  let finalTranscript = moveDividerToFront([...slice.transcript, entryToAdd]);
+  let finalTranscript = moveDividerToFront([...workingTranscript, entryToAdd]);
 
   const result: TranscriptMergeSlice = {
     transcript: finalTranscript,

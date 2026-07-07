@@ -71,6 +71,12 @@ export interface TranscriptEntry {
     toolCallCount: number;
     totalSeconds: number;
   };
+  // Client-side fold of a superseded agent-stream snapshot into the final
+  // agent bubble (toggle via CouncilDraftBubble / AgentJsonBubble).
+  streamSnapshot?: {
+    text: string;
+    streamingMeta?: TranscriptEntry["streamingMeta"];
+  };
 }
 
 export type SwarmPhase =

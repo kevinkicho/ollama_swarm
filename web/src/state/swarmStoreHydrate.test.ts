@@ -57,7 +57,7 @@ describe("applyStatusSnapshotToStore", () => {
           ],
         },
       },
-    } as SwarmStatusSnapshot;
+    } as unknown as SwarmStatusSnapshot;
 
     applyStatusSnapshotToStore(store, "run-council", snap);
     const ids = Object.keys(store.getState().agents).sort();

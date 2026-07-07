@@ -79,7 +79,7 @@ describe("mergeTranscriptEntry", () => {
     assert.equal(mergeTranscriptEntry(slice, entry), null);
   });
 
-  it("preserves agentIndex on flushed agent-stream snapshot", () => {
+  it("folds non-redundant stream buffer into streamSnapshot on final agent entry", () => {
     let slice: TranscriptMergeSlice = {
       transcript: [],
       streaming: { "agent-4": "[{\"issue\":\"x\"}]" },
@@ -96,10 +96,41 @@ describe("mergeTranscriptEntry", () => {
       ts: 300,
     };
     slice = mergeTranscriptEntry(slice, final)!;
-    const stream = slice.transcript.find((t) => t.role === "agent-stream");
-    assert.ok(stream);
-    assert.equal(stream!.agentIndex, 4);
-    assert.equal(slice.transcript.length, 2);
+    assert.equal(slice.transcript.length, 1);
+    assert.equal(slice.transcript[0]!.role, "agent");
+    assert.equal(slice.transcript[0]!.streamSnapshot?.text, "[{\"issue\":\"x\"}]");
+    assert.equal(slice.transcript[0]!.agentIndex, 4);
+  });
+
+  it("prunes pre-existing agent-stream rows when the final agent entry lands", () => {
+    const json = "[{\"issue\":\"duplicate\"}]";
+    let slice: TranscriptMergeSlice = {
+      transcript: [
+        {
+          id: "stream-old",
+          role: "agent-stream",
+          agentId: "agent-2",
+          agentIndex: 2,
+          text: json,
+          ts: 50,
+        },
+      ],
+      streaming: {},
+      streamingMeta: {},
+    };
+    const final: TranscriptEntry = {
+      id: "a2-final",
+      role: "agent",
+      agentId: "agent-2",
+      agentIndex: 2,
+      text: json,
+      ts: 300,
+      summary: { kind: "council_draft", round: 3, phase: "reveal" },
+    };
+    slice = mergeTranscriptEntry(slice, final)!;
+    assert.equal(slice.transcript.length, 1);
+    assert.equal(slice.transcript[0]!.role, "agent");
+    assert.equal(slice.transcript[0]!.streamSnapshot, undefined);
   });
 
   it("skips redundant agent-stream when streamed text matches final entry", () => {
@@ -123,6 +154,29 @@ describe("mergeTranscriptEntry", () => {
     assert.equal(slice.transcript.length, 1);
     assert.equal(slice.transcript[0]!.role, "agent");
     assert.equal(slice.streaming["agent-4"], undefined);
+  });
+
+  it("treats JSON-whitespace variants as redundant stream text", () => {
+    const compact = "[{\"issue\":\"x\"}]";
+    const pretty = "[\n  {\"issue\": \"x\"}\n]";
+    let slice: TranscriptMergeSlice = {
+      transcript: [],
+      streaming: { "agent-1": compact },
+      streamingMeta: {
+        "agent-1": { startedAt: 1, lastTextAt: 2, status: "live" },
+      },
+    };
+    const final: TranscriptEntry = {
+      id: "a1",
+      role: "agent",
+      agentId: "agent-1",
+      agentIndex: 1,
+      text: pretty,
+      ts: 3,
+    };
+    slice = mergeTranscriptEntry(slice, final)!;
+    assert.equal(slice.transcript.length, 1);
+    assert.equal(slice.transcript[0]!.streamSnapshot, undefined);
   });
 
   it("dedupes worker_skip by reason text", () => {
