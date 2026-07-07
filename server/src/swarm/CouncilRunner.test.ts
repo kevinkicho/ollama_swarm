@@ -283,3 +283,13 @@ test("CouncilRunner.drain — soft stop is separate from hard stop", () => {
     "soft drain must enter draining phase",
   );
 });
+
+test("CouncilRunner — summary is written after loop settles on drain/stop", () => {
+  assert.match(COUNCIL_SRC, /closingRequested/, "must gate audit on drain/stop");
+  assert.match(COUNCIL_SRC, /awaitLoopThenCloseOut/, "must await loop before close-out summary");
+  assert.match(
+    COUNCIL_SRC,
+    /if \(this\.closingRequested\(\)\) return "stop"/,
+    "must skip audit when draining",
+  );
+});

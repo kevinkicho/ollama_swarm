@@ -66,6 +66,11 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private capWatchdog: ReturnType<typeof setInterval> | undefined;
   private drainResolve: (() => void) | undefined;
   private drainRequested = false;
+
+  /** True when the run is draining or hard-stopping — skip audit / new cycle work. */
+  private closingRequested(): boolean {
+    return this.stopping || this.drainRequested;
+  }
   private stopAbortController: AbortController | undefined;
   private stopInFlight: Promise<void> | null = null;
   private loopPromise: Promise<void> | null = null;
@@ -167,7 +172,15 @@ export class CouncilRunner extends DiscussionRunnerBase {
    */
   async stop(): Promise<void> {
     if (this.stopInFlight) return this.stopInFlight;
-    this.stopInFlight = this.closeOutStopped({ immediate: true });
+    this.stopping = true;
+    this.drainRequested = true;
+    if (this.state) this.state.stopping = true;
+    try {
+      this.stopAbortController?.abort(new Error("user stop"));
+    } catch {
+      // best-effort
+    }
+    this.stopInFlight = this.awaitLoopThenCloseOut({ immediate: true });
     return this.stopInFlight;
   }
 
@@ -183,24 +196,32 @@ export class CouncilRunner extends DiscussionRunnerBase {
     this.setPhase("draining");
 
     const DRAIN_TIMEOUT = 180_000;
-    await Promise.race([
-      new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
-          this.appendSystem("[drain] Timeout waiting for workers — forcing stop.");
-          resolve();
-        }, DRAIN_TIMEOUT);
-        const origResolve = this.drainResolve;
-        this.drainResolve = () => {
-          clearTimeout(timer);
-          resolve();
-          origResolve?.();
-        };
-      }),
-      this.loopPromise ?? Promise.resolve(),
-    ]);
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        this.appendSystem("[drain] Timeout waiting for workers — forcing stop.");
+        resolve();
+      }, DRAIN_TIMEOUT);
+      const origResolve = this.drainResolve;
+      this.drainResolve = () => {
+        clearTimeout(timer);
+        resolve();
+        origResolve?.();
+      };
+    });
 
-    this.stopInFlight = this.closeOutStopped({ immediate: true });
+    this.stopInFlight = this.awaitLoopThenCloseOut({ immediate: true });
     return this.stopInFlight;
+  }
+
+  /** Wait for the autonomous loop to observe drain/stop, then write summary last. */
+  private async awaitLoopThenCloseOut(opts: { immediate: boolean }): Promise<void> {
+    if (this.loopPromise) {
+      await Promise.race([
+        this.loopPromise.catch(() => {}),
+        new Promise<void>((r) => setTimeout(r, 15_000)),
+      ]);
+    }
+    await this.closeOutStopped(opts);
   }
 
   private async closeOutStopped(opts: { immediate: boolean }): Promise<void> {
@@ -316,13 +337,13 @@ export class CouncilRunner extends DiscussionRunnerBase {
           await new Promise((r) => setTimeout(r, 1000));
           continue;
         }
-        if (!isAutonomous || this.stopping) break;
+        if (!isAutonomous || this.closingRequested()) break;
         this.earlyStopDetail = undefined;
         await new Promise((r) => setTimeout(r, 2000));
       }
     });
 
-    if (!this.stopping) this.appendSystem("Council complete.");
+    if (!this.closingRequested()) this.appendSystem("Council complete.");
   }
 
   private async runCycle(cfg: RunConfig, cycle: number, isAutonomous: boolean): Promise<"done" | "retry" | "stop"> {
@@ -484,7 +505,9 @@ export class CouncilRunner extends DiscussionRunnerBase {
       await this.drainTodos(cfg, cycle);
     }
 
-    if (!this.stopping && this.state.contract) {
+    if (this.closingRequested()) return "stop";
+
+    if (this.state.contract) {
       const skippedTodos = this.state.todoQueue
         .list()
         .filter((t) => t.status === "skipped");
@@ -502,7 +525,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
     }
 
     // ── AUDIT: check criteria ──
-    if (!this.stopping && this.state.contract) {
+    if (!this.closingRequested() && this.state.contract) {
       const auditResult = await this.runAudit(cfg, cycle);
       if (auditResult === "stop") return "stop";
       if (auditResult === "retry") return "retry";
@@ -575,6 +598,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
 
   private async runAudit(cfg: RunConfig, cycle: number): Promise<"done" | "retry" | "stop"> {
     if (!this.state.contract) return "done";
+    if (this.closingRequested()) return "stop";
 
     const tagAudit = (msg: string) => {
       if (msg.startsWith("[audit] LLM audit:")) {
@@ -606,10 +630,13 @@ export class CouncilRunner extends DiscussionRunnerBase {
       {
         manager: this.opts.manager as any,
         appendSystem: tagAudit,
-        stopping: () => this.stopping,
+        stopping: () => this.closingRequested(),
+        abortSignal: this.stopAbortController?.signal,
       },
       skipEvidence,
     );
+
+    if (this.closingRequested()) return "stop";
 
     this.state.contract = { ...this.state.contract, criteria: updatedCriteria };
     const metCount = updatedCriteria.filter(c => c.status === "met").length;

@@ -17,6 +17,8 @@ export interface CouncilAuditorContext {
   manager: { list: () => Agent[]; markStatus: (id: string, status: string) => void; recordPromptComplete: (id: string, data: any) => void };
   appendSystem: (msg: string) => void;
   stopping: () => boolean;
+  /** User stop/drain — aborts an in-flight audit prompt. */
+  abortSignal?: AbortSignal;
 }
 
 export async function runCouncilLlmAudit(
@@ -29,6 +31,10 @@ export async function runCouncilLlmAudit(
   updatedCriteria: ExitCriterion[];
   newTodos: Array<{ description: string; expectedFiles: string[]; criterionId?: string }>;
 }> {
+  if (ctx.stopping()) {
+    return { updatedCriteria: contract.criteria, newTodos: [] };
+  }
+
   const agents = ctx.manager.list();
   const lead = agents.find((a) => a.index === 1);
   if (!lead) {
@@ -108,12 +114,17 @@ Return ONLY a JSON object:
 
   try {
     const { controller, cleanup } = createTimeoutController();
+    const onExternalAbort = () => controller.abort(new Error("user stop"));
+    ctx.abortSignal?.addEventListener("abort", onExternalAbort, { once: true });
     try {
       const raw = await promptWithFailoverAuto(lead, prompt, {
         manager: ctx.manager as any,
         agentName: "swarm-read",
         signal: controller.signal,
       }, cfg.providerFailover);
+      if (ctx.stopping()) {
+        return { updatedCriteria: contract.criteria, newTodos: [] };
+      }
       const text = extractProviderText(raw);
       if (!text) {
         ctx.appendSystem("[audit] Empty auditor response — falling back to file check.");
@@ -153,9 +164,13 @@ Return ONLY a JSON object:
 
       return { updatedCriteria, newTodos };
     } finally {
+      ctx.abortSignal?.removeEventListener("abort", onExternalAbort);
       cleanup();
     }
   } catch (err) {
+    if (ctx.stopping()) {
+      return { updatedCriteria: contract.criteria, newTodos: [] };
+    }
     ctx.appendSystem(`[audit] LLM audit failed: ${err instanceof Error ? err.message : String(err)} — falling back to file check.`);
     return fallbackAudit(cfg, contract, skipEvidence);
   }
