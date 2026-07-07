@@ -46,6 +46,10 @@ const ALLOWED_BINARIES = new Set([
   "typedoc",
   "jsdoc",
   "docusaurus",
+  // Python repos (council run-script todos)
+  "python",
+  "python3",
+  "pytest",
 ] as const);
 
 export interface AllowlistResult {

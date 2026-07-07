@@ -7,37 +7,37 @@ import type { RunConfig } from "./SwarmRunner.js";
 import type { TranscriptEntry } from "../types.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractProviderText, createTimeoutController, parseJsonArrayFromResponse, gatherProjectContext, type RealManager } from "./councilUtils.js";
-import path from "node:path";
 import { classifyExpectedFiles } from "./blackboard/prompts/pathValidation.js";
 import { resolveSafe } from "./blackboard/resolveSafe.js";
 import { promises as fs } from "node:fs";
-
-async function listSourceFiles(root: string): Promise<string[]> {
-  const out: string[] = [];
-  const exts = new Set([".ts", ".tsx", ".js", ".jsx"]);
-  async function walk(dir: string, rel = ""): Promise<void> {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    for (const e of entries) {
-      if (e.name === "node_modules" || e.name === ".git") continue;
-      const relPath = rel ? `${rel}/${e.name}` : e.name;
-      const abs = path.join(dir, e.name);
-      if (e.isDirectory()) await walk(abs, relPath);
-      else if (exts.has(path.extname(e.name))) {
-        out.push(relPath.replace(/\\/g, "/"));
-      }
-    }
-  }
-  await walk(root);
-  return out;
-}
+import type { ExitContract } from "./blackboard/types.js";
+import { skipCoversCriterionFiles } from "./councilSkipReconcile.js";
 
 export { extractProviderText, createTimeoutController, parseJsonArrayFromResponse, gatherProjectContext, type RealManager } from "./councilUtils.js";
+
+type CouncilRepos = {
+  listTopLevel: (path: string) => Promise<string[]>;
+  listRepoFiles: (path: string, opts: { maxFiles: number }) => Promise<string[]>;
+};
+
+function filesGuardedByUnmetCriteria(
+  files: readonly string[],
+  contract: ExitContract | null | undefined,
+): boolean {
+  if (!contract) return false;
+  const unmet = contract.criteria.filter((c) => c.status === "unmet");
+  if (unmet.length === 0) return false;
+  for (const c of unmet) {
+    if (skipCoversCriterionFiles(files, c.expectedFiles)) return true;
+  }
+  return false;
+}
 
 export async function extractTodosFromAudit(
   lead: Agent,
   cfg: RunConfig,
   missingWork: string,
-  repos: { listTopLevel: (path: string) => Promise<string[]> },
+  repos: CouncilRepos,
   manager: RealManager,
 ): Promise<Array<{ id: string; description: string; expectedFiles: string[] }>> {
   let treeSection = "";
@@ -86,9 +86,10 @@ export async function extractActionableTodos(
   lead: Agent,
   cfg: RunConfig,
   transcript: TranscriptEntry[],
-  repos: { listTopLevel: (path: string) => Promise<string[]> },
+  repos: CouncilRepos,
   appendSystem: (msg: string) => void,
   manager: { list: () => Agent[]; recordStreamingText?: (id: string, text: string) => void },
+  contract?: ExitContract | null,
 ): Promise<Array<{ id: string; description: string; expectedFiles: string[] }>> {
   const synthesisEntry = [...transcript]
     .reverse()
@@ -161,10 +162,9 @@ Rules:
         return [];
       }
 
-      // Post-process: verify file paths exist and check for placeholder content
       let repoFiles: string[] = [];
       try {
-        repoFiles = await listSourceFiles(cfg.localPath);
+        repoFiles = await repos.listRepoFiles(cfg.localPath, { maxFiles: 500 });
       } catch { /* ignore */ }
 
       const verified: typeof result = [];
@@ -174,7 +174,9 @@ Rules:
 
         const { accepted, rejected } = classifyExpectedFiles(t.expectedFiles, repoFiles);
         if (rejected.length > 0) {
-          appendSystem(`[path grounding] Dropped ${rejected.length} invalid path(s) from "${t.description}": ${rejected.map(r => r.path).join(", ")}`);
+          appendSystem(
+            `[path grounding] Warned on ${rejected.length} suspicious path(s) in "${t.description}": ${rejected.map((r) => r.path).join(", ")}`,
+          );
         }
 
         const filesWithRealContent: string[] = [];
@@ -194,7 +196,14 @@ Rules:
           }
         }
 
-        if (isCreate && accepted.length > 0 && filesWithRealContent.length === accepted.length) {
+        const guarded = filesGuardedByUnmetCriteria(accepted, contract);
+
+        if (
+          isCreate &&
+          accepted.length > 0 &&
+          filesWithRealContent.length === accepted.length &&
+          !guarded
+        ) {
           appendSystem(`[dedup] Skipping "${t.description}" — files already exist with real content.`);
           continue;
         }
@@ -204,6 +213,12 @@ Rules:
           if (existingFiles.length > 0) {
             appendSystem(`[dedup] Converting "${t.description}" from create to modify — files exist with placeholder content.`);
           }
+        }
+
+        if (guarded && filesWithRealContent.length === accepted.length) {
+          appendSystem(
+            `[dedup] Keeping "${t.description}" — linked to unmet contract criteria despite existing content.`,
+          );
         }
 
         if (accepted.length > 0) {

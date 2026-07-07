@@ -553,3 +553,19 @@ test("cloneStats — returns zeros for a non-git directory (best-effort)", async
     await fs.rm(notARepo, { recursive: true, force: true });
   }
 });
+
+test("ensureGitRepo — initializes git in a plain directory", { skip: !gitOk ? "git not on PATH" : false }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-ensuregit-"));
+  try {
+    await fs.writeFile(path.join(root, "README.md"), "# workspace\n");
+    const repos = new RepoService();
+    const first = await repos.ensureGitRepo(root);
+    assert.equal(first.initialized, true);
+    const second = await repos.ensureGitRepo(root);
+    assert.equal(second.initialized, false);
+    const stats = await repos.cloneStats(root);
+    assert.ok(stats.commits >= 1);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

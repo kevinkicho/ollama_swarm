@@ -99,6 +99,8 @@ const TEST_FILES = [
   "src/swarm/councilReconcile.test.ts",
   "src/swarm/councilSkipReconcile.test.ts",
   "src/swarm/councilPathCanonicalize.test.ts",
+  "src/swarm/councilDecisions.test.ts",
+  "src/swarm/councilTodoClassify.test.ts",
   "src/swarm/councilWorkerRunner.test.ts",
   "src/swarm/extractText.test.ts",
   "src/swarm/runEndReflection.test.ts",

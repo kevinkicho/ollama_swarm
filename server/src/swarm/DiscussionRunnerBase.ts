@@ -279,6 +279,10 @@ export abstract class DiscussionRunnerBase {
       cloneResult = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
     }
     const { destPath } = cloneResult;
+    const gitInit = await this.opts.repos.ensureGitRepo(destPath);
+    if (gitInit.initialized) {
+      this.appendSystem("[clone] Initialized git repository in local workspace.");
+    }
     this.opts.emit({
       type: "clone_state",
       alreadyPresent: cloneResult.alreadyPresent,

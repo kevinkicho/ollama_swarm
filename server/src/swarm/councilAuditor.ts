@@ -8,6 +8,10 @@ import { readDirective, buildDirectiveBlock } from "./directivePromptHelpers.js"
 import { readExpectedFiles } from "./sharedFileUtils.js";
 import { windowFileForWorker } from "./blackboard/windowFile.js";
 import type { SkipEvidenceTodo } from "./councilSkipReconcile.js";
+import {
+  filterAuditTodosAgainstSkips,
+  promoteCriteriaFromSkipEvidence,
+} from "./councilSkipReconcile.js";
 
 export interface CouncilAuditorContext {
   manager: { list: () => Agent[]; markStatus: (id: string, status: string) => void; recordPromptComplete: (id: string, data: any) => void };
@@ -36,7 +40,6 @@ export async function runCouncilLlmAudit(
     return { updatedCriteria: contract.criteria, newTodos: [] };
   }
 
-  // Read full file contents for unmet criteria (not just head -100)
   const filesToRead = new Set<string>();
   for (const c of unmetCriteria) {
     for (const f of c.expectedFiles) {
@@ -87,6 +90,7 @@ ${committedFiles.map(f => `  ${f}`).join("\n")}
 ${skipBlock}
 For each unmet criterion, determine if it is now MET, WONT-DO, or still UNMET.
 - MET: the expected files exist and contain real implementation (not mock/placeholder). When a criterion lists multiple path variants for the same file (e.g. docs/foo.md and foo.md), MET if ANY listed file satisfies the criterion.
+- When worker skip evidence shows work is already done for a criterion's files, prefer MET unless file contents clearly contradict the skip reason.
 - WONT-DO: the criterion is impossible or no longer relevant
 - UNMET: still needs work — provide specific todos
 
@@ -113,17 +117,17 @@ Return ONLY a JSON object:
       const text = extractProviderText(raw);
       if (!text) {
         ctx.appendSystem("[audit] Empty auditor response — falling back to file check.");
-        return fallbackAudit(cfg, contract);
+        return fallbackAudit(cfg, contract, skipEvidence);
       }
 
       const parsed = parseAuditorResponse(text);
       if (!parsed.ok) {
         ctx.appendSystem(`[audit] Parse failed: ${parsed.reason} — falling back to file check.`);
-        return fallbackAudit(cfg, contract);
+        return fallbackAudit(cfg, contract, skipEvidence);
       }
 
       const criteriaById = new Map(contract.criteria.map(c => [c.id, c]));
-      const newTodos: Array<{ description: string; expectedFiles: string[]; criterionId?: string }> = [];
+      let newTodos: Array<{ description: string; expectedFiles: string[]; criterionId?: string }> = [];
 
       for (const v of parsed.result.verdicts) {
         const crit = criteriaById.get(v.id);
@@ -133,11 +137,16 @@ Return ONLY a JSON object:
         }
       }
 
-      const updatedCriteria = contract.criteria.map((c) => {
+      let updatedCriteria = contract.criteria.map((c) => {
         const verdict = parsed.result.verdicts.find((v) => v.id === c.id);
         if (!verdict || c.status !== "unmet") return c;
         return { ...c, status: verdict.status as ExitCriterion["status"], rationale: verdict.rationale };
       });
+
+      updatedCriteria = promoteCriteriaFromSkipEvidence(updatedCriteria, skipEvidence);
+      newTodos = filterAuditTodosAgainstSkips(newTodos, skipEvidence);
+      const metIds = new Set(updatedCriteria.filter((c) => c.status === "met").map((c) => c.id));
+      newTodos = newTodos.filter((t) => !t.criterionId || !metIds.has(t.criterionId));
 
       const metCount = updatedCriteria.filter(c => c.status === "met").length;
       ctx.appendSystem(`[audit] LLM audit: ${metCount}/${updatedCriteria.length} criteria met, ${newTodos.length} new todo(s).`);
@@ -148,13 +157,14 @@ Return ONLY a JSON object:
     }
   } catch (err) {
     ctx.appendSystem(`[audit] LLM audit failed: ${err instanceof Error ? err.message : String(err)} — falling back to file check.`);
-    return fallbackAudit(cfg, contract);
+    return fallbackAudit(cfg, contract, skipEvidence);
   }
 }
 
 async function fallbackAudit(
   cfg: RunConfig,
   contract: ExitContract,
+  skipEvidence: readonly SkipEvidenceTodo[] = [],
 ): Promise<{
   updatedCriteria: ExitCriterion[];
   newTodos: Array<{ description: string; expectedFiles: string[] }>;
@@ -192,5 +202,13 @@ async function fallbackAudit(
     }
   }
 
-  return { updatedCriteria, newTodos };
+  const reconciled = promoteCriteriaFromSkipEvidence(updatedCriteria, skipEvidence);
+  const filteredTodos = filterAuditTodosAgainstSkips(newTodos, skipEvidence);
+  const metIds = new Set(reconciled.filter((c) => c.status === "met").map((c) => c.id));
+  const finalTodos = filteredTodos.filter((t) => {
+    const crit = contract.criteria.find((c) => c.description === t.description);
+    return !crit || !metIds.has(crit.id);
+  });
+
+  return { updatedCriteria: reconciled, newTodos: finalTodos };
 }

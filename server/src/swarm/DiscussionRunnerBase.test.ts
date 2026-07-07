@@ -50,6 +50,7 @@ function makeMockOpts(): {
       priorUntrackedFiles: 0,
     }),
     excludeRunnerArtifacts: async () => {},
+    ensureGitRepo: async () => ({ initialized: false }),
     listTopLevel: async () => [],
   };
 

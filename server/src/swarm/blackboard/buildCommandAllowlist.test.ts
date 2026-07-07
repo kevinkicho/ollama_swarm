@@ -15,6 +15,11 @@ describe("checkBuildCommand — basic acceptance", () => {
     assert.equal(r.binary, "bun");
   });
 
+  it("accepts python and pytest for council run-script todos", () => {
+    assert.equal(checkBuildCommand("python predict_tc.py").ok, true);
+    assert.equal(checkBuildCommand("pytest").ok, true);
+  });
+
   it("accepts a multi-arg command like `npm install --frozen-lockfile`", () => {
     const r = checkBuildCommand("npm install --frozen-lockfile");
     assert.equal(r.ok, true);

@@ -227,6 +227,40 @@ export class RepoService {
   // Best-effort: any git failure yields zeros rather than throwing —
   // we'd rather start the run with a missing banner than abort
   // because `git status` was momentarily unhappy.
+  /** Initialize git in a local workspace that has no .git directory. */
+  async ensureGitRepo(clonePath: string): Promise<{ initialized: boolean }> {
+    const gitDir = path.join(clonePath, ".git");
+    if (await this.dirExists(gitDir)) {
+      return { initialized: false };
+    }
+    try {
+      const git = simpleGit(clonePath);
+      await git.init(["-q", "-b", "main"]);
+      await git.add("-A");
+      const status = await git.status();
+      const hasFiles =
+        !status.isClean() ||
+        status.not_added.length > 0 ||
+        status.created.length > 0;
+      if (hasFiles) {
+        await git.raw(
+          "-c", "user.name=ollama-swarm",
+          "-c", "user.email=swarm@ollama-swarm.local",
+          "commit", "-m", "initial workspace snapshot",
+        );
+      } else {
+        await git.raw(
+          "-c", "user.name=ollama-swarm",
+          "-c", "user.email=swarm@ollama-swarm.local",
+          "commit", "-m", "initial workspace snapshot", "--allow-empty",
+        );
+      }
+      return { initialized: true };
+    } catch {
+      return { initialized: false };
+    }
+  }
+
   async cloneStats(clonePath: string): Promise<CloneStats> {
     try {
       const git = simpleGit(clonePath);

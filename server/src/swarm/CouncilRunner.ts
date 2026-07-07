@@ -47,6 +47,7 @@ import {
 import { gatherCodeContext } from "./gatherCodeContext.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
 import { reconcileCriteriaFromSkips } from "./councilSkipReconcile.js";
+import { buildCouncilTodoPost } from "./councilTodoClassify.js";
 
 
 export class CouncilRunner extends DiscussionRunnerBase {
@@ -378,13 +379,16 @@ export class CouncilRunner extends DiscussionRunnerBase {
               this.opts.repos,
               (msg) => this.appendSystem(msg),
               this.opts.manager as any,
+              this.state.contract,
             );
             for (const t of synthesisTodos) {
-              this.state.todoQueue.post({
-                description: t.description,
-                expectedFiles: t.expectedFiles,
-                createdBy: "council-synthesis",
-              });
+              this.state.todoQueue.post(
+                buildCouncilTodoPost({
+                  description: t.description,
+                  expectedFiles: t.expectedFiles,
+                  createdBy: "council-synthesis",
+                }),
+              );
             }
             if (synthesisTodos.length > 0) {
               this.appendSystem(
@@ -467,6 +471,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
       const { criteria: reconciled, promotedIds } = reconcileCriteriaFromSkips(
         this.state.contract.criteria,
         skippedTodos,
+        this.repoFiles,
       );
       if (promotedIds.length > 0) {
         this.state.contract = { ...this.state.contract, criteria: reconciled };
@@ -647,12 +652,14 @@ export class CouncilRunner extends DiscussionRunnerBase {
 
     // Create todos for unmet criteria
     for (const t of newTodos) {
-      this.state.todoQueue.post({
-        description: t.description,
-        expectedFiles: t.expectedFiles,
-        createdBy: "auditor",
-        ...(t.criterionId ? { criterionId: t.criterionId } : {}),
-      });
+      this.state.todoQueue.post(
+        buildCouncilTodoPost({
+          description: t.description,
+          expectedFiles: t.expectedFiles,
+          createdBy: "auditor",
+          ...(t.criterionId ? { criterionId: t.criterionId } : {}),
+        }),
+      );
     }
     this.appendSystem(`[audit] Created ${newTodos.length} todo(s) for unmet criteria.`);
 
@@ -694,11 +701,13 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
                     expectedFiles: Array.isArray(t.expectedFiles) ? t.expectedFiles.map(String) : [],
                   }));
                   for (const t of todos) {
-                    this.state.todoQueue.post({
-                      description: t.description,
-                      expectedFiles: t.expectedFiles,
-                      createdBy: "planner-fallback",
-                    });
+                    this.state.todoQueue.post(
+                      buildCouncilTodoPost({
+                        description: t.description,
+                        expectedFiles: t.expectedFiles,
+                        createdBy: "planner-fallback",
+                      }),
+                    );
                   }
                   this.appendSystem(`[planner] Fallback created ${todos.length} todo(s).`);
                   if (todos.length > 0) {
@@ -760,11 +769,13 @@ Max 6 items. Each todo must target specific files. Return ONLY the JSON array.`;
         }));
         for (const todo of todos) {
           if (todo.description) {
-            this.state.todoQueue.post({
-              description: todo.description,
-              expectedFiles: todo.expectedFiles,
-              createdBy: "council",
-            });
+            this.state.todoQueue.post(
+              buildCouncilTodoPost({
+                description: todo.description,
+                expectedFiles: todo.expectedFiles,
+                createdBy: "council",
+              }),
+            );
           }
         }
         this.appendSystem(`[Standup] Synthesized ${todos.length} proposals into unified plan.`);

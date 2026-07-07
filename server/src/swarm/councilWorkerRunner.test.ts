@@ -23,3 +23,9 @@ test("councilWorkerRunner — literature research + web tools profile", () => {
 test("councilWorkerRunner — preserves worker skip reason", () => {
   assert.match(SRC, /skip\(todo\.id, result\.reason\)/, "must store actual skip reason on todo");
 });
+
+test("councilWorkerRunner — routes build todos through executeCouncilBuildTodo", () => {
+  assert.match(SRC, /executeCouncilBuildTodo/, "must handle build-style todos");
+  assert.match(SRC, /todo\.kind === "build"/, "must branch on build kind");
+  assert.match(SRC, /checkBuildCommand/, "must enforce build command allowlist");
+});

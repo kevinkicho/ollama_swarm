@@ -22,6 +22,8 @@ import { siblingModelFor } from "./blackboard/BlackboardRunnerConstants.js";
 import { TodoQueue, type QueuedTodo } from "./blackboard/TodoQueue.js";
 import type { CouncilAdapterState } from "./councilAdapter.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
+import { checkBuildCommand } from "./blackboard/buildCommandAllowlist.js";
+import simpleGit from "simple-git";
 
 export interface WorkerRunnerContext {
   appendSystem: (msg: string) => void;
@@ -158,6 +160,95 @@ async function runCouncilWorker(
   return { completed, failed, skipped };
 }
 
+async function executeCouncilBuildTodo(
+  agent: Agent,
+  todo: QueuedTodo,
+  state: CouncilAdapterState,
+  gitAdapter: ReturnType<typeof realGitAdapter>,
+  ctx: WorkerRunnerContext,
+): Promise<TodoExecuteResult> {
+  const command = todo.command?.trim() ?? "";
+  if (!command) {
+    return { outcome: "failed", error: "build TODO missing command field" };
+  }
+
+  const check = checkBuildCommand(command);
+  if (!check.ok) {
+    return { outcome: "failed", error: `build command not allowed: ${check.reason}` };
+  }
+
+  ctx.appendSystem(
+    `[execution] ${agent.id} running build command: \`${command}\` (binary: ${check.binary})`,
+  );
+
+  const buildPrompt = [
+    "You are a build worker. Your job is to run ONE shell command via the bash tool.",
+    "",
+    `Command to run: ${command}`,
+    `Working directory: ${state.clonePath}`,
+    "",
+    "Steps:",
+    "1. Invoke the bash tool with the EXACT command above. Do not modify, prefix, or chain.",
+    "2. After the command completes, respond with this JSON envelope and NOTHING ELSE:",
+    `   {"ok": true|false, "exitCode": <number>, "summary": "<one-line summary of what changed>"}`,
+    "",
+    "If the command exits non-zero, set ok=false. Do not edit files manually — bash side effects are the entire delivery mechanism.",
+  ].join("\n");
+
+  try {
+    const controller = new AbortController();
+    const onPromptAbort = () => controller.abort(new Error("user stop"));
+    ctx.promptSignal?.addEventListener("abort", onPromptAbort, { once: true });
+    try {
+      const profile = resolveToolProfile("worker-build", state.cfg);
+      const res = await chatOnce(agent, {
+        agentName: profile,
+        promptText: buildPrompt,
+        clonePath: state.clonePath,
+        webToolsConfig: state.cfg,
+        runId: state.cfg.runId,
+        mcpServers: state.cfg.mcpServers,
+      });
+      const text = extractText(res)?.trim();
+      if (text) {
+        state.appendAgent(agent, text);
+      }
+    } finally {
+      ctx.promptSignal?.removeEventListener("abort", onPromptAbort);
+    }
+
+    const git = simpleGit(state.clonePath);
+    const status = await git.status();
+    const changedFiles =
+      status.modified.length +
+      status.created.length +
+      status.deleted.length +
+      status.renamed.length +
+      status.not_added.length;
+
+    if (changedFiles === 0) {
+      return { outcome: "failed", error: "build command produced no file changes" };
+    }
+
+    const commitRes = await gitAdapter.commitAll(
+      `build: ${todo.description.slice(0, 80)}`,
+      agent.id,
+    );
+    if (!commitRes.ok) {
+      return { outcome: "failed", error: commitRes.reason ?? "git commit failed" };
+    }
+
+    ctx.appendSystem(
+      `[execution] ${agent.id} ✓ build commit landed — ${commitRes.sha?.slice(0, 7) ?? "ok"}.`,
+    );
+    return { outcome: "completed" };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (ctx.stopping()) return { outcome: "skipped", reason: "run stopping" };
+    return { outcome: "failed", error: `build prompt failed: ${msg.slice(0, 200)}` };
+  }
+}
+
 async function executeTodoWithRetryChain(
   agent: Agent,
   todo: QueuedTodo,
@@ -167,6 +258,11 @@ async function executeTodoWithRetryChain(
   ctx: WorkerRunnerContext,
 ): Promise<TodoExecuteResult> {
   if (ctx.stopping()) return { outcome: "skipped", reason: "run stopping" };
+
+  if (todo.kind === "build" && todo.command) {
+    return executeCouncilBuildTodo(agent, todo, state, gitAdapter, ctx);
+  }
+
   const expectedFiles = [...todo.expectedFiles];
 
   // Stage 1: Primary prompt
