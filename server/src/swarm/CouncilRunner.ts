@@ -48,7 +48,7 @@ import {
 import { gatherCodeContext } from "./gatherCodeContext.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
 import { reconcileCriteriaFromSkips } from "./councilSkipReconcile.js";
-import { buildCouncilTodoPost } from "./councilTodoClassify.js";
+import { postCouncilTodoBatch } from "./councilTodoPlan.js";
 
 
 export class CouncilRunner extends DiscussionRunnerBase {
@@ -401,23 +401,23 @@ export class CouncilRunner extends DiscussionRunnerBase {
               this.opts.manager as any,
               this.state.contract,
             );
-            for (const t of synthesisTodos) {
-              this.state.todoQueue.post(
-                buildCouncilTodoPost({
-                  description: t.description,
-                  expectedFiles: t.expectedFiles,
-                  createdBy: "council-synthesis",
-                }),
-              );
-            }
-            if (synthesisTodos.length > 0) {
+            const enqueued = postCouncilTodoBatch(
+              (input) => this.state.todoQueue.post(input),
+              synthesisTodos.map((t) => ({
+                description: t.description,
+                expectedFiles: t.expectedFiles,
+                createdBy: "council-synthesis",
+              })),
+              (msg) => this.appendSystem(msg),
+            );
+            if (enqueued > 0) {
               this.appendSystem(
-                `[synthesis] Enqueued ${synthesisTodos.length} actionable todo(s).`,
+                `[synthesis] Enqueued ${enqueued} actionable todo(s).`,
                 {
                   kind: "council_stage",
                   cycle,
                   stage: "execution",
-                  detail: `${synthesisTodos.length} synthesis todo(s)`,
+                  detail: `${enqueued} synthesis todo(s)`,
                 },
               );
             }
@@ -670,18 +670,17 @@ export class CouncilRunner extends DiscussionRunnerBase {
       return "stop";
     }
 
-    // Create todos for unmet criteria
-    for (const t of newTodos) {
-      this.state.todoQueue.post(
-        buildCouncilTodoPost({
-          description: t.description,
-          expectedFiles: t.expectedFiles,
-          createdBy: "auditor",
-          ...(t.criterionId ? { criterionId: t.criterionId } : {}),
-        }),
-      );
-    }
-    this.appendSystem(`[audit] Created ${newTodos.length} todo(s) for unmet criteria.`);
+    const auditEnqueued = postCouncilTodoBatch(
+      (input) => this.state.todoQueue.post(input),
+      newTodos.map((t) => ({
+        description: t.description,
+        expectedFiles: t.expectedFiles,
+        createdBy: "auditor",
+        ...(t.criterionId ? { criterionId: t.criterionId } : {}),
+      })),
+      (msg) => this.appendSystem(msg),
+    );
+    this.appendSystem(`[audit] Created ${auditEnqueued} todo(s) for unmet criteria.`);
 
     // Planner fallback
     if (newTodos.length === 0) {
@@ -720,17 +719,17 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
                     description: String(t.description ?? `Task ${i + 1}`),
                     expectedFiles: Array.isArray(t.expectedFiles) ? t.expectedFiles.map(String) : [],
                   }));
-                  for (const t of todos) {
-                    this.state.todoQueue.post(
-                      buildCouncilTodoPost({
-                        description: t.description,
-                        expectedFiles: t.expectedFiles,
-                        createdBy: "planner-fallback",
-                      }),
-                    );
-                  }
-                  this.appendSystem(`[planner] Fallback created ${todos.length} todo(s).`);
-                  if (todos.length > 0) {
+                  const fallbackEnqueued = postCouncilTodoBatch(
+                    (input) => this.state.todoQueue.post(input),
+                    todos.map((t) => ({
+                      description: t.description,
+                      expectedFiles: t.expectedFiles,
+                      createdBy: "planner-fallback",
+                    })),
+                    (msg) => this.appendSystem(msg),
+                  );
+                  this.appendSystem(`[planner] Fallback created ${fallbackEnqueued} todo(s).`);
+                  if (fallbackEnqueued > 0) {
                     cleanup();
                     return "retry";
                   }
@@ -772,6 +771,11 @@ Your task: Merge these proposals into a single, coherent plan. Focus on what's a
 Output a JSON array of concrete todos:
 [{"description": "specific file change", "expectedFiles": ["path/to/file.ts"]}]
 
+Partitioning rules:
+- At most ONE todo per file path (do not split the same file across multiple todos).
+- Order mentally: implementation files first, then tests, then docs, then run/test commands last.
+- Put pytest/npm test commands in their own final todo (not combined with file edits).
+
 Max 6 items. Each todo must target specific files. Return ONLY the JSON array.`;
 
     const controller = new AbortController();
@@ -787,18 +791,19 @@ Max 6 items. Each todo must target specific files. Return ONLY the JSON array.`;
           description: String(item.description ?? ""),
           expectedFiles: Array.isArray(item.expectedFiles) ? item.expectedFiles.map(String) : [],
         }));
-        for (const todo of todos) {
-          if (todo.description) {
-            this.state.todoQueue.post(
-              buildCouncilTodoPost({
-                description: todo.description,
-                expectedFiles: todo.expectedFiles,
-                createdBy: "council",
-              }),
-            );
-          }
-        }
-        this.appendSystem(`[Standup] Synthesized ${todos.length} proposals into unified plan.`);
+        const standupDrafts = todos
+          .filter((todo) => todo.description)
+          .map((todo) => ({
+            description: todo.description,
+            expectedFiles: todo.expectedFiles,
+            createdBy: "council",
+          }));
+        const standupEnqueued = postCouncilTodoBatch(
+          (input) => this.state.todoQueue.post(input),
+          standupDrafts,
+          (msg) => this.appendSystem(msg),
+        );
+        this.appendSystem(`[Standup] Synthesized ${standupEnqueued} proposals into unified plan.`);
       }
     } catch (err) {
       this.appendSystem(`[council] Standup synthesis failed: ${err instanceof Error ? err.message : String(err)}`);

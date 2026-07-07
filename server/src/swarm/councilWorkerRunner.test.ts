@@ -47,3 +47,9 @@ test("councilWorkerRunner — stage-3 failover uses providerFailover chain", () 
   assert.match(SRC, /state\.cfg\.providerFailover/, "must pass per-run providerFailover");
   assert.match(SRC, /withSiblingRetry/, "must swap model for failover attempt");
 });
+
+test("councilWorkerRunner — file-scoped dequeue defers overlapping writers", () => {
+  assert.match(SRC, /dequeueCouncilTodo/, "must use council dequeue with file deferral");
+  assert.match(SRC, /scoreCouncilTodoForDequeue/, "must score todos for overlap and build-last");
+  assert.match(SRC, /WORKER_DEFER_POLL_MS/, "must poll when todos are deferred but still pending");
+});

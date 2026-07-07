@@ -132,8 +132,10 @@ Rules:
 - If a file already exists, READ IT to see if the work is already done. If it is, SKIP that todo.
 - Use the project structure above to suggest realistic file paths. If unsure, use an empty array for expectedFiles.
 - Max 8 items.
+- PARTITIONING (critical): at most ONE todo per file path — never emit two todos with the same expectedFiles entry.
+- Order items: (1) implementation/source files, (2) test files, (3) docs/markdown, (4) run/test commands (pytest, npm test) as the LAST item(s).
 - AVOID creating duplicate files. If two panels serve similar purposes, merge them into one.
-- If the synthesis mentions specific panels/features, each gets its own todo.
+- If the synthesis mentions specific panels/features, each gets its own todo unless they share the same file.
 - IMPORTANT: If creating a new component, also create a todo to integrate it into the app (e.g., add import and route in App.tsx).
 - If modifying an existing panel, also create a todo to update any related imports or routes.
 - Include a "type" field: "normal" for standard work, "contradiction" for cleanup/consolidation/merge tasks.`;

@@ -23,6 +23,7 @@ import {
   summarizeWorkerFailureReason,
 } from "./councilWorkerFallback.js";
 import { TodoQueue, type QueuedTodo } from "./blackboard/TodoQueue.js";
+import { scoreCouncilTodoForDequeue } from "./councilTodoPlan.js";
 import type { CouncilAdapterState } from "./councilAdapter.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
 import { checkBuildCommand } from "./blackboard/buildCommandAllowlist.js";
@@ -39,6 +40,31 @@ export interface WorkerRunnerContext {
 }
 
 const WORKER_COOLDOWN_MS = 5_000;
+const WORKER_DEFER_POLL_MS = 750;
+
+/** Dequeue with file-scoped deferral: at most one in-flight writer per expectedFiles path. */
+function dequeueCouncilTodo(queue: TodoQueue, workerId: string): QueuedTodo | null {
+  const all = queue.list();
+  const inProgress = all.filter((t) => t.status === "in-progress");
+  const hasPendingOrActiveNonBuild = all.some(
+    (t) => (t.status === "pending" || t.status === "in-progress") && t.kind !== "build",
+  );
+
+  let best: (typeof all)[number] | undefined;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const t of all) {
+    if (t.status !== "pending") continue;
+    const score = scoreCouncilTodoForDequeue(t, inProgress, hasPendingOrActiveNonBuild);
+    if (score > bestScore) {
+      bestScore = score;
+      best = t;
+    }
+  }
+  if (!best || bestScore === Number.NEGATIVE_INFINITY) return null;
+  return queue.dequeueByScore(workerId, (t) =>
+    scoreCouncilTodoForDequeue(t, inProgress, hasPendingOrActiveNonBuild),
+  );
+}
 
 type TodoExecuteResult =
   | { outcome: "completed" }
@@ -141,8 +167,12 @@ async function runCouncilWorker(
 
   while (!ctx.stopping()) {
     if (ctx.draining?.()) break;
-    const todo = state.todoQueue.dequeue(agent.id);
-    if (!todo) break;
+    const todo = dequeueCouncilTodo(state.todoQueue, agent.id);
+    if (!todo) {
+      if (state.todoQueue.counts().pending === 0) break;
+      await new Promise((r) => setTimeout(r, WORKER_DEFER_POLL_MS));
+      continue;
+    }
 
     setWorkerThinking(state, agent);
     ctx.appendSystem(`[execution] ${agent.id} working on: ${todo.description.slice(0, 120)}...`);
