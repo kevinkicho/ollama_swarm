@@ -322,6 +322,7 @@ describe("reviewProposedHunks (new auditor hunk review)", () => {
   function makeMockCtx(approve: boolean) {
     return {
       getContract: () => ({ criteria: [] }),
+      getActive: () => undefined,
       promptPlannerSafely: async () => ({
         response: JSON.stringify({ approve, reason: approve ? "looks good" : "bad change" }),
         agentUsed: { id: "auditor", index: 99, model: "test" } as any,

@@ -48,6 +48,16 @@ import { withSiblingRetry } from "./siblingRetry.js";
 import { verifyWorkerSkip } from "./auditorRunner.js";
 import { autoDetectAnchors } from "./autoAnchor.js";
 import { getModelBudget } from "../modelContextBudget.js";
+import { resolveToolProfile } from "../toolProfiles.js";
+import type { ProfileName } from "../../tools/ToolDispatcher.js";
+import { isPromptHaltError } from "./lifecycleState.js";
+
+function workerToolProfile(ctx: WorkerContext, kind: "hunk" | "build" | "read"): ProfileName {
+  const cfg = ctx.getActive();
+  if (kind === "build") return resolveToolProfile("worker-build", cfg);
+  if (kind === "read") return resolveToolProfile("read", cfg);
+  return resolveToolProfile("worker", cfg);
+}
 
 export interface WorkerContext {
   isStopping: () => boolean;
@@ -72,7 +82,7 @@ export interface WorkerContext {
   getAuditor: () => Agent | undefined;
   appendSystem: (msg: string) => void;
   appendAgent: (agent: Agent, text: string) => void;
-  promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => Promise<string>;
+  promptAgent: (agent: Agent, prompt: string, agentName: ProfileName, formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => Promise<string>;
   emitAgentState: (s: AgentState) => void;
   readExpectedFiles: (files: string[]) => Promise<Record<string, string | null>>;
   sleep: (ms: number) => Promise<void>;
@@ -117,6 +127,24 @@ export interface WorkerContext {
   getPlannerFallbackModel: () => string | undefined;
 }
 
+/** Pure helper: workers should stop polling when nothing is claimable
+ *  and no in-flight prompt/replan work remains — even if orphaned
+ *  in-progress or pending-commit todos still exist (auditor's job). */
+export function workersShouldDrain(input: {
+  pending: number;
+  stale: number;
+  replanPending: number;
+  replanRunning: boolean;
+  anyThinking: boolean;
+}): boolean {
+  if (input.pending > 0) return false;
+  if (input.stale > 0) return false;
+  if (input.replanPending > 0) return false;
+  if (input.replanRunning) return false;
+  if (input.anyThinking) return false;
+  return true;
+}
+
 export async function runWorkers(
   ctx: WorkerContext,
   workers: Agent[],
@@ -140,12 +168,15 @@ export async function runWorker(
     if (ctx.isDraining()) return;
 
     const counts = ctx.boardCounts();
+    const qCounts = ctx.getTodoQueue().counts();
     if (
-      counts.open === 0 &&
-      counts.claimed === 0 &&
-      counts.stale === 0 &&
-      ctx.getReplanPending().size === 0 &&
-      !ctx.isReplanRunning()
+      workersShouldDrain({
+        pending: qCounts.pending,
+        stale: counts.stale,
+        replanPending: ctx.getReplanPending().size,
+        replanRunning: ctx.isReplanRunning(),
+        anyThinking: ctx.anyAgentThinking(),
+      })
     ) {
       return;
     }
@@ -277,6 +308,21 @@ export async function runWorker(
     if (outcome === "committed") {
       await ctx.sleep(WORKER_COOLDOWN_MS + Math.floor(Math.random() * 500));
     }
+    if (outcome === "aborted") {
+      const qt = ctx.getTodoQueue().get(todo.id);
+      if (qt?.status === "in-progress") {
+        ctx.getWrappers().skipTodoQ(todo.id, "aborted during stop/drain");
+      }
+      ctx.markStatus(agent.id, "ready", { lastMessageAt: Date.now() });
+      ctx.emitAgentState({
+        id: agent.id,
+        index: agent.index,
+        port: agent.port,
+        sessionId: agent.sessionId,
+        status: "ready",
+        lastMessageAt: Date.now(),
+      });
+    }
   }
 }
 
@@ -325,7 +371,7 @@ export async function executeBuildTodo(
 
   let response: string;
   try {
-    response = await ctx.promptAgent(agent, buildPrompt, "swarm-builder", "json", "json");
+    response = await ctx.promptAgent(agent, buildPrompt, workerToolProfile(ctx, "build"), "json", "json");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     ctx.appendSystem(`[${agent.id}] build prompt failed: ${msg.slice(0, 120)}`);
@@ -448,12 +494,12 @@ export async function executeWorkerTodo(
     response = await ctx.promptAgent(
       agent,
       `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`,
-      "swarm",
+      workerToolProfile(ctx, "hunk"),
       "json",
       WORKER_HUNKS_JSON_SCHEMA,
     );
   } catch (err) {
-    if (ctx.isStopping()) return "aborted";
+    if (isPromptHaltError(err, ctx.isStopping, ctx.isDraining)) return "aborted";
     const msg = err instanceof Error ? err.message : String(err);
     ctx.getWrappers().failTodoQ(todo.id, `[v2] worker prompt failed: ${msg}`, "prompt-fail");
     ctx.bumpPromptErrors(agent.id);
@@ -473,12 +519,12 @@ export async function executeWorkerTodo(
       repair = await ctx.promptAgent(
         agent,
         `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerRepairPrompt(response, parsed.reason)}`,
-        "swarm",
+        workerToolProfile(ctx, "hunk"),
         "json",
         WORKER_HUNKS_JSON_SCHEMA,
       );
     } catch (err) {
-      if (ctx.isStopping()) return "aborted";
+      if (isPromptHaltError(err, ctx.isStopping, ctx.isDraining)) return "aborted";
       const msg = err instanceof Error ? err.message : String(err);
       ctx.getWrappers().failTodoQ(todo.id, `[v2] worker repair prompt failed: ${msg}`, "repair");
       ctx.bumpPromptErrors(agent.id);
@@ -547,7 +593,7 @@ If the response is completely unparseable, return { "skip": "auditor could not i
           const auditorResponse = await ctx.promptAgent(
             auditor,
             auditorPrompt,
-            "swarm-read",
+            workerToolProfile(ctx, "read"),
             "json",
           );
           const auditorParsed = parseWorkerResponse(auditorResponse, todo.expectedFiles);
@@ -582,7 +628,7 @@ If the response is completely unparseable, return { "skip": "auditor could not i
           const siblingResponse = await ctx.promptAgent(
             agent,
             `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`,
-            "swarm",
+            workerToolProfile(ctx, "hunk"),
             "json",
             WORKER_HUNKS_JSON_SCHEMA,
           );
@@ -622,6 +668,7 @@ If the response is completely unparseable, return { "skip": "auditor could not i
         },
         ctx.promptAgent,
         auditor,
+        resolveToolProfile("auditor", ctx.getActive()),
       );
       if (verification.verdict === "invalid") {
         ctx.appendSystem(
@@ -692,7 +739,7 @@ If the response is completely unparseable, return { "skip": "auditor could not i
       ctx.promptAgent(
         fanoutAgents[idx],
         `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`,
-        "swarm",
+        workerToolProfile(ctx, "hunk"),
         "json",
         WORKER_HUNKS_JSON_SCHEMA,
       )
@@ -741,7 +788,7 @@ If the response is completely unparseable, return { "skip": "auditor could not i
       });
       let judgeResponse: string;
       try {
-        judgeResponse = await ctx.promptAgent(judgeAgent, judgePrompt, "swarm-read", "json", {
+        judgeResponse = await ctx.promptAgent(judgeAgent, judgePrompt, workerToolProfile(ctx, "read"), "json", {
           type: "object",
           properties: { winner: { type: "integer", minimum: 1, maximum: candidates.length } },
           required: ["winner"],

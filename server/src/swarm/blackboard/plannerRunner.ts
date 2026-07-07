@@ -27,6 +27,8 @@ import {
   type BrainFallbackEvent,
 } from "./prompts/brainIntegration.js";
 import { PlannerResponseSchema } from "./prompts/planner.js";
+import { resolveToolProfile } from "../toolProfiles.js";
+import type { ProfileName } from "../../tools/ToolDispatcher.js";
 
 export interface PlannerContext {
   getContract: () => ExitContract | undefined;
@@ -40,7 +42,7 @@ export interface PlannerContext {
   promptPlannerSafely: (
     agent: Agent,
     promptText: string,
-    agentName?: "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder",
+    agentName?: ProfileName,
     ollamaFormat?: "json" | Record<string, unknown>,
   ) => Promise<{ response: string; agentUsed: Agent }>;
   /** Brain fallback: prompt an LLM to extract structured JSON from a
@@ -77,10 +79,11 @@ export async function runPlanner(
       }
     : undefined;
 
+  const plannerProfile = resolveToolProfile("planner", ctx.getActive());
   const { response: firstResponse, agentUsed: planAgent } = await ctx.promptPlannerSafely(
     agent,
     `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed, contractForPrompt, agent.model)}`,
-    "swarm-planner",
+    plannerProfile,
     PLANNER_TODOS_JSON_SCHEMA,
   );
   if (ctx.isStopping()) return;
@@ -92,7 +95,7 @@ export async function runPlanner(
     const { response: repairResponse, agentUsed: repairAgent } = await ctx.promptPlannerSafely(
       planAgent,
       `${PLANNER_SYSTEM_PROMPT}\n\n${buildRepairPrompt(firstResponse, parsed.reason)}`,
-      "swarm-planner",
+      plannerProfile,
       PLANNER_TODOS_JSON_SCHEMA,
     );
     if (ctx.isStopping()) return;

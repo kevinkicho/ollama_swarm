@@ -26,20 +26,25 @@ import {
   type BrainFallbackEvent,
 } from "./prompts/brainIntegration.js";
 import { autoDetectAnchors } from "./autoAnchor.js";
+import type { RunConfig } from "../SwarmRunner.js";
+import { resolveToolProfile } from "../toolProfiles.js";
+import type { ProfileName } from "../../tools/ToolDispatcher.js";
 
 export interface ReplanContext {
   getReplanPending: () => Set<string>;
   getReplanRunning: () => boolean;
   setReplanRunning: (v: boolean) => void;
   getPlanner: () => Agent | undefined;
+  getActive: () => RunConfig | undefined;
   isStopping: () => boolean;
+  isDraining: () => boolean;
   boardListTodos: () => Todo[];
   boardGetTodo: (id: string) => Todo | undefined;
   readExpectedFiles: (files: string[]) => Promise<Record<string, string | null>>;
   wrappers: TodoQueueWrappers;
   appendSystem: (msg: string) => void;
   appendAgent: (agent: Agent, text: string) => void;
-  promptPlannerSafely: (agent: Agent, promptText: string, agentName?: "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => Promise<{ response: string; agentUsed: Agent }>;
+  promptPlannerSafely: (agent: Agent, promptText: string, agentName?: ProfileName, ollamaFormat?: "json" | Record<string, unknown>) => Promise<{ response: string; agentUsed: Agent }>;
   checkAndApplyCaps: () => boolean;
   emit?: (e: unknown) => void;
   // Plan 4: brain system overseer
@@ -66,7 +71,7 @@ export async function processReplanQueue(ctx: ReplanContext): Promise<void> {
   if (!ctx.getPlanner()) return;
   ctx.setReplanRunning(true);
   try {
-    while (!ctx.isStopping() && ctx.getReplanPending().size > 0 && ctx.getPlanner()) {
+    while (!ctx.isStopping() && !ctx.isDraining() && ctx.getReplanPending().size > 0 && ctx.getPlanner()) {
       if (ctx.checkAndApplyCaps()) return;
       const todoId = ctx.getReplanPending().values().next().value as string;
       ctx.getReplanPending().delete(todoId);
@@ -137,13 +142,14 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
     autoAnchors,
   };
 
+  const plannerProfile = resolveToolProfile("planner", ctx.getActive());
   let response: string;
   let replanAgent: Agent;
   try {
     const r = await ctx.promptPlannerSafely(
       planner,
       `${REPLANNER_SYSTEM_PROMPT}\n\n${buildReplannerUserPrompt(seed)}`,
-      "swarm-planner",
+      plannerProfile,
       REPLANNER_JSON_SCHEMA,
     );
     response = r.response;
@@ -168,7 +174,7 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
       const r = await ctx.promptPlannerSafely(
         replanAgent,
         `${REPLANNER_SYSTEM_PROMPT}\n\n${buildReplannerRepairPrompt(response, parsed.reason)}`,
-        "swarm-planner",
+        plannerProfile,
         REPLANNER_JSON_SCHEMA,
       );
       repair = r.response;

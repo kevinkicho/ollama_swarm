@@ -31,7 +31,14 @@ const BASH_TIMEOUT_MS = 60_000;
 const BASH_OUTPUT_CAP = 200 * 1024;
 
 export type ToolName = "read" | "grep" | "glob" | "list" | "bash" | "write" | "edit" | "propose_hunks" | "web_fetch" | "web_search";
-export type ProfileName = "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder" | "swarm-write" | "swarm-research";
+export type ProfileName =
+  | "swarm"
+  | "swarm-read"
+  | "swarm-planner"
+  | "swarm-builder"
+  | "swarm-builder-research"
+  | "swarm-write"
+  | "swarm-research";
 export type Permission = "allow" | "deny";
 
 // Default tools list to advertise to the model per profile. Mirrors
@@ -50,6 +57,8 @@ export function defaultToolsForProfile(
       return ["read", "grep", "glob", "list", "web_fetch", "web_search"];
     case "swarm-builder":
       return ["read", "grep", "glob", "list", "bash"];
+    case "swarm-builder-research":
+      return ["read", "grep", "glob", "list", "bash", "web_fetch", "web_search"];
     case "swarm-write":
       return ["read", "grep", "glob", "list", "propose_hunks"];
     case "swarm-research":
@@ -108,6 +117,18 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     propose_hunks: "deny",
     web_fetch: "deny",
     web_search: "deny",
+  },
+  "swarm-builder-research": {
+    read: "allow",
+    grep: "allow",
+    glob: "allow",
+    list: "allow",
+    bash: "allow",
+    write: "deny",
+    edit: "deny",
+    propose_hunks: "deny",
+    web_fetch: "allow",
+    web_search: "allow",
   },
   "swarm-write": {
     read: "allow",
@@ -540,7 +561,13 @@ export class ToolDispatcher {
     private readonly clonePath: string,
     mcpServers?: string,
   ) {
-    if (mcpServers && (profile === "swarm-research" || profile === "swarm-read")) {
+    if (
+      mcpServers
+      && (profile === "swarm-research"
+        || profile === "swarm-read"
+        || profile === "swarm-planner"
+        || profile === "swarm-builder-research")
+    ) {
       // Fire and forget for now; in real use await initMcpServers
       this.initMcpServers(mcpServers).catch((e) => console.error("MCP init failed", e));
     }

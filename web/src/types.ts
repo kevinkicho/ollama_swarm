@@ -258,6 +258,7 @@ export interface RunSummary {
   userDirective?: string;
   plannerTools?: boolean;
   webTools?: boolean;
+  mcpServers?: string;
 }
 
 export interface BoardCountsDTO {
@@ -407,6 +408,7 @@ export type SwarmEvent =
       userDirective?: string;
       plannerTools?: boolean;
       webTools?: boolean;
+      mcpServers?: string;
   // Deliverables: files created or meaningfully changed by this run.
   // Created = new file; Modified = existing file edited. Empty for
   // discussion presets (no code changes). Optional for back-compat.
@@ -572,6 +574,7 @@ export interface RunConfigSnapshot {
   userDirective?: string;
   plannerTools?: boolean;
   webTools?: boolean;
+  mcpServers?: string;
 }
 
 // Unit 52e: digest returned by GET /api/runs for the run-history

@@ -18,6 +18,8 @@ import { CONTRACT_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
 import { classifyExpectedFiles } from "./prompts/pathValidation.js";
 import type { ClassifiedError } from "../errorTaxonomy.js";
 import { config as appConfig } from "../../config.js";
+import { resolveToolProfile } from "../toolProfiles.js";
+import type { ProfileName } from "../../tools/ToolDispatcher.js";
 
 export interface TierContext {
   // --- state getters ---
@@ -49,7 +51,7 @@ export interface TierContext {
   promptPlannerSafely: (
     primaryAgent: Agent,
     promptText: string,
-    agentName?: "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder",
+    agentName?: ProfileName,
     ollamaFormat?: "json" | Record<string, unknown>,
   ) => Promise<{ response: string; agentUsed: Agent }>;
   emit: (e: unknown) => void;
@@ -213,10 +215,11 @@ export async function tryPromoteNextTier(
     userDirective: ctx.directiveWithAmendments(),
   });
 
+  const plannerProfile = resolveToolProfile("planner", ctx.getActive());
   const { response, agentUsed } = await ctx.promptPlannerSafely(
     planner,
     prompt,
-    "swarm-planner",
+    plannerProfile,
     CONTRACT_JSON_SCHEMA,
   );
   if (ctx.getStopping()) return false;
@@ -234,7 +237,7 @@ export async function tryPromoteNextTier(
       await ctx.promptPlannerSafely(
         agentUsed,
         prompt,
-        "swarm-planner",
+        plannerProfile,
         CONTRACT_JSON_SCHEMA,
       );
     if (ctx.getStopping()) return false;
@@ -372,6 +375,15 @@ export async function runAuditedExecution(
     if (ctx.checkAndApplyCaps()) return;
     await ctx.runWorkers(workers);
     if (ctx.getStopping()) return;
+
+    const pendingCommitTodos = ctx
+      .boardListTodos()
+      .filter((t) => t.status === "pending-commit");
+    if (pendingCommitTodos.length > 0) {
+      ctx.appendSystem(
+        `[auditor-gate] Workers drained with ${pendingCommitTodos.length} pending commit(s) — auditor will review next.`,
+      );
+    }
 
     if (!ctx.getContract() || ctx.getContract()!.criteria.length === 0) return;
 

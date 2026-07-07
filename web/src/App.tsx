@@ -10,6 +10,7 @@ import { EventLogMirrorPanel } from "./components/EventLogMirrorPanel";
 import { TimeTravelReplayPanel } from "./components/TimeTravelReplayPanel";
 import { RunCompareReplayPanel } from "./components/RunCompareReplayPanel";
 import { ActiveRunsPanel } from "./components/ActiveRunsPanel";
+import { AuditorGateBanner } from "./components/AuditorGateBanner";
 import { SwarmStoreProvider } from "./state/SwarmStoreProvider";
 import type { RunSummary } from "./types";
 import { PlanningTab } from "./components/PlanningTab";
@@ -114,18 +115,6 @@ function RunRouteWrapper() {
   }
   return (
     <SwarmStoreProvider runId={runId}>
-      <div
-        style={{
-          padding: "4px 12px",
-          background: "#0e3b1f",
-          color: "#7eebb0",
-          fontSize: 12,
-          fontFamily: "monospace",
-        }}
-      >
-        Viewing run <strong>{runId}</strong> · per-run scoped store
-        + WS subscription
-      </div>
       <AppMain />
     </SwarmStoreProvider>
   );
@@ -136,6 +125,7 @@ function AppMain() {
   const location = useLocation();
   const pathname = location.pathname;
   const isOnRoot = pathname === "/";
+  const { runId: routeRunId } = useParams<{ runId?: string }>();
 
   // No reliance on removed composite phase state or helper.
 
@@ -185,6 +175,16 @@ function AppMain() {
     <SystemWrapper parentPath={parentPath}>
       {/* Banners — fixed height, never shrink */}
       <div className="shrink-0">
+        {/* Per-run route banner (inside flex layout so it counts toward height) */}
+        {routeRunId ? (
+          <div
+            className="px-3 py-1 bg-emerald-950/60 border-b border-emerald-800/50 text-xs font-mono text-emerald-300"
+          >
+            Viewing run <strong>{routeRunId}</strong> · per-run scoped store
+            + WS subscription
+          </div>
+        ) : null}
+
         {/* Review mode banner */}
         {review ? (
           <div className="px-4 py-1.5 bg-amber-950/40 border-b border-amber-700/50 flex items-center gap-2">
@@ -197,6 +197,8 @@ function AppMain() {
 
         {/* Error banner */}
         {error ? <ErrorBanner error={error} /> : null}
+
+        <AuditorGateBanner />
 
         {/* Active runs panel (when ≥1 run).
             Now shown on root too after aggressive guard removal.

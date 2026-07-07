@@ -111,6 +111,19 @@ describe("TodoQueue — terminal transitions", () => {
     assert.throws(() => q.fail(id, "x"), /status=pending/);
   });
 
+  it("rejectCommit releases pending-commit back to pending (claim cleared)", () => {
+    const q = new TodoQueue();
+    const id = q.post({ description: "x", expectedFiles: ["a.ts"], createdBy: "p" });
+    q.dequeue("worker-4");
+    q.proposeCommit(id, [{ op: "create", file: "a.ts", content: "x" }], ["a.ts"]);
+    q.rejectCommit(id, "bad hunk");
+    const t = q.get(id);
+    assert.equal(t?.status, "pending");
+    assert.equal(t?.workerId, undefined);
+    assert.equal(t?.reason, "bad hunk");
+    assert.equal(t?.retries, 1);
+  });
+
   it("fail is a no-op on pending-commit (auditor-gated race)", () => {
     const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: ["a.ts"], createdBy: "p" });

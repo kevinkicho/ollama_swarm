@@ -2,6 +2,7 @@ import type { Agent } from "../../services/AgentManager.js";
 import type { ExitCriterion } from "./types.js";
 import type { TranscriptEntry } from "../../types.js";
 import type { AuditorContext } from "./auditorRunner.js";
+import { resolveToolProfile } from "../toolProfiles.js";
 
 export interface DebateAuditResult {
   verdict: {
@@ -95,19 +96,21 @@ export async function runDebateAudit(args: {
 
   const effectiveMaxRounds = Math.min(maxRounds, 2);
 
+  const readProfile = resolveToolProfile("read", ctx.getActive());
+  const auditorProfile = resolveToolProfile("auditor", ctx.getActive());
   for (let round = 0; round < effectiveMaxRounds; round++) {
     roundsUsed++;
 
     const proPrompt = buildProPrompt(criterion, workTranscript, args.userDirective);
     const conPrompt = buildConPrompt(criterion, workTranscript, args.userDirective);
 
-    const { response: proResponse } = await ctx.promptPlannerSafely(pro, proPrompt, "swarm-read");
+    const { response: proResponse } = await ctx.promptPlannerSafely(pro, proPrompt, readProfile);
     ctx.appendAgent(pro, proResponse);
     proEvidence = proResponse;
 
     if (ctx.getStopping()) break;
 
-    const { response: conResponse } = await ctx.promptPlannerSafely(con, conPrompt, "swarm-read");
+    const { response: conResponse } = await ctx.promptPlannerSafely(con, conPrompt, readProfile);
     ctx.appendAgent(con, conResponse);
     conEvidence = conResponse;
 
@@ -117,7 +120,7 @@ export async function runDebateAudit(args: {
     const { response: judgeResponse } = await ctx.promptPlannerSafely(
       judge,
       judgePrompt,
-      "swarm-read",
+      auditorProfile,
       DEBATE_JUDGE_JSON_SCHEMA,
     );
     if (ctx.getStopping()) break;

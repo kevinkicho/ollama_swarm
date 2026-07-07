@@ -21,6 +21,7 @@ import { PlanningTab } from "./PlanningTab";
 import { OutcomeChip } from "./OutcomeChip";
 import { fmtMs, roleForRow } from "./RunHistory";
 import { buildResumeStartPayload } from "../lib/resumeRun";
+import { inferAgentsFromSnapshot } from "../lib/inferAgents";
 import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
 
 
@@ -156,6 +157,60 @@ export const SwarmView = memo(function SwarmView() {
     tab,
   ]);
 
+  const applyStatusSnapshot = (snap: any) => {
+    if (!snap) return;
+    if (typeof window !== "undefined" && window.location.pathname === "/") return;
+
+    setPhaseScoped(snap.phase || "stopped", snap.round || 0);
+    const hasCompletedSummary = !!(snap.summary && (snap.summary.stopReason || snap.summary.endedAt != null));
+    if (!hasCompletedSummary) {
+      const agentsForSidebar = inferAgentsFromSnapshot(snap);
+      agentsForSidebar.forEach((a) => {
+        upsertAgentScoped({
+          id: a.id,
+          index: a.index,
+          status: a.status || "stopped",
+          model: a.model,
+        } as any);
+      });
+    }
+    if (snap.summary) setSummaryScoped(snap.summary);
+    if (snap.transcript && Array.isArray(snap.transcript)) {
+      const curLen = useSwarm.getState().transcript.length;
+      const serverLen = snap.transcript.length;
+      if (!hasCompletedSummary || curLen < serverLen) {
+        hydrateTranscriptScoped(snap.transcript);
+      }
+    }
+  };
+
+  const statusUrl = activeRunId
+    ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/status`
+    : "/api/swarm/status";
+
+  // Poll while draining/stopping so agent cards + transcript stay in sync
+  // when WS events are missed or prompts abort without streaming chunks.
+  useEffect(() => {
+    if (phase !== "draining" && phase !== "stopping") return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await fetch(statusUrl);
+        if (!r.ok || cancelled) return;
+        const snap = await r.json();
+        if (!cancelled) applyStatusSnapshot(snap);
+      } catch {
+        // retry on next tick
+      }
+    };
+    void tick();
+    const id = setInterval(tick, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [phase, statusUrl]);
+
   const onStop = async () => {
     if (!confirm("Stop the swarm IMMEDIATELY? All spawned opencode processes will be terminated and any worker mid-commit will lose its work.")) return;
     setBusy(true);
@@ -173,34 +228,7 @@ export const SwarmView = memo(function SwarmView() {
       setBusy(false);
       // re-hydrate status so UI reflects backend (especially useful for
       // review/per-run views where phase might be stale)
-      const statusUrl = activeRunId
-        ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/status`
-        : "/api/swarm/status";
-      fetch(statusUrl).then(r => r.ok ? r.json() : null).then(snap => {
-        if (snap) {
-          // Extra root guard – do not let stop/drain rehydrate paths pollute the
-          // singleton when we're on the setup root (prevents the recurring flash).
-          if (typeof window !== 'undefined' && window.location.pathname === '/') return;
-
-          setPhaseScoped(snap.phase || "stopped", snap.round || 0);
-          const hasCompletedSummary = !!(snap.summary && (snap.summary.stopReason || snap.summary.endedAt != null));
-          if (snap.agents && !hasCompletedSummary) {
-            snap.agents.forEach((a: any) => {
-              const idx = a.index ?? a.agentIndex ?? 0;
-              const id = a.id || a.agentId || `agent-${idx}`;
-              upsertAgentScoped({ id, index: idx, status: a.status || "stopped", model: a.model } as any);
-            });
-          }
-          if (snap.summary) setSummaryScoped(snap.summary);
-          if (snap.transcript && Array.isArray(snap.transcript)) {
-            const curLen = useSwarm.getState().transcript.length;
-            const serverLen = snap.transcript.length;
-            if (!hasCompletedSummary || curLen < serverLen) {
-              hydrateTranscriptScoped(snap.transcript);
-            }
-          }
-        }
-      }).catch(() => {});
+      fetch(statusUrl).then(r => r.ok ? r.json() : null).then(applyStatusSnapshot).catch(() => {});
     }
   };
 
@@ -208,7 +236,8 @@ export const SwarmView = memo(function SwarmView() {
   // no in-flight commits get lost), no new claims, then escalates
   // to hard stop. Backstopped at 3 min on the server side.
   const onDrain = async () => {
-    if (!confirm("Drain & Stop: workers will finish their current claim (no new claims), then the swarm exits. Up to 3 minutes. OK to proceed?")) return;
+    if (!confirm("Drain & Stop: workers finish their current claim (no new claims), then the swarm exits. Hung prompts abort after ~90s; full backstop 3 min. OK to proceed?")) return;
+    setPhaseScoped("draining", (useSwarm.getState().round || 0) as any);
     setBusy(true);
     try {
       const drainUrl = activeRunId
@@ -231,34 +260,7 @@ export const SwarmView = memo(function SwarmView() {
       setBusy(false);
       // re-hydrate status so UI reflects backend (especially useful for
       // review/per-run views where phase might be stale)
-      const statusUrl = activeRunId
-        ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/status`
-        : "/api/swarm/status";
-      fetch(statusUrl).then(r => r.ok ? r.json() : null).then(snap => {
-        if (snap) {
-          // Extra root guard – do not let stop/drain rehydrate paths pollute the
-          // singleton when we're on the setup root (prevents the recurring flash).
-          if (typeof window !== 'undefined' && window.location.pathname === '/') return;
-
-          setPhaseScoped(snap.phase || "stopped", snap.round || 0);
-          const hasCompletedSummary = !!(snap.summary && (snap.summary.stopReason || snap.summary.endedAt != null));
-          if (snap.agents && !hasCompletedSummary) {
-            snap.agents.forEach((a: any) => {
-              const idx = a.index ?? a.agentIndex ?? 0;
-              const id = a.id || a.agentId || `agent-${idx}`;
-              upsertAgentScoped({ id, index: idx, status: a.status || "stopped", model: a.model } as any);
-            });
-          }
-          if (snap.summary) setSummaryScoped(snap.summary);
-          if (snap.transcript && Array.isArray(snap.transcript)) {
-            const curLen = useSwarm.getState().transcript.length;
-            const serverLen = snap.transcript.length;
-            if (!hasCompletedSummary || curLen < serverLen) {
-              hydrateTranscriptScoped(snap.transcript);
-            }
-          }
-        }
-      }).catch(() => {});
+      fetch(statusUrl).then(r => r.ok ? r.json() : null).then(applyStatusSnapshot).catch(() => {});
     }
   };
 
@@ -426,6 +428,11 @@ export const SwarmView = memo(function SwarmView() {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       <CloneBanner />
+      {phase === "draining" ? (
+        <div className="shrink-0 px-3 py-1.5 bg-amber-950/50 border-b border-amber-700/40 text-xs text-amber-200">
+          Draining — finishing in-flight work, then stopping. Hung prompts abort after ~90s; use Stop to escalate immediately.
+        </div>
+      ) : null}
       <IdentityStrip />
       <div className="flex-1 flex min-h-0">
       <aside className="w-[280px] shrink-0 border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800">

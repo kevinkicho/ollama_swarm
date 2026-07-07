@@ -27,6 +27,8 @@ import {
   type BrainFallbackEvent,
 } from "./prompts/brainIntegration.js";
 import { AuditorResponseSchema } from "./prompts/auditor.js";
+import { resolveToolProfile } from "../toolProfiles.js";
+import type { ProfileName } from "../../tools/ToolDispatcher.js";
 
 export interface AuditorContext {
   getContract: () => ExitContract | undefined;
@@ -57,7 +59,7 @@ export interface AuditorContext {
   appendAgent: (agent: Agent, text: string) => void;
   emit: (e: SwarmEvent) => void;
   updateAgentModel: (agentId: string, model: string) => void;
-  promptPlannerSafely: (agent: Agent, promptText: string, agentName?: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", ollamaFormat?: "json" | Record<string, unknown>) => Promise<{ response: string; agentUsed: Agent }>;
+  promptPlannerSafely: (agent: Agent, promptText: string, agentName?: import("../../tools/ToolDispatcher.js").ProfileName, ollamaFormat?: "json" | Record<string, unknown>) => Promise<{ response: string; agentUsed: Agent }>;
   wrappers: TodoQueueWrappers;
   allCriteriaResolvedSnapshot: () => boolean;
   v2ObserverApply: (event: any) => void;
@@ -110,8 +112,9 @@ const SKIP_VERIFICATION_SCHEMA = {
 
 export async function verifyWorkerSkip(
   input: SkipVerificationInput,
-  promptAgent: (agent: import("../../services/AgentManager.js").Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", formatExpect: "json" | "free") => Promise<string>,
+  promptAgent: (agent: import("../../services/AgentManager.js").Agent, prompt: string, agentName: ProfileName, formatExpect: "json" | "free") => Promise<string>,
   auditor: import("../../services/AgentManager.js").Agent,
+  auditorProfile: ProfileName = "swarm-read",
 ): Promise<SkipVerificationOutput> {
   const filesSection = input.expectedFiles.length > 0
     ? `\nExpected files (current contents):\n${input.expectedFiles.map(f =>
@@ -136,7 +139,7 @@ Evaluate the skip reason. Three possible verdicts:
 Respond in JSON: { "verdict": "valid"|"invalid"|"hallucinated-todo", "rationale": "...", "revisedDescription"?: "...", "approachNotes"?: "..." }`;
 
   try {
-    const response = await promptAgent(auditor, prompt, "swarm-read", "json");
+    const response = await promptAgent(auditor, prompt, auditorProfile, "json");
     const parsed = JSON.parse(response);
     const verdict = parsed.verdict === "invalid" ? "invalid"
       : parsed.verdict === "hallucinated-todo" ? "hallucinated-todo"
@@ -192,10 +195,11 @@ export async function runAuditor(
 
   const auditPrimary = ctx.getAuditor() ?? planner;
   const modelAtEntry = auditPrimary.model;
+  const auditorProfile = resolveToolProfile("auditor", ctx.getActive());
   const { response: firstResponse, agentUsed: auditAgent } = await ctx.promptPlannerSafely(
     auditPrimary,
     `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorUserPrompt(seed, auditPrimary.model)}`,
-    "swarm-read",
+    auditorProfile,
     AUDITOR_VERDICT_JSON_SCHEMA,
   );
   if (ctx.getStopping() && !opts.allowWhenStopping) return;
@@ -209,7 +213,7 @@ export async function runAuditor(
     const { response: repairResponse, agentUsed: repairAgent } = await ctx.promptPlannerSafely(
       auditAgent,
       `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorRepairPrompt(firstResponse, parsed.reason)}`,
-      "swarm-read",
+      auditorProfile,
       AUDITOR_VERDICT_JSON_SCHEMA,
     );
     if (ctx.getStopping() && !opts.allowWhenStopping) return;
@@ -540,7 +544,7 @@ export async function reviewProposedHunks(
     const { response } = await ctx.promptPlannerSafely(
       auditorAgent,
       reviewPrompt,
-      "swarm-read",
+      resolveToolProfile("auditor", ctx.getActive()),
       { type: "object", properties: { approve: { type: "boolean" }, reason: { type: "string" } }, required: ["approve", "reason"] }
     );
     const parsed = JSON.parse(response);
@@ -555,6 +559,24 @@ export async function reviewProposedHunks(
   }
 }
 
+/** Skip non-terminal todos for a criterion before posting a revised plan.
+ *  Prevents orphaned in-progress claims (e.g. rejected t1 blocking drain
+ *  while t2–tN sit in pending-commit). */
+function supersedeCriterionTodos(
+  ctx: AuditorContext,
+  criterionId: string,
+  reason: string,
+): number {
+  let skipped = 0;
+  for (const todo of ctx.boardListTodos()) {
+    if (todo.criterionId !== criterionId) continue;
+    if (todo.status === "committed" || todo.status === "skipped") continue;
+    ctx.wrappers.skipTodoQ(todo.id, reason);
+    skipped++;
+  }
+  return skipped;
+}
+
 export function applyAuditorResult(
   ctx: AuditorContext,
   result: AuditorResult,
@@ -566,6 +588,7 @@ export function applyAuditorResult(
   const now = Date.now();
   let statusChanges = 0;
   let todosPosted = 0;
+  let superseded = 0;
 
   for (const v of result.verdicts) {
     const crit = criteriaById.get(v.id);
@@ -585,6 +608,13 @@ export function applyAuditorResult(
         crit.rationale = `auto-converted: auditor returned unmet with no todos. Original rationale: ${v.rationale}`;
         statusChanges++;
         continue;
+      }
+      if (v.todos.length > 0) {
+        superseded += supersedeCriterionTodos(
+          ctx,
+          crit.id,
+          `Superseded — auditor revised plan for ${crit.id}`,
+        );
       }
       for (const t of v.todos) {
         ctx.wrappers.postTodoQ({
@@ -622,7 +652,8 @@ export function applyAuditorResult(
   }
 
   ctx.emitContractUpdated(ctx.cloneContract(contract));
+  const supersedeNote = superseded > 0 ? `, ${superseded} superseded todo(s)` : "";
   ctx.appendSystem(
-    `Auditor applied: ${statusChanges} status change(s), ${todosPosted} new todo(s), ${added} new criterion(s).`,
+    `Auditor applied: ${statusChanges} status change(s), ${todosPosted} new todo(s), ${added} new criterion(s)${supersedeNote}.`,
   );
 }

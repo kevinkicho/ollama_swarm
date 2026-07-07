@@ -206,7 +206,7 @@ export async function promptWithRetry(
         // discussion presets but harmful for the planner that needs to
         // grep before posting TODOs.
         const profileForTools: ProfileName | null =
-          agentName === "swarm" || agentName === "swarm-read" || agentName === "swarm-planner" || agentName === "swarm-builder" || agentName === "swarm-research"
+          agentName === "swarm" || agentName === "swarm-read" || agentName === "swarm-planner" || agentName === "swarm-builder" || agentName === "swarm-builder-research" || agentName === "swarm-research"
             ? (agentName as ProfileName)
             : null;
         const tools = profileForTools && agent.cwd ? defaultToolsForProfile(profileForTools) : [];

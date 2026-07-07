@@ -47,6 +47,9 @@ export const MAX_PAUSE_TOTAL_MS = 2 * 60 * 60_000;
 // don't, escalate to hard stop. 3 minutes covers a normal worker
 // turn (usually <60s on glm/gemma) plus headroom for retries.
 export const DRAIN_DEADLINE_MS = 3 * 60_000;
+/** Abort hung in-flight prompts during drain so the UI does not sit on
+ *  "thinking" with an empty transcript until the full 3-minute backstop. */
+export const DRAIN_STUCK_PROMPT_MS = 90_000;
 export const DRAIN_WATCHER_INTERVAL_MS = 2_000;
 
 // Issue #3 (2026-04-27): planner-empty model fallback. When the

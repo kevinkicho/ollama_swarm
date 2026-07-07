@@ -19,7 +19,7 @@ import { AmendmentsBuffer, type Amendment } from "./AmendmentsBuffer.js";
 import { RunStatePersister, findRecoverableRuns, isRecoverablePhase, loadSnapshot, type RecoverableRun } from "./RunStatePersister.js";
 import {
   loadRunSummaryForRunId,
-  shapeAgentsFromSummary,
+  resolveStatusAgents,
   terminalPhaseFromStopReason,
 } from "./runSummaryDiscovery.js";
 import { tryAcquireLock, releaseLock } from "../swarm/cloneLock.js";
@@ -491,8 +491,19 @@ export class Orchestrator {
     }
     if (run) {
       const status = run.runner.status();
+      const runConfig = (status.runConfig ?? run.runConfig) as unknown as Record<string, unknown> | undefined;
+      const agents =
+        status.agents?.length
+          ? status.agents
+          : resolveStatusAgents({
+              terminalSum: (status.summary as Record<string, unknown> | undefined) ?? null,
+              clonePath: (runConfig?.clonePath ?? runConfig?.localPath) as string | undefined,
+              runConfig,
+              transcript: status.transcript,
+            });
       return {
         ...status,
+        agents,
         runId: run.runId, // return canonical full
         runConfig: status.runConfig ?? run.runConfig,
         runStartedAt: status.runStartedAt ?? run.startedAt,
@@ -764,7 +775,12 @@ export class Orchestrator {
     if (terminalSum?.stopReason) {
       effectivePhase = terminalPhaseFromStopReason(terminalSum.stopReason) as SwarmPhase;
     }
-    const shapedAgents = terminalSum ? shapeAgentsFromSummary(terminalSum) : [];
+    const shapedAgents = resolveStatusAgents({
+      terminalSum,
+      clonePath: cp,
+      runConfig: rc,
+      transcript: snap.transcript,
+    });
     return {
       phase: effectivePhase,
       round: 0,
@@ -1111,6 +1127,7 @@ export class Orchestrator {
         : {}),
       ...(cfg.plannerTools !== undefined ? { plannerTools: cfg.plannerTools } : {}),
       ...(cfg.webTools !== undefined ? { webTools: cfg.webTools } : {}),
+      ...(cfg.mcpServers ? { mcpServers: cfg.mcpServers } : {}),
     };
     const activeRun = this.createActiveRun(runId, startedAt, cfg, runConfig, runner, manager, persister, holdsCloneLock, runHub);
     this.runs.set(runId, activeRun);

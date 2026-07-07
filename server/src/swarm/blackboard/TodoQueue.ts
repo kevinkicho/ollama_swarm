@@ -333,14 +333,16 @@ export class TodoQueue {
     t.proposedFiles = undefined;
   }
 
-  /** Auditor-gated commits: reject a pending-commit todo → in-progress
-   *  for worker to retry with auditor feedback. */
+  /** Auditor-gated commits: reject a pending-commit todo → pending
+   *  (release claim) so any worker can retry with auditor feedback. */
   rejectCommit(id: string, reason: string, ts: number = Date.now()): void {
     const t = this.findOrThrow(id);
     if (t.status !== "pending-commit") {
       throw new Error(`Cannot reject commit for todo ${id}: status=${t.status}`);
     }
-    t.status = "in-progress";
+    t.status = "pending";
+    t.workerId = undefined;
+    t.startedAt = undefined;
     t.reason = reason;
     t.proposedHunks = undefined;
     t.proposedFiles = undefined;

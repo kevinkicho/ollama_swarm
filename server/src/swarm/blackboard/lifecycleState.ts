@@ -31,3 +31,19 @@ export function isActive(state: LifecycleState): boolean {
 export function isTerminal(state: LifecycleState): boolean {
   return state === "stopped" || state === "idle";
 }
+
+/** True when a prompt should exit as aborted (stop, or drain stuck-prompt abort). */
+export function isPromptHaltError(
+  err: unknown,
+  isStopping: () => boolean,
+  isDraining: () => boolean,
+): boolean {
+  if (isStopping()) return true;
+  if (!isDraining()) return false;
+  if (err instanceof Error) {
+    if (err.name === "AbortError") return true;
+    if (/abort|user stop|drain/i.test(err.message)) return true;
+  }
+  if (err instanceof DOMException && err.name === "AbortError") return true;
+  return false;
+}

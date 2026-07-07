@@ -66,8 +66,8 @@ export interface TodoQueueWrappers {
   /** Auditor-gated commits: approve pending-commit → completed.
    *  Emits todo_committed + fires onTerminal. */
   approveCommitQ: (id: string) => void;
-  /** Auditor-gated commits: reject pending-commit → in-progress with
-   *  reason. Emits todo_reverted. */
+  /** Auditor-gated commits: reject pending-commit → pending (claim released)
+   *  with reason. Emits todo_reverted. */
   rejectCommitQ: (id: string, reason: string) => void;
 }
 

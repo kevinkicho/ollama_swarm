@@ -175,6 +175,7 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
         userDirective: ev.userDirective,
         plannerTools: ev.plannerTools,
         webTools: ev.webTools,
+        mcpServers: ev.mcpServers,
       });
       break;
 

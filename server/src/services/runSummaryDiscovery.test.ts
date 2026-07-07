@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import {
   collectSummaryCandidates,
+  inferAgentsFromTranscript,
   loadRunSummaryForRunId,
+  readBlackboardStateSync,
+  resolveStatusAgents,
   shapeAgentsFromSummary,
 } from "./runSummaryDiscovery.js";
 
@@ -46,5 +49,45 @@ describe("runSummaryDiscovery", () => {
     assert.equal(shaped[0]!.id, "agent-1");
 
     await fs.rm(project, { recursive: true, force: true });
+  });
+
+  it("resolveStatusAgents falls back to blackboard-state agentRoster", async () => {
+    const project = await mkdtemp("summary-bb-");
+    await fs.writeFile(
+      path.join(project, "blackboard-state.json"),
+      JSON.stringify({
+        agentRoster: [
+          { agentId: "agent-1", agentIndex: 1 },
+          { agentId: "agent-2", agentIndex: 2 },
+        ],
+      }),
+      "utf8",
+    );
+
+    const agents = resolveStatusAgents({
+      terminalSum: null,
+      clonePath: project,
+      runConfig: { agentCount: 2, model: "test-model" },
+      transcript: [],
+    });
+    assert.equal(agents.length, 2);
+    assert.equal(agents[0]!.id, "agent-1");
+    assert.ok(readBlackboardStateSync(project));
+
+    await fs.rm(project, { recursive: true, force: true });
+  });
+
+  it("resolveStatusAgents infers agents from ready lines in transcript", () => {
+    const agents = resolveStatusAgents({
+      terminalSum: null,
+      transcript: [
+        { role: "system", text: "Worker agent agent-2 ready (model=glm-5.1)" },
+        { role: "system", text: "Planner agent agent-1 ready (model=glm-5.1)" },
+      ],
+    });
+    assert.equal(agents.length, 2);
+    assert.equal(agents[0]!.index, 1);
+    assert.equal(agents[1]!.index, 2);
+    assert.equal(inferAgentsFromTranscript(agents as any).length, 0);
   });
 });

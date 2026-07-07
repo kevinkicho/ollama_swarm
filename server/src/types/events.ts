@@ -259,6 +259,7 @@ export type SwarmEventBody =
       userDirective?: string;
       plannerTools?: boolean;
       webTools?: boolean;
+      mcpServers?: string;
     }
   // Direction 1 Phase 1: emitted after outcome scoring completes at run-end.
   | {

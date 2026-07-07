@@ -30,6 +30,13 @@ test("PROFILES — swarm-read allows read/grep/glob/list, denies edit/write/bash
   assert.equal(PROFILES["swarm-read"].bash, "deny");
 });
 
+test("PROFILES — swarm-builder-research allows bash and web tools", () => {
+  assert.equal(PROFILES["swarm-builder-research"].bash, "allow");
+  assert.equal(PROFILES["swarm-builder-research"].web_fetch, "allow");
+  assert.equal(PROFILES["swarm-builder-research"].web_search, "allow");
+  assert.equal(PROFILES["swarm-builder-research"].write, "deny");
+});
+
 test("PROFILES — swarm-planner can inspect files but cannot mutate or execute", () => {
   assert.deepEqual(
     ["read", "grep", "glob", "list"].map((tool) => PROFILES["swarm-planner"][tool as keyof typeof PROFILES["swarm-planner"]]),

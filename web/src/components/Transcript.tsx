@@ -32,10 +32,12 @@ export const Transcript = memo(function Transcript() {
   const [suggesting, setSuggesting] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const virtualizerRef = useRef<any>(null);
   // For clean auto-bottom: track previous to only follow on *new* content
   const prevLenRef = useRef(0);
   const prevStreamingCountRef = useRef(0);
+  const prevStreamingTextLenRef = useRef(0);
   const [stickyBottom, setStickyBottom] = useState(false);
   // Phase 10 + transcript normal view: default to "all" so the transcript shows the full unfiltered log
   // (planning + execution content, system messages, agent output, brain activity, etc.) like a normal chat.
@@ -50,6 +52,9 @@ export const Transcript = memo(function Transcript() {
 
   const streamingCount = useSwarm((s) => Object.keys(s.streaming).length);
   const streamingMeta = useSwarm((s) => s.streamingMeta);
+  const streamingTextLen = useSwarm((s) =>
+    Object.values(s.streaming).reduce((n, t) => n + t.length, 0),
+  );
 
   // Per-agent streaming timeout
   const clearStreaming = useSwarm((s) => s.clearStreaming);
@@ -149,16 +154,22 @@ export const Transcript = memo(function Transcript() {
     });
   }, []);
 
+  const scrollContainerToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+  }, []);
+
   const scheduleScrollToEnd = useCallback(() => {
     const now = Date.now();
-    if (now - lastScrollAtRef.current < 150) return;
+    if (now - lastScrollAtRef.current < 80) return;
     if (scrollRafRef.current != null) return;
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null;
       lastScrollAtRef.current = Date.now();
-      endRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+      scrollContainerToBottom();
     });
-  }, []);
+  }, [scrollContainerToBottom]);
 
   // compensateOrReanchor removed: all scroll compensation now inlined with live guards only.
   // For finished/historical transcripts we avoid ANY programmatic scrollTop changes or scrollIntoView
@@ -206,19 +217,17 @@ export const Transcript = memo(function Transcript() {
     jumpLockRef.current = true;
     isAtBottomRef.current = true;
     setStickyBottom(true);
-    const el = scrollRef.current;
-    // Force to end of transcript messages (endRef now right after virtual list).
-    if (el) {
-      endRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+    scrollContainerToBottom();
+    // Two RAF passes: streaming dock + plain-list bubbles may grow after first paint.
+    requestAnimationFrame(() => {
+      scrollContainerToBottom();
       requestAnimationFrame(() => {
-        if (el) {
-          el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
-        }
-        // Explicitly enable sticky after jump, even if no scroll event.
+        scrollContainerToBottom();
         isAtBottomRef.current = true;
         setStickyBottom(true);
+        jumpLockRef.current = false;
       });
-    }
+    });
 
     if (!isLiveRef.current) {
       userScrollingRef.current = true;
@@ -227,8 +236,6 @@ export const Transcript = memo(function Transcript() {
         userScrollingRef.current = false;
       }, 350);
     }
-
-    setTimeout(() => { jumpLockRef.current = false; }, 50);
   };
 
   // Filter transcript entries (client-side only; all data is in the store).
@@ -551,14 +558,19 @@ export const Transcript = memo(function Transcript() {
   useEffect(() => {
     const currentLen = filteredTranscript.length;
     const currentStream = streamingCount;
+    const currentStreamTextLen = streamingTextLen;
 
-    const hadNewContent = currentLen > prevLenRef.current || currentStream > prevStreamingCountRef.current;
+    const hadNewContent =
+      currentLen > prevLenRef.current ||
+      currentStream > prevStreamingCountRef.current ||
+      currentStreamTextLen > prevStreamingTextLenRef.current;
     if (currentLen === 0) {
       initialSizeSettledRef.current = false;
       mountedItemsRef.current.clear();
     }
     prevLenRef.current = currentLen;
     prevStreamingCountRef.current = currentStream;
+    prevStreamingTextLenRef.current = currentStreamTextLen;
 
     const live = isLiveRef.current;
     if (live || !initialSizeSettledRef.current) {
@@ -571,7 +583,31 @@ export const Transcript = memo(function Transcript() {
 
     if (!isAtBottomRef.current || !live || !hadNewContent) return;
     scheduleScrollToEnd();
-  }, [filteredTranscript.length, streamingCount, scheduleMeasure, scheduleScrollToEnd]);
+  }, [filteredTranscript.length, streamingCount, streamingTextLen, scheduleMeasure, scheduleScrollToEnd]);
+
+  // When pinned to bottom, follow any layout growth (streaming bubbles expanding
+  // token-by-token, wrapped text reflow, dock height changes) even if entry count
+  // is unchanged.
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    let raf: number | null = null;
+    const ro = new ResizeObserver(() => {
+      if (!isAtBottomRef.current || !isLiveRef.current || userScrollingRef.current || jumpLockRef.current) {
+        return;
+      }
+      if (raf != null) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        raf = null;
+        scrollContainerToBottom();
+      });
+    });
+    ro.observe(content);
+    return () => {
+      ro.disconnect();
+      if (raf != null) cancelAnimationFrame(raf);
+    };
+  }, [scrollContainerToBottom]);
 
   useLayoutEffect(() => {
     scheduleMeasure();
@@ -657,6 +693,7 @@ export const Transcript = memo(function Transcript() {
         onScroll={onScroll}
         className="flex-1 min-h-0 overflow-y-auto p-1 bg-ink-900 transcript-scroll"
       >
+        <div ref={contentRef}>
         {transcript.length === 0 && streamingCount === 0 && phase !== "completed" && phase !== "stopped" && phase !== "failed" ? (
           <div className="text-ink-400 text-sm">Waiting for agents…</div>
         ) : null}
@@ -727,8 +764,6 @@ export const Transcript = memo(function Transcript() {
           </div>
         )}
 
-        <div ref={endRef} />
-
         {/* Task #173: per-agent streaming dock with collapse-by-default
             + smooth fade-out on completion. The authoritative live UI.
             Removed previous duplicate inline map (tiny divs) that contributed to jitter/growth during massive streaming. */}
@@ -737,6 +772,10 @@ export const Transcript = memo(function Transcript() {
           streamingMeta={streamingMeta}
           agents={agents}
         />
+
+        {/* Anchor after streaming dock so scroll targets the true bottom. */}
+        <div ref={endRef} aria-hidden="true" />
+        </div>
       </div>
       {!stickyBottom ? (
         <button

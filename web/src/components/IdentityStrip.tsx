@@ -15,6 +15,7 @@ function shouldUseEventLogRunId(): boolean {
   return new URLSearchParams(window.location.search).has("useEventLogRunId");
 }
 import { CopyChip } from "./CopyChip";
+import { ToolingConfigPanel } from "./ToolingConfigPanel";
 import type { ConformanceSample, DriftSample } from "../state/store";
 
 // Truncate-from-LEFT (per Kevin's Unit 52c spec preference): the
@@ -103,6 +104,7 @@ export function IdentityStrip() {
       {cfg ? (
         <PresetBadge preset={cfg.preset} />
       ) : null}
+      {cfg ? <ToolingConfigPanel cfg={cfg} /> : null}
       {cfg ? (
         <>
           <span className="text-ink-600">·</span>

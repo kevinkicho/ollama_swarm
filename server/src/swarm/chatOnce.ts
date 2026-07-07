@@ -67,7 +67,12 @@ export async function chatOnce(
     // E3 Phase 4 part 2: bind tools to the dispatcher when clonePath
     // is supplied AND the agent profile grants any tools.
     const profileForTools: ProfileName | null =
-      opts.agentName === "swarm" || opts.agentName === "swarm-read" || opts.agentName === "swarm-builder" || opts.agentName === "swarm-research"
+      opts.agentName === "swarm"
+        || opts.agentName === "swarm-read"
+        || opts.agentName === "swarm-planner"
+        || opts.agentName === "swarm-builder"
+        || opts.agentName === "swarm-builder-research"
+        || opts.agentName === "swarm-research"
         ? (opts.agentName as ProfileName)
         : opts.agentName === "swarm-ui"
           ? "swarm-read" // swarm-ui inherits read-side tools

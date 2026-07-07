@@ -144,8 +144,9 @@ export interface RunConfig {
   plannerTools?: boolean;
 
   /**
-   * When true (or when plannerTools is true), the planner (and research-oriented
-   * agents) gain access to web tools: web_search + web_fetch.
+   * When true (or when plannerTools is true), planner, workers, auditor, and
+   * build workers gain access to web tools: web_search + web_fetch (via the
+   * swarm-research / swarm-planner / swarm-builder-research profiles).
    * This enables directives that require live external research
    * (e.g. "find governmental data endpoints via internet searches").
    * Tools are provided via the same ToolDispatcher (opt-in "swarm-research" profile).

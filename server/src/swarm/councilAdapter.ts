@@ -84,7 +84,7 @@ export function buildCouncilAdapterState(
 export async function promptAgent(
   agent: Agent,
   prompt: string,
-  agentName: "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder" | "swarm-research",
+  agentName: import("../tools/ToolDispatcher.js").ProfileName,
   formatExpect: "json" | "free",
   manager: { list: () => Agent[]; markStatus: (id: string, status: string) => void; recordPromptComplete: (id: string, data: any) => void },
   providerFailover?: readonly string[],
@@ -101,7 +101,7 @@ export async function promptAgent(
 export async function promptPlannerSafely(
   agent: Agent,
   promptText: string,
-  agentName: "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder" | "swarm-research" | undefined,
+  agentName: import("../tools/ToolDispatcher.js").ProfileName | undefined,
   manager: { list: () => Agent[]; markStatus: (id: string, status: string) => void; recordPromptComplete: (id: string, data: any) => void },
   providerFailover?: readonly string[],
 ): Promise<{ response: string; agentUsed: Agent }> {

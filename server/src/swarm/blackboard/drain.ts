@@ -3,6 +3,7 @@
 
 import {
   DRAIN_DEADLINE_MS,
+  DRAIN_STUCK_PROMPT_MS,
   DRAIN_WATCHER_INTERVAL_MS,
 } from "./BlackboardRunnerConstants.js";
 import { isStopping as lifecycleIsStopping, isDraining as lifecycleIsDraining } from "./lifecycleState.js";
@@ -20,9 +21,10 @@ export async function drain(ctx: LifecycleContext): Promise<void> {
   // V2 Step 3b: feed drain event to the parallel reducer.
   ctx.v2ObserverApply({ type: "drain-requested", ts: ctx.getDrainStartedAt()! });
   ctx.setPhase("draining");
+  const claimed = ctx.boardCounts().claimed;
   ctx.appendSystem(
-    `Drain & Stop requested. Workers will finish their current claim (${ctx.boardCounts().claimed} in-flight); no new claims. ` +
-      `Backstop ${DRAIN_DEADLINE_MS / 60_000} min before forced hard stop. ` +
+    `Drain & Stop requested. Workers will finish their current claim (${claimed} in-flight); no new claims. ` +
+      `Hung prompts abort after ${DRAIN_STUCK_PROMPT_MS / 60_000} min; full backstop ${DRAIN_DEADLINE_MS / 60_000} min. ` +
       `Press Stop to escalate immediately.`,
   );
   // Cancel pause probe (no point continuing to poll upstream
@@ -53,6 +55,20 @@ export async function checkDrainComplete(ctx: LifecycleContext): Promise<void> {
   const counts = ctx.boardCounts();
   const elapsed = Date.now() - (ctx.getDrainStartedAt() ?? Date.now());
   const overDeadline = elapsed >= DRAIN_DEADLINE_MS;
+  const stuckPrompts =
+    elapsed >= DRAIN_STUCK_PROMPT_MS && ctx.getActiveAborts().size > 0;
+  if (stuckPrompts) {
+    ctx.appendSystem(
+      `Drain: in-flight prompt(s) still running after ${Math.round(elapsed / 1000)}s with no completion — aborting to unblock exit.`,
+    );
+    for (const ctrl of ctx.getActiveAborts()) {
+      try {
+        ctrl.abort(new Error("drain: stuck prompt"));
+      } catch (err) {
+        ctx.appendSystem(`⚠ drain stuck-prompt abort: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
   if (counts.claimed === 0 && ctx.getActiveAborts().size === 0) {
     ctx.appendSystem(`Drain complete (${Math.round(elapsed / 1000)}s); escalating to hard stop.`);
     if (ctx.getDrainWatcherTimer()) {

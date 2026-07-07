@@ -24,6 +24,7 @@ import {
   getAgentAddendum,
   getAgentOllamaOptions,
 } from "../../../../shared/src/topology.js";
+import type { ProfileName } from "../../tools/ToolDispatcher.js";
 
 export interface PromptContext {
   // --- mutable counter maps (referenced in place) ---
@@ -42,6 +43,7 @@ export interface PromptContext {
   // --- field getters / setters ---
   getActive: () => RunConfig | undefined;
   isStopping: () => boolean;
+  isDraining: () => boolean;
   setLifecycleState: (v: LifecycleState) => void;
   getTerminationReason: () => string | undefined;
   setTerminationReason: (v: string | undefined) => void;
@@ -69,7 +71,7 @@ export async function promptPlannerSafely(
   ctx: PromptContext,
   primaryAgent: Agent,
   promptText: string,
-  agentName: "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder" | "swarm-research" = "swarm",
+  agentName: ProfileName = "swarm",
   ollamaFormat?: "json" | Record<string, unknown>,
 ): Promise<{ response: string; agentUsed: Agent }> {
   const response = await promptAgent(ctx, primaryAgent, promptText, agentName, "json", ollamaFormat);
@@ -80,7 +82,7 @@ export async function promptAgent(
   ctx: PromptContext,
   agent: Agent,
   prompt: string,
-  agentName: "swarm" | "swarm-read" | "swarm-planner" | "swarm-builder" | "swarm-research" = "swarm",
+  agentName: ProfileName = "swarm",
   formatExpect: "json" | "free" = "json",
   ollamaFormat?: "json" | Record<string, unknown>,
 ): Promise<string> {
@@ -103,6 +105,15 @@ export async function promptAgent(
   let abortedReason: string | null = null;
   let abortFiredAt = 0;
   let lastVisibilityWarn = 0;
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      const reason = controller.signal.reason;
+      abortedReason = reason instanceof Error ? reason.message : "aborted";
+      abortFiredAt = Date.now();
+    },
+    { once: true },
+  );
 
   // No hard ceilings — the model runs until it finishes naturally.
   // If the model is truly stuck, the user sees it in the streaming dock
@@ -223,15 +234,30 @@ export async function promptAgent(
   } catch (err) {
     const msg = abortedReason ?? describeSdkError(err);
     ctx.emit({ type: "agent_streaming_end", agentId: agent.id });
-    ctx.manager.markStatus(agent.id, "failed", { error: msg });
-    ctx.emitAgentState({
-      id: agent.id,
-      index: agent.index,
-      port: agent.port,
-      sessionId: agent.sessionId,
-      status: "failed",
-      error: msg,
-    });
+    const userHalt =
+      ctx.isStopping()
+      || (ctx.isDraining() && (controller.signal.aborted || /abort|user stop|drain/i.test(msg)));
+    if (userHalt) {
+      ctx.manager.markStatus(agent.id, "ready", { lastMessageAt: Date.now() });
+      ctx.emitAgentState({
+        id: agent.id,
+        index: agent.index,
+        port: agent.port,
+        sessionId: agent.sessionId,
+        status: "ready",
+        lastMessageAt: Date.now(),
+      });
+    } else {
+      ctx.manager.markStatus(agent.id, "failed", { error: msg });
+      ctx.emitAgentState({
+        id: agent.id,
+        index: agent.index,
+        port: agent.port,
+        sessionId: agent.sessionId,
+        status: "failed",
+        error: msg,
+      });
+    }
     throw new Error(msg);
   } finally {
     ctx.activeAborts.delete(controller);

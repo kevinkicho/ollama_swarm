@@ -38,6 +38,7 @@ import {
   terminalPhaseFromSummary,
   type StatusHydrateContext,
 } from "./swarmStoreHydrate";
+import { inferAgentsFromSnapshot } from "../lib/inferAgents";
 
 interface SwarmStoreProviderProps {
   /** Run id to subscribe to. */
@@ -55,8 +56,12 @@ function applyStatusSnapshot(
     s.setPhase(snap.phase as any, (snap as any).round ?? 0);
   }
   const completed = statusHasCompletedSummary(snap);
-  if (snap.agents && Array.isArray(snap.agents) && !completed) {
-    snap.agents.forEach((a: any) => {
+  const agentsForSidebar =
+    !completed && snap.agents?.length
+      ? snap.agents
+      : inferAgentsFromSnapshot(snap);
+  if (!completed && agentsForSidebar.length > 0) {
+    agentsForSidebar.forEach((a: any) => {
       const idx = a.index ?? a.agentIndex ?? 0;
       const id = a.id || a.agentId || `agent-${idx}`;
       s.upsertAgent({ id, index: idx, status: a.status || "ready", model: a.model } as any);

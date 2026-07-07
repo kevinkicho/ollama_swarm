@@ -146,6 +146,7 @@ export interface SwarmStatusRunConfig {
   userDirective?: string;
   plannerTools?: boolean;
   webTools?: boolean;
+  mcpServers?: string;
 }
 
 /** Lift userDirective / tool flags from persisted run-state extras. */
@@ -157,12 +158,32 @@ export function normalizeSwarmStatusRunConfig(
     (typeof rc.userDirective === "string" && rc.userDirective.trim())
     || (typeof extras.userDirective === "string" && extras.userDirective.trim())
     || undefined;
+  const topology =
+    rc.topology
+    ?? (extras.topology as SwarmStatusRunConfig["topology"] | undefined);
   return {
     ...rc,
     clonePath: rc.clonePath || rc.localPath || "",
     ...(userDirective ? { userDirective } : {}),
+    plannerModel:
+      rc.plannerModel
+      ?? (extras.plannerModel as string | undefined)
+      ?? (extras.model as string | undefined),
+    workerModel:
+      rc.workerModel
+      ?? (extras.workerModel as string | undefined)
+      ?? (extras.model as string | undefined),
+    auditorModel:
+      rc.auditorModel
+      ?? (extras.auditorModel as string | undefined)
+      ?? rc.plannerModel
+      ?? (extras.plannerModel as string | undefined)
+      ?? (extras.model as string | undefined),
+    dedicatedAuditor: rc.dedicatedAuditor ?? (extras.dedicatedAuditor as boolean | undefined) ?? false,
+    ...(topology ? { topology } : {}),
     plannerTools: rc.plannerTools ?? (extras.plannerTools as boolean | undefined),
     webTools: rc.webTools ?? (extras.webTools as boolean | undefined),
+    mcpServers: rc.mcpServers ?? (extras.mcpServers as string | undefined),
   };
 }
 

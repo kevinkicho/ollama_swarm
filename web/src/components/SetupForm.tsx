@@ -277,6 +277,21 @@ export function SetupForm() {
             provider={form.provider}
           />
 
+          {form.preset.id === "blackboard" && (
+            <label className="mt-2 flex items-center gap-2 text-xs text-ink-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={form.webTools}
+                onChange={(e) => form.setWebTools(e.target.checked)}
+                className="rounded border-ink-600 bg-ink-900 text-emerald-500 focus:ring-emerald-500/40"
+              />
+              <span>
+                Enable web research tools
+                <span className="text-ink-500 ml-1">(web_search + web_fetch for planner, workers, and auditor)</span>
+              </span>
+            </label>
+          )}
+
           {/* Explicit mcpServers surface for research */}
           {form.preset.id === "blackboard" && (
             <div className="mt-2 text-xs">
@@ -292,8 +307,7 @@ export function SetupForm() {
                   const cur = (form.mcpServers || "").trim();
                   const next = !cur ? free : cur.includes("open-websearch") ? cur : cur + " " + free;
                   form.setMcpServers(next);
-                  // also ensure web research is on
-                  // (the form may expose setWebTools via other means, but we can hint)
+                  form.setWebTools(true);
                 }}
                 className="mt-1 text-[10px] px-2 py-0.5 rounded bg-emerald-900/30 hover:bg-emerald-900/50 text-emerald-300 border border-emerald-700/50 transition"
               >

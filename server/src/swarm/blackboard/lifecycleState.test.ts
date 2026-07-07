@@ -5,6 +5,7 @@ import {
   isDraining,
   isActive,
   isTerminal,
+  isPromptHaltError,
   type LifecycleState,
   LIFECYCLE_STATES,
 } from "./lifecycleState.js";
@@ -48,6 +49,25 @@ test("LIFECYCLE_STATES contains all five states", () => {
   assert.equal(LIFECYCLE_STATES.has("draining"), true);
   assert.equal(LIFECYCLE_STATES.has("stopping"), true);
   assert.equal(LIFECYCLE_STATES.has("stopped"), true);
+});
+
+test("isPromptHaltError — stop always halts", () => {
+  assert.equal(
+    isPromptHaltError(new Error("anything"), () => true, () => false),
+    true,
+  );
+});
+
+test("isPromptHaltError — drain halts on abort-shaped errors only", () => {
+  const draining = () => true;
+  const notStopping = () => false;
+  assert.equal(isPromptHaltError(new Error("drain: stuck prompt"), notStopping, draining), true);
+  assert.equal(isPromptHaltError(new Error("user stop"), notStopping, draining), true);
+  const abortErr = new Error("aborted");
+  abortErr.name = "AbortError";
+  assert.equal(isPromptHaltError(abortErr, notStopping, draining), true);
+  assert.equal(isPromptHaltError(new Error("timeout"), notStopping, draining), false);
+  assert.equal(isPromptHaltError(new Error("drain: stuck prompt"), notStopping, () => false), false);
 });
 
 test("LifecycleState type narrows correctly", () => {

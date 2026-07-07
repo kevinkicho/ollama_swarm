@@ -84,6 +84,161 @@ export function shapeAgentsFromSummary(summary: Record<string, unknown>): AgentS
   }));
 }
 
+function modelByIndexFromRunConfig(
+  runConfig?: Record<string, unknown>,
+): Map<number, string> | undefined {
+  if (!runConfig) return undefined;
+  const extras = (runConfig.extras ?? {}) as Record<string, unknown>;
+  const topology = (runConfig.topology ?? extras.topology) as
+    | { agents?: Array<{ index?: number; model?: string }> }
+    | undefined;
+  if (!topology?.agents?.length) return undefined;
+  const map = new Map<number, string>();
+  for (const a of topology.agents) {
+    if (typeof a.index === "number" && typeof a.model === "string") {
+      map.set(a.index, a.model);
+    }
+  }
+  return map.size > 0 ? map : undefined;
+}
+
+export function shapeAgentsFromRoster(
+  roster: Array<{ agentId?: string; id?: string; agentIndex?: number; index?: number }>,
+  modelByIndex?: Map<number, string>,
+): AgentStateShape[] {
+  return roster
+    .map((a) => {
+      const index = Number(a.agentIndex ?? a.index ?? 0);
+      const id = String(a.agentId ?? a.id ?? `agent-${index}`);
+      return {
+        id,
+        index,
+        status: "stopped" as const,
+        model: modelByIndex?.get(index),
+      };
+    })
+    .sort((a, b) => a.index - b.index);
+}
+
+export function shapeAgentsFromTopology(
+  topology: { agents: Array<{ index: number; model?: string }> },
+): AgentStateShape[] {
+  return topology.agents
+    .map((a) => ({
+      id: `agent-${a.index}`,
+      index: a.index,
+      status: "stopped" as const,
+      model: a.model,
+    }))
+    .sort((a, b) => a.index - b.index);
+}
+
+export function inferAgentsFromTranscript(
+  transcript: Array<{ role?: string; text?: string; agentId?: string; agentIndex?: number }>,
+): AgentStateShape[] {
+  const byId = new Map<string, AgentStateShape>();
+  for (const e of transcript) {
+    if (e.agentId && e.agentIndex != null) {
+      byId.set(e.agentId, {
+        id: e.agentId,
+        index: e.agentIndex,
+        status: "stopped",
+      });
+    }
+    if (e.role === "system" && e.text) {
+      const m = e.text.match(
+        /(?:Planner|Worker|Auditor) agent (agent-\d+) ready \(model=([^)]+)\)/,
+      );
+      if (m) {
+        const id = m[1]!;
+        const index = Number(id.replace("agent-", ""));
+        byId.set(id, { id, index, status: "stopped", model: m[2] });
+      }
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.index - b.index);
+}
+
+/** Best-effort sync read of `<clone>/blackboard-state.json`. */
+export function readBlackboardStateSync(clonePath: string): Record<string, unknown> | null {
+  const file = path.join(clonePath, "blackboard-state.json");
+  try {
+    if (!existsSync(file)) return null;
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve sidebar agents when summary is missing or killAll cleared live state. */
+export function resolveStatusAgents(opts: {
+  terminalSum: Record<string, unknown> | null;
+  clonePath?: string;
+  runConfig?: Record<string, unknown>;
+  transcript?: unknown[];
+}): AgentStateShape[] {
+  if (opts.terminalSum) {
+    const fromSum = shapeAgentsFromSummary(opts.terminalSum);
+    if (fromSum.length > 0) return fromSum;
+  }
+
+  const modelByIndex = modelByIndexFromRunConfig(opts.runConfig);
+
+  if (opts.clonePath) {
+    const bb = readBlackboardStateSync(opts.clonePath);
+    if (bb) {
+      const roster = bb.agentRoster;
+      if (Array.isArray(roster) && roster.length > 0) {
+        return shapeAgentsFromRoster(roster as Array<{ agentId: string; agentIndex: number }>, modelByIndex);
+      }
+      const perAgent = bb.perAgent;
+      if (Array.isArray(perAgent) && perAgent.length > 0) {
+        return shapeAgentsFromRoster(
+          perAgent as Array<{ agentId: string; agentIndex: number }>,
+          modelByIndex,
+        );
+      }
+    }
+  }
+
+  const extras = (opts.runConfig?.extras ?? {}) as Record<string, unknown>;
+  const topology = (opts.runConfig?.topology ?? extras.topology) as
+    | { agents?: Array<{ index: number; model?: string }> }
+    | undefined;
+  if (topology?.agents?.length) {
+    return shapeAgentsFromTopology({ agents: topology.agents });
+  }
+
+  if (Array.isArray(opts.transcript) && opts.transcript.length > 0) {
+    return inferAgentsFromTranscript(
+      opts.transcript as Array<{ role?: string; text?: string; agentId?: string; agentIndex?: number }>,
+    );
+  }
+
+  const agentCount = Number(opts.runConfig?.agentCount ?? extras.agentCount);
+  if (Number.isFinite(agentCount) && agentCount > 0) {
+    const dedicatedAuditor = Boolean(opts.runConfig?.dedicatedAuditor ?? extras.dedicatedAuditor);
+    const total = dedicatedAuditor ? agentCount + 1 : agentCount;
+    const defaultModel =
+      (typeof opts.runConfig?.workerModel === "string" && opts.runConfig.workerModel)
+      || (typeof opts.runConfig?.model === "string" && opts.runConfig.model)
+      || (typeof extras.workerModel === "string" && extras.workerModel)
+      || undefined;
+    return Array.from({ length: total }, (_, i) => {
+      const index = i + 1;
+      return {
+        id: `agent-${index}`,
+        index,
+        status: "stopped" as const,
+        model: modelByIndex?.get(index) ?? defaultModel,
+      };
+    });
+  }
+
+  return [];
+}
+
 export type AgentStateShape = {
   id: string;
   index: number;
