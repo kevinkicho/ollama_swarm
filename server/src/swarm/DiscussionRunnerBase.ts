@@ -36,6 +36,8 @@ import { discussionWriteSummary } from "./discussionWriteSummary.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { maybeRunPostRoundCritique } from "./postRoundCritique.js";
 import type { RunAgentOpts } from "./postRoundCritiqueTypes.js";
+import { discussionReaderProfile } from "./discussionToolProfile.js";
+import { makeWebToolHandler } from "./toolCallTranscript.js";
 import { tokenTracker, snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { checkBudgetGuards } from "./loopGuards.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
@@ -346,7 +348,7 @@ export abstract class DiscussionRunnerBase {
     prompt: string,
     opts: RunAgentOpts,
   ): Promise<string> {
-    const agentName = opts.agentName ?? "swarm-read";
+    const agentName = opts.agentName ?? discussionReaderProfile(this.active);
     this.opts.manager.markStatus(agent.id, "thinking");
     this.emitAgentState({
       id: agent.id,
@@ -372,6 +374,9 @@ export abstract class DiscussionRunnerBase {
         signal: controller.signal,
         manager: this.opts.manager,
         agentName,
+        webToolsConfig: this.active,
+        mcpServers: this.active?.mcpServers,
+        onTool: makeWebToolHandler((text, summary) => this.appendSystem(text, summary), agent.id),
         promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         describeError: describeSdkError,
         ...(opts.modelOverride && opts.modelOverride !== agent.model

@@ -26,6 +26,10 @@ import { tryAcquireLock, releaseLock } from "../swarm/cloneLock.js";
 import { config } from "../config.js";
 import { createLogger, rootLogger } from "./logger.js";
 import { ActiveRun } from "./ActiveRun.js";
+import {
+  buildRecoveredCrashSummary,
+  recoverCrashSummaryFromSnapshot,
+} from "./crashSummaryRecovery.js";
 import { RunEventHub } from "./RunEventHub.js";
 import { prepareResearchConfig, isResearchRun } from "../swarm/researchHelpers.js";
 import { BrainIntegration } from "./BrainIntegration.js";
@@ -771,7 +775,35 @@ export class Orchestrator {
 
     const rc = snap.runConfig as any;
     const cp = rc?.clonePath || rc?.localPath || pathInfo?.clonePath;
-    const terminalSum = cp ? loadRunSummaryForRunId(cp, runId) : null;
+    let terminalSum = cp ? loadRunSummaryForRunId(cp, runId) : null;
+    if (!terminalSum?.stopReason && cp && effectivePhase === "failed") {
+      terminalSum = buildRecoveredCrashSummary(
+        {
+          runId: snap.runId,
+          preset: snap.preset,
+          phase: snap.phase,
+          startedAt: snap.startedAt,
+          lastEventAt: snap.lastEventAt,
+          transcript: snap.transcript as import("../types.js").TranscriptEntry[],
+          runConfig: rc,
+        },
+        cp,
+        runId,
+      ) as unknown as Record<string, unknown>;
+      void recoverCrashSummaryFromSnapshot(
+        {
+          runId: snap.runId,
+          preset: snap.preset,
+          phase: snap.phase,
+          startedAt: snap.startedAt,
+          lastEventAt: snap.lastEventAt,
+          transcript: snap.transcript as import("../types.js").TranscriptEntry[],
+          runConfig: rc,
+        },
+        cp,
+        runId,
+      ).catch(() => {});
+    }
     if (terminalSum?.stopReason) {
       effectivePhase = terminalPhaseFromStopReason(terminalSum.stopReason) as SwarmPhase;
     }

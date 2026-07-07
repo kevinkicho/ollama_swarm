@@ -9,7 +9,7 @@ import type { RunConfig, RunnerOpts } from "./SwarmRunner.js";
 import { DiscussionRunnerBase } from "./DiscussionRunnerBase.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 
-import { buildSeedSummary } from "./runSummary.js";
+import { buildSeedSummary, formatPortReleaseLine } from "./runSummary.js";
 import { extractProviderText, parseJsonArrayFromResponse, createTimeoutController } from "./councilUtils.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
@@ -47,6 +47,7 @@ import {
 import { gatherCodeContext } from "./gatherCodeContext.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
 
+
 export class CouncilRunner extends DiscussionRunnerBase {
   protected getPresetName(): string { return "Council"; }
 
@@ -61,6 +62,10 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private maxTiers = Infinity;
   private capWatchdog: ReturnType<typeof setInterval> | undefined;
   private drainResolve: (() => void) | undefined;
+  private drainRequested = false;
+  private stopAbortController: AbortController | undefined;
+  private stopInFlight: Promise<void> | null = null;
+  private loopPromise: Promise<void> | null = null;
 
   constructor(opts: RunnerOpts) {
     super(opts);
@@ -111,38 +116,99 @@ export class CouncilRunner extends DiscussionRunnerBase {
       this.startCapWatchdog(cfg);
     }
 
-    void this.loop(cfg);
+    this.stopAbortController = new AbortController();
+    this.stopInFlight = null;
+    this.drainRequested = false;
+    this.loopPromise = this.loop(cfg)
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.opts.emit({ type: "error", message: msg });
+      })
+      .finally(() => this.ensureTerminalCloseOut());
+  }
+
+  /** Idempotent backstop when loop exits without a summary (crash, throw, or race with stop). */
+  private async ensureTerminalCloseOut(): Promise<void> {
+    if (this.summaryWritten) return;
+    if (this.phase === "stopped" || this.phase === "completed") return;
+    if (this.stopInFlight) {
+      await this.stopInFlight.catch(() => {});
+      return;
+    }
+    this.stopInFlight = this.closeOutStopped({ immediate: true });
+    await this.stopInFlight.catch(() => {});
   }
 
   /**
-   * Override stop to support graceful drain: set stopping, let current
-   * workers finish, then kill agents.
+   * Hard stop: enter closing immediately, write summary, kill agents.
+   * (Soft drain is `drain()`.)
    */
   async stop(): Promise<void> {
-    this.stopping = true;
-    this.state.stopping = true;
+    if (this.stopInFlight) return this.stopInFlight;
+    this.stopInFlight = this.closeOutStopped({ immediate: true });
+    return this.stopInFlight;
+  }
+
+  /**
+   * Soft stop: workers finish their current todo, then escalate to hard stop.
+   * Backstopped at 3 min (matches UI copy).
+   */
+  async drain(): Promise<void> {
+    if (this.stopInFlight) return this.stopInFlight;
+    if (this.phase === "stopped" || this.phase === "completed") return;
+
+    this.drainRequested = true;
     this.setPhase("draining");
-    // Signal the drain loop to stop accepting new work
-    this.drainResolve?.();
-    // Wait up to 30s for current workers to finish
-    const DRAIN_TIMEOUT = 30_000;
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        this.appendSystem("[drain] Timeout waiting for workers — forcing stop.");
-        resolve();
-      }, DRAIN_TIMEOUT);
-      // If drain completes before timeout, resolve immediately
-      const origResolve = this.drainResolve;
-      this.drainResolve = () => {
-        clearTimeout(timer);
-        resolve();
-        origResolve?.();
-      };
-    });
-    // Now kill agents
-    const killResult = await this.opts.manager.killAll();
-    this.setPhase("stopped");
+
+    const DRAIN_TIMEOUT = 180_000;
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          this.appendSystem("[drain] Timeout waiting for workers — forcing stop.");
+          resolve();
+        }, DRAIN_TIMEOUT);
+        const origResolve = this.drainResolve;
+        this.drainResolve = () => {
+          clearTimeout(timer);
+          resolve();
+          origResolve?.();
+        };
+      }),
+      this.loopPromise ?? Promise.resolve(),
+    ]);
+
+    this.stopInFlight = this.closeOutStopped({ immediate: true });
+    return this.stopInFlight;
+  }
+
+  private async closeOutStopped(opts: { immediate: boolean }): Promise<void> {
+    if (this.summaryWritten && (this.phase === "stopped" || this.phase === "completed")) return;
+
+    this.stopping = true;
+    if (this.state) this.state.stopping = true;
+    this.setPhase("stopping");
     this.stopCapWatchdog();
+
+    const unblockDrain = this.drainResolve;
+    this.drainResolve = undefined;
+    unblockDrain?.();
+
+    if (opts.immediate) {
+      try {
+        this.stopAbortController?.abort(new Error("user stop"));
+      } catch {
+        // best-effort
+      }
+    }
+
+    const cfg = this.active;
+    if (cfg) {
+      await this.writeSummary(cfg);
+    }
+
+    const killResult = await this.opts.manager.killAll();
+    this.appendSystem(formatPortReleaseLine(killResult));
+    this.setPhase("stopped");
   }
 
   private startCapWatchdog(cfg: RunConfig): void {
@@ -241,14 +307,27 @@ export class CouncilRunner extends DiscussionRunnerBase {
     const hasPendingTodos = this.state.todoQueue.counts().pending > 0;
 
     if (hasPendingTodos) {
-      this.appendSystem(`═══ Council cycle ${cycle} — draining ${this.state.todoQueue.counts().pending} pending todo(s) ═══`);
+      const pending = this.state.todoQueue.counts().pending;
+      this.appendSystem(
+        `═══ Council cycle ${cycle} — draining ${pending} pending todo(s) ═══`,
+        { kind: "council_cycle", cycle, executionOnly: true, pendingTodos: pending },
+      );
     } else {
-      this.appendSystem(`═══ Council cycle ${cycle} ═══`);
+      this.appendSystem(`═══ Council cycle ${cycle} ═══`, {
+        kind: "council_cycle",
+        cycle,
+        executionOnly: false,
+      });
 
       if (cycle === 1) {
         // ── CYCLE 1: Full discussion (3 rounds) ──
         this.setPhase("discussing");
-        this.appendSystem(`Analysis — 3 round(s)`);
+        this.appendSystem(`Analysis — 3 round(s)`, {
+          kind: "council_stage",
+          cycle,
+          stage: "discussion",
+          detail: "3 rounds",
+        });
 
         for (let r = 1; r <= 3; r++) {
           if (this.stopping) break;
@@ -269,7 +348,18 @@ export class CouncilRunner extends DiscussionRunnerBase {
             {
               manager: this.opts.manager as any,
               emit: this.opts.emit as any,
-              appendSystem: this.appendSystem.bind(this) as any,
+              appendSystem: ((msg: string) => {
+                if (msg.startsWith("Synthesizing council consensus")) {
+                  this.appendSystem(msg, {
+                    kind: "council_stage",
+                    cycle,
+                    stage: "synthesis",
+                    detail: `agent-1`,
+                  });
+                } else {
+                  this.appendSystem(msg);
+                }
+              }) as any,
               logDiag: (this.opts.logDiag ?? (() => {})) as any,
             },
             this.state.committedFiles,
@@ -310,7 +400,15 @@ export class CouncilRunner extends DiscussionRunnerBase {
         // ── CYCLE 2+: Fast standup (1 round) ──
         this.setPhase("discussing");
         const unmetCount = this.state.contract?.criteria.filter(c => c.status !== "met").length ?? 0;
-        this.appendSystem(`[Standup] Planning next batch — ${this.state.contract?.criteria.length ?? 0} criteria, ${unmetCount} unmet.`);
+        this.appendSystem(
+          `[Standup] Planning next batch — ${this.state.contract?.criteria.length ?? 0} criteria, ${unmetCount} unmet.`,
+          {
+            kind: "council_stage",
+            cycle,
+            stage: "standup",
+            detail: `${unmetCount} unmet criteria`,
+          },
+        );
 
         if (this.executionFailures.length > 0) {
           this.appendSystem(`[Standup] Previous failures:\n${this.executionFailures.map(f => `  ${f}`).join("\n")}`);
@@ -328,12 +426,12 @@ export class CouncilRunner extends DiscussionRunnerBase {
     // ── DRAIN LOOP: execute all pending todos ──
     this.executionFailures = [];
     if (!this.stopping) {
-      await this.drainTodos(cfg);
+      await this.drainTodos(cfg, cycle);
     }
 
     // ── AUDIT: check criteria ──
     if (!this.stopping && this.state.contract) {
-      const auditResult = await this.runAudit(cfg);
+      const auditResult = await this.runAudit(cfg, cycle);
       if (auditResult === "stop") return "stop";
       if (auditResult === "retry") return "retry";
       return "done";
@@ -342,10 +440,20 @@ export class CouncilRunner extends DiscussionRunnerBase {
     return "done";
   }
 
-  private async drainTodos(cfg: RunConfig): Promise<void> {
+  private async drainTodos(cfg: RunConfig, cycle: number): Promise<void> {
     const agents = this.opts.manager.list();
     const executionAgents = agents.filter((a) => a.index !== 1);
     if (executionAgents.length === 0) return;
+
+    const pending = this.state.todoQueue.counts().pending;
+    if (pending > 0) {
+      this.appendSystem(`[execution] Starting ${pending} todo(s)…`, {
+        kind: "council_stage",
+        cycle,
+        stage: "execution",
+        detail: `${pending} todo${pending === 1 ? "" : "s"}`,
+      });
+    }
 
     const REAPER_INTERVAL = 30_000;
     const IN_PROGRESS_TTL = 10 * 60_000;
@@ -372,10 +480,20 @@ export class CouncilRunner extends DiscussionRunnerBase {
             this.executionFailures.push(`${description}: ${error.slice(0, 200)}`);
           },
           stopping: () => this.stopping,
+          draining: () => this.drainRequested,
+          promptSignal: this.stopAbortController?.signal,
         },
       );
 
-      this.appendSystem(`[execution] Complete: ${completed} done, ${failed} failed, ${skipped} skipped.`);
+      this.appendSystem(
+        `[execution] Complete: ${completed} done, ${failed} failed, ${skipped} skipped.`,
+        {
+          kind: "council_stage",
+          cycle,
+          stage: "execution",
+          detail: `${completed} done, ${failed} failed, ${skipped} skipped`,
+        },
+      );
       // Signal drain complete
       this.drainResolve?.();
     } finally {
@@ -383,8 +501,21 @@ export class CouncilRunner extends DiscussionRunnerBase {
     }
   }
 
-  private async runAudit(cfg: RunConfig): Promise<"done" | "retry" | "stop"> {
+  private async runAudit(cfg: RunConfig, cycle: number): Promise<"done" | "retry" | "stop"> {
     if (!this.state.contract) return "done";
+
+    const tagAudit = (msg: string) => {
+      if (msg.startsWith("[audit] LLM audit:")) {
+        this.appendSystem(msg, {
+          kind: "council_stage",
+          cycle,
+          stage: "audit",
+          detail: msg.replace(/^\[audit\]\s*/, ""),
+        });
+      } else {
+        this.appendSystem(msg);
+      }
+    };
 
     const { updatedCriteria, newTodos } = await runCouncilLlmAudit(
       cfg,
@@ -392,7 +523,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
       this.state.committedFiles,
       {
         manager: this.opts.manager as any,
-        appendSystem: (msg) => this.appendSystem(msg),
+        appendSystem: tagAudit,
         stopping: () => this.stopping,
       },
     );

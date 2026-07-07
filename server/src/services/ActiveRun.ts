@@ -9,6 +9,8 @@ import type { SwarmRunner } from "../swarm/SwarmRunner.js";
 import { releaseLock } from "../swarm/cloneLock.js";
 import { createLogger } from "./logger.js";
 import { RunEventHub } from "./RunEventHub.js";
+import { loadRunSummaryForRunId } from "./runSummaryDiscovery.js";
+import { recoverCrashSummaryFromSnapshot } from "./crashSummaryRecovery.js";
 
 /**
  * ActiveRun encapsulates the full lifecycle of a single run.
@@ -75,6 +77,8 @@ export class ActiveRun {
       this.log.warn('ActiveRun runner stop failed', { error: err instanceof Error ? err.message : err });
     }
 
+    await this.ensureSummaryOnDisk();
+
     try { this.conformanceMonitor?.stop(); } catch {}
     try { this.embeddingDriftMonitor?.stop(); } catch {}
     try { this.persister.stop(); } catch {}
@@ -113,6 +117,32 @@ export class ActiveRun {
   /** Force a terminal snapshot write with the given phase and stopReason.
    *  Used to guarantee terminal state even if last event was intermediate phase.
    */
+  private async ensureSummaryOnDisk(): Promise<void> {
+    if (!this.cfg.localPath) return;
+    const existing = loadRunSummaryForRunId(this.cfg.localPath, this.runId);
+    if (existing?.stopReason) return;
+    try {
+      const status = this.runner.status?.();
+      await recoverCrashSummaryFromSnapshot(
+        {
+          runId: this.runId,
+          preset: this.cfg.preset,
+          phase: status?.phase ?? "stopped",
+          startedAt: this.startedAt,
+          lastEventAt: Date.now(),
+          transcript: status?.transcript ?? [],
+          runConfig: this.runConfig as any,
+        },
+        this.cfg.localPath,
+        this.runId,
+      );
+    } catch (err) {
+      this.log.warn('ActiveRun crash summary backfill failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   forceTerminalSnapshot(phase: SwarmPhase, stopReason: string) {
     // The persister expects schedule with current runner status, but we override phase
     const status = (this.runner.status ? this.runner.status() : { phase, transcript: [], agents: [] }) as any;

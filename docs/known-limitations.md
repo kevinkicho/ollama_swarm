@@ -55,37 +55,36 @@ Until any of those bite, one agent covers both roles.
 
 ---
 
-## Agents have no general internet / web search tools
+## Agent web tools are opt-in only (2026-07-07)
 
-**Current state (as of 2026-07):** The only tools agents can invoke are local
-to the cloned repository via the in-process `ToolDispatcher`:
+**Default (no `webTools` / `plannerTools`):** Agents are sandboxed to the cloned
+repository via the in-process `ToolDispatcher`:
 
-- `swarm` (default workers in blackboard): **no tools**. Must return clean
-  JSON (hunks / answers).
-- `swarm-read` (planners, many discussion roles, auditors): `read | grep | glob | list`.
-  Limited reads per turn in planning to prevent context explosion.
-- `swarm-builder` (build / test roles): above + restricted `bash` (only
-  allowlisted commands: npm test, tsc, eslint, etc. No network, no `curl`,
-  cwd-bound).
+- `swarm` (default workers): **no tools**. Must return clean JSON.
+- `swarm-read` (planners, discussion roles, auditors): `read | grep | glob | list`.
+- `swarm-builder` (build / test roles): above + restricted `bash` (allowlisted
+  build/test commands only; no `curl`, cwd-bound).
 
-**No web tools exist** for agents: no `web_search`, `browse`, `fetch_url`,
-general HTTP, or external API access. The GitHub MCP definitions in
-`mcps/grok_com_github/` and the opt-in `MCP_PLAYWRIGHT_ENABLED` (auditor
-browser automation) are not wired into the general agent tool dispatch loop.
+**Opt-in research mode (`webTools: true` or `plannerTools: true`):**
+`shared/src/toolProfiles.ts` upgrades profiles:
 
-Directives containing "do a websearch", "find current governmental data
-endpoints", "research latest best practices online" etc. are answered
-only from the model's frozen training knowledge. Planning with web tools +
-`systemMap` + `swarm-read` planner tools give "broad view" *within the repo*
-without giving live internet.
+- `swarm-planner` — local tools + `web_search`, `web_fetch`
+- `swarm-research` — same for workers / auditors / discussion readers
+- `swarm-builder-research` — build profile + web tools
 
-**See also:**
-- `server/src/tools/ToolDispatcher.ts`
-- `server/src/swarm/promptWithRetry.ts` + `roles.ts` (profile assignment)
-- Auditor prompts that explicitly document the lack of external tooling.
+Blackboard runs a **research pre-pass** before JSON-locked contract turns.
+Tool calls are logged to the transcript. Web fetch is biased toward
+gov/academic sources; there is no general browser or arbitrary HTTP.
 
-This is a deliberate security / blast-radius choice. Adding live web access
-would require new allowlisting, rate-limiting, and safety work.
+**Still not available:** GitHub MCP (`mcps/grok_com_github/`), Playwright
+(`MCP_PLAYWRIGHT_ENABLED`), or unconstrained external APIs in the general
+agent loop.
+
+**See also:** `server/src/tools/ToolDispatcher.ts`, `researchPrePass.ts`,
+`toolCallTranscript.ts`, README "Using for Scientific Research & Internet Work".
+
+Live web access remains a deliberate opt-in with bounded tools — not the
+default path for code-editing runs.
 
 ---
 

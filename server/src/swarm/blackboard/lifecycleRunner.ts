@@ -21,6 +21,8 @@ import { shouldRunFinalAudit } from "./finalAudit.js";
 import { snapshotLifetimeTokens } from "../../services/ollamaProxy.js";
 import { createTickAccumulator, WALL_CLOCK_CAP_MS } from "./caps.js";
 import { runGoalGenerationPrePass } from "./goalGenerationPrePass.js";
+import { runResearchPrePass } from "./researchPrePass.js";
+import { makeWebToolHandler } from "../toolCallTranscript.js";
 import {
   runStretchGoalReflectionPass,
   runMemoryDistillationPass,
@@ -501,7 +503,11 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
       planner,
       seed,
       (text) => ctx.appendSystem(text),
-      { onStatusChange: (status) => ctx.markPlannerStatus(planner, status) },
+      {
+        onStatusChange: (status) => ctx.markPlannerStatus(planner, status),
+        cfg,
+        onTool: makeWebToolHandler(ctx.appendSystem, planner.id),
+      },
     );
     if (generatedGoals && generatedGoals.length > 0) {
       if (seed.userDirective && seed.userDirective.length > 0) {
@@ -581,6 +587,20 @@ export async function planAndExecute(
       ? await ctx.tryResumeContract(seed.clonePath)
       : false;
     if (!resumed) {
+      const activeCfg = ctx.getActive();
+      if (activeCfg && seed.webToolsEnabled) {
+        const notes = await runResearchPrePass(
+          planner,
+          seed,
+          activeCfg,
+          (text) => ctx.appendSystem(text),
+          {
+            onStatusChange: (status) => ctx.markPlannerStatus(planner, status),
+            onTool: makeWebToolHandler(ctx.appendSystem, planner.id),
+          },
+        );
+        if (notes) seed.researchNotes = notes;
+      }
       await ctx.runFirstPassContractOrchestrator(planner, workers, seed);
     }
     if (lifecycleIsStopping(ctx.getLifecycleState())) return;

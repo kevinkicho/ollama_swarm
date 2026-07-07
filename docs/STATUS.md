@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-07-05 (Phase 9/10: COMPLETE removal of hybrid mode; all hybrid references, fields, UI, and orchestration logic removed from the app. Use "pipeline" preset for chaining or pure presets.)
+**Last updated:** 2026-07-07 (Research web tools, council stop/close-out, transcript cycle markers, structured Drafts tab.)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -36,7 +36,7 @@ The app is a **Brain-as-OS for concurrent swarm orchestration**:
 |---|---|---|---|
 | `blackboard` | production | ✅ (native) | planner + workers + auditor; tier ratchet; Aider-style hunks; pre-commit verify gate (`verifyCommand`). Most tested preset with deepest maturity. |
 | `round-robin` | production | ⚡ (opt-in) | Rotating Critic/Synthesizer/Gap-finder/Builder dispositions framed around directive. `cfg.writeMode: "single"` → synthesizer produces hunks; `"multi"` → vote reconciliation. |
-| `council` | production | ✅ (native) | **3-phase autonomous cycle:** Phase 1 (Analysis): N agents debate and synthesize consensus. Phase 2 (Execution): ALL agents become workers, produce hunks via pipeline. Phase 3 (Audit): ALL agents inspect changes. Cycles repeat in autonomous mode (`rounds: 0`). Retry-on-failure with error feedback. **Architecture:** `CouncilRunner.ts` orchestrates; `councilDecisions.ts` handles todo extraction (`extractActionableTodos`, `extractTodosFromAudit`) with path grounding — legacy Gate 1/3/4 decision helpers were removed. `councilExecution.ts` handles parallel worker execution; `councilAudit.ts` handles audit phase; `councilSynthesis.ts` handles synthesis; `councilDeliverable.ts` handles deliverables; `councilVoteReconcile.ts` handles vote reconciliation. **Blackboard infrastructure:** Uses TodoQueue, ExitContract, hunk-based editing, replanner, path grounding, and tier ratchet. |
+| `council` | production | ✅ (native) | **3-phase autonomous cycle:** Phase 1 (Analysis): N agents debate and synthesize consensus. Phase 2 (Execution): ALL agents become workers, produce hunks via pipeline. Phase 3 (Audit): ALL agents inspect changes. Cycles repeat in autonomous mode (`rounds: 0`). Retry-on-failure with error feedback. **Stop/close-out:** hard `stop()` writes summary + kills agents; `drain()` soft-stops with 3 min backstop; `ensureTerminalCloseOut()` on loop exit; crash summary recovery from `.run-state.json`. **Transcript UX:** `council_cycle` / `council_stage` markers; live elapsed on execution status lines; Drafts tab shows structured council drafts (not raw JSON). **Architecture:** `CouncilRunner.ts` orchestrates; `councilDecisions.ts` handles todo extraction; `councilWorkerRunner.ts` marks `thinking` during todos. **Blackboard infrastructure:** TodoQueue, ExitContract, hunk-based editing, replanner, path grounding, tier ratchet. |
 | `orchestrator-worker` (flat) | production | ⚡ (opt-in) | Lead decomposes directive into subtasks for workers. Phase 1: lead synthesis; Phase 2: sequential reconciliation (CAS on file hashes). |
 | `role-diff` | beta | ⚡ (opt-in) | Specialist role assignment per agent with diff-based deliverable. Phase 1: specialist synthesis; Phase 2: vote reconciliation. |
 | `debate-judge` | beta | ⚡ (opt-in) | PRO/CON/JUDGE debate structure. Phase 1: judge verdict produces hunks; Phase 2: judge picks winner's hunks. |
@@ -73,7 +73,7 @@ Validation: tour v2 (2026-04-28) ran 9 sequentially with 8/9 self-terminating cl
 | V2 event log | `/api/v2/event-log/runs` + UI EventLogPanel; infra-only filter | `EventLogReaderV2` |
 | Run history (95+ runs) | History dropdown auto-scans `runs*/` at startup | `Orchestrator.scanForRunParents` |
 | Model autocomplete | `/api/models` proxies Ollama tags into datalist on every model field | `useAvailableModels` hook |
-| Agent tools | Local-only (read/grep/glob/list + restricted bash). No web/internet tools for agents. | `ToolDispatcher`, profiles in `promptWithRetry` / `roles.ts` |
+| Agent tools | Local by default (`swarm`, `swarm-read`, `swarm-builder`). Opt-in web: `webTools` / `plannerTools` → `swarm-planner`, `swarm-research`, `swarm-builder-research` (`web_search`, `web_fetch`). Research pre-pass before blackboard contract. Tool calls logged to transcript. | `shared/src/toolProfiles.ts`, `ToolDispatcher`, `researchPrePass.ts`, `toolCallTranscript.ts` |
 | Cap watchdog (5s tick) | Wall-clock + commits + todos caps fire promptly during any phase | `BlackboardRunner.startCapWatchdog` (#305) |
 | `runs/` retention | `node scripts/prune-runs.mjs --apply` keeps last N + last 7 days | `scripts/prune-runs.mjs` |
 | `logs/` retention | `node scripts/prune-logs.mjs --apply` (current.jsonl rotations + per-run debug*.jsonl) | `scripts/prune-logs.mjs` (new) |

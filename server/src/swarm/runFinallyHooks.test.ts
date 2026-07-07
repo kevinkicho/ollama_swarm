@@ -50,7 +50,7 @@ describe("runDiscussionCloseOut", () => {
     assert.ok(log.length >= 1, "must emit kill-result line");
   });
 
-  it("when stopping=true, skips killAll + skips setPhase", async () => {
+  it("when stopping=true mid-phase, still killAll and setPhase('stopped')", async () => {
     const phaseSet: SwarmPhase[] = [];
     let killCalls = 0;
     const manager = {
@@ -61,7 +61,29 @@ describe("runDiscussionCloseOut", () => {
       cfg: fakeCfg(),
       stopping: true,
       round: 2,
-      currentPhase: "stopping",
+      currentPhase: "discussing",
+      manager,
+      appendSystem: () => {},
+      setPhase: (p) => phaseSet.push(p),
+      writeSummary: async () => {},
+      hooks: {},
+    });
+    assert.equal(killCalls, 1);
+    assert.deepEqual(phaseSet, ["stopped"]);
+  });
+
+  it("when stopping=true and phase already terminal, skips killAll + setPhase", async () => {
+    const phaseSet: SwarmPhase[] = [];
+    let killCalls = 0;
+    const manager = {
+      list: () => [],
+      killAll: async () => { killCalls++; return { released: 0, total: 0, killed: [] }; },
+    } as unknown as AgentManager;
+    await runDiscussionCloseOut({
+      cfg: fakeCfg(),
+      stopping: true,
+      round: 2,
+      currentPhase: "stopped",
       manager,
       appendSystem: () => {},
       setPhase: (p) => phaseSet.push(p),

@@ -215,3 +215,45 @@ test("CouncilRunner.runSynthesisPass forwards cfg.userDirective into buildCounci
     "synthesis pass must thread userDirective into the prompt builder",
   );
 });
+
+test("CouncilRunner.stop — hard stop enters stopping, writes summary, kills agents", () => {
+  assert.match(
+    COUNCIL_SRC,
+    /async stop\(\): Promise<void>/,
+    "CouncilRunner must implement stop()",
+  );
+  assert.match(
+    COUNCIL_SRC,
+    /setPhase\("stopping"\)/,
+    "hard stop must enter stopping phase immediately (not draining)",
+  );
+  assert.match(
+    COUNCIL_SRC,
+    /await this\.writeSummary\(cfg\)/,
+    "hard stop must write run summary before tearing down agents",
+  );
+  assert.match(
+    COUNCIL_SRC,
+    /formatPortReleaseLine\(killResult\)/,
+    "hard stop must emit kill result transcript line",
+  );
+  const stopBody = COUNCIL_SRC.match(/async stop\(\): Promise<void> \{[\s\S]*?\n  \}/)?.[0] ?? "";
+  assert.doesNotMatch(
+    stopBody,
+    /setPhase\("draining"\)/,
+    "hard stop must not use draining phase (soft drain is drain())",
+  );
+});
+
+test("CouncilRunner.drain — soft stop is separate from hard stop", () => {
+  assert.match(
+    COUNCIL_SRC,
+    /async drain\(\): Promise<void>/,
+    "CouncilRunner must expose drain() for soft stop",
+  );
+  assert.match(
+    COUNCIL_SRC,
+    /setPhase\("draining"\)/,
+    "soft drain must enter draining phase",
+  );
+});

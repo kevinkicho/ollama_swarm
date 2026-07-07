@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { PlannerSeed, PriorRunSummary } from "./planner.js";
+import { buildResearchNotesBlock, buildResearchToolsNote } from "./planner.js";
 import { PRIOR_RATIONALE_MAX_CHARS } from "./planner.js";
 import { lenientPreprocess, softCap } from "./lenientParse.js";
 import { getModelBudget } from "../../modelContextBudget.js";
@@ -232,6 +233,9 @@ export function buildFirstPassContractUserPrompt(seed: PlannerSeed, model?: stri
     readme,
     "=== end README ===",
     "",
+    buildResearchToolsNote(!!seed.webToolsEnabled),
+    buildResearchNotesBlock(seed.researchNotes),
+    seed.webToolsEnabled ? "\n" : "",
     directive
       ? "Output the exit contract JSON object now. Your missionStatement and criteria MUST address the USER DIRECTIVE above (Rule 11). Use the REPO FILE LIST to ground expectedFiles."
       : seed.priorRunSummary

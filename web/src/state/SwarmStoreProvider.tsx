@@ -31,90 +31,22 @@ import { applyEventToStore } from "./applyEvent";
 import type { SwarmEvent, SwarmStatusSnapshot } from "../types";
 import { wsUrlForRunId } from "../hooks/useSwarmSocket";
 import {
+  applyStatusSnapshotToStore,
   buildSyntheticRunStartDivider,
+  catchUpEmptyTranscript,
   hasRunStartDivider,
+  HYDRATE_MAX_WAIT_MS,
   shouldDropTerminalGuardedEvent,
   statusHasCompletedSummary,
   terminalPhaseFromSummary,
+  WS_REPLAY_GRACE_MS,
   type StatusHydrateContext,
 } from "./swarmStoreHydrate";
-import { inferAgentsFromSnapshot } from "../lib/inferAgents";
 
 interface SwarmStoreProviderProps {
   /** Run id to subscribe to. */
   runId: string;
   children: ReactNode;
-}
-
-function applyStatusSnapshot(
-  store: StoreApi<SwarmStore>,
-  runId: string,
-  snap: SwarmStatusSnapshot,
-): void {
-  const s = store.getState();
-  if (snap.phase != null) {
-    s.setPhase(snap.phase as any, (snap as any).round ?? 0);
-  }
-  const completed = statusHasCompletedSummary(snap);
-  const agentsForSidebar =
-    !completed && snap.agents?.length
-      ? snap.agents
-      : inferAgentsFromSnapshot(snap);
-  if (!completed && agentsForSidebar.length > 0) {
-    agentsForSidebar.forEach((a: any) => {
-      const idx = a.index ?? a.agentIndex ?? 0;
-      const id = a.id || a.agentId || `agent-${idx}`;
-      s.upsertAgent({ id, index: idx, status: a.status || "ready", model: a.model } as any);
-    });
-  }
-  if (snap.runConfig) {
-    s.setRunConfig({ ...snap.runConfig });
-  }
-  if (snap.transcript?.length) {
-    s.hydrateTranscriptEntries(snap.transcript);
-  }
-  if (!hasRunStartDivider(store.getState().transcript, runId)) {
-    s.hydrateTranscriptEntries([
-      buildSyntheticRunStartDivider(runId, {
-        preset: (snap as any).preset || snap.runConfig?.preset,
-        plannerModel: snap.runConfig?.plannerModel,
-        workerModel: snap.runConfig?.workerModel,
-        agentCount: snap.runConfig?.agentCount,
-        repoUrl: snap.runConfig?.repoUrl,
-      }),
-    ]);
-  }
-  if (snap.summary) {
-    s.setSummary(snap.summary);
-  }
-  if (snap.contract) s.setContract(snap.contract);
-  if (snap.cloneState) s.setCloneState(snap.cloneState);
-  if (snap.runId) s.setRunId(snap.runId);
-  if (snap.runStartedAt) s.setRunStartedAt(snap.runStartedAt);
-  if (snap.board) {
-    s.replaceBoard({
-      todos: snap.board.todos,
-      findings: snap.board.findings,
-    });
-  }
-  if (snap.latency) {
-    for (const [agentId, samples] of Object.entries(snap.latency)) {
-      for (const sample of samples) s.pushLatencySample(agentId, sample);
-    }
-  }
-  if (snap.streaming) {
-    for (const [agentId, entry] of Object.entries(snap.streaming)) {
-      s.setStreaming(agentId, entry.text);
-    }
-  }
-  if (snap.pheromones) {
-    for (const [file, state] of Object.entries(snap.pheromones)) {
-      s.upsertPheromone(file, state);
-    }
-  }
-  if (snap.mapperSlices && Object.keys(snap.mapperSlices).length > 0) {
-    s.setMapperSlices(snap.mapperSlices);
-  }
 }
 
 export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps) {
@@ -142,10 +74,40 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
     const ctrl = new AbortController();
 
     let isHydrating = true;
+    let restHydrateDone = false;
+    let wsReplayReady = false;
+    let hydrateFinishTimer: ReturnType<typeof setTimeout> | null = null;
+    let hydrateMaxTimer: ReturnType<typeof setTimeout> | null = null;
     const pendingEvents: SwarmEvent[] = [];
     const statusCtx: StatusHydrateContext = {
       statusHydrateOk: false,
       statusHasCompletedSummary: false,
+    };
+    const statusUrl = `/api/swarm/runs/${encodeURIComponent(runId)}/status`;
+
+    const clearHydrateTimers = () => {
+      if (hydrateFinishTimer) {
+        clearTimeout(hydrateFinishTimer);
+        hydrateFinishTimer = null;
+      }
+      if (hydrateMaxTimer) {
+        clearTimeout(hydrateMaxTimer);
+        hydrateMaxTimer = null;
+      }
+    };
+
+    const scheduleHydrateFinish = () => {
+      if (hydrateFinishTimer) return;
+      hydrateFinishTimer = setTimeout(() => {
+        hydrateFinishTimer = null;
+        if (!cancelled && isHydrating) finishHydration();
+      }, WS_REPLAY_GRACE_MS);
+    };
+
+    const tryFinishHydration = () => {
+      if (cancelled || !isHydrating) return;
+      if (!restHydrateDone || !wsReplayReady) return;
+      scheduleHydrateFinish();
     };
 
     const applyWsEvent = (parsed: SwarmEvent) => {
@@ -172,11 +134,14 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
     };
 
     const finishHydration = () => {
+      if (!isHydrating) return;
+      clearHydrateTimers();
       isHydrating = false;
       while (pendingEvents.length > 0) {
         const ev = pendingEvents.shift();
         if (ev) applyWsEvent(ev);
       }
+      void catchUpEmptyTranscript(storeRef.current, runId, statusUrl, ctrl.signal);
     };
 
     const isFake = runId.startsWith("fake-") || runId.includes("fake");
@@ -241,18 +206,19 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
     };
 
     const hydrate = async () => {
-      if (isFake) return;
+      if (isFake) {
+        restHydrateDone = true;
+        tryFinishHydration();
+        return;
+      }
       try {
-        const res = await fetch(
-          `/api/swarm/runs/${encodeURIComponent(runId)}/status`,
-          { signal: ctrl.signal },
-        );
+        const res = await fetch(statusUrl, { signal: ctrl.signal });
         if (res.ok) {
           const snap = (await res.json()) as SwarmStatusSnapshot;
           if (cancelled) return;
           statusCtx.statusHydrateOk = true;
           statusCtx.statusHasCompletedSummary = statusHasCompletedSummary(snap);
-          applyStatusSnapshot(storeRef.current, runId, snap);
+          applyStatusSnapshotToStore(storeRef.current, runId, snap);
         } else if (!cancelled) {
           await hydrateFromHistoryFallback();
         }
@@ -265,7 +231,10 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
           }
         }
       } finally {
-        if (!cancelled) finishHydration();
+        if (!cancelled) {
+          restHydrateDone = true;
+          tryFinishHydration();
+        }
       }
     };
 
@@ -276,6 +245,8 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
       socket = sock;
       sock.onopen = () => {
         backoffMs = 500;
+        wsReplayReady = true;
+        tryFinishHydration();
       };
       sock.onmessage = (ev) => {
         try {
@@ -298,11 +269,15 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
 
     void hydrate();
     open();
+    hydrateMaxTimer = setTimeout(() => {
+      if (!cancelled && isHydrating) finishHydration();
+    }, HYDRATE_MAX_WAIT_MS);
 
     return () => {
       cancelled = true;
       isHydrating = false;
       pendingEvents.length = 0;
+      clearHydrateTimers();
       ctrl.abort();
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);

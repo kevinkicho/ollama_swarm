@@ -95,6 +95,8 @@ export interface PromptWithRetryOptions {
   intraStreamLoop?: IntraStreamLoopDetectorOpts | true;
   /** MCP servers string (e.g. "fetch=..." or "search=...") for tool-augmented profiles. Passed through even if not declared on every path. */
   mcpServers?: string;
+  webToolsConfig?: { webTools?: boolean; plannerTools?: boolean };
+  onTool?: (info: { tool: string; ok: boolean; preview: string }) => void;
 }
 
 export interface RetryInfo {

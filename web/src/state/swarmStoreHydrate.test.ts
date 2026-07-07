@@ -1,109 +1,66 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import {
-  buildSyntheticRunStartDivider,
-  hasRunStartDivider,
-  shouldDropTerminalGuardedEvent,
-  statusHasCompletedSummary,
-  terminalPhaseFromSummary,
-} from "./swarmStoreHydrate.js";
-import type { SwarmEvent, SwarmStatusSnapshot } from "../types.js";
+import { createSwarmStore } from "./store.js";
+import { applyStatusSnapshotToStore } from "./swarmStoreHydrate.js";
+import type { SwarmStatusSnapshot, TranscriptEntry } from "../types.js";
 
-describe("shouldDropTerminalGuardedEvent", () => {
-  const agentEv: SwarmEvent = {
-    type: "agent_state",
-    agent: { id: "a1", index: 1, status: "ready" },
-  };
-
-  it("allows agent_state for live runs (status ok, no completed summary)", () => {
-    assert.equal(
-      shouldDropTerminalGuardedEvent(agentEv, {
-        statusHydrateOk: true,
-        statusHasCompletedSummary: false,
-        phase: "stopped",
-        hasCompletedSummary: false,
-      }),
-      false,
-    );
-  });
-
-  it("drops agent_state for completed historical views", () => {
-    assert.equal(
-      shouldDropTerminalGuardedEvent(agentEv, {
-        statusHydrateOk: true,
-        statusHasCompletedSummary: true,
-        phase: "completed",
-        hasCompletedSummary: true,
-      }),
-      true,
-    );
-  });
-
-  it("drops swarm_state when phase is terminal and status was not live", () => {
-    assert.equal(
-      shouldDropTerminalGuardedEvent(
-        { type: "swarm_state", phase: "planning", round: 1 },
-        {
-          statusHydrateOk: false,
-          statusHasCompletedSummary: false,
-          phase: "stopped",
-          hasCompletedSummary: false,
-        },
-      ),
-      true,
-    );
-  });
-
-  it("passes through transcript_append regardless of terminal context", () => {
-    assert.equal(
-      shouldDropTerminalGuardedEvent(
-        {
-          type: "transcript_append",
-          entry: { id: "t1", role: "system", text: "hi", ts: 1 },
-        },
-        {
-          statusHydrateOk: true,
-          statusHasCompletedSummary: true,
-          phase: "completed",
-          hasCompletedSummary: true,
-        },
-      ),
-      false,
-    );
-  });
-});
-
-describe("statusHasCompletedSummary", () => {
-  it("true when stopReason is set", () => {
-    const snap = { summary: { stopReason: "completed" } } as SwarmStatusSnapshot;
-    assert.equal(statusHasCompletedSummary(snap), true);
-  });
-
-  it("false when summary missing or no stopReason", () => {
-    assert.equal(statusHasCompletedSummary({} as SwarmStatusSnapshot), false);
-  });
-});
-
-describe("terminalPhaseFromSummary", () => {
-  it("maps completed stopReason", () => {
-    assert.equal(terminalPhaseFromSummary({ stopReason: "completed" }), "completed");
-  });
-
-  it("maps user stop to stopped", () => {
-    assert.equal(terminalPhaseFromSummary({ stopReason: "user" }), "stopped");
-  });
-
-  it("returns null when no stopReason", () => {
-    assert.equal(terminalPhaseFromSummary({}), null);
-  });
-});
-
-describe("hasRunStartDivider", () => {
-  it("detects divider for matching runId", () => {
-    const tx = [
-      buildSyntheticRunStartDivider("run-xyz", { preset: "council" }),
+describe("applyStatusSnapshotToStore", () => {
+  it("hydrates transcript before phase so idle phase cannot wipe bubbles", () => {
+    const store = createSwarmStore();
+    const entries: TranscriptEntry[] = [
+      { id: "t1", role: "agent", agentId: "agent-1", agentIndex: 1, text: "hello", ts: 1 },
+      { id: "t2", role: "system", text: "system line", ts: 2 },
     ];
-    assert.equal(hasRunStartDivider(tx, "run-xyz"), true);
-    assert.equal(hasRunStartDivider(tx, "other"), false);
+    const snap = {
+      phase: "idle",
+      round: 0,
+      agents: [],
+      transcript: entries,
+      runId: "run-abc",
+    } as SwarmStatusSnapshot;
+
+    applyStatusSnapshotToStore(store, "run-abc", snap);
+
+    const tx = store.getState().transcript;
+    assert.ok(tx.length >= 2, "transcript entries must survive refresh-style hydrate");
+    assert.ok(tx.some((t) => t.id === "t1"));
+    assert.ok(tx.some((t) => t.id === "t2"));
+  });
+
+  it("applies active phase after transcript hydrate", () => {
+    const store = createSwarmStore();
+    const snap = {
+      phase: "executing",
+      round: 2,
+      agents: [{ id: "agent-0", index: 0, status: "ready" }],
+      transcript: [{ id: "e1", role: "system", text: "go", ts: 1 }],
+      runId: "run-live",
+    } as SwarmStatusSnapshot;
+
+    applyStatusSnapshotToStore(store, "run-live", snap);
+    assert.equal(store.getState().phase, "executing");
+    assert.equal(store.getState().round, 2);
+    assert.equal(store.getState().transcript.length, 2); // entry + RUN-START divider
+  });
+});
+
+describe("setPhase idle", () => {
+  it("does not clear existing transcript on incidental idle", () => {
+    const store = createSwarmStore();
+    store.getState().hydrateTranscriptEntries([
+      { id: "keep", role: "agent", text: "stay", ts: 1 },
+    ]);
+    store.getState().setPhase("idle", 0);
+    assert.equal(store.getState().transcript.length, 1);
+  });
+
+  it("reset() still clears transcript", () => {
+    const store = createSwarmStore();
+    store.getState().hydrateTranscriptEntries([
+      { id: "gone", role: "agent", text: "bye", ts: 1 },
+    ]);
+    store.getState().reset();
+    assert.equal(store.getState().transcript.length, 0);
+    assert.equal(store.getState().phase, "idle");
   });
 });

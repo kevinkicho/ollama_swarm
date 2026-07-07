@@ -25,6 +25,7 @@ import {
   getAgentOllamaOptions,
 } from "../../../../shared/src/topology.js";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
+import { makeWebToolHandler } from "../toolCallTranscript.js";
 
 export interface PromptContext {
   // --- mutable counter maps (referenced in place) ---
@@ -139,6 +140,8 @@ export async function promptAgent(
         if (responseTokens > 0) ctx.responseTokensPerAgent.set(agent.id, (ctx.responseTokensPerAgent.get(agent.id) ?? 0) + responseTokens);
       },
       agentName,
+      webToolsConfig: ctx.getActive(),
+      onTool: makeWebToolHandler(ctx.appendSystem, agent.id),
       describeError: (e) => describeSdkError(e),
       sleep: (ms, sig) => interruptibleSleep(ms, sig),
       onTiming: ({ attempt, elapsedMs, success }) => {

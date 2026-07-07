@@ -4,6 +4,7 @@ import { windowFileForWorker, windowFileWithAnchors } from "../windowFile.js";
 import type { RoundRobinDisposition } from "../../roundRobinPromptHelpers.js";
 import { extractJsonFromText as stripFences } from "../../extractJson.js";
 import { softCap } from "./lenientParse.js";
+import { buildResearchNotesBlock, buildResearchToolsNote } from "./planner.js";
 
 // ---------------------------------------------------------------------------
 // Worker response schema (v2). Shape: {"hunks": [ ...discriminated on op ]}.
@@ -241,6 +242,14 @@ export interface WorkerSeed {
   // Plan 8: model context budget — controls whether full files are shown
   // or windowed. Derived from the model's context window size.
   fullFileMode?: boolean;
+  /** When true, worker may use web_search/web_fetch before writing hunks. */
+  webToolsEnabled?: boolean;
+  /** Web research brief from a prior worker research phase or planner pre-pass. */
+  researchNotes?: string;
+}
+
+export function isLiteratureTodo(description: string): boolean {
+  return /literature|research|survey|review|paper|arxiv|citation|sources?|web search|findings/i.test(description);
 }
 
 export function buildWorkerUserPrompt(seed: WorkerSeed): string {
@@ -272,6 +281,18 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
     parts.push("=== end USER DIRECTIVE ===");
     parts.push("");
   }
+  if (seed.webToolsEnabled) {
+    const toolsNote = buildResearchToolsNote(true);
+    if (toolsNote) {
+      parts.push(toolsNote);
+      parts.push("");
+      parts.push(
+        "For literature/research TODOs: use web_search + web_fetch to gather citable sources, then write hunks that document findings with URLs in the target files.",
+      );
+      parts.push("");
+    }
+  }
+  parts.push(buildResearchNotesBlock(seed.researchNotes));
   parts.push(`TODO: ${seed.description}`);
   parts.push(`Expected files: ${seed.expectedFiles.join(", ")}`);
   if (anchors.length > 0) {

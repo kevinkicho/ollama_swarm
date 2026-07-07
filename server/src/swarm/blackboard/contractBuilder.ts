@@ -39,7 +39,7 @@ import {
   type BrainFallbackEvent,
 } from "./prompts/brainIntegration.js";
 import { ContractSchema } from "./prompts/firstPassContract.js";
-import { resolveToolProfile } from "../toolProfiles.js";
+import { isWebToolsEnabled, resolveToolProfile } from "../toolProfiles.js";
 
 export interface ContractContext {
   // --- state getters ---
@@ -555,5 +555,6 @@ This is a lightweight map to help with systemic planning without full repo dump.
     ...(cfg.testDrivenTodos ? { testDrivenTodos: true } : {}),
     ...(cfg.parallelHypothesis ? { parallelHypothesis: true } : {}),
     systemMap,  // for planner to use for broad view
+    webToolsEnabled: isWebToolsEnabled(cfg),
   };
 }

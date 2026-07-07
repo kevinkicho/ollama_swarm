@@ -16,6 +16,8 @@ import { extractText } from "../extractText.js";
 import { parseGoalList } from "./goalListParser.js";
 import type { PlannerSeed } from "./prompts/planner.js";
 import { chatOnce } from "../chatOnce.js";
+import { isWebToolsEnabled, resolveToolProfile } from "../toolProfiles.js";
+import type { RunConfig } from "../SwarmRunner.js";
 
 export async function runGoalGenerationPrePass(
   planner: Agent,
@@ -24,6 +26,8 @@ export async function runGoalGenerationPrePass(
   opts: {
     signal?: AbortSignal;
     onStatusChange?: (status: "thinking" | "ready") => void;
+    cfg?: RunConfig;
+    onTool?: (info: { tool: string; ok: boolean; preview: string }) => void;
   } = {},
 ): Promise<string[] | undefined> {
   const hasDirective = seed.userDirective && seed.userDirective.length > 0;
@@ -96,10 +100,17 @@ export async function runGoalGenerationPrePass(
   if (opts.signal?.aborted) return undefined;
   opts.onStatusChange?.("thinking");
   try {
+    const webOn = isWebToolsEnabled(opts.cfg);
+    const agentProfile = webOn ? resolveToolProfile("read", opts.cfg) : "swarm";
     const res = await chatOnce(planner, {
-      agentName: "swarm",
+      agentName: agentProfile,
       promptText: prompt,
       signal: opts.signal,
+      clonePath: seed.clonePath,
+      webToolsConfig: opts.cfg,
+      runId: opts.cfg?.runId,
+      mcpServers: opts.cfg?.mcpServers,
+      ...(opts.onTool ? { onTool: opts.onTool } : {}),
     });
     const text = extractText(res);
     if (!text) return undefined;

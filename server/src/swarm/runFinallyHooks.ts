@@ -163,15 +163,22 @@ export async function runDiscussionCloseOut(opts: CloseOutOpts): Promise<void> {
   // 2. writeSummary (caller-owned; we just invoke).
   await opts.writeSummary();
 
-  // 3. killAll + setPhase("completed") (gated on !stopping).
-  if (!opts.stopping) {
+  // 3. killAll + terminal phase. User-stop paths usually kill in stop() first;
+  // natural completion uses !stopping. If we're still mid-phase after summary,
+  // always tear down agents (idempotent killAll).
+  const terminalPhases = new Set(["stopped", "completed", "failed"]);
+  if (!terminalPhases.has(opts.currentPhase)) {
     const killResult = await opts.manager.killAll();
     opts.appendSystem(formatPortReleaseLine(killResult));
+  }
+  if (!opts.stopping) {
     const shouldComplete = opts.hooks.shouldSetCompleted
       ? opts.hooks.shouldSetCompleted(opts.currentPhase)
       : true;
-    if (shouldComplete) {
+    if (shouldComplete && !terminalPhases.has(opts.currentPhase)) {
       opts.setPhase("completed");
     }
+  } else if (!terminalPhases.has(opts.currentPhase)) {
+    opts.setPhase("stopped");
   }
 }

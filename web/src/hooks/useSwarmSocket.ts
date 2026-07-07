@@ -1,7 +1,13 @@
 import { useContext, useEffect } from "react";
-import { useSwarm, SwarmStoreContext } from "../state/store";
+import { useSwarm, SwarmStoreContext, swarmSingletonStore } from "../state/store";
 import { applyEventToStore } from "../state/applyEvent";
 import type { SwarmEvent, SwarmStatusSnapshot } from "../types";
+import {
+  applyStatusSnapshotToStore,
+  catchUpEmptyTranscript,
+  HYDRATE_MAX_WAIT_MS,
+  WS_REPLAY_GRACE_MS,
+} from "../state/swarmStoreHydrate";
 
 // Legacy singleton WS hook for the primary SwarmStore. Per-run views
 // should prefer `useRunScopedWebSocket` to avoid mixing events when
@@ -35,7 +41,55 @@ let catchUpFetched = false;
 // arrival order once hydration completes. Setting `isHydrating=false`
 // is the gate; `pendingEvents` is the queue.
 let isHydrating = true;
+let restHydrateDone = false;
+let wsReplayReady = false;
+let hydrateFinishTimer: ReturnType<typeof setTimeout> | null = null;
+let hydrateMaxTimer: ReturnType<typeof setTimeout> | null = null;
 const pendingEvents: SwarmEvent[] = [];
+
+function runIdFromPathname(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  return window.location.pathname.match(/^\/runs\/([^/]+)/)?.[1];
+}
+
+function clearHydrateTimers(): void {
+  if (hydrateFinishTimer) {
+    clearTimeout(hydrateFinishTimer);
+    hydrateFinishTimer = null;
+  }
+  if (hydrateMaxTimer) {
+    clearTimeout(hydrateMaxTimer);
+    hydrateMaxTimer = null;
+  }
+}
+
+function finishHydrationSingleton(): void {
+  if (!isHydrating) return;
+  clearHydrateTimers();
+  isHydrating = false;
+  while (pendingEvents.length > 0) {
+    const next = pendingEvents.shift();
+    if (next) applyEvent(next);
+  }
+  const runId = useSwarm.getState().runId ?? runIdFromPathname();
+  if (runId) {
+    void catchUpEmptyTranscript(swarmSingletonStore, runId, statusUrlForRunId(runId));
+  }
+}
+
+function scheduleHydrateFinish(): void {
+  if (hydrateFinishTimer) return;
+  hydrateFinishTimer = setTimeout(() => {
+    hydrateFinishTimer = null;
+    finishHydrationSingleton();
+  }, WS_REPLAY_GRACE_MS);
+}
+
+function tryFinishHydrationSingleton(): void {
+  if (!isHydrating) return;
+  if (!restHydrateDone || !wsReplayReady) return;
+  scheduleHydrateFinish();
+}
 
 function dispatch(ev: SwarmEvent): void {
   if (isHydrating) {
@@ -103,6 +157,8 @@ function connect(): void {
 
   socket.onopen = () => {
     backoffMs = 500;
+    wsReplayReady = true;
+    tryFinishHydrationSingleton();
   };
   socket.onmessage = (ev) => {
     try {
@@ -137,71 +193,39 @@ function statusUrlForRunId(runId: string | undefined): string {
 async function hydrateFromSnapshot(): Promise<void> {
   if (catchUpFetched) return;
   catchUpFetched = true;
+  isHydrating = true;
+  restHydrateDone = false;
+  wsReplayReady = false;
+  clearHydrateTimers();
+  hydrateMaxTimer = setTimeout(() => finishHydrationSingleton(), HYDRATE_MAX_WAIT_MS);
 
-  // HARD GUARD against the recurring "stale run state on root" race.
-  // On pure root path we must never hydrate a run-specific snapshot into
-  // the singleton. This is the exact same pattern that caused the agents
-  // sidebar to flash from fallback → cards, and the "empty blackboard run"
-  // view on /.  We check both the URL and the current store shape.
-  const isRoot = typeof window !== 'undefined' && window.location.pathname === '/';
+  const pathRunId = runIdFromPathname();
+  const isRoot = typeof window !== "undefined" && window.location.pathname === "/";
   const current = useSwarm.getState();
-  if (isRoot && (!current.runId || current.phase === 'idle')) {
-    // Clean setup mode – do not pull any run data.
-    isHydrating = false;
+  if (isRoot && !pathRunId && (!current.runId || current.phase === "idle")) {
+    restHydrateDone = true;
+    wsReplayReady = true;
+    finishHydrationSingleton();
     return;
   }
 
+  const runId = current.runId ?? pathRunId;
   try {
-    const runId = useSwarm.getState().runId;
     const res = await fetch(statusUrlForRunId(runId));
     if (!res.ok) return;
     const snap = (await res.json()) as SwarmStatusSnapshot;
 
-    // Re-check after fetch in case we navigated or reset during the request.
-    if (typeof window !== 'undefined' && window.location.pathname === '/' && !useSwarm.getState().runId) {
-      isHydrating = false;
+    if (typeof window !== "undefined" && window.location.pathname === "/" && !pathRunId && !useSwarm.getState().runId) {
       return;
     }
 
-    const s = useSwarm.getState();
-    s.setPhase(snap.phase, snap.round);
-    for (const a of snap.agents) s.upsertAgent(a);
-    if (snap.transcript?.length) s.hydrateTranscriptEntries(snap.transcript);
-    if (snap.summary) s.setSummary(snap.summary);
-    if (snap.contract) s.setContract(snap.contract);
-    if (snap.cloneState) s.setCloneState(snap.cloneState);
-    if (snap.runConfig) s.setRunConfig(snap.runConfig);
-    if (snap.runId) s.setRunId(snap.runId);
-    if (snap.runStartedAt) s.setRunStartedAt(snap.runStartedAt);
-    if (snap.board) {
-      s.replaceBoard({ todos: snap.board.todos, findings: snap.board.findings });
-    }
-    if (snap.latency) {
-      for (const [agentId, samples] of Object.entries(snap.latency)) {
-        for (const sample of samples) s.pushLatencySample(agentId, sample);
-      }
-    }
-    if (snap.streaming) {
-      for (const [agentId, entry] of Object.entries(snap.streaming)) {
-        s.setStreaming(agentId, entry.text);
-      }
-    }
-    if (snap.pheromones) {
-      for (const [file, state] of Object.entries(snap.pheromones)) {
-        s.upsertPheromone(file, state);
-      }
-    }
-    if (snap.mapperSlices && Object.keys(snap.mapperSlices).length > 0) {
-      s.setMapperSlices(snap.mapperSlices);
-    }
+    const effectiveRunId = snap.runId ?? runId ?? "unknown";
+    applyStatusSnapshotToStore(swarmSingletonStore, effectiveRunId, snap);
   } catch {
     // best-effort
   } finally {
-    isHydrating = false;
-    while (pendingEvents.length > 0) {
-      const next = pendingEvents.shift();
-      if (next) applyEvent(next);
-    }
+    restHydrateDone = true;
+    tryFinishHydrationSingleton();
   }
 }
 

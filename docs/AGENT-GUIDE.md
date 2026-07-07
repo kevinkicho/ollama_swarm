@@ -97,18 +97,21 @@ npm run dev            # starts both (from repo root)
 
 ### Agent tools & internet access
 
-**Short answer:** Workers and most agents have **no internet access**.
+**Short answer:** By default, workers and most agents have **no internet access**.
+Enable `webTools: true` or `plannerTools: true` for opt-in `web_search` + `web_fetch`.
 
-The only tools they can call (via in-process `ToolDispatcher`) are:
+Tools (via in-process `ToolDispatcher`, resolved in `shared/src/toolProfiles.ts`):
 
-| Profile         | Tools                                      | Typical users                  | Internet? |
-|-----------------|--------------------------------------------|--------------------------------|-----------|
-| `swarm`         | none (must emit clean JSON)                | Blackboard workers             | No        |
-| `swarm-read`    | `read`, `grep`, `glob`, `list`             | Planners, auditors, discussion roles | No (local FS only) |
-| `swarm-builder` | above + restricted `bash`                  | Build / test roles             | No (allowlisted build cmds only, no curl) |
-| `swarm-write`   | read family + `propose_hunks`              | Some write-mode flows          | No        |
+| Profile                  | Tools                                      | Typical users                  | Internet? |
+|--------------------------|--------------------------------------------|--------------------------------|-----------|
+| `swarm`                  | none (must emit clean JSON)                | Blackboard workers             | No        |
+| `swarm-read`             | `read`, `grep`, `glob`, `list`             | Planners, auditors, discussion roles | No (local FS only) |
+| `swarm-builder`          | above + restricted `bash`                  | Build / test roles             | No (allowlisted build cmds only, no curl) |
+| `swarm-planner`          | read family + `web_search`, `web_fetch`    | Planner when web tools on      | Yes (opt-in) |
+| `swarm-research`         | read family + `web_search`, `web_fetch`    | Workers/auditors when web tools on | Yes (opt-in) |
+| `swarm-builder-research` | builder + `web_search`, `web_fetch`        | Build roles when web tools on  | Yes (opt-in) |
 
-- No `web_search`, `browse`, `fetch`, or external APIs.
+- Web tools require explicit RunConfig flags; not enabled by default.
 - Bash is heavily gated (see `buildCommandAllowlist.ts`).
 - MCP (GitHub tools in `mcps/grok_com_github/`, Playwright) is not generally available to swarm agents.
 - Special case: when `MCP_PLAYWRIGHT_ENABLED=true`, the auditor can get browser snapshots for UI criteria.
@@ -116,10 +119,12 @@ The only tools they can call (via in-process `ToolDispatcher`) are:
 Directives that require "live web research" (scientific literature, data endpoints, superconductor studies, etc.) should set `webTools: true` + `plannerTools: true`. Use pure council/map-reduce/moa or the pipeline preset for research. See README "Using for Scientific Research & Internet Work" and STATUS preset matrix for current patterns and configs. Local-only workers remain sandboxed.
 
 Relevant code:
+- `shared/src/toolProfiles.ts` (profile resolution)
 - `server/src/tools/ToolDispatcher.ts`
-- `server/src/swarm/promptWithRetry.ts` (how `agentName` becomes a profile + dispatcher)
-- `server/src/swarm/roles.ts`
-- `RunConfig.plannerTools`
+- `server/src/swarm/blackboard/researchPrePass.ts`
+- `server/src/swarm/toolCallTranscript.ts`
+- `server/src/swarm/promptWithRetry.ts`
+- `RunConfig.webTools` / `RunConfig.plannerTools`
 
 ### Ollama proxy (port 11533)
 

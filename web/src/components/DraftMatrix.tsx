@@ -1,26 +1,225 @@
 import { useMemo, useState } from "react";
 import { useSwarm } from "../state/store";
 import type { TranscriptEntry } from "../types";
+import {
+  parseCouncilIssues,
+  parseExecutionLine,
+  severityCounts,
+  type CouncilIssue,
+  type ExecutionEvent,
+} from "./drafts/councilDraftParse";
+
+interface CycleData {
+  cycle: number;
+  isDrainOnly: boolean;
+  rounds: Map<number, Map<number, TranscriptEntry>>;
+  execution: ExecutionEvent[];
+  conformance: string | null;
+  todosDone: number;
+  todosFailed: number;
+  todosSkipped: number;
+  maxAgentIndex: number;
+}
+
+function severityClass(severity?: string): string {
+  switch (severity) {
+    case "high":
+      return "bg-rose-950/50 text-rose-300 border-rose-800/60";
+    case "medium":
+      return "bg-amber-950/50 text-amber-300 border-amber-800/60";
+    case "low":
+      return "bg-ink-800/80 text-ink-400 border-ink-700";
+    default:
+      return "bg-ink-800/60 text-ink-400 border-ink-700";
+  }
+}
+
+function executionStatusClass(status: ExecutionEvent["status"]): string {
+  switch (status) {
+    case "done":
+      return "text-emerald-400";
+    case "skipped":
+      return "text-amber-400";
+    case "failed":
+      return "text-rose-400";
+    case "working":
+      return "text-sky-400";
+    case "summary":
+      return "text-ink-300 font-medium";
+    default:
+      return "text-ink-400";
+  }
+}
+
+function executionIcon(status: ExecutionEvent["status"]): string {
+  switch (status) {
+    case "done":
+      return "✓";
+    case "skipped":
+      return "⏭";
+    case "failed":
+      return "✗";
+    case "working":
+      return "◎";
+    case "summary":
+      return "∑";
+    default:
+      return "·";
+  }
+}
+
+function CouncilIssueList({
+  issues,
+  expanded,
+  onToggle,
+}: {
+  issues: CouncilIssue[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const previewCount = 2;
+  const shown = expanded ? issues : issues.slice(0, previewCount);
+  const counts = severityCounts(issues);
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap gap-1">
+        {Object.entries(counts).map(([sev, n]) => (
+          <span
+            key={sev}
+            className={`text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${severityClass(sev)}`}
+          >
+            {sev} {n}
+          </span>
+        ))}
+      </div>
+      <ul className="space-y-1.5">
+        {shown.map((item, i) => (
+          <li
+            key={i}
+            className="rounded border border-ink-700/80 bg-ink-950/40 p-1.5 space-y-0.5"
+          >
+            {item.file ? (
+              <div className="font-mono text-[10px] text-sky-300/90 truncate" title={item.file}>
+                {item.file}
+              </div>
+            ) : null}
+            <p className="text-[11px] text-ink-200 leading-snug line-clamp-3">{item.issue}</p>
+            {item.suggestion && expanded ? (
+              <p className="text-[10px] text-ink-500 leading-snug border-t border-ink-800/80 pt-1 mt-1">
+                {item.suggestion}
+              </p>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      {issues.length > previewCount ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle();
+          }}
+          className="text-[10px] text-ink-400 hover:text-ink-200 underline"
+        >
+          {expanded ? "Show fewer" : `+${issues.length - previewCount} more issue${issues.length - previewCount === 1 ? "" : "s"}`}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function DraftCell({
+  entry,
+  agentIndex,
+  expanded,
+  onToggleCell,
+  issuesExpanded,
+  onToggleIssues,
+}: {
+  entry: TranscriptEntry | undefined;
+  agentIndex: number;
+  expanded: boolean;
+  onToggleCell: () => void;
+  issuesExpanded: boolean;
+  onToggleIssues: () => void;
+}) {
+  const text = entry?.text ?? "";
+  const issues = useMemo(() => (text ? parseCouncilIssues(text) : null), [text]);
+  const phase = entry?.summary?.kind === "council_draft" ? entry.summary.phase : null;
+
+  return (
+    <div
+      className={`flex flex-col min-h-[7rem] rounded-md border p-2 transition ${
+        entry
+          ? "border-ink-700 bg-ink-800/50 hover:border-ink-600"
+          : "border-ink-800/80 bg-ink-900/30"
+      }`}
+    >
+      <button
+        type="button"
+        onClick={onToggleCell}
+        className="text-left w-full shrink-0"
+      >
+        <div className="flex items-center justify-between gap-1 mb-1">
+          <span className="text-[11px] font-semibold text-ink-200">Agent {agentIndex}</span>
+          {phase ? (
+            <span
+              className={`text-[9px] uppercase tracking-wider px-1 rounded ${
+                phase === "draft" ? "text-sky-300 bg-sky-950/40" : "text-emerald-300 bg-emerald-950/40"
+              }`}
+            >
+              {phase}
+            </span>
+          ) : null}
+        </div>
+        {entry ? (
+          <div className="text-[9px] text-ink-500">
+            {new Date(entry.ts).toLocaleTimeString()}
+            {issues ? ` · ${issues.length} issue${issues.length === 1 ? "" : "s"}` : ""}
+          </div>
+        ) : (
+          <div className="text-[10px] italic text-ink-600">No draft</div>
+        )}
+      </button>
+
+      {entry && issues ? (
+        <div className="mt-1.5 flex-1 overflow-hidden">
+          <CouncilIssueList
+            issues={issues}
+            expanded={issuesExpanded}
+            onToggle={onToggleIssues}
+          />
+        </div>
+      ) : entry ? (
+        <button
+          type="button"
+          onClick={onToggleCell}
+          className="mt-1.5 text-left flex-1"
+        >
+          <p className={`text-[11px] text-ink-300 leading-snug whitespace-pre-wrap ${expanded ? "" : "line-clamp-6"}`}>
+            {text}
+          </p>
+          {text.length > 280 && !expanded ? (
+            <span className="text-[10px] text-ink-500 underline">Show full text</span>
+          ) : null}
+        </button>
+      ) : null}
+    </div>
+  );
+}
 
 export function DraftMatrix() {
   const transcript = useSwarm((s) => s.transcript);
   const cfg = useSwarm((s) => s.runConfig);
-  const agentCount = cfg?.agentCount ?? 0;
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const configuredAgents = cfg?.agentCount ?? 0;
+  const [expandedCell, setExpandedCell] = useState<string | null>(null);
+  const [expandedIssues, setExpandedIssues] = useState<Set<string>>(new Set());
+  const [collapsedCycles, setCollapsedCycles] = useState<Set<number>>(new Set());
 
-  // Parse transcript into cycles: each cycle starts with a "═══ Council cycle N ═══" or
-  // "═══ Council cycle N — completing unfinished work ═══" system message.
   const cycles = useMemo(() => {
-    const out: Array<{
-      cycle: number;
-      rounds: Map<number, Map<number, TranscriptEntry>>;
-      execution: TranscriptEntry[];
-      conformance: string | null;
-      todosDone: number;
-      todosFailed: number;
-      todosSkipped: number;
-    }> = [];
-    let current: (typeof out)[number] | null = null;
+    const out: CycleData[] = [];
+    let current: CycleData | null = null;
 
     for (const e of transcript) {
       const text = e.text ?? "";
@@ -29,32 +228,43 @@ export function DraftMatrix() {
         if (current) out.push(current);
         current = {
           cycle: Number.parseInt(cycleMatch[1], 10),
+          isDrainOnly: /draining/i.test(text),
           rounds: new Map(),
           execution: [],
           conformance: null,
           todosDone: 0,
           todosFailed: 0,
           todosSkipped: 0,
+          maxAgentIndex: 0,
         };
       }
       if (!current) continue;
 
-      // Draft entries
       if (e.role === "agent" && e.summary?.kind === "council_draft") {
         const r = e.summary.round;
+        const idx = e.agentIndex ?? 0;
+        if (idx > current.maxAgentIndex) current.maxAgentIndex = idx;
         if (!current.rounds.has(r)) current.rounds.set(r, new Map());
-        current.rounds.get(r)!.set(e.agentIndex ?? 0, e);
+        current.rounds.get(r)!.set(idx, e);
       }
 
-      // Execution results
-      if (e.role === "system") {
-        if (text.includes("✓ applied")) current.todosDone++;
-        else if (text.includes("✗ apply failed")) current.todosFailed++;
-        else if (text.includes("skipped:")) current.todosSkipped++;
-        if (text.startsWith("[conformance]")) current.conformance = text;
-        if (text.startsWith("[execution]") && (text.includes("✓") || text.includes("skipped") || text.includes("✗"))) {
-          current.execution.push(e);
-        }
+      if (e.role === "system" && text.startsWith("[execution]")) {
+        const ev = parseExecutionLine(text);
+        current.execution.push(ev);
+        if (ev.status === "summary") {
+          const m = ev.detail.match(/(\d+) done · (\d+) failed · (\d+) skipped/);
+          if (m) {
+            current.todosDone = Number.parseInt(m[1], 10);
+            current.todosFailed = Number.parseInt(m[2], 10);
+            current.todosSkipped = Number.parseInt(m[3], 10);
+          }
+        } else if (ev.status === "done") current.todosDone++;
+        else if (ev.status === "failed") current.todosFailed++;
+        else if (ev.status === "skipped") current.todosSkipped++;
+      }
+
+      if (e.role === "system" && text.startsWith("[conformance]")) {
+        current.conformance = text;
       }
     }
     if (current) out.push(current);
@@ -70,106 +280,157 @@ export function DraftMatrix() {
   }
 
   return (
-    <div className="h-full overflow-auto p-4 space-y-6">
+    <div className="h-full overflow-auto p-4 space-y-4">
       {cycles.map((cycle) => {
         const rounds = Array.from(cycle.rounds.keys()).sort((a, b) => a - b);
+        const agentSlots = Math.max(configuredAgents, cycle.maxAgentIndex, 1);
+        const collapsed = collapsedCycles.has(cycle.cycle);
+        const hasDiscussion = rounds.length > 0;
         const totalTodos = cycle.todosDone + cycle.todosFailed + cycle.todosSkipped;
+
         return (
-          <div key={cycle.cycle} className="border border-ink-700 rounded-md p-3">
-            {/* Cycle header */}
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-sm font-semibold text-ink-200">
-                Cycle {cycle.cycle}
+          <section
+            key={cycle.cycle}
+            className="rounded-lg border border-ink-700/90 bg-ink-900/30 overflow-hidden"
+          >
+            <button
+              type="button"
+              onClick={() =>
+                setCollapsedCycles((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(cycle.cycle)) next.delete(cycle.cycle);
+                  else next.add(cycle.cycle);
+                  return next;
+                })
+              }
+              className="w-full flex items-center justify-between gap-3 px-3 py-2.5 bg-ink-800/40 hover:bg-ink-800/60 transition text-left"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-sm font-semibold text-ink-100 shrink-0">
+                  Cycle {cycle.cycle}
+                </span>
+                {hasDiscussion ? (
+                  <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-sky-950/50 text-sky-300 border border-sky-900/50">
+                    {rounds.length} discussion round{rounds.length === 1 ? "" : "s"}
+                  </span>
+                ) : (
+                  <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-950/40 text-amber-300/90 border border-amber-900/40">
+                    Execution only
+                  </span>
+                )}
+                {cycle.isDrainOnly ? (
+                  <span className="text-[10px] text-ink-500 truncate hidden sm:inline">
+                    Draining todo queue
+                  </span>
+                ) : null}
               </div>
-              <div className="flex gap-3 text-[10px]">
+              <div className="flex items-center gap-3 shrink-0 text-[10px]">
                 {totalTodos > 0 ? (
                   <>
                     <span className="text-emerald-400">{cycle.todosDone} done</span>
-                    <span className="text-amber-400">{cycle.todosSkipped} skipped</span>
+                    <span className="text-amber-400">{cycle.todosSkipped} skip</span>
                     {cycle.todosFailed > 0 ? (
-                      <span className="text-rose-400">{cycle.todosFailed} failed</span>
+                      <span className="text-rose-400">{cycle.todosFailed} fail</span>
                     ) : null}
                   </>
                 ) : null}
                 {cycle.conformance ? (
-                  <span className="text-ink-400">{cycle.conformance.match(/Score: (\d+\/100)/)?.[1] ?? ""}</span>
+                  <span className="text-ink-400">
+                    {cycle.conformance.match(/Score: (\d+\/100)/)?.[1] ?? ""}
+                  </span>
+                ) : null}
+                <span className="text-ink-500">{collapsed ? "▸" : "▾"}</span>
+              </div>
+            </button>
+
+            {!collapsed ? (
+              <div className="p-3 space-y-4">
+                {hasDiscussion ? (
+                  <div className="space-y-3">
+                    {rounds.map((r) => {
+                      const row = cycle.rounds.get(r)!;
+                      const phaseLabel = r === 1 ? "Independent draft" : "Reveal & revise";
+                      return (
+                        <div key={r}>
+                          <div className="flex items-baseline gap-2 mb-2">
+                            <h4 className="text-xs font-semibold text-ink-200">
+                              Round {r}
+                            </h4>
+                            <span className="text-[10px] uppercase tracking-wider text-ink-500">
+                              {phaseLabel}
+                            </span>
+                          </div>
+                          <div
+                            className="grid gap-2"
+                            style={{
+                              gridTemplateColumns: `repeat(${Math.min(agentSlots, 4)}, minmax(0, 1fr))`,
+                            }}
+                          >
+                            {Array.from({ length: agentSlots }, (_, i) => {
+                              const idx = i + 1;
+                              const entry = row.get(idx);
+                              const cellKey = `c${cycle.cycle}-r${r}-a${idx}`;
+                              return (
+                                <DraftCell
+                                  key={cellKey}
+                                  entry={entry}
+                                  agentIndex={idx}
+                                  expanded={expandedCell === cellKey}
+                                  onToggleCell={() =>
+                                    setExpandedCell((k) => (k === cellKey ? null : cellKey))
+                                  }
+                                  issuesExpanded={expandedIssues.has(cellKey)}
+                                  onToggleIssues={() =>
+                                    setExpandedIssues((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(cellKey)) next.delete(cellKey);
+                                      else next.add(cellKey);
+                                      return next;
+                                    })
+                                  }
+                                />
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-xs text-ink-400 leading-relaxed rounded border border-ink-800 bg-ink-950/30 px-3 py-2">
+                    This cycle skipped discussion because pending todos were queued from the prior
+                    audit. Workers executed (or skipped) those todos below.
+                  </p>
+                )}
+
+                {cycle.execution.length > 0 ? (
+                  <div className="border-t border-ink-800 pt-3">
+                    <h4 className="text-[10px] uppercase tracking-wider text-ink-500 mb-2">
+                      Execution
+                    </h4>
+                    <ul className="space-y-1 max-h-48 overflow-y-auto pr-1">
+                      {cycle.execution.map((ev, i) => (
+                        <li
+                          key={`${cycle.cycle}-ex-${i}`}
+                          className={`text-xs leading-snug flex gap-1.5 ${executionStatusClass(ev.status)}`}
+                        >
+                          <span className="font-mono shrink-0 w-3 text-center">
+                            {executionIcon(ev.status)}
+                          </span>
+                          <span className="min-w-0">
+                            {ev.agentId ? (
+                              <span className="font-mono text-ink-500 mr-1">{ev.agentId}</span>
+                            ) : null}
+                            <span className="break-words">{ev.detail}</span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 ) : null}
               </div>
-            </div>
-
-            {/* Draft rounds grid */}
-            {rounds.length > 0 ? (
-              <div className="space-y-2">
-                {rounds.map((r) => {
-                  const row = cycle.rounds.get(r)!;
-                  const phaseLabel = r === 1 ? "DRAFT" : "REVEAL";
-                  return (
-                    <div key={r}>
-                      <div className="text-[10px] uppercase tracking-wider text-ink-500 mb-1">
-                        Round {r} · {phaseLabel}
-                      </div>
-                      <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${Math.max(agentCount, 1)}, minmax(0, 1fr))` }}>
-                        {Array.from({ length: agentCount }, (_, i) => {
-                          const idx = i + 1;
-                          const entry = row.get(idx);
-                          const cellKey = `c${cycle.cycle}-r${r}-a${idx}`;
-                          const isExpanded = expanded === cellKey;
-                          const text = entry?.text ?? "";
-                          const preview = text.length > 200 ? text.slice(0, 200) + "…" : text;
-                          return (
-                            <button
-                              key={cellKey}
-                              onClick={() => setExpanded(isExpanded ? null : cellKey)}
-                              className={`text-left text-xs border rounded p-1.5 transition ${
-                                entry
-                                  ? "border-ink-700 bg-ink-800/60 hover:bg-ink-800 hover:border-ink-600"
-                                  : "border-ink-800 bg-ink-900/40 text-ink-600"
-                              }`}
-                            >
-                              <div className="text-[10px] uppercase tracking-wide text-ink-500 mb-0.5">
-                                Agent {idx}
-                                {entry ? ` · ${new Date(entry.ts).toLocaleTimeString()}` : ""}
-                              </div>
-                              {entry ? (
-                                <div className="whitespace-pre-wrap text-ink-300 leading-snug">
-                                  {isExpanded ? text : preview}
-                                </div>
-                              ) : (
-                                <div className="italic">— no entry —</div>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="text-xs text-ink-500 italic">No discussion rounds — execution-only cycle</div>
-            )}
-
-            {/* Execution results */}
-            {cycle.execution.length > 0 ? (
-              <div className="mt-2 space-y-0.5">
-                <div className="text-[10px] uppercase tracking-wider text-ink-500">Execution</div>
-                {cycle.execution.map((e) => {
-                  const text = e.text ?? "";
-                  const isDone = text.includes("✓");
-                  const isSkipped = text.includes("skipped");
-                  const isFail = text.includes("✗");
-                  const icon = isDone ? "✓" : isSkipped ? "⏭" : isFail ? "✗" : "·";
-                  const color = isDone ? "text-emerald-400" : isSkipped ? "text-amber-400" : isFail ? "text-rose-400" : "text-ink-400";
-                  return (
-                    <div key={e.id} className={`text-xs ${color} truncate`}>
-                      <span className="font-mono mr-1">{icon}</span>
-                      {text.replace(/^\[execution\] /, "").slice(0, 120)}
-                    </div>
-                  );
-                })}
-              </div>
             ) : null}
-          </div>
+          </section>
         );
       })}
     </div>

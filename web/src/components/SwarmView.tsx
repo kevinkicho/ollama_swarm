@@ -1,5 +1,5 @@
-import { memo, useEffect, useState, useMemo, Fragment } from "react";
-import { useSwarm } from "../state/store";
+import { memo, useEffect, useState, useMemo, Fragment, useContext } from "react";
+import { useSwarm, SwarmStoreContext, swarmSingletonStore } from "../state/store";
 // Phase 10: previous special composite/phase guards removed.
 import { AgentPanel } from "./AgentPanel";
 import { useNavigate } from "react-router-dom";
@@ -21,8 +21,8 @@ import { PlanningTab } from "./PlanningTab";
 import { OutcomeChip } from "./OutcomeChip";
 import { fmtMs, roleForRow } from "./RunHistory";
 import { buildResumeStartPayload } from "../lib/resumeRun";
-import { inferAgentsFromSnapshot } from "../lib/inferAgents";
 import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
+import { applyStatusSnapshotToStore } from "../state/swarmStoreHydrate";
 
 
 type Tab =
@@ -73,9 +73,7 @@ export const SwarmView = memo(function SwarmView() {
   // inside <SwarmStoreProvider> for /runs/:id (prevents writing to singleton while
   // provider hydrates the review store -- major source of missing data / races).
   const setPhaseScoped = useSwarm((s) => s.setPhase);
-  const upsertAgentScoped = useSwarm((s) => s.upsertAgent);
-  const setSummaryScoped = useSwarm((s) => s.setSummary);
-  const hydrateTranscriptScoped = useSwarm((s) => s.hydrateTranscriptEntries);
+  const scopedStore = useContext(SwarmStoreContext) ?? swarmSingletonStore;
   // T-Item-MultiTenant Phase 8 (2026-05-04): when the active runId is
   // known, target the per-run REST routes so stop/say affect THIS run
   // even when other runs are concurrently active. Falls back to the
@@ -160,28 +158,10 @@ export const SwarmView = memo(function SwarmView() {
   const applyStatusSnapshot = (snap: any) => {
     if (!snap) return;
     if (typeof window !== "undefined" && window.location.pathname === "/") return;
-
-    setPhaseScoped(snap.phase || "stopped", snap.round || 0);
-    const hasCompletedSummary = !!(snap.summary && (snap.summary.stopReason || snap.summary.endedAt != null));
-    if (!hasCompletedSummary) {
-      const agentsForSidebar = inferAgentsFromSnapshot(snap);
-      agentsForSidebar.forEach((a) => {
-        upsertAgentScoped({
-          id: a.id,
-          index: a.index,
-          status: a.status || "stopped",
-          model: a.model,
-        } as any);
-      });
-    }
-    if (snap.summary) setSummaryScoped(snap.summary);
-    if (snap.transcript && Array.isArray(snap.transcript)) {
-      const curLen = useSwarm.getState().transcript.length;
-      const serverLen = snap.transcript.length;
-      if (!hasCompletedSummary || curLen < serverLen) {
-        hydrateTranscriptScoped(snap.transcript);
-      }
-    }
+    const rid = snap.runId ?? activeRunId ?? "unknown";
+    applyStatusSnapshotToStore(scopedStore, rid, snap, {
+      preferLongerTranscript: true,
+    });
   };
 
   const statusUrl = activeRunId
@@ -216,8 +196,8 @@ export const SwarmView = memo(function SwarmView() {
     setBusy(true);
     try {
       const res = await fetch(stopUrl, { method: "POST" });
-      // Always force terminal in UI for immediate feedback (stop may be async on backend, rehydrate will sync summary etc.)
-      setPhaseScoped("stopped", (useSwarm.getState().round || 0) as any);
+      // Show closing phase immediately; rehydrate will sync summary + terminal state.
+      setPhaseScoped("stopping", (useSwarm.getState().round || 0) as any);
       if (!res.ok) {
         // already stopped or not active in backend
       }

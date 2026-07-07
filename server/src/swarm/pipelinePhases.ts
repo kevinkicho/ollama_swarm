@@ -29,6 +29,17 @@ export const DEFAULT_PIPELINE: PipelineConfig = {
   pipeMaxEntries: 20,
 };
 
+/** Council exploration → map-reduce synthesis → blackboard implementation. Pair with webTools. */
+export const RESEARCH_PIPELINE: PipelineConfig = {
+  phases: [
+    { preset: "council", rounds: 2, agentCount: 5 },
+    { preset: "map-reduce", rounds: 2 },
+    { preset: "blackboard", rounds: 1 },
+  ],
+  pipeMode: "both",
+  pipeMaxEntries: 30,
+};
+
 export function buildPipedDirective(
   baseDirective: string | undefined,
   previousTranscript: readonly { text: string; role: string; agentIndex?: number }[],

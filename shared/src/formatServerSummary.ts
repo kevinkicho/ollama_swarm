@@ -86,6 +86,17 @@ export function formatServerSummary(s: TranscriptEntrySummary): string {
   if (s.kind === "mapreduce_synthesis") {
     return `Map-reduce synthesis (cycle ${s.cycle})`;
   }
+  if (s.kind === "council_cycle") {
+    if (s.executionOnly) {
+      const n = s.pendingTodos ?? 0;
+      return `Council cycle ${s.cycle} — execution only (${n} pending todo${n === 1 ? "" : "s"})`;
+    }
+    return `Council cycle ${s.cycle}`;
+  }
+  if (s.kind === "council_stage") {
+    const base = `Council cycle ${s.cycle} · ${s.stage}`;
+    return s.detail ? `${base} — ${s.detail}` : base;
+  }
   if (s.kind === "role_diff_synthesis") {
     return `Role-diff synthesis (${s.rounds} round${s.rounds === 1 ? "" : "s"}, ${s.roles} roles)`;
   }
@@ -133,6 +144,9 @@ export function formatServerSummary(s: TranscriptEntrySummary): string {
   }
   if (s.kind === 'brain_suggestion') {
     return `Brain suggestion: ${s.title}`;
+  }
+  if (s.kind === "web_tool") {
+    return `${s.tool} ${s.ok ? "ok" : "error"}: ${s.preview}`;
   }
   return `Unknown summary kind`;
 }

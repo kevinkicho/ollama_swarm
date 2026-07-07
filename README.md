@@ -1,6 +1,6 @@
 # ollama_swarm
 
-> **For agents picking up this codebase**: read [`docs/STATUS.md`](docs/STATUS.md) first — it's the single "what's true right now" pointer + map (updated 2026-07-05). This README is the user-facing intro and the public face of the repo on GitHub.
+> **For agents picking up this codebase**: read [`docs/STATUS.md`](docs/STATUS.md) first — it's the single "what's true right now" pointer + map (updated 2026-07-07). This README is the user-facing intro and the public face of the repo on GitHub.
 
 > **Before pushing code**: read [`docs/CI-RELIABILITY.md`](docs/CI-RELIABILITY.md). It documents the exact process and tooling (`npm run verify-ci` + git hooks) that prevents the classic "worked locally, red on CI" cycle.
 
@@ -175,17 +175,15 @@ Web results are now returned in structured format (Title, URL, Snippet, Relevanc
 
 ### Agent tools (what workers / planners can actually do)
 
-Agents do **not** have general internet access. The only tools exposed via `ToolDispatcher` are local to the cloned repo:
+By default, agents have **no internet access**. Tools are local to the cloned repo via `ToolDispatcher`:
 
-- **Default ("swarm")**: no tools — workers return pure structured JSON.
-- **"swarm-read"** (planners, many roles): `read`, `grep`, `glob`, `list` (files inside the clone only). Planners are often limited to a small number of reads per turn.
-- **"swarm-builder"** (selected build roles): the above + a **very restricted** `bash` (only allowlisted build/test commands like `npm test`, `tsc --noEmit`; no `curl`, no arbitrary net, cwd-bound).
+- **"swarm"** (default workers): no tools — pure structured JSON.
+- **"swarm-read"** (planners, many roles): `read`, `grep`, `glob`, `list`.
+- **"swarm-builder"** (build roles): the above + restricted `bash` (allowlisted build/test commands only).
 
-There are **no** `web_search`, `browse_page`, HTTP fetch, or external tooling tools for agents. GitHub MCP definitions exist under `mcps/` and Playwright is opt-in for the auditor (`MCP_PLAYWRIGHT_ENABLED`), but they are not part of the general agent loop.
+**Opt-in research mode** (`webTools: true` or `plannerTools: true`): profiles upgrade to `swarm-planner`, `swarm-research`, or `swarm-builder-research`, adding `web_search` + `web_fetch`. Blackboard runs a research pre-pass before contract derivation; tool calls appear in the transcript. See `shared/src/toolProfiles.ts` and `docs/known-limitations.md`.
 
-When `webTools: true` (and plannerTools), the planner gets `web_search` + `web_fetch`. Otherwise, the model answers from training data only.
-
-See `server/src/tools/ToolDispatcher.ts`, `promptWithRetry.ts`, and `docs/known-limitations.md`.
+GitHub MCP (`mcps/`) and Playwright (`MCP_PLAYWRIGHT_ENABLED`) are not part of the general agent loop.
 
 ## Architecture
 

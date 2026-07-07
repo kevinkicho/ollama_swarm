@@ -140,7 +140,7 @@ export interface SwarmStore {
    */
   transcriptPlainListLatched: boolean;
 
-  setPhase: (phase: SwarmPhase, round: number) => void;
+  setPhase: (phase: SwarmPhase, round: number, opts?: { clearTranscriptOnIdle?: boolean }) => void;
   latchTranscriptPlainList: () => void;
   upsertAgent: (a: AgentState) => void;
   appendEntry: (e: TranscriptEntry) => void;
@@ -267,7 +267,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   latchTranscriptPlainList: () =>
     set((s) => (s.transcriptPlainListLatched ? s : { transcriptPlainListLatched: true })),
 
-  setPhase: (phase, round) =>
+  setPhase: (phase, round, opts) =>
     set((s) => {
       const isTerminal = phase === "completed" || phase === "stopped" || phase === "failed";
       const latchLive = !isTerminal && phase !== "idle";
@@ -282,13 +282,13 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         };
       }
       if (phase === "idle") {
-        // Step 3: clear transcript on idle for clean state when no run underway.
-        // Prevents virtual list from being active with stale data (source of
-        // autonomous scroll shifts/movement).
+        // Only wipe transcript on explicit idle reset (reset()), not on status/WS
+        // hydration — refreshing mid-run used to call setPhase(idle) and erase bubbles.
+        const clearTranscript = opts?.clearTranscriptOnIdle === true;
         return {
           phase,
           round,
-          transcript: [],
+          ...(clearTranscript ? { transcript: [] } : {}),
           streaming: {},
           streamingMeta: {},
           agents: {},
@@ -664,7 +664,8 @@ export function createSwarmStore(): StoreApi<SwarmStore> {
 
 /** Singleton store — backs the legacy "/" route + any caller without
  *  a Provider. Constructed at module load. */
-const singletonStore: StoreApi<SwarmStore> = createSwarmStore();
+export const swarmSingletonStore: StoreApi<SwarmStore> = createSwarmStore();
+const singletonStore = swarmSingletonStore;
 
 /** Context the per-run Provider populates with a scoped store. */
 export const SwarmStoreContext = createContext<StoreApi<SwarmStore> | null>(

@@ -20,9 +20,23 @@ export interface WorkerRunnerContext {
   appendSystem: (msg: string) => void;
   recordFailure?: (todoId: string, description: string, error: string) => void;
   stopping: () => boolean;
+  /** Soft drain: finish the in-flight todo, then exit without dequeuing more. */
+  draining?: () => boolean;
+  /** Aborted on hard stop so hung prompts fail fast. */
+  promptSignal?: AbortSignal;
 }
 
 const WORKER_COOLDOWN_MS = 5_000;
+
+function setWorkerThinking(state: CouncilAdapterState, agent: Agent): void {
+  (state.manager as { markStatus: (id: string, status: string, extra?: Record<string, unknown>) => void })
+    .markStatus(agent.id, "thinking", { thinkingSince: Date.now() });
+}
+
+function setWorkerReady(state: CouncilAdapterState, agent: Agent): void {
+  (state.manager as { markStatus: (id: string, status: string, extra?: Record<string, unknown>) => void })
+    .markStatus(agent.id, "ready", { lastMessageAt: Date.now() });
+}
 
 export async function runCouncilWorkers(
   state: CouncilAdapterState,
@@ -56,12 +70,19 @@ async function runCouncilWorker(
   let completed = 0, failed = 0, skipped = 0;
 
   while (!ctx.stopping()) {
+    if (ctx.draining?.()) break;
     const todo = state.todoQueue.dequeue(agent.id);
     if (!todo) break;
 
+    setWorkerThinking(state, agent);
     ctx.appendSystem(`[execution] ${agent.id} working on: ${todo.description.slice(0, 120)}...`);
 
-    const result = await executeTodoWithRetryChain(agent, todo, state, fsAdapter, gitAdapter, ctx);
+    let result: "completed" | "skipped" | string;
+    try {
+      result = await executeTodoWithRetryChain(agent, todo, state, fsAdapter, gitAdapter, ctx);
+    } finally {
+      setWorkerReady(state, agent);
+    }
     if (result === "completed") {
       state.todoQueue.complete(todo.id);
       completed++;
@@ -87,6 +108,7 @@ async function executeTodoWithRetryChain(
   gitAdapter: ReturnType<typeof realGitAdapter>,
   ctx: WorkerRunnerContext,
 ): Promise<"completed" | "skipped" | string> {
+  if (ctx.stopping()) return "skipped";
   const expectedFiles = [...todo.expectedFiles];
 
   // Stage 1: Primary prompt
@@ -131,6 +153,7 @@ async function tryWorkerPrompt(
   gitAdapter: ReturnType<typeof realGitAdapter>,
   ctx: WorkerRunnerContext,
 ): Promise<"completed" | "skipped" | "retry"> {
+  if (ctx.stopping()) return "skipped";
   // Re-read file contents fresh each attempt (avoids stale content on retry)
   const fileContents = await readExpectedFiles(state.clonePath, expectedFiles);
 
@@ -150,6 +173,9 @@ async function tryWorkerPrompt(
 
   try {
     const controller = new AbortController();
+    const onPromptAbort = () => controller.abort(new Error("user stop"));
+    ctx.promptSignal?.addEventListener("abort", onPromptAbort, { once: true });
+    try {
     const raw = await promptWithFailoverAuto(agent, basePrompt, {
       manager: state.manager as any,
       agentName: "swarm-builder",
@@ -221,8 +247,12 @@ async function tryWorkerPrompt(
     }
 
     return "retry";
+    } finally {
+      ctx.promptSignal?.removeEventListener("abort", onPromptAbort);
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (ctx.stopping()) return "skipped";
     ctx.appendSystem(`[execution] ${agent.id} error: ${msg.slice(0, 300)}`);
     return "retry";
   }

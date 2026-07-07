@@ -3,6 +3,18 @@
 All notable changes to ollama_swarm. Reverse chronological order.
 The git log is the authoritative record; this summarizes user-facing changes.
 
+## 2026-07-07 — Research tools, council close-out, transcript UX
+
+**Web tools expansion.** Shared `toolProfiles.ts` now resolves `swarm-planner`, `swarm-research`, and `swarm-builder-research` profiles when `webTools` or `plannerTools` is enabled. Discussion presets upgrade legacy `swarm-read` profiles via `effectiveToolProfileId`. Blackboard runs a **research pre-pass** (`researchPrePass.ts`) before JSON-locked contract turns. Tool calls are logged to the transcript via `toolCallTranscript.ts`. `RESEARCH_PIPELINE` phase added to pipeline preset.
+
+**Council stop / close-out.** `CouncilRunner.stop()` now enters `stopping` → writes summary → `killAll` → `stopped` (was draining 30s with no summary). `ensureTerminalCloseOut()` backstop on loop `finally`. `runFinallyHooks` kills agents and sets `stopped` even when phase is mid-run. `crashSummaryRecovery.ts` synthesizes `summary.json` from `.run-state.json` when a run is interrupted; `Orchestrator.statusForRun` uses it for historical failed runs. `ActiveRun.stop()` backfills crash summary when none on disk.
+
+**Transcript + execution UX.** Council cycle stage markers (`council_cycle` / `council_stage`) with `CouncilCycleDivider.tsx`. `ExecutionStatusBubble.tsx` + `elapsed.ts` show live elapsed time on in-flight "working on" lines. `councilWorkerRunner` marks agents `thinking` with `thinkingSince` during todos. `SwarmView` Stop sets `stopping` immediately (not `stopped`).
+
+**Drafts tab.** Structured council draft display via `councilDraftParse.ts` + `DraftMatrix.tsx` (replaces raw JSON blobs).
+
+**Tests:** 3,220+ passing. New/updated: `CouncilRunner.test.ts`, `councilWorkerRunner.test.ts`, `CouncilCycleDivider.test.ts`, `crashSummaryRecovery.test.ts`, `runFinallyHooks.test.ts`, `researchPrePass.test.ts`, `toolCallTranscript.test.ts`, `pipelinePhases.test.ts`.
+
 ## 2026-07-05 — Complete removal of hybrid mode
 
 **Hybrid mode fully removed** from the app (per user request due to persistent issues with flickering, agent status signals showing "ready" while working, transcript gaps, sidebar agents, stop buttons, etc.).

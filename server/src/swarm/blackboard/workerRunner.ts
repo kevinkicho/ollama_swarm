@@ -25,11 +25,17 @@ import {
   buildHunkRepairPrompt,
   buildWorkerRepairPrompt,
   buildWorkerUserPrompt,
+  isLiteratureTodo,
   parseWorkerResponse,
   WORKER_SYSTEM_PROMPT,
   type WorkerSeed,
   WorkerResponseSchema,
 } from "./prompts/worker.js";
+import { buildResearchToolsNote } from "./prompts/planner.js";
+import { chatOnce } from "../chatOnce.js";
+import { extractText } from "../extractText.js";
+import { isWebToolsEnabled } from "../toolProfiles.js";
+import { makeWebToolHandler } from "../toolCallTranscript.js";
 import { DISPOSITIONS, type RoundRobinDisposition, getDispositionForTurn } from "../roundRobinPromptHelpers.js";
 import { WORKER_HUNKS_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
 import { checkBuildCommand } from "./buildCommandAllowlist.js";
@@ -57,6 +63,52 @@ function workerToolProfile(ctx: WorkerContext, kind: "hunk" | "build" | "read"):
   if (kind === "build") return resolveToolProfile("worker-build", cfg);
   if (kind === "read") return resolveToolProfile("read", cfg);
   return resolveToolProfile("worker", cfg);
+}
+
+async function runWorkerLiteratureResearch(
+  ctx: WorkerContext,
+  agent: Agent,
+  todo: { description: string; expectedFiles: string[] },
+  clonePath: string,
+): Promise<string | undefined> {
+  const cfg = ctx.getActive();
+  if (!cfg || !isWebToolsEnabled(cfg) || !isLiteratureTodo(todo.description)) {
+    return undefined;
+  }
+  const profile = workerToolProfile(ctx, "read");
+  const prompt = [
+    "You are a research worker gathering sources BEFORE writing file edits.",
+    buildResearchToolsNote(true),
+    "",
+    `TODO: ${todo.description}`,
+    `Target files: ${todo.expectedFiles.join(", ")}`,
+    cfg.userDirective ? `User directive: ${cfg.userDirective}` : "",
+    "",
+    "Use web_search and web_fetch to gather citable findings. Output plain prose with bullet points and URLs.",
+    "Do NOT emit JSON hunks in this phase.",
+  ].filter(Boolean).join("\n");
+
+  try {
+    const res = await chatOnce(agent, {
+      agentName: profile,
+      promptText: prompt,
+      clonePath,
+      webToolsConfig: cfg,
+      runId: cfg.runId,
+      mcpServers: cfg.mcpServers,
+      onTool: makeWebToolHandler(ctx.appendSystem, agent.id),
+    });
+    const text = extractText(res)?.trim();
+    if (text && text.length >= 80) {
+      const capped = text.length > 8000 ? `${text.slice(0, 8000)}…` : text;
+      ctx.appendSystem(`[${agent.id}] Literature research: captured ${capped.length} chars of notes.`);
+      return capped;
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ctx.appendSystem(`[${agent.id}] Literature research failed: ${msg}`);
+  }
+  return undefined;
 }
 
 export interface WorkerContext {
@@ -466,6 +518,12 @@ export async function executeWorkerTodo(
   }
 
   const budget = getModelBudget(agent.model);
+  const activeCfg = ctx.getActive();
+  const workerCwd = activeCfg?.localPath ?? agent.cwd;
+  const webToolsEnabled = isWebToolsEnabled(activeCfg);
+  const researchNotes = webToolsEnabled
+    ? await runWorkerLiteratureResearch(ctx, agent, todo, workerCwd)
+    : undefined;
   const seed: WorkerSeed = {
     todoId: todo.id,
     description: todo.description,
@@ -475,6 +533,9 @@ export async function executeWorkerTodo(
     expectedAnchors: effectiveAnchors,
     roleGuidance: ctx.getWorkerRoles().get(agent.id),
     fullFileMode: budget.fullFileMode,
+    directive: activeCfg?.userDirective,
+    webToolsEnabled,
+    ...(researchNotes ? { researchNotes } : {}),
   };
 
   if (ctx.getActive()?.stigmergyOnBlackboard && pheromoneHeatmap.size > 0) {

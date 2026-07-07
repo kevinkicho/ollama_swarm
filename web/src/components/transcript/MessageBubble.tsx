@@ -37,6 +37,8 @@ import { TodosBubble } from "./TodosBubble";
 
 import { AgentAvatar } from "./AgentAvatar";
 import { AuditReviewCard } from "./AuditReviewCard";
+import { tryRenderCouncilMarkers } from "./CouncilCycleDivider";
+import { ExecutionStatusBubble } from "./ExecutionStatusBubble";
 
 export const MessageBubble = memo(function MessageBubble({ entry }: { entry: TranscriptEntry }) {
   const ts = new Date(entry.ts).toLocaleTimeString();
@@ -87,6 +89,9 @@ export const MessageBubble = memo(function MessageBubble({ entry }: { entry: Tra
 });
 
 function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
+  const councilMarker = tryRenderCouncilMarkers(entry);
+  if (councilMarker) return councilMarker;
+
   // Task #46: detect the structured run-start divider and render it as
   // a horizontal-rule block with the run's metadata.
   if (entry.text.startsWith("▸▸RUN-START▸▸")) {
@@ -104,24 +109,8 @@ function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
 
   // Execution result detection — render compact execution status
   // Server format: [execution] agent-N ✓ applied|skipped|working on ...
-  const executionMatch = entry.text.match(/^\[execution\] agent-(\d+) (✓ applied|skipped|✗|working on)/);
-  if (executionMatch) {
-    const agentIndex = parseInt(executionMatch[1]);
-    const status = executionMatch[2];
-    const isApply = status.includes("applied");
-    const isSkip = status.includes("skipped");
-    const isWork = status.includes("working");
-    const icon = isApply ? "✓" : isSkip ? "⏭" : isWork ? "⏳" : "✗";
-    const color = isApply ? "text-emerald-400" : isSkip ? "text-amber-400" : isWork ? "text-ink-400" : "text-rose-400";
-    const bg = isApply ? "bg-emerald-950/30" : isSkip ? "bg-amber-950/30" : isWork ? "bg-ink-800/30" : "bg-rose-950/30";
-    return (
-      <div className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs ${bg} border border-ink-700/30`}>
-        <AgentAvatar agentIndex={agentIndex} size="sm" />
-        <span className={color}>{icon}</span>
-        <span className="text-ink-300">{entry.text.slice(entry.text.indexOf("]") + 2)}</span>
-        <span className="text-ink-500 ml-auto">{ts}</span>
-      </div>
-    );
+  if (/^\[execution\] agent-\d+ (✓ applied|skipped|✗|working on)/.test(entry.text)) {
+    return <ExecutionStatusBubble entry={entry} ts={ts} />;
   }
 
   // Task #72: dedicated grid renderers for structured system entries.

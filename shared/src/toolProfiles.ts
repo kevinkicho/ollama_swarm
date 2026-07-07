@@ -37,6 +37,44 @@ export function resolveToolProfileId(
   }
 }
 
+/** Discussion-preset roles map to the same profiles as blackboard read/build. */
+export type DiscussionToolRole = "reader" | "builder";
+
+export function resolveDiscussionProfileId(
+  role: DiscussionToolRole,
+  cfg?: WebToolsConfig | null,
+): ToolProfileId {
+  return resolveToolProfileId(role === "reader" ? "read" : "worker-build", cfg);
+}
+
+const KNOWN_PROFILES: ReadonlySet<string> = new Set([
+  "swarm",
+  "swarm-read",
+  "swarm-planner",
+  "swarm-builder",
+  "swarm-builder-research",
+  "swarm-research",
+]);
+
+/**
+ * Upgrade legacy profile names when web tools are enabled.
+ * Lets discussion runners keep passing "swarm-read" while gaining web_search/web_fetch.
+ */
+export function effectiveToolProfileId(
+  agentName: string,
+  cfg?: WebToolsConfig | null,
+): ToolProfileId {
+  const base = (KNOWN_PROFILES.has(agentName) ? agentName : "swarm") as ToolProfileId;
+  if (!isWebToolsEnabled(cfg)) return base;
+  if (base === "swarm-read") return "swarm-research";
+  if (base === "swarm-builder") return "swarm-builder-research";
+  return base;
+}
+
+export function allowsUnboundedToolTurns(profile: ToolProfileId): boolean {
+  return profile === "swarm-planner" || profile === "swarm-research" || profile === "swarm-builder-research";
+}
+
 export const PROFILE_TOOLS: Record<ToolProfileId, readonly string[]> = {
   swarm: [],
   "swarm-read": ["read", "grep", "glob", "list"],

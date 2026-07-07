@@ -39,7 +39,7 @@ const RETRY_DEADLINE_MS = 60_000;
 export async function retryEmptyResponse(
   agent: Agent,
   originalPrompt: string,
-  agentName: "swarm" | "swarm-read",
+  agentName: string,
   diagCtx: DiagCtx,
 ): Promise<string | null> {
   diagCtx.logDiag?.({

@@ -13,6 +13,11 @@ import type { Agent } from "../services/AgentManager.js";
 import { pickProvider } from "../providers/pickProvider.js";
 import { tokenTracker } from "../services/ollamaProxy.js";
 import { ToolDispatcher, defaultToolsForProfile, type ProfileName } from "../tools/ToolDispatcher.js";
+import {
+  allowsUnboundedToolTurns,
+  effectiveToolProfileId,
+  type WebToolsConfig,
+} from "../../../shared/src/toolProfiles.js";
 
 export interface ChatOnceOpts {
   /** opencode agent profile to invoke under (swarm / swarm-read / swarm-builder / swarm-ui).
@@ -44,6 +49,9 @@ export interface ChatOnceOpts {
   format?: "json" | Record<string, unknown>;
   /** runId for correlation and per-run attribution. */
   runId?: string;
+  /** When set, upgrades swarm-read → swarm-research for legacy call sites. */
+  webToolsConfig?: WebToolsConfig;
+  mcpServers?: string;
 }
 
 // Mirrors what `agent.client.session.prompt` returns so callers don't
@@ -73,16 +81,16 @@ export async function chatOnce(
         || opts.agentName === "swarm-builder"
         || opts.agentName === "swarm-builder-research"
         || opts.agentName === "swarm-research"
-        ? (opts.agentName as ProfileName)
+        ? effectiveToolProfileId(opts.agentName, opts.webToolsConfig) as ProfileName
         : opts.agentName === "swarm-ui"
-          ? "swarm-read" // swarm-ui inherits read-side tools
+          ? effectiveToolProfileId("swarm-read", opts.webToolsConfig) as ProfileName
           : null;
     // Default clonePath to agent.cwd (set by AgentManager.spawnAgent /
     // spawnAgentNoOpencode) so callers don't have to plumb it through
     // explicitly. Override via opts.clonePath when needed.
     const clonePath = opts.clonePath ?? agent.cwd;
     const tools = clonePath && profileForTools ? defaultToolsForProfile(profileForTools) : [];
-    const mcp = (opts as any).mcpServers || undefined;
+    const mcp = opts.mcpServers || undefined;
     const dispatcher = clonePath && profileForTools && tools.length > 0
       ? new ToolDispatcher(profileForTools, clonePath, mcp)
       : undefined;
@@ -97,6 +105,9 @@ export async function chatOnce(
       ...(tools.length > 0 ? { tools } : {}),
       ...(dispatcher ? { dispatcher } : {}),
       ...(opts.onTool ? { onTool: opts.onTool } : {}),
+      ...(profileForTools && allowsUnboundedToolTurns(profileForTools as import("../../../shared/src/toolProfiles.js").ToolProfileId)
+        ? { maxToolTurns: Number.POSITIVE_INFINITY }
+        : {}),
       ...(opts.format !== undefined ? { format: opts.format } : {}),
     });
     if (result.usage) {

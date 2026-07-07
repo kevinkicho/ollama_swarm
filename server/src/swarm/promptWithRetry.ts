@@ -9,6 +9,11 @@ import { pickProvider } from "../providers/pickProvider.js";
 import { providerGateway } from "../providers/ProviderGateway.js";
 import { config } from "../config.js";
 import { ToolDispatcher, defaultToolsForProfile, type ProfileName } from "../tools/ToolDispatcher.js";
+import {
+  allowsUnboundedToolTurns,
+  effectiveToolProfileId,
+  type WebToolsConfig,
+} from "../../../shared/src/toolProfiles.js";
 import { createIntraStreamLoopDetector, type IntraStreamLoopDetectorOpts } from "./intraStreamLoopDetector.js";
 // 2026-04-28: shared interruptible sleep used by both this module's
 // retry-backoff and BlackboardRunner. One source of truth.
@@ -144,6 +149,10 @@ export interface PromptWithRetryOptions {
   intraStreamLoop?: IntraStreamLoopDetectorOpts | true;
   /** MCP servers string (e.g. "fetch=..." or "search=...") for tool-augmented profiles. Forwarded via any-cast in impl. */
   mcpServers?: string;
+  /** When set, upgrades swarm-read → swarm-research for discussion runners. */
+  webToolsConfig?: WebToolsConfig;
+  /** Fired for each tool dispatch so runners can log web_tool transcript entries. */
+  onTool?: (info: { tool: string; ok: boolean; preview: string }) => void;
 }
 
 export interface RetryInfo {
@@ -207,7 +216,7 @@ export async function promptWithRetry(
         // grep before posting TODOs.
         const profileForTools: ProfileName | null =
           agentName === "swarm" || agentName === "swarm-read" || agentName === "swarm-planner" || agentName === "swarm-builder" || agentName === "swarm-builder-research" || agentName === "swarm-research"
-            ? (agentName as ProfileName)
+            ? effectiveToolProfileId(agentName, opts.webToolsConfig) as ProfileName
             : null;
         const tools = profileForTools && agent.cwd ? defaultToolsForProfile(profileForTools) : [];
         const mcp = (opts as any).mcpServers || undefined;
@@ -238,10 +247,11 @@ export async function promptWithRetry(
           },
           ...(tools.length > 0 ? { tools } : {}),
           ...(dispatcher ? { dispatcher } : {}),
-          // The blackboard planner is intentionally allowed to keep
-          // exploring until it decides it has enough evidence or the
-          // enclosing prompt is aborted/times out.
-          ...(agentName === "swarm-planner" ? { maxToolTurns: Number.POSITIVE_INFINITY } : {}),
+          ...(opts.onTool ? { onTool: opts.onTool } : {}),
+          // Research/planner profiles may explore until abort/timeout.
+          ...(profileForTools && allowsUnboundedToolTurns(profileForTools as import("../../../shared/src/toolProfiles.js").ToolProfileId)
+            ? { maxToolTurns: Number.POSITIVE_INFINITY }
+            : {}),
           ...(opts.ollamaFormat !== undefined ? { format: opts.ollamaFormat } : {}),
         };
         const result = config.PROVIDER_GATEWAY

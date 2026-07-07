@@ -272,4 +272,26 @@ export type TranscriptEntrySummary =
       kind: "brain_suggestion";
       title: string;
       category?: string;
+    }
+  // Web tool invocation logged during planner/worker/discussion research turns.
+  | {
+      kind: "web_tool";
+      tool: string;
+      ok: boolean;
+      preview: string;
+    }
+  // Council autonomous loop: cycle header (discussion vs execution-only).
+  | {
+      kind: "council_cycle";
+      cycle: number;
+      /** True when pending todos caused discussion/standup to be skipped. */
+      executionOnly: boolean;
+      pendingTodos?: number;
+    }
+  // Council autonomous loop: sub-stage within a cycle (discussion, execution, audit, …).
+  | {
+      kind: "council_stage";
+      cycle: number;
+      stage: "discussion" | "standup" | "synthesis" | "execution" | "audit";
+      detail?: string;
     };
