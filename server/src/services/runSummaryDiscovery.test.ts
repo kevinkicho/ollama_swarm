@@ -67,12 +67,50 @@ describe("runSummaryDiscovery", () => {
     const agents = resolveStatusAgents({
       terminalSum: null,
       clonePath: project,
-      runConfig: { agentCount: 2, model: "test-model" },
+      runConfig: { preset: "blackboard", agentCount: 2, model: "test-model" },
       transcript: [],
     });
     assert.equal(agents.length, 2);
     assert.equal(agents[0]!.id, "agent-1");
     assert.ok(readBlackboardStateSync(project));
+
+    await fs.rm(project, { recursive: true, force: true });
+  });
+
+  it("resolveStatusAgents — skips blackboard-state roster for council preset", async () => {
+    const project = await mkdtemp("summary-council-");
+    await fs.writeFile(
+      path.join(project, "blackboard-state.json"),
+      JSON.stringify({
+        agentRoster: [
+          { agentId: "agent-1", agentIndex: 1 },
+          { agentId: "agent-2", agentIndex: 2 },
+          { agentId: "agent-5", agentIndex: 5 },
+          { agentId: "agent-6", agentIndex: 6 },
+        ],
+      }),
+      "utf8",
+    );
+
+    const agents = resolveStatusAgents({
+      terminalSum: null,
+      clonePath: project,
+      runConfig: {
+        preset: "council",
+        agentCount: 4,
+        topology: {
+          agents: [
+            { index: 1, model: "m" },
+            { index: 2, model: "m" },
+            { index: 3, model: "m" },
+            { index: 4, model: "m" },
+          ],
+        },
+      },
+      transcript: [],
+    });
+    assert.equal(agents.length, 4);
+    assert.ok(!agents.some((a) => a.id === "agent-5" || a.id === "agent-6"));
 
     await fs.rm(project, { recursive: true, force: true });
   });

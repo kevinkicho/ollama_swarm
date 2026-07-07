@@ -27,6 +27,43 @@ describe("applyStatusSnapshotToStore", () => {
     assert.ok(tx.some((t) => t.id === "t2"));
   });
 
+  it("prunes ghost agents not in council topology", () => {
+    const store = createSwarmStore();
+    store.getState().upsertAgent({ id: "agent-5", index: 5, status: "stopped" });
+    store.getState().upsertAgent({ id: "agent-6", index: 6, status: "stopped" });
+
+    const snap = {
+      phase: "discussing",
+      round: 0,
+      agents: [
+        { id: "agent-1", index: 1, status: "ready" },
+        { id: "agent-2", index: 2, status: "thinking" },
+        { id: "agent-3", index: 3, status: "ready" },
+        { id: "agent-4", index: 4, status: "ready" },
+        { id: "agent-5", index: 5, status: "stopped" },
+        { id: "agent-6", index: 6, status: "stopped" },
+      ],
+      transcript: [],
+      runId: "run-council",
+      runConfig: {
+        preset: "council",
+        agentCount: 4,
+        topology: {
+          agents: [
+            { index: 1, role: "drafter" },
+            { index: 2, role: "drafter" },
+            { index: 3, role: "drafter" },
+            { index: 4, role: "drafter" },
+          ],
+        },
+      },
+    } as SwarmStatusSnapshot;
+
+    applyStatusSnapshotToStore(store, "run-council", snap);
+    const ids = Object.keys(store.getState().agents).sort();
+    assert.deepEqual(ids, ["agent-1", "agent-2", "agent-3", "agent-4"]);
+  });
+
   it("applies active phase after transcript hydrate", () => {
     const store = createSwarmStore();
     const snap = {

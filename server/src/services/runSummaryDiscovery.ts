@@ -159,6 +159,16 @@ export function inferAgentsFromTranscript(
   return [...byId.values()].sort((a, b) => a.index - b.index);
 }
 
+/** True when agent roster should be read from blackboard-state.json. */
+export function shouldUseBlackboardAgentRoster(
+  runConfig?: Record<string, unknown>,
+): boolean {
+  if (!runConfig) return false;
+  const extras = (runConfig.extras ?? {}) as Record<string, unknown>;
+  const preset = String(runConfig.preset ?? extras.preset ?? "");
+  return preset === "blackboard";
+}
+
 /** Best-effort sync read of `<clone>/blackboard-state.json`. */
 export function readBlackboardStateSync(clonePath: string): Record<string, unknown> | null {
   const file = path.join(clonePath, "blackboard-state.json");
@@ -185,7 +195,7 @@ export function resolveStatusAgents(opts: {
 
   const modelByIndex = modelByIndexFromRunConfig(opts.runConfig);
 
-  if (opts.clonePath) {
+  if (opts.clonePath && shouldUseBlackboardAgentRoster(opts.runConfig)) {
     const bb = readBlackboardStateSync(opts.clonePath);
     if (bb) {
       const roster = bb.agentRoster;

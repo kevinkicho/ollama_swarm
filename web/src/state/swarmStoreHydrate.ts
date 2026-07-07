@@ -90,6 +90,23 @@ export const WS_REPLAY_GRACE_MS = 200;
 /** Hard cap — never block hydration forever if WS cannot connect. */
 export const HYDRATE_MAX_WAIT_MS = 8000;
 
+/** Agent ids that belong to the current run (topology or agentCount). */
+export function allowedAgentIdsForRun(
+  runConfig?: SwarmStatusSnapshot["runConfig"],
+): Set<string> | null {
+  if (!runConfig) return null;
+  const topology = runConfig.topology;
+  if (topology?.agents?.length) {
+    return new Set(topology.agents.map((a) => `agent-${a.index}`));
+  }
+  const count = runConfig.agentCount;
+  if (count == null || count < 1) return null;
+  const total = runConfig.dedicatedAuditor ? count + 1 : count;
+  return new Set(
+    Array.from({ length: total }, (_, i) => `agent-${i + 1}`),
+  );
+}
+
 export type ApplyStatusSnapshotOptions = {
   /** When false, skip agent upserts (completed runs keep final summary stats). */
   upsertLiveAgents?: boolean;
@@ -131,9 +148,11 @@ export function applyStatusSnapshotToStore(
     const agentsForSidebar =
       snap.agents?.length ? snap.agents : inferAgentsFromSnapshot(snap);
     if (agentsForSidebar.length > 0) {
+      const allowed = allowedAgentIdsForRun(snap.runConfig);
       agentsForSidebar.forEach((a) => {
         const idx = a.index ?? (a as { agentIndex?: number }).agentIndex ?? 0;
         const id = a.id || (a as { agentId?: string }).agentId || `agent-${idx}`;
+        if (allowed && !allowed.has(id)) return;
         s.upsertAgent({
           id,
           index: idx,
@@ -141,6 +160,16 @@ export function applyStatusSnapshotToStore(
           model: a.model,
         } as Parameters<SwarmStore["upsertAgent"]>[0]);
       });
+      if (allowed) {
+        const cur = store.getState().agents;
+        const pruned: typeof cur = {};
+        for (const [id, agent] of Object.entries(cur)) {
+          if (allowed.has(id)) pruned[id] = agent;
+        }
+        if (Object.keys(pruned).length !== Object.keys(cur).length) {
+          store.setState({ agents: pruned });
+        }
+      }
     }
   }
 
