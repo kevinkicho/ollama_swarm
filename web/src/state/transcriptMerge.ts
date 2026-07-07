@@ -107,26 +107,35 @@ export function mergeTranscriptEntry(
     const streamingText = nextStreaming[e.agentId];
     const meta = nextMeta[e.agentId];
     if (streamingText && streamingText.length > 0) {
-      const streamEntry: TranscriptEntry = {
-        id: `stream-${e.agentId}-${Date.now()}`,
-        role: "agent-stream",
-        text: streamingText,
-        ts: meta?.startedAt ?? Date.now(),
-        agentId: e.agentId,
-        streamingMeta: {
-          startedAt: meta?.startedAt ?? Date.now(),
-          lastTextAt: meta?.lastTextAt ?? Date.now(),
-          toolCallCount: 0,
-          totalSeconds: meta ? Math.round((meta.lastTextAt - meta.startedAt) / 1000) : 0,
-        },
-      };
-      delete nextStreaming[e.agentId];
-      delete nextMeta[e.agentId];
-      return {
-        transcript: moveDividerToFront([...slice.transcript, streamEntry, entryToAdd]),
-        streaming: nextStreaming,
-        streamingMeta: nextMeta,
-      };
+      const finalText = (e.text ?? "").trim();
+      const streamedText = streamingText.trim();
+      // When the streamed buffer matches the final entry (common for audit JSON /
+      // structured outputs), skip the redundant agent-stream snapshot.
+      const isRedundantStream = finalText.length > 0 && streamedText === finalText;
+
+      if (!isRedundantStream) {
+        const streamEntry: TranscriptEntry = {
+          id: `stream-${e.agentId}-${Date.now()}`,
+          role: "agent-stream",
+          text: streamingText,
+          ts: meta?.startedAt ?? Date.now(),
+          agentId: e.agentId,
+          ...(typeof e.agentIndex === "number" ? { agentIndex: e.agentIndex } : {}),
+          streamingMeta: {
+            startedAt: meta?.startedAt ?? Date.now(),
+            lastTextAt: meta?.lastTextAt ?? Date.now(),
+            toolCallCount: 0,
+            totalSeconds: meta ? Math.round((meta.lastTextAt - meta.startedAt) / 1000) : 0,
+          },
+        };
+        delete nextStreaming[e.agentId];
+        delete nextMeta[e.agentId];
+        return {
+          transcript: moveDividerToFront([...slice.transcript, streamEntry, entryToAdd]),
+          streaming: nextStreaming,
+          streamingMeta: nextMeta,
+        };
+      }
     }
     delete nextStreaming[e.agentId];
     delete nextMeta[e.agentId];

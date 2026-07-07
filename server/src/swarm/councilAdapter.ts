@@ -13,6 +13,7 @@ import { buildContract } from "./blackboard/contractBuilder.js";
 import { buildSeed } from "./blackboard/contractBuilder.js";
 import type { PlannerSeed } from "./blackboard/prompts/planner.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
+import { canonicalizeExpectedFiles } from "./councilPathCanonicalize.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractProviderText } from "./councilUtils.js";
 
@@ -233,7 +234,8 @@ function finalizeContract(
         `Contract c${idx + 1}: ${rejected.length}/${c.expectedFiles.length} path(s) stripped — kept with ${JSON.stringify(accepted)}.`,
       );
     }
-    return { description: c.description, expectedFiles: accepted };
+    const canonical = canonicalizeExpectedFiles(accepted, seed.repoFiles);
+    return { description: c.description, expectedFiles: canonical };
   });
 
   const contract = buildContract({
@@ -352,7 +354,8 @@ Max 6 criteria. Each must be concrete, verifiable, and directly advance the user
       if (rejected.length > 0) {
         state.appendSystem(`Tier ${nextTier}: stripped ${rejected.length} invalid path(s) from "${c.description}".`);
       }
-      return { description: c.description, expectedFiles: accepted };
+      const canonical = canonicalizeExpectedFiles(accepted, seed.repoFiles);
+      return { description: c.description, expectedFiles: canonical };
     });
 
     const addedAt = Date.now();

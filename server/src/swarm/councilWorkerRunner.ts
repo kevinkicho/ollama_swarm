@@ -9,7 +9,14 @@ import {
   buildHunkRepairPrompt,
   parseWorkerResponse,
   WORKER_SYSTEM_PROMPT,
+  isLiteratureTodo,
 } from "./blackboard/prompts/worker.js";
+import { buildResearchToolsNote } from "./blackboard/prompts/planner.js";
+import { chatOnce } from "./chatOnce.js";
+import { extractText } from "./extractText.js";
+import { isWebToolsEnabled, resolveToolProfile } from "./toolProfiles.js";
+import { effectiveToolProfileId } from "../../../shared/src/toolProfiles.js";
+import { makeWebToolHandler } from "./toolCallTranscript.js";
 import { withSiblingRetry } from "./blackboard/siblingRetry.js";
 import { siblingModelFor } from "./blackboard/BlackboardRunnerConstants.js";
 import { TodoQueue, type QueuedTodo } from "./blackboard/TodoQueue.js";
@@ -27,6 +34,57 @@ export interface WorkerRunnerContext {
 }
 
 const WORKER_COOLDOWN_MS = 5_000;
+
+type TodoExecuteResult =
+  | { outcome: "completed" }
+  | { outcome: "skipped"; reason: string }
+  | { outcome: "failed"; error: string };
+
+async function runCouncilLiteratureResearch(
+  state: CouncilAdapterState,
+  agent: Agent,
+  todo: QueuedTodo,
+  appendSystem: (msg: string) => void,
+): Promise<string | undefined> {
+  const cfg = state.cfg;
+  if (!isWebToolsEnabled(cfg) || !isLiteratureTodo(todo.description)) {
+    return undefined;
+  }
+  const profile = resolveToolProfile("read", cfg);
+  const prompt = [
+    "You are a research worker gathering sources BEFORE writing file edits.",
+    buildResearchToolsNote(true),
+    "",
+    `TODO: ${todo.description}`,
+    `Target files: ${todo.expectedFiles.join(", ")}`,
+    cfg.userDirective ? `User directive: ${cfg.userDirective}` : "",
+    "",
+    "Use web_search and web_fetch to gather citable findings. Output plain prose with bullet points and URLs.",
+    "Do NOT emit JSON hunks in this phase.",
+  ].filter(Boolean).join("\n");
+
+  try {
+    const res = await chatOnce(agent, {
+      agentName: profile,
+      promptText: prompt,
+      clonePath: state.clonePath,
+      webToolsConfig: cfg,
+      runId: cfg.runId,
+      mcpServers: cfg.mcpServers,
+      onTool: makeWebToolHandler(appendSystem, agent.id),
+    });
+    const text = extractText(res)?.trim();
+    if (text && text.length >= 80) {
+      const capped = text.length > 8000 ? `${text.slice(0, 8000)}…` : text;
+      appendSystem(`[${agent.id}] Literature research: captured ${capped.length} chars of notes.`);
+      return capped;
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    appendSystem(`[${agent.id}] Literature research failed: ${msg}`);
+  }
+  return undefined;
+}
 
 function setWorkerThinking(state: CouncilAdapterState, agent: Agent): void {
   (state.manager as { markStatus: (id: string, status: string, extra?: Record<string, unknown>) => void })
@@ -77,23 +135,23 @@ async function runCouncilWorker(
     setWorkerThinking(state, agent);
     ctx.appendSystem(`[execution] ${agent.id} working on: ${todo.description.slice(0, 120)}...`);
 
-    let result: "completed" | "skipped" | string;
+    let result: TodoExecuteResult;
     try {
       result = await executeTodoWithRetryChain(agent, todo, state, fsAdapter, gitAdapter, ctx);
     } finally {
       setWorkerReady(state, agent);
     }
-    if (result === "completed") {
+    if (result.outcome === "completed") {
       state.todoQueue.complete(todo.id);
       completed++;
       await new Promise((r) => setTimeout(r, WORKER_COOLDOWN_MS + Math.floor(Math.random() * 500)));
-    } else if (result === "skipped") {
-      state.todoQueue.skip(todo.id, "worker declined");
+    } else if (result.outcome === "skipped") {
+      state.todoQueue.skip(todo.id, result.reason);
       skipped++;
     } else {
-      state.todoQueue.fail(todo.id, result);
+      state.todoQueue.fail(todo.id, result.error);
       failed++;
-      ctx.recordFailure?.(todo.id, todo.description, result.slice(0, 200));
+      ctx.recordFailure?.(todo.id, todo.description, result.error.slice(0, 200));
     }
   }
 
@@ -107,8 +165,8 @@ async function executeTodoWithRetryChain(
   fsAdapter: ReturnType<typeof realFilesystemAdapter>,
   gitAdapter: ReturnType<typeof realGitAdapter>,
   ctx: WorkerRunnerContext,
-): Promise<"completed" | "skipped" | string> {
-  if (ctx.stopping()) return "skipped";
+): Promise<TodoExecuteResult> {
+  if (ctx.stopping()) return { outcome: "skipped", reason: "run stopping" };
   const expectedFiles = [...todo.expectedFiles];
 
   // Stage 1: Primary prompt
@@ -123,7 +181,7 @@ async function executeTodoWithRetryChain(
   // Stage 3: Sibling retry (swap model, re-prompt)
   ctx.appendSystem(`[execution] ${agent.id} repair failed — trying sibling retry.`);
   const modelAtEntry = agent.model;
-  let siblingResult: "completed" | "skipped" | "retry" = "retry";
+  let siblingResult: TodoExecuteResult | "retry" = "retry";
   await withSiblingRetry(
     {
       agent,
@@ -141,7 +199,7 @@ async function executeTodoWithRetryChain(
 
   if (siblingResult !== "retry") return siblingResult;
 
-  return "all retries exhausted";
+  return { outcome: "failed", error: "all retries exhausted" };
 }
 
 async function tryWorkerPrompt(
@@ -152,8 +210,8 @@ async function tryWorkerPrompt(
   fsAdapter: ReturnType<typeof realFilesystemAdapter>,
   gitAdapter: ReturnType<typeof realGitAdapter>,
   ctx: WorkerRunnerContext,
-): Promise<"completed" | "skipped" | "retry"> {
-  if (ctx.stopping()) return "skipped";
+): Promise<TodoExecuteResult | "retry"> {
+  if (ctx.stopping()) return { outcome: "skipped", reason: "run stopping" };
   // Re-read file contents fresh each attempt (avoids stale content on retry)
   const fileContents = await readExpectedFiles(state.clonePath, expectedFiles);
 
@@ -163,12 +221,23 @@ async function tryWorkerPrompt(
     adjustedDesc = `${todo.description}\n\nIMPORTANT: The file(s) already exist. Use op "replace" or "append" — do NOT use op "create".`;
   }
 
+  const webToolsEnabled = isWebToolsEnabled(state.cfg);
+  const researchNotes = await runCouncilLiteratureResearch(
+    state,
+    agent,
+    todo,
+    ctx.appendSystem,
+  );
+  const workerProfile = effectiveToolProfileId("swarm-builder", state.cfg);
+
   const basePrompt = `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt({
     todoId: todo.id,
     description: adjustedDesc,
     expectedFiles,
     fileContents,
     directive: state.cfg.userDirective,
+    webToolsEnabled,
+    researchNotes,
   })}`;
 
   try {
@@ -178,7 +247,7 @@ async function tryWorkerPrompt(
     try {
     const raw = await promptWithFailoverAuto(agent, basePrompt, {
       manager: state.manager as any,
-      agentName: "swarm-builder",
+      agentName: workerProfile,
       signal: controller.signal,
       intraStreamLoop: true,
     }, state.cfg.providerFailover);
@@ -207,7 +276,7 @@ async function tryWorkerPrompt(
 
       if (applyResult.ok) {
         ctx.appendSystem(`[execution] ${agent.id} ✓ applied — ${applyResult.commitSha?.slice(0, 7)}.`);
-        return "completed";
+        return { outcome: "completed" };
       }
 
       // Apply failed — try hunk repair
@@ -218,7 +287,7 @@ async function tryWorkerPrompt(
           const repairPrompt = buildHunkRepairPrompt(fixedHunks, applyResult.reason, { [failedFile!]: currentContent });
           const repairRaw = await promptWithFailoverAuto(agent, `${WORKER_SYSTEM_PROMPT}\n\n${repairPrompt}`, {
             manager: state.manager as any,
-            agentName: "swarm-builder",
+            agentName: workerProfile,
             signal: new AbortController().signal,
           }, state.cfg.providerFailover);
           const repairText = extractProviderText(repairRaw);
@@ -235,7 +304,7 @@ async function tryWorkerPrompt(
               });
               if (repairResult.ok) {
                 ctx.appendSystem(`[execution] ${agent.id} ✓ applied (hunk repair) — ${repairResult.commitSha?.slice(0, 7)}.`);
-                return "completed";
+                return { outcome: "completed" };
               }
             }
           }
@@ -243,7 +312,7 @@ async function tryWorkerPrompt(
       }
     } else if (parsed.ok && parsed.skip) {
       ctx.appendSystem(`[execution] ${agent.id} skipped: ${parsed.skip}`);
-      return "skipped";
+      return { outcome: "skipped", reason: parsed.skip };
     }
 
     return "retry";
@@ -252,7 +321,7 @@ async function tryWorkerPrompt(
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (ctx.stopping()) return "skipped";
+    if (ctx.stopping()) return { outcome: "skipped", reason: "run stopping" };
     ctx.appendSystem(`[execution] ${agent.id} error: ${msg.slice(0, 300)}`);
     return "retry";
   }

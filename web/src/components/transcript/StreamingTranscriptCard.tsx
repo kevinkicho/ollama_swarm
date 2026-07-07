@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { agentBubblePalette, hueForAgent } from "../agentPalette";
 import type { TranscriptEntry } from "../../types";
+import { useSwarm } from "../../state/store";
 
 /**
  * Renders an agent-stream transcript entry — the thinking text that was
@@ -9,8 +10,12 @@ import type { TranscriptEntry } from "../../types";
  */
 export function StreamingTranscriptCard({ entry }: { entry: TranscriptEntry }) {
   const [expanded, setExpanded] = useState(false);
+  const agents = useSwarm((s) => s.agents);
   const meta = entry.streamingMeta;
-  const agentIndex = entry.agentIndex ?? 0;
+  const agentIndex =
+    entry.agentIndex ??
+    (entry.agentId ? agents[entry.agentId]?.index : undefined) ??
+    0;
   const hue = hueForAgent(agentIndex);
   const palette = agentBubblePalette(hue, false);
 

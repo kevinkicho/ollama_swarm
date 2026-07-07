@@ -245,6 +245,32 @@ test("CouncilRunner.stop — hard stop enters stopping, writes summary, kills ag
   );
 });
 
+test("CouncilRunner — enqueues synthesis todos after cycle 1 synthesis", () => {
+  assert.match(
+    COUNCIL_SRC,
+    /extractActionableTodos\(/,
+    "cycle 1 must extract actionable todos from synthesis",
+  );
+  assert.match(
+    COUNCIL_SRC,
+    /createdBy: "council-synthesis"/,
+    "synthesis todos must be posted to the queue",
+  );
+});
+
+test("CouncilRunner — reconciles worker skips before audit", () => {
+  assert.match(
+    COUNCIL_SRC,
+    /reconcileCriteriaFromSkips/,
+    "must promote criteria when workers skip with already-done reasons",
+  );
+  assert.match(
+    COUNCIL_SRC,
+    /skipEvidence/,
+    "must pass skip evidence into council audit",
+  );
+});
+
 test("CouncilRunner.drain — soft stop is separate from hard stop", () => {
   assert.match(
     COUNCIL_SRC,

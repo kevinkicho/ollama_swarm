@@ -46,6 +46,7 @@ import {
 } from "./councilAdapter.js";
 import { gatherCodeContext } from "./gatherCodeContext.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
+import { reconcileCriteriaFromSkips } from "./councilSkipReconcile.js";
 
 
 export class CouncilRunner extends DiscussionRunnerBase {
@@ -367,6 +368,36 @@ export class CouncilRunner extends DiscussionRunnerBase {
             this.repoFiles,
             this.codeContextExcerpts,
           );
+
+          const lead = this.opts.manager.list().find((a) => a.index === 1);
+          if (lead) {
+            const synthesisTodos = await extractActionableTodos(
+              lead,
+              cfg,
+              this.transcript,
+              this.opts.repos,
+              (msg) => this.appendSystem(msg),
+              this.opts.manager as any,
+            );
+            for (const t of synthesisTodos) {
+              this.state.todoQueue.post({
+                description: t.description,
+                expectedFiles: t.expectedFiles,
+                createdBy: "council-synthesis",
+              });
+            }
+            if (synthesisTodos.length > 0) {
+              this.appendSystem(
+                `[synthesis] Enqueued ${synthesisTodos.length} actionable todo(s).`,
+                {
+                  kind: "council_stage",
+                  cycle,
+                  stage: "execution",
+                  detail: `${synthesisTodos.length} synthesis todo(s)`,
+                },
+              );
+            }
+          }
         }
 
         // Write deliverable
@@ -427,6 +458,22 @@ export class CouncilRunner extends DiscussionRunnerBase {
     this.executionFailures = [];
     if (!this.stopping) {
       await this.drainTodos(cfg, cycle);
+    }
+
+    if (!this.stopping && this.state.contract) {
+      const skippedTodos = this.state.todoQueue
+        .list()
+        .filter((t) => t.status === "skipped");
+      const { criteria: reconciled, promotedIds } = reconcileCriteriaFromSkips(
+        this.state.contract.criteria,
+        skippedTodos,
+      );
+      if (promotedIds.length > 0) {
+        this.state.contract = { ...this.state.contract, criteria: reconciled };
+        this.appendSystem(
+          `[execution] Promoted ${promotedIds.length} criterion(s) to met from worker skips: ${promotedIds.join(", ")}.`,
+        );
+      }
     }
 
     // ── AUDIT: check criteria ──
@@ -517,6 +564,16 @@ export class CouncilRunner extends DiscussionRunnerBase {
       }
     };
 
+    const skipEvidence = this.state.todoQueue
+      .list()
+      .filter((t) => t.status === "skipped" && t.reason)
+      .map((t) => ({
+        criterionId: t.criterionId,
+        criteriaIds: t.criteriaIds,
+        reason: t.reason,
+        expectedFiles: t.expectedFiles,
+      }));
+
     const { updatedCriteria, newTodos } = await runCouncilLlmAudit(
       cfg,
       this.state.contract,
@@ -526,6 +583,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
         appendSystem: tagAudit,
         stopping: () => this.stopping,
       },
+      skipEvidence,
     );
 
     this.state.contract = { ...this.state.contract, criteria: updatedCriteria };
@@ -593,6 +651,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
         description: t.description,
         expectedFiles: t.expectedFiles,
         createdBy: "auditor",
+        ...(t.criterionId ? { criterionId: t.criterionId } : {}),
       });
     }
     this.appendSystem(`[audit] Created ${newTodos.length} todo(s) for unmet criteria.`);

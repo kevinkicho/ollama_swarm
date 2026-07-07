@@ -6,6 +6,8 @@ import type { ExitContract, ExitCriterion } from "./blackboard/types.js";
 import { AUDITOR_SYSTEM_PROMPT, parseAuditorResponse } from "./blackboard/prompts/auditor.js";
 import { readDirective, buildDirectiveBlock } from "./directivePromptHelpers.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
+import { windowFileForWorker } from "./blackboard/windowFile.js";
+import type { SkipEvidenceTodo } from "./councilSkipReconcile.js";
 
 export interface CouncilAuditorContext {
   manager: { list: () => Agent[]; markStatus: (id: string, status: string) => void; recordPromptComplete: (id: string, data: any) => void };
@@ -18,9 +20,10 @@ export async function runCouncilLlmAudit(
   contract: ExitContract,
   committedFiles: string[],
   ctx: CouncilAuditorContext,
+  skipEvidence: readonly SkipEvidenceTodo[] = [],
 ): Promise<{
   updatedCriteria: ExitCriterion[];
-  newTodos: Array<{ description: string; expectedFiles: string[] }>;
+  newTodos: Array<{ description: string; expectedFiles: string[]; criterionId?: string }>;
 }> {
   const agents = ctx.manager.list();
   const lead = agents.find((a) => a.index === 1);
@@ -49,11 +52,25 @@ export async function runCouncilLlmAudit(
 
   const fileBlock = Object.entries(fileContents)
     .filter(([_, content]) => content !== null)
-    .map(([path, content]) => `--- ${path} ---\n${(content ?? "").slice(0, 3000)}`)
+    .map(([path, content]) => {
+      const view = windowFileForWorker(content ?? "");
+      const sizeNote = view.full ? "" : ` (${view.originalLength} chars total)`;
+      return `--- ${path}${sizeNote} ---\n${view.content}`;
+    })
     .join("\n\n");
 
   const dirCtx = readDirective({ userDirective: cfg.userDirective });
   const directiveBlock = buildDirectiveBlock(dirCtx, { authoritative: true }).join("\n");
+
+  const skipBlock =
+    skipEvidence.length > 0
+      ? `\nWorker skip evidence (workers declined todos citing work already done):\n${skipEvidence
+          .map(
+            (s) =>
+              `  - "${s.reason ?? "(no reason)"}" — files: ${s.expectedFiles.join(", ") || "(none)"}${s.criterionId ? ` [criterion ${s.criterionId}]` : ""}`,
+          )
+          .join("\n")}\n`
+      : "";
 
   const prompt = `${AUDITOR_SYSTEM_PROMPT}\n\nYou are auditing a council's work.
 
@@ -67,9 +84,9 @@ ${fileBlock || "(no files to read)"}
 
 Already committed files:
 ${committedFiles.map(f => `  ${f}`).join("\n")}
-
+${skipBlock}
 For each unmet criterion, determine if it is now MET, WONT-DO, or still UNMET.
-- MET: the expected files exist and contain real implementation (not mock/placeholder)
+- MET: the expected files exist and contain real implementation (not mock/placeholder). When a criterion lists multiple path variants for the same file (e.g. docs/foo.md and foo.md), MET if ANY listed file satisfies the criterion.
 - WONT-DO: the criterion is impossible or no longer relevant
 - UNMET: still needs work — provide specific todos
 
@@ -106,13 +123,13 @@ Return ONLY a JSON object:
       }
 
       const criteriaById = new Map(contract.criteria.map(c => [c.id, c]));
-      const newTodos: Array<{ description: string; expectedFiles: string[] }> = [];
+      const newTodos: Array<{ description: string; expectedFiles: string[]; criterionId?: string }> = [];
 
       for (const v of parsed.result.verdicts) {
         const crit = criteriaById.get(v.id);
         if (!crit || crit.status !== "unmet") continue;
         if (v.status === "unmet" && v.todos && v.todos.length > 0) {
-          newTodos.push(...v.todos);
+          newTodos.push(...v.todos.map((t) => ({ ...t, criterionId: v.id })));
         }
       }
 
@@ -152,11 +169,11 @@ async function fallbackAudit(
     }
 
     const fileContents = await readExpectedFiles(cfg.localPath, c.expectedFiles);
-    const allExist = c.expectedFiles.length > 0 && c.expectedFiles.every((f) => fileContents[f] !== null);
+    const existingFiles = c.expectedFiles.filter((f) => fileContents[f] !== null);
+    const anyExist = c.expectedFiles.length === 0 || existingFiles.length > 0;
 
-    if (allExist) {
-      // Check for placeholder content
-      const hasPlaceholder = c.expectedFiles.some((f) => {
+    if (anyExist && existingFiles.length > 0) {
+      const hasPlaceholder = existingFiles.some((f) => {
         const content = fileContents[f];
         if (!content) return false;
         const lower = content.toLowerCase();

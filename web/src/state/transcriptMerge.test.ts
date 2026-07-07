@@ -79,6 +79,52 @@ describe("mergeTranscriptEntry", () => {
     assert.equal(mergeTranscriptEntry(slice, entry), null);
   });
 
+  it("preserves agentIndex on flushed agent-stream snapshot", () => {
+    let slice: TranscriptMergeSlice = {
+      transcript: [],
+      streaming: { "agent-4": "[{\"issue\":\"x\"}]" },
+      streamingMeta: {
+        "agent-4": { startedAt: 100, lastTextAt: 200, status: "live" },
+      },
+    };
+    const final: TranscriptEntry = {
+      id: "a4-final",
+      role: "agent",
+      agentId: "agent-4",
+      agentIndex: 4,
+      text: "different final response",
+      ts: 300,
+    };
+    slice = mergeTranscriptEntry(slice, final)!;
+    const stream = slice.transcript.find((t) => t.role === "agent-stream");
+    assert.ok(stream);
+    assert.equal(stream!.agentIndex, 4);
+    assert.equal(slice.transcript.length, 2);
+  });
+
+  it("skips redundant agent-stream when streamed text matches final entry", () => {
+    const json = "[{\"issue\":\"duplicate\"}]";
+    let slice: TranscriptMergeSlice = {
+      transcript: [],
+      streaming: { "agent-4": json },
+      streamingMeta: {
+        "agent-4": { startedAt: 100, lastTextAt: 200, status: "live" },
+      },
+    };
+    const final: TranscriptEntry = {
+      id: "a4-final",
+      role: "agent",
+      agentId: "agent-4",
+      agentIndex: 4,
+      text: json,
+      ts: 300,
+    };
+    slice = mergeTranscriptEntry(slice, final)!;
+    assert.equal(slice.transcript.length, 1);
+    assert.equal(slice.transcript[0]!.role, "agent");
+    assert.equal(slice.streaming["agent-4"], undefined);
+  });
+
   it("dedupes worker_skip by reason text", () => {
     let slice = emptySlice();
     const skip1: TranscriptEntry = {
