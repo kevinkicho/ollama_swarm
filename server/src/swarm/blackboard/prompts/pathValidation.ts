@@ -28,17 +28,17 @@ export interface ClassificationResult {
   rejected: PathRejection[];
 }
 
-function toForwardSlashes(p: string): string {
+export function toForwardSlashes(p: string): string {
   return p.replace(/\\/g, "/");
 }
 
-function parentDir(path: string): string {
+export function parentDir(path: string): string {
   const idx = path.lastIndexOf("/");
   if (idx < 0) return "";
   return path.slice(0, idx);
 }
 
-export function classifyPath(path: string, repoFiles: string[]): PathClassification {
+export function classifyPath(path: string, repoFiles: readonly string[]): PathClassification {
   const norm = toForwardSlashes(path);
   if (repoFiles.includes(norm)) return "existing";
   const parent = parentDir(norm);

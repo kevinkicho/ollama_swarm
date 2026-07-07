@@ -180,6 +180,28 @@ describe("todoQueueWrappers — completeTodoQ", () => {
   });
 });
 
+describe("todoQueueWrappers — releaseTodoQ", () => {
+  it("releases in-progress todo to pending without firing onFailed", () => {
+    const { wrappers, todoQueue, rec } = setup();
+    const id = wrappers.postTodoQ({
+      description: "x",
+      expectedFiles: ["a.ts"],
+      createdBy: "p",
+      createdAt: 1,
+    });
+    wrappers.dequeueTodoQ("w");
+    rec.emits.length = 0;
+    rec.stateWrites = 0;
+    rec.failed.length = 0;
+    wrappers.releaseTodoQ(id, "auditor overrode refusal");
+    assert.equal(todoQueue.get(id)?.status, "pending");
+    assert.equal(rec.emits.length, 1);
+    assert.equal(rec.emits[0].type, "todo_reverted");
+    assert.deepEqual(rec.failed, []);
+    assert.equal(rec.stateWrites, 1);
+  });
+});
+
 describe("todoQueueWrappers — failTodoQ", () => {
   it("is a no-op on pending-commit — no stale event or replan enqueue", () => {
     const { wrappers, todoQueue, rec } = setup();
@@ -319,15 +341,17 @@ import { reviewProposedHunks } from "./auditorRunner.js";
 import type { AuditorContext, Todo } from "./auditorRunner.js";
 
 describe("reviewProposedHunks (new auditor hunk review)", () => {
-  function makeMockCtx(approve: boolean) {
+  function makeMockCtx(approve: boolean, response?: string) {
+    const body = response ?? JSON.stringify({ approve, reason: approve ? "looks good" : "bad change" });
     return {
       getContract: () => ({ criteria: [] }),
       getActive: () => undefined,
       promptPlannerSafely: async () => ({
-        response: JSON.stringify({ approve, reason: approve ? "looks good" : "bad change" }),
+        response: body,
         agentUsed: { id: "auditor", index: 99, model: "test" } as any,
       }),
       appendSystem: () => {},
+      appendAgent: () => {},
     } as unknown as AuditorContext;
   }
 
@@ -344,5 +368,14 @@ describe("reviewProposedHunks (new auditor hunk review)", () => {
     const todo = { id: "t2", description: "bad", expectedFiles: ["b.tsx"] } as Todo;
     const res = await reviewProposedHunks(ctx, { id: "a", index: 99, model: "m" } as any, todo, [], ["b.tsx"]);
     assert.equal(res.approve, false);
+  });
+
+  it("parses JSON after think-tag prefix via repair path", async () => {
+    const thinkWrapped = `<think>reviewing hunks</think>\n${JSON.stringify({ approve: true, reason: "ok after strip" })}`;
+    const ctx = makeMockCtx(true, thinkWrapped);
+    const todo = { id: "t3", description: "panel", expectedFiles: ["a.tsx"] } as Todo;
+    const res = await reviewProposedHunks(ctx, { id: "a", index: 99, model: "m" } as any, todo, [], ["a.tsx"]);
+    assert.equal(res.approve, true);
+    assert.ok(res.reason.includes("ok after strip"));
   });
 });

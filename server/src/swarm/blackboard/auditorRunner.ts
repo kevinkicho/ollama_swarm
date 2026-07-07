@@ -22,13 +22,17 @@ import {
 import { buildAuditorSeed } from "./auditorSeedBuilder.js";
 import { runDebateAudit } from "./debateAuditor.js";
 import { withSiblingRetry } from "./siblingRetry.js";
-import {
-  tryBrainFallback,
-  type BrainFallbackEvent,
-} from "./prompts/brainIntegration.js";
+
 import { AuditorResponseSchema } from "./prompts/auditor.js";
 import { resolveToolProfile } from "../toolProfiles.js";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
+import { resolveBlackboardPromptExtras } from "./blackboardPromptContext.js";
+import {
+  buildHunkReviewRepairPrompt,
+  parseHunkReviewResponse,
+} from "./prompts/hunkReview.js";
+import { runParseSalvage } from "./parseSalvage.js";
+import type { AgentAssistKind } from "./runnerUtil.js";
 
 export interface AuditorContext {
   getContract: () => ExitContract | undefined;
@@ -56,7 +60,11 @@ export interface AuditorContext {
   cloneContract: (c: ExitContract) => ExitContract;
   emitContractUpdated: (contract: ExitContract) => void;
   appendSystem: (msg: string) => void;
-  appendAgent: (agent: Agent, text: string) => void;
+  appendAgent: (
+    agent: Agent,
+    text: string,
+    options?: { assistKind?: AgentAssistKind },
+  ) => void;
   emit: (e: SwarmEvent) => void;
   updateAgentModel: (agentId: string, model: string) => void;
   promptPlannerSafely: (agent: Agent, promptText: string, agentName?: import("../../tools/ToolDispatcher.js").ProfileName, ollamaFormat?: "json" | Record<string, unknown>) => Promise<{ response: string; agentUsed: Agent }>;
@@ -64,24 +72,24 @@ export interface AuditorContext {
   allCriteriaResolvedSnapshot: () => boolean;
   v2ObserverApply: (event: any) => void;
   getWorkTranscript: () => readonly import("../../types.js").TranscriptEntry[];
+  getAmendments?: () => Array<{ ts: number; text: string }>;
   /** Apply hunks and commit to git. Used by auditor-gated commits.
    *  options.skipCommit: for batching, apply changes but let caller do one git commit.
    */
   applyHunksAndCommit?: (hunks: readonly unknown[], files: readonly string[], message: string, options?: { skipCommit?: boolean }) => Promise<{ ok: boolean; reason?: string; verifyFailed?: boolean; filesWritten?: string[] }>;
-  /** Brain fallback: prompt an LLM to extract structured JSON from a
-   *  failed parse. The promptFn signature matches promptWithFailover. */
-  brainPromptFn?: (
-    prompt: string,
-    model: string,
-    maxTokens: number,
-    timeoutMs: number,
-  ) => Promise<string>;
 }
 
 // ── Audit verification of worker skip reasons ──
 // When a worker declines a todo, the auditor can verify whether the
 // skip is legitimate or the worker was mistaken/lazy. If the skip is
 // invalid, the auditor provides revised instructions for the next worker.
+
+export type SkipVerdict =
+  | "valid"
+  | "invalid"
+  | "hallucinated-todo"
+  | "insufficient-tools"
+  | "unverified";
 
 export interface SkipVerificationInput {
   todoDescription: string;
@@ -90,22 +98,33 @@ export interface SkipVerificationInput {
   workerIndex: number;
   fileContents: Record<string, string | null>;
   criteriaCount: number;
+  /** Tool profile the refusing worker had (e.g. swarm, swarm-builder). */
+  workerToolProfile: string;
+  /** Tools available to that profile for capability assessment. */
+  workerTools: readonly string[];
+  todoKind?: "hunks" | "build";
 }
 
 export interface SkipVerificationOutput {
-  verdict: "valid" | "invalid" | "hallucinated-todo";
+  verdict: SkipVerdict;
   rationale: string;
   revisedDescription?: string;
   approachNotes?: string;
+  /** When verdict=insufficient-tools, names the missing capability. */
+  toolsetGap?: string;
 }
 
 const SKIP_VERIFICATION_SCHEMA = {
   type: "object",
   properties: {
-    verdict: { type: "string", enum: ["valid", "invalid", "hallucinated-todo"] },
+    verdict: {
+      type: "string",
+      enum: ["valid", "invalid", "hallucinated-todo", "insufficient-tools"],
+    },
     rationale: { type: "string", maxLength: 500 },
     revisedDescription: { type: "string", maxLength: 500 },
     approachNotes: { type: "string", maxLength: 800 },
+    toolsetGap: { type: "string", maxLength: 300 },
   },
   required: ["verdict", "rationale"],
 } as const;
@@ -115,6 +134,7 @@ export async function verifyWorkerSkip(
   promptAgent: (agent: import("../../services/AgentManager.js").Agent, prompt: string, agentName: ProfileName, formatExpect: "json" | "free") => Promise<string>,
   auditor: import("../../services/AgentManager.js").Agent,
   auditorProfile: ProfileName = "swarm-read",
+  appendAgent?: (agent: import("../../services/AgentManager.js").Agent, text: string) => void,
 ): Promise<SkipVerificationOutput> {
   const filesSection = input.expectedFiles.length > 0
     ? `\nExpected files (current contents):\n${input.expectedFiles.map(f =>
@@ -122,37 +142,51 @@ export async function verifyWorkerSkip(
       ).join("\n")}`
     : "\nNo expected files for this todo.";
 
-  const prompt = `You are the AUDITOR verifying a worker's decision to skip a todo.
+  const kindNote = input.todoKind === "build"
+    ? "This is a BUILD todo (requires shell command execution)."
+    : "This is a HUNKS todo (file edits via search/replace).";
+
+  const prompt = `You are the AUDITOR arbitrating a worker's refusal to do a todo. You do NOT do the work yourself — you judge whether the refusal is legitimate and route the outcome.
 
 Todo description: "${input.todoDescription}"
 Expected files: ${input.expectedFiles.join(", ") || "(none)"}
-Worker agent-${input.workerIndex} declined this todo with reason: "${input.skipReason}"
+Todo kind: ${kindNote}
+Worker agent-${input.workerIndex} declined with reason: "${input.skipReason}"
+Worker tool profile: ${input.workerToolProfile}
+Worker available tools: ${input.workerTools.length > 0 ? input.workerTools.join(", ") : "(none — hunks-only)"}
 ${filesSection}
 Contract criteria count: ${input.criteriaCount}
 
-Evaluate the skip reason. Three possible verdicts:
+Evaluate the refusal. Four possible verdicts:
 
-1. **valid** — The worker is right: the work is genuinely unnecessary, out of scope, or already done. Return verdict="valid" and a brief rationale.
-2. **invalid** — The worker was mistaken, lazy, or hallucinated. Return verdict="invalid", rationale explaining why, and optionally revisedDescription + approachNotes for the next worker.
-3. **hallucinated-todo** — The worker is right to skip, but the TODO itself was based on a false premise. Specifically: the worker confirmed the target content genuinely DOES NOT EXIST in the expected files (e.g. the worker searched for "duplicate rows" and found none, or looked for "API endpoint X" and it doesn't exist), and the todo description implies it should exist. This means the PLANNER hallucinated content that isn't in the codebase. Return verdict="hallucinated-todo" with rationale explaining what content the planner hallucinated.
+1. **valid** — The worker is right: work is unnecessary, out of scope, or already done. The planner should revise or discard this todo. Return verdict="valid" with rationale for the planner.
+2. **invalid** — The worker was mistaken or lazy; the work still needs doing AND the worker's toolset is sufficient. Return verdict="invalid", rationale explaining why work is still required, and optionally revisedDescription + approachNotes for the next worker attempt. The todo goes back on the board — you do not do the work.
+3. **hallucinated-todo** — The worker correctly found the TODO premise is false (target content does not exist in the repo). The PLANNER hallucinated. Return verdict="hallucinated-todo" with rationale for the planner to discard or replan.
+4. **insufficient-tools** — The work is legitimate but this worker profile CANNOT do it (e.g. hunks worker needs bash, build worker needs web_fetch). Return verdict="insufficient-tools", rationale, and toolsetGap naming the missing tool/capability. This exposes a systemic swarm configuration issue — do NOT route to planner/auditor to do the worker's job.
 
-Respond in JSON: { "verdict": "valid"|"invalid"|"hallucinated-todo", "rationale": "...", "revisedDescription"?: "...", "approachNotes"?: "..." }`;
+Respond in JSON: { "verdict": "valid"|"invalid"|"hallucinated-todo"|"insufficient-tools", "rationale": "...", "revisedDescription"?: "...", "approachNotes"?: "...", "toolsetGap"?: "..." }`;
 
   try {
     const response = await promptAgent(auditor, prompt, auditorProfile, "json");
+    appendAgent?.(auditor, response);
     const parsed = JSON.parse(response);
-    const verdict = parsed.verdict === "invalid" ? "invalid"
+    const verdict: SkipVerdict =
+      parsed.verdict === "invalid" ? "invalid"
       : parsed.verdict === "hallucinated-todo" ? "hallucinated-todo"
+      : parsed.verdict === "insufficient-tools" ? "insufficient-tools"
       : "valid";
     return {
       verdict,
       rationale: parsed.rationale ?? "Auditor did not provide a rationale.",
       revisedDescription: parsed.revisedDescription || undefined,
       approachNotes: parsed.approachNotes || undefined,
+      toolsetGap: parsed.toolsetGap || undefined,
     };
   } catch {
-    // If auditor fails to respond, default to valid-skip (preserve current behavior).
-    return { verdict: "valid", rationale: "Auditor unavailable — skip stands." };
+    return {
+      verdict: "unverified",
+      rationale: "Auditor unavailable — routing to planner for decision.",
+    };
   }
 }
 
@@ -219,25 +253,32 @@ export async function runAuditor(
     if (ctx.getStopping() && !opts.allowWhenStopping) return;
     ctx.appendAgent(repairAgent, repairResponse);
     parsed = parseAuditorResponse(repairResponse);
-    if (!parsed.ok) {
-      // Brain fallback: try AI-assisted parsing before sibling-retry.
-      if (ctx.brainPromptFn) {
-        ctx.appendSystem(`Auditor parse still failed after repair — trying brain fallback (${parsed.reason}).`);
-        try {
-          const brainResult = await tryBrainFallback(
-            "auditor",
-            firstResponse,
-            AuditorResponseSchema,
-            ctx.brainPromptFn,
-            (e: BrainFallbackEvent) => { ctx.emit({ type: "brain-fallback", ...e }); },
-            auditAgent,
-          );
-          if (brainResult) {
-            parsed = { ok: true as const, result: brainResult as AuditorResult, dropped: [] };
-            ctx.appendSystem(`Brain fallback succeeded — extracted auditor verdict.`);
-          }
-        } catch {
-          // Brain call failed — fall through to sibling-retry.
+    if (!parsed.ok && (!ctx.getStopping() || opts.allowWhenStopping)) {
+      const salvageAgent = ctx.getAuditor() ?? auditAgent;
+      ctx.appendSystem(
+        `Auditor repair failed (${parsed.reason}); attempting JSON salvage before sibling retry.`,
+      );
+      const salvage = await runParseSalvage(
+        salvageAgent,
+        {
+          getStopping: ctx.getStopping,
+          appendSystem: ctx.appendSystem,
+          appendAgent: (a, t, o) => ctx.appendAgent(a, t, o),
+          promptPlannerSafely: ctx.promptPlannerSafely,
+          getActive: ctx.getActive,
+          jsonSchema: AUDITOR_VERDICT_JSON_SCHEMA,
+        },
+        {
+          kind: "auditor",
+          parseError: parsed.reason,
+          rawOutput: repairResponse,
+          attempt: ctx.getAuditInvocations(),
+        },
+      );
+      if (salvage) {
+        parsed = parseAuditorResponse(salvage.json);
+        if (parsed.ok) {
+          ctx.appendSystem(`Auditor JSON salvage succeeded on invocation ${ctx.getAuditInvocations()}.`);
         }
       }
     }
@@ -312,13 +353,19 @@ async function runDebateAuditPath(
   for (const criterion of unmetCriteria) {
     if (ctx.getStopping() && !opts.allowWhenStopping) return;
 
+    const debateExtras = resolveBlackboardPromptExtras({
+      active: active as import("../SwarmRunner.js").RunConfig | undefined,
+      getAmendments: ctx.getAmendments,
+      transcript: workTranscript,
+      forAgentId: auditor.id,
+    });
     const result = await runDebateAudit({
       pro: auditor,
       con: auditor,
       judge: auditor,
       criterion,
       workTranscript,
-      userDirective: active?.userDirective,
+      userDirective: debateExtras.effectiveDirective ?? active?.userDirective,
       ctx,
       maxRounds,
     });
@@ -540,18 +587,72 @@ export async function reviewProposedHunks(
     `{ "approve": true | false, "reason": "<concise 1-2 sentence justification>" }`,
   ].join("\n");
 
+  const auditorProfile = resolveToolProfile("auditor", ctx.getActive());
+  const hunkReviewSchema = {
+    type: "object",
+    properties: { approve: { type: "boolean" }, reason: { type: "string" } },
+    required: ["approve", "reason"],
+  };
+
   try {
-    const { response } = await ctx.promptPlannerSafely(
+    const { response: firstResponse } = await ctx.promptPlannerSafely(
       auditorAgent,
       reviewPrompt,
-      resolveToolProfile("auditor", ctx.getActive()),
-      { type: "object", properties: { approve: { type: "boolean" }, reason: { type: "string" } }, required: ["approve", "reason"] }
+      auditorProfile,
+      hunkReviewSchema,
     );
-    const parsed = JSON.parse(response);
-    return {
-      approve: !!parsed.approve,
-      reason: parsed.reason || (parsed.approve ? "Approved by auditor review" : "Rejected by auditor review"),
-    };
+    ctx.appendAgent(auditorAgent, firstResponse);
+
+    let parsed = parseHunkReviewResponse(firstResponse);
+    if (!parsed.ok) {
+      ctx.appendSystem(
+        `[hunk-review] response did not parse (${parsed.reason}). Issuing repair prompt.`,
+      );
+      const { response: repairResponse } = await ctx.promptPlannerSafely(
+        auditorAgent,
+        buildHunkReviewRepairPrompt(firstResponse, parsed.reason),
+        auditorProfile,
+        hunkReviewSchema,
+      );
+      ctx.appendAgent(auditorAgent, repairResponse);
+      parsed = parseHunkReviewResponse(repairResponse);
+      if (!parsed.ok && !ctx.getStopping()) {
+        ctx.appendSystem(
+          `[hunk-review] repair failed (${parsed.reason}); attempting JSON salvage.`,
+        );
+        const salvage = await runParseSalvage(
+          auditorAgent,
+          {
+            getStopping: ctx.getStopping,
+            appendSystem: ctx.appendSystem,
+            appendAgent: (a, t, o) => ctx.appendAgent(a, t, o),
+            promptPlannerSafely: ctx.promptPlannerSafely,
+            getActive: ctx.getActive,
+            jsonSchema: hunkReviewSchema,
+          },
+          {
+            kind: "hunk-review",
+            parseError: parsed.reason,
+            rawOutput: repairResponse,
+            attempt: 1,
+          },
+        );
+        if (salvage) {
+          parsed = parseHunkReviewResponse(salvage.json);
+          if (parsed.ok) {
+            ctx.appendSystem(`[hunk-review] auditor salvage succeeded for todo ${todo.id}.`);
+          }
+        }
+      }
+      if (!parsed.ok) {
+        ctx.appendSystem(
+          `[hunk-review] still invalid after repair (${parsed.reason}) — rejecting for safety.`,
+        );
+        return { approve: false, reason: "Auditor review failed to parse — rejecting for safety" };
+      }
+    }
+
+    return { approve: parsed.approve, reason: parsed.reason };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     ctx.appendSystem(`[hunk-review] failed: ${msg}`);

@@ -45,4 +45,9 @@ export interface AgentState {
   // distinguishes "patiently waiting for a real response" from
   // "something broke" (which is only true after a retry actually fires).
   thinkingSince?: number;
+  // Planner/worker activity label for sidebar debugging (e.g. "contract derivation attempt 2/8").
+  activityKind?: string;
+  activityLabel?: string;
+  activityAttempt?: number;
+  activityMaxAttempts?: number;
 }

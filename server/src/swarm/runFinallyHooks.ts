@@ -19,7 +19,7 @@
 // a callback fired between reflection and killAll.
 
 import { runEndReflection } from "./runEndReflection.js";
-import { formatPortReleaseLine } from "./runSummary.js";
+import { formatPortReleaseLine, isDiscussionGiveUpStop } from "./runSummary.js";
 import { scoreRun, appendOutcomeHistory, outcomeToMarkdown, type RunOutcome } from "./outcomeScorer.js";
 import type { Agent, AgentManager } from "../services/AgentManager.js";
 import type { RunConfig } from "./SwarmRunner.js";
@@ -91,6 +91,7 @@ export async function runDiscussionCloseOut(opts: CloseOutOpts): Promise<void> {
   if (
     !opts.crashMessage &&
     !opts.stopping &&
+    !isDiscussionGiveUpStop(opts.earlyStopDetail) &&
     opts.cfg.runId &&
     opts.hooks.pickReflectionAgent
   ) {

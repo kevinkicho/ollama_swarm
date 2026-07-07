@@ -17,22 +17,38 @@
 // hallucinated continuation as one giant invalid JSON.
 // Balanced-extract correctly stops at the first complete object.
 
-export function extractJsonFromText(raw: string): string | null {
-  const s = raw.trim();
+import { stripForJsonParse } from "./stripAgentText.js";
+
+function extractJsonFromNormalized(normalized: string): string | null {
+  const s = normalized.trim();
+  if (!s) return null;
   // Strip XML pseudo-tool-call markers before JSON extraction.
-  // Some models emit <read>, <list>, <grep> etc. as raw text which breaks JSON.parse.
   const stripped = s
     .replace(/<(?:read|list|grep|glob|edit|bash|propose_hunks)\b[^>]*\/>/g, "")
     .replace(/<(?:read|list|grep|glob|edit|bash|propose_hunks)\b[^>]*>[\s\S]*?<\/(?:read|list|grep|glob|edit|bash|propose_hunks)>/g, "")
     .trim();
-  // Top-level fenced block.
   const fenceMatch = stripped.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
   if (fenceMatch) return extractFirstBalanced(fenceMatch[1].trim()) ?? fenceMatch[1].trim();
-  // Inner fenced block (preamble allowed before/after).
   const innerFence = stripped.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
   if (innerFence) return extractFirstBalanced(innerFence[1].trim()) ?? innerFence[1].trim();
-  // Raw braces fallback — find first balanced object/array.
   return extractFirstBalanced(stripped);
+}
+
+export function extractJsonFromText(raw: string): string | null {
+  const fromStripped = extractJsonFromNormalized(stripForJsonParse(raw));
+  if (fromStripped) return fromStripped;
+  const fromRaw = extractJsonFromNormalized(raw.trim());
+  if (fromRaw) return fromRaw;
+  // Unclosed <think>: JSON may trail inside the think block (common with deepseek).
+  const openIdx = raw.lastIndexOf("<think>");
+  if (openIdx !== -1) {
+    const afterThink = raw.slice(openIdx + "<think>".length);
+    const fromThinkTail = extractJsonFromNormalized(stripForJsonParse(afterThink));
+    if (fromThinkTail) return fromThinkTail;
+    const fromThinkRaw = extractJsonFromNormalized(afterThink.trim());
+    if (fromThinkRaw) return fromThinkRaw;
+  }
+  return null;
 }
 
 // Find the first balanced JSON object or array in `s`. Returns the

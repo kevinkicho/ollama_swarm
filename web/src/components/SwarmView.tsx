@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, useMemo, Fragment, useContext } from "react";
+import { memo, useEffect, useState, useMemo, useContext } from "react";
 import { useSwarm, SwarmStoreContext, swarmSingletonStore } from "../state/store";
 // Phase 10: previous special composite/phase guards removed.
 import { AgentPanel } from "./AgentPanel";
@@ -19,7 +19,8 @@ import { IdentityStrip } from "./IdentityStrip";
 import { TranscriptTimeline } from "./TranscriptTimeline";
 import { PlanningTab } from "./PlanningTab";
 import { OutcomeChip } from "./OutcomeChip";
-import { fmtMs, roleForRow } from "./RunHistory";
+import { roleForRow } from "./RunHistory";
+import { AgentStatsCards } from "./AgentStatsCards";
 import { buildResumeStartPayload } from "../lib/resumeRun";
 import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
 import { applyStatusSnapshotToStore } from "../state/swarmStoreHydrate";
@@ -427,7 +428,7 @@ export const SwarmView = memo(function SwarmView() {
               className="text-xs px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
               title="Start a new run with the same workspace, preset, models, and agent topology"
             >
-              {busy ? "Starting…" : "Resume"}
+              {busy ? "Starting…" : "Run again"}
             </button>
           ) : (
             <div className="flex gap-1">
@@ -634,39 +635,11 @@ interface TabButtonProps {
 function SidebarSummaryAgents() {
   const summary = useSwarm((s) => s.summary);
   const cfg = useSwarm((s) => s.runConfig);
-  // Phase 10: no special finished remapping.
   if (!summary || summary.agents.length === 0) {
     return <div className="text-xs text-ink-400">No agents yet.</div>;
   }
-  return (
-    <>
-      <div className="text-[10px] uppercase tracking-wider text-ink-500 font-semibold mt-2 mb-1">
-        Final agent stats
-      </div>
-      {summary.agents.map((a, idx) => {
-        let role = cfg ? roleForRow(cfg.preset, a.agentIndex, summary.agents.length) : "agent";
-        // Phase 10: no special remapping of roles.
-        const lines = (a.linesAdded ?? 0) + (a.linesRemoved ?? 0);
-        return (
-          <div key={a.agentId || `agent-${a.agentIndex || idx}`} className="rounded border border-ink-700 bg-ink-800/50 p-2 text-xs">
-            <div className="flex items-baseline justify-between gap-2 mb-1">
-              <span className="text-ink-100 font-semibold">agent-{a.agentIndex}</span>
-              <span className="text-[10px] text-ink-400 font-mono">{role}</span>
-            </div>
-            <div className="text-[10px] font-mono text-ink-300 grid grid-cols-2 gap-x-2 gap-y-0.5">
-              <span className="text-ink-500">turns</span><span className="text-right">{a.turnsTaken}</span>
-              {a.totalAttempts !== undefined ? <Fragment key="attempts"><span className="text-ink-500">attempts</span><span className="text-right">{a.totalAttempts}</span></Fragment> : null}
-              {a.totalRetries !== undefined && a.totalRetries > 0 ? <Fragment key="retries"><span className="text-ink-500">retries</span><span className="text-right text-amber-300">{a.totalRetries}</span></Fragment> : null}
-              {a.meanLatencyMs ? <Fragment key="mean"><span className="text-ink-500">mean</span><span className="text-right">{fmtMs(a.meanLatencyMs)}</span></Fragment> : null}
-              {a.commits !== undefined && a.commits > 0 ? <Fragment key="commits"><span className="text-ink-500">commits</span><span className="text-right text-emerald-300">{a.commits}</span></Fragment> : null}
-              {lines > 0 ? <Fragment key="lines"><span className="text-ink-500">lines</span><span className="text-right"><span className="text-emerald-300">+{a.linesAdded ?? 0}</span> <span className="text-rose-300">−{a.linesRemoved ?? 0}</span></span></Fragment> : null}
-              {a.rejectedAttempts !== undefined && a.rejectedAttempts > 0 ? <Fragment key="rejected"><span className="text-ink-500">rejected</span><span className="text-right text-rose-300">{a.rejectedAttempts}</span></Fragment> : null}
-            </div>
-          </div>
-        );
-      })}
-    </>
-  );
+  const preset = cfg?.preset ?? summary.preset;
+  return <AgentStatsCards agents={summary.agents} preset={preset} />;
 }
 
 function TabButton({ active, onClick, children }: TabButtonProps) {

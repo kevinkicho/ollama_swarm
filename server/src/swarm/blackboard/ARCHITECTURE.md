@@ -53,11 +53,13 @@ system prompt. Same model + same todo, different priors. Default off.
 2. **Build worker prompt** with seed + todo + (anchored context if
    `expectedAnchors` set, Unit 44b).
 3. **Prompt worker** → response is a JSON envelope of hunks.
- 4. **Parse cascade** — 4-tier: parse → repair → brain fallback → sibling-retry.
-    Each tier catches a different failure class (see Parse Cascade section).
+ 4. **Parse cascade** — 4-tier: parse → repair → auditor interpretation → sibling-retry.
+    No in-run brain/system agent — swarm agents only (see Parse Cascade section).
     Task #67 tracks `jsonRepairs` per agent in the first tier.
-5. **Decline branch** — worker returned `{skip: "reason"}` →
-   markStale with `worker declined: <reason>`.
+5. **Decline branch** — worker returned `{skip: "reason"}` → auditor arbitrates:
+   - **valid refusal** or **hallucinated-todo** → stale → replanner (planner revises or discards)
+   - **invalid refusal** (worker has sufficient tools) → todo released back to board
+   - **insufficient-tools** → skipped with systemic finding exposed (no planner/auditor does the work)
 6. **Empty hunks** → markStale (`empty hunks no skip reason`).
 7. **Re-hash expectedFiles** → if any hash changed since `hashes`,
    markStale (`CAS mismatch before write`). Lost the race.
@@ -170,10 +172,17 @@ generates todos premised on code that doesn't exist):
    invalid `expectedSymbols` keeps its files and loses only the symbol
    references. Only todos whose `expectedFiles` fail file-grounding are
    dropped entirely.
-3. **Smaller batches (#71)** — `MAX_TODOS_PER_BATCH = 5` (was 20).
+3. **expectedFiles truncation prioritization (2026-07-07)** — Planner
+   todos are schema-capped at **2** `expectedFiles` via `lenientPreprocess`.
+   Naive `slice(0, 2)` kept the first two paths in model order; when those
+   were invented `src/data/sources/` or `src/components/panels/` trees,
+   grounding dropped every todo while valid registry paths were truncated
+   away (RCA: run `94224a3e`). `prioritizeExpectedFilesSlice()` now keeps
+   shallow registry/config paths when slicing. See `prompts/lenientParse.ts`.
+4. **Smaller batches (#71)** — `MAX_TODOS_PER_BATCH = 5` (was 20).
    Replanner re-prompts per batch; smaller batches give the planner
    feedback (decline / repair / commit) sooner.
-4. **Read-only todo suppression (rule 5a)** — The planner prompt
+5. **Read-only todo suppression (rule 5a)** — The planner prompt
    hard-bans read-only TODOs ("read X", "analyze Y", "explore Z").
    Workers decline these and the replanner confirms the skip, wasting
    an entire cycle.
@@ -208,12 +217,12 @@ primary model to a failover candidate (e.g. `nemotron-3-super → gemma4`).
 Six retry paths (all using `withSiblingRetry()` from `siblingRetry.ts`):
 | Trigger | Condition | File | Retry |
 |---|---|---|---|
-| Planner parse fail | JSON invalid after repair + brain | `plannerRunner.ts` | Re-run planner with sibling |
-| Planner 0-grounded | All todos dropped by file/symbol grounding | `plannerRunner.ts` | Re-run planner with sibling |
+| Planner parse fail | JSON invalid after repair | `plannerRunner.ts` | Re-run planner with sibling |
+| Planner 0-grounded | All todos dropped by file/symbol grounding (check truncation dropped valid paths first — run `94224a3e`) | `plannerRunner.ts` | Re-run planner with sibling; verify `prioritizeExpectedFilesSlice` |
 | Planner empty | 0 valid todos produced | `plannerRunner.ts` | Re-run planner with sibling |
-| Contract parse fail | JSON invalid after repair + brain | `contractBuilder.ts` | Re-run with sibling |
+| Contract parse fail | JSON invalid after repair | `contractBuilder.ts` | Re-run with sibling |
 | Auditor parse fail | JSON invalid after repair attempt | `auditorRunner.ts` | Re-run audit with sibling |
-| Worker parse fail | JSON invalid after repair + brain | `workerRunner.ts` | Re-prompt worker with sibling |
+| Worker parse fail | JSON invalid after repair + auditor interpretation | `workerRunner.ts` | Re-prompt worker with sibling |
 
 All five paths emit a `model_shift` WS event so the UI shows the
 temporary model change. **Critical:** every path emits a **reverse**
@@ -229,31 +238,38 @@ with whatever partial output was produced (or an empty contract).
 ## Parse cascade (why 4 tiers?)
 
 Every worker prompt output goes through a 4-tier cascade before being
-accepted or rejected:
+accepted or rejected. **No in-run brain/system agent** — the brain layer
+is post-run analysis only (brainOverseer). During runs, the auditor
+interprets malformed worker JSON when repair fails.
 
 ```
-worker prompt → [parse] → [repair] → [brain] → [sibling] → commit
-                 75% pass   60% pass   80% pass   55% pass
+worker prompt → [parse] → [repair] → [auditor] → [sibling] → commit
 ```
 
-**Why 4 tiers?** The Monte Carlo analysis (2026-05-09) proved each tier
-catches a different failure class:
-
-| Tier | Catches | Fallback cost |
-|------|---------|---------------|
-| Parse | Valid JSON structure | <1ms (sync) |
-| Repair | Format errors (malformed JSON, wrong field names) | +1 turn |
-| Brain | Unparseable-but-extractable JSON (gemma4 extraction) | +0.3 turns (faster model) |
-| Sibling | Model-specific failure modes (XML drift, empty responses) | +1 turn |
+| Tier | Catches | Who acts |
+|------|---------|----------|
+| Parse | Valid JSON structure | Rule-based `extractJsonCandidate` / envelope parse (<1ms) |
+| Repair | Format errors (malformed JSON, wrong field names) | Same agent, +1 turn |
+| Auditor salvage | Repair exhausted; prose/thinking wrapper around salvageable JSON | Dedicated auditor (`parseSalvage.ts`); transcript `assistKind: auditor-salvage` |
+| Auditor (worker skip) | Genuine skip vs invalid refusal | Auditor arbitration (not salvage) |
+| Sibling | Model-specific failure modes (XML drift, empty responses) | Sibling model, +1 turn |
 
 **Why not fewer tiers?** Removing repair causes trivial format errors to
-cascade to sibling (which may fail the same way). Removing brain removes
-the only tier that handles genuinely unparseable-but-structured output.
-Removing sibling removes the long-tail rescue (~1% of todos).
+cascade to sibling (which may fail the same way). Removing auditor
+interpretation loses structured extraction from malformed-but-readable
+output. Removing sibling removes the long-tail rescue (~1% of todos).
 
-**Why not more tiers?** Each additional tier has diminishing returns.
-The sensitivity analysis showed brain improvement from 0.80→0.95 gains
-only 0.3pp in overall success. The cascade is at an efficiency plateau.
+## Worker refusal arbitration (auditor)
+
+Workers must provide a reason when declining (`{ "skip": "reason" }`).
+The auditor arbitrates — it does not do the work:
+
+| Verdict | Outcome |
+|---------|---------|
+| `valid` | Stale → replanner; planner revises or discards |
+| `hallucinated-todo` | Stale → replanner; planner discards false premise |
+| `invalid` (tools sufficient) | Todo released to board for another worker |
+| `insufficient-tools` | Skipped; systemic toolset gap exposed as finding |
 
 **Sibling model mapping** (from `BlackboardRunnerConstants.ts`):
 
@@ -293,6 +309,7 @@ writeFileAtomic.ts         # tmp + rename helper.
 BlackboardRunnerConstants.ts # Sibling-model lookup, max-replan limit, shared constants.
 prompts/
   planner.ts               # PLANNER_SYSTEM_PROMPT + parsePlannerResponse.
+  lenientParse.ts          # lenientPreprocess + prioritizeExpectedFilesSlice.
   worker.ts                # Worker system prompt + parseWorkerResponse.
   critic.ts                # Single-critic prompt + verdict parser.
   auditor.ts               # Auditor prompt + verdict applier.
@@ -318,6 +335,9 @@ prompts/
   Production runs showed models hallucinate symbol references (functions
   that don't exist in the declared files); dropping the entire todo is
   worse than keeping it without symbols.
+- **Don't slice expectedFiles naively at max 2.** Models often list new
+  file paths before registry edits; use `prioritizeExpectedFilesSlice`
+  so grounding sees real repo paths (see postmortem `docs/postmortems/run-94224a3e.md`).
 - **Don't forget to revert model_shift after sibling-retry.** If the
   retry path emits `model_shift` but the `finally` block doesn't emit
   a reverse shift, the UI permanently shows the fallback model. Always

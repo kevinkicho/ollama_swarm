@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { extractJsonFromText as stripFences } from "../../extractJson.js";
+import { parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 import { lenientPreprocess } from "./lenientParse.js";
 import { windowFileWithAnchors } from "../windowFile.js";
 
@@ -81,23 +81,11 @@ export function parseReplannerResponse(raw: string): ReplannerParseResult {
   if (raw.trim().length === 0) {
     return { ok: false, reason: "empty response — model produced no output after stripping thinking tags" };
   }
-  let parsed: unknown;
-  let lastError = "";
-  try {
-    parsed = JSON.parse(raw.trim());
-  } catch (err) {
-    lastError = err instanceof Error ? err.message : String(err);
-    const cleaned = stripFences(raw);
-    if (cleaned === null) {
-      return { ok: false, reason: `JSON parse failed: ${lastError}` };
-    }
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch (err2) {
-      const msg = err2 instanceof Error ? err2.message : String(err2);
-      return { ok: false, reason: `JSON parse failed: ${msg}` };
-    }
+  const envelopeResult = parseJsonEnvelope(raw);
+  if (!envelopeResult.ok) {
+    return { ok: false, reason: envelopeResult.reason };
   }
+  const parsed = envelopeResult.value;
 
   if (Array.isArray(parsed)) {
     return { ok: false, reason: "expected top-level JSON object, got array" };
@@ -164,6 +152,8 @@ export const REPLANNER_SYSTEM_PROMPT = [
   "",
   "Pick SKIP when: the current file contents already satisfy the original TODO, the original intent no longer applies to the repo as it stands now, or retrying would fail for the same reason the previous attempt failed.",
   "Pick REVISE when: the work still needs doing but the scope, files, or wording needs to shift to match what you see in the files NOW. Prefer shrinking scope over widening it — if the previous attempt was too large, split it and keep only the smaller half.",
+  "",
+  "AUDITOR ARBITRATION (2026-07): When the stale reason mentions an auditor finding (e.g. 'auditor: valid refusal', 'planner hallucination', 'auditor-confirmed'), treat the auditor's rationale as authoritative. The auditor already judged the worker's refusal — you decide whether to revise the todo or discard it based on your reading of the project. Do NOT re-litigate whether the worker was right; focus on whether the todo still belongs on the board.",
 ].join("\n");
 
 export interface ReplannerSeed {
@@ -176,17 +166,33 @@ export interface ReplannerSeed {
   replanCount: number;
   /** Auto-detected anchors from todo description (for large files) */
   autoAnchors?: string[];
+  /** Directive + steer amendments (mid-run nudges). */
+  userDirective?: string;
+  /** Mid-run suggest/ask messages from user chat. */
+  userChatBlock?: string;
 }
 
 export function buildReplannerUserPrompt(seed: ReplannerSeed): string {
-  const parts: string[] = [
+  const parts: string[] = [];
+  if (seed.userDirective && seed.userDirective.trim().length > 0) {
+    parts.push(
+      "=== USER DIRECTIVE (includes any mid-run steer nudges) ===",
+      seed.userDirective.trim(),
+      "=== end USER DIRECTIVE ===",
+      "",
+    );
+  }
+  if (seed.userChatBlock && seed.userChatBlock.trim().length > 0) {
+    parts.push(seed.userChatBlock.trim(), "");
+  }
+  parts.push(
     `Stale TODO id: ${seed.todoId}`,
     `Original description: ${seed.originalDescription}`,
     `Original expected files: ${seed.originalExpectedFiles.join(", ")}`,
     `Stale reason: ${seed.staleReason}`,
     `Prior replan attempts: ${seed.replanCount}`,
     "",
-  ];
+  );
   if (seed.autoAnchors && seed.autoAnchors.length > 0) {
     parts.push(`Auto-detected anchors from description: ${seed.autoAnchors.join(", ")}`);
     parts.push("(These sections exist in the file — use them as context for your revision)");

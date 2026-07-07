@@ -114,4 +114,19 @@ describe("extractJsonFromText", () => {
     const result = extractJsonFromText('```json\n{"nested":{"deep":true}}\n```');
     assert.equal(result, '{"nested":{"deep":true}}');
   });
+
+  it("extracts JSON after closed think tag", () => {
+    const result = extractJsonFromText(
+      '<think>planning</think>\n{"hunks":[{"op":"create","file":"a.js","content":"x"}]}',
+    );
+    assert.ok(result);
+    assert.match(result!, /"hunks"/);
+  });
+
+  it("extracts JSON after unclosed think tag", () => {
+    const result = extractJsonFromText(
+      '<think>We need to emit JSON now\n{"approve":true,"reason":"ok"}',
+    );
+    assert.equal(result, '{"approve":true,"reason":"ok"}');
+  });
 });

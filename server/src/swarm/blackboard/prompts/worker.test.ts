@@ -18,6 +18,19 @@ function expectErr(r: WorkerParseResult, pattern: RegExp): void {
   assert.match(r.reason, pattern);
 }
 
+describe("parseWorkerResponse — think-tag prefix", () => {
+  it("parses hunks after closed think block", () => {
+    const raw =
+      '<think>Checking anchors</think>\n' +
+      JSON.stringify({
+        hunks: [{ op: "replace", file: "a.ts", search: "old", replace: "new" }],
+      });
+    const r = parseWorkerResponse(raw, ["a.ts"]);
+    assert.equal(r.ok, true);
+    if (r.ok) assert.equal(r.hunks.length, 1);
+  });
+});
+
 describe("parseWorkerResponse — happy paths (v2 hunks)", () => {
   it("parses a single replace hunk", () => {
     const raw = JSON.stringify({

@@ -781,6 +781,9 @@ export class OrchestratorWorkerDeepRunner extends DiscussionRunnerBase {
         agentId: agent.id,
         agentIndex: agent.index,
         logDiag: this.opts.logDiag,
+        manager: this.opts.manager,
+        signal: controller.signal,
+        runId: this.active?.runId,
       };
       const extracted = extractTextWithDiag(res, diagCtx);
       let text = extracted.text;

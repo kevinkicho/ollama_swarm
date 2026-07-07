@@ -70,7 +70,10 @@ test("parseSynthesizerHunks — invalid JSON", () => {
   const result = parseSynthesizerHunks(raw, allowedFiles);
 
   assert.strictEqual(result.ok, false);
-  assert.ok(result.reason?.includes("parse"));
+  assert.ok(
+    result.reason?.includes("parse") || result.reason?.includes("no JSON"),
+    `expected parse/no JSON error, got: ${result.reason}`,
+  );
 });
 
 test("parseSynthesizerHunks — file not in allowed set rejected", () => {

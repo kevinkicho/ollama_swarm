@@ -2,7 +2,7 @@
 
 import type { Agent } from "../services/AgentManager.js";
 import { execSync } from "node:child_process";
-import { extractJsonFromText } from "./extractJson.js";
+import { extractJsonCandidate } from "@ollama-swarm/shared/parseAgentJson";
 
 /** Extract text from a provider response that may be a string or a
  *  structured object like {data:{parts:[{type:"text",text:"..."}]}}. */
@@ -46,10 +46,10 @@ export function parseJsonArrayFromResponse<T>(
   text: string,
   normalize: (item: any, i: number) => T
 ): T[] {
-  const extracted = extractJsonFromText(text);
-  if (!extracted) return [];
+  const candidate = extractJsonCandidate(text);
+  if (!candidate) return [];
   try {
-    const parsed = JSON.parse(extracted);
+    const parsed = JSON.parse(candidate.json);
     if (!Array.isArray(parsed)) return [];
     return parsed.map(normalize);
   } catch {

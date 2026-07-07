@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-07-07 (Research web tools, council stop/close-out, transcript cycle markers, structured Drafts tab.)
+**Last updated:** 2026-07-07 (Planner expectedFiles truncation fix, thinking/pseudo-tool transcript UX, parse-salvage cascade.)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
@@ -74,6 +74,8 @@ Validation: tour v2 (2026-04-28) ran 9 sequentially with 8/9 self-terminating cl
 | Run history (95+ runs) | History dropdown auto-scans `runs*/` at startup | `Orchestrator.scanForRunParents` |
 | Model autocomplete | `/api/models` proxies Ollama tags into datalist on every model field | `useAvailableModels` hook |
 | Agent tools | Local by default (`swarm`, `swarm-read`, `swarm-builder`). Opt-in web: `webTools` / `plannerTools` → `swarm-planner`, `swarm-research`, `swarm-builder-research` (`web_search`, `web_fetch`). Research pre-pass before blackboard contract. Tool calls logged to transcript. | `shared/src/toolProfiles.ts`, `ToolDispatcher`, `researchPrePass.ts`, `toolCallTranscript.ts` |
+| Transcript text hygiene | `stripAgentText` strips think tags + pseudo-tool XML (`<read>`, `<tool_use>`, DeepSeek `<function>` wrappers) from bubble text and thoughts. Thinking toggle shows prose + compact intended-tool list. | `shared/src/stripAgentText.ts`, `extractToolCallMarkers.ts`, `parseThinkingDisplay.ts`, `web/.../AgentThinking.tsx` |
+| Parse-salvage | Rule-based JSON extract → repair → auditor salvage → sibling-retry (no in-run brain). `auditor-salvage` chip on transcript entries. | `shared/src/parseAgentJson.ts`, `blackboard/parseSalvage.ts`, `plannerRecovery.ts` |
 | Cap watchdog (5s tick) | Wall-clock + commits + todos caps fire promptly during any phase | `BlackboardRunner.startCapWatchdog` (#305) |
 | `runs/` retention | `node scripts/prune-runs.mjs --apply` keeps last N + last 7 days | `scripts/prune-runs.mjs` |
 | `logs/` retention | `node scripts/prune-logs.mjs --apply` (current.jsonl rotations + per-run debug*.jsonl) | `scripts/prune-logs.mjs` (new) |

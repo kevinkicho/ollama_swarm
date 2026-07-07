@@ -102,6 +102,8 @@ export async function runSynthesisPass(
       agentId: lead.id,
       agentIndex: lead.index,
       logDiag: ctx.logDiag,
+      manager: ctx.manager as import("../services/AgentManager.js").AgentManager,
+      signal: controller.signal,
     };
     const extracted = extractTextWithDiag(res, diagCtx);
     let text = extracted.text;

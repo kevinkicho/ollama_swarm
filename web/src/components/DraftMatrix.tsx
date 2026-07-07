@@ -1,24 +1,15 @@
 import { useMemo, useState } from "react";
 import { useSwarm } from "../state/store";
 import type { TranscriptEntry } from "../types";
+import { parseCouncilIssues, type ExecutionEvent } from "./drafts/councilDraftParse";
 import {
-  parseCouncilIssues,
-  parseExecutionLine,
-  type ExecutionEvent,
-} from "./drafts/councilDraftParse";
+  aggregateCouncilCycles,
+  cycleShowsExecCounts,
+  type CouncilCycleData,
+} from "./drafts/councilCycleAggregate";
 import { CouncilIssueList } from "./drafts/CouncilIssueList";
 
-interface CycleData {
-  cycle: number;
-  isDrainOnly: boolean;
-  rounds: Map<number, Map<number, TranscriptEntry>>;
-  execution: ExecutionEvent[];
-  conformance: string | null;
-  todosDone: number;
-  todosFailed: number;
-  todosSkipped: number;
-  maxAgentIndex: number;
-}
+type CycleData = CouncilCycleData;
 
 function executionStatusClass(status: ExecutionEvent["status"]): string {
   switch (status) {
@@ -140,61 +131,22 @@ export function DraftMatrix() {
   const configuredAgents = cfg?.agentCount ?? 0;
   const [expandedCell, setExpandedCell] = useState<string | null>(null);
   const [expandedIssues, setExpandedIssues] = useState<Set<string>>(new Set());
-  const [collapsedCycles, setCollapsedCycles] = useState<Set<number>>(new Set());
+  /** `'latest'` keeps only the newest cycle open; a number pins one cycle; `'none'` collapses all. */
+  const [expandedCycle, setExpandedCycle] = useState<number | "latest" | "none">("latest");
 
-  const cycles = useMemo(() => {
-    const out: CycleData[] = [];
-    let current: CycleData | null = null;
+  const cycles = useMemo(() => aggregateCouncilCycles(transcript), [transcript]);
 
-    for (const e of transcript) {
-      const text = e.text ?? "";
-      const cycleMatch = text.match(/═══ Council cycle (\d+)/);
-      if (cycleMatch) {
-        if (current) out.push(current);
-        current = {
-          cycle: Number.parseInt(cycleMatch[1], 10),
-          isDrainOnly: /draining/i.test(text),
-          rounds: new Map(),
-          execution: [],
-          conformance: null,
-          todosDone: 0,
-          todosFailed: 0,
-          todosSkipped: 0,
-          maxAgentIndex: 0,
-        };
-      }
-      if (!current) continue;
+  const sortedCycles = useMemo(
+    () => [...cycles].sort((a, b) => b.cycle - a.cycle),
+    [cycles],
+  );
+  const latestCycle = sortedCycles[0]?.cycle ?? 0;
 
-      if (e.role === "agent" && e.summary?.kind === "council_draft") {
-        const r = e.summary.round;
-        const idx = e.agentIndex ?? 0;
-        if (idx > current.maxAgentIndex) current.maxAgentIndex = idx;
-        if (!current.rounds.has(r)) current.rounds.set(r, new Map());
-        current.rounds.get(r)!.set(idx, e);
-      }
-
-      if (e.role === "system" && text.startsWith("[execution]")) {
-        const ev = parseExecutionLine(text);
-        current.execution.push(ev);
-        if (ev.status === "summary") {
-          const m = ev.detail.match(/(\d+) done · (\d+) failed · (\d+) skipped/);
-          if (m) {
-            current.todosDone = Number.parseInt(m[1], 10);
-            current.todosFailed = Number.parseInt(m[2], 10);
-            current.todosSkipped = Number.parseInt(m[3], 10);
-          }
-        } else if (ev.status === "done") current.todosDone++;
-        else if (ev.status === "failed") current.todosFailed++;
-        else if (ev.status === "skipped") current.todosSkipped++;
-      }
-
-      if (e.role === "system" && text.startsWith("[conformance]")) {
-        current.conformance = text;
-      }
-    }
-    if (current) out.push(current);
-    return out;
-  }, [transcript]);
+  const isCycleExpanded = (cycleNum: number) => {
+    if (expandedCycle === "none") return false;
+    if (expandedCycle === "latest") return cycleNum === latestCycle;
+    return expandedCycle === cycleNum;
+  };
 
   if (cycles.length === 0) {
     return (
@@ -206,12 +158,12 @@ export function DraftMatrix() {
 
   return (
     <div className="h-full overflow-auto p-4 space-y-4">
-      {cycles.map((cycle) => {
+      {sortedCycles.map((cycle) => {
         const rounds = Array.from(cycle.rounds.keys()).sort((a, b) => a - b);
         const agentSlots = Math.max(configuredAgents, cycle.maxAgentIndex, 1);
-        const collapsed = collapsedCycles.has(cycle.cycle);
+        const expanded = isCycleExpanded(cycle.cycle);
         const hasDiscussion = rounds.length > 0;
-        const totalTodos = cycle.todosDone + cycle.todosFailed + cycle.todosSkipped;
+        const showExecCounts = cycleShowsExecCounts(cycle);
 
         return (
           <section
@@ -220,14 +172,15 @@ export function DraftMatrix() {
           >
             <button
               type="button"
-              onClick={() =>
-                setCollapsedCycles((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(cycle.cycle)) next.delete(cycle.cycle);
-                  else next.add(cycle.cycle);
-                  return next;
-                })
-              }
+              onClick={() => {
+                if (expanded) {
+                  setExpandedCycle("none");
+                } else if (cycle.cycle === latestCycle) {
+                  setExpandedCycle("latest");
+                } else {
+                  setExpandedCycle(cycle.cycle);
+                }
+              }}
               className="w-full flex items-center justify-between gap-3 px-3 py-2.5 bg-ink-800/40 hover:bg-ink-800/60 transition text-left"
             >
               <div className="flex items-center gap-2 min-w-0">
@@ -250,13 +203,11 @@ export function DraftMatrix() {
                 ) : null}
               </div>
               <div className="flex items-center gap-3 shrink-0 text-[10px]">
-                {totalTodos > 0 ? (
+                {showExecCounts ? (
                   <>
                     <span className="text-emerald-400">{cycle.todosDone} done</span>
                     <span className="text-amber-400">{cycle.todosSkipped} skip</span>
-                    {cycle.todosFailed > 0 ? (
-                      <span className="text-rose-400">{cycle.todosFailed} fail</span>
-                    ) : null}
+                    <span className="text-rose-400">{cycle.todosFailed} fail</span>
                   </>
                 ) : null}
                 {cycle.conformance ? (
@@ -264,11 +215,11 @@ export function DraftMatrix() {
                     {cycle.conformance.match(/Score: (\d+\/100)/)?.[1] ?? ""}
                   </span>
                 ) : null}
-                <span className="text-ink-500">{collapsed ? "▸" : "▾"}</span>
+                <span className="text-ink-500">{expanded ? "▾" : "▸"}</span>
               </div>
             </button>
 
-            {!collapsed ? (
+            {expanded ? (
               <div className="p-3 space-y-4">
                 {hasDiscussion ? (
                   <div className="space-y-3">

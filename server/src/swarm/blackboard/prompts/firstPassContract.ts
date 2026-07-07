@@ -65,29 +65,17 @@ export type ContractParseResult =
 // contract: {...}"). Try progressively looser extraction only if the raw
 // text fails straight-up JSON.parse. Task #204 extracted this helper —
 // shared across 6 prompt parsers.
-import { extractJsonFromText as stripFences } from "../../extractJson.js";
+import { parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 
 export function parseFirstPassContractResponse(raw: string): ContractParseResult {
   if (raw.trim().length === 0) {
     return { ok: false, reason: "empty response — model produced no output after stripping thinking tags" };
   }
-  let parsed: unknown;
-  let lastError = "";
-  try {
-    parsed = JSON.parse(raw.trim());
-  } catch (err) {
-    lastError = err instanceof Error ? err.message : String(err);
-    const cleaned = stripFences(raw);
-    if (cleaned === null) {
-      return { ok: false, reason: `JSON parse failed: ${lastError}` };
-    }
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch (err2) {
-      const msg = err2 instanceof Error ? err2.message : String(err2);
-      return { ok: false, reason: `JSON parse failed: ${msg}` };
-    }
+  const envelopeResult = parseJsonEnvelope(raw);
+  if (!envelopeResult.ok) {
+    return { ok: false, reason: envelopeResult.reason };
   }
+  const parsed = envelopeResult.value;
 
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     return {
@@ -488,19 +476,39 @@ export function buildTierUpPrompt(seed: TierUpSeedInput): string {
 export function buildFirstPassContractRepairPrompt(
   previousResponse: string,
   parseError: string,
+  auditorNote?: string,
 ): string {
+  const auditorBlock = auditorNote?.trim()
+    ? [
+        "",
+        "=== AUDITOR DIAGNOSTIC (read and apply — planner role stays with you) ===",
+        auditorNote.trim(),
+        "=== end AUDITOR DIAGNOSTIC ===",
+        "",
+      ]
+    : [];
+  const groundingHint = parseError.startsWith("grounding failed:")
+    ? [
+        "GROUNDING FAILURE: expectedFiles referenced paths or directories not in the REPO FILE LIST.",
+        "Use ONLY verbatim paths from that list, or [] when unsure.",
+        "Do NOT invent directory trees that do not appear in the REPO FILE LIST.",
+        "",
+      ]
+    : [];
   return [
     "Your previous response could not be parsed as the required JSON object.",
     `Parser error: ${parseError}`,
-    "",
+    ...groundingHint,
+    ...auditorBlock,
     "Your previous response was:",
     "--- BEGIN PREVIOUS RESPONSE ---",
     previousResponse,
     "--- END PREVIOUS RESPONSE ---",
     "",
+    "You have already explored the repo. Do NOT emit more XML pseudo-tool-calls or file dumps.",
     "Respond now with ONLY a JSON object matching the schema:",
     '{"missionStatement": "one sentence", "criteria": [{"description": "one sentence", "expectedFiles": ["path1"]}, ...]}',
     "",
-    "No prose. No markdown fences. No commentary. Just the JSON object.",
+    "No prose. No markdown fences. No <think> tags. No commentary. Just the JSON object.",
   ].join("\n");
 }

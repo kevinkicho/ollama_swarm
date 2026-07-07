@@ -1,4 +1,5 @@
 import { extractJsonFromText } from "@ollama-swarm/shared/extractJson";
+import { extractThinkTags } from "@ollama-swarm/shared/extractThinkTags";
 import type { TranscriptEntry } from "../types";
 
 export type StreamingMetaEntry = {
@@ -37,9 +38,14 @@ function canonicalAgentText(text: string): string {
   }
 }
 
+/** Stream buffer may still carry think tags; final transcript text does not. */
+function streamVisibleText(streamed: string): string {
+  return extractThinkTags(streamed).finalText.trim();
+}
+
 /** True when a flushed stream snapshot duplicates the final agent text. */
 export function textsAreRedundantStream(streamed: string, final: string): boolean {
-  const s = streamed.trim();
+  const s = streamVisibleText(streamed);
   const f = final.trim();
   if (!s || !f) return false;
   if (s === f) return true;

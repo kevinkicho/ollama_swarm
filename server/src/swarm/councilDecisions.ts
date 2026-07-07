@@ -90,6 +90,7 @@ export async function extractActionableTodos(
   appendSystem: (msg: string) => void,
   manager: { list: () => Agent[]; recordStreamingText?: (id: string, text: string) => void },
   contract?: ExitContract | null,
+  progressContext?: string,
 ): Promise<Array<{ id: string; description: string; expectedFiles: string[] }>> {
   const synthesisEntry = [...transcript]
     .reverse()
@@ -104,8 +105,10 @@ export async function extractActionableTodos(
     .map((e) => `[Agent ${e.agentIndex}] ${e.text.slice(0, 500)}`)
     .join("\n");
 
-  const prompt = `You are extracting ACTIONABLE work items from a council discussion. The council agreed on specific changes. Extract each concrete change as a separate todo.
+  const progressBlock = progressContext?.trim() ? `\n${progressContext}\n` : "";
 
+  const prompt = `You are extracting ACTIONABLE work items from a council discussion. The council agreed on specific changes. Extract each concrete change as a separate todo.
+${progressBlock}
 Council synthesis:
 ${synthesisEntry.text.slice(0, 3000)}
 

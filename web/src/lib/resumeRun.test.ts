@@ -78,6 +78,28 @@ describe("resumeRun", () => {
     assert.equal(d, "Add panels from gov data");
   });
 
+  it("buildResumeStartPayload does not auto-resume council execution after crash", () => {
+    const payload = buildResumeStartPayload({
+      runConfig: {
+        preset: "council",
+        localPath: "C:\\workspace\\superconducters_07062026",
+        agentCount: 4,
+        rounds: 0,
+        model: "deepseek-v4-flash:cloud",
+        extras: { userDirective: "study superconductors" },
+      },
+      summary: {
+        preset: "council",
+        runId: "6cb20b27-9db7-4ef9-80e7-3a7934029f48",
+        stopReason: "crash",
+        localPath: "C:\\workspace\\superconducters_07062026",
+        agentCount: 4,
+      } as any,
+    });
+    assert.ok(payload);
+    assert.equal((payload as { resumeExecutionFromRunId?: string }).resumeExecutionFromRunId, undefined);
+  });
+
   it("buildResumeStartPayload carries userDirective and plannerTools", () => {
     const payload = buildResumeStartPayload({
       runConfig: {

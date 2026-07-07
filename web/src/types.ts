@@ -32,6 +32,10 @@ export interface AgentState {
   // it to render a ticking "thinking 3m54s" so a legitimate slow
   // prompt doesn't look like an error. Unset for non-thinking states.
   thinkingSince?: number;
+  activityKind?: string;
+  activityLabel?: string;
+  activityAttempt?: number;
+  activityMaxAttempts?: number;
 }
 
 export type TranscriptRole = "system" | "user" | "agent" | "agent-stream";
@@ -43,6 +47,10 @@ export interface TranscriptEntry {
   agentIndex?: number;
   text: string;
   ts: number;
+  /** Chat lever #2: suggest | steer | ask from /api/swarm/say */
+  intent?: "suggest" | "steer" | "ask";
+  /** @mention routing — only this agent's prompts see the message when set */
+  targetAgent?: string;
 
   // Unit 54: server-computed structured summary of the agent's
   // response when it parsed as a known envelope. Web prefers this
@@ -53,8 +61,8 @@ export interface TranscriptEntry {
   // 2026-04-27 (UI Phase 1): when an agent emitted  thinking... response
   // markers (reasoning models), the server-side appendAgent strips
   // them out into this field via shared/extractThinkTags. The text
-  // field carries the FINAL response only. UI renders thoughts as a
-  // collapsed-by-default ThoughtsBlock above the main bubble.
+  // field carries the FINAL response only. UI renders thoughts inside
+  // the agent bubble via a "Thinking" toggle (see AgentThinking.tsx).
   thoughts?: string;
   // 2026-04-27 evening (#229): when an agent emitted XML pseudo-tool-
   // call markers (<read>, <grep>, <list>, <glob>, <edit>, <bash>) as
@@ -77,6 +85,8 @@ export interface TranscriptEntry {
     text: string;
     streamingMeta?: TranscriptEntry["streamingMeta"];
   };
+  /** Blackboard auditor assist — JSON salvage bubble labeling. */
+  assistKind?: "auditor-salvage" | "auditor-diagnostic";
 }
 
 export type SwarmPhase =

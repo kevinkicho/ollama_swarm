@@ -50,4 +50,10 @@ export class FindingsLog {
   clear(): void {
     this.findings.clear();
   }
+
+  /** Restore a finding with a fixed id (snapshot resume). */
+  restore(finding: Finding): void {
+    if (!finding.text.trim()) return;
+    this.findings.set(finding.id, { ...finding });
+  }
 }

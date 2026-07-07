@@ -195,10 +195,8 @@ export interface RunConfig {
    */
   providerFailover?: readonly string[];
   /**
-   * AI brain fallback model override. When set, overrides the
-   * SWARM_BRAIN_MODEL env var for this run. Empty string disables
-   * brain fallback entirely. Default: SWARM_BRAIN_MODEL env var
-   * (default: "gemma4:31b-cloud").
+   * Legacy — in-run brain parse fallback is retired. Ignored at runtime.
+   * Post-run brainOverseer analysis uses its own model config.
    */
   brainModel?: string;
   /**
@@ -312,6 +310,12 @@ export interface RunConfig {
    * to the normal first-pass-contract path. Blackboard-only.
    */
   resumeContract?: boolean;
+  /**
+   * Council-only: load pending execution todos from
+   * `<clone>/logs/<runId>/pending-execution-todos.json`, skip contract
+   * derivation, and drain the queue (execution-only cycle).
+   */
+  resumeExecutionFromRunId?: string;
   /**
    * Unit 58: opt-in to spawn a 4th agent dedicated to the AUDITOR
    * role. Without this flag, agent-1 wears 4 hats (planner +

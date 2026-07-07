@@ -4,6 +4,7 @@ import type { AgentRole, Topology } from "../../../shared/src/topology";
 import { copyText } from "../utils/copyText";
 import { truncateLeft } from "./IdentityStrip";
 import { loadRecentRuns, type RecentRun } from "./setup/RecentRuns";
+import { AgentStatsTable, rowsFromPerAgentStats } from "./AgentStatsTable";
 
 // Unit 56: IdentifiersRow has been deleted as a separate row.
 // - run uuid moved into IdentityStrip's leading chip
@@ -707,60 +708,10 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
           {/* Per-agent table */}
           {summary && summary.agents.length > 0 ? (
             <section>
-              <SectionLabel>Per-agent ({summary.agents.length})</SectionLabel>
-              <div className="overflow-x-auto rounded border border-ink-700">
-                <table className="w-full text-[11px] font-mono">
-                  <thead className="bg-ink-800/60 text-ink-400 text-left">
-                    <tr>
-                      <th className="px-2 py-1">#</th>
-                      <th className="px-2 py-1">Role</th>
-                      <th className="px-2 py-1 text-right">Turns</th>
-                      <th className="px-2 py-1 text-right">Attempts</th>
-                      <th className="px-2 py-1 text-right">Retries</th>
-                      <th className="px-2 py-1 text-right">Mean</th>
-                      <th className="px-2 py-1 text-right">p50</th>
-                      <th className="px-2 py-1 text-right">p95</th>
-                      <th className="px-2 py-1 text-right" title="Commits this agent landed (blackboard-only)">Commits</th>
-                      <th className="px-2 py-1 text-right text-emerald-400/70" title="Lines added by this agent (blackboard-only)">+Lines</th>
-                      <th className="px-2 py-1 text-right text-rose-400/70" title="Lines removed by this agent (blackboard-only)">−Lines</th>
-                      <th className="px-2 py-1 text-right" title="Total lines touched (added + removed)">Total</th>
-                      <th className="px-2 py-1 text-right text-rose-400/70" title="Rejected work — declined todos + JSON-invalid-after-repair + CAS losses + hunk-apply failures + critic rejections (blackboard-only)">Rejected</th>
-                      <th className="px-2 py-1 text-right text-amber-400/70" title="JSON-invalid first attempts that triggered the repair-prompt path (informational; successful repair still counts)">JSON⚠</th>
-                      <th className="px-2 py-1 text-right text-rose-500/70" title="Hard errors during this agent's prompts (network, abort, etc.)">Errors</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {summary.agents.map((a) => {
-                      const linesTotal = a.linesAdded !== undefined && a.linesRemoved !== undefined
-                        ? a.linesAdded + a.linesRemoved
-                        : undefined;
-                      return (
-                        <tr key={a.agentId} className="border-t border-ink-700/60">
-                          <td className="px-2 py-1 text-ink-300">{a.agentIndex}</td>
-                          <td className="px-2 py-1 text-ink-200">{roleForRow(summary.preset, a.agentIndex, summary.agents.length)}</td>
-                          {/* turns is intentionally numeric (0 = "agent never ran" is meaningful). */}
-                          <td className="px-2 py-1 text-right text-ink-200">{a.turnsTaken}</td>
-                          {/* 2026-04-25 fine-tune (Kevin): empty/zero numeric
-                              cells render "—" with opacity-50 (same as dropdown
-                              + headline tiles). */}
-                          <NumOrDashCell value={a.totalAttempts} className="px-2 py-1 text-right text-ink-300" />
-                          <NumOrDashCell value={a.totalRetries} className="px-2 py-1 text-right text-ink-300" />
-                          <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.meanLatencyMs)}</td>
-                          <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.p50LatencyMs)}</td>
-                          <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.p95LatencyMs)}</td>
-                          <NumOrDashCell value={a.commits} className="px-2 py-1 text-right text-ink-200" />
-                          <NumOrDashCell value={a.linesAdded} className="px-2 py-1 text-right text-emerald-300" />
-                          <NumOrDashCell value={a.linesRemoved} className="px-2 py-1 text-right text-rose-300" />
-                          <NumOrDashCell value={linesTotal} className="px-2 py-1 text-right text-ink-200" />
-                          <NumOrDashCell value={a.rejectedAttempts} className={`px-2 py-1 text-right ${a.rejectedAttempts && a.rejectedAttempts > 0 ? "text-rose-300 font-semibold" : "text-ink-300"}`} />
-                          <NumOrDashCell value={a.jsonRepairs} className={`px-2 py-1 text-right ${a.jsonRepairs && a.jsonRepairs > 0 ? "text-amber-300" : "text-ink-300"}`} />
-                          <NumOrDashCell value={a.promptErrors} className={`px-2 py-1 text-right ${a.promptErrors && a.promptErrors > 0 ? "text-rose-400 font-semibold" : "text-ink-300"}`} />
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <AgentStatsTable
+                label={`Per-agent (${summary.agents.length})`}
+                rows={rowsFromPerAgentStats(summary.agents, summary.preset)}
+              />
             </section>
           ) : null}
 

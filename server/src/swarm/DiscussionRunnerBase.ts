@@ -382,6 +382,8 @@ export abstract class DiscussionRunnerBase {
         mcpServers: this.active?.mcpServers,
         onTool: makeWebToolHandler((text, summary) => this.appendSystem(text, summary), agent.id),
         promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
+        logDiag: this.opts.logDiag,
+        runId: this.active?.runId,
         describeError: describeSdkError,
         ...(opts.modelOverride && opts.modelOverride !== agent.model
           ? { modelOverride: opts.modelOverride }
@@ -436,6 +438,16 @@ export abstract class DiscussionRunnerBase {
         agentId: agent.id,
         agentIndex: agent.index,
         logDiag: this.opts.logDiag,
+        manager: this.opts.manager,
+        signal: controller.signal,
+        webToolsConfig: this.active,
+        mcpServers: this.active?.mcpServers,
+        onTool: makeWebToolHandler((text, summary) => this.appendSystem(text, summary), agent.id),
+        promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
+        ...(opts.modelOverride && opts.modelOverride !== agent.model
+          ? { modelOverride: opts.modelOverride }
+          : {}),
+        runId: this.active?.runId,
       };
       const extracted = extractTextWithDiag(res, diagCtx);
       let text = extracted.text;
@@ -473,7 +485,8 @@ export abstract class DiscussionRunnerBase {
 
       this.transcript.push(entry);
       this.opts.emit({ type: "transcript_append", entry });
-      this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
+      // streaming_end is owned by promptWithRetry → markStreamingDone; a second
+      // emit here raced ahead of agent_state ready and recreated dock bubbles.
       this.opts.manager.markStatus(agent.id, "ready", { lastMessageAt: entry.ts });
       this.emitAgentState({
         id: agent.id,
@@ -502,7 +515,7 @@ export abstract class DiscussionRunnerBase {
     } catch (err) {
       const msg = watchdog.getAbortReason() ?? describeSdkError(err);
       this.appendSystem(`[${agent.id}] error: ${msg}`);
-      this.opts.emit({ type: "agent_streaming_end", agentId: agent.id });
+      this.opts.manager.markStreamingDone(agent.id);
       this.opts.manager.markStatus(agent.id, "failed", { error: msg });
       this.emitAgentState({
         id: agent.id,

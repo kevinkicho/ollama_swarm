@@ -349,6 +349,56 @@ export class TodoQueue {
     t.retries += 1;
   }
 
+  /** Release an in-progress todo back to pending without marking it failed.
+   *  Used when the auditor overrides an invalid worker refusal — the todo
+   *  returns to the board for another worker attempt. Does NOT trigger
+   *  the replan queue (unlike fail()). */
+  release(
+    id: string,
+    reason: string,
+    updates?: {
+      description?: string;
+      expectedFiles?: readonly string[];
+      expectedAnchors?: readonly string[];
+      kind?: "hunks" | "build";
+      command?: string;
+      contextFiles?: readonly string[];
+    },
+    ts: number = Date.now(),
+  ): void {
+    const t = this.findOrThrow(id);
+    if (t.status !== "in-progress") {
+      throw new Error(`Cannot release todo ${id}: status=${t.status}`);
+    }
+    t.status = "pending";
+    t.workerId = undefined;
+    t.startedAt = undefined;
+    t.endedAt = undefined;
+    t.reason = reason;
+    t.retries += 1;
+    if (updates) {
+      if (updates.description !== undefined) {
+        if (!updates.description.trim()) {
+          throw new Error(`Cannot release todo ${id}: empty description`);
+        }
+        t.description = updates.description;
+      }
+      if (updates.expectedFiles !== undefined) {
+        t.expectedFiles = updates.expectedFiles.slice();
+      }
+      if (updates.expectedAnchors !== undefined) {
+        t.expectedAnchors =
+          updates.expectedAnchors.length > 0 ? updates.expectedAnchors.slice() : undefined;
+      }
+      if (updates.kind !== undefined) t.kind = updates.kind;
+      if (updates.command !== undefined) t.command = updates.command;
+      if (updates.contextFiles !== undefined) {
+        t.contextFiles = updates.contextFiles.length > 0 ? updates.contextFiles.slice() : undefined;
+      }
+    }
+    void ts;
+  }
+
   /** Mark an in-progress todo as failed. Increments retries.
    *  Caller decides whether to re-enqueue (via reset()) or leave failed.
    *  Idempotent on already-failed todos (second fail just updates reason). */
@@ -509,6 +559,17 @@ export class TodoQueue {
   clear(): void {
     this.todos = [];
     this.nextIdCounter = 1;
+  }
+
+  /** Bulk-restore from a snapshot (resume-after-crash). */
+  restore(todos: readonly QueuedTodo[]): void {
+    this.todos = todos.map((t) => this.copyTodo(t));
+    let maxId = 0;
+    for (const t of this.todos) {
+      const m = /^t(\d+)$/.exec(t.id);
+      if (m) maxId = Math.max(maxId, Number(m[1]));
+    }
+    this.nextIdCounter = maxId > 0 ? maxId + 1 : 1;
   }
 
   // syncStatus + postWithId removed (audit, 2026-04-28). Both were

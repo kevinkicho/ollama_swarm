@@ -6,9 +6,9 @@
 // SSE-related bugs (#170, #194, #200, #220, #223).
 //
 // Ollama's streaming protocol is JSONL on the HTTP body — each line is
-// a JSON object with `message.content` (incremental chars). The final
-// line has `done: true` plus `prompt_eval_count` + `eval_count` for
-// token telemetry. No SSE, no SDK, no subprocess.
+// a full ChatResponse frame (ollama-js yields every parsed line). Fields
+// we listen to: `message.content`, `message.thinking`, `message.tool_calls`,
+// and `done` + token counts on the final frame. No SSE, no SDK, no subprocess.
 //
 // This module is the V1-replacement substrate. Initial integration
 // will be gated behind a flag and validated preset-by-preset.
@@ -87,8 +87,14 @@ export interface ChatOpts {
   runId?: string;
 }
 
+/** Cumulative display text for streaming + final result (thinking wrapped for stripAgentText). */
+export function buildOllamaStreamText(thinking: string, content: string): string {
+  if (!thinking) return content;
+  return `<think>${thinking}</think>${content}`;
+}
+
 export interface ChatResult {
-  /** Full assistant text (concatenation of all `message.content` chunks). */
+  /** Full assistant text (`message.content`, with `message.thinking` wrapped in think tags). */
   text: string;
   /** Total elapsed wall-clock ms. */
   elapsedMs: number;
@@ -206,9 +212,15 @@ export async function chat(opts: any): Promise<ChatResult> {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
-  let text = "";
+  let content = "";
+  let thinking = "";
   let promptTokens = 0;
   let responseTokens = 0;
+
+  const emitStream = () => {
+    const snapshot = buildOllamaStreamText(thinking, content);
+    opts.onChunk?.(snapshot);
+  };
 
   try {
     while (true) {
@@ -231,7 +243,12 @@ export async function chat(opts: any): Promise<ChatResult> {
         buf = buf.slice(nl + 1);
         if (!line) continue;
         let parsed: {
-          message?: { role?: string; content?: string };
+          message?: {
+            role?: string;
+            content?: string;
+            thinking?: string;
+            tool_calls?: unknown[];
+          };
           done?: boolean;
           prompt_eval_count?: number;
           eval_count?: number;
@@ -243,10 +260,23 @@ export async function chat(opts: any): Promise<ChatResult> {
           // or partial frames mid-stream.
           continue;
         }
-        if (parsed.message?.content) {
-          text += parsed.message.content;
-          opts.onChunk?.(text);
+        let frameTouched = false;
+        if (parsed.message?.thinking) {
+          thinking += parsed.message.thinking;
+          frameTouched = true;
         }
+        if (parsed.message?.content) {
+          content += parsed.message.content;
+          frameTouched = true;
+        }
+        if (
+          Array.isArray(parsed.message?.tool_calls) &&
+          parsed.message.tool_calls.length > 0
+        ) {
+          // Tool-call frames often carry empty content — still counts as activity.
+          frameTouched = true;
+        }
+        if (frameTouched) emitStream();
         if (parsed.done) {
           if (typeof parsed.prompt_eval_count === "number") {
             promptTokens = parsed.prompt_eval_count;
@@ -270,7 +300,7 @@ export async function chat(opts: any): Promise<ChatResult> {
     opts.onTokens({ promptTokens, responseTokens });
   }
   return {
-    text,
+    text: buildOllamaStreamText(thinking, content),
     elapsedMs: Date.now() - t0,
     finishReason,
   };

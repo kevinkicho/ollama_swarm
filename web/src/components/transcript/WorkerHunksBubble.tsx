@@ -1,5 +1,10 @@
 import { memo, useMemo, useState } from "react";
 import { AgentJsonBubble, MAX_BUBBLE_HEIGHT_PX } from "./JsonBubbles";
+import {
+  ThinkingContentPanel,
+  ThinkingToggleButton,
+  type ResolvedThinking,
+} from "./AgentThinking";
 import { extractFirstBalancedJson } from "../../../../shared/src/extractJson";
 
 // Task #74 (2026-04-25): readable diff renderer for worker_hunks
@@ -62,14 +67,17 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
   header,
   className,
   style,
+  thinking,
 }: {
   summary: string;
   rawJson: string;
   header: React.ReactNode;
   className?: string;
   style?: React.CSSProperties;
+  thinking?: ResolvedThinking | null;
 }) {
   const [showRaw, setShowRaw] = useState(false);
+  const [showThinking, setShowThinking] = useState(false);
   // 2026-04-27 (UI Phase 3 follow-up per Kevin): collapsed by default,
   // matching the "Posted N todos" / Contract bubble summary-then-expand
   // pattern. Pre-fix, hunks rendered inline (capped via maxHeight) and
@@ -86,6 +94,7 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
         header={header}
         summary={summary}
         json={rawJson}
+        thinking={thinking}
       />
     );
   }
@@ -103,7 +112,14 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
     <div className={className} style={style}>
       <div className="flex items-start justify-between gap-2 mb-1">
         <div className="flex-1">{header}</div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 shrink-0 justify-end">
+          {thinking ? (
+            <ThinkingToggleButton
+              thinking={thinking}
+              open={showThinking}
+              onClick={() => setShowThinking((v) => !v)}
+            />
+          ) : null}
           <button
             onClick={() => setExpanded((v) => !v)}
             className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200"
@@ -118,6 +134,7 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
           </button>
         </div>
       </div>
+      {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
       <div className="flex items-baseline gap-2 mb-2 text-[11px]">
         <div className="text-ink-400 flex-1 min-w-0 truncate">{summary}</div>
         {added > 0 ? <div className="text-emerald-300 font-mono tabular-nums shrink-0">+{added}</div> : null}

@@ -104,4 +104,18 @@ describe("stripAgentText", () => {
     assert.equal(result.finalText, "use <div> and <span> tags");
     assert.equal(result.toolCalls.length, 0);
   });
+
+  it("strips DeepSeek function blocks from thoughts into toolCalls", () => {
+    const result = stripAgentText(
+      `<think>Plan first.
+<function>
+<function name>read</function>
+<parameter name="path">src/data/marketPanels.js</parameter>
+</function></think>{"ok":true}`,
+    );
+    assert.match(result.thoughts, /Plan first/);
+    assert.doesNotMatch(result.thoughts, /<function/);
+    assert.equal(result.toolCalls.length, 1);
+    assert.match(result.finalText, /"ok"/);
+  });
 });

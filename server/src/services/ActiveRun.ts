@@ -11,6 +11,7 @@ import { createLogger } from "./logger.js";
 import { RunEventHub } from "./RunEventHub.js";
 import { loadRunSummaryForRunId } from "./runSummaryDiscovery.js";
 import { recoverCrashSummaryFromSnapshot } from "./crashSummaryRecovery.js";
+import type { RepoService } from "./RepoService.js";
 
 /**
  * ActiveRun encapsulates the full lifecycle of a single run.
@@ -39,6 +40,7 @@ export class ActiveRun {
     public readonly amendments?: AmendmentsBuffer,
     public holdsCloneLock = false,
     hub?: RunEventHub,
+    private readonly repos?: Pick<RepoService, "gitStatus">,
   ) {
     this.log = createLogger({ runId });
     this.conformanceMonitor = conformanceMonitor;
@@ -135,6 +137,7 @@ export class ActiveRun {
         },
         this.cfg.localPath,
         this.runId,
+        this.repos,
       );
     } catch (err) {
       this.log.warn('ActiveRun crash summary backfill failed', {

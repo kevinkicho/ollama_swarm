@@ -152,6 +152,30 @@ describe("extractToolCallMarkers — edge cases + safety", () => {
     assert.equal(r.toolCalls.length, 50);
     assert.equal(r.finalText, "final");
   });
+
+  it("collapses consecutive duplicate pseudo-tool-call markers", () => {
+    const dup = "<read path='src/foo.ts' />";
+    const text = `${dup}${dup}${dup}\n\nok`;
+    const r = extractToolCallMarkers(text);
+    assert.equal(r.toolCalls.length, 1);
+    assert.equal(r.finalText, "ok");
+  });
+
+  it("strips DeepSeek <function> wrapper blocks (run 94224a3e shape)", () => {
+    const text = `Let me explore the codebase.
+<function>
+<function name>read</function>
+<parameter name="path">C:\\Users\\kevin\\workspace\\repo\\GOVERNMENT_API_CATALOG.md</parameter>
+</function>
+<function>
+<function name>read</function>
+<parameter name="path">C:\\Users\\kevin\\workspace\\repo\\src\\data\\marketPanels.js</parameter>
+</function>`;
+    const r = extractToolCallMarkers(text);
+    assert.equal(r.toolCalls.length, 2);
+    assert.match(r.finalText, /Let me explore the codebase/);
+    assert.doesNotMatch(r.finalText, /<function/);
+  });
 });
 
 // #292 (2026-04-28): MCP-style nested tool_use blocks observed during

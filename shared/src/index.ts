@@ -8,6 +8,13 @@ export {
   extractFirstBalancedJson,
 } from "./extractJson.js";
 
+export {
+  extractJsonCandidate,
+  parseJsonEnvelope,
+  formatParseTier,
+} from "./parseAgentJson.js";
+export type { JsonExtractTier, JsonExtractResult, ParseJsonEnvelopeResult } from "./parseAgentJson.js";
+
 export type { TranscriptEntrySummary } from "./transcriptEntrySummary.js";
 
 export { summarizeAgentJson } from "./summarizeAgentJson.js";

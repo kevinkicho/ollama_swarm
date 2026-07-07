@@ -34,7 +34,10 @@ export function lenientPreprocess(
 
   if (Array.isArray(out.expectedFiles) && opts.maxExpectedFiles) {
     if (out.expectedFiles.length > opts.maxExpectedFiles) {
-      out.expectedFiles = out.expectedFiles.slice(0, opts.maxExpectedFiles);
+      out.expectedFiles = prioritizeExpectedFilesSlice(
+        out.expectedFiles.filter((p): p is string => typeof p === "string"),
+        opts.maxExpectedFiles,
+      );
     }
   }
 
@@ -80,4 +83,28 @@ export function lenientPreprocess(
 // Soft-cap an array: slice to max instead of rejecting the whole response.
 export function softCap<T>(arr: T[], max: number): T[] {
   return arr.length > max ? arr.slice(0, max) : arr;
+}
+
+/**
+ * When lenient truncation must drop expectedFiles, keep paths most likely to
+ * survive repo grounding — shallow registry/config edits over deep new-file
+ * trees the planner often lists first (RCA: run 94224a3e, 2026-07-07).
+ */
+export function prioritizeExpectedFilesSlice(files: string[], max: number): string[] {
+  if (files.length <= max) return files;
+  const scored = files.map((p, i) => {
+    const norm = p.replace(/\\/g, "/");
+    let score = 0;
+    const depth = norm.split("/").filter(Boolean).length;
+    score += Math.max(0, 12 - depth);
+    if (/\/sources\//i.test(norm)) score -= 6;
+    if (/\/panels\//i.test(norm)) score -= 6;
+    if (/\/components\//i.test(norm)) score -= 4;
+    if (/fetch[A-Z]/.test(norm)) score -= 4;
+    if (/Panel\.(jsx|tsx|js)$/i.test(norm)) score -= 5;
+    if (/\.(config|registry|index)\./i.test(norm)) score += 2;
+    return { p, score, i };
+  });
+  scored.sort((a, b) => b.score - a.score || a.i - b.i);
+  return scored.slice(0, max).map((s) => s.p);
 }

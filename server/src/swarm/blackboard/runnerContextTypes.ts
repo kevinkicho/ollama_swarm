@@ -79,6 +79,7 @@ export interface BlackboardRunnerFields {
   phase: any;
   planner: any;
   priorSnapshot: any;
+  boardRestoredFromSnapshot: boolean;
   promptAgent: any;
   promptErrorsPerAgent: any;
   promptPlannerSafely: any;
@@ -207,6 +208,7 @@ export interface BlackboardRunnerFields {
   lifecycleState: any;
   opts: any;
   priorSnapshot: any;
+  boardRestoredFromSnapshot: boolean;
   promptAgent: any;
   promptPlannerSafely: any;
   scheduleStateWrite: any;
@@ -267,6 +269,7 @@ export interface BlackboardRunnerFields {
   paused: any;
   planner: any;
   priorSnapshot: any;
+  boardRestoredFromSnapshot: boolean;
   promptErrorsPerAgent: any;
   promptTokensPerAgent: any;
   recordError: any;

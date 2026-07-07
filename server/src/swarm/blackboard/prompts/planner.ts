@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 import { lenientPreprocess, softCap } from "./lenientParse.js";
 import { registerParserSchema } from "./brainIntegration.js";
 import { getModelBudget } from "../../modelContextBudget.js";
@@ -175,23 +176,11 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
   if (raw.trim().length === 0) {
     return { ok: false, reason: "empty response — model produced no output after stripping thinking tags" };
   }
-  let parsed: unknown;
-  let lastError = "";
-  try {
-    parsed = JSON.parse(raw.trim());
-  } catch (err) {
-    lastError = err instanceof Error ? err.message : String(err);
-    const cleaned = stripFences(raw);
-    if (cleaned === null) {
-      return { ok: false, reason: `JSON parse failed: ${lastError}` };
-    }
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch (err2) {
-      const msg = err2 instanceof Error ? err2.message : String(err2);
-      return { ok: false, reason: `JSON parse failed: ${msg}` };
-    }
+  const envelope = parseJsonEnvelope(raw);
+  if (!envelope.ok) {
+    return { ok: false, reason: envelope.reason };
   }
+  const parsed = envelope.value;
   let items: unknown[];
   if (Array.isArray(parsed)) {
     items = parsed;
@@ -372,6 +361,10 @@ export interface PlannerSeed {
   webToolsEnabled?: boolean;
   /** Free-form web research brief from the pre-contract research pass. */
   researchNotes?: string;
+  /** Mid-run suggest/ask messages from user chat (steer is in userDirective). */
+  userChatBlock?: string;
+  /** Existing API catalog + .env key names for dedup grounding. */
+  endpointCatalogBlock?: string;
 }
 
 /** Shared research-tools guidance for planner/worker prompts. */
@@ -508,8 +501,16 @@ export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionSt
           "",
         ].join("\n")
       : "";
+  const userChatBlock =
+    seed.userChatBlock && seed.userChatBlock.trim().length > 0
+      ? `${seed.userChatBlock.trim()}\n\n`
+      : "";
+  const endpointCatalogBlock =
+    seed.endpointCatalogBlock && seed.endpointCatalogBlock.trim().length > 0
+      ? `${seed.endpointCatalogBlock.trim()}\n\n`
+      : "";
   return [
-    designBlock + memoryBlock + directiveBlock + `Repository: ${seed.repoUrl}`,
+    designBlock + memoryBlock + directiveBlock + userChatBlock + endpointCatalogBlock + `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
     `Top-level entries: ${tree}`,
     "",
@@ -558,20 +559,34 @@ export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionSt
   ].join("\n");
 }
 
-export function buildRepairPrompt(previousResponse: string, parseError: string): string {
+export function buildRepairPrompt(
+  previousResponse: string,
+  parseError: string,
+  auditorNote?: string,
+): string {
+  const auditorBlock = auditorNote?.trim()
+    ? [
+        "",
+        "=== AUDITOR DIAGNOSTIC (read and apply — planner role stays with you) ===",
+        auditorNote.trim(),
+        "=== end AUDITOR DIAGNOSTIC ===",
+        "",
+      ]
+    : [];
   return [
     "Your previous response could not be parsed as the required JSON array.",
     `Parser error: ${parseError}`,
-    "",
+    ...auditorBlock,
     "Your previous response was:",
     "--- BEGIN PREVIOUS RESPONSE ---",
     previousResponse,
     "--- END PREVIOUS RESPONSE ---",
     "",
+    "You have already explored the repo. Do NOT emit more XML pseudo-tool-calls or file dumps.",
     "Respond now with ONLY a JSON array matching the schema:",
     '[{"description": "one sentence", "expectedFiles": ["path1", "path2"]}, ...]',
     "",
-    "No prose. No markdown fences. No commentary. Just the JSON array.",
+    "No prose. No markdown fences. No <think> tags. No commentary. Just the JSON array.",
   ].join("\n");
 }
 

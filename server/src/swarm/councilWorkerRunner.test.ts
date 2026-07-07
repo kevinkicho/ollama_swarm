@@ -42,6 +42,13 @@ test("councilWorkerRunner — retry messages include real failure reasons", () =
   assert.match(SRC, /summarizeWorkerFailureReason/, "must summarize reasons for transcript");
 });
 
+test("councilWorkerRunner — stage 2 uses buildWorkerRepairPrompt (not duplicate primary)", () => {
+  assert.match(SRC, /buildWorkerRepairPrompt/, "must import JSON repair prompt builder");
+  assert.match(SRC, /repairFrom/, "must pass prior response into repair attempt");
+  assert.match(SRC, /repairAndParseJson/, "must lenient-parse before declaring JSON failure");
+  assert.doesNotMatch(SRC, /tryBrainFallback/i, "worker recovery stays in swarm agents, not in-run brain");
+});
+
 test("councilWorkerRunner — stage-3 failover uses providerFailover chain", () => {
   assert.match(SRC, /councilWorkerFallbackModel/, "must resolve fallback from failover chain");
   assert.match(SRC, /state\.cfg\.providerFailover/, "must pass per-run providerFailover");

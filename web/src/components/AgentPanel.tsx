@@ -158,7 +158,13 @@ export const AgentPanel = memo(function AgentPanel({
   const runCompletedCleanly = phase === "completed";
   const statusLabel =
     agent.status === "stopped" && runCompletedCleanly ? "done" : agent.status;
-  const primaryLine = retryLabel ?? thinkingLabel ?? statusLabel;
+  const activityLine =
+    agent.activityLabel && agent.status === "thinking"
+      ? agent.activityAttempt && agent.activityMaxAttempts
+        ? `${agent.activityLabel} (${agent.activityAttempt}/${agent.activityMaxAttempts})`
+        : agent.activityLabel
+      : null;
+  const primaryLine = retryLabel ?? activityLine ?? thinkingLabel ?? statusLabel;
   // Override the status dot color for the done case too.
   const dotColor =
     agent.status === "stopped" && runCompletedCleanly

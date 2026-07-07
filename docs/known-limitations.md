@@ -55,6 +55,16 @@ Until any of those bite, one agent covers both roles.
 
 ---
 
+## Planner todos cap at two expectedFiles per item
+
+**Choice:** Zod schema + `lenientPreprocess` allow at most **2** `expectedFiles` per planner todo (hunks variant). Models often emit four (new module + new component + registry + config).
+
+**Mitigation (2026-07-07):** `prioritizeExpectedFilesSlice()` keeps registry/config paths when truncating, so grounding is less likely to drop every todo because invented `sources/` paths were listed first.
+
+**Remaining gap:** New-file work still needs at least one grounded path; invented directory trees under absent parents are stripped by `groundExpectedFiles`. Planner prompt + contract should cite real repo layout (`functions/src/routes/` in kyahoofinance, not `src/data/sources/`).
+
+---
+
 ## Agent web tools are opt-in only (2026-07-07)
 
 **Default (no `webTools` / `plannerTools`):** Agents are sandboxed to the cloned

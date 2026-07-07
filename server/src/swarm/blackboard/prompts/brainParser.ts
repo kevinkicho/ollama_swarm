@@ -107,6 +107,7 @@ export const SCHEMA_DESCRIPTIONS: Record<string, string> = {
   worker: `{ "hunks": [{ "op": "replace"|"create"|"append", "file": string, "search": string(when replace), "replace": string(when replace), "content": string(when create|append) }], "skip": string? }`,
   verifier: `{ "verdict": "verified"|"partial"|"false"|"unverifiable", "evidenceCitation": string(max500), "rationale": string(max400)? }`,
   replanner: `Either { "revised": { "description": string, "expectedFiles": [string], "kind": "build"?, "command": string?(when kind=build), "expectedAnchors": [string]? } } or { "skip": true, "reason": string }`,
+  "hunk-review": `{ "approve": boolean, "reason": string }`,
   critic: `{ "verdict": "accept"|"reject", "rationale": string(max400) }`,
 };
 

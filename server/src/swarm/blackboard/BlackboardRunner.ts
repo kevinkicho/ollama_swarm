@@ -368,6 +368,8 @@ export class BlackboardRunner implements SwarmRunner {
   private contract?: ExitContract;
   // #57: cached prior run snapshot (read before any setPhase fires).
   private priorSnapshot?: BlackboardStateSnapshot | null;
+  /** True when resumeContract restored todos from blackboard-state.json. */
+  private boardRestoredFromSnapshot = false;
   // Phase 11c: drain-audit-repeat bookkeeping.
   private auditInvocations = 0;
   private completionDetail?: string;
@@ -588,9 +590,9 @@ export class BlackboardRunner implements SwarmRunner {
 
   private async runWorkers(workers: Agent[]): Promise<void> { await runWorkersExtracted(this.workerContext(), workers); }
   private async runWorker(agent: Agent): Promise<void> { await runWorkerExtracted(this.workerContext(), agent); }
-  private async executeBuildTodo(agent: Agent, todo: Todo): Promise<"committed" | "stale" | "lost-race" | "aborted" | "pending-commit"> { return executeBuildTodoExtracted(this.workerContext(), agent, todo); }
+  private async executeBuildTodo(agent: Agent, todo: Todo): Promise<"committed" | "stale" | "lost-race" | "aborted" | "pending-commit" | "released" | "skipped"> { return executeBuildTodoExtracted(this.workerContext(), agent, todo); }
   private maybeSettleHypothesisGroup(todoId: string): void { maybeSettleHypothesisGroupExtracted(this.workerContext(), todoId); }
-  private async executeWorkerTodo(agent: Agent, todo: Todo): Promise<"committed" | "stale" | "lost-race" | "aborted" | "pending-commit"> { return executeWorkerTodoExtracted(this.workerContext(), agent, todo); }
+  private async executeWorkerTodo(agent: Agent, todo: Todo): Promise<"committed" | "stale" | "lost-race" | "aborted" | "pending-commit" | "released" | "skipped"> { return executeWorkerTodoExtracted(this.workerContext(), agent, todo); }
 
   private enqueueReplan(todoId: string): void { enqueueReplanExtracted(this.replanContext(), todoId); }
   private async processReplanQueue(): Promise<void> { await processReplanQueueExtracted(this.replanContext()); }
@@ -863,9 +865,9 @@ export class BlackboardRunner implements SwarmRunner {
 
   private directiveWithAmendments(): string | undefined { return directiveWithAmendmentsExtracted(this.utilCtx()); }
 
-  private appendAgent(agent: Agent, text: string): void {
+  private appendAgent(agent: Agent, text: string, options?: import("./runnerUtil.js").AppendAgentOptions): void {
     const ctx = this.utilCtx();
-    appendAgentExtracted(ctx, agent, text);
+    appendAgentExtracted(ctx, agent, text, options);
     this.consecutiveLoopDetections = ctx.consecutiveLoopDetections;
     this.lastLoopWarningAtTurn = ctx.lastLoopWarningAtTurn;
     this.lifecycleState = ctx.lifecycleState;

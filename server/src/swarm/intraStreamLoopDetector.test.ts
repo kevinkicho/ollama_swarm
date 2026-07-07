@@ -166,4 +166,28 @@ describe("createIntraStreamLoopDetector", () => {
     // With 6/10 identical deltas, loose should fire; strict might not
     assert.ok(looseDetected, "Loose threshold should detect the loop");
   });
+
+  test("detects pseudo-tool-call storm after warmup prose", () => {
+    const d = createIntraStreamLoopDetector({
+      minChunksBeforeCheck: 3,
+      minLengthBeforeCheck: 50,
+      maxPseudoToolMarkers: 100,
+      pseudoToolBurstPerChunk: 30,
+    });
+    const warmup = [
+      "Exploring the repo before drafting the contract.",
+      "Reading module index and route files.",
+      "Checking config entries for missing handlers.",
+      "Scanning source tree for gaps.",
+      "Preparing contract criteria list.",
+    ];
+    let text = "";
+    for (const line of warmup) {
+      text += `${line}\n`;
+      assert.equal(d.onChunk(text).detected, false);
+    }
+    const burst = Array.from({ length: 40 }, (_, i) => `<read path='src/burst${i}.ts' />`).join("\n");
+    const r = d.onChunk(`${text}\n${burst}`);
+    assert.match(r.reason, /pseudo-tool-call/);
+  });
 });

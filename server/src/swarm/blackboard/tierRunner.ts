@@ -15,7 +15,7 @@ import {
   parseFirstPassContractResponse,
 } from "./prompts/firstPassContract.js";
 import { CONTRACT_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
-import { classifyExpectedFiles } from "./prompts/pathValidation.js";
+import { groundExpectedFiles } from "./contractGrounding.js";
 import type { ClassifiedError } from "../errorTaxonomy.js";
 import { config as appConfig } from "../../config.js";
 import { resolveToolProfile } from "../toolProfiles.js";
@@ -314,20 +314,27 @@ export async function tryPromoteNextTier(
   const priorMaxId = largestCriterionIdNumber(ctx);
   const tierStartedAt = Date.now();
   const appendedCriteria = parsed.contract.criteria.map((c, idx) => {
-    const { accepted, rejected } = classifyExpectedFiles(c.expectedFiles, repoFiles);
-    for (const r of rejected) {
+    const { grounded, stripped, rebound } = groundExpectedFiles(c.expectedFiles, repoFiles);
+    for (const rb of rebound) {
       ctx.findPost({
         agentId: planner.id,
-        text: `Tier ${nextTier} c${priorMaxId + idx + 1}: stripped suspicious path '${r.path}' (${r.reason}).`,
+        text: `Tier ${nextTier} c${priorMaxId + idx + 1}: rebound '${rb.from}' → '${rb.to}'.`,
         createdAt: Date.now(),
       });
     }
-    if (rejected.length > 0) {
+    for (const r of stripped) {
+      ctx.findPost({
+        agentId: planner.id,
+        text: `Tier ${nextTier} c${priorMaxId + idx + 1}: stripped ungrounded path '${r.path}' (${r.reason}).`,
+        createdAt: Date.now(),
+      });
+    }
+    if (stripped.length > 0 || rebound.length > 0) {
       ctx.appendSystem(
-        `Tier ${nextTier} c${priorMaxId + idx + 1}: ${rejected.length}/${c.expectedFiles.length} path(s) stripped as unbindable.`,
+        `Tier ${nextTier} c${priorMaxId + idx + 1}: ${stripped.length} stripped, ${rebound.length} rebound(s) — expectedFiles=${JSON.stringify(grounded)}.`,
       );
     }
-    if (accepted.length === 0 && c.expectedFiles.length > 0) {
+    if (grounded.length === 0 && c.expectedFiles.length > 0) {
       ctx.appendSystem(
         `Tier ${nextTier} c${priorMaxId + idx + 1}: auto-marking as wont-do — all ${c.expectedFiles.length} expectedFile(s) rejected by grounding check.`,
       );
@@ -342,7 +349,7 @@ export async function tryPromoteNextTier(
     return {
       id: `c${priorMaxId + idx + 1}`,
       description: c.description,
-      expectedFiles: accepted,
+      expectedFiles: grounded,
       status: "unmet" as const,
       addedAt: tierStartedAt,
     };

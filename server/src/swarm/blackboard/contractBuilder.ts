@@ -17,7 +17,7 @@ import {
   parseFirstPassContractResponse,
 } from "./prompts/firstPassContract.js";
 import { CONTRACT_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
-import { classifyExpectedFiles } from "./prompts/pathValidation.js";
+import { groundExpectedFiles, validateContractGrounding } from "./contractGrounding.js";
 import { withSiblingRetry } from "./siblingRetry.js";
 import { config as appConfig } from "../../config.js";
 import {
@@ -34,12 +34,22 @@ import {
 import { computeWorkerTagCounts } from "./BlackboardRunnerConstants.js";
 import { gatherProposerContext } from "../moaContextGather.js";
 import type { BlackboardStateSnapshot } from "./stateSnapshot.js";
-import {
-  tryBrainFallback,
-  type BrainFallbackEvent,
-} from "./prompts/brainIntegration.js";
-import { ContractSchema } from "./prompts/firstPassContract.js";
+import { runPlannerEmitRecovery } from "./plannerRecovery.js";
+import { emitAgentActivity } from "./promptRunner.js";
 import { isWebToolsEnabled, resolveToolProfile } from "../toolProfiles.js";
+import { resolveBlackboardPromptExtras } from "./blackboardPromptContext.js";
+import type { TranscriptEntry } from "../../types.js";
+import type { TodoQueue } from "./TodoQueue.js";
+import type { FindingsLog } from "./FindingsLog.js";
+import type { TodoQueueCounts } from "./TodoQueue.js";
+import {
+  countActionableTodos,
+  restoreBoardFromSnapshot,
+} from "./boardRestore.js";
+import {
+  loadEndpointCatalogSnapshot,
+  renderEndpointCatalogBlock,
+} from "./endpointCatalogContext.js";
 
 export interface ContractContext {
   // --- state getters ---
@@ -48,6 +58,11 @@ export interface ContractContext {
   getContract: () => ExitContract | undefined;
   getPriorSnapshot: () => BlackboardStateSnapshot | null | undefined;
   getFindingsPost: () => (entry: { agentId: string; text: string; createdAt: number }) => void;
+  getTodoQueue: () => TodoQueue;
+  getFindingsLog: () => FindingsLog;
+  getTodoQueueCounts: () => TodoQueueCounts;
+  getBoardRestoredFromSnapshot: () => boolean;
+  setBoardRestoredFromSnapshot: (v: boolean) => void;
 
   // --- state setters ---
   setContract: (c: ExitContract | undefined) => void;
@@ -69,6 +84,9 @@ export interface ContractContext {
   // --- callbacks ---
   appendSystem: (msg: string) => void;
   appendAgent: (agent: Agent, text: string) => void;
+  findingsPost: (entry: { agentId: string; text: string; createdAt: number }) => void;
+  getAuditor: () => Agent | undefined;
+  emitAgentState: (s: import("../../types.js").AgentState) => void;
   getPlannerFallbackModel: () => string | undefined;
   updateAgentModel: (agentId: string, model: string) => void;
   promptPlannerSafely: (
@@ -85,17 +103,13 @@ export interface ContractContext {
     ollamaFormat?: "json" | Record<string, unknown>,
   ) => Promise<string>;
   emit: (e: unknown) => void;
+  getTranscript: () => readonly TranscriptEntry[];
+  getPlanner: () => Agent | undefined;
+  directiveWithAmendments: () => string | undefined;
+  getAmendments?: () => Array<{ ts: number; text: string }>;
   scheduleStateWrite: () => void;
+  flushBoardBroadcasterSnapshot: () => void;
   v2ObserverApply: (event: unknown) => void;
-
-  /** Brain fallback: prompt an LLM to extract structured JSON from a
-   *  failed parse. The promptFn signature matches promptWithFailover. */
-  brainPromptFn?: (
-    prompt: string,
-    model: string,
-    maxTokens: number,
-    timeoutMs: number,
-  ) => Promise<string>;
 
   // --- deps ---
   repos: {
@@ -140,99 +154,77 @@ export async function runFirstPassContract(
   isFallbackAttempt = false,
 ): Promise<void> {
   const modelAtEntry = agent.model;
+  const exploreProfile = resolveToolProfile("planner", ctx.getActive());
+  const emitProfile = "swarm-read" as import("../../tools/ToolDispatcher.js").ProfileName;
 
-  const plannerProfile = resolveToolProfile("planner", ctx.getActive());
-
-  const { response: firstResponse, agentUsed: contractAgent } = await ctx.promptPlannerSafely(
+  const recovery = await runPlannerEmitRecovery({
+    kind: "contract",
     agent,
-    `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed, agent.model)}`,
-    plannerProfile,
-    CONTRACT_JSON_SCHEMA,
-  );
-  if (ctx.getStopping()) return;
-  ctx.appendAgent(contractAgent, firstResponse);
+    auditor: ctx.getAuditor(),
+    getStopping: ctx.getStopping,
+    appendSystem: ctx.appendSystem,
+    appendAgent: ctx.appendAgent,
+    findingsPost: ctx.findingsPost,
+    getActive: ctx.getActive,
+    emitActivity: (label, attempt, maxAttempts, mode) => {
+      emitAgentActivity(agent, ctx.emitAgentState, {
+        kind: "contract",
+        label,
+        attempt,
+        maxAttempts,
+        mode,
+      });
+    },
+    promptPlannerSafely: (a, p, profile, schema) =>
+      ctx.promptPlannerSafely(a, p, profile, schema),
+    buildExplorePrompt: () =>
+      `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed, agent.model)}`,
+    buildRepairPrompt: (prev, err, note) =>
+      `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractRepairPrompt(prev, err, note)}`,
+    exploreProfile,
+    emitProfile,
+    jsonSchema: CONTRACT_JSON_SCHEMA,
+    parse: (raw) => {
+      const p = parseFirstPassContractResponse(raw);
+      if (!p.ok) return { ok: false as const, reason: p.reason, raw };
+      const groundingError = validateContractGrounding(p.contract, seed.repoFiles);
+      if (groundingError) return { ok: false as const, reason: groundingError, raw };
+      return { ok: true as const, value: p.contract, raw, dropped: p.dropped };
+    },
+  });
 
-  let parsed = parseFirstPassContractResponse(firstResponse);
-  if (!parsed.ok) {
-    ctx.appendSystem(
-      `Contract response did not parse (${parsed.reason}). Retrying with full prompt.`,
-    );
-    const { response: retryResponse, agentUsed: retryAgent } = await ctx.promptPlannerSafely(
-      contractAgent,
-      `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed, contractAgent.model)}`,
-      plannerProfile,
-      CONTRACT_JSON_SCHEMA,
-    );
-    if (ctx.getStopping()) return;
-    ctx.appendAgent(retryAgent, retryResponse);
-    parsed = parseFirstPassContractResponse(retryResponse);
-    if (!parsed.ok) {
-      // Brain fallback: try AI-assisted parsing before sibling-retry.
-      if (ctx.brainPromptFn) {
-        ctx.appendSystem(`Contract parse still failed after repair — trying brain fallback (${parsed.reason}).`);
-        try {
-          const brainResult = await tryBrainFallback(
-            "contract",
-            firstResponse,
-            ContractSchema,
-            ctx.brainPromptFn,
-            (e: BrainFallbackEvent) => { ctx.emit({ type: "brain-fallback", ...e }); },
-            agent,
-          );
-          if (brainResult) {
-            parsed = {
-              ok: true as const,
-              contract: {
-                missionStatement: brainResult.missionStatement,
-                criteria: brainResult.criteria.map((c: { description: string; expectedFiles: string[] }, i: number) => ({
-                  id: `c${i + 1}`,
-                  description: c.description,
-                  expectedFiles: [...c.expectedFiles],
-                  status: "unmet" as const,
-                  addedAt: Date.now(),
-                })),
-              },
-              dropped: [],
-            };
-            ctx.appendSystem(`Brain fallback succeeded — extracted contract with ${brainResult.criteria.length} criterion(crite)ria.`);
-          }
-        } catch {
-          // Brain call failed — fall through to sibling-retry.
-        }
-      }
-    }
-    if (!parsed.ok) {
-      const retried = await withSiblingRetry(
-        {
-          agent,
-          modelAtEntry,
-          logPrefix: `[${agent.id}]`,
-          updateAgentModel: ctx.updateAgentModel,
-          emit: ctx.emit,
-          getFallbackModel: ctx.getPlannerFallbackModel,
-          reason: "sibling-retry: contract JSON parse failed after repair",
-        },
-        async () => {
-          await runFirstPassContract(ctx, agent, seed, true);
-        },
-      );
-      if (retried) return;
+  if (recovery.ok) {
+    if (recovery.dropped.length > 0) {
       ctx.appendSystem(
-        `Contract still invalid after repair (${parsed.reason}). Proceeding without a contract.`,
+        `Dropped ${recovery.dropped.length} invalid criterion(s): ${(recovery.dropped as Array<{ reason: string }>)
+          .map((d) => d.reason)
+          .join(" | ")}`,
       );
-      return;
     }
+    finalizeContract(ctx, recovery.value, seed, agent);
+    return;
   }
 
-  if (parsed.dropped.length > 0) {
-    ctx.appendSystem(
-      `Dropped ${parsed.dropped.length} invalid criterion(s): ${parsed.dropped
-        .map((d) => d.reason)
-        .join(" | ")}`,
-    );
-  }
+  const retried = await withSiblingRetry(
+    {
+      agent,
+      modelAtEntry,
+      logPrefix: `[${agent.id}]`,
+      updateAgentModel: ctx.updateAgentModel,
+      emit: ctx.emit,
+      getFallbackModel: ctx.getPlannerFallbackModel,
+      reason: "sibling-retry: contract JSON parse failed after recovery loop",
+      isFallbackAttempt,
+    },
+    async () => {
+      await runFirstPassContract(ctx, agent, seed, true);
+    },
+  );
+  if (retried) return;
 
-  finalizeContract(ctx, parsed.contract, seed, agent);
+  ctx.appendSystem(
+    `Contract still invalid after recovery (${recovery.reason}). Planning continues WITHOUT exit contract — auditor will have limited gating.`,
+  );
 }
 
 export async function runFirstPassContractOrchestrator(
@@ -368,22 +360,45 @@ export function finalizeContract(
   seed: PlannerSeed,
   ownerAgent: Agent,
 ): void {
+  let totalStripped = 0;
+  let totalRebound = 0;
   const groundedCriteria = parsed.criteria.map((c, idx) => {
-    const { accepted, rejected } = classifyExpectedFiles(c.expectedFiles, seed.repoFiles);
-    for (const r of rejected) {
+    const { grounded, stripped, rebound } = groundExpectedFiles(c.expectedFiles, seed.repoFiles);
+    totalStripped += stripped.length;
+    totalRebound += rebound.length;
+    for (const rb of rebound) {
       ctx.getFindingsPost()({
         agentId: ownerAgent.id,
-        text: `Contract c${idx + 1}: stripped suspicious path '${r.path}' (${r.reason}). Unit 5d linked-commit fallback will rebind from later commits.`,
+        text: `Contract c${idx + 1}: rebound '${rb.from}' → '${rb.to}' (similar in-repo sibling).`,
         createdAt: Date.now(),
       });
     }
-    if (rejected.length > 0) {
+    for (const r of stripped) {
+      ctx.getFindingsPost()({
+        agentId: ownerAgent.id,
+        text: `Contract c${idx + 1}: stripped ungrounded path '${r.path}' (${r.reason}).`,
+        createdAt: Date.now(),
+      });
+    }
+    if (stripped.length > 0 || rebound.length > 0) {
+      const parts: string[] = [];
+      if (stripped.length > 0) {
+        parts.push(`${stripped.length}/${c.expectedFiles.length} path(s) stripped`);
+      }
+      if (rebound.length > 0) {
+        parts.push(`${rebound.length} rebound(s)`);
+      }
       ctx.appendSystem(
-        `Contract c${idx + 1}: ${rejected.length}/${c.expectedFiles.length} path(s) stripped as unbindable — criterion kept with expectedFiles=${JSON.stringify(accepted)}.`,
+        `Contract c${idx + 1}: ${parts.join("; ")} — expectedFiles=${JSON.stringify(grounded)}.`,
       );
     }
-    return { description: c.description, expectedFiles: accepted };
+    return { description: c.description, expectedFiles: grounded };
   });
+  if (totalStripped > 0 || totalRebound > 0) {
+    ctx.appendSystem(
+      `Contract grounding: ${totalStripped} path(s) stripped, ${totalRebound} rebound(s) across ${parsed.criteria.length} criteria.`,
+    );
+  }
   const groundedContract: ParsedContract = {
     missionStatement: parsed.missionStatement,
     criteria: groundedCriteria,
@@ -428,8 +443,30 @@ export async function tryResumeContract(ctx: ContractContext): Promise<boolean> 
   if (snap.tierHistory && snap.tierHistory.length > 0) {
     ctx.setTierHistory(snap.tierHistory.map((t) => ({ ...t })));
   }
+
+  const actionableBefore = countActionableTodos(snap.board?.todos ?? []);
+  if (actionableBefore > 0 && snap.board?.todos?.length) {
+    const restored = restoreBoardFromSnapshot({
+      snap,
+      todoQueue: ctx.getTodoQueue(),
+      findings: ctx.getFindingsLog(),
+    });
+    ctx.setBoardRestoredFromSnapshot(true);
+    ctx.appendSystem(
+      `Resumed board from blackboard-state.json: ${restored.restoredTodos} todo(s) ` +
+        `(${restored.pending} open, ${restored.pendingCommit} pending-commit, ` +
+        `${restored.failed} stale, ${restored.skipped} skipped), ${restored.findings} finding(s). ` +
+        `Claimed todos were re-queued as open.`,
+    );
+  } else {
+    ctx.setBoardRestoredFromSnapshot(false);
+  }
+
   ctx.emit({ type: "contract_updated", contract: cloneContract(contract) });
   ctx.scheduleStateWrite();
+  if (ctx.getBoardRestoredFromSnapshot()) {
+    ctx.flushBoardBroadcasterSnapshot();
+  }
   let met = 0;
   let unmet = 0;
   let wontDo = 0;
@@ -516,9 +553,34 @@ export async function buildSeed(
 
   const workerTags = computeWorkerTagCounts(cfg.topology);
 
+  let endpointCatalogBlock: string | undefined;
+  try {
+    const catalogSnap = await loadEndpointCatalogSnapshot(clonePath);
+    if (catalogSnap) {
+      endpointCatalogBlock = renderEndpointCatalogBlock(catalogSnap);
+      if (cfg.suppressSeedMessages !== true) {
+        ctx.appendSystem(
+          `Endpoint grounding: surfaced ${catalogSnap.catalogPath ?? "no catalog"} + ` +
+            `${catalogSnap.envKeys.length} env key(s) into planner/worker seed.`,
+        );
+      }
+    }
+  } catch {
+    // best-effort — catalog read failure shouldn't block the run
+  }
+
+  const plannerAgent = ctx.getPlanner();
+  const promptExtras = resolveBlackboardPromptExtras({
+    active: cfg,
+    getAmendments: ctx.getAmendments,
+    transcript: ctx.getTranscript(),
+    forAgentId: plannerAgent?.id ?? "agent-1",
+  });
+  const effectiveDirective = promptExtras.effectiveDirective;
+
   let codeContextExcerpts: ReadonlyArray<{ path: string; excerpt: string }> | undefined;
   try {
-    const directive = (cfg.userDirective ?? "").trim();
+    const directive = (effectiveDirective ?? cfg.userDirective ?? "").trim();
     if (directive.length > 0 && repoFiles.length > 0) {
       const excerpts = await gatherProposerContext({
         clonePath,
@@ -534,7 +596,7 @@ export async function buildSeed(
   }
 
   // Ambitious idea: simple system map for broad understanding (Context Oracle / system map)
-  const systemMap = `System overview for ${cfg.userDirective || 'the project'}:
+  const systemMap = `System overview for ${(effectiveDirective ?? cfg.userDirective) || "the project"}:
 - Top level dirs: ${topLevel.slice(0,5).join(', ')}
 - Key files (sample): ${repoFiles.slice(0,10).join(', ')}
 - README summary: ${readmeExcerpt ? readmeExcerpt.slice(0,200) : 'N/A'}
@@ -546,7 +608,8 @@ This is a lightweight map to help with systemic planning without full repo dump.
     topLevel,
     repoFiles,
     readmeExcerpt,
-    userDirective: cfg.userDirective,
+    userDirective: effectiveDirective ?? cfg.userDirective,
+    ...(promptExtras.userChatBlock ? { userChatBlock: promptExtras.userChatBlock } : {}),
     priorRunSummary,
     priorMemoryRendered,
     priorDesignMemoryRendered,
@@ -556,5 +619,6 @@ This is a lightweight map to help with systemic planning without full repo dump.
     ...(cfg.parallelHypothesis ? { parallelHypothesis: true } : {}),
     systemMap,  // for planner to use for broad view
     webToolsEnabled: isWebToolsEnabled(cfg),
+    ...(endpointCatalogBlock ? { endpointCatalogBlock } : {}),
   };
 }

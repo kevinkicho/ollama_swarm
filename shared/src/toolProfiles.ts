@@ -28,7 +28,9 @@ export function resolveToolProfileId(
     case "planner":
       return web ? "swarm-planner" : "swarm-read";
     case "worker":
-      return web ? "swarm-research" : "swarm";
+      // Hunk workers always get read/grep/glob/list — todos routinely reference
+      // files beyond the windowed excerpt and workers must verify anchors.
+      return web ? "swarm-research" : "swarm-read";
     case "worker-build":
       return web ? "swarm-builder-research" : "swarm-builder";
     case "auditor":
@@ -72,7 +74,13 @@ export function effectiveToolProfileId(
 }
 
 export function allowsUnboundedToolTurns(profile: ToolProfileId): boolean {
-  return profile === "swarm-planner" || profile === "swarm-research" || profile === "swarm-builder-research";
+  // Workers/auditors with read tools routinely grep across many files per todo.
+  return (
+    profile === "swarm-read"
+    || profile === "swarm-planner"
+    || profile === "swarm-research"
+    || profile === "swarm-builder-research"
+  );
 }
 
 export const PROFILE_TOOLS: Record<ToolProfileId, readonly string[]> = {

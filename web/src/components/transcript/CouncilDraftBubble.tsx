@@ -1,6 +1,11 @@
 import { memo, useMemo, useState } from "react";
 import { parseCouncilIssues } from "../drafts/councilDraftParse";
 import { CouncilIssueList } from "../drafts/CouncilIssueList";
+import {
+  ThinkingContentPanel,
+  ThinkingToggleButton,
+  resolveEntryThinking,
+} from "./AgentThinking";
 import { CollapsibleBlock, JSON_COLLAPSE_THRESHOLD, tryPrettyJson } from "./JsonBubbles";
 import type { TranscriptEntry } from "../../types";
 
@@ -27,11 +32,7 @@ export const CouncilDraftBubble = memo(function CouncilDraftBubble({
 
   const issues = useMemo(() => parseCouncilIssues(entry.text), [entry.text]);
   const prettyJson = useMemo(() => tryPrettyJson(entry.text), [entry.text]);
-  const thinking = entry.streamSnapshot;
-  const thinkingDiffers =
-    thinking &&
-    thinking.text.trim() !== entry.text.trim() &&
-    (tryPrettyJson(thinking.text) ?? thinking.text.trim()) !== (prettyJson ?? entry.text.trim());
+  const thinking = useMemo(() => resolveEntryThinking(entry), [entry]);
 
   const chipHeader = (
     <div>
@@ -43,7 +44,15 @@ export const CouncilDraftBubble = memo(function CouncilDraftBubble({
   );
 
   if (!issues && !prettyJson) {
-    return <CollapsibleBlock className={className} style={style} header={chipHeader} text={entry.text} />;
+    return (
+      <CollapsibleBlock
+        className={className}
+        style={style}
+        header={chipHeader}
+        text={entry.text}
+        thinking={thinking}
+      />
+    );
   }
 
   const summaryLine = issues
@@ -68,16 +77,12 @@ export const CouncilDraftBubble = memo(function CouncilDraftBubble({
               {showIssues ? "Hide issues" : `Show issues (${issues.length})`}
             </button>
           ) : null}
-          {thinkingDiffers ? (
-            <button
+          {thinking ? (
+            <ThinkingToggleButton
+              thinking={thinking}
+              open={showThinking}
               onClick={() => setShowThinking((v) => !v)}
-              className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200"
-              title="Raw streamed text visible while the agent was still generating"
-            >
-              {showThinking
-                ? "Hide thinking"
-                : `Thinking (${thinking!.streamingMeta?.totalSeconds ?? "?"}s)`}
-            </button>
+            />
           ) : null}
           <button
             onClick={() => setShowJson((v) => !v)}
@@ -97,16 +102,7 @@ export const CouncilDraftBubble = memo(function CouncilDraftBubble({
           />
         </div>
       ) : null}
-      {showThinking && thinkingDiffers ? (
-        <div className="mt-2 rounded border border-indigo-900/60 bg-indigo-950/20 p-2">
-          <div className="text-[10px] uppercase tracking-wide text-indigo-300/80 mb-1">
-            Streamed while generating · {thinking!.text.length.toLocaleString()} chars
-          </div>
-          <div className="whitespace-pre-wrap opacity-80 text-[11px] font-mono max-h-96 overflow-y-auto">
-            {thinking!.text}
-          </div>
-        </div>
-      ) : null}
+      {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
       {showJson ? (
         <div className="mt-2 rounded border border-ink-700 bg-ink-950 p-2">
           <pre className="text-[11px] font-mono text-ink-300 whitespace-pre-wrap break-all">

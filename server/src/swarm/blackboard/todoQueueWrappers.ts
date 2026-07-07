@@ -69,6 +69,9 @@ export interface TodoQueueWrappers {
   /** Auditor-gated commits: reject pending-commit → pending (claim released)
    *  with reason. Emits todo_reverted. */
   rejectCommitQ: (id: string, reason: string) => void;
+  /** Release in-progress → pending (auditor overrode invalid worker skip).
+   *  Does NOT enqueue replan. Emits todo_reverted. */
+  releaseTodoQ: (id: string, reason: string, updates?: ResetUpdates) => void;
 }
 
 export function makeTodoQueueWrappers(deps: TodoQueueWrapperDeps): TodoQueueWrappers {
@@ -176,6 +179,12 @@ export function makeTodoQueueWrappers(deps: TodoQueueWrapperDeps): TodoQueueWrap
     rejectCommitQ(id, reason) {
       todoQueue.rejectCommit(id, reason);
       const wire = v2QueueTodoToWireTodo(todoQueue.get(id)!);
+      emit({ type: "todo_reverted", todoId: id, reason });
+      scheduleStateWrite();
+    },
+
+    releaseTodoQ(id, reason, updates) {
+      todoQueue.release(id, reason, updates);
       emit({ type: "todo_reverted", todoId: id, reason });
       scheduleStateWrite();
     },

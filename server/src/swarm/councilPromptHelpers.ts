@@ -205,6 +205,7 @@ export function buildStandupPrompt(
   localPath?: string,
   repoFiles?: string[],
   model?: string,
+  progressContext?: string,
 ): string {
   const budget = getModelBudget(model);
   const maxRepoFiles = budget.fullFileMode ? 500 : 60;
@@ -251,6 +252,7 @@ export function buildStandupPrompt(
     committedBlock,
     projectStructure,
     repoContext,
+    progressContext?.trim() ? progressContext : "",
     "",
     "RULES:",
     "1. Read actual files before reporting issues. Do NOT guess.",
@@ -264,5 +266,25 @@ export function buildStandupPrompt(
     "Max 4 findings. Be specific about file paths.",
     "",
     `Now respond as Agent ${agentIndex}.`,
+  ].join("\n");
+}
+
+/** Agent-1 standup merge prompt — agents drive the plan; progress block is informational only. */
+export function buildStandupSynthesisPrompt(
+  proposals: string,
+  progressContext?: string,
+): string {
+  return [
+    "You are Agent 1, synthesizing standup proposals into a unified plan.",
+    progressContext?.trim() ? progressContext : "",
+    "",
+    "Standup proposals from all agents:",
+    proposals,
+    "",
+    "Merge these into a single coherent plan. Focus on what is actionable.",
+    "Output a JSON array of concrete todos:",
+    '[{"description": "specific file change", "expectedFiles": ["path/to/file.ts"]}]',
+    "",
+    "Prefer at most one todo per file path. Return ONLY the JSON array.",
   ].join("\n");
 }

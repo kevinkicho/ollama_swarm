@@ -94,6 +94,17 @@ const PAIRED_TAG_RE = new RegExp(
   "gi",
 );
 
+// DeepSeek v4 explore turns emit nested <function> wrappers instead of bare
+// <read path='...'/> markers. Observed in blackboard run 94224a3e (2026-07-07):
+//   <function>
+//   <function name>read</function>
+//   <parameter name="path">C:\...\GOVERNMENT_API_CATALOG.md</parameter>
+//   </function>
+// Must match the full outer wrapper; a naive non-greedy </function> stops at the
+// inner <function name>…</function> child (run 94224a3e).
+const DEEPSEEK_FUNCTION_BLOCK_RE =
+  /<function>\s*<function\s+name>[^<]+<\/function>\s*<parameter\s+name=["'][^"']+["']>[^<]*<\/parameter>\s*<\/function>/gi;
+
 /**
  * Split agent text into tool-call markers + the rest.
  *
@@ -115,18 +126,32 @@ export function extractToolCallMarkers(text: string): {
   if (!text.includes("<")) return { toolCalls: [], finalText: text };
 
   const toolCalls: string[] = [];
+  const pushMarker = (match: string) => {
+    // Collapse consecutive duplicates — models often re-emit the same
+    // pseudo-marker hundreds of times in a stream loop (#4f136068).
+    if (toolCalls.length === 0 || toolCalls[toolCalls.length - 1] !== match) {
+      toolCalls.push(match);
+    }
+  };
+
+  // Pass 0: DeepSeek <function>...</function> wrappers (before bare XML tags).
+  let stripped = text.replace(DEEPSEEK_FUNCTION_BLOCK_RE, (match) => {
+    pushMarker(match);
+    return "";
+  });
 
   // Pass 1: paired tags. The full tag-match (including content) gets
   // recorded; the content stays inside the tool-call entry so the
   // collapsed ToolCallsBlock can show what was being asked for.
-  let stripped = text.replace(PAIRED_TAG_RE, (match) => {
-    toolCalls.push(match);
+
+  stripped = stripped.replace(PAIRED_TAG_RE, (match) => {
+    pushMarker(match);
     return "";
   });
 
   // Pass 2: remaining single-tag / unclosed forms.
   stripped = stripped.replace(SINGLE_TAG_RE, (match) => {
-    toolCalls.push(match);
+    pushMarker(match);
     return "";
   });
 
@@ -145,4 +170,19 @@ export function extractToolCallMarkers(text: string): {
   // appendAgent's `text: finalText || "(empty response)"` shield kicks
   // in and the bubble shows a clean placeholder.
   return { toolCalls, finalText };
+}
+
+/** Count pseudo-tool-call markers without building the full array. */
+export function countPseudoToolCallMarkers(text: string): number {
+  if (!text || !text.includes("<")) return 0;
+  let count = 0;
+  const countPaired = text.replace(PAIRED_TAG_RE, () => {
+    count++;
+    return "";
+  });
+  countPaired.replace(SINGLE_TAG_RE, () => {
+    count++;
+    return "";
+  });
+  return count;
 }

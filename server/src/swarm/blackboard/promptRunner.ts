@@ -310,3 +310,29 @@ export function markPlannerStatus(
     ...(status === "thinking" ? { thinkingSince: Date.now() } : { lastMessageAt: Date.now() }),
   });
 }
+
+/** Surface planner phase in sidebar (DiscussionRunnerBase lifecycle pattern). */
+export function emitAgentActivity(
+  agent: Agent,
+  emitAgentState: (s: AgentState) => void,
+  activity: {
+    kind: string;
+    label: string;
+    attempt: number;
+    maxAttempts: number;
+    mode?: "explore" | "emit";
+  },
+): void {
+  emitAgentState({
+    id: agent.id,
+    index: agent.index,
+    port: agent.port,
+    sessionId: agent.sessionId,
+    status: "thinking",
+    thinkingSince: Date.now(),
+    activityKind: activity.kind,
+    activityLabel: `${activity.label}${activity.mode === "emit" ? " · emit-only" : ""}`,
+    activityAttempt: activity.attempt,
+    activityMaxAttempts: activity.maxAttempts,
+  });
+}

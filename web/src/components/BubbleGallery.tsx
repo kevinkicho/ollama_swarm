@@ -387,7 +387,7 @@ const fixtures: Array<{ label: string; entries: TranscriptEntry[] }> = [
     entries: [entry({ role: "agent", agentIndex: 1, text: JSON.stringify({ randomShape: { foo: "bar", count: 42, nested: [{ a: 1 }, { b: 2 }] } }, null, 2) })],
   },
   {
-    label: "[agent client-fallback] prose with thoughts (Phase 1 ThoughtsBlock above main bubble)",
+    label: "[agent client-fallback] prose with thoughts (Thinking toggle inside bubble)",
     entries: [entry({ role: "agent", agentIndex: 1, text: proseTextWithThoughts, thoughts: "Let me think about this carefully. The request is to split a monolithic handler into per-route modules. The trade-offs are: split-by-domain (matches existing folder structure, simpler imports) vs split-by-feature (more flexible long-term but more refactoring work upfront).\n\nGiven the current scale (3 domains), split-by-domain is the right call. The constructor-arg concern is real and needs addressing.\n\nI'll write a clear, concise final response that picks the cleaner option without over-explaining the deliberation." })],
   },
   {

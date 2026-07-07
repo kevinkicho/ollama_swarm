@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Hunk } from "../applyHunks.js";
 import { windowFileForWorker, windowFileWithAnchors } from "../windowFile.js";
 import type { RoundRobinDisposition } from "../../roundRobinPromptHelpers.js";
-import { extractJsonFromText as stripFences } from "../../extractJson.js";
+import { parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 import { softCap } from "./lenientParse.js";
 import { buildResearchNotesBlock, buildResearchToolsNote } from "./planner.js";
 
@@ -83,23 +83,11 @@ export function parseWorkerResponse(
   if (raw.trim().length === 0) {
     return { ok: false, reason: "empty response — model produced no output after stripping thinking tags" };
   }
-  let parsed: unknown;
-  let lastError = "";
-  try {
-    parsed = JSON.parse(raw.trim());
-  } catch (err) {
-    lastError = err instanceof Error ? err.message : String(err);
-    const cleaned = stripFences(raw);
-    if (cleaned === null) {
-      return { ok: false, reason: `JSON parse failed: ${lastError}` };
-    }
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch (err2) {
-      const msg = err2 instanceof Error ? err2.message : String(err2);
-      return { ok: false, reason: `JSON parse failed: ${msg}` };
-    }
+  const envelopeResult = parseJsonEnvelope(raw);
+  if (!envelopeResult.ok) {
+    return { ok: false, reason: envelopeResult.reason };
   }
+  const parsed = envelopeResult.value;
 
   // Try strict parse first; if it fails, attempt per-hunk extraction so one
   // bad hunk doesn't kill the whole response.
@@ -246,6 +234,24 @@ export interface WorkerSeed {
   webToolsEnabled?: boolean;
   /** Web research brief from a prior worker research phase or planner pre-pass. */
   researchNotes?: string;
+  /** Mid-run suggest/ask messages from user chat (steer is in directive). */
+  userChatBlock?: string;
+  /** Existing API catalog + .env key names for dedup grounding. */
+  endpointCatalogBlock?: string;
+}
+
+/** Read-only repo tools available to hunk workers (swarm-read profile). */
+export function buildWorkerToolsNote(): string {
+  return [
+    "=== AVAILABLE TOOLS (read-only repo inspection) ===",
+    "You have read, grep, glob, and list tools scoped to the clone.",
+    "Use them BEFORE emitting hunks when:",
+    "  - expectedFiles are windowed and you need text from the omitted middle",
+    "  - you must verify an anchor is unique or exists",
+    "  - you need to check for duplicate routes/endpoints/API keys elsewhere in the repo",
+    "Do NOT use tools to write files — output hunks in JSON only.",
+    "=== end TOOLS NOTE ===",
+  ].join("\n");
 }
 
 export function isLiteratureTodo(description: string): boolean {
@@ -279,6 +285,16 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
     parts.push("=== USER DIRECTIVE (AUTHORITATIVE — your work MUST serve this directive. Never create mock/fake/placeholder data.) ===");
     parts.push(seed.directive.trim());
     parts.push("=== end USER DIRECTIVE ===");
+    parts.push("");
+  }
+  if (seed.userChatBlock && seed.userChatBlock.trim().length > 0) {
+    parts.push(seed.userChatBlock.trim());
+    parts.push("");
+  }
+  parts.push(buildWorkerToolsNote());
+  parts.push("");
+  if (seed.endpointCatalogBlock && seed.endpointCatalogBlock.trim().length > 0) {
+    parts.push(seed.endpointCatalogBlock.trim());
     parts.push("");
   }
   if (seed.webToolsEnabled) {

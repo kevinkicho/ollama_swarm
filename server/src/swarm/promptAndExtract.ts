@@ -1,40 +1,51 @@
 // Task #54 (2026-04-24): one-shot retry when extractTextWithDiag
-// signals isEmpty=true. Skips the full promptWithRetry wrapper on the
-// retry — transport errors were already handled on the first attempt;
-// this is purely about getting TEXT out of a response that came back
-// empty (partsLength > 0 but no type:"text" part, e.g.
-// ['step-start', 'tool'] or ['step-start', 'step-finish']).
+// signals isEmpty=true. When the caller passes manager + signal in
+// diagCtx, the retry stays on the same coordinated prompt+stream path
+// as the first attempt (promptWithRetry). Otherwise falls back to
+// chatOnce for lightweight call sites.
 //
 // Best-effort: any error during the retry returns null so the caller
 // keeps its original "(empty response)" placeholder rather than
 // propagating a new failure.
 //
 // Pattern 10 (2026-04-24): retry deadline. Without an upper bound the
-// retry session.prompt has been observed (council + OW runs) to hang
-// indefinitely — the model occasionally never responds to the retry
-// prompt, pinning the agent until the runner's 20-min absolute-turn
-// cap fires. A 60-second cap on the retry itself unblocks the agent
-// loop; the orphaned cloud call drains in the background. Implemented
-// with the same { AbortController + session.abort } pattern the
-// per-runner watchdogs use.
+// retry has been observed (council + OW runs) to hang indefinitely.
+// A 60-second cap on the retry itself unblocks the agent loop.
 
-import type { Agent } from "../services/AgentManager.js";
-import { toOpenCodeModelRef } from "@ollama-swarm/shared/providers.js";
+import type { Agent, AgentManager } from "../services/AgentManager.js";
 import { chatOnce } from "./chatOnce.js";
+import { promptWithRetry } from "./promptWithRetry.js";
+import type { PromptWithRetryOptions } from "./promptWithRetry.js";
 import {
   EMPTY_RESPONSE_RETRY_SUFFIX,
   extractTextWithDiag,
   looksLikeJunk,
 } from "./extractText.js";
 
-interface DiagCtx {
+export interface DiagCtx {
   runner: string;
   agentId: string;
   agentIndex?: number;
   logDiag?: (rec: Record<string, unknown>) => void;
+  /** When set with signal, empty-retry uses promptWithRetry + streaming UI. */
+  manager?: AgentManager;
+  signal?: AbortSignal;
+  webToolsConfig?: PromptWithRetryOptions["webToolsConfig"];
+  mcpServers?: string;
+  onTool?: PromptWithRetryOptions["onTool"];
+  promptAddendum?: string;
+  modelOverride?: string;
+  runId?: string;
 }
 
 const RETRY_DEADLINE_MS = 60_000;
+
+function adaptLogDiag(
+  logDiag: DiagCtx["logDiag"],
+): ((record: unknown) => void) | undefined {
+  if (!logDiag) return undefined;
+  return (record) => logDiag(record as Record<string, unknown>);
+}
 
 export async function retryEmptyResponse(
   agent: Agent,
@@ -47,6 +58,7 @@ export async function retryEmptyResponse(
     runner: diagCtx.runner,
     agentId: diagCtx.agentId,
     agentIndex: diagCtx.agentIndex,
+    coordinated: Boolean(diagCtx.manager),
     ts: Date.now(),
   });
   const retryAbort = new AbortController();
@@ -54,22 +66,33 @@ export async function retryEmptyResponse(
   const timer = setTimeout(() => {
     deadlineHit = true;
     retryAbort.abort(new Error(`retry deadline ${RETRY_DEADLINE_MS / 1000}s`));
-    // Tell the OpenCode session to stop serving the abandoned prompt
-    // so a subsequent prompt on the same session isn't queued behind it.
-    // E3 Phase 5: opencode session.abort is gone. AbortController.signal
-    // handles cancellation through the provider path.
   }, RETRY_DEADLINE_MS);
+  const composed = diagCtx.signal
+    ? AbortSignal.any([retryAbort.signal, diagCtx.signal])
+    : retryAbort.signal;
+  const retryPrompt = originalPrompt + EMPTY_RESPONSE_RETRY_SUFFIX;
   try {
-    const retryRes = await chatOnce(agent, {
-      agentName,
-      promptText: originalPrompt + EMPTY_RESPONSE_RETRY_SUFFIX,
-      signal: retryAbort.signal,
-    });
+    const retryRes = diagCtx.manager
+      ? await promptWithRetry(agent, retryPrompt, {
+          signal: composed,
+          manager: diagCtx.manager,
+          agentName,
+          logDiag: adaptLogDiag(diagCtx.logDiag),
+          runId: diagCtx.runId,
+          ...(diagCtx.webToolsConfig !== undefined ? { webToolsConfig: diagCtx.webToolsConfig } : {}),
+          ...(diagCtx.mcpServers !== undefined ? { mcpServers: diagCtx.mcpServers } : {}),
+          ...(diagCtx.onTool !== undefined ? { onTool: diagCtx.onTool } : {}),
+          ...(diagCtx.promptAddendum !== undefined ? { promptAddendum: diagCtx.promptAddendum } : {}),
+          ...(diagCtx.modelOverride !== undefined ? { modelOverride: diagCtx.modelOverride } : {}),
+        })
+      : await chatOnce(agent, {
+          agentName,
+          promptText: retryPrompt,
+          signal: composed,
+          logDiag: adaptLogDiag(diagCtx.logDiag),
+          runId: diagCtx.runId,
+        });
     const { text, isEmpty } = extractTextWithDiag(retryRes, diagCtx);
-    // Pattern 8: also reject the retry if it came back as junk-short
-    // single-token output (the failure mode we tried to recover from
-    // in the first place). Returning null keeps the original placeholder
-    // / junk text rather than swapping in a different junk string.
     if (isEmpty || looksLikeJunk(text)) return null;
     return text;
   } catch {

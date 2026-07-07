@@ -159,6 +159,7 @@ describe("applyEventToStore", () => {
       assert.equal(store.getState().streamingMeta.a1.status, "done");
       assert.equal(store.getState().streaming.a1, "Hello");
     });
+
   });
 
   describe("error", () => {

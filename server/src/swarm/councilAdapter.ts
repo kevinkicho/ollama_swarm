@@ -3,14 +3,15 @@ import type { RunConfig } from "./SwarmRunner.js";
 import type { ExitContract, ExitCriterion, Todo as BoardTodo } from "./blackboard/types.js";
 import { TodoQueue, type PostTodoInput } from "./blackboard/TodoQueue.js";
 import { FindingsLog } from "./blackboard/FindingsLog.js";
-import { classifyExpectedFiles } from "./blackboard/prompts/pathValidation.js";
+import { groundExpectedFiles } from "./blackboard/contractGrounding.js";
 import {
   buildFirstPassContractUserPrompt,
   parseFirstPassContractResponse,
   FIRST_PASS_CONTRACT_SYSTEM_PROMPT,
 } from "./blackboard/prompts/firstPassContract.js";
-import { buildContract } from "./blackboard/contractBuilder.js";
+import { buildContract, type ContractContext } from "./blackboard/contractBuilder.js";
 import { buildSeed } from "./blackboard/contractBuilder.js";
+import type { TranscriptEntry } from "../types.js";
 import type { PlannerSeed } from "./blackboard/prompts/planner.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
 import { canonicalizeExpectedFiles } from "./councilPathCanonicalize.js";
@@ -40,6 +41,8 @@ export interface CouncilAdapterState {
   tierStartedAt: number | undefined;
   auditInvocations: number;
   committedFiles: string[];
+  /** Neutral shared progress text injected into agent prompts (optional). */
+  progressContext?: string;
   runStartedAt: number | undefined;
   manager: { list: () => Agent[]; markStatus: (id: string, status: string) => void; recordPromptComplete: (id: string, data: any) => void };
   repos: { listTopLevel: (p: string) => Promise<string[]>; readReadme: (p: string) => Promise<string | null>; listRepoFiles: (p: string, opts: { maxFiles: number }) => Promise<string[]> };
@@ -115,38 +118,60 @@ export async function promptPlannerSafely(
   return { response: text ?? "", agentUsed: agent };
 }
 
+/** Minimal ContractContext for council paths that call shared buildSeed(). */
+function councilBuildSeedContext(
+  state: CouncilAdapterState,
+  planner: Agent | undefined,
+  getTranscript: () => readonly TranscriptEntry[] = () => [],
+): ContractContext {
+  return {
+    getStopping: () => state.stopping,
+    getActive: () => state.cfg,
+    getContract: () => state.contract,
+    getPriorSnapshot: () => null,
+    getFindingsPost: () => (entry: { agentId: string; text: string; createdAt: number }) => {
+      state.findings.post(entry);
+    },
+    getTodoQueue: () => state.todoQueue,
+    getFindingsLog: () => state.findings,
+    getTodoQueueCounts: () => state.todoQueue.counts(),
+    getBoardRestoredFromSnapshot: () => false,
+    setBoardRestoredFromSnapshot: () => {},
+    setContract: (c) => { state.contract = c; },
+    setCurrentTier: (t) => { state.currentTier = t; },
+    setTiersCompleted: (t) => { state.tiersCompleted = t; },
+    setTierStartedAt: (t) => { state.tierStartedAt = t; },
+    setTierHistory: (h) => { state.tierHistory = h; },
+    appendSystem: state.appendSystem,
+    appendAgent: state.appendAgent,
+    findingsPost: (entry) => { state.findings.post(entry); },
+    getAuditor: () => undefined,
+    emitAgentState: () => {},
+    getPlannerFallbackModel: () => undefined,
+    updateAgentModel: () => {},
+    promptPlannerSafely: (agent, promptText, agentName) =>
+      promptPlannerSafely(agent, promptText, agentName, state.manager, state.cfg.providerFailover),
+    promptAgent: (agent, prompt, agentName, formatExpect) =>
+      promptAgent(agent, prompt, agentName, formatExpect, state.manager, state.cfg.providerFailover),
+    emit: state.emit,
+    getTranscript,
+    getPlanner: () => planner,
+    directiveWithAmendments: () => state.cfg.userDirective?.trim() || undefined,
+    scheduleStateWrite: () => {},
+    flushBoardBroadcasterSnapshot: () => {},
+    v2ObserverApply: () => {},
+    repos: state.repos,
+  };
+}
+
 export async function runContractDerivation(
   state: CouncilAdapterState,
   planner: Agent,
   workers: Agent[],
+  getTranscript: () => readonly TranscriptEntry[] = () => [],
 ): Promise<void> {
   const seed = await buildSeed(
-    {
-      getStopping: () => state.stopping,
-      getActive: () => state.cfg,
-      getContract: () => state.contract,
-      getPriorSnapshot: () => null,
-      getFindingsPost: () => (entry: { agentId: string; text: string; createdAt: number }) => {
-        state.findings.post(entry);
-      },
-      setContract: (c) => { state.contract = c; },
-      setCurrentTier: (t) => { state.currentTier = t; },
-      setTiersCompleted: (t) => { state.tiersCompleted = t; },
-      setTierStartedAt: (t) => { state.tierStartedAt = t; },
-      setTierHistory: (h) => { state.tierHistory = h; },
-      appendSystem: state.appendSystem,
-      appendAgent: state.appendAgent,
-      getPlannerFallbackModel: () => undefined,
-      updateAgentModel: () => {},
-      promptPlannerSafely: (agent, promptText, agentName) =>
-        promptPlannerSafely(agent, promptText, agentName, state.manager, state.cfg.providerFailover),
-      promptAgent: (agent, prompt, agentName, formatExpect) =>
-        promptAgent(agent, prompt, agentName, formatExpect, state.manager, state.cfg.providerFailover),
-      emit: state.emit,
-      scheduleStateWrite: () => {},
-      v2ObserverApply: () => {},
-      repos: state.repos,
-    },
+    councilBuildSeedContext(state, planner, getTranscript),
     state.clonePath,
     state.cfg,
   );
@@ -221,20 +246,27 @@ function finalizeContract(
   ownerAgent: Agent,
 ): void {
   const groundedCriteria = parsed.criteria.map((c, idx) => {
-    const { accepted, rejected } = classifyExpectedFiles(c.expectedFiles, seed.repoFiles);
-    for (const r of rejected) {
+    const { grounded, stripped, rebound } = groundExpectedFiles(c.expectedFiles, seed.repoFiles);
+    for (const rb of rebound) {
       state.findings.post({
         agentId: ownerAgent.id,
-        text: `Contract c${idx + 1}: stripped suspicious path '${r.path}' (${r.reason}).`,
+        text: `Contract c${idx + 1}: rebound '${rb.from}' → '${rb.to}'.`,
         createdAt: Date.now(),
       });
     }
-    if (rejected.length > 0) {
+    for (const r of stripped) {
+      state.findings.post({
+        agentId: ownerAgent.id,
+        text: `Contract c${idx + 1}: stripped ungrounded path '${r.path}' (${r.reason}).`,
+        createdAt: Date.now(),
+      });
+    }
+    if (stripped.length > 0 || rebound.length > 0) {
       state.appendSystem(
-        `Contract c${idx + 1}: ${rejected.length}/${c.expectedFiles.length} path(s) stripped — kept with ${JSON.stringify(accepted)}.`,
+        `Contract c${idx + 1}: ${stripped.length} stripped, ${rebound.length} rebound(s) — expectedFiles=${JSON.stringify(grounded)}.`,
       );
     }
-    const canonical = canonicalizeExpectedFiles(accepted, seed.repoFiles);
+    const canonical = canonicalizeExpectedFiles(grounded, seed.repoFiles);
     return { description: c.description, expectedFiles: canonical };
   });
 
@@ -262,32 +294,7 @@ export async function runTierPromotion(
   if (state.currentTier >= maxTiers) return false;
 
   const seed = await buildSeed(
-    {
-      getStopping: () => state.stopping,
-      getActive: () => state.cfg,
-      getContract: () => state.contract,
-      getPriorSnapshot: () => null,
-      getFindingsPost: () => (entry: { agentId: string; text: string; createdAt: number }) => {
-        state.findings.post(entry);
-      },
-      setContract: (c) => { state.contract = c; },
-      setCurrentTier: (t) => { state.currentTier = t; },
-      setTiersCompleted: (t) => { state.tiersCompleted = t; },
-      setTierStartedAt: (t) => { state.tierStartedAt = t; },
-      setTierHistory: (h) => { state.tierHistory = h; },
-      appendSystem: state.appendSystem,
-      appendAgent: state.appendAgent,
-      getPlannerFallbackModel: () => undefined,
-      updateAgentModel: () => {},
-      promptPlannerSafely: (agent, promptText, agentName) =>
-        promptPlannerSafely(agent, promptText, agentName, state.manager),
-      promptAgent: (agent, prompt, agentName, formatExpect) =>
-        promptAgent(agent, prompt, agentName, formatExpect, state.manager),
-      emit: state.emit,
-      scheduleStateWrite: () => {},
-      v2ObserverApply: () => {},
-      repos: state.repos,
-    },
+    councilBuildSeedContext(state, planner),
     state.clonePath,
     state.cfg,
   );
@@ -350,11 +357,13 @@ Max 6 criteria. Each must be concrete, verifiable, and directly advance the user
     }
 
     const grounded = newCriteria.map((c) => {
-      const { accepted, rejected } = classifyExpectedFiles(c.expectedFiles, seed.repoFiles);
-      if (rejected.length > 0) {
-        state.appendSystem(`Tier ${nextTier}: stripped ${rejected.length} invalid path(s) from "${c.description}".`);
+      const { grounded: paths, stripped, rebound } = groundExpectedFiles(c.expectedFiles, seed.repoFiles);
+      if (stripped.length > 0 || rebound.length > 0) {
+        state.appendSystem(
+          `Tier ${nextTier}: ${stripped.length} stripped, ${rebound.length} rebound(s) for "${c.description}".`,
+        );
       }
-      const canonical = canonicalizeExpectedFiles(accepted, seed.repoFiles);
+      const canonical = canonicalizeExpectedFiles(paths, seed.repoFiles);
       return { description: c.description, expectedFiles: canonical };
     });
 

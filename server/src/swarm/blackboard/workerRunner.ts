@@ -21,6 +21,7 @@ import {
   evaluateConflictDispatch,
   updateDeferralTimestamps,
 } from "./hypothesisGrouping.js";
+import { hasActiveFileConflict } from "./workerFileConflict.js";
 import {
   buildHunkRepairPrompt,
   buildWorkerRepairPrompt,
@@ -43,18 +44,23 @@ import { applyAndCommit } from "./WorkerPipeline.js";
 import { realFilesystemAdapter, realGitAdapter, realVerifyAdapter } from "./v2Adapters.js";
 import { voteOnHunksWithJudge, type HunkVote, type JudgeFn } from "./hunkVoting.js";
 import { buildJudgePrompt } from "./hunkJudgePrompt.js";
-import {
-  tryBrainFallback,
-  type BrainFallbackEvent,
-} from "./prompts/brainIntegration.js";
+
 import { v2QueueTodoToWireTodo } from "./boardWireCompat.js";
 import { bumpAgentCounter } from "./runnerHelpers.js";
 import { pheromoneHeatmap } from "../pheromoneHeatmap.js";
 import { withSiblingRetry } from "./siblingRetry.js";
 import { verifyWorkerSkip } from "./auditorRunner.js";
+import { resolveBlackboardPromptExtras } from "./blackboardPromptContext.js";
+import type { TranscriptEntry } from "../../types.js";
 import { autoDetectAnchors } from "./autoAnchor.js";
 import { getModelBudget } from "../modelContextBudget.js";
-import { resolveToolProfile } from "../toolProfiles.js";
+import { profileTools, resolveToolProfile } from "../toolProfiles.js";
+import {
+  loadEndpointCatalogSnapshot,
+  renderEndpointCatalogBlock,
+  todoTouchesApiSurface,
+} from "./endpointCatalogContext.js";
+import { runParseSalvage } from "./parseSalvage.js";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
 import { isPromptHaltError } from "./lifecycleState.js";
 
@@ -76,13 +82,20 @@ async function runWorkerLiteratureResearch(
     return undefined;
   }
   const profile = workerToolProfile(ctx, "read");
+  const litExtras = resolveBlackboardPromptExtras({
+    active: cfg,
+    getAmendments: ctx.getAmendments,
+    transcript: ctx.getTranscript(),
+    forAgentId: agent.id,
+  });
+  const litDirective = litExtras.effectiveDirective ?? cfg.userDirective;
   const prompt = [
     "You are a research worker gathering sources BEFORE writing file edits.",
     buildResearchToolsNote(true),
     "",
     `TODO: ${todo.description}`,
     `Target files: ${todo.expectedFiles.join(", ")}`,
-    cfg.userDirective ? `User directive: ${cfg.userDirective}` : "",
+    litDirective ? `User directive: ${litDirective}` : "",
     "",
     "Use web_search and web_fetch to gather citable findings. Output plain prose with bullet points and URLs.",
     "Do NOT emit JSON hunks in this phase.",
@@ -120,6 +133,8 @@ export interface WorkerContext {
   checkAndApplyCaps: () => boolean;
   boardCounts: () => { open: number; claimed: number; stale: number; committed: number; skipped: number; total: number };
   getActive: () => RunConfig | undefined;
+  getTranscript: () => readonly TranscriptEntry[];
+  getAmendments?: () => Array<{ ts: number; text: string }>;
   getReplanPending: () => Set<string>;
   isReplanRunning: () => boolean;
   getWrappers: () => TodoQueueWrappers;
@@ -133,7 +148,7 @@ export interface WorkerContext {
   setHypothesisDeferralTimestamps: (v: Map<string, number>) => void;
   getAuditor: () => Agent | undefined;
   appendSystem: (msg: string) => void;
-  appendAgent: (agent: Agent, text: string) => void;
+  appendAgent: (agent: Agent, text: string, options?: { assistKind?: "auditor-salvage" }) => void;
   promptAgent: (agent: Agent, prompt: string, agentName: ProfileName, formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => Promise<string>;
   emitAgentState: (s: AgentState) => void;
   readExpectedFiles: (files: string[]) => Promise<Record<string, string | null>>;
@@ -149,7 +164,7 @@ export interface WorkerContext {
   bumpCommitsPerAgent: (agentId: string) => void;
   addLinesPerAgent: (agentId: string, added: number, removed: number) => void;
   recordCriterionCommits: (todo: Todo, commitSha: string) => void;
-  // Plan 4: brain system overseer
+  // Plan 4: post-run brain overseer telemetry
   recordInteraction: (type: string, todoId: string, agentId: string, reason: string) => void;
   recordException: (type: string, agentId: string, todoId?: string, reason?: string) => void;
   bumpStigmergyFileCounts: (expectedFiles: readonly string[], commitSha: string) => void;
@@ -167,14 +182,6 @@ export interface WorkerContext {
   setDispositionCycle: (v: Map<string, number>) => void;
   // Plan 3: pheromone heatmap access for hot-files seeding
   getPheromoneHeatmap: () => import("../pheromoneHeatmap.js").PheromoneHeatmap | undefined;
-  /** Brain fallback: prompt an LLM to extract structured JSON from a
-   *  failed parse. The promptFn signature matches promptWithFailover. */
-  brainPromptFn?: (
-    prompt: string,
-    model: string,
-    maxTokens: number,
-    timeoutMs: number,
-  ) => Promise<string>;
   updateAgentModel: (agentId: string, model: string) => void;
   getPlannerFallbackModel: () => string | undefined;
 }
@@ -287,6 +294,7 @@ export async function runWorker(
         expectedFiles: t.expectedFiles,
         status: t.status === "in-progress" ? "in-progress" : t.status,
       }));
+      const globalInProgress = candidates.filter((c) => c.status === "in-progress");
       const now = Date.now();
       const verdictsByTodoId = new Map<string, "dispatch" | "defer" | "force-dispatch">();
 
@@ -296,6 +304,9 @@ export async function runWorker(
           let touched = 0;
           for (const f of t.expectedFiles) touched += stigmergyCounts.get(f) ?? 0;
           stigmergyBias = -touched;
+        }
+        if (hasActiveFileConflict(t.expectedFiles, globalInProgress, t.id)) {
+          return Number.NEGATIVE_INFINITY;
         }
         if (useHypothesisCheck && t.groupId) {
           const candidate = candidates.find((c) => c.id === t.id);
@@ -345,13 +356,37 @@ export async function runWorker(
         }
       }
     } else {
-      queued = ctx.getWrappers().dequeueTodoQ(agent.id, myTag);
+      const allTodos = ctx.getTodoQueue().list();
+      const inProgress = allTodos
+        .filter((t) => t.status === "in-progress")
+        .map((t) => ({ id: t.id, expectedFiles: t.expectedFiles }));
+      if (inProgress.length > 0) {
+        queued = ctx.getTodoQueue().dequeueByScore(agent.id, (t) => {
+          if (t.status !== "pending") return -999_999;
+          if (hasActiveFileConflict(t.expectedFiles, inProgress, t.id)) {
+            return Number.NEGATIVE_INFINITY;
+          }
+          return 0;
+        });
+        if (queued) {
+          const wire = v2QueueTodoToWireTodo(queued);
+          if (wire.claim) {
+            ctx.emit({
+              type: "todo_claimed",
+              todoId: queued.id,
+              claim: wire.claim,
+            });
+          }
+        }
+      } else {
+        queued = ctx.getWrappers().dequeueTodoQ(agent.id, myTag);
+      }
     }
 
     if (!queued) continue;
     const todo = v2QueueTodoToWireTodo(queued);
 
-    let outcome: "committed" | "stale" | "lost-race" | "aborted" | "pending-commit";
+    let outcome: "committed" | "stale" | "lost-race" | "aborted" | "pending-commit" | "released" | "skipped";
     if (todo.kind === "build") {
       outcome = await executeBuildTodo(ctx, agent, todo);
     } else {
@@ -382,7 +417,7 @@ export async function executeBuildTodo(
   ctx: WorkerContext,
   agent: Agent,
   todo: Todo,
-): Promise<"committed" | "stale" | "lost-race" | "aborted" | "pending-commit"> {
+): Promise<"committed" | "stale" | "lost-race" | "aborted" | "pending-commit" | "released" | "skipped"> {
   if (!todo.command || todo.command.trim().length === 0) {
     ctx.appendSystem(`[${agent.id}] build TODO ${todo.id.slice(0, 8)} has no command — marking stale.`);
     ctx.getWrappers().failTodoQ(todo.id, "build TODO missing command field");
@@ -486,7 +521,7 @@ export async function executeWorkerTodo(
   ctx: WorkerContext,
   agent: Agent,
   todo: Todo,
-): Promise<"committed" | "stale" | "lost-race" | "aborted" | "pending-commit"> {
+): Promise<"committed" | "stale" | "lost-race" | "aborted" | "pending-commit" | "released" | "skipped"> {
   const modelAtEntry = agent.model;
   let commitTier: import("./types.js").CommitTier | undefined;
   let contents: Record<string, string | null>;
@@ -524,6 +559,24 @@ export async function executeWorkerTodo(
   const researchNotes = webToolsEnabled
     ? await runWorkerLiteratureResearch(ctx, agent, todo, workerCwd)
     : undefined;
+  const promptExtras = resolveBlackboardPromptExtras({
+    active: activeCfg,
+    getAmendments: ctx.getAmendments,
+    transcript: ctx.getTranscript(),
+    forAgentId: agent.id,
+  });
+  let endpointCatalogBlock: string | undefined;
+  if (todoTouchesApiSurface(todo.description, todo.expectedFiles)) {
+    try {
+      const catalogSnap = await loadEndpointCatalogSnapshot(workerCwd);
+      if (catalogSnap) {
+        endpointCatalogBlock = renderEndpointCatalogBlock(catalogSnap);
+      }
+    } catch {
+      // best-effort
+    }
+  }
+
   const seed: WorkerSeed = {
     todoId: todo.id,
     description: todo.description,
@@ -533,9 +586,11 @@ export async function executeWorkerTodo(
     expectedAnchors: effectiveAnchors,
     roleGuidance: ctx.getWorkerRoles().get(agent.id),
     fullFileMode: budget.fullFileMode,
-    directive: activeCfg?.userDirective,
+    directive: promptExtras.effectiveDirective ?? activeCfg?.userDirective,
     webToolsEnabled,
     ...(researchNotes ? { researchNotes } : {}),
+    ...(promptExtras.userChatBlock ? { userChatBlock: promptExtras.userChatBlock } : {}),
+    ...(endpointCatalogBlock ? { endpointCatalogBlock } : {}),
   };
 
   if (ctx.getActive()?.stigmergyOnBlackboard && pheromoneHeatmap.size > 0) {
@@ -597,70 +652,38 @@ export async function executeWorkerTodo(
     parsed = parseWorkerResponse(repair, todo.expectedFiles);
     if (parsed.ok) commitTier = "repair";
     if (!parsed.ok) {
-      // Brain fallback: try AI-assisted parsing before giving up.
-      if (ctx.brainPromptFn) {
-        ctx.appendSystem(`[${agent.id}] [v2] worker parse still failed after repair — trying brain fallback (${parsed.reason}).`);
-        try {
-          const brainResult = await tryBrainFallback(
-            "worker",
-            response,
-            WorkerResponseSchema,
-            ctx.brainPromptFn,
-            (e: BrainFallbackEvent) => { ctx.emit({ type: "brain-fallback", ...e }); },
-            agent,
-          );
-          if (brainResult) {
-            // Validate that brain-extracted hunks reference allowed files
-            const allowed = new Set(todo.expectedFiles);
-            const validHunks = (brainResult as { hunks: { op: string; file: string; search?: string; replace?: string; content?: string }[]; skip?: string }).hunks
-              ?.filter((h: { file: string }) => allowed.has(h.file)) ?? [];
-            if (validHunks.length > 0 || (brainResult as { skip?: string }).skip) {
-              parsed = {
-                ok: true as const,
-                hunks: validHunks as import("./applyHunks.js").Hunk[],
-                skip: (brainResult as { skip?: string }).skip,
-              };
-              commitTier = "brain";
-              ctx.appendSystem(`[${agent.id}] [v2] Brain fallback succeeded — extracted ${validHunks.length} valid hunk(s).`);
-            }
-          }
-        } catch (err) {
-          ctx.appendSystem(`⚠ worker [brain-fallback]: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-    }
-    if (!parsed.ok) {
       // Auditor interpretation: before sibling retry, let the auditor
-      // try to interpret the response. It has broader context than the
-      // brain fallback and can reason about the response content.
+      // try to interpret the response.
       const auditor = ctx.getAuditor();
       if (auditor && !ctx.isStopping()) {
-        ctx.appendSystem(`[${agent.id}] [v2] parse failed after brain — routing raw response to auditor for interpretation.`);
+        ctx.appendSystem(`[${agent.id}] [v2] parse failed after repair — routing raw response to auditor for JSON salvage.`);
         try {
-          const auditorPrompt = `You are the AUDITOR interpreting a worker's malformed response. The worker was asked to produce hunks for todo "${todo.description}". Expected files: ${todo.expectedFiles.join(", ") || "(none)"}
-
-The worker produced this response which failed JSON validation:
-\`\`\`
-${response.slice(0, 3000)}
-\`\`\`
-
-Parse error: ${parsed.reason}
-
-Your job: extract or fix the JSON. The response likely contains valid hunks wrapped in markdown fences or with minor syntax issues. Return ONLY valid JSON matching this schema:
-{ "hunks": [{ "op": "replace"|"create"|"append"|"delete", "file": string, "search"?: string, "replace"?: string, "content"?: string }], "skip"?: string }
-
-If the worker genuinely declined (e.g. "cannot do this"), return { "skip": "reason" }.
-If the response is completely unparseable, return { "skip": "auditor could not interpret response" }.`;
-          const auditorResponse = await ctx.promptAgent(
+          const salvage = await runParseSalvage(
             auditor,
-            auditorPrompt,
-            workerToolProfile(ctx, "read"),
-            "json",
+            {
+              getStopping: ctx.isStopping,
+              appendSystem: ctx.appendSystem,
+              appendAgent: (a, t, o) => ctx.appendAgent(a, t, o),
+              promptPlannerSafely: (a, p, profile, schema) =>
+                ctx.promptAgent(a, p, profile ?? workerToolProfile(ctx, "read"), "json", schema)
+                  .then((r) => ({ response: r, agentUsed: a })),
+              getActive: ctx.getActive,
+              jsonSchema: WORKER_HUNKS_JSON_SCHEMA,
+            },
+            {
+              kind: "worker",
+              parseError: parsed.reason,
+              rawOutput: repair || response,
+              attempt: 1,
+            },
           );
-          const auditorParsed = parseWorkerResponse(auditorResponse, todo.expectedFiles);
+          const auditorResponse = salvage?.json ?? "";
+          const auditorParsed = salvage
+            ? parseWorkerResponse(auditorResponse, todo.expectedFiles)
+            : { ok: false as const, reason: "auditor salvage failed" };
           if (auditorParsed.ok && (auditorParsed.hunks.length > 0 || auditorParsed.skip)) {
             parsed = auditorParsed;
-            commitTier = "auditor-parse" as any;
+            commitTier = "auditor-parse";
             ctx.appendSystem(
               auditorParsed.skip
                 ? `[${agent.id}] [v2] auditor confirmed skip: ${auditorParsed.skip}`
@@ -714,9 +737,9 @@ If the response is completely unparseable, return { "skip": "auditor could not i
 
   if (parsed.skip) {
     ctx.appendSystem(`[${agent.id}] [v2] worker declined todo: ${parsed.skip}`);
-    // Auditor skip verification (best-effort)
     const auditor = ctx.getAuditor();
     if (auditor) {
+      const workerProfile = workerToolProfile(ctx, todo.kind === "build" ? "build" : "hunk");
       const fileContents = await ctx.readExpectedFiles(todo.expectedFiles);
       const verification = await verifyWorkerSkip(
         {
@@ -726,47 +749,103 @@ If the response is completely unparseable, return { "skip": "auditor could not i
           workerIndex: agent.index,
           fileContents,
           criteriaCount: ctx.getActive()?.userDirective ? 1 : 0,
+          workerToolProfile: workerProfile,
+          workerTools: profileTools(workerProfile),
+          todoKind: todo.kind,
         },
         ctx.promptAgent,
         auditor,
         resolveToolProfile("auditor", ctx.getActive()),
+        ctx.appendAgent,
       );
+      const findingPrefix = `[auditor] todo ${todo.id.slice(0, 8)} — worker-${agent.index} refused: "${parsed.skip}"`;
+
       if (verification.verdict === "invalid") {
         ctx.appendSystem(
-          `Auditor overrode worker-${agent.index}'s skip: "${verification.rationale}". ` +
-          `Reopening todo${verification.revisedDescription ? ' with revised description.' : '.'}`
+          `Auditor overrode worker-${agent.index}'s refusal: ${verification.rationale}. ` +
+          `Todo returns to board for another worker.`,
         );
-        ctx.getWrappers().failTodoQ(todo.id,
-          `auditor overrode skip: ${verification.rationale}`,
-          "declined"
-        );
-        if (verification.revisedDescription || verification.approachNotes) {
-          ctx.getWrappers().postTodoQ({
-            description: verification.revisedDescription ?? todo.description,
-            expectedFiles: todo.expectedFiles,
-            createdBy: auditor.id,
-          });
-          if (verification.approachNotes) {
-            ctx.appendSystem(`Auditor approach notes: ${verification.approachNotes}`);
-          }
+        ctx.getWrappers().postFindingQ({
+          agentId: auditor.id,
+          text: `${findingPrefix} → INVALID refusal. ${verification.rationale}` +
+            (verification.approachNotes ? ` Notes: ${verification.approachNotes}` : ""),
+          createdAt: Date.now(),
+        });
+        if (verification.approachNotes) {
+          ctx.appendSystem(`Auditor approach notes: ${verification.approachNotes}`);
         }
+        ctx.getWrappers().releaseTodoQ(
+          todo.id,
+          `auditor overrode refusal: ${verification.rationale}`,
+          verification.revisedDescription
+            ? { description: verification.revisedDescription }
+            : undefined,
+        );
+        ctx.recordInteraction("auditor_override_refusal", todo.id, auditor.id, verification.rationale);
         ctx.bumpRejectedAttempts(agent.id);
-        return "stale";
+        return "released";
       }
+
+      if (verification.verdict === "insufficient-tools") {
+        const gap = verification.toolsetGap ?? "unknown capability";
+        ctx.appendSystem(
+          `SYSTEMIC TOOLSET GAP on todo ${todo.id.slice(0, 8)}: ${verification.rationale} ` +
+          `(missing: ${gap}). Work cannot proceed with current worker profiles.`,
+        );
+        ctx.getWrappers().postFindingQ({
+          agentId: auditor.id,
+          text: `${findingPrefix} → INSUFFICIENT TOOLS (${gap}). ${verification.rationale}`,
+          createdAt: Date.now(),
+        });
+        ctx.getWrappers().skipTodoQ(
+          todo.id,
+          `insufficient-tools: ${gap} — ${verification.rationale}`,
+        );
+        ctx.recordException("insufficient_tools", agent.id, todo.id, `${gap}: ${verification.rationale}`);
+        ctx.recordInteraction("toolset_gap", todo.id, auditor.id, gap);
+        return "skipped";
+      }
+
       if (verification.verdict === "hallucinated-todo") {
         ctx.appendSystem(
-          `Auditor determined todo ${todo.id.slice(0, 8)} was a PLANNER HALLUCINATION: "${verification.rationale}". ` +
-          `The planner imagined content that doesn't exist. This diagnostic should be reviewed at the next audit cycle.`
+          `Auditor: todo ${todo.id.slice(0, 8)} is a PLANNER HALLUCINATION — ${verification.rationale}. ` +
+          `Routing to planner for discard/revise.`,
         );
-        ctx.getWrappers().failTodoQ(todo.id,
-          `hallucinated-todo: ${verification.rationale}`,
-          "declined"
+        ctx.getWrappers().postFindingQ({
+          agentId: auditor.id,
+          text: `${findingPrefix} → HALLUCINATED TODO. ${verification.rationale}`,
+          createdAt: Date.now(),
+        });
+        ctx.getWrappers().failTodoQ(
+          todo.id,
+          `auditor: planner hallucination — ${verification.rationale}`,
+          "declined",
         );
         ctx.bumpRejectedAttempts(agent.id);
+        ctx.recordInteraction("hallucinated_todo", todo.id, auditor.id, verification.rationale);
         return "stale";
       }
-      ctx.appendSystem(`Auditor confirmed skip: ${verification.rationale}`);
+
+      if (verification.verdict === "valid" || verification.verdict === "unverified") {
+        const label = verification.verdict === "valid" ? "VALID refusal" : "UNVERIFIED refusal";
+        ctx.appendSystem(`Auditor: ${label} — ${verification.rationale}. Routing to planner.`);
+        ctx.getWrappers().postFindingQ({
+          agentId: auditor.id,
+          text: `${findingPrefix} → ${label}. ${verification.rationale}`,
+          createdAt: Date.now(),
+        });
+        ctx.getWrappers().failTodoQ(
+          todo.id,
+          `auditor: ${label.toLowerCase()} — ${verification.rationale} (worker: ${parsed.skip})`,
+          "declined",
+        );
+        ctx.bumpRejectedAttempts(agent.id);
+        ctx.recordException("worker_declined", agent.id, todo.id, parsed.skip);
+        ctx.recordInteraction("worker_skip", todo.id, agent.id, parsed.skip);
+        return "stale";
+      }
     }
+
     ctx.getWrappers().failTodoQ(todo.id, `[v2] worker declined: ${parsed.skip}`, "declined");
     ctx.bumpRejectedAttempts(agent.id);
     ctx.recordException("worker_declined", agent.id, todo.id, parsed.skip);
@@ -854,6 +933,7 @@ If the response is completely unparseable, return { "skip": "auditor could not i
           properties: { winner: { type: "integer", minimum: 1, maximum: candidates.length } },
           required: ["winner"],
         });
+        ctx.appendAgent(judgeAgent, judgeResponse);
       } catch (err) {
         ctx.appendSystem(
           `[${agent.id}] [v2] LLM-judge call failed: ${err instanceof Error ? err.message : String(err)}`,

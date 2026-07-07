@@ -109,6 +109,10 @@ export const AgentStateSchema = z.object({
   retryMax: z.number().optional(),
   retryReason: z.string().optional(),
   thinkingSince: z.number().optional(),
+  activityKind: z.string().optional(),
+  activityLabel: z.string().optional(),
+  activityAttempt: z.number().optional(),
+  activityMaxAttempts: z.number().optional(),
 });
 export type AgentState = z.infer<typeof AgentStateSchema>;
 

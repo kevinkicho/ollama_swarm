@@ -4,9 +4,9 @@
 // The server-side appendAgent runs shared/extractThinkTags on every
 // agent response and stashes the joined thoughts in
 // TranscriptEntry.thoughts (separately from the visible final text).
-// MessageBubble renders THIS block above the entry's main bubble
-// when thoughts is non-empty, so reasoning is preserved + visible
-// without cluttering the final-response surface.
+// Legacy standalone block — agent bubbles now render thinking inside
+// the bubble via AgentThinking.tsx (Show thinking toggle). Kept for
+// reference / gallery reuse if needed.
 //
 // Design choices:
 //  - <details>/<summary> instead of useState — native browser

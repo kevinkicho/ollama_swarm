@@ -61,6 +61,8 @@ export interface TranscriptEntry {
   // own transcript) while keeping a single source-of-truth main
   // transcript. Absent on entries from non-streamed runs.
   streamId?: string;
+  /** Blackboard auditor assist — salvage JSON extraction vs legacy diagnostic. */
+  assistKind?: "auditor-salvage" | "auditor-diagnostic";
 }
 
 export interface BoardCountsDTO {

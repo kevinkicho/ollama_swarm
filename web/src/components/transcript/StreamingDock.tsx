@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { agentBubblePalette, hueForAgent } from "../agentPalette";
 import { useSwarm } from "../../state/store";
-import { extractThinkTags } from "../../../../shared/src/extractThinkTags";
-import { extractToolCallMarkers } from "../../../../shared/src/extractToolCallMarkers";
 import { ProgressTimeline } from "./ProgressTimeline";
+import {
+  streamDisplayParts,
+  streamDoneSubtitle,
+  streamLiveSubtitle,
+} from "./streamDisplayMetrics";
 
 // Task #173 + #176 Phase A+B: per-agent streaming dock. Each agent
 // gets a STABLE bubble that persists from first chunk through
@@ -103,14 +106,14 @@ function PersistentStreamBubble({
   // will finalize (stripAgentText runs both extractors). Without this,
   // split points are offset from the final text, causing bracket-junk
   // rendering like "[]" in the finalized bubble.
-  const { thoughts, finalText: postThink } = useMemo(
-    () => extractThinkTags(text),
-    [text],
-  );
-  const { finalText: cleanedText, toolCalls } = useMemo(
-    () => extractToolCallMarkers(postThink),
-    [postThink],
-  );
+  const parts = useMemo(() => streamDisplayParts(text), [text]);
+  const { finalText: cleanedText, toolCalls, outputChars, thinkingChars } = parts;
+  const timelineText =
+    cleanedText.length > 0
+      ? cleanedText
+      : thinkingChars > 0
+        ? "(reasoning in progress — output not started yet)"
+        : "";
 
   // Detect if the model is looping (same text repeating)
   const isLooping = useMemo(() => {
@@ -142,15 +145,9 @@ function PersistentStreamBubble({
   } else if (isDone) {
     const endAt = meta?.endedAt ?? meta?.lastTextAt ?? now;
     const totalSec = Math.round(Math.max(0, endAt - (meta?.startedAt ?? endAt)) / 1000);
-    subtitle = `done · ${text.length.toLocaleString()} chars · ${totalSec}s total`;
-  } else if (isStalled) {
-    subtitle = `⚠ stalled ${Math.round(sinceLastText / 1000)}s…`;
-  } else if (sinceLastText < 2000) {
-    subtitle = `writing…`;
-  } else if (sinceLastText < 10_000) {
-    subtitle = `thinking ${Math.round(sinceLastText / 1000)}s…`;
+    subtitle = streamDoneSubtitle(parts, totalSec);
   } else {
-    subtitle = `deep reasoning ${Math.round(sinceLastText / 1000)}s…`;
+    subtitle = streamLiveSubtitle(parts, sinceLastText, isStalled);
   }
 
   return (
@@ -164,6 +161,11 @@ function PersistentStreamBubble({
         {/* #231 follow-up 4: surface the count of stripped pseudo-tool-
             calls so the user knows the model emitted them (and they
             were filtered out of the live segment view). */}
+        {thinkingChars > 0 ? (
+          <span className="text-indigo-400/70 text-[10px]" title="Chain-of-thought stripped from output char count">
+            💭 {thinkingChars.toLocaleString()} thinking stripped
+          </span>
+        ) : null}
         {toolCalls.length > 0 ? (
           <span className="text-amber-400/70 text-[10px]">
             🔧 {toolCalls.length} pseudo-tool-call{toolCalls.length === 1 ? "" : "s"} stripped
@@ -181,11 +183,7 @@ function PersistentStreamBubble({
           </span>
         )}
       </div>
-      <ProgressTimeline
-        text={cleanedText}
-        agentLabel={`Agent ${agentIndex}`}
-        className="max-h-48 overflow-y-auto"
-      />
+      <ProgressTimeline text={timelineText} className="max-h-48 overflow-y-auto" />
     </div>
   );
 }

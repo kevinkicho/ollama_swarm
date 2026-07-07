@@ -3,6 +3,22 @@
 All notable changes to ollama_swarm. Reverse chronological order.
 The git log is the authoritative record; this summarizes user-facing changes.
 
+## 2026-07-07 — Planner grounding truncation, thinking UX, parse-salvage
+
+**Planner `expectedFiles` truncation (run `94224a3e`).** `lenientPreprocess` caps planner todos at 2 `expectedFiles`. When the model lists new-file paths first, both kept paths can be grounding-rejected and valid registry paths truncated away → `no-progress` with 0 todos. `prioritizeExpectedFilesSlice()` now keeps shallow config/registry paths over deep `sources/` / `panels/` trees when slicing. Postmortem: `docs/postmortems/run-94224a3e.md`.
+
+**Thinking / pseudo-tool display.** DeepSeek v4 explore turns emit nested `<function><function name>read</function><parameter name="path">…</parameter></function>` blocks inside `thoughts` and bubble text. `extractToolCallMarkers` strips these server-side; `parseThinkingDisplay` + `AgentThinking.tsx` show prose plus a collapsible "Intended tool calls" list. `stripAgentText` also strips pseudo-tool XML from `thoughts`.
+
+**Parse-salvage cascade (runs `4b2da092` and peers).** Shared `extractJsonCandidate` / `parseJsonEnvelope`; blackboard parsers migrated; auditor salvage after repair for worker/replanner/hunk-review/auditor paths; `assistKind: "auditor-salvage"` chip in transcript. Council `councilBuildSeedContext()` fix for `getPlanner is not a function` when council uses contract derivation.
+
+**Tests:** new/updated `lenientParse.test.ts`, `extractToolCallMarkers.test.ts`, `parseThinkingDisplay.test.ts`, `stripAgentText.test.ts`, parse-salvage suites.
+
+## 2026-07-07 — No in-run brain fallback; auditor arbitrates worker refusals
+
+**In-run brain retired.** The system/brain agent no longer jumps into runs as a parse referee. `brainEnabled()` is always false; parse cascade is parse → repair → auditor interpretation → sibling-retry. Post-run brainOverseer analysis unchanged.
+
+**Auditor arbitration.** Workers must give reasons when declining todos. Auditor verdicts: valid refusal → replanner; invalid refusal (sufficient tools) → todo released to board; hallucinated-todo → replanner; insufficient-tools → skipped with systemic finding exposed. Planner/auditor never do the worker's job.
+
 ## 2026-07-07 — Research tools, council close-out, transcript UX
 
 **Web tools expansion.** Shared `toolProfiles.ts` now resolves `swarm-planner`, `swarm-research`, and `swarm-builder-research` profiles when `webTools` or `plannerTools` is enabled. Discussion presets upgrade legacy `swarm-read` profiles via `effectiveToolProfileId`. Blackboard runs a **research pre-pass** (`researchPrePass.ts`) before JSON-locked contract turns. Tool calls are logged to the transcript via `toolCallTranscript.ts`. `RESEARCH_PIPELINE` phase added to pipeline preset.
@@ -77,7 +93,7 @@ The git log is the authoritative record; this summarizes user-facing changes.
 
 ## 2026-05-08 — Worker sibling-retry + P3 quick wins + Docker
 
-**Worker sibling-retry.** 4-tier parse cascade: parse → repair → brain fallback → sibling retry. All 6 retry paths now share `withSiblingRetry()`.
+**Worker sibling-retry.** 4-tier parse cascade: parse → repair → auditor interpretation → sibling retry. All 6 retry paths now share `withSiblingRetry()`. (Brain in-run fallback removed 2026-07-07.)
 
 **P3 quick wins.** API versioning (X-API-Version header), CORS middleware, compression middleware, WS auth (cookie token), WS payload guard, rate limiting, global error handler.
 

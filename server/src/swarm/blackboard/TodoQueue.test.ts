@@ -124,6 +124,19 @@ describe("TodoQueue — terminal transitions", () => {
     assert.equal(t?.retries, 1);
   });
 
+  it("release returns in-progress todo to pending without failed state", () => {
+    const q = new TodoQueue();
+    const id = q.post({ description: "old", expectedFiles: ["a.ts"], createdBy: "p" });
+    q.dequeue("worker-2");
+    q.release(id, "auditor overrode refusal", { description: "revised task" });
+    const t = q.get(id);
+    assert.equal(t?.status, "pending");
+    assert.equal(t?.workerId, undefined);
+    assert.equal(t?.description, "revised task");
+    assert.equal(t?.reason, "auditor overrode refusal");
+    assert.equal(t?.retries, 1);
+  });
+
   it("fail is a no-op on pending-commit (auditor-gated race)", () => {
     const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: ["a.ts"], createdBy: "p" });

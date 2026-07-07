@@ -201,6 +201,8 @@ export const StartBody = z.object({
   // blackboard-state.json instead of re-deriving via first-pass-
   // contract. Blackboard-only. Default false = existing behavior.
   resumeContract: z.boolean().optional(),
+  // Council: drain pending execution todos saved under logs/<runId>/.
+  resumeExecutionFromRunId: z.string().trim().min(1).max(80).optional(),
   // Unit 58: opt-in to a 4th agent dedicated to the auditor role.
   // Total agents = agentCount + 1 (auditor is extra; workers
   // unchanged). Blackboard-only.
@@ -287,9 +289,7 @@ export const StartBody = z.object({
   // "anthropic/claude-haiku-4-5", "glm-5.1:cloud"). Capped at 8
   // entries to keep failover bounded.
   providerFailover: z.array(z.string().min(1)).max(8).optional(),
-  // AI brain fallback model override. When set, overrides the
-  // SWARM_BRAIN_MODEL env var for this run. Lightly validated (non-empty
-  // string). Empty string disables brain fallback for this run.
+  // Legacy — in-run brain parse fallback retired; ignored at runtime.
   brainModel: z.string().trim().max(200).optional(),
   // Task #127: when no userDirective is set, auto-generate one via a
   // pre-pass. Default true (caller can pass false to disable).

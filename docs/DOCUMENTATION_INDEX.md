@@ -57,7 +57,21 @@ This is the structured index of all relevant, tracked documentation for the olla
 - **docs/plans/PENDING-WORK.md**  
   Planned future work.
 
+- **docs/plans/agent-activity-signaling.md**  
+  Study notes: streaming vs sidebar status, missing activity protocol (recall before signaling refactor).
+
+- **docs/postmortems/run-d3a99661.md**  
+  Postmortem for council run `d3a99661` (cycle failures, synthesis loops).
+
+- **docs/postmortems/run-94224a3e.md**  
+  Postmortem for blackboard run `94224a3e` (`no-progress`: expectedFiles truncation + grounding, not JSON repair).
+
+- **docs/postmortems/run-4b2da092.md**  
+  Postmortem for blackboard run `4b2da092` (crash during pending-commit; parse-salvage / think-tag envelope issues).
+
 - `docs/archive/` and `docs/plans/archive/`  
+- `docs/postmortems/`  
+  Per-run postmortems (not runtime logs).
   Historical plans and old documents (kept for context).
 
 ## Other Documentation
@@ -96,6 +110,7 @@ Only the documentation listed above (and actual source code) is kept in the repo
 - **Providers**: `server/src/providers/` (pickProvider.ts + 5 impls)
 - **Brain-as-OS**: `server/src/swarm/blackboard/brainOverseer/`
 - **Web UI (per-run stores, transcript, Brain FAB)**: `web/src/` (App.tsx, state/SwarmStoreProvider.tsx, components for transcript/board/brain)
+- **Transcript text hygiene (shared)**: `shared/src/stripAgentText.ts`, `extractToolCallMarkers.ts`, `parseThinkingDisplay.ts`, `parseAgentJson.ts`
 - **CLI**: `bin/ollama-swarm.mjs`
 - **Eval harness**: `eval/run-eval.mjs`, `eval/aggregate.mjs`, `eval/catalog.json`
 
@@ -111,4 +126,4 @@ For a new person or agent:
 6. README "Using for Scientific Research" + STATUS preset table (for research work)
 7. Dive into architecture docs + blackboard/ source as needed.
 
-Last updated: 2026-07-05 (post doc hygiene + Research Workflows reference cleanup)
+Last updated: 2026-07-07 (postmortems `94224a3e` / `4b2da092`, parse-salvage + thinking UX)

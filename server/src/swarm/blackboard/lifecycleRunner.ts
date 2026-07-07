@@ -175,6 +175,8 @@ export interface LifecycleContext {
   v2ObserverReset(): void;
   flushBoardBroadcasterSnapshot(): void;
   boardCounts(): { open: number; claimed: number; stale: number; committed: number; skipped: number; total: number };
+  getTodoQueueCounts(): { pending: number; inProgress: number; pendingCommit: number; completed: number; failed: number; skipped: number; total: number };
+  getBoardRestoredFromSnapshot(): boolean;
   allCriteriaResolved(): boolean;
   readonly maxAuditInvocations: number;
   runAuditor(planner: Agent, opts?: { allowWhenStopping?: boolean }): Promise<void>;
@@ -604,10 +606,24 @@ export async function planAndExecute(
       await ctx.runFirstPassContractOrchestrator(planner, workers, seed);
     }
     if (lifecycleIsStopping(ctx.getLifecycleState())) return;
-    await ctx.runPlanner(planner, seed);
+    const qAfterResume = ctx.getTodoQueueCounts();
+    const skipPlanner =
+      resumed
+      && ctx.getBoardRestoredFromSnapshot()
+      && (qAfterResume.pending > 0 || qAfterResume.pendingCommit > 0);
+    if (skipPlanner) {
+      ctx.appendSystem(
+        `Skipping initial planner pass — resuming ${qAfterResume.pending} open + ${qAfterResume.pendingCommit} pending-commit todo(s) from snapshot.`,
+      );
+    } else {
+      await ctx.runPlanner(planner, seed);
+    }
     if (lifecycleIsStopping(ctx.getLifecycleState())) return;
     const counts = ctx.boardCounts();
-    if (workers.length > 0 && counts.open > 0) {
+    const qCounts = ctx.getTodoQueueCounts();
+    const hasExecutableWork =
+      counts.open > 0 || counts.claimed > 0 || qCounts.pendingCommit > 0;
+    if (workers.length > 0 && hasExecutableWork) {
       // Stamp the wall-clock origin just before caps start being checked.
       // Planning time (seeding, initial planner prompt, repair) does NOT
       // count toward the cap — the cap is a worker-loop guard, not a total

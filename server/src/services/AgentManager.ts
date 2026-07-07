@@ -758,6 +758,8 @@ export class AgentManager {
   // so the PersistentStreamBubble flips to "done ✓" the same way it
   // does for the SSE path's session.idle.
   markStreamingDone(agentId: string): void {
+    const agent = this.agents.get(agentId);
+    if (agent) this.flushStreamingNow(agent);
     this.onEvent({ type: "agent_streaming_end", agentId });
     // Drop per-agent partial-stream buffer — the response is final.
     this.partialStreams.delete(agentId);

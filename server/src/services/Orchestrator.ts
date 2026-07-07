@@ -802,6 +802,7 @@ export class Orchestrator {
         },
         cp,
         runId,
+        this.opts.repos,
       ).catch(() => {});
     }
     if (terminalSum?.stopReason) {
@@ -1425,6 +1426,7 @@ export class Orchestrator {
       this.amendments,
       holdsCloneLock,
       runHub,
+      this.opts.repos,
     );
   }
 

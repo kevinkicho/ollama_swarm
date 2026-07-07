@@ -27,6 +27,11 @@ const TEST_FILES = [
   "src/swarm/blackboard/prompts/firstPassContract.test.ts",
   "src/swarm/blackboard/prompts/jsonSchemas.test.ts",
   "src/swarm/blackboard/prompts/auditor.test.ts",
+  "src/swarm/blackboard/prompts/hunkReview.test.ts",
+  "src/swarm/blackboard/boardRestore.test.ts",
+  "src/swarm/blackboard/endpointCatalogContext.test.ts",
+  "src/swarm/blackboard/parseSalvage.test.ts",
+  "src/swarm/blackboard/replanSalvage.test.ts",
   "src/swarm/blackboard/prompts/critic.test.ts",
   "src/swarm/blackboard/prompts/verifier.test.ts",
   "src/swarm/blackboard/prompts/pathValidation.test.ts",
@@ -60,6 +65,7 @@ const TEST_FILES = [
   "src/swarm/blackboard/boardWireCompat.test.ts",
   "src/swarm/blackboard/todoQueueWrappers.test.ts",
   "src/swarm/blackboard/siblingRetry.test.ts",
+  "src/swarm/blackboard/userChatContext.test.ts",
 
   // swarm/ (non-blackboard)
   "src/swarm/roles.test.ts",
@@ -99,6 +105,12 @@ const TEST_FILES = [
   "src/swarm/councilReconcile.test.ts",
   "src/swarm/councilSkipReconcile.test.ts",
   "src/swarm/councilPathCanonicalize.test.ts",
+  "src/swarm/councilExecutionResume.test.ts",
+  "src/swarm/councilProgressLedger.test.ts",
+  "src/swarm/councilLedgerReconcile.test.ts",
+  "src/swarm/councilAuditor.test.ts",
+  "src/swarm/discussionStopReason.test.ts",
+  "src/swarm/councilStandupFallback.test.ts",
   "src/swarm/councilDecisions.test.ts",
   "src/swarm/councilTodoClassify.test.ts",
   "src/swarm/councilWorkerRunner.test.ts",
@@ -154,6 +166,7 @@ const TEST_FILES = [
   "src/swarm/semanticLoopDetector.test.ts",
   // 2026-05-04 (R9 extended): intra-stream loop detector.
   "src/swarm/intraStreamLoopDetector.test.ts",
+  "src/swarm/blackboard/workerFileConflict.test.ts",
   // 2026-05-04 (R10): proactive model-health tracker.
   "src/swarm/modelHealthTracker.test.ts",
   // 2026-05-04 (R11): universal JSON repair.
@@ -184,6 +197,7 @@ const TEST_FILES = [
   "../shared/src/summarizeAgentJson.test.ts",
   "../shared/src/stripAgentText.test.ts",
   "../shared/src/extractJson.test.ts",
+  "../shared/src/parseAgentJson.test.ts",
   "../shared/src/providers.test.ts",
   "../shared/src/topology.test.ts",
   "../shared/src/workerHunks.test.ts",
@@ -247,6 +261,11 @@ const TEST_FILES = [
   "../web/src/components/agentPalette.test.ts",
   "../web/src/components/useSegmentSplitter.test.ts",
   "../web/src/components/transcript/JsonBubbles.test.ts",
+  "../web/src/components/transcript/AgentThinking.test.ts",
+  "../web/src/components/transcript/compactPipelineStatus.test.ts",
+  "../web/src/components/transcript/streamDisplayMetrics.test.ts",
+  "../web/src/components/drafts/councilCycleAggregate.test.ts",
+  "../web/src/components/drafts/councilDraftParse.test.ts",
   "../web/src/components/setup/RecentRuns.test.ts",
 
   // 2026-05-18: new unit tests for previously untested modules (+73 tests).
@@ -258,6 +277,7 @@ const TEST_FILES = [
   "src/services/RunStatePersister.test.ts",
   "src/services/RunsScanner.test.ts",
   "src/services/runSummaryDiscovery.test.ts",
+  "src/services/crashSummaryRecovery.test.ts",
   "src/swarm/RoundRobinRunner.test.ts",
   "src/swarm/blackboard/BlackboardRunner.hunkRepair.test.ts",
 
@@ -271,7 +291,6 @@ const TEST_FILES = [
   "src/swarm/blackboard/diffCritic.test.ts",
   "src/swarm/blackboard/prDescription.test.ts",
   "src/swarm/blackboard/todoRollback.test.ts",
-  "src/swarm/blackboard/prompts/brainParser.test.ts",
   "src/swarm/blackboard/brainOverseer/brainService.test.ts",
   "src/swarm/chatReceipt.test.ts",
   "src/swarm/deliverable.test.ts",

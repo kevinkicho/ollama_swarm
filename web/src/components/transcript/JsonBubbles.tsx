@@ -1,5 +1,10 @@
 import { useState } from "react";
 import { extractFirstBalanced } from "../../../../shared/src/extractJson";
+import {
+  ThinkingContentPanel,
+  ThinkingToggleButton,
+  type ResolvedThinking,
+} from "./AgentThinking";
 
 export const COLLAPSE_THRESHOLD = 600;
 export const JSON_COLLAPSE_THRESHOLD = 2000;
@@ -57,9 +62,17 @@ export function splitProseAndJson(text: string): { prose: string; json: string }
   return { prose: trimmed, json: "" };
 }
 
-export function AgentJsonBubble({ summary, json, header, className, style }: AgentJsonBubbleProps) {
+export function AgentJsonBubble({
+  summary,
+  json,
+  header,
+  className,
+  style,
+  thinking,
+}: AgentJsonBubbleProps & { thinking?: ResolvedThinking | null }) {
   const [showJson, setShowJson] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
+  const [showThinking, setShowThinking] = useState(false);
   const [jsonExpanded, setJsonExpanded] = useState(false);
   const { prose, json: jsonPart } = splitProseAndJson(json);
   const hasReasoning = prose.length > 0;
@@ -71,7 +84,14 @@ export function AgentJsonBubble({ summary, json, header, className, style }: Age
     <div className={className} style={style}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1">{header}</div>
-        <div className="flex gap-2 shrink-0">
+        <div className="flex flex-wrap gap-2 shrink-0 justify-end">
+          {thinking ? (
+            <ThinkingToggleButton
+              thinking={thinking}
+              open={showThinking}
+              onClick={() => setShowThinking((v) => !v)}
+            />
+          ) : null}
           {hasReasoning ? (
             <button
               onClick={() => setShowReasoning((v) => !v)}
@@ -90,6 +110,7 @@ export function AgentJsonBubble({ summary, json, header, className, style }: Age
         </div>
       </div>
       <div className="whitespace-pre-wrap">{summary}</div>
+      {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
       {showReasoning && hasReasoning ? (
         <div className="mt-2 rounded border border-indigo-900/60 bg-indigo-950/20 p-2">
           <div className="text-[10px] uppercase tracking-wide text-indigo-300/80 mb-1">
@@ -124,18 +145,35 @@ export function JsonPrettyBubble({
   header,
   className,
   style,
+  thinking,
 }: {
   json: string;
   header: React.ReactNode;
   className?: string;
   style?: React.CSSProperties;
+  thinking?: ResolvedThinking | null;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [showThinking, setShowThinking] = useState(false);
   const tooLong = json.length > JSON_COLLAPSE_THRESHOLD;
   const shown = !tooLong || expanded ? json : json.slice(0, JSON_COLLAPSE_THRESHOLD).trimEnd() + "…";
+  const headerRow = thinking ? (
+    <div className="flex items-start justify-between gap-2 mb-1">
+      <div className="flex-1">{header}</div>
+      <ThinkingToggleButton
+        thinking={thinking}
+        open={showThinking}
+        onClick={() => setShowThinking((v) => !v)}
+      />
+    </div>
+  ) : (
+    header
+  );
+
   return (
     <div className={className} style={style}>
-      {header}
+      {headerRow}
+      {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
       <pre className="text-[11px] font-mono text-ink-200 whitespace-pre-wrap break-all rounded border border-ink-700 bg-ink-950 p-2 mt-1">
         {shown}
       </pre>
@@ -156,9 +194,11 @@ interface CollapsibleProps {
   header: React.ReactNode;
   className?: string;
   style?: React.CSSProperties;
+  thinking?: ResolvedThinking | null;
 }
-export function CollapsibleBlock({ text, header, className, style }: CollapsibleProps) {
+export function CollapsibleBlock({ text, header, className, style, thinking }: CollapsibleProps) {
   const [expanded, setExpanded] = useState(false);
+  const [showThinking, setShowThinking] = useState(false);
   const charLong = text.length > COLLAPSE_THRESHOLD;
   const shown = !charLong || expanded ? text : text.slice(0, COLLAPSE_THRESHOLD).trimEnd() + "…";
   // Height is now predictable from initial render (char count + expanded state).
@@ -166,9 +206,23 @@ export function CollapsibleBlock({ text, header, className, style }: Collapsible
   // This gives the virtualizer a stable first-paint size.
   const bodyStyle = expanded ? undefined : { maxHeight: MAX_BUBBLE_HEIGHT_PX, overflow: "hidden" as const };
   const hasMore = charLong;
+  const headerRow = thinking ? (
+    <div className="flex items-start justify-between gap-2 mb-1">
+      <div className="flex-1">{header}</div>
+      <ThinkingToggleButton
+        thinking={thinking}
+        open={showThinking}
+        onClick={() => setShowThinking((v) => !v)}
+      />
+    </div>
+  ) : (
+    header
+  );
+
   return (
     <div className={className} style={style}>
-      {header}
+      {headerRow}
+      {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
       <div>
         <div className="whitespace-pre-wrap" style={bodyStyle}>{shown}</div>
       </div>

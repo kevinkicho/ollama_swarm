@@ -21,21 +21,25 @@ import {
   REPLANNER_JSON_SCHEMA,
 } from "./prompts/jsonSchemas.js";
 import { truncate } from "./truncate.js";
-import {
-  tryBrainFallback,
-  type BrainFallbackEvent,
-} from "./prompts/brainIntegration.js";
+
 import { autoDetectAnchors } from "./autoAnchor.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import { resolveToolProfile } from "../toolProfiles.js";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
+import { resolveBlackboardPromptExtras } from "./blackboardPromptContext.js";
+import type { TranscriptEntry } from "../../types.js";
+import { runParseSalvage } from "./parseSalvage.js";
+import type { AgentAssistKind } from "./runnerUtil.js";
 
 export interface ReplanContext {
   getReplanPending: () => Set<string>;
   getReplanRunning: () => boolean;
   setReplanRunning: (v: boolean) => void;
   getPlanner: () => Agent | undefined;
+  getAuditor: () => Agent | undefined;
   getActive: () => RunConfig | undefined;
+  getTranscript: () => readonly TranscriptEntry[];
+  getAmendments?: () => Array<{ ts: number; text: string }>;
   isStopping: () => boolean;
   isDraining: () => boolean;
   boardListTodos: () => Todo[];
@@ -43,21 +47,17 @@ export interface ReplanContext {
   readExpectedFiles: (files: string[]) => Promise<Record<string, string | null>>;
   wrappers: TodoQueueWrappers;
   appendSystem: (msg: string) => void;
-  appendAgent: (agent: Agent, text: string) => void;
+  appendAgent: (
+    agent: Agent,
+    text: string,
+    options?: { assistKind?: AgentAssistKind },
+  ) => void;
   promptPlannerSafely: (agent: Agent, promptText: string, agentName?: ProfileName, ollamaFormat?: "json" | Record<string, unknown>) => Promise<{ response: string; agentUsed: Agent }>;
   checkAndApplyCaps: () => boolean;
   emit?: (e: unknown) => void;
-  // Plan 4: brain system overseer
+  // Plan 4: post-run brain overseer telemetry
   recordInteraction: (type: string, todoId: string, agentId: string, reason: string) => void;
   recordException: (type: string, agentId: string, todoId?: string, reason?: string) => void;
-  /** Brain fallback: prompt an LLM to extract structured JSON from a
-   *  failed parse. The promptFn signature matches promptWithFailover. */
-  brainPromptFn?: (
-    prompt: string,
-    model: string,
-    maxTokens: number,
-    timeoutMs: number,
-  ) => Promise<string>;
 }
 
 export function enqueueReplan(ctx: ReplanContext, todoId: string): void {
@@ -132,6 +132,12 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
     }
   }
 
+  const promptExtras = resolveBlackboardPromptExtras({
+    active: ctx.getActive(),
+    getAmendments: ctx.getAmendments,
+    transcript: ctx.getTranscript(),
+    forAgentId: planner.id,
+  });
   const seed: ReplannerSeed = {
     todoId: todo.id,
     originalDescription: todo.description,
@@ -140,6 +146,8 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
     fileContents: contents,
     replanCount: todo.replanCount,
     autoAnchors,
+    ...(promptExtras.effectiveDirective ? { userDirective: promptExtras.effectiveDirective } : {}),
+    ...(promptExtras.userChatBlock ? { userChatBlock: promptExtras.userChatBlock } : {}),
   };
 
   const plannerProfile = resolveToolProfile("planner", ctx.getActive());
@@ -189,24 +197,33 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
     ctx.appendAgent(repairAgent, repair);
     parsed = parseReplannerResponse(repair);
     if (!parsed.ok) {
-      // Brain fallback: try AI-assisted parsing before giving up.
-      if (ctx.brainPromptFn) {
-        ctx.appendSystem(`Replanner parse still failed after repair — trying brain fallback (${parsed.reason}).`);
-        try {
-          const brainResult = await tryBrainFallback(
-            "replanner",
-            response,
-            ReplannerResponseSchema,
-            ctx.brainPromptFn,
-            (e: BrainFallbackEvent) => { ctx.emit?.({ type: "brain-fallback", ...e }); },
-            planner,
-          );
-          if (brainResult) {
-            parsed = brainResult as unknown as typeof parsed;
-            ctx.appendSystem(`Brain fallback succeeded — extracted replanner result.`);
+      const auditor = ctx.getAuditor();
+      if (auditor && ctx.getActive()?.dedicatedAuditor && !ctx.isStopping()) {
+        ctx.appendSystem(
+          `Replanner repair failed (${parsed.reason}); routing to auditor for JSON salvage.`,
+        );
+        const salvage = await runParseSalvage(
+          auditor,
+          {
+            getStopping: ctx.isStopping,
+            appendSystem: ctx.appendSystem,
+            appendAgent: (a, t, o) => ctx.appendAgent(a, t, o),
+            promptPlannerSafely: ctx.promptPlannerSafely,
+            getActive: ctx.getActive,
+            jsonSchema: REPLANNER_JSON_SCHEMA,
+          },
+          {
+            kind: "replanner",
+            parseError: parsed.reason,
+            rawOutput: repair,
+            attempt: todo.replanCount + 1,
+          },
+        );
+        if (salvage) {
+          parsed = parseReplannerResponse(salvage.json);
+          if (parsed.ok) {
+            ctx.appendSystem(`Replanner auditor salvage succeeded for ${todoId}.`);
           }
-        } catch (err) {
-          ctx.appendSystem(`⚠ replan brain-fallback: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     }

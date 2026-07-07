@@ -2,14 +2,14 @@ export type TodoStatus = "open" | "claimed" | "committed" | "stale" | "skipped" 
 
 /** Which tier of the parse cascade produced the committed hunk.
  *  Used for cascade efficiency diagnostics. */
-export type CommitTier = "parse" | "repair" | "brain" | "sibling" | "hunk-repair";
+export type CommitTier = "parse" | "repair" | "auditor-parse" | "sibling" | "hunk-repair";
 
 /** Which tier of the parse cascade failed, causing the todo to go stale.
  *  Used for diagnostics — tells you WHERE work is dying without reading logs. */
 export type StaleReason =
   | "parse"         // raw output unparseable
   | "repair"        // repair prompt also failed to produce valid JSON
-  | "brain"         // brain fallback couldn't extract
+  | "auditor-parse" // auditor interpreted malformed worker JSON
   | "sibling"       // sibling model retry also failed
   | "declined"      // worker explicitly skipped / declined
   | "hunk-empty"    // worker returned zero hunks with no skip reason

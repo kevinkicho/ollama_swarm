@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { runOutcomeHeadline } from "@ollama-swarm/shared/formatServerSummary";
+import { AgentStatsTable, rowsFromRunFinishedAgents } from "../AgentStatsTable";
 import type { TranscriptEntrySummary } from "../../types";
 
 // Task #72 (2026-04-25): grid renderer for the end-of-run banner.
@@ -92,65 +93,10 @@ export function RunFinishedGrid({
           <Tile label="Tokens out" value={fmtTokensCompact(s.totalResponseTokens)} accent="text-violet-300" />
         ) : null}
       </div>
-      {/* Per-agent grid */}
-      <div className="text-[10px] uppercase tracking-wider text-ink-500 font-semibold">
-        Per-agent ({s.agents.length})
-      </div>
-      <div className="overflow-x-auto rounded border border-ink-700/60">
-        <table className="w-full text-[11px] font-mono">
-          <thead className="bg-ink-800/60 text-ink-400 text-left">
-            <tr>
-              <th className="px-2 py-1">#</th>
-              <th className="px-2 py-1">Role</th>
-              <th className="px-2 py-1 text-right">Turns</th>
-              <th className="px-2 py-1 text-right">Att</th>
-              <th className="px-2 py-1 text-right">Ret</th>
-              <th className="px-2 py-1 text-right">Mean</th>
-              <th className="px-2 py-1 text-right">Commits</th>
-              <th className="px-2 py-1 text-right text-emerald-400/70">+L</th>
-              <th className="px-2 py-1 text-right text-rose-400/70">−L</th>
-              <th className="px-2 py-1 text-right text-rose-400/70">Rejected</th>
-              <th className="px-2 py-1 text-right text-amber-400/70">JSON⚠</th>
-              <th className="px-2 py-1 text-right text-rose-500/70">Errors</th>
-              {/* Task #163: per-agent token columns. Approximate for
-                  parallel runners (council/OW/MR fire concurrent calls
-                  so each agent's snapshot delta sees others' tokens too).
-                  Sequential runners (round-robin/stigmergy/debate-judge,
-                  blackboard planner-only paths) are exact. */}
-              <th className="px-2 py-1 text-right text-sky-400/70" title="Approximate for parallel runners — see #163">Tok in</th>
-              <th className="px-2 py-1 text-right text-violet-400/70" title="Approximate for parallel runners — see #163">Tok out</th>
-            </tr>
-          </thead>
-          <tbody>
-            {s.agents.map((a) => (
-              <tr key={a.agentIndex} className="border-t border-ink-700/60">
-                <td className="px-2 py-1 text-ink-300">{a.agentIndex}</td>
-                <td className="px-2 py-1 text-ink-200">{a.role}</td>
-                {/* turns is meaningful when 0 too (means agent never ran) — keep numeric. */}
-                <td className="px-2 py-1 text-right text-ink-200">{a.turns}</td>
-                {/* 2026-04-25 fine-tune (Kevin): empty/zero numeric cells
-                    show "—" with opacity-50 so the column reads as
-                    "no data" instead of a real zero. */}
-                <NumOrDash value={a.attempts} className="px-2 py-1 text-right text-ink-300" />
-                <NumOrDash value={a.retries} className="px-2 py-1 text-right text-ink-300" />
-                <td className="px-2 py-1 text-right text-ink-300">{fmtMs(a.meanLatencyMs)}</td>
-                <NumOrDash value={a.commits} className="px-2 py-1 text-right text-ink-200" />
-                <NumOrDash value={a.linesAdded} className="px-2 py-1 text-right text-emerald-300" />
-                <NumOrDash value={a.linesRemoved} className="px-2 py-1 text-right text-rose-300" />
-                <NumOrDash value={a.rejected} className={`px-2 py-1 text-right ${a.rejected > 0 ? "text-rose-300 font-semibold" : "text-ink-300"}`} />
-                <NumOrDash value={a.jsonRepairs} className={`px-2 py-1 text-right ${a.jsonRepairs > 0 ? "text-amber-300" : "text-ink-300"}`} />
-                <NumOrDash value={a.promptErrors} className={`px-2 py-1 text-right ${a.promptErrors > 0 ? "text-rose-400 font-semibold" : "text-ink-300"}`} />
-                <td className={`px-2 py-1 text-right font-mono ${a.tokensIn != null && a.tokensIn > 0 ? "text-sky-300" : "text-ink-500 opacity-50"}`}>
-                  {a.tokensIn != null ? fmtTokensCompact(a.tokensIn) : "—"}
-                </td>
-                <td className={`px-2 py-1 text-right font-mono ${a.tokensOut != null && a.tokensOut > 0 ? "text-violet-300" : "text-ink-500 opacity-50"}`}>
-                  {a.tokensOut != null ? fmtTokensCompact(a.tokensOut) : "—"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <AgentStatsTable
+        label={`Per-agent (${s.agents.length})`}
+        rows={rowsFromRunFinishedAgents(s.agents)}
+      />
     </div>
   );
 }
@@ -272,6 +218,13 @@ export function SeedAnnounceGrid({
   );
 }
 
+function fmtTokensCompact(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  return `${(n / 1_000_000_000).toFixed(2)}B`;
+}
+
 function formatRuntime(ms: number): string {
   const s = Math.floor(ms / 1000);
   const h = Math.floor(s / 3600);
@@ -280,21 +233,6 @@ function formatRuntime(ms: number): string {
   if (h > 0) return `${h}h ${m}m ${sec}s`;
   if (m > 0) return `${m}m ${sec}s`;
   return `${sec}s`;
-}
-
-function fmtMs(ms: number | null): string {
-  if (ms === null) return "—";
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-// Task #163: compact token formatter — same shape as UsageWidget's
-// fmtTokens but local to this file to avoid a cross-component import.
-function fmtTokensCompact(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
-  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  return `${(n / 1_000_000_000).toFixed(2)}B`;
 }
 
 function Tile({ label, value, accent }: { label: string; value: number | string; accent?: string }) {
@@ -311,13 +249,4 @@ function Tile({ label, value, accent }: { label: string; value: number | string;
   );
 }
 
-// 2026-04-25 fine-tune (Kevin): per-agent table cells render zero/null
-// values as "—" at opacity-50. Reuses the caller's className for
-// padding/alignment, swaps to muted color when empty.
-function NumOrDash({ value, className }: { value: number | null | undefined; className: string }) {
-  const isEmpty = !value;
-  if (isEmpty) {
-    return <td className={`${className} opacity-50`}>—</td>;
-  }
-  return <td className={className}>{value.toLocaleString()}</td>;
-}
+

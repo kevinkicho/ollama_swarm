@@ -140,17 +140,20 @@ export function directiveWithAmendments(ctx: RunnerUtilContext): string | undefi
     : `${header}\n${nudges}`;
 }
 
+export type AgentAssistKind = "auditor-salvage" | "auditor-diagnostic";
+
+export interface AppendAgentOptions {
+  assistKind?: AgentAssistKind;
+}
+
 export function appendAgent(
   ctx: RunnerUtilContext,
   agent: Agent,
   text: string,
+  options?: AppendAgentOptions,
 ): void {
   const { finalText, thoughts, toolCalls } = stripAgentText(text);
   const summary = summarizeAgentResponse(finalText);
-
-  // Phase 10 / normal transcript: always emit worker_skip entries (no server-side suppression guard).
-  // Client can filter if desired; full log should be available ("show like normal").
-  // Skips remain in internal board/audit/summary tracking.
 
   const entry: TranscriptEntry = {
     id: randomUUID(),
@@ -162,6 +165,7 @@ export function appendAgent(
     summary,
     ...(thoughts.length > 0 ? { thoughts } : {}),
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
+    ...(options?.assistKind ? { assistKind: options.assistKind } : {}),
   };
   ctx.transcript.push(entry);
   ctx.emit({ type: "transcript_append", entry });

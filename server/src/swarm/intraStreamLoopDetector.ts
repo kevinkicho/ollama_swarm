@@ -1,3 +1,5 @@
+import { countPseudoToolCallMarkers } from "../../../shared/src/extractToolCallMarkers.js";
+
 // R9 extended (2026-05-04): intra-stream loop detector.
 //
 // The turn-level R9 semanticLoopDetector (which fires at TURN boundaries)
@@ -43,6 +45,12 @@ export interface IntraStreamLoopDetectorOpts {
    *  false positives on the first few chunks which may naturally
    *  be similar (e.g. JSON opening brackets). Default 5. */
   minChunksBeforeCheck?: number;
+  /** Abort when pseudo-tool-call marker count exceeds this (model
+   *  hallucinating XML reads instead of using real tools). Default 280. */
+  maxPseudoToolMarkers?: number;
+  /** Marker count growth per chunk that signals a pseudo-tool storm.
+   *  Default 35. */
+  pseudoToolBurstPerChunk?: number;
 }
 
 /**
@@ -63,9 +71,12 @@ export function createIntraStreamLoopDetector(
   const threshold = opts?.threshold ?? 0.8;
   const minLength = opts?.minLengthBeforeCheck ?? 200;
   const minChunks = opts?.minChunksBeforeCheck ?? 5;
+  const maxPseudoMarkers = opts?.maxPseudoToolMarkers ?? 280;
+  const pseudoBurst = opts?.pseudoToolBurstPerChunk ?? 35;
 
   // Track cumulative text lengths at each chunk boundary
   let lengths: number[] = [];
+  let lastPseudoCount = 0;
   // Track the last few suffixes for substring-repeat detection
   let lastSuffix: string = "";
   let lastSuffixRepeatCount: number = 0;
@@ -151,11 +162,26 @@ export function createIntraStreamLoopDetector(
         }
       }
 
-      // Check 4: pseudo-tool-call marker density — REMOVED.
-      // Worker agents legitimately emit hundreds of <read>/<grep> markers
-      // as raw text when reading files before editing. This is normal
-      // behavior, not a loop. The identical-delta and substring-repeat
-      // checks above already catch actual loops.
+      // Check 4: pseudo-tool-call storm — model emits XML markers as text
+      // in a tight loop (run 4f136068: thousands in one turn) instead of
+      // using SDK tools. Real tool use does not append markers to visible text.
+      const pseudoCount = countPseudoToolCallMarkers(cumulativeText);
+      const pseudoDelta = pseudoCount - lastPseudoCount;
+      lastPseudoCount = pseudoCount;
+      if (pseudoCount >= maxPseudoMarkers) {
+        return {
+          detected: true,
+          reason: `pseudo-tool-call storm: ${pseudoCount} XML markers in stream (cap ${maxPseudoMarkers})`,
+          repeatCount: pseudoCount,
+        };
+      }
+      if (pseudoDelta >= pseudoBurst && totalChunks >= minChunks) {
+        return {
+          detected: true,
+          reason: `pseudo-tool-call burst: +${pseudoDelta} markers in one chunk (${pseudoCount} total)`,
+          repeatCount: pseudoDelta,
+        };
+      }
 
       return { detected: false, reason: "", repeatCount: 0 };
     },
@@ -164,6 +190,7 @@ export function createIntraStreamLoopDetector(
       lengths = [];
       lastSuffix = "";
       lastSuffixRepeatCount = 0;
+      lastPseudoCount = 0;
       totalChunks = 0;
     },
   };

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { lenientPreprocess, softCap } from "./lenientParse.js";
+import { lenientPreprocess, prioritizeExpectedFilesSlice, softCap } from "./lenientParse.js";
 
 describe("lenientPreprocess", () => {
   it("returns non-object values unchanged", () => {
@@ -33,6 +33,17 @@ describe("lenientPreprocess", () => {
     const item = { expectedFiles: ["a.ts", "b.ts", "c.ts", "d.ts"] };
     const result = lenientPreprocess(item, { maxExpectedFiles: 2 }) as any;
     assert.deepEqual(result.expectedFiles, ["a.ts", "b.ts"]);
+  });
+
+  it("prioritizes shallow registry paths over deep new-file trees when truncating", () => {
+    const files = [
+      "src/data/sources/fetchTreasuryYieldCurve.js",
+      "src/components/panels/TreasuryYieldCurvePanel.jsx",
+      "src/data/marketPanels.js",
+      "src/data/panelRegistry.js",
+    ];
+    const kept = prioritizeExpectedFilesSlice(files, 2);
+    assert.deepEqual(kept, ["src/data/marketPanels.js", "src/data/panelRegistry.js"]);
   });
 
   it("leaves expectedFiles alone when under max", () => {

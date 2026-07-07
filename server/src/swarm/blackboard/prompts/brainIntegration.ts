@@ -1,17 +1,7 @@
-// Integration layer: wires the brain parser into the existing prompt runners.
-//
-// Usage: after any rule-based parser (planner, auditor, etc.) returns
-// `{ ok: false, reason }`, call `tryBrainFallback` with the parser name,
-// raw output, Zod schema, and context. If the brain succeeds, you get
-// valid data back; otherwise the original parse failure stands.
-//
-// The brain is ONLY invoked when:
-//   1. The rule-based parser (including lenient extraction) has already failed
-//   2. SWARM_BRAIN_MODEL is non-empty (default: "gemma4:31b-cloud")
-//   3. A prompt function is available (injected by the runner)
-//
-// Brain events are always logged regardless of outcome, providing data
-// for post-run parser improvement proposals.
+// Legacy integration layer for the retired in-run brain parse fallback.
+// In-run parsing is handled by swarm agents only (repair → auditor
+// interpretation → sibling-retry). Post-run analysis uses brainOverseer.
+// tryBrainFallback remains for tests/tooling but brainEnabled() is false.
 
 import { z } from "zod";
 import { config } from "../../../config.js";
@@ -48,9 +38,9 @@ export function getParserSchema(name: string): z.ZodType<unknown> | undefined {
 // Brain-on configuration
 // ---------------------------------------------------------------------------
 
-/** Check if brain fallback is enabled (non-empty SWARM_BRAIN_MODEL). */
+/** In-run parse fallback is retired — brain is post-run system analysis only. */
 export function brainEnabled(): boolean {
-  return config.SWARM_BRAIN_MODEL.length > 0;
+  return false;
 }
 
 /** Build a BrainConfig from app config, with an optional per-run model override. */

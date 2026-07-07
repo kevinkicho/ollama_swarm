@@ -293,3 +293,11 @@ test("CouncilRunner — summary is written after loop settles on drain/stop", ()
     "must skip audit when draining",
   );
 });
+
+test("CouncilRunner — audit stuck sets earlyStopDetail and terminal message before summary", () => {
+  assert.match(COUNCIL_SRC, /earlyStopDetail = `audit-stuck:/, "stuck stop must set earlyStopDetail");
+  assert.match(COUNCIL_SRC, /appendCouncilTerminalMessage/, "terminal line must precede summary write");
+  assert.match(COUNCIL_SRC, /reconcileCriteriaFromLedger/, "must reconcile criteria from ledger commits");
+  assert.match(COUNCIL_SRC, /buildUnmetFailSignature/, "stuck detector must use ledger fail signature");
+  assert.doesNotMatch(COUNCIL_SRC, /tryBrainFallback/i, "council run recovery must not use in-run brain");
+});

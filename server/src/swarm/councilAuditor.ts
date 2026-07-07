@@ -3,7 +3,11 @@ import type { RunConfig } from "./SwarmRunner.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractProviderText, createTimeoutController } from "./councilUtils.js";
 import type { ExitContract, ExitCriterion } from "./blackboard/types.js";
-import { AUDITOR_SYSTEM_PROMPT, parseAuditorResponse } from "./blackboard/prompts/auditor.js";
+import {
+  AUDITOR_SYSTEM_PROMPT,
+  buildAuditorRepairPrompt,
+  parseAuditorResponse,
+} from "./blackboard/prompts/auditor.js";
 import { readDirective, buildDirectiveBlock } from "./directivePromptHelpers.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
 import { windowFileForWorker } from "./blackboard/windowFile.js";
@@ -12,13 +16,73 @@ import {
   filterAuditTodosAgainstSkips,
   promoteCriteriaFromSkipEvidence,
 } from "./councilSkipReconcile.js";
+import type { CouncilProgressLedger } from "./councilProgressLedger.js";
+import { fallbackMayMarkMet } from "./councilLedgerReconcile.js";
 
 export interface CouncilAuditorContext {
-  manager: { list: () => Agent[]; markStatus: (id: string, status: string) => void; recordPromptComplete: (id: string, data: any) => void };
+  manager: {
+    list: () => Agent[];
+    markStatus: (id: string, status: string) => void;
+    recordPromptComplete: (id: string, data: any) => void;
+  };
   appendSystem: (msg: string) => void;
   stopping: () => boolean;
   /** User stop/drain — aborts an in-flight audit prompt. */
   abortSignal?: AbortSignal;
+  ledger?: CouncilProgressLedger;
+}
+
+async function promptAuditor(
+  lead: Agent,
+  prompt: string,
+  cfg: RunConfig,
+  ctx: CouncilAuditorContext,
+  signal: AbortSignal,
+): Promise<string | null> {
+  const raw = await promptWithFailoverAuto(
+    lead,
+    prompt,
+    {
+      manager: ctx.manager as any,
+      agentName: "swarm-read",
+      signal,
+    },
+    cfg.providerFailover,
+  );
+  return extractProviderText(raw);
+}
+
+function applyAuditorVerdicts(
+  contract: ExitContract,
+  verdicts: ReturnType<typeof parseAuditorResponse> & { ok: true },
+  skipEvidence: readonly SkipEvidenceTodo[],
+): {
+  updatedCriteria: ExitCriterion[];
+  newTodos: Array<{ description: string; expectedFiles: string[]; criterionId?: string }>;
+} {
+  const criteriaById = new Map(contract.criteria.map((c) => [c.id, c]));
+  let newTodos: Array<{ description: string; expectedFiles: string[]; criterionId?: string }> = [];
+
+  for (const v of verdicts.result.verdicts) {
+    const crit = criteriaById.get(v.id);
+    if (!crit || crit.status !== "unmet") continue;
+    if (v.status === "unmet" && v.todos && v.todos.length > 0) {
+      newTodos.push(...v.todos.map((t) => ({ ...t, criterionId: v.id })));
+    }
+  }
+
+  let updatedCriteria = contract.criteria.map((c) => {
+    const verdict = verdicts.result.verdicts.find((v) => v.id === c.id);
+    if (!verdict || c.status !== "unmet") return c;
+    return { ...c, status: verdict.status as ExitCriterion["status"], rationale: verdict.rationale };
+  });
+
+  updatedCriteria = promoteCriteriaFromSkipEvidence(updatedCriteria, skipEvidence);
+  newTodos = filterAuditTodosAgainstSkips(newTodos, skipEvidence);
+  const metIds = new Set(updatedCriteria.filter((c) => c.status === "met").map((c) => c.id));
+  newTodos = newTodos.filter((t) => !t.criterionId || !metIds.has(t.criterionId));
+
+  return { updatedCriteria, newTodos };
 }
 
 export async function runCouncilLlmAudit(
@@ -41,7 +105,7 @@ export async function runCouncilLlmAudit(
     return { updatedCriteria: contract.criteria, newTodos: [] };
   }
 
-  const unmetCriteria = contract.criteria.filter(c => c.status === "unmet");
+  const unmetCriteria = contract.criteria.filter((c) => c.status === "unmet");
   if (unmetCriteria.length === 0) {
     return { updatedCriteria: contract.criteria, newTodos: [] };
   }
@@ -55,9 +119,12 @@ export async function runCouncilLlmAudit(
 
   const fileContents = await readExpectedFiles(cfg.localPath, [...filesToRead]);
 
-  const criteriaBlock = unmetCriteria.map((c) =>
-    `  [${c.id}] ${c.description} — files: ${c.expectedFiles.join(", ") || "(none)"}`
-  ).join("\n");
+  const criteriaBlock = unmetCriteria
+    .map(
+      (c) =>
+        `  [${c.id}] ${c.description} — files: ${c.expectedFiles.join(", ") || "(none)"}`,
+    )
+    .join("\n");
 
   const fileBlock = Object.entries(fileContents)
     .filter(([_, content]) => content !== null)
@@ -92,7 +159,7 @@ Current file contents:
 ${fileBlock || "(no files to read)"}
 
 Already committed files:
-${committedFiles.map(f => `  ${f}`).join("\n")}
+${committedFiles.map((f) => `  ${f}`).join("\n")}
 ${skipBlock}
 For each unmet criterion, determine if it is now MET, WONT-DO, or still UNMET.
 - MET: the expected files exist and contain real implementation (not mock/placeholder). When a criterion lists multiple path variants for the same file (e.g. docs/foo.md and foo.md), MET if ANY listed file satisfies the criterion.
@@ -112,55 +179,59 @@ Return ONLY a JSON object:
   ]
 }`;
 
+  const ledger = ctx.ledger;
+
   try {
     const { controller, cleanup } = createTimeoutController();
     const onExternalAbort = () => controller.abort(new Error("user stop"));
     ctx.abortSignal?.addEventListener("abort", onExternalAbort, { once: true });
     try {
-      const raw = await promptWithFailoverAuto(lead, prompt, {
-        manager: ctx.manager as any,
-        agentName: "swarm-read",
-        signal: controller.signal,
-      }, cfg.providerFailover);
+      const text = await promptAuditor(lead, prompt, cfg, ctx, controller.signal);
       if (ctx.stopping()) {
         return { updatedCriteria: contract.criteria, newTodos: [] };
       }
-      const text = extractProviderText(raw);
       if (!text) {
         ctx.appendSystem("[audit] Empty auditor response — falling back to file check.");
-        return fallbackAudit(cfg, contract, skipEvidence);
+        return fallbackAudit(cfg, contract, skipEvidence, ledger);
       }
 
-      const parsed = parseAuditorResponse(text);
+      let parsed = parseAuditorResponse(text);
       if (!parsed.ok) {
-        ctx.appendSystem(`[audit] Parse failed: ${parsed.reason} — falling back to file check.`);
-        return fallbackAudit(cfg, contract, skipEvidence);
-      }
-
-      const criteriaById = new Map(contract.criteria.map(c => [c.id, c]));
-      let newTodos: Array<{ description: string; expectedFiles: string[]; criterionId?: string }> = [];
-
-      for (const v of parsed.result.verdicts) {
-        const crit = criteriaById.get(v.id);
-        if (!crit || crit.status !== "unmet") continue;
-        if (v.status === "unmet" && v.todos && v.todos.length > 0) {
-          newTodos.push(...v.todos.map((t) => ({ ...t, criterionId: v.id })));
+        ctx.appendSystem(
+          `[audit] Parse failed: ${parsed.reason} — issuing repair prompt.`,
+        );
+        const repairText = await promptAuditor(
+          lead,
+          `${AUDITOR_SYSTEM_PROMPT}\n\n${buildAuditorRepairPrompt(text, parsed.reason)}`,
+          cfg,
+          ctx,
+          controller.signal,
+        );
+        if (ctx.stopping()) {
+          return { updatedCriteria: contract.criteria, newTodos: [] };
+        }
+        if (repairText) {
+          parsed = parseAuditorResponse(repairText);
         }
       }
 
-      let updatedCriteria = contract.criteria.map((c) => {
-        const verdict = parsed.result.verdicts.find((v) => v.id === c.id);
-        if (!verdict || c.status !== "unmet") return c;
-        return { ...c, status: verdict.status as ExitCriterion["status"], rationale: verdict.rationale };
-      });
+      if (!parsed.ok) {
+        ctx.appendSystem(
+          `[audit] Parse failed after repair: ${parsed.reason} — falling back to file check.`,
+        );
+        return fallbackAudit(cfg, contract, skipEvidence, ledger);
+      }
 
-      updatedCriteria = promoteCriteriaFromSkipEvidence(updatedCriteria, skipEvidence);
-      newTodos = filterAuditTodosAgainstSkips(newTodos, skipEvidence);
-      const metIds = new Set(updatedCriteria.filter((c) => c.status === "met").map((c) => c.id));
-      newTodos = newTodos.filter((t) => !t.criterionId || !metIds.has(t.criterionId));
+      const { updatedCriteria, newTodos } = applyAuditorVerdicts(
+        contract,
+        parsed,
+        skipEvidence,
+      );
 
-      const metCount = updatedCriteria.filter(c => c.status === "met").length;
-      ctx.appendSystem(`[audit] LLM audit: ${metCount}/${updatedCriteria.length} criteria met, ${newTodos.length} new todo(s).`);
+      const metCount = updatedCriteria.filter((c) => c.status === "met").length;
+      ctx.appendSystem(
+        `[audit] LLM audit: ${metCount}/${updatedCriteria.length} criteria met, ${newTodos.length} new todo(s).`,
+      );
 
       return { updatedCriteria, newTodos };
     } finally {
@@ -171,24 +242,39 @@ Return ONLY a JSON object:
     if (ctx.stopping()) {
       return { updatedCriteria: contract.criteria, newTodos: [] };
     }
-    ctx.appendSystem(`[audit] LLM audit failed: ${err instanceof Error ? err.message : String(err)} — falling back to file check.`);
-    return fallbackAudit(cfg, contract, skipEvidence);
+    ctx.appendSystem(
+      `[audit] LLM audit failed: ${err instanceof Error ? err.message : String(err)} — falling back to file check.`,
+    );
+    return fallbackAudit(cfg, contract, skipEvidence, ledger);
   }
 }
 
-async function fallbackAudit(
+export async function fallbackAudit(
   cfg: RunConfig,
   contract: ExitContract,
   skipEvidence: readonly SkipEvidenceTodo[] = [],
+  ledger?: CouncilProgressLedger,
 ): Promise<{
   updatedCriteria: ExitCriterion[];
   newTodos: Array<{ description: string; expectedFiles: string[] }>;
 }> {
+  const emptyLedger = ledger ?? {
+    schemaVersion: 1 as const,
+    runId: "fallback",
+    updatedAt: 0,
+    lastCycle: 0,
+    observations: [],
+  };
+
   const updatedCriteria: ExitCriterion[] = [];
   const newTodos: Array<{ description: string; expectedFiles: string[] }> = [];
 
   for (const c of contract.criteria) {
     if (c.status === "wont-do") {
+      updatedCriteria.push(c);
+      continue;
+    }
+    if (c.status === "met") {
       updatedCriteria.push(c);
       continue;
     }
@@ -202,14 +288,21 @@ async function fallbackAudit(
         const content = fileContents[f];
         if (!content) return false;
         const lower = content.toLowerCase();
-        return lower.includes("todo") || lower.includes("placeholder") || lower.includes("mock") || lower.includes("fixme") || content.trim().length < 20;
+        return (
+          lower.includes("todo") ||
+          lower.includes("placeholder") ||
+          lower.includes("mock") ||
+          lower.includes("fixme") ||
+          content.trim().length < 20
+        );
       });
 
-      if (hasPlaceholder) {
+      const decision = fallbackMayMarkMet(c, emptyLedger, hasPlaceholder);
+      if (decision.met) {
+        updatedCriteria.push({ ...c, status: "met", rationale: `Fallback: ${decision.reason}` });
+      } else {
         updatedCriteria.push(c);
         newTodos.push({ description: c.description, expectedFiles: c.expectedFiles });
-      } else {
-        updatedCriteria.push({ ...c, status: "met" });
       }
     } else {
       updatedCriteria.push(c);

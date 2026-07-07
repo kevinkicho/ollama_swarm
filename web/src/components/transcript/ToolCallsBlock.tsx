@@ -18,10 +18,13 @@
 import { memo, useState } from "react";
 
 const MAX_OPEN_HEIGHT_PX = 300;
+const MAX_VISIBLE_MARKERS = 80;
 
 export const ToolCallsBlock = memo(function ToolCallsBlock({ markers }: { markers: string[] }) {
   const [open, setOpen] = useState(false);
   const n = markers.length;
+  const visible = markers.slice(0, MAX_VISIBLE_MARKERS);
+  const hidden = n - visible.length;
   return (
     <details
       open={open}
@@ -36,12 +39,17 @@ export const ToolCallsBlock = memo(function ToolCallsBlock({ markers }: { marker
         className="px-3 py-2 border-t border-amber-700/40 overflow-y-auto font-mono text-amber-300/80"
         style={{ maxHeight: `${MAX_OPEN_HEIGHT_PX}px` }}
       >
-        {markers.map((m, i) => (
+        {visible.map((m, i) => (
           <div key={i} className="whitespace-pre-wrap break-all py-0.5">
             <span className="text-ink-600 mr-2">{i + 1}.</span>
             {m}
           </div>
         ))}
+        {hidden > 0 ? (
+          <div className="text-ink-500 py-1 italic">
+            … {hidden} more pseudo-tool-call{hidden === 1 ? "" : "s"} (stream loop collapsed server-side)
+          </div>
+        ) : null}
       </div>
     </details>
   );

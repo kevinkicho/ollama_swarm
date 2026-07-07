@@ -12,6 +12,7 @@
     "./providers": "./src/providers.ts",
     "./runStateMachine": "./src/runStateMachine.ts",
     "./stripAgentText": "./src/stripAgentText.ts",
+    "./parseAgentJson": "./src/parseAgentJson.ts",
     "./summarizeAgentJson": "./src/summarizeAgentJson.ts",
     "./topology": "./src/topology.ts",
     "./transcriptEntrySummary": "./src/transcriptEntrySummary.ts",

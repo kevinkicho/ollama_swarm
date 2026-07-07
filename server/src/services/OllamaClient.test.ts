@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { chat } from "./OllamaClient.js";
+import { buildOllamaStreamText, chat } from "./OllamaClient.js";
 
 // Mock-fetch helpers — install + uninstall a global fetch that returns
 // a controlled streaming body. Each test installs its own fetch so they
@@ -50,6 +50,15 @@ function installMockFetch(opts: MockResponseOpts): () => void {
   };
 }
 
+describe("buildOllamaStreamText", () => {
+  it("wraps thinking in think tags ahead of content", () => {
+    assert.equal(
+      buildOllamaStreamText("reason", "answer"),
+      "<think>reason</think>answer",
+    );
+  });
+});
+
 describe("OllamaClient.chat", () => {
   it("accumulates message.content across JSONL frames + returns final text", async () => {
     const restore = installMockFetch({
@@ -74,6 +83,59 @@ describe("OllamaClient.chat", () => {
       assert.equal(result.finishReason, "done");
       assert.deepEqual(chunks, ["Hello", "Hello world", "Hello world!"]);
       assert.deepEqual(tokens, { promptTokens: 42, responseTokens: 3 });
+    } finally {
+      restore();
+    }
+  });
+
+  it("streams message.thinking frames before content arrives", async () => {
+    const restore = installMockFetch({
+      frames: [
+        '{"message":{"role":"assistant","thinking":"Let me"},"done":false}\n',
+        '{"message":{"role":"assistant","thinking":" check"},"done":false}\n',
+        '{"message":{"role":"assistant","content":"["},"done":false}\n',
+        '{"message":{"role":"assistant","content":"]"},"done":true,"eval_count":2}\n',
+      ],
+    });
+    try {
+      const chunks: string[] = [];
+      const result = await chat({
+        baseUrl: "http://test",
+        model: "test-model",
+        messages: [{ role: "user", content: "hi" }],
+        signal: new AbortController().signal,
+        onChunk: (t) => chunks.push(t),
+      });
+      assert.equal(result.text, "<think>Let me check</think>[]");
+      assert.deepEqual(chunks, [
+        "<think>Let me</think>",
+        "<think>Let me check</think>",
+        "<think>Let me check</think>[",
+        "<think>Let me check</think>[]",
+      ]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("emits on tool_calls frames even when content is empty", async () => {
+    const restore = installMockFetch({
+      frames: [
+        '{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"grep"}}]},"done":false}\n',
+        '{"message":{"role":"assistant","content":"ok"},"done":true}\n',
+      ],
+    });
+    try {
+      const chunks: string[] = [];
+      const result = await chat({
+        baseUrl: "http://test",
+        model: "test-model",
+        messages: [{ role: "user", content: "hi" }],
+        signal: new AbortController().signal,
+        onChunk: (t) => chunks.push(t),
+      });
+      assert.equal(result.text, "ok");
+      assert.deepEqual(chunks, ["", "ok"]);
     } finally {
       restore();
     }

@@ -591,16 +591,15 @@ describe("resolveCriterionFiles — Unit 5d", () => {
     assert.deepEqual(out, ["README.md", "docs/intro.md"]);
   });
 
-  // Unit 28: the 2026-04-21 multi-agent-orchestrator failure mode —
-  // planner's declared path passes parse-time grounding (parent dir exists)
-  // but the exact file is dangling, while workers land their commits at a
+  // Unit 28: planner's declared path passes parse-time grounding (parent dir
+  // exists) but the exact file is dangling, while workers land commits at a
   // different anchor linked to the same criterion.
   it("unions declared expectedFiles with linked-commit files (Unit 28)", () => {
     const c = criterion(
       "c1",
       "Tests exist for team manager",
       "unmet",
-      ["src/brain/team-manager.test.ts"], // dangling — file never created
+      ["src/lib/team-manager.test.ts"], // dangling — file never created
     );
     const out = resolveCriterionFiles(c, [
       commit("t1", ["src/tests/team-manager.test.ts"], 100, "c1"), // where work landed
@@ -608,7 +607,7 @@ describe("resolveCriterionFiles — Unit 5d", () => {
     // Declared first, linked after — gives the auditor the planner-chosen
     // anchor AND the real-work anchor in the same prompt.
     assert.deepEqual(out, [
-      "src/brain/team-manager.test.ts",
+      "src/lib/team-manager.test.ts",
       "src/tests/team-manager.test.ts",
     ]);
   });

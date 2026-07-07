@@ -27,7 +27,18 @@ import {
   buildCouncilSynthesisPrompt,
   buildCouncilPrompt,
   buildStandupPrompt,
+  buildStandupSynthesisPrompt,
 } from "./councilPromptHelpers.js";
+import {
+  buildProgressContextBlock,
+  harvestStandupFindingsFromEntries,
+  loadCouncilProgressLedger,
+  saveCouncilProgressLedger,
+  wrapProgressContextForPrompt,
+  appendLedgerObservation,
+  type CouncilProgressLedger,
+} from "./councilProgressLedger.js";
+import { standupFallbackTodosFromEntries } from "./councilStandupFallback.js";
 import {
   extractActionableTodos,
 } from "./councilDecisions.js";
@@ -48,7 +59,18 @@ import {
 import { gatherCodeContext } from "./gatherCodeContext.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
 import { reconcileCriteriaFromSkips } from "./councilSkipReconcile.js";
+import {
+  buildUnmetFailSignature,
+  hasCommitProgressOnUnmet,
+  reconcileCriteriaFromLedger,
+} from "./councilLedgerReconcile.js";
 import { postCouncilTodoBatch } from "./councilTodoPlan.js";
+import {
+  councilRunIdShort,
+  loadPendingExecutionTodos,
+  persistCouncilPendingTodos,
+  seedPendingTodosToQueue,
+} from "./councilExecutionResume.js";
 
 
 export class CouncilRunner extends DiscussionRunnerBase {
@@ -59,6 +81,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private codeContextExcerpts: ReadonlyArray<{ path: string; excerpt: string }> = [];
   private executionFailures: string[] = [];
   private previousUnmetIds: Set<string> = new Set();
+  private previousStuckFailSignature = "";
   private stuckCycleCount = 0;
   private consecutiveEmptyCycles = 0;
   private tierPromotionRetries = 0;
@@ -74,6 +97,10 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private stopAbortController: AbortController | undefined;
   private stopInFlight: Promise<void> | null = null;
   private loopPromise: Promise<void> | null = null;
+  /** When set, exit after the first execution-drain cycle (resume path). */
+  private executionOnlyResume = false;
+  private progressLedger!: CouncilProgressLedger;
+  private cycleTranscriptStart = 0;
 
   constructor(opts: RunnerOpts) {
     super(opts);
@@ -126,17 +153,48 @@ export class CouncilRunner extends DiscussionRunnerBase {
     this.setPhase("seeding");
     await this.seed(destPath, cfg);
 
-    // Derive initial contract
+    this.executionOnlyResume = false;
+    const resumeFrom = cfg.resumeExecutionFromRunId?.trim();
+    if (resumeFrom) {
+      const pending = loadPendingExecutionTodos(destPath, resumeFrom);
+      if (pending.length > 0) {
+        const n = seedPendingTodosToQueue(pending, (input) => this.state.todoQueue.post(input));
+        this.executionOnlyResume = true;
+        this.appendSystem(
+          `[resume] Loaded ${n} pending execution todo(s) from run ${resumeFrom} — skipping contract derivation.`,
+        );
+      } else {
+        this.appendSystem(
+          `[resume] No pending-execution-todos.json for run ${resumeFrom} — proceeding with normal council flow.`,
+        );
+      }
+    }
+
+    // Derive initial contract (skip when resuming execution-only todos)
     const planner = ready[0];
     const workers = ready.slice(1);
-    if (planner && cfg.userDirective) {
+    const executionResume = resumeFrom && this.state.todoQueue.counts().pending > 0;
+    if (planner && cfg.userDirective && !executionResume) {
       this.appendSystem(`Deriving tier ${this.state.currentTier} contract from directive…`);
-      await runContractDerivation(this.state, planner, workers);
+      await runContractDerivation(this.state, planner, workers, () => this.transcript);
     }
 
     this.setPhase("discussing");
     this.startedAt = Date.now();
     this.state.runStartedAt = this.startedAt;
+
+    if (cfg.runId) {
+      this.progressLedger = loadCouncilProgressLedger(destPath, cfg.runId);
+      this.syncProgressContext();
+    } else {
+      this.progressLedger = {
+        schemaVersion: 1,
+        runId: "local",
+        updatedAt: Date.now(),
+        lastCycle: 0,
+        observations: [],
+      };
+    }
 
     // Start wall-clock cap watchdog if configured
     if (cfg.wallClockCapMs && cfg.wallClockCapMs > 0) {
@@ -245,6 +303,18 @@ export class CouncilRunner extends DiscussionRunnerBase {
     }
 
     const cfg = this.active;
+    if (cfg?.runId && this.state?.todoQueue) {
+      const n = this.state.todoQueue.counts().pending + this.state.todoQueue.counts().inProgress;
+      if (n > 0) {
+        const clonePath = cfg.localPath ?? "";
+        if (clonePath) {
+          persistCouncilPendingTodos(clonePath, cfg.runId, this.state.todoQueue.list());
+          this.appendSystem(
+            `[resume] Saved ${n} pending execution todo(s) for run ${councilRunIdShort(cfg.runId)}.`,
+          );
+        }
+      }
+    }
     if (cfg) {
       await this.writeSummary(cfg);
     }
@@ -337,16 +407,99 @@ export class CouncilRunner extends DiscussionRunnerBase {
           await new Promise((r) => setTimeout(r, 1000));
           continue;
         }
+        if (this.executionOnlyResume) {
+          this.appendSystem("[resume] Execution-only resume complete — finishing run.");
+          break;
+        }
         if (!isAutonomous || this.closingRequested()) break;
         this.earlyStopDetail = undefined;
         await new Promise((r) => setTimeout(r, 2000));
       }
+      this.appendCouncilTerminalMessage();
+    }, {
+      shouldSetCompleted: () => !this.earlyStopDetail,
     });
+  }
 
-    if (!this.closingRequested()) this.appendSystem("Council complete.");
+  /** Terminal line written before summary so transcript and stopDetail stay aligned. */
+  private appendCouncilTerminalMessage(): void {
+    if (this.closingRequested()) return;
+    if (this.earlyStopDetail) {
+      this.appendSystem(`[audit] Council stopped: ${this.earlyStopDetail}`);
+      return;
+    }
+    this.appendSystem("Council complete.");
+  }
+
+  private syncProgressContext(): void {
+    const block = buildProgressContextBlock(this.progressLedger);
+    const wrapped = wrapProgressContextForPrompt(block);
+    this.state.progressContext = wrapped || undefined;
+  }
+
+  private persistProgressLedger(): void {
+    const clonePath = this.active?.localPath;
+    const runId = this.active?.runId;
+    if (!clonePath || !runId) return;
+    saveCouncilProgressLedger(clonePath, this.progressLedger);
+  }
+
+  private cycleTranscriptSlice(): TranscriptEntry[] {
+    return this.transcript.slice(this.cycleTranscriptStart);
+  }
+
+  private recordTodoSettled(
+    cycle: number,
+    info: {
+      description: string;
+      expectedFiles: readonly string[];
+      outcome: "completed" | "skipped" | "failed";
+      detail?: string;
+    },
+  ): void {
+    const files = [...info.expectedFiles];
+    if (info.outcome === "completed") {
+      appendLedgerObservation(this.progressLedger, {
+        kind: "commit",
+        text: info.description.slice(0, 400),
+        cycle,
+        files: files.length ? files : undefined,
+      });
+      for (const f of files) {
+        if (!this.state.committedFiles.includes(f)) this.state.committedFiles.push(f);
+      }
+      return;
+    }
+    if (info.outcome === "skipped") {
+      appendLedgerObservation(this.progressLedger, {
+        kind: "skip",
+        text: info.detail ? `${info.description.slice(0, 200)} — ${info.detail.slice(0, 180)}` : info.description.slice(0, 400),
+        cycle,
+        files: files.length ? files : undefined,
+      });
+      return;
+    }
+    appendLedgerObservation(this.progressLedger, {
+      kind: "fail",
+      text: info.detail
+        ? `${info.description.slice(0, 160)} — ${info.detail.slice(0, 200)}`
+        : info.description.slice(0, 400),
+      cycle,
+      files: files.length ? files : undefined,
+    });
+  }
+
+  private finalizeCycleProgress(cycle: number): void {
+    this.progressLedger.lastCycle = cycle;
+    this.syncProgressContext();
+    this.persistProgressLedger();
   }
 
   private async runCycle(cfg: RunConfig, cycle: number, isAutonomous: boolean): Promise<"done" | "retry" | "stop"> {
+    this.cycleTranscriptStart = this.transcript.length;
+    this.progressLedger.lastCycle = cycle;
+    this.syncProgressContext();
+
     const hasPendingTodos = this.state.todoQueue.counts().pending > 0;
 
     if (hasPendingTodos) {
@@ -421,6 +574,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
               (msg) => this.appendSystem(msg),
               this.opts.manager as any,
               this.state.contract,
+              this.state.progressContext,
             );
             const enqueued = postCouncilTodoBatch(
               (input) => this.state.todoQueue.post(input),
@@ -441,6 +595,10 @@ export class CouncilRunner extends DiscussionRunnerBase {
                   detail: `${enqueued} synthesis todo(s)`,
                 },
               );
+        const clonePath = cfg.localPath ?? "";
+        if (cfg.runId && clonePath) {
+          persistCouncilPendingTodos(clonePath, cfg.runId, this.state.todoQueue.list());
+        }
             }
           }
         }
@@ -495,7 +653,13 @@ export class CouncilRunner extends DiscussionRunnerBase {
           this.runStandupTurn(agent, snapshot, cfg.userDirective),
         );
 
-        await this.synthesizeStandup(cfg);
+        harvestStandupFindingsFromEntries(
+          this.progressLedger,
+          cycle,
+          this.cycleTranscriptSlice(),
+        );
+
+        await this.synthesizeStandup(cfg, cycle);
       }
     }
 
@@ -505,7 +669,10 @@ export class CouncilRunner extends DiscussionRunnerBase {
       await this.drainTodos(cfg, cycle);
     }
 
-    if (this.closingRequested()) return "stop";
+    if (this.closingRequested()) {
+      this.finalizeCycleProgress(cycle);
+      return "stop";
+    }
 
     if (this.state.contract) {
       const skippedTodos = this.state.todoQueue
@@ -527,11 +694,13 @@ export class CouncilRunner extends DiscussionRunnerBase {
     // ── AUDIT: check criteria ──
     if (!this.closingRequested() && this.state.contract) {
       const auditResult = await this.runAudit(cfg, cycle);
+      this.finalizeCycleProgress(cycle);
       if (auditResult === "stop") return "stop";
       if (auditResult === "retry") return "retry";
       return "done";
     }
 
+    this.finalizeCycleProgress(cycle);
     return "done";
   }
 
@@ -574,6 +743,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
           recordFailure: (todoId, description, error) => {
             this.executionFailures.push(`${description}: ${error.slice(0, 200)}`);
           },
+          onTodoSettled: (info) => this.recordTodoSettled(cycle, info),
           stopping: () => this.stopping,
           draining: () => this.drainRequested,
           promptSignal: this.stopAbortController?.signal,
@@ -623,6 +793,19 @@ export class CouncilRunner extends DiscussionRunnerBase {
         expectedFiles: t.expectedFiles,
       }));
 
+    const criteriaBeforeAudit = this.state.contract.criteria;
+    const { criteria: ledgerReconciled, promotedIds: ledgerPromoted } = reconcileCriteriaFromLedger(
+      this.progressLedger,
+      criteriaBeforeAudit,
+      this.state.committedFiles,
+    );
+    if (ledgerPromoted.length > 0) {
+      this.state.contract = { ...this.state.contract, criteria: ledgerReconciled };
+      this.appendSystem(
+        `[execution] Promoted ${ledgerPromoted.length} criterion(s) to met from ledger commits: ${ledgerPromoted.join(", ")}.`,
+      );
+    }
+
     const { updatedCriteria, newTodos } = await runCouncilLlmAudit(
       cfg,
       this.state.contract,
@@ -632,6 +815,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
         appendSystem: tagAudit,
         stopping: () => this.closingRequested(),
         abortSignal: this.stopAbortController?.signal,
+        ledger: this.progressLedger,
       },
       skipEvidence,
     );
@@ -643,31 +827,63 @@ export class CouncilRunner extends DiscussionRunnerBase {
     const unmetCount = updatedCriteria.filter(c => c.status === "unmet").length;
     const currentUnmetIds = new Set(updatedCriteria.filter(c => c.status === "unmet").map(c => c.id));
 
-    // Convergence detection
+    const beforeById = new Map(criteriaBeforeAudit.map((c) => [c.id, c]));
+    const metFlips = updatedCriteria.filter(
+      (c) =>
+        c.status === "met" &&
+        beforeById.get(c.id)?.status === "unmet" &&
+        !ledgerPromoted.includes(c.id),
+    ).length;
+
+    // Convergence detection — same unmet IDs, same fail signature, no commits on those files
     const sameUnmet = [...currentUnmetIds].filter(id => this.previousUnmetIds.has(id)).length;
+    const failSignature = buildUnmetFailSignature(
+      this.progressLedger,
+      currentUnmetIds,
+      updatedCriteria,
+      cycle,
+    );
+    const commitOnUnmet = hasCommitProgressOnUnmet(
+      this.progressLedger,
+      currentUnmetIds,
+      updatedCriteria,
+      cycle,
+    );
+    const sameFailurePattern =
+      failSignature.length > 0 && failSignature === this.previousStuckFailSignature;
+
     this.previousUnmetIds = currentUnmetIds;
+    this.previousStuckFailSignature = failSignature;
+
     if (unmetCount > 0 && sameUnmet === currentUnmetIds.size) {
-      this.stuckCycleCount++;
-      this.appendSystem(`[audit] Same ${sameUnmet} criteria unmet for ${this.stuckCycleCount} cycle(s).`);
-      if (this.stuckCycleCount >= 3) {
-        this.appendSystem(`[audit] Stuck for ${this.stuckCycleCount} cycles — stopping.`);
-        // Council-specific proactive path: trigger brain suggestion (clean opts access)
-        const getBrain = this.opts.getBrainService;
-        if (getBrain) {
-          const brain = getBrain();
-          if (brain && brain.injectSuggestion) {
-            const rid = this.active?.runId || 'current-run';
-            brain.injectSuggestion(rid, {
-              title: `Council stuck after ${this.stuckCycleCount} cycles`,
-              text: 'Suggestion: consider amending directive or trying a different preset (e.g. pipeline for chaining).',
-              category: 'recommendation',
-            });
+      const noLedgerProgress = sameFailurePattern && !commitOnUnmet && metFlips === 0;
+      if (noLedgerProgress) {
+        this.stuckCycleCount++;
+        this.appendSystem(`[audit] Same ${sameUnmet} criteria unmet for ${this.stuckCycleCount} cycle(s).`);
+        if (this.stuckCycleCount >= 3) {
+          this.earlyStopDetail = `audit-stuck: same ${sameUnmet} criteria unmet for ${this.stuckCycleCount} cycles`;
+          this.appendSystem(`[audit] Stuck for ${this.stuckCycleCount} cycles — stopping.`);
+          this.setPhase("stopped");
+          const getBrain = this.opts.getBrainService;
+          if (getBrain) {
+            const brain = getBrain();
+            if (brain && brain.injectSuggestion) {
+              const rid = this.active?.runId || "current-run";
+              brain.injectSuggestion(rid, {
+                title: `Council stuck after ${this.stuckCycleCount} cycles`,
+                text: "Suggestion: consider amending directive or trying a different preset (e.g. pipeline for chaining).",
+                category: "recommendation",
+              });
+            }
           }
+          return "stop";
         }
-        return "stop";
+      } else {
+        this.stuckCycleCount = 0;
       }
     } else {
       this.stuckCycleCount = 0;
+      this.previousStuckFailSignature = "";
     }
 
     if (unmetCount === 0) {
@@ -687,7 +903,9 @@ export class CouncilRunner extends DiscussionRunnerBase {
         // Tier promotion failed — retry with bounded attempts.
         this.tierPromotionRetries++;
         if (this.tierPromotionRetries >= 3) {
+          this.earlyStopDetail = `ambition-failed: tier promotion failed ${this.tierPromotionRetries} times`;
           this.appendSystem(`[ambition] Tier promotion failed ${this.tierPromotionRetries} times — stopping.`);
+          this.setPhase("stopped");
           return "stop";
         }
         this.appendSystem(`[ambition] Tier promotion returned no criteria — retrying (${this.tierPromotionRetries}/3).`);
@@ -777,35 +995,27 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
     return "retry";
   }
 
-  private async synthesizeStandup(cfg: RunConfig): Promise<void> {
+  private async synthesizeStandup(cfg: RunConfig, cycle: number): Promise<void> {
     const agents = this.opts.manager.list();
     const lead = agents.find((a) => a.index === 1);
     if (!lead) return;
 
-    const proposals = this.transcript
-      .filter((e) => e.role === "agent" && e.summary?.kind === "council_draft" && (e.summary as any).phase === "standup")
+    const standupEntries = this.cycleTranscriptSlice().filter(
+      (e) =>
+        e.role === "agent" &&
+        e.summary?.kind === "council_draft" &&
+        (e.summary as { phase?: string }).phase === "standup",
+    );
+    const proposals = standupEntries
       .map((e) => `[Agent ${e.agentIndex}]:\n${e.text}`)
       .join("\n\n---\n\n");
 
     if (!proposals) return;
 
-    const prompt = `You are Agent 1, synthesizing standup proposals into a unified plan.
-
-Standup proposals from all agents:
-${proposals}
-
-Your task: Merge these proposals into a single, coherent plan. Focus on what's actionable.
-Output a JSON array of concrete todos:
-[{"description": "specific file change", "expectedFiles": ["path/to/file.ts"]}]
-
-Partitioning rules:
-- At most ONE todo per file path (do not split the same file across multiple todos).
-- Order mentally: implementation files first, then tests, then docs, then run/test commands last.
-- Put pytest/npm test commands in their own final todo (not combined with file edits).
-
-Max 6 items. Each todo must target specific files. Return ONLY the JSON array.`;
+    const prompt = buildStandupSynthesisPrompt(proposals, this.state.progressContext);
 
     const controller = new AbortController();
+    let standupEnqueued = 0;
     try {
       const raw = await promptWithFailoverAuto(lead, prompt, {
         manager: this.opts.manager,
@@ -825,15 +1035,47 @@ Max 6 items. Each todo must target specific files. Return ONLY the JSON array.`;
             expectedFiles: todo.expectedFiles,
             createdBy: "council",
           }));
-        const standupEnqueued = postCouncilTodoBatch(
+        standupEnqueued = postCouncilTodoBatch(
           (input) => this.state.todoQueue.post(input),
           standupDrafts,
           (msg) => this.appendSystem(msg),
         );
-        this.appendSystem(`[Standup] Synthesized ${standupEnqueued} proposals into unified plan.`);
       }
     } catch (err) {
       this.appendSystem(`[council] Standup synthesis failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    if (standupEnqueued === 0) {
+      const fallback = standupFallbackTodosFromEntries(standupEntries);
+      if (fallback.length > 0) {
+        standupEnqueued = postCouncilTodoBatch(
+          (input) => this.state.todoQueue.post(input),
+          fallback,
+          (msg) => this.appendSystem(msg),
+        );
+        appendLedgerObservation(this.progressLedger, {
+          kind: "synthesis",
+          text: `Agent-1 merge produced no todos; enqueued ${standupEnqueued} from standup agent drafts.`,
+          cycle,
+        });
+        this.appendSystem(
+          `[Standup] Merge empty — enqueued ${standupEnqueued} todo(s) from agent standup drafts.`,
+        );
+      } else {
+        appendLedgerObservation(this.progressLedger, {
+          kind: "synthesis",
+          text: "Standup merge produced no todos and no parseable standup drafts.",
+          cycle,
+        });
+        this.appendSystem(`[Standup] Synthesized 0 proposals into unified plan.`);
+      }
+    } else {
+      appendLedgerObservation(this.progressLedger, {
+        kind: "synthesis",
+        text: `Synthesized ${standupEnqueued} proposal(s) into unified plan.`,
+        cycle,
+      });
+      this.appendSystem(`[Standup] Synthesized ${standupEnqueued} proposals into unified plan.`);
     }
   }
 
@@ -853,6 +1095,7 @@ Max 6 items. Each todo must target specific files. Return ONLY the JSON array.`;
       this.active?.localPath,
       this.repoFiles,
       agent.model,
+      this.state.progressContext,
     );
     await this.runDiscussionAgent(agent, prompt, {
       runnerName: "council",

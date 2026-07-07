@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { useSwarm } from "../state/store";
-import type { AgentState, LatencySample, PerAgentStat } from "../types";
+import type { AgentState, LatencySample } from "../types";
+import { AgentStatsTable, rowsFromPerAgentStats } from "./AgentStatsTable";
 
 // Phase 1 of the tabs-per-preset brainstorm (2026-04-24): a universal
 // per-agent metrics view that works across all 8 presets without
@@ -102,46 +103,10 @@ const MetricsFromSummary = memo(function MetricsFromSummary({ summary }: { summa
         Live sample data is gone but the summary preserves attempts, retries,
         and full-run latency stats.
       </div>
-      <table className="w-full text-xs font-mono">
-        <thead>
-          <tr className="text-left text-ink-500 uppercase tracking-wide text-[10px] border-b border-ink-700">
-            <th className="py-1 px-2">Agent</th>
-            <th className="py-1 px-2 text-right">Turns</th>
-            <th className="py-1 px-2 text-right">Attempts</th>
-            <th className="py-1 px-2 text-right">Retries</th>
-            <th className="py-1 px-2 text-right">Mean</th>
-            <th className="py-1 px-2 text-right">p50</th>
-            <th className="py-1 px-2 text-right">p95</th>
-            <th className="py-1 px-2 text-right">Commits</th>
-            <th className="py-1 px-2 text-right">Lines</th>
-            <th className="py-1 px-2 text-right">Rejected</th>
-          </tr>
-        </thead>
-        <tbody>
-          {summary.agents.map((a) => (
-            <SummaryMetricsRow key={a.agentId} a={a} />
-          ))}
-        </tbody>
-      </table>
+      <AgentStatsTable
+        rows={rowsFromPerAgentStats(summary.agents, summary.preset)}
+      />
     </div>
-  );
-});
-
-const SummaryMetricsRow = memo(function SummaryMetricsRow({ a }: { a: PerAgentStat }) {
-  const lines = (a.linesAdded ?? 0) + (a.linesRemoved ?? 0);
-  return (
-    <tr className="border-b border-ink-800/60 hover:bg-ink-800/40">
-      <td className="py-1 px-2 text-ink-200">agent-{a.agentIndex}</td>
-      <td className="py-1 px-2 text-right text-ink-300">{a.turnsTaken}</td>
-      <td className="py-1 px-2 text-right text-ink-300">{a.totalAttempts ?? "—"}</td>
-      <td className="py-1 px-2 text-right text-ink-300">{a.totalRetries ?? "—"}</td>
-      <td className="py-1 px-2 text-right text-ink-300">{fmt(a.meanLatencyMs ?? null)}</td>
-      <td className="py-1 px-2 text-right text-ink-300">{fmt(a.p50LatencyMs ?? null)}</td>
-      <td className="py-1 px-2 text-right text-ink-300">{fmt(a.p95LatencyMs ?? null)}</td>
-      <td className="py-1 px-2 text-right text-ink-200">{a.commits ?? "—"}</td>
-      <td className="py-1 px-2 text-right text-ink-300">{lines || "—"}</td>
-      <td className={`py-1 px-2 text-right ${(a.rejectedAttempts ?? 0) > 0 ? "text-rose-300" : "text-ink-300"}`}>{a.rejectedAttempts ?? "—"}</td>
-    </tr>
   );
 });
 

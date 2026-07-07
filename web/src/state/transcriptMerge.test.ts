@@ -156,6 +156,28 @@ describe("mergeTranscriptEntry", () => {
     assert.equal(slice.streaming["agent-4"], undefined);
   });
 
+  it("treats think-tagged stream buffer as redundant when final text matches", () => {
+    const json = "[{\"issue\":\"x\"}]";
+    let slice: TranscriptMergeSlice = {
+      transcript: [],
+      streaming: { "agent-2": `<think>reasoning</think>${json}` },
+      streamingMeta: {
+        "agent-2": { startedAt: 100, lastTextAt: 200, status: "live" },
+      },
+    };
+    const final: TranscriptEntry = {
+      id: "a2",
+      role: "agent",
+      agentId: "agent-2",
+      agentIndex: 2,
+      text: json,
+      ts: 300,
+    };
+    slice = mergeTranscriptEntry(slice, final)!;
+    assert.equal(slice.transcript.length, 1);
+    assert.equal(slice.transcript[0]!.streamSnapshot, undefined);
+  });
+
   it("treats JSON-whitespace variants as redundant stream text", () => {
     const compact = "[{\"issue\":\"x\"}]";
     const pretty = "[\n  {\"issue\": \"x\"}\n]";

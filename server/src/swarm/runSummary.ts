@@ -136,7 +136,13 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
   };
 }
 
-function classifyDiscussionStopReason(
+/** Council / discussion give-up stops (audit stuck, ambition failed, etc.). */
+export function isDiscussionGiveUpStop(detail?: string): boolean {
+  if (!detail) return false;
+  return /^(audit-stuck|ambition-failed|no-progress):/.test(detail);
+}
+
+export function classifyDiscussionStopReason(
   input: Pick<DiscussionSummaryInput, "crashMessage" | "stopping" | "earlyStopDetail">,
 ): { stopReason: StopReason; stopDetail?: string } {
   if (input.crashMessage) {
@@ -146,6 +152,9 @@ function classifyDiscussionStopReason(
     return { stopReason: "user" };
   }
   if (input.earlyStopDetail) {
+    if (isDiscussionGiveUpStop(input.earlyStopDetail)) {
+      return { stopReason: "no-progress", stopDetail: input.earlyStopDetail };
+    }
     return { stopReason: "early-stop", stopDetail: input.earlyStopDetail };
   }
   return { stopReason: "completed" };

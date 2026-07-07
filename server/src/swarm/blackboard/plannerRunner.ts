@@ -1,6 +1,6 @@
 // Extracted from BlackboardRunner.ts — planner prompt + JSON parsing + repair +
 // grounding + hypothesis grouping + sibling-retry fallback + V2 observer events +
-// brain fallback (AI-assisted parsing when rule-based parsing fails).
+// planner recovery loop (no in-run brain parse fallback).
 // Takes a narrow PlannerContext object instead of referencing `this.*`.
 
 import { randomUUID } from "node:crypto";
@@ -18,15 +18,14 @@ import {
   parsePlannerResponse,
 } from "./prompts/planner.js";
 import { PLANNER_TODOS_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
-import { classifyExpectedFiles, classifyPath } from "./prompts/pathValidation.js";
+import { classifyPath } from "./prompts/pathValidation.js";
+import { groundExpectedFiles } from "./contractGrounding.js";
 import { checkExpectedSymbols } from "./runnerHelpers.js";
 import { detectHypothesisTag } from "./hypothesisGrouping.js";
 import { withSiblingRetry } from "./siblingRetry.js";
-import {
-  tryBrainFallback,
-  type BrainFallbackEvent,
-} from "./prompts/brainIntegration.js";
-import { PlannerResponseSchema } from "./prompts/planner.js";
+import { runPlannerEmitRecovery } from "./plannerRecovery.js";
+import { emitAgentActivity } from "./promptRunner.js";
+import { detectTodoBatchFileOverlaps } from "./workerFileConflict.js";
 import { resolveToolProfile } from "../toolProfiles.js";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
 
@@ -45,16 +44,10 @@ export interface PlannerContext {
     agentName?: ProfileName,
     ollamaFormat?: "json" | Record<string, unknown>,
   ) => Promise<{ response: string; agentUsed: Agent }>;
-  /** Brain fallback: prompt an LLM to extract structured JSON from a
-   *  failed parse. The promptFn signature matches promptWithFailover. */
-  brainPromptFn?: (
-    prompt: string,
-    model: string,
-    maxTokens: number,
-    timeoutMs: number,
-  ) => Promise<string>;
   wrappers: TodoQueueWrappers;
   findingsPost: (entry: { agentId: string; text: string; createdAt: number }) => void;
+  getAuditor: () => Agent | undefined;
+  emitAgentState: (s: import("../../types.js").AgentState) => void;
   v2ObserverApply: (event: unknown) => void;
   hypothesisGroupAbortsSet: (groupId: string, controller: AbortController) => void;
   buildSeed: (clonePath: string, cfg: RunConfig) => Promise<PlannerSeed>;
@@ -79,80 +72,69 @@ export async function runPlanner(
       }
     : undefined;
 
-  const plannerProfile = resolveToolProfile("planner", ctx.getActive());
-  const { response: firstResponse, agentUsed: planAgent } = await ctx.promptPlannerSafely(
-    agent,
-    `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed, contractForPrompt, agent.model)}`,
-    plannerProfile,
-    PLANNER_TODOS_JSON_SCHEMA,
-  );
-  if (ctx.isStopping()) return;
-  ctx.appendAgent(planAgent, firstResponse);
+  const exploreProfile = resolveToolProfile("planner", ctx.getActive());
+  const emitProfile = "swarm-read" as ProfileName;
 
-  let parsed = parsePlannerResponse(firstResponse);
-  if (!parsed.ok) {
-    ctx.appendSystem(`Planner response did not parse (${parsed.reason}). Issuing repair prompt.`);
-    const { response: repairResponse, agentUsed: repairAgent } = await ctx.promptPlannerSafely(
-      planAgent,
-      `${PLANNER_SYSTEM_PROMPT}\n\n${buildRepairPrompt(firstResponse, parsed.reason)}`,
-      plannerProfile,
-      PLANNER_TODOS_JSON_SCHEMA,
-    );
-    if (ctx.isStopping()) return;
-    ctx.appendAgent(repairAgent, repairResponse);
-    parsed = parsePlannerResponse(repairResponse);
-    if (!parsed.ok) {
-      // Brain fallback: try AI-assisted parsing before sibling-retry.
-      if (ctx.brainPromptFn) {
-        ctx.appendSystem(`Planner parse still failed after repair — trying brain fallback (${parsed.reason}).`);
-        const brainEvent = (e: BrainFallbackEvent) => {
-          ctx.emit({ type: "brain-fallback", ...e });
-        };
-        try {
-          const brainResult = await tryBrainFallback(
-            "planner",
-            firstResponse,
-            PlannerResponseSchema,
-            ctx.brainPromptFn,
-            brainEvent,
-            agent,
-          );
-          if (brainResult) {
-            const brainTodos = brainResult as unknown[];
-            parsed = { ok: true as const, todos: brainTodos as any, dropped: [] };
-            ctx.appendSystem(`Brain fallback succeeded — extracted ${brainTodos.length} todo(s).`);
-          }
-        } catch {
-          // Brain call failed — fall through to sibling-retry.
-        }
-      }
-    }
-    if (!parsed.ok) {
-      const retried = await withSiblingRetry(
-        {
-          agent,
-          modelAtEntry,
-          logPrefix: `[${agent.id}]`,
-          updateAgentModel: ctx.updateAgentModel,
-          emit: ctx.emit,
-          getFallbackModel: ctx.getPlannerFallbackModel,
-          reason: "sibling-retry: planner JSON parse failed after repair",
-          isFallbackAttempt,
-        },
-        async () => {
-          await runPlanner(ctx, agent, seed, true);
-        },
-      );
-      if (retried) return;
-      ctx.appendSystem(`Planner still invalid after repair (${parsed.reason}). Giving up this run.`);
-      ctx.findingsPost({
-        agentId: agent.id,
-        text: `Planner failed to produce valid JSON after one repair attempt. Last error: ${parsed.reason}`,
-        createdAt: Date.now(),
+  const recovery = await runPlannerEmitRecovery({
+    kind: "planner-todos",
+    agent,
+    auditor: ctx.getAuditor(),
+    getStopping: ctx.isStopping,
+    appendSystem: ctx.appendSystem,
+    appendAgent: ctx.appendAgent,
+    findingsPost: ctx.findingsPost,
+    getActive: ctx.getActive,
+    emitActivity: (label, attempt, maxAttempts, mode) => {
+      emitAgentActivity(agent, ctx.emitAgentState, {
+        kind: "planner-todos",
+        label,
+        attempt,
+        maxAttempts,
+        mode,
       });
-      return;
-    }
+    },
+    promptPlannerSafely: (a, p, profile, schema) =>
+      ctx.promptPlannerSafely(a, p, profile, schema),
+    buildExplorePrompt: () =>
+      `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed, contractForPrompt, agent.model)}`,
+    buildRepairPrompt: (prev, err, note) =>
+      `${PLANNER_SYSTEM_PROMPT}\n\n${buildRepairPrompt(prev, err, note)}`,
+    exploreProfile,
+    emitProfile,
+    jsonSchema: PLANNER_TODOS_JSON_SCHEMA,
+    parse: (raw) => {
+      const p = parsePlannerResponse(raw);
+      if (p.ok) return { ok: true as const, value: p.todos, raw, dropped: p.dropped };
+      return { ok: false as const, reason: p.reason, raw };
+    },
+  });
+
+  if (!recovery.ok) {
+    const retried = await withSiblingRetry(
+      {
+        agent,
+        modelAtEntry,
+        logPrefix: `[${agent.id}]`,
+        updateAgentModel: ctx.updateAgentModel,
+        emit: ctx.emit,
+        getFallbackModel: ctx.getPlannerFallbackModel,
+        reason: "sibling-retry: planner JSON parse failed after recovery loop",
+        isFallbackAttempt,
+      },
+      async () => {
+        await runPlanner(ctx, agent, seed, true);
+      },
+    );
+    if (retried) return;
+    ctx.appendSystem(`Planner still invalid after recovery (${recovery.reason}). No todos posted.`);
+    return;
   }
+
+  let parsed = {
+    ok: true as const,
+    todos: recovery.value,
+    dropped: recovery.dropped as import("./prompts/planner.js").PlannerDropped[],
+  };
 
   if (parsed.ok && !isFallbackAttempt && parsed.todos.length === 0) {
       const retried = await withSiblingRetry(
@@ -185,16 +167,23 @@ export async function runPlanner(
   let suspiciousStripped = 0;
   let todosDropped = 0;
   for (const t of parsed.todos) {
-    const { accepted, rejected } = classifyExpectedFiles(t.expectedFiles, seed.repoFiles);
-    for (const r of rejected) {
+    const { grounded, stripped, rebound } = groundExpectedFiles(t.expectedFiles, seed.repoFiles);
+    for (const r of stripped) {
       suspiciousStripped += 1;
       ctx.findingsPost({
         agentId: agent.id,
-        text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": stripped suspicious path '${r.path}' (${r.reason}).`,
+        text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": stripped ungrounded path '${r.path}' (${r.reason}).`,
         createdAt: Date.now(),
       });
     }
-    if (accepted.length === 0) {
+    for (const rb of rebound) {
+      ctx.findingsPost({
+        agentId: agent.id,
+        text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": rebound '${rb.from}' → '${rb.to}'.`,
+        createdAt: Date.now(),
+      });
+    }
+    if (grounded.length === 0) {
       todosDropped += 1;
       ctx.findingsPost({
         agentId: agent.id,
@@ -205,7 +194,7 @@ export async function runPlanner(
     }
     groundedTodos.push({
       description: t.description,
-      expectedFiles: accepted,
+      expectedFiles: grounded,
       expectedAnchors: t.expectedAnchors,
       expectedSymbols: t.expectedSymbols,
     });
@@ -294,6 +283,20 @@ export async function runPlanner(
   }
   groundedTodos.length = 0;
   groundedTodos.push(...symbolGroundedTodos);
+
+  const batchOverlaps = detectTodoBatchFileOverlaps(groundedTodos);
+  if (batchOverlaps.length > 0) {
+    ctx.appendSystem(
+      `Planner provisioning: ${batchOverlaps.length} file(s) shared across todos — workers will serialize edits on those paths.`,
+    );
+    for (const o of batchOverlaps.slice(0, 8)) {
+      ctx.findingsPost({
+        agentId: agent.id,
+        text: `Todo file overlap on '${o.file}' across: ${o.todoIds.join(" | ")}. Workers cannot safely edit the same file concurrently.`,
+        createdAt: Date.now(),
+      });
+    }
+  }
 
   if (groundedTodos.length === 0) {
     // If ALL todos were dropped by the redundancy check, don't trigger

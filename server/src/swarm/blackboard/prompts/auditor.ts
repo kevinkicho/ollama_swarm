@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ExitContract, ExitCriterion, Finding, Todo } from "../types.js";
 import { windowFileForWorker } from "../windowFile.js";
-import { extractJsonFromText as stripFences } from "../../extractJson.js";
+import { parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 import { lenientPreprocess, softCap } from "./lenientParse.js";
 import { getModelBudget } from "../../modelContextBudget.js";
 
@@ -88,23 +88,11 @@ export function parseAuditorResponse(raw: string): AuditorParseResult {
   if (raw.trim().length === 0) {
     return { ok: false, reason: "empty response — model produced no output after stripping thinking tags" };
   }
-  let parsed: unknown;
-  let lastError = "";
-  try {
-    parsed = JSON.parse(raw.trim());
-  } catch (err) {
-    lastError = err instanceof Error ? err.message : String(err);
-    const cleaned = stripFences(raw);
-    if (cleaned === null) {
-      return { ok: false, reason: `JSON parse failed: ${lastError}` };
-    }
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch (err2) {
-      const msg = err2 instanceof Error ? err2.message : String(err2);
-      return { ok: false, reason: `JSON parse failed: ${msg}` };
-    }
+  const envelopeResult = parseJsonEnvelope(raw);
+  if (!envelopeResult.ok) {
+    return { ok: false, reason: envelopeResult.reason };
   }
+  const parsed = envelopeResult.value;
 
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     return {

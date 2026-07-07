@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  allowsUnboundedToolTurns,
   effectiveToolProfileId,
   isWebToolsEnabled,
   resolveDiscussionProfileId,
@@ -17,7 +18,7 @@ describe("toolProfiles", () => {
   });
 
   it("resolveToolProfileId gates web tools per role", () => {
-    assert.equal(resolveToolProfileId("worker", { webTools: false }), "swarm");
+    assert.equal(resolveToolProfileId("worker", { webTools: false }), "swarm-read");
     assert.equal(resolveToolProfileId("worker", { webTools: true }), "swarm-research");
     assert.equal(resolveToolProfileId("auditor", { webTools: true }), "swarm-research");
     assert.equal(resolveToolProfileId("auditor", {}), "swarm-read");
@@ -41,5 +42,10 @@ describe("toolProfiles", () => {
   it("resolveDiscussionProfileId mirrors read/build roles", () => {
     assert.equal(resolveDiscussionProfileId("reader", { webTools: true }), "swarm-research");
     assert.equal(resolveDiscussionProfileId("builder", { webTools: true }), "swarm-builder-research");
+  });
+
+  it("allowsUnboundedToolTurns includes worker read profile", () => {
+    assert.equal(allowsUnboundedToolTurns("swarm-read"), true);
+    assert.equal(allowsUnboundedToolTurns("swarm"), false);
   });
 });

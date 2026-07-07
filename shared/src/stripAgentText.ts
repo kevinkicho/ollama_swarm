@@ -37,8 +37,19 @@ export interface StrippedAgentText {
 const SEMANTICALLY_EMPTY_RE = /^\s*[\[\]{}]+\s*$/;
 
 export function stripAgentText(text: string): StrippedAgentText {
-  const { thoughts, finalText: postThink } = extractThinkTags(text);
-  const { toolCalls, finalText: rawFinal } = extractToolCallMarkers(postThink);
+  const { thoughts: rawThoughts, finalText: postThink } = extractThinkTags(text);
+  const fromBody = extractToolCallMarkers(postThink);
+  const fromThoughts = rawThoughts
+    ? extractToolCallMarkers(rawThoughts)
+    : { toolCalls: [] as string[], finalText: "" };
+  const rawFinal = fromBody.finalText;
   const finalText = SEMANTICALLY_EMPTY_RE.test(rawFinal) ? "" : rawFinal;
+  const thoughts = fromThoughts.finalText.trim();
+  const toolCalls = [...fromThoughts.toolCalls, ...fromBody.toolCalls];
   return { finalText, thoughts, toolCalls };
+}
+
+/** Text to feed JSON.parse / extractJsonFromText — strips thinking + pseudo-tool XML first. */
+export function stripForJsonParse(raw: string): string {
+  return stripAgentText(raw).finalText.trim();
 }

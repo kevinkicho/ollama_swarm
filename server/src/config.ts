@@ -239,13 +239,12 @@ const Schema = z.object({
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
-  // AI brain fallback parser model. When a rule-based parser fails,
-  // this lightweight model is asked to extract structured JSON from
-  // the raw output. Default: gemma4:31b-cloud (fast, good at JSON).
-  // Set to "" to disable brain fallback entirely.
+  // Legacy: in-run brain parse fallback is retired (auditor arbitrates
+  // during runs; brainOverseer handles post-run analysis only).
+  // Kept for API compat; ignored at runtime. Default "".
   SWARM_BRAIN_MODEL: z
     .string()
-    .default("deepseek-v4-flash:cloud")
+    .default("")
     .transform((v) => v.trim()),
   // Production: directory containing built web assets. When set, the
   // server serves these as static files at / and falls through to API

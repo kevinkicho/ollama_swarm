@@ -586,6 +586,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         useLocal: parsed.data.useLocal,
         createdBy: parsed.data.createdBy,
         resumeContract: parsed.data.resumeContract,
+        resumeExecutionFromRunId: parsed.data.resumeExecutionFromRunId,
         // Blackboard defaults dedicatedAuditor to ON (env-overridable
         // via DEFAULT_DEDICATED_AUDITOR). Explicit per-run value
         // always wins — including explicit `false` to disable.

@@ -6,11 +6,13 @@ import { applyAndCommit } from "./blackboard/WorkerPipeline.js";
 import { realFilesystemAdapter, realGitAdapter } from "./blackboard/v2Adapters.js";
 import {
   buildWorkerUserPrompt,
+  buildWorkerRepairPrompt,
   buildHunkRepairPrompt,
   parseWorkerResponse,
   WORKER_SYSTEM_PROMPT,
   isLiteratureTodo,
 } from "./blackboard/prompts/worker.js";
+import { repairAndParseJson } from "./repairJson.js";
 import { buildResearchToolsNote } from "./blackboard/prompts/planner.js";
 import { chatOnce } from "./chatOnce.js";
 import { extractText } from "./extractText.js";
@@ -25,13 +27,23 @@ import {
 import { TodoQueue, type QueuedTodo } from "./blackboard/TodoQueue.js";
 import { scoreCouncilTodoForDequeue } from "./councilTodoPlan.js";
 import type { CouncilAdapterState } from "./councilAdapter.js";
+import { wrapProgressContextForPrompt } from "./councilProgressLedger.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
 import { checkBuildCommand } from "./blackboard/buildCommandAllowlist.js";
 import simpleGit from "simple-git";
 
+export type TodoSettledOutcome = "completed" | "skipped" | "failed";
+
 export interface WorkerRunnerContext {
   appendSystem: (msg: string) => void;
   recordFailure?: (todoId: string, description: string, error: string) => void;
+  onTodoSettled?: (info: {
+    todoId: string;
+    description: string;
+    expectedFiles: readonly string[];
+    outcome: TodoSettledOutcome;
+    detail?: string;
+  }) => void;
   stopping: () => boolean;
   /** Soft drain: finish the in-flight todo, then exit without dequeuing more. */
   draining?: () => boolean;
@@ -71,7 +83,7 @@ type TodoExecuteResult =
   | { outcome: "skipped"; reason: string }
   | { outcome: "failed"; error: string };
 
-type WorkerRetryResult = { outcome: "retry"; reason: string };
+type WorkerRetryResult = { outcome: "retry"; reason: string; lastResponse?: string };
 type WorkerAttemptResult = TodoExecuteResult | WorkerRetryResult;
 
 function isWorkerRetry(r: WorkerAttemptResult): r is WorkerRetryResult {
@@ -186,14 +198,34 @@ async function runCouncilWorker(
     if (result.outcome === "completed") {
       state.todoQueue.complete(todo.id);
       completed++;
+      ctx.onTodoSettled?.({
+        todoId: todo.id,
+        description: todo.description,
+        expectedFiles: todo.expectedFiles,
+        outcome: "completed",
+      });
       await new Promise((r) => setTimeout(r, WORKER_COOLDOWN_MS + Math.floor(Math.random() * 500)));
     } else if (result.outcome === "skipped") {
       state.todoQueue.skip(todo.id, result.reason);
       skipped++;
+      ctx.onTodoSettled?.({
+        todoId: todo.id,
+        description: todo.description,
+        expectedFiles: todo.expectedFiles,
+        outcome: "skipped",
+        detail: result.reason,
+      });
     } else {
       state.todoQueue.fail(todo.id, result.error);
       failed++;
       ctx.recordFailure?.(todo.id, todo.description, result.error.slice(0, 200));
+      ctx.onTodoSettled?.({
+        todoId: todo.id,
+        description: todo.description,
+        expectedFiles: todo.expectedFiles,
+        outcome: "failed",
+        detail: result.error,
+      });
     }
   }
 
@@ -310,11 +342,16 @@ async function executeTodoWithRetryChain(
   if (!isWorkerRetry(primaryResult)) return primaryResult;
   const primaryReason = summarizeWorkerFailureReason(primaryResult.reason);
 
-  // Stage 2: Repair prompt (same agent, same model)
+  // Stage 2: JSON repair prompt (same agent, echoes parse error + prior response)
   ctx.appendSystem(
     `[execution] ${agent.id} primary failed (${primaryReason}) — trying repair prompt.`,
   );
-  const repairResult = await tryWorkerPrompt(agent, todo, expectedFiles, state, fsAdapter, gitAdapter, ctx);
+  const repairResult = await tryWorkerPrompt(agent, todo, expectedFiles, state, fsAdapter, gitAdapter, ctx, {
+    repairFrom:
+      primaryResult.lastResponse && primaryReason
+        ? { previousResponse: primaryResult.lastResponse, parseError: primaryReason }
+        : undefined,
+  });
   if (!isWorkerRetry(repairResult)) return repairResult;
   const repairReason = summarizeWorkerFailureReason(repairResult.reason);
 
@@ -367,6 +404,17 @@ async function executeTodoWithRetryChain(
   };
 }
 
+function parseWorkerResponseWithRepair(raw: string, expectedFiles: string[]): ReturnType<typeof parseWorkerResponse> {
+  const direct = parseWorkerResponse(raw, expectedFiles);
+  if (direct.ok) return direct;
+  const repaired = repairAndParseJson(raw);
+  if (repaired?.value !== undefined && typeof repaired.value === "object" && repaired.value !== null) {
+    const second = parseWorkerResponse(JSON.stringify(repaired.value), expectedFiles);
+    if (second.ok) return second;
+  }
+  return direct;
+}
+
 async function tryWorkerPrompt(
   agent: Agent,
   todo: QueuedTodo,
@@ -375,6 +423,9 @@ async function tryWorkerPrompt(
   fsAdapter: ReturnType<typeof realFilesystemAdapter>,
   gitAdapter: ReturnType<typeof realGitAdapter>,
   ctx: WorkerRunnerContext,
+  opts: {
+    repairFrom?: { previousResponse: string; parseError: string };
+  } = {},
 ): Promise<WorkerAttemptResult> {
   if (ctx.stopping()) return { outcome: "skipped", reason: "run stopping" };
   // Re-read file contents fresh each attempt (avoids stale content on retry)
@@ -395,15 +446,19 @@ async function tryWorkerPrompt(
   );
   const workerProfile = effectiveToolProfileId("swarm-builder", state.cfg);
 
-  const basePrompt = `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt({
-    todoId: todo.id,
-    description: adjustedDesc,
-    expectedFiles,
-    fileContents,
-    directive: state.cfg.userDirective,
-    webToolsEnabled,
-    researchNotes,
-  })}`;
+  const progressBlock = wrapProgressContextForPrompt(state.progressContext ?? "");
+  const userBlock = opts.repairFrom
+    ? buildWorkerRepairPrompt(opts.repairFrom.previousResponse, opts.repairFrom.parseError)
+    : buildWorkerUserPrompt({
+        todoId: todo.id,
+        description: adjustedDesc,
+        expectedFiles,
+        fileContents,
+        directive: state.cfg.userDirective,
+        webToolsEnabled,
+        researchNotes,
+      });
+  const basePrompt = `${WORKER_SYSTEM_PROMPT}\n\n${userBlock}${opts.repairFrom ? "" : progressBlock}`;
 
   try {
     const controller = new AbortController();
@@ -419,14 +474,14 @@ async function tryWorkerPrompt(
 
     const res = extractProviderText(raw);
     if (res === null) {
-      return { outcome: "retry", reason: "empty provider response" };
+      return { outcome: "retry", reason: "empty provider response", lastResponse: undefined };
     }
 
     // Mirror blackboard workerRunner: persist the model JSON so refresh/hydrate
     // can render WorkerHunksBubble (live StreamingDock alone is ephemeral).
     state.appendAgent(agent, res);
 
-    const parsed = parseWorkerResponse(res, expectedFiles);
+    const parsed = parseWorkerResponseWithRepair(res, expectedFiles);
     if (parsed.ok && parsed.hunks.length > 0 && !parsed.skip) {
       const fixedHunks = parsed.hunks.map((h) => {
         if ((h as any).op === "create" && fileContents[(h as any).file] !== null) {
@@ -485,20 +540,21 @@ async function tryWorkerPrompt(
       return {
         outcome: "retry",
         reason: applyResult.reason || "hunks could not be applied to the working tree",
+        lastResponse: res,
       };
     }
     if (!parsed.ok) {
-      return { outcome: "retry", reason: parsed.reason };
+      return { outcome: "retry", reason: parsed.reason, lastResponse: res };
     }
     if (parsed.ok && parsed.skip) {
       ctx.appendSystem(`[execution] ${agent.id} skipped: ${parsed.skip}`);
       return { outcome: "skipped", reason: parsed.skip };
     }
     if (parsed.ok && parsed.hunks.length === 0) {
-      return { outcome: "retry", reason: "worker returned no hunks" };
+      return { outcome: "retry", reason: "worker returned no hunks", lastResponse: res };
     }
 
-    return { outcome: "retry", reason: "worker response could not be committed" };
+    return { outcome: "retry", reason: "worker response could not be committed", lastResponse: res };
     } finally {
       ctx.promptSignal?.removeEventListener("abort", onPromptAbort);
     }

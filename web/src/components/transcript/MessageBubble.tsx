@@ -28,8 +28,12 @@ import { RunFinishedGrid, SeedAnnounceGrid } from "./RunFinishedGrid";
 import { DebateVerdictBubble } from "./DebateVerdictBubble";
 import { RunStartDivider } from "./RunStartDivider";
 import { formatServerSummary } from "../../../../shared/src/formatServerSummary";
-import { ThoughtsBlock } from "./ThoughtsBlock";
 import { ToolCallsBlock } from "./ToolCallsBlock";
+import {
+  ThinkingContentPanel,
+  ThinkingToggleButton,
+  resolveEntryThinking,
+} from "./AgentThinking";
 import { ContractBubble } from "./ContractBubble";
 import { AuditorVerdictBubble } from "./AuditorVerdictBubble";
 import { TodosBubble } from "./TodosBubble";
@@ -40,6 +44,8 @@ import { AuditReviewCard } from "./AuditReviewCard";
 import { tryRenderCouncilMarkers } from "./CouncilCycleDivider";
 import { ExecutionStatusBubble } from "./ExecutionStatusBubble";
 import { CouncilDraftBubble } from "./CouncilDraftBubble";
+import { CompactPipelineStatusLine } from "./CompactPipelineStatusLine";
+import { isCompactPipelineStatus } from "./compactPipelineStatus";
 
 export const MessageBubble = memo(function MessageBubble({ entry }: { entry: TranscriptEntry }) {
   const ts = new Date(entry.ts).toLocaleTimeString();
@@ -59,13 +65,6 @@ export const MessageBubble = memo(function MessageBubble({ entry }: { entry: Tra
       {...(entry.thoughts ? { "data-has-thoughts": "true" } : {})}
       {...(entry.toolCalls && entry.toolCalls.length > 0 ? { "data-has-tool-calls": String(entry.toolCalls.length) } : {})}
     >
-      {/* Phase 1 (UI coherent-fix): render <think>...</think> content
-          above the main bubble as a collapsed-by-default details
-          block. Separate from the final-response bubble so reasoning
-          model output stays scannable. */}
-      {entry.thoughts && entry.thoughts.length > 0 ? (
-        <ThoughtsBlock text={entry.thoughts} />
-      ) : null}
       {/* Task #229 (2026-04-27 evening): render XML pseudo-tool-call
           markers as a collapsed amber block. Separate from thoughts
           because they're a different kind of leaked-intent signal —
@@ -79,7 +78,24 @@ export const MessageBubble = memo(function MessageBubble({ entry }: { entry: Tra
       ) : entry.role === "user" ? (
         <CollapsibleBlock
           className="rounded-md border border-ink-600 bg-ink-800 p-3 text-sm"
-          header={<div className="text-xs text-ink-400 mb-1">you · {ts}</div>}
+          header={
+            <div className="text-xs text-ink-400 mb-1 flex items-center gap-2">
+              <span>you · {ts}</span>
+              {entry.intent ? (
+                <span
+                  className={`inline-block px-1.5 py-0 text-[9px] uppercase tracking-wider rounded ${
+                    entry.intent === "suggest"
+                      ? "bg-sky-900/50 text-sky-300"
+                      : entry.intent === "ask"
+                        ? "bg-violet-900/50 text-violet-300"
+                        : "bg-amber-900/50 text-amber-300"
+                  }`}
+                >
+                  {entry.intent}
+                </span>
+              ) : null}
+            </div>
+          }
           text={entry.text}
         />
       ) : (
@@ -112,6 +128,11 @@ function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
   // Server format: [execution] agent-N ✓ applied|skipped|working on ...
   if (/^\[execution\] agent-\d+ (✓ applied|skipped|✗|working on)/.test(entry.text)) {
     return <ExecutionStatusBubble entry={entry} ts={ts} />;
+  }
+
+  // Research pre-pass, literature research, and web_tool hits — one-line status only.
+  if (isCompactPipelineStatus(entry)) {
+    return <CompactPipelineStatusLine entry={entry} ts={ts} />;
   }
 
   // Task #72: dedicated grid renderers for structured system entries.
@@ -329,6 +350,7 @@ function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
 }
 
 function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
+  const thinking = useMemo(() => resolveEntryThinking(entry), [entry]);
   const hue = hueForAgent(entry.agentIndex);
   // Only label as Brain for actual brain entries (suggestions or explicit brain agentId/index-0 brain),
   // not normal agents that happen to have low index in council planning.
@@ -343,6 +365,15 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
     <div className="flex items-center gap-2 text-xs mb-1" style={{ color: palette.header }}>
       <AgentAvatar agentIndex={entry.agentIndex} size="sm" />
       <span>{isBrain ? "🧠 Brain" : `Agent ${entry.agentIndex}`} · {ts}</span>
+      {entry.assistKind === "auditor-salvage" ? (
+        <span className="inline-block px-1.5 py-0 text-[9px] uppercase tracking-wider rounded bg-amber-900/50 text-amber-300">
+          JSON salvage
+        </span>
+      ) : entry.assistKind === "auditor-diagnostic" ? (
+        <span className="inline-block px-1.5 py-0 text-[9px] uppercase tracking-wider rounded bg-rose-900/40 text-rose-300">
+          parse diagnostic
+        </span>
+      ) : null}
     </div>
   );
   const style = { borderColor: palette.border, background: palette.background };
@@ -386,7 +417,15 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           </div>
         </div>
       );
-      return <CollapsibleBlock className={className} style={style} header={chipHeader} text={entry.text} />;
+      return (
+        <CollapsibleBlock
+          className={className}
+          style={style}
+          header={chipHeader}
+          text={entry.text}
+          thinking={thinking}
+        />
+      );
     }
     // Synthesis-style entries — distinctive bordered wrapper so the
     // consolidated takeaway is visually obvious as the run's "answer",
@@ -401,6 +440,7 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           text={entry.text}
           accent="emerald"
           label={`═ Council synthesis · ${r} round${r === 1 ? "" : "s"} ═`}
+          thinking={thinking}
         />
       );
     }
@@ -412,6 +452,7 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           text={entry.text}
           accent="sky"
           label={`═ Stigmergy report-out · ${n} files ranked ═`}
+          thinking={thinking}
         />
       );
     }
@@ -425,6 +466,7 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           header={header}
           text={entry.text}
           summary={entry.summary}
+          thinking={thinking}
         />
       );
     }
@@ -436,6 +478,7 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           text={entry.text}
           accent="violet"
           label={`═ Map-reduce synthesis · cycle ${c} ═`}
+          thinking={thinking}
         />
       );
     }
@@ -448,6 +491,7 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           text={entry.text}
           accent="amber"
           label={`═ Role-diff synthesis · ${r} round${r === 1 ? "" : "s"} · ${n} role${n === 1 ? "" : "s"} ═`}
+          thinking={thinking}
         />
       );
     }
@@ -523,6 +567,7 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           style={undefined}
           header={phaseHeader}
           text={entry.text}
+          thinking={thinking}
         />
       );
     }
@@ -539,6 +584,7 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           header={header}
           summary={oneLine}
           rawJson={entry.text}
+          thinking={thinking}
         />
       );
     }
@@ -560,6 +606,7 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
             </div>
           }
           text={entry.text}
+          thinking={thinking}
         />
       );
     }
@@ -584,6 +631,7 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
         header={header}
         summary={oneLine}
         json={entry.text}
+        thinking={thinking}
       />
     );
   }
@@ -592,7 +640,16 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
   // from envelopes the lenient parser couldn't slice). Mirrors the
   // WorkerHunksBubble routing so the diff renderer applies even when
   // summary.kind is missing.
-  return <AgentClientFallback entry={entry} className={className} style={style} header={header} hue={hue} />;
+  return (
+    <AgentClientFallback
+      entry={entry}
+      className={className}
+      style={style}
+      header={header}
+      hue={hue}
+      thinking={thinking}
+    />
+  );
 }
 
 function AgentClientFallback({
@@ -601,12 +658,14 @@ function AgentClientFallback({
   style,
   header,
   hue,
+  thinking,
 }: {
   entry: TranscriptEntry;
   className: string;
   style: React.CSSProperties;
   header: React.ReactNode;
   hue: number;
+  thinking: ReturnType<typeof resolveEntryThinking>;
 }) {
   // All hooks live in this dedicated component so the conditional
   // returns above don't violate the rules-of-hooks. (Hook count must
@@ -624,6 +683,7 @@ function AgentClientFallback({
         header={header}
         summary={`${looseHunks.length} hunk${looseHunks.length === 1 ? "" : "s"}`}
         rawJson={entry.text}
+        thinking={thinking}
       />
     );
   }
@@ -671,6 +731,7 @@ function AgentClientFallback({
         header={header}
         summary={clientSummary.summary}
         json={clientSummary.json}
+        thinking={thinking}
       />
     );
   }
@@ -686,10 +747,19 @@ function AgentClientFallback({
         style={style}
         header={header}
         json={prettyJson}
+        thinking={thinking}
       />
     );
   }
-  return <CollapsibleBlock className={className} style={style} header={header} text={entry.text} />;
+  return (
+    <CollapsibleBlock
+      className={className}
+      style={style}
+      header={header}
+      text={entry.text}
+      thinking={thinking}
+    />
+  );
 }
 
 // V2 Step 4 DRY win: 5+ near-identical synthesis branches (council_synthesis,
@@ -721,11 +791,13 @@ function DecoratedSynthesisBlock({
   text,
   accent,
   label,
+  thinking,
 }: {
   header: React.ReactNode;
   text: string;
   accent: Accent;
   label: string;
+  thinking: ReturnType<typeof resolveEntryThinking>;
 }) {
   const { wrapper, chip } = ACCENT_CLASSES[accent];
   const decoratedHeader = (
@@ -742,6 +814,7 @@ function DecoratedSynthesisBlock({
       style={undefined}
       header={decoratedHeader}
       text={text}
+      thinking={thinking}
     />
   );
 }
@@ -755,14 +828,29 @@ function StigmergyAnnotationBubble({
   header,
   text,
   summary,
+  thinking,
 }: {
   header: React.ReactNode;
   text: string;
   summary: { kind: "stigmergy_annotation"; file: string; interest: number; confidence: number; note: string };
+  thinking: ReturnType<typeof resolveEntryThinking>;
 }) {
+  const [showThinking, setShowThinking] = useState(false);
   return (
     <div className="rounded-md p-3 border-2 border-teal-700/60 bg-teal-950/20 text-sm space-y-2">
-      {header}
+      {thinking ? (
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1">{header}</div>
+          <ThinkingToggleButton
+            thinking={thinking}
+            open={showThinking}
+            onClick={() => setShowThinking((v) => !v)}
+          />
+        </div>
+      ) : (
+        header
+      )}
+      {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
       {text && text !== "(empty response)" ? (
         <div className="text-ink-200 whitespace-pre-wrap">{text}</div>
       ) : null}
