@@ -33,6 +33,7 @@ import {
 import { RunEventHub } from "./RunEventHub.js";
 import { prepareResearchConfig, isResearchRun } from "../swarm/researchHelpers.js";
 import { BrainIntegration } from "./BrainIntegration.js";
+import { RunHousekeeper } from "../swarm/runHousekeeper.js";
 
 export interface OrchestratorOpts {
   /** Mint one AgentManager per run so concurrent runs don't share
@@ -1549,6 +1550,11 @@ export class Orchestrator {
       hub: ctx.hub,
       getRunner,
     });
+    const housekeeper = new RunHousekeeper(
+      (entry) => wrappedEmit({ type: "transcript_append", entry }),
+      runId,
+    );
+    manager.attachHousekeeper(housekeeper);
     const opts: RunnerOpts = this.createRunnerOpts(runId, manager, wrappedEmit, cfg);
 
     const { createRunner } = await import("../swarm/presetRouter.js");

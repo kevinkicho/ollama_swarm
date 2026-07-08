@@ -16,6 +16,7 @@
     "./summarizeAgentJson": "./src/summarizeAgentJson.ts",
     "./topology": "./src/topology.ts",
     "./transcriptEntrySummary": "./src/transcriptEntrySummary.ts",
+    "./brainAlias": "./src/brainAlias.ts",
     "./wsProtocol": "./src/wsProtocol.ts",
     "./workerHunks": "./src/workerHunks.ts"
   },

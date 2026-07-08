@@ -11,20 +11,10 @@
 // produces server-side; UI panels can read this without re-parsing.
 
 import { useEffect, useState } from "react";
+import { normalizeDerived, type DerivedRunState } from "../lib/eventLogUi";
 
 export interface EventLogRun {
-  derived: {
-    errors: string[];
-    transcriptCount: number;
-    agentStateUpdates: number;
-    hasSummary: boolean;
-    runId?: string;
-    preset?: string;
-    // EventLogPanel.tsx already consumes this shape — kept in sync.
-    startedAt?: number;
-    finishedAt?: number;
-    finalPhase?: string;
-  };
+  derived: DerivedRunState;
   recordCount: number;
   isSessionBoundary: boolean;
 }
@@ -80,7 +70,10 @@ async function fetchOnce(): Promise<EventLogStreamState> {
         source?: string;
       };
       const next: EventLogStreamState = {
-        runs: body.runs ?? [],
+        runs: (body.runs ?? []).map((r) => ({
+          ...r,
+          derived: normalizeDerived(r.derived),
+        })),
         malformed: body.malformed ?? 0,
         source: body.source ?? null,
         loading: false,

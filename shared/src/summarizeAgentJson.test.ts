@@ -152,6 +152,32 @@ describe("summarizeAgentJson", () => {
     });
   });
 
+  describe("hunk review", () => {
+    it("summarizes approve + reason gate response", () => {
+      const r = summarizeAgentJson(
+        JSON.stringify({
+          approve: true,
+          reason: "Changes follow existing panel patterns and use a valid BBA series ID.",
+        }),
+      );
+      assert.ok(r);
+      assert.match(r!.summary, /Approved:/);
+      assert.equal(r!.parsed.kind, "hunk_review");
+      if (r!.parsed.kind === "hunk_review") {
+        assert.equal(r!.parsed.approve, true);
+      }
+    });
+
+    it("summarizes rejection", () => {
+      const r = summarizeAgentJson(
+        JSON.stringify({ approve: false, reason: "Anchor text not found in target file." }),
+      );
+      assert.ok(r);
+      assert.match(r!.summary, /Rejected:/);
+      assert.equal(r!.parsed.kind, "hunk_review");
+    });
+  });
+
   describe("auditor", () => {
     it("summarizes mixed verdicts with new criteria", () => {
       const r = summarizeAgentJson(JSON.stringify({

@@ -30,7 +30,37 @@ export interface ScanOptions {
   activeRunId?: string | null;
 }
 
+/** In-memory cache TTL for GET /api/swarm/runs scans (ms). */
+export const RUNS_LIST_CACHE_TTL_MS = 30_000;
+
+let runsListCache: {
+  key: string;
+  at: number;
+  runs: RunSummaryDigest[];
+  parentsScanned: string[];
+} | null = null;
+
+/** Clears the in-memory runs list cache (tests). */
+export function clearRunsListCache(): void {
+  runsListCache = null;
+}
+
 export async function scanForRunDigests(
+  parentsToScan: Set<string>,
+  opts: ScanOptions = {},
+): Promise<{ runs: RunSummaryDigest[]; parentsScanned: string[] }> {
+  const key = `${[...parentsToScan].sort().join("\n")}|${opts.activeClone ?? ""}|${opts.activeRunId ?? ""}`;
+  const now = Date.now();
+  if (runsListCache && runsListCache.key === key && now - runsListCache.at < RUNS_LIST_CACHE_TTL_MS) {
+    return { runs: runsListCache.runs, parentsScanned: runsListCache.parentsScanned };
+  }
+
+  const result = await scanForRunDigestsUncached(parentsToScan, opts);
+  runsListCache = { key, at: now, runs: result.runs, parentsScanned: result.parentsScanned };
+  return result;
+}
+
+async function scanForRunDigestsUncached(
   parentsToScan: Set<string>,
   opts: ScanOptions = {},
 ): Promise<{ runs: RunSummaryDigest[]; parentsScanned: string[] }> {

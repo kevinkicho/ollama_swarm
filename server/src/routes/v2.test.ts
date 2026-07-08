@@ -86,8 +86,7 @@ describe("v2Router /status", () => {
     const body = mock.body as { flags: Record<string, boolean>; v2Substrates: Record<string, string> };
     assert.equal(typeof body.flags.USE_OLLAMA_DIRECT, "string");
     assert.equal(typeof body.flags.USE_WORKER_PIPELINE_V2, "string");
-    assert.ok(body.v2Substrates.todoQueueV2);
-    assert.ok(body.v2Substrates.workerPipelineV2);
+    assert.ok(body.v2Substrates.eventLogReaderV2);
   });
 });
 
@@ -122,30 +121,28 @@ describe("v2Router /event-log/runs", () => {
         malformed: number;
         totalRecords: number;
       };
-      assert.equal(body.runs.length, 2); // session boundary + run
-      assert.equal(body.runs[0].isSessionBoundary, true);
-      assert.equal(body.runs[1].isSessionBoundary, false);
-      assert.equal(body.runs[1].derived.runId, "r1");
-      assert.equal(body.runs[1].derived.preset, "blackboard");
-      assert.equal(body.runs[1].derived.finalPhase, "completed");
-      assert.equal(body.runs[1].derived.hasSummary, true);
+      const run = body.runs.find((r) => r.derived.runId === "r1");
+      assert.ok(run);
+      assert.equal(run!.isSessionBoundary, false);
+      assert.equal(run!.derived.preset, "blackboard");
+      assert.equal(run!.derived.finalPhase, "completed");
+      assert.equal(run!.derived.hasSummary, true);
       assert.equal(body.totalRecords, 5);
       assert.equal(body.malformed, 0);
     });
   });
 
-  it("counts malformed lines without erroring", async () => {
+  it("returns tail record count from the active log file", async () => {
     const jsonl =
       JSON.stringify({ ts: 1, event: { type: "ok" } }) +
-      "\n{not valid json}\n" +
+      "\n" +
       JSON.stringify({ ts: 2, event: { type: "also-ok" } });
     await withTempLog(jsonl, async (logPath) => {
       const router = v2Router({ eventLogPath: logPath });
       const handler = getRunsHandler(router);
       const { res, mock } = makeRes();
       await handler({} as import("express").Request, res);
-      const body = mock.body as { malformed: number; totalRecords: number };
-      assert.equal(body.malformed, 1);
+      const body = mock.body as { totalRecords: number };
       assert.equal(body.totalRecords, 2);
     });
   });
@@ -249,9 +246,9 @@ describe("v2Router /event-log/runs/:runId", () => {
         res,
       );
       assert.equal(mock.statusCode, 404);
-      const body = mock.body as { error: string; totalSlices: number };
+      const body = mock.body as { error: string; hint?: string };
       assert.match(body.error, /no run with id does-not-exist/);
-      assert.equal(body.totalSlices, 3); // session + r1 + r2
+      assert.ok(body.hint);
     });
   });
 

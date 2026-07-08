@@ -5,6 +5,7 @@ import { useSwarm } from "../state/store";
 import type { AgentState, LatencySample } from "../types";
 import { CopyChip } from "./CopyChip";
 import { hueForAgent, agentBubblePalette, statusGlowClass } from "./agentPalette";
+import { isBrainAgentName, textMentionsBrainAlias } from "@ollama-swarm/shared/brainAlias";
 
 // Stable reference for "no samples yet". Returning a fresh `[]` from the
 // useSwarm selector on every render makes useSyncExternalStore see a
@@ -200,8 +201,8 @@ export const AgentPanel = memo(function AgentPanel({
     : "border-l-ink-700";
   const runConfig = useSwarm((s) => s.runConfig);
   // Data-driven isBrain: only when the entry explicitly identifies as brain (id/kind/text).
-  const isBrain = agent.id === 'brain' || (agent as any).agentId === 'brain' ||
-    !!(agent as any).isBrain || /brain/i.test((agent.model || '') + ' ' + ((agent as any).role || ''));
+  const isBrain = isBrainAgentName(agent.id) || isBrainAgentName((agent as any).agentId ?? '') ||
+    !!(agent as any).isBrain || textMentionsBrainAlias((agent.model || '') + ' ' + ((agent as any).role || ''));
   const hue = hueForAgent(agent.index);
   const palette = agentBubblePalette(hue, agent.status === "stopped" || agent.status === "ready", isBrain);
   const glowCls = isThinking ? (isBrain ? "glow-brain" : "glow-active") : agent.status === "retrying" ? "glow-stalled" : agent.status === "failed" ? "glow-error" : "";

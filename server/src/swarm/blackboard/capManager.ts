@@ -112,7 +112,6 @@ export function checkAndApplyCaps(ctx: CapContext): boolean {
     startedAt: 0,
     now: next.activeElapsedMs,
     committed: counts.committed,
-    totalTodos: counts.total,
     wallClockCapMs: ctx.getActive()?.wallClockCapMs,
   });
   const tokenBaseline = ctx.getTokenBaselineForRun();

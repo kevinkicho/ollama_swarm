@@ -99,3 +99,71 @@ export function saveRecentRun(input: {
 export function shortRepoLabel(repoUrl: string): string {
   return repoUrl.replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "");
 }
+
+export type RecentRunTipField = {
+  label: string;
+  value: string;
+  mono?: boolean;
+  multiline?: boolean;
+};
+
+/** Relative time for recent-run tooltips (deterministic `now` for tests). */
+export function formatRecentRunAgo(startedAt: number, now = Date.now()): string {
+  if (!startedAt || !Number.isFinite(startedAt)) return "—";
+  const dt = now - startedAt;
+  if (dt < 1000) return "just now";
+  if (dt < 60_000) return `${Math.round(dt / 1000)}s ago`;
+  if (dt < 3_600_000) return `${Math.round(dt / 60_000)}m ago`;
+  if (dt < 86_400_000) return `${Math.round(dt / 3_600_000)}h ago`;
+  return new Date(startedAt).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** Label/value rows for the recent-run chip hover tooltip. */
+export function buildRecentRunTipFields(r: RecentRun): RecentRunTipField[] {
+  const fields: RecentRunTipField[] = [
+    { label: "preset", value: r.presetId?.trim() || "—", mono: true },
+  ];
+  if (r.repoUrl?.trim()) {
+    fields.push({ label: "repo", value: shortRepoLabel(r.repoUrl.trim()), mono: true });
+  }
+  if (r.parentPath?.trim()) {
+    fields.push({ label: "workspace", value: r.parentPath.trim(), mono: true });
+  }
+  const directive = r.directive?.trim() || r.directiveSnippet?.trim();
+  if (directive) {
+    fields.push({ label: "directive", value: directive, multiline: true });
+  }
+  fields.push({ label: "started", value: formatRecentRunAgo(r.startedAt), mono: true });
+  if (r.runId?.trim()) {
+    fields.push({ label: "run", value: r.runId.trim(), mono: true });
+  }
+  if (r.wallClockCapMin?.trim()) {
+    fields.push({ label: "cap", value: `${r.wallClockCapMin.trim()} min`, mono: true });
+  }
+  if (r.ambitionTiers?.trim()) {
+    fields.push({ label: "tiers", value: r.ambitionTiers.trim(), mono: true });
+  }
+  return fields;
+}
+
+/** Primary + optional preset labels for a recent-run chip (no separator dot). */
+export function recentRunChipLabel(
+  r: Pick<RecentRun, "repoUrl" | "parentPath" | "presetId">,
+): { primary: string; preset?: string } {
+  let primary = "";
+  if (r.repoUrl?.trim()) {
+    primary = shortRepoLabel(r.repoUrl.trim());
+  }
+  if (!primary && r.parentPath?.trim()) {
+    const path = r.parentPath.trim().replace(/\\/g, "/").replace(/\/$/, "");
+    primary = path.split("/").pop() ?? path;
+  }
+  if (!primary) primary = r.presetId || "run";
+  const preset = r.presetId && primary !== r.presetId ? r.presetId : undefined;
+  return preset ? { primary, preset } : { primary };
+}

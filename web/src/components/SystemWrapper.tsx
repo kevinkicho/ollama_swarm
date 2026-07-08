@@ -173,6 +173,9 @@ export function SystemWrapper({
     };
     try {
       // Full worker offload via getChatContext for perf (heavy slicing/summary)
+      if (cfgForChat?.clonePath) {
+        (window as any).__currentClonePath = cfgForChat.clonePath;
+      }
       const ctx = await getChatContext(activeRunIdForChat, {
         transcript: transcriptForChat,
         phase: phaseForChat,
@@ -203,7 +206,7 @@ export function SystemWrapper({
 
   return (
     <div className="h-full flex flex-col">
-      <header className="px-4 py-2 border-b border-ink-700 flex items-center justify-between bg-ink-900">
+      <header className="relative z-20 px-4 py-2 border-b border-ink-700 flex items-center justify-between gap-3 bg-ink-900">
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -226,62 +229,60 @@ export function SystemWrapper({
             </button>
           )}
         </div>
-        <div className="flex items-center gap-3 text-[10px]">
-          <StatusDot healthy={systemHealthy} />
-          <span className="text-ink-400">
-            {phase === "idle" ? "Ready" : displaySwarmPhase(phase)}
-          </span>
-          {activeRunId && (
-            <span className="text-ink-500 font-mono">
-              · {activeRunId.slice(0, 8)}
+        <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
+          <div className="flex items-center gap-2 text-[10px] flex-nowrap overflow-x-auto min-w-0 max-w-[min(52vw,32rem)]">
+            <StatusDot healthy={systemHealthy} />
+            <span className="text-ink-400 whitespace-nowrap">
+              {phase === "idle" ? "Ready" : displaySwarmPhase(phase)}
             </span>
-          )}
+            {activeRunId && (
+              <span className="text-ink-500 font-mono whitespace-nowrap">
+                · {activeRunId.slice(0, 8)}
+              </span>
+            )}
 
-          <span className="text-ink-700">|</span>
+            <TopbarStat
+              icon="▸"
+              value={`${activeRuns} active`}
+              color={activeRuns > 0 ? "text-blue-400" : "text-ink-500"}
+            />
+            <TopbarStat
+              icon="📊"
+              value={`${totalRuns} total`}
+              color="text-ink-400"
+            />
+            <TopbarStat
+              icon={successRate >= 70 ? "✓" : successRate >= 40 ? "!" : "✗"}
+              value={`${successRate}%`}
+              color={successRate >= 70 ? "text-emerald-400" : successRate >= 40 ? "text-amber-400" : "text-red-400"}
+            />
 
-          <TopbarStat
-            icon="▸"
-            value={`${activeRuns} active`}
-            color={activeRuns > 0 ? "text-blue-400" : "text-ink-500"}
-          />
-          <TopbarStat
-            icon="📊"
-            value={`${totalRuns} total`}
-            color="text-ink-400"
-          />
-          <TopbarStat
-            icon={successRate >= 70 ? "✓" : successRate >= 40 ? "!" : "✗"}
-            value={`${successRate}%`}
-            color={successRate >= 70 ? "text-emerald-400" : successRate >= 40 ? "text-amber-400" : "text-red-400"}
-          />
+            {/* Phase 10: brain always shown. */}
+            <TopbarStat
+              icon="🧠"
+              value={brainHealth?.status ?? "idle"}
+              color="text-violet-400"
+            />
+          </div>
 
-          <span className="text-ink-700">|</span>
-
-          {/* Phase 10: brain always shown. */}
-          <TopbarStat
-            icon="🧠"
-            value={brainHealth?.status ?? "idle"}
-            color="text-violet-400"
-          />
-
-          <span className="text-ink-700">|</span>
-
-          <UsageWidget />
-          <RunHistoryDropdown parentPath={parentPath} forceOpenSignal={historyOpenSignal} />
-          <EventLogPanel />
+          <div className="flex items-center gap-1.5 shrink-0 pl-1 border-l border-ink-700/60">
+            <UsageWidget />
+            <RunHistoryDropdown parentPath={parentPath} forceOpenSignal={historyOpenSignal} />
+            <EventLogPanel />
+          </div>
         </div>
       </header>
 
       {/* True floating pill (fixed) for Brain chat, persists across views */}
       {/* Phase 10: brain always available for active runs. */}
-      {activeRunIdForChat && phaseForChat !== 'idle' && (
+      {activeRunIdForChat && phaseForChat !== "idle" && (
         <button
+          type="button"
           onClick={handleOpenBrainChat}
-          className="fixed bottom-4 right-4 z-40 px-4 py-2 rounded-full bg-violet-700 hover:bg-violet-600 text-white shadow-lg flex items-center gap-2 text-sm font-medium border border-violet-500"
-          title="Talk to Brain about this run (persistent)"
+          className="fixed bottom-4 right-4 z-40 text-[10px] px-2 py-1 rounded border border-ink-600 bg-ink-800 hover:bg-ink-700 text-violet-300 hover:text-violet-200 shadow-md"
+          title="Talk to Brain about this run"
         >
-          <span>🧠</span>
-          <span>Brain</span>
+          Brain
         </button>
       )}
 
@@ -316,31 +317,48 @@ export function SystemWrapper({
         </main>
       </div>
 
-      {/* Brain Chat Modal - prototype for persistent during-run access */}
       {brainChatOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setBrainChatOpen(false)}>
-          <div 
-            className="bg-ink-900 border border-violet-700 rounded-xl max-w-lg w-full max-h-[80vh] overflow-hidden flex flex-col"
-            onClick={e => e.stopPropagation()}
+        <div
+          className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-3"
+          onClick={() => setBrainChatOpen(false)}
+        >
+          <div
+            className="bg-ink-800 border border-violet-700/50 rounded-lg w-full max-w-md max-h-[min(70vh,520px)] flex flex-col shadow-xl shadow-violet-950/20"
+            onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between p-3 border-b border-ink-700">
-              <div className="flex items-center gap-2">
-                <span className="text-violet-400">🧠</span>
-                <span className="font-semibold">Brain Assistant {activeRunIdForChat ? `(run ${activeRunIdForChat.slice(0,8)})` : ''}</span>
+            <div className="flex items-center justify-between px-3 py-2 border-b border-ink-700/60 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-[10px] uppercase tracking-wider text-violet-400 font-semibold">
+                  🧠 Brain
+                </span>
+                {activeRunIdForChat && (
+                  <span className="text-[10px] font-mono text-ink-500 truncate">
+                    {activeRunIdForChat.slice(0, 8)}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
                 <button
                   type="button"
-                  className="ml-1 text-[10px] leading-none text-ink-500 hover:text-violet-400 transition-opacity opacity-50 hover:opacity-100 px-0.5"
-                  title="Context includes run state, recent transcript summary, board info (if available). Ask about current progress, amendments, research insights, etc."
+                  className="text-[10px] px-1.5 py-0.5 rounded border border-ink-600 text-ink-500 hover:text-ink-300"
+                  title="Context: run phase, recent transcript, board todos (if blackboard)"
                   aria-label="Chat context info"
                 >
-                  ⓘ
+                  ?
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBrainChatOpen(false)}
+                  className="text-[10px] px-1.5 py-0.5 rounded border border-ink-600 text-ink-500 hover:text-ink-200"
+                  aria-label="Close"
+                >
+                  Close
                 </button>
               </div>
-              <button onClick={() => setBrainChatOpen(false)} className="text-ink-400 hover:text-white">✕</button>
             </div>
-            <div className="flex-1 overflow-auto p-4">
-              <BrainStartChat 
-                onApplyConfig={() => {}} 
+            <div className="flex-1 min-h-0 px-3 py-2">
+              <BrainStartChat
+                onApplyConfig={() => {}}
                 onStartNow={() => {}}
                 runContext={brainContext}
               />
@@ -362,7 +380,7 @@ function TopbarStat({
   color?: string;
 }) {
   return (
-    <span className={`flex items-center gap-1 ${color}`}>
+    <span className={`flex items-center gap-1 whitespace-nowrap shrink-0 ${color}`}>
       <span className="text-xs">{icon}</span>
       <span>{value}</span>
     </span>

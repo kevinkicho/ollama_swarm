@@ -5,6 +5,7 @@ import { promises as fs, readFileSync } from "node:fs";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { TopologySchema, deriveLegacyFields, synthesizeTopology } from "@ollama-swarm/shared/topology";
+import { BRAIN_ALIAS_USER_NOTE, resolveBrainAgentId } from "@ollama-swarm/shared/brainAlias";
 import type { Todo } from "../swarm/blackboard/types.js";
 import { resolveModels, type ModelDefaults } from "@ollama-swarm/shared/modelConfig";
 import { config } from "../config.js";
@@ -221,7 +222,7 @@ export function swarmRouter(orch: Orchestrator): Router {
       intent === "suggest" || intent === "ask" ? intent : "steer";
     const ok = orch.injectUserForRun(runId, text, {
       intent: normalizedIntent,
-      ...(targetAgent ? { targetAgent } : {}),
+      ...(targetAgent ? { targetAgent: resolveBrainAgentId(targetAgent) } : {}),
     });
     if (!ok) {
       res.status(404).json({ error: "runId not active" });
@@ -800,7 +801,9 @@ export function swarmRouter(orch: Orchestrator): Router {
     }
     const ok = orch.injectUserForRun(resolved.runId, parsed.data.text, {
       intent: parsed.data.intent ?? "steer",
-      ...(parsed.data.targetAgent ? { targetAgent: parsed.data.targetAgent } : {}),
+      ...(parsed.data.targetAgent
+        ? { targetAgent: resolveBrainAgentId(parsed.data.targetAgent) }
+        : {}),
     });
     if (!ok) {
       res.status(404).json({ error: "runId not active" });
@@ -1455,16 +1458,26 @@ function registerBrainRoutes(r: Router, orch: Orchestrator) {
 
   // Brain chat: conversational interface to configure and start swarms.
   // The Brain (librarian/master-admin) helps via natural language.
-  // Supports ?structured=true or body {structured:true} for machine-friendly output
-  // (includes parsed config + recommendation object).
+  // Structured RECOMMENDATION + CONFIG blocks are inferred from the latest user
+  // message (setup vs during-run). ?structured=true still forces it for API callers.
   r.post("/brain/chat", async (req: Request, res: Response) => {
     try {
       const body = req.body || {};
       const { messages = [], runContext, clonePath, structured } = body;
-      const wantsStructured = structured === true || req.query.structured === 'true' || req.query.explain === 'options';
       if (!Array.isArray(messages) || messages.length === 0) {
         return res.status(400).json({ error: "messages array required" });
       }
+
+      const lastUserMsg =
+        [...messages].reverse().find((m: { role?: string }) => m.role === "user")?.content ??
+        messages[messages.length - 1]?.content ??
+        "";
+      const { inferStructuredBrainMode } = await import("../swarm/brainChatMode.js");
+      const wantsStructured =
+        structured === true ||
+        req.query.structured === "true" ||
+        req.query.explain === "options" ||
+        inferStructuredBrainMode(String(lastUserMsg ?? ""), { duringRun: !!runContext });
 
       // Ground recommendations using the real preset recommender (outcome history + seeds + heuristics).
       // Proactively quote real numbers from /outcome/stats when possible.
@@ -1504,6 +1517,7 @@ function registerBrainRoutes(r: Router, orch: Orchestrator) {
       const presetGuide = buildPresetGuideString();
 
       let systemPrompt = `You are Brain, the master-admin and librarian for ollama_swarm.
+${BRAIN_ALIAS_USER_NOTE}
 
 Your job is to help the user configure and START a swarm run using natural language. The user may be using the web UI **or** talking to you from a terminal / agent loop that can execute commands.
 
@@ -1554,20 +1568,39 @@ CRITICAL BEHAVIOR:
 - Be concise and actionable.
 - Always ground your preset recommendation in the user's described use-case + the guide above. Provide supporting analysis.`;
 
-      if (runContext && typeof runContext === 'object') {
-        systemPrompt += `
+      let modelStr = "deepseek-v4-flash:cloud";
+      let brainTools: typeof import("../swarm/brainDuringRun.js").BRAIN_EXPLORE_TOOLS | undefined;
+      let brainDispatcher: import("../swarm/brainDuringRun.js").BrainExplorerDispatcher | undefined;
+      let brainRunId: string | undefined;
+
+      if (runContext && typeof runContext === "object") {
+        const {
+          enrichBrainRunContext,
+          buildDuringRunSystemPrompt,
+          BRAIN_EXPLORE_TOOLS,
+          BrainExplorerDispatcher,
+        } = await import("../swarm/brainDuringRun.js");
+        const enriched = enrichBrainRunContext(orch, runContext);
+        if (enriched) {
+          systemPrompt = buildDuringRunSystemPrompt(enriched.markdown, enriched.toolsEnabled);
+          modelStr = enriched.modelString;
+          brainRunId = enriched.runId;
+          if (enriched.toolsEnabled && enriched.clonePath) {
+            brainTools = BRAIN_EXPLORE_TOOLS;
+            brainDispatcher = new BrainExplorerDispatcher(enriched.clonePath);
+          }
+        } else {
+          systemPrompt += `
 
 You are now in DURING-RUN assistance mode for an active swarm.
 
 Current run context (use this to give real-time help, suggestions, analysis, or draft amendments):
 ${JSON.stringify(runContext, null, 2)}
 
-Focus on helping the user understand the current state, suggest mid-run adjustments (amends, say messages), interpret progress, or recommend actions. Do not suggest new run starts unless explicitly asked. Be helpful and concise.`;
+Focus on helping the user understand the current state. Format replies in Markdown.`;
+        }
       }
 
-
-
-      const modelStr = "deepseek-v4-flash:cloud";
       const { provider, modelId } = pickProvider(modelStr);
 
       // For structured mode, instruct LLM to output parseable sections
@@ -1590,6 +1623,15 @@ Use the tables and recommender data.`;
         model: modelId,
         messages: chatMessages,
         signal: AbortSignal.timeout(90_000),
+        ...(brainTools && brainDispatcher
+          ? {
+              tools: [...brainTools],
+              dispatcher: brainDispatcher as unknown as import("../tools/ToolDispatcher.js").ToolDispatcher,
+              maxToolTurns: 8,
+              runId: brainRunId,
+              brainInitiated: true,
+            }
+          : {}),
       });
 
       const text = result.text;

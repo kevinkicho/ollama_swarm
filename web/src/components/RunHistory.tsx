@@ -1,4 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useTopbarDropdown } from "../lib/topbarDropdown";
 import type { PerAgentStat, RunSummary, RunSummaryDigest } from "../types";
 import type { AgentRole, Topology } from "../../../shared/src/topology";
 import { copyText } from "../utils/copyText";
@@ -33,6 +35,7 @@ const CACHE_RUNS_LIST_KEY = "ollama-swarm:runs-list";
 const CACHE_RUN_SUMMARY_PREFIX = "ollama-swarm:run-summary:";
 const CACHE_RUNS_LIST_MAX = 100;
 const CACHE_SUMMARY_MAX_BYTES = 1_000_000; // 1MB per summary
+const RUN_SUMMARY_PAGE_SIZE = 10;
 
 function tryReadCache<T>(key: string): T | null {
   try {
@@ -82,6 +85,10 @@ export function RunHistoryDropdown({ parentPath, forceOpenSignal }: { parentPath
   // New: optional merge of client-side "Recent runs" (localStorage) into the server list
   const [includeLocalRecent, setIncludeLocalRecent] = useState(false);
   const [localRecent, setLocalRecent] = useState<RecentRun[]>([]);
+  const [page, setPage] = useState(0);
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const closeDropdown = useCallback(() => setOpen(false), []);
+  const { panelRef, pos: panelPos, panelStyle } = useTopbarDropdown(open, triggerRef, 960, closeDropdown);
 
   // Refetch on open so the list reflects any sibling runs that
   // appeared since the previous open. Cheap — directory listing.
@@ -190,17 +197,26 @@ export function RunHistoryDropdown({ parentPath, forceOpenSignal }: { parentPath
     return merged.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
   }, [runs, includeLocalRecent, localRecent]);
 
-  return (
-    <span className="relative">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        title="Browse past runs — curated summary data (commits, todos, duration)"
-        className="text-[11px] uppercase tracking-wide px-2 py-1 rounded bg-emerald-900/40 hover:bg-emerald-800/50 text-emerald-300 border border-emerald-700/50 hover:border-emerald-600 transition"
+  const totalPages = Math.max(1, Math.ceil(displayedRuns.length / RUN_SUMMARY_PAGE_SIZE));
+  const safePage = Math.min(page, totalPages - 1);
+  const pageStart = safePage * RUN_SUMMARY_PAGE_SIZE;
+  const pageItems = displayedRuns.slice(pageStart, pageStart + RUN_SUMMARY_PAGE_SIZE);
+
+  useEffect(() => {
+    setPage(0);
+  }, [displayedRuns.length, includeLocalRecent, open]);
+
+  useEffect(() => {
+    if (page > totalPages - 1) setPage(Math.max(0, totalPages - 1));
+  }, [page, totalPages]);
+
+  const dropdownPanel =
+    open && panelPos ? (
+      <div
+        ref={panelRef}
+        className="fixed z-50 rounded border border-ink-600 bg-ink-900 shadow-xl shadow-black/50 overflow-hidden"
+        style={panelStyle}
       >
-        ▸ Runs{displayedRuns.length > 0 ? ` (${displayedRuns.length})` : ""}
-      </button>
-      {open ? (
-        <div className="absolute z-20 right-0 mt-1 w-[min(960px,calc(100vw-2rem))] rounded border border-ink-600 bg-ink-900 shadow-xl overflow-hidden">
           <div className="px-3 py-2 border-b border-ink-700 flex items-center justify-between text-[11px] text-ink-400">
             <span>
               <span className="text-emerald-400 font-semibold">Run Summaries</span>
@@ -224,13 +240,40 @@ export function RunHistoryDropdown({ parentPath, forceOpenSignal }: { parentPath
                 {includeLocalRecent ? '✓ recent' : '+ recent'}
               </button>
             </span>
-            <button
-              onClick={() => setOpen(false)}
-              className="text-ink-500 hover:text-ink-200"
-              aria-label="Close"
-            >
-              ✕
-            </button>
+            <span className="flex items-center gap-2 shrink-0">
+              {displayedRuns.length > RUN_SUMMARY_PAGE_SIZE ? (
+                <span className="flex items-center gap-1 text-[10px] text-ink-500">
+                  <button
+                    type="button"
+                    disabled={safePage === 0}
+                    onClick={() => setPage((p) => Math.max(0, p - 1))}
+                    className="px-1 py-0 rounded border border-ink-700 bg-ink-800 text-ink-400 hover:text-ink-200 disabled:opacity-40 disabled:hover:text-ink-400"
+                    aria-label="Previous page"
+                  >
+                    ←
+                  </button>
+                  <span className="tabular-nums whitespace-nowrap">
+                    {safePage + 1}/{totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={safePage >= totalPages - 1}
+                    onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                    className="px-1 py-0 rounded border border-ink-700 bg-ink-800 text-ink-400 hover:text-ink-200 disabled:opacity-40 disabled:hover:text-ink-400"
+                    aria-label="Next page"
+                  >
+                    →
+                  </button>
+                </span>
+              ) : null}
+              <button
+                onClick={() => setOpen(false)}
+                className="text-ink-500 hover:text-ink-200"
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </span>
           </div>
           <div className="max-h-[70vh] overflow-y-auto">
             {loading ? (
@@ -272,7 +315,7 @@ export function RunHistoryDropdown({ parentPath, forceOpenSignal }: { parentPath
                   </tr>
                 </thead>
                 <tbody>
-                  {displayedRuns.map((r) => (
+                  {pageItems.map((r) => (
                     <tr
                       key={`${r.clonePath}-${r.runId ?? r.startedAt}`}
                       className={
@@ -349,11 +392,47 @@ export function RunHistoryDropdown({ parentPath, forceOpenSignal }: { parentPath
                   ))}
                 </tbody>
               </table>
+              {displayedRuns.length > RUN_SUMMARY_PAGE_SIZE ? (
+                <div className="flex items-center justify-between px-3 py-2 border-t border-ink-800/80 text-[10px] text-ink-500">
+                  <button
+                    type="button"
+                    disabled={safePage === 0}
+                    onClick={() => setPage((p) => Math.max(0, p - 1))}
+                    className="px-1.5 py-0.5 rounded border border-ink-700 bg-ink-800 text-ink-400 hover:text-ink-200 disabled:opacity-40"
+                  >
+                    ← prev
+                  </button>
+                  <span className="tabular-nums">
+                    {pageStart + 1}–{Math.min(pageStart + RUN_SUMMARY_PAGE_SIZE, displayedRuns.length)} of{" "}
+                    {displayedRuns.length}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={safePage >= totalPages - 1}
+                    onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                    className="px-1.5 py-0.5 rounded border border-ink-700 bg-ink-800 text-ink-400 hover:text-ink-200 disabled:opacity-40"
+                  >
+                    next →
+                  </button>
+                </div>
+              ) : null}
               </>
             ) : null}
           </div>
         </div>
-      ) : null}
+    ) : null;
+
+  return (
+    <span ref={triggerRef} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="Browse past runs — curated summary data (commits, todos, duration)"
+        className="text-[11px] uppercase tracking-wide px-2 py-1 rounded bg-emerald-900/40 hover:bg-emerald-800/50 text-emerald-300 border border-emerald-700/50 hover:border-emerald-600 transition"
+      >
+        ▸ Runs{displayedRuns.length > 0 ? ` (${displayedRuns.length})` : ""}
+      </button>
+      {dropdownPanel ? createPortal(dropdownPanel, document.body) : null}
       {selected ? (
         <RunDigestModal digest={selected} onClose={() => setSelected(null)} />
       ) : null}

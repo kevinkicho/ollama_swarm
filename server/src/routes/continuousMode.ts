@@ -14,7 +14,7 @@ export interface ContinuousModeArgs {
 
 export function validateContinuousMode(args: ContinuousModeArgs): string | null {
   if (args.continuous !== true) return null;
-  // Blackboard has its own baked-in commits/todos caps + a default 8h
+  // Blackboard has its own baked-in commits cap + a default 8h
   // wall-clock cap, so a continuous-mode blackboard run is bounded
   // even without a per-run override. Discussion presets (everything
   // else) have only the per-round tokenBudget check from #124, so

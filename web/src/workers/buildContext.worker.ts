@@ -32,6 +32,10 @@ self.onmessage = (e: MessageEvent) => {
     preset: cfg.preset,
     userDirective: cfg.userDirective,
     phase: storeState.phase,
+    clonePath: cfg.clonePath || cfg.localPath,
+    plannerModel: cfg.plannerModel,
+    workerModel: cfg.workerModel,
+    auditorModel: cfg.auditorModel,
     recentTranscript: recent,
     boardCounts: boardState?.counts,
     recentTodos: (boardState?.todos || []).slice(0, 3).map((t: any) => ({

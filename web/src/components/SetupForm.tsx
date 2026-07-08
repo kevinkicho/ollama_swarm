@@ -8,8 +8,12 @@ import { TopologyGrid } from "./setup/TopologyGrid";
 import { BlackboardWallClockCap, BlackboardAmbitionTiers } from "./setup/BlackboardSettings";
 import { Field } from "./setup/SharedFields";
 import { InfoTip } from "./setup/InfoTip";
+import { FormattedTipContent, TipParagraph, TipSection } from "./setup/FormattedTipContent";
 import { estimateWallClockSeconds, formatDurationSeconds } from "./setup/WallClockEstimate";
 import { useSwarm } from "../state/store";
+import { recentRunChipLabel } from "./setup/RecentRuns";
+import { RecentRunTipContent } from "./setup/RecentRunTipContent";
+import { PresetTipContent } from "./setup/PresetTooltip";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -122,29 +126,40 @@ export function SetupForm() {
         {form.recentRuns.length > 0 && (
           <Section title="Recent runs">
             <div className="flex flex-wrap gap-2">
-              {form.recentRuns.map((r: any) => (
-                <button
-                  key={r.id}
-                  type="button"
-                  onClick={() => form.refillFromRecent(r)}
-                  className="text-left bg-ink-900 hover:bg-ink-700 border border-ink-700 rounded p-2 max-w-[280px] transition-colors text-xs"
-                  title={`${r.presetId || 'preset'} • ${r.parentPath}${r.runId ? ` • run ${r.runId}` : ''}`}
-                >
-                  {r.repoUrl.split("/").pop()} <span className="text-ink-500">· {r.presetId}</span>
-                  {r.runId && (
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigate(`/runs/${encodeURIComponent(r.runId)}`);
-                      }}
-                      className="ml-1 text-[9px] px-1 bg-ink-700 hover:bg-ink-600 rounded text-ink-400 cursor-pointer"
-                      title={`View run ${r.runId}`}
-                    >
-                      view
-                    </span>
-                  )}
-                </button>
-              ))}
+              {form.recentRuns.map((r: any) => {
+                const { primary, preset } = recentRunChipLabel(r);
+                return (
+                  <InfoTip
+                    key={r.id}
+                    maxWidth={400}
+                    wrapperClassName="inline-block max-w-[280px]"
+                    trigger={
+                      <button
+                        type="button"
+                        onClick={() => form.refillFromRecent(r)}
+                        className="w-full text-left bg-ink-900 hover:bg-ink-700 border border-ink-700 rounded p-2 transition-colors text-xs"
+                      >
+                        {primary}
+                        {preset ? <span className="text-ink-500 ml-1">{preset}</span> : null}
+                        {r.runId && (
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/runs/${encodeURIComponent(r.runId)}`);
+                            }}
+                            className="ml-1 text-[9px] px-1 bg-ink-700 hover:bg-ink-600 rounded text-ink-400 cursor-pointer"
+                            title={`View run ${r.runId}`}
+                          >
+                            view
+                          </span>
+                        )}
+                      </button>
+                    }
+                  >
+                    <RecentRunTipContent run={r} />
+                  </InfoTip>
+                );
+              })}
             </div>
           </Section>
         )}
@@ -194,23 +209,38 @@ export function SetupForm() {
               const isActive = p.status === "active";
               const isSelected = form.preset.id === p.id;
               return (
-                <button
+                <InfoTip
                   key={p.id}
-                  type="button"
-                  disabled={!isActive}
-                  onClick={() => form.setPresetId(p.id)}
-                  className={`w-full text-left px-3 py-2 rounded border transition ${isSelected ? "border-emerald-500 bg-emerald-900/30" : "border-ink-700 bg-ink-900 hover:bg-ink-800"} ${!isActive ? "opacity-50 cursor-not-allowed" : ""}`}
-                  title={p.summary}
+                  maxWidth={420}
+                  wrapperClassName="block w-full"
+                  trigger={
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isActive) form.setPresetId(p.id);
+                      }}
+                      className={`w-full text-left px-3 py-2 rounded border transition ${
+                        isSelected ? "border-emerald-500 bg-emerald-900/30" : "border-ink-700 bg-ink-900 hover:bg-ink-800"
+                      } ${!isActive ? "opacity-50 cursor-not-allowed" : ""}`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-sm">{p.label}</span>
+                        <span className="text-[10px] text-ink-500">
+                          {p.min}–{p.max} agents (rec {p.recommended})
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-ink-400 mt-0.5 line-clamp-2">{p.summary}</div>
+                      {p.useCases && p.useCases.length > 0 && (
+                        <div className="text-[9px] text-violet-400 mt-0.5">use: {p.useCases.join(", ")}</div>
+                      )}
+                    </button>
+                  }
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-sm">{p.label}</span>
-                    <span className="text-[10px] text-ink-500">{p.min}–{p.max} agents (rec {p.recommended})</span>
-                  </div>
-                  <div className="text-[10px] text-ink-400 mt-0.5 line-clamp-2">{p.summary}</div>
-                  {p.useCases && p.useCases.length > 0 && (
-                    <div className="text-[9px] text-violet-400 mt-0.5">use: {p.useCases.join(", ")}</div>
-                  )}
-                </button>
+                  <PresetTipContent
+                    preset={p}
+                    footer={isActive ? "Click to select this swarm mode" : "Coming soon — not selectable yet"}
+                  />
+                </InfoTip>
               );
             })}
             {filteredPresets.length === 0 && (
@@ -226,7 +256,13 @@ export function SetupForm() {
         <Section title="User Directive">
           <Field
             label="Directive / Goal"
-            labelAccessory={<InfoTip>{form.preset.directive === "honored" ? "This preset will use the directive to shape contracts, turns, synthesis, etc." : "This preset may ignore or use the directive in special ways (see preset description)."}</InfoTip>}
+            labelAccessory={
+              <InfoTip title="Directive / Goal">
+                {form.preset.directive === "honored"
+                  ? "This preset will use the directive to shape contracts, turns, synthesis, etc."
+                  : "This preset may ignore or use the directive in special ways (see preset description)."}
+              </InfoTip>
+            }
           >
             <textarea
               value={form.userDirective}
@@ -245,7 +281,14 @@ export function SetupForm() {
 
         <Section title="Repository">
           <div className="grid lg:grid-cols-2 gap-4">
-            <Field label="GitHub URL (optional)" labelAccessory={<InfoTip>Leave empty to work directly on the Parent folder below.</InfoTip>}>
+            <Field
+              label="GitHub URL (optional)"
+              labelAccessory={
+                <InfoTip title="GitHub URL">
+                  Leave empty to work directly on the Parent folder below.
+                </InfoTip>
+              }
+            >
               <input
                 value={form.repoUrl}
                 onChange={(e) => form.setRepoUrl(e.target.value)}
@@ -253,7 +296,14 @@ export function SetupForm() {
                 placeholder="https://github.com/owner/repo"
               />
             </Field>
-            <Field label="Project folder (workspace)" labelAccessory={<InfoTip>When GitHub URL is empty, this folder IS the repo.</InfoTip>}>
+            <Field
+              label="Project folder (workspace)"
+              labelAccessory={
+                <InfoTip title="Project folder">
+                  When GitHub URL is empty, this folder IS the repo.
+                </InfoTip>
+              }
+            >
               <input
                 value={form.parentPath}
                 placeholder="C:\\Users\\yourname\\workspace\\my-project"
@@ -277,44 +327,119 @@ export function SetupForm() {
             provider={form.provider}
           />
 
-          {form.preset.id === "blackboard" && (
-            <label className="mt-2 flex items-center gap-2 text-xs text-ink-300 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={form.webTools}
-                onChange={(e) => form.setWebTools(e.target.checked)}
-                className="rounded border-ink-600 bg-ink-900 text-emerald-500 focus:ring-emerald-500/40"
-              />
-              <span>
-                Enable web research tools
-                <span className="text-ink-500 ml-1">(web_search + web_fetch for planner, workers, and auditor)</span>
+          <label className="mt-2 flex items-center gap-2 text-xs text-ink-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={form.webTools}
+              onChange={(e) => form.setWebTools(e.target.checked)}
+              className="rounded border-ink-600 bg-ink-900 text-emerald-500 focus:ring-emerald-500/40"
+            />
+            <span>
+              Enable web research tools
+              <span className="text-ink-500 ml-1">
+                (built-in web_search + web_fetch for agents — all presets, not only blackboard)
               </span>
-            </label>
-          )}
+            </span>
+          </label>
 
-          {/* Explicit mcpServers surface for research */}
-          {form.preset.id === "blackboard" && (
-            <div className="mt-2 text-xs">
-              <div className="flex items-center gap-1">
-                <label className="text-ink-400">MCP Servers (for additional tools like advanced fetch/search):</label>
-                <InfoTip>Spawn/connect MCP servers for more tools (e.g. advanced fetch, github, custom gov data). Format: name=command. Free keyless search examples: search=npx -y open-websearch@latest (multi-engine: DDG/Bing/etc, no key). Other free options: pskill9/web-search (build locally) or heventure-search-mcp (Python: uvx heventure-search-mcp). Tools available when "enable web research tools" or research profile is active. Note: native DuckDuckGo web_search is already included when the checkbox is on — no MCP entry needed.</InfoTip>
-              </div>
-              <input value={form.mcpServers} onChange={e => form.setMcpServers(e.target.value)} className="input text-xs" placeholder="search=npx -y open-websearch@latest fetch=npx -y @modelcontextprotocol/server-fetch" />
-              <button
-                type="button"
-                onClick={() => {
-                  const free = "search=npx -y open-websearch@latest";
-                  const cur = (form.mcpServers || "").trim();
-                  const next = !cur ? free : cur.includes("open-websearch") ? cur : cur + " " + free;
-                  form.setMcpServers(next);
-                  form.setWebTools(true);
-                }}
-                className="mt-1 text-[10px] px-2 py-0.5 rounded bg-emerald-900/30 hover:bg-emerald-900/50 text-emerald-300 border border-emerald-700/50 transition"
-              >
-                + recommended free keyless search (open-websearch)
-              </button>
+          <div className="mt-2 text-xs">
+            <div className="flex items-center gap-1">
+              <label className="text-ink-400">MCP Servers (optional extra tools like advanced fetch/search):</label>
+              <InfoTip maxWidth={380}>
+                <FormattedTipContent title="MCP servers">
+                  <TipParagraph>
+                    Optional MCP subprocesses for extra tools (GitHub, gov APIs, advanced search).
+                    Active when <span className="text-ink-200">Enable web research tools</span> is checked.
+                    Leave the field empty if built-in tools are enough.
+                  </TipParagraph>
+                  <TipSection label="format">
+                    <code className="block font-mono text-[10px] bg-ink-800/90 border border-ink-700/60 rounded px-2 py-1 text-ink-200">
+                      name=command with args
+                    </code>
+                    <p className="text-[10px] text-ink-500 opacity-50 mt-1">Separate multiple servers with spaces.</p>
+                  </TipSection>
+                  <TipSection label="built-in (no mcp)">
+                    <ul className="space-y-0.5">
+                      <li>
+                        <code className="font-mono text-ink-300">web_search</code> — DuckDuckGo HTML
+                      </li>
+                      <li>
+                        <code className="font-mono text-ink-300">web_fetch</code> — fetch page text from a URL
+                      </li>
+                    </ul>
+                  </TipSection>
+                  <TipSection label="free keyless examples">
+                    <code className="block font-mono text-[10px] bg-ink-800/90 border border-ink-700/60 rounded px-2 py-1 text-emerald-200/90 break-all leading-relaxed">
+                      search=npx -y open-websearch@latest
+                    </code>
+                    <p className="text-[10px] text-ink-500 opacity-50 mt-1">
+                      Multi-engine (DDG/Bing). Use the + recommended chip.
+                    </p>
+                    <code className="block font-mono text-[10px] bg-ink-800/90 border border-ink-700/60 rounded px-2 py-1 text-ink-300 break-all leading-relaxed mt-2">
+                      fetch=npx -y @modelcontextprotocol/server-fetch
+                    </code>
+                    <p className="text-[10px] text-ink-500 opacity-50 mt-1">
+                      Usually redundant — built-in web_fetch covers this.
+                    </p>
+                  </TipSection>
+                </FormattedTipContent>
+              </InfoTip>
             </div>
-          )}
+            <input
+              value={form.mcpServers}
+              onChange={(e) => form.setMcpServers(e.target.value)}
+              className="input text-xs"
+              placeholder="search=npx -y open-websearch@latest"
+              title="Optional MCP entries (name=command). Built-in web_fetch needs no MCP when web tools are on. Add fetch=… only if you want the MCP fetch server instead."
+            />
+            <p className="mt-0.5 text-[10px] text-ink-600 leading-snug">
+              Leave empty to use built-in web_search + web_fetch only. The + recommended chip fills the search line above — not fetch (already built-in).
+            </p>
+            <InfoTip
+              maxWidth={380}
+              wrapperClassName="inline-block mt-1"
+              trigger={
+                <button
+                  type="button"
+                  onClick={() => {
+                    const free = "search=npx -y open-websearch@latest";
+                    const cur = (form.mcpServers || "").trim();
+                    const next = !cur ? free : cur.includes("open-websearch") ? cur : cur + " " + free;
+                    form.setMcpServers(next);
+                    form.setWebTools(true);
+                  }}
+                  className="text-[10px] px-2 py-0.5 rounded bg-emerald-900/30 hover:bg-emerald-900/50 text-emerald-300 border border-emerald-700/50 transition"
+                >
+                  + recommended free keyless search (open-websearch)
+                </button>
+              }
+            >
+              <FormattedTipContent
+                title="Recommended search MCP"
+                footer="Click chip to fill MCP field and enable web tools"
+              >
+                <TipParagraph>
+                  Optional add-on for multi-engine search (DuckDuckGo + Bing).
+                </TipParagraph>
+                <TipSection label="without clicking">
+                  MCP field stays empty. Built-in{" "}
+                  <code className="font-mono text-ink-300">web_search</code> and{" "}
+                  <code className="font-mono text-ink-300">web_fetch</code> still work when{" "}
+                  <span className="text-ink-200">Enable web research tools</span> is on (default).
+                </TipSection>
+                <TipSection label="with clicking">
+                  Fills the MCP field and turns web tools on — adds an extra MCP subprocess on top of built-in tools.
+                  <code className="block font-mono text-[10px] bg-ink-800/90 border border-ink-700/60 rounded px-2 py-1 text-emerald-200/90 break-all leading-relaxed mt-1.5">
+                    search=npx -y open-websearch@latest
+                  </code>
+                </TipSection>
+                <TipParagraph>
+                  Requires <code className="font-mono text-ink-400">npx</code> on the machine running the swarm server.
+                  Not required for basic web research.
+                </TipParagraph>
+              </FormattedTipContent>
+            </InfoTip>
+          </div>
 
           {/* Full blackboard advanced panels (cap + ambition tiers with warnings) now in Topology */}
           {form.preset.id === "blackboard" && (

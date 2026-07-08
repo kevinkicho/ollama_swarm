@@ -7,6 +7,8 @@
 // Wired by each runner's injectUser. The text is intentionally calm
 // + factual so it reads as feedback, not noise.
 
+import { resolveBrainAgentId } from "@ollama-swarm/shared/brainAlias";
+
 export type ChatIntent = "suggest" | "steer" | "ask";
 
 /** Minimal shape of a transcript user-entry — just what's needed for
@@ -35,7 +37,7 @@ export interface UserEntryView {
 export function userEntryVisibleTo(entry: UserEntryView, currentAgentId: string): boolean {
   if (entry.role !== "user") return true;
   if (!entry.targetAgent) return true;
-  return entry.targetAgent === currentAgentId;
+  return resolveBrainAgentId(entry.targetAgent) === resolveBrainAgentId(currentAgentId);
 }
 
 /** Build a one-line system receipt for a user chat injection.

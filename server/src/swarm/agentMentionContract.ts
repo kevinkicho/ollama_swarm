@@ -1,3 +1,5 @@
+import { resolveBrainAgentId } from "@ollama-swarm/shared/brainAlias";
+
 // Q3 (2026-05-04): inter-agent @-mention contracts.
 //
 // Agents can already write `@planner` / `@auditor` / `@agent-2` in
@@ -164,13 +166,14 @@ function resolveTarget(
   to: string,
   resolveRole: ((role: string) => number | null) | undefined,
 ): number | null {
+  const toNorm = resolveBrainAgentId(to);
   // Explicit agent-N form
-  const idxMatch = /^agent-(\d+)$/i.exec(to.trim());
+  const idxMatch = /^agent-(\d+)$/i.exec(toNorm);
   if (idxMatch) {
     const n = Number.parseInt(idxMatch[1], 10);
     return Number.isFinite(n) ? n : null;
   }
   // Role label
-  if (resolveRole) return resolveRole(to.trim().toLowerCase());
+  if (resolveRole) return resolveRole(toNorm.toLowerCase());
   return null;
 }

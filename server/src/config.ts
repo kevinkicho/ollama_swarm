@@ -157,7 +157,7 @@ const Schema = z.object({
       const n = Number.parseInt(v, 10);
       return Number.isInteger(n) && n >= 1 && n <= 16 ? n : 4;
     }),
-  // Runtime cap overrides (wall-clock in minutes, commits, todos). Per-run cfg wins.
+  // Runtime cap overrides (wall-clock in minutes, commits). Per-run cfg wins for wall-clock.
   SWARM_WALL_CLOCK_CAP_MIN: z
     .string()
     .default("480")
@@ -176,13 +176,6 @@ const Schema = z.object({
       // ceiling is just "obvious accident detection" — runs landing
       // 10K commits are testing infrastructure, not blackboard runs.
       return Number.isInteger(n) && n >= 1 && n <= 10_000 ? n : 200;
-    }),
-  SWARM_TODOS_CAP: z
-    .string()
-    .default("300")
-    .transform((v) => {
-      const n = Number.parseInt(v, 10);
-      return Number.isInteger(n) && n >= 1 && n <= 10_000 ? n : 300;
     }),
   // Drain on first stop (finish turn); second within 5s kills. Default: immediate kill.
   SWARM_DRAIN_ON_STOP: z

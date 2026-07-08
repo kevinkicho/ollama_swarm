@@ -163,6 +163,7 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
     excludeRunnerArtifacts: (destPath: string) => r.opts.repos.excludeRunnerArtifacts(destPath),
     buildSeed: (clonePath: string, cfg: RunConfig) => r.buildSeed(clonePath, cfg),
     spawnAgentNoOpencode: (opts: SpawnOpts) => r.opts.manager.spawnAgentNoOpencode(opts),
+    getManager: () => r.opts.manager,
     markPlannerStatus: (planner: Agent, status: "thinking" | "ready") => r.markPlannerStatus(planner, status),
     v2ObserverApply: (ev: SwarmEvent) => r.v2Observer.apply(ev),
     v2ObserverReset: () => r.v2Observer.reset(),

@@ -211,6 +211,60 @@ describe("deriveRunState — per-run snapshot", () => {
     assert.equal(state.finishedAt, 100);
   });
 
+  it("infers runId from stamped events when run_started is missing", () => {
+    const records = parseEventLog(
+      [
+        JSON.stringify({ ts: 1, event: { type: "_session_started" } }),
+        JSON.stringify({
+          ts: 2,
+          event: { type: "agent_streaming", runId: "abc-123", agentId: "a0", agentIndex: 0, text: "hi" },
+        }),
+        JSON.stringify({ ts: 3, event: { type: "transcript_append", runId: "abc-123" } }),
+      ].join("\n"),
+    ).records;
+    const slice = splitIntoRuns(records)[0];
+    const state = deriveRunState(slice);
+    assert.equal(state.runId, "abc-123");
+    assert.equal(state.runIdInferred, true);
+    assert.equal(state.finalPhase, "active");
+  });
+
+  it("aggregates telemetry fields for the debug panel", () => {
+    const records = parseEventLog(
+      [
+        JSON.stringify({
+          ts: 1,
+          event: { type: "run_started", runId: "r1", preset: "blackboard", agentCount: 4 },
+        }),
+        JSON.stringify({ ts: 2, event: { type: "swarm_state", phase: "planning", round: 0 } }),
+        JSON.stringify({ ts: 3, event: { type: "swarm_state", phase: "executing", round: 1 } }),
+        JSON.stringify({ ts: 4, event: { type: "model_shift", agentId: "a0", fromModel: "m1", toModel: "m2", reason: "timeout" } }),
+        JSON.stringify({ ts: 5, event: { type: "todo_failed", todoId: "t1", reason: "x", replanCount: 1 } }),
+        JSON.stringify({ ts: 6, event: { type: "directive_amended", runId: "r1", ts: 6, text: "focus tests" } }),
+        JSON.stringify({ ts: 7, event: { type: "conformance_sample", runId: "r1", ts: 7, score: 0.8, smoothedScore: 0.75 } }),
+        JSON.stringify({ ts: 8, event: { type: "cold_start", agentId: "a0", elapsedMs: 4200, success: true } }),
+        JSON.stringify({
+          ts: 9,
+          event: { type: "agent_streaming", agentId: "a0", agentIndex: 0, text: "x".repeat(2500) },
+        }),
+        JSON.stringify({ ts: 10, event: { type: "agent_streaming_end", agentId: "a0" } }),
+      ].join("\n"),
+    ).records;
+    const state = deriveRunState(splitIntoRuns(records)[0]);
+    assert.equal(state.modelShiftCount, 1);
+    assert.equal(state.todoFailed, 1);
+    assert.equal(state.amendmentCount, 1);
+    assert.equal(state.conformanceSampleCount, 1);
+    assert.equal(state.lastConformanceScore, 0.8);
+    assert.equal(state.coldStartCount, 1);
+    assert.equal(state.maxColdStartMs, 4200);
+    assert.equal(state.phaseTimeline.length, 2);
+    assert.ok(state.eventTypeCounts["model_shift"] === 1);
+    assert.ok(state.anomalyFlags.includes("activity_gap"));
+    assert.ok(state.anomalyFlags.includes("model_failover"));
+    assert.ok(state.anomalyFlags.includes("todo_failures"));
+  });
+
   it("future event types are silently ignored (forward-compatible)", () => {
     const records = parseEventLog(
       [

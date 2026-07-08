@@ -1,10 +1,4 @@
-// V2 Step 6b: read-only endpoint that exposes the event log via
-// EventLogReaderV2. Lets the UI render a per-run history derived
-// from logs/current.jsonl + rotated event log files.
-//
-// Read-only: the writer is ws/eventLogger.ts. This route just reads
-// and parses. No state mutation, no auth — same trust boundary as
-// the rest of /api/*.
+// V2 Step 6b: read-only event-log API for the Debug Log panel.
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -14,67 +8,36 @@ import {
   parseEventLog,
   splitIntoRuns,
   deriveRunState,
-  type DerivedRunState,
-  type LoggedRecord,
 } from "../swarm/blackboard/EventLogReaderV2.js";
+import {
+  buildEventLogRunList,
+  findRunReplay,
+  readAllEventLogs,
+  readPerRunDebugLog,
+} from "../swarm/blackboard/eventLogSources.js";
 
 export interface V2RouterDeps {
-  /** Absolute path to the JSONL event log. Typically logs/current.jsonl. */
   eventLogPath: string;
 }
 
-/** Read all event log files (current.jsonl + rotated events-*.jsonl) and
- *  concatenate their records in chronological order. Bounded to
- *  MAX_LOG_FILES most recent files to avoid unbounded disk reads. */
-const MAX_LOG_FILES = 10;
-
-async function readAllEventLogs(eventLogPath: string): Promise<{ records: LoggedRecord[]; malformed: Array<{ lineNumber: number; raw: string; error: string }>; sources: string[] }> {
-  const logDir = path.dirname(eventLogPath);
-  const allRecords: LoggedRecord[] = [];
-  const allMalformed: Array<{ lineNumber: number; raw: string; error: string }> = [];
-  const sources: string[] = [];
-
-  // Find all JSONL files in the log directory
-  let entries: string[];
+async function perRunDebugLog(
+  logDir: string,
+  runId: string,
+): Promise<{ relativePath: string; bytes: number } | null> {
+  const rel = path.join(runId, "debug.jsonl");
+  const abs = path.join(logDir, rel);
   try {
-    entries = await fs.readdir(logDir);
+    const s = await fs.stat(abs);
+    return { relativePath: rel.replace(/\\/g, "/"), bytes: s.size };
   } catch {
-    return { records: [], malformed: [], sources: [] };
+    return null;
   }
-
-  const jsonlFiles = entries
-    .filter((e) => e.endsWith(".jsonl"))
-    .map((e) => path.join(logDir, e))
-    .sort((a, b) => {
-      // current.jsonl first, then rotated files by name (newest first)
-      const aBase = path.basename(a);
-      const bBase = path.basename(b);
-      if (aBase === "current.jsonl") return -1;
-      if (bBase === "current.jsonl") return 1;
-      return a > b ? -1 : 1;
-    })
-    .slice(0, MAX_LOG_FILES);
-
-  for (const filePath of jsonlFiles) {
-    let raw: string;
-    try {
-      raw = await fs.readFile(filePath, "utf8");
-    } catch {
-      continue; // skip unreadable files
-    }
-    const { records, malformed } = parseEventLog(raw);
-    allRecords.push(...records);
-    allMalformed.push(...malformed);
-    sources.push(filePath);
-  }
-
-  return { records: allRecords, malformed: allMalformed, sources };
 }
 
 export function v2Router(deps: V2RouterDeps): Router {
+  const logDir = path.dirname(deps.eventLogPath);
   const r = Router();
 
-  // GET /api/v2/status → { flags: {...}, env: {...} }
   r.get("/status", (_req: Request, res: Response) => {
     res.json({
       flags: {
@@ -83,34 +46,25 @@ export function v2Router(deps: V2RouterDeps): Router {
       },
       eventLogPath: deps.eventLogPath,
       v2Substrates: {
-        runStateMachine: "shared/src/runStateMachine.ts (Step 3a)",
-        runStateObserver: "server/src/swarm/blackboard/RunStateObserver.ts (Step 3b)",
-        todoQueueV2: "server/src/swarm/blackboard/TodoQueue.ts (Step 5a)",
-        workerPipelineV2: "server/src/swarm/blackboard/WorkerPipeline.ts (Step 5b)",
-        v2Adapters: "server/src/swarm/blackboard/v2Adapters.ts (Step 5c.2)",
         eventLogReaderV2: "server/src/swarm/blackboard/EventLogReaderV2.ts (Step 6a)",
       },
     });
   });
 
-  // GET /api/v2/event-log/runs → { runs: [{ derived, recordCount }] }
-  // Reads ALL event log files (current + rotated) and returns derived
-  // state per run slice.
   r.get("/event-log/runs", async (_req: Request, res: Response) => {
     try {
-      const { records, malformed, sources } = await readAllEventLogs(deps.eventLogPath);
-      const slices = splitIntoRuns(records);
-      const runs: Array<{ derived: DerivedRunState; recordCount: number; isSessionBoundary: boolean }> =
-        slices.map((s) => ({
-          derived: deriveRunState(s),
-          recordCount: s.records.length,
-          isSessionBoundary: s.isSessionBoundary,
-        }));
+      const list = await buildEventLogRunList(deps.eventLogPath, logDir);
       res.json({
-        runs,
-        malformed: malformed.length,
-        sources,
-        totalRecords: records.length,
+        runs: list.runs,
+        sliceCount: list.runs.length,
+        malformed: 0,
+        sources: [deps.eventLogPath],
+        totalRecords: list.tailRecordCount,
+        logDir,
+        eventLogPath: deps.eventLogPath,
+        archivesTotal: list.archivesTotal,
+        archivesRead: list.archivesIndexed,
+        perRunDebugCount: list.perRunDebugCount,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -118,31 +72,74 @@ export function v2Router(deps: V2RouterDeps): Router {
     }
   });
 
-  // GET /api/v2/event-log/runs/:runId → per-run record replay
+  r.get("/event-log/slices/:index", async (req: Request, res: Response) => {
+    const raw = req.params.index;
+    const indexStr = typeof raw === "string" ? raw : raw?.[0];
+    const sliceIndex = Number.parseInt(indexStr ?? "", 10);
+    if (!Number.isFinite(sliceIndex) || sliceIndex < 0) {
+      res.status(400).json({ error: "slice index must be a non-negative integer" });
+      return;
+    }
+    try {
+      const list = await buildEventLogRunList(deps.eventLogPath, logDir);
+      const entry = list.runs[sliceIndex];
+      if (!entry?.derived.runId) {
+        res.status(404).json({ error: `no run at slice index ${sliceIndex}` });
+        return;
+      }
+      const replay = await findRunReplay(logDir, deps.eventLogPath, entry.derived.runId);
+      if (!replay) {
+        res.status(404).json({ error: `no replay for ${entry.derived.runId}` });
+        return;
+      }
+      const derived = deriveRunState(replay.slice);
+      const debugLog = await perRunDebugLog(logDir, entry.derived.runId);
+      res.json({
+        sliceIndex,
+        runId: entry.derived.runId,
+        derived,
+        records: replay.slice.records,
+        isSessionBoundary: replay.slice.isSessionBoundary,
+        source: replay.source,
+        logDir,
+        debugLog,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: `failed to read event logs: ${msg}` });
+    }
+  });
+
   r.get("/event-log/runs/:runId", async (req: Request, res: Response) => {
-    const wantId = req.params.runId;
+    const rawId = req.params.runId;
+    const wantId = typeof rawId === "string" ? rawId : rawId?.[0];
     if (!wantId || wantId.length > 100) {
       res.status(400).json({ error: "runId required (max 100 chars)" });
       return;
     }
     try {
-      const { records, malformed, sources } = await readAllEventLogs(deps.eventLogPath);
-      const slices = splitIntoRuns(records);
-      const matched = slices.find((s) => {
-        const derived = deriveRunState(s);
-        return derived.runId === wantId;
-      });
-      if (!matched) {
-        res.status(404).json({ error: `no run with id ${wantId}`, totalSlices: slices.length });
+      const replay = await findRunReplay(logDir, deps.eventLogPath, wantId);
+      if (!replay) {
+        res.status(404).json({
+          error: `no run with id ${wantId}`,
+          hint: "Checked logs/<runId>/debug.jsonl, recent archives, and current.jsonl",
+        });
         return;
       }
+      const derived = deriveRunState(replay.slice);
+      const debugLog = await perRunDebugLog(logDir, wantId);
+      const globalMeta =
+        replay.source === "global" ? await readAllEventLogs(deps.eventLogPath) : null;
       res.json({
         runId: wantId,
-        derived: deriveRunState(matched),
-        records: matched.records,
-        isSessionBoundary: matched.isSessionBoundary,
-        malformed: malformed.length,
-        sources,
+        derived,
+        records: replay.slice.records,
+        isSessionBoundary: replay.slice.isSessionBoundary,
+        source: replay.source,
+        malformed: globalMeta?.malformed.length ?? 0,
+        sources: globalMeta?.sources ?? [path.join(logDir, wantId, "debug.jsonl")],
+        logDir,
+        debugLog,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -152,3 +149,5 @@ export function v2Router(deps: V2RouterDeps): Router {
 
   return r;
 }
+
+export { parseEventLog };

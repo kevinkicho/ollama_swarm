@@ -294,4 +294,15 @@ export type TranscriptEntrySummary =
       cycle: number;
       stage: "discussion" | "standup" | "synthesis" | "execution" | "audit";
       detail?: string;
+    }
+  // Agent-0 housekeeper: stream anomaly detected on another agent.
+  | {
+      kind: "housekeeper_alert";
+      watchedAgentId: string;
+      watchedAgentIndex: number;
+      streamLen: number;
+      anomalyKind: "phrase_repeat" | "trailing_suffix_repeat" | "stream_length";
+      repeatCount: number;
+      patternSample: string;
+      detail: string;
     };

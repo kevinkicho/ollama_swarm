@@ -9,6 +9,7 @@ import { AgentPidTracker } from "./agentPids.js";
 import type { AgentState, SwarmEvent } from "../types.js";
 import { tokenTracker } from "./ollamaProxy.js";
 import { createSession } from "./Session.js";
+import type { RunHousekeeper } from "../swarm/runHousekeeper.js";
 
 // Unit 17: minimal-token warmup prompt sent to each new agent right
 // after spawn. Intentionally trivial — we don't care about the response
@@ -200,6 +201,7 @@ export class AgentManager {
   // absent (older callers / tests), PID tracking is a no-op — the
   // manager still works, orphans just don't get reclaimed.
   private readonly pidTracker?: AgentPidTracker;
+  private housekeeper: RunHousekeeper | null = null;
 
   constructor(
     private readonly onState: (s: AgentState) => void,
@@ -211,6 +213,23 @@ export class AgentManager {
     pidTracker?: AgentPidTracker,
   ) {
     this.pidTracker = pidTracker;
+  }
+
+  attachHousekeeper(housekeeper: RunHousekeeper): void {
+    this.housekeeper = housekeeper;
+  }
+
+  /** Agent-0: deterministic run monitor (no LLM turns). */
+  async spawnHousekeeperAgent(cwd: string): Promise<Agent> {
+    if (this.agents.has("agent-0")) {
+      return this.agents.get("agent-0")!;
+    }
+    return this.spawnAgentNoOpencode({
+      cwd,
+      index: 0,
+      model: "monitor",
+      skipWarmup: true,
+    });
   }
 
   getLastActivity(sessionId: string): number | undefined {
@@ -749,6 +768,7 @@ export class AgentManager {
   // emit (throttled, same as the SSE path).
   recordStreamingText(agentId: string, agentIndex: number, cumulativeText: string): void {
     this.partialStreams.set(agentId, { text: cumulativeText, updatedAt: Date.now() });
+    this.housekeeper?.observe(agentId, agentIndex, cumulativeText);
     // Use the same throttled flush as the SSE path so the UI gets
     // ~10Hz updates.
     this.scheduleStreamingFlush({ id: agentId, index: agentIndex } as Agent, cumulativeText);
@@ -760,6 +780,7 @@ export class AgentManager {
   markStreamingDone(agentId: string): void {
     const agent = this.agents.get(agentId);
     if (agent) this.flushStreamingNow(agent);
+    this.housekeeper?.resetTurn(agentId);
     this.onEvent({ type: "agent_streaming_end", agentId });
     // Drop per-agent partial-stream buffer — the response is final.
     this.partialStreams.delete(agentId);

@@ -262,7 +262,7 @@ export interface RunConfig {
    * Task #132: continuous mode — run-against-budget instead of
    * run-against-rounds. When true, the runner treats `rounds` as
    * effectively unbounded; the run halts on cap (tokenBudget /
-   * wallClockCapMs / blackboard's commits/todos caps) or user
+   * wallClockCapMs / blackboard's commits cap) or user
    * stop. Required: at least one budget cap must be set, otherwise
    * the route layer rejects the start (else this would be an
    * infinite loop). Default false. Compatible with all presets;

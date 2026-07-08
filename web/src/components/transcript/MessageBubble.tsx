@@ -17,6 +17,7 @@ import { memo, useMemo, useState } from "react";
 import type { TranscriptEntry } from "../../types";
 import { summarizeAgentJson } from "../../../../shared/src/summarizeAgentJson";
 import { agentBubblePalette, hueForAgent } from "../agentPalette";
+import { isBrainAgentName, textMentionsBrainAlias } from "@ollama-swarm/shared/brainAlias";
 import {
   AgentJsonBubble,
   CollapsibleBlock,
@@ -36,6 +37,7 @@ import {
 } from "./AgentThinking";
 import { ContractBubble } from "./ContractBubble";
 import { AuditorVerdictBubble } from "./AuditorVerdictBubble";
+import { HunkReviewBubble } from "./HunkReviewBubble";
 import { TodosBubble } from "./TodosBubble";
 // New components for transcript UI improvements
 
@@ -355,9 +357,9 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
   // Only label as Brain for actual brain entries (suggestions or explicit brain agentId/index-0 brain),
   // not normal agents that happen to have low index in council planning.
   const isBrain = entry.agentIndex === 0 && (
-    entry.agentId === 'brain' ||
+    isBrainAgentName(entry.agentId ?? '') ||
     entry.summary?.kind === 'brain_suggestion' ||
-    /brain/i.test(entry.text || '') ||
+    textMentionsBrainAlias(entry.text || '') ||
     (entry.id || '').includes('brain')
   );
   const palette = agentBubblePalette(hue, false, isBrain);
@@ -621,7 +623,26 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
         </div>
       );
     }
-    if (!["worker_skip", "ow_assignments"].includes(entry.summary.kind)) {
+    if (entry.summary.kind === "housekeeper_alert") {
+      const s = entry.summary;
+      return (
+        <div
+          className={`rounded-lg border border-amber-700/50 bg-amber-950/25 px-3 py-2 text-sm ${className ?? ""}`}
+          style={style}
+        >
+          {header}
+          <div className="text-[10px] uppercase tracking-wider font-semibold text-amber-300 mb-1">
+            Housekeeper · {s.anomalyKind.replace(/_/g, " ")} · {s.watchedAgentId}
+          </div>
+          <p className="text-ink-200 text-xs">{s.detail}</p>
+          <p className="text-ink-400 text-[11px] mt-1 font-mono break-all">
+            ×{s.repeatCount} · {s.streamLen.toLocaleString()} chars · "{s.patternSample.slice(0, 120)}
+            {s.patternSample.length > 120 ? "…" : ""}"
+          </p>
+        </div>
+      );
+    }
+    if (!["worker_skip", "ow_assignments", "housekeeper_alert"].includes(entry.summary.kind)) {
       console.warn(`[MessageBubble] Unhandled agent summary kind: "${entry.summary.kind}" — add an AgentBubble branch`);
     }
     return (
@@ -708,6 +729,17 @@ function AgentClientFallback({
       return (
         <AuditorVerdictBubble
           envelope={clientSummary.parsed}
+          header={header}
+          className={className}
+          style={style}
+        />
+      );
+    }
+    if (clientSummary.parsed.kind === "hunk_review") {
+      return (
+        <HunkReviewBubble
+          envelope={clientSummary.parsed}
+          rawJson={entry.text}
           header={header}
           className={className}
           style={style}

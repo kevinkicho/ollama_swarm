@@ -27,6 +27,12 @@ function makeMockOpts(): {
       agentStates.set(agent.id, { id: agent.id, index: agent.index, status: "ready" });
       return agent;
     },
+    spawnHousekeeperAgent: async (cwd: string) => {
+      const agent = makeMockAgent("agent-0", 0, "monitor");
+      agents.set(agent.id, agent);
+      agentStates.set(agent.id, { id: agent.id, index: agent.index, status: "ready" });
+      return agent;
+    },
     killAll: async () => ({ portsReleased: 0 }),
     killAgent: async () => {},
     toStates: () => [...agentStates.values()],

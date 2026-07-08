@@ -9,6 +9,8 @@
 // docs. Empty caps = no progress bar; users opt in.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useTopbarDropdown } from "../lib/topbarDropdown";
 
 interface UsageBreakdownEntry {
   promptTokens: number;
@@ -145,6 +147,8 @@ export function UsageWidget() {
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollAbortRef = useRef<AbortController | null>(null);
   const containerRef = useRef<HTMLSpanElement>(null);
+  const closeDropdown = useCallback(() => setOpen(false), []);
+  const { panelRef, pos: panelPos, panelStyle } = useTopbarDropdown(open, containerRef, 720, closeDropdown);
 
   const fetchUsage = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -177,18 +181,6 @@ export function UsageWidget() {
       ctrl.abort();
     };
   }, [open, fetchUsage]);
-
-  // Close the dropdown when clicking outside (makes the "tokens dropdown" behave like one)
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open]);
 
   const setCap = useCallback((key: WindowKey, value: number | null) => {
     writeCap(key, value);
@@ -228,21 +220,13 @@ export function UsageWidget() {
     }
   }, []);
 
-  return (
-    <span className="relative" ref={containerRef}>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        title={chipTitle}
-        className={chipCls}
+  const dropdownPanel =
+    open && panelPos ? (
+      <div
+        ref={panelRef}
+        className="fixed z-50 rounded border border-ink-600 bg-ink-900 shadow-xl shadow-black/50 overflow-hidden"
+        style={panelStyle}
       >
-        <span>{chipLabel}</span>
-        <span className={`font-mono text-[10px] ${isPersistent ? "text-rose-200" : isTransient ? "text-amber-200" : "text-ink-500"}`}>
-          {chipSubtle}
-        </span>
-        <span>{open ? "▴" : "▾"}</span>
-      </button>
-      {open ? (
-        <div className="absolute z-20 right-0 mt-1 w-[min(720px,calc(100vw-2rem))] rounded border border-ink-600 bg-ink-900 shadow-xl overflow-hidden">
           <div className="px-3 py-2 border-b border-ink-700 flex items-center justify-between text-[11px] text-ink-400">
             <span>
               Token usage
@@ -376,7 +360,23 @@ export function UsageWidget() {
             )}
           </div>
         </div>
-      ) : null}
+    ) : null;
+
+  return (
+    <span className="relative shrink-0" ref={containerRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title={chipTitle}
+        className={chipCls}
+      >
+        <span>{chipLabel}</span>
+        <span className={`font-mono text-[10px] ${isPersistent ? "text-rose-200" : isTransient ? "text-amber-200" : "text-ink-500"}`}>
+          {chipSubtle}
+        </span>
+        <span>{open ? "▴" : "▾"}</span>
+      </button>
+      {dropdownPanel ? createPortal(dropdownPanel, document.body) : null}
     </span>
   );
 }

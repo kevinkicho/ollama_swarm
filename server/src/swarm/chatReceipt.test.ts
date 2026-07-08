@@ -68,6 +68,12 @@ describe("userEntryVisibleTo — @mention routing filter", () => {
     assert.equal(userEntryVisibleTo(e, "agent-3"), false);
   });
 
+  it("brian alias routes to brain agent", () => {
+    const e = { role: "user", targetAgent: "brian" };
+    assert.equal(userEntryVisibleTo(e, "brain"), true);
+    assert.equal(userEntryVisibleTo(e, "agent-2"), false);
+  });
+
   it("empty-string targetAgent is treated as broadcast (defensive)", () => {
     // Defensive — a UI bug that submits "" instead of undefined should
     // fall through to broadcast, not silently hide the message from

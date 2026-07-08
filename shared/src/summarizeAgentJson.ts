@@ -42,6 +42,7 @@ export type ParsedEnvelope =
       newCriteria?: Array<{ description: string; expectedFiles: string[] }>;
     }
   | { kind: "todos"; todos: Array<{ description: string; expectedFiles: string[] }> }
+  | { kind: "hunk_review"; approve: boolean; reason: string }
   | { kind: "unknown" };
 
 export interface AgentJsonSummary {
@@ -177,6 +178,22 @@ export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
         missionStatement: p.missionStatement,
         criteria: criteriaForUi,
       },
+    };
+  }
+
+  // Auditor hunk gate: { approve, reason } — must precede verdicts branch.
+  if (
+    isObject(parsed)
+    && typeof (parsed as { approve?: unknown }).approve === "boolean"
+    && typeof (parsed as { reason?: unknown }).reason === "string"
+    && !Array.isArray((parsed as { verdicts?: unknown }).verdicts)
+  ) {
+    const p = parsed as { approve: boolean; reason: string };
+    const label = p.approve ? "Approved" : "Rejected";
+    return {
+      summary: `${label}: ${truncate(p.reason, 120)}`,
+      json: pretty,
+      parsed: { kind: "hunk_review", approve: p.approve, reason: p.reason },
     };
   }
 

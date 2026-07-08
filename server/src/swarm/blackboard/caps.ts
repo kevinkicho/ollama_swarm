@@ -3,11 +3,10 @@
 // checkCaps() on every worker-loop iteration and, if it returns a non-null
 // reason, flags the run for cap-induced termination.
 //
-// T-Item-Caps (2026-05-04): the three caps are now env-overridable via
-// SWARM_WALL_CLOCK_CAP_MIN, SWARM_COMMITS_CAP, SWARM_TODOS_CAP (read
-// from config). The exports below are re-evaluations of those env values at
-// module-import time. Per-run overrides (RunConfig.wallClockCapMs) win in
-// checkCaps. Commits/todos caps are currently global backstops.
+// T-Item-Caps (2026-05-04): wall-clock and commits caps are env-overridable via
+// SWARM_WALL_CLOCK_CAP_MIN and SWARM_COMMITS_CAP (read from config). The exports
+// below are re-evaluations of those env values at module-import time. Per-run
+// overrides (RunConfig.wallClockCapMs) win in checkCaps for wall-clock.
 //
 // Review note (2026-07): for stricter isolation, future work should compute
 // all three caps strictly from per-run config and remove direct use of the
@@ -15,7 +14,6 @@
 import { config } from "../../config.js";
 export const WALL_CLOCK_CAP_MS = config.SWARM_WALL_CLOCK_CAP_MIN * 60_000;
 export const COMMITS_CAP = config.SWARM_COMMITS_CAP;
-export const TODOS_CAP = config.SWARM_TODOS_CAP;
 
 // Unit 27: host-sleep compensation. The wall-clock cap originally used
 // `Date.now() - runStartedAt`, which silently counts suspended-host time
@@ -88,32 +86,28 @@ export interface CapState {
   now: number;
   /** Count of todos currently in `committed` state on the board. */
   committed: number;
-  /** Total number of todos that have ever been posted (includes stale/skipped/etc.). */
-  totalTodos: number;
   /**
    * Unit 43: per-run wall-clock cap override (ms). When undefined, the
-   * baked-in `WALL_CLOCK_CAP_MS` (8 h) applies. Commits + todos caps
-   * remain hard-coded — they're runaway-prevention backstops, not
-   * per-run knobs.
+   * baked-in `WALL_CLOCK_CAP_MS` (8 h) applies. Commits cap remains a
+   * global runaway-prevention backstop, not a per-run knob.
    */
   wallClockCapMs?: number;
 }
 
 export type CapReason =
   | "wall-clock cap reached"
-  | "commits cap reached"
-  | "todos cap reached";
+  | "commits cap reached";
 
 /**
  * Returns a human-readable termination reason if any cap has been met or
  * exceeded, or null if the run may continue.
  *
- * Priority is deterministic: wall-clock → commits → todos. The first cap
- * that fires wins so the caller gets a single, stable reason string even if
- * multiple caps trip in the same tick.
+ * Priority is deterministic: wall-clock → commits. The first cap that fires
+ * wins so the caller gets a single, stable reason string even if both trip
+ * in the same tick.
  */
 export function checkCaps(state: CapState): string | null {
-  const { startedAt, now, committed, totalTodos, wallClockCapMs } = state;
+  const { startedAt, now, committed, wallClockCapMs } = state;
   const elapsed = now - startedAt;
   // Unit 43: per-run override wins, baked-in default backs it up.
   const wallCap = wallClockCapMs ?? WALL_CLOCK_CAP_MS;
@@ -123,9 +117,6 @@ export function checkCaps(state: CapState): string | null {
   }
   if (committed >= COMMITS_CAP) {
     return `commits cap reached (${COMMITS_CAP})`;
-  }
-  if (totalTodos >= TODOS_CAP) {
-    return `todos cap reached (${TODOS_CAP})`;
   }
   return null;
 }

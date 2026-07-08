@@ -15,6 +15,11 @@
 // One JSON object per line, with a leading "_session_started"
 // sentinel marker per server boot.
 
+import {
+  detectStreamAnomalies,
+  type StreamAnomalyFinding,
+} from "../streamAnomalyDetector.js";
+
 export interface LoggedRecord {
   ts: number;
   event: { type: string } & Record<string, unknown>;
@@ -124,42 +129,147 @@ export function splitIntoRuns(records: LoggedRecord[]): RunSlice[] {
   return slices;
 }
 
-/** Derived state from an event log. Minimal V2 view — extracts the
- *  fields a basic event-log UI needs without trying to be a complete
- *  state mirror. Step 6b can extend this as the UI grows. */
+export interface PhaseStep {
+  phase: string;
+  ts: number;
+}
+
+export interface StreamAnomalySummary {
+  kind: StreamAnomalyFinding["kind"];
+  pattern: string;
+  detail: string;
+  agentId?: string;
+}
+
+/** Derived state from an event log — flight-recorder summary for the
+ *  Debug Log panel. Richer than Runs digests: causal telemetry the
+ *  summary artifacts compress away. */
 export interface DerivedRunState {
   runId?: string;
   preset?: string;
   startedAt?: number;
   finishedAt?: number;
+  durationMs?: number;
   finalPhase?: string;
+  stopReason?: string;
   errors: string[];
   transcriptCount: number;
   agentStateUpdates: number;
   /** True if a "run_summary" event was seen (run completed cleanly). */
   hasSummary: boolean;
+  agentCount?: number;
+  clonePath?: string;
+  phaseTimeline: PhaseStep[];
+  eventTypeCounts: Record<string, number>;
+  modelShiftCount: number;
+  brainFallbackCount: number;
+  todoClaimed: number;
+  todoFailed: number;
+  todoReplanned: number;
+  todoSkipped: number;
+  streamingEventCount: number;
+  streamingEndCount: number;
+  amendmentCount: number;
+  conformanceSampleCount: number;
+  lastConformanceScore?: number;
+  driftSampleCount: number;
+  lastDriftSimilarity?: number;
+  coldStartCount: number;
+  maxColdStartMs?: number;
+  streamAnomalies: StreamAnomalySummary[];
+  /** Heuristic flags for the debug panel (no_summary, stream_loop, …). */
+  anomalyFlags: string[];
+  /** True when runId came from stamped events, not run_started. */
+  runIdInferred?: boolean;
+}
+
+function bumpTypeCount(counts: Record<string, number>, type: string): void {
+  counts[type] = (counts[type] ?? 0) + 1;
+}
+
+function scanAgentStream(
+  agentId: string,
+  text: string,
+  out: StreamAnomalySummary[],
+): void {
+  if (text.length < 2_000) return;
+  const findings = detectStreamAnomalies(text, { minLength: 2_000, minPhraseCount: 6 });
+  for (const f of findings) {
+    out.push({ kind: f.kind, pattern: f.pattern, detail: f.detail, agentId });
+  }
+}
+
+export function computeAnomalyFlags(state: DerivedRunState): string[] {
+  const flags: string[] = [];
+  if (state.runId && state.transcriptCount > 0 && !state.hasSummary) {
+    flags.push("no_summary");
+  }
+  if (state.streamingEventCount > 0 && state.agentStateUpdates === 0) {
+    flags.push("activity_gap");
+  }
+  if (state.errors.length > 0) flags.push("errors");
+  if (state.streamAnomalies.length > 0) flags.push("stream_loop");
+  if (state.modelShiftCount + state.brainFallbackCount > 0) flags.push("model_failover");
+  if (state.todoFailed > 0) flags.push("todo_failures");
+  if (state.runId && !state.hasSummary && state.finalPhase === "executing") {
+    flags.push("in_flight");
+  }
+  return flags;
 }
 
 /** Reduce a slice of records into a derived state snapshot. Pure —
- *  no side effects. Useful for replay debugging and the eventual
- *  event-log UI's per-run overview cards. */
+ *  no side effects. Useful for replay debugging and the debug panel. */
 export function deriveRunState(slice: RunSlice): DerivedRunState {
   const state: DerivedRunState = {
     errors: [],
     transcriptCount: 0,
     agentStateUpdates: 0,
     hasSummary: false,
+    phaseTimeline: [],
+    eventTypeCounts: {},
+    modelShiftCount: 0,
+    brainFallbackCount: 0,
+    todoClaimed: 0,
+    todoFailed: 0,
+    todoReplanned: 0,
+    todoSkipped: 0,
+    streamingEventCount: 0,
+    streamingEndCount: 0,
+    amendmentCount: 0,
+    conformanceSampleCount: 0,
+    driftSampleCount: 0,
+    coldStartCount: 0,
+    streamAnomalies: [],
+    anomalyFlags: [],
   };
+
+  const streamBuffers = new Map<string, string>();
+  const runIdVotes = new Map<string, number>();
+
   for (const r of slice.records) {
     const ev = r.event;
-    switch (ev.type) {
+    const t = ev.type;
+    bumpTypeCount(state.eventTypeCounts, t);
+    if (typeof ev.runId === "string" && ev.runId.length > 0) {
+      runIdVotes.set(ev.runId, (runIdVotes.get(ev.runId) ?? 0) + 1);
+    }
+
+    switch (t) {
       case "run_started":
         state.startedAt = r.ts;
         if (typeof ev.runId === "string") state.runId = ev.runId;
         if (typeof ev.preset === "string") state.preset = ev.preset;
+        if (typeof ev.agentCount === "number") state.agentCount = ev.agentCount;
+        if (typeof ev.clonePath === "string") state.clonePath = ev.clonePath;
         break;
       case "swarm_state":
-        if (typeof ev.phase === "string") state.finalPhase = ev.phase;
+        if (typeof ev.phase === "string") {
+          state.finalPhase = ev.phase;
+          const last = state.phaseTimeline[state.phaseTimeline.length - 1];
+          if (!last || last.phase !== ev.phase) {
+            state.phaseTimeline.push({ phase: ev.phase, ts: r.ts });
+          }
+        }
         break;
       case "transcript_append":
         state.transcriptCount += 1;
@@ -167,26 +277,112 @@ export function deriveRunState(slice: RunSlice): DerivedRunState {
       case "agent_state":
         state.agentStateUpdates += 1;
         break;
+      case "agent_streaming":
+        state.streamingEventCount += 1;
+        if (typeof ev.agentId === "string" && typeof ev.text === "string") {
+          streamBuffers.set(ev.agentId, ev.text);
+        }
+        break;
+      case "agent_streaming_end":
+        state.streamingEndCount += 1;
+        if (typeof ev.agentId === "string") {
+          const text = streamBuffers.get(ev.agentId) ?? "";
+          scanAgentStream(ev.agentId, text, state.streamAnomalies);
+          streamBuffers.delete(ev.agentId);
+        }
+        break;
       case "error":
         if (typeof ev.message === "string") state.errors.push(ev.message);
+        break;
+      case "model_shift":
+        state.modelShiftCount += 1;
+        break;
+      case "brain-fallback":
+        state.brainFallbackCount += 1;
+        break;
+      case "todo_claimed":
+        state.todoClaimed += 1;
+        break;
+      case "todo_failed":
+        state.todoFailed += 1;
+        break;
+      case "todo_replanned":
+        state.todoReplanned += 1;
+        break;
+      case "todo_skipped":
+        state.todoSkipped += 1;
+        break;
+      case "directive_amended":
+        state.amendmentCount += 1;
+        break;
+      case "conformance_sample":
+        state.conformanceSampleCount += 1;
+        if (typeof ev.score === "number") state.lastConformanceScore = ev.score;
+        break;
+      case "drift_sample":
+        state.driftSampleCount += 1;
+        if (typeof ev.similarity === "number") state.lastDriftSimilarity = ev.similarity;
+        break;
+      case "cold_start":
+        state.coldStartCount += 1;
+        if (typeof ev.elapsedMs === "number") {
+          state.maxColdStartMs = Math.max(state.maxColdStartMs ?? 0, ev.elapsedMs);
+        }
         break;
       case "run_summary":
         state.hasSummary = true;
         state.finishedAt = r.ts;
-        const stopReason = (ev as any)?.summary?.stopReason;
-        if (stopReason === "completed") {
-          state.finalPhase = "completed";
-        } else if (stopReason) {
-          state.finalPhase = "stopped";
-        } else if (!state.finalPhase || !["completed", "stopped", "failed"].includes(state.finalPhase)) {
-          state.finalPhase = "completed";
+        {
+          const summary = ev.summary as { stopReason?: string } | undefined;
+          const stopReason = summary?.stopReason;
+          if (typeof stopReason === "string") state.stopReason = stopReason;
+          if (stopReason === "completed") {
+            state.finalPhase = "completed";
+          } else if (stopReason) {
+            state.finalPhase = "stopped";
+          } else if (
+            !state.finalPhase ||
+            !["completed", "stopped", "failed"].includes(state.finalPhase)
+          ) {
+            state.finalPhase = "completed";
+          }
         }
         break;
       default:
-        // Unknown / future event type — silently skip. The reader
-        // is forward-compatible by design.
         break;
     }
   }
+
+  for (const [agentId, text] of streamBuffers) {
+    scanAgentStream(agentId, text, state.streamAnomalies);
+  }
+
+  if (!state.runId && runIdVotes.size > 0) {
+    let bestId = "";
+    let bestVotes = 0;
+    for (const [id, votes] of runIdVotes) {
+      if (votes > bestVotes) {
+        bestId = id;
+        bestVotes = votes;
+      }
+    }
+    state.runId = bestId;
+    state.runIdInferred = true;
+  }
+
+  if (state.startedAt == null) state.startedAt = slice.startedAt;
+
+  if (!state.finalPhase) {
+    if (state.streamingEventCount > 0 || state.agentStateUpdates > 0) {
+      state.finalPhase = "active";
+    }
+  }
+
+  const endTs = state.finishedAt ?? slice.endedAt;
+  if (state.startedAt != null && endTs != null) {
+    state.durationMs = Math.max(0, endTs - state.startedAt);
+  }
+
+  state.anomalyFlags = computeAnomalyFlags(state);
   return state;
 }

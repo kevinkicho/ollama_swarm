@@ -23,6 +23,15 @@ export type { AgentJsonSummary } from "./summarizeAgentJson.js";
 export { formatServerSummary } from "./formatServerSummary.js";
 
 export {
+  BRAIN_AGENT_ID,
+  BRAIN_ALIAS_NAMES,
+  BRAIN_ALIAS_USER_NOTE,
+  isBrainAgentName,
+  resolveBrainAgentId,
+  textMentionsBrainAlias,
+} from "./brainAlias.js";
+
+export {
   INITIAL_STATE,
   reduce,
   isTerminal,

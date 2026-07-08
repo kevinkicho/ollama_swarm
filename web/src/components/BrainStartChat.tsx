@@ -2,6 +2,76 @@ import { useState, useEffect, useRef } from "react";
 import { useSwarm } from "../state/store";
 import { formatServerSummary } from "../../../shared/src/formatServerSummary";
 import { PRESETS_GUIDE } from "../../../shared/src/presetGuide";
+import { renderBrainChatMarkdown } from "../lib/brainChatMarkdown";
+import { InfoTip } from "./setup/InfoTip";
+import { FormattedTipContent } from "./setup/FormattedTipContent";
+
+const BRAIN_TIP_MAX_WIDTH = 520;
+
+const SETUP_AUTO_APPLY_TIP = {
+  title: "Configs auto-apply below",
+  items: [
+    "Brain recommends a preset and explains why it fits your goal.",
+    "Workspace path, directive, model, and agent count fill into the setup form.",
+    "Edit any field before starting — nothing launches until you confirm.",
+    'Say "yes", "start", or "go", or use Start this swarm when ready.',
+  ],
+};
+
+const SETUP_CHAT_TIP = {
+  title: "Chat history",
+  items: [
+    "Conversation with Brain, your swarm librarian for starting runs.",
+    "Describe your goal in plain English — no need to know preset names.",
+    "Brain can compare presets, explain options, and answer follow-ups.",
+    "Your messages and Brain's replies stay in this thread.",
+  ],
+};
+
+const SETUP_INPUT_TIP = {
+  title: "Message box",
+  items: [
+    "Include your project folder path and what you want the swarm to do.",
+    "Example: blackboard on C:\\…\\myapp — directive: add panels from gov APIs.",
+    'Try "compare presets" or "explain options" for a recommendation table.',
+    "Enter sends · Shift+Enter adds a new line.",
+  ],
+};
+
+const SETUP_SEND_TIP = {
+  title: "Send",
+  items: [
+    "Sends your message to Brain and waits for a reply.",
+    "Brain may update the setup form below when it has a concrete recommendation.",
+    "Disabled while Brain is thinking or if the message is empty.",
+  ],
+};
+
+const RUN_CHAT_TIP = {
+  title: "Run chat",
+  items: [
+    "Ask about live progress, todos, agents, or recent transcript activity.",
+    "Brain has a snapshot of this run (phase, board, recent events).",
+    "Replies use Markdown; history is saved for this run.",
+  ],
+};
+
+const RUN_INPUT_TIP = {
+  title: "Message box",
+  items: [
+    "Ask status questions or suggest changes to the run.",
+    'Examples: "what failed?", "summarize todos", "amend directive to …"',
+    "Enter sends · Shift+Enter adds a new line.",
+  ],
+};
+
+const RUN_SEND_TIP = {
+  title: "Send",
+  items: [
+    "Sends your message to Brain for this run.",
+    "Disabled while Brain is thinking or if the message is empty.",
+  ],
+};
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -20,6 +90,10 @@ export interface RunBrainContext {
   preset?: string;
   userDirective?: string;
   phase?: string;
+  clonePath?: string;
+  plannerModel?: string;
+  workerModel?: string;
+  auditorModel?: string;
   // Summarized recent transcript (use formatServerSummary or similar)
   recentTranscript?: Array<{
     role: string;
@@ -65,6 +139,10 @@ export function buildRunContext(runId: string, storeState: any, boardState?: any
     preset: cfg.preset,
     userDirective: cfg.userDirective,
     phase: storeState.phase,
+    clonePath: cfg.clonePath || cfg.localPath,
+    plannerModel: cfg.plannerModel,
+    workerModel: cfg.workerModel,
+    auditorModel: cfg.auditorModel,
     recentTranscript: recent,
     boardCounts: boardState?.counts,
     recentTodos: boardState?.todos?.slice(0, 3).map((t: any) => ({
@@ -118,8 +196,8 @@ export function BrainStartChat({
   runContext?: RunBrainContext;
 }) {
   const isDuringRun = !!runContext;
-  const initialMsg = isDuringRun 
-    ? `Hi! I'm Brain assisting your active run ${runContext.runId?.slice(0,8)}. Current phase: ${runContext.phase || 'unknown'}. Ask me about progress, suggest amendments, analyze state, or help with research findings.`
+  const initialMsg = isDuringRun
+    ? `**Run ${runContext.runId?.slice(0, 8)}** · ${runContext.preset ?? "swarm"} · phase **${runContext.phase || "unknown"}**\n\nI have the live run snapshot (transcript, agents, board). Ask about progress, todos, or what agents are doing — I can also explore the workspace read-only when tools are available.`
     : "Hi! I'm Brain, the swarm librarian. Describe your goal or use-case (you don't need to know the 'swarm mode'). Example: 'I want to analyze lots of research papers on superconductors and synthesize the common properties' or 'I need to safely add new data panels to my finance app using public gov endpoints'. I'll analyze it, recommend the best preset + explain why with supporting reasons, and give you the exact config + start command.";
 
   // Persist history per-run using the per-run store (falls back to local state)
@@ -130,9 +208,6 @@ export function BrainStartChat({
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([
     { role: "assistant", content: initialMsg },
   ]);
-
-  // Dedicated structured toggle for agents/UI power users
-  const [useStructured, setUseStructured] = useState(true);
 
   // Suggested filters from interactive table (for chips)
   const [suggestedFilters, setSuggestedFilters] = useState<string[]>([]);
@@ -225,13 +300,15 @@ export function BrainStartChat({
 
     try {
       const body: any = { messages: baseForSend };
-      if (runContext) body.runContext = runContext;
-      // Pass clonePath when available so Brain can ground recommendations in actual outcome history
-      const currentClone = (window as any).__currentClonePath || null;
+      if (runContext) {
+        body.runContext = {
+          ...runContext,
+          clonePath: runContext.clonePath || (window as any).__currentClonePath || undefined,
+        };
+      }
+      const currentClone =
+        runContext?.clonePath || (window as any).__currentClonePath || null;
       if (currentClone) body.clonePath = currentClone;
-
-      // Use the toggle for structured (clean rec + config)
-      body.structured = useStructured || !runContext; // default on for setup
 
       const userMsgText = input.trim().toLowerCase();
       const userWantsOptionsTable = /explain (all )?options|show (me )?(all )?options|compare (all )?(presets|options)|which preset|what mode|best preset|preset options|table of presets|all presets for|recommend.*preset|options for my goal/i.test(userMsgText);
@@ -330,147 +407,281 @@ export function BrainStartChat({
     }
   };
 
-  return (
-    <div className="bg-ink-800 border border-violet-700/60 rounded-xl p-4 shadow-2xl mb-4">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <span className="text-violet-400 text-lg">🧠</span>
-          <span className="font-semibold text-lg">Talk to Brain</span>
-          <span className="text-xs text-ink-500">(natural language → swarm start)</span>
-        </div>
-        <span className="text-[10px] text-violet-400">JSON configs are auto-applied to the form below</span>
-      </div>
+  const chipBtn =
+    "text-[10px] px-1.5 py-0.5 rounded border border-ink-600 text-ink-300 hover:text-ink-100 hover:border-ink-500 disabled:opacity-40 shrink-0";
 
-      <div ref={chatScrollRef} className="h-72 overflow-y-auto bg-ink-900 border border-ink-700 rounded p-3 text-sm space-y-2 mb-3 custom-scroll">
+  return (
+    <div
+      className={
+        isDuringRun
+          ? "flex flex-col h-full min-h-0 gap-2"
+          : "bg-ink-800 border border-violet-700/60 rounded-xl p-4 shadow-2xl mb-4"
+      }
+    >
+      {!isDuringRun && (
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-violet-400 text-lg">🧠</span>
+            <span className="font-semibold text-lg text-ink-100">Talk to Brain</span>
+            <span className="text-xs text-ink-500 truncate">(natural language → swarm start)</span>
+          </div>
+          <InfoTip
+            maxWidth={BRAIN_TIP_MAX_WIDTH}
+            preferNoWrap
+            trigger={
+              <span className="text-[10px] text-violet-400 shrink-0 cursor-help">
+                configs auto-apply below
+              </span>
+            }
+          >
+            <FormattedTipContent
+              title={SETUP_AUTO_APPLY_TIP.title}
+              items={SETUP_AUTO_APPLY_TIP.items}
+              noWrapItems
+            />
+          </InfoTip>
+        </div>
+      )}
+
+      <InfoTip
+        maxWidth={BRAIN_TIP_MAX_WIDTH}
+        preferNoWrap
+        wrapperClassName={isDuringRun ? "flex flex-1 min-h-0 flex-col" : "block mb-3"}
+        trigger={
+          <div
+            ref={chatScrollRef}
+            className={
+              isDuringRun
+                ? "flex-1 min-h-0 overflow-y-auto space-y-1.5 text-xs custom-scroll cursor-help"
+                : "h-72 overflow-y-auto bg-ink-900 border border-ink-700 rounded p-3 text-sm space-y-2 custom-scroll cursor-help"
+            }
+          >
         {messages.map((m: ChatMessage, i: number) => (
-          <div key={i} className={m.role === "user" ? "text-right" : ""}>
-            <div className={`inline-block max-w-[85%] rounded-xl px-3 py-1.5 text-ink-100 ${m.role === "user" ? "bg-emerald-900/40" : "bg-ink-800"}`}>
-              <div className="text-xs text-ink-400 mb-0.5">{m.role}</div>
-              <div className="whitespace-pre-wrap">{m.content}</div>
+          <div
+            key={i}
+            className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+          >
+            <div
+              className={
+                isDuringRun
+                  ? `max-w-[92%] rounded px-2 py-1 whitespace-pre-wrap ${
+                      m.role === "user"
+                        ? "bg-ink-700/80 text-ink-100"
+                        : "text-ink-300"
+                    }`
+                  : `inline-block max-w-[85%] rounded-lg px-3 py-1.5 text-ink-100 ${
+                      m.role === "user" ? "bg-emerald-900/40" : "bg-ink-800"
+                    }`
+              }
+            >
+              {!isDuringRun && (
+                <div className="text-[10px] text-ink-400 mb-0.5">{m.role}</div>
+              )}
+              <div className={isDuringRun && m.role === "assistant" ? "" : "whitespace-pre-wrap"}>
+                {isDuringRun && m.role === "assistant"
+                  ? renderBrainChatMarkdown(m.content)
+                  : m.content}
+              </div>
             </div>
           </div>
         ))}
-        {loading && <div className="text-ink-400 text-xs">Brain is thinking…</div>}
-        {starting && <div className="text-emerald-400 text-xs">Starting the swarm via Brain…</div>}
+        {loading && (
+          <div className="text-[10px] text-ink-500">
+            {isDuringRun ? "Thinking…" : "Brain is thinking…"}
+          </div>
+        )}
+        {!isDuringRun && starting && (
+          <div className="text-emerald-400 text-xs">Starting the swarm via Brain…</div>
+        )}
         {suggestedAmend && (
-          <div className="mt-2 p-2 bg-amber-900/30 border border-amber-700 rounded text-xs">
-            Suggested amend: <span className="font-mono">{suggestedAmend}</span>
+          <div
+            className={
+              isDuringRun
+                ? "text-[10px] px-2 py-1 bg-amber-900/20 border border-amber-800/40 rounded flex items-center gap-1 flex-wrap"
+                : "mt-2 p-2 bg-amber-900/30 border border-amber-700 rounded text-xs"
+            }
+          >
+            <span className="text-ink-400">Amend:</span>
+            <span className="font-mono text-ink-200">{suggestedAmend}</span>
             <button
               type="button"
               onClick={async () => {
-                // Call /amend for current run (assume runId from context or prop)
                 if (runContext?.runId) {
                   try {
                     await fetch(`/api/swarm/amend`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ runId: runContext.runId, text: suggestedAmend }),
                     });
-                    alert('Amend sent!');
+                    alert("Amend sent!");
                     setSuggestedAmend(null);
                   } catch (e) {
-                    alert('Amend failed: ' + (e as Error).message);
+                    alert("Amend failed: " + (e as Error).message);
                   }
                 }
               }}
-              className="ml-2 px-2 py-0.5 bg-amber-600 rounded text-[10px]"
+              className={chipBtn}
             >
-              Apply Amend
+              Apply
             </button>
-            <button type="button" onClick={() => setSuggestedAmend(null)} className="ml-1 text-ink-400">dismiss</button>
+            <button
+              type="button"
+              onClick={() => setSuggestedAmend(null)}
+              className="text-[10px] text-ink-500 hover:text-ink-300"
+            >
+              dismiss
+            </button>
           </div>
         )}
-      </div>
+          </div>
+        }
+      >
+        <FormattedTipContent
+          title={isDuringRun ? RUN_CHAT_TIP.title : SETUP_CHAT_TIP.title}
+          items={isDuringRun ? RUN_CHAT_TIP.items : SETUP_CHAT_TIP.items}
+          noWrapItems
+        />
+      </InfoTip>
 
-      {/* Interactive chips from Brain table - click to filter Swarm Mode live */}
-      {suggestedFilters.length > 0 && (
-        <div className="mt-1 mb-1 text-[10px] flex items-center gap-1 flex-wrap">
-          <span className="text-ink-400">Filter Swarm Mode live:</span>
-          {suggestedFilters.map(tag => (
+      {!isDuringRun && suggestedFilters.length > 0 && (
+        <div className="mb-2 text-[10px] flex items-center gap-1 flex-wrap">
+          <span className="text-ink-400">Filter Swarm Mode:</span>
+          {suggestedFilters.map((tag) => (
             <button
               type="button"
               key={tag}
               onClick={() => {
                 const current = useSwarm.getState().useCaseFilters || [];
-                const next = current.includes(tag) ? current.filter(t => t !== tag) : [...current, tag];
+                const next = current.includes(tag)
+                  ? current.filter((t) => t !== tag)
+                  : [...current, tag];
                 setUseCaseFilters(next);
               }}
-              className="px-1.5 py-0.5 bg-violet-700 hover:bg-violet-600 rounded text-white text-[10px] border border-violet-500"
+              className={
+                isDuringRun
+                  ? "px-1.5 py-0.5 rounded border border-ink-600 text-ink-300 hover:text-ink-100 text-[10px]"
+                  : "px-1.5 py-0.5 bg-violet-700 hover:bg-violet-600 rounded text-white text-[10px] border border-violet-500"
+              }
             >
               {tag}
             </button>
           ))}
-          <button type="button" onClick={() => { setUseCaseFilters([]); setSuggestedFilters([]); }} className="text-ink-400 hover:text-white text-[10px]">clear</button>
+          <button
+            type="button"
+            onClick={() => {
+              setUseCaseFilters([]);
+              setSuggestedFilters([]);
+            }}
+            className={
+              isDuringRun
+                ? "text-ink-500 hover:text-ink-300 text-[10px]"
+                : "text-ink-400 hover:text-white text-[10px]"
+            }
+          >
+            clear
+          </button>
         </div>
       )}
 
-      <div className="flex gap-2">
-        <textarea
-          className="flex-1 bg-ink-900 border border-ink-700 rounded px-3 py-2.5 text-sm text-ink-100 placeholder:text-ink-500 focus:outline-none focus:border-violet-600 resize-y min-h-[60px] max-h-40"
-          placeholder="e.g. blackboard on C:\\Users\\...\\kyahoofinance , directive: add panels using gov + existing endpoints..."
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
+      <div className={`flex items-stretch gap-1.5 shrink-0 ${isDuringRun ? "" : "gap-2"}`}>
+          <InfoTip
+            maxWidth={BRAIN_TIP_MAX_WIDTH}
+            preferNoWrap
+            wrapperClassName="flex-1 min-w-0 flex"
+            trigger={
+              <textarea
+                className={
+                  isDuringRun
+                    ? "w-full bg-ink-900/50 border border-ink-700 rounded px-2 py-1.5 text-xs text-ink-100 placeholder:text-ink-500 focus:outline-none focus:border-ink-500 resize-none min-h-[40px] max-h-24 cursor-help"
+                    : "w-full bg-ink-900 border border-ink-700 rounded px-3 py-2.5 text-sm text-ink-100 placeholder:text-ink-500 focus:outline-none focus:border-violet-600 resize-y min-h-[60px] max-h-40 cursor-help"
+                }
+                placeholder={
+                  isDuringRun
+                    ? "Ask about progress, suggest changes, or request analysis…"
+                    : "e.g. blackboard on C:\\Users\\...\\kyahoofinance , directive: add panels using gov + existing endpoints..."
+                }
+                aria-label={isDuringRun ? "Message Brain about this run" : "Message Brain to configure a swarm"}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
+                disabled={loading}
+                rows={isDuringRun ? 2 : 3}
+              />
             }
-          }}
-          disabled={loading}
-          rows={3}
-        />
-        <button
-          type="button"
-          onClick={send}
-          disabled={loading || !input.trim()}
-          className="px-4 py-2 rounded bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-sm font-medium self-end"
-        >
-          Send
-        </button>
-
-        {/* Even more discreet structured toggle: tiny icon-only badge, right-aligned, very low visual weight */}
-        <button
-          type="button"
-          onClick={() => setUseStructured(!useStructured)}
-          className="px-1 py-px text-[8px] leading-none rounded border self-end opacity-50 hover:opacity-90 transition font-mono tabular-nums shrink-0"
-          style={{ borderColor: 'var(--ink-700, #333)', color: useStructured ? '#4ade80' : '#64748b' }}
-          title="Toggle structured JSON (clean rec + config objects). Click for discreet power-user mode."
-        >
-          {useStructured ? 'S' : 's'}
-        </button>
-
+          >
+            <FormattedTipContent
+              title={isDuringRun ? RUN_INPUT_TIP.title : SETUP_INPUT_TIP.title}
+              items={isDuringRun ? RUN_INPUT_TIP.items : SETUP_INPUT_TIP.items}
+              noWrapItems
+            />
+          </InfoTip>
+          <InfoTip
+            maxWidth={BRAIN_TIP_MAX_WIDTH}
+            preferNoWrap
+            wrapperClassName="inline-flex shrink-0 self-stretch"
+            trigger={
+              <button
+                type="button"
+                onClick={send}
+                disabled={loading || !input.trim()}
+                className={
+                  isDuringRun
+                    ? `${chipBtn} h-full flex items-center justify-center cursor-help`
+                    : "h-full px-4 rounded bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-sm font-medium flex items-center justify-center cursor-help"
+                }
+              >
+                Send
+              </button>
+            }
+          >
+            <FormattedTipContent
+              title={isDuringRun ? RUN_SEND_TIP.title : SETUP_SEND_TIP.title}
+              items={isDuringRun ? RUN_SEND_TIP.items : SETUP_SEND_TIP.items}
+              noWrapItems
+            />
+          </InfoTip>
         {runContext && (
-          /* More discreet "Brain Suggest" — small icon, low visual weight, not competing with Send */
           <button
             type="button"
             onClick={async () => {
-              const title = 'Proactive suggestion from chat';
-              const text = 'Consider checking current todos for issues or amending the directive based on recent activity.';
+              const title = "Proactive suggestion from chat";
+              const text =
+                "Consider checking current todos for issues or amending the directive based on recent activity.";
               try {
-                await fetch('/api/swarm/brain/suggest', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ runId: runContext.runId, title, text, category: 'recommendation' }),
+                await fetch("/api/swarm/brain/suggest", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    runId: runContext.runId,
+                    title,
+                    text,
+                    category: "recommendation",
+                  }),
                 });
-                const suggestion: ChatMessage = { role: 'assistant', content: `[🧠 Brain Suggestion] ${title}\n${text}` };
-                const updated = [...messages, suggestion];
-                setMessages(updated);
-              } catch (e) {
-                const suggestion: ChatMessage = { role: 'assistant', content: `[🧠 Brain Suggestion] ${title}\n${text}` };
-                const updated = [...messages, suggestion];
-                setMessages(updated);
+              } catch {
+                // still surface locally
               }
+              const suggestion: ChatMessage = {
+                role: "assistant",
+                content: `[Brain Suggestion] ${title}\n${text}`,
+              };
+              setMessages([...messages, suggestion]);
             }}
-            className="px-1.5 py-1 text-base rounded bg-amber-900/40 hover:bg-amber-800/60 text-amber-300 self-end border border-amber-800/50 opacity-60 hover:opacity-100 transition"
-            title="Brain suggest: ask for proactive focus/amend (discreet)"
+            className={chipBtn}
+            title="Request a proactive suggestion for this run"
             disabled={loading}
           >
-            💡
+            Suggest
           </button>
         )}
       </div>
 
-      {lastConfig && (
+      {!isDuringRun && lastConfig && (
         <div className="mt-2">
           <button
             type="button"
@@ -482,15 +693,21 @@ export function BrainStartChat({
               }
             }}
             disabled={loading || starting}
-            className="w-full py-2 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-sm font-semibold flex items-center justify-center gap-2"
+            className="w-full py-2 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-sm font-semibold text-white"
           >
-            {starting ? "🚀 Launching swarm..." : "🚀 Yes — Start this swarm now"}
+            {starting ? "Launching…" : "Start this swarm"}
           </button>
-          <div className="text-[10px] text-center text-ink-500 mt-1">Or just type "yes", "start", "go" and hit Send</div>
+          <div className="text-[10px] text-center text-ink-500 mt-1">
+            Or type &quot;yes&quot;, &quot;start&quot;, or &quot;go&quot;
+          </div>
         </div>
       )}
 
-      <div className="text-[10px] text-ink-500 mt-1">Brain will help you craft the perfect start config. When a config is ready, use the green button or say "yes".</div>
+      {!isDuringRun && (
+        <div className="text-[10px] text-ink-500 mt-1">
+          Brain helps craft the start config. Say &quot;yes&quot; when ready.
+        </div>
+      )}
     </div>
   );
 }

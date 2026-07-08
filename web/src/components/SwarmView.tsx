@@ -23,6 +23,7 @@ import { roleForRow } from "./RunHistory";
 import { AgentStatsCards } from "./AgentStatsCards";
 import { buildResumeStartPayload } from "../lib/resumeRun";
 import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
+import { resolveBrainAgentId } from "@ollama-swarm/shared/brainAlias";
 import { applyStatusSnapshotToStore } from "../state/swarmStoreHydrate";
 
 
@@ -290,7 +291,7 @@ export const SwarmView = memo(function SwarmView() {
   const parseMention = (raw: string): { text: string; targetAgent: string | null } => {
     const m = /^\s*@([a-z][a-z0-9-]*)\s+(.+)$/i.exec(raw);
     if (!m) return { text: raw, targetAgent: null };
-    return { text: m[2], targetAgent: m[1] };
+    return { text: m[2], targetAgent: resolveBrainAgentId(m[1]) };
   };
 
   const onSay = async (e: React.FormEvent) => {
@@ -333,6 +334,7 @@ export const SwarmView = memo(function SwarmView() {
   // uses its catalog overlay since topology stores generic "role-diff"
   // labels — the catalog names are richer.
   const agentRole = (idx: number): string => {
+    if (idx === 0) return "housekeeper";
     if (cfg?.topology) {
       const spec = cfg.topology.agents.find((a) => a.index === idx);
       if (spec) {

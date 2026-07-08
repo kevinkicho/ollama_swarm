@@ -1,4 +1,4 @@
-import type { Agent, KillAllResult } from "../../services/AgentManager.js";
+import type { Agent, AgentManager, KillAllResult, SpawnOpts } from "../../services/AgentManager.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { PlannerSeed } from "./prompts/planner.js";
 import type { ExitContract } from "./types.js";
@@ -169,7 +169,8 @@ export interface LifecycleContext {
   promptPlannerSafely(agent: Agent, prompt: string, name?: "swarm" | "swarm-read" | "swarm-builder", format?: "json" | Record<string, unknown>): Promise<{ response: string; agentUsed: Agent }>;
   excludeRunnerArtifacts(destPath: string): Promise<void>;
   buildSeed(clonePath: string, cfg: RunConfig): Promise<PlannerSeed>;
-  spawnAgentNoOpencode(opts: { cwd: string; index: number; model: string }): Promise<Agent>;
+  spawnAgentNoOpencode(opts: SpawnOpts): Promise<Agent>;
+  getManager(): AgentManager;
   markPlannerStatus(planner: Agent, status: "thinking" | "ready"): void;
   v2ObserverApply(ev: Record<string, unknown>): void;
   v2ObserverReset(): void;
@@ -405,6 +406,8 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   ctx.setPriorSnapshot(await readBlackboardStateSnapshot(destPath));
 
   ctx.setPhase("spawning");
+  await ctx.spawnAgentNoOpencode({ cwd: destPath, index: 0, model: "monitor", skipWarmup: true });
+  ctx.appendSystem("Housekeeper agent agent-0 ready (stream monitor).");
   // Planner is always index 1. Workers take 2..N. If the user picks
   // agentCount=1 there are no workers — planner posts TODOs, nothing drains
   // them, and we transition straight to completed. Documented in README.
@@ -468,8 +471,13 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
 
   // Freeze the roster for the summary artifact — killAll() will later
   // empty AgentManager's own map.
-  ctx.setAgentRoster([planner, ...workers, ...(ctx.getAuditor() ? [ctx.getAuditor()!] : [])]
-    .map((a) => ({ id: a.id, index: a.index })));
+  const housekeeper = ctx.getManager().list().find((a: Agent) => a.index === 0);
+  ctx.setAgentRoster([
+    ...(housekeeper ? [housekeeper] : []),
+    planner,
+    ...workers,
+    ...(ctx.getAuditor() ? [ctx.getAuditor()!] : []),
+  ].map((a) => ({ id: a.id, index: a.index })));
 
   ctx.setPhase("seeding");
   const seed = await ctx.buildSeed(destPath, cfg);

@@ -371,7 +371,7 @@ const fixtures: Array<{ label: string; entries: TranscriptEntry[] }> = [
     entries: [entry({ role: "agent", agentIndex: 1, text: contractEnvelope })],
   },
   {
-    label: "[agent client-fallback] auditor envelope (AuditorVerdictBubble - 3 tabs)",
+    label: "[agent client-fallback] auditor envelope (AuditorVerdictBubble - compact + expand)",
     entries: [entry({ role: "agent", agentIndex: 5, text: auditorEnvelope })],
   },
   {
@@ -381,6 +381,17 @@ const fixtures: Array<{ label: string; entries: TranscriptEntry[] }> = [
   {
     label: "[agent client-fallback] worker_hunks loose (no server tag, WorkerHunksBubble via tryParseWorkerHunks)",
     entries: [entry({ role: "agent", agentIndex: 2, text: workerHunksRawJson })],
+  },
+  {
+    label: "[agent client-fallback] hunk review gate (HunkReviewBubble - approve chip + reason)",
+    entries: [entry({
+      role: "agent",
+      agentIndex: 6,
+      text: JSON.stringify({
+        approve: true,
+        reason: "The changes correctly add a new panel directory and registry entry for a QR Growth tracker.",
+      }),
+    })],
   },
   {
     label: "[agent client-fallback] generic JSON (JsonPrettyBubble - kind not recognized)",

@@ -1,83 +1,82 @@
-// #290: rich-info hover tooltip for the Preset field. Appears next to
-// the field label as an "ⓘ" target; on hover renders a portal-based
-// card with the currently-selected preset's full metadata (summary,
-// agent range, recommended count, recommended model, directive
-// behavior, status). Complements the per-option `title` attribute on
-// the select dropdown — that gives a one-line hint while picking;
-// this gives the full picture for the selected one.
+// Rich hover tooltip for swarm preset metadata (list items + optional ⓘ target).
 
-import { useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import type { SwarmPreset } from "./PresetExtras";
+import type { ReactNode } from "react";
+import { InfoTip } from "./InfoTip";
+import {
+  FormattedTipContent,
+  TipKvRow,
+  type TipKvField,
+} from "./FormattedTipContent";
+import type { DirectiveBehavior, SwarmPreset } from "./PresetExtras";
 
-function directiveText(p: SwarmPreset): string {
-  switch (p.directive) {
+function directiveShort(directive: DirectiveBehavior): string {
+  switch (directive) {
     case "honored":
-      return "Directive HONORED — your User Directive shapes the run.";
+      return "honored — shapes the run";
     case "uses-proposition":
-      return "Directive ignored — uses Proposition field instead.";
+      return "ignored — uses Proposition field";
     case "ignored":
-      return "Directive ignored — analysis-only preset.";
+      return "ignored — analysis only";
   }
 }
 
-export function PresetTooltip({ preset }: { preset: SwarmPreset }) {
-  const triggerRef = useRef<HTMLSpanElement>(null);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-  const onEnter = () => {
-    if (!triggerRef.current) return;
-    const rect = triggerRef.current.getBoundingClientRect();
-    setPos({ top: rect.bottom + 4, left: rect.left });
-  };
+function agentsLabel(p: SwarmPreset): string {
+  if (p.min === p.max) return `${p.min} (fixed)`;
+  return `${p.min}–${p.max} (rec ${p.recommended})`;
+}
+
+function directiveAccent(directive: DirectiveBehavior): string | undefined {
+  if (directive === "honored") return "text-emerald-300";
+  if (directive === "uses-proposition") return "text-sky-300";
+  return "text-ink-400";
+}
+
+/** Label/value rows for preset hover tooltips. */
+export function buildPresetTipFields(p: SwarmPreset): TipKvField[] {
+  const fields: TipKvField[] = [
+    { label: "id", value: p.id, mono: true },
+    {
+      label: "status",
+      value: p.status === "active" ? "active" : "coming soon",
+      accent: p.status === "active" ? "text-emerald-300" : "text-amber-300",
+    },
+    { label: "agents", value: agentsLabel(p), mono: true },
+    { label: "model", value: p.recommendedModel, mono: true },
+    {
+      label: "directive",
+      value: directiveShort(p.directive),
+      accent: directiveAccent(p.directive),
+    },
+  ];
+  if (p.useCases && p.useCases.length > 0) {
+    fields.push({ label: "use cases", value: p.useCases.join(", ") });
+  }
+  fields.push({ label: "about", value: p.summary, multiline: true });
+  return fields;
+}
+
+export function PresetTipContent({
+  preset,
+  footer,
+}: {
+  preset: SwarmPreset;
+  footer?: ReactNode;
+}) {
+  const fields = buildPresetTipFields(preset);
   return (
-    <>
-      <span
-        ref={triggerRef}
-        onMouseEnter={onEnter}
-        onMouseLeave={() => setPos(null)}
-        className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full border border-ink-600 text-ink-400 hover:text-ink-200 hover:border-ink-400 cursor-help text-[10px] font-mono leading-none align-middle"
-        aria-label={`About ${preset.label}`}
-      >
-        ?
-      </span>
-      {pos
-        ? createPortal(
-            <div
-              className="fixed z-50 bg-ink-900 border border-ink-600 rounded-md p-3 shadow-xl pointer-events-none text-xs"
-              style={{ top: pos.top, left: pos.left, maxWidth: 380 }}
-            >
-              <div className="text-ink-100 font-semibold mb-1">{preset.label}</div>
-              <p className="text-ink-300 mb-2 leading-snug">{preset.summary}</p>
-              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
-                <dt className="text-ink-500 uppercase tracking-wider">Agents</dt>
-                <dd className="text-ink-200 font-mono">
-                  {preset.min === preset.max
-                    ? `${preset.min} (fixed)`
-                    : `${preset.min}–${preset.max} (recommended ${preset.recommended})`}
-                </dd>
-                <dt className="text-ink-500 uppercase tracking-wider">Model</dt>
-                <dd className="text-ink-200 font-mono">{preset.recommendedModel}</dd>
-                <dt className="text-ink-500 uppercase tracking-wider">Status</dt>
-                <dd className="text-ink-200">
-                  {preset.status === "active" ? "Active" : "Coming soon"}
-                </dd>
-                <dt className="text-ink-500 uppercase tracking-wider">Directive</dt>
-                <dd
-                  className={
-                    preset.directive === "honored"
-                      ? "text-emerald-300"
-                      : preset.directive === "uses-proposition"
-                        ? "text-sky-300"
-                        : "text-ink-400"
-                  }
-                >
-                  {directiveText(preset)}
-                </dd>
-              </dl>
-            </div>,
-            document.body,
-          )
-        : null}
-    </>
+    <FormattedTipContent title={preset.label} footer={footer}>
+      {fields.map((field) => (
+        <TipKvRow key={field.label} field={field} />
+      ))}
+    </FormattedTipContent>
+  );
+}
+
+/** ⓘ target beside a field label — shows full metadata for the selected preset. */
+export function PresetTooltip({ preset }: { preset: SwarmPreset }) {
+  return (
+    <InfoTip maxWidth={420}>
+      <PresetTipContent preset={preset} />
+    </InfoTip>
   );
 }
