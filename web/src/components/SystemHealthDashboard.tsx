@@ -31,7 +31,7 @@ const SystemHealthDashboard = () => {
   if (!health) return <div className="text-red-400 text-xs p-2">Health check failed</div>;
 
   return (
-    <div className="rounded border border-ink-700 bg-ink-800 p-3 text-xs space-y-1">
+    <div className="rounded border border-ink-700 bg-ink-800 p-2 text-xs space-y-1 min-w-0 max-w-full overflow-hidden">
       <div className="font-medium text-ink-200">System Health</div>
       <div className="flex items-center gap-2">
         <span className={`inline-block w-2 h-2 rounded-full ${health.ok ? 'bg-emerald-400' : 'bg-red-400'}`} />
@@ -40,7 +40,11 @@ const SystemHealthDashboard = () => {
         </span>
       </div>
       {health.defaultModel && <div className="text-ink-400">Model: {health.defaultModel}</div>}
-      {health.ollamaUrl && <div className="text-ink-400">Ollama: {health.ollamaUrl}</div>}
+      {health.ollamaUrl && (
+        <div className="text-ink-400 truncate" title={health.ollamaUrl}>
+          Ollama: {health.ollamaUrl}
+        </div>
+      )}
     </div>
   );
 };

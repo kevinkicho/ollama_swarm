@@ -41,6 +41,10 @@ export type ProfileName =
   | "swarm-research";
 export type Permission = "allow" | "deny";
 
+function unrestrictedReadTools(profile: ProfileName): boolean {
+  return profile === "swarm-planner" || profile === "swarm-research";
+}
+
 // Default tools list to advertise to the model per profile. Mirrors
 // what opencode's permission system grants today. Used by chatOnce /
 // promptWithRetry callers to derive `tools` for SessionProvider.chat
@@ -54,7 +58,7 @@ export function defaultToolsForProfile(
     case "swarm-read":
       return ["read", "grep", "glob", "list"];
     case "swarm-planner":
-      return ["read", "grep", "glob", "list", "web_fetch", "web_search"];
+      return ["read", "grep", "glob", "list", "bash", "web_fetch", "web_search"];
     case "swarm-builder":
       return ["read", "grep", "glob", "list", "bash"];
     case "swarm-builder-research":
@@ -99,7 +103,7 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     grep: "allow",
     glob: "allow",
     list: "allow",
-    bash: "deny",
+    bash: "allow",
     write: "deny",
     edit: "deny",
     propose_hunks: "deny",
@@ -255,6 +259,28 @@ function matchesGlob(filePath: string, pattern: string): boolean {
 
 const MAX_GREP_PATTERN_LEN = 200;
 
+async function grepFileForPattern(
+  abs: string,
+  clone: string,
+  re: RegExp,
+  hits: string[],
+  unrestricted: boolean,
+): Promise<void> {
+  try {
+    const text = await fs.readFile(abs, "utf8");
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (re.test(lines[i])) {
+        const rel = path.relative(clone, abs).replace(/\\/g, "/");
+        hits.push(`${rel}:${i + 1}: ${lines[i].slice(0, 200)}`);
+        if (!unrestricted && hits.length >= 200) return;
+      }
+    }
+  } catch {
+    // skip unreadable files (binary, etc.)
+  }
+}
+
 async function grepTool(clone: string, args: Record<string, unknown>, unrestricted = false): Promise<ToolResult> {
   const pattern = String(args.pattern ?? "");
   if (!pattern) return { ok: false, error: "grep: missing `pattern` arg" };
@@ -271,30 +297,21 @@ async function grepTool(clone: string, args: Record<string, unknown>, unrestrict
     }
     const root = await resolveSafe(clone, subdir);
     const hits: string[] = [];
-    const walk = async (dir: string): Promise<void> => {
-      const entries = await fs.readdir(dir, { withFileTypes: true });
-      for (const e of entries) {
-        if (e.name.startsWith(".git") || (!unrestricted && e.name === "node_modules")) continue;
-        const abs = path.join(dir, e.name);
-        if (e.isDirectory()) await walk(abs);
-        else if (e.isFile()) {
-          try {
-            const text = await fs.readFile(abs, "utf8");
-            const lines = text.split("\n");
-            for (let i = 0; i < lines.length; i++) {
-              if (re.test(lines[i])) {
-                const rel = path.relative(clone, abs).replace(/\\/g, "/");
-                hits.push(`${rel}:${i + 1}: ${lines[i].slice(0, 200)}`);
-                if (!unrestricted && hits.length >= 200) return;
-              }
-            }
-          } catch {
-            // skip unreadable files (binary, etc.)
-          }
+    const st = await fs.stat(root);
+    if (st.isFile()) {
+      await grepFileForPattern(root, clone, re, hits, unrestricted);
+    } else {
+      const walk = async (dir: string): Promise<void> => {
+        const entries = await fs.readdir(dir, { withFileTypes: true });
+        for (const e of entries) {
+          if (e.name.startsWith(".git") || (!unrestricted && e.name === "node_modules")) continue;
+          const abs = path.join(dir, e.name);
+          if (e.isDirectory()) await walk(abs);
+          else if (e.isFile()) await grepFileForPattern(abs, clone, re, hits, unrestricted);
         }
-      }
-    };
-    await walk(root);
+      };
+      await walk(root);
+    }
     if (hits.length === 0) {
       const scope = subdir && subdir !== "." ? ` in ${subdir}` : "";
       return { ok: true, output: `(no matches for pattern "${pattern}"${scope})` };
@@ -680,13 +697,13 @@ export class ToolDispatcher {
     }
     switch (call.tool) {
       case "read":
-        return readTool(this.clonePath, call.args, this.profile === "swarm-planner");
+        return readTool(this.clonePath, call.args, unrestrictedReadTools(this.profile));
       case "list":
         return listTool(this.clonePath, call.args);
       case "glob":
-        return globTool(this.clonePath, call.args, this.profile === "swarm-planner");
+        return globTool(this.clonePath, call.args, unrestrictedReadTools(this.profile));
       case "grep":
-        return grepTool(this.clonePath, call.args, this.profile === "swarm-planner");
+        return grepTool(this.clonePath, call.args, unrestrictedReadTools(this.profile));
       case "bash":
         return bashTool(this.clonePath, call.args);
       case "propose_hunks":

@@ -13,7 +13,7 @@ export function NotificationPreferences() {
   }, [enabled]);
 
   return (
-    <div className="rounded border border-ink-700 bg-ink-800 p-3 space-y-2">
+    <div className="rounded border border-ink-700 bg-ink-800 p-2 space-y-2 min-w-0 max-w-full overflow-hidden">
       <div className="text-[10px] uppercase tracking-wider text-ink-500 font-semibold">
         Notification Preferences
       </div>

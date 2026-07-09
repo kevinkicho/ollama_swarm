@@ -14,10 +14,12 @@ export function parseGoalList(text: string): string[] {
   let current: string[] = [];
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trimEnd();
-    const numStart = /^\s*(\d{1,2})[.)]\s+(.*)$/.exec(line);
+    const numStart =
+      /^\s*#{1,4}\s*(\d{1,2})[.)]?\s+(.*)$/.exec(line)
+      ?? /^\s*(\d{1,2})[.)]\s+(.*)$/.exec(line);
     if (numStart) {
       if (current.length > 0) items.push(current.join(" ").trim());
-      current = [numStart[2] ?? ""];
+      current = [numStart[numStart.length - 1] ?? ""];
     } else if (current.length > 0 && line.trim().length > 0 && !/^TOP\s*:/i.test(line)) {
       current.push(line.trim());
     } else if (current.length > 0 && (line.trim().length === 0 || /^TOP\s*:/i.test(line))) {

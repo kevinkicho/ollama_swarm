@@ -11,19 +11,23 @@
 //   - mirroring into AgentPanel + History (Phase 4)
 // Each later phase adds columns or adjacent UI without restructuring.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   type AgentColor,
   type AgentRole,
   type AgentSpec,
   type Topology,
   AGENT_COLORS,
+  countAgentsWithRole,
   defaultRoleForIndex,
   isRoleStructural,
+  minWorkerCountForPreset,
   synthesizeTopology,
 } from "../../../../shared/src/topology";
-import type { Provider } from "../../../../shared/src/providers";
-import { ModelInput } from "./ModelInput";
+import { detectProvider, modelsForProvider, type Provider } from "../../../../shared/src/providers";
+import { useAvailableModels } from "../../hooks/useAvailableModels";
+import { useProviders } from "../../hooks/useProviders";
+import { ModelSelect } from "./ModelSelect";
 
 // Phase 2 of #243: tailwind color name → swatch CSS for the per-row
 // color picker. Single source of truth — AgentPanel's color border
@@ -191,6 +195,82 @@ function ColorPicker({
   );
 }
 
+const TOPOLOGY_PROVIDER_ORDER: readonly Provider[] = [
+  "ollama",
+  "ollama-cloud",
+  "opencode",
+  "anthropic",
+  "openai",
+];
+
+const TOPOLOGY_PROVIDER_LABELS: Record<Provider, string> = {
+  ollama: "Ollama (local)",
+  "ollama-cloud": "Ollama Cloud",
+  opencode: "OpenCode",
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+};
+
+function topologyProviderAvailable(
+  p: Provider,
+  status: ReturnType<typeof useProviders>,
+): boolean {
+  if (p === "ollama" || p === "ollama-cloud") return true;
+  if (p === "opencode") return status.providers?.opencode?.available ?? false;
+  return status.providers ? status.providers[p].available : true;
+}
+
+function agentRowProvider(agent: AgentSpec, formProvider: Provider): Provider {
+  return agent.provider ?? formProvider;
+}
+
+function modelMatchesProvider(model: string, next: Provider): boolean {
+  const detected = detectProvider(model);
+  if (detected === next) return true;
+  return next === "ollama-cloud" && model.includes(":cloud");
+}
+
+/** Header-row bulk apply — arrow only; row dropdowns stay full-width. */
+function ApplyAllSelect({
+  ariaLabel,
+  onApply,
+  children,
+}: {
+  ariaLabel: string;
+  onApply: (value: string) => void;
+  children: ReactNode;
+}) {
+  const [resetKey, setResetKey] = useState(0);
+  return (
+    <div
+      className="relative inline-flex items-center justify-center w-6 h-6 shrink-0 group"
+      title="Apply to all agents in this column"
+    >
+      <select
+        key={resetKey}
+        defaultValue=""
+        aria-label={ariaLabel}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (!v) return;
+          onApply(v);
+          setResetKey((k) => k + 1);
+        }}
+        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+      >
+        <option value="" />
+        {children}
+      </select>
+      <span
+        className="pointer-events-none inline-flex items-center justify-center w-6 h-6 rounded border border-ink-600 bg-ink-900/80 text-[10px] text-ink-400 group-hover:text-ink-200 group-hover:border-ink-500"
+        aria-hidden
+      >
+        ▾
+      </span>
+    </div>
+  );
+}
+
 function RoleChip({ role, structural }: { role: AgentRole; structural: boolean }) {
   return (
     <span
@@ -203,11 +283,28 @@ function RoleChip({ role, structural }: { role: AgentRole; structural: boolean }
 }
 
 export function TopologyGrid({ preset, topology, setTopology, defaultModel, provider }: TopologyGridProps) {
+  const providersStatus = useProviders();
+  const [bulkApplyProvider, setBulkApplyProvider] = useState<Provider>(provider);
+  const { models: bulkModels, loading: bulkModelsLoading } = useAvailableModels(bulkApplyProvider);
   const total = topology.agents.length;
+
+  useEffect(() => {
+    setBulkApplyProvider(provider);
+  }, [provider]);
   const atMax = total >= preset.max;
   const atMin = total <= preset.min;
+  const minWorkers = minWorkerCountForPreset(preset.id);
+  const workerCount = countAgentsWithRole(topology, "worker");
   const addableRole = nextAddableRole(preset.id);
   const canAdd = !atMax && addableRole !== null;
+
+  const canRemoveAgent = (agent: AgentSpec): boolean => {
+    if (!agent.removable || atMin) return false;
+    if (minWorkers > 0 && agent.role === "worker" && workerCount <= minWorkers) {
+      return false;
+    }
+    return true;
+  };
 
   // Safety: if the passed topology doesn't match this preset's role structure
   // (e.g. after a preset switch the parent state was stale), re-synthesize
@@ -225,11 +322,41 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel, prov
       setTopology({
         agents: fresh.agents.map((a, idx) => {
           const prior = old[idx];
-          return prior && prior.role === a.role && prior.model ? { ...a, model: prior.model } : a;
+          if (!prior || prior.role !== a.role) return a;
+          return {
+            ...a,
+            model: prior.model,
+            provider: prior.provider,
+          };
         }),
       });
     }
   }, [preset.id]);
+
+  // Blackboard needs planner + ≥1 worker + auditor. Repair stale saved
+  // shapes (e.g. planner+auditor only) that would spawn zero workers.
+  useEffect(() => {
+    if (preset.id !== "blackboard") return;
+    if (topology.agents.length >= preset.min && workerCount >= minWorkers) return;
+    const target = Math.max(preset.min, preset.recommended ?? preset.min);
+    const fresh = synthesizeTopology(preset.id, target);
+    const old = topology.agents;
+    setTopology({
+      agents: fresh.agents.map((a, idx) => {
+        const prior = old[idx];
+        if (!prior || prior.role !== a.role) return a;
+        return {
+          ...a,
+          model: prior.model,
+          provider: prior.provider,
+          tag: prior.tag,
+          color: prior.color,
+          temperature: prior.temperature,
+          promptAddendum: prior.promptAddendum,
+        };
+      }),
+    });
+  }, [preset.id, topology.agents.length, workerCount, preset.min, preset.recommended, minWorkers]);
 
   // Phase 3: auto-save last-used topology on every change so the
   // user's preferred shape survives dev-server restarts and the
@@ -322,10 +449,12 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel, prov
       // top-level defaultModel).
       const prior = i < agents.length ? agents[i] : undefined;
       const keptModel = prior && prior.role === role ? prior.model : undefined;
+      const keptProvider = prior && prior.role === role ? prior.provider : undefined;
       return {
         index: idx,
         role,
         model: keptModel,
+        provider: keptProvider,
         removable: !isRoleStructural(preset.id, role),
       };
     });
@@ -354,11 +483,62 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel, prov
   };
 
   const onRemove = (index: number) => {
-    if (atMin) return;
     const agent = topology.agents.find((a) => a.index === index);
-    if (!agent || !agent.removable) return;
+    if (!agent || !canRemoveAgent(agent)) return;
     const nextAgents = topology.agents.filter((a) => a.index !== index);
     setTopology({ agents: renumber(nextAgents) });
+  };
+
+  const onProviderChange = (index: number, next: Provider) => {
+    const defaultModel = defaultModelForProvider(next);
+    setTopology({
+      agents: topology.agents.map((a) => {
+        if (a.index !== index) return a;
+        const keepModel = a.model && modelMatchesProvider(a.model, next);
+        return {
+          ...a,
+          provider: next,
+          model: keepModel ? a.model : defaultModel,
+        };
+      }),
+    });
+  };
+
+  const defaultModelForProvider = (p: Provider): string | undefined => {
+    const catalog = modelsForProvider(p);
+    return catalog.length > 0 ? catalog[0] : undefined;
+  };
+
+  const applyProviderToAll = (next: Provider) => {
+    setBulkApplyProvider(next);
+    const defaultModel = defaultModelForProvider(next);
+    setTopology({
+      agents: topology.agents.map((a) => {
+        const keepModel = a.model && modelMatchesProvider(a.model, next);
+        return {
+          ...a,
+          provider: next,
+          model: keepModel ? a.model : defaultModel,
+        };
+      }),
+    });
+  };
+
+  const applyModelToAll = (value: string) => {
+    if (value === "__clear__") {
+      setTopology({
+        agents: topology.agents.map((a) => ({ ...a, model: undefined })),
+      });
+      return;
+    }
+    const trimmed = value.trim();
+    setTopology({
+      agents: topology.agents.map((a) => ({
+        ...a,
+        provider: bulkApplyProvider,
+        model: trimmed.length > 0 ? trimmed : undefined,
+      })),
+    });
   };
 
   const onModelChange = (index: number, value: string) => {
@@ -548,6 +728,11 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel, prov
           )}
         </div>
       ) : null}
+      <p className="text-[10px] text-ink-500">
+        Use the <span className="text-ink-400">▾</span> in the Provider / Model headers to set every row at once.
+        Model list follows the bulk provider ({TOPOLOGY_PROVIDER_LABELS[bulkApplyProvider]}).
+        {preset.id === "blackboard" ? " Blackboard requires at least one worker." : ""}
+      </p>
       <div className="rounded border border-ink-700 bg-ink-900/60 overflow-hidden">
         <table className="w-full text-[11px]">
           <thead className="bg-ink-800/60 text-[10px] uppercase tracking-wider text-ink-500">
@@ -556,7 +741,45 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel, prov
               {showColor ? <th className="px-2 py-1.5 text-left w-20">Color</th> : null}
               <th className="px-2 py-1.5 text-left">Role</th>
               {showTag ? <th className="px-2 py-1.5 text-left">Tag</th> : null}
-              <th className="px-2 py-1.5 text-left">Model override</th>
+              <th className="px-2 py-1.5 text-left w-36">
+                <div className="flex items-center justify-between gap-1 min-w-0">
+                  <span className="shrink-0">Provider</span>
+                  <ApplyAllSelect
+                    ariaLabel="Apply provider to all agents"
+                    onApply={(v) => applyProviderToAll(v as Provider)}
+                  >
+                    {TOPOLOGY_PROVIDER_ORDER.map((p) => {
+                      const available = topologyProviderAvailable(p, providersStatus);
+                      return (
+                        <option key={p} value={p} disabled={!available}>
+                          {TOPOLOGY_PROVIDER_LABELS[p]}
+                        </option>
+                      );
+                    })}
+                  </ApplyAllSelect>
+                </div>
+              </th>
+              <th className="px-2 py-1.5 text-left min-w-[11rem]">
+                <div className="flex items-center justify-between gap-1 min-w-0">
+                  <span className="shrink-0">Model</span>
+                  <ApplyAllSelect
+                    ariaLabel="Apply model to all agents"
+                    onApply={applyModelToAll}
+                  >
+                    <option value="__clear__">(clear all)</option>
+                    {bulkModelsLoading ? (
+                      <option value="" disabled>
+                        Loading…
+                      </option>
+                    ) : null}
+                    {bulkModels.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </ApplyAllSelect>
+                </div>
+              </th>
               {showTemp ? <th className="px-2 py-1.5 text-left w-20">Temp</th> : null}
               {showPrompt ? <th className="px-2 py-1.5 text-left">Prompt+</th> : null}
               <th className="px-2 py-1.5 text-right w-12">Action</th>
@@ -590,13 +813,33 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel, prov
                   </td>
                 ) : null}
                 <td className="px-2 py-1.5">
-                  <ModelInput
+                  <select
+                    aria-label={`Provider for agent ${a.index}`}
+                    value={agentRowProvider(a, provider)}
+                    onChange={(e) => onProviderChange(a.index, e.target.value as Provider)}
+                    className="w-full min-w-0 bg-ink-950/60 border border-ink-700 rounded px-1.5 py-0.5 text-[10px] text-ink-200 focus:outline-none focus:border-ink-500"
+                  >
+                    {TOPOLOGY_PROVIDER_ORDER.map((p) => {
+                      const available = topologyProviderAvailable(p, providersStatus);
+                      return (
+                        <option key={p} value={p} disabled={!available}>
+                          {TOPOLOGY_PROVIDER_LABELS[p]}
+                          {!available ? " (no key)" : ""}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </td>
+                <td className="px-2 py-1.5 min-w-[10rem]">
+                  <ModelSelect
+                    key={`${a.index}-${agentRowProvider(a, provider)}`}
                     value={a.model ?? ""}
                     onChange={(v) => onModelChange(a.index, v)}
-                    placeholder={defaultModel || "(use default)"}
-                    className="w-full bg-ink-950/60 border border-ink-700 rounded px-2 py-0.5 text-[11px] font-mono text-ink-200 placeholder:text-ink-600 focus:outline-none focus:border-ink-500"
+                    provider={agentRowProvider(a, provider)}
                     ariaLabel={`Model override for agent ${a.index}`}
-                    provider={provider}
+                    compact
+                    allowDefault
+                    defaultLabel={defaultModel ? `(default: ${defaultModel})` : "(use default)"}
                   />
                 </td>
                 {showTemp ? (
@@ -626,17 +869,28 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel, prov
                   </td>
                 ) : null}
                 <td className="px-2 py-1.5 text-right">
-                  {a.removable && !atMin ? (
+                  {canRemoveAgent(a) ? (
                     <button
                       type="button"
                       onClick={() => onRemove(a.index)}
-                      title={`Remove agent #${a.index}`}
+                      title={
+                        minWorkers > 0 && a.role === "worker" && workerCount <= minWorkers
+                          ? "Blackboard requires at least one worker"
+                          : `Remove agent #${a.index}`
+                      }
                       className="w-6 h-6 rounded text-ink-400 hover:text-rose-300 hover:bg-rose-950/40 border border-transparent hover:border-rose-800/50 transition"
                     >
                       −
                     </button>
                   ) : (
-                    <span className="w-6 h-6 inline-block" />
+                    <span
+                      className="w-6 h-6 inline-block"
+                      title={
+                        a.removable && minWorkers > 0 && a.role === "worker" && workerCount <= minWorkers
+                          ? "Blackboard requires at least one worker"
+                          : undefined
+                      }
+                    />
                   )}
                 </td>
               </tr>
@@ -647,7 +901,7 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel, prov
               <tr className="border-t border-ink-800/60">
                 <td
                   colSpan={
-                    4 + (showColor ? 1 : 0) + (showTag ? 1 : 0) + (showTemp ? 1 : 0) + (showPrompt ? 1 : 0)
+                    5 + (showColor ? 1 : 0) + (showTag ? 1 : 0) + (showTemp ? 1 : 0) + (showPrompt ? 1 : 0)
                   }
                   className="px-2 py-1.5 text-right"
                 >

@@ -17,7 +17,6 @@ import {
   sleep as sleepExtracted,
   directiveWithAmendments as directiveWithAmendmentsExtracted,
   appendAgent as appendAgentExtracted,
-  maybeEmitLoopWarning as maybeEmitLoopWarningExtracted,
   setPhase as setPhaseExtracted,
   emitAgentState as emitAgentStateExtracted,
   extractText as extractTextExtracted,
@@ -314,8 +313,6 @@ export class BlackboardRunner implements SwarmRunner {
   private static readonly MAX_TRACKED_ERRORS = 200;
   // R13: last emitted memory-pressure level for one-shot warnings.
   private lastMemoryPressureLevel: "ok" | "throttle" | "pause" = "ok";
-  // R9: turn of last loop-detector warning; -1 = never.
-  private lastLoopWarningAtTurn = -1;
   // W13/W14/W15: per-run failover state carrying per-model attempt-history.
   private failoverState: FailoverState = { modelHealth: new Map() };
   // W14: local Ollama tags discovered at run-start for local fallback.
@@ -324,9 +321,6 @@ export class BlackboardRunner implements SwarmRunner {
   private subscriberPaused = false;
   // W17/R13: heap-pressure pause flag.
   private memoryPaused = false;
-  // W18/R9: consecutive loop detections; halts after LOOP_DETECTIONS_TO_HALT.
-  private consecutiveLoopDetections = 0;
-  private static readonly LOOP_DETECTIONS_TO_HALT = 3;
   private consecutiveStuckCycles = 0;
   // #167: drain/soft-stop state (timing metadata only; primary state in lifecycleState).
   private drainStartedAt?: number;
@@ -334,6 +328,8 @@ export class BlackboardRunner implements SwarmRunner {
   private terminationReason?: string;
   // Phase 9: run-summary counters + per-agent stats.
   private runBootedAt?: number;
+  /** `git status --porcelain` captured after clone setup; scopes summary git stats to this run. */
+  private gitPorcelainAtRunStart = "";
   private staleEventCount = 0;
   private turnsPerAgent = new Map<string, number>();
   /** Stashed in promptAgent, consumed in appendAgent for transcript promptText. */
@@ -676,6 +672,7 @@ export class BlackboardRunner implements SwarmRunner {
     await writeRunSummaryExtracted({
       cfg,
       runBootedAt: this.runBootedAt!,
+      gitPorcelainAtRunStart: this.gitPorcelainAtRunStart,
       runStartedAt: this.runStartedAt,
       tickAccumulatorActiveElapsedMs: this.tickAccumulator?.activeElapsedMs,
       stopping: this.isStopping(),
@@ -872,17 +869,6 @@ export class BlackboardRunner implements SwarmRunner {
   private appendAgent(agent: Agent, text: string, options?: import("./runnerUtil.js").AppendAgentOptions): void {
     const ctx = this.utilCtx();
     appendAgentExtracted(ctx, agent, text, options);
-    this.consecutiveLoopDetections = ctx.consecutiveLoopDetections;
-    this.lastLoopWarningAtTurn = ctx.lastLoopWarningAtTurn;
-    this.lifecycleState = ctx.lifecycleState;
-    this.terminationReason = ctx.terminationReason;
-  }
-
-  private maybeEmitLoopWarning(): void {
-    const ctx = this.utilCtx();
-    maybeEmitLoopWarningExtracted(ctx);
-    this.consecutiveLoopDetections = ctx.consecutiveLoopDetections;
-    this.lastLoopWarningAtTurn = ctx.lastLoopWarningAtTurn;
     this.lifecycleState = ctx.lifecycleState;
     this.terminationReason = ctx.terminationReason;
   }

@@ -474,7 +474,7 @@ async function tryWorkerPrompt(
       manager: state.manager as any,
       agentName: workerProfile,
       signal: controller.signal,
-      intraStreamLoop: true,
+
       onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
     }, state.cfg.providerFailover);
 

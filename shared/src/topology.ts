@@ -11,6 +11,7 @@
 // phases drop the legacy paths once nothing uses them.
 
 import { z } from "zod";
+import { PROVIDERS, resolveModelForAgent } from "./providers.js";
 
 // All known per-agent role labels across every preset. Keep in sync
 // with server/src/swarm/* role assignments and web/src/components/
@@ -53,6 +54,9 @@ export type AgentColor = (typeof AGENT_COLORS)[number];
 export const AgentSpecSchema = z.object({
   index: z.number().int().min(1).max(16),
   role: z.enum(AGENT_ROLES),
+  // Per-agent AI provider. Falls back to the form-level provider when
+  // absent. Drives the topology grid model dropdown for this row.
+  provider: z.enum(PROVIDERS).optional(),
   // Per-agent model override. Falls back to RunConfig.model when
   // absent. Phase 1 wires this through the same plumbing as the
   // existing plannerModel/workerModel/auditorModel fields.
@@ -149,6 +153,16 @@ export function defaultRoleForIndex(
 // user delete it. Workers / mappers / drafters / explorers / peers
 // are flexible — the user can scale their count up/down. Everything
 // else is structural.
+/** Count agents with a given role in a topology. */
+export function countAgentsWithRole(topology: Topology, role: AgentRole): number {
+  return topology.agents.filter((a) => a.role === role).length;
+}
+
+/** Minimum worker agents required for a preset to be runnable. */
+export function minWorkerCountForPreset(preset: string): number {
+  return preset === "blackboard" ? 1 : 0;
+}
+
 export function isRoleStructural(preset: string, role: AgentRole): boolean {
   // debate-judge is fixed at exactly 3 (pro/con/judge), so all rows
   // are structural regardless of role.
@@ -292,11 +306,19 @@ export function deriveLegacyFields(topology: Topology, preset: string): {
       a.role === "explorer" ||
       a.role === "peer",
   );
+  const topologyModel = (agent: AgentSpec | undefined): string | undefined => {
+    if (!agent) return undefined;
+    if (agent.model?.trim() || agent.provider) {
+      return resolveModelForAgent(agent, "");
+    }
+    return undefined;
+  };
+
   return {
     agentCount,
     dedicatedAuditor,
-    plannerModel: planner?.model,
-    workerModel: workerLike?.model,
-    auditorModel: auditor?.model,
+    plannerModel: topologyModel(planner),
+    workerModel: topologyModel(workerLike),
+    auditorModel: topologyModel(auditor),
   };
 }

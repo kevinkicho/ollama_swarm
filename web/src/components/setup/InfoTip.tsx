@@ -1,4 +1,12 @@
-import { useRef, useState, type ReactNode } from "react";
+import {
+  cloneElement,
+  isValidElement,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+  type Ref,
+} from "react";
 import { createPortal } from "react-dom";
 import { FormattedTipContent } from "./FormattedTipContent";
 
@@ -11,29 +19,52 @@ export const STRUCTURED_TIP_FOOTER_CLASS =
 const DEFAULT_SHOW_DELAY_MS = 2000;
 const CURSOR_OFFSET_PX = 12;
 const VIEWPORT_PADDING_PX = 8;
+const EST_TIP_HEIGHT_PX = 180;
 
 function positionAtCursor(
   x: number,
   y: number,
-  maxW: number,
-  fallback?: DOMRect,
+  requestedMaxW: number,
 ): { top: number; left: number; maxW: number } {
-  let left = x + CURSOR_OFFSET_PX;
-  let top = y + CURSOR_OFFSET_PX;
-  if (left + maxW > window.innerWidth - VIEWPORT_PADDING_PX) {
-    left = x - maxW - CURSOR_OFFSET_PX;
+  const pad = VIEWPORT_PADDING_PX;
+  const off = CURSOR_OFFSET_PX;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  let maxW = Math.min(requestedMaxW, vw - pad * 2);
+  let left = x + off;
+
+  if (left + maxW > vw - pad) {
+    maxW = Math.min(maxW, Math.max(120, x - off - pad));
+    left = Math.max(pad, x - maxW - off);
   }
-  left = Math.max(
-    VIEWPORT_PADDING_PX,
-    Math.min(left, window.innerWidth - maxW - VIEWPORT_PADDING_PX),
-  );
-  const maxTop = window.innerHeight - VIEWPORT_PADDING_PX - 48;
-  if (top > maxTop && fallback) {
-    top = Math.max(VIEWPORT_PADDING_PX, fallback.top - CURSOR_OFFSET_PX);
-  } else {
-    top = Math.max(VIEWPORT_PADDING_PX, Math.min(top, maxTop));
+
+  let top = y + off;
+  if (top + EST_TIP_HEIGHT_PX > vh - pad) {
+    top = y - EST_TIP_HEIGHT_PX - off;
   }
+  top = Math.max(pad, Math.min(top, vh - pad - 48));
+
   return { top, left, maxW };
+}
+
+function mergeRefs<T>(...refs: Array<Ref<T> | undefined>): Ref<T> {
+  return (value: T) => {
+    for (const ref of refs) {
+      if (!ref) continue;
+      if (typeof ref === "function") ref(value);
+      else (ref as React.MutableRefObject<T | null>).current = value;
+    }
+  };
+}
+
+type MouseHandler = (e: React.MouseEvent) => void;
+
+function chainHandlers(ours: MouseHandler, theirs?: MouseHandler): MouseHandler {
+  return (e) => {
+    ours(e);
+    theirs?.(e);
+  };
 }
 
 export function InfoTip({
@@ -57,7 +88,7 @@ export function InfoTip({
   /** Milliseconds to wait after hover before showing the tooltip. */
   showDelayMs?: number;
 }) {
-  const triggerRef = useRef<HTMLSpanElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
   const cursorRef = useRef<{ x: number; y: number } | null>(null);
   const [pos, setPos] = useState<{ top: number; left: number; maxW: number } | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -70,8 +101,14 @@ export function InfoTip({
     }
   };
 
+  const applyCursorPosition = (x: number, y: number) => {
+    const maxW = Math.min(maxWidth, window.innerWidth - 16);
+    setPos(positionAtCursor(x, y, maxW));
+  };
+
   const trackCursor = (e: React.MouseEvent) => {
     cursorRef.current = { x: e.clientX, y: e.clientY };
+    if (pos) applyCursorPosition(e.clientX, e.clientY);
   };
 
   const show = () => {
@@ -79,19 +116,16 @@ export function InfoTip({
       clearTimeout(hideTimer.current);
       hideTimer.current = null;
     }
-    const maxW = Math.min(maxWidth, window.innerWidth - 16);
-    const fallback = triggerRef.current?.getBoundingClientRect();
     const cursor = cursorRef.current;
     if (cursor) {
-      setPos(positionAtCursor(cursor.x, cursor.y, maxW, fallback));
-    } else if (fallback) {
-      setPos(
-        positionAtCursor(
-          fallback.left + fallback.width / 2,
-          fallback.top + fallback.height / 2,
-          maxW,
-          fallback,
-        ),
+      applyCursorPosition(cursor.x, cursor.y);
+      return;
+    }
+    const fallback = triggerRef.current?.getBoundingClientRect();
+    if (fallback) {
+      applyCursorPosition(
+        fallback.left + fallback.width / 2,
+        fallback.top + fallback.height / 2,
       );
     }
   };
@@ -123,22 +157,60 @@ export function InfoTip({
 
   const defaultTriggerClass =
     "ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full border border-violet-700/50 text-violet-300/80 hover:text-violet-200 hover:border-violet-500/70 cursor-help text-[10px] font-mono leading-none align-middle select-none";
+
+  const hoverProps = {
+    onMouseEnter: scheduleShow,
+    onMouseMove: trackCursor,
+    onMouseLeave: scheduleHide,
+  };
+
+  let triggerNode: ReactNode;
+  if (trigger && isValidElement(trigger)) {
+    const el = trigger as ReactElement<{
+      onMouseEnter?: MouseHandler;
+      onMouseMove?: MouseHandler;
+      onMouseLeave?: MouseHandler;
+      className?: string;
+      ref?: Ref<HTMLElement>;
+    }>;
+    triggerNode = cloneElement(el, {
+      ...hoverProps,
+      onMouseEnter: chainHandlers(scheduleShow, el.props.onMouseEnter),
+      onMouseMove: chainHandlers(trackCursor, el.props.onMouseMove),
+      onMouseLeave: chainHandlers(scheduleHide, el.props.onMouseLeave),
+      ref: mergeRefs(triggerRef, el.props.ref),
+      className: [el.props.className, wrapperClassName, "cursor-help"].filter(Boolean).join(" "),
+    });
+  } else if (trigger) {
+    triggerNode = (
+      <span
+        ref={triggerRef as Ref<HTMLSpanElement>}
+        {...hoverProps}
+        className={wrapperClassName ?? "inline cursor-help"}
+      >
+        {trigger}
+      </span>
+    );
+  } else {
+    triggerNode = (
+      <span
+        ref={triggerRef as Ref<HTMLSpanElement>}
+        {...hoverProps}
+        className={wrapperClassName ?? defaultTriggerClass}
+        aria-label="More info"
+      >
+        ⓘ
+      </span>
+    );
+  }
+
   return (
     <>
-      <span
-        ref={triggerRef}
-        onMouseEnter={scheduleShow}
-        onMouseMove={trackCursor}
-        onMouseLeave={scheduleHide}
-        className={wrapperClassName ?? (trigger ? "inline" : defaultTriggerClass)}
-        aria-label={trigger ? undefined : "More info"}
-      >
-        {trigger ?? "ⓘ"}
-      </span>
+      {triggerNode}
       {pos
         ? createPortal(
             <div
-              className={`fixed z-50 bg-ink-900 border border-violet-700/60 rounded-md p-3 shadow-xl shadow-violet-950/10 text-xs leading-snug text-ink-300 ${
+              className={`fixed z-[60] bg-ink-900 border border-violet-700/60 rounded-md p-3 shadow-xl shadow-violet-950/10 text-xs leading-snug text-ink-300 pointer-events-none ${
                 preferNoWrap ? "w-max" : ""
               }`}
               style={{
@@ -146,8 +218,6 @@ export function InfoTip({
                 left: pos.left,
                 maxWidth: pos.maxW,
               }}
-              onMouseEnter={keepVisible}
-              onMouseLeave={scheduleHide}
             >
               {rendered}
             </div>,

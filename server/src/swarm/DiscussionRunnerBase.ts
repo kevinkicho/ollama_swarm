@@ -391,7 +391,6 @@ export abstract class DiscussionRunnerBase {
         logDiag: this.opts.logDiag,
         runId: this.active?.runId,
         describeError: describeSdkError,
-        intraStreamLoop: true,
         ...(opts.modelOverride && opts.modelOverride !== agent.model
           ? { modelOverride: opts.modelOverride }
           : {}),

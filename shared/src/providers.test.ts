@@ -6,6 +6,7 @@ import {
   withProviderPrefix,
   toOpenCodeModelRef,
   modelsForProvider,
+  resolveModelForAgent,
   ANTHROPIC_MODELS,
   OPENAI_MODELS,
   OLLAMA_CLOUD_MODELS,
@@ -97,6 +98,15 @@ test("OLLAMA_CLOUD_MODELS — every entry routes via ollama-cloud (matches :clou
     assert.ok(/(?::|-)cloud$/.test(m), `${m} must end with :cloud or -cloud`);
     assert.equal(detectProvider(m), "ollama-cloud");
   }
+});
+
+test("resolveModelForAgent — opencode provider pin avoids :cloud fallback", () => {
+  const resolved = resolveModelForAgent(
+    { provider: "opencode" },
+    "deepseek-v4-flash:cloud",
+  );
+  assert.match(resolved, /^opencode-go\//);
+  assert.equal(detectProvider(resolved), "opencode");
 });
 
 test("ANTHROPIC_MODELS and OPENAI_MODELS — every entry is provider-prefixed", () => {

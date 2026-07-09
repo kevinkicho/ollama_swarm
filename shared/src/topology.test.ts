@@ -8,7 +8,9 @@ import {
   getAgentAddendum,
   getAgentTag,
   getAgentOllamaOptions,
+  countAgentsWithRole,
   deriveLegacyFields,
+  minWorkerCountForPreset,
   AgentSpecSchema,
   TopologySchema,
   type AgentRole,
@@ -108,6 +110,25 @@ describe("defaultRoleForIndex", () => {
     it("others are workers", () => {
       assert.equal(defaultRoleForIndex("unknown-preset", 2, 5), "worker");
     });
+  });
+});
+
+describe("countAgentsWithRole", () => {
+  it("counts workers in a blackboard topology", () => {
+    const topo = synthesizeTopology("blackboard", 5);
+    assert.equal(countAgentsWithRole(topo, "worker"), 3);
+    assert.equal(countAgentsWithRole(topo, "planner"), 1);
+    assert.equal(countAgentsWithRole(topo, "auditor"), 1);
+  });
+});
+
+describe("minWorkerCountForPreset", () => {
+  it("requires one worker for blackboard", () => {
+    assert.equal(minWorkerCountForPreset("blackboard"), 1);
+  });
+
+  it("requires zero workers for other presets", () => {
+    assert.equal(minWorkerCountForPreset("council"), 0);
   });
 });
 

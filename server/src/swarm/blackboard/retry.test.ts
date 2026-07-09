@@ -36,6 +36,17 @@ describe("isRetryableSdkError", () => {
     assert.equal(isRetryableSdkError(outer), true);
   });
 
+  it("retries on bare 'fetch failed' when OpenCode strips the cause chain", () => {
+    assert.equal(isRetryableSdkError(new Error("fetch failed")), true);
+  });
+
+  it("retries on OpenCode HTTP 5xx error messages", () => {
+    assert.equal(
+      isRetryableSdkError(new Error("OpenCode API server error (HTTP 502)")),
+      true,
+    );
+  });
+
   it("retries on ECONNRESET", () => {
     assert.equal(isRetryableSdkError(errWithCode("Error", "ECONNRESET")), true);
   });
@@ -107,12 +118,18 @@ describe("isRetryableSdkError", () => {
     assert.equal(isRetryableSdkError(new Error("server busy: capacity at limit")), true);
   });
 
-  it("retries on intra-stream loop abort (model-output turn retry)", () => {
+  it("does NOT retry intra-stream loop or stream-guard aborts (guards removed — see docs/decisions.md)", () => {
     assert.equal(
       isRetryableSdkError(
-        new Error("intra-stream loop detected: intra-stream loop: 8/10 recent chunks had identical delta=8 bytes"),
+        new Error("intra-stream loop detected: suffix repeat"),
       ),
-      true,
+      false,
+    );
+    assert.equal(
+      isRetryableSdkError(
+        new Error("stream exceeded 100,000 chars before any tool call without completing — aborting runaway stream"),
+      ),
+      false,
     );
   });
 

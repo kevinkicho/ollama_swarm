@@ -8,6 +8,7 @@ import type { ClassifiedError, ErrorCategory } from "../errorTaxonomy.js";
 import type { FailoverState } from "../promptWithFailover.js";
 import type { TickAccumulator } from "./caps.js";
 import type { TierHistoryEntry } from "./tierRunner.js";
+import { resolveModelForTopologyIndex } from "@ollama-swarm/shared/modelConfig";
 import { config as appConfig } from "../../config.js";
 import { formatCloneMessage } from "../cloneMessage.js";
 import { formatPortReleaseLine } from "../runSummary.js";
@@ -77,6 +78,8 @@ export interface LifecycleContext {
   setRunStartedAt(v: number | undefined): void;
   getRunBootedAt(): number | undefined;
   setRunBootedAt(v: number | undefined): void;
+  getGitPorcelainAtRunStart(): string;
+  setGitPorcelainAtRunStart(v: string): void;
   getTokenBaselineForRun(): number | undefined;
   setTokenBaselineForRun(v: number | undefined): void;
   getTickAccumulator(): TickAccumulator | undefined;
@@ -99,10 +102,6 @@ export interface LifecycleContext {
   setMemoryPaused(v: boolean): void;
   getLastMemoryPressureLevel(): "ok" | "throttle" | "pause";
   setLastMemoryPressureLevel(v: "ok" | "throttle" | "pause"): void;
-  getConsecutiveLoopDetections(): number;
-  setConsecutiveLoopDetections(v: number): void;
-  getLastLoopWarningAtTurn(): number;
-  setLastLoopWarningAtTurn(v: number): void;
 
   // --- complex fields ---
   getActive(): RunConfig | undefined;
@@ -185,8 +184,9 @@ export interface LifecycleContext {
   getBrainService(): BrainService | null;
   getInteractionTracker(): InteractionTracker;
   getExceptionCollector(): ExceptionCollector;
-  promptPlannerSafely(agent: Agent, prompt: string, name?: "swarm" | "swarm-read" | "swarm-builder", format?: "json" | Record<string, unknown>): Promise<{ response: string; agentUsed: Agent }>;
+  promptPlannerSafely(agent: Agent, prompt: string, name?: import("../../tools/ToolDispatcher.js").ProfileName, format?: "json" | Record<string, unknown>): Promise<{ response: string; agentUsed: Agent }>;
   excludeRunnerArtifacts(destPath: string): Promise<void>;
+  captureGitBaseline(clonePath: string): Promise<void>;
   buildSeed(clonePath: string, cfg: RunConfig): Promise<PlannerSeed>;
   spawnAgentNoOpencode(opts: SpawnOpts): Promise<Agent>;
   getManager(): AgentManager;
@@ -275,12 +275,10 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   ctx.getErrorTracker().length = 0;
   ctx.setFailoverState({ modelHealth: new Map() });
   ctx.setLocalOllamaTags([]);
-  // 2026-05-04 (W16/W17/W18 wiring): clear pause/loop counters.
+  // 2026-05-04 (W16/W17 wiring): clear pause counters.
   ctx.setSubscriberPaused(false);
   ctx.setMemoryPaused(false);
   ctx.setLastMemoryPressureLevel("ok");
-  ctx.setConsecutiveLoopDetections(0);
-  ctx.setLastLoopWarningAtTurn(-1);
   // 2026-05-04 (W14 wiring): when SWARM_DEGRADATION_FALLBACK is on,
   // discover local Ollama tags once at run-start so R3's
   // pickLocalFallback has candidates. Best-effort: discovery
@@ -295,6 +293,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   // stateWriteInFlight may still be true momentarily if a run was torn
   // down mid-write. The new scheduler starts fresh on next run.
   ctx.clearStateSnapshotScheduler();
+  ctx.setGitPorcelainAtRunStart("");
   ctx.setRunBootedAt(Date.now());
   // Task #171: persist a "Run started" entry as the FIRST transcript
   // line so it survives a page-refresh catch-up. The WS run_started
@@ -393,20 +392,21 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
     type: "clone_state",
     ...ctx.cloneStateForStatus,
   });
-  // Unit 42: per-agent model overrides. Each falls back to cfg.model
-  // when absent, so existing single-model runs are byte-identical.
-  const plannerModel = cfg.plannerModel ?? cfg.model;
-  const workerModel = cfg.workerModel ?? cfg.model;
-  // Unit 58: auditor model. Falls back to plannerModel (same role
-  // family — reasoning over criteria + file state) then to model.
-  // Only meaningful when cfg.dedicatedAuditor is true; harmless to
-  // compute either way.
-  const auditorModel = cfg.auditorModel ?? plannerModel;
+  // Unit 42: per-agent model overrides. Topology row provider pins API
+  // routing even when the model field is empty (otherwise :cloud defaults
+  // would still hit Ollama Cloud after switching the grid to OpenCode).
+  const plannerFallback = cfg.plannerModel ?? cfg.model;
+  const workerFallback = cfg.workerModel ?? cfg.model;
+  const auditorFallback = cfg.auditorModel ?? plannerFallback;
+  const plannerModel = resolveModelForTopologyIndex(cfg.topology, 1, plannerFallback);
+  const workerModel = workerFallback;
+  const auditorModel = auditorFallback;
   // Unit 48: hide runner-written artifacts (opencode.json,
   // blackboard-state.json, summary.json, summary-*.json) from
   // `git status` via the clone's local .git/info/exclude — NOT the
   // user's .gitignore. See RepoService.excludeRunnerArtifacts.
   await ctx.excludeRunnerArtifacts(destPath);
+  await ctx.captureGitBaseline(destPath);
   // E3 Phase 5: opencode.json no longer needed — prompts route through pickProvider directly.
   ctx.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
   if (plannerModel !== workerModel) {
@@ -446,9 +446,14 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   if (workerCount > 0) {
     // Parallel spawn: each opencode serve takes a few seconds to boot,
     // sequential would compound that for every extra worker.
-    const workerSpawns = Array.from({ length: workerCount }, (_, i) =>
-      ctx.spawnAgentNoOpencode({ cwd: destPath, index: 2 + i, model: workerModel }),
-    );
+    const workerSpawns = Array.from({ length: workerCount }, (_, i) => {
+      const agentIndex = 2 + i;
+      return ctx.spawnAgentNoOpencode({
+        cwd: destPath,
+        index: agentIndex,
+        model: resolveModelForTopologyIndex(cfg.topology, agentIndex, workerModel),
+      });
+    });
     const spawned = await Promise.all(workerSpawns);
     workers.push(...spawned);
     // Unit 59 (59a): assign a static role bias to each worker when
@@ -478,7 +483,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
     ctx.setAuditor(await ctx.spawnAgentNoOpencode({
       cwd: destPath,
       index: auditorIndex,
-      model: auditorModel,
+      model: resolveModelForTopologyIndex(cfg.topology, auditorIndex, auditorModel),
     }));
     ctx.appendSystem(
       `Auditor agent ${ctx.getAuditor()!.id} ready (model=${auditorModel}). Audit calls will route here in parallel with workers.`,
@@ -863,7 +868,7 @@ export async function planAndExecute(
           const { response } = await ctx.promptPlannerSafely(
             plannerAgent,
             prompt,
-            "swarm-read",
+            "swarm-planner",
           );
           return response;
         };

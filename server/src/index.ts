@@ -31,6 +31,12 @@ import { devRouter } from "./routes/dev.js";
 import { v2Router } from "./routes/v2.js";
 import { discoverAnthropicModels } from "./providers/discoverAnthropicModels.js";
 import { discoverOpenAIModels } from "./providers/discoverOpenAIModels.js";
+import { discoverOpenCodeModels } from "./providers/discoverOpenCodeModels.js";
+import {
+  getSystemLayerSettingsPayload,
+  resolveSystemLayerModel,
+  setSystemLayerUiModel,
+} from "./services/systemLayerSettings.js";
 import {
   ANTHROPIC_MODELS as FALLBACK_ANTHROPIC,
   OPENAI_MODELS as FALLBACK_OPENAI,
@@ -217,14 +223,31 @@ broadcaster.attach(wss, (ws) => {
 });
 
 app.get("/api/health", (_req, res) => {
-  const ollamaProbe = getProvidersStatusPayload().providers.ollama;
-  const ollamaOk =
-    ollamaProbe.probeStatus === "ok" ||
-    ollamaProbe.probeStatus === "degraded" ||
-    ollamaProbe.probeStatus === "idle";
+  const providersPayload = getProvidersStatusPayload();
+  const ollamaProbe = providersPayload.providers.ollama;
+  const systemLayer = resolveSystemLayerModel();
+  const activeProbe = providersPayload.providers[systemLayer.provider];
+  const activeOk =
+    activeProbe.probeStatus === "ok" ||
+    activeProbe.probeStatus === "degraded" ||
+    activeProbe.probeStatus === "idle";
   res.json({
-    ok: ollamaOk,
+    ok: activeOk,
+    model: systemLayer.modelString,
+    provider: systemLayer.provider,
+    toolsEnabled: systemLayer.toolsEnabled,
+    probe: {
+      status: activeProbe.probeStatus,
+      lastProbeAt: activeProbe.lastProbeAt,
+      lastProbeMs: activeProbe.lastProbeMs,
+      lastError: activeProbe.lastError,
+      modelCount: activeProbe.modelCount,
+    },
     defaultModel: config.DEFAULT_MODEL,
+    systemLayerModel: systemLayer.modelString,
+    systemLayerProvider: systemLayer.provider,
+    systemLayerTools: systemLayer.toolsEnabled,
+    systemLayerSource: systemLayer.source,
     ollamaUrl: config.OLLAMA_BASE_URL,
     ollamaProbe: {
       status: ollamaProbe.probeStatus,
@@ -234,6 +257,20 @@ app.get("/api/health", (_req, res) => {
       modelCount: ollamaProbe.modelCount,
     },
   });
+});
+
+app.get("/api/system-layer", (_req, res) => {
+  res.json(getSystemLayerSettingsPayload());
+});
+
+app.put("/api/system-layer", (req, res) => {
+  const model = typeof req.body?.model === "string" ? req.body.model.trim() : "";
+  if (!model || model.length > 200) {
+    res.status(400).json({ error: "model string required (max 200 chars)" });
+    return;
+  }
+  setSystemLayerUiModel(model);
+  res.json(getSystemLayerSettingsPayload());
 });
 
 // #288: list models the local Ollama install can run RIGHT NOW so the
@@ -262,7 +299,7 @@ interface ModelCacheEntry {
   /** When models came from live discovery vs. fallback constants. */
   source: "discovery" | "fallback";
 }
-const modelCache = new Map<"anthropic" | "openai", ModelCacheEntry>();
+const modelCache = new Map<"anthropic" | "openai" | "opencode", ModelCacheEntry>();
 
 async function getProviderModels(
   provider: "anthropic" | "openai",
@@ -312,9 +349,32 @@ app.get("/api/models", async (req, res) => {
     res.json({ models: OLLAMA_CLOUD_MODELS, source: "fallback" });
     return;
   }
-  // OpenCode Go — curated open models catalog.
   if (provider === "opencode") {
-    res.json({ models: OPENCODE_GO_MODELS, source: "fallback" });
+    const cached = modelCache.get("opencode");
+    if (cached && Date.now() - cached.fetchedAt < DISCOVERY_TTL_MS) {
+      res.json({ models: cached.models, source: cached.source });
+      return;
+    }
+    const goKey = config.OPENCODE_GO_API_KEY || config.OPENCODE_API_KEY;
+    const zenKey = config.OPENCODE_ZEN_API_KEY || config.OPENCODE_API_KEY;
+    const discovered = await discoverOpenCodeModels({ goApiKey: goKey, zenApiKey: zenKey });
+    if (discovered && discovered.length > 0) {
+      const entry: ModelCacheEntry = {
+        models: discovered,
+        fetchedAt: Date.now(),
+        source: "discovery",
+      };
+      modelCache.set("opencode", entry);
+      res.json({ models: entry.models, source: "discovery" });
+      return;
+    }
+    const entry: ModelCacheEntry = {
+      models: OPENCODE_GO_MODELS,
+      fetchedAt: Date.now(),
+      source: "fallback",
+    };
+    modelCache.set("opencode", entry);
+    res.json({ models: entry.models, source: "fallback" });
     return;
   }
   // Default / explicit "ollama" — existing behavior unchanged.

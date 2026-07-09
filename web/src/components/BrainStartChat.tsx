@@ -5,8 +5,10 @@ import { PRESETS_GUIDE } from "../../../shared/src/presetGuide";
 import { renderBrainChatMarkdown } from "../lib/brainChatMarkdown";
 import { InfoTip } from "./setup/InfoTip";
 import { FormattedTipContent } from "./setup/FormattedTipContent";
+import { useSystemLayerModel } from "../hooks/useSystemLayerModel";
 
 const BRAIN_TIP_MAX_WIDTH = 520;
+const BRAIN_TIP_SHOW_DELAY_MS = 400;
 
 const SETUP_AUTO_APPLY_TIP = {
   title: "Configs auto-apply below",
@@ -207,6 +209,7 @@ export function BrainStartChat({
   onStartNow?: (cfg: BrainConfigPatch) => void;
   runContext?: RunBrainContext;
 }) {
+  const { model: systemLayerModel } = useSystemLayerModel();
   const isDuringRun = !!runContext;
   const initialMsg = isDuringRun
     ? `**Run ${runContext.runId?.slice(0, 8)}** · ${runContext.preset ?? "swarm"} · phase **${runContext.phase || "unknown"}**\n\nI have the live run snapshot (transcript, agents, board). Ask about progress, todos, or what agents are doing — I can also explore the workspace read-only when tools are available.`
@@ -319,7 +322,7 @@ export function BrainStartChat({
     }
 
     try {
-      const body: any = { messages: baseForSend };
+      const body: any = { messages: baseForSend, model: systemLayerModel };
       if (runContext) {
         body.runContext = {
           ...runContext,
@@ -493,6 +496,7 @@ export function BrainStartChat({
           <InfoTip
             maxWidth={BRAIN_TIP_MAX_WIDTH}
             preferNoWrap
+            showDelayMs={BRAIN_TIP_SHOW_DELAY_MS}
             trigger={
               <span className="text-[10px] text-violet-400 shrink-0 cursor-help">
                 configs auto-apply below
@@ -507,10 +511,17 @@ export function BrainStartChat({
           </InfoTip>
         </div>
       )}
+      <div
+        className={`text-[10px] text-ink-500 font-mono truncate min-w-0 ${isDuringRun ? "shrink-0" : "mb-2"}`}
+        title={`System model: ${systemLayerModel} — change in sidebar System Status`}
+      >
+        Model: {systemLayerModel}
+      </div>
 
       <InfoTip
         maxWidth={BRAIN_TIP_MAX_WIDTH}
         preferNoWrap
+        showDelayMs={BRAIN_TIP_SHOW_DELAY_MS}
         wrapperClassName={isDuringRun ? "flex flex-1 min-h-0 flex-col" : "block mb-3"}
         trigger={
           <div
@@ -652,6 +663,7 @@ export function BrainStartChat({
           <InfoTip
             maxWidth={BRAIN_TIP_MAX_WIDTH}
             preferNoWrap
+            showDelayMs={BRAIN_TIP_SHOW_DELAY_MS}
             wrapperClassName="flex-1 min-w-0 flex"
             trigger={
               <textarea
@@ -688,7 +700,7 @@ export function BrainStartChat({
           <InfoTip
             maxWidth={BRAIN_TIP_MAX_WIDTH}
             preferNoWrap
-            wrapperClassName="inline-flex shrink-0 self-stretch"
+            showDelayMs={BRAIN_TIP_SHOW_DELAY_MS}
             trigger={
               <button
                 type="button"
@@ -696,8 +708,8 @@ export function BrainStartChat({
                 disabled={loading || !input.trim()}
                 className={
                   isDuringRun
-                    ? `${chipBtn} h-full flex items-center justify-center cursor-help`
-                    : "h-full px-4 rounded bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-sm font-medium flex items-center justify-center cursor-help"
+                    ? `${chipBtn} h-full flex items-center justify-center`
+                    : "h-full px-4 rounded bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-sm font-medium flex items-center justify-center"
                 }
               >
                 Send
@@ -714,12 +726,12 @@ export function BrainStartChat({
           <InfoTip
             maxWidth={BRAIN_TIP_MAX_WIDTH}
             preferNoWrap
-            wrapperClassName="inline-flex shrink-0 self-stretch"
+            showDelayMs={BRAIN_TIP_SHOW_DELAY_MS}
             trigger={
               <button
                 type="button"
                 onClick={requestProactiveSuggestion}
-                className={`${chipBtn} h-full flex items-center justify-center cursor-help`}
+                className={`${chipBtn} h-full flex items-center justify-center`}
                 disabled={loading || suggesting}
               >
                 {suggesting ? "…" : "Suggest"}

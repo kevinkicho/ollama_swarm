@@ -73,9 +73,10 @@ const RETRYABLE_MESSAGE_PATTERNS: readonly RegExp[] = [
   /Server overloaded/i,
   /\boverloaded\b/i,
   /\bserver\s+busy\b/i,
-  // Intra-stream loop abort — retry the turn (false positives possible on
-  // fixed-size cloud frames; real loops should also get a clean retry).
-  /\bintra-stream loop\b/i,
+  // OpenCode / undici: outer message is often bare "fetch failed" with a
+  // retryable cause chain — also retry when no cause is surfaced.
+  /^fetch failed$/i,
+  /OpenCode\b.*\bHTTP 5\d\d\b/i,
 ];
 
 /** Sidebar + transcript retry label — avoids implying local Ollama is down. */
@@ -91,6 +92,9 @@ export function shortRetryReason(err: unknown): string {
   }
   if (/503|overloaded|server busy/i.test(msg)) {
     return "cloud capacity busy (transient; retrying)";
+  }
+  if (/^fetch failed$/i.test(msg) || /OpenCode HTTP 5/i.test(msg)) {
+    return "provider connection failed (transient; retrying)";
   }
   return msg.length > 96 ? `${msg.slice(0, 93)}…` : msg;
 }

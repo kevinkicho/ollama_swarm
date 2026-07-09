@@ -131,6 +131,47 @@ export const OLLAMA_CLOUD_MODELS = [
   "rnj-1:cloud",
 ] as const;
 
+/** Topology row shape needed to resolve a routable model id. */
+export interface AgentModelPin {
+  provider?: Provider;
+  model?: string;
+}
+
+/**
+ * Effective model string for one agent row. Honors per-agent `provider`
+ * when the model (or fallback) would route elsewhere — e.g. provider=opencode
+ * with an empty override must not fall back to a `:cloud` default.
+ */
+export function resolveModelForAgent(agent: AgentModelPin, fallbackModel: string): string {
+  const provider = agent.provider;
+  const explicit = agent.model?.trim();
+
+  if (!provider) {
+    return explicit && explicit.length > 0 ? explicit : fallbackModel;
+  }
+
+  const seed = explicit && explicit.length > 0 ? explicit : fallbackModel;
+  if (seed.length > 0 && detectProvider(seed) === provider) {
+    return seed;
+  }
+
+  const catalog = modelsForProvider(provider);
+  if (explicit && explicit.length > 0) {
+    const bare = stripProviderPrefix(explicit);
+    const mapped = catalog.find(
+      (m) =>
+        stripProviderPrefix(m) === bare ||
+        m.endsWith(`/${bare}`) ||
+        bare.endsWith(stripProviderPrefix(m)),
+    );
+    if (mapped) return mapped;
+  }
+  if (catalog.length > 0) {
+    return catalog[0]!;
+  }
+  return seed.length > 0 ? seed : fallbackModel;
+}
+
 export function modelsForProvider(provider: Provider): readonly string[] {
   switch (provider) {
     case "anthropic":
@@ -146,18 +187,27 @@ export function modelsForProvider(provider: Provider): readonly string[] {
   }
 }
 
-// OpenCode Go — curated open models (https://opencode.ai/docs/go/)
+// OpenCode Go — curated open models (https://opencode.ai/docs/go/).
+// Server may replace with live list from GET /zen/go/v1/models when keyed.
 export const OPENCODE_GO_MODELS = [
+  "opencode-go/glm-5.2",
   "opencode-go/glm-5.1",
   "opencode-go/glm-5",
+  "opencode-go/kimi-k2.7-code",
   "opencode-go/kimi-k2.6",
   "opencode-go/kimi-k2.5",
   "opencode-go/deepseek-v4-pro",
   "opencode-go/deepseek-v4-flash",
-  "opencode-go/mimo-v2.5",
-  "opencode-go/mimo-v2.5-pro",
+  "opencode-go/minimax-m3",
   "opencode-go/minimax-m2.7",
   "opencode-go/minimax-m2.5",
+  "opencode-go/qwen3.7-max",
+  "opencode-go/qwen3.7-plus",
   "opencode-go/qwen3.6-plus",
   "opencode-go/qwen3.5-plus",
+  "opencode-go/mimo-v2.5-pro",
+  "opencode-go/mimo-v2.5",
+  "opencode-go/mimo-v2-pro",
+  "opencode-go/mimo-v2-omni",
+  "opencode-go/hy3-preview",
 ] as const;

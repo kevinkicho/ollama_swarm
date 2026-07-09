@@ -26,7 +26,8 @@ export function resolveToolProfileId(
   const web = isWebToolsEnabled(cfg);
   switch (role) {
     case "planner":
-      return web ? "swarm-planner" : "swarm-read";
+      // Planner always gets the full read/web/bash toolkit — not gated on run config.
+      return "swarm-planner";
     case "worker":
       // Hunk workers always get read/grep/glob/list — todos routinely reference
       // files beyond the windowed excerpt and workers must verify anchors.
@@ -86,7 +87,7 @@ export function allowsUnboundedToolTurns(profile: ToolProfileId): boolean {
 export const PROFILE_TOOLS: Record<ToolProfileId, readonly string[]> = {
   swarm: [],
   "swarm-read": ["read", "grep", "glob", "list"],
-  "swarm-planner": ["read", "grep", "glob", "list", "web_search", "web_fetch"],
+  "swarm-planner": ["read", "grep", "glob", "list", "bash", "web_search", "web_fetch"],
   "swarm-builder": ["read", "grep", "glob", "list", "bash"],
   "swarm-builder-research": ["read", "grep", "glob", "list", "bash", "web_search", "web_fetch"],
   "swarm-research": ["read", "grep", "glob", "list", "web_search", "web_fetch"],

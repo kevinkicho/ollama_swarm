@@ -93,6 +93,8 @@ export interface ChatResult {
   };
   /** Provider-set error message when finishReason === "error". */
   errorMessage?: string;
+  /** Original transport error — preserved for retry classification. */
+  errorCause?: unknown;
 }
 
 export interface SessionProvider {

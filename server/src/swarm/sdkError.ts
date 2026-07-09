@@ -38,3 +38,12 @@ export function describeSdkError(err: unknown): string {
   }
   return String(err);
 }
+
+/** Throw a chat-provider error while preserving the underlying cause for retry logic. */
+export function throwChatProviderError(message: string, cause?: unknown): never {
+  const e = new Error(message);
+  if (cause !== undefined) {
+    (e as Error & { cause?: unknown }).cause = cause;
+  }
+  throw e;
+}

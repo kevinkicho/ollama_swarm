@@ -4,8 +4,6 @@ import { randomUUID } from "node:crypto";
 
 import type { Agent } from "../../services/AgentManager.js";
 import type { AgentState, SwarmPhase, TranscriptEntry, TranscriptEntrySummary } from "../../types.js";
-import { config as appConfig } from "../../config.js";
-import { detectSemanticLoop } from "../semanticLoopDetector.js";
 import { buildCrashSnapshot } from "./crashSnapshot.js";
 import {
   buildWireSnapshot,
@@ -35,12 +33,9 @@ export interface RunnerUtilContext {
   pendingToolTraceByAgent?: Map<string, ToolTraceEntry[]>;
   todoQueue: TodoQueue;
   findings: FindingsLog;
-  consecutiveLoopDetections: number;
-  lastLoopWarningAtTurn: number;
   activeAborts: Set<AbortController>;
   lifecycleState: LifecycleState;
   terminationReason?: string;
-  loopDetectionsToHalt: number;
   getAmendments?: () => Array<{ ts: number; text: string }>;
   scheduleStateWrite(): void;
   appendSystem(text: string, summary?: TranscriptEntrySummary): void;
@@ -200,44 +195,6 @@ export function appendAgent(
   };
   ctx.transcript.push(entry);
   ctx.emit({ type: "transcript_append", entry });
-  if (appConfig.SWARM_LOOP_DETECTION) {
-    maybeEmitLoopWarning(ctx);
-  }
-}
-
-export function maybeEmitLoopWarning(ctx: RunnerUtilContext): void {
-  const agentTexts = ctx.transcript
-    .filter((e) => e.role === "agent" && typeof e.text === "string")
-    .map((e) => e.text as string);
-  const verdict = detectSemanticLoop({ recentTurns: agentTexts });
-  if (!verdict.inLoop) {
-    if (verdict.windowSize >= 4) ctx.consecutiveLoopDetections = 0;
-    return;
-  }
-  if (
-    ctx.lastLoopWarningAtTurn >= 0 &&
-    agentTexts.length - ctx.lastLoopWarningAtTurn < verdict.windowSize
-  ) {
-    return;
-  }
-  ctx.lastLoopWarningAtTurn = agentTexts.length;
-  ctx.consecutiveLoopDetections += 1;
-  const haltCap = ctx.loopDetectionsToHalt;
-  if (ctx.consecutiveLoopDetections >= haltCap) {
-    const reason = `loop-detected (${haltCap} consecutive detections — last: ${verdict.reason})`;
-    ctx.terminationReason = reason;
-    ctx.lifecycleState = "stopping";
-    ctx.appendSystem(
-      `[loop-detector] HALT: ${reason}. Stopping the run before more budget burns on repetition.`,
-    );
-    for (const ctrl of ctx.activeAborts) {
-      try { ctrl.abort(new Error("loop-detected")); } catch { /* */ }
-    }
-    return;
-  }
-  ctx.appendSystem(
-    `[loop-detector] ${verdict.reason} — consider changing tactic, splitting the todo, or wrapping up. (${ctx.consecutiveLoopDetections}/${haltCap} consecutive detections; halts at ${haltCap})`,
-  );
 }
 
 export function setPhase(

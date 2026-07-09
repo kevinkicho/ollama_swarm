@@ -45,12 +45,9 @@ export function utilCtx(r: BlackboardRunnerFields): RunnerUtilContext {
     transcript: r.transcript,
     todoQueue: r.todoQueue,
     findings: r.findings,
-    consecutiveLoopDetections: r.consecutiveLoopDetections,
-    lastLoopWarningAtTurn: r.lastLoopWarningAtTurn,
     activeAborts: r.activeAborts,
     lifecycleState: r.lifecycleState,
     terminationReason: r.terminationReason,
-    loopDetectionsToHalt: r.loopDetectionsToHalt,
     scheduleStateWrite: () => r.scheduleStateWrite(),
     appendSystem: (text: string, summary?: TranscriptEntrySummary) => r.appendSystem(text, summary),
     emit: (e: SwarmEvent) => r.opts.emit(e),
@@ -77,6 +74,8 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
     setRunStartedAt: (v: number | undefined) => { r.runStartedAt = v; },
     getRunBootedAt: () => r.runBootedAt,
     setRunBootedAt: (v: number | undefined) => { r.runBootedAt = v; },
+    getGitPorcelainAtRunStart: () => r.gitPorcelainAtRunStart,
+    setGitPorcelainAtRunStart: (v: string) => { r.gitPorcelainAtRunStart = v; },
     getTokenBaselineForRun: () => r.tokenBaselineForRun,
     setTokenBaselineForRun: (v: number | undefined) => { r.tokenBaselineForRun = v; },
     getTickAccumulator: () => r.tickAccumulator,
@@ -99,10 +98,6 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
     setMemoryPaused: (v: boolean) => { r.memoryPaused = v; },
     getLastMemoryPressureLevel: () => r.lastMemoryPressureLevel,
     setLastMemoryPressureLevel: (v: "ok" | "throttle" | "pause") => { r.lastMemoryPressureLevel = v; },
-    getConsecutiveLoopDetections: () => r.consecutiveLoopDetections,
-    setConsecutiveLoopDetections: (v: number) => { r.consecutiveLoopDetections = v; },
-    getLastLoopWarningAtTurn: () => r.lastLoopWarningAtTurn,
-    setLastLoopWarningAtTurn: (v: number) => { r.lastLoopWarningAtTurn = v; },
     getActive: () => r.active,
     setActive: (v: RunConfig | undefined) => { r.active = v; },
     getContract: () => r.contract,
@@ -165,6 +160,14 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
     clearStateSnapshotScheduler: () => r.stateSnapshotScheduler.clearTimer(),
     emit: (ev: SwarmEvent) => r.opts.emit(ev),
     excludeRunnerArtifacts: (destPath: string) => r.opts.repos.excludeRunnerArtifacts(destPath),
+    captureGitBaseline: async (clonePath: string) => {
+      try {
+        const gs = await r.opts.repos.gitStatus(clonePath);
+        r.gitPorcelainAtRunStart = gs.porcelain;
+      } catch {
+        r.gitPorcelainAtRunStart = "";
+      }
+    },
     buildSeed: (clonePath: string, cfg: RunConfig) => r.buildSeed(clonePath, cfg),
     spawnAgentNoOpencode: (opts: SpawnOpts) => r.opts.manager.spawnAgentNoOpencode(opts),
     getManager: () => r.opts.manager,
@@ -423,10 +426,6 @@ export function promptContext(r: BlackboardRunnerFields): PromptContext {
     setLifecycleState: (v: LifecycleState) => { r.lifecycleState = v; },
     getTerminationReason: () => r.terminationReason,
     setTerminationReason: (v: string | undefined) => { r.terminationReason = v; },
-    getConsecutiveLoopDetections: () => r.consecutiveLoopDetections,
-    setConsecutiveLoopDetections: (v: number) => { r.consecutiveLoopDetections = v; },
-    getLastLoopWarningAtTurn: () => r.lastLoopWarningAtTurn,
-    setLastLoopWarningAtTurn: (v: number) => { r.lastLoopWarningAtTurn = v; },
     manager: r.opts.manager,
     emit: r.opts.emit,
     logDiag: r.opts.logDiag,

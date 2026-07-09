@@ -19,7 +19,16 @@ import type { useProviders } from "../../hooks/useProviders";
 type ProvidersStatus = ReturnType<typeof useProviders>;
 
 const PROVIDER_LABELS: Record<Provider, string> = {
-  ollama: "Ollama (local)",
+  ollama: "Ollama",
+  "ollama-cloud": "Ollama Cloud",
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  opencode: "OpenCode",
+};
+
+/** Compact dropdown labels (sidebar) — same names, no abbreviations. */
+const PROVIDER_COMPACT_LABELS: Record<Provider, string> = {
+  ollama: "Ollama",
   "ollama-cloud": "Ollama Cloud",
   anthropic: "Anthropic",
   openai: "OpenAI",
@@ -33,34 +42,63 @@ const PROVIDER_ORDER: readonly Provider[] = ["ollama", "ollama-cloud", "opencode
 const PROVIDER_ENV_VAR: Partial<Record<Provider, string>> = {
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
-  opencode: "OPENCODE_GO_API_KEY / OPENCODE_ZEN_API_KEY",
+  opencode: "OPENCODE_API_KEY or OPENCODE_GO_API_KEY",
 };
+
+function providerAvailable(p: Provider, status: ProvidersStatus): boolean {
+  if (p === "ollama" || p === "ollama-cloud") return true;
+  if (p === "opencode") return status.providers?.opencode?.available ?? false;
+  return status.providers ? status.providers[p].available : true;
+}
 
 export function ProviderTabs({
   value,
   onChange,
   status,
+  variant = "tabs",
 }: {
   value: Provider;
   onChange: (next: Provider) => void;
   status: ProvidersStatus;
+  /** `compact` = dropdown for narrow sidebars; `tabs` = horizontal tab row (wraps). */
+  variant?: "tabs" | "compact";
 }) {
+  if (variant === "compact") {
+    return (
+      <select
+        aria-label="AI provider"
+        value={value}
+        onChange={(e) => onChange(e.target.value as Provider)}
+        className="w-full min-w-0 max-w-full text-[11px] bg-ink-900 border border-ink-700 rounded px-2 py-1.5 text-ink-200 focus:outline-none focus:border-emerald-600"
+      >
+        {PROVIDER_ORDER.map((p) => {
+          const available = providerAvailable(p, status);
+          const envVar = PROVIDER_ENV_VAR[p];
+          return (
+            <option key={p} value={p} disabled={!available}>
+              {PROVIDER_COMPACT_LABELS[p]}
+              {!available ? " (no key)" : ""}
+              {envVar && !available ? ` — ${envVar}` : ""}
+            </option>
+          );
+        })}
+      </select>
+    );
+  }
+
   return (
-    <div role="tablist" aria-label="AI provider" className="flex gap-1 bg-ink-900 border border-ink-700 rounded p-1">
+    <div
+      role="tablist"
+      aria-label="AI provider"
+      className="flex flex-wrap gap-1 bg-ink-900 border border-ink-700 rounded p-1 min-w-0"
+    >
       {PROVIDER_ORDER.map((p) => {
         const label = PROVIDER_LABELS[p];
         // Ollama (local) and Ollama Cloud are "available" whenever the
         // local install responds — for cloud, the local Ollama proxies
         // :cloud models to ollama.com when an account is configured.
         // Paid providers gate on env-set API key.
-        const available =
-          p === "ollama" || p === "ollama-cloud"
-            ? true
-            : p === "opencode"
-              ? (status.providers?.opencode?.available ?? false)
-              : status.providers
-                ? status.providers[p].available
-                : true; // optimistic while loading
+        const available = providerAvailable(p, status);
         const noKey = !available;
         const active = value === p;
         const envVar = PROVIDER_ENV_VAR[p];
@@ -73,7 +111,7 @@ export function ProviderTabs({
             disabled={noKey}
             onClick={() => onChange(p)}
             className={[
-              "flex-1 px-3 py-2 rounded text-sm font-medium transition-colors",
+              "shrink-0 px-2 py-1.5 rounded text-[11px] font-medium transition-colors whitespace-nowrap",
               active
                 ? "bg-emerald-600 text-white shadow-sm"
                 : noKey

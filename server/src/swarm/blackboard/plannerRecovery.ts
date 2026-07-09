@@ -9,6 +9,8 @@ import {
 } from "@ollama-swarm/shared/parseAgentJson";
 import { interruptibleSleep } from "../interruptibleSleep.js";
 import { runPlannerAuditorSalvage } from "./plannerAuditorAssist.js";
+import { isRetryableSdkError } from "./retry.js";
+import { describeSdkError } from "../sdkError.js";
 
 export const PLANNER_EMIT_MAX_ATTEMPTS = 8;
 export const PLANNER_EMIT_PAUSE_BASE_MS = 12_000;
@@ -150,7 +152,7 @@ export async function runPlannerEmitRecovery<T>(
 
     opts.emitActivity(label, attempt, maxAttempts, mode);
     opts.appendSystem(
-      `[${opts.agent.id}] ${label} — attempt ${attempt}/${maxAttempts}${useEmitOnly ? " (JSON only, no tools)" : ""}`,
+      `[${opts.agent.id}] ${label} — attempt ${attempt}/${maxAttempts}${useEmitOnly ? " (structured emit)" : ""}`,
     );
 
     const prompt = useEmitOnly
@@ -159,13 +161,30 @@ export async function runPlannerEmitRecovery<T>(
         ? opts.buildExplorePrompt()
         : opts.buildRepairPrompt(lastRaw || exploreResponse, lastReason);
 
-    const { response, agentUsed } = await opts.promptPlannerSafely(
-      opts.agent,
-      prompt,
-      profile,
-      useEmitOnly ? opts.jsonSchema : undefined,
-      { kind: opts.kind, label },
-    );
+    let response: string;
+    let agentUsed: Agent;
+    try {
+      const prompted = await opts.promptPlannerSafely(
+        opts.agent,
+        prompt,
+        profile,
+        useEmitOnly ? opts.jsonSchema : undefined,
+        { kind: opts.kind, label },
+      );
+      response = prompted.response;
+      agentUsed = prompted.agentUsed;
+    } catch (err) {
+      if (opts.getStopping()) return { ok: false, reason: "run stopping", lastRaw: lastRaw || "" };
+      const msg = describeSdkError(err);
+      lastReason = `transport: ${msg}`;
+      opts.appendSystem(
+        `[${opts.agent.id}] ${opts.kind} transport error (attempt ${attempt}/${maxAttempts}): ${msg}`,
+      );
+      if (!isRetryableSdkError(err)) {
+        return { ok: false, reason: lastReason, lastRaw: lastRaw || "" };
+      }
+      continue;
+    }
     if (opts.getStopping()) return { ok: false, reason: "run stopping", lastRaw: response };
 
     opts.appendAgent(agentUsed, response);

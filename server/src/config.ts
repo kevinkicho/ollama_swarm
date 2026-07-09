@@ -192,11 +192,6 @@ const Schema = z.object({
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
-  // Semantic loop detection (Jaccard on recent turns).
-  SWARM_LOOP_DETECTION: z
-    .enum(["true", "false", "1", "0", "yes", "no"])
-    .default("false")
-    .transform((v) => v === "true" || v === "1" || v === "yes"),
   // Pause runs when last WS subscriber disconnects.
   SWARM_PAUSE_ON_DISCONNECT: z
     .enum(["true", "false", "1", "0", "yes", "no"])

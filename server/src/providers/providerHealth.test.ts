@@ -69,6 +69,23 @@ test("probeProviders — anthropic unconfigured without key", async (t) => {
   assert.equal(rec.hasKey, false);
 });
 
+test("probeProviders — opencode ok via models discovery", async () => {
+  const fetchImpl = (async (url: string) => {
+    if (url === "https://opencode.ai/zen/go/v1/models") {
+      return new Response(JSON.stringify({ data: [{ id: "glm-5.1" }, { id: "deepseek-v4-flash" }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  await probeProviders({ providers: ["opencode"], force: true, fetchImpl });
+  const rec = getProvidersStatusPayload().providers.opencode;
+  assert.equal(rec.probeStatus, "ok");
+  assert.equal(rec.modelCount, 2);
+});
+
 test("probeProviders — opencode rate limit surfaces as rate_limited", async (t) => {
   if (!hasProviderKey("opencode")) {
     return t.skip("no OpenCode API key in this environment");

@@ -12,6 +12,14 @@
 import type { Agent } from "../services/AgentManager.js";
 import { pickProvider } from "../providers/pickProvider.js";
 import { tokenTracker } from "../services/ollamaProxy.js";
+import { throwChatProviderError } from "./sdkError.js";
+import {
+  isRetryableSdkError,
+  RETRY_BACKOFF_MS,
+  RETRY_MAX_ATTEMPTS,
+  shortRetryReason,
+} from "./blackboard/retry.js";
+import { interruptibleSleep } from "./interruptibleSleep.js";
 import { ToolDispatcher, defaultToolsForProfile, type ProfileName } from "../tools/ToolDispatcher.js";
 import {
   allowsUnboundedToolTurns,
@@ -52,6 +60,10 @@ export interface ChatOnceOpts {
   /** When set, upgrades swarm-read → swarm-research for legacy call sites. */
   webToolsConfig?: WebToolsConfig;
   mcpServers?: string;
+  /** Explicit tool-loop cap; overrides allowsUnboundedToolTurns when set. */
+  maxToolTurns?: number;
+  /** Fired before a transport retry (attempt >= 2). */
+  onRetry?: (info: { attempt: number; max: number; reasonShort: string; delayMs: number }) => void;
 }
 
 // Mirrors what `agent.client.session.prompt` returns so callers don't
@@ -63,7 +75,7 @@ export interface ChatOnceResult {
   };
 }
 
-export async function chatOnce(
+async function chatOnceOnce(
   agent: Agent,
   opts: ChatOnceOpts,
 ): Promise<ChatOnceResult> {
@@ -105,9 +117,11 @@ export async function chatOnce(
       ...(tools.length > 0 ? { tools } : {}),
       ...(dispatcher ? { dispatcher } : {}),
       ...(opts.onTool ? { onTool: opts.onTool } : {}),
-      ...(profileForTools && allowsUnboundedToolTurns(profileForTools as import("../../../shared/src/toolProfiles.js").ToolProfileId)
-        ? { maxToolTurns: Number.POSITIVE_INFINITY }
-        : {}),
+      ...(opts.maxToolTurns !== undefined
+        ? { maxToolTurns: opts.maxToolTurns }
+        : profileForTools && allowsUnboundedToolTurns(profileForTools as import("../../../shared/src/toolProfiles.js").ToolProfileId)
+          ? { maxToolTurns: Number.POSITIVE_INFINITY }
+          : {}),
       ...(opts.format !== undefined ? { format: opts.format } : {}),
     });
     if (result.usage) {
@@ -121,11 +135,43 @@ export async function chatOnce(
       });
     }
     if (result.finishReason === "error") {
-      throw new Error(result.errorMessage ?? "chatOnce: provider error");
+      throwChatProviderError(
+        result.errorMessage ?? "chatOnce: provider error",
+        result.errorCause,
+      );
     }
     if (result.finishReason === "aborted") {
       throw new Error("aborted");
     }
     return { data: { parts: [{ type: "text", text: result.text }] } };
   }
+}
+
+/** One-shot chat with the same transport retry semantics as promptWithRetry. */
+export async function chatOnce(
+  agent: Agent,
+  opts: ChatOnceOpts,
+): Promise<ChatOnceResult> {
+  const signal = opts.signal ?? new AbortController().signal;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await chatOnceOnce(agent, { ...opts, signal });
+    } catch (err) {
+      lastErr = err;
+      if (signal.aborted) throw err;
+      if (!isRetryableSdkError(err)) throw err;
+      if (attempt >= RETRY_MAX_ATTEMPTS) throw err;
+      const delayMs = RETRY_BACKOFF_MS[attempt - 1];
+      opts.onRetry?.({
+        attempt: attempt + 1,
+        max: RETRY_MAX_ATTEMPTS,
+        reasonShort: shortRetryReason(err),
+        delayMs,
+      });
+      const completed = await interruptibleSleep(delayMs, signal);
+      if (!completed) throw err;
+    }
+  }
+  throw lastErr ?? new Error("chatOnce: no result");
 }

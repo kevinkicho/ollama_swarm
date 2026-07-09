@@ -17,6 +17,8 @@ function shouldUseEventLogRunId(): boolean {
 import { CopyChip } from "./CopyChip";
 import { ToolingConfigPanel } from "./ToolingConfigPanel";
 import type { ConformanceSample, DriftSample } from "../state/store";
+import { isActiveSwarmPhase } from "../lib/swarmPhase";
+import { submitMidRunNudge } from "../lib/submitMidRunNudge";
 
 // Truncate-from-LEFT (per Kevin's Unit 52c spec preference): the
 // distinguishing tail of a path is the run-name + repo-name, not the
@@ -116,8 +118,8 @@ export function IdentityStrip() {
           </span>
           <span className="text-ink-600">·</span>
           <ConformanceGauge samples={conformance} drift={drift} />
-          {runId && phase !== "idle" && phase !== "completed" && phase !== "stopped" ? (
-            <AmendButton runId={runId} amendmentCount={amendments.length} />
+          {runId && isActiveSwarmPhase(phase) ? (
+            <AmendButton amendmentCount={amendments.length} />
           ) : null}
           {cfg.clonePath ? (
             <button
@@ -468,13 +470,7 @@ function AgreementHint({ llmJudge, embedding }: { llmJudge: number; embedding: n
 // event (handled by useSwarmSocket → store.pushAmendment) so the
 // gauge area shows the new amendment count without any local state
 // roundtrip. The runner picks it up at the next planner-tier prompt.
-function AmendButton({
-  runId,
-  amendmentCount,
-}: {
-  runId: string;
-  amendmentCount: number;
-}) {
+function AmendButton({ amendmentCount }: { amendmentCount: number }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -485,23 +481,9 @@ function AmendButton({
     setBusy(true);
     setError(null);
     try {
-      // Fetch the active run ID from the server — this ensures the
-      // nudge targets the currently-running run, not a reviewed/stale one.
-      const statusRes = await fetch("/api/swarm/status");
-      if (!statusRes.ok) throw new Error(`Server status: HTTP ${statusRes.status}`);
-      const status = (await statusRes.json()) as { runId?: string };
-      const activeRunId = status.runId;
-      if (!activeRunId) throw new Error("No active run on server");
-
-      const res = await fetch("/api/swarm/amend", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ runId: activeRunId, text: trimmed }),
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${res.status}`);
-      }
+      const { amendment } = await submitMidRunNudge(trimmed);
+      // Optimistic count — WS event is dropped when store.runId !== active run.
+      useSwarm.getState().pushAmendment(amendment);
       setText("");
       setOpen(false);
     } catch (e) {

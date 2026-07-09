@@ -4,7 +4,13 @@ import path from "node:path";
 import { promises as fs, readFileSync } from "node:fs";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
-import { TopologySchema, deriveLegacyFields, synthesizeTopology } from "@ollama-swarm/shared/topology";
+import {
+  TopologySchema,
+  countAgentsWithRole,
+  deriveLegacyFields,
+  minWorkerCountForPreset,
+  synthesizeTopology,
+} from "@ollama-swarm/shared/topology";
 import { BRAIN_ALIAS_USER_NOTE, resolveBrainAgentId } from "@ollama-swarm/shared/brainAlias";
 import type { Todo } from "../swarm/blackboard/types.js";
 import { resolveModels, type ModelDefaults } from "@ollama-swarm/shared/modelConfig";
@@ -399,6 +405,27 @@ export function swarmRouter(orch: Orchestrator): Router {
         error: `Map-reduce requires at least 4 agents (1 reducer + 3 mappers). With fewer mappers, slice quality degrades sharply and one mapper typically gets stuck on a tiny slice. Got agentCount=${effAgentCount}.`,
       });
       return;
+    }
+    // Blackboard needs at least one worker (planner + worker(s) + auditor).
+    // agentCount excludes the dedicated auditor, so effAgentCount < 2 means
+    // planner-only with zero workers to claim todos.
+    if (parsed.data.preset === "blackboard") {
+      const minWorkers = minWorkerCountForPreset("blackboard");
+      const topoWorkers = parsed.data.topology
+        ? countAgentsWithRole(parsed.data.topology, "worker")
+        : null;
+      if (topoWorkers !== null && topoWorkers < minWorkers) {
+        res.status(400).json({
+          error: `Blackboard requires at least ${minWorkers} worker agent (planner + worker(s) + auditor). Got ${topoWorkers} worker(s) in topology.`,
+        });
+        return;
+      }
+      if (effAgentCount < 1 + minWorkers) {
+        res.status(400).json({
+          error: `Blackboard requires at least ${1 + minWorkers} non-auditor agents (planner + ≥1 worker). Got agentCount=${effAgentCount}.`,
+        });
+        return;
+      }
     }
     // Council preset: always exactly 3 agents. 3 is the sweet spot for
     // diverse independent drafts without excessive token burn. Fewer
@@ -1507,7 +1534,7 @@ function registerBrainRoutes(r: Router, orch: Orchestrator) {
   r.post("/brain/chat", async (req: Request, res: Response) => {
     try {
       const body = req.body || {};
-      const { messages = [], runContext, clonePath, structured } = body;
+      const { messages = [], runContext, clonePath, structured, model: clientModel } = body;
       if (!Array.isArray(messages) || messages.length === 0) {
         return res.status(400).json({ error: "messages array required" });
       }
@@ -1612,7 +1639,10 @@ CRITICAL BEHAVIOR:
 - Be concise and actionable.
 - Always ground your preset recommendation in the user's described use-case + the guide above. Provide supporting analysis.`;
 
-      let modelStr = "deepseek-v4-flash:cloud";
+      const { resolveSystemLayerModel } = await import("../services/systemLayerSettings.js");
+      let modelStr = resolveSystemLayerModel(
+        typeof clientModel === "string" ? clientModel : undefined,
+      ).modelString;
       let brainTools: typeof import("../swarm/brainDuringRun.js").BRAIN_EXPLORE_TOOLS | undefined;
       let brainDispatcher: import("../swarm/brainDuringRun.js").BrainExplorerDispatcher | undefined;
       let brainRunId: string | undefined;
@@ -1624,7 +1654,11 @@ CRITICAL BEHAVIOR:
           BRAIN_EXPLORE_TOOLS,
           BrainExplorerDispatcher,
         } = await import("../swarm/brainDuringRun.js");
-        const enriched = enrichBrainRunContext(orch, runContext);
+        const enriched = enrichBrainRunContext(
+          orch,
+          runContext,
+          typeof clientModel === "string" ? clientModel : undefined,
+        );
         if (enriched) {
           systemPrompt = buildDuringRunSystemPrompt(enriched.markdown, enriched.toolsEnabled);
           modelStr = enriched.modelString;

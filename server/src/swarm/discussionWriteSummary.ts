@@ -30,6 +30,7 @@ import type { PerAgentStat, RunSummary } from "./blackboard/summary.js";
 import type { TranscriptEntry, TranscriptEntrySummary } from "../types.js";
 import type { RepoService } from "../services/RepoService.js";
 import type { RunConfig } from "./SwarmRunner.js";
+import { resolveRunGitMetrics } from "./blackboard/gitRunDelta.js";
 
 export interface DiscussionWriteSummaryOpts {
   cfg: RunConfig;
@@ -60,6 +61,8 @@ export interface DiscussionWriteSummaryOpts {
 
   /** Repo service for the gitStatus call. */
   repos: RepoService;
+  /** When set, git summary fields are scoped to this run (not whole-clone dirt). */
+  gitPorcelainAtRunStart?: string;
   /** Runner's appendSystem method. Used to emit the banner + the
    *  terse log line. */
   appendSystem: (text: string, summary?: TranscriptEntrySummary) => void;
@@ -96,6 +99,14 @@ export async function discussionWriteSummary(opts: DiscussionWriteSummaryOpts): 
     // best-effort — git status failure shouldn't block the summary
   }
 
+  const runGit = opts.gitPorcelainAtRunStart !== undefined
+    ? await resolveRunGitMetrics(opts.cfg.localPath, {
+        baselinePorcelain: opts.gitPorcelainAtRunStart,
+        endPorcelain: gitStatus.porcelain,
+        runStartedAt: opts.startedAt,
+      })
+    : { filesChanged: 0, finalGitStatus: "", deliverables: undefined };
+
   const summaryInput: DiscussionSummaryInput = {
     config: {
       repoUrl: opts.cfg.repoUrl,
@@ -111,8 +122,8 @@ export async function discussionWriteSummary(opts: DiscussionWriteSummaryOpts): 
     crashMessage: opts.crashMessage,
     stopping: opts.stopping,
     earlyStopDetail: opts.earlyStopDetail,
-    filesChanged: gitStatus.changedFiles,
-    finalGitStatus: gitStatus.porcelain,
+    filesChanged: runGit.filesChanged,
+    finalGitStatus: runGit.finalGitStatus,
     agents: opts.agents,
     transcript: opts.transcript,
     topology: opts.topology,

@@ -28,10 +28,6 @@ export function councilWorkerFallbackModel(
 export function summarizeWorkerFailureReason(raw: string): string {
   const msg = raw.trim();
   if (!msg) return "unknown failure";
-  if (/intra-stream loop/i.test(msg)) {
-    const detail = msg.replace(/^intra-stream loop detected:\s*/i, "").trim();
-    return detail ? `stream loop (${detail})` : "stream loop aborted";
-  }
   if (/empty provider response/i.test(msg)) return "empty provider response";
   if (/JSON parse failed/i.test(msg)) return msg.slice(0, 160);
   if (/hunk file/i.test(msg) && /not in expectedFiles/i.test(msg)) return msg.slice(0, 160);

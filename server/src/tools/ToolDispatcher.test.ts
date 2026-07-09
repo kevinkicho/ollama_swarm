@@ -37,12 +37,12 @@ test("PROFILES — swarm-builder-research allows bash and web tools", () => {
   assert.equal(PROFILES["swarm-builder-research"].write, "deny");
 });
 
-test("PROFILES — swarm-planner can inspect files but cannot mutate or execute", () => {
+test("PROFILES — swarm-planner has full read/web/bash, cannot mutate repo", () => {
   assert.deepEqual(
     ["read", "grep", "glob", "list"].map((tool) => PROFILES["swarm-planner"][tool as keyof typeof PROFILES["swarm-planner"]]),
     ["allow", "allow", "allow", "allow"],
   );
-  assert.equal(PROFILES["swarm-planner"].bash, "deny");
+  assert.equal(PROFILES["swarm-planner"].bash, "allow");
   assert.equal(PROFILES["swarm-planner"].write, "deny");
   assert.equal(PROFILES["swarm-planner"].edit, "deny");
   assert.equal(PROFILES["swarm-planner"].propose_hunks, "deny");
@@ -148,6 +148,24 @@ test("ToolDispatcher — grep finds pattern with line numbers", async () => {
     if (r.ok) {
       assert.match(r.output, /src\/a\.ts:2:/);
       assert.match(r.output, /function add/);
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ToolDispatcher — grep accepts a single file path (not only directories)", async () => {
+  const root = await makeFixtureClone();
+  try {
+    const d = new ToolDispatcher("swarm-read", root);
+    const r = await d.dispatch({
+      tool: "grep",
+      args: { pattern: "function add", path: "src/a.ts" },
+    });
+    assert.equal(r.ok, true);
+    if (r.ok) {
+      assert.match(r.output, /src\/a\.ts:2:/);
+      assert.doesNotMatch(r.output, /ENOTDIR/i);
     }
   } finally {
     await fs.rm(root, { recursive: true, force: true });

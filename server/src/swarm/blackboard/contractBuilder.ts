@@ -157,8 +157,9 @@ export async function runFirstPassContract(
   isFallbackAttempt = false,
 ): Promise<void> {
   const modelAtEntry = agent.model;
-  const exploreProfile = resolveToolProfile("planner", ctx.getActive());
-  const emitProfile = "swarm-read" as import("../../tools/ToolDispatcher.js").ProfileName;
+  const plannerProfile = resolveToolProfile("planner", ctx.getActive());
+  const exploreProfile = plannerProfile;
+  const emitProfile = plannerProfile;
 
   const recovery = await runPlannerEmitRecovery({
     kind: "contract",
@@ -251,8 +252,9 @@ export async function runCouncilContractDraftForAgent(
   agent: Agent,
   seed: PlannerSeed,
 ): Promise<{ agent: Agent; text: string } | null> {
-  const exploreProfile = resolveToolProfile("planner", deps.getActive());
-  const emitProfile = "swarm-read" as import("../../tools/ToolDispatcher.js").ProfileName;
+  const plannerProfile = resolveToolProfile("planner", deps.getActive());
+  const exploreProfile = plannerProfile;
+  const emitProfile = plannerProfile;
   const explorePrompt = `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(
     seed,
     agent.model,

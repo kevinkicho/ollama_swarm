@@ -74,8 +74,9 @@ export async function runPlanner(
       }
     : undefined;
 
-  const exploreProfile = resolveToolProfile("planner", ctx.getActive());
-  const emitProfile = "swarm-read" as ProfileName;
+  const plannerProfile = resolveToolProfile("planner", ctx.getActive());
+  const exploreProfile = plannerProfile;
+  const emitProfile = plannerProfile;
 
   const recovery = await runPlannerEmitRecovery({
     kind: "planner-todos",

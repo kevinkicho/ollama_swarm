@@ -18,7 +18,21 @@
 //
 // One-line mental model: explicit > topology > model > default
 
+import { resolveModelForAgent } from "./providers.js";
 import { deriveLegacyFields, type Topology } from "./topology.js";
+
+export { resolveModelForAgent } from "./providers.js";
+
+/** Resolve spawn model for a topology index (1-based agent index). */
+export function resolveModelForTopologyIndex(
+  topology: Topology | undefined,
+  index: number,
+  roleFallback: string,
+): string {
+  const spec = topology?.agents.find((a) => a.index === index);
+  if (!spec) return roleFallback;
+  return resolveModelForAgent(spec, roleFallback);
+}
 
 export interface ModelConfig {
   /** The user's top-level model selection — the catch-all. */

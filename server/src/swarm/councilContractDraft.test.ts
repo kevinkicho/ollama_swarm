@@ -15,7 +15,7 @@ describe("council contract drafts use repo tools", () => {
   it("shared helper runs explore then emit with tool profiles", () => {
     assert.match(CONTRACT_BUILDER, /runCouncilContractDraftForAgent/);
     assert.match(CONTRACT_BUILDER, /resolveToolProfile\("planner"/);
-    assert.match(CONTRACT_BUILDER, /emitProfile = "swarm-read"/);
+    assert.match(CONTRACT_BUILDER, /emitProfile = plannerProfile/);
     assert.match(CONTRACT_BUILDER, /contract explore/);
     assert.match(CONTRACT_BUILDER, /buildFirstPassContractRepairPrompt/);
   });

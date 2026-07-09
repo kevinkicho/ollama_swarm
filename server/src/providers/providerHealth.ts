@@ -5,6 +5,8 @@ import { PROVIDERS } from "@ollama-swarm/shared/providers";
 import { config } from "../config.js";
 import { discoverAnthropicModels } from "./discoverAnthropicModels.js";
 import { discoverOpenAIModels } from "./discoverOpenAIModels.js";
+import { discoverOpenCodeModels } from "./discoverOpenCodeModels.js";
+import { resolveOpenCodeRoute } from "./openCodeModelRouting.js";
 import { providerGateway, type ProviderHealthEntry } from "./ProviderGateway.js";
 
 export type ProviderProbeStatus =
@@ -211,21 +213,23 @@ async function probeOpenCode(fetchImpl: typeof fetch): Promise<{
   elapsedMs: number;
   error?: string;
 }> {
-  const key =
-    config.OPENCODE_ZEN_API_KEY ||
-    config.OPENCODE_GO_API_KEY ||
-    config.OPENCODE_API_KEY;
+  const goKey = config.OPENCODE_GO_API_KEY || config.OPENCODE_API_KEY;
+  const zenKey = config.OPENCODE_ZEN_API_KEY || config.OPENCODE_API_KEY;
+  const key = goKey || zenKey;
   if (!key) return { ok: false, elapsedMs: 0, error: "no API key" };
+  // Prefer Go tier — subscription keys often have no Zen balance.
+  const probeModel = goKey ? "opencode-go/deepseek-v4-flash" : "opencode/deepseek-v4-flash";
+  const { url: probeUrl, bareModel: probeBareModel } = resolveOpenCodeRoute(probeModel);
   const t0 = Date.now();
   try {
-    const r = await fetchImpl("https://opencode.ai/zen/v1/chat/completions", {
+    const r = await fetchImpl(probeUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "glm-5.1",
+        model: probeBareModel,
         messages: [{ role: "user", content: "ping" }],
         max_tokens: 1,
         stream: false,
@@ -330,12 +334,27 @@ async function probeProvider(
       break;
     }
     case "opencode": {
-      const res = await probeOpenCode(fetchImpl);
-      ok = res.ok;
-      statusCode = res.statusCode;
-      elapsedMs = res.elapsedMs;
-      error = res.error;
       probeStage = "auth";
+      const t0 = Date.now();
+      const goKey = config.OPENCODE_GO_API_KEY || config.OPENCODE_API_KEY;
+      const zenKey = config.OPENCODE_ZEN_API_KEY || config.OPENCODE_API_KEY;
+      const models = await discoverOpenCodeModels({
+        goApiKey: goKey,
+        zenApiKey: zenKey,
+        fetchImpl,
+        timeoutMs: 8000,
+      });
+      elapsedMs = Date.now() - t0;
+      if (models && models.length > 0) {
+        ok = true;
+        modelCount = models.length;
+      } else {
+        const res = await probeOpenCode(fetchImpl);
+        ok = res.ok;
+        statusCode = res.statusCode;
+        elapsedMs += res.elapsedMs;
+        error = res.error;
+      }
       break;
     }
   }

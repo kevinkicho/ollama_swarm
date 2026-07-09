@@ -18,6 +18,8 @@ import { isUsableResearchBrief } from "../researchBrief.js";
 
 export function shouldRunResearchPrePass(cfg: RunConfig, seed: PlannerSeed): boolean {
   if (!seed.webToolsEnabled) return false;
+  // Goal pre-pass already ran with web + read tools — skip redundant web research.
+  if (seed.goalPrePassWithWebTools) return false;
   if (seed.researchNotes && seed.researchNotes.trim().length > 0) return false;
   const directive = (seed.userDirective ?? "").trim();
   if (directive.length > 0) return true;
@@ -65,9 +67,7 @@ export async function runResearchPrePass(
     "- Suggested file targets in the repo for documenting findings",
     "",
     "Cite every claim with at least one URL. Prefer primary sources and recent papers (2020+).",
-    "",
-    "Do NOT end the turn with intent-only prose. You MUST call web_search or read/list local files",
-    "at least once, then return bullet findings with URLs before finishing.",
+    "Use web_search/web_fetch for external facts when helpful.",
   ].join("\n");
 
   if (opts.signal?.aborted) return undefined;

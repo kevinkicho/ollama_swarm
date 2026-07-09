@@ -1,7 +1,13 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
+import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { detectProvider, stripProviderPrefix } from "@ollama-swarm/shared/providers";
 import { pickProvider, __resetProviderSingletons } from "./pickProvider.js";
+import { formatOpenCodeHttpError } from "./OpenCodeProvider.js";
+import {
+  openCodeApiKind,
+  openCodeEndpointUrl,
+  resolveOpenCodeRoute,
+} from "./openCodeModelRouting.js";
 
 // ---------------------------------------------------------------------------
 // stripProviderPrefix & detectProvider — regression for key CRITICAL bug
@@ -96,23 +102,102 @@ describe("OpenCodeProvider — format downgrade", () => {
 
   it("pickProvider correctly identifies opencode provider for all opencode-go models", () => {
     const models = [
+      "opencode-go/glm-5.2",
       "opencode-go/glm-5.1",
-      "opencode-go/glm-5",
-      "opencode-go/kimi-k2.6",
-      "opencode-go/kimi-k2.5",
-      "opencode-go/deepseek-v4-pro",
+      "opencode-go/kimi-k2.7-code",
       "opencode-go/deepseek-v4-flash",
-      "opencode-go/mimo-v2.5",
-      "opencode-go/mimo-v2.5-pro",
-      "opencode-go/minimax-m2.7",
-      "opencode-go/minimax-m2.5",
-      "opencode-go/qwen3.6-plus",
-      "opencode-go/qwen3.5-plus",
+      "opencode-go/minimax-m3",
+      "opencode-go/qwen3.7-plus",
     ];
     for (const m of models) {
       const result = pickProvider(m);
       assert.equal(result.provider.id, "opencode", `${m} should route to opencode`);
       assert.ok(result.modelId.startsWith("opencode-go/"), `${m} should keep full prefix in modelId`);
     }
+  });
+});
+
+describe("openCodeModelRouting", () => {
+  it("routes chat/completions models on Go tier", () => {
+    const route = resolveOpenCodeRoute("opencode-go/deepseek-v4-flash");
+    assert.equal(route.tier, "go");
+    assert.equal(route.api, "chat");
+    assert.equal(route.bareModel, "deepseek-v4-flash");
+    assert.equal(route.url, "https://opencode.ai/zen/go/v1/chat/completions");
+  });
+
+  it("routes messages models on Go tier", () => {
+    const route = resolveOpenCodeRoute("opencode-go/qwen3.6-plus");
+    assert.equal(route.tier, "go");
+    assert.equal(route.api, "messages");
+    assert.equal(route.bareModel, "qwen3.6-plus");
+    assert.equal(route.url, "https://opencode.ai/zen/go/v1/messages");
+  });
+
+  it("routes messages models on Zen tier", () => {
+    const route = resolveOpenCodeRoute("opencode-zen/minimax-m2.7");
+    assert.equal(route.tier, "zen");
+    assert.equal(route.api, "messages");
+    assert.equal(route.url, "https://opencode.ai/zen/v1/messages");
+  });
+
+  it("routes chat/completions models on Zen tier via opencode/ prefix", () => {
+    const route = resolveOpenCodeRoute("opencode/glm-5.1");
+    assert.equal(route.tier, "zen");
+    assert.equal(route.api, "chat");
+    assert.equal(route.url, "https://opencode.ai/zen/v1/chat/completions");
+  });
+
+  it("classifies all documented Go models per opencode.ai/docs/go", () => {
+    const chatModels = [
+      "glm-5.2",
+      "glm-5.1",
+      "kimi-k2.7-code",
+      "kimi-k2.6",
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+      "mimo-v2.5",
+      "mimo-v2.5-pro",
+    ];
+    const messagesModels = [
+      "minimax-m3",
+      "minimax-m2.7",
+      "minimax-m2.5",
+      "qwen3.7-max",
+      "qwen3.7-plus",
+      "qwen3.6-plus",
+    ];
+    for (const m of chatModels) {
+      assert.equal(openCodeApiKind(m), "chat", `${m} should use chat/completions`);
+      assert.equal(
+        openCodeEndpointUrl("go", "chat"),
+        "https://opencode.ai/zen/go/v1/chat/completions",
+      );
+    }
+    for (const m of messagesModels) {
+      assert.equal(openCodeApiKind(m), "messages", `${m} should use /messages`);
+      assert.equal(
+        openCodeEndpointUrl("zen", "messages"),
+        "https://opencode.ai/zen/v1/messages",
+      );
+    }
+  });
+});
+
+describe("formatOpenCodeHttpError", () => {
+  it("maps Zen insufficient balance to actionable message", () => {
+    const msg = formatOpenCodeHttpError(
+      401,
+      JSON.stringify({ error: { type: "CreditsError", message: "Insufficient balance" } }),
+      "zen",
+      "https://opencode.ai/zen/v1/chat/completions",
+    );
+    assert.match(msg, /Zen balance depleted/i);
+    assert.match(msg, /opencode-go/i);
+  });
+
+  it("maps Go 429 to subscription limit message", () => {
+    const msg = formatOpenCodeHttpError(429, "", "go", "https://opencode.ai/zen/go/v1/chat/completions");
+    assert.match(msg, /Go subscription limit/i);
   });
 });

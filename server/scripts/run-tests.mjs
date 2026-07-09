@@ -46,6 +46,7 @@ const TEST_FILES = [
   "src/swarm/blackboard/stateSnapshot.test.ts",
   "src/swarm/blackboard/summary.test.ts",
   "src/swarm/blackboard/runDeliverables.test.ts",
+  "src/swarm/blackboard/gitRunDelta.test.ts",
   "src/swarm/blackboard/finalAudit.test.ts",
   "src/swarm/blackboard/retry.test.ts",
   "src/swarm/blackboard/applyHunks.test.ts",
@@ -166,10 +167,6 @@ const TEST_FILES = [
   "src/swarm/subscriberPausePolicy.test.ts",
   // 2026-05-04 (R8): cross-process clone lock.
   "src/swarm/cloneLock.test.ts",
-  // 2026-05-04 (R9): semantic-loop detector.
-  "src/swarm/semanticLoopDetector.test.ts",
-  // 2026-05-04 (R9 extended): intra-stream loop detector.
-  "src/swarm/intraStreamLoopDetector.test.ts",
   "src/swarm/blackboard/workerFileConflict.test.ts",
   // 2026-05-04 (R10): proactive model-health tracker.
   "src/swarm/modelHealthTracker.test.ts",

@@ -359,6 +359,8 @@ export interface PlannerSeed {
   systemMap?: string;
   /** True when webTools or plannerTools are enabled for this run. */
   webToolsEnabled?: boolean;
+  /** Set when goal-generation pre-pass ran with web/read tools (skips redundant research pre-pass). */
+  goalPrePassWithWebTools?: boolean;
   /** Free-form web research brief from the pre-contract research pass. */
   researchNotes?: string;
   /** Mid-run suggest/ask messages from user chat (steer is in userDirective). */

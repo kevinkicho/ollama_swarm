@@ -9,11 +9,12 @@ import { useSwarm } from "../state/store";
 // Phase 10: brain always available (unless other config).
 import { RunHistoryDropdown } from "./RunHistory";
 import { EventLogPanel } from "./EventLogPanel";
-import SystemHealthDashboard from "./SystemHealthDashboard";
+
 import { NotificationPreferences } from "./NotificationPreferences";
 import { UsageWidget } from "./UsageWidget";
 import { PhasePill, RuntimeTicker } from "./RunHeaderWidgets";
-import { displaySwarmPhase } from "../lib/swarmPhase";
+import { displaySwarmPhase, isActiveSwarmPhase } from "../lib/swarmPhase";
+import { runQueueIsActive } from "../lib/runQueueState";
 import type { RunSummaryDigest } from "../types";
 import { useRunsList } from "../hooks/useRunsList";
 import { BrainStartChat, buildRunContext, getChatContext, type RunBrainContext } from "./BrainStartChat";
@@ -81,7 +82,18 @@ export function SystemWrapper({
     navigate("/");
   };
 
-  const activeRuns = runs.filter((r) => r.isActive).length;
+  const activeRuns = runs.filter((r) => runQueueIsActive(r)).length;
+  const focusedRunDigest = activeRunId
+    ? runs.find((r) => r.runId === activeRunId)
+    : undefined;
+  const focusedRunLive = !!activeRunId && (
+    focusedRunDigest
+      ? runQueueIsActive(focusedRunDigest)
+      : isActiveSwarmPhase(phase)
+  );
+  const focusedRunStatus =
+    focusedRunDigest?.stopReason ??
+    (isActiveSwarmPhase(phase) ? undefined : phase !== "idle" ? phase : undefined);
   const totalRuns = runs.length;
   const completedRuns = runs.filter((r) => !r.isActive && r.stopReason === "completed").length;
   const terminalRuns = runs.filter((r) => !r.isActive).length;
@@ -90,7 +102,7 @@ export function SystemWrapper({
   const handleViewRun = (run: RunSummaryDigest) => {
     const rid = run.runId || "";
     if (!rid) return;
-    if (run.isActive || !run.endedAt) {
+    if (runQueueIsActive(run)) {
       navigate(`/runs/${encodeURIComponent(rid)}`);
     } else if (run.clonePath) {
       // Historical run → review mode (matches RunHistory + parseReviewParams)
@@ -206,9 +218,9 @@ export function SystemWrapper({
   };
 
   return (
-    <div className="h-full flex flex-col">
-      <header className="relative z-20 px-4 py-2 border-b border-ink-700 flex items-center justify-between gap-3 bg-ink-900">
-        <div className="flex items-center gap-3">
+    <div className="h-full flex flex-col min-w-0 overflow-x-hidden">
+      <header className="relative z-20 px-3 sm:px-4 py-2 border-b border-ink-700 flex items-center justify-between gap-2 min-w-0 overflow-hidden bg-ink-900">
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0 min-w-0">
           <button
             type="button"
             onClick={() => navigate('/')}
@@ -230,8 +242,8 @@ export function SystemWrapper({
             </button>
           )}
         </div>
-        <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
-          <div className="flex items-center gap-2 text-[10px] flex-nowrap overflow-x-auto min-w-0 max-w-[min(52vw,32rem)]">
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1 justify-end overflow-hidden">
+          <div className="hidden md:flex items-center gap-2 text-[10px] flex-wrap min-w-0 max-w-full justify-end">
             <StatusDot
               healthy={systemHealthy}
               title={
@@ -301,7 +313,7 @@ export function SystemWrapper({
 
       {/* True floating pill (fixed) for Brain chat, persists across views */}
       {/* Phase 10: brain always available for active runs. */}
-      {activeRunIdForChat && phaseForChat !== "idle" && (
+      {activeRunIdForChat && isActiveSwarmPhase(phaseForChat) && (
         <button
           type="button"
           onClick={handleOpenBrainChat}
@@ -314,8 +326,8 @@ export function SystemWrapper({
 
       <div className="flex-1 flex min-h-0">
         <aside
-          className={`border-r border-ink-700 bg-ink-800 overflow-y-auto transition-all duration-200 ${
-            sidebarCollapsed ? "w-10" : "w-60"
+          className={`shrink-0 border-r border-ink-700 bg-ink-800 overflow-y-auto overflow-x-hidden transition-all duration-200 ${
+            sidebarCollapsed ? "w-10" : "w-56 sm:w-64"
           }`}
         >
           <button
@@ -326,19 +338,21 @@ export function SystemWrapper({
           </button>
 
           {!sidebarCollapsed && (
-            <div className="p-2 space-y-3">
+            <div className="p-2 space-y-3 min-w-0 max-w-full overflow-x-hidden">
               <SystemStatusPanel />
               <RunQueuePanel parentPath={parentPath} onViewRun={handleViewRun} onStopRun={handleStopRun} />
               <MetricsOverviewPanel parentPath={parentPath} />
               <BrainActivityPanel brainHealth={brainHealth} activities={brainActivities} />
               <QuickNavPanel
-                activeRunId={activeRunId}
+                focusedRunId={activeRunId}
+                focusedRunLive={focusedRunLive}
+                focusedRunStatus={focusedRunStatus}
+                phase={phase}
                 parentPath={parentPath}
                 clonePath={clonePathForNav}
                 onSwitchRun={handleSwitchRun}
                 onNewRun={handleNewRun}
               />
-              <SystemHealthDashboard />
               <NotificationPreferences />
             </div>
           )}

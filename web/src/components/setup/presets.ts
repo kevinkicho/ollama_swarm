@@ -56,6 +56,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     id: "blackboard",
     label: "Blackboard (optimistic + small units)",
     summary: "Planner posts todos; workers claim and commit in parallel. CAS on file hashes catches stale plans.",
+    // min 3 = planner + 1 worker + auditor (zero workers cannot run).
     min: 3,
     max: 8,
     recommended: 6,

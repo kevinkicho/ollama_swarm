@@ -2,6 +2,41 @@
 
 This document records major architectural and product decisions with their rationale and status.
 
+## 2026-07-09: No stream guards or loop-detection aborts on agent prompts
+
+**Decision:** Do **not** cap streaming length, abort on intra-stream “loop” heuristics,
+or retry with stream-abort feedback blocks on planner/worker/council prompts.
+
+**What we removed (do not bring back without explicit reversal):**
+- `STREAM_GUARD_*` character caps in `promptWithRetry` and `chatOnceWithStreaming`
+- `intraStreamLoop: true` on blackboard, council, and discussion prompt paths
+- `streamAbortRetry` addenda prepended on guard abort
+- Retryability of `intra-stream loop` / `runaway stream` errors in `retry.ts`
+- Turn-level `SWARM_LOOP_DETECTION` / `maybeEmitLoopWarning` (Jaccard on recent
+  turns, halt after 3 consecutive detections)
+- `semanticLoopDetector.ts` and `intraStreamLoopDetector.ts` modules
+
+**Rationale:**
+- Guards aborted **after** large token spend (80–100K+ reasoning), then **`promptWithRetry`
+  restarted the full explore prompt** — agents re-read the repo and re-ran analysis.
+- Nested retries (3× transport × 8× planner recovery) produced **2×–4× billed work**
+  without reliably fixing council contract explore ramble.
+- Long exploratory reasoning often failed stream caps while **not** being true
+  byte-identical loops; false positives added more rework.
+- User-visible outcome: **massive inefficiency, slowness, and bloated AI cost** — worse
+  than letting the user stop a run manually.
+
+**If runaway output is a problem:** tighten **prompts** (tool-call budgets, “emit JSON
+after 3 reads”), reduce `agentCount`, or user **Stop** — **not** server-side stream
+guards that discard progress and trigger full retries.
+
+**Detail:** `docs/postmortems/stream-guards-removed.md`
+
+**Status:** Shipped (removed). Detector modules deleted; no guard or loop-abort
+wiring remains in any swarm preset.
+
+---
+
 ## 2026-07-08: No client-side `:cloud` admission / concurrency throttling
 
 **Decision:** Do **not** implement local “cloud admission”, slot queues, or artificial

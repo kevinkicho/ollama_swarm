@@ -249,7 +249,7 @@ export async function runContractDerivation(
         getActive: () => state.cfg,
         appendSystem: state.appendSystem,
         appendAgent: state.appendAgent,
-        manager: state.manager,
+        manager: state.manager as import("../services/AgentManager.js").AgentManager,
         emitAgentState: (s) => state.emit({ type: "agent_state", agent: s }),
         promptPlannerSafely: (agent, promptText, agentName, ollamaFormat, activity) =>
           promptPlannerSafely(

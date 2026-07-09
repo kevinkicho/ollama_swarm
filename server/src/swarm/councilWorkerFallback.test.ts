@@ -27,14 +27,6 @@ describe("councilWorkerFallbackModel", () => {
 });
 
 describe("summarizeWorkerFailureReason", () => {
-  it("shortens intra-stream loop errors", () => {
-    const s = summarizeWorkerFailureReason(
-      "intra-stream loop detected: intra-stream loop: suffix of 25 chars repeated 3 times",
-    );
-    assert.match(s, /^stream loop \(/);
-    assert.match(s, /suffix of 25 chars/);
-  });
-
   it("passes through JSON parse reasons", () => {
     assert.equal(
       summarizeWorkerFailureReason('JSON parse failed: Unexpected token'),

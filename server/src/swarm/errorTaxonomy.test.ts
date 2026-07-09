@@ -115,14 +115,6 @@ test("classifyError — message: empty response → model-output", () => {
   assert.equal(got.retryable, true);
 });
 
-test("classifyError — message: intra-stream loop → model-output (retryable)", () => {
-  const got = classifyError({
-    message: "intra-stream loop detected: suffix of 25 chars repeated 3 times",
-  });
-  assert.equal(got.category, "model-output");
-  assert.equal(got.retryable, true);
-});
-
 test("classifyError — message: malformed JSON → model-output", () => {
   const got = classifyError({ message: "malformed JSON in tool args" });
   assert.equal(got.category, "model-output");

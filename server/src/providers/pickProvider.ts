@@ -78,5 +78,6 @@ export function __resetProviderSingletons(): void {
   ollamaCloudSingleton = null;
   anthropicSingleton = null;
   openaiSingleton = null;
+  opencodeSingleton = null;
   testProviderOverride = null;
 }

@@ -5,6 +5,7 @@ import {
   isRetryableSdkError,
   shortRetryReason,
 } from "./blackboard/retry.js";
+import { throwChatProviderError } from "./sdkError.js";
 
 /** :cloud cold-start p95 can exceed 180s when 4 agents fan out in parallel. */
 const CLOUD_FIRST_CHUNK_TIMEOUT_MS = 360_000;
@@ -20,7 +21,7 @@ import {
   effectiveToolProfileId,
   type WebToolsConfig,
 } from "../../../shared/src/toolProfiles.js";
-import { createIntraStreamLoopDetector, type IntraStreamLoopDetectorOpts } from "./intraStreamLoopDetector.js";
+
 
 // 2026-04-28: shared interruptible sleep used by both this module's
 // retry-backoff and BlackboardRunner. One source of truth.
@@ -146,14 +147,6 @@ export interface PromptWithRetryOptions {
   // The agent's spawn-time model stays as the default; this is an
   // override scope of one call.
   modelOverride?: string;
-  // R9 extended (2026-05-04): intra-stream loop detection. When set,
-  // monitors chunks for repetitive patterns (identical delta streaks,
-  // trailing substring repetition, zero-byte streaks). Aborts the prompt
-  // via the signal if a loop is detected, saving the turn budget that
-  // would otherwise burn until the SSE-idle watchdog fires (observed:
-  // 132 identical chunks before the 90s watchdog caught it). Default OFF;
-  // BlackboardRunner and discussion runners opt in.
-  intraStreamLoop?: IntraStreamLoopDetectorOpts | true;
   /** MCP servers string (e.g. "fetch=..." or "search=...") for tool-augmented profiles. Forwarded via any-cast in impl. */
   mcpServers?: string;
   /** When set, upgrades swarm-read → swarm-research for discussion runners. */
@@ -262,9 +255,6 @@ export async function promptWithRetry(
         const dispatcher = tools.length > 0 && profileForTools && agent.cwd
           ? new ToolDispatcher(profileForTools, agent.cwd, mcp)
           : undefined;
-        const loopDetector = opts.intraStreamLoop
-          ? createIntraStreamLoopDetector(opts.intraStreamLoop === true ? undefined : opts.intraStreamLoop)
-          : null;
         const isCloud = effectiveModel.includes(":cloud");
         const chatOpts = {
           modelString: effectiveModel,
@@ -281,14 +271,6 @@ export async function promptWithRetry(
               emitActivity("streaming", { attempt });
             }
             opts.manager?.recordStreamingText(agent.id, agent.index, cumulativeText);
-            if (loopDetector) {
-              const loopResult = loopDetector.onChunk(cumulativeText);
-              if (loopResult.detected) {
-                throw new Error(
-                  `intra-stream loop detected: ${loopResult.reason}`,
-                );
-              }
-            }
           },
           ...(tools.length > 0 ? { tools } : {}),
           ...(dispatcher ? { dispatcher } : {}),
@@ -352,7 +334,10 @@ export async function promptWithRetry(
         // ChatResult directly. Keep parity for now — this is a
         // dispatch-path swap, not a refactor of every consumer.
         if (result.finishReason === "error") {
-          throw new Error(result.errorMessage ?? "session provider chat error");
+          throwChatProviderError(
+            result.errorMessage ?? "session provider chat error",
+            result.errorCause,
+          );
         }
         if (result.finishReason === "aborted") {
           // Mirror the SDK's behavior on abort — the outer signal is

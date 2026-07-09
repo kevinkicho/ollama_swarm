@@ -10,11 +10,8 @@
 // a less-common Ollama tag), they pick "Custom..." which swaps the
 // select for a text input. Free-text path is preserved.
 //
-// Per-row TopologyGrid + per-role Blackboard overrides continue to
-// use the ModelInput (datalist) component — those grid cells need
-// the compact text-input style and per-cell discovery is overkill.
-// This component is for the top-level Model field where the
-// discovery-aware dropdown adds the most value.
+// Also used in TopologyGrid per-row overrides (with allowDefault).
+// Blackboard per-role Advanced overrides still use ModelInput (datalist).
 
 import { useState } from "react";
 import { useAvailableModels } from "../../hooks/useAvailableModels";
@@ -27,12 +24,23 @@ export function ModelSelect({
   onChange,
   provider,
   ariaLabel,
+  compact = false,
+  allowDefault = false,
+  defaultLabel = "(use default)",
 }: {
   value: string;
   onChange: (next: string) => void;
   provider: Provider;
   ariaLabel?: string;
+  /** Smaller typography for narrow sidebars. */
+  compact?: boolean;
+  /** When true, empty value is a first-class option (topology overrides). */
+  allowDefault?: boolean;
+  defaultLabel?: string;
 }) {
+  const inputCls = compact
+    ? "input font-mono text-[11px] min-w-0 max-w-full w-full"
+    : "input font-mono min-w-0 max-w-full w-full";
   const { models, loading, error, source } = useAvailableModels(provider);
   // "Custom" mode is sticky: once the user picks Custom we keep the
   // text input visible (even if the typed value happens to match a
@@ -45,7 +53,10 @@ export function ModelSelect({
   // If the user typed a value that doesn't match any option AND we're
   // not in customMode, force customMode on so the text input shows the
   // typed value instead of the select silently dropping it.
-  const showCustom = customMode || (hasOptions && value.length > 0 && !valueIsKnown);
+  const showCustom =
+    customMode || (hasOptions && value.length > 0 && !valueIsKnown && !(allowDefault && value === ""));
+
+  const discoveryTitle = getDiscoverySourceTitle(source, models.length, provider);
 
   if (!hasOptions || showCustom) {
     return (
@@ -55,10 +66,11 @@ export function ModelSelect({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={loading ? "Loading models…" : "Type a model id"}
-          className="input font-mono"
+          className={inputCls}
           autoComplete="off"
           spellCheck={false}
           aria-label={ariaLabel}
+          title={discoveryTitle ?? undefined}
         />
         {hasOptions ? (
           <button
@@ -82,7 +94,13 @@ export function ModelSelect({
   return (
     <div className="space-y-1">
       <select
-        value={valueIsKnown ? value : models[0]}
+        value={
+          allowDefault && value === ""
+            ? ""
+            : valueIsKnown
+              ? value
+              : models[0]
+        }
         onChange={(e) => {
           const next = e.target.value;
           if (next === CUSTOM_SENTINEL) {
@@ -93,9 +111,13 @@ export function ModelSelect({
           }
           onChange(next);
         }}
-        className="input font-mono"
+        className={inputCls}
         aria-label={ariaLabel}
+        title={discoveryTitle ?? undefined}
       >
+        {allowDefault ? (
+          <option value="">{defaultLabel}</option>
+        ) : null}
         {models.map((m) => (
           <option key={m} value={m}>
             {m}
@@ -103,61 +125,33 @@ export function ModelSelect({
         ))}
         <option value={CUSTOM_SENTINEL}>— Custom (type a model id) —</option>
       </select>
-      <DiscoverySourceHint source={source} count={models.length} provider={provider} />
     </div>
   );
 }
 
-// Inline hint showing where the dropdown options came from. Tells
-// the user "your account has live access to N models" vs "showing
-// fallback list because no API key" so they can self-diagnose.
-function DiscoverySourceHint({
-  source,
-  count,
-  provider,
-}: {
-  source: "ollama-tags" | "discovery" | "fallback" | null;
-  count: number;
-  provider: Provider;
-}) {
+/** Hover title for the model dropdown — where the option list came from. */
+function getDiscoverySourceTitle(
+  source: "ollama-tags" | "discovery" | "fallback" | null,
+  count: number,
+  provider: Provider,
+): string | null {
   if (source === null) return null;
+  const n = `${count} model${count === 1 ? "" : "s"}`;
   if (source === "ollama-tags") {
-    return (
-      <div className="text-[11px] text-ink-500">
-        {count} model{count === 1 ? "" : "s"} from your local Ollama install
-      </div>
-    );
+    return `${n} from your local Ollama install`;
   }
   if (source === "discovery") {
-    return (
-      <div className="text-[11px] text-emerald-500/70">
-        {count} live model{count === 1 ? "" : "s"} from {provider === "anthropic" ? "Anthropic" : "OpenAI"} API
-      </div>
-    );
+    if (provider === "anthropic") return `${n} live from Anthropic API`;
+    if (provider === "openai") return `${n} live from OpenAI API`;
+    if (provider === "opencode") return `${n} live from OpenCode Go API`;
+    return `${n} live from provider API`;
   }
-  // fallback: for paid providers means discovery failed (no key or
-  // upstream error). For ollama-cloud "fallback" is the EXPECTED source
-  // — Ollama Cloud has no per-user discovery endpoint, the catalog is
-  // global (sourced from ollama.com/search?c=cloud) so we always show
-  // it as the curated list with no warning tone.
   if (provider === "ollama-cloud") {
-    return (
-      <div className="text-[11px] text-ink-500">
-        {count} model{count === 1 ? "" : "s"} from the Ollama Cloud catalog
-      </div>
-    );
+    return `${n} from the Ollama Cloud catalog`;
   }
-  // OpenCode Go/Zen — same as ollama-cloud: curated, no live discovery.
   if (provider === "opencode") {
-    return (
-      <div className="text-[11px] text-ink-500">
-        {count} model{count === 1 ? "" : "s"} from the OpenCode catalog
-      </div>
-    );
+    return `${n} from the OpenCode catalog`;
   }
-  return (
-    <div className="text-[11px] text-amber-400/80">
-      {count} fallback model{count === 1 ? "" : "s"} ({provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"} not set — list may be stale)
-    </div>
-  );
+  const key = provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
+  return `${n} fallback (${key} not set — list may be stale)`;
 }

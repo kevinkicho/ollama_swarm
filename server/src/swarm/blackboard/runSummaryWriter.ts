@@ -12,8 +12,8 @@ import type { RunStateObserver } from "./RunStateObserver.js";
 import { computeLatencyStats } from "./summary.js";
 import { buildPerRunSummaryFileName, buildRunFinishedSummary, formatRunFinishedBanner } from "../runSummary.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
-import { buildSummary, extractDeliverables } from "./summary.js";
-import { extractDeliverablesFromGit } from "./runDeliverables.js";
+import { buildSummary } from "./summary.js";
+import { resolveRunGitMetrics } from "./gitRunDelta.js";
 import { config } from "../../config.js";
 
 export interface PerAgentCounters {
@@ -61,6 +61,8 @@ export function buildPerAgentStats(counters: PerAgentCounters): PerAgentStat[] {
 export interface SummaryContext {
   cfg: RunConfig;
   runBootedAt: number;
+  /** Porcelain snapshot after clone setup; scopes git summary fields to this run. */
+  gitPorcelainAtRunStart: string;
   runStartedAt: number | undefined;
   tickAccumulatorActiveElapsedMs: number | undefined;
   stopping: boolean;
@@ -101,12 +103,12 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
   const { cfg } = ctx;
   if (ctx.runBootedAt === undefined) return;
 
-  let deliverables =
-    extractDeliverables(ctx.gitStatus.porcelain) ??
-    (await extractDeliverablesFromGit(cfg.localPath, {
-      runStartedAt: ctx.runStartedAt ?? ctx.runBootedAt,
-      commitCount: ctx.boardCounts.committed,
-    }));
+  const runGit = await resolveRunGitMetrics(cfg.localPath, {
+    baselinePorcelain: ctx.gitPorcelainAtRunStart,
+    endPorcelain: ctx.gitStatus.porcelain,
+    commitCount: ctx.boardCounts.committed,
+    runStartedAt: ctx.runStartedAt ?? ctx.runBootedAt,
+  });
 
   const summary = buildSummary({
     config: {
@@ -154,12 +156,9 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
       total: ctx.boardCounts.total,
     },
     staleEvents: ctx.staleEventCount,
-    filesChanged:
-      ctx.gitStatus.changedFiles > 0
-        ? ctx.gitStatus.changedFiles
-        : (deliverables?.length ?? 0),
-    finalGitStatus: ctx.gitStatus.porcelain,
-    deliverables,
+    filesChanged: runGit.filesChanged,
+    finalGitStatus: runGit.finalGitStatus,
+    deliverables: runGit.deliverables,
     agents: ctx.agentStats,
     contract: ctx.contract ? ctx.cloneContract(ctx.contract) : undefined,
     maxTierReached: ctx.currentTier > 0 ? ctx.currentTier : undefined,
@@ -213,7 +212,7 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
           stopReason: summary.stopReason,
           localPath: summary.localPath ?? cfg.localPath,
           deliverables: summary.deliverables,
-          finalGitStatus: ctx.gitStatus.porcelain,
+          finalGitStatus: runGit.finalGitStatus,
         }),
       )
       .catch((err) => {

@@ -5,6 +5,7 @@ import { BRAIN_ALIAS_USER_NOTE } from "@ollama-swarm/shared/brainAlias";
 import { formatServerSummary } from "@ollama-swarm/shared/formatServerSummary";
 import type { TranscriptEntrySummary } from "@ollama-swarm/shared/transcriptEntrySummary";
 import { config } from "../config.js";
+import { resolveSystemLayerModel } from "../services/systemLayerSettings.js";
 import type { Orchestrator } from "../services/Orchestrator.js";
 import type { SwarmStatus } from "../types/run.js";
 import {
@@ -116,17 +117,30 @@ export class BrainExplorerDispatcher {
   }
 }
 
-export function pickBrainChatModelWithTools(): { modelString: string; toolsEnabled: boolean } {
+function brainToolsEnabledForModel(modelString: string): boolean {
+  return /^(anthropic|openai|opencode)/.test(modelString);
+}
+
+/** Resolve Brain / system-layer model: client override → env → paid keys → cloud default. */
+export function pickBrainChatModelWithTools(
+  clientModel?: string,
+): { modelString: string; toolsEnabled: boolean } {
+  const fromClient = clientModel?.trim();
+  if (fromClient) {
+    return { modelString: fromClient, toolsEnabled: brainToolsEnabledForModel(fromClient) };
+  }
   const override = config.SWARM_BRAIN_MODEL?.trim();
   if (override) {
-    const toolsEnabled = /^(anthropic|openai)\//.test(override);
-    return { modelString: override, toolsEnabled };
+    return { modelString: override, toolsEnabled: brainToolsEnabledForModel(override) };
   }
   if (config.ANTHROPIC_API_KEY) {
     return { modelString: "anthropic/claude-haiku-4-5", toolsEnabled: true };
   }
   if (config.OPENAI_API_KEY) {
     return { modelString: "openai/gpt-4o-mini", toolsEnabled: true };
+  }
+  if (config.OPENCODE_GO_API_KEY || config.OPENCODE_ZEN_API_KEY || config.OPENCODE_API_KEY) {
+    return { modelString: "opencode-go/deepseek-v4-flash", toolsEnabled: true };
   }
   return { modelString: "deepseek-v4-flash:cloud", toolsEnabled: false };
 }
@@ -269,12 +283,13 @@ export function buildRunSnapshotMarkdown(
 export function enrichBrainRunContext(
   orch: Orchestrator,
   clientCtx: BrainRunContextClient,
+  clientModel?: string,
 ): EnrichedBrainRunContext | null {
   const runId = resolveRunId(orch, clientCtx.runId);
   if (!runId) return null;
 
   const status = orch.statusForRun(runId);
-  const { modelString, toolsEnabled } = pickBrainChatModelWithTools();
+  const { modelString, toolsEnabled } = resolveSystemLayerModel(clientModel);
   const clonePath =
     clientCtx.clonePath
     ?? status?.runConfig?.clonePath

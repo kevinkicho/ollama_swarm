@@ -5,6 +5,7 @@ import {
   buildRunSnapshotMarkdown,
   isProtectedInfraPath,
   isSwarmAppClone,
+  pickBrainChatModelWithTools,
 } from "./brainDuringRun.js";
 import type { SwarmStatus } from "../types/run.js";
 
@@ -60,6 +61,19 @@ describe("buildRunSnapshotMarkdown", () => {
     assert.match(md, /blackboard/);
     assert.match(md, /agent-1/);
     assert.match(md, /fix auth/);
+  });
+});
+
+describe("pickBrainChatModelWithTools", () => {
+  it("prefers client override over env default", () => {
+    const picked = pickBrainChatModelWithTools("opencode-go/glm-5.1");
+    assert.equal(picked.modelString, "opencode-go/glm-5.1");
+    assert.equal(picked.toolsEnabled, true);
+  });
+
+  it("enables tools for anthropic and openai models", () => {
+    assert.equal(pickBrainChatModelWithTools("anthropic/claude-haiku-4-5").toolsEnabled, true);
+    assert.equal(pickBrainChatModelWithTools("openai/gpt-4o-mini").toolsEnabled, true);
   });
 });
 

@@ -1,18 +1,40 @@
 import { useState } from "react";
+import type { SwarmPhase } from "../types";
 
 interface QuickNavPanelProps {
-  activeRunId?: string;
+  /** Run id currently loaded in this view (may be terminal). */
+  focusedRunId?: string;
+  /** True only while the focused run is still executing. */
+  focusedRunLive?: boolean;
+  /** Terminal stop reason or phase label when not live. */
+  focusedRunStatus?: string;
+  phase?: SwarmPhase;
   parentPath?: string;
   clonePath?: string;
   onSwitchRun?: (runId: string) => void;
   onNewRun?: () => void;
 }
 
-export function QuickNavPanel({ activeRunId, parentPath, clonePath, onSwitchRun, onNewRun }: QuickNavPanelProps) {
+export function QuickNavPanel({
+  focusedRunId,
+  focusedRunLive = false,
+  focusedRunStatus,
+  phase,
+  parentPath,
+  clonePath,
+  onSwitchRun,
+  onNewRun,
+}: QuickNavPanelProps) {
   const [section, setSection] = useState<"runs" | "system" | "brain">("runs");
+  const statusHint =
+    focusedRunStatus ??
+    (phase && phase !== "idle" ? phase : focusedRunLive ? "active" : "ended");
 
   return (
     <div className="rounded border border-ink-700 bg-ink-800 p-3 space-y-2">
+      <div className="text-[9px] uppercase tracking-wider text-ink-400 font-semibold px-0.5">
+        Quick Nav
+      </div>
       <div className="flex gap-1">
         {(["runs", "system", "brain"] as const).map((s) => (
           <button
@@ -31,12 +53,23 @@ export function QuickNavPanel({ activeRunId, parentPath, clonePath, onSwitchRun,
 
       {section === "runs" && (
         <div className="space-y-1">
-          {activeRunId && (
-            <div className="text-[10px] text-emerald-400 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              Active: {activeRunId.slice(0, 8)}
-            </div>
-          )}
+          {focusedRunId ? (
+            focusedRunLive ? (
+              <div className="text-[10px] text-emerald-400 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Active: {focusedRunId.slice(0, 8)}
+              </div>
+            ) : (
+              <div
+                className="text-[10px] text-ink-500 flex items-center gap-1"
+                title={`Run ended (${statusHint})`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-ink-500" />
+                Last: {focusedRunId.slice(0, 8)}
+                <span className="text-ink-600 truncate">({statusHint})</span>
+              </div>
+            )
+          ) : null}
           <button
             onClick={onNewRun}
             className="w-full text-left text-[10px] px-2 py-1 rounded bg-emerald-900/30 hover:bg-emerald-800/40 text-emerald-300 border border-emerald-700/30"

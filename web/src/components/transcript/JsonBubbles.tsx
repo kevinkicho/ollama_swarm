@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
+import { TranscriptExpandableRoot } from "../../hooks/useTranscriptClickAwayCollapse";
 import { extractFirstBalanced } from "../../../../shared/src/extractJson";
 import {
   BubbleToggleRow,
@@ -93,8 +94,23 @@ export function AgentJsonBubble({
   const jsonTooLong = prettyJson.length > JSON_COLLAPSE_THRESHOLD;
   const shownJson =
     !jsonTooLong || jsonExpanded ? prettyJson : prettyJson.slice(0, JSON_COLLAPSE_THRESHOLD).trimEnd() + "…";
+  const collapseAll = useCallback(() => {
+    setShowJson(false);
+    setShowReasoning(false);
+    setShowThinking(false);
+    setShowPrompt(false);
+    setShowToolTrace(false);
+    setJsonExpanded(false);
+  }, []);
+  const isExpanded =
+    showJson || showReasoning || showThinking || showPrompt || showToolTrace || jsonExpanded;
   return (
-    <div className={className} style={style}>
+    <TranscriptExpandableRoot
+      expanded={isExpanded}
+      onCollapse={collapseAll}
+      className={className}
+      style={style}
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1">{header}</div>
         <BubbleToggleRow
@@ -154,7 +170,7 @@ export function AgentJsonBubble({
           ) : null}
         </div>
       ) : null}
-    </div>
+    </TranscriptExpandableRoot>
   );
 }
 
@@ -181,6 +197,13 @@ export function JsonPrettyBubble({
   const [showToolTrace, setShowToolTrace] = useState(false);
   const tooLong = json.length > JSON_COLLAPSE_THRESHOLD;
   const shown = !tooLong || expanded ? json : json.slice(0, JSON_COLLAPSE_THRESHOLD).trimEnd() + "…";
+  const collapseAll = useCallback(() => {
+    setExpanded(false);
+    setShowThinking(false);
+    setShowPrompt(false);
+    setShowToolTrace(false);
+  }, []);
+  const isExpanded = expanded || showThinking || showPrompt || showToolTrace;
   const hasToggles = thinking || prompt || toolTrace?.length;
   const headerRow = hasToggles ? (
     <div className="flex items-start justify-between gap-2 mb-1">
@@ -202,7 +225,12 @@ export function JsonPrettyBubble({
   );
 
   return (
-    <div className={className} style={style}>
+    <TranscriptExpandableRoot
+      expanded={isExpanded}
+      onCollapse={collapseAll}
+      className={className}
+      style={style}
+    >
       {headerRow}
       {showPrompt && prompt ? <PromptContentPanel prompt={prompt} /> : null}
       {showToolTrace && toolTrace?.length ? <ToolTraceContentPanel trace={toolTrace} /> : null}
@@ -218,7 +246,7 @@ export function JsonPrettyBubble({
           {expanded ? "Show less" : `Show more (${json.length - JSON_COLLAPSE_THRESHOLD} chars)`}
         </button>
       ) : null}
-    </div>
+    </TranscriptExpandableRoot>
   );
 }
 
@@ -241,9 +269,21 @@ export function CollapsibleBlock({ text, header, className, style, thinking, pro
   const bodyStyle = expanded ? undefined : { maxHeight: MAX_BUBBLE_HEIGHT_PX, overflow: "hidden" as const };
   const hasMore = charLong;
   const hasToggles = thinking || prompt || toolTrace?.length;
+  const collapseAll = useCallback(() => {
+    setExpanded(false);
+    setShowThinking(false);
+    setShowPrompt(false);
+    setShowToolTrace(false);
+  }, []);
+  const isExpanded = expanded || showThinking || showPrompt || showToolTrace;
 
   return (
-    <div className={className} style={style}>
+    <TranscriptExpandableRoot
+      expanded={isExpanded}
+      onCollapse={collapseAll}
+      className={className}
+      style={style}
+    >
       <div className="mb-2">
         {header}
         {hasToggles ? (
@@ -285,6 +325,6 @@ export function CollapsibleBlock({ text, header, className, style, thinking, pro
           </button>
         )
       ) : null}
-    </div>
+    </TranscriptExpandableRoot>
   );
 }

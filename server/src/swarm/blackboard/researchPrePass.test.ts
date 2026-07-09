@@ -37,4 +37,12 @@ describe("shouldRunResearchPrePass", () => {
       true,
     );
   });
+
+  it("skips when goal pre-pass already ran with web tools", () => {
+    const cfg = { repoUrl: "x", webTools: true } as RunConfig;
+    assert.equal(
+      shouldRunResearchPrePass(cfg, seed({ userDirective: "literature review", goalPrePassWithWebTools: true })),
+      false,
+    );
+  });
 });

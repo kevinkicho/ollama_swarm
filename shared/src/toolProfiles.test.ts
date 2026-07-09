@@ -23,7 +23,7 @@ describe("toolProfiles", () => {
     assert.equal(resolveToolProfileId("auditor", { webTools: true }), "swarm-research");
     assert.equal(resolveToolProfileId("auditor", {}), "swarm-read");
     assert.equal(resolveToolProfileId("planner", { webTools: true }), "swarm-planner");
-    assert.equal(resolveToolProfileId("planner", {}), "swarm-read");
+    assert.equal(resolveToolProfileId("planner", {}), "swarm-planner");
     assert.equal(resolveToolProfileId("worker-build", { webTools: true }), "swarm-builder-research");
   });
 
@@ -48,4 +48,5 @@ describe("toolProfiles", () => {
     assert.equal(allowsUnboundedToolTurns("swarm-read"), true);
     assert.equal(allowsUnboundedToolTurns("swarm"), false);
   });
+
 });

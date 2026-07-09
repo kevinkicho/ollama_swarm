@@ -91,4 +91,13 @@ describe("parseGoalList", () => {
     const result = parseGoalList(text);
     assert.deepStrictEqual(result, ["Goal"]);
   });
+
+  it("parses markdown heading numbered goals (### 1.)", () => {
+    const text = "### 1. [FX] Wire central-bank routes\n### 2. [Bonds] Add TIC panel";
+    const result = parseGoalList(text);
+    assert.deepStrictEqual(result, [
+      "[FX] Wire central-bank routes",
+      "[Bonds] Add TIC panel",
+    ]);
+  });
 });

@@ -47,7 +47,7 @@ export const BrainActivityPanel = memo(function BrainActivityPanel({ activities 
       <div className="flex items-center justify-between text-xs">
         <div className="flex items-center gap-2">
           <span className="text-violet-400 font-semibold">🧠 Brain</span>
-          <HealthBadge status={brainHealth?.status ?? "unknown"} />
+          {brainHealth ? <HealthBadge status={brainHealth.status} /> : null}
         </div>
         {activities.length > 5 && (
           <button
@@ -125,9 +125,8 @@ function HealthBadge({ status }: { status: string }) {
     idle: { color: "bg-ink-600 text-ink-300", label: "Idle" },
     analyzing: { color: "bg-violet-900/50 text-violet-300", label: "Analyzing" },
     error: { color: "bg-red-900/50 text-red-300", label: "Error" },
-    unknown: { color: "bg-ink-600 text-ink-400", label: "?" },
   };
-  const c = config[status] ?? config.unknown;
+  const c = config[status] ?? config.idle;
   return (
     <span className={`text-[10px] px-1.5 py-0.5 rounded ${c.color}`}>
       {c.label}

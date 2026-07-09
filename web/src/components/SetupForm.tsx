@@ -100,14 +100,14 @@ export function SetupForm() {
 
   return (
     <>
-    <div className="h-full overflow-auto flex justify-center items-start px-4 pt-5 pb-4">
+    <div className="h-full overflow-y-auto overflow-x-hidden flex justify-center items-start px-3 sm:px-4 pt-5 pb-4 min-w-0">
       <form
         id="setup-form"
         onSubmit={(e) => {
           e.preventDefault();
           form.performStart();
         }}
-        className="w-full max-w-4xl space-y-4"
+        className="w-full max-w-4xl space-y-4 min-w-0"
       >
         <BrainStartChat
           onApplyConfig={(cfg: BrainConfigPatch) => {
@@ -316,7 +316,7 @@ export function SetupForm() {
         </Section>
 
         <Section title="Topology">
-          <p className="text-xs text-ink-500 mb-2">Per-agent role + model overrides</p>
+          <p className="text-xs text-ink-500 mb-2">Per-agent role, provider, and model overrides</p>
 
           <TopologyGrid
             key={form.preset.id}
@@ -506,15 +506,15 @@ export function SetupForm() {
           {/* gentle fade separator from content above */}
           <div className="h-3 bg-gradient-to-t from-ink-900/70 to-transparent" />
 
-          <div className={`bg-ink-800/95 border border-ink-700 rounded-t-2xl shadow-2xl backdrop-blur supports-[backdrop-filter]:bg-ink-800/90 px-5 py-3.5 relative transition-all duration-200 ease-out ${canStart ? 'hover:shadow-[0_25px_50px_-12px_rgb(0,0,0,0.3)] hover:-translate-y-0.5 hover:scale-[1.005] ring-1 ring-emerald-500/10' : ''}`}>
+          <div className={`bg-ink-800/95 border border-ink-700 rounded-t-2xl shadow-2xl backdrop-blur supports-[backdrop-filter]:bg-ink-800/90 px-3 sm:px-5 py-3 relative sm:py-3.5 min-w-0 overflow-hidden transition-all duration-200 ease-out ${canStart ? 'sm:hover:shadow-[0_25px_50px_-12px_rgb(0,0,0,0.3)] sm:hover:-translate-y-0.5 sm:hover:scale-[1.005] ring-1 ring-emerald-500/10' : ''}`}>
             {/* Different accent style: left vertical emerald bar when enabled (instead of top thin line) + ready dot in label */}
             {canStart && (
               <div className="absolute left-0 top-2 bottom-2 w-1 bg-emerald-500/70 rounded-r-full transition-all duration-300" />
             )}
 
-            <div className="flex items-center justify-between gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 min-w-0">
               {/* Left: label + always-visible estimate (colored by cap fit) + cap value + badges */}
-              <div className="min-w-0 flex-1 text-sm text-ink-300 flex items-center gap-2.5">
+              <div className="min-w-0 flex-1 text-sm text-ink-300 flex flex-wrap items-center gap-x-2.5 gap-y-1">
                 <span className="font-semibold text-ink-100 tracking-tight flex items-center gap-1.5">
                   Start a swarm
                   {canStart && (
@@ -573,20 +573,6 @@ export function SetupForm() {
         </div>
       </form>
     </div>
-
-    <style>{`
-      .input {
-        width: 100%;
-        background: #0b0d10;
-        border: 1px solid #2a2f3a;
-        border-radius: 6px;
-        padding: 8px 10px;
-        color: #e5e7eb;
-        font-size: 14px;
-      }
-      .input:focus { outline: none; border-color: #10b981; }
-      .input:disabled { opacity: 0.5; cursor: not-allowed; }
-    `}</style>
     </>
   );
 }

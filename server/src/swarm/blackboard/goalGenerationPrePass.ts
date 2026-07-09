@@ -15,7 +15,7 @@ import type { Agent } from "../../services/AgentManager.js";
 import { extractText } from "../extractText.js";
 import { parseGoalList } from "./goalListParser.js";
 import type { PlannerSeed } from "./prompts/planner.js";
-import { isWebToolsEnabled, resolveToolProfile } from "../toolProfiles.js";
+import { resolveToolProfile } from "../toolProfiles.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import {
   chatOnceWithStreaming,
@@ -75,7 +75,7 @@ export async function runGoalGenerationPrePass(
       "RULES:",
       "1. Every improvement MUST directly serve the user's directive. Do NOT propose unrelated features.",
       "2. Every file path MUST appear in the PROJECT FILES list above. Do NOT invent paths.",
-      "3. Read the actual files using your tools before proposing. Do NOT guess.",
+      "3. Ground paths in the PROJECT FILES list and README; use tools only when you need to verify uncertain paths.",
       "4. Favor improvements that fix existing gaps over creating new features from scratch.",
       "5. If the directive is already well-served by the codebase, say so — don't force improvements.",
       "",
@@ -107,8 +107,8 @@ export async function runGoalGenerationPrePass(
 
   if (opts.signal?.aborted) return undefined;
 
-  const webOn = isWebToolsEnabled(opts.cfg);
-  const agentProfile = webOn ? resolveToolProfile("read", opts.cfg) : "swarm";
+  seed.goalPrePassWithWebTools = true;
+  const agentProfile = resolveToolProfile("planner", opts.cfg);
   const chatOpts = {
     agentName: agentProfile,
     promptText: prompt,

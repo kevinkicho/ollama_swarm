@@ -104,4 +104,24 @@ describe("resolveModels", () => {
     );
     assert.equal(result.auditorModel, "opencode-go/deepseek-v4-pro");
   });
+
+  it("topology provider=opencode without model override avoids :cloud defaults", () => {
+    const result = resolveModels(
+      {
+        model: "deepseek-v4-flash:cloud",
+        preset: "blackboard",
+        topology: {
+          agents: [
+            { index: 1, role: "planner", removable: false, provider: "opencode" },
+            { index: 2, role: "worker", removable: true, provider: "opencode" },
+            { index: 3, role: "auditor", removable: false, provider: "opencode" },
+          ],
+        },
+      },
+      DEFAULTS,
+    );
+    assert.match(result.plannerModel, /^opencode-go\//);
+    assert.match(result.workerModel, /^opencode-go\//);
+    assert.match(result.auditorModel, /^opencode-go\//);
+  });
 });
