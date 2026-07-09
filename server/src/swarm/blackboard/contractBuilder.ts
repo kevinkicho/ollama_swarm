@@ -3,7 +3,7 @@
 // resume-from-snapshot, and contract grounding/finalization.
 // Takes a narrow ContractContext object instead of referencing `this.*`.
 
-import type { Agent } from "../../services/AgentManager.js";
+import type { Agent, AgentManager } from "../../services/AgentManager.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { ExitContract } from "./types.js";
 import type { PlannerSeed, PriorRunSummary } from "./prompts/planner.js";
@@ -87,6 +87,7 @@ export interface ContractContext {
   findingsPost: (entry: { agentId: string; text: string; createdAt: number }) => void;
   getAuditor: () => Agent | undefined;
   emitAgentState: (s: import("../../types.js").AgentState) => void;
+  manager: AgentManager;
   getPlannerFallbackModel: () => string | undefined;
   updateAgentModel: (agentId: string, model: string) => void;
   promptPlannerSafely: (
@@ -94,6 +95,7 @@ export interface ContractContext {
     promptText: string,
     agentName?: import("../../tools/ToolDispatcher.js").ProfileName,
     ollamaFormat?: "json" | Record<string, unknown>,
+    activity?: { kind?: string; label?: string },
   ) => Promise<{ response: string; agentUsed: Agent }>;
   promptAgent: (
     agent: Agent,
@@ -101,6 +103,7 @@ export interface ContractContext {
     agentName: import("../../tools/ToolDispatcher.js").ProfileName,
     formatExpect: "json" | "free",
     ollamaFormat?: "json" | Record<string, unknown>,
+    activity?: { kind?: string; label?: string },
   ) => Promise<string>;
   emit: (e: unknown) => void;
   getTranscript: () => readonly TranscriptEntry[];
@@ -167,7 +170,7 @@ export async function runFirstPassContract(
     findingsPost: ctx.findingsPost,
     getActive: ctx.getActive,
     emitActivity: (label, attempt, maxAttempts, mode) => {
-      emitAgentActivity(agent, ctx.emitAgentState, {
+      emitAgentActivity(agent, ctx.manager, ctx.emitAgentState, {
         kind: "contract",
         label,
         attempt,
@@ -175,8 +178,8 @@ export async function runFirstPassContract(
         mode,
       });
     },
-    promptPlannerSafely: (a, p, profile, schema) =>
-      ctx.promptPlannerSafely(a, p, profile, schema),
+    promptPlannerSafely: (a, p, profile, schema, activity) =>
+      ctx.promptPlannerSafely(a, p, profile, schema, activity),
     buildExplorePrompt: () =>
       `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed, agent.model)}`,
     buildRepairPrompt: (prev, err, note) =>
@@ -264,24 +267,48 @@ export async function tryCouncilContract(
     `Council contract: prompting ${allAgents.length} agents for independent first-pass drafts.`,
   );
 
-  const draftResults = await Promise.allSettled(
-    allAgents.map(async (a) => {
-      const text = await ctx.promptAgent(a, draftPrompt, "swarm", "json", CONTRACT_JSON_SCHEMA);
+  const { burstSpacingForModels, staggerStart } = await import("../staggerStart.js");
+  let draftsCompleted = 0;
+  const draftSpacing = burstSpacingForModels(allAgents);
+  const draftResults = await staggerStart(allAgents, async (a) => {
+    emitAgentActivity(a, ctx.manager, ctx.emitAgentState, {
+      kind: "contract",
+      label: "contract draft",
+      attempt: 1,
+      maxAttempts: 1,
+    });
+    ctx.appendSystem(
+      `Council contract: Agent ${a.index} drafting first-pass contract…`,
+    );
+    try {
+      const text = await ctx.promptAgent(a, draftPrompt, "swarm", "json", CONTRACT_JSON_SCHEMA, {
+        kind: "contract",
+        label: "contract draft",
+      });
+      ctx.appendAgent(a, text);
       return { agent: a, text };
-    }),
-  );
+    } finally {
+      draftsCompleted++;
+      if (draftsCompleted < allAgents.length) {
+        ctx.appendSystem(
+          `Council contract: ${draftsCompleted}/${allAgents.length} drafts complete — waiting on remaining agent(s).`,
+        );
+      }
+    }
+  }, draftSpacing);
 
   const drafts: CouncilContractDraft[] = [];
-  for (const r of draftResults) {
+  for (let i = 0; i < draftResults.length; i++) {
+    const r = draftResults[i]!;
+    const agent = allAgents[i]!;
     if (r.status !== "fulfilled") {
       ctx.appendSystem(
-        `Council draft prompt rejected: ${
+        `Council draft from ${agent.id} rejected: ${
           r.reason instanceof Error ? r.reason.message : String(r.reason)
         }`,
       );
       continue;
     }
-    ctx.appendAgent(r.value.agent, r.value.text);
     const parsed = parseFirstPassContractResponse(r.value.text);
     if (!parsed.ok) {
       ctx.appendSystem(
@@ -602,6 +629,20 @@ export async function buildSeed(
 - README summary: ${readmeExcerpt ? readmeExcerpt.slice(0,200) : 'N/A'}
 This is a lightweight map to help with systemic planning without full repo dump.`;
 
+  let projectGraphSlice: string | undefined;
+  try {
+    const { getProjectGraphSliceForClone } = await import("../../projectGraph/service.js");
+    const { DEFAULT_PLANNER_SLICE_MAX_CHARS } = await import("../../projectGraph/formatAgentSlice.js");
+    projectGraphSlice = await getProjectGraphSliceForClone(clonePath, cfg, {
+      maxChars: DEFAULT_PLANNER_SLICE_MAX_CHARS,
+    });
+    if (projectGraphSlice && cfg.suppressSeedMessages !== true) {
+      ctx.appendSystem("Project map: surfaced cross-run knowledge graph into planner seed.");
+    }
+  } catch {
+    // best-effort
+  }
+
   return {
     repoUrl: cfg.repoUrl,
     clonePath,
@@ -620,5 +661,6 @@ This is a lightweight map to help with systemic planning without full repo dump.
     systemMap,  // for planner to use for broad view
     webToolsEnabled: isWebToolsEnabled(cfg),
     ...(endpointCatalogBlock ? { endpointCatalogBlock } : {}),
+    ...(projectGraphSlice ? { projectGraphSlice } : {}),
   };
 }

@@ -327,7 +327,7 @@ export async function runDesignMemoryUpdatePass(
     "",
     '2. NEW DECISIONS (0-3 entries): meaningful design CHOICES made this run that future runs should respect. Each: {title, body}. Title is short; body is 1-3 sentences explaining the choice + rationale. Skip trivial/mechanical commits.',
     "",
-    "3. ROADMAP (3-7 items, ranked): the top features to build next. IMPORTANT: roadmap items MUST advance the user directive above. Do NOT propose generic platform features (user accounts, plugin marketplaces, collaborative editing) unless the directive explicitly calls for them. Focus on concrete data panels, API integrations, and data-quality improvements that serve the project's stated mission.",
+    "3. ROADMAP (3-7 items, ranked): the top features to build next. IMPORTANT: roadmap items MUST advance the user directive above. Do NOT propose generic platform scaffolding (user accounts, plugin marketplaces, collaborative editing) unless the directive explicitly calls for them. Focus on concrete, repo-appropriate work implied by the directive and this run's commits.",
     "",
     "Output format — ONE JSON object only, no fences, no prose:",
     `{"northStar": "...", "newDecisions": [{"title":"...", "body":"..."}], "roadmap": ["item1", "item2", ...]}`,

@@ -19,6 +19,20 @@ The git log is the authoritative record; this summarizes user-facing changes.
 
 **Auditor arbitration.** Workers must give reasons when declining todos. Auditor verdicts: valid refusal → replanner; invalid refusal (sufficient tools) → todo released to board; hallucinated-todo → replanner; insufficient-tools → skipped with systemic finding exposed. Planner/auditor never do the worker's job.
 
+## 2026-07-08 — Stop/drain lifecycle documentation + execution close-out hardening
+
+**Docs:** Added `docs/run-stop-drain-lifecycle.md` — canonical contract for hard stop vs
+soft drain, council `workerDrainPromise` wait, transcript freeze, `killAll` session abort,
+and debugging checklist. Indexed from `DOCUMENTATION_INDEX.md`, `AGENT-GUIDE.md`,
+`decisions.md`, `known-limitations.md`, `swarm-patterns.md`, `STATUS.md`.
+
+**Council stop (code):** Close-out waits for execution workers before summary/killAll;
+hard `stop()` no longer sets `drainRequested`; literature pre-pass and hunk repair use
+abort signals; `killAll` aborts provider sessions; transcript frozen after summary write.
+(See decision in `docs/decisions.md` 2026-07-08.)
+
+---
+
 ## 2026-07-07 — Research tools, council close-out, transcript UX
 
 **Web tools expansion.** Shared `toolProfiles.ts` now resolves `swarm-planner`, `swarm-research`, and `swarm-builder-research` profiles when `webTools` or `plannerTools` is enabled. Discussion presets upgrade legacy `swarm-read` profiles via `effectiveToolProfileId`. Blackboard runs a **research pre-pass** (`researchPrePass.ts`) before JSON-locked contract turns. Tool calls are logged to the transcript via `toolCallTranscript.ts`. `RESEARCH_PIPELINE` phase added to pipeline preset.

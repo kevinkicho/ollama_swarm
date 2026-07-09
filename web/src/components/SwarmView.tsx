@@ -9,12 +9,14 @@ import { Transcript } from "./Transcript";
 import { MetricsPanel } from "./MetricsPanel";
 import { PheromonePanel } from "./PheromonePanel";
 import { DraftMatrix } from "./DraftMatrix";
+import { DraftsTabWithTooltip } from "./drafts/DraftsTabTooltip";
 import { VerdictPanel } from "./VerdictPanel";
 import { CoveragePanel } from "./CoveragePanel";
 import { OwSubtasksPanel } from "./OwSubtasksPanel";
 import { MemoryLogPanel } from "./MemoryLogPanel";
 import { CloneBanner } from "./CloneBanner";
 import { IdentityStrip } from "./IdentityStrip";
+import { ProjectGraphPanel } from "../features/projectGrowth/ProjectGraphPanel";
 
 import { TranscriptTimeline } from "./TranscriptTimeline";
 import { PlanningTab } from "./PlanningTab";
@@ -39,7 +41,8 @@ type Tab =
   | "coverage"
   | "subtasks"
   | "memory"
-  | "history";
+  | "history"
+  | "graph";
 
 export const SwarmView = memo(function SwarmView() {
   const agents = useSwarm((s) => s.agents);
@@ -334,7 +337,6 @@ export const SwarmView = memo(function SwarmView() {
   // uses its catalog overlay since topology stores generic "role-diff"
   // labels — the catalog names are richer.
   const agentRole = (idx: number): string => {
-    if (idx === 0) return "housekeeper";
     if (cfg?.topology) {
       const spec = cfg.topology.agents.find((a) => a.index === idx);
       if (spec) {
@@ -502,9 +504,12 @@ export const SwarmView = memo(function SwarmView() {
             </TabButton>
           ) : null}
           {showDraftsTab ? (
-            <TabButton active={tab === "drafts"} onClick={() => setTab("drafts")}>
-              Drafts
-            </TabButton>
+            <DraftsTabWithTooltip
+              active={tab === "drafts"}
+              onClick={() => setTab("drafts")}
+              rounds={cfg?.rounds}
+              transcript={transcript}
+            />
           ) : null}
           {showVerdictTab ? (
             <TabButton active={tab === "verdict"} onClick={() => setTab("verdict")}>
@@ -529,6 +534,11 @@ export const SwarmView = memo(function SwarmView() {
           <TabButton active={tab === "history"} onClick={() => setTab("history")}>
             History
           </TabButton>
+          {cfg?.clonePath ? (
+            <TabButton active={tab === "graph"} onClick={() => setTab("graph")}>
+              Graph
+            </TabButton>
+          ) : null}
           <span className="ml-auto self-center px-2"><OutcomeChip /></span>
         </div>
         <div className={`flex-1 min-h-0 ${tab === "transcript" ? "overflow-hidden" : "overflow-y-auto"}`}>
@@ -556,6 +566,8 @@ export const SwarmView = memo(function SwarmView() {
             <PlanningTab />
           ) : tab === "history" ? (
             <TranscriptTimeline parentPath={cfg?.clonePath ? `${cfg.clonePath}/logs` : undefined} />
+          ) : tab === "graph" && cfg?.clonePath ? (
+            <ProjectGraphPanel clonePath={cfg.clonePath} activeRunId={activeRunId ?? undefined} />
           ) : (
             <Transcript />
           )}

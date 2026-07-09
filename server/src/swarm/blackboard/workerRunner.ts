@@ -33,10 +33,10 @@ import {
   WorkerResponseSchema,
 } from "./prompts/worker.js";
 import { buildResearchToolsNote } from "./prompts/planner.js";
-import { chatOnce } from "../chatOnce.js";
+
 import { extractText } from "../extractText.js";
 import { isWebToolsEnabled } from "../toolProfiles.js";
-import { makeWebToolHandler } from "../toolCallTranscript.js";
+import { makeBufferedToolHandler, type ToolTraceEntry } from "../toolCallTranscript.js";
 import { DISPOSITIONS, type RoundRobinDisposition, getDispositionForTurn } from "../roundRobinPromptHelpers.js";
 import { WORKER_HUNKS_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
 import { checkBuildCommand } from "./buildCommandAllowlist.js";
@@ -63,6 +63,12 @@ import {
 import { runParseSalvage } from "./parseSalvage.js";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
 import { isPromptHaltError } from "./lifecycleState.js";
+import {
+  chatOnceWithStreaming,
+  type ChatStreamingSurface,
+} from "./promptRunner.js";
+import { isUsableResearchBrief } from "../researchBrief.js";
+import type { AgentManager } from "../../services/AgentManager.js";
 
 function workerToolProfile(ctx: WorkerContext, kind: "hunk" | "build" | "read"): ProfileName {
   const cfg = ctx.getActive();
@@ -101,23 +107,35 @@ async function runWorkerLiteratureResearch(
     "Do NOT emit JSON hunks in this phase.",
   ].filter(Boolean).join("\n");
 
+  const chatOpts = {
+    agentName: profile,
+    promptText: prompt,
+    clonePath,
+    webToolsConfig: cfg,
+    runId: cfg.runId,
+    mcpServers: cfg.mcpServers,
+    onTool: makeBufferedToolHandler(ctx.pendingToolTraceByAgent, agent.id),
+  };
+  const surface: ChatStreamingSurface = {
+    manager: ctx.getManager(),
+    emitAgentState: (s) => ctx.emitAgentState(s),
+    activity: { kind: "worker", label: "literature research" },
+    abort: {
+      activeAborts: ctx.getActiveAborts(),
+      isStopping: ctx.isStopping,
+      isDraining: ctx.isDraining,
+    },
+  };
   try {
-    const res = await chatOnce(agent, {
-      agentName: profile,
-      promptText: prompt,
-      clonePath,
-      webToolsConfig: cfg,
-      runId: cfg.runId,
-      mcpServers: cfg.mcpServers,
-      onTool: makeWebToolHandler(ctx.appendSystem, agent.id),
-    });
-    const text = extractText(res)?.trim();
-    if (text && text.length >= 80) {
+    const res = await chatOnceWithStreaming(agent, surface, chatOpts);
+    const text = extractText(res)?.trim() ?? "";
+    if (isUsableResearchBrief(text)) {
       const capped = text.length > 8000 ? `${text.slice(0, 8000)}…` : text;
-      ctx.appendSystem(`[${agent.id}] Literature research: captured ${capped.length} chars of notes.`);
+      ctx.appendAgent(agent, capped);
       return capped;
     }
   } catch (err) {
+    if (isPromptHaltError(err, ctx.isStopping, ctx.isDraining)) return undefined;
     const msg = err instanceof Error ? err.message : String(err);
     ctx.appendSystem(`[${agent.id}] Literature research failed: ${msg}`);
   }
@@ -127,6 +145,7 @@ async function runWorkerLiteratureResearch(
 export interface WorkerContext {
   isStopping: () => boolean;
   isDraining: () => boolean;
+  getActiveAborts: () => Set<AbortController>;
   isPaused: () => boolean;
   isSubscriberPaused: () => boolean;
   isMemoryPaused: () => boolean;
@@ -149,8 +168,10 @@ export interface WorkerContext {
   getAuditor: () => Agent | undefined;
   appendSystem: (msg: string) => void;
   appendAgent: (agent: Agent, text: string, options?: { assistKind?: "auditor-salvage" }) => void;
-  promptAgent: (agent: Agent, prompt: string, agentName: ProfileName, formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => Promise<string>;
+  pendingToolTraceByAgent: Map<string, ToolTraceEntry[]>;
+  promptAgent: (agent: Agent, prompt: string, agentName: ProfileName, formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>, activity?: { kind?: string; label?: string }) => Promise<string>;
   emitAgentState: (s: AgentState) => void;
+  getManager: () => AgentManager;
   readExpectedFiles: (files: string[]) => Promise<Record<string, string | null>>;
   sleep: (ms: number) => Promise<void>;
   markStatus: (agentId: string, status: AgentStatus, meta?: Record<string, unknown>) => void;
@@ -577,6 +598,16 @@ export async function executeWorkerTodo(
     }
   }
 
+  let projectGraphSlice: string | undefined;
+  if (activeCfg?.localPath) {
+    try {
+      const { getProjectGraphSliceForClone } = await import("../../projectGraph/service.js");
+      projectGraphSlice = await getProjectGraphSliceForClone(workerCwd, activeCfg);
+    } catch {
+      // best-effort
+    }
+  }
+
   const seed: WorkerSeed = {
     todoId: todo.id,
     description: todo.description,
@@ -591,6 +622,7 @@ export async function executeWorkerTodo(
     ...(researchNotes ? { researchNotes } : {}),
     ...(promptExtras.userChatBlock ? { userChatBlock: promptExtras.userChatBlock } : {}),
     ...(endpointCatalogBlock ? { endpointCatalogBlock } : {}),
+    ...(projectGraphSlice ? { projectGraphSlice } : {}),
   };
 
   if (ctx.getActive()?.stigmergyOnBlackboard && pheromoneHeatmap.size > 0) {
@@ -613,6 +645,7 @@ export async function executeWorkerTodo(
       workerToolProfile(ctx, "hunk"),
       "json",
       WORKER_HUNKS_JSON_SCHEMA,
+      { kind: "worker", label: `todo ${todo.id.slice(0, 8)}` },
     );
   } catch (err) {
     if (isPromptHaltError(err, ctx.isStopping, ctx.isDraining)) return "aborted";
@@ -638,6 +671,7 @@ export async function executeWorkerTodo(
         workerToolProfile(ctx, "hunk"),
         "json",
         WORKER_HUNKS_JSON_SCHEMA,
+        { kind: "worker", label: `repair ${todo.id.slice(0, 8)}` },
       );
     } catch (err) {
       if (isPromptHaltError(err, ctx.isStopping, ctx.isDraining)) return "aborted";

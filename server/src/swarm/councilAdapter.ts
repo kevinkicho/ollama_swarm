@@ -16,7 +16,13 @@ import type { PlannerSeed } from "./blackboard/prompts/planner.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
 import { canonicalizeExpectedFiles } from "./councilPathCanonicalize.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
-import { extractProviderText } from "./councilUtils.js";
+import { extractProviderText, createTimeoutController } from "./councilUtils.js";
+import { burstSpacingForModels, staggerStart } from "./staggerStart.js";
+
+/** Wall-clock cap per contract draft. Covers provider cold-start (p95
+ *  can exceed 90s on :cloud) without blocking the whole batch forever. */
+const CONTRACT_DRAFT_TIMEOUT_MS = 180_000;
+
 
 export interface CouncilAdapterState {
   cfg: RunConfig;
@@ -44,7 +50,11 @@ export interface CouncilAdapterState {
   /** Neutral shared progress text injected into agent prompts (optional). */
   progressContext?: string;
   runStartedAt: number | undefined;
-  manager: { list: () => Agent[]; markStatus: (id: string, status: string) => void; recordPromptComplete: (id: string, data: any) => void };
+  manager: {
+    list: () => Agent[];
+    markStatus: (id: string, status: string, extra?: Record<string, unknown>) => void;
+    recordPromptComplete: (id: string, data: any) => void;
+  };
   repos: { listTopLevel: (p: string) => Promise<string[]>; readReadme: (p: string) => Promise<string | null>; listRepoFiles: (p: string, opts: { maxFiles: number }) => Promise<string[]> };
   appendSystem: (msg: string) => void;
   appendAgent: (agent: Agent, text: string) => void;
@@ -55,7 +65,7 @@ export interface CouncilAdapterState {
 export function buildCouncilAdapterState(
   cfg: RunConfig,
   clonePath: string,
-  manager: { list: () => Agent[]; markStatus: (id: string, status: string) => void; recordPromptComplete: (id: string, data: any) => void },
+  manager: CouncilAdapterState["manager"],
   repos: { listTopLevel: (p: string) => Promise<string[]>; readReadme: (p: string) => Promise<string | null>; listRepoFiles: (p: string, opts: { maxFiles: number }) => Promise<string[]> },
   appendSystem: (msg: string) => void,
   appendAgent: (agent: Agent, text: string) => void,
@@ -92,11 +102,15 @@ export async function promptAgent(
   formatExpect: "json" | "free",
   manager: { list: () => Agent[]; markStatus: (id: string, status: string) => void; recordPromptComplete: (id: string, data: any) => void },
   providerFailover?: readonly string[],
+  signal?: AbortSignal,
+  activity?: { kind?: string; label?: string },
 ): Promise<string> {
   const raw = await promptWithFailoverAuto(agent, prompt, {
     manager: manager as any,
     agentName,
-    signal: new AbortController().signal,
+    formatExpect,
+    signal: signal ?? new AbortController().signal,
+    ...(activity ? { activity: { kind: activity.kind ?? "council", label: activity.label } } : {}),
   }, providerFailover);
   const text = extractProviderText(raw);
   return text ?? "";
@@ -108,11 +122,15 @@ export async function promptPlannerSafely(
   agentName: import("../tools/ToolDispatcher.js").ProfileName | undefined,
   manager: { list: () => Agent[]; markStatus: (id: string, status: string) => void; recordPromptComplete: (id: string, data: any) => void },
   providerFailover?: readonly string[],
+  activity?: { kind?: string; label?: string },
+  signal?: AbortSignal,
 ): Promise<{ response: string; agentUsed: Agent }> {
   const raw = await promptWithFailoverAuto(agent, promptText, {
     manager: manager as any,
     agentName: agentName ?? "swarm-read",
-    signal: new AbortController().signal,
+    formatExpect: "json",
+    signal: signal ?? new AbortController().signal,
+    ...(activity ? { activity: { kind: activity.kind ?? "council", label: activity.label } } : {}),
   }, providerFailover);
   const text = extractProviderText(raw);
   return { response: text ?? "", agentUsed: agent };
@@ -125,6 +143,7 @@ function councilBuildSeedContext(
   getTranscript: () => readonly TranscriptEntry[] = () => [],
 ): ContractContext {
   return {
+    manager: state.manager as ContractContext["manager"],
     getStopping: () => state.stopping,
     getActive: () => state.cfg,
     getContract: () => state.contract,
@@ -176,25 +195,61 @@ export async function runContractDerivation(
     state.cfg,
   );
 
-  // Run council-style contract (all agents propose, planner merges)
+  // Run council-style contract (all agents propose, lead merges)
   const allAgents = [planner, ...workers];
+  const mergePlanner = planner;
+  if (!mergePlanner) {
+    state.appendSystem("Council contract: no LLM lead agent — proceeding without contract.");
+    return;
+  }
   const draftPrompt = `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed)}`;
 
   state.appendSystem(
     `Council contract: prompting ${allAgents.length} agents for independent first-pass drafts.`,
   );
 
-  const draftResults = await Promise.allSettled(
-    allAgents.map(async (a) => {
-      const text = await promptAgent(a, draftPrompt, "swarm", "json", state.manager, state.cfg.providerFailover);
+  let draftsCompleted = 0;
+  const draftSpacing = burstSpacingForModels(allAgents);
+  const draftResults = await staggerStart(allAgents, async (a) => {
+    state.manager.markStatus(a.id, "thinking", {
+      activityKind: "contract",
+      activityLabel: "contract draft",
+    });
+    state.appendSystem(
+      `Council contract: Agent ${a.index} drafting first-pass contract…`,
+    );
+    const { controller, cleanup } = createTimeoutController(CONTRACT_DRAFT_TIMEOUT_MS);
+    try {
+      const text = await promptAgent(
+        a, draftPrompt, "swarm", "json", state.manager, state.cfg.providerFailover, controller.signal,
+        { kind: "contract", label: "contract draft" },
+      );
+      // Post each draft to the transcript immediately — do not wait for the
+      // slowest agent in the parallel batch (provider cold-start can lag one
+      // agent while others already finished streaming).
+      state.appendAgent(a, text);
       return { agent: a, text };
-    }),
-  );
+    } finally {
+      cleanup();
+      state.manager.markStatus(a.id, "ready");
+      draftsCompleted++;
+      if (draftsCompleted < allAgents.length) {
+        state.appendSystem(
+          `Council contract: ${draftsCompleted}/${allAgents.length} drafts complete — waiting on remaining agent(s).`,
+        );
+      }
+    }
+  }, draftSpacing);
 
   const drafts: Array<{ agentId: string; contract: any }> = [];
-  for (const r of draftResults) {
-    if (r.status !== "fulfilled") continue;
-    state.appendAgent(r.value.agent, r.value.text);
+  for (let i = 0; i < draftResults.length; i++) {
+    const r = draftResults[i]!;
+    const agent = allAgents[i]!;
+    if (r.status === "rejected") {
+      const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+      state.appendSystem(`Council draft from ${agent.id} failed (${msg}).`);
+      continue;
+    }
     const parsed = parseFirstPassContractResponse(r.value.text);
     if (!parsed.ok) continue;
     if (parsed.dropped.length > 0) {
@@ -211,16 +266,33 @@ export async function runContractDerivation(
   }
 
   if (drafts.length === 1) {
-    finalizeContract(state, drafts[0].contract, seed, planner);
+    finalizeContract(state, drafts[0].contract, seed, mergePlanner);
     return;
   }
 
-  // Merge drafts via planner
+  // Merge drafts via lead (index 1)
   const { buildCouncilContractMergePrompt } = await import("./blackboard/prompts/firstPassContract.js");
   const mergePrompt = buildCouncilContractMergePrompt(seed, drafts);
-  const { response: mergeResponse, agentUsed: mergeAgent } = await promptPlannerSafely(
-    planner, mergePrompt, undefined, state.manager, state.cfg.providerFailover,
+  state.appendSystem(
+    `Council contract: merging ${drafts.length} drafts via ${mergePlanner.id}…`,
   );
+  state.manager.markStatus(mergePlanner.id, "thinking", {
+    activityKind: "contract",
+    activityLabel: "contract merge",
+  });
+  let mergeResponse: string;
+  let mergeAgent: Agent;
+  const { controller: mergeAbort, cleanup: mergeCleanup } = createTimeoutController(CONTRACT_DRAFT_TIMEOUT_MS);
+  try {
+    ({ response: mergeResponse, agentUsed: mergeAgent } = await promptPlannerSafely(
+      mergePlanner, mergePrompt, undefined, state.manager, state.cfg.providerFailover,
+      { kind: "contract", label: "contract merge" },
+      mergeAbort.signal,
+    ));
+  } finally {
+    mergeCleanup();
+    state.manager.markStatus(mergePlanner.id, "ready");
+  }
   if (state.stopping) return;
   state.appendAgent(mergeAgent, mergeResponse);
 
@@ -230,13 +302,13 @@ export async function runContractDerivation(
     const best = drafts.reduce((a, b) =>
       b.contract.criteria.length > a.contract.criteria.length ? b : a,
     );
-    finalizeContract(state, best.contract, seed, planner);
+    finalizeContract(state, best.contract, seed, mergePlanner);
     return;
   }
   if (mergeParsed.dropped.length > 0) {
     state.appendSystem(`Council merge: dropped ${mergeParsed.dropped.length} invalid criterion(s).`);
   }
-  finalizeContract(state, mergeParsed.contract, seed, planner);
+  finalizeContract(state, mergeParsed.contract, seed, mergePlanner);
 }
 
 function finalizeContract(

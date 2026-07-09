@@ -118,6 +118,7 @@ export function SystemWrapper({
   const activeRunIdForChat = useSwarm((s) => s.runId);
   const phaseForChat = useSwarm((s) => s.phase);
   const cfg = useSwarm((s) => s.runConfig);
+  const clonePathForNav = cfg?.clonePath;
   const transcriptForChat = useSwarm((s) => s.transcript);
   const agentsForChat = useSwarm((s) => s.agents);
   const cfgForChat = useSwarm((s) => s.runConfig);
@@ -279,7 +280,7 @@ export function SystemWrapper({
         <button
           type="button"
           onClick={handleOpenBrainChat}
-          className="fixed bottom-4 right-4 z-40 text-[10px] px-2 py-1 rounded border border-ink-600 bg-ink-800 hover:bg-ink-700 text-violet-300 hover:text-violet-200 shadow-md"
+          className="fixed bottom-20 right-4 z-40 text-[10px] px-2 py-1 rounded-full border border-violet-700/50 bg-ink-800/95 hover:bg-ink-700 text-violet-300 hover:text-violet-200 shadow-lg shadow-black/40 backdrop-blur-sm"
           title="Talk to Brain about this run"
         >
           Brain
@@ -305,7 +306,13 @@ export function SystemWrapper({
               <RunQueuePanel parentPath={parentPath} onViewRun={handleViewRun} onStopRun={handleStopRun} />
               <MetricsOverviewPanel parentPath={parentPath} />
               <BrainActivityPanel brainHealth={brainHealth} activities={brainActivities} />
-              <QuickNavPanel activeRunId={activeRunId} onSwitchRun={handleSwitchRun} onNewRun={handleNewRun} />
+              <QuickNavPanel
+                activeRunId={activeRunId}
+                parentPath={parentPath}
+                clonePath={clonePathForNav}
+                onSwitchRun={handleSwitchRun}
+                onNewRun={handleNewRun}
+              />
               <SystemHealthDashboard />
               <NotificationPreferences />
             </div>
@@ -323,7 +330,7 @@ export function SystemWrapper({
           onClick={() => setBrainChatOpen(false)}
         >
           <div
-            className="bg-ink-800 border border-violet-700/50 rounded-lg w-full max-w-md max-h-[min(70vh,520px)] flex flex-col shadow-xl shadow-violet-950/20"
+            className="bg-ink-800 border border-violet-700/50 rounded-lg w-full max-w-md h-[min(70vh,520px)] flex flex-col shadow-xl shadow-violet-950/20"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-3 py-2 border-b border-ink-700/60 shrink-0">
@@ -356,7 +363,7 @@ export function SystemWrapper({
                 </button>
               </div>
             </div>
-            <div className="flex-1 min-h-0 px-3 py-2">
+            <div className="flex-1 min-h-0 overflow-hidden px-3 py-2">
               <BrainStartChat
                 onApplyConfig={() => {}}
                 onStartNow={() => {}}

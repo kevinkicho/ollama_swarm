@@ -158,7 +158,6 @@ export class BaselineRunner implements SwarmRunner {
     if (this.stopping) return;
 
     this.setPhase("spawning");
-    await this.opts.manager.spawnHousekeeperAgent(destPath);
     // E3 Phase 5: opencode subprocess is gone. Agent is a lightweight
     // Session stub; no port, no warmup, no SSE event stream.
     const agent = await this.opts.manager.spawnAgentNoOpencode({

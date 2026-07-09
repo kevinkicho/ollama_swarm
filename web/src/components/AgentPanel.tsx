@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { memo } from "react";
 import { useSwarm } from "../state/store";
 import type { AgentState, LatencySample } from "../types";
+import { viewAgentActivity } from "../state/agentActivityView";
 import { CopyChip } from "./CopyChip";
 import { hueForAgent, agentBubblePalette, statusGlowClass } from "./agentPalette";
 import { isBrainAgentName, textMentionsBrainAlias } from "@ollama-swarm/shared/brainAlias";
@@ -135,7 +136,12 @@ export const AgentPanel = memo(function AgentPanel({
   if (!agent || typeof agent.index !== 'number') {
     return <div className="text-[10px] text-ink-500">agent (invalid)</div>;
   }
-  const elapsed = useElapsedTicker(agent.thinkingSince, agent.status === "thinking");
+  const elapsed = useElapsedTicker(
+    agent.thinkingSince,
+    agent.status === "thinking" || agent.status === "retrying",
+  );
+  const activity = useSwarm((s) => s.agentActivity[agent.id]);
+  const actView = viewAgentActivity(agent, activity);
   const samples = useSwarm((s) => s.latency[agent.id] ?? EMPTY_SAMPLES);
   const phase = useSwarm((s) => s.phase);
   // #291: portal-based tooltip. Sidebar is `<aside overflow-y-auto>`,
@@ -150,9 +156,13 @@ export const AgentPanel = memo(function AgentPanel({
       : null;
   // Unit 39: while "thinking" and we have a timestamp, show the ticker;
   // otherwise fall back to status / retry label as before.
-  const thinkingLabel =
-    agent.status === "thinking" && elapsed
-      ? `thinking ${elapsed}`
+  const waitingLabel =
+    (agent.status === "thinking" || agent.status === "retrying") && elapsed && actView.isWaiting
+      ? `waiting ${elapsed}`
+      : null;
+  const streamingLabel =
+    agent.status === "thinking" && elapsed && actView.phase === "streaming"
+      ? `streaming ${elapsed}`
       : null;
   // Task #40: when the run ended cleanly, rename the terminal state
   // to "done" so users can tell it apart from a crash / user-stop.
@@ -160,12 +170,18 @@ export const AgentPanel = memo(function AgentPanel({
   const statusLabel =
     agent.status === "stopped" && runCompletedCleanly ? "done" : agent.status;
   const activityLine =
-    agent.activityLabel && agent.status === "thinking"
-      ? agent.activityAttempt && agent.activityMaxAttempts
-        ? `${agent.activityLabel} (${agent.activityAttempt}/${agent.activityMaxAttempts})`
-        : agent.activityLabel
+    actView.label && (agent.status === "thinking" || agent.status === "retrying")
+      ? [
+          actView.label,
+          agent.activityAttempt && agent.activityMaxAttempts
+            ? `(${agent.activityAttempt}/${agent.activityMaxAttempts})`
+            : null,
+          elapsed ?? null,
+        ]
+          .filter(Boolean)
+          .join(" · ")
       : null;
-  const primaryLine = retryLabel ?? activityLine ?? thinkingLabel ?? statusLabel;
+  const primaryLine = retryLabel ?? activityLine ?? streamingLabel ?? waitingLabel ?? statusLabel;
   // Override the status dot color for the done case too.
   const dotColor =
     agent.status === "stopped" && runCompletedCleanly

@@ -15,9 +15,13 @@ import type { Agent } from "../../services/AgentManager.js";
 import { extractText } from "../extractText.js";
 import { parseGoalList } from "./goalListParser.js";
 import type { PlannerSeed } from "./prompts/planner.js";
-import { chatOnce } from "../chatOnce.js";
 import { isWebToolsEnabled, resolveToolProfile } from "../toolProfiles.js";
 import type { RunConfig } from "../SwarmRunner.js";
+import {
+  chatOnceWithStreaming,
+  type ChatStreamingSurface,
+} from "./promptRunner.js";
+import { isPromptHaltError } from "./lifecycleState.js";
 
 export async function runGoalGenerationPrePass(
   planner: Agent,
@@ -25,9 +29,13 @@ export async function runGoalGenerationPrePass(
   appendSystem: (text: string) => void,
   opts: {
     signal?: AbortSignal;
+    /** @deprecated Prefer streaming surface — wires dock + activity labels. */
     onStatusChange?: (status: "thinking" | "ready") => void;
+    streaming?: ChatStreamingSurface;
     cfg?: RunConfig;
     onTool?: (info: { tool: string; ok: boolean; preview: string }) => void;
+    /** When set, raw model output is appended as an agent bubble (tool trace attaches there). */
+    onAgentOutput?: (text: string) => void;
   } = {},
 ): Promise<string[] | undefined> {
   const hasDirective = seed.userDirective && seed.userDirective.length > 0;
@@ -98,30 +106,46 @@ export async function runGoalGenerationPrePass(
   }
 
   if (opts.signal?.aborted) return undefined;
-  opts.onStatusChange?.("thinking");
+
+  const webOn = isWebToolsEnabled(opts.cfg);
+  const agentProfile = webOn ? resolveToolProfile("read", opts.cfg) : "swarm";
+  const chatOpts = {
+    agentName: agentProfile,
+    promptText: prompt,
+    signal: opts.signal,
+    clonePath: seed.clonePath,
+    webToolsConfig: opts.cfg,
+    runId: opts.cfg?.runId,
+    mcpServers: opts.cfg?.mcpServers,
+    ...(opts.onTool ? { onTool: opts.onTool } : {}),
+  };
+
   try {
-    const webOn = isWebToolsEnabled(opts.cfg);
-    const agentProfile = webOn ? resolveToolProfile("read", opts.cfg) : "swarm";
-    const res = await chatOnce(planner, {
-      agentName: agentProfile,
-      promptText: prompt,
-      signal: opts.signal,
-      clonePath: seed.clonePath,
-      webToolsConfig: opts.cfg,
-      runId: opts.cfg?.runId,
-      mcpServers: opts.cfg?.mcpServers,
-      ...(opts.onTool ? { onTool: opts.onTool } : {}),
-    });
+    const res = opts.streaming
+      ? await chatOnceWithStreaming(planner, opts.streaming, chatOpts)
+      : await (async () => {
+          opts.onStatusChange?.("thinking");
+          try {
+            const { chatOnce } = await import("../chatOnce.js");
+            return chatOnce(planner, chatOpts);
+          } finally {
+            opts.onStatusChange?.("ready");
+          }
+        })();
     const text = extractText(res);
     if (!text) return undefined;
+    opts.onAgentOutput?.(text);
     const items = parseGoalList(text);
     return items.length > 0 ? items : undefined;
   } catch (err) {
+    const stopping = () => opts.streaming?.abort?.isStopping?.() ?? false;
+    const draining = () => opts.streaming?.abort?.isDraining?.() ?? false;
+    if (opts.signal?.aborted || isPromptHaltError(err, stopping, draining)) {
+      throw err;
+    }
     appendSystem(
       `Goal-generation pre-pass failed (${err instanceof Error ? err.message : String(err)}); continuing without enrichment.`,
     );
     return undefined;
-  } finally {
-    opts.onStatusChange?.("ready");
   }
 }

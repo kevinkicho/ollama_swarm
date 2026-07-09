@@ -20,7 +20,7 @@ export const RETRY_MAX_ATTEMPTS = 3;
 // Delays BEFORE attempts 2 and 3 (no delay before attempt 1).
 //
 // Unit 39 (2026-04-23): bumped from [4 s, 16 s] to [30 s, 90 s].
-// Live kyahoofinance smoke showed retries firing back-to-back with
+// Live smoke runs showed retries firing back-to-back with
 // only ~4-16 s of cooling between them, each hitting the same slow
 // cloud shard. At [4, 16] the cloud didn't have time to warm; at
 // [30, 90] a truly cold shard has a real chance to come online
@@ -73,7 +73,27 @@ const RETRYABLE_MESSAGE_PATTERNS: readonly RegExp[] = [
   /Server overloaded/i,
   /\boverloaded\b/i,
   /\bserver\s+busy\b/i,
+  // Intra-stream loop abort — retry the turn (false positives possible on
+  // fixed-size cloud frames; real loops should also get a clean retry).
+  /\bintra-stream loop\b/i,
 ];
+
+/** Sidebar + transcript retry label — avoids implying local Ollama is down. */
+export function shortRetryReason(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  const idle = /Ollama idle timeout: no body data for (\d+)ms/i.exec(msg);
+  if (idle) {
+    const sec = Math.round(Number(idle[1]) / 1000);
+    return `cloud queue: no first token in ${sec}s (other agents may be fine)`;
+  }
+  if (/UND_ERR_HEADERS_TIMEOUT/i.test(msg)) {
+    return "cloud headers timeout (transient; retrying)";
+  }
+  if (/503|overloaded|server busy/i.test(msg)) {
+    return "cloud capacity busy (transient; retrying)";
+  }
+  return msg.length > 96 ? `${msg.slice(0, 93)}…` : msg;
+}
 
 export function isRetryableSdkError(err: unknown): boolean {
   // Intentional cancellations — don't retry.

@@ -64,6 +64,66 @@ describe("applyStatusSnapshotToStore", () => {
     assert.deepEqual(ids, ["agent-1", "agent-2", "agent-3", "agent-4"]);
   });
 
+  it("fills full council roster when status returns only one agent after crash", () => {
+    const store = createSwarmStore();
+    const snap = {
+      phase: "failed",
+      round: 0,
+      agents: [{ id: "agent-2", index: 2, status: "stopped", model: "deepseek-v4-flash:cloud" }],
+      transcript: [
+        {
+          id: "sys-ready",
+          role: "system",
+          text: "4/4 agents ready — models: deepseek-v4-flash:cloud, deepseek-v4-flash:cloud, deepseek-v4-flash:cloud, deepseek-v4-flash:cloud",
+          ts: 1,
+        },
+      ],
+      runId: "run-partial",
+      runConfig: {
+        preset: "council",
+        agentCount: 4,
+        topology: {
+          agents: [
+            { index: 1, model: "deepseek-v4-flash:cloud" },
+            { index: 2, model: "deepseek-v4-flash:cloud" },
+            { index: 3, model: "deepseek-v4-flash:cloud" },
+            { index: 4, model: "deepseek-v4-flash:cloud" },
+          ],
+        },
+      },
+    } as unknown as SwarmStatusSnapshot;
+
+    applyStatusSnapshotToStore(store, "run-partial", snap);
+    const ids = Object.keys(store.getState().agents).sort();
+    assert.deepEqual(ids, ["agent-1", "agent-2", "agent-3", "agent-4"]);
+  });
+
+  it("preserves thinkingSince from status snapshot for sidebar elapsed ticker", () => {
+    const store = createSwarmStore();
+    const snap = {
+      phase: "seeding",
+      round: 0,
+      agents: [
+        {
+          id: "agent-3",
+          index: 3,
+          status: "thinking",
+          thinkingSince: 1_700_000_000_000,
+          activityLabel: "contract draft",
+          model: "deepseek-v4-flash:cloud",
+        },
+      ],
+      transcript: [],
+      runId: "run-thinking",
+    } as SwarmStatusSnapshot;
+
+    applyStatusSnapshotToStore(store, "run-thinking", snap);
+    const a = store.getState().agents["agent-3"];
+    assert.equal(a?.status, "thinking");
+    assert.equal(a?.thinkingSince, 1_700_000_000_000);
+    assert.equal(a?.activityLabel, "contract draft");
+  });
+
   it("applies active phase after transcript hydrate", () => {
     const store = createSwarmStore();
     const snap = {

@@ -1,8 +1,10 @@
 import { memo, useMemo, useState } from "react";
 import { AgentJsonBubble, MAX_BUBBLE_HEIGHT_PX } from "./JsonBubbles";
 import {
+  BubbleToggleRow,
+  PromptContentPanel,
   ThinkingContentPanel,
-  ThinkingToggleButton,
+  type ResolvedPrompt,
   type ResolvedThinking,
 } from "./AgentThinking";
 import { extractFirstBalancedJson } from "../../../../shared/src/extractJson";
@@ -68,6 +70,7 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
   className,
   style,
   thinking,
+  prompt,
 }: {
   summary: string;
   rawJson: string;
@@ -75,9 +78,11 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
   className?: string;
   style?: React.CSSProperties;
   thinking?: ResolvedThinking | null;
+  prompt?: ResolvedPrompt | null;
 }) {
   const [showRaw, setShowRaw] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
   // 2026-04-27 (UI Phase 3 follow-up per Kevin): collapsed by default,
   // matching the "Posted N todos" / Contract bubble summary-then-expand
   // pattern. Pre-fix, hunks rendered inline (capped via maxHeight) and
@@ -95,6 +100,7 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
         summary={summary}
         json={rawJson}
         thinking={thinking}
+        prompt={prompt}
       />
     );
   }
@@ -112,14 +118,14 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
     <div className={className} style={style}>
       <div className="flex items-start justify-between gap-2 mb-1">
         <div className="flex-1">{header}</div>
-        <div className="flex flex-wrap items-center gap-2 shrink-0 justify-end">
-          {thinking ? (
-            <ThinkingToggleButton
-              thinking={thinking}
-              open={showThinking}
-              onClick={() => setShowThinking((v) => !v)}
-            />
-          ) : null}
+        <BubbleToggleRow
+          thinking={thinking}
+          prompt={prompt}
+          showThinking={showThinking}
+          showPrompt={showPrompt}
+          onToggleThinking={() => setShowThinking((v) => !v)}
+          onTogglePrompt={() => setShowPrompt((v) => !v)}
+        >
           <button
             onClick={() => setExpanded((v) => !v)}
             className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200"
@@ -132,8 +138,9 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
           >
             {showRaw ? "Hide raw" : "Raw JSON"}
           </button>
-        </div>
+        </BubbleToggleRow>
       </div>
+      {showPrompt && prompt ? <PromptContentPanel prompt={prompt} /> : null}
       {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
       <div className="flex items-baseline gap-2 mb-2 text-[11px]">
         <div className="text-ink-400 flex-1 min-w-0 truncate">{summary}</div>

@@ -22,6 +22,7 @@ export interface BrainAnalysisResult {
   insights: RunInsight[];           // Renamed from "proposals" — final run analysis insights
   runSummaries: RunSummary[];
   summaryAnalysis: ReturnType<typeof analyzeSummaries>;
+  projectGraphInsights?: import("../../../projectGraph/types.js").ProjectGraphBrainInsights;
 }
 
 export interface RunInsight {
@@ -59,6 +60,23 @@ export async function runBrainAnalysis(
   const chains = interactionTracker.getChains();
   const exceptions = exceptionCollector.getPatternSummary();
 
+  let projectGraphContext: string | undefined;
+  let projectGraphInsights: import("../../../projectGraph/types.js").ProjectGraphBrainInsights | undefined;
+  try {
+    const { readProjectGraphSidecar } = await import("../../../projectGraph/sidecar.js");
+    const {
+      analyzeProjectGraphForBrain,
+      formatGraphContextForBrain,
+    } = await import("../../../projectGraph/graphLibrarian.js");
+    const pg = await readProjectGraphSidecar(clonePath);
+    if (pg) {
+      projectGraphInsights = analyzeProjectGraphForBrain(pg);
+      projectGraphContext = formatGraphContextForBrain(pg, projectGraphInsights);
+    }
+  } catch {
+    // best-effort
+  }
+
   // Update pattern cache
   const priorCache = await readPatternCache(clonePath);
   const updatedCache = updateCache(priorCache, exceptionCollector.getAll(), runId);
@@ -68,13 +86,21 @@ export async function runBrainAnalysis(
   let insights: RunInsight[];
   if (promptFn && model) {
     try {
-      insights = await analyzeWithLLM(chains, exceptions, priorImprovements, promptFn, model);
+      insights = await analyzeWithLLM(chains, exceptions, priorImprovements, promptFn, model, projectGraphContext);
     } catch (err) {
       console.warn(`[brain-overseer] LLM analysis failed, falling back to rules: ${err instanceof Error ? err.message : err}`);
       insights = generateInsights(exceptions, updatedCache);
     }
   } else {
-    insights = generateInsights(exceptions, updatedCache);
+    insights = generateInsights(exceptions, updatedCache, projectGraphInsights);
+  }
+
+  if (projectGraphInsights) {
+    const { graphInsightsToRunInsights } = await import("../../../projectGraph/graphLibrarian.js");
+    const graphDerived = graphInsightsToRunInsights(projectGraphInsights);
+    for (const g of graphDerived) {
+      if (!insights.some((i) => i.title === g.title)) insights.push(g);
+    }
   }
 
   // Persist insights (as before, using the proposals store for run knowledge)
@@ -106,6 +132,7 @@ export async function runBrainAnalysis(
     insights,
     runSummaries,
     summaryAnalysis,
+    projectGraphInsights,
   };
 }
 
@@ -118,8 +145,9 @@ async function analyzeWithLLM(
   priorImprovements: string[],
   promptFn: (prompt: string, model: string, maxTokens: number, timeoutMs: number) => Promise<string>,
   model: string,
+  projectGraphContext?: string,
 ): Promise<RunInsight[]> {
-  const prompt = buildAnalysisPrompt(chains, exceptions, priorImprovements);
+  const prompt = buildAnalysisPrompt(chains, exceptions, priorImprovements, projectGraphContext);
   const response = await promptFn(prompt, model, 4096, 60_000);
 
   try {
@@ -163,6 +191,7 @@ async function analyzeWithLLM(
 function generateInsights(
   exceptions: PatternSummary,
   cache: PatternCacheData,
+  _projectGraphInsights?: import("../../../projectGraph/types.js").ProjectGraphBrainInsights,
 ): RunInsight[] {
   const insights: RunInsight[] = [];
 

@@ -5,10 +5,10 @@
 
 /** Union of all BlackboardRunner properties referenced by context builders.
  *  Replaces the unsafe `BlackboardRunnerFields = any` escape hatch.
- *  125 properties discovered across 11 contexts. */
+ *  131 properties discovered across 11 contexts. */
 export interface BlackboardRunnerFields {
+  _startupCrashMessage: any;
   _wasDrained: any;
-  _startupCrashMessage?: string;
   active: any;
   activeAborts: any;
   adaptiveHysteresis: any;
@@ -27,6 +27,7 @@ export interface BlackboardRunnerFields {
   boardCounts: any;
   boardGetTodo: any;
   boardListTodos: any;
+  boardRestoredFromSnapshot: any;
   brainPromptFn: any;
   buildReflectionContext: any;
   buildSeed: any;
@@ -48,6 +49,7 @@ export interface BlackboardRunnerFields {
   emitAgentState: any;
   enqueueReplan: any;
   errorTracker: any;
+  exceptionCollector: any;
   extractText: any;
   failoverState: any;
   fileCommitCounts: any;
@@ -55,6 +57,8 @@ export interface BlackboardRunnerFields {
   flushStateWrite: any;
   hypothesisDeferralTimestamps: any;
   hypothesisGroupAborts: any;
+  initBrainOverseer: any;
+  interactionTracker: any;
   isOverWallClockCap: any;
   isRunning: any;
   jsonRepairsPerAgent: any;
@@ -76,10 +80,11 @@ export interface BlackboardRunnerFields {
   pauseProbeTimer: any;
   pauseStartedAt: any;
   paused: any;
+  pendingPromptByAgent: any;
+  pendingToolTraceByAgent: any;
   phase: any;
   planner: any;
   priorSnapshot: any;
-  boardRestoredFromSnapshot: boolean;
   promptAgent: any;
   promptErrorsPerAgent: any;
   promptPlannerSafely: any;
@@ -134,9 +139,6 @@ export interface BlackboardRunnerFields {
   writeBlackboardDeliverable: any;
   writeCrashSnapshot: any;
   writeRunSummary: any;
-  interactionTracker: any;
-  exceptionCollector: any;
-  initBrainOverseer: any;
 }
 
 /** Properties accessed by adaptiveWatchdogContext(). 8 properties. */export interface AdaptiveWatchdogFields {
@@ -197,30 +199,36 @@ export interface BlackboardRunnerFields {
   v2Observer: any;
 }
 
-/** Properties accessed by contractContext(). 17 properties. */export interface ContractFields {
+/** Properties accessed by contractContext(). 24 properties. */export interface ContractFields {
   active: any;
   appendAgent: any;
   appendSystem: any;
-  brainPromptFn: any;
+  auditor: any;
+  boardBroadcaster: any;
+  boardRestoredFromSnapshot: any;
   contract: any;
   currentTier: any;
+  directiveWithAmendments: any;
+  emitAgentState: any;
   findings: any;
   lifecycleState: any;
   opts: any;
+  planner: any;
   priorSnapshot: any;
-  boardRestoredFromSnapshot: boolean;
   promptAgent: any;
   promptPlannerSafely: any;
   scheduleStateWrite: any;
   tierHistory: any;
   tierStartedAt: any;
   tiersCompleted: any;
+  todoQueue: any;
+  transcript: any;
   v2Observer: any;
 }
 
-/** Properties accessed by lifecycleContext(). 92 properties. */export interface LifecycleFields {
+/** Properties accessed by lifecycleContext(). 98 properties. */export interface LifecycleFields {
+  _startupCrashMessage: any;
   _wasDrained: any;
-  _startupCrashMessage?: string;
   active: any;
   activeAborts: any;
   agentRoster: any;
@@ -232,6 +240,7 @@ export interface BlackboardRunnerFields {
   auditor: any;
   boardBroadcaster: any;
   boardCounts: any;
+  boardRestoredFromSnapshot: any;
   buildReflectionContext: any;
   buildSeed: any;
   cloneStateForStatus: any;
@@ -243,13 +252,17 @@ export interface BlackboardRunnerFields {
   discoverLocalOllamaTags: any;
   drainStartedAt: any;
   drainWatcherTimer: any;
+  emitAgentState: any;
   errorTracker: any;
+  exceptionCollector: any;
   failoverState: any;
   fileCommitCounts: any;
   findings: any;
   flushStateWrite: any;
   hypothesisDeferralTimestamps: any;
   hypothesisGroupAborts: any;
+  initBrainOverseer: any;
+  interactionTracker: any;
   isOverWallClockCap: any;
   isRunning: any;
   jsonRepairsPerAgent: any;
@@ -269,7 +282,6 @@ export interface BlackboardRunnerFields {
   paused: any;
   planner: any;
   priorSnapshot: any;
-  boardRestoredFromSnapshot: boolean;
   promptErrorsPerAgent: any;
   promptTokensPerAgent: any;
   recordError: any;
@@ -315,14 +327,15 @@ export interface BlackboardRunnerFields {
   writeRunSummary: any;
 }
 
-/** Properties accessed by plannerContext(). 14 properties. */export interface PlannerFields {
+/** Properties accessed by plannerContext(). 15 properties. */export interface PlannerFields {
   active: any;
   appendAgent: any;
   appendSystem: any;
+  auditor: any;
   boardCounts: any;
-  brainPromptFn: any;
   buildSeed: any;
   contract: any;
+  emitAgentState: any;
   findings: any;
   hypothesisGroupAborts: any;
   lifecycleState: any;
@@ -332,7 +345,7 @@ export interface BlackboardRunnerFields {
   wrappers: any;
 }
 
-/** Properties accessed by promptContext(). 21 properties. */export interface PromptFields {
+/** Properties accessed by promptContext(). 22 properties. */export interface PromptFields {
   active: any;
   activeAborts: any;
   appendSystem: any;
@@ -348,6 +361,8 @@ export interface BlackboardRunnerFields {
   localOllamaTags: any;
   maxTrackedErrors: any;
   opts: any;
+  pendingPromptByAgent: any;
+  pendingToolTraceByAgent: any;
   promptTokensPerAgent: any;
   recentLatencySamples: any;
   responseTokensPerAgent: any;
@@ -356,13 +371,17 @@ export interface BlackboardRunnerFields {
   turnsPerAgent: any;
 }
 
-/** Properties accessed by replanContext(). 14 properties. */export interface ReplanFields {
+/** Properties accessed by replanContext(). 19 properties. */export interface ReplanFields {
+  active: any;
   appendAgent: any;
   appendSystem: any;
+  auditor: any;
   boardGetTodo: any;
   boardListTodos: any;
   brainPromptFn: any;
   checkAndApplyCaps: any;
+  exceptionCollector: any;
+  interactionTracker: any;
   lifecycleState: any;
   opts: any;
   planner: any;
@@ -370,6 +389,7 @@ export interface BlackboardRunnerFields {
   readExpectedFiles: any;
   replanPending: any;
   replanRunning: any;
+  transcript: any;
   wrappers: any;
 }
 
@@ -402,7 +422,7 @@ export interface BlackboardRunnerFields {
   v2Observer: any;
 }
 
-/** Properties accessed by utilContext(). 16 properties. */export interface RunnerUtilFields {
+/** Properties accessed by utilContext(). 17 properties. */export interface RunnerUtilFields {
   active: any;
   activeAborts: any;
   appendSystem: any;
@@ -412,6 +432,8 @@ export interface BlackboardRunnerFields {
   lifecycleState: any;
   loopDetectionsToHalt: any;
   opts: any;
+  pendingPromptByAgent: any;
+  pendingToolTraceByAgent: any;
   phase: any;
   round: any;
   runStartedAt: any;
@@ -421,7 +443,7 @@ export interface BlackboardRunnerFields {
   transcript: any;
 }
 
-/** Properties accessed by workerContext(). 34 properties. */export interface WorkerFields {
+/** Properties accessed by workerContext(). 37 properties. */export interface WorkerFields {
   active: any;
   appendAgent: any;
   appendSystem: any;
@@ -433,9 +455,11 @@ export interface BlackboardRunnerFields {
   commitsPerAgent: any;
   emitAgentState: any;
   enqueueReplan: any;
+  exceptionCollector: any;
   fileCommitCounts: any;
   hypothesisDeferralTimestamps: any;
   hypothesisGroupAborts: any;
+  interactionTracker: any;
   jsonRepairsPerAgent: any;
   lifecycleState: any;
   linesAddedPerAgent: any;
@@ -453,6 +477,7 @@ export interface BlackboardRunnerFields {
   staleEventCount: any;
   subscriberPaused: any;
   todoQueue: any;
+  transcript: any;
   workerPool: any;
   workerRoles: any;
   wrappers: any;

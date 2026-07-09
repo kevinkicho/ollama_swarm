@@ -73,6 +73,18 @@ const RUN_SEND_TIP = {
   ],
 };
 
+const RUN_SUGGEST_TIP = {
+  title: "Suggest",
+  items: [
+    "Asks Brain for a proactive recommendation based on live run context.",
+    "Brain replies in this chat thread with concrete next steps or amendments.",
+    "Also injects a summary into the live transcript for agents to consider.",
+  ],
+};
+
+const PROACTIVE_SUGGEST_PROMPT =
+  "Give me a proactive suggestion for this run based on the current phase, todos, and recent transcript. What should I focus on or amend next?";
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
@@ -198,7 +210,7 @@ export function BrainStartChat({
   const isDuringRun = !!runContext;
   const initialMsg = isDuringRun
     ? `**Run ${runContext.runId?.slice(0, 8)}** · ${runContext.preset ?? "swarm"} · phase **${runContext.phase || "unknown"}**\n\nI have the live run snapshot (transcript, agents, board). Ask about progress, todos, or what agents are doing — I can also explore the workspace read-only when tools are available.`
-    : "Hi! I'm Brain, the swarm librarian. Describe your goal or use-case (you don't need to know the 'swarm mode'). Example: 'I want to analyze lots of research papers on superconductors and synthesize the common properties' or 'I need to safely add new data panels to my finance app using public gov endpoints'. I'll analyze it, recommend the best preset + explain why with supporting reasons, and give you the exact config + start command.";
+    : "Hi! I'm Brain, the swarm librarian. Describe your goal or use-case (you don't need to know the 'swarm mode'). Example: 'I want to analyze lots of research papers on superconductors and synthesize the common properties' or 'I need to add OAuth login and session handling to my Node API'. I'll analyze it, recommend the best preset + explain why with supporting reasons, and give you the exact config + start command.";
 
   // Persist history per-run using the per-run store (falls back to local state)
   const storeHistory = useSwarm((s: any) => (runContext ? s.brainChatHistory : undefined));
@@ -243,6 +255,7 @@ export function BrainStartChat({
   }, [runContext]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
   const [lastConfig, setLastConfig] = useState<BrainConfigPatch | null>(null);
   const [starting, setStarting] = useState(false);
   const [suggestedAmend, setSuggestedAmend] = useState<string | null>(null);
@@ -279,13 +292,20 @@ export function BrainStartChat({
     return /\b(yes|yep|yeah|sure|go|start|launch|do it|please|confirm|ready|ok|okay)\b/i.test(text);
   };
 
-  const send = async () => {
-    if (!input.trim() || loading) return;
-    const userMsg: ChatMessage = { role: "user", content: input.trim() };
-    // Build list from current messages (avoids relying on selector during updates)
-    const baseForSend = [...messages, userMsg];
+  const sendMessage = async (rawText: string) => {
+    const trimmed = rawText.trim();
+    if (!trimmed || loading) return;
+    const userMsg: ChatMessage = { role: "user", content: trimmed };
+    // Read latest history from store when during-run to avoid stale closure on Suggest etc.
+    const currentMessages =
+      runContext && setStoreHistory && useSwarm.getState().brainChatHistory.length > 0
+        ? useSwarm.getState().brainChatHistory
+        : runContext && storeHistory && storeHistory.length > 0
+          ? storeHistory
+          : messages;
+    const baseForSend = [...currentMessages, userMsg];
     setMessages(baseForSend);
-    setInput("");
+    if (trimmed === input.trim()) setInput("");
     setLoading(true);
 
     const userWantsToStart = lastConfig && isAffirmative(userMsg.content);
@@ -310,7 +330,7 @@ export function BrainStartChat({
         runContext?.clonePath || (window as any).__currentClonePath || null;
       if (currentClone) body.clonePath = currentClone;
 
-      const userMsgText = input.trim().toLowerCase();
+      const userMsgText = trimmed.toLowerCase();
       const userWantsOptionsTable = /explain (all )?options|show (me )?(all )?options|compare (all )?(presets|options)|which preset|what mode|best preset|preset options|table of presets|all presets for|recommend.*preset|options for my goal/i.test(userMsgText);
 
       const res = await fetch("/api/swarm/brain/chat", {
@@ -365,7 +385,7 @@ export function BrainStartChat({
         const shouldShowTable = (userWantsOptionsTable || /explain (all )?options|options table|compare presets|which preset|preset options/i.test(data.reply)) && !isDuringRun;
         if (shouldShowTable) {
           // Auto-apply relevant filters to the Swarm Mode card (live update via shared store)
-          const goalText = (input || data.reply || '').toLowerCase();
+          const goalText = (trimmed || data.reply || '').toLowerCase();
           const autoTags: string[] = [];
           if (goalText.includes('research') || goalText.includes('paper') || goalText.includes('literature') || goalText.includes('scan')) autoTags.push('research', 'literature-scan');
           if (goalText.includes('analysis') || goalText.includes('debate') || goalText.includes('hypothesis')) autoTags.push('analysis');
@@ -407,6 +427,51 @@ export function BrainStartChat({
     }
   };
 
+  const send = () => sendMessage(input);
+
+  const requestProactiveSuggestion = async () => {
+    if (!runContext || loading || suggesting) return;
+    setSuggesting(true);
+    try {
+      await sendMessage(PROACTIVE_SUGGEST_PROMPT);
+      // Mirror transcript-header suggest: inject a system entry agents can see.
+      if (runContext.runId) {
+        const res = await fetch("/api/swarm/brain/suggest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            runId: runContext.runId,
+            title: "Proactive suggestion from Brain chat",
+            text: "Brain was asked for a proactive recommendation — see the Brain chat thread and consider any concrete amend or focus area.",
+            category: "recommendation",
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          const errMsg: ChatMessage = {
+            role: "assistant",
+            content: `Could not inject transcript suggestion (${(err as { error?: string }).error ?? res.status}). The Brain reply above is still available in this chat.`,
+          };
+          const latest = runContext && setStoreHistory
+            ? useSwarm.getState().brainChatHistory
+            : localMessages;
+          setMessages([...latest, errMsg]);
+        }
+      }
+    } catch {
+      const errMsg: ChatMessage = {
+        role: "assistant",
+        content: "Sorry, the proactive suggestion request failed. Check that the server is running.",
+      };
+      const latest = runContext && setStoreHistory
+        ? useSwarm.getState().brainChatHistory
+        : localMessages;
+      setMessages([...latest, errMsg]);
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
   const chipBtn =
     "text-[10px] px-1.5 py-0.5 rounded border border-ink-600 text-ink-300 hover:text-ink-100 hover:border-ink-500 disabled:opacity-40 shrink-0";
 
@@ -414,7 +479,7 @@ export function BrainStartChat({
     <div
       className={
         isDuringRun
-          ? "flex flex-col h-full min-h-0 gap-2"
+          ? "flex flex-col h-full min-h-0 overflow-hidden gap-2"
           : "bg-ink-800 border border-violet-700/60 rounded-xl p-4 shadow-2xl mb-4"
       }
     >
@@ -598,7 +663,7 @@ export function BrainStartChat({
                 placeholder={
                   isDuringRun
                     ? "Ask about progress, suggest changes, or request analysis…"
-                    : "e.g. blackboard on C:\\Users\\...\\kyahoofinance , directive: add panels using gov + existing endpoints..."
+                    : "e.g. blackboard on C:\\Users\\...\\my-project , directive: add retry logic to the API client and update README..."
                 }
                 aria-label={isDuringRun ? "Message Brain about this run" : "Message Brain to configure a swarm"}
                 value={input}
@@ -646,38 +711,27 @@ export function BrainStartChat({
             />
           </InfoTip>
         {runContext && (
-          <button
-            type="button"
-            onClick={async () => {
-              const title = "Proactive suggestion from chat";
-              const text =
-                "Consider checking current todos for issues or amending the directive based on recent activity.";
-              try {
-                await fetch("/api/swarm/brain/suggest", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    runId: runContext.runId,
-                    title,
-                    text,
-                    category: "recommendation",
-                  }),
-                });
-              } catch {
-                // still surface locally
-              }
-              const suggestion: ChatMessage = {
-                role: "assistant",
-                content: `[Brain Suggestion] ${title}\n${text}`,
-              };
-              setMessages([...messages, suggestion]);
-            }}
-            className={chipBtn}
-            title="Request a proactive suggestion for this run"
-            disabled={loading}
+          <InfoTip
+            maxWidth={BRAIN_TIP_MAX_WIDTH}
+            preferNoWrap
+            wrapperClassName="inline-flex shrink-0 self-stretch"
+            trigger={
+              <button
+                type="button"
+                onClick={requestProactiveSuggestion}
+                className={`${chipBtn} h-full flex items-center justify-center cursor-help`}
+                disabled={loading || suggesting}
+              >
+                {suggesting ? "…" : "Suggest"}
+              </button>
+            }
           >
-            Suggest
-          </button>
+            <FormattedTipContent
+              title={RUN_SUGGEST_TIP.title}
+              items={RUN_SUGGEST_TIP.items}
+              noWrapItems
+            />
+          </InfoTip>
         )}
       </div>
 

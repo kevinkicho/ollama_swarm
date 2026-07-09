@@ -357,7 +357,7 @@ describe("reviewProposedHunks (new auditor hunk review)", () => {
 
   it("approves when auditor says yes", async () => {
     const ctx = makeMockCtx(true);
-    const todo = { id: "t1", description: "add panel", expectedFiles: ["a.tsx"] } as Todo;
+    const todo = { id: "t1", description: "add feature module", expectedFiles: ["a.tsx"] } as Todo;
     const res = await reviewProposedHunks(ctx, { id: "a", index: 99, model: "m" } as any, todo, [{ op: "create", file: "a.tsx" }], ["a.tsx"]);
     assert.equal(res.approve, true);
     assert.ok(res.reason.includes("looks good"));
@@ -373,7 +373,7 @@ describe("reviewProposedHunks (new auditor hunk review)", () => {
   it("parses JSON after think-tag prefix via repair path", async () => {
     const thinkWrapped = `<think>reviewing hunks</think>\n${JSON.stringify({ approve: true, reason: "ok after strip" })}`;
     const ctx = makeMockCtx(true, thinkWrapped);
-    const todo = { id: "t3", description: "panel", expectedFiles: ["a.tsx"] } as Todo;
+    const todo = { id: "t3", description: "update registry", expectedFiles: ["a.tsx"] } as Todo;
     const res = await reviewProposedHunks(ctx, { id: "a", index: 99, model: "m" } as any, todo, [], ["a.tsx"]);
     assert.equal(res.approve, true);
     assert.ok(res.reason.includes("ok after strip"));

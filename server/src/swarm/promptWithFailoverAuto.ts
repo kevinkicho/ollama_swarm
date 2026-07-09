@@ -26,6 +26,7 @@ import type { PromptWithRetryOptions } from "./promptWithRetry.js";
 import { promptWithFailover, type FailoverConfig } from "./promptWithFailover.js";
 import { config as appConfig } from "../config.js";
 
+
 export async function promptWithFailoverAuto(
   agent: Agent,
   promptText: string,

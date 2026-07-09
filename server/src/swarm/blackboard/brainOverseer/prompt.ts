@@ -12,6 +12,7 @@ export function buildAnalysisPrompt(
   chains: InteractionChain[],
   exceptions: PatternSummary,
   priorImprovements: string[],
+  projectGraphContext?: string,
 ): string {
   const chainText = chains
     .slice(0, 20)
@@ -59,6 +60,8 @@ export function buildAnalysisPrompt(
     "=== PRIOR RUN ANALYSES ===",
     priorText,
     "",
+    projectGraphContext ? projectGraphContext : "",
+    projectGraphContext ? "" : "",
     "=== YOUR TASK ===",
     "Produce a final run analysis as an array of insights/recommendations:",
     "1. High-level summary of what the run accomplished.",

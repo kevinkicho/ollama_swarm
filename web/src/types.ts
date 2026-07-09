@@ -87,6 +87,12 @@ export interface TranscriptEntry {
   };
   /** Blackboard auditor assist — JSON salvage bubble labeling. */
   assistKind?: "auditor-salvage" | "auditor-diagnostic";
+  /** Outbound prompt sent to this agent for the turn (server-stashed). */
+  promptText?: string;
+  /** Activity label when the prompt was sent (e.g. "contract draft"). */
+  promptLabel?: string;
+  /** Buffered SDK tool calls for this agent turn — shown via a Tools toggle on the bubble. */
+  toolTrace?: Array<{ tool: string; ok: boolean; preview: string; ts?: number }>;
 }
 
 export type SwarmPhase =
@@ -292,6 +298,20 @@ export type SwarmEvent =
   | { type: "swarm_state"; phase: SwarmPhase; round: number; runId?: string }
   | { type: "agent_streaming"; agentId: string; agentIndex: number; text: string; runId?: string }
   | { type: "agent_streaming_end"; agentId: string; runId?: string }
+  | {
+      type: "agent_activity";
+      agentId: string;
+      agentIndex: number;
+      phase: "queued" | "waiting" | "streaming" | "retrying" | "done";
+      ts: number;
+      activityId?: string;
+      kind?: string;
+      label?: string;
+      attempt?: number;
+      maxAttempts?: number;
+      reason?: string;
+      runId?: string;
+    }
   | { type: "error"; message: string }
   | { type: "todo_posted"; todo: Todo }
   | { type: "todo_claimed"; todoId: string; claim: Claim }
@@ -371,6 +391,9 @@ export type SwarmEvent =
       latencyMs?: number;
       excerptChars?: number;
       windowScores?: number[];
+      anchorOverlap?: number;
+      offGraphPaths?: string[];
+      recoverySuggested?: boolean;
     }
   // #302 Phase B: independent embedding-similarity drift sample.
   | {

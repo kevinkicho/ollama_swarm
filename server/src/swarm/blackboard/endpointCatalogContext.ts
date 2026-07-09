@@ -4,9 +4,14 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+// Repo-agnostic discovery: try common catalog names if present in the clone.
 const CATALOG_CANDIDATES = [
   "API_ENDPOINTS.md",
   "docs/API_ENDPOINTS.md",
+  "API_CATALOG.md",
+  "docs/API_CATALOG.md",
+  "ENDPOINTS.md",
+  "docs/ENDPOINTS.md",
   "GOVERNMENT_API_CATALOG.md",
   "docs/GOVERNMENT_API_CATALOG.md",
 ] as const;
@@ -14,7 +19,7 @@ const CATALOG_CANDIDATES = [
 const ENV_CANDIDATES = [".env", ".env.example", "functions/.env.example"] as const;
 
 const API_TODO_RE =
-  /\b(api|endpoint|route|proxy|panel|\.env|catalog|data source|webhook|fetch|http)\b/i;
+  /\b(api|endpoint|route|proxy|\.env|catalog|data source|webhook|fetch|http|integration|service)\b/i;
 
 export interface EndpointCatalogSnapshot {
   catalogPath?: string;
@@ -27,7 +32,7 @@ export function todoTouchesApiSurface(description: string, expectedFiles: readon
   if (API_TODO_RE.test(description)) return true;
   return expectedFiles.some(
     (f) =>
-      /API_ENDPOINTS|GOVERNMENT_API|\.env|routes?\//i.test(f)
+      /API_ENDPOINTS|API_CATALOG|ENDPOINTS|_API_CATALOG|\.env|routes?\//i.test(f)
       || /\/routes\/[^/]+\.js$/i.test(f),
   );
 }

@@ -36,11 +36,11 @@ export function truncateLeft(s: string | undefined | null, maxLen: number): stri
 export function IdentityStrip() {
   const cfg = useSwarm((s) => s.runConfig);
   const wsRunId = useSwarm((s) => s.runId);
-  // Always subscribe to the event-log stream so the hook stays warm —
-  // the conditional consumes the value but the subscription cost is
-  // negligible (one fetch every 10s shared across all consumers).
-  const eventLog = useEventLogStream();
-  const runId = shouldUseEventLogRunId()
+  const useEventLogRunId = shouldUseEventLogRunId();
+  // Event-log list build can take 10s+ on cold cache; only fetch when the
+  // incremental cutover flag is set (?useEventLogRunId=1).
+  const eventLog = useEventLogStream({ enabled: useEventLogRunId });
+  const runId = useEventLogRunId
     ? eventLog.runs[eventLog.runs.length - 1]?.derived.runId ?? wsRunId
     : wsRunId;
   const conformance = useSwarm((s) => s.conformance);
@@ -327,7 +327,23 @@ function ConformanceTooltip({
         <span className="font-mono text-ink-300">{samples.length}</span>
         <span className="text-ink-500">poll interval</span>
         <span className="font-mono text-ink-300">90s</span>
+        {typeof latest.anchorOverlap === "number" ? (
+          <>
+            <span className="text-ink-500">anchor overlap</span>
+            <span className="font-mono text-ink-300">{latest.anchorOverlap}%</span>
+          </>
+        ) : null}
       </div>
+
+      {latest.offGraphPaths && latest.offGraphPaths.length > 0 ? (
+        <div className="mt-2 pt-2 border-t border-ink-700 text-[10px] text-amber-300/90 leading-snug">
+          Off-graph edits:{" "}
+          <span className="font-mono">{latest.offGraphPaths.join(", ")}</span>
+          {latest.recoverySuggested ? (
+            <span className="block mt-1 text-ink-400">Consider tying work back to hot/mission files.</span>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* Grader's reason for the LATEST score */}
       {latest.reason ? (

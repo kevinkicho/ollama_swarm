@@ -15,7 +15,7 @@ import { extractProviderText, parseJsonArrayFromResponse, createTimeoutControlle
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 
-import { staggerStart } from "./staggerStart.js";
+import { burstSpacingForModels, staggerStart } from "./staggerStart.js";
 import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
 import { describeSdkError } from "./sdkError.js";
 import { userEntryVisibleTo } from "./chatReceipt.js";
@@ -73,6 +73,7 @@ import {
 } from "./councilExecutionResume.js";
 
 
+
 export class CouncilRunner extends DiscussionRunnerBase {
   protected getPresetName(): string { return "Council"; }
 
@@ -97,6 +98,10 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private stopAbortController: AbortController | undefined;
   private stopInFlight: Promise<void> | null = null;
   private loopPromise: Promise<void> | null = null;
+  /** Set while drainTodos / runCouncilWorkers is in flight — stop waits for this. */
+  private workerDrainPromise: Promise<void> | null = null;
+  /** After close-out begins, drop straggler worker transcript lines. */
+  private transcriptFrozen = false;
   /** When set, exit after the first execution-drain cycle (resume path). */
   private executionOnlyResume = false;
   private progressLedger!: CouncilProgressLedger;
@@ -106,8 +111,14 @@ export class CouncilRunner extends DiscussionRunnerBase {
     super(opts);
   }
 
+  appendSystem(text: string, summary?: import("../types.js").TranscriptEntrySummary): void {
+    if (this.transcriptFrozen) return;
+    super.appendSystem(text, summary);
+  }
+
   /** Persist worker / drafter JSON to the server transcript (survives refresh). */
   private appendCouncilAgent(agent: Agent, text: string): void {
+    if (this.transcriptFrozen) return;
     const { finalText, thoughts, toolCalls } = stripAgentText(text);
     const summary = summarizeAgentResponse(finalText);
     const entry: TranscriptEntry = {
@@ -129,11 +140,11 @@ export class CouncilRunner extends DiscussionRunnerBase {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
     this.resetState(cfg);
 
-    const { destPath, ready } = await this.initCloneAndSpawn(cfg, {
+    const { destPath, ready: spawnedLlm } = await this.initCloneAndSpawn(cfg, {
       preset: "council",
       roleResolver: () => "Drafter",
     });
-    this.stats.registerAgents(ready);
+    this.stats.registerAgents(this.opts.manager.list());
 
     this.state = buildCouncilAdapterState(
       cfg,
@@ -171,8 +182,8 @@ export class CouncilRunner extends DiscussionRunnerBase {
     }
 
     // Derive initial contract (skip when resuming execution-only todos)
-    const planner = ready[0];
-    const workers = ready.slice(1);
+    const planner = spawnedLlm.find((a) => a.index === 1);
+    const workers = spawnedLlm.filter((a) => a.index > 1);
     const executionResume = resumeFrom && this.state.todoQueue.counts().pending > 0;
     if (planner && cfg.userDirective && !executionResume) {
       this.appendSystem(`Deriving tier ${this.state.currentTier} contract from directive…`);
@@ -231,7 +242,6 @@ export class CouncilRunner extends DiscussionRunnerBase {
   async stop(): Promise<void> {
     if (this.stopInFlight) return this.stopInFlight;
     this.stopping = true;
-    this.drainRequested = true;
     if (this.state) this.state.stopping = true;
     try {
       this.stopAbortController?.abort(new Error("user stop"));
@@ -273,10 +283,20 @@ export class CouncilRunner extends DiscussionRunnerBase {
 
   /** Wait for the autonomous loop to observe drain/stop, then write summary last. */
   private async awaitLoopThenCloseOut(opts: { immediate: boolean }): Promise<void> {
+    // Hard stop during execution: wait for worker pool to exit before writing
+    // summary / killAll. The old 15s loop race let close-out run while
+    // runCouncilWorkers was still awaiting in-flight provider HTTP.
+    if (opts.immediate && this.workerDrainPromise) {
+      await Promise.race([
+        this.workerDrainPromise.catch(() => {}),
+        new Promise<void>((r) => setTimeout(r, 45_000)),
+      ]);
+    }
     if (this.loopPromise) {
+      const loopCapMs = opts.immediate ? 10_000 : 120_000;
       await Promise.race([
         this.loopPromise.catch(() => {}),
-        new Promise<void>((r) => setTimeout(r, 15_000)),
+        new Promise<void>((r) => setTimeout(r, loopCapMs)),
       ]);
     }
     await this.closeOutStopped(opts);
@@ -319,8 +339,9 @@ export class CouncilRunner extends DiscussionRunnerBase {
       await this.writeSummary(cfg);
     }
 
+    this.transcriptFrozen = true;
     const killResult = await this.opts.manager.killAll();
-    this.appendSystem(formatPortReleaseLine(killResult));
+    super.appendSystem(formatPortReleaseLine(killResult));
     this.setPhase("stopped");
   }
 
@@ -528,8 +549,11 @@ export class CouncilRunner extends DiscussionRunnerBase {
         for (let r = 1; r <= 3; r++) {
           if (this.stopping) break;
           const snapshot: readonly TranscriptEntry[] = [...this.transcript];
-          await staggerStart(this.opts.manager.list(), (agent) =>
-            this.runTurn(agent, r, 3, snapshot, cfg.userDirective),
+          const agents = this.opts.manager.list();
+          await staggerStart(
+            agents,
+            (agent) => this.runTurn(agent, r, 3, snapshot, cfg.userDirective),
+            burstSpacingForModels(agents),
           );
         }
 
@@ -619,16 +643,19 @@ export class CouncilRunner extends DiscussionRunnerBase {
               appendSystem: this.appendSystem.bind(this) as any,
             },
           );
-          await maybeRunWrapUpApply({
-            cfg,
-            presetName: "council",
-            agent: this.opts.manager.list()[0],
-            manager: this.opts.manager,
-            repos: this.opts.repos,
-            emit: this.opts.emit,
-            appendSystem: (text) => this.appendSystem(text),
-            relevantFiles: [],
-          });
+          const wrapLead = this.opts.manager.list().find((a) => a.index === 1);
+          if (wrapLead) {
+            await maybeRunWrapUpApply({
+              cfg,
+              presetName: "council",
+              agent: wrapLead,
+              manager: this.opts.manager,
+              repos: this.opts.repos,
+              emit: this.opts.emit,
+              appendSystem: (text) => this.appendSystem(text),
+              relevantFiles: [],
+            });
+          }
         }
       } else {
         // ── CYCLE 2+: Fast standup (1 round) ──
@@ -649,8 +676,11 @@ export class CouncilRunner extends DiscussionRunnerBase {
         }
 
         const snapshot: readonly TranscriptEntry[] = [...this.transcript];
-        await staggerStart(this.opts.manager.list(), (agent) =>
-          this.runStandupTurn(agent, snapshot, cfg.userDirective),
+        const standupAgents = this.opts.manager.list();
+        await staggerStart(
+          standupAgents,
+          (agent) => this.runStandupTurn(agent, snapshot, cfg.userDirective),
+          burstSpacingForModels(standupAgents),
         );
 
         harvestStandupFindingsFromEntries(
@@ -706,7 +736,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
 
   private async drainTodos(cfg: RunConfig, cycle: number): Promise<void> {
     const agents = this.opts.manager.list();
-    const executionAgents = agents.filter((a) => a.index !== 1);
+    const executionAgents = agents.filter((a) => a.index > 1);
     if (executionAgents.length === 0) return;
 
     const pending = this.state.todoQueue.counts().pending;
@@ -729,12 +759,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
     }, REAPER_INTERVAL);
     reaper.unref();
 
-    try {
-      // Set up drain resolver so stop() can signal us
-      const drainPromise = new Promise<void>((resolve) => {
-        this.drainResolve = resolve;
-      });
-
+    const drainWork = (async () => {
       const { completed, failed, skipped } = await runCouncilWorkers(
         this.state,
         executionAgents,
@@ -759,8 +784,15 @@ export class CouncilRunner extends DiscussionRunnerBase {
           detail: `${completed} done, ${failed} failed, ${skipped} skipped`,
         },
       );
-      // Signal drain complete
       this.drainResolve?.();
+    })();
+
+    this.workerDrainPromise = drainWork.finally(() => {
+      this.workerDrainPromise = null;
+    });
+
+    try {
+      await this.workerDrainPromise;
     } finally {
       clearInterval(reaper);
     }
@@ -1016,11 +1048,16 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
 
     const controller = new AbortController();
     let standupEnqueued = 0;
+    this.opts.manager.markStatus(lead.id, "thinking", {
+      activityKind: "council",
+      activityLabel: "standup synthesis",
+    });
     try {
       const raw = await promptWithFailoverAuto(lead, prompt, {
         manager: this.opts.manager,
         agentName: "swarm-read",
         signal: controller.signal,
+        activity: { kind: "council", label: "standup synthesis" },
       }, cfg.providerFailover);
       const text = extractProviderText(raw);
       if (text) {
@@ -1043,6 +1080,8 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
       }
     } catch (err) {
       this.appendSystem(`[council] Standup synthesis failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.opts.manager.markStatus(lead.id, "ready");
     }
 
     if (standupEnqueued === 0) {

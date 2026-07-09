@@ -16,10 +16,13 @@ import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
 import { summarizeAgentResponse } from "./transcriptSummary.js";
 import { stripAgentText } from "../../../../shared/src/stripAgentText.js";
+import { takePendingToolTrace, type ToolTraceEntry } from "../toolCallTranscript.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { TodoQueue } from "./TodoQueue.js";
 import type { FindingsLog } from "./FindingsLog.js";
 import type { LifecycleState } from "./lifecycleState.js";
+
+export type PendingPrompt = { text: string; label?: string };
 
 export interface RunnerUtilContext {
   active?: RunConfig;
@@ -27,6 +30,8 @@ export interface RunnerUtilContext {
   round: number;
   runStartedAt?: number;
   transcript: TranscriptEntry[];
+  pendingPromptByAgent?: Map<string, PendingPrompt>;
+  pendingToolTraceByAgent?: Map<string, ToolTraceEntry[]>;
   todoQueue: TodoQueue;
   findings: FindingsLog;
   consecutiveLoopDetections: number;
@@ -155,6 +160,10 @@ export function appendAgent(
   const { finalText, thoughts, toolCalls } = stripAgentText(text);
   const summary = summarizeAgentResponse(finalText);
 
+  const pending = ctx.pendingPromptByAgent?.get(agent.id);
+  if (pending) ctx.pendingPromptByAgent?.delete(agent.id);
+  const toolTrace = takePendingToolTrace(ctx.pendingToolTraceByAgent, agent.id);
+
   const entry: TranscriptEntry = {
     id: randomUUID(),
     role: "agent",
@@ -166,6 +175,13 @@ export function appendAgent(
     ...(thoughts.length > 0 ? { thoughts } : {}),
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
     ...(options?.assistKind ? { assistKind: options.assistKind } : {}),
+    ...(pending?.text
+      ? {
+          promptText: pending.text,
+          ...(pending.label ? { promptLabel: pending.label } : {}),
+        }
+      : {}),
+    ...(toolTrace ? { toolTrace } : {}),
   };
   ctx.transcript.push(entry);
   ctx.emit({ type: "transcript_append", entry });

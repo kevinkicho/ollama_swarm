@@ -9,6 +9,7 @@ import type {
 } from "../types.js";
 import type { RunConfig, RunnerOpts } from "./SwarmRunner.js";
 import { DiscussionRunnerBase } from "./DiscussionRunnerBase.js";
+
 import { promptWithRetry } from "./promptWithRetry.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { selectModelForRole } from "./dynamicModelRoute.js";
@@ -146,7 +147,7 @@ export class OrchestratorWorkerRunner extends DiscussionRunnerBase {
     try {
       const agents = this.opts.manager.list();
       const lead = agents.find((a) => a.index === 1);
-      const workers = agents.filter((a) => a.index !== 1);
+      const workers = agents.filter((a) => a.index > 1);
       if (!lead) throw new Error("lead agent (index 1) did not spawn");
       if (workers.length === 0) throw new Error("no workers spawned");
 

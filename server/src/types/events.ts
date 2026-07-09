@@ -63,6 +63,14 @@ export interface TranscriptEntry {
   streamId?: string;
   /** Blackboard auditor assist — salvage JSON extraction vs legacy diagnostic. */
   assistKind?: "auditor-salvage" | "auditor-diagnostic";
+  // Outbound user prompt sent to this agent for the turn that produced
+  // this entry. Stashed in promptAgent, attached in appendAgent. UI
+  // renders collapsed-by-default via a top-right "Prompt" toggle.
+  promptText?: string;
+  /** Activity label from agent_activity when the prompt was sent (optional). */
+  promptLabel?: string;
+  /** SDK tool invocations during this turn (buffered; UI toggle, not per-call system lines). */
+  toolTrace?: Array<{ tool: string; ok: boolean; preview: string; ts?: number }>;
 }
 
 export interface BoardCountsDTO {
@@ -86,6 +94,19 @@ export type SwarmEventBody =
   | { type: "swarm_state"; phase: SwarmPhase; round: number; phaseIndex?: number; phasePreset?: string }
   | { type: "agent_streaming"; agentId: string; agentIndex: number; text: string }
   | { type: "agent_streaming_end"; agentId: string }
+  | {
+      type: "agent_activity";
+      agentId: string;
+      agentIndex: number;
+      phase: "queued" | "waiting" | "streaming" | "retrying" | "done";
+      ts: number;
+      activityId?: string;
+      kind?: string;
+      label?: string;
+      attempt?: number;
+      maxAttempts?: number;
+      reason?: string;
+    }
   | { type: "error"; message: string }
   | { type: "todo_posted"; todo: Todo }
   | { type: "todo_claimed"; todoId: string; claim: Claim }
@@ -209,6 +230,12 @@ export type SwarmEventBody =
       excerptChars?: number;
       /** The raw scores currently in the smoothing window (≤ 3). */
       windowScores?: number[];
+      /** 0–100 overlap of recent file touches with project graph anchors. */
+      anchorOverlap?: number;
+      /** Paths touched this run that are outside anchor neighborhood. */
+      offGraphPaths?: string[];
+      /** True when anchor overlap is low and recovery may help. */
+      recoverySuggested?: boolean;
     }
   // Unit 47: emitted once per run, right after RepoService.clone
   // resolves. `alreadyPresent` distinguishes a fresh shallow clone

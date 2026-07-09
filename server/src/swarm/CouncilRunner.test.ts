@@ -287,11 +287,17 @@ test("CouncilRunner.drain — soft stop is separate from hard stop", () => {
 test("CouncilRunner — summary is written after loop settles on drain/stop", () => {
   assert.match(COUNCIL_SRC, /closingRequested/, "must gate audit on drain/stop");
   assert.match(COUNCIL_SRC, /awaitLoopThenCloseOut/, "must await loop before close-out summary");
+  assert.match(COUNCIL_SRC, /workerDrainPromise/, "stop must wait for execution workers");
   assert.match(
     COUNCIL_SRC,
     /if \(this\.closingRequested\(\)\) return "stop"/,
     "must skip audit when draining",
   );
+});
+
+test("CouncilRunner.stop — hard stop must not set drainRequested (soft drain only)", () => {
+  const stopBody = COUNCIL_SRC.match(/async stop\(\): Promise<void> \{[\s\S]*?\n  \}/)?.[0] ?? "";
+  assert.doesNotMatch(stopBody, /drainRequested\s*=\s*true/);
 });
 
 test("CouncilRunner — audit stuck sets earlyStopDetail and terminal message before summary", () => {

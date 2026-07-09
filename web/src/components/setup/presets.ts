@@ -230,7 +230,7 @@ export const clamp = (v: number, min: number, max: number) => Math.max(min, Math
 
 // Quick-fill text for the "Deliver README + research" chip below the
 // user-directive textarea. One-click way to seed the planner with the
-// directive we've been overnight-running on `kyahoofinance032926`.
+// common README + online-research directive (project-agnostic template).
 export const DIRECTIVE_README_AND_RESEARCH =
   "Make this project actually deliver every feature the README claims to support. Also, creatively enhance its functionalities by adding in more pipelines by conducting research online and then implement them. Use bash to run npm test / npx playwright test / npx vitest run and capture screenshots via Playwright; cite test output as evidence.";
 

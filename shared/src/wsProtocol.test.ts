@@ -160,6 +160,20 @@ test("SwarmEventSchema validates a todo_posted event", () => {
   assert.equal(result.success, true);
 });
 
+test("SwarmEventSchema validates an agent_activity event", () => {
+  const result = SwarmEventSchema.safeParse({
+    type: "agent_activity",
+    agentId: "agent-3",
+    agentIndex: 3,
+    phase: "queued",
+    ts: 1_700_000_000_000,
+    label: "contract draft",
+    attempt: 1,
+    maxAttempts: 3,
+  });
+  assert.equal(result.success, true);
+});
+
 test("SwarmEventSchema validates a model_shift event", () => {
   const result = SwarmEventSchema.safeParse({
     type: "model_shift",

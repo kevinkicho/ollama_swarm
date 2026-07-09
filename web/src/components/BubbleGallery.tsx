@@ -325,7 +325,16 @@ const fixtures: Array<{ label: string; entries: TranscriptEntry[] }> = [
     entries: [entry({ role: "agent", agentIndex: 2, text: "PRO position: the immediate cutover gives us the fastest possible feedback loop. Telemetry from the past 30 days shows that 73% of latency-sensitive paths route through the affected handler. Delaying by 2 weeks (CON's proposal) costs us $4.2k in compute overhead at current volume. The migration risk is bounded — we've benched the new code path against the old in staging for 3 weeks with zero divergences.", summary: sumDebateTurn })],
   },
   {
-    label: "[agent] council_synthesis (DecoratedSynthesisBlock - emerald)",
+    label: "[agent] council_synthesis (CouncilSynthesisBubble - todos JSON)",
+    entries: [entry({
+      role: "agent",
+      agentIndex: 1,
+      text: 'Merged findings from 4 auditors.\n\n[{"description": "Split handlers by domain (users/orders/sessions)", "expectedFiles": ["src/handlers/api.ts"]}, {"description": "Update README with new folder layout", "expectedFiles": ["README.md"]}, {"description": "Add integration tests for split routes", "expectedFiles": ["tests/integration/api.test.ts"]}]',
+      summary: sumCouncilSynthesis,
+    })],
+  },
+  {
+    label: "[agent] council_synthesis (CouncilSynthesisBubble - prose fallback)",
     entries: [entry({ role: "agent", agentIndex: 1, text: "Consensus across 4 drafters: split by domain (users/orders/sessions) over feature-folders. All 4 cited the import-path stability as the deciding factor.\n\nDisagreement: 2 of 4 wanted README updated as part of the split; the other 2 wanted that as a separate commit.\n\nNext action: agent-2 implements split-by-domain; agent-3 adds README update in a follow-up commit.", summary: sumCouncilSynthesis })],
   },
   {

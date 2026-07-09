@@ -41,7 +41,6 @@ import { makeWebToolHandler } from "./toolCallTranscript.js";
 import { tokenTracker, snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { checkBudgetGuards } from "./loopGuards.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
-
 export interface CloneSpawnResult {
   destPath: string;
   ready: Agent[];
@@ -296,17 +295,14 @@ export abstract class DiscussionRunnerBase {
 
     this.setPhase("spawning");
     const spawnStart = Date.now();
-    await this.opts.manager.spawnHousekeeperAgent(destPath);
     const spawnTasks: Promise<Agent>[] = [];
     for (let i = 1; i <= cfg.agentCount; i++) {
       spawnTasks.push(this.opts.manager.spawnAgentNoOpencode({ cwd: destPath, index: i, model: cfg.model }));
     }
     const results = await Promise.allSettled(spawnTasks);
-    const workerReady = results
+    const ready = results
       .filter((r): r is PromiseFulfilledResult<Agent> => r.status === "fulfilled")
       .map((r) => r.value);
-    const housekeeper = this.opts.manager.list().find((a) => a.index === 0);
-    const ready = housekeeper ? [housekeeper, ...workerReady] : workerReady;
 
     const minAgents = spawnOpts.minAgents ?? 1;
     if (ready.length < minAgents) {
@@ -321,15 +317,14 @@ export abstract class DiscussionRunnerBase {
     const modelList = ready.map((a) => a.model).join(", ");
     const extra = spawnOpts.extraReadyMessage ? ` ${spawnOpts.extraReadyMessage}` : "";
     this.appendSystem(
-      `${ready.length}/${cfg.agentCount + 1} agents ready (incl. housekeeper) — models: ${modelList}.${extra}`,
+      `${ready.length}/${cfg.agentCount} agents ready — models: ${modelList}.${extra}`,
       buildAgentsReadySummary({
         manager: this.opts.manager,
         preset: spawnOpts.preset,
         ready,
-        requestedCount: cfg.agentCount + 1,
+        requestedCount: cfg.agentCount,
         spawnElapsedMs: Date.now() - spawnStart,
-        roleResolver: (agent) =>
-          agent.index === 0 ? "Housekeeper" : spawnOpts.roleResolver(agent),
+        roleResolver: spawnOpts.roleResolver,
       }),
     );
 

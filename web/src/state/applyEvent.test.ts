@@ -144,6 +144,39 @@ describe("applyEventToStore", () => {
     });
   });
 
+  describe("agent_activity", () => {
+    it("records prompt lifecycle phases", () => {
+      applyEventToStore(
+        {
+          type: "agent_activity",
+          agentId: "a1",
+          agentIndex: 1,
+          phase: "queued",
+          ts: 1000,
+          activityId: "sess-1",
+          label: "council turn",
+        },
+        store.getState(),
+      );
+      assert.equal(store.getState().agentActivity.a1.phase, "queued");
+      assert.equal(store.getState().agentActivity.a1.startedAt, 1000);
+
+      applyEventToStore(
+        {
+          type: "agent_activity",
+          agentId: "a1",
+          agentIndex: 1,
+          phase: "streaming",
+          ts: 5000,
+          activityId: "sess-1",
+        },
+        store.getState(),
+      );
+      assert.equal(store.getState().agentActivity.a1.phase, "streaming");
+      assert.equal(store.getState().agentActivity.a1.startedAt, 1000);
+    });
+  });
+
   describe("agent_streaming_end", () => {
     it("marks streaming as ended", () => {
       applyEventToStore(

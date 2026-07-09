@@ -87,8 +87,8 @@ export function softCap<T>(arr: T[], max: number): T[] {
 
 /**
  * When lenient truncation must drop expectedFiles, keep paths most likely to
- * survive repo grounding — shallow registry/config edits over deep new-file
- * trees the planner often lists first (RCA: run 94224a3e, 2026-07-07).
+ * survive repo grounding — shallow, config-like paths over deep invented trees
+ * the planner often lists first. Repo-agnostic: no domain-specific path rules.
  */
 export function prioritizeExpectedFilesSlice(files: string[], max: number): string[] {
   if (files.length <= max) return files;
@@ -97,12 +97,10 @@ export function prioritizeExpectedFilesSlice(files: string[], max: number): stri
     let score = 0;
     const depth = norm.split("/").filter(Boolean).length;
     score += Math.max(0, 12 - depth);
-    if (/\/sources\//i.test(norm)) score -= 6;
-    if (/\/panels\//i.test(norm)) score -= 6;
-    if (/\/components\//i.test(norm)) score -= 4;
-    if (/fetch[A-Z]/.test(norm)) score -= 4;
-    if (/Panel\.(jsx|tsx|js)$/i.test(norm)) score -= 5;
-    if (/\.(config|registry|index)\./i.test(norm)) score += 2;
+    if (depth >= 5) score -= 8;
+    else if (depth >= 4) score -= 4;
+    if (/\.(config|registry|index|settings|constants)\./i.test(norm)) score += 3;
+    if (/(^|\/)(README|package\.json|tsconfig)/i.test(norm)) score += 2;
     return { p, score, i };
   });
   scored.sort((a, b) => b.score - a.score || a.i - b.i);

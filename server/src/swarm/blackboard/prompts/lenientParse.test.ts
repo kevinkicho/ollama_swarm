@@ -37,13 +37,13 @@ describe("lenientPreprocess", () => {
 
   it("prioritizes shallow registry paths over deep new-file trees when truncating", () => {
     const files = [
-      "src/data/sources/fetchTreasuryYieldCurve.js",
-      "src/components/panels/TreasuryYieldCurvePanel.jsx",
-      "src/data/marketPanels.js",
-      "src/data/panelRegistry.js",
+      "src/features/deep/nested/module/impl/handler.ts",
+      "src/features/deep/nested/other.ts",
+      "src/config/registry.ts",
+      "lib/settings.json",
     ];
     const kept = prioritizeExpectedFilesSlice(files, 2);
-    assert.deepEqual(kept, ["src/data/marketPanels.js", "src/data/panelRegistry.js"]);
+    assert.deepEqual(kept, ["lib/settings.json", "src/config/registry.ts"]);
   });
 
   it("leaves expectedFiles alone when under max", () => {

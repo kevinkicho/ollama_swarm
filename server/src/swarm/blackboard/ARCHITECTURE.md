@@ -133,6 +133,12 @@ Scenarios / triggering conditions:
 
 `stopReason` + `stopDetail` + phase land on summary/status so UI (history, /runs/:id, RunFinishedGrid) labels correctly. All fallbacks in Orchestrator now pipe "crashed"/"crash" → "failed", non-completed non-crash → "stopped".
 
+**Stop/drain close-out contract (all presets):** Ideal sequencing — wait for in-flight
+workers (or abort them), write summary, then `killAll`, then freeze transcript — is
+documented in `docs/run-stop-drain-lifecycle.md`. Council and blackboard each implement
+it in their runner (`CouncilRunner.closeOutStopped`, `lifecycleRunner` / `drain.ts`).
+When debugging “messages after ports released”, start there.
+
 ## Persistence
 
 - **`<clone>/blackboard-state.json`** — debounced live snapshot of
@@ -175,10 +181,11 @@ generates todos premised on code that doesn't exist):
 3. **expectedFiles truncation prioritization (2026-07-07)** — Planner
    todos are schema-capped at **2** `expectedFiles` via `lenientPreprocess`.
    Naive `slice(0, 2)` kept the first two paths in model order; when those
-   were invented `src/data/sources/` or `src/components/panels/` trees,
-   grounding dropped every todo while valid registry paths were truncated
-   away (RCA: run `94224a3e`). `prioritizeExpectedFilesSlice()` now keeps
-   shallow registry/config paths when slicing. See `prompts/lenientParse.ts`.
+   were invented deep directory trees the repo does not contain, grounding
+   dropped every todo while valid shallow registry/config paths were
+   truncated away (RCA: postmortem `docs/postmortems/run-94224a3e.md`).
+   `prioritizeExpectedFilesSlice()` now keeps shallow registry/config paths
+   when slicing. See `prompts/lenientParse.ts`.
 4. **Smaller batches (#71)** — `MAX_TODOS_PER_BATCH = 5` (was 20).
    Replanner re-prompts per batch; smaller batches give the planner
    feedback (decline / repair / commit) sooner.
@@ -318,6 +325,11 @@ prompts/
 
 ## Things NOT to do (lessons learned)
 
+- **Don't bake target-repo layout into heuristics or prompts.** Blackboard
+  infra must stay project-agnostic: discover paths from the clone (repo file
+  list, grep/read, catalogs that actually exist) rather than hard-coding
+  domain-specific trees, registry filenames, or API-catalog naming from any
+  one customer project.
 - **Don't rotate the planner role across agents.** Single-session
   context continuity is what makes the planner's mental model of the
   codebase coherent across replans. See

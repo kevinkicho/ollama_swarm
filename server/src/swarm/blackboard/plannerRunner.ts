@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
-import type { Agent } from "../../services/AgentManager.js";
+import type { Agent, AgentManager } from "../../services/AgentManager.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { TodoQueueWrappers } from "./todoQueueWrappers.js";
 import type { ExitContract } from "./types.js";
@@ -43,11 +43,13 @@ export interface PlannerContext {
     promptText: string,
     agentName?: ProfileName,
     ollamaFormat?: "json" | Record<string, unknown>,
+    activity?: { kind?: string; label?: string },
   ) => Promise<{ response: string; agentUsed: Agent }>;
   wrappers: TodoQueueWrappers;
   findingsPost: (entry: { agentId: string; text: string; createdAt: number }) => void;
   getAuditor: () => Agent | undefined;
   emitAgentState: (s: import("../../types.js").AgentState) => void;
+  manager: AgentManager;
   v2ObserverApply: (event: unknown) => void;
   hypothesisGroupAbortsSet: (groupId: string, controller: AbortController) => void;
   buildSeed: (clonePath: string, cfg: RunConfig) => Promise<PlannerSeed>;
@@ -85,7 +87,7 @@ export async function runPlanner(
     findingsPost: ctx.findingsPost,
     getActive: ctx.getActive,
     emitActivity: (label, attempt, maxAttempts, mode) => {
-      emitAgentActivity(agent, ctx.emitAgentState, {
+      emitAgentActivity(agent, ctx.manager, ctx.emitAgentState, {
         kind: "planner-todos",
         label,
         attempt,
@@ -93,8 +95,8 @@ export async function runPlanner(
         mode,
       });
     },
-    promptPlannerSafely: (a, p, profile, schema) =>
-      ctx.promptPlannerSafely(a, p, profile, schema),
+    promptPlannerSafely: (a, p, profile, schema, activity) =>
+      ctx.promptPlannerSafely(a, p, profile, schema, activity),
     buildExplorePrompt: () =>
       `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed, contractForPrompt, agent.model)}`,
     buildRepairPrompt: (prev, err, note) =>

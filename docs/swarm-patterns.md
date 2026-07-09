@@ -65,14 +65,13 @@ replies. Round 2+: all drafts are revealed, agents revise.
 The independent Round 1 is where the real diversity lives.
 
 Shipped via `CouncilRunner` (see `server/src/swarm/CouncilRunner.ts`).
-Implementation: `loop()` snapshots the transcript at round start, fans
-out all agents in parallel via `Promise.allSettled`, and each agent's
-prompt is built from the pre-round snapshot — so even if one agent's
-`session.prompt` returns before another's, no agent in the same round
-can ever see a peer's draft. `buildCouncilPrompt` (exported for tests)
-filters `role === "agent"` entries out of the visible transcript when
-`round === 1`. No reconcile policy in v1 — agents revise freely across
-later rounds with no voting or synthesis step. Discussion-only.
+Autonomous mode (`rounds: 0`) runs **3-phase cycles**: cycle 1 = 3 discussion rounds +
+synthesis; cycle 2+ = 1 standup round + standup synthesis; every cycle drains execution
+todos and runs audit. Implementation: `loop()` snapshots the transcript at round start,
+fans out agents in parallel, and Round 1 hides peer drafts via `buildCouncilPrompt`.
+
+**Stop / drain:** Hard `stop()` and soft `drain()` behavior, transcript ordering, and
+debugging checklist — **`docs/run-stop-drain-lifecycle.md`** (canonical contract).
 
 **Reference:** Du et al., "Improving Factuality and Reasoning in Language
 Models through Multiagent Debate" (MIT, 2023).

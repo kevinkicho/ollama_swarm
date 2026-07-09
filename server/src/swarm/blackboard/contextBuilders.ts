@@ -55,6 +55,8 @@ export function utilCtx(r: BlackboardRunnerFields): RunnerUtilContext {
     appendSystem: (text: string, summary?: TranscriptEntrySummary) => r.appendSystem(text, summary),
     emit: (e: SwarmEvent) => r.opts.emit(e),
     getAmendments: r.opts.getAmendments,
+    pendingPromptByAgent: r.pendingPromptByAgent,
+    pendingToolTraceByAgent: r.pendingToolTraceByAgent,
   } as RunnerUtilContext;
 }
 
@@ -157,6 +159,8 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
     set cloneStateForStatus(v: LifecycleContext["cloneStateForStatus"]) { r.cloneStateForStatus = v; },
     setPhase: (phase: SwarmPhase) => r.setPhase(phase),
     appendSystem: (text: string, summary?: TranscriptEntrySummary) => r.appendSystem(text, summary),
+    appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
+    pendingToolTraceByAgent: r.pendingToolTraceByAgent,
     discoverLocalOllamaTags: () => r.discoverLocalOllamaTags(),
     clearStateSnapshotScheduler: () => r.stateSnapshotScheduler.clearTimer(),
     emit: (ev: SwarmEvent) => r.opts.emit(ev),
@@ -164,6 +168,7 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
     buildSeed: (clonePath: string, cfg: RunConfig) => r.buildSeed(clonePath, cfg),
     spawnAgentNoOpencode: (opts: SpawnOpts) => r.opts.manager.spawnAgentNoOpencode(opts),
     getManager: () => r.opts.manager,
+    emitAgentState: (s: AgentState) => r.emitAgentState(s),
     markPlannerStatus: (planner: Agent, status: "thinking" | "ready") => r.markPlannerStatus(planner, status),
     v2ObserverApply: (ev: SwarmEvent) => r.v2Observer.apply(ev),
     v2ObserverReset: () => r.v2Observer.reset(),
@@ -229,10 +234,11 @@ export function contractContext(r: BlackboardRunnerFields): ContractContext {
     findingsPost: (entry: { agentId: string; text: string; createdAt: number }) => r.findings.post(entry),
     getAuditor: () => r.auditor,
     emitAgentState: (s: AgentState) => r.emitAgentState(s),
+    manager: r.opts.manager,
     getPlannerFallbackModel: () => r.active?.plannerFallbackModel,
     updateAgentModel: (agentId: string, model: string) => { r.opts.manager.updateAgentModel(agentId, model); },
     promptPlannerSafely: (primaryAgent: Agent, promptText: string, agentName?: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => r.promptPlannerSafely(primaryAgent, promptText, agentName ?? "swarm", ollamaFormat),
-    promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => r.promptAgent(agent, prompt, agentName, formatExpect, ollamaFormat),
+    promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>, activity?: { kind?: string; label?: string }) => r.promptAgent(agent, prompt, agentName, formatExpect, ollamaFormat, activity),
     emit: (e: unknown) => r.opts.emit(e as SwarmEvent),
     scheduleStateWrite: () => r.scheduleStateWrite(),
     flushBoardBroadcasterSnapshot: () => r.boardBroadcaster.flushSnapshot(),
@@ -302,6 +308,7 @@ export function plannerContext(r: BlackboardRunnerFields): PlannerContext {
     findingsPost: (entry: { agentId: string; text: string; createdAt: number }) => r.findings.post(entry),
     getAuditor: () => r.auditor,
     emitAgentState: (s: AgentState) => r.emitAgentState(s),
+    manager: r.opts.manager,
     v2ObserverApply: (event: SwarmEvent) => r.v2Observer.apply(event),
     hypothesisGroupAbortsSet: (groupId: string, controller: AbortController) => { r.hypothesisGroupAborts.set(groupId, controller); },
     buildSeed: (clonePath: string, cfg: RunConfig) => r.buildSeed(clonePath, cfg),
@@ -313,6 +320,7 @@ export function workerContext(r: BlackboardRunnerFields): WorkerContext {
   return {
     isStopping: () => r.lifecycleState === "stopping",
     isDraining: () => r.lifecycleState === "draining",
+    getActiveAborts: () => r.activeAborts,
     isPaused: () => r.paused,
     isSubscriberPaused: () => r.subscriberPaused,
     isMemoryPaused: () => r.memoryPaused,
@@ -335,8 +343,10 @@ export function workerContext(r: BlackboardRunnerFields): WorkerContext {
     getAuditor: () => r.auditor,
     appendSystem: (msg: string) => r.appendSystem(msg),
     appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
-    promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>) => r.promptAgent(agent, prompt, agentName, formatExpect, ollamaFormat),
+    pendingToolTraceByAgent: r.pendingToolTraceByAgent,
+    promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>, activity?: { kind?: string; label?: string }) => r.promptAgent(agent, prompt, agentName, formatExpect, ollamaFormat, activity),
     emitAgentState: (s: AgentState) => r.emitAgentState(s),
+    getManager: () => r.opts.manager,
     readExpectedFiles: (files: string[]) => r.readExpectedFiles(files),
     sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
     markStatus: (agentId: string, status: AgentState["status"], meta?: Partial<AgentState>) => r.opts.manager.markStatus(agentId, status, meta),
@@ -425,6 +435,8 @@ export function promptContext(r: BlackboardRunnerFields): PromptContext {
     emitAgentState: (s: AgentState) => r.emitAgentState(s),
     extractText: (res: unknown) => r.extractText(res),
     maxTrackedErrors: r.maxTrackedErrors,
+    pendingPromptByAgent: r.pendingPromptByAgent,
+    pendingToolTraceByAgent: r.pendingToolTraceByAgent,
   } as unknown as PromptContext;
 }
 

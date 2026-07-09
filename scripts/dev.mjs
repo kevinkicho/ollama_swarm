@@ -2,7 +2,9 @@ import { spawn, spawnSync, execSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { freePorts, isPortBindable } from "./lib/freePort.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -87,6 +89,58 @@ for (const [label, p] of [["tsx", tsxCli], ["vite", viteCli]]) {
 
 const children = [];
 let shuttingDown = false;
+
+const DEFAULT_OLLAMA_PROXY_PORT = 11533;
+
+/** Ports this dev stack binds: backend, Vite, and in-process Ollama proxy. */
+function devPorts() {
+  const proxy = parsePort(process.env.OLLAMA_PROXY_PORT) ?? DEFAULT_OLLAMA_PROXY_PORT;
+  const ports = [port, webPort];
+  if (proxy > 0) ports.push(proxy);
+  return ports;
+}
+
+function isPortListening(p, host = "127.0.0.1") {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host, port: p, timeout: 600 }, () => {
+      socket.end();
+      resolve(true);
+    });
+    socket.on("error", () => resolve(false));
+    socket.on("timeout", () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
+}
+
+/** Free dev ports — LISTENING-only kill + bind verification (Windows-safe). */
+async function freeDevPorts(ports = devPorts(), { log = true } = {}) {
+  const results = await freePorts(ports, {
+    log: log ? (msg) => console.log(`[dev] ${msg}`) : undefined,
+  });
+  const stuck = results.filter((r) => r.stillBusy);
+  if (stuck.length > 0) {
+    console.warn(
+      `[dev] could not free port(s) ${stuck.map((r) => `:${r.port}`).join(", ")} — close other dev terminals or run npm run dev:kill`,
+    );
+  }
+  return results;
+}
+
+/** If a prior Ctrl+C left zombies, reclaim ports before spawning children. */
+async function reclaimStaleDevPorts() {
+  const ports = devPorts();
+  const busy = [];
+  for (const p of ports) {
+    if (!(await isPortBindable(p))) busy.push(p);
+  }
+  if (busy.length === 0) return;
+  console.warn(
+    `[dev] port(s) ${busy.map((p) => `:${p}`).join(", ")} still in use — cleaning up stale process(es) from a prior dev session`,
+  );
+  await freeDevPorts(busy);
+}
 
 // On Windows, `child.kill("SIGTERM")` only terminates the direct child —
 // our server process — while any tree keeps running and holding ports
@@ -194,68 +248,63 @@ async function waitForBackend(port, host = "127.0.0.1", timeoutMs = 25000) {
   console.warn(`[dev] backend :${port} not reachable after ~${Math.round(timeoutMs/1000)}s (last error: ${lastErr?.message ?? "unknown"}). Starting web anyway — initial proxy requests may fail until it finishes booting.`);
 }
 
-function shutdown() {
+async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log("[dev] shutdown: killing children + ports");
+  console.log("[dev] shutdown: stopping children and freeing ports");
 
-  const pids = children.map(c => c.child?.pid).filter(Boolean);
+  const pids = children.map((c) => c.child?.pid).filter(Boolean);
 
   for (const { child } of children) {
     treeKill(child, "SIGTERM");
   }
 
   if (process.platform === "win32") {
-    // Belt-and-suspenders for Windows + npm + PowerShell:
-    // 1. Force tree-kill the direct pids (tsx node + vite node).
     for (const pid of pids) forceKillWinPid(pid);
-
-    // 2. Kill the dev ports themselves. This catches the case where the
-    //    SIGINT never quite made it to the dev.mjs handler (very common
-    //    under `npm run dev` on Win) or a child survived as orphan.
-    //    Uses the kill-port already present in root deps.
-    for (const p of [port, webPort]) {
-      try {
-        spawnSync("npx", ["kill-port", String(p)], {
-          stdio: "ignore",
-          windowsHide: true,
-          timeout: 4000,
-        });
-      } catch {}
-    }
   }
 
-  // hard-kill any leftovers after a short grace (reduced from 4s).
+  try {
+    await freeDevPorts(devPorts(), { log: false });
+  } catch {
+    // best-effort
+  }
+
   setTimeout(() => {
     for (const { child } of children) {
       if (process.platform === "win32" && child?.pid) forceKillWinPid(child.pid);
       else treeKill(child, "SIGKILL");
     }
     process.exit(0);
-  }, 2500).unref();
+  }, 800).unref();
 }
 
-process.on("SIGINT", () => {
-  console.log("\n[dev] SIGINT — stopping children");
-  shutdown();
-});
-process.on("SIGTERM", shutdown);
-process.on("SIGBREAK", shutdown); // Windows (some terminals / Ctrl+Break variant)
+function requestShutdown(signal) {
+  console.log(`\n[dev] ${signal} — stopping children`);
+  void shutdown();
+}
 
-// Extra Windows robustness: under `npm run dev` + PowerShell/cmd the normal
-// SIGINT emulation is often swallowed by the npm shim or the console group
-// and never reaches our process.on('SIGINT'). The readline interface gives
-// us a second chance to observe Ctrl+C even with piped stdio / windowsHide.
-if (process.platform === "win32") {
-  import("node:readline").then(({ createInterface }) => {
-    try {
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      rl.on("SIGINT", () => {
-        console.log("\n[dev] readline SIGINT (win32 fallback)");
-        shutdown();
-      });
-    } catch {}
-  }).catch(() => {});
+process.on("SIGINT", () => requestShutdown("SIGINT"));
+process.on("SIGTERM", () => requestShutdown("SIGTERM"));
+process.on("SIGBREAK", () => requestShutdown("SIGBREAK"));
+
+// Last-resort sync cleanup if the process exits without running async shutdown.
+process.on("exit", () => {
+  if (shuttingDown) return;
+  for (const { child } of children) {
+    if (process.platform === "win32" && child?.pid) forceKillWinPid(child.pid);
+  }
+});
+
+// Windows: npm/PowerShell often swallow process.on('SIGINT'). readline must be
+// registered synchronously before children start — the old dynamic import()
+// raced Ctrl+C during the first seconds of boot.
+if (process.stdin.isTTY) {
+  try {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.on("SIGINT", () => requestShutdown("readline SIGINT"));
+  } catch {
+    // non-TTY — skip
+  }
 }
 
 // 2026-04-27: --no-watch / NO_WATCH=1 disables tsx watch on the server.
@@ -267,6 +316,7 @@ const serverArgs = noWatch
   ? [tsxCli, "src/index.ts"]
   : [tsxCli, "watch", "src/index.ts"];
 if (noWatch) console.log("[dev] server running WITHOUT tsx watch (--no-watch). Code edits won't auto-restart.");
+await reclaimStaleDevPorts();
 launch("server", path.join(root, "server"), serverArgs, "36");
 await waitForBackend(port);
 launch("web", path.join(root, "web"), [viteCli, "--port", String(webPort), "--strictPort", "--host"], "35");

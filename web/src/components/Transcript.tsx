@@ -53,6 +53,7 @@ export const Transcript = memo(function Transcript() {
 
   const streamingCount = useSwarm((s) => Object.keys(s.streaming).length);
   const streamingMeta = useSwarm((s) => s.streamingMeta);
+  const agentActivity = useSwarm((s) => s.agentActivity);
   const streamingTextLen = useSwarm((s) =>
     Object.values(s.streaming).reduce((n, t) => n + t.length, 0),
   );
@@ -778,6 +779,7 @@ export const Transcript = memo(function Transcript() {
           streaming={streaming}
           streamingMeta={streamingMeta}
           agents={agents}
+          agentActivity={agentActivity}
         />
 
         {/* Anchor after streaming dock so scroll targets the true bottom. */}

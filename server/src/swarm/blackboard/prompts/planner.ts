@@ -281,9 +281,9 @@ export const PLANNER_SYSTEM_PROMPT = [
   "13. (#243, 2026-04-28) WORKER SPECIALIZATION — when the user's topology declares per-worker tags (e.g. agent #3 tagged `tests-expert`, agent #5 tagged `frontend`), the AVAILABLE WORKER TAGS section of the user message lists them. For each TODO, you MAY add an optional `preferredTag` field that names the tag of the worker who should ideally claim it (e.g. `\"preferredTag\": \"tests-expert\"` for a TODO that touches test files). Only set it when one of the listed tags clearly fits — do NOT invent tags or use a tag that no worker carries. Workers preferentially claim TODOs matching their tag; absent or no-match TODOs fall through to any available worker, so unset = no preference. When the topology has no tagged workers, this section is empty and you SHOULD NOT emit `preferredTag`.",
   "14. (2026-05-02) CRITERION ATTRIBUTION — for each TODO that serves one or more EXIT CONTRACT criteria, include a `criteria` field listing the criterion id(s) it serves: `\"criteria\": [\"c1\", \"c3\"]`. Criterion ids appear in the EXIT CONTRACT section of the user message. Tag liberally (a TODO that contributes to a criterion even partially should list it) but honestly (don't tag criteria the TODO has no plausible relation to). Auto-rollback (when enabled by the user) uses this attribution to know which commits to unwind when a criterion comes back FALSE. Untagged TODOs have their commits preserved on rollback — explicit attribution is the contract for opt-in cleanup.",
   "",
-  "15. CONTEXT FILES — for TODOs that reference or depend on files NOT in expectedFiles, include an optional `contextFiles` array listing those files. The worker will see their content as read-only reference. Do NOT put files in contextFiles that you intend to modify — those go in expectedFiles. Max 3 context files per TODO. Example: if a TODO updates docs/PANELS.md but you need the worker to see config/dashboardPanels.js for reference, put config/dashboardPanels.js in contextFiles.",
+  "15. CONTEXT FILES — for TODOs that reference or depend on files NOT in expectedFiles, include an optional `contextFiles` array listing those files. The worker will see their content as read-only reference. Do NOT put files in contextFiles that you intend to modify — those go in expectedFiles. Max 3 context files per TODO. Example: if a TODO updates docs/API.md but you need the worker to see src/config/registry.ts for reference, put src/config/registry.ts in contextFiles.",
   "",
-  "16. VERIFY BEFORE CREATING — before emitting a TODO, use grep/read to verify the work isn't already done. Common false positives: (a) a component is already imported and rendered but you didn't see it in the truncated file view, (b) a lineage entry already exists in config/dashboardPanels.js but you only saw part of the file. If grep shows the import/entry/rendering already exists, DO NOT emit the TODO — skip it and move to the next item. This prevents the worker→auditor→replanner skip loop.",
+  "16. VERIFY BEFORE CREATING — before emitting a TODO, use grep/read to verify the work isn't already done. Common false positives: (a) a symbol is already imported and wired but you didn't see it in the truncated file view, (b) a registry entry already exists in a config/module manifest but you only saw part of the file. If grep shows the import/entry/rendering already exists, DO NOT emit the TODO — skip it and move to the next item. This prevents the worker→auditor→replanner skip loop.",
   "17. ONE TODO PER FILE — do NOT emit multiple TODOs that modify the same file in the same batch. Workers edit files sequentially; concurrent edits to the same file cause hunk failures (search anchor stale). If you need to make multiple changes to one file, combine them into a single TODO. Exception: creating a NEW file is safe to batch with edits to OTHER files.",
   "",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",
@@ -365,6 +365,8 @@ export interface PlannerSeed {
   userChatBlock?: string;
   /** Existing API catalog + .env key names for dedup grounding. */
   endpointCatalogBlock?: string;
+  /** Cross-run project knowledge graph slice (swarm KG). */
+  projectGraphSlice?: string;
 }
 
 /** Shared research-tools guidance for planner/worker prompts. */
@@ -444,6 +446,9 @@ export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionSt
     ? `${seed.priorDesignMemoryRendered}\n\n` +
       "GUIDANCE: honor the north star + recent decisions when proposing TODOs. Prefer work that advances the roadmap. If a TODO would contradict a prior decision, propose updating the decision first instead.\n\n"
     : "";
+  const projectGraphBlock = seed.projectGraphSlice
+    ? `${seed.projectGraphSlice}\n\n`
+    : "";
   // #231 follow-up (2026-04-27 evening): include the user's directive
   // AND the just-produced contract directly in the todos prompt. RCA
   // from runs af27f55c / 07e37525 / 00347ab2 found the planner was
@@ -510,7 +515,7 @@ export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionSt
       ? `${seed.endpointCatalogBlock.trim()}\n\n`
       : "";
   return [
-    designBlock + memoryBlock + directiveBlock + userChatBlock + endpointCatalogBlock + `Repository: ${seed.repoUrl}`,
+    designBlock + projectGraphBlock + memoryBlock + directiveBlock + userChatBlock + endpointCatalogBlock + `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
     `Top-level entries: ${tree}`,
     "",

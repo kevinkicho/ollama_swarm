@@ -18,7 +18,11 @@ import { tokenTracker } from "./ollamaProxy.js";
 import { AmendmentsBuffer, type Amendment } from "./AmendmentsBuffer.js";
 import { RunStatePersister, findRecoverableRuns, isRecoverablePhase, loadSnapshot, type RecoverableRun } from "./RunStatePersister.js";
 import {
+  buildTerminalStatusFromSummary,
+  collectClonePathsForSummaryLookup,
   loadRunSummaryForRunId,
+  lookupTerminalSummaryOnDisk,
+  mergeStatusAgents,
   resolveStatusAgents,
   terminalPhaseFromStopReason,
 } from "./runSummaryDiscovery.js";
@@ -33,7 +37,7 @@ import {
 import { RunEventHub } from "./RunEventHub.js";
 import { prepareResearchConfig, isResearchRun } from "../swarm/researchHelpers.js";
 import { BrainIntegration } from "./BrainIntegration.js";
-import { RunHousekeeper } from "../swarm/runHousekeeper.js";
+
 
 export interface OrchestratorOpts {
   /** Mint one AgentManager per run so concurrent runs don't share
@@ -208,6 +212,9 @@ export class Orchestrator {
   // the most-recently-started run without an explicit "active"
   // pointer. Capped at 1 in Phase 3; Phase 4 relaxes.
   private runs = new Map<string, ActiveRun>();
+  /** Disk-resolved /status snapshots (post-restart deep links). */
+  private statusForRunDiskCache = new Map<string, { status: SwarmStatus; at: number }>();
+  private static readonly STATUS_FOR_RUN_DISK_CACHE_TTL_MS = 60_000;
   // After a run completes, its clonePath is retained here so that
   // statusForRun can fall back to the persister file on disk. Without
   // this, a page refresh after run completion would lose the contract.
@@ -356,7 +363,7 @@ export class Orchestrator {
       return {
         ...runnerStatus,
         runId: runnerStatus.runId ?? this.runId,
-        runConfig: runnerStatus.runConfig ?? this.runConfig,
+        runConfig: this.mergeRunConfig(this.runConfig, runnerStatus.runConfig),
         runStartedAt: runnerStatus.runStartedAt ?? this.runStartedAt,
         regions: this.computeRegions(runnerStatus),
       };
@@ -393,7 +400,7 @@ export class Orchestrator {
       lifecycle,
       planner: plannerThinking ? "thinking" : (phase !== "idle" && phase !== "stopped" && phase !== "completed") ? "waiting" : "idle",
       workers: {
-        total: agents.length > 0 ? agents.length - 1 : 0, // exclude planner (agent-0)
+        total: agents.length > 0 ? agents.length - 1 : 0, // exclude lead (index 1)
         thinking: thinking,
         idle: agents.length - thinking,
       },
@@ -486,7 +493,31 @@ export class Orchestrator {
    *  Falls back to the persister file on disk when the run is no longer
    *  in memory (completed + cleaned up). This ensures page refreshes
    *  after run completion still get the contract, summary, etc. */
+  private cacheDiskStatusForRun(runId: string, status: SwarmStatus): SwarmStatus {
+    this.statusForRunDiskCache.set(runId, { status, at: Date.now() });
+    return status;
+  }
+
+  /** Live runner snapshots may omit tooling fields; keep orchestrator start cfg as base. */
+  private mergeRunConfig(
+    stored?: SwarmStatusRunConfig,
+    live?: SwarmStatusRunConfig,
+  ): SwarmStatusRunConfig | undefined {
+    if (!stored && !live) return undefined;
+    if (!stored) return live;
+    if (!live) return stored;
+    return { ...stored, ...live };
+  }
+
   statusForRun(runId: string): SwarmStatus | null {
+    const cached = this.statusForRunDiskCache.get(runId);
+    if (
+      cached
+      && Date.now() - cached.at < Orchestrator.STATUS_FOR_RUN_DISK_CACHE_TTL_MS
+    ) {
+      return cached.status;
+    }
+
     let run = this.runs.get(runId);
     if (!run && runId) {
       // tolerant lookup for short prefix (UI may pass 8-char slice)
@@ -496,21 +527,24 @@ export class Orchestrator {
     }
     if (run) {
       const status = run.runner.status();
-      const runConfig = (status.runConfig ?? run.runConfig) as unknown as Record<string, unknown> | undefined;
-      const agents =
-        status.agents?.length
-          ? status.agents
-          : resolveStatusAgents({
-              terminalSum: (status.summary as Record<string, unknown> | undefined) ?? null,
-              clonePath: (runConfig?.clonePath ?? runConfig?.localPath) as string | undefined,
-              runConfig,
-              transcript: status.transcript,
-            });
+      const runConfig = this.mergeRunConfig(run.runConfig, status.runConfig) as
+        | Record<string, unknown>
+        | undefined;
+      const roster = resolveStatusAgents({
+        terminalSum: (status.summary as Record<string, unknown> | undefined) ?? null,
+        clonePath: (runConfig?.clonePath ?? runConfig?.localPath) as string | undefined,
+        runConfig,
+        transcript: status.transcript,
+      });
+      const agents = mergeStatusAgents(
+        status.agents as import("./runSummaryDiscovery.js").AgentStateShape[],
+        roster,
+      ) as SwarmStatus["agents"];
       return {
         ...status,
         agents,
         runId: run.runId, // return canonical full
-        runConfig: status.runConfig ?? run.runConfig,
+        runConfig: this.mergeRunConfig(run.runConfig, status.runConfig),
         runStartedAt: status.runStartedAt ?? run.startedAt,
         regions: this.computeRegions(status),
       };
@@ -539,82 +573,21 @@ export class Orchestrator {
       }
     }
 
-    // Broader last-ditch for direct /runs/:runId deep links after full server restart:
-    // runPaths is empty, but /api/swarm/runs (via RunsScanner) can still find the
-    // summary on disk. Here we scan known parents + cwd/logs to locate a matching
-    // summary by runId and synthesize a proper terminal status. This prevents
-    // /runs/:id/status 404 + WS initial "idle" that kicks the UI back to SetupForm.
+    // Deep-link after server restart: locate summary via clone paths (not every
+    // summary file in every workspace folder — that was ~300–400ms per /status).
     if (!snap && !pathInfo) {
       const parents = new Set<string>(this.knownParentPaths || []);
       try { parents.add(process.cwd()); } catch {}
       try { parents.add(nodePath.join(process.cwd(), "logs")); } catch {}
       const last = this.getLastParentPath();
       if (last) parents.add(last);
-      for (const p of parents) {
-        if (!p) continue;
-        try {
-          const entries = readdirSync(p);
-          for (const e of entries) {
-            const candidateDir = nodePath.join(p, e);
-            try {
-              if (!statSync(candidateDir).isDirectory()) continue;
-            } catch { continue; }
-            // Check direct summary files + logs/ subdir + per-run subdirs
-            const cands: string[] = [];
-            try {
-              const ents = readdirSync(candidateDir);
-              for (const ee of ents) {
-                if (/^summary(?:-.*)?\.json$/.test(ee)) cands.push(nodePath.join(candidateDir, ee));
-              }
-              const logsD = nodePath.join(candidateDir, "logs");
-              if (existsSync(logsD) && statSync(logsD).isDirectory()) {
-                const le = readdirSync(logsD);
-                for (const ll of le) {
-                  if (/^summary(?:-.*)?\.json$/.test(ll)) cands.push(nodePath.join(logsD, ll));
-                  const sub = nodePath.join(logsD, ll);
-                  if (existsSync(sub) && statSync(sub).isDirectory()) {
-                    for (const sse of readdirSync(sub)) {
-                      if (/^summary(?:-.*)?\.json$/.test(sse)) cands.push(nodePath.join(sub, sse));
-                    }
-                  }
-                }
-              }
-            } catch {}
-            for (const cand of cands) {
-              try {
-                if (!existsSync(cand)) continue;
-                const raw = readFileSync(cand, "utf8");
-                const sum = JSON.parse(raw);
-                if (sum && (sum.runId === runId || (runId && (sum.runId?.startsWith(runId) || runId.startsWith(sum.runId))))) {
-                  // Phase 10: use summary as-is. No phase synthesis or injection.
-                  const effPhase = (sum.stopReason === "completed" ? "completed" :
-                                   (sum.stopReason === "crash" || sum.stopReason === "crashed" ? "failed" : "stopped")) as SwarmPhase;
-                  const rc = (sum as any).runConfig || { preset: sum.preset };
-                  const cp = sum.localPath || sum.clonePath || candidateDir;
-                  const shapedAgents = Array.isArray(sum.agents)
-                    ? sum.agents.map((pa: any) => ({ id: pa.agentId, index: pa.agentIndex, status: "stopped" as const, model: pa.model }))
-                    : [];
-                  return {
-                    phase: effPhase,
-                    round: 0,
-                    agents: shapedAgents,
-                    transcript: (sum.transcript || []) as SwarmStatus["transcript"],
-                    contract: sum.contract,
-                    summary: sum,
-                    runId,
-                    runConfig: rc ? { 
-                      ...rc, 
-                      clonePath: cp,
-                    } as any : undefined,
-                    runStartedAt: sum.startedAt,
-                    wallClockMs: typeof sum.wallClockMs === "number" ? sum.wallClockMs : undefined,
-                    endedAt: typeof sum.endedAt === "number" ? sum.endedAt : undefined,
-                  } as any;
-                }
-              } catch {}
-            }
-          }
-        } catch {}
+      const clonePaths = collectClonePathsForSummaryLookup([...parents]);
+      const hit = lookupTerminalSummaryOnDisk(runId, clonePaths);
+      if (hit) {
+        return this.cacheDiskStatusForRun(
+          runId,
+          buildTerminalStatusFromSummary(hit.summary, runId, hit.clonePath),
+        );
       }
     }
 
@@ -815,7 +788,7 @@ export class Orchestrator {
       runConfig: rc,
       transcript: snap.transcript,
     });
-    return {
+    return this.cacheDiskStatusForRun(runId, {
       phase: effectivePhase,
       round: 0,
       agents: shapedAgents,
@@ -828,7 +801,7 @@ export class Orchestrator {
       runStartedAt: snap.startedAt,
       wallClockMs: typeof terminalSum?.wallClockMs === "number" ? terminalSum.wallClockMs : undefined,
       endedAt: typeof terminalSum?.endedAt === "number" ? terminalSum.endedAt : undefined,
-    } as SwarmStatus;
+    } as SwarmStatus);
   }
 
   /** T-Item-MultiTenant Phase 5 (2026-05-04): inject for ONE run.
@@ -1443,32 +1416,58 @@ export class Orchestrator {
       config.CONFORMANCE_MONITOR &&
       this.opts.ollamaBaseUrl
     ) {
-      // #295 fix: monitor lives on the ActiveRun record so its
-      // lifecycle is decoupled from runner.start()'s return.
-      const monitor = new ConformanceMonitor({
-        runId,
-        directive: trimmedDirective,
-        ollamaBaseUrl: this.opts.ollamaBaseUrl,
-        graderModel: cfg.model,
-        getTranscript: () => activeRun.runner.status().transcript ?? [],
-        getPhase: () => activeRun.runner.status().phase ?? "idle",
-        emit: this.opts.emit,
-        isActive: () => activeRun.runner.isRunning(),
-      });
-      activeRun.attachMonitors(monitor);
-      monitor.start();
+      const ollamaBaseUrl = this.opts.ollamaBaseUrl as string;
+      void (async () => {
+        let anchors: import("../projectGraph/types.js").ProjectGraphAnchors | undefined;
+        if (config.PROJECT_GRAPH_ENABLED && cfg.localPath) {
+          try {
+            const { readProjectGraphSidecar } = await import("../projectGraph/sidecar.js");
+            const sidecar = await readProjectGraphSidecar(cfg.localPath);
+            if (sidecar) anchors = sidecar.anchors;
+          } catch {
+            // best-effort
+          }
+        }
 
-      // #302 Phase B: independent embedding-similarity signal.
-      const drift = new EmbeddingDriftMonitor({
-        runId,
-        directive: trimmedDirective,
-        ollamaBaseUrl: this.opts.ollamaBaseUrl,
-        getTranscript: () => activeRun.runner.status().transcript ?? [],
-        emit: this.opts.emit,
-        isActive: () => activeRun.runner.isRunning(),
-      });
-      activeRun.attachMonitors(undefined, drift);
-      void drift.start();
+        const monitor = new ConformanceMonitor({
+          runId,
+          directive: trimmedDirective,
+          ollamaBaseUrl,
+          graderModel: cfg.model,
+          getTranscript: () => activeRun.runner.status().transcript ?? [],
+          getPhase: () => activeRun.runner.status().phase ?? "idle",
+          emit: this.opts.emit,
+          isActive: () => activeRun.runner.isRunning(),
+          anchors,
+          getTouchedPaths:
+            cfg.localPath && anchors
+              ? async () => {
+                  const localPath = cfg.localPath;
+                  try {
+                    const gs = await this.opts.repos.gitStatus(localPath);
+                    const { extractDeliverables } = await import("../swarm/blackboard/summary.js");
+                    const d = extractDeliverables(gs.porcelain);
+                    return d?.map((x) => x.path) ?? [];
+                  } catch {
+                    return [];
+                  }
+                }
+              : undefined,
+        });
+        activeRun.attachMonitors(monitor);
+        monitor.start();
+
+        const drift = new EmbeddingDriftMonitor({
+          runId,
+          directive: trimmedDirective,
+          ollamaBaseUrl,
+          getTranscript: () => activeRun.runner.status().transcript ?? [],
+          emit: this.opts.emit,
+          isActive: () => activeRun.runner.isRunning(),
+        });
+        activeRun.attachMonitors(undefined, drift);
+        void drift.start();
+      })();
     }
   }
 
@@ -1550,11 +1549,6 @@ export class Orchestrator {
       hub: ctx.hub,
       getRunner,
     });
-    const housekeeper = new RunHousekeeper(
-      (entry) => wrappedEmit({ type: "transcript_append", entry }),
-      runId,
-    );
-    manager.attachHousekeeper(housekeeper);
     const opts: RunnerOpts = this.createRunnerOpts(runId, manager, wrappedEmit, cfg);
 
     const { createRunner } = await import("../swarm/presetRouter.js");

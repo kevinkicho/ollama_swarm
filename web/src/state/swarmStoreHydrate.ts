@@ -2,7 +2,7 @@ import type { StoreApi } from "zustand";
 import type { SwarmEvent, SwarmStatusSnapshot, TranscriptEntry } from "../types";
 import type { SwarmPhase } from "../types";
 import type { SwarmStore } from "./store";
-import { inferAgentsFromSnapshot } from "../lib/inferAgents";
+import { inferAgentsFromSnapshot, mergeAgentsForSnapshot } from "../lib/inferAgents";
 import { isTerminalSwarmPhase } from "../lib/swarmPhase";
 
 /** Context from a successful /status hydrate used to tune WS guards. */
@@ -145,20 +145,32 @@ export function applyStatusSnapshotToStore(
   }
 
   if (upsertLiveAgents) {
-    const agentsForSidebar =
-      snap.agents?.length ? snap.agents : inferAgentsFromSnapshot(snap);
+    const roster = inferAgentsFromSnapshot({ ...snap, agents: [] });
+    const agentsForSidebar = mergeAgentsForSnapshot(snap.agents ?? [], roster);
     if (agentsForSidebar.length > 0) {
       const allowed = allowedAgentIdsForRun(snap.runConfig);
       agentsForSidebar.forEach((a) => {
         const idx = a.index ?? (a as { agentIndex?: number }).agentIndex ?? 0;
         const id = a.id || (a as { agentId?: string }).agentId || `agent-${idx}`;
         if (allowed && !allowed.has(id)) return;
-        s.upsertAgent({
+        const existing = store.getState().agents[id];
+        const status = a.status || existing?.status || "ready";
+        const merged = {
+          ...existing,
+          ...a,
           id,
           index: idx,
-          status: a.status || "ready",
-          model: a.model,
-        } as Parameters<SwarmStore["upsertAgent"]>[0]);
+          status,
+          model: a.model ?? existing?.model,
+        } as Parameters<SwarmStore["upsertAgent"]>[0];
+        if (status !== "thinking" && status !== "retrying") {
+          merged.thinkingSince = undefined;
+          merged.activityKind = undefined;
+          merged.activityLabel = undefined;
+          merged.activityAttempt = undefined;
+          merged.activityMaxAttempts = undefined;
+        }
+        s.upsertAgent(merged);
       });
       if (allowed) {
         const cur = store.getState().agents;

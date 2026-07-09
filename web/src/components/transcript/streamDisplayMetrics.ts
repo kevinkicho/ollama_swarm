@@ -44,22 +44,51 @@ export function streamDoneSubtitle(parts: StreamDisplayParts, totalSec: number):
   return `done · ${parts.outputChars.toLocaleString()} chars · ${totalSec}s total`;
 }
 
+function liveCharCount(parts: StreamDisplayParts): string {
+  const n = parts.outputChars > 0 ? parts.outputChars : parts.thinkingChars;
+  return n > 0 ? `${n.toLocaleString()} chars · ` : "";
+}
+
 /** Live subtitle while the model is still streaming. */
 export function streamLiveSubtitle(
   parts: StreamDisplayParts,
   sinceLastTextMs: number,
   stalled: boolean,
+  elapsedMs: number,
 ): string {
+  const elapsedSec = Math.max(0, Math.round(elapsedMs / 1000));
+  const elapsed = `${elapsedSec}s`;
+  const chars = liveCharCount(parts);
   if (stalled) {
-    return `⚠ stalled ${Math.round(sinceLastTextMs / 1000)}s…`;
+    return `⚠ stalled ${Math.round(sinceLastTextMs / 1000)}s · ${chars}${elapsed}…`;
   }
   const thinkingOnly = parts.outputChars === 0 && parts.thinkingChars > 0;
   if (thinkingOnly) {
-    return `reasoning · ${parts.thinkingChars.toLocaleString()} chars (hidden)…`;
+    return `reasoning · ${parts.thinkingChars.toLocaleString()} chars · ${elapsed}…`;
   }
-  if (sinceLastTextMs < 2000) return "writing…";
+  if (sinceLastTextMs < 2000) return `writing · ${chars}${elapsed}…`;
   if (sinceLastTextMs < 10_000) {
-    return `thinking ${Math.round(sinceLastTextMs / 1000)}s…`;
+    return `paused ${Math.round(sinceLastTextMs / 1000)}s · ${chars}${elapsed}…`;
   }
-  return `deep reasoning ${Math.round(sinceLastTextMs / 1000)}s…`;
+  return `deep reasoning ${Math.round(sinceLastTextMs / 1000)}s · ${chars}${elapsed}…`;
+}
+
+/** Subtitle for dock slots waiting before streaming starts. */
+export function streamWaitingSubtitle(
+  elapsedMs: number,
+  opts: {
+    label?: string;
+    phase?: "queued" | "waiting" | "retrying";
+    reason?: string;
+    modelHint?: string;
+  } = {},
+): string {
+  const sec = Math.max(0, Math.round(elapsedMs / 1000));
+  if (opts.phase === "retrying") {
+    return opts.reason ? `retrying ${sec}s · ${opts.reason}` : `retrying ${sec}s…`;
+  }
+  const task = opts.label?.trim() ?? "prompt";
+  if (sec >= 120) return `${task} · ${sec}s · provider stall…`;
+  if (sec >= 60) return `${task} · ${sec}s · no bytes yet…`;
+  return `${task} · ${sec}s…`;
 }

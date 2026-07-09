@@ -2,6 +2,11 @@
 // Compact by default (like WorkerHunksBubble): one summary line + expand.
 
 import { memo, useState, type ReactNode } from "react";
+import {
+  BubbleToggleRow,
+  PromptContentPanel,
+  type ResolvedPrompt,
+} from "./AgentThinking";
 
 interface AuditorEnvelope {
   verdicts: Array<{
@@ -47,14 +52,17 @@ export const AuditorVerdictBubble = memo(function AuditorVerdictBubble({
   header,
   className = "",
   style,
+  prompt,
 }: {
   envelope: AuditorEnvelope;
   header: ReactNode;
   className?: string;
   style?: React.CSSProperties;
+  prompt?: ResolvedPrompt | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showJson, setShowJson] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
   const n = envelope.verdicts.length;
   const summaryLine = buildSummaryLine(envelope);
 
@@ -62,7 +70,13 @@ export const AuditorVerdictBubble = memo(function AuditorVerdictBubble({
     <div className={className} style={style}>
       <div className="flex items-start justify-between gap-2 mb-1">
         <div className="flex-1">{header}</div>
-        <div className="flex flex-wrap items-center gap-2 shrink-0 justify-end">
+        <BubbleToggleRow
+          prompt={prompt}
+          showThinking={false}
+          showPrompt={showPrompt}
+          onToggleThinking={() => {}}
+          onTogglePrompt={() => setShowPrompt((v) => !v)}
+        >
           {n > 0 ? (
             <button
               type="button"
@@ -79,8 +93,9 @@ export const AuditorVerdictBubble = memo(function AuditorVerdictBubble({
           >
             {showJson ? "Hide JSON" : "View JSON"}
           </button>
-        </div>
+        </BubbleToggleRow>
       </div>
+      {showPrompt && prompt ? <PromptContentPanel prompt={prompt} /> : null}
       <div className="text-ink-400 text-[11px] truncate mb-0.5">{summaryLine}</div>
       {expanded ? (
         <div className="mt-2 space-y-1.5 text-[13px] overflow-y-auto border-t border-ink-700/50 pt-2" style={{ maxHeight: "24rem" }}>

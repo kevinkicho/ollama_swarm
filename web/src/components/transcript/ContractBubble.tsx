@@ -1,19 +1,11 @@
-// Phase 3 (UI coherent-fix package, 2026-04-27): structured-expand
-// renderer for the planner's first-pass-contract envelope (and any
-// later contract-shaped emission). Replaces the AgentJsonBubble
-// fallback for this specific envelope kind so users can see ALL
-// criteria with a single click instead of dropping to raw JSON.
-//
-// 3-tab UI:
-//   Summary — first 3 criteria + "+N more (click 'All N criteria' tab)"
-//   All N criteria — full numbered list with each criterion's expectedFiles
-//   JSON — raw envelope for programmatic / debug use
-//
-// Mirrors the RunFinishedGrid / DebateVerdictBubble pattern: dedicated
-// component owns its own view-mode state, renders the entry-wrapper
-// data attrs are applied by the parent MessageBubble.
-
 import { memo, useState, type ReactNode } from "react";
+import {
+  BubbleToggleRow,
+  PromptContentPanel,
+  ThinkingContentPanel,
+  type ResolvedPrompt,
+  type ResolvedThinking,
+} from "./AgentThinking";
 
 interface ContractEnvelope {
   missionStatement: string;
@@ -32,13 +24,19 @@ export const ContractBubble = memo(function ContractBubble({
   header,
   className = "",
   style,
+  thinking,
+  prompt,
 }: {
   envelope: ContractEnvelope;
   header: ReactNode;
   className?: string;
   style?: React.CSSProperties;
+  thinking?: ResolvedThinking | null;
+  prompt?: ResolvedPrompt | null;
 }) {
   const [view, setView] = useState<"summary" | "full" | "json">("summary");
+  const [showThinking, setShowThinking] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
   const n = envelope.criteria.length;
 
   const tabBtnBase = "px-2 py-0.5 text-[10px] uppercase tracking-wide rounded";
@@ -50,7 +48,17 @@ export const ContractBubble = memo(function ContractBubble({
       className={`rounded border-2 border-emerald-700/50 bg-emerald-950/15 p-3 text-sm ${className}`}
       style={style}
     >
-      {header}
+      <div className="flex items-start justify-between gap-2 mb-1">
+        <div className="flex-1 min-w-0">{header}</div>
+        <BubbleToggleRow
+          thinking={thinking}
+          prompt={prompt}
+          showThinking={showThinking}
+          showPrompt={showPrompt}
+          onToggleThinking={() => setShowThinking((v) => !v)}
+          onTogglePrompt={() => setShowPrompt((v) => !v)}
+        />
+      </div>
       <div className="text-ink-200 font-medium mb-1.5">
         Contract: {truncate(envelope.missionStatement, 200)}
       </div>
@@ -74,6 +82,8 @@ export const ContractBubble = memo(function ContractBubble({
           JSON
         </button>
       </div>
+      {showPrompt && prompt ? <PromptContentPanel prompt={prompt} /> : null}
+      {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
       {view === "summary" && (
         <ol className="list-decimal list-inside space-y-1 text-ink-300 text-[13px]">
           {envelope.criteria.slice(0, PREVIEW_COUNT).map((c, i) => (

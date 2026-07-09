@@ -155,6 +155,13 @@ export interface RunConfig {
    */
   webTools?: boolean;
   /**
+   * Project knowledge graph context injection for planner/workers.
+   * When true, inject cross-run file map from `.swarm/project-graph.json`.
+   * When false, never inject. When absent, auto-on for blackboard runs
+   * with a non-empty userDirective.
+   */
+  projectGraphContext?: boolean;
+  /**
    * Experimental: MCP server specs (e.g. for full dynamic tool connection).
    * Currently the native web tools provide the capability; full MCP client
    * proxy (using @modelcontextprotocol/sdk) is the next layer.

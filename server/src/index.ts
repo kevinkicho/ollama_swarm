@@ -468,29 +468,35 @@ const shutdown = async (signal: string) => {
   shuttingDown = true;
   rootLogger.info(`${signal} received — shutting down swarm`);
   try { broadcaster.detach(); } catch { /* ignore */ }
-  // orchestrator.stop() can hang if a runner is mid-flight. Race it
-  // against a 20 s timeout so graceful shutdown doesn't block forever.
+
+  // tsx watch sends SIGTERM and immediately spawns a replacement — release
+  // the TCP port first so the new process can bind without EADDRINUSE.
+  const fastExit = signal === "SIGTERM";
+  try { wss.close(); } catch { /* ignore */ }
+  await new Promise<void>((resolve) => {
+    try {
+      server.closeAllConnections?.();
+    } catch { /* ignore */ }
+    server.close(() => resolve());
+    setTimeout(resolve, fastExit ? 400 : 5_000).unref?.();
+  });
+
+  // Best-effort runner cleanup after the port is free.
+  const stopBudgetMs = fastExit ? 3_000 : 20_000;
   try {
     await Promise.race([
       orchestrator.stopAll(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("orchestrator.stopAll() timed out")), 20_000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("orchestrator.stopAll() timed out")), stopBudgetMs)),
     ]);
   } catch { /* ignore */ }
   stopProviderHealthScheduler();
   eventLogger.close();
   try { await proxy?.stop(); } catch { /* ignore */ }
 
-  // Close the HTTP server — stops accepting new connections. Uses
-  // Promise wrapper so we await completion instead of hoping the
-  // callback fires before the Node event loop drains.
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-
-  // Give in-flight cleanup (killAll, file writes, Ollama proxy
-  // connections) up to 15 s to finish before force-exiting. The
-  // previous 5 s was too tight for killAll's three-stage escalation.
-  await new Promise((r) => setTimeout(r, 15_000));
+  if (!fastExit) {
+    // Interactive stop (SIGINT): brief tail for killAll file writes.
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
   process.exit(0);
 };
 process.on("SIGINT", () => { shutdown("SIGINT"); });

@@ -265,6 +265,19 @@ const Schema = z.object({
     .enum(["true", "false", "1", "0", "yes", "no", "off"])
     .default("true")
     .transform((v) => v !== "false" && v !== "0" && v !== "no" && v !== "off"),
+  // Project growth graph API + sidecar merge. Default on; set false to disable.
+  PROJECT_GRAPH_ENABLED: z
+    .enum(["true", "false", "1", "0", "yes", "no", "off"])
+    .default("true")
+    .transform((v) => v !== "false" && v !== "0" && v !== "no" && v !== "off"),
+  PROJECT_GRAPH_GIT_LAYER: z
+    .enum(["true", "false", "1", "0", "yes", "no", "off"])
+    .default("true")
+    .transform((v) => v !== "false" && v !== "0" && v !== "no" && v !== "off"),
+  PROJECT_GRAPH_STRUCTURE_LAYER: z
+    .enum(["true", "false", "1", "0", "yes", "no", "off"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
   // PR-7: route LLM calls through ProviderGateway (rate limits + circuits).
   PROVIDER_GATEWAY: z
     .enum(["true", "false", "1", "0", "yes", "no"])

@@ -8,8 +8,8 @@ import { treeKill, killByPid, killByPort, isProcessAlive } from "./treeKill.js";
 import { AgentPidTracker } from "./agentPids.js";
 import type { AgentState, SwarmEvent } from "../types.js";
 import { tokenTracker } from "./ollamaProxy.js";
-import { createSession } from "./Session.js";
-import type { RunHousekeeper } from "../swarm/runHousekeeper.js";
+import { createSession, type Session } from "./Session.js";
+
 
 // Unit 17: minimal-token warmup prompt sent to each new agent right
 // after spawn. Intentionally trivial — we don't care about the response
@@ -190,19 +190,24 @@ export class AgentManager {
   // Keyed by agent.id; survives process exit so the REST snapshot still
   // shows the terminal status until killAll() clears.
   private readonly agentStates = new Map<string, AgentState>();
+  /** In-flight prompt session ids — binds markStatus to agent_activity. */
+  private readonly promptActivityByAgent = new Map<
+    string,
+    { activityId: string; kind?: string; label?: string }
+  >();
   // Kill guard: once killAll() completes, any stale setAgentState calls
   // that race with the clear (e.g., a prompt catch-block running on a
   // microtask after the kill) are silently dropped instead of re-adding
   // an already-dead agent to the map. Reset by spawnAgent / spawnAgentNoOpencode.
   private killed = false;
+  /** Provider-session abort handles — fired on killAll to cancel in-flight HTTP. */
+  private readonly sessions = new Map<string, Session>();
   // Unit 38: persistent PID tracking for orphan reclamation across
   // dev-server restarts. When present, AgentManager appends a record
   // per successful spawn and removes it on clean exit / killAll. When
   // absent (older callers / tests), PID tracking is a no-op — the
   // manager still works, orphans just don't get reclaimed.
   private readonly pidTracker?: AgentPidTracker;
-  private housekeeper: RunHousekeeper | null = null;
-
   constructor(
     private readonly onState: (s: AgentState) => void,
     private readonly onEvent: (e: SwarmEvent) => void = () => {},
@@ -213,23 +218,6 @@ export class AgentManager {
     pidTracker?: AgentPidTracker,
   ) {
     this.pidTracker = pidTracker;
-  }
-
-  attachHousekeeper(housekeeper: RunHousekeeper): void {
-    this.housekeeper = housekeeper;
-  }
-
-  /** Agent-0: deterministic run monitor (no LLM turns). */
-  async spawnHousekeeperAgent(cwd: string): Promise<Agent> {
-    if (this.agents.has("agent-0")) {
-      return this.agents.get("agent-0")!;
-    }
-    return this.spawnAgentNoOpencode({
-      cwd,
-      index: 0,
-      model: "monitor",
-      skipWarmup: true,
-    });
   }
 
   getLastActivity(sessionId: string): number | undefined {
@@ -346,6 +334,7 @@ export class AgentManager {
       model: opts.model,
     };
     this.killed = false;
+    this.sessions.set(session.id, session);
     this.setAgentState(stateBase);
     const agent: Agent = {
       id,
@@ -397,10 +386,128 @@ export class AgentManager {
   // Unit 18: made public so runners can call it explicitly via
   // warmupSerially / warmupParallel after a parallel spawn batch.
 
+  /** Unified prompt-session lifecycle signal (control plane). Data-plane
+   *  tokens still flow via agent_streaming; this binds status + dock slots. */
+  emitAgentActivity(
+    agentId: string,
+    agentIndex: number,
+    phase: "queued" | "waiting" | "streaming" | "retrying" | "done",
+    extra: {
+      activityId?: string;
+      kind?: string;
+      label?: string;
+      attempt?: number;
+      maxAttempts?: number;
+      reason?: string;
+    } = {},
+  ): void {
+    if (this.suppressStreamingFor.has(agentId)) return;
+    this.onEvent({
+      type: "agent_activity",
+      agentId,
+      agentIndex,
+      phase,
+      ts: Date.now(),
+      ...extra,
+    });
+  }
+
+  getPromptActivity(agentId: string): { activityId: string; kind?: string; label?: string } | undefined {
+    return this.promptActivityByAgent.get(agentId);
+  }
+
+  /** Resolve label/kind for promptWithRetry — prefers runner markStatus, then opts. */
+  resolvePromptActivity(
+    agentId: string,
+    agentIndex: number,
+    fromOpts?: { kind?: string; label?: string; activityId?: string },
+  ): { activityId: string; kind?: string; label?: string; emitQueued: boolean } {
+    const mirror = this.agentStates.get(agentId);
+    const existing = this.promptActivityByAgent.get(agentId);
+    if (existing && mirror?.status === "thinking") {
+      return {
+        activityId: existing.activityId,
+        kind: fromOpts?.kind ?? existing.kind ?? mirror.activityKind,
+        label: fromOpts?.label ?? existing.label ?? mirror.activityLabel,
+        emitQueued: false,
+      };
+    }
+    const activityId = fromOpts?.activityId ?? `${agentId}-${Date.now()}`;
+    const kind = fromOpts?.kind ?? mirror?.activityKind;
+    const label = fromOpts?.label ?? mirror?.activityLabel;
+    this.promptActivityByAgent.set(agentId, { activityId, kind, label });
+    return { activityId, kind, label, emitQueued: true };
+  }
+
+  clearPromptActivity(agentId: string): void {
+    this.promptActivityByAgent.delete(agentId);
+  }
+
+  /** New prompt attempt after retry — emits queued with fresh activityId. */
+  renewPromptActivity(agentId: string, agentIndex: number, attempt: number): string {
+    const prior = this.promptActivityByAgent.get(agentId);
+    const activityId = `${agentId}-${Date.now()}`;
+    const next = { activityId, kind: prior?.kind, label: prior?.label };
+    this.promptActivityByAgent.set(agentId, next);
+    this.emitAgentActivity(agentId, agentIndex, "waiting", {
+      activityId,
+      kind: next.kind,
+      label: next.label,
+      attempt,
+      maxAttempts: 3,
+    });
+    return activityId;
+  }
+
   markStatus(id: string, status: AgentState["status"], extra: Partial<AgentState> = {}): void {
     const a = this.agents.get(id);
     if (!a) return;
-    this.setAgentState({ id, index: a.index, sessionId: a.sessionId, model: a.model, status, ...extra });
+    const patch: Partial<AgentState> = { ...extra };
+    // Unit 39: callers often markStatus("thinking") without thinkingSince.
+    // Auto-fill so REST /status + sidebar elapsed ticker stay in sync.
+    if (status === "thinking" && patch.thinkingSince === undefined) {
+      patch.thinkingSince = Date.now();
+    }
+    if (status === "thinking") {
+      const prior = this.promptActivityByAgent.get(id);
+      const activityId = prior?.activityId ?? `${id}-${patch.thinkingSince ?? Date.now()}`;
+      const kind = patch.activityKind ?? prior?.kind;
+      const label = patch.activityLabel ?? prior?.label;
+      this.promptActivityByAgent.set(id, {
+        activityId,
+        kind,
+        label,
+      });
+      this.emitAgentActivity(id, a.index, "waiting", {
+        activityId,
+        kind,
+        label,
+        attempt: patch.activityAttempt,
+        maxAttempts: patch.activityMaxAttempts,
+      });
+    } else if (status === "retrying") {
+      const pa = this.promptActivityByAgent.get(id);
+      this.emitAgentActivity(id, a.index, "retrying", {
+        activityId: pa?.activityId,
+        kind: patch.activityKind ?? pa?.kind,
+        label: patch.activityLabel ?? pa?.label,
+        attempt: patch.retryAttempt,
+        maxAttempts: patch.retryMax,
+        reason: patch.retryReason,
+      });
+    } else {
+      const pa = this.promptActivityByAgent.get(id);
+      if (pa) {
+        this.emitAgentActivity(id, a.index, "done", { activityId: pa.activityId });
+        this.promptActivityByAgent.delete(id);
+      }
+      patch.thinkingSince = undefined;
+      patch.activityKind = undefined;
+      patch.activityLabel = undefined;
+      patch.activityAttempt = undefined;
+      patch.activityMaxAttempts = undefined;
+    }
+    this.setAgentState({ id, index: a.index, sessionId: a.sessionId, model: a.model, status, ...patch });
   }
 
   updateAgentModel(id: string, model: string): void {
@@ -616,6 +723,14 @@ export class AgentManager {
       this.agentStates.set(a.id, { id: a.id, index: a.index, sessionId: a.sessionId, model: a.model, status: "stopped" });
       this.onState({ id: a.id, index: a.index, sessionId: a.sessionId, model: a.model, status: "stopped" });
     }
+    for (const session of this.sessions.values()) {
+      try {
+        session.abortController.abort(new Error("agent killed"));
+      } catch {
+        // best-effort
+      }
+    }
+    this.sessions.clear();
     this.killed = true;
     for (const ctrl of this.eventAborts.values()) ctrl.abort();
     this.eventAborts.clear();
@@ -706,6 +821,7 @@ export class AgentManager {
     // killAll fires at run-end, so clearing here means the next run's
     // first prompts emit fresh "cold_start" diag records.
     this.firstPromptLogged.clear();
+    this.promptActivityByAgent.clear();
     // Task #39: drop any residual partial-stream buffers — agent IDs
     // from the killed run no longer exist; the next run spawns fresh.
     this.partialStreams.clear();
@@ -767,11 +883,12 @@ export class AgentManager {
   // to mirror it into the existing per-agent buffers + trigger a UI
   // emit (throttled, same as the SSE path).
   recordStreamingText(agentId: string, agentIndex: number, cumulativeText: string): void {
+    const agent = this.agents.get(agentId) ?? ({ id: agentId, index: agentIndex } as Agent);
+    const isFirstByte = !this.partialStreams.has(agentId);
     this.partialStreams.set(agentId, { text: cumulativeText, updatedAt: Date.now() });
-    this.housekeeper?.observe(agentId, agentIndex, cumulativeText);
-    // Use the same throttled flush as the SSE path so the UI gets
-    // ~10Hz updates.
-    this.scheduleStreamingFlush({ id: agentId, index: agentIndex } as Agent, cumulativeText);
+    // First byte: emit immediately so the dock leaves "awaiting first token"
+    // as soon as onChunk fires — do not wait for the 33ms throttle.
+    this.scheduleStreamingFlush(agent, cumulativeText, isFirstByte);
   }
 
   // V2 Step 1: emit the streaming-end event for the Ollama-direct path
@@ -780,7 +897,6 @@ export class AgentManager {
   markStreamingDone(agentId: string): void {
     const agent = this.agents.get(agentId);
     if (agent) this.flushStreamingNow(agent);
-    this.housekeeper?.resetTurn(agentId);
     this.onEvent({ type: "agent_streaming_end", agentId });
     // Drop per-agent partial-stream buffer — the response is final.
     this.partialStreams.delete(agentId);
@@ -790,8 +906,11 @@ export class AgentManager {
     this.latestStreamingText.delete(agentId);
   }
 
-  private scheduleStreamingFlush(agent: Agent, text: string): void {
+  private scheduleStreamingFlush(agent: Agent, text: string, flushNow = false): void {
     this.latestStreamingText.set(agent.id, text);
+    if (flushNow) {
+      this.emitStreamingChunk(agent);
+    }
     if (this.streamingFlushTimers.has(agent.id)) return;
     this.streamingFlushTimers.set(
       agent.id,
@@ -799,14 +918,21 @@ export class AgentManager {
         this.streamingFlushTimers.delete(agent.id);
         const latest = this.latestStreamingText.get(agent.id);
         if (latest === undefined) return;
-        this.onEvent({
-          type: "agent_streaming",
-          agentId: agent.id,
-          agentIndex: agent.index,
-          text: latest,
-        });
+        this.emitStreamingChunk(agent, latest);
       }, AgentManager.STREAMING_THROTTLE_MS),
     );
+  }
+
+  private emitStreamingChunk(agent: Agent, text?: string): void {
+    const latest = text ?? this.latestStreamingText.get(agent.id);
+    if (latest === undefined) return;
+    if (this.suppressStreamingFor.has(agent.id)) return;
+    this.onEvent({
+      type: "agent_streaming",
+      agentId: agent.id,
+      agentIndex: agent.index,
+      text: latest,
+    });
   }
 
   private flushStreamingNow(agent: Agent): void {
@@ -817,13 +943,7 @@ export class AgentManager {
     }
     const latest = this.latestStreamingText.get(agent.id);
     this.latestStreamingText.delete(agent.id);
-    if (latest === undefined) return;
-    this.onEvent({
-      type: "agent_streaming",
-      agentId: agent.id,
-      agentIndex: agent.index,
-      text: latest,
-    });
+    this.emitStreamingChunk(agent, latest);
   }
 
   // Task #39: expose the current per-agent partial-stream buffer as a

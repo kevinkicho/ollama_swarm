@@ -1,6 +1,7 @@
-import { chat as ollamaChat } from "../services/OllamaClient.js";
+import { chat as ollamaChat, type ChatMessage, type ChatResult as OllamaTurnResult } from "../services/OllamaClient.js";
 import type { ChatOpts, ChatResult, SessionProvider } from "./SessionProvider.js";
 import { config } from "../config.js";
+import { chatWithOllamaToolLoop, type OllamaLoopMessage } from "./ollamaToolLoop.js";
 
 export class OllamaCloudProvider implements SessionProvider {
   readonly id = "ollama-cloud" as const;
@@ -13,47 +14,60 @@ export class OllamaCloudProvider implements SessionProvider {
     this.apiKey = key;
   }
 
-  // Ollama Cloud API uses bare model names without the :cloud / -cloud
-  // suffix (e.g. "glm-5.1" not "glm-5.1:cloud"). Strip it before sending.
   private stripCloudSuffix(model: string): string {
     return model.replace(/(?::|-)cloud$/, "");
   }
 
   async chat(opts: ChatOpts): Promise<ChatResult> {
-    const messages =
-      opts.system && opts.system.length > 0
-        ? [{ role: "system" as const, content: opts.system }, ...opts.messages]
-        : opts.messages;
+    return chatWithOllamaToolLoop(
+      (messages, extra) => this.singleTurn(messages, opts, extra),
+      opts,
+    );
+  }
 
-    let usagePrompt = 0;
-    let usageResponse = 0;
-    const result = await ollamaChat({
+  private async singleTurn(
+    messages: OllamaLoopMessage[],
+    opts: ChatOpts,
+    extra: {
+      tools?: Array<{
+        type: "function";
+        function: { name: string; description: string; parameters: Record<string, unknown> };
+      }>;
+      onChunk?: ChatOpts["onChunk"];
+      format?: ChatOpts["format"];
+      options?: ChatOpts["options"];
+    },
+  ): Promise<OllamaTurnResult> {
+    const ollamaMessages: ChatMessage[] = messages.map((m) => {
+      if (m.role === "tool") {
+        return { role: "tool", content: m.content, tool_name: m.tool_name };
+      }
+      if (m.role === "assistant") {
+        return {
+          role: "assistant",
+          content: m.content,
+          ...(m.thinking ? { thinking: m.thinking } : {}),
+          ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+        };
+      }
+      return { role: m.role, content: m.content };
+    });
+
+    return ollamaChat({
       baseUrl: this.baseUrl,
       model: this.stripCloudSuffix(opts.model),
-      messages,
+      messages: ollamaMessages,
       signal: opts.signal,
       idleTimeoutMs: opts.idleTimeoutMs,
       firstChunkTimeoutMs: opts.firstChunkTimeoutMs,
-      options: opts.options,
+      options: extra.options ?? opts.options,
       logDiag: opts.logDiag,
       agentId: opts.agentId,
       apiKey: this.apiKey,
       runId: opts.runId,
-      onTokens: (counts: any) => {
-        usagePrompt = counts.promptTokens;
-        usageResponse = counts.responseTokens;
-      },
-      ...(opts.onChunk ? { onChunk: opts.onChunk } : {}),
-      ...(opts.format !== undefined ? { format: opts.format } : {}),
+      ...(extra.onChunk ? { onChunk: extra.onChunk } : opts.onChunk ? { onChunk: opts.onChunk } : {}),
+      ...(extra.format !== undefined ? { format: extra.format } : opts.format !== undefined ? { format: opts.format } : {}),
+      ...(extra.tools && extra.tools.length > 0 ? { tools: extra.tools } : {}),
     });
-
-    return {
-      text: result.text,
-      elapsedMs: result.elapsedMs,
-      finishReason: result.finishReason,
-      ...(usagePrompt + usageResponse > 0
-        ? { usage: { promptTokens: usagePrompt, responseTokens: usageResponse } }
-        : {}),
-    };
   }
 }

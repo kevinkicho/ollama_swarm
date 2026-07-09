@@ -23,7 +23,11 @@ This is the structured index of all relevant, tracked documentation for the olla
 - **docs/known-limitations.md**  
   Honest trade-offs and deliberate limitations of the current system.
 
-- **docs/swarm-patterns.md**  
+- **docs/run-stop-drain-lifecycle.md**  
+  Canonical stop/drain/close-out contract (hard vs soft stop, council execution wait,
+  transcript ordering, debugging checklist). Read when messages appear after “ports released”.
+
+- **docs/swarm-patterns.md**
   Recommended usage patterns by preset and use case (full catalog of the presets). Research/webTools guidance lives in README and STATUS.md. (Hybrid mode removed 2026-07.)
 
 ## Architecture & Vision
@@ -40,7 +44,8 @@ This is the structured index of all relevant, tracked documentation for the olla
 ## Operational & Historical
 
 - **docs/decisions.md**  
-  Key architectural and product decisions.
+  Key architectural and product decisions. Includes **2026-07-08: no `:cloud`
+  admission throttling** — do not reintroduce local parallel-stream limits.
 
 - **docs/changelog.md**  
   Historical change log.
@@ -59,6 +64,12 @@ This is the structured index of all relevant, tracked documentation for the olla
 
 - **docs/plans/agent-activity-signaling.md**  
   Study notes: streaming vs sidebar status, missing activity protocol (recall before signaling refactor).
+
+- **docs/plans/event-log-performance.md**  
+  Debug Log list/replay performance: shipped fast-path (Jul 2026) and queued PRs (meta sidecar, pagination, indexes).
+
+- **docs/plans/project-growth-knowledge-graph.md**  
+  Swarm-evolution graph (user UX), per-clone project knowledge graph (user + in-run agents), conformance grounding, and digression recovery — phased PR plan (Jul 2026).
 
 - **docs/postmortems/run-d3a99661.md**  
   Postmortem for council run `d3a99661` (cycle failures, synthesis loops).
@@ -126,4 +137,4 @@ For a new person or agent:
 6. README "Using for Scientific Research" + STATUS preset table (for research work)
 7. Dive into architecture docs + blackboard/ source as needed.
 
-Last updated: 2026-07-07 (postmortems `94224a3e` / `4b2da092`, parse-salvage + thinking UX)
+Last updated: 2026-07-08 (project growth / knowledge graph plan)

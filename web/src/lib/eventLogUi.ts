@@ -64,7 +64,13 @@ export function guessEventCategory(type: string): EventCategory {
   if (type.startsWith("todo_") || type === "queue_state" || type.startsWith("board_")) return "todo";
   if (type.includes("brain") || type === "analysis" || type === "provision") return "brain";
   if (type === "transcript_append" || type.startsWith("agent_stream")) return "transcript";
-  if (type === "agent_state" || type === "swarm_state" || type === "run_started" || type === "run_summary") {
+  if (
+    type === "agent_state" ||
+    type === "agent_activity" ||
+    type === "swarm_state" ||
+    type === "run_started" ||
+    type === "run_summary"
+  ) {
     return "lifecycle";
   }
   if (type === "error" || type.includes("health") || type === "cold_start") return "diag";
@@ -86,6 +92,8 @@ export function eventOneLiner(ev: { type: string } & Record<string, unknown>): s
       const agent = ev.agent as { id?: string; status?: string } | undefined;
       return `${agent?.id ?? "?"} → ${agent?.status ?? "?"}`;
     }
+    case "agent_activity":
+      return `${String(ev.agentId ?? "?")} activity → ${String(ev.phase ?? "?")}`;
     case "agent_streaming":
       return `${String(ev.agentId ?? "?")} streaming (+${String((ev.text as string)?.length ?? 0)} chars)`;
     case "agent_streaming_end":

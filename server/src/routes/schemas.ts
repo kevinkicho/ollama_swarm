@@ -79,6 +79,15 @@ export const RunsQuery = z.object({
   parentPath: z.string().min(1).max(500).optional(),
 });
 
+export const ProjectGraphQuery = z.object({
+  parentPath: z.string().min(1).max(500).optional(),
+  clonePath: z.string().min(1).max(500).optional(),
+  refresh: z.coerce.boolean().optional(),
+  includeGit: z.coerce.boolean().optional(),
+  includeStructure: z.coerce.boolean().optional(),
+  refreshLayers: z.coerce.boolean().optional(),
+});
+
 export const StatusQuery = z.object({
   runId: z.string().min(1).max(100).optional(),
 });
@@ -189,6 +198,7 @@ export const StartBody = z.object({
   // (e.g. governmental data endpoints). Uses DuckDuckGo + fetch under
   // the hood, results are truncated. Pair with plannerTools for best effect.
   webTools: z.boolean().optional(),
+  projectGraphContext: z.boolean().optional(),
   // Experimental MCP servers (future full dynamic connection).
   mcpServers: z.string().trim().optional(),
   // Local Ollama: strips :cloud suffix from all model refs.

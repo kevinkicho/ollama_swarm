@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Routes, Route, useParams, useNavigate, useLocation } from "react-router-dom";
+import { Routes, Route, useParams, useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import { useSwarm } from "./state/store";
 import { useSwarmSocket } from "./hooks/useSwarmSocket";
 import { SetupForm } from "./components/SetupForm";
@@ -16,6 +16,7 @@ import type { RunSummary } from "./types";
 import { PlanningTab } from "./components/PlanningTab";
 import { notificationService } from "./services/notificationService";
 import { SystemWrapper } from "./components/SystemWrapper";
+import { ProjectGrowthPage } from "./features/projectGrowth/ProjectGrowthPage";
 
 // Task #65 (2026-04-24): URL-based review mode. When the user opens a
 // past run from the history modal we set ?review=<runId>&path=<encoded>.
@@ -84,6 +85,7 @@ export default function App() {
       <Route path="/" element={<HomeRoute />} />
       <Route path="/runs/:runId" element={<RunRouteWrapper />} />
       <Route path="/planning" element={<PlanningTab />} />
+      <Route path="/growth" element={<GrowthRoute />} />
     </Routes>
   );
 }
@@ -95,6 +97,19 @@ export default function App() {
  */
 function HomeRoute() {
   return <AppMain />;
+}
+
+function GrowthRoute() {
+  const [searchParams] = useSearchParams();
+  const pathParam = searchParams.get("path") ?? undefined;
+  const parentPath = pathParam
+    ? pathParam.replace(/[/\\][^/\\]*$/, "")
+    : undefined;
+  return (
+    <SystemWrapper parentPath={parentPath}>
+      <ProjectGrowthPage parentPath={pathParam} />
+    </SystemWrapper>
+  );
 }
 
 // T-Item-MultiTenant Phase 9 (2026-05-04): per-run route wrapper.

@@ -31,9 +31,15 @@ import { RunStartDivider } from "./RunStartDivider";
 import { formatServerSummary } from "../../../../shared/src/formatServerSummary";
 import { ToolCallsBlock } from "./ToolCallsBlock";
 import {
+  BubbleToggleRow,
+  PromptContentPanel,
   ThinkingContentPanel,
-  ThinkingToggleButton,
+  ToolTraceContentPanel,
+  resolveAgentDisplayText,
+  resolveEntryPrompt,
   resolveEntryThinking,
+  resolveEntryToolTrace,
+  type ResolvedToolTraceEntry,
 } from "./AgentThinking";
 import { ContractBubble } from "./ContractBubble";
 import { AuditorVerdictBubble } from "./AuditorVerdictBubble";
@@ -46,6 +52,7 @@ import { AuditReviewCard } from "./AuditReviewCard";
 import { tryRenderCouncilMarkers } from "./CouncilCycleDivider";
 import { ExecutionStatusBubble } from "./ExecutionStatusBubble";
 import { CouncilDraftBubble } from "./CouncilDraftBubble";
+import { CouncilSynthesisBubble } from "./CouncilSynthesisBubble";
 import { CompactPipelineStatusLine } from "./CompactPipelineStatusLine";
 import { isCompactPipelineStatus } from "./compactPipelineStatus";
 
@@ -353,6 +360,9 @@ function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
 
 function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
   const thinking = useMemo(() => resolveEntryThinking(entry), [entry]);
+  const prompt = useMemo(() => resolveEntryPrompt(entry), [entry]);
+  const toolTrace = useMemo(() => resolveEntryToolTrace(entry), [entry]);
+  const displayText = useMemo(() => resolveAgentDisplayText(entry), [entry]);
   const hue = hueForAgent(entry.agentIndex);
   // Only label as Brain for actual brain entries (suggestions or explicit brain agentId/index-0 brain),
   // not normal agents that happen to have low index in council planning.
@@ -426,6 +436,8 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           header={chipHeader}
           text={entry.text}
           thinking={thinking}
+          prompt={prompt}
+          toolTrace={toolTrace}
         />
       );
     }
@@ -435,14 +447,13 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
     // 5 near-identical branches that previously copy-pasted the chip +
     // CollapsibleBlock pattern with different colors and labels.
     if (entry.summary.kind === "council_synthesis") {
-      const r = entry.summary.rounds;
       return (
-        <DecoratedSynthesisBlock
+        <CouncilSynthesisBubble
+          text={displayText}
           header={header}
-          text={entry.text}
-          accent="emerald"
-          label={`═ Council synthesis · ${r} round${r === 1 ? "" : "s"} ═`}
+          rounds={entry.summary.rounds}
           thinking={thinking}
+          prompt={prompt}
         />
       );
     }
@@ -455,6 +466,8 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           accent="sky"
           label={`═ Stigmergy report-out · ${n} files ranked ═`}
           thinking={thinking}
+          prompt={prompt}
+          toolTrace={toolTrace}
         />
       );
     }
@@ -469,6 +482,8 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           text={entry.text}
           summary={entry.summary}
           thinking={thinking}
+          prompt={prompt}
+          toolTrace={toolTrace}
         />
       );
     }
@@ -481,6 +496,8 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           accent="violet"
           label={`═ Map-reduce synthesis · cycle ${c} ═`}
           thinking={thinking}
+          prompt={prompt}
+          toolTrace={toolTrace}
         />
       );
     }
@@ -494,6 +511,8 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           accent="amber"
           label={`═ Role-diff synthesis · ${r} round${r === 1 ? "" : "s"} · ${n} role${n === 1 ? "" : "s"} ═`}
           thinking={thinking}
+          prompt={prompt}
+          toolTrace={toolTrace}
         />
       );
     }
@@ -570,6 +589,8 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           header={phaseHeader}
           text={entry.text}
           thinking={thinking}
+          prompt={prompt}
+          toolTrace={toolTrace}
         />
       );
     }
@@ -587,6 +608,7 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           summary={oneLine}
           rawJson={entry.text}
           thinking={thinking}
+          prompt={prompt}
         />
       );
     }
@@ -609,6 +631,8 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           }
           text={entry.text}
           thinking={thinking}
+          prompt={prompt}
+          toolTrace={toolTrace}
         />
       );
     }
@@ -623,26 +647,7 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
         </div>
       );
     }
-    if (entry.summary.kind === "housekeeper_alert") {
-      const s = entry.summary;
-      return (
-        <div
-          className={`rounded-lg border border-amber-700/50 bg-amber-950/25 px-3 py-2 text-sm ${className ?? ""}`}
-          style={style}
-        >
-          {header}
-          <div className="text-[10px] uppercase tracking-wider font-semibold text-amber-300 mb-1">
-            Housekeeper · {s.anomalyKind.replace(/_/g, " ")} · {s.watchedAgentId}
-          </div>
-          <p className="text-ink-200 text-xs">{s.detail}</p>
-          <p className="text-ink-400 text-[11px] mt-1 font-mono break-all">
-            ×{s.repeatCount} · {s.streamLen.toLocaleString()} chars · "{s.patternSample.slice(0, 120)}
-            {s.patternSample.length > 120 ? "…" : ""}"
-          </p>
-        </div>
-      );
-    }
-    if (!["worker_skip", "ow_assignments", "housekeeper_alert"].includes(entry.summary.kind)) {
+    if (!["worker_skip", "ow_assignments"].includes(entry.summary.kind)) {
       console.warn(`[MessageBubble] Unhandled agent summary kind: "${entry.summary.kind}" — add an AgentBubble branch`);
     }
     return (
@@ -653,6 +658,8 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
         summary={oneLine}
         json={entry.text}
         thinking={thinking}
+        prompt={prompt}
+        toolTrace={toolTrace}
       />
     );
   }
@@ -669,6 +676,8 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
       header={header}
       hue={hue}
       thinking={thinking}
+      prompt={prompt}
+      toolTrace={toolTrace}
     />
   );
 }
@@ -680,6 +689,8 @@ function AgentClientFallback({
   header,
   hue,
   thinking,
+  prompt,
+  toolTrace,
 }: {
   entry: TranscriptEntry;
   className: string;
@@ -687,6 +698,8 @@ function AgentClientFallback({
   header: React.ReactNode;
   hue: number;
   thinking: ReturnType<typeof resolveEntryThinking>;
+  prompt: ReturnType<typeof resolveEntryPrompt>;
+  toolTrace: ResolvedToolTraceEntry[] | null;
 }) {
   // All hooks live in this dedicated component so the conditional
   // returns above don't violate the rules-of-hooks. (Hook count must
@@ -705,6 +718,7 @@ function AgentClientFallback({
         summary={`${looseHunks.length} hunk${looseHunks.length === 1 ? "" : "s"}`}
         rawJson={entry.text}
         thinking={thinking}
+        prompt={prompt}
       />
     );
   }
@@ -722,6 +736,8 @@ function AgentClientFallback({
           header={header}
           className={className}
           style={style}
+          thinking={thinking}
+          prompt={prompt}
         />
       );
     }
@@ -732,6 +748,7 @@ function AgentClientFallback({
           header={header}
           className={className}
           style={style}
+          prompt={prompt}
         />
       );
     }
@@ -743,6 +760,7 @@ function AgentClientFallback({
           header={header}
           className={className}
           style={style}
+          prompt={prompt}
         />
       );
     }
@@ -764,6 +782,8 @@ function AgentClientFallback({
         summary={clientSummary.summary}
         json={clientSummary.json}
         thinking={thinking}
+        prompt={prompt}
+        toolTrace={toolTrace}
       />
     );
   }
@@ -780,6 +800,8 @@ function AgentClientFallback({
         header={header}
         json={prettyJson}
         thinking={thinking}
+        prompt={prompt}
+        toolTrace={toolTrace}
       />
     );
   }
@@ -790,6 +812,8 @@ function AgentClientFallback({
       header={header}
       text={entry.text}
       thinking={thinking}
+      prompt={prompt}
+      toolTrace={toolTrace}
     />
   );
 }
@@ -824,12 +848,16 @@ function DecoratedSynthesisBlock({
   accent,
   label,
   thinking,
+  prompt,
+  toolTrace,
 }: {
   header: React.ReactNode;
   text: string;
   accent: Accent;
   label: string;
   thinking: ReturnType<typeof resolveEntryThinking>;
+  prompt: ReturnType<typeof resolveEntryPrompt>;
+  toolTrace?: ResolvedToolTraceEntry[] | null;
 }) {
   const { wrapper, chip } = ACCENT_CLASSES[accent];
   const decoratedHeader = (
@@ -847,6 +875,8 @@ function DecoratedSynthesisBlock({
       header={decoratedHeader}
       text={text}
       thinking={thinking}
+      prompt={prompt}
+      toolTrace={toolTrace}
     />
   );
 }
@@ -861,27 +891,44 @@ function StigmergyAnnotationBubble({
   text,
   summary,
   thinking,
+  prompt,
+  toolTrace,
 }: {
   header: React.ReactNode;
   text: string;
   summary: { kind: "stigmergy_annotation"; file: string; interest: number; confidence: number; note: string };
   thinking: ReturnType<typeof resolveEntryThinking>;
+  prompt: ReturnType<typeof resolveEntryPrompt>;
+  toolTrace?: ResolvedToolTraceEntry[] | null;
 }) {
   const [showThinking, setShowThinking] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [showToolTrace, setShowToolTrace] = useState(false);
+  const hasToggles = thinking || prompt || toolTrace?.length;
   return (
     <div className="rounded-md p-3 border-2 border-teal-700/60 bg-teal-950/20 text-sm space-y-2">
-      {thinking ? (
+      {hasToggles ? (
         <div className="flex items-start justify-between gap-2">
           <div className="flex-1">{header}</div>
-          <ThinkingToggleButton
+          <BubbleToggleRow
             thinking={thinking}
-            open={showThinking}
-            onClick={() => setShowThinking((v) => !v)}
+            prompt={prompt}
+            toolTrace={toolTrace}
+            showThinking={showThinking}
+            showPrompt={showPrompt}
+            showToolTrace={showToolTrace}
+            onToggleThinking={() => setShowThinking((v) => !v)}
+            onTogglePrompt={() => setShowPrompt((v) => !v)}
+            onToggleToolTrace={() => setShowToolTrace((v) => !v)}
           />
         </div>
       ) : (
         header
       )}
+      {showPrompt && prompt ? <PromptContentPanel prompt={prompt} /> : null}
+      {showToolTrace && toolTrace?.length ? (
+        <ToolTraceContentPanel trace={toolTrace} />
+      ) : null}
       {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
       {text && text !== "(empty response)" ? (
         <div className="text-ink-200 whitespace-pre-wrap">{text}</div>

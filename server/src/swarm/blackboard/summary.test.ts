@@ -53,7 +53,7 @@ describe("buildSummary — stopReason classification", () => {
     assert.equal(s.stopDetail, undefined);
   });
 
-  it("reports 'crash' when user-stopped during startup with zero progress", () => {
+  it("reports 'crash' when stopped during startup with zero progress and no user-stop signal", () => {
     const input = baseInput({
       startedAt: 1_000,
       endedAt: 1_224,
@@ -65,6 +65,41 @@ describe("buildSummary — stopReason classification", () => {
     const s = buildSummary(input);
     assert.equal(s.stopReason, "crash");
     assert.match(s.stopDetail ?? "", /during startup with zero progress/);
+  });
+
+  it("reports 'user' when v2 records an explicit user-stop during startup", () => {
+    const s = buildSummary(
+      baseInput({
+        startedAt: 1_000,
+        endedAt: 1_224,
+        stopping: true,
+        board: { committed: 0, skipped: 0, total: 0 },
+        agents: [],
+        v2State: { phase: "stopped", enteredAt: 1_200, detail: "user-stop" },
+      }),
+    );
+    assert.equal(s.stopReason, "user");
+  });
+
+  it("reports 'user' when goal-generation pre-pass produced startup transcript", () => {
+    const s = buildSummary(
+      baseInput({
+        startedAt: 1_000,
+        endedAt: 8_000,
+        stopping: true,
+        board: { committed: 0, skipped: 0, total: 0 },
+        agents: [{ agentId: "agent-1", agentIndex: 1, turnsTaken: 0 }],
+        transcript: [
+          {
+            id: "1",
+            role: "system",
+            text: "Goal-generation pre-pass: analyzing codebase…",
+            ts: 1_100,
+          },
+        ],
+      }),
+    );
+    assert.equal(s.stopReason, "user");
   });
 
   it("reports 'user' when stopped quickly but agents had turns", () => {

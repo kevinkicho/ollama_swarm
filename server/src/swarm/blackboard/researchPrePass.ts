@@ -4,13 +4,17 @@
 
 import type { Agent } from "../../services/AgentManager.js";
 import { extractText } from "../extractText.js";
-import { chatOnce } from "../chatOnce.js";
 import { resolveToolProfile } from "../toolProfiles.js";
+import {
+  chatOnceWithStreaming,
+  type ChatStreamingSurface,
+} from "./promptRunner.js";
+import { isPromptHaltError } from "./lifecycleState.js";
 import { isResearchRun } from "../researchHelpers.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { PlannerSeed } from "./prompts/planner.js";
 import { buildResearchToolsNote } from "./prompts/planner.js";
-import { makeWebToolHandler } from "../toolCallTranscript.js";
+import { isUsableResearchBrief } from "../researchBrief.js";
 
 export function shouldRunResearchPrePass(cfg: RunConfig, seed: PlannerSeed): boolean {
   if (!seed.webToolsEnabled) return false;
@@ -27,8 +31,12 @@ export async function runResearchPrePass(
   appendSystem: (text: string) => void,
   opts: {
     signal?: AbortSignal;
+    /** @deprecated Prefer streaming surface — wires dock + activity labels. */
     onStatusChange?: (status: "thinking" | "ready") => void;
+    streaming?: ChatStreamingSurface;
     onTool?: (info: { tool: string; ok: boolean; preview: string }) => void;
+    /** When set, raw model output is appended as an agent bubble (tool trace attaches there). */
+    onAgentOutput?: (text: string) => void;
   } = {},
 ): Promise<string | undefined> {
   if (!shouldRunResearchPrePass(cfg, seed)) return undefined;
@@ -57,34 +65,55 @@ export async function runResearchPrePass(
     "- Suggested file targets in the repo for documenting findings",
     "",
     "Cite every claim with at least one URL. Prefer primary sources and recent papers (2020+).",
+    "",
+    "Do NOT end the turn with intent-only prose. You MUST call web_search or read/list local files",
+    "at least once, then return bullet findings with URLs before finishing.",
   ].join("\n");
 
   if (opts.signal?.aborted) return undefined;
-  opts.onStatusChange?.("thinking");
   const profile = resolveToolProfile("planner", cfg);
+  const chatOpts = {
+    agentName: profile,
+    promptText: prompt,
+    signal: opts.signal,
+    clonePath: seed.clonePath,
+    runId: cfg.runId,
+    webToolsConfig: cfg,
+    mcpServers: cfg.mcpServers,
+    ...(opts.onTool ? { onTool: opts.onTool } : {}),
+  };
   try {
-    const res = await chatOnce(planner, {
-      agentName: profile,
-      promptText: prompt,
-      signal: opts.signal,
-      clonePath: seed.clonePath,
-      runId: cfg.runId,
-      ...(opts.onTool ? { onTool: opts.onTool } : {}),
-    });
-    const text = extractText(res)?.trim();
-    if (!text || text.length < 80) {
-      appendSystem("Research pre-pass: no usable brief returned; continuing without web notes.");
+    const res = opts.streaming
+      ? await chatOnceWithStreaming(planner, opts.streaming, chatOpts)
+      : await (async () => {
+          opts.onStatusChange?.("thinking");
+          try {
+            const { chatOnce } = await import("../chatOnce.js");
+            return chatOnce(planner, chatOpts);
+          } finally {
+            opts.onStatusChange?.("ready");
+          }
+        })();
+    const text = extractText(res)?.trim() ?? "";
+    if (!isUsableResearchBrief(text)) {
+      appendSystem(
+        "Research pre-pass: no usable brief (need bullet findings with URLs, not intent-only text); continuing without web notes.",
+      );
       return undefined;
     }
     const capped = text.length > 12_000 ? `${text.slice(0, 12_000)}…` : text;
+    opts.onAgentOutput?.(capped);
     appendSystem(`Research pre-pass: captured ${capped.length} chars of web research notes.`);
     return capped;
   } catch (err) {
+    const stopping = () => opts.streaming?.abort?.isStopping?.() ?? false;
+    const draining = () => opts.streaming?.abort?.isDraining?.() ?? false;
+    if (opts.signal?.aborted || isPromptHaltError(err, stopping, draining)) {
+      throw err;
+    }
     appendSystem(
       `Research pre-pass failed (${err instanceof Error ? err.message : String(err)}); continuing without web notes.`,
     );
     return undefined;
-  } finally {
-    opts.onStatusChange?.("ready");
   }
 }

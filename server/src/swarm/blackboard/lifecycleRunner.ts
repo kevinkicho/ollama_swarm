@@ -22,7 +22,8 @@ import { snapshotLifetimeTokens } from "../../services/ollamaProxy.js";
 import { createTickAccumulator, WALL_CLOCK_CAP_MS } from "./caps.js";
 import { runGoalGenerationPrePass } from "./goalGenerationPrePass.js";
 import { runResearchPrePass } from "./researchPrePass.js";
-import { makeWebToolHandler } from "../toolCallTranscript.js";
+import { makeBufferedToolHandler } from "../toolCallTranscript.js";
+import type { ChatStreamingSurface } from "./promptRunner.js";
 import {
   runStretchGoalReflectionPass,
   runMemoryDistillationPass,
@@ -36,6 +37,22 @@ import {
   DRAIN_WATCHER_INTERVAL_MS,
 } from "./BlackboardRunnerConstants.js";
 import { drain as doDrain, checkDrainComplete as doCheckDrainComplete, stop as doStop } from "./drain.js";
+
+function lifecycleChatSurface(
+  ctx: LifecycleContext,
+  activity: { kind: string; label: string },
+): ChatStreamingSurface {
+  return {
+    manager: ctx.getManager(),
+    emitAgentState: (s) => ctx.emitAgentState(s),
+    activity,
+    abort: {
+      activeAborts: ctx.getActiveAborts(),
+      isStopping: () => lifecycleIsStopping(ctx.getLifecycleState()),
+      isDraining: () => lifecycleIsDraining(ctx.getLifecycleState()),
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // LifecycleContext — everything the extracted lifecycle methods need
@@ -159,6 +176,8 @@ export interface LifecycleContext {
   // --- methods ---
   setPhase(phase: SwarmPhase): void;
   appendSystem(text: string, summary?: TranscriptEntrySummary): void;
+  appendAgent(agent: Agent, text: string): void;
+  pendingToolTraceByAgent: Map<string, import("../toolCallTranscript.js").ToolTraceEntry[]>;
   discoverLocalOllamaTags(): Promise<void>;
   clearStateSnapshotScheduler(): void;
   emit(ev: { type: string; [key: string]: unknown }): void;
@@ -171,6 +190,7 @@ export interface LifecycleContext {
   buildSeed(clonePath: string, cfg: RunConfig): Promise<PlannerSeed>;
   spawnAgentNoOpencode(opts: SpawnOpts): Promise<Agent>;
   getManager(): AgentManager;
+  emitAgentState(s: import("../../types.js").AgentState): void;
   markPlannerStatus(planner: Agent, status: "thinking" | "ready"): void;
   v2ObserverApply(ev: Record<string, unknown>): void;
   v2ObserverReset(): void;
@@ -406,8 +426,6 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   ctx.setPriorSnapshot(await readBlackboardStateSnapshot(destPath));
 
   ctx.setPhase("spawning");
-  await ctx.spawnAgentNoOpencode({ cwd: destPath, index: 0, model: "monitor", skipWarmup: true });
-  ctx.appendSystem("Housekeeper agent agent-0 ready (stream monitor).");
   // Planner is always index 1. Workers take 2..N. If the user picks
   // agentCount=1 there are no workers — planner posts TODOs, nothing drains
   // them, and we transition straight to completed. Documented in README.
@@ -471,9 +489,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
 
   // Freeze the roster for the summary artifact — killAll() will later
   // empty AgentManager's own map.
-  const housekeeper = ctx.getManager().list().find((a: Agent) => a.index === 0);
   ctx.setAgentRoster([
-    ...(housekeeper ? [housekeeper] : []),
     planner,
     ...workers,
     ...(ctx.getAuditor() ? [ctx.getAuditor()!] : []),
@@ -514,11 +530,13 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
       seed,
       (text) => ctx.appendSystem(text),
       {
-        onStatusChange: (status) => ctx.markPlannerStatus(planner, status),
         cfg,
-        onTool: makeWebToolHandler(ctx.appendSystem, planner.id),
+        onTool: makeBufferedToolHandler(ctx.pendingToolTraceByAgent, planner.id),
+        onAgentOutput: (text) => ctx.appendAgent(planner, text),
+        streaming: lifecycleChatSurface(ctx, { kind: "seeding", label: "goal analysis" }),
       },
     );
+    if (lifecycleIsStopping(ctx.getLifecycleState())) return;
     if (generatedGoals && generatedGoals.length > 0) {
       if (seed.userDirective && seed.userDirective.length > 0) {
         // Directive exists — goals ENHANCE it, not replace it.
@@ -541,6 +559,8 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
       );
     }
   }
+
+  if (lifecycleIsStopping(ctx.getLifecycleState())) return;
 
   // V2 Step 3b.2: agents are ready — fire spawned event so the V2
   // reducer can advance from "spawning" to "planning".
@@ -605,8 +625,9 @@ export async function planAndExecute(
           activeCfg,
           (text) => ctx.appendSystem(text),
           {
-            onStatusChange: (status) => ctx.markPlannerStatus(planner, status),
-            onTool: makeWebToolHandler(ctx.appendSystem, planner.id),
+            onTool: makeBufferedToolHandler(ctx.pendingToolTraceByAgent, planner.id),
+            onAgentOutput: (text) => ctx.appendAgent(planner, text),
+            streaming: lifecycleChatSurface(ctx, { kind: "planning", label: "web research" }),
           },
         );
         if (notes) seed.researchNotes = notes;

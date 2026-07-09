@@ -3,7 +3,13 @@ import {
   RETRY_MAX_ATTEMPTS,
   RETRY_BACKOFF_MS,
   isRetryableSdkError,
+  shortRetryReason,
 } from "./blackboard/retry.js";
+
+/** :cloud cold-start p95 can exceed 180s when 4 agents fan out in parallel. */
+const CLOUD_FIRST_CHUNK_TIMEOUT_MS = 360_000;
+// Do NOT add in-process :cloud admission / slot queues here — see
+// docs/decisions.md (2026-07-08: No client-side :cloud admission).
 import { tokenTracker } from "../services/ollamaProxy.js";
 import { pickProvider } from "../providers/pickProvider.js";
 import { providerGateway } from "../providers/ProviderGateway.js";
@@ -15,6 +21,7 @@ import {
   type WebToolsConfig,
 } from "../../../shared/src/toolProfiles.js";
 import { createIntraStreamLoopDetector, type IntraStreamLoopDetectorOpts } from "./intraStreamLoopDetector.js";
+
 // 2026-04-28: shared interruptible sleep used by both this module's
 // retry-backoff and BlackboardRunner. One source of truth.
 import { interruptibleSleep as defaultInterruptibleSleep } from "./interruptibleSleep.js";
@@ -153,6 +160,8 @@ export interface PromptWithRetryOptions {
   webToolsConfig?: WebToolsConfig;
   /** Fired for each tool dispatch so runners can log web_tool transcript entries. */
   onTool?: (info: { tool: string; ok: boolean; preview: string }) => void;
+  /** Optional metadata for agent_activity events when manager is set. */
+  activity?: { kind?: string; label?: string; activityId?: string };
 }
 
 export interface RetryInfo {
@@ -189,11 +198,41 @@ export async function promptWithRetry(
   // a delta to opts.onTokens after the call settles.
   const tokensBefore = opts.onTokens ? tokenTracker.total() : null;
   let lastErr: unknown;
+  let session = opts.manager?.resolvePromptActivity(agent.id, agent.index, opts.activity) ?? {
+    activityId: opts.activity?.activityId ?? `${agent.id}-${Date.now()}`,
+    kind: opts.activity?.kind,
+    label: opts.activity?.label,
+    emitQueued: true,
+  };
+  const emitActivity = (
+    phase: "queued" | "waiting" | "streaming" | "retrying" | "done",
+    extra: { attempt?: number; reason?: string } = {},
+  ) => {
+    opts.manager?.emitAgentActivity(agent.id, agent.index, phase, {
+      activityId: session.activityId,
+      kind: session.kind ?? opts.activity?.kind,
+      label: session.label ?? opts.activity?.label,
+      maxAttempts: RETRY_MAX_ATTEMPTS,
+      ...extra,
+    });
+  };
   try {
   for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
     const t0 = Date.now();
+    if (attempt > 1 && opts.manager) {
+      session.activityId = opts.manager.renewPromptActivity(agent.id, agent.index, attempt);
+    } else if (attempt === 1 && session.emitQueued && opts.manager) {
+      opts.manager.emitAgentActivity(agent.id, agent.index, "waiting", {
+        activityId: session.activityId,
+        kind: session.kind,
+        label: session.label,
+        maxAttempts: RETRY_MAX_ATTEMPTS,
+        attempt,
+      });
+    }
     try {
       let res: unknown;
+      let sawFirstChunk = false;
       // E3 Phase 5 cleanup pt 4: USE_SESSION_PROVIDER + ollamaDirect +
       // streamPrompt + session.prompt branches DELETED. The provider
       // path is now the only path. opencode subprocess + SDK gone.
@@ -226,6 +265,7 @@ export async function promptWithRetry(
         const loopDetector = opts.intraStreamLoop
           ? createIntraStreamLoopDetector(opts.intraStreamLoop === true ? undefined : opts.intraStreamLoop)
           : null;
+        const isCloud = effectiveModel.includes(":cloud");
         const chatOpts = {
           modelString: effectiveModel,
           runId: opts.runId,
@@ -233,8 +273,13 @@ export async function promptWithRetry(
           signal: opts.signal,
           agentId: agent.id,
           logDiag: opts.logDiag,
+          ...(isCloud ? { firstChunkTimeoutMs: CLOUD_FIRST_CHUNK_TIMEOUT_MS } : {}),
           ...(opts.ollamaOptions !== undefined ? { options: opts.ollamaOptions } : {}),
           onChunk: (cumulativeText: string) => {
+            if (!sawFirstChunk) {
+              sawFirstChunk = true;
+              emitActivity("streaming", { attempt });
+            }
             opts.manager?.recordStreamingText(agent.id, agent.index, cumulativeText);
             if (loopDetector) {
               const loopResult = loopDetector.onChunk(cumulativeText);
@@ -247,7 +292,25 @@ export async function promptWithRetry(
           },
           ...(tools.length > 0 ? { tools } : {}),
           ...(dispatcher ? { dispatcher } : {}),
-          ...(opts.onTool ? { onTool: opts.onTool } : {}),
+          ...(opts.onTool || opts.manager
+            ? {
+                onTool: (info: { tool: string; ok: boolean; preview: string }) => {
+                  if (!sawFirstChunk) {
+                    sawFirstChunk = true;
+                    emitActivity("streaming", { attempt });
+                  }
+                  const toolLabel = info.ok ? info.tool : `${info.tool} (error)`;
+                  opts.manager?.emitAgentActivity(agent.id, agent.index, "streaming", {
+                    activityId: session.activityId,
+                    kind: session.kind ?? opts.activity?.kind,
+                    label: toolLabel,
+                    maxAttempts: RETRY_MAX_ATTEMPTS,
+                    attempt,
+                  });
+                  opts.onTool?.(info);
+                },
+              }
+            : {}),
           // Research/planner profiles may explore until abort/timeout.
           ...(profileForTools && allowsUnboundedToolTurns(profileForTools as import("../../../shared/src/toolProfiles.js").ToolProfileId)
             ? { maxToolTurns: Number.POSITIVE_INFINITY }
@@ -274,6 +337,14 @@ export async function promptWithRetry(
               }
               return r;
             })();
+        // Non-streaming providers may return the full body without firing onChunk.
+        // Mirror one-shot text into the dock so the UI does not sit on
+        // "awaiting first token" for the entire turn.
+        if (!sawFirstChunk && result.text.trim().length > 0) {
+          sawFirstChunk = true;
+          emitActivity("streaming", { attempt });
+          opts.manager?.recordStreamingText(agent.id, agent.index, result.text);
+        }
         // Surface streaming-end so the UI's PersistentStreamBubble flips to "done".
         opts.manager?.markStreamingDone(agent.id);
         // Adapt to the SDK-shaped {data: {parts}} return shape every
@@ -291,6 +362,7 @@ export async function promptWithRetry(
         }
         res = { data: { parts: [{ type: "text", text: result.text }] } };
       }
+      emitActivity("done", { attempt });
       opts.onTiming?.({ attempt, elapsedMs: Date.now() - t0, success: true });
       return res;
     } catch (err) {
@@ -302,7 +374,13 @@ export async function promptWithRetry(
       if (!isRetryableSdkError(err)) throw err;
       if (attempt >= RETRY_MAX_ATTEMPTS) throw err;
       const delayMs = RETRY_BACKOFF_MS[attempt - 1];
-      const reasonShort = describe(err);
+      const friendly = shortRetryReason(err);
+      const customized = describe(err);
+      const reasonShort =
+        /cloud queue|cloud capacity busy|cloud headers timeout/i.test(friendly)
+          ? friendly
+          : customized;
+      emitActivity("retrying", { attempt: attempt + 1, reason: reasonShort });
       opts.onRetry?.({
         attempt: attempt + 1,
         max: RETRY_MAX_ATTEMPTS,

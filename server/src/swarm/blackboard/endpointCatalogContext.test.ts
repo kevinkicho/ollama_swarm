@@ -11,7 +11,7 @@ import {
 
 describe("todoTouchesApiSurface", () => {
   it("detects API-related descriptions", () => {
-    assert.equal(todoTouchesApiSurface("Add BoE proxy route", ["x.js"]), true);
+    assert.equal(todoTouchesApiSurface("Add Acme API proxy route", ["x.js"]), true);
   });
 
   it("detects route file targets", () => {
@@ -32,21 +32,21 @@ describe("loadEndpointCatalogSnapshot", () => {
     try {
       await writeFile(
         path.join(dir, "API_ENDPOINTS.md"),
-        "| Provider | URL |\n| BEA | /api/bea |",
+        "| Provider | URL |\n| Acme | /api/acme |",
         "utf8",
       );
       await writeFile(
         path.join(dir, ".env.example"),
-        "# keys\nBEA_API_KEY=\nFRED_API_KEY=\nPORT=3000\n",
+        "# keys\nACME_API_KEY=\nSERVICE_TOKEN=\nPORT=3000\n",
         "utf8",
       );
       const snap = await loadEndpointCatalogSnapshot(dir);
       assert.ok(snap);
       assert.equal(snap!.catalogPath, "API_ENDPOINTS.md");
-      assert.ok(snap!.envKeys.includes("BEA_API_KEY"));
+      assert.ok(snap!.envKeys.includes("ACME_API_KEY"));
       const block = renderEndpointCatalogBlock(snap!);
       assert.match(block, /do NOT add duplicates/);
-      assert.match(block, /BEA_API_KEY/);
+      assert.match(block, /ACME_API_KEY/);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

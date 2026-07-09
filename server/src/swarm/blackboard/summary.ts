@@ -509,13 +509,40 @@ function cloneContract(c: ExitContract): ExitContract {
 /** Align with autoRca FAST_DEATH_MS — sub-threshold runs with zero work are failures. */
 export const STARTUP_ABORT_MAX_MS = 30_000;
 
+const STARTUP_ACTIVITY_RE =
+  /Goal-generation pre-pass|research pre-pass|goal analysis|web research|Planner agent .* ready/i;
+
+function hasStartupWorkEvidence(
+  input: Pick<BuildSummaryInput, "transcript" | "v2State" | "agents">,
+): boolean {
+  if (input.v2State?.detail === "user-stop" || input.v2State?.detail === "drain-requested") {
+    return true;
+  }
+  const transcript = input.transcript ?? [];
+  if (transcript.some((e) => e.role === "agent")) return true;
+  if (transcript.some((e) => e.role === "system" && STARTUP_ACTIVITY_RE.test(e.text))) {
+    return true;
+  }
+  return input.agents.some(
+    (a) => (a.tokensIn ?? 0) > 0 || (a.tokensOut ?? 0) > 0,
+  );
+}
+
 export function isStartupAbort(
   input: Pick<
     BuildSummaryInput,
-    "startedAt" | "endedAt" | "stopping" | "terminationReason" | "board" | "agents"
+    | "startedAt"
+    | "endedAt"
+    | "stopping"
+    | "terminationReason"
+    | "board"
+    | "agents"
+    | "transcript"
+    | "v2State"
   >,
 ): boolean {
   if (!input.stopping || input.terminationReason) return false;
+  if (hasStartupWorkEvidence(input)) return false;
   const wallClockMs = Math.max(0, input.endedAt - input.startedAt);
   if (wallClockMs >= STARTUP_ABORT_MAX_MS) return false;
   const noBoard =
@@ -539,6 +566,8 @@ function classifyStopReason(
     | "board"
     | "contract"
     | "agents"
+    | "transcript"
+    | "v2State"
   >,
 ): { stopReason: StopReason; stopDetail?: string } {
   if (input.crashMessage) {

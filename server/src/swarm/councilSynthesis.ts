@@ -14,6 +14,8 @@ import { describeSdkError } from "./sdkError.js";
 import { buildCouncilSynthesisPrompt } from "./councilPromptHelpers.js";
 import { runPostSynthesisCritique } from "./postSynthesisCritique.js";
 import { parseConvergenceSignal } from "./convergenceSignal.js";
+import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+
 
 export interface SynthesisContext {
   manager: { list: () => Agent[]; markStatus: (id: string, status: string) => void; recordPromptComplete: (id: string, data: any) => void };
@@ -124,7 +126,7 @@ export async function runSynthesisPass(
         .filter(e => e.role === "agent")
         .slice(-ctx.manager.list().length)
         .map(e => ({ workerId: `agent-${e.agentIndex}`, text: e.text }));
-      const criticAgent = ctx.manager.list()[0] ?? lead;
+      const criticAgent = ctx.manager.list().find((a) => a.index === 1) ?? lead;
       const revised = await runPostSynthesisCritique({
         synthesis: text,
         proposals,
@@ -139,7 +141,7 @@ export async function runSynthesisPass(
       text = revised;
     }
 
-    const stripped = { finalText: text, thoughts: [] as string[], toolCalls: [] as string[] };
+    const stripped = stripAgentText(text);
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "agent",
@@ -150,7 +152,7 @@ export async function runSynthesisPass(
       summary: isJunkSynthesis
         ? undefined
         : { kind: "council_synthesis", rounds: cfg.rounds } as any,
-      ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts.join("") } : {}),
+      ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
       ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
     } as TranscriptEntry;
     transcript.push(entry);

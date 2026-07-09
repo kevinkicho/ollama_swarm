@@ -2,11 +2,13 @@ import { useState } from "react";
 
 interface QuickNavPanelProps {
   activeRunId?: string;
+  parentPath?: string;
+  clonePath?: string;
   onSwitchRun?: (runId: string) => void;
   onNewRun?: () => void;
 }
 
-export function QuickNavPanel({ activeRunId, onSwitchRun, onNewRun }: QuickNavPanelProps) {
+export function QuickNavPanel({ activeRunId, parentPath, clonePath, onSwitchRun, onNewRun }: QuickNavPanelProps) {
   const [section, setSection] = useState<"runs" | "system" | "brain">("runs");
 
   return (
@@ -47,6 +49,14 @@ export function QuickNavPanel({ activeRunId, onSwitchRun, onNewRun }: QuickNavPa
           >
             History
           </button>
+          {(clonePath || parentPath) ? (
+            <a
+              href={`/growth?path=${encodeURIComponent(clonePath || parentPath || "")}`}
+              className="block w-full text-left text-[10px] px-2 py-1 rounded hover:bg-ink-700 text-sky-300/90"
+            >
+              Project growth
+            </a>
+          ) : null}
         </div>
       )}
 

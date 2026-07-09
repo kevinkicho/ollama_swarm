@@ -95,7 +95,9 @@ async function runCouncilLiteratureResearch(
   agent: Agent,
   todo: QueuedTodo,
   appendSystem: (msg: string) => void,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
+  if (signal?.aborted) return undefined;
   const cfg = state.cfg;
   if (!isWebToolsEnabled(cfg) || !isLiteratureTodo(todo.description)) {
     return undefined;
@@ -121,6 +123,7 @@ async function runCouncilLiteratureResearch(
       webToolsConfig: cfg,
       runId: cfg.runId,
       mcpServers: cfg.mcpServers,
+      signal,
       onTool: makeWebToolHandler(appendSystem, agent.id),
     });
     const text = extractText(res)?.trim();
@@ -443,6 +446,7 @@ async function tryWorkerPrompt(
     agent,
     todo,
     ctx.appendSystem,
+    ctx.promptSignal,
   );
   const workerProfile = effectiveToolProfileId("swarm-builder", state.cfg);
 
@@ -514,7 +518,7 @@ async function tryWorkerPrompt(
           const repairRaw = await promptWithFailoverAuto(agent, `${WORKER_SYSTEM_PROMPT}\n\n${repairPrompt}`, {
             manager: state.manager as any,
             agentName: workerProfile,
-            signal: new AbortController().signal,
+            signal: controller.signal,
           }, state.cfg.providerFailover);
           const repairText = extractProviderText(repairRaw);
           if (repairText) {

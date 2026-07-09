@@ -4,57 +4,79 @@
 // only impl ever called, behavior is bit-for-bit identical to today's
 // USE_OLLAMA_DIRECT=1 path.
 
-import { chat as ollamaChat } from "../services/OllamaClient.js";
+import { chat as ollamaChat, type ChatMessage, type ChatResult as OllamaTurnResult } from "../services/OllamaClient.js";
 import type { ChatOpts, ChatResult, SessionProvider } from "./SessionProvider.js";
 import { config } from "../config.js";
 import { configureHttpDispatcher } from "../services/httpDispatcher.js";
+import { chatWithOllamaToolLoop, type OllamaLoopMessage } from "./ollamaToolLoop.js";
 
 export class OllamaProvider implements SessionProvider {
   readonly id = "ollama" as const;
 
   constructor(private readonly baseUrl: string = config.OLLAMA_BASE_URL) {
-    // Per-provider agent for connection reuse and isolation
     configureHttpDispatcher(this.id);
   }
 
   async chat(opts: ChatOpts): Promise<ChatResult> {
-    // Fold `system` (if present) into messages as the leading
-    // system-role entry — Ollama's /api/chat accepts the standard
-    // OpenAI-style messages array.
-    const messages =
-      opts.system && opts.system.length > 0
-        ? [{ role: "system" as const, content: opts.system }, ...opts.messages]
-        : opts.messages;
+    return chatWithOllamaToolLoop(
+      (messages, extra) => this.singleTurn(messages, opts, extra),
+      opts,
+    );
+  }
+
+  private async singleTurn(
+    messages: OllamaLoopMessage[],
+    opts: ChatOpts,
+    extra: {
+      tools?: Array<{
+        type: "function";
+        function: { name: string; description: string; parameters: Record<string, unknown> };
+      }>;
+      onChunk?: ChatOpts["onChunk"];
+      format?: ChatOpts["format"];
+      options?: ChatOpts["options"];
+    },
+  ): Promise<OllamaTurnResult> {
+    const ollamaMessages: ChatMessage[] = messages.map((m) => {
+      if (m.role === "tool") {
+        return { role: "tool", content: m.content, tool_name: m.tool_name };
+      }
+      if (m.role === "assistant") {
+        return {
+          role: "assistant",
+          content: m.content,
+          ...(m.thinking ? { thinking: m.thinking } : {}),
+          ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+        };
+      }
+      return { role: m.role, content: m.content };
+    });
 
     let usagePrompt = 0;
     let usageResponse = 0;
     const result = await ollamaChat({
       baseUrl: this.baseUrl,
       model: opts.model,
-      messages,
+      messages: ollamaMessages,
       signal: opts.signal,
       idleTimeoutMs: opts.idleTimeoutMs,
       firstChunkTimeoutMs: opts.firstChunkTimeoutMs,
-      options: opts.options,
+      options: extra.options ?? opts.options,
       logDiag: opts.logDiag,
       agentId: opts.agentId,
       runId: opts.runId,
-      httpDispatcher: (opts as any).httpDispatcher || configureHttpDispatcher(this.id),
-      onTokens: (counts: any) => {
+      httpDispatcher: (opts as { httpDispatcher?: unknown }).httpDispatcher || configureHttpDispatcher(this.id),
+      onTokens: (counts: { promptTokens: number; responseTokens: number }) => {
         usagePrompt = counts.promptTokens;
         usageResponse = counts.responseTokens;
       },
-      ...(opts.onChunk ? { onChunk: opts.onChunk } : {}),
-      // Constrained-decoding pass-through. Ollama's /api/chat honors
-      // `format: "json"` or `format: <jsonSchema>` natively — when set,
-      // the model literally cannot emit text outside the schema.
-      ...(opts.format !== undefined ? { format: opts.format } : {}),
+      ...(extra.onChunk ? { onChunk: extra.onChunk } : opts.onChunk ? { onChunk: opts.onChunk } : {}),
+      ...(extra.format !== undefined ? { format: extra.format } : opts.format !== undefined ? { format: opts.format } : {}),
+      ...(extra.tools && extra.tools.length > 0 ? { tools: extra.tools } : {}),
     });
 
     return {
-      text: result.text,
-      elapsedMs: result.elapsedMs,
-      finishReason: result.finishReason,
+      ...result,
       ...(usagePrompt + usageResponse > 0
         ? { usage: { promptTokens: usagePrompt, responseTokens: usageResponse } }
         : {}),

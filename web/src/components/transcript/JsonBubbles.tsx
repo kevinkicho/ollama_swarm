@@ -1,9 +1,13 @@
 import { useState } from "react";
 import { extractFirstBalanced } from "../../../../shared/src/extractJson";
 import {
+  BubbleToggleRow,
+  PromptContentPanel,
   ThinkingContentPanel,
-  ThinkingToggleButton,
+  ToolTraceContentPanel,
+  type ResolvedPrompt,
   type ResolvedThinking,
+  type ResolvedToolTraceEntry,
 } from "./AgentThinking";
 
 export const COLLAPSE_THRESHOLD = 600;
@@ -69,10 +73,18 @@ export function AgentJsonBubble({
   className,
   style,
   thinking,
-}: AgentJsonBubbleProps & { thinking?: ResolvedThinking | null }) {
+  prompt,
+  toolTrace,
+}: AgentJsonBubbleProps & {
+  thinking?: ResolvedThinking | null;
+  prompt?: ResolvedPrompt | null;
+  toolTrace?: ResolvedToolTraceEntry[] | null;
+}) {
   const [showJson, setShowJson] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [showToolTrace, setShowToolTrace] = useState(false);
   const [jsonExpanded, setJsonExpanded] = useState(false);
   const { prose, json: jsonPart } = splitProseAndJson(json);
   const hasReasoning = prose.length > 0;
@@ -84,14 +96,17 @@ export function AgentJsonBubble({
     <div className={className} style={style}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1">{header}</div>
-        <div className="flex flex-wrap gap-2 shrink-0 justify-end">
-          {thinking ? (
-            <ThinkingToggleButton
-              thinking={thinking}
-              open={showThinking}
-              onClick={() => setShowThinking((v) => !v)}
-            />
-          ) : null}
+        <BubbleToggleRow
+          thinking={thinking}
+          prompt={prompt}
+          toolTrace={toolTrace}
+          showThinking={showThinking}
+          showPrompt={showPrompt}
+          showToolTrace={showToolTrace}
+          onToggleThinking={() => setShowThinking((v) => !v)}
+          onTogglePrompt={() => setShowPrompt((v) => !v)}
+          onToggleToolTrace={() => setShowToolTrace((v) => !v)}
+        >
           {hasReasoning ? (
             <button
               onClick={() => setShowReasoning((v) => !v)}
@@ -107,9 +122,11 @@ export function AgentJsonBubble({
           >
             {showJson ? "Hide JSON" : "View JSON"}
           </button>
-        </div>
+        </BubbleToggleRow>
       </div>
       <div className="whitespace-pre-wrap">{summary}</div>
+      {showPrompt && prompt ? <PromptContentPanel prompt={prompt} /> : null}
+      {showToolTrace && toolTrace?.length ? <ToolTraceContentPanel trace={toolTrace} /> : null}
       {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
       {showReasoning && hasReasoning ? (
         <div className="mt-2 rounded border border-indigo-900/60 bg-indigo-950/20 p-2">
@@ -146,24 +163,37 @@ export function JsonPrettyBubble({
   className,
   style,
   thinking,
+  prompt,
+  toolTrace,
 }: {
   json: string;
   header: React.ReactNode;
   className?: string;
   style?: React.CSSProperties;
   thinking?: ResolvedThinking | null;
+  prompt?: ResolvedPrompt | null;
+  toolTrace?: ResolvedToolTraceEntry[] | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [showToolTrace, setShowToolTrace] = useState(false);
   const tooLong = json.length > JSON_COLLAPSE_THRESHOLD;
   const shown = !tooLong || expanded ? json : json.slice(0, JSON_COLLAPSE_THRESHOLD).trimEnd() + "…";
-  const headerRow = thinking ? (
+  const hasToggles = thinking || prompt || toolTrace?.length;
+  const headerRow = hasToggles ? (
     <div className="flex items-start justify-between gap-2 mb-1">
       <div className="flex-1">{header}</div>
-      <ThinkingToggleButton
+      <BubbleToggleRow
         thinking={thinking}
-        open={showThinking}
-        onClick={() => setShowThinking((v) => !v)}
+        prompt={prompt}
+        toolTrace={toolTrace}
+        showThinking={showThinking}
+        showPrompt={showPrompt}
+        showToolTrace={showToolTrace}
+        onToggleThinking={() => setShowThinking((v) => !v)}
+        onTogglePrompt={() => setShowPrompt((v) => !v)}
+        onToggleToolTrace={() => setShowToolTrace((v) => !v)}
       />
     </div>
   ) : (
@@ -173,6 +203,8 @@ export function JsonPrettyBubble({
   return (
     <div className={className} style={style}>
       {headerRow}
+      {showPrompt && prompt ? <PromptContentPanel prompt={prompt} /> : null}
+      {showToolTrace && toolTrace?.length ? <ToolTraceContentPanel trace={toolTrace} /> : null}
       {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
       <pre className="text-[11px] font-mono text-ink-200 whitespace-pre-wrap break-all rounded border border-ink-700 bg-ink-950 p-2 mt-1">
         {shown}
@@ -195,10 +227,14 @@ interface CollapsibleProps {
   className?: string;
   style?: React.CSSProperties;
   thinking?: ResolvedThinking | null;
+  prompt?: ResolvedPrompt | null;
+  toolTrace?: ResolvedToolTraceEntry[] | null;
 }
-export function CollapsibleBlock({ text, header, className, style, thinking }: CollapsibleProps) {
+export function CollapsibleBlock({ text, header, className, style, thinking, prompt, toolTrace }: CollapsibleProps) {
   const [expanded, setExpanded] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [showToolTrace, setShowToolTrace] = useState(false);
   const charLong = text.length > COLLAPSE_THRESHOLD;
   const shown = !charLong || expanded ? text : text.slice(0, COLLAPSE_THRESHOLD).trimEnd() + "…";
   // Height is now predictable from initial render (char count + expanded state).
@@ -206,13 +242,20 @@ export function CollapsibleBlock({ text, header, className, style, thinking }: C
   // This gives the virtualizer a stable first-paint size.
   const bodyStyle = expanded ? undefined : { maxHeight: MAX_BUBBLE_HEIGHT_PX, overflow: "hidden" as const };
   const hasMore = charLong;
-  const headerRow = thinking ? (
+  const hasToggles = thinking || prompt || toolTrace?.length;
+  const headerRow = hasToggles ? (
     <div className="flex items-start justify-between gap-2 mb-1">
       <div className="flex-1">{header}</div>
-      <ThinkingToggleButton
+      <BubbleToggleRow
         thinking={thinking}
-        open={showThinking}
-        onClick={() => setShowThinking((v) => !v)}
+        prompt={prompt}
+        toolTrace={toolTrace}
+        showThinking={showThinking}
+        showPrompt={showPrompt}
+        showToolTrace={showToolTrace}
+        onToggleThinking={() => setShowThinking((v) => !v)}
+        onTogglePrompt={() => setShowPrompt((v) => !v)}
+        onToggleToolTrace={() => setShowToolTrace((v) => !v)}
       />
     </div>
   ) : (
@@ -222,6 +265,8 @@ export function CollapsibleBlock({ text, header, className, style, thinking }: C
   return (
     <div className={className} style={style}>
       {headerRow}
+      {showPrompt && prompt ? <PromptContentPanel prompt={prompt} /> : null}
+      {showToolTrace && toolTrace?.length ? <ToolTraceContentPanel trace={toolTrace} /> : null}
       {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
       <div>
         <div className="whitespace-pre-wrap" style={bodyStyle}>{shown}</div>

@@ -45,6 +45,17 @@ export const AgentStatusSchema = z.enum([
 ]);
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
+/** Prompt-session lifecycle phases emitted by the transport layer (promptWithRetry). */
+export const AgentActivityPhaseSchema = z.enum([
+  /** @deprecated legacy logs — same as waiting (prompt in flight, no bytes yet) */
+  "queued",
+  "waiting",
+  "streaming",
+  "retrying",
+  "done",
+]);
+export type AgentActivityPhase = z.infer<typeof AgentActivityPhaseSchema>;
+
 export const TranscriptRoleSchema = z.enum(["system", "user", "agent"]);
 export type TranscriptRole = z.infer<typeof TranscriptRoleSchema>;
 
@@ -162,6 +173,20 @@ export const SwarmEventSchema = z.discriminatedUnion("type", [
     runId: z.string().optional(),
   }),
   z.object({ type: z.literal("agent_streaming_end"), agentId: z.string(), runId: z.string().optional() }),
+  z.object({
+    type: z.literal("agent_activity"),
+    agentId: z.string(),
+    agentIndex: z.number(),
+    phase: AgentActivityPhaseSchema,
+    ts: z.number(),
+    activityId: z.string().optional(),
+    kind: z.string().optional(),
+    label: z.string().optional(),
+    attempt: z.number().optional(),
+    maxAttempts: z.number().optional(),
+    reason: z.string().optional(),
+    runId: z.string().optional(),
+  }),
   z.object({ type: z.literal("error"), message: z.string() }),
   z.object({ type: z.literal("todo_posted"), todo: TodoSchema }),
   z.object({ type: z.literal("todo_claimed"), todoId: z.string(), claim: ClaimSchema }),
@@ -223,6 +248,9 @@ export const SwarmEventSchema = z.discriminatedUnion("type", [
     latencyMs: z.number().optional(),
     excerptChars: z.number().optional(),
     windowScores: z.array(z.number()).optional(),
+    anchorOverlap: z.number().optional(),
+    offGraphPaths: z.array(z.string()).optional(),
+    recoverySuggested: z.boolean().optional(),
   }),
   z.object({
     type: z.literal("drift_sample"),

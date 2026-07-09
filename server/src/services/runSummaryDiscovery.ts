@@ -1,5 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import type { SwarmPhase, SwarmStatus, SwarmStatusRunConfig } from "../types.js";
+import { normalizeSwarmStatusRunConfig } from "../types/run.js";
 
 /** All summary.json paths under a clone (root, logs/, logs/<runId>/). Newest basename first. */
 export function collectSummaryCandidates(clonePath: string): string[] {
@@ -146,6 +148,22 @@ export function inferAgentsFromTranscript(
       });
     }
     if (e.role === "system" && e.text) {
+      const bulk = e.text.match(
+        /(\d+)\/(\d+)\s+agents ready\s*[—-]\s*models:\s*(.+)/i,
+      );
+      if (bulk) {
+        const count = Number(bulk[2]);
+        const models = bulk[3]!.split(",").map((s) => s.trim()).filter(Boolean);
+        for (let i = 1; i <= count; i++) {
+          const id = `agent-${i}`;
+          byId.set(id, {
+            id,
+            index: i,
+            status: "stopped",
+            model: models[i - 1] ?? models[0],
+          });
+        }
+      }
       const m = e.text.match(
         /(?:Planner|Worker|Auditor) agent (agent-\d+) ready \(model=([^)]+)\)/,
       );
@@ -157,6 +175,85 @@ export function inferAgentsFromTranscript(
     }
   }
   return [...byId.values()].sort((a, b) => a.index - b.index);
+}
+
+/** Overlay live/summary agents onto the expected roster (topology / agentCount). */
+export function mergeStatusAgents<T extends AgentStateShape>(
+  live: readonly T[] | undefined,
+  roster: readonly AgentStateShape[],
+): T[] {
+  if (!roster.length) return [...(live ?? [])];
+  const byId = new Map<string, T>();
+  for (const a of roster) {
+    byId.set(a.id, { ...a } as T);
+  }
+  for (const a of live ?? []) {
+    const prior = byId.get(a.id);
+    byId.set(a.id, { ...prior, ...a } as T);
+  }
+  return [...byId.values()].sort((a, b) => a.index - b.index);
+}
+
+function resolveAgentRosterFromConfig(opts: {
+  clonePath?: string;
+  runConfig?: Record<string, unknown>;
+  transcript?: unknown[];
+}): AgentStateShape[] {
+  const modelByIndex = modelByIndexFromRunConfig(opts.runConfig);
+
+  if (opts.clonePath && shouldUseBlackboardAgentRoster(opts.runConfig)) {
+    const bb = readBlackboardStateSync(opts.clonePath);
+    if (bb) {
+      const roster = bb.agentRoster;
+      if (Array.isArray(roster) && roster.length > 0) {
+        return shapeAgentsFromRoster(roster as Array<{ agentId: string; agentIndex: number }>, modelByIndex);
+      }
+      const perAgent = bb.perAgent;
+      if (Array.isArray(perAgent) && perAgent.length > 0) {
+        return shapeAgentsFromRoster(
+          perAgent as Array<{ agentId: string; agentIndex: number }>,
+          modelByIndex,
+        );
+      }
+    }
+  }
+
+  const extras = (opts.runConfig?.extras ?? {}) as Record<string, unknown>;
+  const topology = (opts.runConfig?.topology ?? extras.topology) as
+    | { agents?: Array<{ index: number; model?: string }> }
+    | undefined;
+  if (topology?.agents?.length) {
+    return shapeAgentsFromTopology({ agents: topology.agents });
+  }
+
+  if (Array.isArray(opts.transcript) && opts.transcript.length > 0) {
+    const fromTx = inferAgentsFromTranscript(
+      opts.transcript as Array<{ role?: string; text?: string; agentId?: string; agentIndex?: number }>,
+    );
+    if (fromTx.length > 0) return fromTx;
+  }
+
+  const agentCount = Number(opts.runConfig?.agentCount ?? extras.agentCount);
+  if (Number.isFinite(agentCount) && agentCount > 0) {
+    const dedicatedAuditor = Boolean(opts.runConfig?.dedicatedAuditor ?? extras.dedicatedAuditor);
+    const total = dedicatedAuditor ? agentCount + 1 : agentCount;
+    const defaultModel =
+      (typeof opts.runConfig?.workerModel === "string" && opts.runConfig.workerModel)
+      || (typeof opts.runConfig?.model === "string" && opts.runConfig.model)
+      || (typeof extras.workerModel === "string" && extras.workerModel)
+      || undefined;
+    return Array.from({ length: total }, (_, i) => {
+      const index = i + 1;
+      return {
+        id: `agent-${index}`,
+        index,
+        status: "stopped" as const,
+        model: modelByIndex?.get(index) ?? defaultModel,
+      };
+    });
+  }
+
+  return [];
 }
 
 /** True when agent roster should be read from blackboard-state.json. */
@@ -188,65 +285,12 @@ export function resolveStatusAgents(opts: {
   runConfig?: Record<string, unknown>;
   transcript?: unknown[];
 }): AgentStateShape[] {
-  if (opts.terminalSum) {
-    const fromSum = shapeAgentsFromSummary(opts.terminalSum);
-    if (fromSum.length > 0) return fromSum;
+  const roster = resolveAgentRosterFromConfig(opts);
+  const fromSum = opts.terminalSum ? shapeAgentsFromSummary(opts.terminalSum) : [];
+  if (fromSum.length > 0) {
+    return mergeStatusAgents(fromSum, roster.length ? roster : fromSum);
   }
-
-  const modelByIndex = modelByIndexFromRunConfig(opts.runConfig);
-
-  if (opts.clonePath && shouldUseBlackboardAgentRoster(opts.runConfig)) {
-    const bb = readBlackboardStateSync(opts.clonePath);
-    if (bb) {
-      const roster = bb.agentRoster;
-      if (Array.isArray(roster) && roster.length > 0) {
-        return shapeAgentsFromRoster(roster as Array<{ agentId: string; agentIndex: number }>, modelByIndex);
-      }
-      const perAgent = bb.perAgent;
-      if (Array.isArray(perAgent) && perAgent.length > 0) {
-        return shapeAgentsFromRoster(
-          perAgent as Array<{ agentId: string; agentIndex: number }>,
-          modelByIndex,
-        );
-      }
-    }
-  }
-
-  const extras = (opts.runConfig?.extras ?? {}) as Record<string, unknown>;
-  const topology = (opts.runConfig?.topology ?? extras.topology) as
-    | { agents?: Array<{ index: number; model?: string }> }
-    | undefined;
-  if (topology?.agents?.length) {
-    return shapeAgentsFromTopology({ agents: topology.agents });
-  }
-
-  if (Array.isArray(opts.transcript) && opts.transcript.length > 0) {
-    return inferAgentsFromTranscript(
-      opts.transcript as Array<{ role?: string; text?: string; agentId?: string; agentIndex?: number }>,
-    );
-  }
-
-  const agentCount = Number(opts.runConfig?.agentCount ?? extras.agentCount);
-  if (Number.isFinite(agentCount) && agentCount > 0) {
-    const dedicatedAuditor = Boolean(opts.runConfig?.dedicatedAuditor ?? extras.dedicatedAuditor);
-    const total = dedicatedAuditor ? agentCount + 1 : agentCount;
-    const defaultModel =
-      (typeof opts.runConfig?.workerModel === "string" && opts.runConfig.workerModel)
-      || (typeof opts.runConfig?.model === "string" && opts.runConfig.model)
-      || (typeof extras.workerModel === "string" && extras.workerModel)
-      || undefined;
-    return Array.from({ length: total }, (_, i) => {
-      const index = i + 1;
-      return {
-        id: `agent-${index}`,
-        index,
-        status: "stopped" as const,
-        model: modelByIndex?.get(index) ?? defaultModel,
-      };
-    });
-  }
-
-  return [];
+  return roster;
 }
 
 export type AgentStateShape = {
@@ -260,4 +304,85 @@ export function terminalPhaseFromStopReason(stopReason: unknown): "completed" | 
   if (stopReason === "completed") return "completed";
   if (stopReason === "crash" || stopReason === "crashed") return "failed";
   return "stopped";
+}
+
+/** Clone dirs under known parents that may hold run summaries (logs/ or summary.json). */
+export function collectClonePathsForSummaryLookup(parentPaths: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (p: string) => {
+    const norm = path.resolve(p);
+    if (seen.has(norm)) return;
+    seen.add(norm);
+    out.push(p);
+  };
+
+  for (const parent of parentPaths) {
+    let entries: string[];
+    try {
+      entries = readdirSync(parent);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      if (name.endsWith(".run-state.json") || name.endsWith(".run-state.json.tmp")) continue;
+      const cloneDir = path.join(parent, name);
+      try {
+        if (!statSync(cloneDir).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      const logsDir = path.join(cloneDir, "logs");
+      if (existsSync(logsDir) || existsSync(path.join(cloneDir, "summary.json"))) {
+        add(cloneDir);
+      }
+    }
+  }
+  return out;
+}
+
+/** Try each clone path via loadRunSummaryForRunId (newest summary first per clone). */
+export function lookupTerminalSummaryOnDisk(
+  runId: string,
+  clonePaths: readonly string[],
+): { summary: Record<string, unknown>; clonePath: string } | null {
+  for (const clonePath of clonePaths) {
+    const summary = loadRunSummaryForRunId(clonePath, runId);
+    if (summary) return { summary, clonePath };
+  }
+  return null;
+}
+
+/** Build a terminal /status snapshot from a persisted run summary file. */
+export function buildTerminalStatusFromSummary(
+  sum: Record<string, unknown>,
+  runId: string,
+  clonePath: string,
+): SwarmStatus {
+  const effPhase = terminalPhaseFromStopReason(sum.stopReason) as SwarmPhase;
+  const rc = (sum.runConfig as Record<string, unknown> | undefined) ?? { preset: sum.preset };
+  const cp =
+    (typeof sum.localPath === "string" && sum.localPath)
+    || (typeof sum.clonePath === "string" && sum.clonePath)
+    || clonePath;
+  const shapedAgents = resolveStatusAgents({
+    terminalSum: sum,
+    clonePath: cp,
+    runConfig: rc,
+    transcript: Array.isArray(sum.transcript) ? sum.transcript : [],
+  });
+  const runConfig = rc
+    ? normalizeSwarmStatusRunConfig({ ...rc, clonePath: cp } as SwarmStatusRunConfig & { localPath?: string })
+    : undefined;
+  return {
+    phase: effPhase,
+    round: 0,
+    agents: shapedAgents,
+    transcript: (sum.transcript || []) as SwarmStatus["transcript"],
+    contract: sum.contract as SwarmStatus["contract"],
+    summary: sum as unknown as import("../swarm/blackboard/summary.js").RunSummary,
+    runId,
+    runConfig,
+    runStartedAt: typeof sum.startedAt === "number" ? sum.startedAt : undefined,
+  };
 }

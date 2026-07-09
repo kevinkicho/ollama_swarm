@@ -32,6 +32,7 @@ import { retryEmptyResponse } from "./promptAndExtract.js";
 
 // runEndReflection moved into runFinallyHooks (Phase D).
 import { staggerStart } from "./staggerStart.js";
+
 import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
 import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import { describeSdkError } from "./sdkError.js";
@@ -170,7 +171,7 @@ export class MapReduceRunner extends DiscussionRunnerBase {
     try {
       const agents = this.opts.manager.list();
       const reducer = agents.find((a) => a.index === 1);
-      const mappers = agents.filter((a) => a.index !== 1);
+      const mappers = agents.filter((a) => a.index > 1);
       if (!reducer) throw new Error("reducer agent (index 1) did not spawn");
       if (mappers.length < 2) throw new Error("need at least 2 mappers");
 
@@ -434,7 +435,7 @@ export class MapReduceRunner extends DiscussionRunnerBase {
             const revised = await runPostSynthesisCritique({
               synthesis: synthText,
               proposals,
-              criticAgent: this.opts.manager.list()[0] ?? reducer,
+              criticAgent: this.opts.manager.list().find((a) => a.index === 1) ?? reducer,
               manager: this.opts.manager,
               appendSystem: (text) => this.appendSystem(text),
               stopping: this.stopping,

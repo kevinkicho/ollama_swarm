@@ -19,6 +19,24 @@ Project state lives in the repo: read `docs/STATUS.md`, `docs/active-work.md`, a
 
 ---
 
+## Hard rules — do not regress
+
+These are intentional product/architecture choices. **Do not reimplement them**
+in code, plans, or “helpful” optimizations unless the user explicitly reverses
+the decision in `docs/decisions.md`.
+
+| Forbidden | Why |
+|-----------|-----|
+| **`:cloud` admission / slot queues** (`acquireCloudSlot`, max-N concurrent pipes, “cloud slot” UI) | Removed 2026-07-08. Misleading UX; parallel provider streams are expected. See `docs/decisions.md` → *No client-side `:cloud` admission*. |
+| **Wide artificial stagger for `:cloud` only** (e.g. 3s × agent index before prompt) | Same decision — use default `staggerStart` jitter (~150ms) for all models. |
+| **Dock copy claiming “request sent” while the app blocks the prompt** | Activity labels must reflect real lifecycle (`markStatus` → provider → streaming), not local throttles. |
+
+If you see a task, comment, or plan that says “cloud admission”, “limit concurrent
+:cloud”, or “pipe-handler for parallel bursts”, **stop** and read the decision
+doc first.
+
+---
+
 ## Common commands
 
 ### Run tests
@@ -166,6 +184,19 @@ SERVER_PORT=9243 WEB_PORT=9244 OLLAMA_PROXY_PORT=21533 LOG_DIR=/tmp/swarm2-logs 
 
 Both proxies forward to the same Ollama at 11434 — Ollama handles concurrent requests fine.
 
+### Stop / drain — expected behavior
+
+If transcript lines appear **after** “Run stopped” or “ports released”, read
+**`docs/run-stop-drain-lifecycle.md`** first. That doc is the contract for:
+
+- Hard stop vs soft drain (`/stop` vs `/drain`)
+- Council execution: close-out waits for `workerDrainPromise`, then summary → `killAll`
+- Abort signals on all worker provider calls (including literature pre-pass)
+- Transcript freeze after summary write (no straggler execution lines)
+
+**Regression smell:** `[agent-N] Literature research`, worker hunks, or
+`[execution] Complete:` after the ports-released line.
+
 ### Recommended monitors for debugging swarm runs
 
 When debugging a swarm run, these three monitors capture different layers and together provide full visibility:
@@ -222,5 +253,8 @@ The council preset is the most complex preset. Here's how it works (see also `do
 ### Todo extraction (current)
 
 Todo extraction lives in `councilDecisions.ts` (`extractActionableTodos`, `extractTodosFromAudit`). Legacy AI "decision gates" (Gate 1 verifyTodo, Gate 3 resolveContradiction, Gate 4 recoverDeletedFiles) were removed; path validation and simple extraction are used instead. See `councilDecisions.ts` header comment.
+
+**Stop / close-out:** Hard stop aborts in-flight work, waits for the execution pool to
+exit (bounded), writes summary, then `killAll`. See `docs/run-stop-drain-lifecycle.md`.
 
 (Additional details on the council refactor live in the source and in `docs/STATUS.md`.)

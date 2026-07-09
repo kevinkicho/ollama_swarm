@@ -129,6 +129,31 @@ describe("createIntraStreamLoopDetector", () => {
     assert.equal(d.chunkCount, 1);
   });
 
+  test("does not false-positive on fixed 8-byte cloud frames with diverse content (run 847558d2)", () => {
+    const d = createIntraStreamLoopDetector();
+    let text = "A".repeat(250);
+    const frames = [
+      '{"miss":',
+      '"Add new',
+      " data pa",
+      "nels to ",
+      "the FX t",
+      "ab using",
+      " gov API",
+      " endpoin",
+      'ts only"',
+      ', "crit',
+      'eria": [',
+      ' {"desc"',
+    ].map((f) => f.padEnd(8, " "));
+    for (const frame of frames) {
+      assert.equal(frame.length, 8, "simulate uniform provider frame size");
+      text += frame;
+      const r = d.onChunk(text);
+      assert.equal(r.detected, false, `should not detect on frame: ${JSON.stringify(frame)}`);
+    }
+  });
+
   test("does not false-positive on slowly growing diverse content", () => {
     const d = createIntraStreamLoopDetector();
     // Simulate realistic streaming: each chunk adds different amounts

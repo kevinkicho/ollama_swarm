@@ -16,6 +16,35 @@ See **`docs/plans/run-start-stability.md`** for full PR breakdown.
 
 ---
 
+## Queued: Event log / Debug Log performance (P2)
+
+See **`docs/plans/event-log-performance.md`** for full PR breakdown.
+
+- [x] List fast-path: per-run head/tail + stream scan, bounded archive gunzip, 45s cache
+- [x] Topbar dropdown portals (tokens, runs, debug log)
+- [ ] **PR1** — `debug.meta.json` sidecar on run end
+- [ ] **PR2** — Paginated list API + wire `EventLogPanel`
+- [ ] **PR3** — Persistent on-disk `event-log-index.json`
+- [ ] **PR4** — Rotated `debug-*.jsonl.gz` segment merge
+- [ ] **PR5** — Drill-down record pagination
+- [ ] **PR6** — Persistent archive index
+
+---
+
+## Queued: Project growth + knowledge graph (P2)
+
+See **`docs/plans/project-growth-knowledge-graph.md`** for full PR breakdown.
+
+- [x] **PR1** — Swarm evolution graph from run summaries (API + UI)
+- [x] **PR2** — `.swarm/project-graph.json` sidecar + incremental merge
+- [x] **PR3** — Agent context injection + recovery hints on drift
+- [x] **PR4** — ConformanceMonitor v2 (anchor overlap + UI tooltip)
+- [x] **PR5** — Git timeline layer (`git log` + UI toggle)
+- [x] **PR6** — Import-based structure layer (opt-in env + UI)
+- [x] **PR7** — Brain librarian graph queries
+
+---
+
 ## Queued: Brain Implementation (see docs/ARCHITECTURE-VISION.md)
 
 ### P2: Wire LLM Analysis ✅ DONE

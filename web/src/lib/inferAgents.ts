@@ -1,6 +1,23 @@
 import type { AgentState, TranscriptEntry } from "../types";
 
 /** Client-side fallback when /status returns agents: [] without a terminal summary. */
+/** Overlay partial /status agents onto the full expected roster. */
+export function mergeAgentsForSnapshot<T extends AgentState>(
+  live: readonly T[],
+  roster: readonly AgentState[],
+): T[] {
+  if (!roster.length) return [...live];
+  const byId = new Map<string, T>();
+  for (const a of roster) {
+    byId.set(a.id, { ...a } as T);
+  }
+  for (const a of live) {
+    const prior = byId.get(a.id);
+    byId.set(a.id, { ...prior, ...a } as T);
+  }
+  return [...byId.values()].sort((a, b) => a.index - b.index);
+}
+
 export function inferAgentsFromSnapshot(
   snap: {
     agents?: AgentState[];
@@ -42,6 +59,22 @@ export function inferAgentsFromSnapshot(
       });
     }
     if (e.role === "system" && e.text) {
+      const bulk = e.text.match(
+        /(\d+)\/(\d+)\s+agents ready\s*[—-]\s*models:\s*(.+)/i,
+      );
+      if (bulk) {
+        const count = Number(bulk[2]);
+        const models = bulk[3]!.split(",").map((s) => s.trim()).filter(Boolean);
+        for (let i = 1; i <= count; i++) {
+          const id = `agent-${i}`;
+          byId.set(id, {
+            id,
+            index: i,
+            status: "stopped",
+            model: models[i - 1] ?? models[0],
+          });
+        }
+      }
       const m = e.text.match(
         /(?:Planner|Worker|Auditor) agent (agent-\d+) ready \(model=([^)]+)\)/,
       );

@@ -2,8 +2,10 @@ import { memo, useMemo, useState } from "react";
 import { parseCouncilIssues } from "../drafts/councilDraftParse";
 import { CouncilIssueList } from "../drafts/CouncilIssueList";
 import {
+  BubbleToggleRow,
+  PromptContentPanel,
   ThinkingContentPanel,
-  ThinkingToggleButton,
+  resolveEntryPrompt,
   resolveEntryThinking,
 } from "./AgentThinking";
 import { CollapsibleBlock, JSON_COLLAPSE_THRESHOLD, tryPrettyJson } from "./JsonBubbles";
@@ -26,6 +28,7 @@ export const CouncilDraftBubble = memo(function CouncilDraftBubble({
 }) {
   const [showJson, setShowJson] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
   const [showIssues, setShowIssues] = useState(false);
   const [issuesListExpanded, setIssuesListExpanded] = useState(false);
   const [jsonExpanded, setJsonExpanded] = useState(false);
@@ -33,6 +36,7 @@ export const CouncilDraftBubble = memo(function CouncilDraftBubble({
   const issues = useMemo(() => parseCouncilIssues(entry.text), [entry.text]);
   const prettyJson = useMemo(() => tryPrettyJson(entry.text), [entry.text]);
   const thinking = useMemo(() => resolveEntryThinking(entry), [entry]);
+  const prompt = useMemo(() => resolveEntryPrompt(entry), [entry]);
 
   const chipHeader = (
     <div>
@@ -51,6 +55,7 @@ export const CouncilDraftBubble = memo(function CouncilDraftBubble({
         header={chipHeader}
         text={entry.text}
         thinking={thinking}
+        prompt={prompt}
       />
     );
   }
@@ -68,7 +73,14 @@ export const CouncilDraftBubble = memo(function CouncilDraftBubble({
     <div className={className} style={style}>
       <div className="flex items-start justify-between gap-2 mb-1">
         <div className="flex-1">{chipHeader}</div>
-        <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
+        <BubbleToggleRow
+          thinking={thinking}
+          prompt={prompt}
+          showThinking={showThinking}
+          showPrompt={showPrompt}
+          onToggleThinking={() => setShowThinking((v) => !v)}
+          onTogglePrompt={() => setShowPrompt((v) => !v)}
+        >
           {issues ? (
             <button
               onClick={() => setShowIssues((v) => !v)}
@@ -77,21 +89,15 @@ export const CouncilDraftBubble = memo(function CouncilDraftBubble({
               {showIssues ? "Hide issues" : `Show issues (${issues.length})`}
             </button>
           ) : null}
-          {thinking ? (
-            <ThinkingToggleButton
-              thinking={thinking}
-              open={showThinking}
-              onClick={() => setShowThinking((v) => !v)}
-            />
-          ) : null}
           <button
             onClick={() => setShowJson((v) => !v)}
             className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200"
           >
             {showJson ? "Hide JSON" : "View JSON"}
           </button>
-        </div>
+        </BubbleToggleRow>
       </div>
+      {showPrompt && prompt ? <PromptContentPanel prompt={prompt} /> : null}
       <div className="text-[11px] text-ink-400 mb-1">{summaryLine}</div>
       {issues && showIssues ? (
         <div className="mb-2">

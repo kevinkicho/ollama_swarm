@@ -69,6 +69,20 @@ test("isInFlight — true when status=thinking", () => {
   assert.equal(mgr.isInFlight("a-2"), true);
 });
 
+test("markStatus — auto-fills thinkingSince when flipping to thinking", () => {
+  const { mgr, states } = makeManager();
+  injectAgent(mgr, fakeAgent({ id: "a-ts" }));
+  const before = Date.now();
+  mgr.markStatus("a-ts", "thinking");
+  const last = states[states.length - 1]!;
+  assert.equal(last.status, "thinking");
+  assert.ok(last.thinkingSince !== undefined && last.thinkingSince >= before);
+  mgr.markStatus("a-ts", "ready");
+  const ready = states[states.length - 1]!;
+  assert.equal(ready.status, "ready");
+  assert.equal(ready.thinkingSince, undefined);
+});
+
 test("isInFlight — true when status=retrying", () => {
   const { mgr } = makeManager();
   injectAgent(mgr, fakeAgent({ id: "a-3" }));
@@ -113,6 +127,19 @@ test("killAgent — does not affect other agents", async () => {
   const remaining = mgr.list();
   assert.equal(remaining.length, 1);
   assert.equal(remaining[0].id, "survivor");
+});
+
+test("killAll — aborts provider session controllers", async () => {
+  const { mgr } = makeManager();
+  const agent = fakeAgent({ id: "a-abort", sessionId: "sess-abort" });
+  injectAgent(mgr, agent);
+  const internal = mgr as unknown as {
+    sessions: Map<string, { abortController: AbortController }>;
+  };
+  const session = { abortController: new AbortController() };
+  internal.sessions.set("sess-abort", session as never);
+  await mgr.killAll();
+  assert.equal(session.abortController.signal.aborted, true);
 });
 
 test("killAgent — clears mirrored agentState (subsequent isInFlight returns false)", async () => {

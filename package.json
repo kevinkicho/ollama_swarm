@@ -12,7 +12,8 @@
     "web"
   ],
   "scripts": {
-    "dev": "node scripts/dev.mjs",
+    "dev": "node scripts/kill-dev-ports.mjs && node scripts/dev.mjs",
+    "dev:kill": "node scripts/kill-dev-ports.mjs",
     "build": "npm -w server run build && npm -w web run build",
     "start": "npm -w server run start",
     "cli": "node bin/ollama-swarm.mjs",

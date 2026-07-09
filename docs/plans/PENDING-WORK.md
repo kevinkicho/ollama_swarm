@@ -12,13 +12,22 @@ This file contains longer-term or lower-priority items that are not currently in
 
 ## UI / UX
 
-- Better visualization of multi-run timelines
+- See **`docs/plans/project-growth-knowledge-graph.md`** for swarm-evolution graph, project KG, and conformance grounding (replaces vague "multi-run timeline" item).
 - First-class support for reviewing historical Brain proposals
 
 ## Reliability
 
 - (Hybrid mode removed; no pending hybrid items)
 - Additional watchdog layers for paid-provider quota edge cases
+
+## Observability / Debug Log
+
+- See **`docs/plans/event-log-performance.md`** for the full breakdown.
+- [ ] `debug.meta.json` sidecar per run (fast list without scanning `debug.jsonl`)
+- [ ] Paginated `GET /api/v2/event-log/runs`
+- [ ] Persistent `event-log-index.json` + archive index
+- [ ] Rotated `debug-*.jsonl.gz` merge for list + replay
+- [ ] Drill-down record pagination for large timelines
 
 ## Presets & Patterns
 

@@ -44,6 +44,22 @@ export function status(ctx: StatusContext): SwarmStatus {
         clonePath: ctx.active.localPath,
         agentCount: ctx.active.agentCount,
         rounds: ctx.active.rounds,
+        topology: ctx.active.topology,
+        wallClockCapMin: ctx.active.wallClockCapMs
+          ? Math.round(ctx.active.wallClockCapMs / 60000).toString()
+          : undefined,
+        ambitionTiers:
+          ctx.active.ambitionTiers !== undefined
+            ? String(ctx.active.ambitionTiers)
+            : undefined,
+        ...(ctx.active.userDirective?.trim()
+          ? { userDirective: ctx.active.userDirective.trim() }
+          : {}),
+        ...(ctx.active.plannerTools !== undefined
+          ? { plannerTools: ctx.active.plannerTools }
+          : {}),
+        ...(ctx.active.webTools !== undefined ? { webTools: ctx.active.webTools } : {}),
+        ...(ctx.active.mcpServers ? { mcpServers: ctx.active.mcpServers } : {}),
       }
     : undefined;
   return {

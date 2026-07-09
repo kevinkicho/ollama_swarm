@@ -117,9 +117,22 @@ function tearDownIfIdle(): void {
   }
 }
 
-export function useEventLogStream(): EventLogStreamState {
-  const [state, setState] = useState<EventLogStreamState>(() => cache ?? DEFAULT_STATE);
+const IDLE_STATE: EventLogStreamState = {
+  runs: [],
+  malformed: 0,
+  source: null,
+  loading: false,
+  error: null,
+  lastFetchedAt: null,
+};
+
+export function useEventLogStream(opts?: { enabled?: boolean }): EventLogStreamState {
+  const enabled = opts?.enabled !== false;
+  const [state, setState] = useState<EventLogStreamState>(() =>
+    enabled ? (cache ?? DEFAULT_STATE) : IDLE_STATE,
+  );
   useEffect(() => {
+    if (!enabled) return;
     subscribers.add(setState);
     if (!cache) void fetchOnce();
     ensurePolling();
@@ -127,8 +140,8 @@ export function useEventLogStream(): EventLogStreamState {
       subscribers.delete(setState);
       tearDownIfIdle();
     };
-  }, []);
-  return state;
+  }, [enabled]);
+  return enabled ? state : IDLE_STATE;
 }
 
 // Test seam: lets unit tests preload a known cache + observe notifications

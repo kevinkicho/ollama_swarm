@@ -1,4 +1,4 @@
-// Agent-0 housekeeper: heuristic detection of runaway / repetitive streams.
+// Heuristic detection of runaway / repetitive streams (offline log analysis).
 
 export type StreamAnomalyKind =
   | "phrase_repeat"

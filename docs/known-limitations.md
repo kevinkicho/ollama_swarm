@@ -6,6 +6,48 @@ we made it, and what would force us to revisit. Anything that becomes a
 
 ---
 
+## Parallel `:cloud` prompts are not throttled in-app (2026-07-08)
+
+**Choice:** When N agents use `:cloud` models in the same phase, all N may call
+`promptWithRetry` → provider concurrently. There is **no** local admission
+controller, slot queue, or “max 2 concurrent cloud” gate.
+
+**Why:** A short-lived `cloudAdmission` layer caused false “waiting for model /
+cloud slot” UI, delayed prompts that were never sent, and fought the preset
+design (e.g. four independent council contract drafts). Production use showed
+four parallel provider streams work; the throttle made the system feel worse,
+not more reliable.
+
+**Do not reintroduce without updating `docs/decisions.md`:** See decision
+*“No client-side `:cloud` admission / concurrency throttling”* (2026-07-08).
+Contributors and coding agents should not add admission pipes, semaphores on
+`:cloud`, or widened stagger solely to “protect” the provider from parallel
+fan-out.
+
+**When overload is real:** Use `providerFailover`, retry/backoff in
+`promptWithRetry`, lower `agentCount`, or provider-side limits — not hidden
+in-process queuing that mislabels agent state.
+
+---
+
+## Hard stop may cap execution-worker wait at 45s (2026-07-08)
+
+**Choice:** On hard stop during council execution, close-out waits up to **45 seconds**
+for `runCouncilWorkers` to exit after abort before writing summary and calling `killAll`.
+
+**Why:** Without a cap, a hung provider call could wedge `POST /stop` indefinitely. With
+no wait at all, summary and “ports released” race ahead of in-flight workers (see run
+`43e79fa7`).
+
+**Ideal contract:** Documented in `docs/run-stop-drain-lifecycle.md`. After close-out,
+no execution transcript lines should appear.
+
+**When this would need revisiting:** If 45s proves too short for legitimate drain tails
+or too long for interactive stop UX — tune the cap in `CouncilRunner.awaitLoopThenCloseOut`
+and update the lifecycle doc in the same PR.
+
+---
+
 ## Blackboard planner now uses `swarm-read` (resolved 2026-05-09)
 
 **Previous state:** Blackboard's planner and auditor used `swarm` profile (tools
@@ -61,7 +103,7 @@ Until any of those bite, one agent covers both roles.
 
 **Mitigation (2026-07-07):** `prioritizeExpectedFilesSlice()` keeps registry/config paths when truncating, so grounding is less likely to drop every todo because invented `sources/` paths were listed first.
 
-**Remaining gap:** New-file work still needs at least one grounded path; invented directory trees under absent parents are stripped by `groundExpectedFiles`. Planner prompt + contract should cite real repo layout (`functions/src/routes/` in kyahoofinance, not `src/data/sources/`).
+**Remaining gap:** New-file work still needs at least one grounded path; invented directory trees under absent parents are stripped by `groundExpectedFiles`. Planner prompt + contract should cite paths from the actual repo file list (e.g. existing `src/routes/` or `server/api/`), not invented deep trees.
 
 ---
 

@@ -7,6 +7,8 @@
 
 import type { SwarmEvent } from "../types";
 import type { SwarmStore } from "./store";
+import { activityStubId, activityStubText } from "./agentActivityView";
+import { isPreStreamActivityPhase } from "./agentActivityPhases";
 
 /** Events without a runId field (global lifecycle) always apply.
  *  When the store has a runId, drop events stamped for another run.
@@ -42,6 +44,25 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
       break;
     case "agent_streaming_end":
       s.markStreamingEnded(ev.agentId);
+      break;
+    case "agent_activity":
+      s.setAgentActivity(ev);
+      if (isPreStreamActivityPhase(ev.phase)) {
+        const stubId = activityStubId(ev.agentId);
+        s.removeTranscriptEntry(stubId);
+        s.appendEntry({
+          id: stubId,
+          role: "system",
+          agentId: ev.agentId,
+          agentIndex: ev.agentIndex,
+          text: activityStubText(ev.agentIndex, ev.label, ev.phase, ev.reason, ev.agentId),
+          ts: ev.ts,
+        });
+      } else if (ev.phase === "streaming") {
+        s.removeTranscriptEntry(activityStubId(ev.agentId));
+      } else if (ev.phase === "done") {
+        s.removeTranscriptEntry(activityStubId(ev.agentId));
+      }
       break;
     case "error":
       s.setError(ev.message);
@@ -107,6 +128,9 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
         ...(typeof ev.latencyMs === "number" ? { latencyMs: ev.latencyMs } : {}),
         ...(typeof ev.excerptChars === "number" ? { excerptChars: ev.excerptChars } : {}),
         ...(Array.isArray(ev.windowScores) ? { windowScores: ev.windowScores } : {}),
+        ...(typeof ev.anchorOverlap === "number" ? { anchorOverlap: ev.anchorOverlap } : {}),
+        ...(Array.isArray(ev.offGraphPaths) ? { offGraphPaths: ev.offGraphPaths } : {}),
+        ...(ev.recoverySuggested ? { recoverySuggested: true } : {}),
       });
       break;
     case "directive_amended":

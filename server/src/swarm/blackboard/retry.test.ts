@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import {
   isRetryableSdkError,
+  shortRetryReason,
   RETRY_BACKOFF_MS,
   RETRY_MAX_ATTEMPTS,
 } from "./retry.js";
@@ -106,6 +107,15 @@ describe("isRetryableSdkError", () => {
     assert.equal(isRetryableSdkError(new Error("server busy: capacity at limit")), true);
   });
 
+  it("retries on intra-stream loop abort (model-output turn retry)", () => {
+    assert.equal(
+      isRetryableSdkError(
+        new Error("intra-stream loop detected: intra-stream loop: 8/10 recent chunks had identical delta=8 bytes"),
+      ),
+      true,
+    );
+  });
+
   it("does NOT retry on a generic 503 with no overloaded/busy keyword", () => {
     // 503 alone (without the message keyword) shouldn't auto-retry —
     // could be a real outage that retry won't help. Match must be on
@@ -127,5 +137,14 @@ describe("retry config", () => {
         `delay[${i}] should exceed delay[${i - 1}]`,
       );
     }
+  });
+});
+
+describe("shortRetryReason", () => {
+  it("reframes idle timeout as cloud queue wait", () => {
+    const msg = shortRetryReason(new Error("Ollama idle timeout: no body data for 180000ms"));
+    assert.match(msg, /cloud queue/i);
+    assert.match(msg, /180s/);
+    assert.match(msg, /other agents may be fine/i);
   });
 });

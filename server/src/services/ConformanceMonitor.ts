@@ -25,6 +25,8 @@
 //   - Empty / very short transcript → skip (nothing to grade)
 
 import type { SwarmEvent, TranscriptEntry } from "../types.js";
+import type { ProjectGraphAnchors } from "../projectGraph/types.js";
+import { computeAnchorOverlap } from "../projectGraph/anchorOverlap.js";
 
 export interface ConformanceMonitorOpts {
   runId: string;
@@ -58,6 +60,10 @@ export interface ConformanceMonitorOpts {
   isActive?: () => boolean;
   /** Optional override for the underlying fetch — tests inject a stub. */
   fetchImpl?: typeof fetch;
+  /** Project KG anchors for grounded grading (optional). */
+  anchors?: ProjectGraphAnchors;
+  /** Recent file paths touched this run (for anchor overlap). */
+  getTouchedPaths?: () => string[] | Promise<string[]>;
 }
 
 const DEFAULT_INTERVAL_MS = 90_000;
@@ -121,12 +127,37 @@ export class ConformanceMonitor {
     this.inflight = true;
     const requestStart = Date.now();
     try {
+      let anchorOverlap: number | undefined;
+      let offGraphPaths: string[] | undefined;
+      let recoverySuggested: boolean | undefined;
+      let anchorsBlock: string | undefined;
+
+      if (this.opts.anchors) {
+        const mission = this.opts.anchors.missionFiles.join(", ") || "(none)";
+        const hot = this.opts.anchors.hotFiles
+          .slice(0, 8)
+          .map((h) => h.path)
+          .join(", ");
+        anchorsBlock = `Mission anchors: ${mission}\nHot modules/files: ${hot || "(none)"}`;
+        if (this.opts.getTouchedPaths) {
+          const touched = await Promise.resolve(this.opts.getTouchedPaths());
+          const overlap = computeAnchorOverlap(touched, this.opts.anchors);
+          anchorOverlap = overlap.anchorOverlap;
+          offGraphPaths = overlap.offGraphPaths.length > 0 ? overlap.offGraphPaths : undefined;
+          recoverySuggested = overlap.recoverySuggested || undefined;
+          if (touched.length > 0) {
+            anchorsBlock += `\nRecent file activity this run: ${touched.slice(0, 12).join(", ")}`;
+          }
+        }
+      }
+
       const result = await gradeWithOllama({
         directive: this.opts.directive,
         excerpt,
         baseUrl: this.opts.ollamaBaseUrl,
         model: this.opts.graderModel,
         fetchImpl: this.opts.fetchImpl ?? fetch,
+        anchorsBlock,
       });
       if (this.stopped) return;
       const latencyMs = Date.now() - requestStart;
@@ -149,6 +180,9 @@ export class ConformanceMonitor {
         excerptChars: excerpt.length,
         windowScores: this.rawScores.slice(),
         ...(result.reason ? { reason: result.reason } : {}),
+        ...(anchorOverlap !== undefined ? { anchorOverlap } : {}),
+        ...(offGraphPaths ? { offGraphPaths } : {}),
+        ...(recoverySuggested ? { recoverySuggested } : {}),
       });
     } catch {
       // silent — transient grader failures shouldn't pollute the
@@ -190,15 +224,19 @@ export async function gradeWithOllama(input: {
   baseUrl: string;
   model: string;
   fetchImpl: typeof fetch;
+  anchorsBlock?: string;
 }): Promise<{ score: number; reason: string | null }> {
-  const prompt = `You are a strict grader. Rate 0-100 how on-topic the multi-agent transcript excerpt is to the user's directive.
+  const anchorSection = input.anchorsBlock
+    ? `\nProject anchors (files/modules in scope):\n${input.anchorsBlock}\n`
+    : "";
+  const prompt = `You are a strict grader. Rate 0-100 how on-topic the multi-agent transcript excerpt is to the user's directive and project scope.
 
-100 = transcript is making concrete progress toward the directive
-50 = mixed/tangential — some discussion is on-topic, some has wandered
-0 = transcript has completely drifted away from the directive
+100 = transcript + file activity align with directive and project anchors
+50 = mixed/tangential — on-topic discussion but touching peripheral areas
+0 = clear digression — work unrelated to directive and anchors
 
 Directive: "${input.directive}"
-
+${anchorSection}
 Recent transcript excerpt:
 ${input.excerpt}
 

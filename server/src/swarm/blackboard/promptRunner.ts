@@ -25,7 +25,12 @@ import {
   getAgentOllamaOptions,
 } from "../../../../shared/src/topology.js";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
-import { makeWebToolHandler } from "../toolCallTranscript.js";
+import { makeBufferedToolHandler } from "../toolCallTranscript.js";
+import { createIntraStreamLoopDetector } from "../intraStreamLoopDetector.js";
+import { chatOnce, type ChatOnceOpts, type ChatOnceResult } from "../chatOnce.js";
+import { extractText } from "../extractText.js";
+import type { PendingPrompt } from "./runnerUtil.js";
+import type { ToolTraceEntry } from "../toolCallTranscript.js";
 
 export interface PromptContext {
   // --- mutable counter maps (referenced in place) ---
@@ -63,6 +68,8 @@ export interface PromptContext {
   appendSystem: (msg: string, summary?: TranscriptEntrySummary) => void;
   emitAgentState: (s: AgentState) => void;
   extractText: (res: unknown) => string | undefined;
+  pendingPromptByAgent?: Map<string, PendingPrompt>;
+  pendingToolTraceByAgent: Map<string, ToolTraceEntry[]>;
 
   // --- static-like config ---
   maxTrackedErrors: number;
@@ -74,9 +81,152 @@ export async function promptPlannerSafely(
   promptText: string,
   agentName: ProfileName = "swarm",
   ollamaFormat?: "json" | Record<string, unknown>,
+  activity?: { kind?: string; label?: string },
 ): Promise<{ response: string; agentUsed: Agent }> {
-  const response = await promptAgent(ctx, primaryAgent, promptText, agentName, "json", ollamaFormat);
+  const response = await promptAgent(
+    ctx,
+    primaryAgent,
+    promptText,
+    agentName,
+    "json",
+    ollamaFormat,
+    activity,
+  );
   return { response, agentUsed: primaryAgent };
+}
+
+/**
+ * Blackboard streaming tiers (mirror council's single promptWithRetry path):
+ *
+ * 1. **promptAgent / promptPlannerSafely** — JSON-locked turns (workers, contract,
+ *    planner todos). Full retry + failover + agent_activity via promptWithRetry.
+ * 2. **chatOnceWithStreaming** — free-form one-shot turns (goal/research pre-passes,
+ *    worker literature research). Same dock signals without the retry wrapper.
+ *
+ * Council discussion presets use DiscussionRunnerBase.runAgent → promptWithFailoverAuto
+ * for every turn (tier 1 only). Blackboard splits tiers because pre-passes are
+ * intentionally single-shot and must not share the planner session history.
+ */
+export type ChatStreamingAbort = {
+  activeAborts: Set<AbortController>;
+  isStopping?: () => boolean;
+  isDraining?: () => boolean;
+};
+
+export type ChatStreamingSurface = {
+  manager: AgentManager;
+  emitAgentState: (s: AgentState) => void;
+  activity: { kind: string; label: string };
+  /** When set, registers an AbortController so stop()/drain() can cancel provider HTTP. */
+  abort?: ChatStreamingAbort;
+};
+
+function mergeAbortSignals(
+  primary: AbortSignal,
+  secondary?: AbortSignal,
+): AbortSignal {
+  if (!secondary) return primary;
+  if (typeof AbortSignal !== "undefined" && "any" in AbortSignal) {
+    return AbortSignal.any([primary, secondary]);
+  }
+  return primary;
+}
+
+/**
+ * Run a one-shot provider chat with the same dock/sidebar signals as promptAgent:
+ * agent_activity labels, streaming chunks, and a final streaming_end.
+ */
+export async function chatOnceWithStreaming(
+  agent: Agent,
+  surface: ChatStreamingSurface,
+  chatOpts: ChatOnceOpts,
+): Promise<ChatOnceResult> {
+  let sawFirstChunk = false;
+  const emitStreaming = () => {
+    if (sawFirstChunk) return;
+    sawFirstChunk = true;
+    surface.manager.emitAgentActivity(agent.id, agent.index, "streaming", {
+      kind: surface.activity.kind,
+      label: surface.activity.label,
+    });
+  };
+
+  emitAgentActivity(agent, surface.manager, surface.emitAgentState, {
+    kind: surface.activity.kind,
+    label: surface.activity.label,
+    attempt: 1,
+    maxAttempts: 1,
+  });
+
+  const priorOnChunk = chatOpts.onChunk;
+  const priorOnTool = chatOpts.onTool;
+  const loopDetector = createIntraStreamLoopDetector();
+  const onToolLive = (info: { tool: string; ok: boolean; preview: string }) => {
+    emitStreaming();
+    const toolLabel = info.ok ? info.tool : `${info.tool} (error)`;
+    surface.manager.emitAgentActivity(agent.id, agent.index, "streaming", {
+      kind: surface.activity.kind,
+      label: toolLabel,
+    });
+    priorOnTool?.(info);
+  };
+  const maxStreamChars = 80_000;
+  const controller = new AbortController();
+  const abortCtx = surface.abort;
+  if (abortCtx) abortCtx.activeAborts.add(controller);
+  const promptSignal = mergeAbortSignals(controller.signal, chatOpts.signal);
+  try {
+    const res = await chatOnce(agent, {
+      ...chatOpts,
+      signal: promptSignal,
+      onChunk: (cumulativeText) => {
+        const loopVerdict = loopDetector.onChunk(cumulativeText);
+        if (loopVerdict.detected) {
+          throw new Error(`intra-stream loop detected: ${loopVerdict.reason}`);
+        }
+        if (cumulativeText.length > maxStreamChars) {
+          throw new Error(
+            `research stream exceeded ${maxStreamChars.toLocaleString()} chars without completing — aborting think-only runaway`,
+          );
+        }
+        emitStreaming();
+        surface.manager.recordStreamingText(agent.id, agent.index, cumulativeText);
+        priorOnChunk?.(cumulativeText);
+      },
+      onTool: onToolLive,
+    });
+    const text = extractText(res) ?? "";
+    if (!sawFirstChunk && text.trim().length > 0) {
+      emitStreaming();
+      surface.manager.recordStreamingText(agent.id, agent.index, text);
+    }
+    surface.manager.markStreamingDone(agent.id);
+    surface.manager.emitAgentActivity(agent.id, agent.index, "done", {});
+    surface.manager.markStatus(agent.id, "ready", { lastMessageAt: Date.now() });
+    surface.emitAgentState({
+      id: agent.id,
+      index: agent.index,
+      port: agent.port,
+      sessionId: agent.sessionId,
+      status: "ready",
+      lastMessageAt: Date.now(),
+    });
+    return res;
+  } catch (err) {
+    surface.manager.markStreamingDone(agent.id);
+    surface.manager.markStatus(agent.id, "ready", { lastMessageAt: Date.now() });
+    surface.emitAgentState({
+      id: agent.id,
+      index: agent.index,
+      port: agent.port,
+      sessionId: agent.sessionId,
+      status: "ready",
+      lastMessageAt: Date.now(),
+    });
+    throw err;
+  } finally {
+    if (abortCtx) abortCtx.activeAborts.delete(controller);
+  }
 }
 
 export async function promptAgent(
@@ -86,10 +236,18 @@ export async function promptAgent(
   agentName: ProfileName = "swarm",
   formatExpect: "json" | "free" = "json",
   ollamaFormat?: "json" | Record<string, unknown>,
+  activity?: { kind?: string; label?: string },
 ): Promise<string> {
   ctx.turnsPerAgent.set(agent.id, (ctx.turnsPerAgent.get(agent.id) ?? 0) + 1);
-  ctx.manager.markStatus(agent.id, "thinking");
+  ctx.pendingPromptByAgent?.set(agent.id, {
+    text: prompt,
+    ...(activity?.label ? { label: activity.label } : {}),
+  });
   const turnStart = Date.now();
+  ctx.manager.markStatus(agent.id, "thinking", {
+    activityKind: activity?.kind,
+    activityLabel: activity?.label,
+  });
   ctx.emitAgentState({
     id: agent.id,
     index: agent.index,
@@ -97,6 +255,8 @@ export async function promptAgent(
     sessionId: agent.sessionId,
     status: "thinking",
     thinkingSince: turnStart,
+    activityKind: activity?.kind,
+    activityLabel: activity?.label,
   });
 
   ctx.manager.touchActivity(agent.sessionId, turnStart);
@@ -125,6 +285,7 @@ export async function promptAgent(
     const res = await promptWithFailover(agent, prompt, {
       signal: controller.signal,
       manager: ctx.manager,
+      ...(activity ? { activity } : {}),
       formatExpect,
       intraStreamLoop: true,
       ollamaDirect: config.USE_OLLAMA_DIRECT
@@ -141,7 +302,7 @@ export async function promptAgent(
       },
       agentName,
       webToolsConfig: ctx.getActive(),
-      onTool: makeWebToolHandler(ctx.appendSystem, agent.id),
+      onTool: makeBufferedToolHandler(ctx.pendingToolTraceByAgent, agent.id),
       describeError: (e) => describeSdkError(e),
       sleep: (ms, sig) => interruptibleSleep(ms, sig),
       onTiming: ({ attempt, elapsedMs, success }) => {
@@ -223,7 +384,7 @@ export async function promptAgent(
       });
     });
     const text = ctx.extractText(res) ?? "";
-    ctx.emit({ type: "agent_streaming_end", agentId: agent.id });
+    // streaming_end owned by promptWithRetry → markStreamingDone
     ctx.manager.markStatus(agent.id, "ready", { lastMessageAt: Date.now() });
     ctx.emitAgentState({
       id: agent.id,
@@ -236,7 +397,6 @@ export async function promptAgent(
     return text;
   } catch (err) {
     const msg = abortedReason ?? describeSdkError(err);
-    ctx.emit({ type: "agent_streaming_end", agentId: agent.id });
     const userHalt =
       ctx.isStopping()
       || (ctx.isDraining() && (controller.signal.aborted || /abort|user stop|drain/i.test(msg)));
@@ -311,9 +471,10 @@ export function markPlannerStatus(
   });
 }
 
-/** Surface planner phase in sidebar (DiscussionRunnerBase lifecycle pattern). */
+/** Surface planner phase in sidebar + agent_activity control plane. */
 export function emitAgentActivity(
   agent: Agent,
+  manager: AgentManager,
   emitAgentState: (s: AgentState) => void,
   activity: {
     kind: string;
@@ -323,6 +484,13 @@ export function emitAgentActivity(
     mode?: "explore" | "emit";
   },
 ): void {
+  const label = `${activity.label}${activity.mode === "emit" ? " · emit-only" : ""}`;
+  manager.markStatus(agent.id, "thinking", {
+    activityKind: activity.kind,
+    activityLabel: label,
+    activityAttempt: activity.attempt,
+    activityMaxAttempts: activity.maxAttempts,
+  });
   emitAgentState({
     id: agent.id,
     index: agent.index,
@@ -331,7 +499,7 @@ export function emitAgentActivity(
     status: "thinking",
     thinkingSince: Date.now(),
     activityKind: activity.kind,
-    activityLabel: `${activity.label}${activity.mode === "emit" ? " · emit-only" : ""}`,
+    activityLabel: label,
     activityAttempt: activity.attempt,
     activityMaxAttempts: activity.maxAttempts,
   });

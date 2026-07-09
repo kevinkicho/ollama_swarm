@@ -55,10 +55,10 @@ export interface IntraStreamLoopDetectorOpts {
 
 /**
  * Creates an intra-stream loop detector. The detector examines chunks
- * by tracking the cumulative text length at each chunk arrival and
- * checking whether the last K length-deltas are identical (meaning the
- * same number of bytes arrived for K consecutive chunks — a strong
- * signal the model is emitting the same repeated block).
+ * by tracking the actual text slice added per chunk. Identical slice
+ * content across most of the recent window indicates a true loop.
+ * Chunk *size* uniformity alone is not a signal — cloud providers often
+ * emit fixed-size frames (e.g. 8 bytes) with different content.
  *
  * It also checks for exact substring repetition: if the last N characters
  * of cumulative text appear verbatim 3+ times in a row at the end, that's
@@ -76,10 +76,10 @@ export function createIntraStreamLoopDetector(
 
   // Track cumulative text lengths at each chunk boundary
   let lengths: number[] = [];
+  // Actual bytes added per chunk — delta size alone is not a loop signal
+  // (cloud providers often emit fixed-size frames, e.g. 8 bytes each).
+  let recentSlices: string[] = [];
   let lastPseudoCount = 0;
-  // Track the last few suffixes for substring-repeat detection
-  let lastSuffix: string = "";
-  let lastSuffixRepeatCount: number = 0;
   let totalChunks = 0;
 
   return {
@@ -89,12 +89,18 @@ export function createIntraStreamLoopDetector(
 
     onChunk(cumulativeText: string): IntraStreamLoopResult {
       totalChunks++;
+      const prevLength = lengths.length > 0 ? lengths[lengths.length - 1]! : 0;
       const currentLength = cumulativeText.length;
       lengths.push(currentLength);
+      const slice = cumulativeText.slice(prevLength);
+      recentSlices.push(slice);
 
       // Keep only the last windowSize+1 lengths (we need +1 to compute deltas)
       if (lengths.length > windowSize + 1) {
         lengths = lengths.slice(-windowSize - 1);
+      }
+      if (recentSlices.length > windowSize) {
+        recentSlices = recentSlices.slice(-windowSize);
       }
 
       // Don't check until we have enough data
@@ -102,22 +108,22 @@ export function createIntraStreamLoopDetector(
         return { detected: false, reason: "", repeatCount: 0 };
       }
 
-      // Compute deltas (bytes per chunk) for the last windowSize chunks
+      // Compute deltas (bytes per chunk) for zero-byte streak detection
       const deltas: number[] = [];
       for (let i = 1; i < lengths.length; i++) {
         deltas.push(lengths[i] - lengths[i - 1]);
       }
 
-      // Check 1: identical deltas. If ≥threshold of recent chunks had
-      // the exact same byte count, the model is emitting uniform blocks.
-      if (deltas.length >= 3) {
-        const lastDelta = deltas[deltas.length - 1];
-        if (lastDelta > 0) {
-          const identicalCount = deltas.filter((d) => d === lastDelta).length;
-          if (identicalCount / deltas.length >= threshold) {
+      // Check 1: identical chunk *content*. Same byte-count frames from the
+      // provider are normal; only verbatim repeated slices indicate a loop.
+      if (recentSlices.length >= 3) {
+        const lastSlice = recentSlices[recentSlices.length - 1]!;
+        if (lastSlice.length > 0) {
+          const identicalCount = recentSlices.filter((s) => s === lastSlice).length;
+          if (identicalCount / recentSlices.length >= threshold) {
             return {
               detected: true,
-              reason: `intra-stream loop: ${identicalCount}/${deltas.length} recent chunks had identical delta=${lastDelta} bytes`,
+              reason: `intra-stream loop: ${identicalCount}/${recentSlices.length} recent chunks had identical content (${lastSlice.length} bytes)`,
               repeatCount: identicalCount,
             };
           }
@@ -188,8 +194,7 @@ export function createIntraStreamLoopDetector(
 
     reset(): void {
       lengths = [];
-      lastSuffix = "";
-      lastSuffixRepeatCount = 0;
+      recentSlices = [];
       lastPseudoCount = 0;
       totalChunks = 0;
     },

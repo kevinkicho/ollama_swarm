@@ -18,9 +18,11 @@ import type {
 } from "../types";
 import type { ChatMessage } from "../components/BrainStartChat";
 import { mergeTranscriptEntry } from "./transcriptMerge.js";
+import type { AgentActivityRecord } from "./agentActivityProjection.js";
 
 export { mergeTranscriptEntry } from "./transcriptMerge.js";
 export type { TranscriptMergeSlice } from "./transcriptMerge.js";
+export type { AgentActivityRecord } from "./agentActivityProjection.js";
 
 // Unit 40: cap per-agent rolling window. 20 samples is enough for a
 // sparkline to show "is the current wait unusually long vs. recent
@@ -44,6 +46,9 @@ export interface ConformanceSample {
   latencyMs?: number;
   excerptChars?: number;
   windowScores?: number[];
+  anchorOverlap?: number;
+  offGraphPaths?: string[];
+  recoverySuggested?: boolean;
 }
 
 // #299: user-submitted mid-run directive amendments. Cleared on
@@ -82,6 +87,8 @@ export interface SwarmStore {
     string,
     { startedAt: number; lastTextAt: number; status: "live" | "done"; endedAt?: number }
   >;
+  /** Prompt-session lifecycle from agent_activity WS events. */
+  agentActivity: Record<string, AgentActivityRecord>;
   todos: Record<string, Todo>;
   findings: Finding[];
   contract?: ExitContract;
@@ -147,6 +154,7 @@ export interface SwarmStore {
   /** Batch-load transcript from REST hydrate — one set() to avoid virtual-list flicker. */
   hydrateTranscriptEntries: (entries: TranscriptEntry[]) => void;
   clearTranscript: () => void;
+  removeTranscriptEntry: (id: string) => void;
   setStreaming: (agentId: string, text: string) => void;
   clearStreaming: (agentId: string) => void;
   // Task #176 Phase A: agent_streaming_end now marks the entry as
@@ -154,6 +162,17 @@ export interface SwarmStore {
   // transcript_append takes over that DOM position naturally via
   // appendEntry's existing delete-from-streaming side effect.
   markStreamingEnded: (agentId: string) => void;
+  setAgentActivity: (ev: {
+    agentId: string;
+    phase: AgentActivityRecord["phase"];
+    ts: number;
+    activityId?: string;
+    kind?: string;
+    label?: string;
+    attempt?: number;
+    maxAttempts?: number;
+    reason?: string;
+  }) => void;
 
   upsertTodo: (t: Todo) => void;
   applyClaim: (todoId: string, claim: Claim) => void;
@@ -241,6 +260,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   transcript: [],
   streaming: {},
   streamingMeta: {},
+  agentActivity: {},
   todos: {},
   findings: [],
   contract: undefined,
@@ -277,6 +297,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
           round,
           streaming: {},
           streamingMeta: {},
+          agentActivity: {},
           // Keep plain list latched through stop — do not flip to virtual.
           transcriptPlainListLatched: s.transcriptPlainListLatched || latchLive,
         };
@@ -291,6 +312,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
           ...(clearTranscript ? { transcript: [] } : {}),
           streaming: {},
           streamingMeta: {},
+          agentActivity: {},
           agents: {},
         };
       }
@@ -311,6 +333,11 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
     return { agents: { ...s.agents, [norm.id]: norm } };
   }),
   clearTranscript: () => set({ transcript: [] }),
+  removeTranscriptEntry: (id) =>
+    set((s) => {
+      if (!s.transcript.some((e) => e.id === id)) return s;
+      return { transcript: s.transcript.filter((e) => e.id !== id) };
+    }),
 
   appendEntry: (e) =>
     set((s) => {
@@ -392,6 +419,47 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         streamingMeta: {
           ...s.streamingMeta,
           [agentId]: { ...prior, status: "done", endedAt: Date.now() },
+        },
+      };
+    }),
+  setAgentActivity: (ev) =>
+    set((s) => {
+      const prior = s.agentActivity[ev.agentId];
+      const freshSession =
+        (ev.phase === "queued" || ev.phase === "waiting")
+        && (!prior || prior.phase === "done" || prior.activityId !== ev.activityId);
+      const startedAt = freshSession ? ev.ts : (prior?.startedAt ?? ev.ts);
+      let streaming = s.streaming;
+      let streamingMeta = s.streamingMeta;
+      if (freshSession && (ev.phase === "queued" || ev.phase === "waiting")) {
+        if (ev.agentId in streaming || ev.agentId in streamingMeta) {
+          streaming = { ...streaming };
+          streamingMeta = { ...streamingMeta };
+          delete streaming[ev.agentId];
+          delete streamingMeta[ev.agentId];
+        }
+      }
+      return {
+        streaming,
+        streamingMeta,
+        agentActivity: {
+          ...s.agentActivity,
+          [ev.agentId]: {
+            phase: ev.phase,
+            ts: ev.ts,
+            startedAt,
+            activityId: ev.activityId ?? prior?.activityId,
+            kind: ev.kind ?? prior?.kind,
+            label: ev.label ?? prior?.label,
+            attempt: ev.attempt ?? prior?.attempt,
+            maxAttempts: ev.maxAttempts ?? prior?.maxAttempts,
+            reason:
+              ev.phase === "done"
+                ? undefined
+                : ev.reason !== undefined
+                  ? ev.reason
+                  : prior?.reason,
+          },
         },
       };
     }),
@@ -535,6 +603,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       agents: {},
       transcript: [],
       streaming: {}, streamingMeta: {},
+      agentActivity: {},
       todos: {},
       findings: [],
       contract: undefined,
@@ -620,6 +689,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       return {
         agents: {},
         streaming: {}, streamingMeta: {},
+        agentActivity: {},
         latency: {},
         conformance: [],
         drift: [],

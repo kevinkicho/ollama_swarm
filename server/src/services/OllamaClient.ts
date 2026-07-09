@@ -19,8 +19,14 @@
 // once and threads it through.
 
 export interface ChatMessage {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
+  thinking?: string;
+  tool_calls?: Array<{
+    type?: string;
+    function: { name: string; arguments?: unknown };
+  }>;
+  tool_name?: string;
 }
 
 export interface ChatOpts {
@@ -85,12 +91,22 @@ export interface ChatOpts {
 
   /** runId for per-run proxy attribution (sent as X-Swarm-Run-Id). */
   runId?: string;
+  /** Ollama tool definitions — paired with tool-loop handling in OllamaProvider. */
+  tools?: Array<{
+    type: "function";
+    function: { name: string; description: string; parameters: Record<string, unknown> };
+  }>;
 }
 
 /** Cumulative display text for streaming + final result (thinking wrapped for stripAgentText). */
 export function buildOllamaStreamText(thinking: string, content: string): string {
   if (!thinking) return content;
   return `<think>${thinking}</think>${content}`;
+}
+
+export interface OllamaParsedToolCall {
+  name: string;
+  arguments: Record<string, unknown>;
 }
 
 export interface ChatResult {
@@ -102,6 +118,12 @@ export interface ChatResult {
    *  "aborted" = the AbortSignal fired. "idle-timeout" = no body
    *  data for idleTimeoutMs (call hung). */
   finishReason: "done" | "aborted" | "idle-timeout";
+  /** Parsed tool calls when the model invoked tools this turn. */
+  toolCalls?: OllamaParsedToolCall[];
+  /** Raw assistant content (no think wrapper) for tool-loop history. */
+  contentOnly?: string;
+  /** Raw thinking text from this turn. */
+  thinkingOnly?: string;
 }
 
 function createOllamaTimeoutController(
@@ -156,6 +178,7 @@ export async function chat(opts: any): Promise<ChatResult> {
     ...(opts.options !== undefined && Object.keys(opts.options).length > 0
       ? { options: opts.options }
       : {}),
+    ...(opts.tools && opts.tools.length > 0 ? { tools: opts.tools } : {}),
   });
 
   // Two-phase timeout: firstChunk for cold starts, idle after first byte.
@@ -214,8 +237,35 @@ export async function chat(opts: any): Promise<ChatResult> {
   let buf = "";
   let content = "";
   let thinking = "";
+  const toolCalls: OllamaParsedToolCall[] = [];
   let promptTokens = 0;
   let responseTokens = 0;
+
+  const mergeToolCalls = (rawCalls: unknown[]) => {
+    for (const raw of rawCalls) {
+      if (typeof raw !== "object" || raw === null) continue;
+      const fn = (raw as { function?: { name?: string; arguments?: unknown } }).function;
+      if (!fn?.name) continue;
+      let args: Record<string, unknown> = {};
+      const a = fn.arguments;
+      if (typeof a === "object" && a !== null && !Array.isArray(a)) {
+        args = a as Record<string, unknown>;
+      } else if (typeof a === "string") {
+        try {
+          const parsed = JSON.parse(a) as unknown;
+          if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+            args = parsed as Record<string, unknown>;
+          }
+        } catch { /* */ }
+      }
+      const existing = toolCalls.find((t) => t.name === fn.name);
+      if (existing) {
+        existing.arguments = { ...existing.arguments, ...args };
+      } else {
+        toolCalls.push({ name: fn.name, arguments: args });
+      }
+    }
+  };
 
   const emitStream = () => {
     const snapshot = buildOllamaStreamText(thinking, content);
@@ -273,7 +323,7 @@ export async function chat(opts: any): Promise<ChatResult> {
           Array.isArray(parsed.message?.tool_calls) &&
           parsed.message.tool_calls.length > 0
         ) {
-          // Tool-call frames often carry empty content — still counts as activity.
+          mergeToolCalls(parsed.message.tool_calls);
           frameTouched = true;
         }
         if (frameTouched) emitStream();
@@ -303,5 +353,8 @@ export async function chat(opts: any): Promise<ChatResult> {
     text: buildOllamaStreamText(thinking, content),
     elapsedMs: Date.now() - t0,
     finishReason,
+    ...(toolCalls.length > 0 ? { toolCalls } : {}),
+    contentOnly: content,
+    thinkingOnly: thinking || undefined,
   };
 }

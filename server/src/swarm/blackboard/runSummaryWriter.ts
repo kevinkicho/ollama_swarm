@@ -12,7 +12,9 @@ import type { RunStateObserver } from "./RunStateObserver.js";
 import { computeLatencyStats } from "./summary.js";
 import { buildPerRunSummaryFileName, buildRunFinishedSummary, formatRunFinishedBanner } from "../runSummary.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
-import { buildSummary } from "./summary.js";
+import { buildSummary, extractDeliverables } from "./summary.js";
+import { extractDeliverablesFromGit } from "./runDeliverables.js";
+import { config } from "../../config.js";
 
 export interface PerAgentCounters {
   agentRoster: Array<{ id: string; index: number }>;
@@ -99,6 +101,13 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
   const { cfg } = ctx;
   if (ctx.runBootedAt === undefined) return;
 
+  let deliverables =
+    extractDeliverables(ctx.gitStatus.porcelain) ??
+    (await extractDeliverablesFromGit(cfg.localPath, {
+      runStartedAt: ctx.runStartedAt ?? ctx.runBootedAt,
+      commitCount: ctx.boardCounts.committed,
+    }));
+
   const summary = buildSummary({
     config: {
       repoUrl: cfg.repoUrl,
@@ -145,8 +154,12 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
       total: ctx.boardCounts.total,
     },
     staleEvents: ctx.staleEventCount,
-    filesChanged: ctx.gitStatus.changedFiles,
+    filesChanged:
+      ctx.gitStatus.changedFiles > 0
+        ? ctx.gitStatus.changedFiles
+        : (deliverables?.length ?? 0),
     finalGitStatus: ctx.gitStatus.porcelain,
+    deliverables,
     agents: ctx.agentStats,
     contract: ctx.contract ? ctx.cloneContract(ctx.contract) : undefined,
     maxTierReached: ctx.currentTier > 0 ? ctx.currentTier : undefined,
@@ -188,6 +201,28 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
   }
   ctx.lastSummarySetter(summary);
   ctx.emit({ type: "run_summary", summary });
+
+  if (config.PROJECT_GRAPH_ENABLED) {
+    void import("../../projectGraph/service.js")
+      .then(({ updateProjectGraphSidecarForSummary }) =>
+        updateProjectGraphSidecarForSummary({
+          runId: summary.runId,
+          preset: summary.preset,
+          startedAt: summary.startedAt,
+          endedAt: summary.endedAt,
+          stopReason: summary.stopReason,
+          localPath: summary.localPath ?? cfg.localPath,
+          deliverables: summary.deliverables,
+          finalGitStatus: ctx.gitStatus.porcelain,
+        }),
+      )
+      .catch((err) => {
+        console.warn(
+          "[projectGraph] sidecar merge failed:",
+          err instanceof Error ? err.message : String(err),
+        );
+      });
+  }
 
   // Guard the project-level copy + append too (in case writeRunSummary called from multiple stop paths).
   const alreadyHasRunFinished = ctx.transcript.some((e) => e.summary?.kind === "run_finished");

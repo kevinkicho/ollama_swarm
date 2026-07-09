@@ -141,6 +141,27 @@ describe("OllamaClient.chat", () => {
     }
   });
 
+  it("returns parsed toolCalls when the model invokes tools", async () => {
+    const restore = installMockFetch({
+      frames: [
+        '{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"web_search","arguments":{"query":"bis derivatives"}}}]},"done":true}\n',
+      ],
+    });
+    try {
+      const result = await chat({
+        baseUrl: "http://test",
+        model: "test-model",
+        messages: [{ role: "user", content: "search" }],
+        signal: new AbortController().signal,
+      });
+      assert.equal(result.toolCalls?.length, 1);
+      assert.equal(result.toolCalls?.[0]?.name, "web_search");
+      assert.equal(result.toolCalls?.[0]?.arguments.query, "bis derivatives");
+    } finally {
+      restore();
+    }
+  });
+
   it("handles multiple JSONL lines packed in one frame", async () => {
     const restore = installMockFetch({
       frames: [

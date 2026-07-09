@@ -35,6 +35,7 @@ export interface PlannerEmitRecoveryOpts<T> {
     promptText: string,
     agentName: ProfileName,
     ollamaFormat?: "json" | Record<string, unknown>,
+    activity?: { kind?: string; label?: string },
   ) => Promise<{ response: string; agentUsed: Agent }>;
   buildExplorePrompt: () => string;
   buildRepairPrompt: (previousResponse: string, parseError: string, auditorNote?: string) => string;
@@ -163,6 +164,7 @@ export async function runPlannerEmitRecovery<T>(
       prompt,
       profile,
       useEmitOnly ? opts.jsonSchema : undefined,
+      { kind: opts.kind, label },
     );
     if (opts.getStopping()) return { ok: false, reason: "run stopping", lastRaw: response };
 

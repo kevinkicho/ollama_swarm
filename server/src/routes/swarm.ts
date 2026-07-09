@@ -25,6 +25,7 @@ import {
   TimelineParams,
   SayPerRunBody,
   RunsQuery,
+  ProjectGraphQuery,
   BrainApplyBody,
   BrainRejectBody,
   StatusQuery,
@@ -583,6 +584,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         requireAuditorVerification: parsed.data.requireAuditorVerification,
         plannerTools: parsed.data.plannerTools,
         webTools: parsed.data.webTools,
+        projectGraphContext: parsed.data.projectGraphContext,
         mcpServers: parsed.data.mcpServers,
         useLocal: parsed.data.useLocal,
         createdBy: parsed.data.createdBy,
@@ -951,6 +953,40 @@ export function swarmRouter(orch: Orchestrator): Router {
     });
 
     res.json({ runs, parents: parentsScanned });
+  });
+
+  r.get("/project-graph", validate(ProjectGraphQuery, "query"), async (req: Request, res: Response) => {
+    if (!config.PROJECT_GRAPH_ENABLED) {
+      res.status(404).json({ error: "project graph disabled" });
+      return;
+    }
+    const query = req.query as unknown as z.infer<typeof ProjectGraphQuery>;
+    const { collectParentsToScan } = await import("../projectGraph/collectParents.js");
+    const { getProjectGraph } = await import("../projectGraph/service.js");
+    const parentsToScan = await collectParentsToScan(orch, query.parentPath);
+    const status = orch.status();
+    const activeClone = status.localPath ? path.resolve(status.localPath) : null;
+    const activeRunId = status.runId ?? null;
+    if (query.clonePath) {
+      const resolved = guardClonePath(orch, res, query.clonePath);
+      if (!resolved) return;
+    }
+    const result = await getProjectGraph({
+      parentPath: query.parentPath,
+      clonePath: query.clonePath,
+      refresh: query.refresh === true,
+      includeGit: query.includeGit,
+      includeStructure: query.includeStructure,
+      refreshLayers: query.refreshLayers === true,
+      parentsToScan,
+      activeClone,
+      activeRunId,
+    });
+    if (!result) {
+      res.status(404).json({ error: "no workspace resolved for project graph" });
+      return;
+    }
+    res.json(result);
   });
 
   // Single full-summary fetch for the history modal (2026-04-24).
@@ -1527,7 +1563,7 @@ ${recommenderHint}
 Key rules:
 - For local folders without a Git repo: use "parentPath" + "repoUrl": "".
 - Default: model "deepseek-v4-flash:cloud", agentCount 5. For research-heavy tasks prefer enabling webTools + plannerTools.
-- When user describes their *goal or use-case* (e.g. "I need to analyze many papers and find common patterns", "add gov data panels to my finance app", "debate pros and cons of migrating", "explore this repo and understand its structure"), analyze it against the guide above and recommend the SINGLE best preset.
+- When user describes their *goal or use-case* (e.g. "I need to analyze many papers and find common patterns", "add OAuth and session handling to my API", "debate pros and cons of migrating", "explore this repo and understand its structure"), analyze it against the guide above and recommend the SINGLE best preset.
 
 CRITICAL: When the user does not know which "swarm mode" / preset to pick:
 - Clearly state: "Recommended Preset: council (or blackboard, map-reduce, etc.)"
@@ -1539,7 +1575,7 @@ When the user gives enough details, output the config **and** a ready-to-run com
 
 \`\`\`json
 {
-  "parentPath": "C:\\Users\\ysile\\Downloads\\workspace\\kyahoofinance032926",
+  "parentPath": "C:\\Users\\you\\workspace\\my-project",
   "repoUrl": "",
   "userDirective": "the full directive here",
   "preset": "blackboard",

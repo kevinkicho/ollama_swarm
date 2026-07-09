@@ -238,6 +238,8 @@ export interface WorkerSeed {
   userChatBlock?: string;
   /** Existing API catalog + .env key names for dedup grounding. */
   endpointCatalogBlock?: string;
+  /** Cross-run project knowledge graph slice. */
+  projectGraphSlice?: string;
 }
 
 /** Read-only repo tools available to hunk workers (swarm-read profile). */
@@ -278,6 +280,10 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
     for (const hf of seed.hotFiles) {
       parts.push(`  ${hf.path} (score: ${hf.score.toFixed(1)}, interest: ${hf.avgInterest.toFixed(0)}, confidence: ${hf.avgConfidence.toFixed(0)})`);
     }
+    parts.push("");
+  }
+  if (seed.projectGraphSlice && seed.projectGraphSlice.trim().length > 0) {
+    parts.push(seed.projectGraphSlice.trim());
     parts.push("");
   }
   if (seed.directive && seed.directive.trim().length > 0) {

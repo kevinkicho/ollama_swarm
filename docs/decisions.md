@@ -2,6 +2,66 @@
 
 This document records major architectural and product decisions with their rationale and status.
 
+## 2026-07-08: No client-side `:cloud` admission / concurrency throttling
+
+**Decision:** Do **not** implement local “cloud admission”, slot queues, or artificial
+limits on how many agents may call `:cloud` models in parallel. All agents in a
+fan-out (council contract draft, blackboard workers, etc.) may open provider
+streams concurrently without waiting on an in-app semaphore.
+
+**What we removed (do not bring back):**
+- `cloudAdmission.ts` — `acquireCloudSlot` / `releaseCloudSlot` (max 2 concurrent)
+- `burstSpacingForModels` widening to 3s per agent for `:cloud` bursts
+- UI copy that implied “cloud slot”, “throttled, not sent yet”, or “request sent
+  but no bytes” when the app itself was blocking the prompt
+
+**Rationale:**
+- The stack already supports multiple concurrent streams to the AI provider; the
+  admission layer added misleading dock/sidebar states and made the product feel
+  broken when agents were healthy but locally queued.
+- Council and similar presets are designed for parallel independent drafts; throttling
+  one agent while showing “waiting for model” on others was worse UX than provider-side
+  queue latency.
+- Cold-start and provider queue behavior are real; they should be surfaced honestly
+  (elapsed time, streaming when bytes arrive), not simulated with fake pipeline stages.
+
+**If provider overload becomes a problem:** fix at the provider/gateway layer
+(retries, backoff, failover chain in `providerFailover`) or reduce `agentCount` /
+preset parallelism — **not** a hidden in-process pipe that blocks `promptWithRetry`.
+
+**Status:** Shipped (removed). **Agents and contributors: treat reintroducing cloud
+admission as a regression unless the product owner explicitly reverses this decision
+in this file.**
+
+---
+
+## 2026-07-08: Council stop must wait for execution workers before close-out
+
+**Decision:** Hard `stop()` must not write the run summary or call `killAll()` while
+`runCouncilWorkers` is still in flight. Close-out waits on `workerDrainPromise` (with
+a bounded timeout), aborts all in-flight provider HTTP via `Session.abortController`,
+and freezes the transcript after `writeSummary()` so stragglers cannot append.
+
+**Ideal behavior (full sequence):** See `docs/run-stop-drain-lifecycle.md`.
+
+**What we fixed (do not regress):**
+- `awaitLoopThenCloseOut` racing the main loop on a **15s timeout** without waiting for
+  execution workers — caused “ports released” while literature/worker/hunk lines still
+  landed (run `43e79fa7`).
+- Hard `stop()` setting `drainRequested = true` (soft-drain flag only belongs on `drain()`).
+- Literature pre-pass calling `chatOnce` without an abort signal.
+- `killAll()` not aborting stored `Session.abortController` instances (E3 cloud path has
+  no local subprocess to kill; HTTP must be cancelled explicitly).
+- `appendSystem` / `appendCouncilAgent` accepting lines after summary write.
+
+**Rationale:** Users read “Run stopped” and “ports released” as terminal. Post-stop
+transcript noise looks like a bug and wastes tokens/commits on an abandoned run.
+
+**Status:** Shipped. **Agents: if you see messages after “ports released”, compare
+implementation to `docs/run-stop-drain-lifecycle.md` and restore the contract.**
+
+---
+
 ## 2026-04-29: E3 — Complete removal of opencode subprocess
 
 **Decision:** Retire the per-agent `opencode serve` HTTP subprocess and the associated SDK client entirely.

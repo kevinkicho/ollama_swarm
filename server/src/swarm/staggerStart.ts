@@ -25,6 +25,14 @@
 // queue-race fix it buys.
 
 export const DEFAULT_SPACING_MS = 150;
+
+/** Small jitter between parallel starts (all models — no :cloud throttle).
+ *  Do not widen spacing for :cloud; see docs/decisions.md 2026-07-08. */
+export function burstSpacingForModels(
+  _items: readonly { model?: string }[],
+): number {
+  return DEFAULT_SPACING_MS;
+}
 const JITTER_PCT = 0.25;
 
 /**

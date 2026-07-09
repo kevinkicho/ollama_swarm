@@ -57,7 +57,7 @@ export function tickAdaptiveWatchdog(
   const workers = ctx
     .getManager()
     .list()
-    .filter((a: AgentType) => a.index !== 1).length;
+    .filter((a: AgentType) => a.index > 1).length;
   const h = ctx.getAdaptiveHysteresis();
   if (totalLive > workers * 2 && workers < opts.max) {
     ctx.setAdaptiveHysteresis({
@@ -110,7 +110,7 @@ export async function scaleUpAdaptive(
   const currentWorkers = ctx
     .getManager()
     .list()
-    .filter((a: AgentType) => a.index !== 1);
+    .filter((a: AgentType) => a.index > 1);
   if (currentWorkers.length >= opts.max) return;
   const recommendedAdd = Math.max(
     1,
@@ -161,7 +161,7 @@ export async function scaleDownAdaptive(
   const currentWorkers = ctx
     .getManager()
     .list()
-    .filter((a: AgentType) => a.index !== 1);
+    .filter((a: AgentType) => a.index > 1);
   if (currentWorkers.length <= opts.min) return;
   const recommendedKill = currentWorkers.length - opts.min;
   const idleWorkers = currentWorkers.filter(
