@@ -7,7 +7,6 @@ import type { Agent } from "../../services/AgentManager.js";
 import type { AgentState, SwarmEvent, TranscriptEntrySummary } from "../../types.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { ClassifiedError } from "../errorTaxonomy.js";
-import { config } from "../../config.js";
 import type { LifecycleState } from "./lifecycleState.js";
 import {
   promptWithFailover,
@@ -27,9 +26,16 @@ import {
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
 import { makeBufferedToolHandler } from "../toolCallTranscript.js";
 import { chatOnce, type ChatOnceOpts, type ChatOnceResult } from "../chatOnce.js";
+import {
+  createThinkGuardHandler,
+  isThinkGuardRefereeEligible,
+  resolveThinkGuardRefereeOn,
+} from "./thinkGuardHandler.js";
 import { extractText } from "../extractText.js";
 import type { PendingPrompt } from "./runnerUtil.js";
 import type { ToolTraceEntry } from "../toolCallTranscript.js";
+import type { SwarmControlCenter } from "../control/SwarmControlCenter.js";
+import type { ToolResultHook } from "../../tools/ToolDispatcher.js";
 
 export interface PromptContext {
   // --- mutable counter maps (referenced in place) ---
@@ -68,6 +74,41 @@ export interface PromptContext {
 
   // --- static-like config ---
   maxTrackedErrors: number;
+  getSwarmControl?: () => SwarmControlCenter;
+  getCoachAgent?: () => Agent | undefined;
+}
+
+function wrapPromptWithControlHints(
+  prompt: string,
+  agentId: string,
+  ctx: PromptContext,
+): string {
+  const control = ctx.getSwarmControl?.();
+  if (!control) return prompt;
+  const agentHint = control.consumeAgentHint(agentId);
+  const sessionHint = control.consumeSessionPlannerHint();
+  const blocks: string[] = [];
+  if (sessionHint) blocks.push(`[Swarm control — session]\n${sessionHint}`);
+  if (agentHint) blocks.push(`[Swarm control — tool coach]\n${agentHint}`);
+  if (blocks.length === 0) return prompt;
+  return `${blocks.join("\n\n")}\n\n[End swarm control]\n\n${prompt}`;
+}
+
+function buildToolCoachHook(ctx: PromptContext, agent: Agent): ToolResultHook | undefined {
+  const control = ctx.getSwarmControl?.();
+  const coach = ctx.getCoachAgent?.() ?? agent;
+  const active = ctx.getActive();
+  if (!control) return undefined;
+  return (info) => {
+    if (info.ok) return;
+    control.recordToolFailure(agent.id, info.tool, info.error ?? "tool error", info.preview, {
+      agent: coach,
+      clonePath: active?.localPath,
+      runId: active?.runId,
+      appendSystem: ctx.appendSystem,
+      emit: ctx.emit,
+    });
+  };
 }
 
 export async function promptPlannerSafely(
@@ -76,7 +117,13 @@ export async function promptPlannerSafely(
   promptText: string,
   agentName: ProfileName = "swarm",
   ollamaFormat?: "json" | Record<string, unknown>,
-  activity?: { kind?: string; label?: string },
+  activity?: {
+    kind?: string;
+    label?: string;
+    maxToolTurns?: number;
+    mode?: "explore" | "emit";
+    promptWallClockMs?: number;
+  },
 ): Promise<{ response: string; agentUsed: Agent }> {
   const response = await promptAgent(
     ctx,
@@ -245,11 +292,18 @@ export async function promptAgent(
   agentName: ProfileName = "swarm",
   formatExpect: "json" | "free" = "json",
   ollamaFormat?: "json" | Record<string, unknown>,
-  activity?: { kind?: string; label?: string },
+  activity?: {
+    kind?: string;
+    label?: string;
+    maxToolTurns?: number;
+    mode?: "explore" | "emit";
+    promptWallClockMs?: number;
+  },
 ): Promise<string> {
+  const effectivePrompt = wrapPromptWithControlHints(prompt, agent.id, ctx);
   ctx.turnsPerAgent.set(agent.id, (ctx.turnsPerAgent.get(agent.id) ?? 0) + 1);
   ctx.pendingPromptByAgent?.set(agent.id, {
-    text: prompt,
+    text: effectivePrompt,
     ...(activity?.label ? { label: activity.label } : {}),
   });
   const turnStart = Date.now();
@@ -291,13 +345,41 @@ export async function promptAgent(
 
   try {
     const failoverCfg = buildFailoverConfig(ctx);
-    const res = await promptWithFailover(agent, prompt, {
+    const cfg = ctx.getActive();
+    const refereeOn = resolveThinkGuardRefereeOn(activity, cfg, {
+      stopping: ctx.isStopping(),
+      draining: ctx.isDraining(),
+    });
+    const thinkGuardHandlerState = { continuationUsed: false };
+    const thinkGuardHandler = isThinkGuardRefereeEligible(activity)
+      ? createThinkGuardHandler(
+          {
+            getActive: ctx.getActive,
+            isStopping: ctx.isStopping,
+            isDraining: ctx.isDraining,
+            appendSystem: ctx.appendSystem,
+            logDiag: ctx.logDiag,
+            runId: cfg?.runId,
+            activity,
+            promptExcerpt: prompt.slice(0, 1500),
+            signal: controller.signal,
+            clonePath: cfg?.localPath,
+          },
+          thinkGuardHandlerState,
+        )
+      : undefined;
+    const res = await promptWithFailover(agent, effectivePrompt, {
       signal: controller.signal,
       manager: ctx.manager,
+      runId: cfg?.runId,
+      onToolResultHook: buildToolCoachHook(ctx, agent),
+      refereeOn,
+      minThinkCharsForReferee: cfg?.thinkGuardRefereeMinThinkChars,
+      thinkGuardHandler,
       ...(activity ? { activity } : {}),
       formatExpect,
-      ollamaDirect: config.USE_OLLAMA_DIRECT
-        ? { baseUrl: ctx.getOllamaBaseUrl() ?? config.OLLAMA_DIRECT_FALLBACK_URL }
+      ollamaDirect: appConfig.USE_OLLAMA_DIRECT
+        ? { baseUrl: ctx.getOllamaBaseUrl() ?? appConfig.OLLAMA_DIRECT_FALLBACK_URL }
         : undefined,
       ...(ollamaFormat !== undefined ? { ollamaFormat } : {}),
       logDiag: ctx.logDiag,
@@ -310,6 +392,10 @@ export async function promptAgent(
       },
       agentName,
       webToolsConfig: ctx.getActive(),
+      ...(activity?.maxToolTurns !== undefined ? { maxToolTurns: activity.maxToolTurns } : {}),
+      ...(activity?.promptWallClockMs !== undefined
+        ? { promptWallClockMs: activity.promptWallClockMs }
+        : {}),
       onTool: makeBufferedToolHandler(ctx.pendingToolTraceByAgent, agent.id),
       describeError: (e) => describeSdkError(e),
       sleep: (ms, sig) => interruptibleSleep(ms, sig),
@@ -447,7 +533,7 @@ export function buildFailoverConfig(ctx: PromptContext): FailoverConfig {
 
 export async function discoverLocalOllamaTags(ctx: PromptContext): Promise<void> {
   try {
-    const baseUrl = (ctx.getOllamaBaseUrl() ?? config.OLLAMA_TAGS_FALLBACK_URL).replace(/\/v1\/?$/, "");
+    const baseUrl = (ctx.getOllamaBaseUrl() ?? appConfig.OLLAMA_TAGS_FALLBACK_URL).replace(/\/v1\/?$/, "");
     const r = await fetch(`${baseUrl}/api/tags`, {
       signal: AbortSignal.timeout(3000),
     });

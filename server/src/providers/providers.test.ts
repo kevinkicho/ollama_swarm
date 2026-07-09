@@ -317,6 +317,157 @@ test("OllamaProvider — forwards format to ollamaChat", async () => {
   }
 });
 
+test("OpenAIProvider — forwards response_format on tool-free emit calls", async () => {
+  const realFetch = globalThis.fetch;
+  let observedBody: Record<string, unknown> | null = null;
+  globalThis.fetch = (async (_url: string, init: RequestInit) => {
+    observedBody = init?.body ? JSON.parse(init.body as string) : null;
+    const events =
+      `data: {"choices":[{"delta":{"content":"{}"}}]}\n\n` +
+      `data: [DONE]\n\n`;
+    return new Response(events, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  }) as unknown as typeof fetch;
+  try {
+    const { CONTRACT_JSON_SCHEMA } = await import("../swarm/blackboard/prompts/jsonSchemas.js");
+    const p = new OpenAIProvider("sk-test-key");
+    await p.chat({
+      model: "gpt-5-mini",
+      messages: [{ role: "user", content: "emit" }],
+      signal: new AbortController().signal,
+      format: CONTRACT_JSON_SCHEMA,
+    });
+    const rf = observedBody!.response_format as {
+      type: string;
+      json_schema: { name: string; strict: boolean; schema: unknown };
+    };
+    assert.equal(rf.type, "json_schema");
+    assert.equal(rf.json_schema.strict, true);
+    assert.equal(rf.json_schema.name, "emit_response");
+    assert.deepEqual(rf.json_schema.schema, CONTRACT_JSON_SCHEMA);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("OpenAIProvider — omits response_format when tools are active", async () => {
+  const realFetch = globalThis.fetch;
+  let observedBody: Record<string, unknown> | null = null;
+  globalThis.fetch = (async (_url: string, init: RequestInit) => {
+    observedBody = init?.body ? JSON.parse(init.body as string) : null;
+    const events =
+      `data: {"choices":[{"delta":{"content":"ok"}}]}\n\n` +
+      `data: [DONE]\n\n`;
+    return new Response(events, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  }) as unknown as typeof fetch;
+  try {
+    const { CONTRACT_JSON_SCHEMA } = await import("../swarm/blackboard/prompts/jsonSchemas.js");
+    const p = new OpenAIProvider("sk-test-key");
+    await p.chat({
+      model: "gpt-5-mini",
+      messages: [{ role: "user", content: "explore" }],
+      signal: new AbortController().signal,
+      format: CONTRACT_JSON_SCHEMA,
+      tools: ["read"],
+      dispatcher: { dispatch: async () => ({ ok: true, output: "" }) } as never,
+    });
+    assert.equal("response_format" in observedBody!, false);
+    assert.ok(Array.isArray(observedBody!.tools));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("AnthropicProvider — forwards output_format + beta header on tool-free emit", async () => {
+  const realFetch = globalThis.fetch;
+  let observedBody: Record<string, unknown> | null = null;
+  let observedHeaders: Record<string, string> | null = null;
+  globalThis.fetch = (async (_url: string, init: RequestInit) => {
+    observedBody = init?.body ? JSON.parse(init.body as string) : null;
+    observedHeaders = init?.headers as Record<string, string>;
+    const events =
+      `event: message_start\ndata: {"type":"message_start","message":{"id":"m1","usage":{"input_tokens":1}}}\n\n` +
+      `event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"{}"}}\n\n` +
+      `event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n` +
+      `event: message_stop\ndata: {"type":"message_stop"}\n\n`;
+    return new Response(events, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  }) as unknown as typeof fetch;
+  try {
+    const { CONTRACT_JSON_SCHEMA } = await import("../swarm/blackboard/prompts/jsonSchemas.js");
+    const p = new AnthropicProvider("sk-ant-test-key");
+    await p.chat({
+      model: "claude-opus-4-7",
+      messages: [{ role: "user", content: "emit" }],
+      signal: new AbortController().signal,
+      format: CONTRACT_JSON_SCHEMA,
+    });
+    const of = observedBody!.output_format as { type: string; schema: unknown };
+    assert.equal(of.type, "json_schema");
+    assert.deepEqual(of.schema, CONTRACT_JSON_SCHEMA);
+    assert.match(observedHeaders!["anthropic-beta"] ?? "", /structured-outputs/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("AnthropicProvider — omits output_format when tools are active", async () => {
+  const realFetch = globalThis.fetch;
+  let observedBody: Record<string, unknown> | null = null;
+  globalThis.fetch = (async (_url: string, init: RequestInit) => {
+    observedBody = init?.body ? JSON.parse(init.body as string) : null;
+    const events =
+      `event: message_start\ndata: {"type":"message_start","message":{"id":"m1","usage":{"input_tokens":1}}}\n\n` +
+      `event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"ok"}}\n\n` +
+      `event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n` +
+      `event: message_stop\ndata: {"type":"message_stop"}\n\n`;
+    return new Response(events, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  }) as unknown as typeof fetch;
+  try {
+    const { CONTRACT_JSON_SCHEMA } = await import("../swarm/blackboard/prompts/jsonSchemas.js");
+    const p = new AnthropicProvider("sk-ant-test-key");
+    await p.chat({
+      model: "claude-opus-4-7",
+      messages: [{ role: "user", content: "explore" }],
+      signal: new AbortController().signal,
+      format: CONTRACT_JSON_SCHEMA,
+      tools: ["read"],
+      dispatcher: { dispatch: async () => ({ ok: true, output: "" }) } as never,
+    });
+    assert.equal("output_format" in observedBody!, false);
+    assert.ok(Array.isArray(observedBody!.tools));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("OpenAIProvider — forwards response_format across model budget tiers", async () => {
+  const realFetch = globalThis.fetch;
+  const models = ["gpt-5-mini", "gpt-4o", "o3-mini"];
+  for (const model of models) {
+    let observedBody: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      observedBody = init?.body ? JSON.parse(init.body as string) : null;
+      const events =
+        `data: {"choices":[{"delta":{"content":"{}"}}]}\n\n` +
+        `data: [DONE]\n\n`;
+      return new Response(events, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+    try {
+      const { CONTRACT_JSON_SCHEMA } = await import("../swarm/blackboard/prompts/jsonSchemas.js");
+      const p = new OpenAIProvider("sk-test-key");
+      await p.chat({
+        model,
+        messages: [{ role: "user", content: "emit" }],
+        signal: new AbortController().signal,
+        format: CONTRACT_JSON_SCHEMA,
+      });
+      const rf = observedBody!.response_format as { type: string };
+      assert.equal(rf.type, "json_schema", `model ${model}`);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  }
+});
+
 test("OllamaProvider — omits format when caller doesn't pass it", async () => {
   const realFetch = globalThis.fetch;
   let observedBody: any = null;

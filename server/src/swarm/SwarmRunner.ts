@@ -71,4 +71,6 @@ export interface SwarmRunner {
   isRunning(): boolean;
   // For Brain proactive suggestions during run
   appendSystemMessage?(text: string, summary?: TranscriptEntrySummary): void;
+  /** Mid-run limit extension (rounds, wall-clock cap, token budget). */
+  reconfig?(changes: import("./runReconfig.js").RunReconfigChanges): void;
 }

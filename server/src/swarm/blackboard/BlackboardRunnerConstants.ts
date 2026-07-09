@@ -50,7 +50,12 @@ export const DRAIN_DEADLINE_MS = 3 * 60_000;
 /** Abort hung in-flight prompts during drain so the UI does not sit on
  *  "thinking" with an empty transcript until the full 3-minute backstop. */
 export const DRAIN_STUCK_PROMPT_MS = 90_000;
+/** When drain is eligible but only prompts are hung (0 claims), abort sooner. */
+export const DRAIN_STUCK_PROMPT_NO_CLAIMS_MS = 5_000;
 export const DRAIN_WATCHER_INTERVAL_MS = 2_000;
+
+/** Default planning-phase wall clock (separate from worker-loop cap). */
+export const PLANNING_WALL_CLOCK_CAP_MS = 15 * 60_000;
 
 // Issue #3 (2026-04-27): planner-empty model fallback. When the
 // primary planner returns 0 valid todos after parse + grounding +

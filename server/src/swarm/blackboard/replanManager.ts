@@ -12,10 +12,11 @@ import {
 import {
   REPLANNER_SYSTEM_PROMPT,
   buildReplannerUserPrompt,
-  buildReplannerRepairPrompt,
+  buildReplannerFullPrompt,
+  buildReplannerRepairFullPrompt,
+  buildReplanPolicyGuidance,
   parseReplannerResponse,
   type ReplannerSeed,
-  ReplannerResponseSchema,
 } from "./prompts/replanner.js";
 import {
   REPLANNER_JSON_SCHEMA,
@@ -25,11 +26,21 @@ import { truncate } from "./truncate.js";
 import { autoDetectAnchors } from "./autoAnchor.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import { resolveToolProfile } from "../toolProfiles.js";
+import { EMIT_ONLY_PROFILE_ID } from "@ollama-swarm/shared/toolProfiles";
+import { resolveMaxToolTurnsForPlanningPhase } from "@ollama-swarm/shared/toolProfiles";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
 import { resolveBlackboardPromptExtras } from "./blackboardPromptContext.js";
 import type { TranscriptEntry } from "../../types.js";
-import { runParseSalvage } from "./parseSalvage.js";
 import type { AgentAssistKind } from "./runnerUtil.js";
+import {
+  resolveReplanPolicy,
+  shouldTriggerBatchReplanBreaker,
+} from "@ollama-swarm/shared/replanPolicy";
+import { appendExplorationCache } from "@ollama-swarm/shared/explorationCache";
+import type { ExplorationCacheEntry } from "@ollama-swarm/shared/explorationCache";
+import { runReplannerEmitRecovery } from "./replannerRecovery.js";
+import { applyPanelConvention } from "@ollama-swarm/shared/panelConvention";
+import { evaluateReplannerSkip } from "@ollama-swarm/shared/swarmControl/replannerSkipGrounding";
 
 export interface ReplanContext {
   getReplanPending: () => Set<string>;
@@ -38,8 +49,13 @@ export interface ReplanContext {
   getPlanner: () => Agent | undefined;
   getAuditor: () => Agent | undefined;
   getActive: () => RunConfig | undefined;
+  getContract?: () => ExitContract | undefined;
+  getSessionPlannerHint?: () => string | undefined;
   getTranscript: () => readonly TranscriptEntry[];
   getAmendments?: () => Array<{ ts: number; text: string }>;
+  getExplorationCache?: () => ExplorationCacheEntry[];
+  setExplorationCache?: (cache: ExplorationCacheEntry[]) => void;
+  getRepoFiles?: () => readonly string[];
   isStopping: () => boolean;
   isDraining: () => boolean;
   boardListTodos: () => Todo[];
@@ -52,10 +68,20 @@ export interface ReplanContext {
     text: string,
     options?: { assistKind?: AgentAssistKind },
   ) => void;
-  promptPlannerSafely: (agent: Agent, promptText: string, agentName?: ProfileName, ollamaFormat?: "json" | Record<string, unknown>) => Promise<{ response: string; agentUsed: Agent }>;
+  promptPlannerSafely: (
+    agent: Agent,
+    promptText: string,
+    agentName?: ProfileName,
+    ollamaFormat?: "json" | Record<string, unknown>,
+    activity?: {
+      kind?: string;
+      label?: string;
+      maxToolTurns?: number;
+      mode?: "explore" | "emit";
+    },
+  ) => Promise<{ response: string; agentUsed: Agent }>;
   checkAndApplyCaps: () => boolean;
   emit?: (e: unknown) => void;
-  // Plan 4: post-run brain overseer telemetry
   recordInteraction: (type: string, todoId: string, agentId: string, reason: string) => void;
   recordException: (type: string, agentId: string, todoId?: string, reason?: string) => void;
 }
@@ -71,12 +97,18 @@ export async function processReplanQueue(ctx: ReplanContext): Promise<void> {
   if (!ctx.getPlanner()) return;
   ctx.setReplanRunning(true);
   try {
+    const batchBreaker = shouldTriggerBatchReplanBreaker(ctx.boardListTodos());
+    if (batchBreaker) {
+      ctx.appendSystem(
+        "Batch replan breaker: ≥3 todos stale from worker timeout/tool-cap — forcing emit-first replans with prior explore cache.",
+      );
+    }
     while (!ctx.isStopping() && !ctx.isDraining() && ctx.getReplanPending().size > 0 && ctx.getPlanner()) {
       if (ctx.checkAndApplyCaps()) return;
       const todoId = ctx.getReplanPending().values().next().value as string;
       ctx.getReplanPending().delete(todoId);
       try {
-        await replanOne(ctx, todoId);
+        await replanOne(ctx, todoId, { batchBreaker });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         ctx.appendSystem(`Replan handler crashed on todo ${todoId}: ${msg}`);
@@ -92,7 +124,39 @@ export async function processReplanQueue(ctx: ReplanContext): Promise<void> {
   }
 }
 
-export async function replanOne(ctx: ReplanContext, todoId: string): Promise<void> {
+function buildReplannerSeed(
+  ctx: ReplanContext,
+  todo: Todo,
+  planner: Agent,
+  contents: Record<string, string | null>,
+  autoAnchors: string[] | undefined,
+): ReplannerSeed {
+  const promptExtras = resolveBlackboardPromptExtras({
+    active: ctx.getActive(),
+    getAmendments: ctx.getAmendments,
+    transcript: ctx.getTranscript(),
+    forAgentId: planner.id,
+  });
+  const explorationCache = ctx.getExplorationCache?.() ?? [];
+  return {
+    todoId: todo.id,
+    originalDescription: todo.description,
+    originalExpectedFiles: todo.expectedFiles,
+    staleReason: todo.staleReason ?? "(unknown)",
+    fileContents: contents,
+    replanCount: todo.replanCount,
+    autoAnchors,
+    ...(explorationCache.length > 0 ? { explorationCache } : {}),
+    ...(promptExtras.effectiveDirective ? { userDirective: promptExtras.effectiveDirective } : {}),
+    ...(promptExtras.userChatBlock ? { userChatBlock: promptExtras.userChatBlock } : {}),
+  };
+}
+
+export async function replanOne(
+  ctx: ReplanContext,
+  todoId: string,
+  opts?: { batchBreaker?: boolean },
+): Promise<void> {
   const planner = ctx.getPlanner();
   if (!planner) return;
   const todo = ctx.boardListTodos().find((t) => t.id === todoId);
@@ -119,9 +183,6 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
     return;
   }
 
-  // Auto-anchor: when no anchors were declared but the file is large,
-  // detect likely section names from the todo description and inject them
-  // as anchors so windowFileWithAnchors shows the relevant region.
   let autoAnchors: string[] | undefined;
   if (!todo.expectedAnchors || todo.expectedAnchors.length === 0) {
     autoAnchors = autoDetectAnchors(todo.description, contents, todo.expectedFiles);
@@ -132,111 +193,127 @@ export async function replanOne(ctx: ReplanContext, todoId: string): Promise<voi
     }
   }
 
-  const promptExtras = resolveBlackboardPromptExtras({
-    active: ctx.getActive(),
-    getAmendments: ctx.getAmendments,
-    transcript: ctx.getTranscript(),
-    forAgentId: planner.id,
+  const seed = buildReplannerSeed(ctx, todo, planner, contents, autoAnchors);
+  const explorationCache = ctx.getExplorationCache?.() ?? [];
+  const hasCache = explorationCache.some((e) => e.excerpt.trim().length > 0);
+  const batchBreaker = opts?.batchBreaker === true;
+  const policy = resolveReplanPolicy(todo.staleReason, {
+    batchBreaker,
+    hasExplorationCache: hasCache,
   });
-  const seed: ReplannerSeed = {
-    todoId: todo.id,
-    originalDescription: todo.description,
-    originalExpectedFiles: todo.expectedFiles,
-    staleReason: todo.staleReason ?? "(unknown)",
-    fileContents: contents,
-    replanCount: todo.replanCount,
-    autoAnchors,
-    ...(promptExtras.effectiveDirective ? { userDirective: promptExtras.effectiveDirective } : {}),
-    ...(promptExtras.userChatBlock ? { userChatBlock: promptExtras.userChatBlock } : {}),
-  };
 
-  const plannerProfile = resolveToolProfile("planner", ctx.getActive());
-  let response: string;
-  let replanAgent: Agent;
-  try {
-    const r = await ctx.promptPlannerSafely(
-      planner,
-      `${REPLANNER_SYSTEM_PROMPT}\n\n${buildReplannerUserPrompt(seed)}`,
-      plannerProfile,
-      REPLANNER_JSON_SCHEMA,
+  const exploreProfile = resolveToolProfile("planner", ctx.getActive());
+  const emitProfile = EMIT_ONLY_PROFILE_ID;
+  const policyGuidance = buildReplanPolicyGuidance(policy);
+
+  const recovery = await runReplannerEmitRecovery({
+    agent: planner,
+    auditor: ctx.getAuditor(),
+    policy,
+    getStopping: ctx.isStopping,
+    appendSystem: ctx.appendSystem,
+    appendAgent: ctx.appendAgent,
+    emitActivity: (label, attempt, maxAttempts, mode) => {
+      void label;
+      void attempt;
+      void maxAttempts;
+      void mode;
+    },
+    promptPlannerSafely: (a, p, profile, schema, activity) =>
+      ctx.promptPlannerSafely(a, p, profile, schema, {
+        ...activity,
+        maxToolTurns:
+          activity?.mode === "emit"
+            ? 0
+            : activity?.maxToolTurns
+              ?? resolveMaxToolTurnsForPlanningPhase("replan", ctx.getActive()),
+      }),
+    buildPrimaryPrompt: () => {
+      const sessionHint = ctx.getSessionPlannerHint?.();
+      const hintBlock = sessionHint
+        ? `[Swarm control hint]\n${sessionHint}\n[End swarm control hint]\n\n`
+        : "";
+      const base = policyGuidance
+        ? `${REPLANNER_SYSTEM_PROMPT}\n\n${policyGuidance}\n${buildReplannerUserPrompt(seed)}`
+        : buildReplannerFullPrompt(seed);
+      return hintBlock + base;
+    },
+    buildRepairPrompt: (prev, err) => buildReplannerRepairFullPrompt(seed, prev, err),
+    exploreProfile: policy.emitFirst && !policy.allowExplore ? emitProfile : exploreProfile,
+    emitProfile,
+    parse: (raw) => {
+      const p = parseReplannerResponse(raw);
+      if (p.ok) return { ok: true as const, value: p, raw };
+      return { ok: false as const, reason: p.reason, raw };
+    },
+    getActive: ctx.getActive,
+    onExploreCaptured: (raw) => {
+      if (!ctx.setExplorationCache) return;
+      const next = appendExplorationCache(explorationCache, {
+        phase: "replan",
+        excerpt: raw,
+        agentId: planner.id,
+      });
+      ctx.setExplorationCache(next);
+    },
+  });
+
+  if (!recovery.ok) {
+    ctx.wrappers.skipTodoQ(
+      todoId,
+      `replanner failed after recovery: ${recovery.reason}`,
     );
-    response = r.response;
-    replanAgent = r.agentUsed;
-  } catch (err) {
-    if (ctx.isStopping()) return;
-    const msg = err instanceof Error ? err.message : String(err);
-    ctx.wrappers.skipTodoQ(todoId, `replanner prompt failed: ${msg}`);
     return;
   }
   if (ctx.isStopping()) return;
-  ctx.appendAgent(replanAgent, response);
 
-  let parsed = parseReplannerResponse(response);
-  if (!parsed.ok) {
-    ctx.appendSystem(
-      `Replanner JSON invalid for ${todoId} (${parsed.reason}); issuing repair prompt.`,
+  let parsed = recovery.value;
+
+  const repoFiles = ctx.getRepoFiles?.() ?? [];
+  if (parsed.action === "revised" && repoFiles.length > 0) {
+    const convention = applyPanelConvention(
+      { description: parsed.description, expectedFiles: parsed.expectedFiles },
+      repoFiles,
     );
-    let repair: string;
-    let repairAgent: Agent;
-    try {
-      const r = await ctx.promptPlannerSafely(
-        replanAgent,
-        `${REPLANNER_SYSTEM_PROMPT}\n\n${buildReplannerRepairPrompt(response, parsed.reason)}`,
-        plannerProfile,
-        REPLANNER_JSON_SCHEMA,
-      );
-      repair = r.response;
-      repairAgent = r.agentUsed;
-    } catch (err) {
-      if (ctx.isStopping()) return;
-      const msg = err instanceof Error ? err.message : String(err);
-      ctx.wrappers.skipTodoQ(todoId, `replanner repair prompt failed: ${msg}`);
-      return;
-    }
-    if (ctx.isStopping()) return;
-    ctx.appendAgent(repairAgent, repair);
-    parsed = parseReplannerResponse(repair);
-    if (!parsed.ok) {
-      const auditor = ctx.getAuditor();
-      if (auditor && ctx.getActive()?.dedicatedAuditor && !ctx.isStopping()) {
-        ctx.appendSystem(
-          `Replanner repair failed (${parsed.reason}); routing to auditor for JSON salvage.`,
-        );
-        const salvage = await runParseSalvage(
-          auditor,
-          {
-            getStopping: ctx.isStopping,
-            appendSystem: ctx.appendSystem,
-            appendAgent: (a, t, o) => ctx.appendAgent(a, t, o),
-            promptPlannerSafely: ctx.promptPlannerSafely,
-            getActive: ctx.getActive,
-            jsonSchema: REPLANNER_JSON_SCHEMA,
-          },
-          {
-            kind: "replanner",
-            parseError: parsed.reason,
-            rawOutput: repair,
-            attempt: todo.replanCount + 1,
-          },
-        );
-        if (salvage) {
-          parsed = parseReplannerResponse(salvage.json);
-          if (parsed.ok) {
-            ctx.appendSystem(`Replanner auditor salvage succeeded for ${todoId}.`);
-          }
-        }
-      }
-    }
-    if (!parsed.ok) {
-      ctx.wrappers.skipTodoQ(
-        todoId,
-        `replanner produced invalid JSON after repair: ${parsed.reason}`,
-      );
+    if (convention.action === "repath" || convention.action === "register-existing") {
+      parsed = {
+        ...parsed,
+        description: convention.description,
+        expectedFiles: convention.expectedFiles,
+      };
+      ctx.appendSystem(`Replanner panel convention for ${todoId}: ${convention.note}`);
+    } else if (convention.action === "skip") {
+      ctx.wrappers.skipTodoQ(todoId, `replanner panel dedup: ${convention.reason}`);
+      ctx.appendSystem(`Replanner skipped todo ${todoId} (panel dedup): ${convention.reason}`);
       return;
     }
   }
 
   if (parsed.action === "skip") {
+    const unmet =
+      ctx.getContract?.()?.criteria.filter((c) => c.status === "unmet").length ?? 0;
+    const grounding = evaluateReplannerSkip({
+      reason: parsed.reason,
+      expectedFiles: todo.expectedFiles,
+      fileContents: contents,
+      unmetCriteriaCount: unmet,
+    });
+    if (!grounding.allow) {
+      ctx.appendSystem(
+        `Replanner skip blocked for ${todoId} (control grounding): ${grounding.blockReason}. Forcing revise.`,
+      );
+      try {
+        ctx.wrappers.resetTodoQ(todoId, {
+          description: `${todo.description} — revise: ${grounding.blockReason}`,
+          expectedFiles: todo.expectedFiles,
+          expectedAnchors: todo.expectedAnchors,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.wrappers.skipTodoQ(todoId, `replanner skip blocked; reset failed: ${msg}`);
+      }
+      return;
+    }
     ctx.wrappers.skipTodoQ(todoId, `replanner decided to skip: ${parsed.reason}`);
     ctx.appendSystem(`Replanner skipped todo ${todoId}: ${parsed.reason}`);
     ctx.recordInteraction("replanner_skip", todoId, planner.id, parsed.reason);

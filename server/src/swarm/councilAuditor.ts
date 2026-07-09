@@ -19,11 +19,14 @@ import {
 import type { CouncilProgressLedger } from "./councilProgressLedger.js";
 import { fallbackMayMarkMet } from "./councilLedgerReconcile.js";
 import { resolveCouncilToolProfile } from "./toolProfiles.js";
+import type { SwarmControlCenter } from "./control/SwarmControlCenter.js";
+import type { SwarmEvent } from "../types.js";
+import { buildCouncilToolCoachHook } from "./control/councilControlHooks.js";
 
 export interface CouncilAuditorContext {
   manager: {
     list: () => Agent[];
-    markStatus: (id: string, status: string) => void;
+    markStatus: (id: string, status: string, extra?: Record<string, unknown>) => void;
     recordPromptComplete: (id: string, data: any) => void;
   };
   appendSystem: (msg: string) => void;
@@ -31,6 +34,9 @@ export interface CouncilAuditorContext {
   /** User stop/drain — aborts an in-flight audit prompt. */
   abortSignal?: AbortSignal;
   ledger?: CouncilProgressLedger;
+  getSwarmControl?: () => SwarmControlCenter;
+  getCoachAgent?: () => Agent | undefined;
+  emit?: (e: SwarmEvent) => void;
 }
 
 async function promptAuditor(
@@ -40,6 +46,11 @@ async function promptAuditor(
   ctx: CouncilAuditorContext,
   signal: AbortSignal,
 ): Promise<string | null> {
+  ctx.manager.markStatus(lead.id, "thinking", {
+    activityKind: "council",
+    activityLabel: "council audit",
+    thinkingSince: Date.now(),
+  });
   const raw = await promptWithFailoverAuto(
     lead,
     prompt,
@@ -48,6 +59,16 @@ async function promptAuditor(
       agentName: resolveCouncilToolProfile(cfg),
       signal,
       webToolsConfig: cfg,
+      activity: { kind: "council", label: "council audit" },
+      onToolResultHook: buildCouncilToolCoachHook(lead, {
+        getSwarmControl: ctx.getSwarmControl,
+        getCoachAgent: ctx.getCoachAgent,
+        clonePath: cfg.localPath,
+        runId: cfg.runId,
+        appendSystem: ctx.appendSystem,
+        emit: ctx.emit,
+      }),
+      runId: cfg.runId,
     },
     cfg.providerFailover,
   );

@@ -16,6 +16,10 @@ import type { Todo } from "../swarm/blackboard/types.js";
 import { resolveModels, type ModelDefaults } from "@ollama-swarm/shared/modelConfig";
 import { config } from "../config.js";
 import { validateContinuousMode } from "./continuousMode.js";
+import {
+  PLANNING_FAST_PATH_EXCLUDED_PRESETS,
+  SUBSTANTIAL_DIRECTIVE_MIN_CHARS,
+} from "../swarm/blackboard/planningPolicy.js";
 import { tokenTracker } from "../services/ollamaProxy.js";
 import {
   validate,
@@ -47,7 +51,7 @@ import { normalizeWslPath } from "../services/pathNormalize.js";
 import { preflightDiskCheck } from "../swarm/preflightDiskCheck.js";
 import { projectRunCost, exceedsBudget } from "../swarm/preflightCostProjector.js";
 import { decideStopAction } from "../swarm/drainStopPolicy.js";
-import { SwarmRoleSchema, StartBody, SayBody, OpenBody } from "./schemas.js";
+import { SwarmRoleSchema, StartBody, SayBody, OpenBody, ReconfigBody } from "./schemas.js";
 import { buildPresetGuideString, buildOptionsTable } from "../swarm/presetGuide.js";
 import { extractJsonFromText, extractLabeledJson } from "../../../shared/src/extractJson.js";
 
@@ -585,6 +589,7 @@ export function swarmRouter(orch: Orchestrator): Router {
             ? parsed.data.roles
             : undefined,
         councilContract: parsed.data.councilContract,
+        councilSharedExplore: parsed.data.councilSharedExplore,
         proposition:
           parsed.data.proposition && parsed.data.proposition.length > 0
             ? parsed.data.proposition
@@ -668,6 +673,13 @@ export function swarmRouter(orch: Orchestrator): Router {
         providerFailover: parsed.data.providerFailover,
         brainModel: parsed.data.brainModel,
         autoGenerateGoals: parsed.data.autoGenerateGoals,
+        planningFastPath:
+          parsed.data.planningFastPath ??
+          (parsed.data.preset === "blackboard"
+            && !PLANNING_FAST_PATH_EXCLUDED_PRESETS.has(parsed.data.preset)
+            && (parsed.data.userDirective?.trim().length ?? 0) >= SUBSTANTIAL_DIRECTIVE_MIN_CHARS),
+        skipContractDerivation: parsed.data.skipContractDerivation,
+        planningWallClockCapMs: parsed.data.planningWallClockCapMs,
         autoStretchReflection: parsed.data.autoStretchReflection,
         verifier: parsed.data.verifier,
         useWorkerPipeline: parsed.data.useWorkerPipeline,
@@ -791,6 +803,26 @@ export function swarmRouter(orch: Orchestrator): Router {
     // Broadcast happens inside orch.addAmendment via opts.emit so
     // all WS clients see the directive_amended event in realtime.
     res.json({ ok: true, amendment: stored });
+  });
+
+  // Mid-run limit extension (rounds, wall-clock cap, token budget).
+  r.post("/reconfig", async (req: Request, res: Response) => {
+    const parsed = ReconfigBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.flatten() });
+      return;
+    }
+    const { runId, ...patch } = parsed.data;
+    const result = orch.reconfigRun(runId, patch);
+    if (result === null) {
+      res.status(404).json({ error: "No active run with that runId" });
+      return;
+    }
+    if (!result.ok) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.json({ ok: true, message: result.message, changes: result.changes });
   });
 
   // Task #167: soft-stop. Workers finish currently-claimed todos
@@ -1682,11 +1714,21 @@ Focus on helping the user understand the current state. Format replies in Markdo
       const { provider, modelId } = pickProvider(modelStr);
 
       // For structured mode, instruct LLM to output parseable sections
+      const duringRun = !!runContext?.runId;
       if (wantsStructured) {
-        systemPrompt += `\n\nSTRUCTURED OUTPUT MODE: After your normal reply, also output exactly:
+        if (duringRun) {
+          systemPrompt += `\n\nSTRUCTURED OUTPUT MODE (active run): After your normal reply, also output when relevant:
+RECONFIG: { "extendWallClockCapMin": 15 } OR { "extendRounds": 2 } OR { "extendTokenBudget": 500000 }
+OR referee (absolute): { "thinkGuardRefereeEnabled": true, "thinkGuardRefereeMaxCallsPerRun": 8, "thinkGuardRefereeMinThinkChars": 30000, "thinkGuardRefereeThinkTailMinChars": 4000, "thinkGuardRefereeThinkTailMaxChars": 12000, "thinkGuardRefereeMaxOutputTokens": 512 }
+Run limits use extend-only fields — never lower rounds/cap/budget. Referee fields are absolute setters (you may raise OR lower within server limits).
+When agents show long reasoning / think loops, proactively suggest enabling referee or increasing max calls. Omit RECONFIG if not needed.
+You may also output: amend: one-line directive addendum (plain text, not JSON).`;
+        } else {
+          systemPrompt += `\n\nSTRUCTURED OUTPUT MODE: After your normal reply, also output exactly:
 RECOMMENDATION: { "preset": "...", "confidence": 0.8, "rationale": "..." }
 CONFIG: { the json config }
 Use the tables and recommender data.`;
+        }
       }
 
       const chatMessages = [
@@ -1719,9 +1761,11 @@ Use the tables and recommender data.`;
         // This is significantly better than naive regex (handles fences, strings, first-balanced, etc.).
         const rec = extractLabeledJson(text, 'RECOMMENDATION');
         const cfg = extractLabeledJson(text, 'CONFIG');
+        const reconfig = extractLabeledJson(text, 'RECONFIG');
         structuredData = {
           recommendation: rec,
           config: cfg,
+          reconfig,
         };
       }
 

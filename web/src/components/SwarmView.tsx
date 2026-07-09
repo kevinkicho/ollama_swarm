@@ -29,6 +29,8 @@ import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
 import { resolveBrainAgentId } from "@ollama-swarm/shared/brainAlias";
 import { applyStatusSnapshotToStore } from "../state/swarmStoreHydrate";
 import { stopControlsDisabled } from "../lib/stopControls";
+import { drainIneligibleReason, isDrainEligible } from "@ollama-swarm/shared/drainEligibility";
+import { planningSubphaseLabel } from "@ollama-swarm/shared/planningSubphase";
 
 
 type Tab =
@@ -49,6 +51,7 @@ type Tab =
 export const SwarmView = memo(function SwarmView() {
   const agents = useSwarm((s) => s.agents);
   const phase = useSwarm((s) => s.phase);
+  const planningSubphase = useSwarm((s) => s.planningSubphase);
   const setError = useSwarm((s) => s.setError);
   const [sayText, setSayText] = useState("");
   // 2026-05-02 (chat lever #2): tagged intent on chat submit. Default
@@ -334,6 +337,34 @@ export const SwarmView = memo(function SwarmView() {
   // isTerminal logic accounts for composite runs with sub phases.
   const canStop = !isTerminal && phase !== "stopping";
   const stopDisabled = stopControlsDisabled(actionRunId, viewRunId, canStop);
+  const todos = useSwarm((s) => s.todos);
+  const claimedCount = useMemo(
+    () => Object.values(todos).filter((t) => t.status === "claimed").length,
+    [todos],
+  );
+  const pendingCommitCount = useMemo(
+    () => Object.values(todos).filter((t) => t.status === "pending-commit").length,
+    [todos],
+  );
+  const workerThinking = useMemo(
+    () => agentList.some((a) => a.status === "thinking" || a.status === "retrying"),
+    [agentList],
+  );
+  const drainEligible = isDrainEligible({
+    phase,
+    claimed: claimedCount,
+    pendingCommit: pendingCommitCount,
+    workerThinking,
+  });
+  const drainDisabled = stopDisabled || !drainEligible;
+  const drainIneligibleTitle = drainEligible
+    ? "Soft stop: workers finish their current claim, then swarm exits. Up to 3 min. Preserves in-flight commits."
+    : drainIneligibleReason({
+        phase,
+        claimed: claimedCount,
+        pendingCommit: pendingCommitCount,
+        workerThinking,
+      });
 
   // Per-preset role labels. Each preset has its own spawn contract:
   //   - blackboard: agent-1=planner, mid=workers, N+1=auditor (Unit 58)
@@ -432,6 +463,11 @@ export const SwarmView = memo(function SwarmView() {
           Draining — finishing in-flight work, then stopping. Hung prompts abort after ~90s; use Stop to escalate immediately.
         </div>
       ) : null}
+      {(phase === "planning" || phase === "seeding") && planningSubphase ? (
+        <div className="shrink-0 px-3 py-1.5 bg-sky-950/40 border-b border-sky-700/30 text-xs text-sky-200">
+          Planning — {planningSubphaseLabel(planningSubphase)}. Use Stop to exit immediately (Drain is not available until workers are executing).
+        </div>
+      ) : null}
       <IdentityStrip />
       <div className="flex-1 flex min-h-0">
       <aside className="w-[280px] shrink-0 border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800">
@@ -456,9 +492,9 @@ export const SwarmView = memo(function SwarmView() {
                   structure has nothing analogous to drain). */}
               <button
                 onClick={onDrain}
-                disabled={stopDisabled}
+                disabled={drainDisabled}
                 className="text-xs px-2 py-1 rounded bg-amber-700 hover:bg-amber-600 text-amber-100 font-medium transition-colors disabled:bg-ink-600 disabled:text-ink-300 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-ink-800"
-                title="Soft stop: workers finish their current claim, then swarm exits. Up to 3 min. Preserves in-flight commits. (Discussion presets: same as Stop — no in-flight work to preserve.)"
+                title={drainIneligibleTitle}
               >
                 Drain & Stop
               </button>

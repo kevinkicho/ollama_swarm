@@ -97,6 +97,15 @@ export interface PromptWithRetryOptions {
   mcpServers?: string;
   webToolsConfig?: { webTools?: boolean; plannerTools?: boolean };
   onTool?: (info: { tool: string; ok: boolean; preview: string }) => void;
+  onToolResultHook?: import("../../tools/ToolDispatcher.js").ToolResultHook;
+  runId?: string;
+  activity?: { kind?: string; label?: string; activityId?: string; mode?: "explore" | "emit" };
+  promptWallClockMs?: number;
+  maxToolTurns?: number;
+  refereeOn?: boolean;
+  minThinkCharsForReferee?: number;
+  thinkGuardHandler?: import("../blackboard/thinkGuardHandler.js").ThinkGuardHandler;
+  toolLoopNudge?: { atTurn: number; message: string };
 }
 
 export interface RetryInfo {

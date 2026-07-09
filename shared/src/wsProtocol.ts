@@ -238,6 +238,25 @@ export const SwarmEventSchema = z.discriminatedUnion("type", [
     text: z.string(),
   }),
   z.object({
+    type: z.literal("run_reconfigured"),
+    runId: z.string(),
+    ts: z.number(),
+    message: z.string(),
+    changes: z.object({
+      rounds: z.object({ from: z.number().optional(), to: z.number() }).optional(),
+      wallClockCapMs: z.object({ from: z.number().optional(), to: z.number() }).optional(),
+      tokenBudget: z.object({ from: z.number().optional(), to: z.number() }).optional(),
+      thinkGuardReferee: z.object({
+        thinkGuardRefereeEnabled: z.object({ from: z.boolean().optional(), to: z.boolean() }).optional(),
+        thinkGuardRefereeMaxCallsPerRun: z.object({ from: z.number().optional(), to: z.number() }).optional(),
+        thinkGuardRefereeMinThinkChars: z.object({ from: z.number().optional(), to: z.number() }).optional(),
+        thinkGuardRefereeThinkTailMinChars: z.object({ from: z.number().optional(), to: z.number() }).optional(),
+        thinkGuardRefereeThinkTailMaxChars: z.object({ from: z.number().optional(), to: z.number() }).optional(),
+        thinkGuardRefereeMaxOutputTokens: z.object({ from: z.number().optional(), to: z.number() }).optional(),
+      }).optional(),
+    }),
+  }),
+  z.object({
     type: z.literal("conformance_sample"),
     runId: z.string(),
     ts: z.number(),
@@ -303,6 +322,17 @@ export const SwarmEventSchema = z.discriminatedUnion("type", [
     toModel: z.string(),
     reason: z.string(),
     originalError: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("swarm_control_advice"),
+    ts: z.number(),
+    kind: z.enum(["stall_gate", "tool_coach"]),
+    action: z.enum(["backoff", "retry", "stop"]).optional(),
+    source: z.enum(["rule", "arbitrator"]).optional(),
+    rationale: z.string(),
+    plannerHint: z.string().optional(),
+    agentId: z.string().optional(),
+    tool: z.string().optional(),
   }),
 ]);
 

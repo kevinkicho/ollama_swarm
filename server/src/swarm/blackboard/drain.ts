@@ -4,13 +4,30 @@
 import {
   DRAIN_DEADLINE_MS,
   DRAIN_STUCK_PROMPT_MS,
+  DRAIN_STUCK_PROMPT_NO_CLAIMS_MS,
   DRAIN_WATCHER_INTERVAL_MS,
 } from "./BlackboardRunnerConstants.js";
 import { isStopping as lifecycleIsStopping, isDraining as lifecycleIsDraining } from "./lifecycleState.js";
 import type { LifecycleContext } from "./lifecycleRunner.js";
+import { drainIneligibleReason, isDrainEligible } from "./drainEligibility.js";
 
 export async function drain(ctx: LifecycleContext): Promise<void> {
   if (lifecycleIsStopping(ctx.getLifecycleState()) || lifecycleIsDraining(ctx.getLifecycleState())) return;
+
+  const counts = ctx.boardCounts();
+  const qCounts = ctx.getTodoQueueCounts();
+  const eligibility = ctx.getDrainEligibilityInput({
+    claimed: counts.claimed,
+    pendingCommit: qCounts.pendingCommit,
+  });
+  if (!isDrainEligible(eligibility)) {
+    ctx.appendSystem(
+      `Drain not applicable (${drainIneligibleReason(eligibility)}). Stopping immediately.`,
+    );
+    await stop(ctx);
+    return;
+  }
+
   ctx.setLifecycleState("draining");
   ctx.setDrainStartedAt(Date.now());
   // Task #168: marker for the post-run gate — drained runs ARE
@@ -21,7 +38,7 @@ export async function drain(ctx: LifecycleContext): Promise<void> {
   // V2 Step 3b: feed drain event to the parallel reducer.
   ctx.v2ObserverApply({ type: "drain-requested", ts: ctx.getDrainStartedAt()! });
   ctx.setPhase("draining");
-  const claimed = ctx.boardCounts().claimed;
+  const claimed = counts.claimed;
   ctx.appendSystem(
     `Drain & Stop requested. Workers will finish their current claim (${claimed} in-flight); no new claims. ` +
       `Hung prompts abort after ${DRAIN_STUCK_PROMPT_MS / 60_000} min; full backstop ${DRAIN_DEADLINE_MS / 60_000} min. ` +
@@ -53,10 +70,15 @@ export async function checkDrainComplete(ctx: LifecycleContext): Promise<void> {
     return;
   }
   const counts = ctx.boardCounts();
+  const qCounts = ctx.getTodoQueueCounts();
   const elapsed = Date.now() - (ctx.getDrainStartedAt() ?? Date.now());
   const overDeadline = elapsed >= DRAIN_DEADLINE_MS;
+  const stuckMs =
+    counts.claimed === 0 && qCounts.pendingCommit === 0
+      ? DRAIN_STUCK_PROMPT_NO_CLAIMS_MS
+      : DRAIN_STUCK_PROMPT_MS;
   const stuckPrompts =
-    elapsed >= DRAIN_STUCK_PROMPT_MS && ctx.getActiveAborts().size > 0;
+    elapsed >= stuckMs && ctx.getActiveAborts().size > 0;
   if (stuckPrompts) {
     ctx.appendSystem(
       `Drain: in-flight prompt(s) still running after ${Math.round(elapsed / 1000)}s with no completion — aborting to unblock exit.`,

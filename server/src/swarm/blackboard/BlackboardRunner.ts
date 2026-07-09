@@ -18,6 +18,7 @@ import {
   directiveWithAmendments as directiveWithAmendmentsExtracted,
   appendAgent as appendAgentExtracted,
   setPhase as setPhaseExtracted,
+  setPlanningSubphase as setPlanningSubphaseExtracted,
   emitAgentState as emitAgentStateExtracted,
   extractText as extractTextExtracted,
   type RunnerUtilContext,
@@ -83,6 +84,7 @@ import { StateSnapshotScheduler } from "./stateSnapshotScheduler.js";
 import { buildPerAgentStats as buildPerAgentStatsExtracted, type PerAgentCounters, writeRunSummary as writeRunSummaryExtracted } from "./runSummaryWriter.js";
 import { InteractionTracker } from "./brainOverseer/interactionTracker.js";
 import { ExceptionCollector } from "./brainOverseer/exceptionCollector.js";
+import { SwarmControlCenter } from "../control/SwarmControlCenter.js";
 import { buildSummary, computeLatencyStats, type PerAgentStat, type RunSummary } from "./summary.js";
 import { applyHunks } from "./applyHunks.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
@@ -294,10 +296,16 @@ export class BlackboardRunner implements SwarmRunner {
   };
   private replanPending = new Set<string>();
   private replanRunning = false;
+  private planningStartedAt?: number;
+  private planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
+  private explorationCache: import("@ollama-swarm/shared/explorationCache").ExplorationCacheEntry[] = [];
+  private repoFilesCache: string[] = [];
+  private contractDerivationFailure?: string;
   private replanTickTimer?: NodeJS.Timeout;
   // Plan 4: brain system overseer — tracks interaction chains and exceptions
   private interactionTracker = new InteractionTracker();
   private exceptionCollector: ExceptionCollector | null = null;
+  private swarmControl = new SwarmControlCenter();
   // Phase 7: hard-cap state. runStartedAt scopes wall-clock cap to worker loop.
   private runStartedAt?: number;
   // #124: lifetime token total at run-start for per-run token accounting.
@@ -325,6 +333,18 @@ export class BlackboardRunner implements SwarmRunner {
   // W17/R13: heap-pressure pause flag.
   private memoryPaused = false;
   private consecutiveStuckCycles = 0;
+  /** Last planner/auditor transport stall — tier loop must not count quota hits as stuck. */
+  private lastProviderStallReason?: string;
+
+  noteProviderStall(msg: string): void {
+    this.lastProviderStallReason = msg;
+  }
+
+  consumeProviderStall(): string | undefined {
+    const msg = this.lastProviderStallReason;
+    this.lastProviderStallReason = undefined;
+    return msg;
+  }
   // #167: drain/soft-stop state (timing metadata only; primary state in lifecycleState).
   private drainStartedAt?: number;
   private drainWatcherTimer?: NodeJS.Timeout;
@@ -480,6 +500,9 @@ export class BlackboardRunner implements SwarmRunner {
   status(): SwarmStatus {
     return statusExtracted({
       phase: this.phase,
+      planningSubphase: this.planningSubphase,
+      getDrainEligibilityInput: (partial) => this.getDrainEligibilityInput(partial),
+      getTodoQueueCounts: () => this.todoQueue.counts(),
       round: this.round,
       active: this.active,
       transcript: this.transcript,
@@ -696,6 +719,10 @@ export class BlackboardRunner implements SwarmRunner {
       boardCounts: { committed: counts.committed, skipped: counts.skipped, stale: counts.stale, total: counts.total },
       gitStatus,
       errorTracker: this.errorTracker,
+      controlAdvice: (() => {
+        const h = this.swarmControl.getAdviceHistory();
+        return h.length > 0 ? [...h] : undefined;
+      })(),
       v2State: {
         phase: this.v2Observer.getState().phase,
         enteredAt: this.v2Observer.getState().enteredAt,
@@ -775,6 +802,17 @@ export class BlackboardRunner implements SwarmRunner {
 
   // Plan 4: initialize brain overseer components for this run.
   // Phase 10: brain enablement is solely via enableBrainAnalysis flag.
+  initRunControl(runId: string): void {
+    this.swarmControl.reset();
+    const clonePath = this.active?.localPath;
+    if (clonePath) void this.swarmControl.loadPriorPatterns(clonePath);
+    void runId;
+  }
+
+  getSwarmControl(): SwarmControlCenter {
+    return this.swarmControl;
+  }
+
   initBrainOverseer(runId: string): void {
     const cfg = this.active as any;
     if (cfg?.enableBrainAnalysis === false) return;
@@ -823,9 +861,64 @@ export class BlackboardRunner implements SwarmRunner {
 
   private stopCapWatchdog(): void { stopCapWatchdogExtracted(this.capContext()); }
 
-  private async promptPlannerSafely(primaryAgent: Agent, promptText: string, agentName: import("../../tools/ToolDispatcher.js").ProfileName = "swarm", ollamaFormat?: "json" | Record<string, unknown>): Promise<{ response: string; agentUsed: Agent }> { return promptPlannerSafelyExtracted(this.promptContext(), primaryAgent, promptText, agentName, ollamaFormat); }
+  private async promptPlannerSafely(
+    primaryAgent: Agent,
+    promptText: string,
+    agentName: import("../../tools/ToolDispatcher.js").ProfileName = "swarm",
+    ollamaFormat?: "json" | Record<string, unknown>,
+    activity?: {
+      kind?: string;
+      label?: string;
+      maxToolTurns?: number;
+      mode?: "explore" | "emit";
+      promptWallClockMs?: number;
+    },
+  ): Promise<{ response: string; agentUsed: Agent }> {
+    return promptPlannerSafelyExtracted(this.promptContext(), primaryAgent, promptText, agentName, ollamaFormat, activity);
+  }
 
-  private async promptAgent(agent: Agent, prompt: string, agentName: import("../../tools/ToolDispatcher.js").ProfileName = "swarm", formatExpect: "json" | "free" = "json", ollamaFormat?: "json" | Record<string, unknown>, activity?: { kind?: string; label?: string }): Promise<string> { return promptAgentExtracted(this.promptContext(), agent, prompt, agentName, formatExpect, ollamaFormat, activity); }
+  getExplorationCache(): import("@ollama-swarm/shared/explorationCache").ExplorationCacheEntry[] {
+    return this.explorationCache;
+  }
+
+  setExplorationCache(
+    cache: import("@ollama-swarm/shared/explorationCache").ExplorationCacheEntry[],
+  ): void {
+    this.explorationCache = cache;
+  }
+
+  clearExplorationCache(): void {
+    this.explorationCache = [];
+  }
+
+  syncExplorationCacheFromSeed(seed: PlannerSeed): void {
+    if (seed.explorationCache?.length) {
+      this.explorationCache = seed.explorationCache;
+    }
+    if (seed.repoFiles?.length) {
+      this.repoFilesCache = [...seed.repoFiles];
+    }
+  }
+
+  getRepoFiles(): readonly string[] {
+    return this.repoFilesCache;
+  }
+
+  getDrainEligibilityInput(partial: { claimed: number; pendingCommit: number }): import("./drainEligibility.js").DrainEligibilityInput {
+    const workerThinking = this.opts.manager.toStates().some(
+      (a) => a.index > 1 && (a.status === "thinking" || a.status === "retrying"),
+    );
+    return {
+      phase: this.phase,
+      claimed: partial.claimed,
+      pendingCommit: partial.pendingCommit,
+      replanPending: this.replanPending.size,
+      replanRunning: this.replanRunning,
+      workerThinking,
+    };
+  }
+
+  private async promptAgent(agent: Agent, prompt: string, agentName: import("../../tools/ToolDispatcher.js").ProfileName = "swarm", formatExpect: "json" | "free" = "json", ollamaFormat?: "json" | Record<string, unknown>, activity?: { kind?: string; label?: string; maxToolTurns?: number; mode?: "explore" | "emit"; promptWallClockMs?: number }): Promise<string> { return promptAgentExtracted(this.promptContext(), agent, prompt, agentName, formatExpect, ollamaFormat, activity); }
 
   /** Brain fallback prompt function. Uses the passed agent (the caller's
    *  agent) for model, tools, and session context. Falls back to a
@@ -866,6 +959,10 @@ export class BlackboardRunner implements SwarmRunner {
     this.appendSystem(text, summary);
   }
 
+  reconfig(_changes: import("../runReconfig.js").RunReconfigChanges): void {
+    // Cap checks read this.active live — cfg mutation is sufficient.
+  }
+
   private recordError(err: unknown, opts: { causeHint?: ErrorCategory; statusCode?: number } = {}): ClassifiedError {
     return recordErrorExtracted({ errorTracker: this.errorTracker, maxTrackedErrors: BlackboardRunner.MAX_TRACKED_ERRORS }, err, opts);
   }
@@ -879,7 +976,20 @@ export class BlackboardRunner implements SwarmRunner {
     this.terminationReason = ctx.terminationReason;
   }
 
-  private setPhase(phase: SwarmPhase): void { setPhaseExtracted(this.utilCtx(), phase); this.phase = phase; }
+  private setPhase(phase: SwarmPhase): void {
+    const ctx = this.utilCtx();
+    setPhaseExtracted(ctx, phase);
+    this.phase = phase;
+    this.planningSubphase = ctx.planningSubphase;
+  }
+
+  private setPlanningSubphase(
+    subphase: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase | undefined,
+  ): void {
+    const ctx = this.utilCtx();
+    setPlanningSubphaseExtracted(ctx, subphase);
+    this.planningSubphase = subphase;
+  }
 
   private emitAgentState(s: AgentState): void { emitAgentStateExtracted(this.opts.manager, s); }
 

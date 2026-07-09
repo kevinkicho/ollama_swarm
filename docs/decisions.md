@@ -4,36 +4,32 @@ This document records major architectural and product decisions with their ratio
 
 ## 2026-07-09: No stream guards or loop-detection aborts on agent prompts
 
-**Decision:** Do **not** cap streaming length, abort on intra-stream “loop” heuristics,
-or retry with stream-abort feedback blocks on planner/worker/council prompts.
+**Decision:** Do **not** use the **old** stream guard stack (100K pre-tool caps,
+intra-stream loop modules, stream-abort retry addenda, transport retry on guard abort).
 
 **What we removed (do not bring back without explicit reversal):**
-- `STREAM_GUARD_*` character caps in `promptWithRetry` and `chatOnceWithStreaming`
-- `intraStreamLoop: true` on blackboard, council, and discussion prompt paths
+- `STREAM_GUARD_*` **pre-tool** character caps and `intraStreamLoop` modules
 - `streamAbortRetry` addenda prepended on guard abort
 - Retryability of `intra-stream loop` / `runaway stream` errors in `retry.ts`
-- Turn-level `SWARM_LOOP_DETECTION` / `maybeEmitLoopWarning` (Jaccard on recent
-  turns, halt after 3 consecutive detections)
+- Turn-level `SWARM_LOOP_DETECTION` / `maybeEmitLoopWarning`
 - `semanticLoopDetector.ts` and `intraStreamLoopDetector.ts` modules
 
-**Rationale:**
-- Guards aborted **after** large token spend (80–100K+ reasoning), then **`promptWithRetry`
-  restarted the full explore prompt** — agents re-read the repo and re-ran analysis.
-- Nested retries (3× transport × 8× planner recovery) produced **2×–4× billed work**
-  without reliably fixing council contract explore ramble.
-- Long exploratory reasoning often failed stream caps while **not** being true
-  byte-identical loops; false positives added more rework.
-- User-visible outcome: **massive inefficiency, slowness, and bloated AI cost** — worse
-  than letting the user stop a run manually.
+**Narrow exception retained:** `shared/src/streamThinkGuard.ts` — think-**only**
+hard caps (160k chars / 120s / repetitive tail) via `composePromptGuardSignals`.
+Transport retry on guard abort is **blocked** (`isPromptGuardAbort`). No full
+explore prompt replay.
 
-**If runaway output is a problem:** tighten **prompts** (tool-call budgets, “emit JSON
-after 3 reads”), reduce `agentCount`, or user **Stop** — **not** server-side stream
-guards that discard progress and trigger full retries.
+**Extension in progress:** Think-stream **referee checkpoint** (soft tier + agent
+triage). Design: `docs/design/think-guard-referee-checkpoint.md`. Flag
+`THINK_GUARD_REFEREE_ENABLED` default **off**; user/Brain can tune budgets mid-run.
+
+**Rationale:** Old guards aborted after large spend then restarted the full explore
+prompt — 2×–4× billed work. Referee extension preserves anti-retry + emit-only salvage.
 
 **Detail:** `docs/postmortems/stream-guards-removed.md`
 
-**Status:** Shipped (removed). Detector modules deleted; no guard or loop-abort
-wiring remains in any swarm preset.
+**Status:** Old stack removed. Narrow `streamThinkGuard` retained. Referee extension
+landed incrementally (PR 0–1 + budget UI); not default-on.
 
 ---
 

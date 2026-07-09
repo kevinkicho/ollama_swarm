@@ -289,6 +289,10 @@ const Schema = z.object({
   PROVIDER_RATE_LIMIT_OPENCODE: z.coerce.number().positive().default(5),
   PROVIDER_CIRCUIT_BREAKER_THRESHOLD: z.coerce.number().int().min(1).default(3),
   PROVIDER_CIRCUIT_BREAKER_COOLDOWN_MS: z.coerce.number().int().min(1000).default(60_000),
+  THINK_GUARD_REFEREE_ENABLED: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("true")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
 });
 
 const parsed = Schema.parse(process.env);

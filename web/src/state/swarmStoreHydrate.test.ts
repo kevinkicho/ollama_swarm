@@ -1,7 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createSwarmStore } from "./store.js";
-import { applyStatusSnapshotToStore } from "./swarmStoreHydrate.js";
+import {
+  applyStatusSnapshotToStore,
+  shouldDropTerminalGuardedEvent,
+} from "./swarmStoreHydrate.js";
 import type { SwarmStatusSnapshot, TranscriptEntry } from "../types.js";
 
 describe("applyStatusSnapshotToStore", () => {
@@ -138,6 +141,59 @@ describe("applyStatusSnapshotToStore", () => {
     assert.equal(store.getState().phase, "executing");
     assert.equal(store.getState().round, 2);
     assert.equal(store.getState().transcript.length, 2); // entry + RUN-START divider
+  });
+});
+
+describe("shouldDropTerminalGuardedEvent", () => {
+  const baseCtx = {
+    statusHydrateOk: true,
+    statusHasCompletedSummary: true,
+    phase: "planning" as const,
+    hasCompletedSummary: true,
+  };
+
+  it("never drops lifecycle events during active phases", () => {
+    assert.equal(
+      shouldDropTerminalGuardedEvent(
+        { type: "agent_state", agent: { id: "agent-2", index: 2, status: "thinking" } },
+        baseCtx,
+      ),
+      false,
+    );
+    assert.equal(
+      shouldDropTerminalGuardedEvent(
+        { type: "swarm_state", phase: "executing", round: 1 },
+        { ...baseCtx, phase: "executing" },
+      ),
+      false,
+    );
+  });
+
+  it("drops agent_state on completed historical views", () => {
+    assert.equal(
+      shouldDropTerminalGuardedEvent(
+        { type: "agent_state", agent: { id: "agent-1", index: 1, status: "thinking" } },
+        { ...baseCtx, phase: "completed", hasCompletedSummary: true },
+      ),
+      true,
+    );
+  });
+});
+
+describe("setPhase terminal", () => {
+  it("clears thinking agents when run reaches completed/stopped/failed", () => {
+    const store = createSwarmStore();
+    store.getState().upsertAgent({
+      id: "agent-1",
+      index: 1,
+      status: "thinking",
+      thinkingSince: Date.now() - 60_000,
+      model: "test",
+    });
+    store.getState().setPhase("completed", 0);
+    const a = store.getState().agents["agent-1"];
+    assert.equal(a?.status, "ready");
+    assert.equal(a?.thinkingSince, undefined);
   });
 });
 

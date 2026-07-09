@@ -44,6 +44,10 @@ export const FINAL_GIT_STATUS_MAX = 4_000;
 // usually the most useful for review).
 export const TRANSCRIPT_MAX_ENTRIES = 1_000;
 
+/** Minimum quota-classified errors in the terminal window to label cap:quota. */
+export const TERMINAL_QUOTA_MIN_ERRORS = 5;
+const TERMINAL_QUOTA_TRANSCRIPT_TAIL = 30;
+
 export type StopReason =
   | "completed"
   | "user"
@@ -249,6 +253,8 @@ export interface RunSummary {
   // Empty for discussion presets (no code changes). Optional for
   // back-compat with summaries written before this lands.
   deliverables?: Array<{ path: string; status: "created" | "modified" }>;
+  /** Swarm control center advice emitted during the run (history hydrate). */
+  controlAdvice?: import("@ollama-swarm/shared/swarmControl/controlAdvice").SwarmControlAdviceRecord[];
   /** User directive from setup / start payload. Enables Resume to replay intent. */
   userDirective?: string;
   plannerTools?: boolean;
@@ -335,6 +341,49 @@ export interface BuildSummaryInput {
    *  git porcelain output at summary time. When undefined, deliverables
    *  are extracted from `finalGitStatus` porcelain automatically. */
   deliverables?: Array<{ path: string; status: "created" | "modified" }>;
+  /** Swarm control center advice emitted during the run (history hydrate). */
+  controlAdvice?: import("@ollama-swarm/shared/swarmControl/controlAdvice").SwarmControlAdviceRecord[];
+}
+
+/**
+ * Detect quota exhaustion in the terminal window: many 429/quota errors with
+ * no successful agent turns. Surfaces as cap:quota instead of no-progress.
+ */
+export function detectTerminalQuotaExhaustion(
+  input: Pick<BuildSummaryInput, "errors" | "agents" | "transcript">,
+): string | null {
+  const errors = input.errors ?? [];
+  const quotaCount = errors.filter((e) => e.category === "quota").length;
+  const successfulTurns = input.agents.reduce(
+    (sum, a) => sum + (a.successfulAttempts ?? 0),
+    0,
+  );
+
+  if (quotaCount >= TERMINAL_QUOTA_MIN_ERRORS && successfulTurns === 0) {
+    return `terminal window: ${quotaCount} quota errors, zero successful agent turns`;
+  }
+
+  const tail = (input.transcript ?? [])
+    .filter((e) => e.role === "system")
+    .slice(-TERMINAL_QUOTA_TRANSCRIPT_TAIL);
+  let streak = 0;
+  let maxStreak = 0;
+  for (const e of tail) {
+    const text = e.text ?? "";
+    if (
+      /429|session usage limit|quota wall|rate.?limit|transport error.*retry/i.test(text)
+    ) {
+      streak++;
+      maxStreak = Math.max(maxStreak, streak);
+    } else if (!/\[control\]/i.test(text)) {
+      streak = 0;
+    }
+  }
+  if (maxStreak >= TERMINAL_QUOTA_MIN_ERRORS && successfulTurns <= 1) {
+    return `terminal window: ${maxStreak} consecutive quota/transport failures, ${successfulTurns} successful turns`;
+  }
+
+  return null;
 }
 
 export function buildSummary(input: BuildSummaryInput): RunSummary {
@@ -418,6 +467,7 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     ...(input.config.userDirective ? { userDirective: input.config.userDirective } : {}),
     ...(input.config.plannerTools !== undefined ? { plannerTools: input.config.plannerTools } : {}),
     ...(input.config.webTools !== undefined ? { webTools: input.config.webTools } : {}),
+    ...(input.controlAdvice?.length ? { controlAdvice: input.controlAdvice.slice() } : {}),
   };
 }
 
@@ -613,6 +663,10 @@ function classifyStopReason(
     }
     return { stopReason: "user" };
   }
+  const quotaDetail = detectTerminalQuotaExhaustion(input);
+  if (quotaDetail) {
+    return { stopReason: "cap:quota", stopDetail: quotaDetail };
+  }
   // Zero-progress detector — see top-of-file priority list. Catches the
   // "planner returned 0 valid todos and the run gracefully wound down"
   // pattern that previously masqueraded as a successful completion.
@@ -640,7 +694,10 @@ function classifyStopReason(
       stopDetail: input.completionDetail,
     };
   }
-  if (hasUnmet && !allUnmet && input.completionDetail?.includes("no new work")) {
+  if (
+    hasUnmet
+    && input.completionDetail?.includes("no new work")
+  ) {
     return {
       stopReason: "no-progress",
       stopDetail: input.completionDetail,

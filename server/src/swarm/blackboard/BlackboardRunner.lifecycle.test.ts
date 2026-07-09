@@ -191,22 +191,31 @@ describe("BlackboardRunner — lifecycle state transitions", () => {
   });
 
   describe("drain()", () => {
-    it("sets lifecycleState to draining and wasDrained to true", async () => {
+    it("sets lifecycleState to draining when claims are in-flight", async () => {
       const { opts } = makeMockOpts();
       const runner = new BlackboardRunner(opts);
       (runner as any).phase = "executing";
       (runner as any).lifecycleState = "running";
       (runner as any).active = MINIMAL_CFG;
+      (runner as any).boardCounts = () => ({ open: 0, claimed: 1, committed: 0, stale: 0, skipped: 0 });
 
-      // Mock boardCounts to return 0 claimed (so drain completes immediately
-      // if checkDrainComplete fires)
+      await runner.drain();
+
+      assert.equal((runner as any)._wasDrained, true);
+      assert.equal((runner as any).lifecycleState, "draining");
+    });
+
+    it("escalates to stop immediately when drain is not eligible (planning)", async () => {
+      const { opts } = makeMockOpts();
+      const runner = new BlackboardRunner(opts);
+      (runner as any).phase = "planning";
+      (runner as any).lifecycleState = "running";
+      (runner as any).active = MINIMAL_CFG;
       (runner as any).boardCounts = () => ({ open: 0, claimed: 0, committed: 0, stale: 0, skipped: 0 });
 
       await runner.drain();
 
-      // wasDrained should be true after drain()
-      assert.equal((runner as any)._wasDrained, true);
-      assert.equal((runner as any).lifecycleState, "draining");
+      assert.equal((runner as any).lifecycleState, "stopping");
     });
 
     it("does not override stopping state", async () => {
@@ -236,6 +245,7 @@ describe("BlackboardRunner — lifecycle state transitions", () => {
       (runner as any).phase = "executing";
       (runner as any).lifecycleState = "running";
       (runner as any).active = MINIMAL_CFG;
+      (runner as any).boardCounts = () => ({ open: 0, claimed: 1, committed: 0, stale: 0, skipped: 0 });
 
       await runner.drain();
       assert.equal((runner as any)._wasDrained, true);

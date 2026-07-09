@@ -40,6 +40,18 @@ describe("council contract drafts use repo tools", () => {
     assert.match(tryBlock, /runCouncilContractDraftForAgent/);
   });
 
+  it("supports shared explore → emit-only council drafts", () => {
+    assert.match(CONTRACT_BUILDER, /runCouncilSharedExplore/);
+    assert.match(CONTRACT_BUILDER, /runCouncilContractEmitForAgent/);
+    assert.match(CONTRACT_BUILDER, /buildCouncilContractEmitUserPrompt/);
+    const tryBlock = CONTRACT_BUILDER.slice(
+      CONTRACT_BUILDER.indexOf("export async function tryCouncilContract"),
+      CONTRACT_BUILDER.indexOf("export async function tryResumeContract"),
+    );
+    assert.match(tryBlock, /councilSharedExplore/);
+    assert.match(tryBlock, /shared explore complete/);
+  });
+
   it("CouncilRunner adapter uses the shared explore→emit draft helper", () => {
     const deriveBlock = COUNCIL_ADAPTER.slice(
       COUNCIL_ADAPTER.indexOf("export async function runContractDerivation"),
@@ -47,5 +59,9 @@ describe("council contract drafts use repo tools", () => {
     );
     assert.doesNotMatch(deriveBlock, /"swarm",\s*"json"/);
     assert.match(deriveBlock, /runCouncilContractDraftForAgent/);
+    assert.match(deriveBlock, /councilSharedExplore/);
+    assert.match(deriveBlock, /runCouncilSharedExplore/);
+    assert.match(deriveBlock, /runCouncilContractEmitForAgent/);
+    assert.match(deriveBlock, /shared explore complete/);
   });
 });

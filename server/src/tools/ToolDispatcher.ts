@@ -23,6 +23,11 @@ import { exec, spawn, ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { resolveSafe } from "../swarm/blackboard/resolveSafe.js";
 import { checkBuildCommand } from "../swarm/blackboard/buildCommandAllowlist.js";
+import {
+  BASH_ERROR_BACKOFF_THRESHOLD,
+  getAgentBashErrors,
+  recordAgentBashResult,
+} from "./agentBashBackoff.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
@@ -590,6 +595,13 @@ async function webSearchTool(args: Record<string, unknown>): Promise<ToolResult>
 // Dispatcher.
 // ---------------------------------------------------------------------------
 
+export type ToolResultHook = (info: {
+  tool: string;
+  ok: boolean;
+  error?: string;
+  preview: string;
+}) => void;
+
 export class ToolDispatcher {
   private mcpClients: Map<string, { client: Client; transport: StdioClientTransport; proc?: ChildProcess }> = new Map();
   private mcpToolToClient: Map<string, string> = new Map(); // toolName -> clientKey
@@ -598,6 +610,8 @@ export class ToolDispatcher {
     private readonly profile: ProfileName,
     private readonly clonePath: string,
     mcpServers?: string,
+    private readonly agentId?: string,
+    private readonly onToolResult?: ToolResultHook,
   ) {
     if (
       mcpServers
@@ -682,58 +696,91 @@ export class ToolDispatcher {
     this.mcpToolToClient.clear();
   }
 
+  private notifyToolResult(tool: string, result: ToolResult): void {
+    if (!this.onToolResult) return;
+    this.onToolResult({
+      tool,
+      ok: result.ok,
+      error: result.ok ? undefined : result.error,
+      preview: result.ok ? (result.output ?? "").slice(0, 200) : (result.error ?? "").slice(0, 200),
+    });
+  }
+
   async dispatch(call: ToolCall): Promise<ToolResult> {
+    let result: ToolResult;
     const perm = PROFILES[this.profile][call.tool];
     if (perm !== "allow") {
       // Check if it's an MCP tool (namespaced or direct)
       const mcpKey = this.mcpToolToClient.get(call.tool) || this.mcpToolToClient.get(`${call.tool}`);
       if (mcpKey && this.mcpClients.has(mcpKey)) {
-        return this.callMcpTool(mcpKey, call.tool, call.args);
+        result = await this.callMcpTool(mcpKey, call.tool, call.args);
+        this.notifyToolResult(call.tool, result);
+        return result;
       }
-      return {
+      const denied: ToolResult = {
         ok: false,
         error: `tool "${call.tool}" denied by profile "${this.profile}"`,
       };
+      this.notifyToolResult(call.tool, denied);
+      return denied;
     }
     switch (call.tool) {
       case "read":
-        return readTool(this.clonePath, call.args, unrestrictedReadTools(this.profile));
+        result = await readTool(this.clonePath, call.args, unrestrictedReadTools(this.profile));
+        break;
       case "list":
-        return listTool(this.clonePath, call.args);
+        result = await listTool(this.clonePath, call.args);
+        break;
       case "glob":
-        return globTool(this.clonePath, call.args, unrestrictedReadTools(this.profile));
+        result = await globTool(this.clonePath, call.args, unrestrictedReadTools(this.profile));
+        break;
       case "grep":
-        return grepTool(this.clonePath, call.args, unrestrictedReadTools(this.profile));
-      case "bash":
-        return bashTool(this.clonePath, call.args);
+        result = await grepTool(this.clonePath, call.args, unrestrictedReadTools(this.profile));
+        break;
+      case "bash": {
+        const prior = getAgentBashErrors(this.agentId);
+        if (prior >= BASH_ERROR_BACKOFF_THRESHOLD) {
+          result = {
+            ok: false,
+            error:
+              `bash disabled after ${prior} consecutive failures — use read, grep, or glob instead`,
+          };
+          break;
+        }
+        result = await bashTool(this.clonePath, call.args);
+        recordAgentBashResult(this.agentId, result.ok);
+        break;
+      }
       case "propose_hunks":
-        // Phase 2 (writeMode: multi): agent proposes hunks during turn.
-        // The dispatcher doesn't apply them — just returns the envelope
-        // for the runner to collect and reconcile.
-        return {
+        result = {
           ok: true,
           output: JSON.stringify({
             note: "propose_hunks tool called — return hunks in your response",
             format: { hunks: "Hunk[]", skip: "string (optional)" },
           }),
         };
+        break;
       case "write":
       case "edit":
-        // No profile allows these today; if we ever change that, the
-        // PROFILES table above is the single source of truth.
-        return { ok: false, error: `${call.tool} dispatch not yet implemented` };
+        result = { ok: false, error: `${call.tool} dispatch not yet implemented` };
+        break;
       case "web_fetch":
-        return webFetchTool(call.args);
+        result = await webFetchTool(call.args);
+        break;
       case "web_search":
-        return webSearchTool(call.args);
-      default:
-        // Try as MCP tool (direct name)
+        result = await webSearchTool(call.args);
+        break;
+      default: {
         const mcpKey2 = this.mcpToolToClient.get(call.tool);
         if (mcpKey2 && this.mcpClients.has(mcpKey2)) {
-          return this.callMcpTool(mcpKey2, call.tool, call.args);
+          result = await this.callMcpTool(mcpKey2, call.tool, call.args);
+        } else {
+          result = { ok: false, error: `unknown tool ${call.tool}` };
         }
-        return { ok: false, error: `unknown tool ${call.tool}` };
+      }
     }
+    this.notifyToolResult(call.tool, result);
+    return result;
   }
 
   private async callMcpTool(clientKey: string, toolName: string, args: Record<string, unknown>): Promise<ToolResult> {

@@ -20,3 +20,8 @@ test("councilDecisions — contract-aware dedup guard", () => {
 test("councilDecisions — path grounding warns instead of drops", () => {
   assert.match(SRC, /\[path grounding\] Warned on/, "must log warnings not drops for suspicious paths");
 });
+
+test("councilDecisions — keeps runtime fix todos through dedup", () => {
+  assert.match(SRC, /isRuntimeFixTodo/, "must detect runtime repair todos");
+  assert.match(SRC, /Keeping runtime fix/, "must not skip runtime fixes when files exist");
+});

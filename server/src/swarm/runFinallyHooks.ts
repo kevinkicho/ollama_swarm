@@ -87,6 +87,12 @@ export interface CloseOutOpts {
  *      }
  */
 export async function runDiscussionCloseOut(opts: CloseOutOpts): Promise<void> {
+  // Abort in-flight provider HTTP/streaming before summary + killAll so a
+  // thrown worker error does not leave orphaned tool loops running.
+  if (opts.crashMessage) {
+    opts.manager.beginRunShutdown();
+  }
+
   // 1. Reflection (gated on natural completion + runId + hook provides agent).
   if (
     !opts.crashMessage &&

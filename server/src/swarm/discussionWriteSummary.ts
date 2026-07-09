@@ -74,6 +74,7 @@ export interface DiscussionWriteSummaryOpts {
   /** Whether the terse log line includes `, files=${n}`. Default true.
    *  MoA passes false. */
   includeFilesInLogLine?: boolean;
+  controlAdvice?: RunSummary["controlAdvice"];
 }
 
 /** The shared writeSummary body. Calling pattern in each runner:
@@ -127,6 +128,7 @@ export async function discussionWriteSummary(opts: DiscussionWriteSummaryOpts): 
     agents: opts.agents,
     transcript: opts.transcript,
     topology: opts.topology,
+    controlAdvice: opts.controlAdvice,
   };
   const summary = buildDiscussionSummary(summaryInput);
 

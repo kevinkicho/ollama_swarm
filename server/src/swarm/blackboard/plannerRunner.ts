@@ -28,7 +28,15 @@ import { emitAgentActivity } from "./promptRunner.js";
 import { detectTodoBatchFileOverlaps } from "./workerFileConflict.js";
 import { EMIT_ONLY_PROFILE_ID } from "@ollama-swarm/shared/toolProfiles";
 import { resolveToolProfile } from "../toolProfiles.js";
+import { resolveMaxToolTurnsForPlanningPhase } from "@ollama-swarm/shared/toolProfiles";
+import {
+  appendExplorationCache,
+  getExplorationExcerpt,
+  shouldSkipTodosExplore,
+} from "@ollama-swarm/shared/explorationCache";
+import { isSeedSufficientForDirectEmit } from "@ollama-swarm/shared/planningSeed";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
+import { applyPanelConventionToTodos } from "./plannerPanelGrounding.js";
 
 export interface PlannerContext {
   getContract: () => ExitContract | undefined;
@@ -44,7 +52,7 @@ export interface PlannerContext {
     promptText: string,
     agentName?: ProfileName,
     ollamaFormat?: "json" | Record<string, unknown>,
-    activity?: { kind?: string; label?: string },
+    activity?: { kind?: string; label?: string; maxToolTurns?: number },
   ) => Promise<{ response: string; agentUsed: Agent }>;
   wrappers: TodoQueueWrappers;
   findingsPost: (entry: { agentId: string; text: string; createdAt: number }) => void;
@@ -55,6 +63,8 @@ export interface PlannerContext {
   hypothesisGroupAbortsSet: (groupId: string, controller: AbortController) => void;
   buildSeed: (clonePath: string, cfg: RunConfig) => Promise<PlannerSeed>;
   boardCounts: () => { open: number; claimed: number; stale: number; committed: number; skipped: number; total: number };
+  noteProviderStall?: (msg: string) => void;
+  getSessionPlannerHint?: () => string | undefined;
 }
 
 export async function runPlanner(
@@ -78,7 +88,28 @@ export async function runPlanner(
   const plannerProfile = resolveToolProfile("planner", ctx.getActive());
   const exploreProfile = plannerProfile;
   const emitProfile = EMIT_ONLY_PROFILE_ID;
+  const exploreToolCap = resolveMaxToolTurnsForPlanningPhase(
+    "planner-todos-explore",
+    ctx.getActive(),
+  );
+  const cachedExplore =
+    shouldSkipTodosExplore(seed.explorationCache)
+      ? getExplorationExcerpt(seed.explorationCache, "contract-explore")
+        ?? getExplorationExcerpt(seed.explorationCache, "council-shared-explore")
+      : undefined;
+  const emitDirectFromSeed =
+    !cachedExplore && isSeedSufficientForDirectEmit(seed, ctx.getActive());
+  if (cachedExplore) {
+    ctx.appendSystem(
+      "Planner todos: reusing contract explore brief — skipping redundant repo tour.",
+    );
+  } else if (emitDirectFromSeed) {
+    ctx.appendSystem(
+      "Planner todos: seed-direct emit — rich grounding present, skipping explore turn.",
+    );
+  }
 
+  const explorePromptSeed = `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed, contractForPrompt, agent.model)}`;
   const recovery = await runPlannerEmitRecovery({
     kind: "planner-todos",
     agent,
@@ -88,6 +119,8 @@ export async function runPlanner(
     appendAgent: ctx.appendAgent,
     findingsPost: ctx.findingsPost,
     getActive: ctx.getActive,
+    clonePath: ctx.getActive()?.localPath,
+    promptExcerpt: explorePromptSeed.slice(0, 1500),
     emitActivity: (label, attempt, maxAttempts, mode) => {
       emitAgentActivity(agent, ctx.manager, ctx.emitAgentState, {
         kind: "planner-todos",
@@ -98,9 +131,16 @@ export async function runPlanner(
       });
     },
     promptPlannerSafely: (a, p, profile, schema, activity) =>
-      ctx.promptPlannerSafely(a, p, profile, schema, activity),
-    buildExplorePrompt: () =>
-      `${PLANNER_SYSTEM_PROMPT}\n\n${buildPlannerUserPrompt(seed, contractForPrompt, agent.model)}`,
+      ctx.promptPlannerSafely(a, p, profile, schema, {
+        ...activity,
+        maxToolTurns:
+          schema || profile === emitProfile
+            ? 0
+            : profile === exploreProfile
+              ? exploreToolCap
+              : undefined,
+      }),
+    buildExplorePrompt: () => explorePromptSeed,
     buildRepairPrompt: (prev, err, note) =>
       `${PLANNER_SYSTEM_PROMPT}\n\n${buildRepairPrompt(prev, err, note)}`,
     exploreProfile,
@@ -110,6 +150,15 @@ export async function runPlanner(
       const p = parsePlannerResponse(raw);
       if (p.ok) return { ok: true as const, value: p.todos, raw, dropped: p.dropped };
       return { ok: false as const, reason: p.reason, raw };
+    },
+    cachedExploreResponse: cachedExplore,
+    emitDirectFromSeed,
+    onExploreCaptured: (raw) => {
+      seed.explorationCache = appendExplorationCache(seed.explorationCache, {
+        phase: "planner-todos-explore",
+        excerpt: raw,
+        agentId: agent.id,
+      });
     },
   });
 
@@ -130,6 +179,9 @@ export async function runPlanner(
       },
     );
     if (retried) return;
+    if (ctx.noteProviderStall && /transport|HTTP 429|session usage limit/i.test(recovery.reason)) {
+      ctx.noteProviderStall(recovery.reason);
+    }
     ctx.appendSystem(`Planner still invalid after recovery (${recovery.reason}). No todos posted.`);
     return;
   }
@@ -288,6 +340,29 @@ export async function runPlanner(
   groundedTodos.length = 0;
   groundedTodos.push(...symbolGroundedTodos);
 
+  const panelGrounded = applyPanelConventionToTodos(groundedTodos, seed.repoFiles);
+  if (panelGrounded.notes.length > 0 || panelGrounded.skipped.length > 0) {
+    for (const n of panelGrounded.notes) {
+      ctx.findingsPost({
+        agentId: agent.id,
+        text: `Panel convention (${n.description.slice(0, 60)}…): ${n.note}`,
+        createdAt: Date.now(),
+      });
+    }
+    for (const s of panelGrounded.skipped) {
+      ctx.findingsPost({
+        agentId: agent.id,
+        text: `Panel todo dropped: ${s}`,
+        createdAt: Date.now(),
+      });
+    }
+    ctx.appendSystem(
+      `Panel convention: adjusted ${panelGrounded.notes.length} todo(s); dropped ${panelGrounded.skipped.length} redundant panel todo(s).`,
+    );
+  }
+  groundedTodos.length = 0;
+  groundedTodos.push(...panelGrounded.todos);
+
   const batchOverlaps = detectTodoBatchFileOverlaps(groundedTodos);
   if (batchOverlaps.length > 0) {
     ctx.appendSystem(
@@ -416,9 +491,13 @@ export async function runPlannerFallbackForUnmetCriteria(
   const active = ctx.getActive();
   if (!active) return false;
   const openBefore = ctx.boardCounts().open;
+  const sessionHint = (ctx as { getSessionPlannerHint?: () => string | undefined }).getSessionPlannerHint?.();
   ctx.appendSystem(
     "Auditor produced no new work; trying a planner pass against the current contract before stopping.",
   );
+  if (sessionHint) {
+    ctx.appendSystem(`[control] Planner fallback hint: ${sessionHint.slice(0, 300)}`);
+  }
   let seed: PlannerSeed;
   try {
     seed = await ctx.buildSeed(active.localPath, active);

@@ -22,9 +22,13 @@ function fakeCfg(overrides: Partial<RunConfig> = {}): RunConfig {
   } as RunConfig;
 }
 
-function fakeManager(opts?: { killResult?: { released: number; total: number } }): AgentManager {
+function fakeManager(opts?: {
+  killResult?: { released: number; total: number };
+  onBeginRunShutdown?: () => void;
+}): AgentManager {
   return {
     list: () => [],
+    beginRunShutdown: () => opts?.onBeginRunShutdown?.(),
     killAll: async () => opts?.killResult ?? { released: 3, total: 3, killed: [] },
   } as unknown as AgentManager;
 }
@@ -97,13 +101,14 @@ describe("runDiscussionCloseOut", () => {
   it("when crashMessage set, skips reflection (still writes summary + killAll)", async () => {
     let reflectionAgentCalls = 0;
     let writeSummaryCalls = 0;
+    let shutdownCalls = 0;
     await runDiscussionCloseOut({
       cfg: fakeCfg(),
       crashMessage: "boom",
       stopping: false,
       round: 1,
       currentPhase: "failed",
-      manager: fakeManager(),
+      manager: fakeManager({ onBeginRunShutdown: () => { shutdownCalls++; } }),
       appendSystem: () => {},
       setPhase: () => {},
       writeSummary: async () => { writeSummaryCalls++; },
@@ -113,6 +118,7 @@ describe("runDiscussionCloseOut", () => {
     });
     assert.equal(reflectionAgentCalls, 0, "reflection hook not even called when crash present");
     assert.equal(writeSummaryCalls, 1, "writeSummary still fires after crash");
+    assert.equal(shutdownCalls, 1, "beginRunShutdown aborts in-flight work on crash");
   });
 
   it("reflection hook returning null skips runEndReflection (MoA case)", async () => {

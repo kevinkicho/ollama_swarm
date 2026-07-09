@@ -14,6 +14,7 @@ export type StaleReason =
   | "declined"      // worker explicitly skipped / declined
   | "hunk-empty"    // worker returned zero hunks with no skip reason
   | "hunk-fail"     // applyAndCommit failed
+  | "hunk-oversized" // payload still exceeds cap after repair
   | "prompt-fail";  // promptAgent threw
 
 export interface Todo {

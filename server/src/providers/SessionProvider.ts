@@ -35,10 +35,11 @@ export interface ChatOpts {
   /** Constrained-decoding schema. When set, the provider asks the model
    *  to emit output matching this JSON Schema (Ollama's `format` parameter,
    *  Anthropic's tool_use → input_schema, OpenAI's response_format
-   *  json_schema). Today only OllamaProvider honors this — other
-   *  providers ignore it gracefully (their structured-output stories
-   *  exist but require different plumbing). Pass `"json"` for free-form
-   *  JSON, pass a JSON Schema object for strict shape enforcement. */
+   *  json_schema). Ollama uses `format` directly; OpenAI/OpenCode chat
+   *  use `response_format`; Anthropic uses `output_format` (structured
+   *  outputs beta). Skipped when tools are active on the same call.
+   *  Pass `"json"` for free-form JSON, or a JSON Schema object for strict
+   *  emit-only planner/contract shapes. */
   format?: "json" | Record<string, unknown>;
   /** Diagnostic logger — fires on call start + finish. */
   logDiag?: (record: unknown) => void;
@@ -64,6 +65,12 @@ export interface ChatOpts {
   /** Maximum model/tool round trips for this call. Defaults to 10;
    * explore profiles cap at EXPLORE_MAX_TOOL_TURNS (20) via promptWithRetry. */
   maxToolTurns?: number;
+  /** Inject a user nudge before the Nth tool-loop turn (1-based). */
+  toolLoopNudge?: { atTurn: number; message: string };
+  /** Multiple nudges at different turns (merged with toolLoopNudge when set). */
+  toolLoopNudges?: ReadonlyArray<{ atTurn: number; message: string }>;
+  /** Hard wall-clock abort for the entire prompt (composed with caller signal). */
+  promptWallClockMs?: number;
   /** Diagnostic callback fired for each tool invocation (name + result
    *  ok/error) so the UI can render tool-call timeline entries. */
   onTool?: (info: { tool: string; ok: boolean; preview: string }) => void;

@@ -16,7 +16,11 @@ test("councilWorkerRunner marks thinking before todo prompt and ready after", ()
 test("councilWorkerRunner — literature research + web tools profile", () => {
   assert.match(SRC, /runCouncilLiteratureResearch/, "must run literature pre-pass for research todos");
   assert.match(SRC, /isLiteratureTodo/, "must detect literature todos");
-  assert.match(SRC, /effectiveToolProfileId\("swarm-builder"/, "must upgrade builder profile when web tools on");
+  assert.match(SRC, /LITERATURE_RESEARCH_PROFILE/, "must use web-only literature profile");
+  assert.match(SRC, /LITERATURE_RESEARCH_TOOLS/, "must restrict literature tools to web only");
+  assert.match(SRC, /LITERATURE_RESEARCH_NUDGE_TURN/, "must nudge at turn 25 to emit prose");
+  assert.match(SRC, /isUsableResearchBrief/, "must reject JSON hunks and intent-only stubs");
+  assert.match(SRC, /activity: \{ kind: "worker"/, "must label worker todo prompts");
   assert.match(SRC, /researchNotes/, "must pass research notes into worker prompt");
 });
 

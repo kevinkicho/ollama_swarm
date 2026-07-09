@@ -50,6 +50,7 @@ import { runCouncilWorkers } from "./councilWorkerRunner.js";
 import { runCouncilLlmAudit } from "./councilAuditor.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
 import { TodoQueue } from "./blackboard/TodoQueue.js";
+import { v2QueueCountsToWireCounts } from "./blackboard/boardWireCompat.js";
 import { FindingsLog } from "./blackboard/FindingsLog.js";
 import type { ExitContract, ExitCriterion } from "./blackboard/types.js";
 import {
@@ -63,10 +64,16 @@ import { readExpectedFiles } from "./sharedFileUtils.js";
 import { reconcileCriteriaFromSkips } from "./councilSkipReconcile.js";
 import {
   buildUnmetFailSignature,
+  extractRecentProviderStallFromLedger,
   hasCommitProgressOnUnmet,
+  unmetFailsAreTransientOnly,
   reconcileCriteriaFromLedger,
 } from "./councilLedgerReconcile.js";
+import { SwarmControlCenter } from "./control/SwarmControlCenter.js";
+import type { StallGateVerdict } from "@ollama-swarm/shared/swarmControl/types";
 import { postCouncilTodoBatch } from "./councilTodoPlan.js";
+import { emitCouncilTodoPosted } from "./councilTodoWire.js";
+import type { PostTodoInput } from "./blackboard/TodoQueue.js";
 import {
   councilRunIdShort,
   loadPendingExecutionTodos,
@@ -108,9 +115,25 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private executionOnlyResume = false;
   private progressLedger!: CouncilProgressLedger;
   private cycleTranscriptStart = 0;
+  private swarmControl = new SwarmControlCenter();
+
+  /** Post a todo and sync the wire event the drain button reads. */
+  private postCouncilTodo(input: PostTodoInput): string {
+    const id = this.state.todoQueue.post(input);
+    emitCouncilTodoPosted((e) => this.opts.emit(e as SwarmEvent), this.state.todoQueue, id);
+    return id;
+  }
 
   constructor(opts: RunnerOpts) {
     super(opts);
+  }
+
+  protected override getSwarmControl(): SwarmControlCenter {
+    return this.swarmControl;
+  }
+
+  protected override getCoachAgent(_agent: Agent): Agent | undefined {
+    return this.opts.manager.list().find((a) => a.index === 1);
   }
 
   appendSystem(text: string, summary?: import("../types.js").TranscriptEntrySummary): void {
@@ -149,6 +172,12 @@ export class CouncilRunner extends DiscussionRunnerBase {
       preset: "council",
       roleResolver: () => "Drafter",
     });
+    try {
+      const gs = await this.opts.repos.gitStatus(destPath);
+      this.gitPorcelainAtRunStart = gs.porcelain;
+    } catch {
+      this.gitPorcelainAtRunStart = "";
+    }
     this.stats.registerAgents(this.opts.manager.list());
 
     this.state = buildCouncilAdapterState(
@@ -175,7 +204,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
     if (resumeFrom) {
       const pending = loadPendingExecutionTodos(destPath, resumeFrom);
       if (pending.length > 0) {
-        const n = seedPendingTodosToQueue(pending, (input) => this.state.todoQueue.post(input));
+        const n = seedPendingTodosToQueue(pending, (input) => this.postCouncilTodo(input));
         this.executionOnlyResume = true;
         this.appendSystem(
           `[resume] Loaded ${n} pending execution todo(s) from run ${resumeFrom} — skipping contract derivation.`,
@@ -199,6 +228,9 @@ export class CouncilRunner extends DiscussionRunnerBase {
     this.setPhase("discussing");
     this.startedAt = Date.now();
     this.state.runStartedAt = this.startedAt;
+
+    this.swarmControl.reset();
+    void this.swarmControl.loadPriorPatterns(destPath);
 
     if (cfg.runId) {
       this.progressLedger = loadCouncilProgressLedger(destPath, cfg.runId);
@@ -275,6 +307,15 @@ export class CouncilRunner extends DiscussionRunnerBase {
   async drain(): Promise<void> {
     if (this.stopInFlight) return this.stopInFlight;
     if (this.phase === "stopped" || this.phase === "completed") return;
+
+    const q = this.state?.todoQueue?.counts();
+    const inFlight = (q?.inProgress ?? 0) + (q?.pending ?? 0);
+    if (inFlight === 0 && this.phase !== "executing") {
+      this.appendSystem(
+        "Drain not applicable (no in-flight execution todos — use Stop for immediate exit). Stopping immediately.",
+      );
+      return this.stop();
+    }
 
     this.drainRequested = true;
     this.setPhase("draining");
@@ -358,15 +399,26 @@ export class CouncilRunner extends DiscussionRunnerBase {
   }
 
   private startCapWatchdog(cfg: RunConfig): void {
-    const deadline = this.startedAt! + cfg.wallClockCapMs!;
     const CHECK_INTERVAL = 10_000;
     this.capWatchdog = setInterval(() => {
+      const capMs = this.active?.wallClockCapMs ?? cfg.wallClockCapMs;
+      if (!capMs || capMs <= 0 || this.startedAt == null) return;
+      const deadline = this.startedAt + capMs;
       if (Date.now() >= deadline) {
-        this.appendSystem(`[cap] Wall-clock cap reached (${Math.round(cfg.wallClockCapMs! / 60_000)} min) — stopping.`);
+        this.appendSystem(`[cap] Wall-clock cap reached (${Math.round(capMs / 60_000)} min) — stopping.`);
         this.stop();
       }
     }, CHECK_INTERVAL);
     this.capWatchdog.unref();
+  }
+
+  protected override onReconfig(changes: import("./runReconfig.js").RunReconfigChanges): void {
+    if (changes.wallClockCapMs && this.active) {
+      this.stopCapWatchdog();
+      if (this.active.wallClockCapMs && this.active.wallClockCapMs > 0) {
+        this.startCapWatchdog(this.active);
+      }
+    }
   }
 
   private stopCapWatchdog(): void {
@@ -470,6 +522,38 @@ export class CouncilRunner extends DiscussionRunnerBase {
     this.state.progressContext = wrapped || undefined;
   }
 
+  private prependCouncilControlHints(): void {
+    const sessionHint = this.swarmControl.consumeSessionPlannerHint();
+    if (!sessionHint) return;
+    const tag = `[Swarm control — session]\n${sessionHint}\n[End swarm control]\n\n`;
+    this.state.progressContext = tag + (this.state.progressContext ?? "");
+  }
+
+  private async evaluateCouncilStallGate(
+    planner: Agent,
+    providerStall?: string,
+  ): Promise<StallGateVerdict | null> {
+    const wire = v2QueueCountsToWireCounts(this.state.todoQueue.counts());
+    return this.swarmControl.evaluateStallGate({
+      board: {
+        open: wire.open + wire.claimed,
+        stale: wire.stale,
+        skipped: wire.skipped,
+        committed: wire.committed,
+        total: wire.total,
+      },
+      contract: this.state.contract,
+      stuckCycles: this.stuckCycleCount,
+      providerStall,
+      todos: this.state.todoQueue.list() as unknown as import("./blackboard/types.js").Todo[],
+      coachAgent: planner,
+      clonePath: this.active?.localPath,
+      runId: this.active?.runId,
+      appendSystem: (msg) => this.appendSystem(msg),
+      emit: (e) => this.opts.emit(e),
+    });
+  }
+
   private persistProgressLedger(): void {
     const clonePath = this.active?.localPath;
     const runId = this.active?.runId;
@@ -532,6 +616,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
     this.cycleTranscriptStart = this.transcript.length;
     this.progressLedger.lastCycle = cycle;
     this.syncProgressContext();
+    this.prependCouncilControlHints();
 
     const hasPendingTodos = this.state.todoQueue.counts().pending > 0;
 
@@ -580,6 +665,8 @@ export class CouncilRunner extends DiscussionRunnerBase {
             {
               manager: this.opts.manager as any,
               emit: this.opts.emit as any,
+              getSwarmControl: () => this.swarmControl,
+              getCoachAgent: () => this.opts.manager.list().find((a) => a.index === 1),
               appendSystem: ((msg: string) => {
                 if (msg.startsWith("Synthesizing council consensus")) {
                   this.appendSystem(msg, {
@@ -613,7 +700,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
               this.state.progressContext,
             );
             const enqueued = postCouncilTodoBatch(
-              (input) => this.state.todoQueue.post(input),
+              (input) => this.postCouncilTodo(input),
               synthesisTodos.map((t) => ({
                 description: t.description,
                 expectedFiles: t.expectedFiles,
@@ -761,8 +848,11 @@ export class CouncilRunner extends DiscussionRunnerBase {
       });
     }
 
+    this.setPhase("executing");
+
     const REAPER_INTERVAL = 30_000;
-    const IN_PROGRESS_TTL = 10 * 60_000;
+    // Council doc+web todos routinely exceed 10 min; 15 min reduces false reaps.
+    const IN_PROGRESS_TTL = 15 * 60_000;
     const reaper = setInterval(() => {
       const reaped = this.state.todoQueue.reapStaleInProgress(Date.now(), IN_PROGRESS_TTL);
       for (const id of reaped) {
@@ -772,6 +862,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
     reaper.unref();
 
     const drainWork = (async () => {
+      const coachAgent = this.opts.manager.list().find((a) => a.index === 1);
       const { completed, failed, skipped } = await runCouncilWorkers(
         this.state,
         executionAgents,
@@ -784,6 +875,9 @@ export class CouncilRunner extends DiscussionRunnerBase {
           stopping: () => this.stopping,
           draining: () => this.drainRequested,
           promptSignal: this.stopAbortController?.signal,
+          getSwarmControl: () => this.swarmControl,
+          getCoachAgent: () => coachAgent,
+          emit: (e) => this.opts.emit(e as SwarmEvent),
         },
       );
 
@@ -813,6 +907,9 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private async runAudit(cfg: RunConfig, cycle: number): Promise<"done" | "retry" | "stop"> {
     if (!this.state.contract) return "done";
     if (this.closingRequested()) return "stop";
+    const isAutonomous = cfg.rounds === 0;
+
+    this.setPhase("auditing");
 
     const tagAudit = (msg: string) => {
       if (msg.startsWith("[audit] LLM audit:")) {
@@ -860,6 +957,9 @@ export class CouncilRunner extends DiscussionRunnerBase {
         stopping: () => this.closingRequested(),
         abortSignal: this.stopAbortController?.signal,
         ledger: this.progressLedger,
+        getSwarmControl: () => this.swarmControl,
+        getCoachAgent: () => this.opts.manager.list().find((a) => a.index === 1),
+        emit: (e) => this.opts.emit(e as SwarmEvent),
       },
       skipEvidence,
     );
@@ -902,6 +1002,46 @@ export class CouncilRunner extends DiscussionRunnerBase {
     if (unmetCount > 0 && sameUnmet === currentUnmetIds.size) {
       const noLedgerProgress = sameFailurePattern && !commitOnUnmet && metFlips === 0;
       if (noLedgerProgress) {
+        const transientOnly = unmetFailsAreTransientOnly(
+          this.progressLedger,
+          currentUnmetIds,
+          updatedCriteria,
+          cycle,
+        );
+        if (transientOnly && isAutonomous) {
+          this.stuckCycleCount = 0;
+          this.previousStuckFailSignature = "";
+          this.appendSystem(
+            "[audit] Provider quota/transport stall — backing off 2m without counting as stuck (autonomous).",
+          );
+          await new Promise((r) => setTimeout(r, 120_000));
+          return "retry";
+        }
+        const providerStall = extractRecentProviderStallFromLedger(this.progressLedger, cycle);
+        const planner = this.opts.manager.list().find((a) => a.index === 1);
+        if (planner) {
+          const gate = await this.evaluateCouncilStallGate(planner, providerStall);
+          if (gate?.action === "backoff" && isAutonomous) {
+            this.stuckCycleCount = 0;
+            this.previousStuckFailSignature = "";
+            const waitMs = gate.backoffMs ?? 120_000;
+            this.appendSystem(`[control] Backing off ${Math.round(waitMs / 1000)}s — ${gate.rationale}`);
+            await new Promise((r) => setTimeout(r, waitMs));
+            return "retry";
+          }
+          if (gate?.action === "retry" && isAutonomous) {
+            this.stuckCycleCount = 0;
+            this.previousStuckFailSignature = "";
+            this.appendSystem(`[control] Retrying after stall gate — ${gate.rationale}`);
+            return "retry";
+          }
+          if (gate?.action === "stop") {
+            this.earlyStopDetail = `audit-stuck: ${gate.rationale}`;
+            this.appendSystem(`[control] Stopping — ${gate.rationale}`);
+            this.setPhase("stopped");
+            return "stop";
+          }
+        }
         this.stuckCycleCount++;
         this.appendSystem(`[audit] Same ${sameUnmet} criteria unmet for ${this.stuckCycleCount} cycle(s).`);
         if (this.stuckCycleCount >= 3) {
@@ -960,7 +1100,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
     }
 
     const auditEnqueued = postCouncilTodoBatch(
-      (input) => this.state.todoQueue.post(input),
+      (input) => this.postCouncilTodo(input),
       newTodos.map((t) => ({
         description: t.description,
         expectedFiles: t.expectedFiles,
@@ -1010,7 +1150,7 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
                     expectedFiles: Array.isArray(t.expectedFiles) ? t.expectedFiles.map(String) : [],
                   }));
                   const fallbackEnqueued = postCouncilTodoBatch(
-                    (input) => this.state.todoQueue.post(input),
+                    (input) => this.postCouncilTodo(input),
                     todos.map((t) => ({
                       description: t.description,
                       expectedFiles: t.expectedFiles,
@@ -1087,7 +1227,7 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
             createdBy: "council",
           }));
         standupEnqueued = postCouncilTodoBatch(
-          (input) => this.state.todoQueue.post(input),
+          (input) => this.postCouncilTodo(input),
           standupDrafts,
           (msg) => this.appendSystem(msg),
         );
@@ -1102,7 +1242,7 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
       const fallback = standupFallbackTodosFromEntries(standupEntries);
       if (fallback.length > 0) {
         standupEnqueued = postCouncilTodoBatch(
-          (input) => this.state.todoQueue.post(input),
+          (input) => this.postCouncilTodo(input),
           fallback,
           (msg) => this.appendSystem(msg),
         );
@@ -1153,6 +1293,7 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
     await this.runDiscussionAgent(agent, prompt, {
       runnerName: "council",
       agentName: resolveCouncilToolProfile(this.active),
+      activity: { kind: "council", label: "standup" },
       stats: this.stats,
       enrichSummary: {
         kind: "council_draft",

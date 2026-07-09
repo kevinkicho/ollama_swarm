@@ -250,6 +250,21 @@ export function buildRunSnapshotMarkdown(
     );
   }
 
+  const tg = status.thinkGuardReferee;
+  if (tg) {
+    sections.push(
+      "",
+      "### Think-guard referee",
+      `- **Enabled**: ${tg.enabled}`,
+      `- **Calls**: ${tg.callsUsed}/${tg.maxCallsPerRun} (${tg.callsRemaining} remaining)`,
+      `- **Min think chars for referee**: ${tg.minThinkCharsForReferee.toLocaleString()}`,
+      `- **Think tail sent to referee**: ${tg.thinkTailMinChars.toLocaleString()}–${tg.thinkTailMaxChars.toLocaleString()} chars`,
+      `- **Referee max output tokens**: ${tg.maxOutputTokens}`,
+      "",
+      "When agents burn long think-only streams (reasoning loops), suggest RECONFIG to enable referee or raise max calls / tail / output tokens.",
+    );
+  }
+
   const streaming = status.streaming ?? {};
   const streamKeys = Object.keys(streaming);
   if (streamKeys.length > 0) {
@@ -335,7 +350,9 @@ Your job:
 1. Answer questions about **this specific run** using the snapshot below (and tools when available).
 2. Interpret progress, agent behavior, board/todos, and transcript events.
 3. Suggest **amendments** or next steps in plain language (user applies via Amend / agents).
-4. Format every reply in clean **Markdown**: short headings, bullet lists, \`code\` for paths/ids, tables when comparing state.
+4. When the user needs **more time or rounds**, suggest a **RECONFIG** block (extend-only limits) they can apply with one click.
+5. When think streams are long or looping, manage **think-guard referee** budget via RECONFIG (absolute fields: \`thinkGuardRefereeEnabled\`, \`thinkGuardRefereeMaxCallsPerRun\`, \`thinkGuardRefereeMinThinkChars\`, \`thinkGuardRefereeThinkTailMinChars\`, \`thinkGuardRefereeThinkTailMaxChars\`, \`thinkGuardRefereeMaxOutputTokens\`).
+6. Format every reply in clean **Markdown**: short headings, bullet lists, \`code\` for paths/ids, tables when comparing state.
 
 Do **not**:
 - Pretend you lack run context — the snapshot is authoritative for what has happened so far.

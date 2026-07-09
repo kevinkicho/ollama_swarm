@@ -3,7 +3,14 @@ import type { SwarmEvent, SwarmStatusSnapshot, TranscriptEntry } from "../types"
 import type { SwarmPhase } from "../types";
 import type { SwarmStore } from "./store";
 import { inferAgentsFromSnapshot, mergeAgentsForSnapshot } from "../lib/inferAgents";
-import { isTerminalSwarmPhase } from "../lib/swarmPhase";
+import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
+import { syncThinkGuardRefereeStore } from "./thinkGuardRefereeSync";
+import {
+  extractControlAdviceFromTranscript,
+  extractControlAdviceFromEventRecords,
+  mergeControlAdvice,
+  type SwarmControlAdviceRecord,
+} from "@ollama-swarm/shared/swarmControl/controlAdvice";
 
 /** Context from a successful /status hydrate used to tune WS guards. */
 export type StatusHydrateContext = {
@@ -25,6 +32,9 @@ export function shouldDropTerminalGuardedEvent(
   },
 ): boolean {
   if (ev.type !== "agent_state" && ev.type !== "swarm_state") return false;
+  // Live runs must always accept lifecycle events — dropping agent_state while
+  // agent_streaming still flows leaves the sidebar stuck on "ready".
+  if (isActiveSwarmPhase(ctx.phase)) return false;
   const liveByStatus = ctx.statusHydrateOk && !ctx.statusHasCompletedSummary;
   if (liveByStatus) return false;
   const isTerminalPhase = TERMINAL_PHASES.has(ctx.phase);
@@ -107,6 +117,30 @@ export function allowedAgentIdsForRun(
   );
 }
 
+/** Merge summary / transcript / event-log control advice into the store. */
+export function hydrateControlAdviceToStore(
+  store: StoreApi<SwarmStore>,
+  sources: {
+    summaryAdvice?: SwarmControlAdviceRecord[];
+    transcript?: TranscriptEntry[];
+    eventRecords?: ReadonlyArray<{ event?: { type?: string; ts?: number; [key: string]: unknown } }>;
+  },
+): void {
+  const transcriptAdvice = sources.transcript
+    ? extractControlAdviceFromTranscript(sources.transcript)
+    : [];
+  const eventAdvice = sources.eventRecords
+    ? extractControlAdviceFromEventRecords(sources.eventRecords)
+    : [];
+  const merged = mergeControlAdvice(
+    sources.summaryAdvice ?? [],
+    transcriptAdvice,
+    eventAdvice,
+  );
+  if (merged.length === 0) return;
+  store.getState().replaceControlAdvice(merged);
+}
+
 export type ApplyStatusSnapshotOptions = {
   /** When false, skip agent upserts (completed runs keep final summary stats). */
   upsertLiveAgents?: boolean;
@@ -138,8 +172,12 @@ export function applyStatusSnapshotToStore(
     }
   }
 
+  const snapSubphase = (snap as { planningSubphase?: SwarmStatusSnapshot["planningSubphase"] })
+    .planningSubphase;
   if (snap.phase != null && snap.phase !== "idle") {
-    s.setPhase(snap.phase as SwarmPhase, (snap as { round?: number }).round ?? 0);
+    s.setPhase(snap.phase as SwarmPhase, (snap as { round?: number }).round ?? 0, {
+      ...(snapSubphase ? { planningSubphase: snapSubphase } : {}),
+    });
   } else if (snap.phase === "idle" && s.transcript.length === 0) {
     s.setPhase("idle", (snap as { round?: number }).round ?? 0);
   }
@@ -198,6 +236,11 @@ export function applyStatusSnapshotToStore(
   }
 
   if (snap.runConfig) s.setRunConfig({ ...snap.runConfig });
+  if (snap.thinkGuardReferee) {
+    s.setThinkGuardReferee(snap.thinkGuardReferee);
+  } else if (snap.runConfig) {
+    syncThinkGuardRefereeStore(s);
+  }
   if (snap.summary) s.setSummary(snap.summary);
   if (snap.contract) s.setContract(snap.contract);
   if (snap.cloneState) s.setCloneState(snap.cloneState);
@@ -226,6 +269,33 @@ export function applyStatusSnapshotToStore(
   }
   if (snap.mapperSlices && Object.keys(snap.mapperSlices).length > 0) {
     s.setMapperSlices(snap.mapperSlices);
+  }
+
+  hydrateControlAdviceToStore(store, {
+    summaryAdvice: (snap.summary as { controlAdvice?: SwarmControlAdviceRecord[] } | undefined)
+      ?.controlAdvice,
+    transcript: store.getState().transcript,
+  });
+}
+
+/** Best-effort event-log replay for control advice on historical runs. */
+export async function fetchAndHydrateControlAdviceFromEventLog(
+  store: StoreApi<SwarmStore>,
+  runId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  try {
+    const res = await fetch(
+      `/api/v2/event-log/runs/${encodeURIComponent(runId)}`,
+      { signal },
+    );
+    if (!res.ok) return;
+    const body = (await res.json()) as {
+      records?: ReadonlyArray<{ event?: { type?: string; ts?: number; [key: string]: unknown } }>;
+    };
+    hydrateControlAdviceToStore(store, { eventRecords: body.records ?? [] });
+  } catch {
+    // best-effort
   }
 }
 

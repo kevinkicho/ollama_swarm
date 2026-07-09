@@ -21,6 +21,15 @@ type CouncilRepos = {
   listRepoFiles: (path: string, opts: { maxFiles: number }) => Promise<string[]>;
 };
 
+/** Runtime repair todos must not be dropped when target files already exist. */
+function isRuntimeFixTodo(description: string): boolean {
+  const d = description.toLowerCase();
+  return (
+    /\b(fix|crash|import|attributeerror|nameerror|typeerror|filenotfounderror|module-level)\b/.test(d)
+    && /\.(py|ts|tsx|js|jsx|mjs|cjs)\b/.test(d)
+  );
+}
+
 function filesGuardedByUnmetCriteria(
   files: readonly string[],
   contract: ExitContract | null | undefined,
@@ -212,6 +221,13 @@ Rules:
           filesWithRealContent.length === accepted.length &&
           !guarded
         ) {
+          if (isRuntimeFixTodo(t.description)) {
+            appendSystem(
+              `[dedup] Keeping runtime fix "${t.description.slice(0, 120)}…" — not skipping despite existing file content.`,
+            );
+            verified.push({ ...t, expectedFiles: accepted });
+            continue;
+          }
           appendSystem(`[dedup] Skipping "${t.description}" — files already exist with real content.`);
           continue;
         }

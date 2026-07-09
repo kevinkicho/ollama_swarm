@@ -62,6 +62,7 @@ export interface DiscussionSummaryInput {
   // history dropdown / review-mode hydration can show exact agent
   // specs without re-deriving from preset+count.
   topology?: RunSummary["topology"];
+  controlAdvice?: RunSummary["controlAdvice"];
 }
 
 export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummary {
@@ -123,6 +124,7 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
     transcriptTruncated,
     // Phase 4a of #243: topology passthrough.
     topology: input.topology,
+    ...(input.controlAdvice?.length ? { controlAdvice: input.controlAdvice.slice() } : {}),
   };
 }
 

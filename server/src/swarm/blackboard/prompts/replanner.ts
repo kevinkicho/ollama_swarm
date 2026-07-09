@@ -2,6 +2,8 @@ import { z } from "zod";
 import { parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 import { lenientPreprocess } from "./lenientParse.js";
 import { windowFileWithAnchors, WORKER_FILE_WINDOW_THRESHOLD } from "../windowFile.js";
+import { buildExplorationCacheBlock } from "@ollama-swarm/shared/explorationCache";
+import type { ExplorationCacheEntry } from "@ollama-swarm/shared/explorationCache";
 
 // ---------------------------------------------------------------------------
 // Schema. The replanner is shown a stale TODO + current file state and must
@@ -170,6 +172,8 @@ export interface ReplannerSeed {
   userDirective?: string;
   /** Mid-run suggest/ask messages from user chat. */
   userChatBlock?: string;
+  /** Prior planning explore briefs — avoid broad repo re-tours during replan. */
+  explorationCache?: readonly ExplorationCacheEntry[];
 }
 
 export function buildReplannerUserPrompt(seed: ReplannerSeed): string {
@@ -185,6 +189,10 @@ export function buildReplannerUserPrompt(seed: ReplannerSeed): string {
   if (seed.userChatBlock && seed.userChatBlock.trim().length > 0) {
     parts.push(seed.userChatBlock.trim(), "");
   }
+  const explorationBlock = buildExplorationCacheBlock(
+    seed.explorationCache ? [...seed.explorationCache] : undefined,
+  );
+  if (explorationBlock) parts.push(explorationBlock);
   parts.push(
     `Stale TODO id: ${seed.todoId}`,
     `Original description: ${seed.originalDescription}`,
@@ -220,6 +228,46 @@ export function buildReplannerUserPrompt(seed: ReplannerSeed): string {
   }
   parts.push("Output your JSON object now. Remember: one shape only, no prose, <=2 files if revising.");
   return parts.join("\n");
+}
+
+export function buildReplannerFullPrompt(seed: ReplannerSeed): string {
+  return `${REPLANNER_SYSTEM_PROMPT}\n\n${buildReplannerUserPrompt(seed)}`;
+}
+
+export function buildReplannerRepairFullPrompt(
+  seed: ReplannerSeed,
+  previousResponse: string,
+  parseError: string,
+): string {
+  return [
+    buildReplannerFullPrompt(seed),
+    "",
+    buildReplannerRepairPrompt(previousResponse, parseError),
+  ].join("\n");
+}
+
+/** Stale-reason-specific guidance appended to replanner system prompt. */
+export function buildReplanPolicyGuidance(policy: {
+  emitFirst: boolean;
+  staleClass: string;
+}): string {
+  if (policy.emitFirst) {
+    return [
+      "REPLAN POLICY (worker timeout / tool-cap):",
+      "The prior worker already toured the repo and failed to emit JSON.",
+      "Do NOT call read/grep/glob/list — revise or skip from the TODO + file state below.",
+      "Output exactly one JSON object now.",
+      "",
+    ].join("\n");
+  }
+  if (policy.staleClass === "cas-drift" || policy.staleClass === "hunk-fail") {
+    return [
+      "REPLAN POLICY (CAS / hunk drift):",
+      "Use tools sparingly (≤4 calls) to read files that changed while the TODO was in flight.",
+      "",
+    ].join("\n");
+  }
+  return "";
 }
 
 export function buildReplannerRepairPrompt(previousResponse: string, parseError: string): string {

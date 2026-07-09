@@ -20,12 +20,14 @@ import type { RunConfig } from "../SwarmRunner.js";
 import type { TodoQueue } from "./TodoQueue.js";
 import type { FindingsLog } from "./FindingsLog.js";
 import type { LifecycleState } from "./lifecycleState.js";
+import type { PlanningSubphase } from "@ollama-swarm/shared/planningSubphase";
 
 export type PendingPrompt = { text: string; label?: string };
 
 export interface RunnerUtilContext {
   active?: RunConfig;
   phase: SwarmPhase;
+  planningSubphase?: PlanningSubphase;
   round: number;
   runStartedAt?: number;
   transcript: TranscriptEntry[];
@@ -202,7 +204,29 @@ export function setPhase(
   phase: SwarmPhase,
 ): void {
   ctx.phase = phase;
-  ctx.emit({ type: "swarm_state", phase, round: ctx.round });
+  if (phase !== "seeding" && phase !== "planning") {
+    ctx.planningSubphase = undefined;
+  }
+  ctx.emit({
+    type: "swarm_state",
+    phase,
+    round: ctx.round,
+    ...(ctx.planningSubphase ? { planningSubphase: ctx.planningSubphase } : {}),
+  });
+  ctx.scheduleStateWrite();
+}
+
+export function setPlanningSubphase(
+  ctx: RunnerUtilContext,
+  subphase: PlanningSubphase | undefined,
+): void {
+  ctx.planningSubphase = subphase;
+  ctx.emit({
+    type: "swarm_state",
+    phase: ctx.phase,
+    round: ctx.round,
+    ...(subphase ? { planningSubphase: subphase } : {}),
+  });
   ctx.scheduleStateWrite();
 }
 

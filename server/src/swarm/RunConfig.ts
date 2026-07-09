@@ -27,6 +27,12 @@ export interface RunConfig {
    */
   councilContract?: boolean;
   /**
+   * When council contract is on: one lead planner explores, then all agents
+   * emit-only drafts from the shared brief (default true). Set false to
+   * restore per-agent explore→emit.
+   */
+  councilSharedExplore?: boolean;
+  /**
    * Proposition text for debate-judge, captured at start time. Previously
    * users had to call `injectUser(text)` BEFORE `start()` to set the
    * proposition — awkward because the SetupForm submits start immediately.
@@ -217,6 +223,23 @@ export interface RunConfig {
    * other presets (which don't use userDirective).
    */
   autoGenerateGoals?: boolean;
+  /**
+   * Planning fast path: skip goal pre-pass, lower explore tool caps, prefer
+   * seed grounding over repo tours. Blackboard-only. Ignored for stigmergy /
+   * map-reduce presets (Phase 5 opt-out).
+   */
+  planningFastPath?: boolean;
+  /**
+   * D11: skip LLM contract derivation and install a synthetic contract from
+   * the user directive + prefetched UI file paths. Blackboard-only; also
+   * auto-triggers for scoped UI directives when planningFastPath is on.
+   */
+  skipContractDerivation?: boolean;
+  /**
+   * Wall-clock cap for seeding + contract + initial planner pass (ms).
+   * Default 15 min. Does not count worker execution time.
+   */
+  planningWallClockCapMs?: number;
   /**
    * Task #129: post-completion stretch-goal reflection. After a run
    * finishes successfully (not crashed, not user-stopped, has at
@@ -923,6 +946,19 @@ export interface RunConfig {
    * to effectively disable fallback. Blackboard-only.
    */
   plannerFallbackModel?: string;
+  /**
+   * Think-stream referee checkpoint (design: docs/design/think-guard-referee-checkpoint.md).
+   * When enabled, soft-tier think-only aborts trigger a cheap referee triage before discard.
+   */
+  thinkGuardRefereeEnabled?: boolean;
+  thinkGuardRefereeModel?: string;
+  thinkGuardRefereeMaxCallsPerRun?: number;
+  thinkGuardRefereeMinThinkChars?: number;
+  thinkGuardRefereeThinkTailMinChars?: number;
+  thinkGuardRefereeThinkTailMaxChars?: number;
+  thinkGuardRefereeMaxOutputTokens?: number;
+  /** Runtime: referee calls consumed this run (mutable mid-run). */
+  thinkGuardRefereeCallsUsed?: number;
   /**
    * Task #36: app-level run id minted by the Orchestrator at run-start
    * (Unit 52d) and stashed into RunConfig here so runners can forward

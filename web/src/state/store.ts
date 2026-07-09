@@ -19,6 +19,7 @@ import type {
 import type { ChatMessage } from "../components/BrainStartChat";
 import { mergeTranscriptEntry } from "./transcriptMerge.js";
 import type { AgentActivityRecord } from "./agentActivityProjection.js";
+import { patchAgentForLiveSignals } from "./agentActivityView.js";
 
 export { mergeTranscriptEntry } from "./transcriptMerge.js";
 export type { TranscriptMergeSlice } from "./transcriptMerge.js";
@@ -70,10 +71,25 @@ export interface DriftSample {
   windowSimilarities: number[];
 }
 
+/** Live swarm control center advice (stall gates, tool coaches). */
+export interface SwarmControlAdvice {
+  ts: number;
+  kind: "stall_gate" | "tool_coach";
+  action?: "backoff" | "retry" | "stop";
+  source?: "rule" | "arbitrator";
+  rationale: string;
+  plannerHint?: string;
+  agentId?: string;
+  tool?: string;
+}
+
+const CONTROL_ADVICE_WINDOW = 40;
+
 // T-Item-PerRunStore (2026-05-04): exported so the per-run
 // Provider + the shared event applier can type-narrow against it.
 export interface SwarmStore {
   phase: SwarmPhase;
+  planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
   round: number;
   agents: Record<string, AgentState>;
   transcript: TranscriptEntry[];
@@ -125,6 +141,10 @@ export interface SwarmStore {
   // captured from the same run_started event. Drives the
   // run-identity strip.
   runConfig?: RunConfigSnapshot;
+  /** Live think-guard referee budget (resolved defaults + usage). */
+  thinkGuardReferee?: import("../types").ResolvedThinkGuardRefereeBudget;
+  /** Rolling window of swarm_control_advice WS events. */
+  controlAdvice: SwarmControlAdvice[];
   // Caps from setup (wall clock, ambition tiers for blackboard) synced to
   // global store so other panels / review / bar can see them live.
   wallClockCapMin?: string;
@@ -147,7 +167,14 @@ export interface SwarmStore {
    */
   transcriptPlainListLatched: boolean;
 
-  setPhase: (phase: SwarmPhase, round: number, opts?: { clearTranscriptOnIdle?: boolean }) => void;
+  setPhase: (
+    phase: SwarmPhase,
+    round: number,
+    opts?: {
+      clearTranscriptOnIdle?: boolean;
+      planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
+    },
+  ) => void;
   latchTranscriptPlainList: () => void;
   upsertAgent: (a: AgentState) => void;
   appendEntry: (e: TranscriptEntry) => void;
@@ -197,10 +224,14 @@ export interface SwarmStore {
   pushDriftSample: (sample: DriftSample) => void;
   // #299: append a mid-run amendment received via WS.
   pushAmendment: (amendment: DirectiveAmendment) => void;
+  pushControlAdvice: (advice: SwarmControlAdvice) => void;
+  replaceControlAdvice: (advice: SwarmControlAdvice[]) => void;
   setCloneState: (c: CloneState) => void;
   dismissCloneBanner: () => void;
   setRunStartedAt: (ts: number) => void;
   setRunConfig: (c: RunConfigSnapshot) => void;
+  patchRunConfig: (patch: Partial<RunConfigSnapshot>) => void;
+  setThinkGuardReferee: (b: import("../types").ResolvedThinkGuardRefereeBudget | undefined) => void;
   // Brain chat (FAB + per-run history + suggest injection)
   setBrainChatHistory: (history: ChatMessage[]) => void;
   appendBrainChatMessage: (msg: ChatMessage) => void;
@@ -274,6 +305,8 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   cloneBannerDismissed: false,
   runStartedAt: undefined,
   runConfig: undefined,
+  thinkGuardReferee: undefined,
+  controlAdvice: [],
   wallClockCapMin: undefined,
   ambitionTiers: undefined,
   runId: undefined,
@@ -291,13 +324,35 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
     set((s) => {
       const isTerminal = phase === "completed" || phase === "stopped" || phase === "failed";
       const latchLive = !isTerminal && phase !== "idle";
+      const planningSubphase =
+        opts?.planningSubphase !== undefined
+          ? opts.planningSubphase
+          : phase === "seeding" || phase === "planning"
+            ? s.planningSubphase
+            : undefined;
       if (isTerminal) {
+        const agents = { ...s.agents };
+        for (const [id, agent] of Object.entries(agents)) {
+          if (agent.status === "thinking" || agent.status === "retrying") {
+            agents[id] = {
+              ...agent,
+              status: "ready",
+              thinkingSince: undefined,
+              activityKind: undefined,
+              activityLabel: undefined,
+              activityAttempt: undefined,
+              activityMaxAttempts: undefined,
+            };
+          }
+        }
         return {
           phase,
           round,
+          planningSubphase: undefined,
           streaming: {},
           streamingMeta: {},
           agentActivity: {},
+          agents,
           // Keep plain list latched through stop — do not flip to virtual.
           transcriptPlainListLatched: s.transcriptPlainListLatched || latchLive,
         };
@@ -309,6 +364,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         return {
           phase,
           round,
+          planningSubphase: undefined,
           ...(clearTranscript ? { transcript: [] } : {}),
           streaming: {},
           streamingMeta: {},
@@ -319,6 +375,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       return {
         phase,
         round,
+        planningSubphase,
         ...(latchLive ? { transcriptPlainListLatched: true } : {}),
       };
     }),
@@ -381,16 +438,30 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
     set((s) => {
       const now = Date.now();
       const prior = s.streamingMeta[agentId];
+      const nextMetaEntry = {
+        startedAt: prior?.startedAt ?? now,
+        lastTextAt: now,
+        status: "live" as const,
+        endedAt: undefined,
+      };
       const nextMeta = {
         ...s.streamingMeta,
-        [agentId]: {
-          startedAt: prior?.startedAt ?? now,
-          lastTextAt: now,
-          status: "live" as const,
-          endedAt: undefined,
-        },
+        [agentId]: nextMetaEntry,
       };
-      return { streaming: { ...s.streaming, [agentId]: text }, streamingMeta: nextMeta };
+      const patched = patchAgentForLiveSignals(s.agents[agentId], {
+        streamingMeta: nextMetaEntry,
+        streamingText: text,
+        activity: s.agentActivity[agentId],
+        now,
+      });
+      if (!patched) {
+        return { streaming: { ...s.streaming, [agentId]: text }, streamingMeta: nextMeta };
+      }
+      return {
+        streaming: { ...s.streaming, [agentId]: text },
+        streamingMeta: nextMeta,
+        agents: { ...s.agents, [agentId]: patched },
+      };
     }),
   clearStreaming: (agentId) =>
     set((s) => {
@@ -439,28 +510,38 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
           delete streamingMeta[ev.agentId];
         }
       }
+      const nextActivity: AgentActivityRecord = {
+        phase: ev.phase,
+        ts: ev.ts,
+        startedAt,
+        activityId: ev.activityId ?? prior?.activityId,
+        kind: ev.kind ?? prior?.kind,
+        label: ev.label ?? prior?.label,
+        attempt: ev.attempt ?? prior?.attempt,
+        maxAttempts: ev.maxAttempts ?? prior?.maxAttempts,
+        reason:
+          ev.phase === "done"
+            ? undefined
+            : ev.reason !== undefined
+              ? ev.reason
+              : prior?.reason,
+      };
+      const patched = patchAgentForLiveSignals(s.agents[ev.agentId], {
+        activity: nextActivity,
+        streamingMeta: streamingMeta[ev.agentId],
+        streamingText: streaming[ev.agentId],
+        now: ev.ts,
+      });
       return {
         streaming,
         streamingMeta,
         agentActivity: {
           ...s.agentActivity,
-          [ev.agentId]: {
-            phase: ev.phase,
-            ts: ev.ts,
-            startedAt,
-            activityId: ev.activityId ?? prior?.activityId,
-            kind: ev.kind ?? prior?.kind,
-            label: ev.label ?? prior?.label,
-            attempt: ev.attempt ?? prior?.attempt,
-            maxAttempts: ev.maxAttempts ?? prior?.maxAttempts,
-            reason:
-              ev.phase === "done"
-                ? undefined
-                : ev.reason !== undefined
-                  ? ev.reason
-                  : prior?.reason,
-          },
+          [ev.agentId]: nextActivity,
         },
+        ...(patched
+          ? { agents: { ...s.agents, [ev.agentId]: patched } }
+          : {}),
       };
     }),
 
@@ -568,6 +649,18 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
     }),
   pushAmendment: (amendment) =>
     set((s) => ({ amendments: s.amendments.concat(amendment) })),
+  pushControlAdvice: (advice) =>
+    set((s) => {
+      const next = s.controlAdvice.concat(advice);
+      if (next.length > CONTROL_ADVICE_WINDOW) {
+        next.splice(0, next.length - CONTROL_ADVICE_WINDOW);
+      }
+      return { controlAdvice: next };
+    }),
+  replaceControlAdvice: (advice) =>
+    set({
+      controlAdvice: advice.slice(-CONTROL_ADVICE_WINDOW),
+    }),
   // Unit 47: clone_state arrives once per run. Setting it ALSO clears
   // the dismissed flag so a fresh run shows its banner even if a
   // prior banner was dismissed mid-session (each run has its own
@@ -576,6 +669,9 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   dismissCloneBanner: () => set({ cloneBannerDismissed: true }),
   setRunStartedAt: (ts) => set({ runStartedAt: ts }),
   setRunConfig: (c) => set({ runConfig: c }),
+  patchRunConfig: (patch) =>
+    set((s) => (s.runConfig ? { runConfig: { ...s.runConfig, ...patch } } : {})),
+  setThinkGuardReferee: (b) => set({ thinkGuardReferee: b }),
   setRunId: (id) => set({ runId: id }),
   // Brain chat history per-run
   setBrainChatHistory: (history: ChatMessage[]) => set({ brainChatHistory: history }),
@@ -617,6 +713,8 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       cloneBannerDismissed: false,
       runStartedAt: undefined,
       runConfig: undefined,
+      thinkGuardReferee: undefined,
+      controlAdvice: [],
       wallClockCapMin: undefined,
       ambitionTiers: undefined,
       runId: undefined,
@@ -657,6 +755,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         error: undefined,
         brainChatHistory: [],
         useCaseFilters: [],
+        controlAdvice: [],
       };
       const text = info
         ? [

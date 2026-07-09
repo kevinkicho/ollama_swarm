@@ -3,6 +3,7 @@ import { parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 import { lenientPreprocess, softCap } from "./lenientParse.js";
 import { registerParserSchema } from "./brainIntegration.js";
 import { getModelBudget } from "../../modelContextBudget.js";
+import { buildPlannerGroundingBlocks } from "./plannerGrounding.js";
 
 // ---------------------------------------------------------------------------
 // Schema: what we expect back from the planner. Kept tight on purpose — small
@@ -252,9 +253,9 @@ export const PLANNER_SYSTEM_PROMPT = [
   "You are the PLANNER for a swarm of coding agents working on a cloned repository.",
   "Your only job is to produce a short list of small, atomic TODOs that other agents will each implement independently.",
   "",
-  "TOOLS (Unit 37): You have `read`, `grep`, `glob`, `list` tools on the cloned repo. USE THEM before emitting TODOs. Read the files your criteria name (so the TODO description can be specific), grep for existing implementations (so you don't duplicate work), list adjacent directories (so you name real paths). A TODO shaped around what's actually in the code succeeds; a TODO shaped around a guess fails at worker time.",
+  "TOOLS (Unit 37): You have `read`, `grep`, `glob`, `list` tools on the cloned repo. The user message includes REPO FILE LIST, README, and often ENDPOINT CATALOG / PRE-FETCHED EXCERPTS / PROJECT MAP — use those FIRST. Call tools only to verify a specific file, symbol, or wiring uncertainty before emitting TODOs.",
   "",
-  "TOOL USAGE: Use as many read/grep/glob/list calls as you need to build a complete picture of the codebase before emitting TODOs. Prefer grep and glob to discover candidates, then read the sections that matter. There is no per-turn file-read cap — thoroughness beats speed.",
+  "TOOL USAGE: Prefer seed blocks (catalog, excerpts, file list) over open-ended repo tours. Use grep/read on targeted paths your criteria name; skip broad directory walks when the seed already answers the question.",
   "",
   "REQUIRED VERIFICATION (Task #69): The single biggest source of wasted work is TODOs premised on symbols that DON'T EXIST in the codebase. Common pattern: you assume `class Foo` exists with a `constructor` because the project name suggests OOP, but the codebase is functional (factory functions like `createFoo`). Before emitting a TODO that references an EXISTING symbol (a class, function, named export the worker is supposed to modify):",
   "  - GREP for the symbol in the expectedFile FIRST. Example: `grep -n 'class Agent' src/agent.ts`.",
@@ -369,6 +370,8 @@ export interface PlannerSeed {
   endpointCatalogBlock?: string;
   /** Cross-run project knowledge graph slice (swarm KG). */
   projectGraphSlice?: string;
+  /** Prior explore turns from contract/todos/council — injected to skip repo re-tours. */
+  explorationCache?: import("@ollama-swarm/shared/explorationCache").ExplorationCacheEntry[];
 }
 
 /** Shared research-tools guidance for planner/worker prompts. */
@@ -427,30 +430,11 @@ export const PRIOR_RATIONALE_MAX_CHARS = 400;
 export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionStatement: string; criteria: Array<{ description: string; expectedFiles: string[] }> }, model?: string): string {
   const budget = getModelBudget(model);
   const tree = seed.topLevel.length > 0 ? seed.topLevel.join(", ") : "(empty)";
-  const readme = seed.readmeExcerpt
-    ? seed.readmeExcerpt.slice(0, budget.fullFileMode ? 20_000 : 4_000)
-    : "(no README found at repo root)";
-  // Grounding Unit 6a: show the real files. One path per line — less token-
-  // efficient than comma-separated, but much easier for the model to scan
-  // and quote verbatim into expectedFiles.
   const maxRepoFiles = budget.fullFileMode ? 500 : 150;
   const fileList = seed.repoFiles.length > 0
     ? seed.repoFiles.slice(0, maxRepoFiles).join("\n") + (seed.repoFiles.length > maxRepoFiles ? `\n... and ${seed.repoFiles.length - maxRepoFiles} more` : "")
     : "(no files listed — clone may be unreadable; use top-level entries above as a weaker guide)";
-  // Task #130: prepend persistent cross-run memory if present. Renderer
-  // returns "" when there are no prior memories so this is a no-op on
-  // fresh clones / first runs.
-  const memoryBlock = seed.priorMemoryRendered ? `${seed.priorMemoryRendered}\n\n` : "";
-  // Task #177: prepend design memory (north-star + roadmap + recent
-  // decisions). Comes BEFORE the engineering memory because it sets
-  // the long-horizon framing the planner should evaluate todos against.
-  const designBlock = seed.priorDesignMemoryRendered
-    ? `${seed.priorDesignMemoryRendered}\n\n` +
-      "GUIDANCE: honor the north star + recent decisions when proposing TODOs. Prefer work that advances the roadmap. If a TODO would contradict a prior decision, propose updating the decision first instead.\n\n"
-    : "";
-  const projectGraphBlock = seed.projectGraphSlice
-    ? `${seed.projectGraphSlice}\n\n`
-    : "";
+  const grounding = buildPlannerGroundingBlocks(seed, model);
   // #231 follow-up (2026-04-27 evening): include the user's directive
   // AND the just-produced contract directly in the todos prompt. RCA
   // from runs af27f55c / 07e37525 / 00347ab2 found the planner was
@@ -495,29 +479,8 @@ export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionSt
   // failure mode where the planner confidently dispatched against
   // src/foo.ts because the name matched, when src/bar.ts was the
   // actual relevant file. Empty/absent → no block rendered.
-  const codeContextBlock =
-    seed.codeContextExcerpts && seed.codeContextExcerpts.length > 0
-      ? [
-          "=== PRE-FETCHED FILE EXCERPTS (head only, picked from directive keywords + repo structure) ===",
-          ...seed.codeContextExcerpts.flatMap((f) => [
-            `--- ${f.path} ---`,
-            f.excerpt,
-            "",
-          ]),
-          "=== end PRE-FETCHED EXCERPTS ===",
-          "",
-        ].join("\n")
-      : "";
-  const userChatBlock =
-    seed.userChatBlock && seed.userChatBlock.trim().length > 0
-      ? `${seed.userChatBlock.trim()}\n\n`
-      : "";
-  const endpointCatalogBlock =
-    seed.endpointCatalogBlock && seed.endpointCatalogBlock.trim().length > 0
-      ? `${seed.endpointCatalogBlock.trim()}\n\n`
-      : "";
   return [
-    designBlock + projectGraphBlock + memoryBlock + directiveBlock + userChatBlock + endpointCatalogBlock + `Repository: ${seed.repoUrl}`,
+    grounding.prefix + directiveBlock + `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
     `Top-level entries: ${tree}`,
     "",
@@ -528,13 +491,12 @@ export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionSt
     "=== end REPO FILE LIST ===",
     "",
     "=== README excerpt (first 4000 chars) ===",
-    readme,
+    grounding.readme,
     "=== end README ===",
     "",
-    codeContextBlock,
-    seed.systemMap ? `=== SYSTEM MAP (lightweight broad view for systemic planning) ===\n${seed.systemMap}\n=== end SYSTEM MAP ===\n\n` : "",
-    buildResearchToolsNote(!!seed.webToolsEnabled),
-    buildResearchNotesBlock(seed.researchNotes),
+    grounding.codeContextBlock,
+    grounding.researchToolsNote,
+    grounding.researchNotesBlock,
     seed.webToolsEnabled ? "\n" : "",
     // T198h (2026-05-04): test-driven todo expansion. When opt-in,
     // the planner is asked to surface a verification step per todo

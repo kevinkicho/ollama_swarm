@@ -10,12 +10,18 @@ import type { PlannerSeed, PriorRunSummary } from "./prompts/planner.js";
 import type { ParsedContract } from "./prompts/firstPassContract.js";
 import type { CouncilContractDraft } from "./prompts/firstPassContract.js";
 import {
+  buildCouncilContractEmitUserPrompt,
   buildCouncilContractMergePrompt,
   buildFirstPassContractRepairPrompt,
   buildFirstPassContractUserPrompt,
   FIRST_PASS_CONTRACT_SYSTEM_PROMPT,
   parseFirstPassContractResponse,
 } from "./prompts/firstPassContract.js";
+import {
+  appendExplorationCache,
+  captureExplorationExcerpt,
+  type ExplorationCacheEntry,
+} from "@ollama-swarm/shared/explorationCache";
 import { CONTRACT_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
 import { groundExpectedFiles, validateContractGrounding } from "./contractGrounding.js";
 import { withSiblingRetry } from "./siblingRetry.js";
@@ -38,6 +44,15 @@ import { runPlannerEmitRecovery } from "./plannerRecovery.js";
 import { emitAgentActivity } from "./promptRunner.js";
 import { EMIT_ONLY_PROFILE_ID } from "@ollama-swarm/shared/toolProfiles";
 import { isWebToolsEnabled, resolveToolProfile } from "../toolProfiles.js";
+import { resolveMaxToolTurnsForPlanningPhase } from "@ollama-swarm/shared/toolProfiles";
+import {
+  buildScopedUiContract,
+  inferScopedUiExpectedFiles,
+  resolveContractExploreProfile,
+  shouldSkipContractDerivation,
+} from "./planningPolicy.js";
+import { isSeedSufficientForDirectEmit } from "@ollama-swarm/shared/planningSeed";
+import { buildSeedDirectEmitBrief } from "./prompts/plannerGrounding.js";
 import { resolveBlackboardPromptExtras } from "./blackboardPromptContext.js";
 import type { TranscriptEntry } from "../../types.js";
 import type { TodoQueue } from "./TodoQueue.js";
@@ -96,7 +111,7 @@ export interface ContractContext {
     promptText: string,
     agentName?: import("../../tools/ToolDispatcher.js").ProfileName,
     ollamaFormat?: "json" | Record<string, unknown>,
-    activity?: { kind?: string; label?: string },
+    activity?: { kind?: string; label?: string; maxToolTurns?: number; mode?: "explore" | "emit" },
   ) => Promise<{ response: string; agentUsed: Agent }>;
   promptAgent: (
     agent: Agent,
@@ -104,7 +119,7 @@ export interface ContractContext {
     agentName: import("../../tools/ToolDispatcher.js").ProfileName,
     formatExpect: "json" | "free",
     ollamaFormat?: "json" | Record<string, unknown>,
-    activity?: { kind?: string; label?: string },
+    activity?: { kind?: string; label?: string; maxToolTurns?: number },
   ) => Promise<string>;
   emit: (e: unknown) => void;
   getTranscript: () => readonly TranscriptEntry[];
@@ -114,6 +129,7 @@ export interface ContractContext {
   scheduleStateWrite: () => void;
   flushBoardBroadcasterSnapshot: () => void;
   v2ObserverApply: (event: unknown) => void;
+  setContractDerivationFailure?: (reason: string | undefined) => void;
 
   // --- deps ---
   repos: {
@@ -139,6 +155,19 @@ export function buildContract(parsed: ParsedContract): ExitContract {
   };
 }
 
+function recordExploreOnSeed(
+  seed: PlannerSeed,
+  phase: ExplorationCacheEntry["phase"],
+  raw: string,
+  agentId: string,
+): void {
+  seed.explorationCache = appendExplorationCache(seed.explorationCache, {
+    phase,
+    excerpt: captureExplorationExcerpt(raw),
+    agentId,
+  });
+}
+
 export function cloneContract(c: ExitContract): ExitContract {
   return {
     missionStatement: c.missionStatement,
@@ -157,11 +186,22 @@ export async function runFirstPassContract(
   seed: PlannerSeed,
   isFallbackAttempt = false,
 ): Promise<void> {
+  ctx.setContractDerivationFailure?.(undefined);
   const modelAtEntry = agent.model;
-  const plannerProfile = resolveToolProfile("planner", ctx.getActive());
-  const exploreProfile = plannerProfile;
+  const exploreProfile = resolveContractExploreProfile(seed, ctx.getActive());
   const emitProfile = EMIT_ONLY_PROFILE_ID;
+  const exploreToolCap = resolveMaxToolTurnsForPlanningPhase(
+    "contract-explore",
+    ctx.getActive(),
+  );
+  const emitDirectFromSeed = isSeedSufficientForDirectEmit(seed, ctx.getActive());
+  if (emitDirectFromSeed) {
+    ctx.appendSystem(
+      "Contract: seed-direct emit — rich grounding present, skipping explore turn.",
+    );
+  }
 
+  const contractExplorePrompt = `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed, agent.model)}`;
   const recovery = await runPlannerEmitRecovery({
     kind: "contract",
     agent,
@@ -171,6 +211,8 @@ export async function runFirstPassContract(
     appendAgent: ctx.appendAgent,
     findingsPost: ctx.findingsPost,
     getActive: ctx.getActive,
+    clonePath: ctx.getActive()?.localPath,
+    promptExcerpt: contractExplorePrompt.slice(0, 1500),
     emitActivity: (label, attempt, maxAttempts, mode) => {
       emitAgentActivity(agent, ctx.manager, ctx.emitAgentState, {
         kind: "contract",
@@ -181,9 +223,11 @@ export async function runFirstPassContract(
       });
     },
     promptPlannerSafely: (a, p, profile, schema, activity) =>
-      ctx.promptPlannerSafely(a, p, profile, schema, activity),
-    buildExplorePrompt: () =>
-      `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed, agent.model)}`,
+      ctx.promptPlannerSafely(a, p, profile, schema, {
+        ...activity,
+        maxToolTurns: profile === exploreProfile && !schema ? exploreToolCap : undefined,
+      }),
+    buildExplorePrompt: () => contractExplorePrompt,
     buildRepairPrompt: (prev, err, note) =>
       `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractRepairPrompt(prev, err, note)}`,
     exploreProfile,
@@ -196,6 +240,8 @@ export async function runFirstPassContract(
       if (groundingError) return { ok: false as const, reason: groundingError, raw };
       return { ok: true as const, value: p.contract, raw, dropped: p.dropped };
     },
+    emitDirectFromSeed,
+    onExploreCaptured: (raw) => recordExploreOnSeed(seed, "contract-explore", raw, agent.id),
   });
 
   if (recovery.ok) {
@@ -227,6 +273,7 @@ export async function runFirstPassContract(
   );
   if (retried) return;
 
+  ctx.setContractDerivationFailure?.(recovery.reason);
   ctx.appendSystem(
     `Contract still invalid after recovery (${recovery.reason}). Planning continues WITHOUT exit contract — auditor will have limited gating.`,
   );
@@ -243,6 +290,80 @@ export interface CouncilContractDraftDeps {
   promptPlannerSafely: ContractContext["promptPlannerSafely"];
 }
 
+/** Single lead explore for council — shared brief feeds N emit-only drafts. */
+export async function runCouncilSharedExplore(
+  deps: CouncilContractDraftDeps,
+  leadAgent: Agent,
+  seed: PlannerSeed,
+): Promise<string | null> {
+  const exploreProfile = resolveContractExploreProfile(seed, deps.getActive());
+  const exploreToolCap = resolveMaxToolTurnsForPlanningPhase(
+    "contract-explore",
+    deps.getActive(),
+  );
+  const explorePrompt = `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(
+    seed,
+    leadAgent.model,
+  )}`;
+
+  emitAgentActivity(leadAgent, deps.manager, deps.emitAgentState, {
+    kind: "contract",
+    label: "council shared explore",
+    attempt: 1,
+    maxAttempts: 1,
+    mode: "explore",
+  });
+  deps.appendSystem(
+    `Council contract: Agent ${leadAgent.index} exploring repo once for shared brief…`,
+  );
+
+  const { response, agentUsed } = await deps.promptPlannerSafely(
+    leadAgent,
+    explorePrompt,
+    exploreProfile,
+    undefined,
+    { kind: "contract", label: "council shared explore", maxToolTurns: exploreToolCap, mode: "explore" },
+  );
+  if (deps.getStopping()) return null;
+  deps.appendAgent(agentUsed, response);
+  recordExploreOnSeed(seed, "council-shared-explore", response, agentUsed.id);
+  return captureExplorationExcerpt(response);
+}
+
+/** Emit-only council draft using a shared explore brief (no per-agent repo tour). */
+export async function runCouncilContractEmitForAgent(
+  deps: CouncilContractDraftDeps,
+  agent: Agent,
+  seed: PlannerSeed,
+  sharedExploreBrief: string,
+): Promise<{ agent: Agent; text: string } | null> {
+  const emitProfile = EMIT_ONLY_PROFILE_ID;
+  const emitPrompt = `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildCouncilContractEmitUserPrompt(
+    seed,
+    sharedExploreBrief,
+    agent.model,
+  )}`;
+
+  emitAgentActivity(agent, deps.manager, deps.emitAgentState, {
+    kind: "contract",
+    label: "contract draft (emit)",
+    attempt: 1,
+    maxAttempts: 1,
+    mode: "emit",
+  });
+
+  const { response, agentUsed } = await deps.promptPlannerSafely(
+    agent,
+    emitPrompt,
+    emitProfile,
+    CONTRACT_JSON_SCHEMA,
+    { kind: "contract", label: "contract draft (emit)" },
+  );
+  if (deps.getStopping()) return null;
+  deps.appendAgent(agentUsed, response);
+  return { agent: agentUsed, text: response };
+}
+
 /**
  * Two-phase council draft: explore the clone with repo tools, then emit JSON.
  * Mirrors the single-agent `runPlannerEmitRecovery` explore→emit split so drafts
@@ -253,9 +374,22 @@ export async function runCouncilContractDraftForAgent(
   agent: Agent,
   seed: PlannerSeed,
 ): Promise<{ agent: Agent; text: string } | null> {
-  const plannerProfile = resolveToolProfile("planner", deps.getActive());
-  const exploreProfile = plannerProfile;
+  const seedDirectEmit = isSeedSufficientForDirectEmit(seed, deps.getActive());
+  if (seedDirectEmit) {
+    return runCouncilContractEmitForAgent(
+      deps,
+      agent,
+      seed,
+      buildSeedDirectEmitBrief(seed),
+    );
+  }
+
+  const exploreProfile = resolveContractExploreProfile(seed, deps.getActive());
   const emitProfile = EMIT_ONLY_PROFILE_ID;
+  const exploreToolCap = resolveMaxToolTurnsForPlanningPhase(
+    "contract-explore",
+    deps.getActive(),
+  );
   const explorePrompt = `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(
     seed,
     agent.model,
@@ -278,7 +412,7 @@ export async function runCouncilContractDraftForAgent(
       explorePrompt,
       exploreProfile,
       undefined,
-      { kind: "contract", label: "contract explore" },
+      { kind: "contract", label: "contract explore", maxToolTurns: exploreToolCap, mode: "explore" },
     );
   if (deps.getStopping()) return null;
   deps.appendAgent(exploreAgent, exploreResponse);
@@ -332,8 +466,20 @@ export async function runFirstPassContractOrchestrator(
   workers: Agent[],
   seed: PlannerSeed,
 ): Promise<void> {
+  const active = ctx.getActive();
+  if (shouldSkipContractDerivation(active, seed)) {
+    const directive = (seed.userDirective ?? active?.userDirective ?? "").trim();
+    const files = inferScopedUiExpectedFiles(seed, directive);
+    const synthetic = buildScopedUiContract(directive, files);
+    ctx.appendSystem(
+      "Contract fast path: scoped UI directive — synthetic contract from seed (skipped LLM derivation).",
+    );
+    finalizeContract(ctx, synthetic, seed, planner);
+    return;
+  }
+
   const councilEnabled =
-    ctx.getActive()?.councilContract ?? appConfig.COUNCIL_CONTRACT_ENABLED;
+    active?.councilContract ?? appConfig.COUNCIL_CONTRACT_ENABLED;
   if (councilEnabled && workers.length > 0) {
     const merged = await tryCouncilContract(ctx, planner, workers, seed);
     if (merged !== null) {
@@ -370,16 +516,43 @@ export async function tryCouncilContract(
     ) => ctx.promptPlannerSafely(agent, promptText, agentName, ollamaFormat, activity),
   };
 
-  ctx.appendSystem(
-    `Council contract: prompting ${allAgents.length} agents for independent first-pass drafts (explore → emit, with repo tools).`,
-  );
+  const useSharedExplore =
+    allAgents.length > 1
+    && (ctx.getActive()?.councilSharedExplore ?? true);
+
+  const seedDirectEmit = isSeedSufficientForDirectEmit(seed, ctx.getActive());
+  let sharedBrief: string | null = null;
+  if (useSharedExplore) {
+    if (seedDirectEmit) {
+      sharedBrief = buildSeedDirectEmitBrief(seed);
+      ctx.appendSystem(
+        "Council contract: seed-direct emit — skipping shared explore.",
+      );
+    } else {
+      sharedBrief = await runCouncilSharedExplore(draftDeps, planner, seed);
+      if (ctx.getStopping()) return null;
+    }
+  }
+
+  if (useSharedExplore && sharedBrief) {
+    ctx.appendSystem(
+      `Council contract: shared explore complete — ${allAgents.length} emit-only draft(s) from brief.`,
+    );
+  } else {
+    ctx.appendSystem(
+      `Council contract: prompting ${allAgents.length} agents for independent first-pass drafts (explore → emit, with repo tools).`,
+    );
+  }
 
   const { burstSpacingForModels, staggerStart } = await import("../staggerStart.js");
   let draftsCompleted = 0;
   const draftSpacing = burstSpacingForModels(allAgents);
   const draftResults = await staggerStart(allAgents, async (a) => {
     try {
-      const result = await runCouncilContractDraftForAgent(draftDeps, a, seed);
+      const result =
+        useSharedExplore && sharedBrief
+          ? await runCouncilContractEmitForAgent(draftDeps, a, seed, sharedBrief)
+          : await runCouncilContractDraftForAgent(draftDeps, a, seed);
       if (!result) return null;
       return result;
     } finally {

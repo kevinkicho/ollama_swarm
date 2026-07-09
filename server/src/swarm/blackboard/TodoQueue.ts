@@ -14,6 +14,11 @@
 // 7 SDK presets, the V2 cutover (commits 4e08092 → 85c5614, 2026-
 // 04-28) made this the only queue and Board.ts was deleted.
 
+/** True when `reason` was set by reapStaleInProgress (worker TTL exceeded). */
+export function isReaperTimeoutReason(reason: string | undefined): boolean {
+  return typeof reason === "string" && reason.startsWith("worker timeout (>");
+}
+
 export type TodoQueueStatus =
   | "pending" // queued, not yet dequeued
   | "in-progress" // dequeued by a worker, not yet completed/failed
@@ -296,9 +301,19 @@ export class TodoQueue {
   }
 
   /** Mark an in-progress todo as completed. Throws if id unknown or
-   *  not in-progress (callers should guard against double-complete). */
+   *  not in-progress (callers should guard against double-complete).
+   *
+   *  Idempotent on already-completed. Accepts late completion when the
+   *  reaper marked the todo failed for in-progress timeout but the worker
+   *  finished and committed shortly after (council execution race). */
   complete(id: string, ts: number = Date.now()): void {
     const t = this.findOrThrow(id);
+    if (t.status === "failed" && isReaperTimeoutReason(t.reason)) {
+      t.status = "completed";
+      t.endedAt = ts;
+      t.reason = undefined;
+      return;
+    }
     if (t.status !== "in-progress") {
       throw new Error(`Cannot complete todo ${id}: status=${t.status}`);
     }

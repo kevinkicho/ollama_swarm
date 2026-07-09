@@ -46,6 +46,9 @@ import {
 import { tokenTracker, snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { checkBudgetGuards } from "./loopGuards.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
+import type { SwarmControlAdviceRecord } from "@ollama-swarm/shared/swarmControl/controlAdvice";
+import type { SwarmControlCenter } from "./control/SwarmControlCenter.js";
+import type { ToolResultHook } from "../tools/ToolDispatcher.js";
 export interface CloneSpawnResult {
   destPath: string;
   ready: Agent[];
@@ -78,6 +81,37 @@ export abstract class DiscussionRunnerBase {
   protected pendingToolTraceByAgent = new Map<string, ToolTraceEntry[]>();
 
   constructor(protected readonly opts: RunnerOpts) {}
+
+  /** Optional swarm control center — Council overrides to enable tool coach. */
+  protected getSwarmControl(): SwarmControlCenter | undefined {
+    return undefined;
+  }
+
+  /** Agent used for bounded tool-coach LLM calls (defaults to discussion agent). */
+  protected getCoachAgent(_agent: Agent): Agent | undefined {
+    return undefined;
+  }
+
+  protected getControlAdviceHistory(): SwarmControlAdviceRecord[] | undefined {
+    const h = this.getSwarmControl()?.getAdviceHistory();
+    return h && h.length > 0 ? [...h] : undefined;
+  }
+
+  private buildDiscussionToolCoachHook(agent: Agent): ToolResultHook | undefined {
+    const control = this.getSwarmControl();
+    const coach = this.getCoachAgent(agent) ?? agent;
+    if (!control) return undefined;
+    return (info) => {
+      if (info.ok) return;
+      control.recordToolFailure(agent.id, info.tool, info.error ?? "tool error", info.preview, {
+        agent: coach,
+        clonePath: this.active?.localPath,
+        runId: this.active?.runId,
+        appendSystem: (msg) => this.appendSystem(msg),
+        emit: (e) => this.opts.emit(e),
+      });
+    };
+  }
 
   // --- Shared methods (identical across all 8 discussion runners) ---
 
@@ -187,6 +221,13 @@ export abstract class DiscussionRunnerBase {
     this.appendSystem(text, summary);
   }
 
+  reconfig(changes: import("./runReconfig.js").RunReconfigChanges): void {
+    this.onReconfig(changes);
+  }
+
+  /** Override when a preset must react to limit changes (e.g. restart cap watchdog). */
+  protected onReconfig(_changes: import("./runReconfig.js").RunReconfigChanges): void {}
+
   setPhase(phase: SwarmPhase): void {
     this.phase = phase;
     this.opts.emit({ type: "swarm_state", phase, round: this.round });
@@ -208,6 +249,9 @@ export abstract class DiscussionRunnerBase {
    * Reset common state fields at the start of a new run.
    * Subclasses should call this and then reset their own extra fields.
    */
+  /** Porcelain snapshot at run start — scopes per-run filesChanged in summary. */
+  protected gitPorcelainAtRunStart = "";
+
   protected resetState(cfg: RunConfig): void {
     this.transcript = [];
     this.stopping = false;
@@ -216,6 +260,7 @@ export abstract class DiscussionRunnerBase {
     this.startedAt = undefined;
     this.summaryWritten = false;
     this.earlyStopDetail = undefined;
+    this.gitPorcelainAtRunStart = "";
     this.stats.reset();
     this.pendingToolTraceByAgent.clear();
   }
@@ -237,6 +282,8 @@ export abstract class DiscussionRunnerBase {
       transcript: this.transcript,
       topology: cfg.topology,
       repos: this.opts.repos,
+      gitPorcelainAtRunStart: this.gitPorcelainAtRunStart,
+      controlAdvice: this.getControlAdviceHistory(),
       appendSystem: (text, summary) => this.appendSystem(text, summary),
     });
   }
@@ -361,7 +408,11 @@ export abstract class DiscussionRunnerBase {
     opts: RunAgentOpts,
   ): Promise<string> {
     const agentName = opts.agentName ?? discussionReaderProfile(this.active);
-    this.opts.manager.markStatus(agent.id, "thinking");
+    this.opts.manager.markStatus(agent.id, "thinking", {
+      ...(opts.activity?.kind ? { activityKind: opts.activity.kind } : {}),
+      ...(opts.activity?.label ? { activityLabel: opts.activity.label } : {}),
+      thinkingSince: Date.now(),
+    });
     this.emitAgentState({
       id: agent.id,
       index: agent.index,
@@ -386,9 +437,11 @@ export abstract class DiscussionRunnerBase {
         signal: controller.signal,
         manager: this.opts.manager,
         agentName,
+        ...(opts.activity ? { activity: opts.activity } : {}),
         webToolsConfig: this.active,
         mcpServers: this.active?.mcpServers,
         onTool: makeBufferedToolHandler(this.pendingToolTraceByAgent, agent.id),
+        onToolResultHook: this.buildDiscussionToolCoachHook(agent),
         promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         logDiag: this.opts.logDiag,
         runId: this.active?.runId,

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { ExitCriterion } from "./blackboard/types.js";
 import {
   buildUnmetFailSignature,
+  unmetFailsAreTransientOnly,
   fallbackMayMarkMet,
   isExecutableCriterion,
   ledgerFailCountForCriterion,
@@ -73,6 +74,40 @@ test("reconcileCriteriaFromLedger promotes doc criterion after commit observatio
   const { criteria: out, promotedIds } = reconcileCriteriaFromLedger(ledger, criteria, []);
   assert.deepEqual(promotedIds, ["c1"]);
   assert.equal(out[0].status, "met");
+});
+
+test("unmetFailsAreTransientOnly — true for quota stalls only", () => {
+  const ledger = createEmptyLedger("run-1");
+  appendLedgerObservation(ledger, {
+    kind: "fail",
+    text: "all retries exhausted (last: Ollama HTTP 429: session usage limit)",
+    cycle: 8,
+    files: ["run_pipeline.py"],
+  });
+  const criteria = [
+    crit({ id: "c1", description: "pipeline", expectedFiles: ["run_pipeline.py"] }),
+  ];
+  assert.equal(
+    unmetFailsAreTransientOnly(ledger, new Set(["c1"]), criteria, 8),
+    true,
+  );
+});
+
+test("unmetFailsAreTransientOnly — false when real tool-loop stuck mixed in", () => {
+  const ledger = createEmptyLedger("run-1");
+  appendLedgerObservation(ledger, {
+    kind: "fail",
+    text: "tool loop stuck: 3× repeated read",
+    cycle: 2,
+    files: ["tests/test_run_pipeline.py"],
+  });
+  const criteria = [
+    crit({ id: "c1", description: "tests", expectedFiles: ["tests/test_run_pipeline.py"] }),
+  ];
+  assert.equal(
+    unmetFailsAreTransientOnly(ledger, new Set(["c1"]), criteria, 2),
+    false,
+  );
 });
 
 test("buildUnmetFailSignature is stable for same failures", () => {

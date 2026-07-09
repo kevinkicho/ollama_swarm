@@ -403,6 +403,34 @@ async function runDebateAuditPath(
   });
 }
 
+/** Reject auditor batches that wrote no files or touch no unmet criterion paths. */
+export function batchAdvancesUnmetCriteria(
+  contract: ExitContract | undefined,
+  filesWritten: readonly string[],
+  batchFileSet: ReadonlySet<string>,
+): { ok: boolean; reason: string } {
+  if (filesWritten.length === 0) {
+    return { ok: false, reason: "batch apply wrote zero files" };
+  }
+  const unmet = (contract?.criteria ?? []).filter((c) => c.status === "unmet");
+  if (unmet.length === 0) return { ok: true, reason: "" };
+
+  const expected = new Set<string>();
+  for (const c of unmet) {
+    for (const f of c.expectedFiles ?? []) expected.add(f);
+  }
+  if (expected.size === 0) return { ok: true, reason: "" };
+
+  const touched = new Set([...filesWritten, ...batchFileSet]);
+  for (const f of touched) {
+    if (expected.has(f)) return { ok: true, reason: "" };
+  }
+  return {
+    ok: false,
+    reason: `batch touched no unmet criterion expectedFiles (wrote: ${filesWritten.join(", ")})`,
+  };
+}
+
 /** Review pending-commit todos and approve/reject each one.
  *  Called before applyAuditorResult so the auditor can evaluate
  *  proposed hunks before assessing contract criteria. */
@@ -500,6 +528,19 @@ export async function reviewPendingCommits(
 
     if (!batchOk) {
       ctx.appendSystem(`[auditor-gate] ✗ Some applies failed in unified batch path`);
+      return;
+    }
+
+    const advanceCheck = batchAdvancesUnmetCriteria(
+      ctx.getContract(),
+      filesWritten,
+      allFiles,
+    );
+    if (!advanceCheck.ok) {
+      for (const id of todoIds) {
+        ctx.wrappers.rejectCommitQ(id, advanceCheck.reason);
+      }
+      ctx.appendSystem(`[auditor-gate] ✗ Batch rejected: ${advanceCheck.reason}`);
       return;
     }
 

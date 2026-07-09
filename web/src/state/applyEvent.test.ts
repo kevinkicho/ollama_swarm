@@ -131,6 +131,16 @@ describe("applyEventToStore", () => {
       assert.equal(store.getState().streaming.a1, "Hello");
     });
 
+    it("promotes ready agent to thinking when live stream arrives", () => {
+      store.getState().upsertAgent({ id: "a2", index: 2, status: "ready" });
+      applyEventToStore(
+        { type: "agent_streaming", agentId: "a2", agentIndex: 2, text: "{" },
+        store.getState(),
+      );
+      assert.equal(store.getState().agents.a2.status, "thinking");
+      assert.ok(store.getState().agents.a2.thinkingSince != null);
+    });
+
     it("overwrites previous streaming text", () => {
       applyEventToStore(
         { type: "agent_streaming", agentId: "a1", agentIndex: 0, text: "Part 1" },
@@ -593,6 +603,84 @@ describe("applyEventToStore", () => {
       );
       assert.equal(store.getState().amendments.length, 1);
       assert.equal(store.getState().amendments[0].text, "Add error handling");
+    });
+  });
+
+  describe("run_reconfigured", () => {
+    it("patches runConfig limits", () => {
+      store.getState().setRunConfig({
+        preset: "council",
+        plannerModel: "m",
+        workerModel: "m",
+        auditorModel: "m",
+        dedicatedAuditor: false,
+        repoUrl: "",
+        clonePath: "/x",
+        agentCount: 3,
+        rounds: 4,
+        wallClockCapMin: "30",
+      });
+      applyEventToStore(
+        {
+          type: "run_reconfigured",
+          runId: "r1",
+          ts: 2000,
+          message: "[reconfig] Run limits updated: rounds 4 → 6.",
+          changes: {
+            rounds: { from: 4, to: 6 },
+            wallClockCapMs: { from: 1_800_000, to: 2_700_000 },
+          },
+        },
+        store.getState(),
+      );
+      assert.equal(store.getState().runConfig?.rounds, 6);
+      assert.equal(store.getState().runConfig?.wallClockCapMin, "45");
+    });
+
+    it("patches think-guard referee budget", () => {
+      store.getState().setRunConfig({
+        preset: "council",
+        plannerModel: "m",
+        workerModel: "m",
+        auditorModel: "m",
+        dedicatedAuditor: false,
+        repoUrl: "",
+        clonePath: "/x",
+        agentCount: 3,
+        rounds: 4,
+        thinkGuardRefereeEnabled: false,
+        thinkGuardRefereeMaxCallsPerRun: 6,
+      });
+      store.getState().setThinkGuardReferee({
+        enabled: false,
+        maxCallsPerRun: 6,
+        callsUsed: 1,
+        callsRemaining: 5,
+        minThinkCharsForReferee: 30_000,
+        thinkTailMinChars: 4_000,
+        thinkTailMaxChars: 12_000,
+        maxOutputTokens: 512,
+      });
+      applyEventToStore(
+        {
+          type: "run_reconfigured",
+          runId: "r1",
+          ts: 2000,
+          message: "[reconfig] referee on",
+          changes: {
+            thinkGuardReferee: {
+              thinkGuardRefereeEnabled: { from: false, to: true },
+              thinkGuardRefereeMaxCallsPerRun: { from: 6, to: 10 },
+            },
+          },
+        },
+        store.getState(),
+      );
+      assert.equal(store.getState().runConfig?.thinkGuardRefereeEnabled, true);
+      assert.equal(store.getState().runConfig?.thinkGuardRefereeMaxCallsPerRun, 10);
+      assert.equal(store.getState().thinkGuardReferee?.enabled, true);
+      assert.equal(store.getState().thinkGuardReferee?.maxCallsPerRun, 10);
+      assert.equal(store.getState().thinkGuardReferee?.callsUsed, 1);
     });
   });
 

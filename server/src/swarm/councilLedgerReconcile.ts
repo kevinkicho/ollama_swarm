@@ -1,4 +1,5 @@
 import type { ExitCriterion } from "./blackboard/types.js";
+import { isTransientProviderStall } from "./blackboard/retry.js";
 import type { CouncilProgressLedger } from "./councilProgressLedger.js";
 import { skipCoversCriterionFiles } from "./councilSkipReconcile.js";
 
@@ -88,6 +89,47 @@ export function reconcileCriteriaFromLedger(
   });
 
   return { criteria: updated, promotedIds };
+}
+
+/** True when recent fail observations for unmet criteria are all transport/quota stalls. */
+export function unmetFailsAreTransientOnly(
+  ledger: CouncilProgressLedger,
+  unmetIds: ReadonlySet<string>,
+  criteria: readonly ExitCriterion[],
+  cycle: number,
+): boolean {
+  const targetFiles = new Set<string>();
+  for (const c of criteria) {
+    if (!unmetIds.has(c.id)) continue;
+    for (const f of c.expectedFiles) targetFiles.add(normalizePath(f));
+  }
+  if (targetFiles.size === 0) return false;
+
+  const recentFails: string[] = [];
+  for (const o of ledger.observations) {
+    if (o.kind !== "fail" || o.cycle < cycle - 1) continue;
+    const overlaps =
+      (o.files?.length &&
+        o.files.some((f) => targetFiles.has(normalizePath(f)))) ||
+      (!o.files?.length &&
+        [...targetFiles].some((f) => o.text.includes(f)));
+    if (overlaps) recentFails.push(o.text);
+  }
+  if (recentFails.length === 0) return false;
+  return recentFails.every((t) => isTransientProviderStall(t));
+}
+
+/** Most recent transient provider stall text from ledger fails (for control gate). */
+export function extractRecentProviderStallFromLedger(
+  ledger: CouncilProgressLedger,
+  cycle: number,
+): string | undefined {
+  for (let i = ledger.observations.length - 1; i >= 0; i--) {
+    const o = ledger.observations[i]!;
+    if (o.kind !== "fail" || o.cycle < cycle - 2) continue;
+    if (isTransientProviderStall(o.text)) return o.text;
+  }
+  return undefined;
 }
 
 /** Stable signature of recent fail observations for unmet criteria (stuck detection). */

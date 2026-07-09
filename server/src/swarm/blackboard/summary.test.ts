@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import {
   buildSummary,
   computeLatencyStats,
+  detectTerminalQuotaExhaustion,
   extractDeliverables,
   FINAL_GIT_STATUS_MAX,
   isStartupAbort,
   type BuildSummaryInput,
   type PerAgentStat,
 } from "./summary.js";
+import { classifyError } from "../errorTaxonomy.js";
 
 function baseInput(overrides: Partial<BuildSummaryInput> = {}): BuildSummaryInput {
   return {
@@ -237,19 +239,43 @@ describe("buildSummary — stopReason classification", () => {
     assert.match(s.stopDetail ?? "", /no new work/);
   });
 
-  it("stays 'completed' when commits>0 even if all criteria still unmet (work was done)", () => {
+  it("reports 'no-progress' for 8e5ab2-shaped stall (1 commit, 26 skipped, all criteria unmet)", () => {
+    const s = buildSummary(
+      baseInput({
+        board: { committed: 1, skipped: 26, total: 39 },
+        staleEvents: 45,
+        completionDetail: "auditor + planner produced no new work; unresolved criteria remain",
+        contract: {
+          missionStatement: "Add government data panels",
+          criteria: Array.from({ length: 12 }, (_, i) => ({
+            id: `c${i + 1}`,
+            description: `criterion ${i + 1}`,
+            expectedFiles: [`src/p${i + 1}.jsx`],
+            status: "unmet" as const,
+            addedAt: 0,
+          })),
+        },
+      }),
+    );
+    assert.equal(s.stopReason, "no-progress");
+  });
+
+  it("reports 'no-progress' when all criteria unmet and auditor+planner stuck despite commits", () => {
     const s = buildSummary(
       baseInput({
         board: { committed: 3, skipped: 0, total: 3 },
+        completionDetail: "auditor + planner produced no new work; unresolved criteria remain",
         contract: {
           missionStatement: "Some mission",
           criteria: [
             { id: "c1", description: "x", expectedFiles: ["a.ts"], status: "unmet", addedAt: 0 },
+            { id: "c2", description: "y", expectedFiles: ["b.ts"], status: "unmet", addedAt: 0 },
           ],
         },
       }),
     );
-    assert.equal(s.stopReason, "completed");
+    assert.equal(s.stopReason, "no-progress");
+    assert.match(s.stopDetail ?? "", /no new work/);
   });
 
   it("stays 'completed' when no contract is present and no completionDetail (discussion-style)", () => {
@@ -260,6 +286,38 @@ describe("buildSummary — stopReason classification", () => {
       }),
     );
     assert.equal(s.stopReason, "completed");
+  });
+
+  it("reports 'cap:quota' when terminal window is all quota errors", () => {
+    const quotaErrors = Array.from({ length: 8 }, (_, i) =>
+      classifyError({ message: `rate limit ${i}`, statusCode: 429 }),
+    );
+    const s = buildSummary(
+      baseInput({
+        completionDetail: "auditor + planner produced no new work; unresolved criteria remain",
+        board: { committed: 0, skipped: 0, stale: 0, total: 5 },
+        agents: [agent(1, 12)],
+        errors: quotaErrors,
+      }),
+    );
+    assert.equal(s.stopReason, "cap:quota");
+    assert.match(s.stopDetail ?? "", /quota/);
+  });
+
+  it("detectTerminalQuotaExhaustion — transcript streak of 429 retries", () => {
+    const transcript = Array.from({ length: 8 }, (_, i) => ({
+      id: `t-${i}`,
+      role: "system" as const,
+      text: "[agent-1] transport error (429) — retry 3/5 in 30s",
+      ts: i,
+    }));
+    const detail = detectTerminalQuotaExhaustion({
+      errors: [],
+      agents: [{ ...agent(1, 8), successfulAttempts: 0 }],
+      transcript,
+    });
+    assert.ok(detail);
+    assert.match(detail, /consecutive quota/);
   });
 
   it("reports 'no-progress' when no contract and planner left zero board activity", () => {

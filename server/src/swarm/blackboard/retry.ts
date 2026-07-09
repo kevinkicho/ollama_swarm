@@ -77,7 +77,17 @@ const RETRYABLE_MESSAGE_PATTERNS: readonly RegExp[] = [
   // retryable cause chain — also retry when no cause is surfaced.
   /^fetch failed$/i,
   /OpenCode\b.*\bHTTP 5\d\d\b/i,
+  /Ollama HTTP 429\b/i,
+  /session usage limit/i,
+  /rate limit exceeded/i,
 ];
+
+/** Provider quota / transport stall — not genuine "no progress" on the task. */
+export function isTransientProviderStall(msg: string): boolean {
+  if (!msg) return false;
+  if (isRetryableSdkError(new Error(msg))) return true;
+  return RETRYABLE_MESSAGE_PATTERNS.some((p) => p.test(msg));
+}
 
 /** Sidebar + transcript retry label — avoids implying local Ollama is down. */
 export function shortRetryReason(err: unknown): string {

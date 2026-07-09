@@ -29,6 +29,9 @@ import { bumpAgentCounter } from "./runnerHelpers.js";
 import { pheromoneHeatmap } from "../pheromoneHeatmap.js";
 import type { LifecycleState } from "./lifecycleState.js";
 import { brainEnabled } from "./prompts/brainIntegration.js";
+import type { ProfileName } from "../../tools/ToolDispatcher.js";
+import type { ExplorationCacheEntry } from "@ollama-swarm/shared/explorationCache";
+import type { StallGateVerdict } from "@ollama-swarm/shared/swarmControl/types";
 
 // BlackboardRunnerFields is now a generated interface (125 properties,
 // 11 per-context subsets). Regenerate via:
@@ -40,6 +43,7 @@ export function utilCtx(r: BlackboardRunnerFields): RunnerUtilContext {
   return {
     active: r.active,
     phase: r.phase,
+    planningSubphase: r.planningSubphase,
     round: r.round,
     runStartedAt: r.runStartedAt,
     transcript: r.transcript,
@@ -155,6 +159,18 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
     get cloneStateForStatus() { return r.cloneStateForStatus; },
     set cloneStateForStatus(v: LifecycleContext["cloneStateForStatus"]) { r.cloneStateForStatus = v; },
     setPhase: (phase: SwarmPhase) => r.setPhase(phase),
+    setPlanningSubphase: (
+      subphase: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase | undefined,
+    ) => r.setPlanningSubphase(subphase),
+    clearExplorationCache: () => r.clearExplorationCache(),
+    syncExplorationCacheFromSeed: (seed: PlannerSeed) => r.syncExplorationCacheFromSeed(seed),
+    getPhase: () => r.phase,
+    getPlanningStartedAt: () => r.planningStartedAt,
+    setPlanningStartedAt: (v: number | undefined) => { r.planningStartedAt = v; },
+    getContractDerivationFailure: () => r.contractDerivationFailure,
+    setContractDerivationFailure: (v: string | undefined) => { r.contractDerivationFailure = v; },
+    getDrainEligibilityInput: (partial: { claimed: number; pendingCommit: number }) =>
+      r.getDrainEligibilityInput(partial),
     appendSystem: (text: string, summary?: TranscriptEntrySummary) => r.appendSystem(text, summary),
     appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
     pendingToolTraceByAgent: r.pendingToolTraceByAgent,
@@ -210,6 +226,7 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
     clearFindings: () => r.findings.clear(),
     stop: () => r.stop(),
     buildReflectionContext: (planner: Agent, abortSignal: AbortSignal) => r.buildReflectionContext(planner, abortSignal),
+    initRunControl: (runId: string) => r.initRunControl(runId),
     initBrainOverseer: (runId: string) => r.initBrainOverseer(runId),
     getBrainService: () => r.opts.getBrainService?.() ?? null,
     getInteractionTracker: () => r.interactionTracker,
@@ -242,7 +259,14 @@ export function contractContext(r: BlackboardRunnerFields): ContractContext {
     manager: r.opts.manager,
     getPlannerFallbackModel: () => r.active?.plannerFallbackModel,
     updateAgentModel: (agentId: string, model: string) => { r.opts.manager.updateAgentModel(agentId, model); },
-    promptPlannerSafely: (primaryAgent: Agent, promptText: string, agentName?: "swarm" | "swarm-read" | "swarm-builder", ollamaFormat?: "json" | Record<string, unknown>) => r.promptPlannerSafely(primaryAgent, promptText, agentName ?? "swarm", ollamaFormat),
+    setContractDerivationFailure: (reason: string | undefined) => { r.contractDerivationFailure = reason; },
+    promptPlannerSafely: (
+      primaryAgent: Agent,
+      promptText: string,
+      agentName?: "swarm" | "swarm-read" | "swarm-builder",
+      ollamaFormat?: "json" | Record<string, unknown>,
+      activity?: { kind?: string; label?: string; maxToolTurns?: number },
+    ) => r.promptPlannerSafely(primaryAgent, promptText, agentName ?? "swarm", ollamaFormat, activity),
     promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>, activity?: { kind?: string; label?: string }) => r.promptAgent(agent, prompt, agentName, formatExpect, ollamaFormat, activity),
     emit: (e: unknown) => r.opts.emit(e as SwarmEvent),
     scheduleStateWrite: () => r.scheduleStateWrite(),
@@ -284,6 +308,7 @@ export function tierContext(r: BlackboardRunnerFields): TierContext {
     scheduleStateWrite: () => r.scheduleStateWrite(),
     cloneContract: (c: ExitContract) => r.cloneContract(c),
     directiveWithAmendments: () => r.directiveWithAmendments(),
+    getExplorationCache: () => r.getExplorationCache(),
     logDiag: r.opts.logDiag,
     boardListTodos: () => r.boardListTodos(),
     boardCounts: () => r.boardCounts(),
@@ -294,6 +319,29 @@ export function tierContext(r: BlackboardRunnerFields): TierContext {
     runWorkers: (workers: Agent[]) => r.runWorkers(workers),
     runAuditor: (planner: Agent, opts?: { allowWhenStopping?: boolean }) => r.runAuditor(planner, opts),
     runPlannerFallbackForUnmetCriteria: (planner: Agent) => r.runPlannerFallbackForUnmetCriteria(planner),
+    noteProviderStall: (msg: string) => r.noteProviderStall(msg),
+    consumeProviderStall: () => r.consumeProviderStall(),
+    evaluateStallGate: async (
+      planner: Agent,
+      providerStall?: string,
+    ): Promise<StallGateVerdict | null> => {
+      const active = r.active;
+      const counts = r.boardCounts();
+      return r.getSwarmControl().evaluateStallGate({
+        board: counts,
+        contract: r.contract,
+        stuckCycles: r.consecutiveStuckCycles,
+        providerStall,
+        todos: r.boardListTodos(),
+        coachAgent: planner,
+        clonePath: active?.localPath,
+        runId: active?.runId,
+        interactionTracker: r.interactionTracker,
+        exceptionCollector: r.exceptionCollector,
+        appendSystem: (msg: string) => r.appendSystem(msg),
+        emit: (e: SwarmEvent) => r.opts.emit(e),
+      });
+    },
     v2ObserverApply: (event: SwarmEvent) => r.v2Observer.apply(event),
   } as unknown as TierContext;
 }
@@ -316,6 +364,7 @@ export function plannerContext(r: BlackboardRunnerFields): PlannerContext {
     manager: r.opts.manager,
     v2ObserverApply: (event: SwarmEvent) => r.v2Observer.apply(event),
     hypothesisGroupAbortsSet: (groupId: string, controller: AbortController) => { r.hypothesisGroupAborts.set(groupId, controller); },
+    noteProviderStall: (msg: string) => r.noteProviderStall(msg),
     buildSeed: (clonePath: string, cfg: RunConfig) => r.buildSeed(clonePath, cfg),
     boardCounts: () => r.boardCounts(),
   } as unknown as PlannerContext;
@@ -349,7 +398,21 @@ export function workerContext(r: BlackboardRunnerFields): WorkerContext {
     appendSystem: (msg: string) => r.appendSystem(msg),
     appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
     pendingToolTraceByAgent: r.pendingToolTraceByAgent,
-    promptAgent: (agent: Agent, prompt: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>, activity?: { kind?: string; label?: string }) => r.promptAgent(agent, prompt, agentName, formatExpect, ollamaFormat, activity),
+    promptAgent: (
+      agent: Agent,
+      prompt: string,
+      agentName: ProfileName,
+      formatExpect: "json" | "free",
+      ollamaFormat?: "json" | Record<string, unknown>,
+      activity?: {
+        kind?: string;
+        label?: string;
+        maxToolTurns?: number;
+        mode?: "explore" | "emit";
+        promptWallClockMs?: number;
+      },
+    ) => r.promptAgent(agent, prompt, agentName, formatExpect, ollamaFormat, activity),
+    getRepoFiles: () => r.getRepoFiles(),
     emitAgentState: (s: AgentState) => r.emitAgentState(s),
     getManager: () => r.opts.manager,
     readExpectedFiles: (files: string[]) => r.readExpectedFiles(files),
@@ -406,6 +469,7 @@ export function workerContext(r: BlackboardRunnerFields): WorkerContext {
     recordException: (type: string, agentId: string, todoId?: string, reason?: string) => {
       r.exceptionCollector?.record({ type: type as any, agentId, todoId, reason: reason ?? "" });
     },
+    getSessionPlannerHint: () => r.getSwarmControl().getSessionPlannerHint(),
   } as unknown as WorkerContext;
 }
 
@@ -438,6 +502,8 @@ export function promptContext(r: BlackboardRunnerFields): PromptContext {
     maxTrackedErrors: r.maxTrackedErrors,
     pendingPromptByAgent: r.pendingPromptByAgent,
     pendingToolTraceByAgent: r.pendingToolTraceByAgent,
+    getSwarmControl: () => r.getSwarmControl(),
+    getCoachAgent: () => r.planner ?? r.auditor ?? r.opts.manager.list()[0],
   } as unknown as PromptContext;
 }
 
@@ -489,8 +555,13 @@ export function replanContext(r: BlackboardRunnerFields): ReplanContext {
     getPlanner: () => r.planner,
     getAuditor: () => r.auditor,
     getActive: () => r.active,
+    getContract: () => r.contract,
+    getSessionPlannerHint: () => r.getSwarmControl().getSessionPlannerHint(),
     getTranscript: () => r.transcript,
     getAmendments: r.opts.getAmendments,
+    getExplorationCache: () => r.getExplorationCache(),
+    setExplorationCache: (cache: ExplorationCacheEntry[]) => r.setExplorationCache(cache),
+    getRepoFiles: () => r.getRepoFiles(),
     isStopping: () => r.lifecycleState === "stopping",
     isDraining: () => r.lifecycleState === "draining",
     boardListTodos: () => r.boardListTodos(),
@@ -500,7 +571,18 @@ export function replanContext(r: BlackboardRunnerFields): ReplanContext {
     appendSystem: (msg: string) => r.appendSystem(msg),
     appendAgent: (agent: Agent, text: string, options?: import("./runnerUtil.js").AppendAgentOptions) =>
       r.appendAgent(agent, text, options),
-    promptPlannerSafely: (agent: Agent, prompt: string, name: "swarm" | "swarm-read" | "swarm-builder", format?: "json" | Record<string, unknown>) => r.promptPlannerSafely(agent, prompt, name, format),
+    promptPlannerSafely: (
+      agent: Agent,
+      prompt: string,
+      name?: ProfileName,
+      format?: "json" | Record<string, unknown>,
+      activity?: {
+        kind?: string;
+        label?: string;
+        maxToolTurns?: number;
+        mode?: "explore" | "emit";
+      },
+    ) => r.promptPlannerSafely(agent, prompt, name, format, activity),
     checkAndApplyCaps: () => r.checkAndApplyCaps(),
     emit: (e: unknown) => r.opts.emit(e as SwarmEvent),
     brainPromptFn: brainEnabled() ? r.brainPromptFn.bind(r) : undefined,

@@ -33,4 +33,26 @@ describe("inferStructuredBrainMode", () => {
   it("structured for affirmatives during run (launch path)", () => {
     assert.equal(inferStructuredBrainMode("yes", { duringRun: true }), true);
   });
+
+  it("structured when user asks to extend runtime limits", () => {
+    assert.equal(
+      inferStructuredBrainMode("extend the wall-clock cap by 15 minutes", { duringRun: true }),
+      true,
+    );
+    assert.equal(
+      inferStructuredBrainMode("give the run more time — increase the cap", { duringRun: true }),
+      true,
+    );
+  });
+
+  it("structured when user asks about think-guard referee budget", () => {
+    assert.equal(
+      inferStructuredBrainMode("enable the think guard referee and add more calls", { duringRun: true }),
+      true,
+    );
+    assert.equal(
+      inferStructuredBrainMode("agent 1 is stuck in a reasoning loop — increase referee tail", { duringRun: true }),
+      true,
+    );
+  });
 });

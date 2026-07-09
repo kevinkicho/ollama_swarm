@@ -3,9 +3,15 @@ import type { RunConfig } from "../SwarmRunner.js";
 import type { ExitContract } from "./types.js";
 import type { RunSummary } from "./summary.js";
 import { boardCounts as boardCountsExtracted, boardSnapshot as boardSnapshotExtracted, type RunnerUtilContext } from "./runnerUtil.js";
+import { isDrainEligible } from "@ollama-swarm/shared/drainEligibility";
+import { resolveThinkGuardRefereeBudget } from "@ollama-swarm/shared/thinkGuardBudget";
+import { config } from "../../config.js";
 
 export interface StatusContext {
   phase: string;
+  planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
+  getDrainEligibilityInput?: (partial: { claimed: number; pendingCommit: number }) => import("./drainEligibility.js").DrainEligibilityInput;
+  getTodoQueueCounts?: () => { pendingCommit: number };
   round: number;
   active?: RunConfig;
   transcript: TranscriptEntry[];
@@ -60,10 +66,40 @@ export function status(ctx: StatusContext): SwarmStatus {
           : {}),
         ...(ctx.active.webTools !== undefined ? { webTools: ctx.active.webTools } : {}),
         ...(ctx.active.mcpServers ? { mcpServers: ctx.active.mcpServers } : {}),
+        ...(ctx.active.thinkGuardRefereeEnabled != null
+          ? { thinkGuardRefereeEnabled: ctx.active.thinkGuardRefereeEnabled }
+          : {}),
+        ...(ctx.active.thinkGuardRefereeMaxCallsPerRun != null
+          ? { thinkGuardRefereeMaxCallsPerRun: ctx.active.thinkGuardRefereeMaxCallsPerRun }
+          : {}),
+        ...(ctx.active.thinkGuardRefereeMinThinkChars != null
+          ? { thinkGuardRefereeMinThinkChars: ctx.active.thinkGuardRefereeMinThinkChars }
+          : {}),
+        ...(ctx.active.thinkGuardRefereeThinkTailMinChars != null
+          ? { thinkGuardRefereeThinkTailMinChars: ctx.active.thinkGuardRefereeThinkTailMinChars }
+          : {}),
+        ...(ctx.active.thinkGuardRefereeThinkTailMaxChars != null
+          ? { thinkGuardRefereeThinkTailMaxChars: ctx.active.thinkGuardRefereeThinkTailMaxChars }
+          : {}),
+        ...(ctx.active.thinkGuardRefereeMaxOutputTokens != null
+          ? { thinkGuardRefereeMaxOutputTokens: ctx.active.thinkGuardRefereeMaxOutputTokens }
+          : {}),
       }
     : undefined;
+  const thinkGuardReferee = ctx.active
+    ? resolveThinkGuardRefereeBudget(ctx.active, config.THINK_GUARD_REFEREE_ENABLED)
+    : undefined;
+  const pendingCommit = ctx.getTodoQueueCounts?.().pendingCommit ?? 0;
+  const drainEligible = ctx.getDrainEligibilityInput
+    ? isDrainEligible(
+        ctx.getDrainEligibilityInput({ claimed: counts.claimed, pendingCommit }),
+      )
+    : isDrainEligible({ phase: ctx.phase, claimed: counts.claimed, pendingCommit });
+
   return {
     phase: ctx.phase as import("../../types.js").SwarmPhase,
+    ...(ctx.planningSubphase ? { planningSubphase: ctx.planningSubphase } : {}),
+    drainEligible,
     round: ctx.round,
     repoUrl: ctx.active?.repoUrl,
     localPath: ctx.active?.localPath,
@@ -78,5 +114,6 @@ export function status(ctx: StatusContext): SwarmStatus {
     board: { todos: board.todos, findings: board.findings, counts },
     latency,
     streaming: ctx.getPartialStreams(),
+    ...(thinkGuardReferee ? { thinkGuardReferee } : {}),
   };
 }

@@ -15,6 +15,7 @@ import type { RunConfig } from "../SwarmRunner.js";
 import type { PlannerSeed } from "./prompts/planner.js";
 import { buildResearchToolsNote } from "./prompts/planner.js";
 import { isUsableResearchBrief } from "../researchBrief.js";
+import { resolveMaxToolTurnsForPlanningPhase } from "@ollama-swarm/shared/toolProfiles";
 
 export function shouldRunResearchPrePass(cfg: RunConfig, seed: PlannerSeed): boolean {
   if (!seed.webToolsEnabled) return false;

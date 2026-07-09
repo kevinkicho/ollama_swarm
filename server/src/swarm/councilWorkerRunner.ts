@@ -9,6 +9,7 @@ import {
   buildWorkerRepairPrompt,
   buildHunkRepairPrompt,
   parseWorkerResponse,
+  validateHunkPayload,
   WORKER_SYSTEM_PROMPT,
   isLiteratureTodo,
 } from "./blackboard/prompts/worker.js";
@@ -17,7 +18,23 @@ import { buildResearchToolsNote } from "./blackboard/prompts/planner.js";
 import { chatOnce } from "./chatOnce.js";
 import { extractText } from "./extractText.js";
 import { isWebToolsEnabled, resolveCouncilToolProfile, resolveToolProfile } from "./toolProfiles.js";
-import { effectiveToolProfileId } from "../../../shared/src/toolProfiles.js";
+import {
+  effectiveToolProfileId,
+  EXPLORE_MAX_LITERATURE_TOOL_TURNS,
+  LITERATURE_RESEARCH_NUDGE_MESSAGE,
+  LITERATURE_RESEARCH_NUDGE_TURN,
+  LITERATURE_RESEARCH_PROFILE,
+  LITERATURE_RESEARCH_TOOLS,
+  resolveMaxToolTurnsForProfile,
+  type ToolProfileId,
+} from "../../../shared/src/toolProfiles.js";
+import { isUsableResearchBrief } from "./researchBrief.js";
+import {
+  emitCouncilTodoClaimed,
+  emitCouncilTodoCommitted,
+  emitCouncilTodoFailed,
+  emitCouncilTodoSkipped,
+} from "./councilTodoWire.js";
 import { makeBufferedToolHandler } from "./toolCallTranscript.js";
 import { withSiblingRetry } from "./blackboard/siblingRetry.js";
 import {
@@ -31,6 +48,9 @@ import { wrapProgressContextForPrompt } from "./councilProgressLedger.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
 import { checkBuildCommand } from "./blackboard/buildCommandAllowlist.js";
 import simpleGit from "simple-git";
+import type { SwarmControlCenter } from "./control/SwarmControlCenter.js";
+import type { SwarmEvent } from "../types.js";
+import type { ToolResultHook } from "../tools/ToolDispatcher.js";
 
 export type TodoSettledOutcome = "completed" | "skipped" | "failed";
 
@@ -49,6 +69,45 @@ export interface WorkerRunnerContext {
   draining?: () => boolean;
   /** Aborted on hard stop so hung prompts fail fast. */
   promptSignal?: AbortSignal;
+  getSwarmControl?: () => SwarmControlCenter;
+  getCoachAgent?: () => Agent | undefined;
+  emit?: (e: SwarmEvent) => void;
+}
+
+function wrapCouncilPromptWithControlHints(
+  prompt: string,
+  agentId: string,
+  ctx: WorkerRunnerContext,
+): string {
+  const control = ctx.getSwarmControl?.();
+  if (!control) return prompt;
+  const agentHint = control.consumeAgentHint(agentId);
+  const sessionHint = control.consumeSessionPlannerHint();
+  const blocks: string[] = [];
+  if (sessionHint) blocks.push(`[Swarm control — session]\n${sessionHint}`);
+  if (agentHint) blocks.push(`[Swarm control — tool coach]\n${agentHint}`);
+  if (blocks.length === 0) return prompt;
+  return `${blocks.join("\n\n")}\n\n[End swarm control]\n\n${prompt}`;
+}
+
+function buildCouncilToolCoachHook(
+  ctx: WorkerRunnerContext,
+  agent: Agent,
+  state: CouncilAdapterState,
+): ToolResultHook | undefined {
+  const control = ctx.getSwarmControl?.();
+  const coach = ctx.getCoachAgent?.() ?? agent;
+  if (!control) return undefined;
+  return (info) => {
+    if (info.ok) return;
+    control.recordToolFailure(agent.id, info.tool, info.error ?? "tool error", info.preview, {
+      agent: coach,
+      clonePath: state.clonePath,
+      runId: state.cfg.runId,
+      appendSystem: ctx.appendSystem,
+      emit: ctx.emit,
+    });
+  };
 }
 
 const WORKER_COOLDOWN_MS = 5_000;
@@ -102,7 +161,13 @@ async function runCouncilLiteratureResearch(
   if (!isWebToolsEnabled(cfg) || !isLiteratureTodo(todo.description)) {
     return undefined;
   }
-  const profile = resolveCouncilToolProfile(cfg);
+  (state.manager as {
+    markStatus: (id: string, status: string, extra?: Record<string, unknown>) => void;
+  }).markStatus(agent.id, "thinking", {
+    activityKind: "worker",
+    activityLabel: "literature research",
+    thinkingSince: Date.now(),
+  });
   const prompt = [
     "You are a research worker gathering sources BEFORE writing file edits.",
     buildResearchToolsNote(true),
@@ -117,20 +182,31 @@ async function runCouncilLiteratureResearch(
 
   try {
     const res = await chatOnce(agent, {
-      agentName: profile,
+      agentName: LITERATURE_RESEARCH_PROFILE,
       promptText: prompt,
       clonePath: state.clonePath,
       webToolsConfig: cfg,
       runId: cfg.runId,
       mcpServers: cfg.mcpServers,
       signal,
+      maxToolTurns: EXPLORE_MAX_LITERATURE_TOOL_TURNS,
+      toolsOverride: [...LITERATURE_RESEARCH_TOOLS],
+      toolLoopNudge: {
+        atTurn: LITERATURE_RESEARCH_NUDGE_TURN,
+        message: LITERATURE_RESEARCH_NUDGE_MESSAGE,
+      },
       onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
     });
     const text = extractText(res)?.trim();
-    if (text && text.length >= 80) {
+    if (text && isUsableResearchBrief(text)) {
       const capped = text.length > 8000 ? `${text.slice(0, 8000)}…` : text;
       appendSystem(`[${agent.id}] Literature research: captured ${capped.length} chars of notes.`);
       return capped;
+    }
+    if (text && text.length >= 80) {
+      appendSystem(
+        `[${agent.id}] Literature research: rejected output (need prose notes with URLs, not JSON hunks or intent-only stubs).`,
+      );
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -183,6 +259,9 @@ async function runCouncilWorker(
   while (!ctx.stopping()) {
     if (ctx.draining?.()) break;
     const todo = dequeueCouncilTodo(state.todoQueue, agent.id);
+    if (todo) {
+      emitCouncilTodoClaimed(state.emit, todo);
+    }
     if (!todo) {
       if (state.todoQueue.counts().pending === 0) break;
       await new Promise((r) => setTimeout(r, WORKER_DEFER_POLL_MS));
@@ -200,6 +279,7 @@ async function runCouncilWorker(
     }
     if (result.outcome === "completed") {
       state.todoQueue.complete(todo.id);
+      emitCouncilTodoCommitted(state.emit, todo.id);
       completed++;
       ctx.onTodoSettled?.({
         todoId: todo.id,
@@ -210,6 +290,7 @@ async function runCouncilWorker(
       await new Promise((r) => setTimeout(r, WORKER_COOLDOWN_MS + Math.floor(Math.random() * 500)));
     } else if (result.outcome === "skipped") {
       state.todoQueue.skip(todo.id, result.reason);
+      emitCouncilTodoSkipped(state.emit, state.todoQueue, todo.id);
       skipped++;
       ctx.onTodoSettled?.({
         todoId: todo.id,
@@ -220,6 +301,7 @@ async function runCouncilWorker(
       });
     } else {
       state.todoQueue.fail(todo.id, result.error);
+      emitCouncilTodoFailed(state.emit, state.todoQueue, todo.id);
       failed++;
       ctx.recordFailure?.(todo.id, todo.description, result.error.slice(0, 200));
       ctx.onTodoSettled?.({
@@ -449,7 +531,8 @@ async function tryWorkerPrompt(
     ctx.appendSystem,
     ctx.promptSignal,
   );
-  const workerProfile = effectiveToolProfileId("swarm-builder", state.cfg);
+  const workerProfile = effectiveToolProfileId("swarm-builder", state.cfg) as ToolProfileId;
+  const workerToolTurnCap = resolveMaxToolTurnsForProfile(workerProfile);
 
   const progressBlock = wrapProgressContextForPrompt(state.progressContext ?? "");
   const userBlock = opts.repairFrom
@@ -463,7 +546,12 @@ async function tryWorkerPrompt(
         webToolsEnabled,
         researchNotes,
       });
-  const basePrompt = `${WORKER_SYSTEM_PROMPT}\n\n${userBlock}${opts.repairFrom ? "" : progressBlock}`;
+  const basePrompt = wrapCouncilPromptWithControlHints(
+    `${WORKER_SYSTEM_PROMPT}\n\n${userBlock}${opts.repairFrom ? "" : progressBlock}`,
+    agent.id,
+    ctx,
+  );
+  const toolCoachHook = buildCouncilToolCoachHook(ctx, agent, state);
 
   try {
     const controller = new AbortController();
@@ -474,8 +562,11 @@ async function tryWorkerPrompt(
       manager: state.manager as any,
       agentName: workerProfile,
       signal: controller.signal,
-
+      maxToolTurns: workerToolTurnCap,
+      activity: { kind: "worker", label: `todo ${todo.id.slice(0, 8)}` },
       onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
+      onToolResultHook: toolCoachHook,
+      runId: state.cfg.runId,
     }, state.cfg.providerFailover);
 
     const res = extractProviderText(raw);
@@ -489,6 +580,10 @@ async function tryWorkerPrompt(
 
     const parsed = parseWorkerResponseWithRepair(res, expectedFiles);
     if (parsed.ok && parsed.hunks.length > 0 && !parsed.skip) {
+      const sizeCheck = validateHunkPayload(parsed.hunks);
+      if (!sizeCheck.ok) {
+        return { outcome: "retry", reason: sizeCheck.reason, lastResponse: res };
+      }
       const fixedHunks = parsed.hunks.map((h) => {
         if ((h as any).op === "create" && fileContents[(h as any).file] !== null) {
           const currentContent = fileContents[(h as any).file]!;
@@ -517,11 +612,18 @@ async function tryWorkerPrompt(
         const currentContent = failedFile ? fileContents[failedFile] : null;
         if (currentContent && fixedHunks.length > 0) {
           const repairPrompt = buildHunkRepairPrompt(fixedHunks, applyResult.reason, { [failedFile!]: currentContent });
-          const repairRaw = await promptWithFailoverAuto(agent, `${WORKER_SYSTEM_PROMPT}\n\n${repairPrompt}`, {
+          const repairRaw = await promptWithFailoverAuto(agent, wrapCouncilPromptWithControlHints(
+            `${WORKER_SYSTEM_PROMPT}\n\n${repairPrompt}`,
+            agent.id,
+            ctx,
+          ), {
             manager: state.manager as any,
             agentName: workerProfile,
             signal: controller.signal,
+            maxToolTurns: workerToolTurnCap,
             onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
+            onToolResultHook: toolCoachHook,
+            runId: state.cfg.runId,
           }, state.cfg.providerFailover);
           const repairText = extractProviderText(repairRaw);
           if (repairText) {

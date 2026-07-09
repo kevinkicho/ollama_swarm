@@ -116,6 +116,8 @@ export function eventOneLiner(ev: { type: string } & Record<string, unknown>): s
       return `replanned ${String(ev.todoId)} (#${String(ev.replanCount)})`;
     case "directive_amended":
       return `amend: ${String(ev.text).slice(0, 80)}`;
+    case "run_reconfigured":
+      return String(ev.message ?? "limits updated").slice(0, 100);
     case "conformance_sample":
       return `conformance ${String(ev.score)} (smoothed ${String(ev.smoothedScore)})`;
     case "drift_sample":

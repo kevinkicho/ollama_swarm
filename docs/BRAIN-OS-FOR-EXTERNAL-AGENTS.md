@@ -16,7 +16,7 @@ Brain acts as a librarian / master-admin: it understands use-cases from the tabl
 - **History**: `POST /api/swarm/brain/chat-history` (persists per-run)
 - **Preset recommendation with data**: `GET /api/swarm/outcome/recommend?directive=...`
   - Returns best preset + rationale + real stats (median/avg scores from past runs).
-- **Control**: `/api/swarm/start`, `/api/swarm/amend`, per-run `/status`, `/stop`, etc.
+- **Control**: `/api/swarm/start`, `/api/swarm/amend`, `/api/swarm/reconfig` (extend rounds/cap/budget mid-run), per-run `/status`, `/stop`, etc.
 - **Observation**: `/api/swarm/run-summary`, `/memory`, event logs, `/brain/activity`, `/brain/proposals`.
 
 ## Use-Case Tables (source of truth for Brain)

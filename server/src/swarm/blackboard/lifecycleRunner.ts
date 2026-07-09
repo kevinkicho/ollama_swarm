@@ -22,6 +22,11 @@ import { shouldRunFinalAudit } from "./finalAudit.js";
 import { snapshotLifetimeTokens } from "../../services/ollamaProxy.js";
 import { createTickAccumulator, WALL_CLOCK_CAP_MS } from "./caps.js";
 import { runGoalGenerationPrePass } from "./goalGenerationPrePass.js";
+import {
+  isPlanningWallClockExceeded,
+  shouldRunGoalPrePass,
+  shouldSkipPlannerAfterContractFailure,
+} from "./planningPolicy.js";
 import { runResearchPrePass } from "./researchPrePass.js";
 import { makeBufferedToolHandler } from "../toolCallTranscript.js";
 import type { ChatStreamingSurface } from "./promptRunner.js";
@@ -176,12 +181,18 @@ export interface LifecycleContext {
 
   // --- methods ---
   setPhase(phase: SwarmPhase): void;
+  setPlanningSubphase(
+    subphase: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase | undefined,
+  ): void;
+  clearExplorationCache(): void;
+  syncExplorationCacheFromSeed(seed: PlannerSeed): void;
   appendSystem(text: string, summary?: TranscriptEntrySummary): void;
   appendAgent(agent: Agent, text: string, options?: import("./runnerUtil.js").AppendAgentOptions): void;
   pendingToolTraceByAgent: Map<string, import("../toolCallTranscript.js").ToolTraceEntry[]>;
   discoverLocalOllamaTags(): Promise<void>;
   clearStateSnapshotScheduler(): void;
   emit(ev: { type: string; [key: string]: unknown }): void;
+  initRunControl(runId: string): void;
   initBrainOverseer(runId: string): void;
   getBrainService(): BrainService | null;
   getInteractionTracker(): InteractionTracker;
@@ -240,6 +251,23 @@ export interface LifecycleContext {
 
   // --- reflection context helper ---
   buildReflectionContext(planner: Agent, abortSignal: AbortSignal): ReflectionContext;
+  getPhase(): SwarmPhase;
+  getPlanningStartedAt(): number | undefined;
+  setPlanningStartedAt(v: number | undefined): void;
+  getContractDerivationFailure(): string | undefined;
+  setContractDerivationFailure(v: string | undefined): void;
+  getDrainEligibilityInput(partial: {
+    claimed: number;
+    pendingCommit: number;
+  }): import("./drainEligibility.js").DrainEligibilityInput;
+}
+
+function assertPlanningWithinWallClock(ctx: LifecycleContext): void {
+  if (!isPlanningWallClockExceeded(ctx.getPlanningStartedAt(), ctx.getActive())) return;
+  const capMin = Math.round(
+    ((ctx.getActive()?.planningWallClockCapMs ?? 15 * 60_000) / 60_000),
+  );
+  throw new Error(`planning wall-clock cap (${capMin} min) exceeded`);
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +300,10 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   // to "stop = hard user-stop" classification unless drain() fires.
   ctx.setWasDrained(false);
   ctx.setUserStopRequested(false);
+  ctx.setPlanningStartedAt(undefined);
+  ctx.setPlanningSubphase(undefined);
+  ctx.clearExplorationCache();
+  ctx.setContractDerivationFailure(undefined);
   ctx.setStartupCrashMessage(undefined);
   ctx.setTerminationReason(undefined);
   // 2026-05-04 (W7/W13/W14/W15 wiring): clear per-run trackers.
@@ -323,6 +355,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
       `repoUrl=${cfg.repoUrl ?? ""}`,
     ].join("|");
     ctx.appendSystem(dividerText);
+    ctx.initRunControl(cfg.runId ?? "");
     // Plan 4: initialize brain overseer components
     ctx.initBrainOverseer(cfg.runId ?? "");
   }
@@ -504,7 +537,10 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   ].map((a) => ({ id: a.id, index: a.index })));
 
   ctx.setPhase("seeding");
+  ctx.setPlanningSubphase("seeding");
+  ctx.setPlanningStartedAt(Date.now());
   const seed = await ctx.buildSeed(destPath, cfg);
+  ctx.syncExplorationCacheFromSeed?.(seed);
   if (cfg.suppressSeedMessages !== true) {
     const directiveTrimmed = (cfg.userDirective ?? "").trim();
     if (directiveTrimmed.length > 0) {
@@ -531,8 +567,10 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   // ENHANCE the directive — they don't replace it.
   // When NO directive is provided, goal generation proposes ambitious goals
   // as before (the top one becomes the directive).
-  const shouldGenerateGoals = cfg.autoGenerateGoals !== false;
+  const shouldGenerateGoals = shouldRunGoalPrePass(cfg, seed.userDirective);
   if (shouldGenerateGoals && cfg.suppressSeedMessages !== true) {
+    assertPlanningWithinWallClock(ctx);
+    ctx.setPlanningSubphase("goal-pre-pass");
     const generatedGoals = await runGoalGenerationPrePass(
       planner,
       seed,
@@ -566,6 +604,14 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
         `Goal-generation pre-pass: no usable goals returned — continuing without enrichment.`,
       );
     }
+  } else if (
+    cfg.suppressSeedMessages !== true
+    && (cfg.userDirective ?? "").trim().length >= 80
+    && cfg.autoGenerateGoals !== true
+  ) {
+    ctx.appendSystem(
+      "Goal-generation pre-pass skipped — user directive is already specific (set autoGenerateGoals:true to force enrichment).",
+    );
   }
 
   if (lifecycleIsStopping(ctx.getLifecycleState())) return;
@@ -578,6 +624,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
     agentCount: ctx.getAgentRoster().length,
   });
   ctx.setPhase("planning");
+  ctx.setPlanningSubphase("contract");
   // Background so the HTTP POST that triggered start() returns immediately.
   // The UI watches progress over /ws.
   // Task #198: planAndExecute has internal try/catch (line ~676), but its
@@ -625,8 +672,10 @@ export async function planAndExecute(
       ? await ctx.tryResumeContract(seed.clonePath)
       : false;
     if (!resumed) {
+      assertPlanningWithinWallClock(ctx);
       const activeCfg = ctx.getActive();
       if (activeCfg && seed.webToolsEnabled) {
+        ctx.setPlanningSubphase("research");
         const notes = await runResearchPrePass(
           planner,
           seed,
@@ -640,7 +689,9 @@ export async function planAndExecute(
         );
         if (notes) seed.researchNotes = notes;
       }
+      ctx.setPlanningSubphase("contract");
       await ctx.runFirstPassContractOrchestrator(planner, workers, seed);
+      ctx.syncExplorationCacheFromSeed(seed);
     }
     if (lifecycleIsStopping(ctx.getLifecycleState())) return;
     const qAfterResume = ctx.getTodoQueueCounts();
@@ -652,8 +703,15 @@ export async function planAndExecute(
       ctx.appendSystem(
         `Skipping initial planner pass — resuming ${qAfterResume.pending} open + ${qAfterResume.pendingCommit} pending-commit todo(s) from snapshot.`,
       );
+    } else if (shouldSkipPlannerAfterContractFailure(ctx.getContractDerivationFailure())) {
+      ctx.appendSystem(
+        `Skipping planner-todos — contract derivation aborted (${ctx.getContractDerivationFailure()}).`,
+      );
     } else {
+      assertPlanningWithinWallClock(ctx);
+      ctx.setPlanningSubphase("todos");
       await ctx.runPlanner(planner, seed);
+      ctx.syncExplorationCacheFromSeed(seed);
     }
     if (lifecycleIsStopping(ctx.getLifecycleState())) return;
     const counts = ctx.boardCounts();
@@ -969,6 +1027,19 @@ export async function planAndExecute(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       ctx.appendSystem(`Deliverable write failed (best-effort): ${msg}`);
+    }
+    // Pattern cache write-back: persist in-run exception fingerprints even
+    // when brain analysis is disabled (read path exists at run start).
+    try {
+      const clonePath = ctx.getActive()?.localPath ?? "";
+      const runId = ctx.getActive()?.runId ?? "";
+      const events = ctx.getExceptionCollector().getAll();
+      if (clonePath && events.length > 0) {
+        const { persistExceptionPatterns } = await import("./brainOverseer/patternCache.js");
+        await persistExceptionPatterns(clonePath, runId, events);
+      }
+    } catch {
+      // best-effort — never block summary write
     }
     // Phase 9: always try to write a summary, regardless of how we got
     // here (completed / stopped / failed / cap). Awaited so the file and

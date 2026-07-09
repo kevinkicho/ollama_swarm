@@ -18,7 +18,9 @@ import { CONTRACT_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
 import { groundExpectedFiles } from "./contractGrounding.js";
 import type { ClassifiedError } from "../errorTaxonomy.js";
 import { config as appConfig } from "../../config.js";
+import { isTransientProviderStall } from "./retry.js";
 import { resolveToolProfile } from "../toolProfiles.js";
+import { EMIT_ONLY_PROFILE_ID } from "@ollama-swarm/shared/toolProfiles";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
 
 export interface TierContext {
@@ -58,6 +60,7 @@ export interface TierContext {
   scheduleStateWrite: () => void;
   cloneContract: (c: ExitContract) => ExitContract;
   directiveWithAmendments: () => string | undefined;
+  getExplorationCache?: () => import("@ollama-swarm/shared/explorationCache").ExplorationCacheEntry[];
   logDiag: ((entry: unknown) => void) | undefined;
   boardListTodos: () => Todo[];
   boardCounts: () => BoardCounts;
@@ -68,6 +71,12 @@ export interface TierContext {
   runWorkers: (workers: Agent[]) => Promise<void>;
   runAuditor: (planner: Agent, opts?: { allowWhenStopping?: boolean }) => Promise<void>;
   runPlannerFallbackForUnmetCriteria: (planner: Agent) => Promise<boolean>;
+  noteProviderStall?: (msg: string) => void;
+  consumeProviderStall?: () => string | undefined;
+  evaluateStallGate?: (
+    planner: Agent,
+    providerStall?: string,
+  ) => Promise<import("@ollama-swarm/shared/swarmControl/types").StallGateVerdict | null>;
   v2ObserverApply: (event: unknown) => void;
 }
 
@@ -204,6 +213,7 @@ export async function tryPromoteNextTier(
     return [] as string[];
   });
 
+  const explorationCache = ctx.getExplorationCache?.() ?? [];
   const prompt = buildTierUpPrompt({
     nextTier,
     maxTiers,
@@ -213,9 +223,18 @@ export async function tryPromoteNextTier(
     repoFiles,
     readmeExcerpt,
     userDirective: ctx.directiveWithAmendments(),
+    explorationCache,
   });
 
-  const plannerProfile = resolveToolProfile("planner", ctx.getActive());
+  const plannerProfile =
+    explorationCache.length > 0
+      ? EMIT_ONLY_PROFILE_ID
+      : resolveToolProfile("planner", ctx.getActive());
+  if (explorationCache.length > 0) {
+    ctx.appendSystem(
+      "Tier-up: reusing prior explore brief — emit-only contract (no repo tour).",
+    );
+  }
   const { response, agentUsed } = await ctx.promptPlannerSafely(
     planner,
     prompt,
@@ -490,10 +509,15 @@ export async function runAuditedExecution(
     }
 
     const openBefore = ctx.boardCounts().open;
+    let auditorStall: string | undefined;
     try {
       await ctx.runAuditor(planner);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (isTransientProviderStall(msg)) {
+        auditorStall = msg;
+        ctx.noteProviderStall?.(msg);
+      }
       ctx.appendSystem(`Auditor failed (${msg}) — skipping this cycle, will retry next.`);
     }
     if (ctx.getStopping()) return;
@@ -512,10 +536,45 @@ export async function runAuditedExecution(
         ctx.setConsecutiveStuckCycles(0);
         continue;
       }
-      const stuckCycles = ctx.getConsecutiveStuckCycles() + 1;
-      ctx.setConsecutiveStuckCycles(stuckCycles);
+      const plannerStall = ctx.consumeProviderStall?.();
+      const transientStall =
+        (auditorStall && isTransientProviderStall(auditorStall))
+        || (plannerStall && isTransientProviderStall(plannerStall));
       const r = ctx.getActive()?.rounds ?? 1;
       const isAutonomous = r === 0 || r >= 1_000_000;
+      if (transientStall && isAutonomous) {
+        ctx.setConsecutiveStuckCycles(0);
+        ctx.appendSystem(
+          "Provider quota/transport stall — backing off 2m without counting as stuck (autonomous).",
+        );
+        await new Promise((resolve) => setTimeout(resolve, 120_000));
+        continue;
+      }
+      if (ctx.evaluateStallGate) {
+        const gate = await ctx.evaluateStallGate(
+          planner,
+          auditorStall ?? plannerStall,
+        );
+        if (gate?.action === "backoff" && isAutonomous) {
+          ctx.setConsecutiveStuckCycles(0);
+          const waitMs = gate.backoffMs ?? 120_000;
+          ctx.appendSystem(`[control] Backing off ${Math.round(waitMs / 1000)}s — ${gate.rationale}`);
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          continue;
+        }
+        if (gate?.action === "retry") {
+          ctx.setConsecutiveStuckCycles(0);
+          ctx.appendSystem(`[control] Retrying after stall gate — ${gate.rationale}`);
+          continue;
+        }
+        if (gate?.action === "stop") {
+          ctx.setCompletionDetail(gate.rationale);
+          ctx.appendSystem(ctx.getCompletionDetail()! + ".");
+          return;
+        }
+      }
+      const stuckCycles = ctx.getConsecutiveStuckCycles() + 1;
+      ctx.setConsecutiveStuckCycles(stuckCycles);
       if (isAutonomous && stuckCycles < MAX_STUCK_CYCLES_FOR_INFINITE_RUN) {
         ctx.appendSystem(
           `Stuck cycle ${stuckCycles}/${MAX_STUCK_CYCLES_FOR_INFINITE_RUN} — auditor + planner produced no new work; re-trying in autonomous mode.`,

@@ -16,6 +16,8 @@ import { runPostSynthesisCritique } from "./postSynthesisCritique.js";
 import { parseConvergenceSignal } from "./convergenceSignal.js";
 import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
 import { resolveCouncilToolProfile } from "./toolProfiles.js";
+import type { SwarmControlCenter } from "./control/SwarmControlCenter.js";
+import { buildCouncilToolCoachHook } from "./control/councilControlHooks.js";
 
 
 export interface SynthesisContext {
@@ -23,6 +25,8 @@ export interface SynthesisContext {
   emit: (event: Record<string, unknown>) => void;
   appendSystem: (msg: string) => void;
   logDiag: (entry: Record<string, unknown>) => void;
+  getSwarmControl?: () => SwarmControlCenter;
+  getCoachAgent?: () => Agent | undefined;
 }
 
 export interface SynthesisStats {
@@ -80,6 +84,15 @@ export async function runSynthesisPass(
       webToolsConfig: cfg,
       promptAddendum: "",
       describeError: describeSdkError,
+      onToolResultHook: buildCouncilToolCoachHook(lead, {
+        getSwarmControl: ctx.getSwarmControl,
+        getCoachAgent: ctx.getCoachAgent,
+        clonePath: cfg.localPath,
+        runId: cfg.runId,
+        appendSystem: ctx.appendSystem,
+        emit: ctx.emit as (e: import("../types.js").SwarmEvent) => void,
+      }),
+      runId: cfg.runId,
       onTiming: ({ attempt, elapsedMs, success }: { attempt: number; elapsedMs: number; success: boolean }) => {
         stats.onTiming(lead.id, success, elapsedMs);
         ctx.manager.recordPromptComplete(lead.id, { attempt, elapsedMs, success });

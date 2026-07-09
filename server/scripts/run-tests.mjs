@@ -73,6 +73,7 @@ const TEST_FILES = [
   // swarm/ (non-blackboard)
   "src/swarm/roles.test.ts",
   "src/swarm/CouncilRunner.test.ts",
+  "src/swarm/councilContractDraft.test.ts",
   "src/swarm/OrchestratorWorkerRunner.test.ts",
   "src/swarm/OrchestratorWorkerDeepRunner.test.ts",
   "src/swarm/DebateJudgeRunner.test.ts",
@@ -140,6 +141,8 @@ const TEST_FILES = [
   "src/swarm/discussionWriteSummary.test.ts",
   // 2026-05-03 (Phase D): finally close-out helper.
   "src/swarm/runFinallyHooks.test.ts",
+  "src/swarm/runReconfig.test.ts",
+  "src/swarm/brainChatMode.test.ts",
   // 2026-05-04 (T2.1): wrap-up apply phase + wiring assertions.
   "src/swarm/wrapUpApplyPhase.test.ts",
   "src/swarm/wrapUpApplyPhase.wiring.test.ts",
@@ -200,8 +203,14 @@ const TEST_FILES = [
   "../shared/src/extractJson.test.ts",
   "../shared/src/parseAgentJson.test.ts",
   "../shared/src/providers.test.ts",
+  "../shared/src/drainEligibility.test.ts",
+  "../shared/src/explorationCache.test.ts",
+  "../shared/src/planningSeed.test.ts",
   "../shared/src/topology.test.ts",
   "../shared/src/workerHunks.test.ts",
+  "../shared/src/swarmControl/stallRules.test.ts",
+  "../shared/src/swarmControl/replannerSkipGrounding.test.ts",
+  "src/swarm/control/SwarmControlCenter.test.ts",
   "src/swarm/blackboard/buildCommandAllowlist.test.ts",
 
   // services/
@@ -222,6 +231,7 @@ const TEST_FILES = [
   "src/services/CostTracker.test.ts",
   "src/services/AgentManager.usage.test.ts",
   "src/providers/providers.test.ts",
+  "src/providers/structuredFormat.test.ts",
   "src/providers/discoverModels.test.ts",
   "src/providers/providers.test.extended.ts",
   "src/providers/ProviderGateway.test.ts",
@@ -239,6 +249,8 @@ const TEST_FILES = [
 
   // blackboard/ BlackboardRunner lifecycle
   "src/swarm/blackboard/BlackboardRunner.lifecycle.test.ts",
+  "src/swarm/blackboard/planningPolicy.test.ts",
+  "src/swarm/blackboard/thinkGuardHandler.test.ts",
 
   // streamMerge/ OTEngine
   "src/swarm/streamMerge/OTEngine.test.ts",

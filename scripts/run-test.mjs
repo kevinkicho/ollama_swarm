@@ -345,6 +345,30 @@ async function probeApi() {
     warnOnly: true,
   });
 
+  // Reconfig route exists and rejects unknown/inactive runs (no LLM required).
+  try {
+    const resp = await fetch(`${serverUrl}/api/swarm/reconfig`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runId: "_run-test-inactive-run-id",
+        extendWallClockCapMin: 5,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const text = await resp.text();
+    await logApi(JSON.stringify({ at: Date.now(), label: "reconfig_inactive", status: resp.status, body: text.slice(0, 500) }));
+    if (resp.status === 404) {
+      record("api", "reconfig_inactive", "pass", "404 for inactive runId");
+    } else {
+      record("api", "reconfig_inactive", "fail", `expected 404, got ${resp.status}`);
+      allOk = false;
+    }
+  } catch (err) {
+    record("api", "reconfig_inactive", "fail", err.message);
+    allOk = false;
+  }
+
   return allOk;
 }
 
@@ -600,6 +624,7 @@ async function runLiveSmoke() {
   const logPath = path.join(logsDir, "live-smoke.json");
   /** @type {Record<string, unknown>} */
   const artifact = { startedAt: new Date().toISOString(), preset: liveSmokePreset };
+  let allOk = true;
 
   if (!liveSmokeEnabled) {
     record(
@@ -639,6 +664,34 @@ async function runLiveSmoke() {
   const runId = start.runId;
   record("live-smoke", "start_run", "pass", `runId=${runId} preset=${liveSmokePreset}`);
   artifact.runId = runId;
+
+  try {
+    const reconfigResp = await fetch(`${serverUrl}/api/swarm/reconfig`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runId, extendWallClockCapMin: 5 }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const reconfigText = await reconfigResp.text();
+    let reconfigBody = null;
+    try { reconfigBody = JSON.parse(reconfigText); } catch {}
+    artifact.reconfig = { status: reconfigResp.status, body: reconfigBody ?? reconfigText.slice(0, 500) };
+    if (reconfigResp.status === 200 && reconfigBody?.ok && reconfigBody?.changes?.wallClockCapMs) {
+      record("live-smoke", "reconfig_extend", "pass", reconfigBody.message ?? "wall-clock extended");
+    } else {
+      record(
+        "live-smoke",
+        "reconfig_extend",
+        "fail",
+        `HTTP ${reconfigResp.status}: ${reconfigText.slice(0, 200)}`,
+      );
+      allOk = false;
+    }
+  } catch (err) {
+    artifact.reconfig = { error: err.message };
+    record("live-smoke", "reconfig_extend", "fail", err.message);
+    allOk = false;
+  }
 
   let browser;
   try {
@@ -730,7 +783,6 @@ async function runLiveSmoke() {
 
   await browser.close();
 
-  let allOk = true;
   const transcript = lastStatus?.transcript ?? [];
   const transcriptLen = transcript.length;
 

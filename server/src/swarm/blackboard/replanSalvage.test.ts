@@ -4,6 +4,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+const REPLAN_RECOVERY_SRC = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "replannerRecovery.ts"),
+  "utf8",
+);
 const REPLAN_SRC = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), "replanManager.ts"),
   "utf8",
@@ -13,11 +17,16 @@ const AUDITOR_SRC = readFileSync(
   "utf8",
 );
 
-describe("replanManager — auditor salvage", () => {
+describe("replanner recovery — auditor salvage", () => {
   it("routes replanner repair failures to auditor JSON salvage", () => {
-    assert.match(REPLAN_SRC, /runParseSalvage/);
-    assert.match(REPLAN_SRC, /kind: "replanner"/);
-    assert.match(REPLAN_SRC, /dedicatedAuditor/);
+    assert.match(REPLAN_RECOVERY_SRC, /runParseSalvage/);
+    assert.match(REPLAN_RECOVERY_SRC, /kind: "replanner"/);
+    assert.match(REPLAN_RECOVERY_SRC, /dedicatedAuditor/);
+  });
+
+  it("replanManager uses emit recovery loop", () => {
+    assert.match(REPLAN_SRC, /runReplannerEmitRecovery/);
+    assert.match(REPLAN_SRC, /buildReplannerRepairFullPrompt/);
   });
 });
 

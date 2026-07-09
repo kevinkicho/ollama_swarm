@@ -6,6 +6,7 @@ import type { ChatResult as OllamaChatResult } from "../services/OllamaClient.js
 import type { ChatOpts, ChatResult } from "./SessionProvider.js";
 import { TOOL_SCHEMAS } from "./AnthropicProvider.js";
 import { formatToolInvokePreview } from "../swarm/toolCallTranscript.js";
+import { createToolLoopStuckDetector } from "@ollama-swarm/shared/toolLoopStuck";
 
 const DEFAULT_MAX_TOOL_TURNS = 10;
 
@@ -49,6 +50,13 @@ function parseToolArguments(raw: unknown): Record<string, unknown> {
   return {};
 }
 
+function resolveNudges(opts: ChatOpts): Array<{ atTurn: number; message: string }> {
+  const out: Array<{ atTurn: number; message: string }> = [];
+  if (opts.toolLoopNudge) out.push(opts.toolLoopNudge);
+  if (opts.toolLoopNudges) out.push(...opts.toolLoopNudges);
+  return out;
+}
+
 export async function chatWithOllamaToolLoop(
   baseChat: (messages: OllamaLoopMessage[], extra: {
     tools?: ReturnType<typeof buildOllamaToolDefs>;
@@ -82,6 +90,8 @@ export async function chatWithOllamaToolLoop(
 
   const toolDefs = buildOllamaToolDefs(opts.tools!);
   const maxTurns = opts.maxToolTurns ?? DEFAULT_MAX_TOOL_TURNS;
+  const nudges = resolveNudges(opts);
+  const stuckDetector = createToolLoopStuckDetector();
   const messages: OllamaLoopMessage[] = [];
   if (opts.system?.trim()) messages.push({ role: "system", content: opts.system });
   for (const m of opts.messages) messages.push({ role: m.role, content: m.content });
@@ -91,6 +101,11 @@ export async function chatWithOllamaToolLoop(
   let cumulativeResponse = 0;
 
   for (let turn = 0; turn < maxTurns; turn++) {
+    for (const nudge of nudges) {
+      if (turn + 1 === nudge.atTurn) {
+        messages.push({ role: "user", content: nudge.message });
+      }
+    }
     const turnResult = await baseChat(messages, {
       tools: toolDefs,
       onChunk: (snap) => {
@@ -118,6 +133,15 @@ export async function chatWithOllamaToolLoop(
           tool: tc.name as Parameters<NonNullable<ChatOpts["dispatcher"]>["dispatch"]>[0]["tool"],
           args: tc.arguments,
         });
+        const stuckReason = stuckDetector.record(tc.name, dispatchResult.ok, tc.arguments);
+        if (stuckReason) {
+          return {
+            text: cumulativeText,
+            elapsedMs: Date.now() - t0,
+            finishReason: "error",
+            errorMessage: stuckReason,
+          };
+        }
         const preview = formatToolInvokePreview(tc.name, tc.arguments, dispatchResult);
         opts.onTool?.({ tool: tc.name, ok: dispatchResult.ok, preview });
         messages.push({

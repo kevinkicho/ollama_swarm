@@ -27,6 +27,18 @@ export function inferStructuredBrainMode(
   if (/\b(amend|change (the )?directive|update (the )?directive|new directive)\b/i.test(text)) {
     return true;
   }
+  if (/\b(extend|more time|longer run|raise|increase).*(round|cap|limit|budget|runtime)\b/i.test(text)) {
+    return true;
+  }
+  if (/\b(reconfig|adjust|change).*(round|cap|limit|budget|runtime)\b/i.test(text)) {
+    return true;
+  }
+  if (/\b(referee|think.?guard|think.?stream|reasoning.?loop|long.?think)\b/i.test(text)) {
+    return true;
+  }
+  if (/\b(extend|increase|decrease|adjust|enable|disable).*(referee|think.?guard)\b/i.test(text)) {
+    return true;
+  }
   if (/\b(which preset|recommend|suggest (a )?preset|best preset|change (the )?(preset|model))\b/i.test(text)) {
     return true;
   }

@@ -20,6 +20,7 @@
 import type { ChatOpts, ChatResult, SessionProvider } from "./SessionProvider.js";
 import { TOOL_SCHEMAS } from "./AnthropicProvider.js";
 import { formatToolInvokePreview } from "../swarm/toolCallTranscript.js";
+import { structuredFormatForChat } from "./structuredFormat.js";
 
 const OPENAI_BASE = "https://api.openai.com/v1/chat/completions";
 const MAX_TOOL_TURNS = 10;
@@ -112,6 +113,7 @@ export class OpenAIProvider implements SessionProvider {
     let cumulativePrompt = 0;
     let cumulativeResponse = 0;
 
+    const structured = structuredFormatForChat(opts);
     const maxToolTurns = opts.maxToolTurns ?? MAX_TOOL_TURNS;
     for (let turn = 0; turn < maxToolTurns; turn++) {
       const body = JSON.stringify({
@@ -122,6 +124,7 @@ export class OpenAIProvider implements SessionProvider {
         ...(tools ? { tools } : {}),
         ...(opts.options?.temperature !== undefined ? { temperature: opts.options.temperature } : {}),
         ...(opts.options?.top_p !== undefined ? { top_p: opts.options.top_p } : {}),
+        ...(structured.openAi ?? {}),
       });
 
       let resp: Response;

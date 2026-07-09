@@ -43,6 +43,18 @@ export async function readPatternCache(clonePath: string): Promise<PatternCacheD
   }
 }
 
+/** Append in-run exception fingerprints to the clone pattern cache (best-effort). */
+export async function persistExceptionPatterns(
+  clonePath: string,
+  runId: string,
+  events: ExceptionEvent[],
+): Promise<void> {
+  if (!clonePath || events.length === 0) return;
+  const prior = await readPatternCache(clonePath);
+  const updated = updateCache(prior, events, runId);
+  await writePatternCache(clonePath, updated);
+}
+
 export async function writePatternCache(clonePath: string, data: PatternCacheData): Promise<void> {
   const cachePath = path.join(clonePath, CACHE_FILE);
   await fs.mkdir(path.dirname(cachePath), { recursive: true });

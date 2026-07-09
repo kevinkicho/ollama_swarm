@@ -62,9 +62,25 @@ const RUN_INPUT_TIP = {
   title: "Message box",
   items: [
     "Ask status questions or suggest changes to the run.",
-    'Examples: "what failed?", "summarize todos", "amend directive to …"',
+    'Examples: "what failed?", "extend wall-clock cap 15 min", "amend directive to …"',
     "Enter sends · Shift+Enter adds a new line.",
   ],
+};
+
+type RunReconfigPatch = {
+  rounds?: number;
+  wallClockCapMs?: number;
+  wallClockCapMin?: number;
+  tokenBudget?: number;
+  extendRounds?: number;
+  extendWallClockCapMin?: number;
+  extendTokenBudget?: number;
+  thinkGuardRefereeEnabled?: boolean;
+  thinkGuardRefereeMaxCallsPerRun?: number;
+  thinkGuardRefereeMinThinkChars?: number;
+  thinkGuardRefereeThinkTailMinChars?: number;
+  thinkGuardRefereeThinkTailMaxChars?: number;
+  thinkGuardRefereeMaxOutputTokens?: number;
 };
 
 const RUN_SEND_TIP = {
@@ -262,6 +278,7 @@ export function BrainStartChat({
   const [lastConfig, setLastConfig] = useState<BrainConfigPatch | null>(null);
   const [starting, setStarting] = useState(false);
   const [suggestedAmend, setSuggestedAmend] = useState<string | null>(null);
+  const [suggestedReconfig, setSuggestedReconfig] = useState<RunReconfigPatch | null>(null);
 
   // Sticky bottom scroll for chat
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -272,6 +289,53 @@ export function BrainStartChat({
       el.scrollTop = el.scrollHeight;
     }
   }, [messages.length, loading]);
+
+  const extractLabeledJson = (text: string, label: string): unknown => {
+    const re = new RegExp(`${label}:\\s*({[\\s\\S]*?})(?=\\n[A-Z_]+:|$)`, "i");
+    const m = text.match(re);
+    if (!m) return null;
+    try {
+      return JSON.parse(m[1]);
+    } catch {
+      return null;
+    }
+  };
+
+  const extractReconfig = (text: string): RunReconfigPatch | null => {
+    const parsed = extractLabeledJson(text, "RECONFIG") as RunReconfigPatch | null;
+    if (parsed && typeof parsed === "object") return parsed;
+    return null;
+  };
+
+  const formatReconfigLabel = (patch: RunReconfigPatch): string => {
+    const parts: string[] = [];
+    if (patch.extendWallClockCapMin != null) parts.push(`+${patch.extendWallClockCapMin}m cap`);
+    if (patch.extendRounds != null) parts.push(`+${patch.extendRounds} rounds`);
+    if (patch.extendTokenBudget != null) parts.push(`+${patch.extendTokenBudget.toLocaleString()} tokens`);
+    if (patch.wallClockCapMin != null) parts.push(`cap → ${patch.wallClockCapMin}m`);
+    if (patch.rounds != null) parts.push(`rounds → ${patch.rounds}`);
+    if (patch.tokenBudget != null) parts.push(`budget → ${patch.tokenBudget.toLocaleString()}`);
+    if (patch.thinkGuardRefereeEnabled != null) {
+      parts.push(`referee ${patch.thinkGuardRefereeEnabled ? "on" : "off"}`);
+    }
+    if (patch.thinkGuardRefereeMaxCallsPerRun != null) {
+      parts.push(`referee calls → ${patch.thinkGuardRefereeMaxCallsPerRun}`);
+    }
+    if (patch.thinkGuardRefereeMinThinkChars != null) {
+      parts.push(`referee min think → ${patch.thinkGuardRefereeMinThinkChars.toLocaleString()}`);
+    }
+    if (patch.thinkGuardRefereeThinkTailMinChars != null || patch.thinkGuardRefereeThinkTailMaxChars != null) {
+      const min = patch.thinkGuardRefereeThinkTailMinChars;
+      const max = patch.thinkGuardRefereeThinkTailMaxChars;
+      if (min != null && max != null) parts.push(`referee tail ${min.toLocaleString()}–${max.toLocaleString()}`);
+      else if (min != null) parts.push(`referee tail min → ${min.toLocaleString()}`);
+      else if (max != null) parts.push(`referee tail max → ${max!.toLocaleString()}`);
+    }
+    if (patch.thinkGuardRefereeMaxOutputTokens != null) {
+      parts.push(`referee max out → ${patch.thinkGuardRefereeMaxOutputTokens} tok`);
+    }
+    return parts.join(", ") || "limits";
+  };
 
   const extractConfig = (text: string): BrainConfigPatch | null => {
     // Prefer fenced json, then first balanced object (mirrors shared extractor).
@@ -382,6 +446,13 @@ export function BrainStartChat({
         const amendMatch = data.reply.match(/amend:\s*(.+?)(?:\n|$)/i);
         if (amendMatch) {
           setSuggestedAmend(amendMatch[1].trim());
+        }
+
+        if (isDuringRun) {
+          const reconfig = (data.structured?.reconfig as RunReconfigPatch | null) || extractReconfig(data.reply);
+          if (reconfig && Object.keys(reconfig).length > 0) {
+            setSuggestedReconfig(reconfig);
+          }
         }
 
         // Always surface a small table when user asked to "explain options"
@@ -603,6 +674,41 @@ export function BrainStartChat({
             <button
               type="button"
               onClick={() => setSuggestedAmend(null)}
+              className="text-[10px] text-ink-500 hover:text-ink-300"
+            >
+              dismiss
+            </button>
+          </div>
+        )}
+        {suggestedReconfig && isDuringRun && (
+          <div className="text-[10px] px-2 py-1 bg-sky-900/20 border border-sky-800/40 rounded flex items-center gap-1 flex-wrap">
+            <span className="text-ink-400">Limits:</span>
+            <span className="font-mono text-ink-200">{formatReconfigLabel(suggestedReconfig)}</span>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!runContext?.runId) return;
+                try {
+                  const res = await fetch(`/api/swarm/reconfig`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ runId: runContext.runId, ...suggestedReconfig }),
+                  });
+                  const body = await res.json().catch(() => ({}));
+                  if (!res.ok) throw new Error(body.error ?? res.statusText);
+                  alert(body.message ?? "Limits updated");
+                  setSuggestedReconfig(null);
+                } catch (e) {
+                  alert("Reconfig failed: " + (e as Error).message);
+                }
+              }}
+              className={chipBtn}
+            >
+              Apply
+            </button>
+            <button
+              type="button"
+              onClick={() => setSuggestedReconfig(null)}
               className="text-[10px] text-ink-500 hover:text-ink-300"
             >
               dismiss

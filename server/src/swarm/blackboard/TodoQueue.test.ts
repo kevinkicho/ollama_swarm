@@ -561,12 +561,22 @@ describe("TodoQueue — reapStaleInProgress (Phase 2 reaper)", () => {
     assert.equal(q.get(id)?.retries, 2);
   });
 
-  it("complete() after reap throws (worker lost the race)", () => {
+  it("complete() after reap accepts late worker success (reaper race)", () => {
     const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("worker", undefined, 1_000);
     q.reapStaleInProgress(601_001, 600_000);
-    // Worker eventually returns and tries to complete — should throw.
+    assert.equal(q.get(id)?.status, "failed");
+    q.complete(id, 602_000);
+    assert.equal(q.get(id)?.status, "completed");
+    assert.equal(q.get(id)?.endedAt, 602_000);
+  });
+
+  it("complete() after reap still throws for non-timeout failures", () => {
+    const q = new TodoQueue();
+    const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
+    q.dequeue("worker", undefined, 1_000);
+    q.fail(id, "parse error");
     assert.throws(
       () => q.complete(id),
       /Cannot complete todo .* status=failed/,

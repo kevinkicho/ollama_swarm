@@ -4,6 +4,9 @@ import { buildResearchNotesBlock, buildResearchToolsNote } from "./planner.js";
 import { PRIOR_RATIONALE_MAX_CHARS } from "./planner.js";
 import { lenientPreprocess, softCap } from "./lenientParse.js";
 import { getModelBudget } from "../../modelContextBudget.js";
+import { buildPlannerGroundingBlocks } from "./plannerGrounding.js";
+import { buildExplorationCacheBlock } from "@ollama-swarm/shared/explorationCache";
+import type { ExplorationCacheEntry } from "@ollama-swarm/shared/explorationCache";
 
 // ---------------------------------------------------------------------------
 // Phase 11b: first-pass exit contract.
@@ -152,7 +155,7 @@ export const FIRST_PASS_CONTRACT_SYSTEM_PROMPT = [
   "You are the PLANNER for a swarm of coding agents working on a cloned repository.",
   "Before you hand out work, write an EXIT CONTRACT — a short mission statement plus the specific criteria that will count as 'done' for this run.",
   "",
-  "TOOLS (Unit 37): You have `read`, `grep`, `glob`, `list` tools that operate on the cloned repo. USE THEM BEFORE DRAFTING THE CONTRACT. The REPO FILE LIST in the user message gives you paths — use `read` on the key ones (`package.json`, main entry files, test harness config, README beyond the excerpt, docs/*, etc.), `grep` for what's already implemented vs stubbed, `list` directories you suspect are relevant. Your criteria should reflect what's ACTUALLY in the code and what's actually missing, NOT patterns you imagine from file names. A contract derived from real inspection will always beat a contract pattern-matched on \"this is a GitHub project\".",
+  "TOOLS (Unit 37): You have `read`, `grep`, `glob`, `list` tools on the cloned repo. The user message includes a REPO FILE LIST, README, and often ENDPOINT CATALOG / PRE-FETCHED EXCERPTS / PROJECT MAP — use those FIRST. Only call tools to verify a specific uncertainty (a path, symbol, or panel wiring), not to re-scan the entire repository. When ENDPOINT CATALOG is present, do NOT web_search for routes already listed. Criteria should reflect what is ACTUALLY in the code and seed, NOT patterns imagined from file names alone.",
   "",
   "HARD RULES:",
   "1. Output ONLY a single JSON object. No prose. No markdown fences. No commentary before or after.",
@@ -172,6 +175,25 @@ export const FIRST_PASS_CONTRACT_SYSTEM_PROMPT = [
   "Criteria should be WHAT SUCCESS LOOKS LIKE when this run ends, not a to-do list.",
   "Paths must be relative to the repo root. Never use absolute paths or `..`.",
 ].join("\n");
+
+/** Emit-only council draft — reuses a shared explore brief from the lead planner. */
+export function buildCouncilContractEmitUserPrompt(
+  seed: PlannerSeed,
+  sharedExploreBrief: string,
+  model?: string,
+): string {
+  const base = buildFirstPassContractUserPrompt(seed, model);
+  return [
+    "=== SHARED EXPLORE BRIEF (lead planner already toured the repo) ===",
+    sharedExploreBrief.trim(),
+    "=== end SHARED EXPLORE BRIEF ===",
+    "",
+    "EMIT-ONLY: Produce the exit-contract JSON now using the brief + seed blocks below.",
+    "Do NOT call read/grep/glob/list/bash/web tools — structured JSON emit only.",
+    "",
+    base,
+  ].join("\n");
+}
 
 export function buildFirstPassContractUserPrompt(seed: PlannerSeed, model?: string): string {
   const budget = getModelBudget(model);
@@ -205,10 +227,10 @@ export function buildFirstPassContractUserPrompt(seed: PlannerSeed, model?: stri
   // BETWEEN directive and repo state so the planner reads "what did we
   // try last time" before "what's in the repo now" — the prior block
   // is shorter and primes the model on continuation framing.
-  const priorBlock = buildPriorRunBlock(seed.priorRunSummary);
+  const grounding = buildPlannerGroundingBlocks(seed, model);
   return [
     ...directiveBlock,
-    ...priorBlock,
+    grounding.prefix,
     `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
     `Top-level entries: ${tree}`,
@@ -218,11 +240,12 @@ export function buildFirstPassContractUserPrompt(seed: PlannerSeed, model?: stri
     "=== end REPO FILE LIST ===",
     "",
     "=== README excerpt (first 4000 chars) ===",
-    readme,
+    grounding.readme,
     "=== end README ===",
     "",
-    buildResearchToolsNote(!!seed.webToolsEnabled),
-    buildResearchNotesBlock(seed.researchNotes),
+    grounding.codeContextBlock,
+    grounding.researchToolsNote,
+    grounding.researchNotesBlock,
     seed.webToolsEnabled ? "\n" : "",
     directive
       ? "Output the exit contract JSON object now. Your missionStatement and criteria MUST address the USER DIRECTIVE above (Rule 11). Use the REPO FILE LIST to ground expectedFiles."
@@ -321,9 +344,11 @@ export function buildCouncilContractMergePrompt(
         "",
       ]
     : [];
+  const grounding = buildPlannerGroundingBlocks(seed);
 
   return [
     ...directiveBlock,
+    grounding.prefix,
     `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
     "",
@@ -401,6 +426,8 @@ export interface TierUpSeedInput {
   readmeExcerpt: string | null;
   /** User directive (Unit 25) — still authoritative at every tier. */
   userDirective?: string;
+  /** Prior explore briefs from initial planning — skip redundant repo tours. */
+  explorationCache?: readonly ExplorationCacheEntry[];
 }
 
 export function buildTierUpPrompt(seed: TierUpSeedInput): string {
@@ -434,8 +461,13 @@ export function buildTierUpPrompt(seed: TierUpSeedInput): string {
       ]
     : [];
 
+  const explorationCacheBlock = buildExplorationCacheBlock(
+    seed.explorationCache ? [...seed.explorationCache] : undefined,
+  );
+
   return [
     ...directiveBlock,
+    explorationCacheBlock,
     `You are the PLANNER. Tier ${seed.nextTier - 1} of this run is complete — every criterion is now met (or marked wont-do with a valid reason). You are now producing the TIER ${seed.nextTier} contract for this run (of at most ${seed.maxTiers} tiers).`,
     "",
     "Your task: produce a JSON contract for the NEXT tier of ambition. Tier N+1 must be MATERIALLY MORE AMBITIOUS than tier N — broader scope, deeper feature work, or capability the prior tier didn't touch.",

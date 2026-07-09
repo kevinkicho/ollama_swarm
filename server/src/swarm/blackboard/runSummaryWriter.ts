@@ -94,6 +94,7 @@ export interface SummaryContext {
   boardCounts: { committed: number; skipped: number; stale: number; total: number };
   gitStatus: { porcelain: string; changedFiles: number };
   errorTracker: ClassifiedError[];
+  controlAdvice?: import("@ollama-swarm/shared/swarmControl/controlAdvice").SwarmControlAdviceRecord[];
   v2State: { phase: string; enteredAt: number; detail?: string; pausedReason?: string };
   v2QueueState: { counts: ReturnType<TodoQueue["counts"]> };
   cloneContract: (c: ExitContract) => ExitContract;
@@ -174,6 +175,7 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
     v2QueueState: ctx.v2QueueState,
     topology: cfg.topology,
     errors: ctx.errorTracker,
+    ...(ctx.controlAdvice?.length ? { controlAdvice: ctx.controlAdvice } : {}),
   });
 
   const prior = ctx.getLastSummary?.();

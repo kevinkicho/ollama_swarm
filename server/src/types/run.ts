@@ -87,6 +87,12 @@ export interface SwarmStatus {
   mapperSlices?: Record<string, string[]>;
   /** Per-region status for the run-status dashboard (statechart insight). */
   regions?: RegionStatus;
+  /** True when soft drain would preserve in-flight worker work (exec-only). */
+  drainEligible?: boolean;
+  /** Blackboard planning pipeline step (seeding / contract / todos). */
+  planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
+  /** Live think-guard referee budget (resolved defaults + usage). */
+  thinkGuardReferee?: import("@ollama-swarm/shared/thinkGuardBudget").ResolvedThinkGuardRefereeBudget;
 }
 
 export interface SwarmStatusStreamingEntry {
@@ -147,6 +153,12 @@ export interface SwarmStatusRunConfig {
   plannerTools?: boolean;
   webTools?: boolean;
   mcpServers?: string;
+  thinkGuardRefereeEnabled?: boolean;
+  thinkGuardRefereeMaxCallsPerRun?: number;
+  thinkGuardRefereeMinThinkChars?: number;
+  thinkGuardRefereeThinkTailMinChars?: number;
+  thinkGuardRefereeThinkTailMaxChars?: number;
+  thinkGuardRefereeMaxOutputTokens?: number;
 }
 
 /** Lift userDirective / tool flags from persisted run-state extras. */

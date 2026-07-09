@@ -295,7 +295,13 @@ export interface BoardCountsDTO {
 export type SwarmEvent =
   | { type: "transcript_append"; entry: TranscriptEntry }
   | { type: "agent_state"; agent: AgentState; runId?: string }
-  | { type: "swarm_state"; phase: SwarmPhase; round: number; runId?: string }
+  | {
+      type: "swarm_state";
+      phase: SwarmPhase;
+      round: number;
+      runId?: string;
+      planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
+    }
   | { type: "agent_streaming"; agentId: string; agentIndex: number; text: string; runId?: string }
   | { type: "agent_streaming_end"; agentId: string; runId?: string }
   | {
@@ -378,6 +384,29 @@ export type SwarmEvent =
       ts: number;
       text: string;
     }
+  | {
+      type: "run_reconfigured";
+      runId: string;
+      ts: number;
+      message: string;
+      changes: {
+        rounds?: { from?: number; to: number };
+        wallClockCapMs?: { from?: number; to: number };
+        tokenBudget?: { from?: number; to: number };
+        thinkGuardReferee?: import("@ollama-swarm/shared/thinkGuardBudget").ThinkGuardRefereeReconfigChanges;
+      };
+    }
+  | {
+      type: "swarm_control_advice";
+      ts: number;
+      kind: "stall_gate" | "tool_coach";
+      action?: "backoff" | "retry" | "stop";
+      source?: "rule" | "arbitrator";
+      rationale: string;
+      plannerHint?: string;
+      agentId?: string;
+      tool?: string;
+    }
   // #295 + #301: live directive-conformance sample. Per-poll grader
   // metadata enriches the IdentityStrip tooltip infographic.
   | {
@@ -448,6 +477,12 @@ export type SwarmEvent =
       plannerTools?: boolean;
       webTools?: boolean;
       mcpServers?: string;
+      thinkGuardRefereeEnabled?: boolean;
+      thinkGuardRefereeMaxCallsPerRun?: number;
+      thinkGuardRefereeMinThinkChars?: number;
+      thinkGuardRefereeThinkTailMinChars?: number;
+      thinkGuardRefereeThinkTailMaxChars?: number;
+      thinkGuardRefereeMaxOutputTokens?: number;
   // Deliverables: files created or meaningfully changed by this run.
   // Created = new file; Modified = existing file edited. Empty for
   // discussion presets (no code changes). Optional for back-compat.
@@ -614,7 +649,16 @@ export interface RunConfigSnapshot {
   plannerTools?: boolean;
   webTools?: boolean;
   mcpServers?: string;
+  thinkGuardRefereeEnabled?: boolean;
+  thinkGuardRefereeMaxCallsPerRun?: number;
+  thinkGuardRefereeMinThinkChars?: number;
+  thinkGuardRefereeThinkTailMinChars?: number;
+  thinkGuardRefereeThinkTailMaxChars?: number;
+  thinkGuardRefereeMaxOutputTokens?: number;
 }
+
+export type ResolvedThinkGuardRefereeBudget =
+  import("@ollama-swarm/shared/thinkGuardBudget").ResolvedThinkGuardRefereeBudget;
 
 // Unit 52e: digest returned by GET /api/runs for the run-history
 // dropdown. Mirror of server-side RunSummaryDigest in
@@ -674,6 +718,9 @@ export interface SwarmStatusSnapshot {
   // Phase 2d: map-reduce mapper slice assignments for catch-up.
   mapperSlices?: Record<string, string[]>;
   regions?: RegionStatus;
+  drainEligible?: boolean;
+  planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
+  thinkGuardReferee?: ResolvedThinkGuardRefereeBudget;
 }
 
 export interface RegionStatus {

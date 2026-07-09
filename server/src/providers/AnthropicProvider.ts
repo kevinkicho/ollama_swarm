@@ -18,6 +18,7 @@
 
 import type { ChatMessage, ChatOpts, ChatResult, SessionProvider } from "./SessionProvider.js";
 import { formatToolInvokePreview } from "../swarm/toolCallTranscript.js";
+import { structuredFormatForChat } from "./structuredFormat.js";
 
 const ANTHROPIC_BASE = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -170,6 +171,7 @@ export class AnthropicProvider implements SessionProvider {
     let cumulativePrompt = 0;
     let cumulativeResponse = 0;
 
+    const structured = structuredFormatForChat(opts);
     const maxToolTurns = opts.maxToolTurns ?? MAX_TOOL_TURNS;
     for (let turn = 0; turn < maxToolTurns; turn++) {
       const body = JSON.stringify({
@@ -179,20 +181,26 @@ export class AnthropicProvider implements SessionProvider {
         ...(opts.system ? { system: opts.system } : {}),
         messages,
         ...(tools ? { tools } : {}),
+        ...(structured.anthropic ? { output_format: structured.anthropic.output_format } : {}),
         ...(opts.options?.temperature !== undefined ? { temperature: opts.options.temperature } : {}),
         ...(opts.options?.top_p !== undefined ? { top_p: opts.options.top_p } : {}),
       });
+
+      const anthropicHeaders: Record<string, string> = {
+        "x-api-key": this.apiKey,
+        "anthropic-version": ANTHROPIC_VERSION,
+        "content-type": "application/json",
+      };
+      if (structured.anthropic) {
+        anthropicHeaders["anthropic-beta"] = structured.anthropic.beta;
+      }
 
       let resp: Response;
       try {
         resp = await fetch(ANTHROPIC_BASE, {
           method: "POST",
           signal: opts.signal,
-          headers: {
-            "x-api-key": this.apiKey,
-            "anthropic-version": ANTHROPIC_VERSION,
-            "content-type": "application/json",
-          },
+          headers: anthropicHeaders,
           body,
         });
       } catch (err) {

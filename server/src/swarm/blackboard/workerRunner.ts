@@ -28,6 +28,7 @@ import {
   buildWorkerUserPrompt,
   isLiteratureTodo,
   parseWorkerResponse,
+  validateHunkPayload,
   WORKER_SYSTEM_PROMPT,
   type WorkerSeed,
   WorkerResponseSchema,
@@ -62,12 +63,20 @@ import {
 } from "./endpointCatalogContext.js";
 import { runParseSalvage } from "./parseSalvage.js";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
+import { resolveWorkerScaffoldPlan } from "./workerScaffold.js";
 import { isPromptHaltError } from "./lifecycleState.js";
 import {
   chatOnceWithStreaming,
   type ChatStreamingSurface,
 } from "./promptRunner.js";
 import { isUsableResearchBrief } from "../researchBrief.js";
+import {
+  LITERATURE_RESEARCH_NUDGE_MESSAGE,
+  LITERATURE_RESEARCH_NUDGE_TURN,
+  LITERATURE_RESEARCH_PROFILE,
+  LITERATURE_RESEARCH_TOOLS,
+  EXPLORE_MAX_LITERATURE_TOOL_TURNS,
+} from "@ollama-swarm/shared/toolProfiles";
 import type { AgentManager } from "../../services/AgentManager.js";
 
 function workerToolProfile(ctx: WorkerContext, kind: "hunk" | "build" | "read"): ProfileName {
@@ -87,7 +96,7 @@ async function runWorkerLiteratureResearch(
   if (!cfg || !isWebToolsEnabled(cfg) || !isLiteratureTodo(todo.description)) {
     return undefined;
   }
-  const profile = workerToolProfile(ctx, "read");
+  const profile = LITERATURE_RESEARCH_PROFILE;
   const litExtras = resolveBlackboardPromptExtras({
     active: cfg,
     getAmendments: ctx.getAmendments,
@@ -114,6 +123,12 @@ async function runWorkerLiteratureResearch(
     webToolsConfig: cfg,
     runId: cfg.runId,
     mcpServers: cfg.mcpServers,
+    maxToolTurns: EXPLORE_MAX_LITERATURE_TOOL_TURNS,
+    toolsOverride: [...LITERATURE_RESEARCH_TOOLS],
+    toolLoopNudge: {
+      atTurn: LITERATURE_RESEARCH_NUDGE_TURN,
+      message: LITERATURE_RESEARCH_NUDGE_MESSAGE,
+    },
     onTool: makeBufferedToolHandler(ctx.pendingToolTraceByAgent, agent.id),
   };
   const surface: ChatStreamingSurface = {
@@ -169,7 +184,21 @@ export interface WorkerContext {
   appendSystem: (msg: string) => void;
   appendAgent: (agent: Agent, text: string, options?: { assistKind?: "auditor-salvage" }) => void;
   pendingToolTraceByAgent: Map<string, ToolTraceEntry[]>;
-  promptAgent: (agent: Agent, prompt: string, agentName: ProfileName, formatExpect: "json" | "free", ollamaFormat?: "json" | Record<string, unknown>, activity?: { kind?: string; label?: string }) => Promise<string>;
+  promptAgent: (
+    agent: Agent,
+    prompt: string,
+    agentName: ProfileName,
+    formatExpect: "json" | "free",
+    ollamaFormat?: "json" | Record<string, unknown>,
+    activity?: {
+      kind?: string;
+      label?: string;
+      maxToolTurns?: number;
+      mode?: "explore" | "emit";
+      promptWallClockMs?: number;
+    },
+  ) => Promise<string>;
+  getRepoFiles?: () => readonly string[];
   emitAgentState: (s: AgentState) => void;
   getManager: () => AgentManager;
   readExpectedFiles: (files: string[]) => Promise<Record<string, string | null>>;
@@ -577,9 +606,25 @@ export async function executeWorkerTodo(
   const activeCfg = ctx.getActive();
   const workerCwd = activeCfg?.localPath ?? agent.cwd;
   const webToolsEnabled = isWebToolsEnabled(activeCfg);
-  const researchNotes = webToolsEnabled
-    ? await runWorkerLiteratureResearch(ctx, agent, todo, workerCwd)
+  const repoFiles = ctx.getRepoFiles?.() ?? [];
+  const scaffoldPlan = workerCwd && repoFiles.length > 0
+    ? await resolveWorkerScaffoldPlan({
+        description: todo.description,
+        expectedFiles: todo.expectedFiles,
+        fileContents: contents,
+        repoFiles,
+        clonePath: workerCwd,
+      })
     : undefined;
+  if (scaffoldPlan) {
+    ctx.appendSystem(
+      `[${agent.id}] create-scaffold mode for todo ${todo.id.slice(0, 8)} — emit-only with exemplar panel.`,
+    );
+  }
+  const researchNotes =
+    scaffoldPlan?.skipLiterature || !webToolsEnabled
+      ? undefined
+      : await runWorkerLiteratureResearch(ctx, agent, todo, workerCwd);
   const promptExtras = resolveBlackboardPromptExtras({
     active: activeCfg,
     getAmendments: ctx.getAmendments,
@@ -637,15 +682,27 @@ export async function executeWorkerTodo(
     cycle.set(agent.id, turn);
   }
 
+  const workerProfile = scaffoldPlan?.profile ?? workerToolProfile(ctx, "hunk");
+  const workerPromptParts = [WORKER_SYSTEM_PROMPT];
+  if (scaffoldPlan?.scaffoldBlock) workerPromptParts.push(scaffoldPlan.scaffoldBlock);
+  workerPromptParts.push(buildWorkerUserPrompt(seed));
+  const workerActivity = {
+    kind: "worker",
+    label: `todo ${todo.id.slice(0, 8)}`,
+    ...(scaffoldPlan
+      ? { mode: "emit" as const, maxToolTurns: 0, promptWallClockMs: scaffoldPlan.promptWallClockMs }
+      : {}),
+  };
+
   let response: string;
   try {
     response = await ctx.promptAgent(
       agent,
-      `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`,
-      workerToolProfile(ctx, "hunk"),
+      `${workerPromptParts.join("\n\n")}`,
+      workerProfile,
       "json",
       WORKER_HUNKS_JSON_SCHEMA,
-      { kind: "worker", label: `todo ${todo.id.slice(0, 8)}` },
+      workerActivity,
     );
   } catch (err) {
     if (isPromptHaltError(err, ctx.isStopping, ctx.isDraining)) return "aborted";
@@ -667,11 +724,11 @@ export async function executeWorkerTodo(
     try {
       repair = await ctx.promptAgent(
         agent,
-        `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerRepairPrompt(response, parsed.reason)}`,
-        workerToolProfile(ctx, "hunk"),
+        `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}\n\n${buildWorkerRepairPrompt(response, parsed.reason)}`,
+        workerProfile,
         "json",
         WORKER_HUNKS_JSON_SCHEMA,
-        { kind: "worker", label: `repair ${todo.id.slice(0, 8)}` },
+        { ...workerActivity, label: `repair ${todo.id.slice(0, 8)}` },
       );
     } catch (err) {
       if (isPromptHaltError(err, ctx.isStopping, ctx.isDraining)) return "aborted";
@@ -891,6 +948,50 @@ export async function executeWorkerTodo(
     ctx.getWrappers().failTodoQ(todo.id, "[v2] worker returned empty hunks with no skip reason", "hunk-empty");
     ctx.bumpRejectedAttempts(agent.id);
     return "stale";
+  }
+
+  const sizeCheck = validateHunkPayload(parsed.hunks);
+  if (!sizeCheck.ok) {
+    ctx.bumpJsonRepairs(agent.id);
+    ctx.appendSystem(`[${agent.id}] [v2] hunk payload oversized (${sizeCheck.reason}); issuing repair prompt.`);
+    let sizeRepair: string;
+    try {
+      sizeRepair = await ctx.promptAgent(
+        agent,
+        `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerRepairPrompt(response, sizeCheck.reason)}`,
+        workerToolProfile(ctx, "hunk"),
+        "json",
+        WORKER_HUNKS_JSON_SCHEMA,
+        { kind: "worker", label: `hunk-size-repair ${todo.id.slice(0, 8)}` },
+      );
+    } catch (err) {
+      if (isPromptHaltError(err, ctx.isStopping, ctx.isDraining)) return "aborted";
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.getWrappers().failTodoQ(todo.id, `[v2] hunk size repair prompt failed: ${msg}`, "repair");
+      ctx.bumpPromptErrors(agent.id);
+      ctx.bumpRejectedAttempts(agent.id);
+      return "stale";
+    }
+    if (ctx.isStopping()) return "aborted";
+    ctx.appendAgent(agent, sizeRepair);
+    const repaired = parseWorkerResponse(sizeRepair, todo.expectedFiles);
+    if (!repaired.ok || repaired.hunks.length === 0) {
+      ctx.getWrappers().failTodoQ(
+        todo.id,
+        `[v2] hunk size repair failed: ${!repaired.ok ? repaired.reason : "empty hunks"}`,
+        "hunk-oversized",
+      );
+      ctx.bumpRejectedAttempts(agent.id);
+      return "stale";
+    }
+    const repairedSize = validateHunkPayload(repaired.hunks);
+    if (!repairedSize.ok) {
+      ctx.getWrappers().failTodoQ(todo.id, `[v2] hunk still oversized after repair: ${repairedSize.reason}`, "hunk-oversized");
+      ctx.bumpRejectedAttempts(agent.id);
+      return "stale";
+    }
+    parsed = repaired;
+    commitTier = "repair";
   }
 
   const k = ctx.getSelfConsistencyK();

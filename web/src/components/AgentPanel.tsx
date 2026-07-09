@@ -136,12 +136,14 @@ export const AgentPanel = memo(function AgentPanel({
   if (!agent || typeof agent.index !== 'number') {
     return <div className="text-[10px] text-ink-500">agent (invalid)</div>;
   }
-  const elapsed = useElapsedTicker(
-    agent.thinkingSince,
-    agent.status === "thinking" || agent.status === "retrying",
-  );
   const activity = useSwarm((s) => s.agentActivity[agent.id]);
-  const actView = viewAgentActivity(agent, activity);
+  const streamingMeta = useSwarm((s) => s.streamingMeta[agent.id]);
+  const streamingText = useSwarm((s) => s.streaming[agent.id] ?? "");
+  const actView = viewAgentActivity(agent, activity, { streamingMeta, streamingText });
+  const elapsed = useElapsedTicker(
+    actView.busySince ?? agent.thinkingSince,
+    actView.isBusy,
+  );
   const samples = useSwarm((s) => s.latency[agent.id] ?? EMPTY_SAMPLES);
   const phase = useSwarm((s) => s.phase);
   // #291: portal-based tooltip. Sidebar is `<aside overflow-y-auto>`,
@@ -157,11 +159,11 @@ export const AgentPanel = memo(function AgentPanel({
   // Unit 39: while "thinking" and we have a timestamp, show the ticker;
   // otherwise fall back to status / retry label as before.
   const waitingLabel =
-    (agent.status === "thinking" || agent.status === "retrying") && elapsed && actView.isWaiting
+    actView.isBusy && elapsed && actView.isWaiting
       ? `waiting ${elapsed}`
       : null;
   const streamingLabel =
-    agent.status === "thinking" && elapsed && actView.phase === "streaming"
+    actView.isBusy && elapsed && actView.phase === "streaming"
       ? `streaming ${elapsed}`
       : null;
   // Task #40: when the run ended cleanly, rename the terminal state
@@ -170,7 +172,7 @@ export const AgentPanel = memo(function AgentPanel({
   const statusLabel =
     agent.status === "stopped" && runCompletedCleanly ? "done" : agent.status;
   const activityLine =
-    actView.label && (agent.status === "thinking" || agent.status === "retrying")
+    actView.label && actView.isBusy && actView.phase !== "streaming" && !actView.isWaiting
       ? [
           actView.label,
           agent.activityAttempt && agent.activityMaxAttempts
@@ -186,8 +188,8 @@ export const AgentPanel = memo(function AgentPanel({
   const dotColor =
     agent.status === "stopped" && runCompletedCleanly
       ? DONE_COLOR
-      : STATUS_COLOR[agent.status];
-  const isThinking = agent.status === "thinking" && agent.thinkingSince !== undefined;
+      : STATUS_COLOR[actView.effectiveStatus] ?? STATUS_COLOR[agent.status];
+  const isThinking = actView.effectiveStatus === "thinking" && actView.busySince !== undefined;
   // #291: show tooltip on hover regardless of sample count. Agents
   // that haven't completed a prompt yet (auditor with turnsTaken=0,
   // freshly-spawned, crashed pre-first-prompt) used to get NO
@@ -220,8 +222,18 @@ export const AgentPanel = memo(function AgentPanel({
   const isBrain = isBrainAgentName(agent.id) || isBrainAgentName((agent as any).agentId ?? '') ||
     !!(agent as any).isBrain || textMentionsBrainAlias((agent.model || '') + ' ' + ((agent as any).role || ''));
   const hue = hueForAgent(agent.index);
-  const palette = agentBubblePalette(hue, agent.status === "stopped" || agent.status === "ready", isBrain);
-  const glowCls = isThinking ? (isBrain ? "glow-brain" : "glow-active") : agent.status === "retrying" ? "glow-stalled" : agent.status === "failed" ? "glow-error" : "";
+  const palette = agentBubblePalette(
+    hue,
+    actView.effectiveStatus === "stopped" || (!actView.isBusy && actView.effectiveStatus === "ready"),
+    isBrain,
+  );
+  const glowCls = isThinking
+    ? (isBrain ? "glow-brain" : "glow-active")
+    : actView.effectiveStatus === "retrying"
+      ? "glow-stalled"
+      : agent.status === "failed"
+        ? "glow-error"
+        : "";
   return (
     <div className={`border border-ink-700 ${colorBorderCls} rounded-md p-3 bg-ink-800 transition-all duration-300 ${glowCls}`}>
       <div className="flex items-center justify-between">
@@ -288,7 +300,7 @@ export const AgentPanel = memo(function AgentPanel({
                 <div className="text-[10px] text-ink-400">
                   No completed prompts yet.
                   {isThinking
-                    ? ` Thinking since ${new Date(agent.thinkingSince!).toLocaleTimeString()} — cloud cold-start can take minutes.`
+                    ? ` Thinking since ${new Date((actView.busySince ?? agent.thinkingSince)!).toLocaleTimeString()} — cloud cold-start can take minutes.`
                     : agent.status === "spawning"
                       ? " Waiting for opencode subprocess + first session."
                       : ""}

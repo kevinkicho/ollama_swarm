@@ -3,7 +3,7 @@
  * ollama-swarm CLI
  *
  * Control interface for humans and **Brain-OS agents**.
- * Supports the full loop: recommend preset, start, monitor (status), steer (amend), stop.
+ * Supports the full loop: recommend preset, start, monitor (status), steer (amend), reconfig limits, stop.
  *
  * Requires the ollama-swarm server running.
  *
@@ -29,6 +29,7 @@ Commands (full control loop for agents):
   start        Start a swarm (flags or --config from Brain)
   status       Show status (global or --run-id)
   amend        Send amendment to a running swarm (--run-id + --text)
+  reconfig     Extend run limits (--run-id + extend flags)
   stop         Stop a run (--run-id)
   recommend    Get Brain-style preset recommendation for a directive
 
@@ -109,6 +110,29 @@ async function cmdStatus(values, serverUrl) {
   } else {
     console.log(JSON.stringify(data, null, 2));
   }
+}
+
+async function cmdReconfig(values, serverUrl) {
+  const runId = values['run-id'] || values.runId;
+  if (!runId) {
+    console.error('reconfig requires --run-id');
+    process.exit(1);
+  }
+  const patch = { runId };
+  if (values['extend-rounds']) patch.extendRounds = Number(values['extend-rounds']);
+  if (values['extend-wall-clock-min']) patch.extendWallClockCapMin = Number(values['extend-wall-clock-min']);
+  if (values['extend-token-budget']) patch.extendTokenBudget = Number(values['extend-token-budget']);
+  if (values.rounds) patch.rounds = Number(values.rounds);
+  if (values['wall-clock-min']) patch.wallClockCapMin = Number(values['wall-clock-min']);
+  if (values['token-budget']) patch.tokenBudget = Number(values['token-budget']);
+  const hasField = Object.keys(patch).length > 1;
+  if (!hasField) {
+    console.error('reconfig requires at least one limit flag (e.g. --extend-wall-clock-min 15)');
+    process.exit(1);
+  }
+  const url = `${serverUrl.replace(/\/$/, '')}/api/swarm/reconfig`;
+  const res = await fetchJson(url, { method: 'POST', body: JSON.stringify(patch) });
+  console.log('✅ Limits updated:', res.message || res);
 }
 
 async function cmdAmend(values, serverUrl) {
@@ -213,6 +237,11 @@ async function main() {
       server: { type: 'string' },
       'run-id': { type: 'string' },
       'clone-path': { type: 'string' },
+      'extend-rounds': { type: 'string' },
+      'extend-wall-clock-min': { type: 'string' },
+      'extend-token-budget': { type: 'string' },
+      'wall-clock-min': { type: 'string' },
+      'token-budget': { type: 'string' },
       text: { type: 'string' },
       'dry-run': { type: 'boolean' },
       json: { type: 'boolean' },
@@ -239,6 +268,9 @@ async function main() {
         break;
       case 'amend':
         await cmdAmend(values, serverUrl);
+        break;
+      case 'reconfig':
+        await cmdReconfig(values, serverUrl);
         break;
       case 'stop':
         await cmdStop(values, serverUrl);

@@ -34,6 +34,7 @@ import {
   applyStatusSnapshotToStore,
   buildSyntheticRunStartDivider,
   catchUpEmptyTranscript,
+  fetchAndHydrateControlAdviceFromEventLog,
   hasRunStartDivider,
   HYDRATE_MAX_WAIT_MS,
   shouldDropTerminalGuardedEvent,
@@ -142,6 +143,11 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
         if (ev) applyWsEvent(ev);
       }
       void catchUpEmptyTranscript(storeRef.current, runId, statusUrl, ctrl.signal);
+      void fetchAndHydrateControlAdviceFromEventLog(
+        storeRef.current,
+        runId,
+        ctrl.signal,
+      );
     };
 
     const isFake = runId.startsWith("fake-") || runId.includes("fake");
@@ -198,6 +204,11 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
       }
       if (summary) s.setSummary(summary);
       if (summary.contract) s.setContract(summary.contract);
+      const { hydrateControlAdviceToStore } = await import("./swarmStoreHydrate");
+      hydrateControlAdviceToStore(storeRef.current, {
+        summaryAdvice: summary.controlAdvice,
+        transcript: store.getState().transcript,
+      });
       const terminal = terminalPhaseFromSummary(summary);
       if (terminal) {
         s.setPhase(terminal, 0);

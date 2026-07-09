@@ -9,9 +9,13 @@ import {
   buildContract,
   buildSeed,
   runCouncilContractDraftForAgent,
+  runCouncilContractEmitForAgent,
+  runCouncilSharedExplore,
   type ContractContext,
   type CouncilContractDraftDeps,
 } from "./blackboard/contractBuilder.js";
+import { isSeedSufficientForDirectEmit } from "@ollama-swarm/shared/planningSeed";
+import { buildSeedDirectEmitBrief } from "./blackboard/prompts/plannerGrounding.js";
 import type { TranscriptEntry } from "../types.js";
 import type { PlannerSeed } from "./blackboard/prompts/planner.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
@@ -238,38 +242,76 @@ export async function runContractDerivation(
     state.appendSystem("Council contract: no LLM lead agent — proceeding without contract.");
     return;
   }
-  state.appendSystem(
-    `Council contract: prompting ${allAgents.length} agents for independent first-pass drafts (explore → emit, with repo tools).`,
-  );
+  let draftAbort: AbortSignal | undefined;
+  const draftDeps: CouncilContractDraftDeps = {
+    getStopping: () => state.stopping,
+    getActive: () => state.cfg,
+    appendSystem: state.appendSystem,
+    appendAgent: state.appendAgent,
+    manager: state.manager as import("../services/AgentManager.js").AgentManager,
+    emitAgentState: (s) => state.emit({ type: "agent_state", agent: s }),
+    promptPlannerSafely: (agent, promptText, agentName, ollamaFormat, activity) =>
+      promptPlannerSafely(
+        agent,
+        promptText,
+        agentName,
+        state.manager,
+        state.cfg.providerFailover,
+        activity,
+        draftAbort,
+        state.pendingToolTraceByAgent,
+        state.cfg,
+      ),
+  };
+
+  const useSharedExplore =
+    allAgents.length > 1
+    && (state.cfg.councilSharedExplore ?? true);
+
+  const seedDirectEmit = isSeedSufficientForDirectEmit(seed, state.cfg);
+  let sharedBrief: string | null = null;
+  if (useSharedExplore) {
+    if (seedDirectEmit) {
+      sharedBrief = buildSeedDirectEmitBrief(seed);
+      state.appendSystem(
+        "Council contract: seed-direct emit — skipping shared explore.",
+      );
+    } else {
+      const { controller: exploreAbort, cleanup: exploreCleanup } =
+        createTimeoutController(CONTRACT_DRAFT_TIMEOUT_MS);
+      draftAbort = exploreAbort.signal;
+      try {
+        sharedBrief = await runCouncilSharedExplore(draftDeps, mergePlanner, seed);
+      } finally {
+        exploreCleanup();
+        draftAbort = undefined;
+      }
+      if (state.stopping) return;
+    }
+  }
+
+  if (useSharedExplore && sharedBrief) {
+    state.appendSystem(
+      `Council contract: shared explore complete — ${allAgents.length} emit-only draft(s) from brief.`,
+    );
+  } else {
+    state.appendSystem(
+      `Council contract: prompting ${allAgents.length} agents for independent first-pass drafts (explore → emit, with repo tools).`,
+    );
+  }
 
   let draftsCompleted = 0;
   const draftSpacing = burstSpacingForModels(allAgents);
   const draftResults = await staggerStart(allAgents, async (a) => {
     const { controller, cleanup } = createTimeoutController(CONTRACT_DRAFT_TIMEOUT_MS);
+    draftAbort = controller.signal;
     try {
-      const draftDeps: CouncilContractDraftDeps = {
-        getStopping: () => state.stopping,
-        getActive: () => state.cfg,
-        appendSystem: state.appendSystem,
-        appendAgent: state.appendAgent,
-        manager: state.manager as import("../services/AgentManager.js").AgentManager,
-        emitAgentState: (s) => state.emit({ type: "agent_state", agent: s }),
-        promptPlannerSafely: (agent, promptText, agentName, ollamaFormat, activity) =>
-          promptPlannerSafely(
-            agent,
-            promptText,
-            agentName,
-            state.manager,
-            state.cfg.providerFailover,
-            activity,
-            controller.signal,
-            state.pendingToolTraceByAgent,
-            state.cfg,
-          ),
-      };
-      return await runCouncilContractDraftForAgent(draftDeps, a, seed);
+      return useSharedExplore && sharedBrief
+        ? await runCouncilContractEmitForAgent(draftDeps, a, seed, sharedBrief)
+        : await runCouncilContractDraftForAgent(draftDeps, a, seed);
     } finally {
       cleanup();
+      draftAbort = undefined;
       state.manager.markStatus(a.id, "ready");
       draftsCompleted++;
       if (draftsCompleted < allAgents.length) {

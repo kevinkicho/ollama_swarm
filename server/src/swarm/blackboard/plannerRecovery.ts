@@ -11,6 +11,9 @@ import { interruptibleSleep } from "../interruptibleSleep.js";
 import { runPlannerAuditorSalvage } from "./plannerAuditorAssist.js";
 import { isRetryableSdkError } from "./retry.js";
 import { describeSdkError } from "../sdkError.js";
+import { isThinkGuardAbort } from "@ollama-swarm/shared/thinkGuardErrors";
+import { runRecoveryRefereeCheckpoint } from "./thinkGuardHandler.js";
+import type { RunConfig } from "../RunConfig.js";
 
 export const PLANNER_EMIT_MAX_ATTEMPTS = 4;
 export const PLANNER_EMIT_PAUSE_BASE_MS = 12_000;
@@ -37,7 +40,7 @@ export interface PlannerEmitRecoveryOpts<T> {
     promptText: string,
     agentName: ProfileName,
     ollamaFormat?: "json" | Record<string, unknown>,
-    activity?: { kind?: string; label?: string },
+    activity?: { kind?: string; label?: string; mode?: "explore" | "emit" },
   ) => Promise<{ response: string; agentUsed: Agent }>;
   buildExplorePrompt: () => string;
   buildRepairPrompt: (previousResponse: string, parseError: string, auditorNote?: string) => string;
@@ -45,8 +48,20 @@ export interface PlannerEmitRecoveryOpts<T> {
   emitProfile: ProfileName;
   jsonSchema: Record<string, unknown>;
   parse: (raw: string) => ParseAttemptResult<T>;
-  getActive: () => { dedicatedAuditor?: boolean } | undefined;
+  getActive: () => (RunConfig & { dedicatedAuditor?: boolean }) | undefined;
   maxAttempts?: number;
+  clonePath?: string;
+  logDiag?: (record: unknown) => void;
+  promptExcerpt?: string;
+  /** When set, first loop iteration is emit-only using this prior explore prose. */
+  cachedExploreResponse?: string;
+  /**
+   * D12: seed is rich enough — attempt 1 is structured emit using buildExplorePrompt
+   * (full seed) with no prior explore turn.
+   */
+  emitDirectFromSeed?: boolean;
+  /** Fired after each non-emit explore turn completes (for cross-phase cache). */
+  onExploreCaptured?: (response: string) => void;
 }
 
 function responseExcerpt(raw: string, max = 8000): string {
@@ -88,6 +103,56 @@ export async function pauseBetweenPlannerAttempts(
   await interruptibleSleep(ms, controller.signal);
 }
 
+async function applyRecoveryRefereeSalvage<T>(
+  opts: PlannerEmitRecoveryOpts<T>,
+  input: {
+    attempt: number;
+    lastReason: string;
+    partialText: string;
+    exploreResponse: string;
+  },
+): Promise<{ exploreResponse: string; lastReason: string; applied: boolean }> {
+  const salvage = await runRecoveryRefereeCheckpoint(
+    {
+      getActive: opts.getActive as () => RunConfig | undefined,
+      isStopping: opts.getStopping,
+      appendSystem: opts.appendSystem,
+      logDiag: opts.logDiag,
+      clonePath: opts.clonePath ?? opts.getActive()?.localPath,
+      kind: opts.kind,
+      label: opts.kind,
+      promptExcerpt: opts.promptExcerpt,
+    },
+    {
+      partialText: input.partialText,
+      attempt: input.attempt,
+      lastReason: input.lastReason,
+    },
+  );
+  if (!salvage) {
+    return { exploreResponse: input.exploreResponse, lastReason: input.lastReason, applied: false };
+  }
+  const brief = salvage.salvageBrief?.trim() || input.partialText;
+  opts.appendSystem(
+    `[${opts.agent.id}] ${opts.kind} recovery referee: ${salvage.verdict.verdict} (${salvage.verdict.confidence}) — ${salvage.rationale}`,
+  );
+  return {
+    exploreResponse: brief,
+    lastReason: `recovery-referee: ${salvage.rationale}`,
+    applied: true,
+  };
+}
+
+function thinkGuardSalvageContinue(err: import("@ollama-swarm/shared/thinkGuardErrors").ThinkGuardAbortError): boolean {
+  const brief = err.verdict?.salvageableBrief?.trim();
+  return !!(
+    brief
+    || err.verdict?.suggestedAction === "force_emit"
+    || err.verdict?.suggestedAction === "nudge_emit"
+    || err.verdict?.verdict === "ready_to_emit"
+  );
+}
+
 export async function runPlannerEmitRecovery<T>(
   opts: PlannerEmitRecoveryOpts<T>,
 ): Promise<
@@ -97,7 +162,9 @@ export async function runPlannerEmitRecovery<T>(
   const maxAttempts = opts.maxAttempts ?? PLANNER_EMIT_MAX_ATTEMPTS;
   let lastRaw = "";
   let lastReason = "no attempts";
-  let exploreResponse = "";
+  let exploreResponse = opts.cachedExploreResponse?.trim() ?? "";
+  const emitDirectFromSeed = opts.emitDirectFromSeed === true;
+  const skipInitialExplore = exploreResponse.length > 0 || emitDirectFromSeed;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (opts.getStopping()) {
@@ -105,6 +172,23 @@ export async function runPlannerEmitRecovery<T>(
     }
 
     await pauseBetweenPlannerAttempts(attempt, opts.getStopping);
+
+    if (
+      attempt >= 3
+      && lastReason !== "no attempts"
+      && (lastRaw.length > 0 || exploreResponse.length > 0)
+    ) {
+      const salvage = await applyRecoveryRefereeSalvage(opts, {
+        attempt,
+        lastReason,
+        partialText: lastRaw || exploreResponse,
+        exploreResponse,
+      });
+      if (salvage.applied) {
+        exploreResponse = salvage.exploreResponse;
+        lastReason = salvage.lastReason;
+      }
+    }
 
     if (attempt >= 3 && attempt % 2 === 1 && opts.auditor) {
       const salvagedJson = await runPlannerAuditorSalvage(
@@ -143,11 +227,17 @@ export async function runPlannerEmitRecovery<T>(
       }
     }
 
-    const useEmitOnly = attempt >= 2 && attempt % 2 === 0;
+    const useEmitOnly = emitDirectFromSeed
+      ? true
+      : skipInitialExplore
+        ? attempt % 2 === 1
+        : attempt >= 2 && attempt % 2 === 0;
     const mode: "explore" | "emit" = useEmitOnly ? "emit" : "explore";
     const profile = useEmitOnly ? opts.emitProfile : opts.exploreProfile;
     const label = useEmitOnly
-      ? `${opts.kind} emit-only retry`
+      ? emitDirectFromSeed && attempt === 1
+        ? `${opts.kind} seed-direct emit`
+        : `${opts.kind} emit-only retry`
       : `${opts.kind} derivation`;
 
     opts.emitActivity(label, attempt, maxAttempts, mode);
@@ -156,8 +246,10 @@ export async function runPlannerEmitRecovery<T>(
     );
 
     const prompt = useEmitOnly
-      ? opts.buildRepairPrompt(lastRaw || exploreResponse, lastReason)
-      : attempt === 1
+      ? emitDirectFromSeed && attempt === 1
+        ? opts.buildExplorePrompt()
+        : opts.buildRepairPrompt(lastRaw || exploreResponse, lastReason)
+      : attempt === 1 && !skipInitialExplore
         ? opts.buildExplorePrompt()
         : opts.buildRepairPrompt(lastRaw || exploreResponse, lastReason);
 
@@ -169,12 +261,33 @@ export async function runPlannerEmitRecovery<T>(
         prompt,
         profile,
         useEmitOnly ? opts.jsonSchema : undefined,
-        { kind: opts.kind, label },
+        { kind: opts.kind, label, mode },
       );
       response = prompted.response;
       agentUsed = prompted.agentUsed;
     } catch (err) {
       if (opts.getStopping()) return { ok: false, reason: "run stopping", lastRaw: lastRaw || "" };
+      if (isThinkGuardAbort(err)) {
+        lastRaw = err.partialText;
+        if (thinkGuardSalvageContinue(err)) {
+          lastReason = `think-guard-salvage: ${err.reason}`;
+          exploreResponse = err.verdict?.salvageableBrief?.trim() || err.partialText;
+          continue;
+        }
+        const salvage = await applyRecoveryRefereeSalvage(opts, {
+          attempt,
+          lastReason: err.reason,
+          partialText: err.partialText,
+          exploreResponse,
+        });
+        if (salvage.applied) {
+          exploreResponse = salvage.exploreResponse;
+          lastReason = salvage.lastReason;
+          continue;
+        }
+        lastReason = `think-guard: ${err.reason}`;
+        return { ok: false, reason: lastReason, lastRaw };
+      }
       const msg = describeSdkError(err);
       lastReason = `transport: ${msg}`;
       opts.appendSystem(
@@ -188,7 +301,10 @@ export async function runPlannerEmitRecovery<T>(
     if (opts.getStopping()) return { ok: false, reason: "run stopping", lastRaw: response };
 
     opts.appendAgent(agentUsed, response);
-    if (!useEmitOnly) exploreResponse = response;
+    if (!useEmitOnly) {
+      exploreResponse = response;
+      opts.onExploreCaptured?.(response);
+    }
     lastRaw = response;
 
     const parsed = tryParseWithRuleBasedExtract(
@@ -220,6 +336,16 @@ export async function runPlannerEmitRecovery<T>(
     opts.appendSystem(
       `[${opts.agent.id}] ${opts.kind} parse failed (attempt ${attempt}/${maxAttempts}): ${parsed.reason}`,
     );
+    const postEmitSalvage = await applyRecoveryRefereeSalvage(opts, {
+      attempt,
+      lastReason: parsed.reason,
+      partialText: response,
+      exploreResponse,
+    });
+    if (postEmitSalvage.applied) {
+      exploreResponse = postEmitSalvage.exploreResponse;
+      lastReason = postEmitSalvage.lastReason;
+    }
   }
 
   opts.appendSystem(

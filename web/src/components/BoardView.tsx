@@ -2,6 +2,7 @@ import { memo, useMemo, useState } from "react";
 import { useSwarm } from "../state/store";
 import type { Finding, RunSummary, Todo, TodoStatus } from "../types";
 import { computeCostBreakdown } from "../lib/costBreakdown";
+import { truncateLeft } from "./IdentityStrip";
 
 const COLUMNS: { key: TodoStatus; label: string; accent: string; help: string }[] = [
   {
@@ -137,7 +138,7 @@ interface ColumnProps {
 
 function Column({ label, accent, help, count, todos, agentLabel, claimAge }: ColumnProps) {
   return (
-    <div className="flex flex-col border-r border-ink-700 last:border-r-0 min-h-0">
+    <div className="flex flex-col border-r border-ink-700 last:border-r-0 min-h-0 min-w-0">
       <div
         title={help}
         className={`px-3 py-2 border-b ${accent} border-b-ink-700 text-xs uppercase tracking-wide flex items-center justify-between bg-ink-800 cursor-help`}
@@ -145,7 +146,7 @@ function Column({ label, accent, help, count, todos, agentLabel, claimAge }: Col
         <span>{label}</span>
         <span className="text-ink-400">{count}</span>
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-2 space-y-2">
         {todos.map((t) => (
           <TodoCard key={t.id + ":" + t.status} todo={t} agentLabel={agentLabel} claimAge={claimAge} />
         ))}
@@ -165,9 +166,9 @@ const TodoCard = memo(function TodoCard({ todo, agentLabel, claimAge }: TodoCard
   const liveClaimAge = claimAge(todo);
 
   return (
-    <div className="rounded-md border border-ink-700 bg-ink-800 p-2 text-xs space-y-1.5">
-      <div className="flex items-start justify-between gap-2">
-        <div className="text-ink-100 leading-snug">{todo.description}</div>
+    <div className="rounded-md border border-ink-700 bg-ink-800 p-2 text-xs space-y-1.5 min-w-0 overflow-hidden">
+      <div className="flex items-start justify-between gap-2 min-w-0">
+        <div className="text-ink-100 leading-snug break-words min-w-0">{todo.description}</div>
         {todo.replanCount > 0 ? (
           <span
             className="shrink-0 px-1.5 py-0.5 rounded bg-amber-900/50 border border-amber-700 text-amber-300 text-[10px] uppercase tracking-wide"
@@ -178,48 +179,72 @@ const TodoCard = memo(function TodoCard({ todo, agentLabel, claimAge }: TodoCard
         ) : null}
       </div>
       {todo.expectedFiles.length > 0 ? (
-        <div className="font-mono text-[11px] text-ink-400 break-all">
-          {todo.expectedFiles.join(", ")}
-        </div>
+        <PathList paths={todo.expectedFiles} tone="muted" />
       ) : null}
-      <div className="flex items-center gap-2 text-[10px] text-ink-500">
-        <span>by {agentLabel(todo.createdBy)}</span>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-ink-500 min-w-0">
+        <span className="shrink-0">by {agentLabel(todo.createdBy)}</span>
         {todo.status === "claimed" && todo.claim ? (
           <>
-            <span>·</span>
-            <span className="text-amber-300">{agentLabel(todo.claim.agentId)}</span>
-            {liveClaimAge ? <span>· {liveClaimAge}</span> : null}
+            <span className="shrink-0">·</span>
+            <span className="text-amber-300 shrink-0">{agentLabel(todo.claim.agentId)}</span>
+            {liveClaimAge ? <span className="shrink-0">· {liveClaimAge}</span> : null}
           </>
         ) : null}
         {todo.status === "committed" && todo.committedAt ? (
           <>
-            <span>·</span>
-            <span>{new Date(todo.committedAt).toLocaleTimeString()}</span>
+            <span className="shrink-0">·</span>
+            <span className="shrink-0">{new Date(todo.committedAt).toLocaleTimeString()}</span>
           </>
         ) : null}
         {todo.status === "pending-commit" ? (
           <>
-            <span>·</span>
-            <span className="text-violet-300">awaiting auditor</span>
-            {todo.proposedFiles && todo.proposedFiles.length > 0 ? (
-              <span className="font-mono text-violet-400">→ {todo.proposedFiles.join(", ")}</span>
-            ) : null}
+            <span className="shrink-0">·</span>
+            <span className="text-violet-300 shrink-0">awaiting auditor</span>
           </>
         ) : null}
       </div>
+      {todo.status === "pending-commit" && todo.proposedFiles && todo.proposedFiles.length > 0 ? (
+        <PathList paths={todo.proposedFiles} tone="violet" prefix="→" />
+      ) : null}
       {todo.status === "stale" && todo.staleReason ? (
-        <div className="rounded border border-rose-900 bg-rose-950/60 px-2 py-1 text-[11px] text-rose-200">
+        <div className="rounded border border-rose-900 bg-rose-950/60 px-2 py-1 text-[11px] text-rose-200 break-words overflow-hidden">
           {todo.staleReason}
         </div>
       ) : null}
       {todo.status === "skipped" && todo.skippedReason ? (
-        <div className="rounded border border-ink-600 bg-ink-900 px-2 py-1 text-[11px] text-ink-300">
+        <div className="rounded border border-ink-600 bg-ink-900 px-2 py-1 text-[11px] text-ink-300 break-words overflow-hidden">
           {todo.skippedReason}
         </div>
       ) : null}
     </div>
   );
 });
+
+function PathList({
+  paths,
+  tone = "muted",
+  prefix,
+}: {
+  paths: string[];
+  tone?: "muted" | "violet";
+  prefix?: string;
+}) {
+  const color = tone === "violet" ? "text-violet-400" : "text-ink-400";
+  return (
+    <ul className="space-y-0.5 min-w-0">
+      {paths.map((p) => (
+        <li
+          key={p}
+          className={`font-mono text-[11px] ${color} break-all leading-snug min-w-0`}
+          title={p}
+        >
+          {prefix ? <span className="text-violet-300/80">{prefix} </span> : null}
+          {truncateLeft(p, 72)}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 function formatAge(ms: number): string {
   if (ms < 0) return "0s";

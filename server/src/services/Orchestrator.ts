@@ -16,6 +16,11 @@ import { ConformanceMonitor } from "./ConformanceMonitor.js";
 import { EmbeddingDriftMonitor } from "./EmbeddingDriftMonitor.js";
 import { tokenTracker } from "./ollamaProxy.js";
 import { AmendmentsBuffer, type Amendment } from "./AmendmentsBuffer.js";
+import {
+  applyRunReconfig,
+  type RunReconfigPatch,
+  type RunReconfigResult,
+} from "../swarm/runReconfig.js";
 import { RunStatePersister, findRecoverableRuns, isRecoverablePhase, loadSnapshot, type RecoverableRun } from "./RunStatePersister.js";
 import {
   buildTerminalStatusFromSummary,
@@ -454,6 +459,54 @@ export class Orchestrator {
       });
     }
     return stored;
+  }
+
+  /** Extend mid-run limits (rounds, wall-clock cap, token budget). */
+  reconfigRun(runId: string, patch: RunReconfigPatch): RunReconfigResult | null {
+    const run = this.runs.get(runId);
+    if (!run || !run.runner.isRunning()) return null;
+
+    const applied = applyRunReconfig(run.cfg, patch, { startedAt: run.startedAt });
+    if (!applied.ok) return applied;
+
+    if (applied.changes.rounds) {
+      run.runConfig.rounds = applied.changes.rounds.to;
+    }
+    if (applied.changes.wallClockCapMs) {
+      run.runConfig.wallClockCapMin = String(Math.round(applied.changes.wallClockCapMs.to / 60_000));
+    }
+    const tg = applied.changes.thinkGuardReferee;
+    if (tg?.thinkGuardRefereeEnabled) {
+      run.runConfig.thinkGuardRefereeEnabled = tg.thinkGuardRefereeEnabled.to;
+    }
+    if (tg?.thinkGuardRefereeMaxCallsPerRun) {
+      run.runConfig.thinkGuardRefereeMaxCallsPerRun = tg.thinkGuardRefereeMaxCallsPerRun.to;
+    }
+    if (tg?.thinkGuardRefereeMinThinkChars) {
+      run.runConfig.thinkGuardRefereeMinThinkChars = tg.thinkGuardRefereeMinThinkChars.to;
+    }
+    if (tg?.thinkGuardRefereeThinkTailMinChars) {
+      run.runConfig.thinkGuardRefereeThinkTailMinChars = tg.thinkGuardRefereeThinkTailMinChars.to;
+    }
+    if (tg?.thinkGuardRefereeThinkTailMaxChars) {
+      run.runConfig.thinkGuardRefereeThinkTailMaxChars = tg.thinkGuardRefereeThinkTailMaxChars.to;
+    }
+    if (tg?.thinkGuardRefereeMaxOutputTokens) {
+      run.runConfig.thinkGuardRefereeMaxOutputTokens = tg.thinkGuardRefereeMaxOutputTokens.to;
+    }
+
+    run.runner.reconfig?.(applied.changes);
+    run.runner.appendSystemMessage?.(applied.message);
+
+    this.opts.emit({
+      type: "run_reconfigured",
+      runId,
+      ts: Date.now(),
+      message: applied.message,
+      changes: applied.changes,
+    });
+
+    return applied;
   }
 
   /** #299: read all amendments for a run, oldest first. Used by the
@@ -1152,7 +1205,26 @@ export class Orchestrator {
       ...(cfg.plannerTools !== undefined ? { plannerTools: cfg.plannerTools } : {}),
       ...(cfg.webTools !== undefined ? { webTools: cfg.webTools } : {}),
       ...(cfg.mcpServers ? { mcpServers: cfg.mcpServers } : {}),
+      ...(cfg.thinkGuardRefereeEnabled != null
+        ? { thinkGuardRefereeEnabled: cfg.thinkGuardRefereeEnabled }
+        : {}),
+      ...(cfg.thinkGuardRefereeMaxCallsPerRun != null
+        ? { thinkGuardRefereeMaxCallsPerRun: cfg.thinkGuardRefereeMaxCallsPerRun }
+        : {}),
+      ...(cfg.thinkGuardRefereeMinThinkChars != null
+        ? { thinkGuardRefereeMinThinkChars: cfg.thinkGuardRefereeMinThinkChars }
+        : {}),
+      ...(cfg.thinkGuardRefereeThinkTailMinChars != null
+        ? { thinkGuardRefereeThinkTailMinChars: cfg.thinkGuardRefereeThinkTailMinChars }
+        : {}),
+      ...(cfg.thinkGuardRefereeThinkTailMaxChars != null
+        ? { thinkGuardRefereeThinkTailMaxChars: cfg.thinkGuardRefereeThinkTailMaxChars }
+        : {}),
+      ...(cfg.thinkGuardRefereeMaxOutputTokens != null
+        ? { thinkGuardRefereeMaxOutputTokens: cfg.thinkGuardRefereeMaxOutputTokens }
+        : {}),
     };
+    cfg.thinkGuardRefereeCallsUsed = cfg.thinkGuardRefereeCallsUsed ?? 0;
     const activeRun = this.createActiveRun(runId, startedAt, cfg, runConfig, runner, manager, persister, holdsCloneLock, runHub);
     this.runs.set(runId, activeRun);
     this.runPaths.set(runId, {

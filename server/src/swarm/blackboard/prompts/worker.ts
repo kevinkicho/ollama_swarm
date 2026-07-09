@@ -35,6 +35,9 @@ export const SEARCH_MAX = 100_000;
 export const REPLACE_MAX = 100_000;
 export const CONTENT_MAX = 400_000;
 
+/** Soft cap — oversized replace blocks risk apply failures and provider timeouts. */
+export const HUNK_REPLACE_SOFT_MAX = 32_000;
+
 const ReplaceHunkSchema = z.object({
   op: z.literal("replace"),
   file: FILE_FIELD,
@@ -79,6 +82,37 @@ export const WorkerResponseSchema = z.object({
 export type WorkerParseResult =
   | { ok: true; hunks: Hunk[]; skip?: string }
   | { ok: false; reason: string };
+
+/** Reject hunks whose replace payload is too large for reliable apply. */
+export function validateHunkPayload(hunks: readonly Hunk[]): WorkerParseResult {
+  for (const h of hunks) {
+    if (h.op === "replace") {
+      const size = h.search.length + h.replace.length;
+      if (size > HUNK_REPLACE_SOFT_MAX) {
+        return {
+          ok: false,
+          reason:
+            `replace hunk on "${h.file}" is ${size} chars (soft max ${HUNK_REPLACE_SOFT_MAX}) — split into smaller section edits`,
+        };
+      }
+    }
+    if (h.op === "create" && h.content.length > HUNK_REPLACE_SOFT_MAX) {
+      return {
+        ok: false,
+        reason:
+          `create hunk on "${h.file}" is ${h.content.length} chars (soft max ${HUNK_REPLACE_SOFT_MAX}) — split into multiple hunks`,
+      };
+    }
+    if (h.op === "append" && h.content.length > HUNK_REPLACE_SOFT_MAX) {
+      return {
+        ok: false,
+        reason:
+          `append hunk on "${h.file}" is ${h.content.length} chars (soft max ${HUNK_REPLACE_SOFT_MAX}) — split into smaller appends`,
+      };
+    }
+  }
+  return { ok: true, hunks: [...hunks] };
+}
 
 export function parseWorkerResponse(
   raw: string,

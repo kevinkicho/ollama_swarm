@@ -181,6 +181,29 @@ export type SwarmEventBody =
       ts: number;
       text: string;
     }
+  | {
+      type: "run_reconfigured";
+      runId: string;
+      ts: number;
+      message: string;
+      changes: {
+        rounds?: { from?: number; to: number };
+        wallClockCapMs?: { from?: number; to: number };
+        tokenBudget?: { from?: number; to: number };
+        thinkGuardReferee?: import("@ollama-swarm/shared/thinkGuardBudget").ThinkGuardRefereeReconfigChanges;
+      };
+    }
+  | {
+      type: "swarm_control_advice";
+      ts: number;
+      kind: "stall_gate" | "tool_coach";
+      action?: "backoff" | "retry" | "stop";
+      source?: "rule" | "arbitrator";
+      rationale: string;
+      plannerHint?: string;
+      agentId?: string;
+      tool?: string;
+    }
   // #302 Phase B (2026-04-28): live embedding-similarity drift sample.
   // Independent second signal alongside conformance_sample (LLM-judge).
   // Emitted by EmbeddingDriftMonitor when an embedding model is

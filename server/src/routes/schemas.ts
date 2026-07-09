@@ -159,6 +159,7 @@ export const StartBody = z.object({
   // already-validated values and only need to decide how to apply them.
   roles: z.array(SwarmRoleSchema).min(1).max(16).optional(),
   councilContract: z.boolean().optional(),
+  councilSharedExplore: z.boolean().optional(),
   proposition: z.string().trim().max(2000).optional(),
   // Unit 34: per-run ambition ratchet cap. 0 = explicitly disabled; 1-20
   // enables with that many tiers max. Absent = inherit from env.
@@ -304,6 +305,12 @@ export const StartBody = z.object({
   // Task #127: when no userDirective is set, auto-generate one via a
   // pre-pass. Default true (caller can pass false to disable).
   autoGenerateGoals: z.boolean().optional(),
+  /** Blackboard-only: skip goal pre-pass, lower explore caps, prefer seed grounding. */
+  planningFastPath: z.boolean().optional(),
+  /** Blackboard-only: skip LLM contract derivation for scoped UI directives. */
+  skipContractDerivation: z.boolean().optional(),
+  /** Blackboard-only: wall-clock cap for seeding + contract + initial planner (ms). */
+  planningWallClockCapMs: z.coerce.number().int().positive().max(60 * 60_000).optional(),
   // Task #129: post-completion stretch-goal reflection pass — one
   // planner prompt asks "what would the BEST version of this work
   // have done?" and tags the answer for next-run / user review.
@@ -403,6 +410,40 @@ export const SayBody = z.object({
   targetAgent: z.string().min(1).max(64).optional(),
   runId: z.string().min(1).max(100).optional(),
 });
+
+/** Mid-run limit extension (extend-only). At least one field required. */
+export const ReconfigBody = z.object({
+  runId: z.string().min(1).max(100),
+  rounds: z.coerce.number().int().min(1).max(100).optional(),
+  wallClockCapMs: z.coerce.number().int().positive().optional(),
+  wallClockCapMin: z.coerce.number().int().positive().optional(),
+  tokenBudget: z.coerce.number().int().positive().optional(),
+  extendRounds: z.coerce.number().int().positive().max(50).optional(),
+  extendWallClockCapMin: z.coerce.number().int().positive().max(24 * 60).optional(),
+  extendTokenBudget: z.coerce.number().int().positive().optional(),
+  thinkGuardRefereeEnabled: z.boolean().optional(),
+  thinkGuardRefereeMaxCallsPerRun: z.coerce.number().int().min(0).max(24).optional(),
+  thinkGuardRefereeMinThinkChars: z.coerce.number().int().min(5000).max(200000).optional(),
+  thinkGuardRefereeThinkTailMinChars: z.coerce.number().int().min(1000).max(20000).optional(),
+  thinkGuardRefereeThinkTailMaxChars: z.coerce.number().int().min(2000).max(32000).optional(),
+  thinkGuardRefereeMaxOutputTokens: z.coerce.number().int().min(128).max(4096).optional(),
+}).refine(
+  (v) =>
+    v.rounds != null
+    || v.wallClockCapMs != null
+    || v.wallClockCapMin != null
+    || v.tokenBudget != null
+    || v.extendRounds != null
+    || v.extendWallClockCapMin != null
+    || v.extendTokenBudget != null
+    || v.thinkGuardRefereeEnabled != null
+    || v.thinkGuardRefereeMaxCallsPerRun != null
+    || v.thinkGuardRefereeMinThinkChars != null
+    || v.thinkGuardRefereeThinkTailMinChars != null
+    || v.thinkGuardRefereeThinkTailMaxChars != null
+    || v.thinkGuardRefereeMaxOutputTokens != null,
+  { message: "at least one limit field is required" },
+);
 
 // Unit 52c: open-clone request body. Path is the absolute path of the
 // directory the user wants to open in the OS file manager. Validated

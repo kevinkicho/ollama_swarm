@@ -19,8 +19,17 @@ import { ToolDispatcher, defaultToolsForProfile, type ProfileName } from "../too
 import {
   resolveMaxToolTurnsForProfile,
   effectiveToolProfileId,
+  defaultPromptWallClockMs,
+  workerJsonNudgeForProfile,
   type WebToolsConfig,
 } from "../../../shared/src/toolProfiles.js";
+import { composePromptGuardSignals } from "./thinkStreamGuardRuntime.js";
+import {
+  extractThinkGuardAbortError,
+  isPromptGuardAbort,
+} from "@ollama-swarm/shared/thinkGuardErrors";
+import { createThinkGuardSession, type ThinkGuardSession } from "@ollama-swarm/shared/streamThinkGuard";
+import type { ThinkGuardHandler } from "./blackboard/thinkGuardHandler.js";
 
 
 // 2026-04-28: shared interruptible sleep used by both this module's
@@ -149,12 +158,24 @@ export interface PromptWithRetryOptions {
   modelOverride?: string;
   /** MCP servers string (e.g. "fetch=..." or "search=...") for tool-augmented profiles. Forwarded via any-cast in impl. */
   mcpServers?: string;
+  /** Swarm control center — repeated tool failures trigger coach hints. */
+  onToolResultHook?: import("../tools/ToolDispatcher.js").ToolResultHook;
   /** When set, upgrades swarm-read → swarm-research for discussion runners. */
   webToolsConfig?: WebToolsConfig;
+  /** When set, overrides resolveMaxToolTurnsForProfile for this call (planning phases). */
+  maxToolTurns?: number;
   /** Fired for each tool dispatch so runners can log web_tool transcript entries. */
   onTool?: (info: { tool: string; ok: boolean; preview: string }) => void;
   /** Optional metadata for agent_activity events when manager is set. */
-  activity?: { kind?: string; label?: string; activityId?: string };
+  activity?: { kind?: string; label?: string; activityId?: string; mode?: "explore" | "emit" };
+  /** Hard wall-clock abort (ms). Defaults from profile when unset. */
+  promptWallClockMs?: number;
+  /** Post-abort think-stream referee (blackboard explore only). */
+  thinkGuardHandler?: ThinkGuardHandler;
+  refereeOn?: boolean;
+  minThinkCharsForReferee?: number;
+  /** Tool-loop nudge before turn N (1-based). Worker profile gets a default when unset. */
+  toolLoopNudge?: { atTurn: number; message: string };
 }
 
 export interface RetryInfo {
@@ -253,99 +274,141 @@ export async function promptWithRetry(
         const tools = profileForTools && agent.cwd ? defaultToolsForProfile(profileForTools) : [];
         const mcp = (opts as any).mcpServers || undefined;
         const dispatcher = tools.length > 0 && profileForTools && agent.cwd
-          ? new ToolDispatcher(profileForTools, agent.cwd, mcp)
+          ? new ToolDispatcher(profileForTools, agent.cwd, mcp, agent.id, opts.onToolResultHook)
           : undefined;
-        const exploreToolCap = profileForTools
+        const exploreToolCap = opts.maxToolTurns ?? (profileForTools
           ? resolveMaxToolTurnsForProfile(
               profileForTools as import("../../../shared/src/toolProfiles.js").ToolProfileId,
             )
-          : undefined;
+          : undefined);
+        const wallClockMs = opts.promptWallClockMs ?? defaultPromptWallClockMs(profileForTools);
+        const toolLoopNudge = opts.toolLoopNudge ?? workerJsonNudgeForProfile(profileForTools);
         const isCloud = effectiveModel.includes(":cloud");
-        const chatOpts = {
-          modelString: effectiveModel,
-          runId: opts.runId,
-          messages: [{ role: "user" as const, content: effectivePromptText }],
-          signal: opts.signal,
-          agentId: agent.id,
-          logDiag: opts.logDiag,
-          ...(isCloud ? { firstChunkTimeoutMs: CLOUD_FIRST_CHUNK_TIMEOUT_MS } : {}),
-          ...(opts.ollamaOptions !== undefined ? { options: opts.ollamaOptions } : {}),
-          onChunk: (cumulativeText: string) => {
-            if (!sawFirstChunk) {
-              sawFirstChunk = true;
-              emitActivity("streaming", { attempt });
-            }
-            opts.manager?.recordStreamingText(agent.id, agent.index, cumulativeText);
-          },
-          ...(tools.length > 0 ? { tools } : {}),
-          ...(dispatcher ? { dispatcher } : {}),
-          ...(opts.onTool || opts.manager
-            ? {
-                onTool: (info: { tool: string; ok: boolean; preview: string }) => {
-                  if (!sawFirstChunk) {
-                    sawFirstChunk = true;
-                    emitActivity("streaming", { attempt });
-                  }
-                  const toolLabel = info.ok ? info.tool : `${info.tool} (error)`;
-                  opts.manager?.emitAgentActivity(agent.id, agent.index, "streaming", {
-                    activityId: session.activityId,
-                    kind: session.kind ?? opts.activity?.kind,
-                    label: toolLabel,
-                    maxAttempts: RETRY_MAX_ATTEMPTS,
-                    attempt,
-                  });
-                  opts.onTool?.(info);
-                },
-              }
-            : {}),
-          ...(exploreToolCap !== undefined ? { maxToolTurns: exploreToolCap } : {}),
-          ...(opts.ollamaFormat !== undefined ? { format: opts.ollamaFormat } : {}),
+        const guardSession: ThinkGuardSession = createThinkGuardSession();
+        let chatPrompt = effectivePromptText;
+        let continuationUsed = false;
+        type ProviderChatResult = {
+          text: string;
+          finishReason: string;
+          errorMessage?: string;
+          errorCause?: unknown;
         };
-        const result = config.PROVIDER_GATEWAY
-          ? await providerGateway.chat(chatOpts)
-          : await (async () => {
-              const { provider, modelId } = pickProvider(effectiveModel);
-              const r = await provider.chat({ ...chatOpts, model: modelId });
-              if (r.usage) {
-                tokenTracker.add(
-                  {
-                    ts: Date.now(),
-                    promptTokens: r.usage.promptTokens,
-                    responseTokens: r.usage.responseTokens,
-                    durationMs: Date.now() - t0Provider,
-                    model: agent.model,
-                    path: `/sdk-direct (${provider.id})`,
-                  },
-                  opts.runId,
-                );
+        let result: ProviderChatResult | undefined;
+
+        const runOneGuardedChat = async (promptBody: string): Promise<ProviderChatResult> => {
+          const { signal: guardedSignal, wrapOnChunk, cleanup: guardCleanup } =
+            composePromptGuardSignals(opts.signal, {
+              wallClockMs,
+              refereeOn: opts.refereeOn === true,
+              minThinkCharsForReferee: opts.minThinkCharsForReferee,
+              activityKind: opts.activity?.kind,
+              session: guardSession,
+            });
+          const chatOpts = {
+            modelString: effectiveModel,
+            runId: opts.runId,
+            messages: [{ role: "user" as const, content: promptBody }],
+            signal: guardedSignal,
+            agentId: agent.id,
+            logDiag: opts.logDiag,
+            ...(isCloud ? { firstChunkTimeoutMs: CLOUD_FIRST_CHUNK_TIMEOUT_MS } : {}),
+            ...(opts.ollamaOptions !== undefined ? { options: opts.ollamaOptions } : {}),
+            onChunk: wrapOnChunk((cumulativeText: string) => {
+              if (!sawFirstChunk) {
+                sawFirstChunk = true;
+                emitActivity("streaming", { attempt });
               }
-              return r;
-            })();
-        // Non-streaming providers may return the full body without firing onChunk.
-        // Mirror one-shot text into the dock so the UI does not sit on
-        // "awaiting first token" for the entire turn.
+              opts.manager?.recordStreamingText(agent.id, agent.index, cumulativeText);
+            }),
+            ...(tools.length > 0 ? { tools } : {}),
+            ...(dispatcher ? { dispatcher } : {}),
+            ...(opts.onTool || opts.manager
+              ? {
+                  onTool: (info: { tool: string; ok: boolean; preview: string }) => {
+                    if (!sawFirstChunk) {
+                      sawFirstChunk = true;
+                      emitActivity("streaming", { attempt });
+                    }
+                    const toolLabel = info.ok ? info.tool : `${info.tool} (error)`;
+                    opts.manager?.emitAgentActivity(agent.id, agent.index, "streaming", {
+                      activityId: session.activityId,
+                      kind: session.kind ?? opts.activity?.kind,
+                      label: toolLabel,
+                      maxAttempts: RETRY_MAX_ATTEMPTS,
+                      attempt,
+                    });
+                    opts.onTool?.(info);
+                  },
+                }
+              : {}),
+            ...(exploreToolCap !== undefined ? { maxToolTurns: exploreToolCap } : {}),
+            ...(toolLoopNudge ? { toolLoopNudge } : {}),
+            ...(wallClockMs ? { promptWallClockMs: wallClockMs } : {}),
+            ...(opts.ollamaFormat !== undefined ? { format: opts.ollamaFormat } : {}),
+          };
+          try {
+            const r = config.PROVIDER_GATEWAY
+              ? await providerGateway.chat(chatOpts)
+              : await (async () => {
+                  const { provider, modelId } = pickProvider(effectiveModel);
+                  const out = await provider.chat({ ...chatOpts, model: modelId });
+                  if (out.usage) {
+                    tokenTracker.add(
+                      {
+                        ts: Date.now(),
+                        promptTokens: out.usage.promptTokens,
+                        responseTokens: out.usage.responseTokens,
+                        durationMs: Date.now() - t0Provider,
+                        model: agent.model,
+                        path: `/sdk-direct (${provider.id})`,
+                      },
+                      opts.runId,
+                    );
+                  }
+                  return out;
+                })();
+            if (r.finishReason === "aborted") {
+              const guardErr = extractThinkGuardAbortError(guardSession, guardedSignal);
+              if (guardErr && opts.thinkGuardHandler) {
+                const action = await opts.thinkGuardHandler.handleAbort(guardErr);
+                if (action.type === "return_partial") {
+                  opts.manager?.markStreamingDone(agent.id, { preservePartial: true });
+                  return { text: action.text, finishReason: "salvaged" };
+                }
+                if (action.type === "continuation_prompt" && !continuationUsed) {
+                  continuationUsed = true;
+                  guardSession.budgetExtended = true;
+                  chatPrompt = action.prompt;
+                  sawFirstChunk = false;
+                  return { text: "", finishReason: "continuation" };
+                }
+              }
+              opts.manager?.markStreamingDone(agent.id);
+              throw guardErr ?? new Error("aborted");
+            }
+            return r;
+          } finally {
+            guardCleanup();
+          }
+        };
+
+        do {
+          result = await runOneGuardedChat(chatPrompt);
+        } while (result.finishReason === "continuation");
+
         if (!sawFirstChunk && result.text.trim().length > 0) {
           sawFirstChunk = true;
           emitActivity("streaming", { attempt });
           opts.manager?.recordStreamingText(agent.id, agent.index, result.text);
         }
-        // Surface streaming-end so the UI's PersistentStreamBubble flips to "done".
-        opts.manager?.markStreamingDone(agent.id);
-        // Adapt to the SDK-shaped {data: {parts}} return shape every
-        // caller already handles. Future cleanup: callers consume
-        // ChatResult directly. Keep parity for now — this is a
-        // dispatch-path swap, not a refactor of every consumer.
+        if (result.finishReason !== "salvaged") {
+          opts.manager?.markStreamingDone(agent.id);
+        }
         if (result.finishReason === "error") {
           throwChatProviderError(
             result.errorMessage ?? "session provider chat error",
             result.errorCause,
           );
-        }
-        if (result.finishReason === "aborted") {
-          // Mirror the SDK's behavior on abort — the outer signal is
-          // already aborted; downstream catches it and treats as
-          // intentional cancellation, not a retryable error.
-          throw new Error("aborted");
         }
         res = { data: { parts: [{ type: "text", text: result.text }] } };
       }
@@ -357,7 +420,7 @@ export async function promptWithRetry(
       lastErr = err;
       // Watchdog, user stop, or cap already cancelled this turn — do
       // not retry a deliberate abort.
-      if (opts.signal.aborted) throw err;
+      if (opts.signal.aborted || isPromptGuardAbort(err)) throw err;
       if (!isRetryableSdkError(err)) throw err;
       if (attempt >= RETRY_MAX_ATTEMPTS) throw err;
       const delayMs = RETRY_BACKOFF_MS[attempt - 1];
@@ -397,4 +460,6 @@ function defaultDescribeError(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
 }
+
+
 

@@ -2,8 +2,10 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import {
   buildWorkerUserPrompt,
+  HUNK_REPLACE_SOFT_MAX,
   MAX_HUNKS,
   parseWorkerResponse,
+  validateHunkPayload,
   WORKER_SYSTEM_PROMPT,
   type WorkerParseResult,
 } from "./worker.js";
@@ -170,6 +172,15 @@ describe("parseWorkerResponse — rejections (v2 hunks)", () => {
       assert.strictEqual(r.skip, "why");
       assert.strictEqual(r.hunks.length, 0);
     }
+  });
+
+  it("validateHunkPayload rejects oversized replace hunks", () => {
+    const big = "x".repeat(HUNK_REPLACE_SOFT_MAX + 1);
+    const r = validateHunkPayload([
+      { op: "replace", file: "a.ts", search: "anchor", replace: big },
+    ]);
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.match(r.reason, /soft max/);
   });
 
   it("soft-caps more than MAX_HUNKS hunks to MAX_HUNKS", () => {

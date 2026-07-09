@@ -29,4 +29,10 @@ describe("plannerRecovery — explore vs emit", () => {
     assert.match(SRC, /runPlannerAuditorSalvage/);
     assert.doesNotMatch(SRC, /runPlannerParseDiagnostic/);
   });
+
+  it("supports seed-direct emit (D12) on attempt 1", () => {
+    assert.match(SRC, /emitDirectFromSeed/);
+    assert.match(SRC, /seed-direct emit/);
+    assert.match(SRC, /emitDirectFromSeed && attempt === 1/);
+  });
 });

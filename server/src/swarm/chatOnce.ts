@@ -26,6 +26,12 @@ import {
   effectiveToolProfileId,
   type WebToolsConfig,
 } from "../../../shared/src/toolProfiles.js";
+import {
+  defaultPromptWallClockMs,
+  workerJsonNudgeForProfile,
+} from "../../../shared/src/toolProfiles.js";
+import { composePromptGuardSignals } from "./thinkStreamGuardRuntime.js";
+import { isPromptGuardAbort } from "@ollama-swarm/shared/thinkGuardErrors";
 
 export interface ChatOnceOpts {
   /** opencode agent profile to invoke under (swarm / swarm-read / swarm-builder / swarm-ui).
@@ -62,8 +68,19 @@ export interface ChatOnceOpts {
   mcpServers?: string;
   /** Explicit tool-loop cap; overrides resolveMaxToolTurnsForProfile when set. */
   maxToolTurns?: number;
+  /** Restrict advertised tools for this call (e.g. literature web-only). */
+  toolsOverride?: ReadonlyArray<
+    "read" | "grep" | "glob" | "list" | "bash" | "web_search" | "web_fetch"
+  >;
+  /** Inject a user nudge before the Nth tool-loop turn (1-based). */
+  toolLoopNudge?: { atTurn: number; message: string };
   /** Fired before a transport retry (attempt >= 2). */
   onRetry?: (info: { attempt: number; max: number; reasonShort: string; delayMs: number }) => void;
+  /** Hard wall-clock abort (ms). Defaults from profile when unset. */
+  promptWallClockMs?: number;
+  /** When false (default), think guard uses hard tier only. */
+  refereeOn?: boolean;
+  minThinkCharsForReferee?: number;
 }
 
 // Mirrors what `agent.client.session.prompt` returns so callers don't
@@ -79,7 +96,7 @@ async function chatOnceOnce(
   agent: Agent,
   opts: ChatOnceOpts,
 ): Promise<ChatOnceResult> {
-  const signal = opts.signal ?? new AbortController().signal;
+  const baseSignal = opts.signal ?? new AbortController().signal;
   // E3 Phase 5: provider path is the only path. Legacy SDK fallback gone.
   {
     const t0 = Date.now();
@@ -97,28 +114,44 @@ async function chatOnceOnce(
         : opts.agentName === "swarm-ui"
           ? effectiveToolProfileId("swarm-read", opts.webToolsConfig) as ProfileName
           : null;
+    const wallClockMs = opts.promptWallClockMs ?? defaultPromptWallClockMs(profileForTools);
+    const toolLoopNudge = opts.toolLoopNudge ?? workerJsonNudgeForProfile(profileForTools);
+    const { signal, wrapOnChunk, cleanup: guardCleanup } = composePromptGuardSignals(baseSignal, {
+      wallClockMs,
+      refereeOn: opts.refereeOn === true,
+      minThinkCharsForReferee: opts.minThinkCharsForReferee,
+    });
     // Default clonePath to agent.cwd (set by AgentManager.spawnAgent /
     // spawnAgentNoOpencode) so callers don't have to plumb it through
     // explicitly. Override via opts.clonePath when needed.
     const clonePath = opts.clonePath ?? agent.cwd;
-    const tools = clonePath && profileForTools ? defaultToolsForProfile(profileForTools) : [];
+    const tools =
+      opts.toolsOverride && opts.toolsOverride.length > 0
+        ? [...opts.toolsOverride]
+        : clonePath && profileForTools
+          ? defaultToolsForProfile(profileForTools)
+          : [];
     const mcp = opts.mcpServers || undefined;
     const dispatcher = clonePath && profileForTools && tools.length > 0
-      ? new ToolDispatcher(profileForTools, clonePath, mcp)
+      ? new ToolDispatcher(profileForTools, clonePath, mcp, agent.id)
       : undefined;
-    const exploreToolCap = profileForTools
+    const exploreToolCap = opts.maxToolTurns ?? (profileForTools
       ? resolveMaxToolTurnsForProfile(
           profileForTools as import("../../../shared/src/toolProfiles.js").ToolProfileId,
         )
-      : undefined;
-    const result = await provider.chat({
+      : undefined);
+    let result;
+    try {
+    result = await provider.chat({
       model: modelId,
       messages: [{ role: "user", content: opts.promptText }],
       signal,
       agentId: agent.id,
       logDiag: opts.logDiag,
       runId: opts.runId,
-      ...(opts.onChunk ? { onChunk: opts.onChunk } : {}),
+      ...(wrapOnChunk(opts.onChunk) ? { onChunk: wrapOnChunk(opts.onChunk) } : {}),
+      ...(opts.toolLoopNudge ?? toolLoopNudge ? { toolLoopNudge: opts.toolLoopNudge ?? toolLoopNudge } : {}),
+      ...(wallClockMs ? { promptWallClockMs: wallClockMs } : {}),
       ...(tools.length > 0 ? { tools } : {}),
       ...(dispatcher ? { dispatcher } : {}),
       ...(opts.onTool ? { onTool: opts.onTool } : {}),
@@ -129,6 +162,9 @@ async function chatOnceOnce(
           : {}),
       ...(opts.format !== undefined ? { format: opts.format } : {}),
     });
+    } finally {
+      guardCleanup();
+    }
     if (result.usage) {
       tokenTracker.add({
         ts: Date.now(),
@@ -164,7 +200,7 @@ export async function chatOnce(
       return await chatOnceOnce(agent, { ...opts, signal });
     } catch (err) {
       lastErr = err;
-      if (signal.aborted) throw err;
+      if (signal.aborted || isPromptGuardAbort(err)) throw err;
       if (!isRetryableSdkError(err)) throw err;
       if (attempt >= RETRY_MAX_ATTEMPTS) throw err;
       const delayMs = RETRY_BACKOFF_MS[attempt - 1];

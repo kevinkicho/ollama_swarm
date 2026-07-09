@@ -327,6 +327,10 @@ export class PipelineRunner implements SwarmRunner {
     this.appendSystem(text, summary);
   }
 
+  reconfig(changes: import("./runReconfig.js").RunReconfigChanges): void {
+    this.currentRunner?.reconfig?.(changes);
+  }
+
   private setPhase(phase: SwarmPhase): void {
     this.phase = phase;
     this.opts.emit({ type: "swarm_state", phase, round: this.round });

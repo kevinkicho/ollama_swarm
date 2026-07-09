@@ -12,6 +12,7 @@ import { formatToolInvokePreview } from "../swarm/toolCallTranscript.js";
 import { describeSdkError } from "../swarm/sdkError.js";
 import { config } from "../config.js";
 import { resolveOpenCodeRoute, type OpenCodeTier } from "./openCodeModelRouting.js";
+import { structuredFormatForChat } from "./structuredFormat.js";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_TOOL_TURNS = 10;
@@ -40,19 +41,7 @@ type OpenAiMessage = {
 };
 
 function responseFormatBody(format: ChatOpts["format"]): Record<string, unknown> | undefined {
-  if (!format) return undefined;
-  if (typeof format === "string") {
-    return { response_format: { type: "json_object" as const } };
-  }
-  if (
-    format.type === "json_object" ||
-    format.type === "json_schema" ||
-    format.type === "regex" ||
-    format.type === "text"
-  ) {
-    return { response_format: format };
-  }
-  return { response_format: { type: "json_object" as const } };
+  return structuredFormatForChat({ format, model: "", messages: [], signal: new AbortController().signal }).openAi;
 }
 
 function keyForTier(tier: OpenCodeTier, goKey: string, zenKey: string): string {
@@ -285,6 +274,7 @@ export class OpenCodeProvider implements SessionProvider {
     let cumulativePrompt = 0;
     let cumulativeResponse = 0;
     const maxToolTurns = opts.maxToolTurns ?? MAX_TOOL_TURNS;
+    const structured = structuredFormatForChat(opts);
 
     for (let turn = 0; turn < maxToolTurns; turn++) {
       const body = JSON.stringify({
@@ -294,20 +284,26 @@ export class OpenCodeProvider implements SessionProvider {
         ...(opts.system ? { system: opts.system } : {}),
         messages,
         ...(tools ? { tools } : {}),
+        ...(structured.anthropic ? { output_format: structured.anthropic.output_format } : {}),
         ...(opts.options?.temperature !== undefined ? { temperature: opts.options.temperature } : {}),
         ...(opts.options?.top_p !== undefined ? { top_p: opts.options.top_p } : {}),
       });
+
+      const anthropicHeaders: Record<string, string> = {
+        "x-api-key": key,
+        "anthropic-version": ANTHROPIC_VERSION,
+        "content-type": "application/json",
+      };
+      if (structured.anthropic) {
+        anthropicHeaders["anthropic-beta"] = structured.anthropic.beta;
+      }
 
       let resp: Response;
       try {
         resp = await fetch(url, {
           method: "POST",
           signal: opts.signal,
-          headers: {
-            "x-api-key": key,
-            "anthropic-version": ANTHROPIC_VERSION,
-            "content-type": "application/json",
-          },
+          headers: anthropicHeaders,
           body,
         });
       } catch (err) {

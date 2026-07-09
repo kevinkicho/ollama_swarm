@@ -16,6 +16,7 @@ import { extractText } from "../extractText.js";
 import { parseGoalList } from "./goalListParser.js";
 import type { PlannerSeed } from "./prompts/planner.js";
 import { resolveToolProfile } from "../toolProfiles.js";
+import { resolveMaxToolTurnsForPlanningPhase } from "@ollama-swarm/shared/toolProfiles";
 import type { RunConfig } from "../SwarmRunner.js";
 import {
   chatOnceWithStreaming,
@@ -117,6 +118,7 @@ export async function runGoalGenerationPrePass(
     webToolsConfig: opts.cfg,
     runId: opts.cfg?.runId,
     mcpServers: opts.cfg?.mcpServers,
+    maxToolTurns: resolveMaxToolTurnsForPlanningPhase("goal-pre-pass", opts.cfg),
     ...(opts.onTool ? { onTool: opts.onTool } : {}),
   };
 

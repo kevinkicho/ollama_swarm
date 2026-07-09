@@ -238,6 +238,27 @@ test("ToolDispatcher — swarm-research profile exposes web tools", () => {
   assert.ok(true, "research profile defined with web tools");
 });
 
+test("ToolDispatcher — bash backoff persists across dispatcher instances per agent", async () => {
+  const { resetAllAgentBashBackoff } = await import("./agentBashBackoff.js");
+  resetAllAgentBashBackoff();
+  const root = await makeFixtureClone();
+  try {
+    const agentId = "agent-2-test";
+    for (let i = 0; i < 4; i++) {
+      const d = new ToolDispatcher("swarm-builder", root, undefined, agentId);
+      const r = await d.dispatch({ tool: "bash", args: { command: "ls" } });
+      assert.equal(r.ok, false);
+    }
+    const d2 = new ToolDispatcher("swarm-builder", root, undefined, agentId);
+    const blocked = await d2.dispatch({ tool: "bash", args: { command: "ls" } });
+    assert.equal(blocked.ok, false);
+    if (!blocked.ok) assert.match(blocked.error, /bash disabled after 4 consecutive failures/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    resetAllAgentBashBackoff();
+  }
+});
+
 test("ToolDispatcher — web_search and web_fetch are denied on non-research profiles", async () => {
   const d = new ToolDispatcher("swarm-read", "/tmp");
   const r1 = await d.dispatch({ tool: "web_search", args: { query: "test" } });
