@@ -30,6 +30,7 @@ import type {
   TranscriptEntrySummary,
 } from "../types.js";
 import type { RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
+import { resolveRunSpawnModel } from "./resolveRunSpawnModel.js";
 import { extractText } from "./extractText.js";
 import { formatChatReceipt } from "./chatReceipt.js";
 import { applyHunks, type Hunk } from "./blackboard/applyHunks.js";
@@ -163,7 +164,7 @@ export class BaselineRunner implements SwarmRunner {
     const agent = await this.opts.manager.spawnAgentNoOpencode({
       cwd: destPath,
       index: 1,
-      model: cfg.model,
+      model: resolveRunSpawnModel(cfg, 1),
     });
     if (this.stopping) return;
     this.appendSystem(`Baseline agent ready (session=${agent.sessionId.slice(0, 8)})`);

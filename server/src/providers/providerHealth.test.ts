@@ -70,20 +70,28 @@ test("probeProviders — anthropic unconfigured without key", async (t) => {
 });
 
 test("probeProviders — opencode ok via models discovery", async () => {
-  const fetchImpl = (async (url: string) => {
-    if (url === "https://opencode.ai/zen/go/v1/models") {
-      return new Response(JSON.stringify({ data: [{ id: "glm-5.1" }, { id: "deepseek-v4-flash" }] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+  const prevGoKey = config.OPENCODE_GO_API_KEY;
+  const prevApiKey = config.OPENCODE_API_KEY;
+  config.OPENCODE_GO_API_KEY = "test-key";
+  try {
+    const fetchImpl = (async (url: string) => {
+      if (url === "https://opencode.ai/zen/go/v1/models") {
+        return new Response(JSON.stringify({ data: [{ id: "glm-5.1" }, { id: "deepseek-v4-flash" }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
 
-  await probeProviders({ providers: ["opencode"], force: true, fetchImpl });
-  const rec = getProvidersStatusPayload().providers.opencode;
-  assert.equal(rec.probeStatus, "ok");
-  assert.equal(rec.modelCount, 2);
+    await probeProviders({ providers: ["opencode"], force: true, fetchImpl });
+    const rec = getProvidersStatusPayload().providers.opencode;
+    assert.equal(rec.probeStatus, "ok");
+    assert.equal(rec.modelCount, 2);
+  } finally {
+    config.OPENCODE_GO_API_KEY = prevGoKey;
+    config.OPENCODE_API_KEY = prevApiKey;
+  }
 });
 
 test("probeProviders — opencode rate limit surfaces as rate_limited", async (t) => {

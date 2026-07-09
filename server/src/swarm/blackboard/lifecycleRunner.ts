@@ -8,7 +8,7 @@ import type { ClassifiedError, ErrorCategory } from "../errorTaxonomy.js";
 import type { FailoverState } from "../promptWithFailover.js";
 import type { TickAccumulator } from "./caps.js";
 import type { TierHistoryEntry } from "./tierRunner.js";
-import { resolveModelForTopologyIndex } from "@ollama-swarm/shared/modelConfig";
+import { resolveRunSpawnModel } from "../resolveRunSpawnModel.js";
 import { config as appConfig } from "../../config.js";
 import { formatCloneMessage } from "../cloneMessage.js";
 import { formatPortReleaseLine } from "../runSummary.js";
@@ -398,7 +398,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   const plannerFallback = cfg.plannerModel ?? cfg.model;
   const workerFallback = cfg.workerModel ?? cfg.model;
   const auditorFallback = cfg.auditorModel ?? plannerFallback;
-  const plannerModel = resolveModelForTopologyIndex(cfg.topology, 1, plannerFallback);
+  const plannerModel = resolveRunSpawnModel(cfg, 1);
   const workerModel = workerFallback;
   const auditorModel = auditorFallback;
   // Unit 48: hide runner-written artifacts (opencode.json,
@@ -451,7 +451,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
       return ctx.spawnAgentNoOpencode({
         cwd: destPath,
         index: agentIndex,
-        model: resolveModelForTopologyIndex(cfg.topology, agentIndex, workerModel),
+        model: resolveRunSpawnModel(cfg, agentIndex),
       });
     });
     const spawned = await Promise.all(workerSpawns);
@@ -483,7 +483,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
     ctx.setAuditor(await ctx.spawnAgentNoOpencode({
       cwd: destPath,
       index: auditorIndex,
-      model: resolveModelForTopologyIndex(cfg.topology, auditorIndex, auditorModel),
+      model: resolveRunSpawnModel(cfg, auditorIndex),
     }));
     ctx.appendSystem(
       `Auditor agent ${ctx.getAuditor()!.id} ready (model=${auditorModel}). Audit calls will route here in parallel with workers.`,

@@ -399,6 +399,50 @@ describe("DiscussionRunnerBase — initCloneAndSpawn", () => {
     assert.ok(transcriptEvents.length >= 2, "should emit clone message and agents ready message");
   });
 
+  it("spawns each agent with topology per-row model, not only cfg.model", async () => {
+    const spawnedModels: string[] = [];
+    const { opts } = makeMockOpts();
+    (opts.manager as any).spawnAgentNoOpencode = async (spawnOpts: { index: number; model: string }) => {
+      spawnedModels.push(spawnOpts.model);
+      return makeMockAgent(`agent-${spawnOpts.index}`, spawnOpts.index, spawnOpts.model);
+    };
+    const runner = new TestRunner(opts);
+
+    const cfg: RunConfig = {
+      ...MINIMAL_CFG,
+      agentCount: 3,
+      model: "deepseek-v4-flash:cloud",
+      preset: "council",
+      topology: {
+        agents: [
+          { index: 1, role: "drafter", provider: "opencode", model: "opencode-go/deepseek-v4-flash", removable: true },
+          { index: 2, role: "drafter", provider: "opencode", model: "opencode-go/deepseek-v4-flash", removable: true },
+          { index: 3, role: "drafter", provider: "opencode", model: "opencode-go/deepseek-v4-flash", removable: true },
+        ],
+      },
+    };
+    runner.start(cfg);
+
+    const result = await runner.initCloneAndSpawn(cfg, {
+      preset: "council",
+      roleResolver: () => "Drafter",
+    });
+
+    assert.equal(spawnedModels.length, 3);
+    assert.deepEqual(
+      spawnedModels,
+      [
+        "opencode-go/deepseek-v4-flash",
+        "opencode-go/deepseek-v4-flash",
+        "opencode-go/deepseek-v4-flash",
+      ],
+    );
+    assert.ok(
+      result.ready.every((a) => a.model === "opencode-go/deepseek-v4-flash"),
+      "ready agents should carry topology models",
+    );
+  });
+
   it("throws when no agents start and minAgents > 1", async () => {
     const { opts, events } = makeMockOpts();
     (opts.manager as any).spawnAgentNoOpencode = async () => {

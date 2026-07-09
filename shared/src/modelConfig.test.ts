@@ -1,6 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { resolveModels, type ModelDefaults, type ModelResolutionInput } from "../src/modelConfig.js";
+import {
+  resolveModels,
+  resolveSpawnModelForIndex,
+  spawnModelFallbackForIndex,
+  type ModelDefaults,
+  type ModelResolutionInput,
+} from "../src/modelConfig.js";
 
 const DEFAULTS: ModelDefaults = {
   model: "glm-5.1:cloud",
@@ -123,5 +129,46 @@ describe("resolveModels", () => {
     assert.match(result.plannerModel, /^opencode-go\//);
     assert.match(result.workerModel, /^opencode-go\//);
     assert.match(result.auditorModel, /^opencode-go\//);
+  });
+});
+
+describe("resolveSpawnModelForIndex", () => {
+  it("topology row wins over cfg.model for council drafters", () => {
+    const model = resolveSpawnModelForIndex(
+      {
+        model: "deepseek-v4-flash:cloud",
+        preset: "council",
+        topology: {
+          agents: [
+            { index: 1, role: "drafter", provider: "opencode", model: "opencode-go/deepseek-v4-flash", removable: true },
+          ],
+        },
+      },
+      1,
+    );
+    assert.equal(model, "opencode-go/deepseek-v4-flash");
+  });
+
+  it("spawnModelFallbackForIndex uses orchestrator tier on index 1 for OW", () => {
+    const fb = spawnModelFallbackForIndex(
+      {
+        model: "deepseek-v4-flash:cloud",
+        preset: "orchestrator-worker",
+        orchestratorModel: "opencode-go/glm-5.1",
+        workerModel: "opencode-go/kimi-k2.5",
+      },
+      1,
+    );
+    assert.equal(fb, "opencode-go/glm-5.1");
+    const workerFb = spawnModelFallbackForIndex(
+      {
+        model: "deepseek-v4-flash:cloud",
+        preset: "orchestrator-worker",
+        orchestratorModel: "opencode-go/glm-5.1",
+        workerModel: "opencode-go/kimi-k2.5",
+      },
+      2,
+    );
+    assert.equal(workerFb, "opencode-go/kimi-k2.5");
   });
 });

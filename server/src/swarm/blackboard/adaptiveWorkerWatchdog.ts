@@ -7,6 +7,7 @@ import type { Agent as AgentType } from "../../services/AgentManager.js";
 import type { AgentManager } from "../../services/AgentManager.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { TodoQueue } from "./TodoQueue.js";
+import { resolveRunSpawnModel } from "../resolveRunSpawnModel.js";
 
 export const ADAPTIVE_SUSTAINED_POLLS = 2;
 
@@ -137,10 +138,11 @@ export async function scaleUpAdaptive(
   const baseIdx = currentWorkers.length + 2;
   for (let i = 0; i < recommendedAdd; i++) {
     try {
+      const spawnIndex = baseIdx + i;
       const newAgent = await ctx.getManager().spawnAgentNoOpencode({
         cwd: cfg.localPath,
-        index: baseIdx + i,
-        model: cfg.workerModel ?? cfg.model,
+        index: spawnIndex,
+        model: resolveRunSpawnModel(cfg, spawnIndex),
       });
       ctx.appendSystem(
         `[T-Item-4 adaptive workers] spawned worker ${newAgent.index} (${newAgent.id.slice(0, 8)}).`,

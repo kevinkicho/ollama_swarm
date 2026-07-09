@@ -223,11 +223,9 @@ export function useSetupForm(navigate: (path: string) => void) {
         ...(directiveTrimmed ? { userDirective: directiveTrimmed } : {}),
         webTools,
         mcpServers,
-        // Per-agent model declarations (from the Topology grid). This is
-        // how individual agents get their "AI provider" (via the model
-        // string, e.g. different ollama models, :cloud, or anthropic/openai).
-        // Server resolveModels + deriveLegacyFields will turn per-agent
-        // .model into the plannerModel/workerModel/auditorModel used for spawn.
+        // Per-agent provider/model from the Topology grid (including header
+        // bulk-apply). Discussion presets spawn via resolveModelForTopologyIndex;
+        // blackboard also honors per-row overrides at spawn.
         topology,
         // Explicit per-role overrides (if user set them in Advanced section)
         // take precedence over topology-derived in resolveModels.

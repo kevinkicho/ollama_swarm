@@ -39,6 +39,7 @@ import {
   AGGREGATOR_VARIANTS,
   parseAggregatorConfidence,
 } from "./moaPromptHelpers.js";
+import { resolveModelForTopologyIndex } from "@ollama-swarm/shared/modelConfig";
 import { DiscussionRunnerBase } from "./DiscussionRunnerBase.js";
 import { extractText } from "./extractText.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
@@ -198,9 +199,10 @@ export class MoaRunner extends DiscussionRunnerBase {
     const agents: Agent[] = [];
     for (let i = 1; i <= totalAgents; i++) {
       const isAggregator = i > proposerCount;
-      const model = isAggregator
+      const tierFallback = isAggregator
         ? aggregatorModel
         : proposerModels[(i - 1) % proposerModels.length]!;
+      const model = resolveModelForTopologyIndex(cfg.topology, i, tierFallback);
       const agent = await this.opts.manager.spawnAgentNoOpencode({
         cwd: destPath,
         index: i,

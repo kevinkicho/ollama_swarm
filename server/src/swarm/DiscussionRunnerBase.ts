@@ -30,6 +30,7 @@ import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extrac
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
 import { getAgentAddendum } from "@ollama-swarm/shared/topology";
+import { resolveRunSpawnModel } from "./resolveRunSpawnModel.js";
 import { describeSdkError } from "./sdkError.js";
 import { buildCheckpoint, writeCheckpoint } from "./checkpoint.js";
 import { discussionWriteSummary } from "./discussionWriteSummary.js";
@@ -304,7 +305,8 @@ export abstract class DiscussionRunnerBase {
     const spawnStart = Date.now();
     const spawnTasks: Promise<Agent>[] = [];
     for (let i = 1; i <= cfg.agentCount; i++) {
-      spawnTasks.push(this.opts.manager.spawnAgentNoOpencode({ cwd: destPath, index: i, model: cfg.model }));
+      const model = resolveRunSpawnModel(cfg, i);
+      spawnTasks.push(this.opts.manager.spawnAgentNoOpencode({ cwd: destPath, index: i, model }));
     }
     const results = await Promise.allSettled(spawnTasks);
     const ready = results

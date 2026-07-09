@@ -95,67 +95,19 @@ import {
   MultiWriterState,
   DEFAULT_CONFLICT_POLICIES,
 } from "./multiWriterState.js";
+import { resolveRunSpawnModel } from "./resolveRunSpawnModel.js";
+import {
+  DEEP_OW_MIN_AGENTS,
+  computeDeepTopology,
+  type DeepTopology,
+} from "./orchestratorWorkerDeepTopology.js";
 
-// Target workers per mid-lead. Picked empirically from #131's industry-
-// consensus note ("past ~8 workers, you need a tree"). At 6, the
-// orchestrator's mid-lead-plan prompt stays compact and each mid-lead's
-// worker-plan prompt also stays compact — no tier in the tree blows
-// past ~8 reports.
-export const TARGET_WORKERS_PER_MID_LEAD = 6;
-
-// Hard floor on the agent count for deep mode. 1 orchestrator + 1
-// mid-lead + 2 workers = the smallest layout where the layer adds
-// coverage over flat OW. The route schema enforces a higher floor in
-// practice, but we re-validate here too — defensive defaults are
-// cheaper than diagnosing a 4-AM crash.
-export const DEEP_OW_MIN_AGENTS = 4;
-
-export interface DeepTopology {
-  orchestratorIndex: number; // always 1
-  midLeadIndices: number[]; // K mid-leads
-  workerIndices: number[]; // N - K - 1 workers
-  // workerByMidLead[i] = worker indices managed by midLeadIndices[i].
-  // Lengths sum to workerIndices.length. Always non-empty per mid-lead
-  // (we ensure each mid-lead has at least 1 worker by construction).
-  workerByMidLead: number[][];
-}
-
-// Pure topology computation. Exported for testability so the
-// "K mid-leads, ~5 workers each" rule can be pinned without spinning
-// up a runner.
-export function computeDeepTopology(agentCount: number): DeepTopology {
-  if (agentCount < DEEP_OW_MIN_AGENTS) {
-    throw new Error(
-      `orchestrator-worker-deep needs at least ${DEEP_OW_MIN_AGENTS} agents (1 orchestrator + 1 mid-lead + 2 workers); got ${agentCount}`,
-    );
-  }
-  // Reserve agent 1 for orchestrator. Of the remaining N-1, decide how
-  // many become mid-leads. We want each mid-lead to manage at least 2
-  // workers, so K is bounded by floor((N-1)/3): K mid-leads + 2K workers
-  // = 3K agents under the orchestrator. Within that bound, target the
-  // ~6-per-mid-lead ratio.
-  const remaining = agentCount - 1;
-  const targetK = Math.max(1, Math.ceil(remaining / TARGET_WORKERS_PER_MID_LEAD));
-  const maxK = Math.max(1, Math.floor(remaining / 3));
-  const k = Math.min(targetK, maxK);
-  const midLeadIndices = Array.from({ length: k }, (_, i) => i + 2);
-  const workerIndices = Array.from(
-    { length: remaining - k },
-    (_, i) => i + 2 + k,
-  );
-  // Round-robin assign workers to mid-leads so any size disparity is
-  // ≤1 worker. Stable and deterministic.
-  const workerByMidLead: number[][] = Array.from({ length: k }, () => []);
-  for (let i = 0; i < workerIndices.length; i++) {
-    workerByMidLead[i % k]!.push(workerIndices[i]!);
-  }
-  return {
-    orchestratorIndex: 1,
-    midLeadIndices,
-    workerIndices,
-    workerByMidLead,
-  };
-}
+export {
+  TARGET_WORKERS_PER_MID_LEAD,
+  DEEP_OW_MIN_AGENTS,
+  computeDeepTopology,
+  type DeepTopology,
+} from "./orchestratorWorkerDeepTopology.js";
 
 export class OrchestratorWorkerDeepRunner extends DiscussionRunnerBase {
   protected getPresetName(): string { return "Orchestrator-Worker-Deep"; }
@@ -690,16 +642,7 @@ export class OrchestratorWorkerDeepRunner extends DiscussionRunnerBase {
   // promptWithRetry uses the agent's spawn-time model.
   private pickTierModel(agentIndex: number): string | undefined {
     if (!this.active) return undefined;
-    if (agentIndex === 1) {
-      return this.active.orchestratorModel;
-    }
-    // Mid-leads — look up topology.
-    const topo = computeDeepTopology(this.active.agentCount);
-    if (topo.midLeadIndices.includes(agentIndex)) {
-      return this.active.midLeadModel;
-    }
-    // Default: worker tier.
-    return this.active.workerModel;
+    return resolveRunSpawnModel(this.active, agentIndex);
   }
 
   // The runAgent shape matches OrchestratorWorkerRunner's — same retry,

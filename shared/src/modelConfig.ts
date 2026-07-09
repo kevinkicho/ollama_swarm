@@ -34,6 +34,53 @@ export function resolveModelForTopologyIndex(
   return resolveModelForAgent(spec, roleFallback);
 }
 
+/** Inputs needed to pick a role/tier fallback before topology overrides. */
+export interface SpawnModelContext {
+  topology?: Topology;
+  model: string;
+  plannerModel?: string;
+  workerModel?: string;
+  auditorModel?: string;
+  orchestratorModel?: string;
+  midLeadModel?: string;
+  preset?: string;
+  agentCount?: number;
+}
+
+/**
+ * Role/tier fallback for one agent index when topology has no override.
+ * Topology per-row provider/model always wins via resolveModelForTopologyIndex.
+ */
+export function spawnModelFallbackForIndex(ctx: SpawnModelContext, index: number): string {
+  const preset = ctx.preset ?? "";
+  if (preset === "orchestrator-worker") {
+    if (index === 1) return ctx.orchestratorModel ?? ctx.plannerModel ?? ctx.model;
+    return ctx.workerModel ?? ctx.model;
+  }
+  if (preset === "map-reduce") {
+    if (index === 1) return ctx.plannerModel ?? ctx.model;
+    return ctx.workerModel ?? ctx.model;
+  }
+  if (preset === "blackboard") {
+    if (index === 1) return ctx.plannerModel ?? ctx.model;
+    const dedicatedAuditorIndex = (ctx.agentCount ?? 0) + 1;
+    if (ctx.auditorModel && index === dedicatedAuditorIndex) {
+      return ctx.auditorModel;
+    }
+    return ctx.workerModel ?? ctx.model;
+  }
+  return ctx.model;
+}
+
+/** Resolve the model string used when spawning agent `index` for a run. */
+export function resolveSpawnModelForIndex(ctx: SpawnModelContext, index: number): string {
+  return resolveModelForTopologyIndex(
+    ctx.topology,
+    index,
+    spawnModelFallbackForIndex(ctx, index),
+  );
+}
+
 export interface ModelConfig {
   /** The user's top-level model selection — the catch-all. */
   model: string;
