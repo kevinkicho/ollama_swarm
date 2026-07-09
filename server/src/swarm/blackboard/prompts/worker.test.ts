@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import {
   buildWorkerUserPrompt,
+  MAX_HUNKS,
   parseWorkerResponse,
   WORKER_SYSTEM_PROMPT,
   type WorkerParseResult,
@@ -171,9 +172,9 @@ describe("parseWorkerResponse — rejections (v2 hunks)", () => {
     }
   });
 
-  it("soft-caps more than 8 hunks to 8", () => {
+  it("soft-caps more than MAX_HUNKS hunks to MAX_HUNKS", () => {
     const raw = JSON.stringify({
-      hunks: Array.from({ length: 9 }, (_, i) => ({
+      hunks: Array.from({ length: MAX_HUNKS + 1 }, (_, i) => ({
         op: "replace" as const,
         file: "a.ts",
         search: `s${i}`,
@@ -182,7 +183,7 @@ describe("parseWorkerResponse — rejections (v2 hunks)", () => {
     });
     const r = parseWorkerResponse(raw, ["a.ts"]);
     assert(r.ok, "should succeed with soft cap");
-    assert.strictEqual(r.hunks.length, 8, "should cap to 8 hunks");
+    assert.strictEqual(r.hunks.length, MAX_HUNKS, `should cap to ${MAX_HUNKS} hunks`);
   });
 
   it("rejects a hunk whose file is not in expectedFiles", () => {

@@ -53,6 +53,32 @@ describe("buildSummary — stopReason classification", () => {
     assert.equal(s.stopDetail, undefined);
   });
 
+  it("reports 'user' when userStopRequested sticky flag is set without lifecycle stopping", () => {
+    const s = buildSummary(baseInput({ stopping: false, userStopRequested: true }));
+    assert.equal(s.stopReason, "user");
+  });
+
+  it("reports 'user' when drain was requested (wasDrained) but lifecycle is still draining", () => {
+    const s = buildSummary(
+      baseInput({
+        stopping: false,
+        wasDrained: true,
+        v2State: { phase: "draining", enteredAt: 2_000, detail: "drain-requested" },
+      }),
+    );
+    assert.equal(s.stopReason, "user");
+  });
+
+  it("reports 'user' when v2 reducer recorded user-stop but stopping flag already cleared", () => {
+    const s = buildSummary(
+      baseInput({
+        stopping: false,
+        v2State: { phase: "stopped", enteredAt: 4_000, detail: "user-stop" },
+      }),
+    );
+    assert.equal(s.stopReason, "user");
+  });
+
   it("reports 'crash' when stopped during startup with zero progress and no user-stop signal", () => {
     const input = baseInput({
       startedAt: 1_000,
@@ -226,7 +252,7 @@ describe("buildSummary — stopReason classification", () => {
     assert.equal(s.stopReason, "completed");
   });
 
-  it("stays 'completed' when no contract is present (back-compat with discussion-style runs)", () => {
+  it("stays 'completed' when no contract is present and no completionDetail (discussion-style)", () => {
     const s = buildSummary(
       baseInput({
         board: { committed: 0, skipped: 0, total: 0 },
@@ -234,6 +260,18 @@ describe("buildSummary — stopReason classification", () => {
       }),
     );
     assert.equal(s.stopReason, "completed");
+  });
+
+  it("reports 'no-progress' when no contract and planner left zero board activity", () => {
+    const s = buildSummary(
+      baseInput({
+        board: { committed: 0, skipped: 0, total: 0 },
+        contract: undefined,
+        completionDetail: "planner produced no actionable todos; no commits",
+      }),
+    );
+    assert.equal(s.stopReason, "no-progress");
+    assert.match(s.stopDetail ?? "", /no actionable todos/i);
   });
 });
 

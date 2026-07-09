@@ -26,6 +26,7 @@ import { withSiblingRetry } from "./siblingRetry.js";
 import { runPlannerEmitRecovery } from "./plannerRecovery.js";
 import { emitAgentActivity } from "./promptRunner.js";
 import { detectTodoBatchFileOverlaps } from "./workerFileConflict.js";
+import { EMIT_ONLY_PROFILE_ID } from "@ollama-swarm/shared/toolProfiles";
 import { resolveToolProfile } from "../toolProfiles.js";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
 
@@ -76,7 +77,7 @@ export async function runPlanner(
 
   const plannerProfile = resolveToolProfile("planner", ctx.getActive());
   const exploreProfile = plannerProfile;
-  const emitProfile = plannerProfile;
+  const emitProfile = EMIT_ONLY_PROFILE_ID;
 
   const recovery = await runPlannerEmitRecovery({
     kind: "planner-todos",

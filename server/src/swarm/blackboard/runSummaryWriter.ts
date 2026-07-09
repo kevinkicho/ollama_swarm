@@ -66,6 +66,9 @@ export interface SummaryContext {
   runStartedAt: number | undefined;
   tickAccumulatorActiveElapsedMs: number | undefined;
   stopping: boolean;
+  userStopRequested?: boolean;
+  wasDrained?: boolean;
+  getLastSummary?: () => RunSummary | undefined;
   crashMessage: string | undefined;
   terminationReason: string | undefined;
   completionDetail: string | undefined;
@@ -110,7 +113,7 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
     runStartedAt: ctx.runStartedAt ?? ctx.runBootedAt,
   });
 
-  const summary = buildSummary({
+  let summary = buildSummary({
     config: {
       repoUrl: cfg.repoUrl,
       localPath: cfg.localPath,
@@ -148,6 +151,8 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
     crashMessage: ctx.crashMessage,
     terminationReason: ctx.terminationReason,
     stopping: ctx.stopping,
+    userStopRequested: ctx.userStopRequested,
+    wasDrained: ctx.wasDrained,
     completionDetail: ctx.completionDetail,
     board: {
       committed: ctx.boardCounts.committed,
@@ -170,6 +175,18 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
     topology: cfg.topology,
     errors: ctx.errorTracker,
   });
+
+  const prior = ctx.getLastSummary?.();
+  if (
+    prior?.stopReason === "user"
+    && summary.stopReason === "completed"
+  ) {
+    summary = {
+      ...summary,
+      stopReason: prior.stopReason,
+      stopDetail: prior.stopDetail ?? summary.stopDetail,
+    };
+  }
 
   const json = JSON.stringify(summary, null, 2);
   const runIdShort = summary.runId ? summary.runId.slice(0, 8) : "";

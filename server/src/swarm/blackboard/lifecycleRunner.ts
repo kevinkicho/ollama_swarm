@@ -66,6 +66,8 @@ export interface LifecycleContext {
   setLifecycleState(v: LifecycleState): void;
   getWasDrained(): boolean;
   setWasDrained(v: boolean): void;
+  getUserStopRequested(): boolean;
+  setUserStopRequested(v: boolean): void;
   getStartupCrashMessage(): string | undefined;
   setStartupCrashMessage(v: string | undefined): void;
   getPaused(): boolean;
@@ -269,6 +271,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   // Task #168: clear the drain-marker so this fresh run defaults
   // to "stop = hard user-stop" classification unless drain() fires.
   ctx.setWasDrained(false);
+  ctx.setUserStopRequested(false);
   ctx.setStartupCrashMessage(undefined);
   ctx.setTerminationReason(undefined);
   // 2026-05-04 (W7/W13/W14/W15 wiring): clear per-run trackers.
@@ -657,6 +660,17 @@ export async function planAndExecute(
     const qCounts = ctx.getTodoQueueCounts();
     const hasExecutableWork =
       counts.open > 0 || counts.claimed > 0 || qCounts.pendingCommit > 0;
+    if (
+      !hasExecutableWork
+      && workers.length > 0
+      && counts.total === 0
+      && counts.committed === 0
+      && !ctx.getCompletionDetail()
+    ) {
+      ctx.setCompletionDetail(
+        "planner produced no actionable todos; no commits",
+      );
+    }
     if (workers.length > 0 && hasExecutableWork) {
       // Stamp the wall-clock origin just before caps start being checked.
       // Planning time (seeding, initial planner prompt, repair) does NOT

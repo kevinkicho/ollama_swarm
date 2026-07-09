@@ -36,6 +36,7 @@ import { gatherProposerContext } from "../moaContextGather.js";
 import type { BlackboardStateSnapshot } from "./stateSnapshot.js";
 import { runPlannerEmitRecovery } from "./plannerRecovery.js";
 import { emitAgentActivity } from "./promptRunner.js";
+import { EMIT_ONLY_PROFILE_ID } from "@ollama-swarm/shared/toolProfiles";
 import { isWebToolsEnabled, resolveToolProfile } from "../toolProfiles.js";
 import { resolveBlackboardPromptExtras } from "./blackboardPromptContext.js";
 import type { TranscriptEntry } from "../../types.js";
@@ -159,7 +160,7 @@ export async function runFirstPassContract(
   const modelAtEntry = agent.model;
   const plannerProfile = resolveToolProfile("planner", ctx.getActive());
   const exploreProfile = plannerProfile;
-  const emitProfile = plannerProfile;
+  const emitProfile = EMIT_ONLY_PROFILE_ID;
 
   const recovery = await runPlannerEmitRecovery({
     kind: "contract",
@@ -254,7 +255,7 @@ export async function runCouncilContractDraftForAgent(
 ): Promise<{ agent: Agent; text: string } | null> {
   const plannerProfile = resolveToolProfile("planner", deps.getActive());
   const exploreProfile = plannerProfile;
-  const emitProfile = plannerProfile;
+  const emitProfile = EMIT_ONLY_PROFILE_ID;
   const explorePrompt = `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(
     seed,
     agent.model,

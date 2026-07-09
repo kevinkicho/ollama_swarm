@@ -1,10 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  EMIT_ONLY_PROFILE_ID,
+  EXPLORE_MAX_TOOL_TURNS,
   allowsUnboundedToolTurns,
   effectiveToolProfileId,
   isWebToolsEnabled,
   resolveDiscussionProfileId,
+  resolveMaxToolTurnsForProfile,
   resolveToolProfileId,
   toolingMatrix,
 } from "./toolProfiles.js";
@@ -47,6 +50,17 @@ describe("toolProfiles", () => {
   it("allowsUnboundedToolTurns includes worker read profile", () => {
     assert.equal(allowsUnboundedToolTurns("swarm-read"), true);
     assert.equal(allowsUnboundedToolTurns("swarm"), false);
+  });
+
+  it("EMIT_ONLY_PROFILE_ID is tools-off swarm", () => {
+    assert.equal(EMIT_ONLY_PROFILE_ID, "swarm");
+  });
+
+  it("resolveMaxToolTurnsForProfile caps explore profiles at EXPLORE_MAX_TOOL_TURNS", () => {
+    assert.equal(EXPLORE_MAX_TOOL_TURNS, 20);
+    assert.equal(resolveMaxToolTurnsForProfile("swarm-planner"), 20);
+    assert.equal(resolveMaxToolTurnsForProfile("swarm-read"), 20);
+    assert.equal(resolveMaxToolTurnsForProfile("swarm"), undefined);
   });
 
 });

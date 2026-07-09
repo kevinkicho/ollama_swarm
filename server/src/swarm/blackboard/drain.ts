@@ -91,6 +91,7 @@ export async function checkDrainComplete(ctx: LifecycleContext): Promise<void> {
 }
 
 export async function stop(ctx: LifecycleContext): Promise<void> {
+  ctx.setUserStopRequested(true);
   ctx.setLifecycleState("stopping");
   // V2 Step 3b: feed user-stop event to the parallel reducer.
   ctx.v2ObserverApply({ type: "stop-requested", ts: Date.now() });

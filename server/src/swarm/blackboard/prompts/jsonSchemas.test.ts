@@ -25,7 +25,7 @@ import { parseFirstPassContractResponse } from "./firstPassContract.js";
 import { parsePlannerResponse } from "./planner.js";
 import { parseAuditorResponse } from "./auditor.js";
 import { parseCriticResponse } from "./critic.js";
-import { parseWorkerResponse } from "./worker.js";
+import { MAX_HUNKS, parseWorkerResponse } from "./worker.js";
 import { parseReplannerResponse } from "./replanner.js";
 
 // ---------------------------------------------------------------------------
@@ -150,7 +150,7 @@ test("WORKER_HUNKS_JSON_SCHEMA — replace hunk parses + matches schema", () => 
   const parsed = parseWorkerResponse(JSON.stringify(payload), ["src/x.ts"]);
   assert.equal(parsed.ok, true);
   assert.deepEqual(WORKER_HUNKS_JSON_SCHEMA.required, ["hunks"]);
-  assert.equal(WORKER_HUNKS_JSON_SCHEMA.properties.hunks.maxItems, 8, "matches MAX_HUNKS");
+  assert.equal(WORKER_HUNKS_JSON_SCHEMA.properties.hunks.maxItems, MAX_HUNKS, "matches MAX_HUNKS");
 });
 
 test("WORKER_HUNKS_JSON_SCHEMA — create hunk parses + schema variant present", () => {

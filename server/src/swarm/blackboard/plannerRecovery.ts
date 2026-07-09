@@ -12,7 +12,7 @@ import { runPlannerAuditorSalvage } from "./plannerAuditorAssist.js";
 import { isRetryableSdkError } from "./retry.js";
 import { describeSdkError } from "../sdkError.js";
 
-export const PLANNER_EMIT_MAX_ATTEMPTS = 8;
+export const PLANNER_EMIT_MAX_ATTEMPTS = 4;
 export const PLANNER_EMIT_PAUSE_BASE_MS = 12_000;
 
 export type ParseAttemptResult<T> =

@@ -62,7 +62,7 @@ export interface ChatOpts {
    *  for bash). See server/src/tools/ToolDispatcher.ts. */
   dispatcher?: import("../tools/ToolDispatcher.js").ToolDispatcher;
   /** Maximum model/tool round trips for this call. Defaults to 10;
-   * Number.POSITIVE_INFINITY permits exploration until abort/timeout. */
+   * explore profiles cap at EXPLORE_MAX_TOOL_TURNS (20) via promptWithRetry. */
   maxToolTurns?: number;
   /** Diagnostic callback fired for each tool invocation (name + result
    *  ok/error) so the UI can render tool-call timeline entries. */

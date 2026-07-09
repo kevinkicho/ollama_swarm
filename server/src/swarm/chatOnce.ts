@@ -22,7 +22,7 @@ import {
 import { interruptibleSleep } from "./interruptibleSleep.js";
 import { ToolDispatcher, defaultToolsForProfile, type ProfileName } from "../tools/ToolDispatcher.js";
 import {
-  allowsUnboundedToolTurns,
+  resolveMaxToolTurnsForProfile,
   effectiveToolProfileId,
   type WebToolsConfig,
 } from "../../../shared/src/toolProfiles.js";
@@ -60,7 +60,7 @@ export interface ChatOnceOpts {
   /** When set, upgrades swarm-read → swarm-research for legacy call sites. */
   webToolsConfig?: WebToolsConfig;
   mcpServers?: string;
-  /** Explicit tool-loop cap; overrides allowsUnboundedToolTurns when set. */
+  /** Explicit tool-loop cap; overrides resolveMaxToolTurnsForProfile when set. */
   maxToolTurns?: number;
   /** Fired before a transport retry (attempt >= 2). */
   onRetry?: (info: { attempt: number; max: number; reasonShort: string; delayMs: number }) => void;
@@ -106,6 +106,11 @@ async function chatOnceOnce(
     const dispatcher = clonePath && profileForTools && tools.length > 0
       ? new ToolDispatcher(profileForTools, clonePath, mcp)
       : undefined;
+    const exploreToolCap = profileForTools
+      ? resolveMaxToolTurnsForProfile(
+          profileForTools as import("../../../shared/src/toolProfiles.js").ToolProfileId,
+        )
+      : undefined;
     const result = await provider.chat({
       model: modelId,
       messages: [{ role: "user", content: opts.promptText }],
@@ -119,8 +124,8 @@ async function chatOnceOnce(
       ...(opts.onTool ? { onTool: opts.onTool } : {}),
       ...(opts.maxToolTurns !== undefined
         ? { maxToolTurns: opts.maxToolTurns }
-        : profileForTools && allowsUnboundedToolTurns(profileForTools as import("../../../shared/src/toolProfiles.js").ToolProfileId)
-          ? { maxToolTurns: Number.POSITIVE_INFINITY }
+        : exploreToolCap !== undefined
+          ? { maxToolTurns: exploreToolCap }
           : {}),
       ...(opts.format !== undefined ? { format: opts.format } : {}),
     });

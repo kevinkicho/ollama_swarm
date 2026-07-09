@@ -12,6 +12,7 @@ import { resolveSafe } from "./blackboard/resolveSafe.js";
 import { promises as fs } from "node:fs";
 import type { ExitContract } from "./blackboard/types.js";
 import { skipCoversCriterionFiles } from "./councilSkipReconcile.js";
+import { resolveCouncilToolProfile } from "./toolProfiles.js";
 
 export { extractProviderText, createTimeoutController, parseJsonArrayFromResponse, gatherProjectContext, type RealManager } from "./councilUtils.js";
 
@@ -64,8 +65,9 @@ Rules:
     try {
       const raw = await promptWithFailoverAuto(lead, prompt, {
         manager: manager as any,
-        agentName: "swarm-read",
+        agentName: resolveCouncilToolProfile(cfg),
         signal: controller.signal,
+        webToolsConfig: cfg,
       });
       const text = extractProviderText(raw);
       if (text === null) return [];
@@ -148,8 +150,9 @@ Rules:
     try {
       const raw = await promptWithFailoverAuto(lead, prompt, {
         manager: manager as any,
-        agentName: "swarm-read",
+        agentName: resolveCouncilToolProfile(cfg),
         signal: controller.signal,
+        webToolsConfig: cfg,
       });
       const text = extractProviderText(raw);
       if (text === null) {

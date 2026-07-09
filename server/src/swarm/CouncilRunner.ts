@@ -19,6 +19,7 @@ import { burstSpacingForModels, staggerStart } from "./staggerStart.js";
 import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
 import { takePendingToolTrace } from "./toolCallTranscript.js";
 import { describeSdkError } from "./sdkError.js";
+import { resolveCouncilToolProfile } from "./toolProfiles.js";
 import { userEntryVisibleTo } from "./chatReceipt.js";
 import {
   readDirective,
@@ -998,7 +999,8 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
               try {
                 const raw = await promptWithFailoverAuto(lead, prompt, {
                   manager: this.opts.manager,
-                  agentName: "swarm-read",
+                  agentName: resolveCouncilToolProfile(cfg),
+                  webToolsConfig: cfg,
                   signal: controller.signal,
                 }, cfg.providerFailover);
                 const text = extractProviderText(raw);
@@ -1066,7 +1068,8 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
     try {
       const raw = await promptWithFailoverAuto(lead, prompt, {
         manager: this.opts.manager,
-        agentName: "swarm-read",
+        agentName: resolveCouncilToolProfile(cfg),
+        webToolsConfig: cfg,
         signal: controller.signal,
         activity: { kind: "council", label: "standup synthesis" },
       }, cfg.providerFailover);
@@ -1149,7 +1152,7 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
     );
     await this.runDiscussionAgent(agent, prompt, {
       runnerName: "council",
-      agentName: "swarm-read",
+      agentName: resolveCouncilToolProfile(this.active),
       stats: this.stats,
       enrichSummary: {
         kind: "council_draft",
@@ -1180,7 +1183,7 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
     );
     await this.runDiscussionAgent(agent, prompt, {
       runnerName: "council",
-      agentName: "swarm-read",
+      agentName: resolveCouncilToolProfile(this.active),
       stats: this.stats,
       enrichSummary: {
         kind: "council_draft",

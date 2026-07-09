@@ -251,11 +251,14 @@ export class BlackboardRunner implements SwarmRunner {
   private lifecycleState: LifecycleState = "idle";
   /** Sticky marker: true once `draining` entered, survives into `stopping`/`stopped`. */
   private _wasDrained = false;
+  /** Sticky marker: true once user hard-stops; survives summary races in planAndExecute finally. */
+  private _userStopRequested = false;
   /** Set when start() throws before planAndExecute; surfaced in stop() summary. */
   private _startupCrashMessage: string | undefined;
   private isStopping(): boolean { return this.lifecycleState === "stopping"; }
   private isDraining(): boolean { return this.lifecycleState === "draining"; }
   private isWasDrained(): boolean { return this._wasDrained; }
+  private isUserStopRequested(): boolean { return this._userStopRequested; }
   private active?: RunConfig;
   private boardBroadcaster: BoardBroadcaster;
   // V2: append-only findings log alongside the V2 TodoQueue.
@@ -675,7 +678,10 @@ export class BlackboardRunner implements SwarmRunner {
       gitPorcelainAtRunStart: this.gitPorcelainAtRunStart,
       runStartedAt: this.runStartedAt,
       tickAccumulatorActiveElapsedMs: this.tickAccumulator?.activeElapsedMs,
-      stopping: this.isStopping(),
+      stopping: this.isStopping() || this.isUserStopRequested(),
+      userStopRequested: this.isUserStopRequested(),
+      wasDrained: this.isWasDrained(),
+      getLastSummary: () => this.lastSummary,
       crashMessage,
       terminationReason: this.terminationReason,
       completionDetail: this.completionDetail,

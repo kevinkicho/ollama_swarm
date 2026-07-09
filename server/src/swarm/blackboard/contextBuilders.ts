@@ -64,6 +64,8 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
     setLifecycleState: (v: LifecycleState) => { r.lifecycleState = v; },
     getWasDrained: () => r._wasDrained,
     setWasDrained: (v: boolean) => { r._wasDrained = v; },
+    getUserStopRequested: () => r._userStopRequested,
+    setUserStopRequested: (v: boolean) => { r._userStopRequested = v; },
     getStartupCrashMessage: () => r._startupCrashMessage,
     setStartupCrashMessage: (v: string | undefined) => { r._startupCrashMessage = v; },
     getPaused: () => r.paused,

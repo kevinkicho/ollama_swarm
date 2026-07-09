@@ -17,7 +17,7 @@ import { providerGateway } from "../providers/ProviderGateway.js";
 import { config } from "../config.js";
 import { ToolDispatcher, defaultToolsForProfile, type ProfileName } from "../tools/ToolDispatcher.js";
 import {
-  allowsUnboundedToolTurns,
+  resolveMaxToolTurnsForProfile,
   effectiveToolProfileId,
   type WebToolsConfig,
 } from "../../../shared/src/toolProfiles.js";
@@ -255,6 +255,11 @@ export async function promptWithRetry(
         const dispatcher = tools.length > 0 && profileForTools && agent.cwd
           ? new ToolDispatcher(profileForTools, agent.cwd, mcp)
           : undefined;
+        const exploreToolCap = profileForTools
+          ? resolveMaxToolTurnsForProfile(
+              profileForTools as import("../../../shared/src/toolProfiles.js").ToolProfileId,
+            )
+          : undefined;
         const isCloud = effectiveModel.includes(":cloud");
         const chatOpts = {
           modelString: effectiveModel,
@@ -293,10 +298,7 @@ export async function promptWithRetry(
                 },
               }
             : {}),
-          // Research/planner profiles may explore until abort/timeout.
-          ...(profileForTools && allowsUnboundedToolTurns(profileForTools as import("../../../shared/src/toolProfiles.js").ToolProfileId)
-            ? { maxToolTurns: Number.POSITIVE_INFINITY }
-            : {}),
+          ...(exploreToolCap !== undefined ? { maxToolTurns: exploreToolCap } : {}),
           ...(opts.ollamaFormat !== undefined ? { format: opts.ollamaFormat } : {}),
         };
         const result = config.PROVIDER_GATEWAY

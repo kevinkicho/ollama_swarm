@@ -9,6 +9,7 @@
 export interface BlackboardRunnerFields {
   _startupCrashMessage: any;
   _wasDrained: any;
+  _userStopRequested: any;
   active: any;
   activeAborts: any;
   adaptiveHysteresis: any;
@@ -227,6 +228,7 @@ export interface BlackboardRunnerFields {
 /** Properties accessed by lifecycleContext(). 99 properties. */export interface LifecycleFields {
   _startupCrashMessage: any;
   _wasDrained: any;
+  _userStopRequested: any;
   active: any;
   activeAborts: any;
   agentRoster: any;

@@ -74,14 +74,25 @@ export function effectiveToolProfileId(
   return base;
 }
 
+/** Tools-off profile for structured JSON emit retries (no read/bash loops). */
+export const EMIT_ONLY_PROFILE_ID: ToolProfileId = "swarm";
+
+/** Max provider round-trips (model → tool → model) for explore-style profiles. */
+export const EXPLORE_MAX_TOOL_TURNS = 20;
+
 export function allowsUnboundedToolTurns(profile: ToolProfileId): boolean {
-  // Workers/auditors with read tools routinely grep across many files per todo.
+  // Legacy name — explore profiles use EXPLORE_MAX_TOOL_TURNS, not infinity.
   return (
     profile === "swarm-read"
     || profile === "swarm-planner"
     || profile === "swarm-research"
     || profile === "swarm-builder-research"
   );
+}
+
+/** Tool-loop cap for a profile, or undefined to use the provider default (10). */
+export function resolveMaxToolTurnsForProfile(profile: ToolProfileId): number | undefined {
+  return allowsUnboundedToolTurns(profile) ? EXPLORE_MAX_TOOL_TURNS : undefined;
 }
 
 export const PROFILE_TOOLS: Record<ToolProfileId, readonly string[]> = {

@@ -18,6 +18,7 @@ import {
 } from "./councilSkipReconcile.js";
 import type { CouncilProgressLedger } from "./councilProgressLedger.js";
 import { fallbackMayMarkMet } from "./councilLedgerReconcile.js";
+import { resolveCouncilToolProfile } from "./toolProfiles.js";
 
 export interface CouncilAuditorContext {
   manager: {
@@ -44,8 +45,9 @@ async function promptAuditor(
     prompt,
     {
       manager: ctx.manager as any,
-      agentName: "swarm-read",
+      agentName: resolveCouncilToolProfile(cfg),
       signal,
+      webToolsConfig: cfg,
     },
     cfg.providerFailover,
   );

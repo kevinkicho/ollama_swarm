@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { Hunk } from "../applyHunks.js";
-import { windowFileForWorker, windowFileWithAnchors } from "../windowFile.js";
+import {
+  windowFileForWorker,
+  windowFileWithAnchors,
+  WORKER_FILE_WINDOW_THRESHOLD,
+} from "../windowFile.js";
 import type { RoundRobinDisposition } from "../../roundRobinPromptHelpers.js";
 import { parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 import { softCap } from "./lenientParse.js";
@@ -27,9 +31,9 @@ const FILE_FIELD = z.string().trim().min(1).max(1000);
 // hunks is NOT to do that. Create/append can legitimately be larger (new
 // scaffolding file, long CHANGELOG entry), but we still cap to prevent a
 // runaway model from buying us half a gigabyte of prose.
-const SEARCH_MAX = 50_000;
-const REPLACE_MAX = 50_000;
-const CONTENT_MAX = 200_000;
+export const SEARCH_MAX = 100_000;
+export const REPLACE_MAX = 100_000;
+export const CONTENT_MAX = 400_000;
 
 const ReplaceHunkSchema = z.object({
   op: z.literal("replace"),
@@ -65,7 +69,7 @@ const HunkSchema = z.discriminatedUnion("op", [
 // Per-response hunk budget. 8 lets a worker make several focused edits to a
 // large file (e.g. README troubleshooting + routing section + provider note)
 // without needing to bundle them into one giant replace block.
-const MAX_HUNKS = 8;
+export const MAX_HUNKS = 16;
 
 export const WorkerResponseSchema = z.object({
   hunks: z.array(HunkSchema).max(MAX_HUNKS),
@@ -164,12 +168,12 @@ export const WORKER_SYSTEM_PROMPT = [
   "     Deletes the entire file. Only valid when the TODO explicitly requires removing a file (e.g. removing duplicates, cleaning up deprecated code).",
   "5. Multiple hunks per file are allowed and applied in order — each hunk sees the output of the previous one.",
   "6. If the TODO is genuinely impossible or unsafe, respond with: {\"hunks\": [], \"skip\": \"brief reason\"}. Do NOT skip because expected files don't exist — that means you need to CREATE them. Do NOT skip because the work looks 'already done' — read the file contents and verify. If the file exists and its content already matches the TODO goal, then skip.",
-  "7. Maximum 8 hunks per response.",
+  `7. Maximum ${MAX_HUNKS} hunks per response.`,
   "8. CRITICAL — USER DIRECTIVE: When a USER DIRECTIVE block is present below, it is AUTHORITATIVE. Your implementation MUST serve the directive's intent. Do NOT create mock/fake/placeholder data — the directive explicitly forbids it. Do NOT contradict or ignore the directive. Every file you create or modify must align with what the directive asks for.",
   "",
   "You will be given the TODO description, the expected file paths, and the current contents of each file (or a note that it does not exist).",
   "",
-  "LARGE FILES: any file above 8000 chars is shown WINDOWED — you will see the first 3000 chars, a marker noting how many chars are omitted, then the last 3000 chars. To edit text in the omitted middle region, either use op \"append\" for end-of-file additions, or use op \"replace\" with a \"search\" anchor that is unique and visible in the shown head or tail. Do not try to reproduce the whole file back — use hunks.",
+  "LARGE FILES: any file above 16000 chars is shown WINDOWED — you will see the first 6000 chars, a marker noting how many chars are omitted, then the last 6000 chars. To edit text in the omitted middle region, either use op \"append\" for end-of-file additions, or use op \"replace\" with a \"search\" anchor that is unique and visible in the shown head or tail. Do not try to reproduce the whole file back — use hunks.",
   "",
   // 2026-05-02: few-shot examples. Open-weights models (glm-5.1,
   // gemma4) consistently produce hunks with non-unique `search`
@@ -325,7 +329,7 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
     const content = seed.fileContents[f];
     if (content === null || content === undefined) {
       parts.push(`=== ${f} (does not exist — use op "create") ===`);
-    } else if (seed.fullFileMode && content.length > 8000) {
+    } else if (seed.fullFileMode && content.length > WORKER_FILE_WINDOW_THRESHOLD) {
       // Plan 8: large-context models see full file content — this takes
       // priority over anchored view, since the model can handle the full file.
       parts.push(`=== Current contents of ${f} (${content.length} chars, full) ===`);
@@ -412,7 +416,7 @@ export function buildWorkerRepairPrompt(previousResponse: string, parseError: st
 // Cap at HUNK_REPAIR_FILE_SLICE chars — most worker turns are
 // surgical and the worker doesn't need the whole 50KB file to fix
 // one hunk. If the file is larger we send head+tail.
-const HUNK_REPAIR_FILE_SLICE = 4_000;
+const HUNK_REPAIR_FILE_SLICE = 8_000;
 
 export function buildHunkRepairPrompt(
   failedHunks: unknown[],

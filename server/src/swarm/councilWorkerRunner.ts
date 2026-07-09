@@ -16,7 +16,7 @@ import { repairAndParseJson } from "./repairJson.js";
 import { buildResearchToolsNote } from "./blackboard/prompts/planner.js";
 import { chatOnce } from "./chatOnce.js";
 import { extractText } from "./extractText.js";
-import { isWebToolsEnabled, resolveToolProfile } from "./toolProfiles.js";
+import { isWebToolsEnabled, resolveCouncilToolProfile, resolveToolProfile } from "./toolProfiles.js";
 import { effectiveToolProfileId } from "../../../shared/src/toolProfiles.js";
 import { makeBufferedToolHandler } from "./toolCallTranscript.js";
 import { withSiblingRetry } from "./blackboard/siblingRetry.js";
@@ -102,7 +102,7 @@ async function runCouncilLiteratureResearch(
   if (!isWebToolsEnabled(cfg) || !isLiteratureTodo(todo.description)) {
     return undefined;
   }
-  const profile = resolveToolProfile("read", cfg);
+  const profile = resolveCouncilToolProfile(cfg);
   const prompt = [
     "You are a research worker gathering sources BEFORE writing file edits.",
     buildResearchToolsNote(true),

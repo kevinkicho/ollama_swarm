@@ -245,13 +245,15 @@ export const REPLANNER_JSON_SCHEMA = {
   ],
 } as const;
 
+import { CONTENT_MAX, MAX_HUNKS, REPLACE_MAX, SEARCH_MAX } from "./worker.js";
+
 /** Mirrors `WorkerResponseSchema` in `worker.ts` — the highest-frequency
  *  parse-failure path in the system because workers emit complex multi-
  *  line search/replace strings. Discriminated union via `oneOf` covers
  *  the three hunk variants (replace / create / append).
  *
- *  Cap of 8 hunks per response matches MAX_HUNKS. Search/replace cap
- *  at 50K, content cap at 200K — same as the zod schema. The schema
+ *  Cap of MAX_HUNKS hunks per response. Search/replace/content caps match
+ *  the zod schema in worker.ts. The schema
  *  optionally accepts a `skip` field; when present, the runner treats
  *  the response as "worker declined this todo with reason X." */
 export const WORKER_HUNKS_JSON_SCHEMA = {
@@ -259,7 +261,7 @@ export const WORKER_HUNKS_JSON_SCHEMA = {
   properties: {
     hunks: {
       type: "array",
-      maxItems: 8,
+      maxItems: MAX_HUNKS,
       items: {
         oneOf: [
           // replace variant: { op: "replace", file, search, replace }
@@ -268,8 +270,8 @@ export const WORKER_HUNKS_JSON_SCHEMA = {
             properties: {
               op: { type: "string", enum: ["replace"] },
               file: { type: "string", minLength: 1, maxLength: 1000 },
-              search: { type: "string", minLength: 1, maxLength: 50_000 },
-              replace: { type: "string", maxLength: 50_000},
+              search: { type: "string", minLength: 1, maxLength: SEARCH_MAX },
+              replace: { type: "string", maxLength: REPLACE_MAX },
             },
             required: ["op", "file", "search", "replace"],
           },
@@ -279,7 +281,7 @@ export const WORKER_HUNKS_JSON_SCHEMA = {
             properties: {
               op: { type: "string", enum: ["create"] },
               file: { type: "string", minLength: 1, maxLength: 1000 },
-              content: { type: "string", maxLength: 200_000 },
+              content: { type: "string", maxLength: CONTENT_MAX },
             },
             required: ["op", "file", "content"],
           },
@@ -289,7 +291,7 @@ export const WORKER_HUNKS_JSON_SCHEMA = {
             properties: {
               op: { type: "string", enum: ["append"] },
               file: { type: "string", minLength: 1, maxLength: 1000 },
-              content: { type: "string", minLength: 1, maxLength: 200_000 },
+              content: { type: "string", minLength: 1, maxLength: CONTENT_MAX },
             },
             required: ["op", "file", "content"],
           },

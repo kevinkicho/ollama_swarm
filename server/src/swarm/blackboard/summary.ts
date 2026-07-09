@@ -7,8 +7,9 @@
 // stopReason discriminator priority (same as caps.ts — first match wins):
 //   1. crashMessage set            → "crash"
 //   2. terminationReason set       → "cap:<type>" (wall-clock | commits | todos)
-//   3. stopping flag set (no cap)  → "user", unless startup-abort detector
-//      fires (fast death + zero board/agent work) → "crash"
+//   3. user-initiated stop (stopping | userStopRequested | wasDrained |
+//      v2 detail user-stop/drain-requested | user-stop errors) → "user",
+//      unless startup-abort detector fires → "crash"
 //   4. zero-progress detector      → "no-progress"
 //   5. partial                       → "partial-progress"
 //   6. else (incl. load-time abrupt) → "completed" or "crashed" (set at load for
@@ -290,9 +291,15 @@ export interface BuildSummaryInput {
   crashMessage?: string;
   /** Set by `checkCaps` when a hard cap tripped. Parsed for cap sub-type. */
   terminationReason?: string;
-  /** True if user pressed Stop (or a cap flipped the flag). Distinguished via
+  /** True if lifecycle is in `stopping` (or a cap flipped the flag). Distinguished via
    *  terminationReason: user stops leave it unset, cap stops set it. */
   stopping: boolean;
+  /** Sticky: set on hard stop and survives until the next run start. Covers the race
+   *  where planAndExecute's finally writes a summary after stop() but lifecycle already
+   *  moved on, or while still `draining`. */
+  userStopRequested?: boolean;
+  /** True once drain() entered; distinguishes soft-stop from natural completion. */
+  wasDrained?: boolean;
   /** Phase 11c: short explanation for why a successful "completed" run
    *  terminated, e.g. "all contract criteria satisfied" or "auditor invocation
    *  cap reached". Populated into `stopDetail` on the completed branch only. */
@@ -512,6 +519,19 @@ export const STARTUP_ABORT_MAX_MS = 30_000;
 const STARTUP_ACTIVITY_RE =
   /Goal-generation pre-pass|research pre-pass|goal analysis|web research|Planner agent .* ready/i;
 
+/** User pressed Stop/Drain, or V2 reducer / error tracker recorded the request. */
+export function isUserInitiatedStop(
+  input: Pick<
+    BuildSummaryInput,
+    "stopping" | "userStopRequested" | "wasDrained" | "v2State" | "errors"
+  >,
+): boolean {
+  if (input.stopping || input.userStopRequested || input.wasDrained) return true;
+  const detail = input.v2State?.detail;
+  if (detail === "user-stop" || detail === "drain-requested") return true;
+  return (input.errors ?? []).some((e) => e.category === "user-stop");
+}
+
 function hasStartupWorkEvidence(
   input: Pick<BuildSummaryInput, "transcript" | "v2State" | "agents">,
 ): boolean {
@@ -534,14 +554,17 @@ export function isStartupAbort(
     | "startedAt"
     | "endedAt"
     | "stopping"
+    | "userStopRequested"
+    | "wasDrained"
     | "terminationReason"
     | "board"
     | "agents"
     | "transcript"
     | "v2State"
+    | "errors"
   >,
 ): boolean {
-  if (!input.stopping || input.terminationReason) return false;
+  if (!isUserInitiatedStop(input) || input.terminationReason) return false;
   if (hasStartupWorkEvidence(input)) return false;
   const wallClockMs = Math.max(0, input.endedAt - input.startedAt);
   if (wallClockMs >= STARTUP_ABORT_MAX_MS) return false;
@@ -562,12 +585,15 @@ function classifyStopReason(
     | "crashMessage"
     | "terminationReason"
     | "stopping"
+    | "userStopRequested"
+    | "wasDrained"
     | "completionDetail"
     | "board"
     | "contract"
     | "agents"
     | "transcript"
     | "v2State"
+    | "errors"
   >,
 ): { stopReason: StopReason; stopDetail?: string } {
   if (input.crashMessage) {
@@ -577,7 +603,7 @@ function classifyStopReason(
     const capType = parseCapType(input.terminationReason);
     return { stopReason: capType, stopDetail: input.terminationReason };
   }
-  if (input.stopping) {
+  if (isUserInitiatedStop(input)) {
     if (isStartupAbort(input)) {
       return {
         stopReason: "crash",
@@ -603,6 +629,15 @@ function classifyStopReason(
       stopDetail:
         input.completionDetail ??
         "planner produced no actionable todos; no commits and all criteria still unmet",
+    };
+  }
+  // Blackboard planning failed before any contract/todos landed (e.g. tool-loop
+  // cap on contract emit + planner-todos). Without this, runs masquerade as
+  // "completed" when the board never received work.
+  if (!hadCriteria && noBoardActivity && input.completionDetail) {
+    return {
+      stopReason: "no-progress",
+      stopDetail: input.completionDetail,
     };
   }
   if (hasUnmet && !allUnmet && input.completionDetail?.includes("no new work")) {

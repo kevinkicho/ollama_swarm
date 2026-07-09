@@ -27,3 +27,8 @@ function toolConfigFromRun(cfg: unknown): WebToolsConfig | undefined {
 export function resolveToolProfile(role: AgentToolRole, cfg?: unknown): ProfileName {
   return resolveToolProfileId(role, toolConfigFromRun(cfg)) as ProfileName;
 }
+
+/** Full toolkit (read/grep/glob/list/bash[/web]) for council agents. */
+export function resolveCouncilToolProfile(cfg?: unknown): ProfileName {
+  return resolveToolProfile("planner", cfg);
+}

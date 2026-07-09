@@ -15,6 +15,7 @@ import { buildCouncilSynthesisPrompt } from "./councilPromptHelpers.js";
 import { runPostSynthesisCritique } from "./postSynthesisCritique.js";
 import { parseConvergenceSignal } from "./convergenceSignal.js";
 import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { resolveCouncilToolProfile } from "./toolProfiles.js";
 
 
 export interface SynthesisContext {
@@ -75,7 +76,8 @@ export async function runSynthesisPass(
       onTokens,
       signal: controller.signal,
       manager: ctx.manager as any,
-      agentName: "swarm-read",
+      agentName: resolveCouncilToolProfile(cfg),
+      webToolsConfig: cfg,
       promptAddendum: "",
       describeError: describeSdkError,
       onTiming: ({ attempt, elapsedMs, success }: { attempt: number; elapsedMs: number; success: boolean }) => {
@@ -110,7 +112,12 @@ export async function runSynthesisPass(
     const extracted = extractTextWithDiag(res, diagCtx);
     let text = extracted.text;
     if ((extracted.isEmpty || looksLikeJunk(text)) && !stopping) {
-      const retryText = await retryEmptyResponse(lead, prompt, "swarm-read", diagCtx);
+      const retryText = await retryEmptyResponse(
+        lead,
+        prompt,
+        resolveCouncilToolProfile(cfg),
+        diagCtx,
+      );
       if (retryText !== null) text = retryText;
     }
 

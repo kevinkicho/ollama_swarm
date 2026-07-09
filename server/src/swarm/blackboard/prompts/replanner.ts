@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 import { lenientPreprocess } from "./lenientParse.js";
-import { windowFileWithAnchors } from "../windowFile.js";
+import { windowFileWithAnchors, WORKER_FILE_WINDOW_THRESHOLD } from "../windowFile.js";
 
 // ---------------------------------------------------------------------------
 // Schema. The replanner is shown a stale TODO + current file state and must
@@ -202,7 +202,7 @@ export function buildReplannerUserPrompt(seed: ReplannerSeed): string {
     const content = seed.fileContents[f];
     if (content === null || content === undefined) {
       parts.push(`=== ${f} (does not exist on disk right now) ===`);
-    } else if (seed.autoAnchors && seed.autoAnchors.length > 0 && content.length > 8000) {
+    } else if (seed.autoAnchors && seed.autoAnchors.length > 0 && content.length > WORKER_FILE_WINDOW_THRESHOLD) {
       // For large files with auto-anchors, use windowed view with anchors
       const anchored = windowFileWithAnchors(content, seed.autoAnchors);
       const reportSummary = anchored.anchorReports

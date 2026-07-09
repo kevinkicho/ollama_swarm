@@ -20,6 +20,7 @@ import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractProviderText, createTimeoutController } from "./councilUtils.js";
 import { burstSpacingForModels, staggerStart } from "./staggerStart.js";
 import { makeBufferedToolHandler, type ToolTraceEntry } from "./toolCallTranscript.js";
+import { resolveCouncilToolProfile } from "./toolProfiles.js";
 
 /** Wall-clock cap per contract draft. Covers provider cold-start (p95
  *  can exceed 90s on :cloud) without blocking the whole batch forever. */
@@ -135,10 +136,11 @@ export async function promptPlannerSafely(
   activity?: { kind?: string; label?: string },
   signal?: AbortSignal,
   pendingToolTraceByAgent?: Map<string, ToolTraceEntry[]>,
+  toolProfileCfg?: unknown,
 ): Promise<{ response: string; agentUsed: Agent }> {
   const raw = await promptWithFailoverAuto(agent, promptText, {
     manager: manager as any,
-    agentName: agentName ?? "swarm-read",
+    agentName: agentName ?? resolveCouncilToolProfile(toolProfileCfg),
     formatExpect: "json",
     signal: signal ?? new AbortController().signal,
     ...(activity ? { activity: { kind: activity.kind ?? "council", label: activity.label } } : {}),
@@ -192,6 +194,7 @@ function councilBuildSeedContext(
         undefined,
         undefined,
         state.pendingToolTraceByAgent,
+        state.cfg,
       ),
     promptAgent: (agent, prompt, agentName, formatExpect) =>
       promptAgent(
@@ -261,6 +264,7 @@ export async function runContractDerivation(
             activity,
             controller.signal,
             state.pendingToolTraceByAgent,
+            state.cfg,
           ),
       };
       return await runCouncilContractDraftForAgent(draftDeps, a, seed);
@@ -321,9 +325,15 @@ export async function runContractDerivation(
   const { controller: mergeAbort, cleanup: mergeCleanup } = createTimeoutController(CONTRACT_DRAFT_TIMEOUT_MS);
   try {
     ({ response: mergeResponse, agentUsed: mergeAgent } = await promptPlannerSafely(
-      mergePlanner, mergePrompt, undefined, state.manager, state.cfg.providerFailover,
+      mergePlanner,
+      mergePrompt,
+      undefined,
+      state.manager,
+      state.cfg.providerFailover,
       { kind: "contract", label: "contract merge" },
       mergeAbort.signal,
+      state.pendingToolTraceByAgent,
+      state.cfg,
     ));
   } finally {
     mergeCleanup();

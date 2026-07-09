@@ -3,13 +3,14 @@
 // to import from the base (creating a cycle).
 
 import type { Agent } from "../services/AgentManager.js";
+import type { ProfileName } from "../tools/ToolDispatcher.js";
 import type { TranscriptEntrySummary, TranscriptEntry } from "../types.js";
 
 export interface RunAgentOpts {
   /** Runner name for diagnostic logging (e.g. "council", "debate-judge") */
   runnerName: string;
-  /** Agent name for the prompt call: "swarm-read" (discussion) or "swarm" (write-capable) */
-  agentName?: "swarm" | "swarm-read";
+  /** Tool profile for the prompt call (e.g. swarm-read, swarm-planner). */
+  agentName?: ProfileName;
   /** Custom summary for the transcript entry. Can be a static value or a
    *  function that receives the final stripped text and returns a summary. */
   enrichSummary?: TranscriptEntrySummary | ((text: string) => TranscriptEntrySummary | undefined);

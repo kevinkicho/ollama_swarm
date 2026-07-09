@@ -18,9 +18,9 @@
 // Threshold and head/tail sizes chosen to land a 49KB README under 8KB of
 // worker prompt. Head + tail + marker is always ≤ threshold, so crossing
 // the threshold always strictly shrinks the prompt.
-export const WORKER_FILE_WINDOW_THRESHOLD = 8_000;
-export const WORKER_FILE_HEAD_BYTES = 3_000;
-export const WORKER_FILE_TAIL_BYTES = 3_000;
+export const WORKER_FILE_WINDOW_THRESHOLD = 16_000;
+export const WORKER_FILE_HEAD_BYTES = 6_000;
+export const WORKER_FILE_TAIL_BYTES = 6_000;
 
 export interface WindowedFileView {
   // true when the worker receives the whole file verbatim.

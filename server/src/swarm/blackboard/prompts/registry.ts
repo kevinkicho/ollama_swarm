@@ -50,7 +50,7 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
       "prompt MUST require hunks use op field (replace|create|append)",
-      "prompt MUST limit hunks to MAX_HUNKS (8)",
+      "prompt MUST limit hunks to MAX_HUNKS (16)",
     ],
     lastValidatedModel: "gemma4:31b-cloud",
     lastValidatedAt: 0,
